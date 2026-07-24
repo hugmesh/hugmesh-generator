@@ -1,0 +1,25 @@
+# snapdragon-character-forge-ui — the Character Forge (3D character maker) Angular
+# micro-frontend, federated into the snapdragon.systems host at /character-forge
+# (ROLE_USER floor). Frontend Pis. Embeds the Godot WASM maker from its own
+# same-origin assets; saves via /bff/character-forge/** (39b). OPTIONAL service
+# (DEFAULT-OFF, admin gate): pruned by gate_optional_services() when the
+# 'character-forge' slug is not selected, and rendered installed:"false" in the
+# optional-services ApplicationSet / ConfigMap.
+# See specs/cluster/optional-services.yaml (slug: character-forge) + docs/XR-CHAT.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-character-forge-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/character-forge
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

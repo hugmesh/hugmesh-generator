@@ -1030,8 +1030,17 @@ run_gui_threading_checks() {
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","media_data":"off","media_label":"DATA","no_vaults":true}' \
         '--no-media-data' '--media-label DATA' '--no-vaults' 'PLAN:media_data=false'
     guithr g34-force-off-tristates \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","aide":"off","tor_onion_service":"off","character_studio":"off","edge_ai_service":"off"}' \
-        '--no-aide' '--no-tor' '--no-character-studio' '--no-edge-ai'
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","aide":"off","tor_onion_service":"off","character_studio":"off","character_forge":"off","edge_ai_service":"off"}' \
+        '--no-aide' '--no-tor' '--no-character-studio' '--no-character-forge' '--no-edge-ai'
+    # character-forge (3D maker multi-app slug): the lone tri-state flag pair on
+    # BOTH channels of the tri-state (with/no), plus the slug through the
+    # --optional-services checklist path (x86 + rpi5 parity below).
+    guithr g34-with-character-forge \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","character_forge":true}' \
+        '--with-character-forge' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*character-forge'
+    guithr g13-character-forge-slug-in-services \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["akkoma","character-forge"]}' \
+        "--optional-services 'akkoma character-forge'" 'PLAN:^PLAN_OPTIONAL_SERVICES=.*character-forge'
     guithr g30-image-stamps \
         '{"platform":"x86","role":"be","mode":"mesh","env":"test","release_tag":"rc1","version":"1.2.3"}' \
         '--release-tag rc1' '--version 1.2.3'
@@ -1069,6 +1078,13 @@ run_gui_threading_checks() {
     guithr g15-infra-slugs-rpi5 \
         '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","optional_services":["tor","egress-vpn"]}' \
         "--optional-services 'tor egress-vpn'" 'PLAN:^PLAN_OPTIONAL_SERVICES=.*tor'
+    # character-forge flag parity on the ARM channel (the tri-state is _X86_RPI5).
+    guithr g34-with-character-forge-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","character_forge":true}' \
+        '--with-character-forge' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*character-forge'
+    guithr g34-no-character-forge-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","character_forge":"off"}' \
+        '--no-character-forge' 'PLAN:!^PLAN_OPTIONAL_SERVICES=.*character-forge'
     guithr g13-explicit-none-rpi5 \
         '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","optional_services":["none"]}' \
         "--optional-services ''" 'PLAN:^PLAN_OPTIONAL_SERVICES=none$'

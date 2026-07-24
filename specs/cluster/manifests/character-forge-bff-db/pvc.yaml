@@ -1,0 +1,12 @@
+# Persistent storage for the snapdragon-character-forge-bff-api Postgres data directory
+# (the character_forge_character table: saved 3D character configs).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: character-forge-bff-db
+  namespace: snapdragon-backend
+  labels: { app: character-forge-bff-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 2Gi } }

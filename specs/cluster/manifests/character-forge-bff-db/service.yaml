@@ -1,0 +1,14 @@
+# ClusterIP — reached only in-cluster by snapdragon-character-forge-bff-api (R2DBC runtime +
+# the JDBC handle Liquibase uses at startup). DNS:
+#   character-forge-bff-db.snapdragon-backend.svc.cluster.local:5432
+apiVersion: v1
+kind: Service
+metadata:
+  name: character-forge-bff-db
+  namespace: snapdragon-backend
+  labels: { app: character-forge-bff-db }
+spec:
+  type: ClusterIP
+  selector: { app: character-forge-bff-db }
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }

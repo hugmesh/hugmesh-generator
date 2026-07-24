@@ -120,9 +120,10 @@ data:
                hugmesh-mod-bff-api hugmesh-user-bff-api \
                hugmesh-forum-bff-api \
                hugmesh-wiki-bff-api \
+               snapdragon-character-forge-bff-api \
                hugmesh-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
-               federation-db forum-bff-db wiki-bff-db \
+               federation-db forum-bff-db wiki-bff-db character-forge-bff-db \
                akkoma-proxy tuwunel-proxy; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \

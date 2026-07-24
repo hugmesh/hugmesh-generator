@@ -69,6 +69,12 @@ REPOS=(
   hugmesh-tube-ui
   hugmesh-tube-bff-api
   hugmesh-character-studio-ui
+  # character-forge is ONE multi-surface repo (Spring BFF at the root + godot/ +
+  # frontend/): the compose stack builds the BFF image from the repo root and the
+  # UI image from its frontend/ subdir — no separate -ui repo to clone. NOTE: like
+  # hugmesh-host-shell above, the repo keeps a non-mechanical name — it was CREATED
+  # under the DESIGN-locked name snapdragon-character-forge-bff-api (docs/XR-CHAT.md).
+  snapdragon-character-forge-bff-api
 )
 
 echo "==> Cloning ${#REPOS[@]} HugMesh repos into ${STACK_SRC}"

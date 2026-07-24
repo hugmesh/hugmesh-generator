@@ -1,0 +1,25 @@
+# character-forge-bff-db — dedicated Postgres for snapdragon-character-forge-bff-api's
+# datastore (the character_forge_character table: saved 3D character configs). In
+# snapdragon-backend with the other BFF dbs (forum-bff-db/wiki-bff-db). Lands
+# BEFORE character-forge-bff-api (39b) so the DB + least-privilege roles exist
+# when the BFF boots its Liquibase migration.
+# OPTIONAL service (DEFAULT-OFF, admin gate): pruned by gate_optional_services()
+# when the 'character-forge' slug is not selected. See
+# specs/cluster/optional-services.yaml (slug: character-forge) + docs/XR-CHAT.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: character-forge-bff-db
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/character-forge-bff-db
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

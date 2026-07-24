@@ -104,9 +104,21 @@ metadata:
   # same PR that adds apps/24-attestation-server.yaml — same rationale as
   # `hmdm`, the literal route first-segment, not the app name. The four
   # app-repo ReservedNames copies should add `attest` too to stay in sync.
-  revision: "8"
+  # revision 8 -> 9: reserve `character-forge` for the Character Forge (3D)
+  # optional-service's fe-gateway routes (`/character-forge/**` UI remote +
+  # `/bff/character-forge/**` BFF — apps/20-gateway-fe.yaml
+  # route[character-forge-ui] + route[snapdragon-character-forge-bff-api], both
+  # seeded in route-access schema.sql). Ships ATOMICALLY with the routes in the
+  # same PR that adds apps/{38b,39b,49c}-character-forge-*.yaml — same rationale
+  # as `hmdm`/`attest`, a DEDICATED first-segment route prefix. ALSO reserves the
+  # games-side slugs `games-character-forge` (the 3D maker published into
+  # snapdragon.games as a wasm-game) + `games-shadows-of-the-net` (the XR chat
+  # room game) per the existing games-* naming pattern (games-rpg-maker /
+  # games-vn-maker siblings; see docs/XR-CHAT.md). The four app-repo
+  # ReservedNames copies should add all three labels too to stay in sync.
+  revision: "9"
 spec:
-  # The canonical reserved set (77 labels). KEEP SORTED BY CATEGORY (comments) but
+  # The canonical reserved set (82 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
   # also asserts there are no duplicates.
   #
@@ -245,6 +257,12 @@ spec:
     - games-rpg-maker
     - games-three-wizards
     - games-vn-maker
+    # games-side slugs of the XR-chat track (revision 9; docs/XR-CHAT.md): the
+    # character-forge 3D maker published into snapdragon.games as a wasm-game +
+    # the "Shadows of the Net" XR chat room game. Same games-* naming pattern as
+    # games-rpg-maker/games-vn-maker above.
+    - games-character-forge
+    - games-shadows-of-the-net
     # --- optional-service / games-console DEPLOYED route prefixes --------------
     # `tube`: the LocalTube media route `/tube/content/**` is a DEDICATED first-
     # segment route on the be-gateway (gateway_route_access seed, ROLE_TUBE signed-
@@ -272,6 +290,16 @@ spec:
     # url_pattern '/v1/analyze/**' — so a vanity `v1` handle would shadow it.
     - character-studio
     - v1
+    # --- DEPLOYED route prefixes added in revision 9 ----------------------------
+    # `character-forge`: the Character Forge (3D) micro-frontend remote is served
+    # at `/character-forge/**` on the fe-gateway (apps/20-gateway-fe.yaml
+    # route[character-forge-ui].path) and its BFF at `/bff/character-forge/**`
+    # (route[snapdragon-character-forge-bff-api].path; first-segment `bff` is
+    # already reserved) — a DEDICATED first-segment route prefix, so a vanity
+    # `character-forge` handle would shadow it. Both seeded in route-access
+    # schema.sql as url_patterns. Ships ATOMICALLY with the character-forge
+    # optional-service slug (docs/XR-CHAT.md).
+    - character-forge
     # --- planned / not-yet-deployed publicly-routable services -----------------
     # These have NO kind:Service / gateway route in the GitOps tree YET, so the
     # route-consistency drift check will NOT demand them — they are reserved here

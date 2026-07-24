@@ -413,6 +413,14 @@ class NetworkPage(QtWidgets.QWizardPage):
             "Character Studio (VN) — character creator + chat remote at /character-studio (default off)")
         self.character_studio.setTristate(True)   # G34: --with-/--no-character-studio / default
         sv_outer.addWidget(self.character_studio)
+        # Character Forge (3D) multi-app slug — OPTIONAL, DEFAULT-OFF (admin gate).
+        # BFF db + BFF api + UI remote (the 3D character maker + XR chat avatars;
+        # docs/XR-CHAT.md). Cloud/mesh cluster builds only; gated exactly like
+        # character_studio above (PLATFORM capability, not mode).
+        self.character_forge = QtWidgets.QCheckBox(
+            "Character Forge (3D) — 3D character maker (BFF db+api + remote at /character-forge; default off)")
+        self.character_forge.setTristate(True)   # G34: --with-/--no-character-forge / default
+        sv_outer.addWidget(self.character_forge)
         # edge-ai-tts (VN voice synthesis) — OPTIONAL, DEFAULT-OFF. CPU-only,
         # self-contained (NO edge-ai/GPU dependency, unlike the Analysis API inside
         # edge_ai_box above) — deliberately placed OUTSIDE edge_ai_box (which hides
@@ -626,6 +634,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.character_studio.setCheckState(_tri_state(c.character_studio)
                                             if platform_supports("character_studio", c.platform)
                                             else Qt.CheckState.Unchecked)
+        self.character_forge.setCheckState(_tri_state(c.character_forge)
+                                           if platform_supports("character_forge", c.platform)
+                                           else Qt.CheckState.Unchecked)
         self.edge_ai_tts.setCheckState(_tri_state(c.edge_ai_tts)
                                        if platform_supports("edge_ai_tts", c.platform)
                                        else Qt.CheckState.Unchecked)
@@ -657,6 +668,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # these boxes were mode-gated. gate_widgets() below greys them wherever the
         # builder has no flag (G12: frite/orangepi5/orangepizero2/jetson).
         self.character_studio.setVisible(True)
+        self.character_forge.setVisible(True)
         self.edge_ai_tts.setVisible(True)
         self.services_box.setVisible(True)
         # CLIENT-class role (builder ROLE_CLIENT — see _client_class_role): the
@@ -689,6 +701,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             "edge_ai_service": self.edge_ai_box,
             "tor_onion_service": self.tor_onion,
             "character_studio": self.character_studio,
+            "character_forge": self.character_forge,
             "edge_ai_tts": self.edge_ai_tts,
             "optional_services": self.services_box,
             "enable_games": self.games,
@@ -725,7 +738,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         # gate_widgets blanks the tooltip on every ENABLED widget — restore the
         # 3-state legend on the live tri-state boxes (disabled ones keep the
         # unsupported-platform note it set).
-        for w in (self.aide, self.edge_ai, self.tor_onion, self.character_studio, self.edge_ai_tts):
+        for w in (self.aide, self.edge_ai, self.tor_onion, self.character_studio,
+                  self.character_forge, self.edge_ai_tts):
             if w.isEnabled():
                 w.setToolTip(_TRI_TIP)
         self._apply_default_expansion()
@@ -810,6 +824,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.edge_ai_analysis = self.edge_ai_analysis.isChecked()
         c.tor_onion_service = _tri_value(self.tor_onion)
         c.character_studio = _tri_value(self.character_studio)
+        c.character_forge = _tri_value(self.character_forge)
         c.edge_ai_tts = _tri_value(self.edge_ai_tts)
         # the sentinels replace the checklist (see _services_args: [none] emits
         # --optional-services "" and [all] emits --all-services); an empty custom
@@ -842,7 +857,8 @@ class NetworkPage(QtWidgets.QWizardPage):
             "proxy_stack", "snort", "aide",
             "edge_ai_service", "edge_ai_runtime", "edge_ai_models",
             "edge_ai_model_default", "edge_ai_analysis", "edge_ai_tts", "tor_onion_service",
-            "character_studio", "optional_services", "exclude_services", "enable_games",
+            "character_studio", "character_forge",
+            "optional_services", "exclude_services", "enable_games",
             "managed_services",
         ))
         return True

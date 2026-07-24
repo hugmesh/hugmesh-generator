@@ -108,6 +108,17 @@ spring:
                 - Path=/character-studio/**
               filters:
                 - StripPrefix=1
+            # character-forge-ui — the Character Forge (3D) remote on
+            # nginx-unprivileged :8080, mirroring the cluster route
+            # (apps/20-gateway-fe.yaml route[character-forge-ui]; route-access row
+            # /character-forge/** = ROLE_USER already seeded from the same
+            # 20-schema.sql this stack initializes route-access-db with).
+            - id: character-forge-ui
+              uri: http://snapdragon-character-forge-ui:8080
+              predicates:
+                - Path=/character-forge/**
+              filters:
+                - StripPrefix=1
             # SSO/login + user surface -> user-bff. MUST precede the /bff/** admin
             # catch-all (SCG matches in list order). NATIVE login: the browser POSTs
             # username/password to /bff/login (permitAll at the BFF); user-bff runs PKCE +
@@ -138,8 +149,19 @@ spring:
               uri: http://hugmesh-forum-bff-api:8080
               predicates:
                 - Path=/bff/forum/**
+<<<<<<< HEAD
+            # character-forge BFF — same sibling shape (non-overlapping
+            # /bff/character-forge/** prefix, ROLE_USER row seeded in 20-schema.sql).
+            - id: snapdragon-character-forge-bff-api
+              uri: http://snapdragon-character-forge-bff-api:8080
+              predicates:
+                - Path=/bff/character-forge/**
+            - id: snapdragon-wiki-bff-api
+              uri: http://snapdragon-wiki-bff-api:8080
+=======
             - id: hugmesh-wiki-bff-api
               uri: http://hugmesh-wiki-bff-api:8080
+>>>>>>> origin/main
               predicates:
                 - Path=/bff/wiki/**
             - id: hugmesh-owncast-bff-api

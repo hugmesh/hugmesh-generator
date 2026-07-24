@@ -162,6 +162,11 @@ ensure_org() { # <base-url> <org>
 
 # Mirrors seed-accounts.sh declared_roles + ROLE_SUPERADMIN (which the base
 # matrix omits because the cluster seeds it in init-data; compose has neither).
+# NOTE: character-studio + character-forge deliberately have NO role here — both
+# ride the ROLE_USER floor (route-access rows /character-studio/**,
+# /character-forge/**, /bff/character-forge/** are all ROLE_USER; ownership is
+# enforced inside character-forge-bff), so every persona below can already reach
+# them and no new role object is required.
 REQUIRED_ROLES="ROLE_SUPERADMIN ROLE_ADMIN ROLE_MOD ROLE_MATRIX ROLE_MASTODON \
 ROLE_MATRIX_DOMAINLOCKED ROLE_MASTODON_DOMAINLOCKED \
 ROLE_MATRIX_EXTERNAL_CLIENT ROLE_MASTODON_EXTERNAL_CLIENT \

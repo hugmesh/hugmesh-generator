@@ -17,10 +17,11 @@
 #   * DEFAULT-ON  (the built-in default when NO selection is given): akkoma, tuwunel
 #     (Matrix), phpbb.
 #   * DEFAULT-OFF (must be specifically added): games, owncast, tube,
-#     character-studio — and any future user-level service. games moved from
-#     default-on to DEFAULT-OFF here.
+#     character-studio, character-forge — and any future user-level service. games
+#     moved from default-on to DEFAULT-OFF here.
 #   * FULL-SET sentinel: OPTIONAL_SERVICES=all (and --all-services) selects EVERY
-#     user-level slug (akkoma tuwunel phpbb games owncast tube character-studio).
+#     user-level slug (akkoma tuwunel phpbb games owncast tube character-studio
+#     character-forge).
 # The per-slug `default: on|off` below records THIS policy (akkoma/tuwunel/phpbb on;
 # games/owncast/tube off).
 #
@@ -299,6 +300,66 @@ spec:
         requiresRole: ROLE_USER
         exposed: ./routes
         changeset: "036-register-character-studio-module.xml"   # in hugmesh-federation-api (separate repo)
+      casdoorSeed: null
+
+    # ── character-forge — Character Forge (3D character maker + XR chat avatars) ──
+    # The 3D character generator that maps the VN (character-studio) SVG characters
+    # onto parameterized 3D rigs (Char3DConfig), and the avatar source for the
+    # "Shadows of the Net" XR chat room (docs/XR-CHAT.md). A MULTI-APP slug shaped
+    # like phpbb (BFF db + BFF api + UI remote), combined with the character-studio
+    # frontend pattern:
+    #   * character-forge-bff-db  (38b) — dedicated Postgres, snapdragon-backend
+    #   * character-forge-bff-api (39b) — Spring BFF at /bff/character-forge/**
+    #     (ROLE_USER floor; Char3DConfig CRUD + active-config lookup + VN→3D /map)
+    #   * snapdragon-character-forge-ui (49c) — Angular native-federation remote at
+    #     /character-forge (ROLE_USER floor), nginx-unprivileged :8080, embedding
+    #     the Godot WASM maker from its own same-origin assets
+    # No gateway HOST; two fe-gateway path routes + two route-access rows. The BFF's
+    # ESO secrets ride the SHARED external-secrets files (secretstore.yaml db-auth
+    # pair + pki-externalsecrets.yaml mTLS certs, exactly like forum-bff's), so —
+    # like phpbb — esoFile is null here and the shared files are NOT pruned with the
+    # slug (the unused Secrets are inert without their consumer pods).
+    # DEFAULT-OFF (admin gate): add it explicitly (--with-character-forge /
+    # 'character-forge' in --optional-services / OPTIONAL_SERVICES=all). When
+    # deselected, gate_optional_services() prunes the three Applications + the three
+    # manifest dirs + both fe-gateway routes + both route-access rows, and
+    # _opt_render_installed_services renders character-forge:"false" so the host
+    # greys the entry out instead of 404/502. Soft dependency: character-studio (VN
+    # character import); the /map + forge surfaces degrade gracefully without it.
+    - slug: character-forge
+      displayName: "Character Forge (3D)"
+      # Primary namespace = where the BFF + its DB land (the UI remote lands in
+      # snapdragon-frontend via its own Application, like phpbb's forum-ui).
+      namespace: snapdragon-backend
+      default: off
+      apps:
+        - apps/38b-character-forge-bff-db.yaml
+        - apps/39b-character-forge-bff-api.yaml
+        - apps/49c-character-forge-ui.yaml
+      sharedApps: []
+      manifestPath: manifests/character-forge
+      extraManifestPaths:
+        - manifests/character-forge-bff-api
+        - manifests/character-forge-bff-db
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: [character-forge-ui, snapdragon-character-forge-bff-api]
+      routeAccessRows:
+        - { gateway: snapdragon-fe-gateway, urlPattern: /character-forge/** }
+        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/character-forge/** }
+      # federation_modules registration lives in the SEPARATE snapdragon-federation-api
+      # repo (Liquibase changelog), NOT in this generator repo. 036 is reserved for
+      # character-studio, so character-forge takes the next free number, 037. See
+      # manifests/character-forge/FEDERATION-REGISTRATION-TODO.md for the exact
+      # changeset. mountAt/requiresRole/exposed are recorded inline here so the
+      # generator can derive the registration when the federation-api wave runs.
+      federationModule:
+        slug: character-forge
+        mountAt: /character-forge
+        requiresRole: ROLE_USER
+        exposed: ./routes
+        changeset: "037-register-character-forge-module.xml"   # in snapdragon-federation-api (separate repo)
       casdoorSeed: null
 
     # ── edge-ai — GPU inference node serving an OpenAI-compatible model API ─────

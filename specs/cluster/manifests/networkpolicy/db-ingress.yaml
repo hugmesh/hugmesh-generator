@@ -172,6 +172,27 @@ spec:
       ports:
         - { protocol: TCP, port: 5432 }
 ---
+# ── character-forge-bff-db (Postgres, hugmesh-backend) ─────────────────────────
+# Consumer: character-forge-bff-api only (charforgebff datasource). Ships with the
+# OPTIONAL character-forge slug's manifests-adjacent policy: the policy is inert
+# when the slug (and thus both pods) is not installed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-character-forge-bff-db
+  namespace: hugmesh-backend
+  labels: { app: character-forge-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app: character-forge-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: snapdragon-character-forge-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
 # ── wiki-bff-db (Postgres, hugmesh-backend) ─────────────────────────────────
 # Consumer: wiki-bff-api only (wikibff datasource).
 apiVersion: networking.k8s.io/v1

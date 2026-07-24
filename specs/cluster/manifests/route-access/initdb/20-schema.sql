@@ -380,6 +380,11 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- ⚠ gate_optional_services REMOVES this row when the character-studio slug is
   -- deselected (so a matched route to a pruned upstream cannot stale-grant / 502).
   ('hugmesh-fe-gateway',  '/character-studio/**',  'ROLE_USER',      true),  -- character-studio VN UI
+  -- Character Forge (3D) micro-frontend UI (snapdragon-character-forge-ui at
+  -- /character-forge/**). Authenticated floor — any logged-in principal reaches it.
+  -- ⚠ gate_optional_services REMOVES this row when the character-forge slug is
+  -- deselected (so a matched route to a pruned upstream cannot stale-grant / 502).
+  ('hugmesh-fe-gateway',  '/character-forge/**',   'ROLE_USER',      true),  -- character-forge 3D UI
   -- API documentation micro-frontend UI (hugmesh-api-docs at /apidocs/**).
   -- ROLE_ADMIN only — the rendered OpenAPI/spec docs are admin-gated, matching
   -- federation's spec floor (its swagger-ui is ROLE_ADMIN).
@@ -493,6 +498,14 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- every wiki-floor endpoint to admins who have not been granted wiki access.
   ('hugmesh-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
   ('hugmesh-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
+  -- Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-bff-
+  -- api): saved 3D character configs + the VN→3D /map endpoint. Authenticated floor
+  -- (ROLE_USER, matching the /character-forge/** UI-mount row above) — ownership is
+  -- enforced in the BFF (owner = jwt subject; foreign id => 404), so no dedicated
+  -- role is minted (character-studio precedent, not the granted-role tube/wiki
+  -- shape). ⚠ gate_optional_services REMOVES this row when the character-forge slug
+  -- is deselected (so a matched route to a pruned upstream cannot stale-grant / 502).
+  ('hugmesh-fe-gateway',  '/bff/character-forge/**',  'ROLE_USER',  true),  -- character-forge BFF (authenticated floor)
   -- Owncast BFF (/bff/owncast/** -> hugmesh-owncast-bff-api). Admins reach
   -- /bff/owncast/admin/** for per-user broadcast grants; ROLE_OWNCAST holders
   -- (granted by admin) reach the user-facing console.

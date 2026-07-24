@@ -92,10 +92,11 @@ GAMES_DOMAIN="games.hugmesh.systems"
 # slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
 # infra slugs egress-vpn / tor / workloadConsole / anubis). It is what
 # OPTIONAL_SERVICES=all / --all-services expands to.
-USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio"
+USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
 #   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
-#   DEFAULT-OFF (must be specifically added): games owncast tube character-studio.
+#   DEFAULT-OFF (must be specifically added): games owncast tube character-studio
+#   character-forge.
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services) expands to EVERY
 # user-level slug (USER_LEVEL_SERVICES) just before EXCLUDE_SERVICES subtracts, so
 # `all` + EXCLUDE_SERVICES="games" still drops games. GAMES IS OPT-IN / OFF BY
@@ -492,11 +493,13 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --optional-services "<slugs>"
                             The SUBSET of user-level OPTIONAL services to bake
                             (allow-list). Choose from akkoma tuwunel phpbb games
-                            owncast tube character-studio, or the literal "all"
-                            (every user-level slug). Unlisted slugs are pruned from
-                            the baked GitOps tree by gate_optional_services.
+                            owncast tube character-studio character-forge, or the
+                            literal "all" (every user-level slug). Unlisted slugs
+                            are pruned from the baked GitOps tree by
+                            gate_optional_services.
                             Built-in DEFAULT (no selection) = "akkoma tuwunel phpbb";
-                            games/owncast/tube/character-studio are DEFAULT-OFF.
+                            games/owncast/tube/character-studio/character-forge are
+                            DEFAULT-OFF.
                             (env/brand.conf: OPTIONAL_SERVICES; =all = the full set)
       --all-services        Bake EVERY user-level OPTIONAL service — the FULL-SET
                             shortcut, equivalent to --optional-services all.
@@ -533,6 +536,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             /character-studio (ROLE_USER). OPTIONAL, DEFAULT-OFF (admin
                             gate). Equivalent to adding 'character-studio' to
                             --optional-services. --no-character-studio to keep it off.
+      --with-character-forge  Bake the Character Forge (3D character maker) slug —
+                            BFF db + BFF api (/bff/character-forge) + frontend
+                            remote at /character-forge (ROLE_USER). OPTIONAL,
+                            DEFAULT-OFF (admin gate). Equivalent to adding
+                            'character-forge' to --optional-services.
+                            --no-character-forge to keep it off. See docs/XR-CHAT.md.
       --idp P               Identity provider the baked services TRUST: casdoor
                             (DEFAULT — the built-in IdP, zero change) | entra
                             (Azure Entra ID) | aws (AWS Cognito) | oidc (any other
@@ -808,6 +817,12 @@ while [[ $# -gt 0 ]]; do
         # a CLIENT/standalone desktop is not a cluster member, so it is a no-op there.
         --with-character-studio) WANT_CHARACTER_STUDIO=true; shift ;;
         --no-character-studio) WANT_CHARACTER_STUDIO=false; shift ;;
+        # Character Forge (3D) — OPTIONAL multi-app slug (DEFAULT-OFF, admin gate):
+        # BFF db + BFF api + UI remote. --with-character-forge folds 'character-forge'
+        # into OPTIONAL_SERVICES; no-op on a CLIENT/standalone desktop (not a cluster
+        # member). See docs/XR-CHAT.md.
+        --with-character-forge) WANT_CHARACTER_FORGE=true; shift ;;
+        --no-character-forge) WANT_CHARACTER_FORGE=false; shift ;;
         # Tor v3 onion (hidden) service — a NODE service (DEFAULT-OFF) that exposes the
         # in-cluster fe-gateway as a .onion. Opt-in only; no-op on CLIENT/standalone.
         --with-tor) WANT_TOR=true; shift ;;
@@ -1015,6 +1030,22 @@ if [ "${WANT_CHARACTER_STUDIO}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-studio "*) ;;
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} character-studio" ;;
+    esac
+fi
+
+# Character Forge (3D) selection: --with-character-forge folds 'character-forge'
+# into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never auto-selected. A
+# CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
+# gate prunes the slug anyway when the cluster tree is absent).
+WANT_CHARACTER_FORGE="${WANT_CHARACTER_FORGE:-}"
+if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then
+    warn "--with-character-forge on a CLIENT/standalone role has no effect (no cluster tree); Character Forge is a cluster service."
+    WANT_CHARACTER_FORGE=false
+fi
+if [ "${WANT_CHARACTER_FORGE}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" character-forge "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} character-forge" ;;
     esac
 fi
 
@@ -2003,7 +2034,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind attestation-server egress-vpn workloadConsole edge-ai edge-ai-analysis edge-ai-tts tor; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge headwind attestation-server egress-vpn workloadConsole edge-ai edge-ai-analysis edge-ai-tts tor; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -2110,6 +2141,25 @@ gate_optional_services() {
                 _opt_drop_route "${apps}/20-gateway-fe.yaml" character-studio-ui
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/character-studio/**'
+                ;;
+            character-forge)
+                # Character Forge (3D) — MULTI-APP slug (DEFAULT-OFF, admin gate): BFF db +
+                # BFF api + UI remote (phpbb shape). Owns its three bootstrap Applications +
+                # three manifest dirs + its TWO fe-gateway path routes (character-forge-ui +
+                # snapdragon-character-forge-bff-api) + its TWO route-access rows (no gateway
+                # HOST; its ESO secrets ride the SHARED secretstore/pki files like forum-bff's
+                # — inert without their consumer pods, so NOT pruned here). When deselected
+                # the host greys the /character-forge entry out (installed-services "false").
+                # See docs/XR-CHAT.md.
+                rm -f "${apps}/38b-character-forge-bff-db.yaml" \
+                      "${apps}/39b-character-forge-bff-api.yaml" \
+                      "${apps}/49c-character-forge-ui.yaml"
+                rm -rf "${tree}/manifests/character-forge" \
+                       "${tree}/manifests/character-forge-bff-api" \
+                       "${tree}/manifests/character-forge-bff-db"
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-forge-ui snapdragon-character-forge-bff-api
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
+                    '/character-forge/**' '/bff/character-forge/**'
                 ;;
             tube)
                 # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
@@ -2324,7 +2374,7 @@ _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/hugmesh/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind attestation-server workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge headwind attestation-server workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
@@ -2359,7 +2409,7 @@ _opt_render_optionalservice_cr() {
     local seed="${SYSROOT}/var/lib/hugmesh/cluster/manifests/optional-services-operator/seed-optionalservices.yaml"
     [ -f "${seed}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio edge-ai edge-ai-analysis edge-ai-tts; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         _opt_set_cr_enabled "${seed}" "${slug}" "${val}"
     done

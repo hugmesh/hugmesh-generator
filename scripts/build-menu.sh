@@ -105,11 +105,14 @@ OPT_IDP_CLIENT_ID=""
 OPT_IDP_JWKS=""
 # ── Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate) ──
 OPT_CHARACTER_STUDIO="no"     # yes => --with-character-studio: VN character-studio remote at /character-studio
+# ── Character Forge (3D) multi-app slug — OPTIONAL, DEFAULT-OFF (admin gate) ────
+OPT_CHARACTER_FORGE="no"      # yes => --with-character-forge: 3D character maker (BFF db+api + remote at /character-forge)
 # ── OPTIONAL services catalog (cluster roles; specs/cluster/optional-services.yaml) ─
 # Comma list of user-level slugs {akkoma,tuwunel,phpbb,games,owncast,tube,
-# character-studio}. Empty = builder default (akkoma tuwunel phpbb); the literal
-# 'none' = EXPLICITLY none (=> --optional-services ""). The checklist supersedes
-# the lone character-studio toggle above — the two are kept in sync both ways.
+# character-studio,character-forge}. Empty = builder default (akkoma tuwunel
+# phpbb); the literal 'none' = EXPLICITLY none (=> --optional-services ""). The
+# checklist supersedes the lone character-studio/character-forge toggles above —
+# they are kept in sync both ways.
 OPT_SERVICES=""
 # ── MANAGED backing services (I8/M2; specs/cluster/backing-services.yaml) ────────
 # SPACE-separated `id=endpoint` tokens (mirrors the builders' MANAGED_SERVICES env,
@@ -221,6 +224,7 @@ save_conf() {
         printf 'OPT_IDP_CLIENT_ID=%q\n' "${OPT_IDP_CLIENT_ID}"
         printf 'OPT_IDP_JWKS=%q\n'      "${OPT_IDP_JWKS}"
         printf 'OPT_CHARACTER_STUDIO=%q\n' "${OPT_CHARACTER_STUDIO}"
+        printf 'OPT_CHARACTER_FORGE=%q\n' "${OPT_CHARACTER_FORGE}"
         printf 'OPT_SERVICES=%q\n'      "${OPT_SERVICES}"
         printf 'OPT_MANAGED_SERVICES=%q\n' "${OPT_MANAGED_SERVICES}"
         printf 'OPT_INSTALLER_UI=%q\n'  "${OPT_INSTALLER_UI}"
@@ -756,6 +760,7 @@ build_make_cmd() {
                 done
             fi
             [ "${OPT_CHARACTER_STUDIO}" = yes ] && bf+=" --with-character-studio"
+            [ "${OPT_CHARACTER_FORGE}" = yes ] && bf+=" --with-character-forge"
             # edge-ai-tts rides HERE (not the GPU-target case below with
             # edge-ai-analysis) — it is CPU-only + self-contained, NO edge-ai
             # dependency, so it applies to any cluster role, GPU or not.
@@ -1097,9 +1102,9 @@ edge_ai_options_screen() {
 # ── OPTIONAL services catalog (the user-level slugs from
 # specs/cluster/optional-services.yaml). One checklist -> --optional-services
 # "<list>" on cluster roles; checking 'games' also emits --enable-games (games is
-# opt-in). character-studio HERE supersedes the older lone toggle — the two are
-# kept in sync both ways (see services_sync_charstudio).
-SERVICE_SLUGS=(akkoma tuwunel phpbb games owncast tube character-studio)
+# opt-in). character-studio/character-forge HERE supersede the older lone toggles
+# — kept in sync both ways (see services_sync_charstudio/services_sync_charforge).
+SERVICE_SLUGS=(akkoma tuwunel phpbb games owncast tube character-studio character-forge)
 
 # Keep the services checklist and the lone Character Studio toggle consistent:
 # the checklist is authoritative once SET, so flipping the toggle edits the list
@@ -1115,6 +1120,18 @@ services_sync_charstudio() {
     OPT_SERVICES="${svc:-none}"
 }
 
+# Same both-ways sync for the lone Character Forge toggle (mirror of
+# services_sync_charstudio; the checklist is authoritative once SET).
+services_sync_charforge() {
+    [ -z "${OPT_SERVICES}" ] && return 0
+    local svc=",${OPT_SERVICES},"
+    svc="${svc/,none,/,}"
+    svc="${svc/,character-forge,/,}"
+    [ "${OPT_CHARACTER_FORGE}" = yes ] && svc="${svc}character-forge,"
+    svc="${svc#,}"; svc="${svc%,}"
+    OPT_SERVICES="${svc:-none}"
+}
+
 services_screen() {
     # Current selection: saved list, or (untouched) the builder default — with the
     # legacy lone character-studio toggle migrated in as a pre-checked box.
@@ -1122,6 +1139,7 @@ services_screen() {
     if [ -z "${OPT_SERVICES}" ]; then
         cur="akkoma,tuwunel,phpbb"
         [ "${OPT_CHARACTER_STUDIO}" = yes ] && cur="${cur},character-studio"
+        [ "${OPT_CHARACTER_FORGE}" = yes ] && cur="${cur},character-forge"
     elif [ "${OPT_SERVICES}" = none ]; then
         cur=""
     else
@@ -1136,6 +1154,7 @@ services_screen() {
         [owncast]="owncast ........... live streaming"
         [tube]="tube .............. LocalTube video"
         [character-studio]="character-studio .. Character Studio (VN) frontend remote"
+        [character-forge]="character-forge ... Character Forge (3D maker: BFF db+api + remote)"
     )
     for s in "${SERVICE_SLUGS[@]}"; do
         case ",${cur}," in *,"${s}",*) state=on ;; *) state=off ;; esac
@@ -1143,7 +1162,7 @@ services_screen() {
     done
     local sel
     sel="$(ui_checklist "Optional services" \
-        "OPTIONAL user-level services baked onto CLUSTER images (defaults: akkoma+tuwunel+phpbb ON; games/owncast/tube/character-studio OFF). Unchecked slugs are pruned from the baked GitOps tree:" \
+        "OPTIONAL user-level services baked onto CLUSTER images (defaults: akkoma+tuwunel+phpbb ON; games/owncast/tube/character-studio/character-forge OFF). Unchecked slugs are pruned from the baked GitOps tree:" \
         "${rows[@]}")" || return 0
     # space-separated tags -> the persisted comma list ('' selection = EXPLICIT none)
     set -- ${sel}
@@ -1152,10 +1171,14 @@ services_screen() {
     else
         OPT_SERVICES="$(IFS=,; printf '%s' "$*")"
     fi
-    # the checklist supersedes the lone Character Studio toggle — mirror it
+    # the checklist supersedes the lone Character Studio/Forge toggles — mirror them
     case ",${OPT_SERVICES}," in
         *,character-studio,*) OPT_CHARACTER_STUDIO=yes ;;
         *)                    OPT_CHARACTER_STUDIO=no ;;
+    esac
+    case ",${OPT_SERVICES}," in
+        *,character-forge,*) OPT_CHARACTER_FORGE=yes ;;
+        *)                   OPT_CHARACTER_FORGE=no ;;
     esac
     save_conf
 }
@@ -1359,6 +1382,7 @@ options_screen() {
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
             idp      "Identity provider ... ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo " (${OPT_IDP_ISSUER:-issuer unset})")   (mesh-node token IdP; casdoor=built-in default)" \
             charstudio "Character Studio (VN) $([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo on || echo off)   (frontend remote at /character-studio; default off)" \
+            charforge "Character Forge (3D)  $([ "${OPT_CHARACTER_FORGE}" = yes ] && echo on || echo off)   (3D maker: BFF db+api + remote at /character-forge; default off)" \
             advbrand "Advanced branding ... $({ [ -n "${OPT_BR_WALLPAPER}${OPT_BR_GRUB_BG}${OPT_BR_LOGIN_BG}${OPT_BR_LOGO}${OPT_BR_ACCENT}${OPT_BR_SCHEME}" ] && echo overrides; } || echo '<preset>')   (wallpaper/GRUB/login/logo/accent/scheme)" \
             home     "Home provisioning ... ${OPT_HOME_MODE:-<default>}   (standalone/client desktops)" \
             instui   "Installer UI ........ ${OPT_INSTALLER_UI:-<builder default>}   (cli|ncurses|calamares|all)" \
@@ -1387,6 +1411,8 @@ options_screen() {
             idp)     idp_screen ;;
             charstudio) OPT_CHARACTER_STUDIO="$([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo no || echo yes)"
                         services_sync_charstudio ;;   # the checklist mirrors the toggle
+            charforge) OPT_CHARACTER_FORGE="$([ "${OPT_CHARACTER_FORGE}" = yes ] && echo no || echo yes)"
+                       services_sync_charforge ;;     # the checklist mirrors the toggle
             advbrand) branding_screen ;;
             home)    home_screen ;;
             instui)  local iu

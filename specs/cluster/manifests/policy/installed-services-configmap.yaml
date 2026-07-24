@@ -59,6 +59,14 @@ data:
   # installed:"false" and the optional-services ApplicationSet never creates it even
   # on a repo-synced cluster. The host greys the /character-studio entry when "false".
   character-studio: "false"
+  # character-forge — Character Forge (3D character maker + XR chat avatars), the
+  # MULTI-APP slug (BFF db + BFF api + UI remote at /character-forge, ROLE_USER;
+  # docs/XR-CHAT.md). DEFAULT-OFF (admin gate). Rendered true/false by
+  # _opt_render_installed_services from OPTIONAL_SERVICES; the literal baseline
+  # below is the SAFE DEFAULT (off) so an image built WITHOUT it ships
+  # installed:"false" and the optional-services ApplicationSet never creates it even
+  # on a repo-synced cluster. The host greys the /character-forge entry when "false".
+  character-forge: "false"
   # workloadConsole — the podman/OpenShift-equivalent pod console (RBAC + route-access).
   # DEFAULT "false" (ships dark); rendered to true/false by _opt_render_installed_services
   # from OPTIONAL_SERVICES. The admin console greys out the Workload Console remote when
@@ -144,6 +152,7 @@ data:
       { "slug": "owncast", "displayName": "Owncast (live streaming)", "namespace": "hugmesh-owncast", "mountAt": "/owncast" },
       { "slug": "tube",    "displayName": "LocalTube (YouTube archive)", "namespace": "hugmesh-tube", "mountAt": "/tube" },
       { "slug": "character-studio", "displayName": "Character Studio (VN)", "namespace": "hugmesh-frontend", "mountAt": "/character-studio" },
+      { "slug": "character-forge", "displayName": "Character Forge (3D)", "namespace": "hugmesh-backend", "mountAt": "/character-forge" },
       { "slug": "workloadConsole", "displayName": "Workload Console", "namespace": "hugmesh-backend", "mountAt": "/admin/workloads", "hidden": true },
       { "slug": "anubis",  "displayName": "Anubis (anti-scraper PoW gate)", "namespace": "hugmesh-frontend", "mountAt": null },
       { "slug": "coturn",  "displayName": "coturn (TURN/STUN server)", "namespace": "hugmesh-backend", "mountAt": null, "dependsOn": "tuwunel" },

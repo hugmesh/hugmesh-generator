@@ -1214,6 +1214,46 @@ def test_g34_rpi5_force_off_character_studio():
     assert "--no-character-studio" in args
 
 
+# ---- character-forge: tri-state multi-app slug (mirrors character_studio) -------
+
+def test_character_forge_with_flag_x86():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       character_forge=True).to_cli_args()
+    assert "--with-character-forge" in args
+
+
+def test_g34_force_off_character_forge_x86():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       character_forge="off").to_cli_args()
+    assert "--no-character-forge" in args
+    assert "--with-character-forge" not in args
+
+
+def test_character_forge_default_emits_nothing():
+    """The never-set tri-state must emit NEITHER flag (builder default = off)."""
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                       tailscale=True).to_cli_args()
+    assert "--with-character-forge" not in args
+    assert "--no-character-forge" not in args
+
+
+def test_g34_rpi5_character_forge_tristate_both_ways():
+    on = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                     character_forge=True).to_cli_args()
+    off = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                      character_forge="off").to_cli_args()
+    assert "--with-character-forge" in on
+    assert "--no-character-forge" in off
+
+
+def test_character_forge_slug_in_services_list():
+    """'character-forge' is a first-class --optional-services slug too (the
+    checklist path, independent of the lone tri-state flag)."""
+    args = ImageConfig(mode="mesh", role="be", platform="x86", tailscale=True,
+                       optional_services=["akkoma", "character-forge"]).to_cli_args()
+    assert ("--optional-services", "akkoma character-forge") in zip(args, args[1:])
+
+
 # ---- edge-ai-tts: independent tri-state, NO edge-ai dependency ------------------
 
 def test_edge_ai_tts_x86_no_edge_ai_coupling():
@@ -1399,6 +1439,7 @@ _FIELD_PROBE = {
     "edge_ai_tts": {"edge_ai_tts": True},
     "tor_onion_service": {"tor_onion_service": True},
     "character_studio": {"character_studio": True},
+    "character_forge": {"character_forge": True},
     # mesh-node identity provider (I6): the casdoor default emits NOTHING, so every
     # probe is the minimal VALID external combo (multi-key prerequisite entries,
     # like egress_vpn_locked) — emission on x86 + rpi5 only.

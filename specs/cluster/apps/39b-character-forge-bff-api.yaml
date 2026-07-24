@@ -1,0 +1,30 @@
+# character-forge-bff — Backend-For-Frontend for the character-forge remote (the
+# 3D character maker + the XR chat room's avatar source). ClusterIP in
+# snapdragon-backend; the ONLY way in is the fe-gateway /bff/character-forge/**
+# route (same origin as snapdragon.systems). Owns the character_forge_character
+# table in character-forge-bff-db. See docs/XR-CHAT.md.
+#
+# DEPLOY ORDERING: lands AFTER character-forge-bff-db (38b) + its mTLS/db ESO
+# secrets. No downstream homeserver leg (unlike forum-bff): its only dependency is
+# its own Postgres. Deploy with the gateway/BFF client-cert mTLS wave
+# (SSL_CLIENT_AUTH=need).
+# OPTIONAL service (DEFAULT-OFF, admin gate): pruned by gate_optional_services()
+# when the 'character-forge' slug is not selected. See
+# specs/cluster/optional-services.yaml (slug: character-forge).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: character-forge-bff-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/character-forge-bff-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

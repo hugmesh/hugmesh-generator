@@ -104,6 +104,18 @@ spec:
 apiVersion: platform.hugmesh.systems/v1alpha1
 kind: OptionalService
 metadata:
+  name: character-forge
+  namespace: devops
+  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  slug: character-forge
+  enabled: false
+  reason: build-seed (DEFAULT-OFF baseline)
+  requestedBy: generator:_opt_render_optionalservice_cr
+---
+apiVersion: platform.snapdragon.systems/v1alpha1
+kind: OptionalService
+metadata:
   name: anubis
   namespace: devops
   labels: { app.kubernetes.io/part-of: hugmesh.systems }

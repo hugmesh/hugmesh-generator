@@ -294,7 +294,7 @@ GPU_DRIVER_ALIASES = {"amd": "amd-free", "ati": "amd-free", "ati-free": "amd-fre
 
 # The full cluster user-level optional-service set (--optional-services slugs).
 OPTIONAL_SERVICES_CHOICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
-                             "character-studio")
+                             "character-studio", "character-forge")
 
 # INFRA-level slugs the builders honour in --optional-services but which --all-services
 # does NOT include (build-rpi5-stage4.sh usage 573-581). x86 has dedicated flags for
@@ -480,8 +480,9 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # default emits nothing; the probe uses an external combo (multi-key entry).
     "idp": _X86_RPI5, "idp_issuer": _X86_RPI5, "idp_client_id": _X86_RPI5,
     "idp_jwks": _X86_RPI5,
-    # tor / character-studio / services.
+    # tor / character-studio / character-forge / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
+    "character_forge": _X86_RPI5,
     "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
@@ -1413,6 +1414,8 @@ class ImageConfig:
     tor_onion_service: bool | str = False  # tri-state: --with-tor / --no-tor (expose fe-gateway as a v3 .onion)
     # ── Character Studio (VN) frontend remote — OPTIONAL, default off (admin gate) ──
     character_studio: bool | str = False  # tri-state: --with-character-studio / --no-character-studio
+    # ── Character Forge (3D) multi-app slug — OPTIONAL, default off (admin gate) ──
+    character_forge: bool | str = False   # tri-state: --with-character-forge / --no-character-forge (3D maker: BFF db+api + remote)
     # ── cluster optional services + games (node-scoped) ──
     optional_services: list[str] = field(default_factory=list)  # --optional-services slugs (+ none/all sentinels)
     exclude_services: list[str] = field(default_factory=list)   # --exclude-services subtractive list (applied last)
@@ -1945,6 +1948,17 @@ class ImageConfig:
             return ["--no-character-studio"]
         return []
 
+    def _character_forge_args(self) -> list[str]:
+        """--with-character-forge / --no-character-forge tri-state (x86 + rpi5).
+        The Character Forge multi-app slug (BFF db + BFF api + UI remote) —
+        mirrors _character_studio_args' shape exactly."""
+        cf = self._tri(self.character_forge)
+        if cf == "on":
+            return ["--with-character-forge"]
+        if cf == "off":
+            return ["--no-character-forge"]
+        return []
+
     def _edge_ai_tts_args(self) -> list[str]:
         """--with-edge-ai-tts / --no-edge-ai-tts tri-state (x86 + rpi5). CPU-only,
         self-contained — NO edge-ai dependency (unlike edge_ai_analysis's plain-bool
@@ -2458,6 +2472,11 @@ class ImageConfig:
         # cloud/mesh cluster build (the builder guards on !ROLE_CLIENT / no-op on a
         # standalone desktop with no cluster tree). Tri-state (--no-character-studio).
         a += self._character_studio_args()
+
+        # Character Forge (3D) multi-app slug — OPTIONAL, DEFAULT-OFF (admin gate).
+        # Folds 'character-forge' into OPTIONAL_SERVICES. Same cluster-only scope +
+        # tri-state shape as character_studio above (--no-character-forge).
+        a += self._character_forge_args()
 
         # mesh-node identity provider (I6). Casdoor default = ZERO emission (the
         # byte-identity invariant); external providers thread the 4 idp flags the

@@ -59,6 +59,16 @@ spec:
           # from the installed-services ConfigMap by _opt_render_installed_services.
           # Scaffolded "false" (DEFAULT-OFF baseline + the pre-cut-over no-collision rule).
           - { slug: character-studio, path: specs/cluster/manifests/character-studio, namespace: hugmesh-frontend, installed: "false" }
+          # character-forge — Character Forge (3D) MULTI-APP slug (DEFAULT-OFF, admin
+          # gate): BFF db + BFF api + UI remote (docs/XR-CHAT.md). Same runtime
+          # add/remove model; installed flag mirrored from the installed-services
+          # ConfigMap by _opt_render_installed_services. Scaffolded "false"
+          # (DEFAULT-OFF baseline + the pre-cut-over no-collision rule). LIMITATION
+          # (mirrors phpbb above, whose element covers only manifests/forum of its
+          # four apps): one element = one Application = ONE manifest dir — this
+          # element carries the BFF api dir; the bff-db + UI dirs ride the hardcoded
+          # apps/38b + 49c until the multi-dir cut-over.
+          - { slug: character-forge, path: specs/cluster/manifests/character-forge-bff-api, namespace: hugmesh-backend, installed: "false" }
           # anubis — PUBLIC PoW shield. ENV-CONDITIONAL default: the generator's
           # _opt_render_installed_services() renders the installed-services
           # ConfigMap anubis flag ON for PROD builds ("all shields up") and OFF for

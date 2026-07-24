@@ -157,6 +157,17 @@ spec:
             path: /character-studio/**
             filters:
               - StripPrefix=1
+          # Character Forge (3D character maker) micro-frontend remote
+          # (/character-forge/** -> snapdragon-character-forge-ui on :8080, non-root
+          # nginx; the Service keeps the repo's DESIGN-locked snapdragon-* name).
+          # Role floor ROLE_USER (route-DB). OPTIONAL slug `character-forge`:
+          # gate_optional_services REMOVES this route (and the /bff/character-forge/**
+          # BFF route below) when the slug is deselected.
+          - id: character-forge-ui
+            uri: http://snapdragon-character-forge-ui.hugmesh-frontend.svc.cluster.local:8080
+            path: /character-forge/**
+            filters:
+              - StripPrefix=1
           # API documentation micro-frontend remote (/apidocs/** -> hugmesh-api-docs).
           # Role floor ROLE_ADMIN (route-DB) — the rendered OpenAPI/spec docs are
           # admin-only, matching federation's spec floor.
@@ -209,6 +220,17 @@ spec:
           - id: hugmesh-wiki-bff-api
             uri: https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/wiki/**
+          # Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-
+          # bff-api): saved 3D character configs + the VN→3D /map endpoint. SIBLING of
+          # /bff/forum/** + /bff/wiki/** above (non-overlapping prefix, ROLE_USER
+          # floor), declared BEFORE the /bff/** admin-bff catch-all below (Spring Cloud
+          # Gateway matches first-in-declared-order). https:// — character-forge-bff
+          # enforces mTLS (client-auth=need); the gateway presents its client cert on
+          # this leg. OPTIONAL slug `character-forge`: gate_optional_services REMOVES
+          # this route when the slug is deselected.
+          - id: snapdragon-character-forge-bff-api
+            uri: https://snapdragon-character-forge-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/character-forge/**
           # SSO login/session/registration RELOCATED admin-bff -> user-bff-api: login
           # is a user concern, so the user BFF now owns /bff/login, /bff/register,
           # /bff/me, /bff/session, /bff/provision. These are MORE-SPECIFIC than the

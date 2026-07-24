@@ -109,6 +109,14 @@ spec:
                     - owncast
                     - tube
                     - character-studio
+                    # character-forge (3D maker multi-app slug, docs/XR-CHAT.md) —
+                    # added WITH its 13a element + ConfigMap boolean + seed CR in the
+                    # same wave (the 1:1 shape this enum requires), growing the
+                    # closed set 12 -> 13. NOTE (cross-repo, like the meshbridge
+                    # TODO above): the admin-bff controller's built-in
+                    # OptionalServiceRegistry must learn the slug before the
+                    # (dark-by-default) reconciler can actuate it.
+                    - character-forge
                     - anubis
                     - coturn
                     - edge-ai

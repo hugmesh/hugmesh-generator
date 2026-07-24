@@ -181,6 +181,24 @@ services:
       interval: 5s
       retries: 20
 
+  # character-forge-bff-db — character-forge-bff's own Postgres (Liquibase-owned
+  # schema, EMPTY DB). specs/cluster/manifests/character-forge-bff-db. Same
+  # shape/creds convention as forum-bff-db above (owner-role connect, dev
+  # placeholder password).
+  character-forge-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: charforgebff
+      POSTGRES_USER: charforgebff
+      POSTGRES_PASSWORD: charforgebff
+    volumes:
+      - character-forge-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U charforgebff -d charforgebff"]
+      interval: 5s
+      retries: 20
+
   # wiki-bff-db — wiki-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
   # specs/cluster/manifests/wiki-bff-db.
   wiki-bff-db:
@@ -780,6 +798,36 @@ services:
       retries: 30
       start_period: 60s
 
+  # character-forge-bff — the character-forge slug's BFF (saved 3D character
+  # configs + the VN→3D /map endpoint; docs/XR-CHAT.md). Same spring-bff
+  # resource-server archetype as forum-bff above; NO downstream homeserver leg —
+  # its only dependency is its own Postgres. NOTE: the repo is the MULTI-SURFACE
+  # snapdragon-character-forge-bff-api (BFF root + godot/ + frontend/); the BFF
+  # image builds from the repo ROOT.
+  snapdragon-character-forge-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-forge-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      SPRING_R2DBC_URL: "r2dbc:postgresql://character-forge-bff-db:5432/charforgebff"
+      SPRING_R2DBC_USERNAME: charforgebff
+      SPRING_R2DBC_PASSWORD: charforgebff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://character-forge-bff-db:5432/charforgebff"
+      SPRING_LIQUIBASE_USER: charforgebff
+      SPRING_LIQUIBASE_PASSWORD: charforgebff
+    depends_on:
+      character-forge-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
   hugmesh-wiki-bff-api:
     <<: *amd64
     build:
@@ -1040,6 +1088,17 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-studio-ui
 
+  # character-forge-ui — mounted at /character-forge/** (canonical cluster
+  # route-access row + fe route, specs/cluster/apps/20-gateway-fe.yaml). UNLIKE
+  # character-studio-ui it has a dedicated BFF (snapdragon-character-forge-bff-api
+  # above, /bff/character-forge/**). The frontend lives in the SAME repo as the
+  # BFF (frontend/ subdir of snapdragon-character-forge-bff-api — one repo: BFF
+  # root + godot/ + frontend/), so the build context points INTO that clone.
+  snapdragon-character-forge-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-forge-bff-api/frontend
+
   # ── hugmesh-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
   # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional
   # service (docs/TOR-HIDDEN-SERVICE.md) for the LOCAL docker mesh — INBOUND
@@ -1071,6 +1130,7 @@ volumes:
   federation-pg:
   admin-bff-pg:
   forum-bff-pg:
+  character-forge-bff-pg:
   wiki-bff-pg:
   owncast-bff-pg:
   tube-bff-pg:
