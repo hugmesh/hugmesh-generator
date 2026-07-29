@@ -128,16 +128,26 @@ def test_branding_dir_scheme_grub_theme_grey_and_clear_on_arm(wiz):
 
 
 def test_branding_dir_scheme_grub_theme_clear_for_unaffiliated(wiz):
-    """The unaffiliated role hard-conflicts on ALL branding assets — the new
-    fields must join the role's clear-on-validate so a role switch cannot poison
-    the argv (config._check_unaffiliated_conflicts lists all three)."""
+    """The unaffiliated role hard-conflicts on ALL branding assets — a role switch
+    must not poison the argv (config._check_unaffiliated_conflicts lists all three).
+
+    Updated for the unaffiliated-surface fix: the BrandingPage is no longer PART of
+    this flow at all (applies_to skips it — a page whose every field is a hard
+    conflict has nothing to offer), so the clearing this test used to observe on
+    the page's validate now happens at ROLE COMMIT, and the walk below must land on
+    the NetworkPage without ever seeing a branding screen. The original assertions
+    — fields cleared, argv emittable, no branding flags — are unchanged; only WHERE
+    the flow satisfies them moved."""
     c = wiz.cfg
     c.branding_dir = "/tmp/brand-tree"; c.grub_theme = "/tmp/grub-theme"
     c.color_scheme = "/tmp/Boogiepop.colors"
     pick_role(wiz, UNAFFILIATED_ROLE)
-    page = advance_to(wiz, wizard_mod.BrandingPage)
-    assert page.unaffiliated_note.isVisible()
-    advance_to(wiz, wizard_mod.NetworkPage)
+    page = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not isinstance(page, wizard_mod.BrandingPage)
+    # the walk from role -> network must not have passed through BrandingPage
+    assert not any(isinstance(wiz.page(i), wizard_mod.BrandingPage)
+                   for i in wiz.visitedIds() if i != -1), \
+        "the BrandingPage was visited on an unaffiliated flow"
     assert c.branding_dir == "" and c.grub_theme == "" and c.color_scheme == ""
     args = c.to_cli_args()   # would raise on any leftover branding asset
     for flag in ("--branding-dir", "--grub-theme", "--color-scheme"):

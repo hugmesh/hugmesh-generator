@@ -38,6 +38,7 @@ from ...core.config import (
     RPI5_ROLE_MAP,
     SERVICES_ALL,
     SERVICES_NONE,
+    UNAFFILIATED_ROLE,
     X86_NODE_ROLES,
     tailnet_sso_visible,
 )
@@ -686,6 +687,30 @@ class NetworkPage(QtWidgets.QWizardPage):
                 "but IGNORED by the builder (the build plan shows OPTIONAL_SERVICES "
                 "as n/a). They only take effect on cluster NODE roles.")
         self.services_role_note.setVisible(client)
+        # …and on an UNAFFILIATED image, HIDE the cluster-services picker outright
+        # rather than merely captioning it. Operator report: "the unaffiliated
+        # desktop image wizard still shows options like mesh services and branding
+        # and login when it shouldn't". For every other client-class role the
+        # heads-up note above is the right call — the flags ARE parsed, they just
+        # do nothing on a desktop, and a branded desktop can legitimately be
+        # re-rolled as a node later. Unaffiliated is categorically different: the
+        # role exists to bake ZERO HugMesh affiliation, and cluster services are
+        # the platform machinery it is defined by NOT having. Offering a mesh
+        # service list on that screen is offering a choice that cannot mean
+        # anything. Values are cleared below so hiding changes no argv.
+        unaffiliated = (c.role == UNAFFILIATED_ROLE or getattr(c, "unaffiliated", False))
+        if unaffiliated:
+            # Clear to the UNSET state, NOT to the "none" sentinel: SERVICES_NONE is
+            # an explicit choice that emits `--optional-services none`, so checking it
+            # here would ADD a flag the operator never picked — hiding a control must
+            # not change the build. (Caught by
+            # test_hiding_the_services_box_leaves_the_emission_neutral, which failed on
+            # exactly that first attempt.)
+            self.services_none.setChecked(False)
+            self.services_all.setChecked(False)
+            self.services.clearSelection()
+            self.services_box.setVisible(False)
+            self.services_role_note.setVisible(False)
         # per-platform capability greying (G10/G11/G12): x86-only emission fields
         # used to sit un-greyed on ARM and silently drop their values from the argv.
         # validatePage() clears whatever is greyed here (clear_unsupported).

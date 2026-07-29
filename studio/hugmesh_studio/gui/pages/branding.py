@@ -161,6 +161,31 @@ class BrandingPage(QtWidgets.QWizardPage):
         elif self.theme.count():
             self.theme.setCurrentIndex(0)
 
+    def applies_to(self, cfg) -> bool:
+        """SKIP this page entirely on an unaffiliated image (operator report: "the
+        unaffiliated desktop image wizard still shows options like mesh services and
+        branding and login when it shouldn't").
+
+        The role builds a plain Gentoo desktop with ZERO HugMesh affiliation, so
+        EVERY field this page owns is a builder hard conflict
+        (_check_unaffiliated_conflicts) — the page could only ever be shown greyed
+        with an apology note, which is what it did. A greyed-out screen the operator
+        must still click Next through is not a choice; it is noise.
+
+        Emission-neutral, the documented precondition for applies_to() -> False: the
+        RolePage now blanks every branding field at the moment the role is committed,
+        so nothing this page would have cleared can survive to the argv.
+
+        The web-login-theme half goes with it. Those fields are mesh-plane and
+        deliberately NOT cleared for the unaffiliated ROLE (an unaffiliated image can
+        ride a mesh whose login page is themed — different scopes), but that scope
+        only exists in MESH mode, where the RolePage never runs and this role is
+        unreachable. In the standalone/cloud flows that DO reach it there is no
+        login-ui being served, so the section themed nothing.
+        """
+        return not (getattr(cfg, "role", "") == UNAFFILIATED_ROLE
+                    or getattr(cfg, "unaffiliated", False))
+
     def initializePage(self):
         c = self.wiz.cfg
         unaffiliated = c.role == UNAFFILIATED_ROLE

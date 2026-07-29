@@ -17,6 +17,8 @@ import argparse
 import os
 import sys
 
+from .core import crashlog
+
 
 def _default_generator_dir() -> str:
     # studio/ lives inside the generator repo; default to the repo root.
@@ -36,6 +38,12 @@ REMEMBER_ROLES_ENV = "HUGMESH_REMEMBER_ROLES_FOR_PASSWORDLESS_LOGIN"
 
 
 def main(argv=None) -> int:
+    # FIRST thing, before argparse and long before any Qt import: a crash from here
+    # on leaves a file behind. Under PyQt6 an unhandled exception in a slot calls
+    # qFatal() and ABORTS the process, and a Studio launched from a desktop entry has
+    # nowhere to print — which is why the 2026-07-29 GUI crash had to be
+    # reconstructed from build artifacts and file mtimes. See core/crashlog.py.
+    crashlog.install()
     ap = argparse.ArgumentParser(description="HugMesh Image Studio")
     ap.add_argument("--generator-dir", default=_default_generator_dir(),
                     help="path to the hugmesh-generator checkout")

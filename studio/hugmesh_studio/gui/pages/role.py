@@ -751,6 +751,20 @@ class RolePage(QtWidgets.QWizardPage):
         # clear it here so the wizard default cannot poison the argv.
         if c.role == UNAFFILIATED_ROLE or c.unaffiliated:
             c.bundle_source = False
+            # Every branding field is a builder HARD CONFLICT on an unaffiliated
+            # image (_check_unaffiliated_conflicts: "branding assets (… — nothing
+            # to theme against)"), so clear them HERE, at the moment the role is
+            # committed, rather than relying on the BrandingPage's own
+            # validatePage. That page is now SKIPPED for this role (applies_to),
+            # and a skipped page never validates — so an operator who set a theme
+            # and then switched to unaffiliated would otherwise carry the stale
+            # value straight into a ValueError at preview/build time. Clearing at
+            # the commit point is also what makes the skip emission-neutral, the
+            # documented precondition for applies_to() returning False.
+            c.theme = c.branding_dir = c.wallpaper = c.grub_background = ""
+            c.grub_theme = c.login_background = c.brand_logo = ""
+            c.accent_color = c.color_scheme = ""
+            c.brand_locked = False
         # per-platform-only axes default clear; the selected platform's branch
         # below overrides (same lingering-value rule as the composable flags)
         c.kernel_flavor = ""
