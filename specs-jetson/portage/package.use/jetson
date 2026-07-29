@@ -14,6 +14,18 @@ sys-block/parted device-mapper
 # modems are absent from this target (same rationale as the Frite).
 net-misc/networkmanager wifi -modemmanager
 
+# networkmanager[wifi] (forced above) hard-requires wpa_supplicant[dbus] (NM drives
+# it over D-Bus). dbus is not a default USE; pre-seed it or payload resolution
+# aborts. Verbatim the same pre-seed specs-rpi5/portage/package.use/rpi5:26 and
+# specs-x86/portage/package.use/net:18 already carry — this spec forced the wifi
+# USE without it, so NetworkManager could never merge and ALL FOUR Jetson roles
+# (edge_ai, full, gpu-host, jetson-desktop) failed the payload assert with zero
+# artifacts in the 2026-07-19 sweep:
+#     The following USE changes are necessary to proceed:
+#     # required by net-misc/networkmanager-1.56.1::gentoo[wifi,-iwd]
+#     >=net-wireless/wpa_supplicant-2.11-r5 dbus
+net-wireless/wpa_supplicant dbus
+
 # containerd on the hardened/selinux profile (k8s roles): the selinux USE is
 # profile-forced; the HOST-side toolchain pre-seed lives in the builder (see the
 # rpi5 builder's host package.use note) — this covers the TARGET side.

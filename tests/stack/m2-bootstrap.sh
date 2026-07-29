@@ -136,16 +136,35 @@ build_one() { # repo -> mvn install from ${SRC_DIR}/<repo> into the cached m2
   # on disk — expected; the registry serves it read-only and the idempotency
   # probe above only needs world-read). -DskipTests skips test EXECUTION only:
   # test classes still compile, so commons' test-jar classifier is produced.
+  #
+  # -Dhugmesh.analysis.skip=true is the parent POM's OWN single switch for the
+  # spotbugs/pmd/checkstyle gates (all three use <skip>${hugmesh.analysis.skip}</skip>);
+  # the standard per-plugin skip properties are IGNORED because the parent hardcodes
+  # <skip> to this property. This is a cache-population build reproducing the artifacts
+  # the org registry would serve — re-running a dependency's quality gates here is wrong
+  # (and auth-core 2.4.0 has 8 latent spotbugs findings that would fail the cold-build).
+  #
+  # KEEP THIS COMMENT BLOCK ABOVE THE COMMAND. It used to sit BETWEEN the image
+  # argument and `mvn`, inside the backslash continuation — which silently broke
+  # cold bring-up entirely. A `\` continuation joins the next line, and that line
+  # began with `#`, so bash read:
+  #     docker run --rm -v … -v … -w /work "${MAVEN_IMAGE}"   # comment…
+  # i.e. the container launched with NO mvn command (it ran the image's default
+  # CMD), the logical line ENDED at the comment, and the `mvn … install` lines
+  # below then executed as a SEPARATE command ON THE HOST — against
+  # /usr/share/maven/ref/settings-docker.xml, a path that exists only inside the
+  # container. Reproduced verbatim with stub docker/mvn (and /usr/bin/mvn IS
+  # present on this host, so it really did run):
+  #     DOCKER:--rm maven:image        HOSTMVN:-B install
+  # So build_one could never populate the cache, `make stack-m2-bootstrap`
+  # produced no artifacts, and every COLD `make stack-up` then failed at the
+  # first private-maven consumer. `bash -n` does not catch this — it is valid
+  # bash that means something else. tests/stack/test-m2-bootstrap.sh pins the
+  # shape here AND lints the whole repo for the same class.
   docker run --rm \
     -v "${M2_CACHE}/m2:/usr/share/maven/ref" \
     -v "${dir}:/work" -w /work \
     "${MAVEN_IMAGE}" \
-    # -Dhugmesh.analysis.skip=true is the parent POM's OWN single switch for the
-    # spotbugs/pmd/checkstyle gates (all three use <skip>${hugmesh.analysis.skip}</skip>);
-    # the standard per-plugin skip properties are IGNORED because the parent hardcodes
-    # <skip> to this property. This is a cache-population build reproducing the artifacts
-    # the org registry would serve — re-running a dependency's quality gates here is wrong
-    # (and auth-core 2.4.0 has 8 latent spotbugs findings that would fail the cold-build).
     mvn -B -ntp -s /usr/share/maven/ref/settings-docker.xml install -DskipTests \
         -Dhugmesh.analysis.skip=true
 }

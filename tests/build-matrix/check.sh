@@ -1570,7 +1570,8 @@ run_nongating_smokes() {
                 "sharedbinpkg-ro-distdir:${REPO_DIR}/tests/scripts/test-arm-ro-distdir.sh" \
                 "sharedbinpkg-pool-fingerprint:${REPO_DIR}/tests/scripts/test-binpkg-pool-fingerprint.sh" \
                 "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh" \
-                "package-completeness:${REPO_DIR}/tests/build-package-completeness.sh"; do
+                "package-completeness:${REPO_DIR}/tests/build-package-completeness.sh" \
+                "spec-use-parity:${REPO_DIR}/tests/scripts/test-spec-use-parity.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then
             SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue

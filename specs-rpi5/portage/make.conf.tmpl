@@ -40,6 +40,25 @@ DISTDIR="@@WORK_DIR@@/distfiles"
 # no gir consumer, so disable introspection fleet-wide for the Pi cross-build. (The x86
 # NATIVE build is unaffected: it runs g-ir-scanner inside a chroot whose python matches.)
 USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth -introspection"
+# -vala is REQUIRED once introspection is off, and its absence here was the one
+# token separating this spec from every other platform (jetson:39, frite:50,
+# orangepi5:61, orangepi-zero2:53 all carry `-introspection -vala`). librsvg
+# enforces `vala? ( introspection )`, so with vala ON and introspection OFF the
+# constraint is UNSATISFIABLE and resolution dies:
+#     !!! The ebuild selected to satisfy "gnome-base/librsvg[...]" has unmet requirements.
+#       - gnome-base/librsvg-2.62.2-r1 USE="vala -debug -gtk-doc -introspection"
+#       The following REQUIRED_USE flag constraints are unsatisfied:
+#         vala? ( introspection )
+# librsvg is only reachable via the gtk+3 chain that @@CLIENT_USE@@ turns on, so
+# the headless pki/be/fe roles never hit it and shipped fine — but --role desktop
+# did, and the failure CASCADED far past librsvg: the 2026-07-19 rpi5-desktop
+# build skipped 47 of its 64 packages (xorg-server, openbox, lightdm, openssh,
+# sudo, cryptsetup, lvm2, audit, policycoreutils, selinux-base, ...) and produced
+# NO artifact, ending at:
+#     ERROR: stage4 payload incomplete — missing: NetworkManager nmcli auditd
+#            crond parted flashrom rpi-eeprom-update Xorg openbox lxsession
+#            pcmanfm lightdm
+USE="${USE} -vala"
 USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
 # @@CLIENT_USE@@ expands to "X gtk dbus elogind udev" for --role desktop
 # (ROLE_CLIENT) and to nothing for the k8s cluster-node roles. Appended LAST so

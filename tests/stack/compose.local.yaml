@@ -185,8 +185,13 @@ services:
   # schema, EMPTY DB). specs/cluster/manifests/character-forge-bff-db. Same
   # shape/creds convention as forum-bff-db above (owner-role connect, dev
   # placeholder password).
+  # OPT-IN under the same `charforge` profile as the BFF it serves (see that
+  # service for why the slug is gated): its ONLY consumer is that BFF, so in the
+  # default set it was a Postgres container plus a persistent volume running for
+  # nobody.
   character-forge-bff-db:
     <<: *amd64
+    profiles: ["charforge"]
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: charforgebff
@@ -856,8 +861,29 @@ services:
   # its only dependency is its own Postgres. NOTE: the repo is the MULTI-SURFACE
   # snapdragon-character-forge-bff-api (BFF root + godot/ + frontend/); the BFF
   # image builds from the repo ROOT.
+  #
+  # OPT-IN (`--profile charforge`) because this repo CANNOT BUILD today, and an
+  # unbuildable service in the default set fails `docker compose build` — i.e. it
+  # takes the WHOLE local mesh down with it, for a surface nothing else depends on
+  # (verified: zero depends_on references to this service anywhere in the stack).
+  # The repo never got the Snapdragon->HugMesh rebrand: its pom still declares the
+  # pre-rename parent `systems.snapdragon:snapdragon-parent:2.7.0` and dependency
+  # `systems.snapdragon:snapdragon-commons`, neither of which is published any
+  # more (m2-bootstrap.sh builds and serves systems.hugmesh:hugmesh-parent:2.8.0 /
+  # hugmesh-commons:2.1.0). It is also absent from compose.m2-local.yaml, so it is
+  # never even pointed at the local registry.
+  # This is NOT locally patchable the way the sibling repos were: its MAIN sources
+  # `import systems.snapdragon.commons.{web,security,tenancy,config}.*`, so
+  # re-coordinating the pom would leave the code importing packages the renamed
+  # artifact does not contain. scripts/patch-stack-src.sh refuses it for exactly
+  # that reason (drop_pre_rename_commons_dep bails when the dep is IMPORTED).
+  # UPSTREAM FIX: rebrand snapdragon-character-forge-bff-api (coords + imports),
+  # then drop this profile and add it to compose.m2-local.yaml. Until then:
+  #   make stack-up            -> mesh comes up, character-forge omitted
+  #   docker compose ... --profile charforge  -> opt in and watch it fail honestly
   snapdragon-character-forge-bff-api:
     <<: *amd64
+    profiles: ["charforge"]
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-forge-bff-api
     environment:
@@ -1154,8 +1180,17 @@ services:
   # above, /bff/character-forge/**). The frontend lives in the SAME repo as the
   # BFF (frontend/ subdir of snapdragon-character-forge-bff-api — one repo: BFF
   # root + godot/ + frontend/), so the build context points INTO that clone.
+  # OPT-IN under the SAME `charforge` profile as its BFF: with the BFF profiled
+  # out this page has no /bff/character-forge/** to call, and it would render
+  # blank regardless — scripts/patch-stack-src.sh's --base-href injection is keyed
+  # by REPO DIRECTORY name and this is the only UI whose build context points into
+  # a SUBDIR of another repo (…/snapdragon-character-forge-bff-api/frontend), so
+  # the patch structurally cannot reach it and the app ships `<base href="/">`
+  # under a /character-forge/ mount (the exact defect fixed fleet-wide in #459).
+  # Keeping the slug whole-hog opt-in beats shipping half of it broken by default.
   snapdragon-character-forge-ui:
     <<: *amd64
+    profiles: ["charforge"]
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-forge-bff-api/frontend
 
