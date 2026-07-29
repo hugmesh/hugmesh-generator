@@ -155,6 +155,28 @@ def _compose_services_by_context():
     return out
 
 
+def _compose_profiled_services():
+    """The services gated behind an OPT-IN compose profile (``profiles: [...]``) —
+    NOT part of the default ``make stack-up`` set. The charforge slug moved there in
+    #464 precisely BECAUSE it cannot cold-build (never-rebranded pom, dead
+    ``systems.snapdragon`` coordinates, structurally unpatchable — its main sources
+    import the pre-rename packages), so the cold-build m2-wiring guarantee the test
+    below enforces does not apply to it: docker compose never builds a profiled-out
+    service in the default flow, wired or not."""
+    path = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.local.yaml")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    out, service = set(), None
+    for line in text.splitlines():
+        m = re.match(r"^  ([A-Za-z0-9][\w.-]*):\s*$", line)
+        if m:
+            service = m.group(1)
+            continue
+        if service and re.match(r"^    profiles:\s*\[", line):
+            out.add(service)
+    return out
+
+
 def test_every_private_maven_consumer_is_wired_into_the_m2_override():
     """Every checkout whose Dockerfile takes ARG CI_API_V4_URL resolves org-private
     systems.hugmesh:* artifacts, so a COLD build must hand EVERY service built from it
@@ -186,6 +208,14 @@ def test_every_private_maven_consumer_is_wired_into_the_m2_override():
         wired = set(re.findall(r"^  ([A-Za-z0-9][\w.-]*):$", fh.read(), re.M))
     need = {svc for svc, ctx in _compose_services_by_context().items() if ctx in consumers}
     assert need, "no service maps to a private-maven consumer context — parser broke"
+    # Services behind an OPT-IN profile are OUTSIDE the default cold-build set the
+    # m2 override exists for (compose never builds them in `make stack-up`), so the
+    # wiring guarantee does not bind them. Today that is the charforge slug (#464:
+    # unbuildable never-rebranded repo, profiled out so it cannot take the whole
+    # mesh down). If one of them ever rejoins the default set, it re-enters the
+    # assert below automatically and bites again.
+    profiled = _compose_profiled_services()
+    need -= profiled
     assert not (need - wired), (
         f"{sorted(need - wired)} build from a checkout that resolves org-private maven "
         f"artifacts but are not in compose.m2-local.yaml — their cold build gets an "
