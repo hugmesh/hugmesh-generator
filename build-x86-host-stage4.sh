@@ -360,6 +360,14 @@ ISO_CACHED=false
 # per-role image build reuses via --usepkg (--resume into this same sysroot). This
 # is a host/CI build-phase flag, NOT a Studio ImageConfig field (like --specs-dir).
 PACKAGES_ONLY=false
+# --allow-missing-packages : accept a KNOWINGLY degraded image. The payload emerge
+# runs --keep-going so one unbuildable optional package can't throw away hours of
+# work; the completeness gate after it then FAILS the build when any requested atom
+# did not actually install (before this gate, such a build emitted a full set of
+# "prod" artifacts silently missing packages — see the gate's comment). This flag
+# downgrades that hard failure to a warning for the operator who genuinely wants
+# the image anyway. Default OFF: a silent hole is the thing being fixed.
+ALLOW_MISSING_PACKAGES=false
 # --bundle-source : ship the generator source in the image (/usr/src/hugmesh-
 # generator) + a regenerate helper, so you can build a fresh customized ISO from the
 # running desktop. Default ON for standalone (self-hosting appliance).
@@ -655,6 +663,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             --thin-desktop Moonlight leg (docs/MDM.md).
       --no-sunshine         Force it off (override a brand.conf default).
       --no-vaults           Don't install gocryptfs / wire /media/Vaults.
+      --allow-missing-packages  Ship the image even if some requested packages
+                            failed to merge. The payload emerge uses --keep-going,
+                            and the completeness gate after it normally FAILS the
+                            build listing every atom that did not install — this
+                            downgrades that to a warning. Use only when you have
+                            read the list and genuinely want a degraded image.
   Seed from a running system + bake a home directory:
       --seed-packages-from FILE  Append a package list (e.g. produced by
                             scripts/seed-packages-from-running-system.sh) to the
@@ -900,6 +914,9 @@ while [[ $# -gt 0 ]]; do
         --distdir) DISTDIR_SRC="$2"; shift 2 ;;
         # PREBUILD the binpkg pool then stop before image assembly (shared-binpkg).
         --packages-only) PACKAGES_ONLY=true; shift ;;
+        # Accept an image whose requested package set did not fully merge (the
+        # completeness gate warns instead of failing). See ALLOW_MISSING_PACKAGES.
+        --allow-missing-packages) ALLOW_MISSING_PACKAGES=true; shift ;;
         # Live ISO: add a "copy to RAM (removable)" boot path so the stick can be pulled.
         --live-toram) LIVE_TORAM=true; shift ;;
         --no-live-toram) LIVE_TORAM=false; shift ;;
@@ -4444,6 +4461,62 @@ if [ -n "\${missing}" ]; then
     echo "[build-x86] ERROR: stage4 payload incomplete — missing:\${missing}"
     echo "[build-x86]        packages.list did not merge; review the emerge output above."
     exit 1
+fi
+# ── REQUESTED-ATOM COMPLETENESS GATE ──────────────────────────────────────────
+# The binary probe above only covers a HANDFUL of well-known commands, so a
+# package that fails under --keep-going ships a SILENTLY DEGRADED image that
+# still looks like a clean build. That is not theoretical: app-office/
+# libreoffice failed check-if-root ("Building LibreOffice as root is a very bad
+# idea") on 2026-07-25 and session 20260725-061608-978c99 went right on to emit
+# a complete set of standalone-unaffiliated PROD artifacts with no office suite
+# on them. Nothing in the build said a word.
+#
+# So: assert that EVERY atom we asked for is actually installed. portage's own
+# vardb match() is the authority (one python startup for the whole set — a
+# per-atom portageq loop would add minutes), and it understands every atom form
+# the lists can carry (plain cat/pn, =cat/pn-ver, <cat/pn-ver, slots, virtuals).
+# Anything portage cannot parse is reported rather than skipped.
+printf '%s\n' ${PKGS} > /tmp/hugmesh-requested-atoms.txt
+: > /tmp/hugmesh-missing-atoms.txt
+# Guarded: a gate that ABORTS a six-hour build because its own tooling misfired
+# would be worse than the hole it closes, so tooling failure is a loud WARN and
+# only a real missing package is fatal. (portage itself is python3, so the
+# fallback branch is unreachable in practice — it exists to stay honest.)
+if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PYEOF' > /tmp/hugmesh-missing-atoms.txt || echo "[build-x86] WARN: completeness gate could not run (portage python API error) — package set NOT verified" >&2
+import portage
+vardb = portage.db[portage.settings["EROOT"]]["vartree"].dbapi
+seen, out = set(), []
+with open("/tmp/hugmesh-requested-atoms.txt") as fh:
+    for line in fh:
+        atom = line.strip()
+        if not atom or atom in seen:
+            continue
+        seen.add(atom)
+        try:
+            if not vardb.match(atom):
+                out.append(atom)
+        except Exception as exc:
+            out.append("%s  (unparsable atom: %s)" % (atom, exc))
+print("\n".join(out))
+PYEOF
+else
+    echo "[build-x86] WARN: python3 absent — requested-atom completeness gate SKIPPED" >&2
+fi
+if [ -s /tmp/hugmesh-missing-atoms.txt ]; then
+    echo "[build-x86] ERROR: \$(wc -l < /tmp/hugmesh-missing-atoms.txt) requested package(s) are NOT installed:"
+    sed 's/^/[build-x86]          /' /tmp/hugmesh-missing-atoms.txt
+    echo "[build-x86]        The emerge above ran with --keep-going, so these failed WITHOUT"
+    echo "[build-x86]        aborting it. Their per-package logs are in /var/log/portage/build/."
+    if [ "${ALLOW_MISSING_PACKAGES}" = "true" ]; then
+        echo "[build-x86] WARN: --allow-missing-packages given — shipping a DEGRADED image anyway."
+    else
+        echo "[build-x86]        Fix them, or rebuild with --allow-missing-packages to accept a"
+        echo "[build-x86]        knowingly degraded image."
+        exit 1
+    fi
+else
+    echo "[build-x86] Package completeness: all \$(sort -u /tmp/hugmesh-requested-atoms.txt | grep -c .) requested atoms installed."
 fi
 CHROOT
 

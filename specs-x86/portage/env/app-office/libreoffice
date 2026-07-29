@@ -1,0 +1,47 @@
+# Per-package BASH environment for app-office/libreoffice — portage sources
+# /etc/portage/env/${CATEGORY}/${PN} as bash in the ebuild environment (unlike
+# the package.env-referenced *.conf files, which are key=value only).
+#
+# WHY: LibreOffice refuses to compile as root. Its top-level Makefile.in ships
+#
+#     check-if-root:
+#         @if test ! `uname` = 'Haiku' -a `id -u` = 0 && test -z $$container; then \
+#             if test ! -x "$$(command -v systemd-detect-virt)" || ! systemd-detect-virt -c -q; then \
+#                 echo 'Building LibreOffice as root is a very bad idea, use a regular user.'; \
+#                 exit 1; \
+#             fi \
+#         fi
+#
+# and EVERY package in this stage4 builds as root: specs-x86/portage/make.conf.tmpl
+# sets FEATURES="... -userpriv -usersandbox ..." (deliberately — the chroot has no
+# usable portage-user ownership over the bind-mounted scratch), so `id -u` is 0 and
+# there is no systemd-detect-virt in the seed. Result, reproduced on two consecutive
+# standalone-unaffiliated prod builds (out/sessions/20260725-061608-978c99 and
+# 20260725-140638-09692d):
+#
+#     Building LibreOffice as root is a very bad idea, use a regular user.
+#     make: *** [Makefile:72: check-if-root] Error 1
+#     >>> Failed to emerge app-office/libreoffice-25.2.7.2-r1
+#
+# Because the payload emerge runs --keep-going, that did NOT abort the build — the
+# 061608 session went on to emit a full set of "prod" artifacts (.img.xz/.iso/
+# .stage4.tar.xz) with NO office suite on an image whose whole point is a capable
+# desktop. (The companion fix for that silent degradation is the requested-atom
+# completeness gate in build-x86-host-stage4.sh.)
+#
+# THE FIX: upstream's own escape hatch. `test -z $container` is the FIRST branch of
+# that guard: a non-empty `container` makes the whole check a no-op, which is
+# precisely how distro/CI builds inside containers pass it (the same variable
+# systemd sets to advertise a container payload). Our chroot IS that case, so the
+# value is honest rather than a workaround: we are building inside a chroot.
+#
+# NOT FORCE_BUILD_AS_ROOT: that variable does not exist in LibreOffice 25.2's
+# Makefile.in (verified against the real distfile, not from memory). NOT
+# per-package FEATURES=userpriv either: the portage user cannot own the
+# bind-mounted build scratch in this chroot, which is why userpriv is off
+# fleet-wide in the first place.
+#
+# Scoped to this one package on purpose: `container` is read by other software
+# (systemd-detect-virt consumers, some ebuilds' container-aware branches), so it
+# must NOT go in make.conf where it would reach every package in the image.
+export container="chroot"

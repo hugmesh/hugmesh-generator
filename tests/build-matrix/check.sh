@@ -1569,7 +1569,8 @@ run_nongating_smokes() {
                 "sharedbinpkg-per-board-pkgdir:${REPO_DIR}/tests/scripts/test-rpi5-per-board-pkgdir.sh" \
                 "sharedbinpkg-ro-distdir:${REPO_DIR}/tests/scripts/test-arm-ro-distdir.sh" \
                 "sharedbinpkg-pool-fingerprint:${REPO_DIR}/tests/scripts/test-binpkg-pool-fingerprint.sh" \
-                "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh"; do
+                "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh" \
+                "package-completeness:${REPO_DIR}/tests/build-package-completeness.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then
             SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue
