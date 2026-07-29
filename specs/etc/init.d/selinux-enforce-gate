@@ -1,0 +1,68 @@
+#!/sbin/openrc-run
+
+description="Gated permissive->enforcing flip after a clean SELinux settle"
+
+depend() {
+    after keys-provision auditd containerd kubelet
+    before local
+}
+
+MARKER=/var/lib/keys-provision/selinux-settled
+CONFIG=/etc/selinux/config
+TYPE=mcs
+
+check_relabel_clean() {
+    # /.autorelabel consumed by the relabel boot, and a dry-run reports
+    # no pending changes for the host-integration paths and /.
+    [ -e /.autorelabel ] && { ewarn "flip-gate: /.autorelabel still present"; return 1; }
+    if command -v restorecon >/dev/null 2>&1; then
+        out=$(restorecon -nrv /mnt/data/local-path /mnt/usb/local-path /var/log/pods 2>/dev/null)
+        [ -n "${out}" ] && { ewarn "flip-gate: mislabel detected:"; ewarn "${out}"; return 1; }
+    fi
+    return 0
+}
+
+check_modules() {
+    local l; l=$(semodule -s "${TYPE}" -l 2>/dev/null) || return 1
+    for m in base container otel_collector localpath_provisioner; do
+        printf '%s\n' "${l}" | grep -q "^${m}\b" || { ewarn "flip-gate: module ${m} not loaded"; return 1; }
+    done
+    return 0
+}
+
+check_avc_clean() {
+    command -v ausearch >/dev/null 2>&1 || return 0
+    local d='container_t|container_runtime_t|spc_t|kernel_t|init_t|otel_collector_t|localpath_provisioner_t|localpath_provisioner_helper_t'
+    if ausearch -m AVC,USER_AVC -ts boot 2>/dev/null | grep -Eq "(scontext|tcontext)=[^ ]*:(${d}):"; then
+        ewarn "flip-gate: outstanding AVCs for core/custom domains — staying permissive"
+        return 1
+    fi
+    return 0
+}
+
+check_mode_sane() {
+    selinuxenabled || { ewarn "flip-gate: SELinux disabled (policy never loaded) — refusing flip"; return 1; }
+    [ "$(getenforce 2>/dev/null)" = "Permissive" ] || { ewarn "flip-gate: not in Permissive (got $(getenforce))"; return 1; }
+    return 0
+}
+
+start() {
+    ebegin "SELinux enforce-gate"
+    # Marker guard: write it the FIRST time we run so the flip can only
+    # happen on the SECOND (or later) boot, never the relabel boot.
+    if [ ! -e "${MARKER}" ]; then
+        mkdir -p "$(dirname "${MARKER}")"; touch "${MARKER}"
+        einfo "first settle boot recorded; flip deferred to next boot"
+        eend 0; return 0
+    fi
+    if check_mode_sane && check_modules && check_relabel_clean && check_avc_clean; then
+        setenforce 1 && sed -i 's/^SELINUX=permissive/SELINUX=enforcing/' "${CONFIG}"
+        einfo "all gate checks passed — flipped to enforcing (persisted)"
+        rc-update del selinux-enforce-gate default 2>/dev/null || true
+        eend 0
+    else
+        eend 0 "gate not satisfied — staying permissive, will retry next boot"
+    fi
+}
+
+stop() { return 0; }

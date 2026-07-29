@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-backend
+resources:
+  - service-account.yaml
+  - deployment.yaml            # Deployment (bridge) + Service meshbridge:8009 (AS push target)
+  - network-policy.yaml        # default-deny + tuwunel-only ingress + documented radio/broker egress
+  - devices-configmap.yaml     # devices.json — the operator surface for radio attachments
+  - meshbridge-register-job.yaml   # PostSync Job: appservice registration via the tuwunel admin room
+
+# The bridge APP (dependency-free Python 3.12, stdlib only — the
+# tuwunel-admin-sync precedent, just factored into modules) is shipped as a
+# generated ConfigMap mounted read-only at /app. The DEFAULT name-suffix-hash
+# behaviour is kept ON PURPOSE (no generatorOptions.disableNameSuffixHash):
+# any change to an app/*.py file renames the ConfigMap, which rewrites the
+# Deployment's volume reference and therefore ROLLS the pod — code changes
+# deploy without a manual restart. See docs/MESHTASTIC-BRIDGE.md.
+configMapGenerator:
+  - name: meshbridge-app
+    files:
+      - app/main.py              # entrypoint: config, /healthz + AS HTTP server, wiring
+      - app/bridge.py            # bridge core: room<->channel mapping, identity, dedupe/limits
+      - app/matrix_cs.py         # Matrix CS-API client (as_token, ?user_id masquerade)
+      - app/as_server.py         # appservice transaction receiver (hs_token-authenticated)
+      - app/transports.py        # tcp (LoRa-WiFi) / serial (USB) / mqtt (WAN gateway) transports
+      - app/meshtastic_codec.py  # minimal Meshtastic protobuf subset + 0x94C3 stream framing

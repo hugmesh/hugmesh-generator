@@ -1,0 +1,67 @@
+# amd64 "MOST CAPABLE" desktop set — a full KDE Plasma workstation.
+# Concatenated onto packages-desktop.list + packages-desktop-full.list by the
+# builder ONLY for --capable (the standalone-thick role presets it). Curated from
+# this build host's own /var/lib/portage/world (a desktop/plasma profile box) but
+# trimmed to a coherent FOSS workstation — proprietary -bin browsers / Discord /
+# Zoom / Steam-native and host-specific dev cruft are intentionally NOT here (Steam
+# is wired separately via packages-media-data.list + the media-data feature).
+#
+# Regenerate / extend from a running box with:
+#   scripts/seed-packages-from-running-system.sh --output mylist.list
+#   ./build-x86-host-stage4.sh --role standalone-thick --seed-packages-from mylist.list
+
+# ── KDE Plasma desktop + workspace ──
+# NOTE: the display manager stays lightdm (configured for the standalone desktop);
+# Plasma is selected as the lightdm user-session (plasmax11), so SDDM is NOT pulled.
+kde-plasma/plasma-meta
+kde-apps/dolphin
+kde-apps/konsole
+kde-apps/kate
+kde-apps/ark
+kde-apps/gwenview
+kde-apps/okular
+kde-plasma/spectacle
+kde-apps/kcalc
+kde-apps/kfind
+kde-apps/kwrite
+kde-apps/filelight
+kde-apps/kgpg
+kde-misc/kdeconnect
+kde-apps/khelpcenter
+
+# ── Browsers / office / mail (FOSS) ──
+www-client/firefox
+app-office/libreoffice
+mail-client/thunderbird
+
+# ── Media / graphics / audio / video ──
+media-gfx/gimp
+media-gfx/inkscape
+media-gfx/krita
+media-video/mpv
+media-video/vlc
+media-video/ffmpeg
+media-video/obs-studio
+media-sound/audacious
+media-sound/audacity
+media-sound/pavucontrol-qt
+media-video/pipewire
+media-video/wireplumber
+
+# ── Comms (Matrix native client) ──
+net-im/neochat
+
+# ── Developer toolchain (a capable workstation) ──
+dev-vcs/git
+dev-vcs/git-lfs
+app-editors/neovim
+app-editors/vim
+dev-lang/python
+dev-lang/go
+dev-lang/rust-bin
+
+# ── Utilities ──
+app-arch/p7zip
+app-arch/unzip
+sys-process/htop
+sys-apps/flatpak

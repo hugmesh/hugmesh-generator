@@ -1,0 +1,53 @@
+# =============================================================================
+# 00a-cassandra-hardening — DARK Cassandra auth + TLS (ADR-32). MANUAL-SYNC.
+# =============================================================================
+# Cassandra currently runs with no authenticator (effectively AllowAllAuthenticator)
+# and plaintext (apps/00-cassandra.yaml). This app carries the auth + TLS hardening
+# so it is wired into GitOps but CANNOT turn on by itself — enabling auth is a
+# breaking cutover (every gateway revocation/registry + federation manifest cache
+# reconnects WITH credentials at once), so it is staged live (docs/CLUSTER-
+# HARDENING-PLAN.md §H).
+#
+# DARK — belt-and-braces (the same idiom held PR #132 / 08a-networkpolicy-egress uses):
+#   1. NO `automated:` block — ArgoCD NEVER auto-syncs this app's resources; an
+#      operator must sync it deliberately.
+#   2. Its source is the EMPTY overlay (manifests/cassandra-hardening-empty), which
+#      renders ZERO objects — so even a deliberate sync applies nothing.
+#
+# TO ENABLE (after staging per §H): repoint spec.source.path to
+# `specs/cluster/manifests/cassandra-hardening` and sync this app manually (it has
+# no automated block, so it will not self-heal/prune until you sync). That renders
+# the ESO creds, the auth-config record, the bootstrap-roles Job, and the TLS
+# keystore builder. The Helm-values flip on apps/00-cassandra.yaml +
+# the consumer env (client-credentials-patch.md) are separate operator steps in §H.
+#
+# The default root app (../app-of-apps.yaml, directory.recurse:true) WILL create
+# THIS Application object, but because there is no automated block AND the source is
+# empty, no Cassandra-hardening resource is ever rendered or applied. Inert + fail-
+# closed by construction.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cassandra-hardening
+  namespace: devops
+  labels:
+    hugmesh.systems/ships: dark
+  annotations:
+    hugmesh.systems/dark: "manual-sync; empty source until operator flips — see docs/CLUSTER-HARDENING-PLAN.md §H"
+    # Run after Cassandra itself (apps/00-cassandra.yaml, default wave 0).
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    # EMPTY overlay (renders nothing). Flip to manifests/cassandra-hardening to enable.
+    path: specs/cluster/manifests/cassandra-hardening-empty
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-pki
+  # NO syncPolicy.automated — MANUAL sync only. Never auto-applies / self-heals /
+  # prunes. Operator syncs deliberately at the flip step.
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false

@@ -1,0 +1,140 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# STATUS SWEEP — reconcile Velero CR .status.phase → the admin-bff catalog row's
+# status (running → complete/failed). This is the leg the effector explicitly
+# defers to: VeleroBackupEffector marks a set `running` on apply and notes "a
+# future watch/sweep flips it terminal" from the Velero CR status.
+#
+# ── ARCHITECTURE DECISION: split sweep (CR-read here, catalog-write in admin-bff) ─
+# The catalog status lives in the admin-bff Postgres `backup_set` table and is
+# written by BackupSetRepository.markStatus(id, status, …) keyed on the RAW set id
+# (`WHERE id = :id`). Two facts make a generator CronJob writing the DB directly
+# the WRONG design:
+#   1. LEAST PRIVILEGE / OWNERSHIP. admin-bff is the sole writer of backup_set,
+#      via the dedicated non-owner role `adminbff_app` (DML-only). A CronJob with
+#      direct Postgres write access would duplicate that authority outside the BFF,
+#      need its own DB credential, and break the BFF's "BFF owns its tables" model
+#      (the SAME reason the workload-console + appstore effectors don't write
+#      foreign state directly).
+#   2. ID MAPPING IS LOSSY ON THE CR. The Velero CR carries
+#      hugmesh.systems/backup-set-id = PerServiceIdentity.slug(set.id()) — a
+#      LOSSY transform (lowercased, '.'→'-', non-alnum→'-', collapsed). markStatus
+#      keys on the RAW id. Only the admin-bff (which holds both the raw id and the
+#      slug) can map a terminal CR back to the right row safely.
+#
+# THEREFORE the sweep is SPLIT:
+#   * GENERATOR (this CronJob) — the CR-READ half: find Velero Backup/Restore CRs
+#     this platform created (label app.kubernetes.io/managed-by=hugmesh-admin-bff)
+#     that have reached a TERMINAL .status.phase (Completed / Failed / PartiallyFailed
+#     / FailedValidation), and MIRROR that terminal state onto the CR as the
+#     annotation hugmesh.systems/catalog-status = complete|failed. This makes the
+#     terminal state cheaply queryable and is the side the cluster can own.
+#   * ADMIN-BFF (a documented FOLLOW-ON leg — NOT built here) — the CATALOG-WRITE
+#     half: a scheduled reactive reconciler (or a /bff/superadmin/backups/sweep
+#     endpoint this CronJob could POST to) that lists CRs carrying the mirror
+#     annotation, maps hugmesh.systems/backup-set-key + the version label back to
+#     the raw backup_set id, and calls markStatus(id, complete|failed). That is the
+#     ONLY correct writer of the catalog row. See docs/CLOUD-BACKUPS.md
+#     "Status reconciliation hand-off".
+#
+# This split is the architecture the codebase already supports (BFF-owns-its-state)
+# and is faithful to the effector's "future sweep" note WITHOUT shipping a
+# half-version that bypasses the BFF's least-privilege DB model.
+#
+# ── SHIPS DARK ──────────────────────────────────────────────────────────────────
+# suspend: true — the CronJob is inert until a superadmin enables backups (Velero
+# installed + admin-bff effector flag on). While dark there are no Velero CRs to
+# sweep, so it has nothing to do; a superadmin flips suspend:false (kubectl patch /
+# ArgoCD value) as the same opt-in step that sets app.backups.effector.enabled=true.
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backups-status-sweep
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: sweep
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  # Inert until backups are deliberately enabled (see header).
+  suspend: true
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cloud-backups
+            app.kubernetes.io/component: sweep
+            app.kubernetes.io/part-of: hugmesh.systems
+        spec:
+          serviceAccountName: backups-sweep
+          automountServiceAccountToken: true
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile: { type: RuntimeDefault }
+            # SELinux MCS isolation (docs/SECURITY.md §3): the status-sweep is its
+            # own pod in the `velero` namespace, so it carries a unique MCS category
+            # `s0:c66` (server c64 / node-agent c65). The effector identity itself
+            # runs INSIDE the admin-bff pod (already `s0:c23`), so it needs no level
+            # here. seLinuxOptions set pod-level; all other securityContext above
+            # left as-is.
+            seLinuxOptions:
+              level: "s0:c66"
+          containers:
+            - name: sweep
+              # kubectl pinned (no :latest) — the only tool the sweep needs.
+              image: registry.k8s.io/kubectl:v1.31.3
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  # CR-READ HALF of the split sweep. For each Velero Backup/Restore
+                  # CR this platform created (managed-by=hugmesh-admin-bff) that
+                  # has reached a terminal phase, mirror the catalog-status onto the
+                  # CR as an annotation the admin-bff reconciler reads. We NEVER
+                  # write the admin-bff DB here (see file header).
+                  set -eu
+                  SEL='app.kubernetes.io/managed-by=hugmesh-admin-bff'
+                  for KIND in backups.velero.io restores.velero.io; do
+                    # phase is the only status we read; name+phase, one per line.
+                    kubectl -n velero get "$KIND" -l "$SEL" \
+                      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' \
+                    | while read -r NAME PHASE; do
+                        [ -n "${NAME:-}" ] || continue
+                        case "${PHASE:-}" in
+                          Completed)
+                            CATALOG=complete ;;
+                          Failed|PartiallyFailed|FailedValidation)
+                            CATALOG=failed ;;
+                          *)
+                            # InProgress / New / empty: still running — skip.
+                            continue ;;
+                        esac
+                        # Idempotent mirror: stamp the terminal catalog-status the
+                        # admin-bff reconciler keys on. A re-run re-patches the same
+                        # value (no-op). We do NOT touch .status (Velero owns it).
+                        kubectl -n velero annotate "$KIND" "$NAME" \
+                          "hugmesh.systems/catalog-status=$CATALOG" \
+                          "hugmesh.systems/catalog-status-phase=$PHASE" \
+                          --overwrite >/dev/null
+                        echo "[sweep] $KIND/$NAME phase=$PHASE -> catalog-status=$CATALOG (mirrored; admin-bff reconciler writes the row)"
+                      done
+                  done
+                  echo "[sweep] CR-read sweep complete. Catalog-write is the admin-bff reconciler hand-off (docs/CLOUD-BACKUPS.md)."
+              resources:
+                requests: { cpu: 25m, memory: 64Mi }
+                limits:   { cpu: 250m, memory: 128Mi }

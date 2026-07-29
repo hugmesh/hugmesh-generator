@@ -1,0 +1,87 @@
+# Cross-compilation — @@OPI5_CPU@@ — Orange Pi 5 / Orange Pi 5 Plus (Rockchip
+# RK3588/RK3588S) — HARDENED
+#
+# This is the LIGHT-DESKTOP image's portage config (NOT a K8s cluster node —
+# this platform has ONE role, mirroring build-frite-stage4.sh exactly; see the
+# builder header). It mirrors specs-frite/portage/make.conf.tmpl (same aarch64
+# cross toolchain, same hardened CFLAGS/LDFLAGS, same FEATURES) but tunes the
+# board CPU for RK3588's big.LITTLE core mix and the VIDEO_CARDS for the
+# Mali-G610 GPU.
+#
+# Variables substituted at build time (by render_template in build-orangepi5-stage4.sh):
+#   @@CBUILD@@           Host compiler triplet
+#   @@CROSS_TARGET@@     Target triplet (e.g. aarch64-unknown-linux-gnu)
+#   @@OPI5_CPU@@          GCC -mcpu / -mtune value (cortex-a76.cortex-a55 default —
+#                        RK3588/RK3588S's 4x Cortex-A76 + 4x Cortex-A55 big.LITTLE mix)
+#   @@JOBS@@             Parallel make jobs
+#   @@WORK_DIR@@         Base build directory (per-arch build root)
+
+CBUILD="@@CBUILD@@"
+CHOST="@@CROSS_TARGET@@"
+
+# Hardened CFLAGS — same posture as the rest of the fleet. RK3588/RK3588S is a
+# big.LITTLE octa-core (4x Cortex-A76 @ up to 2.4GHz + 4x Cortex-A55 @ up to
+# 1.8GHz); GCC's combined "big.cLITTLE" -mcpu form (cortex-a76.cortex-a55) tunes
+# scheduling for BOTH clusters rather than favoring only one. The builder passes
+# -c cortex-a76.cortex-a55 by default (confirmed as a real, working Gentoo/GCC
+# flag for this exact SoC — see specs-orangepi5/README.md's research notes).
+CFLAGS="-mcpu=@@OPI5_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+MAKEOPTS="-j@@JOBS@@"
+# -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
+# mode-700 / encrypted $HOME work dir). All sandboxing off for the cross-build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline + a LEAN desktop. Same rationale as Frite: enable just
+# enough of X11 + a minimal GTK to run a lightweight WM/panel + a terminal + a
+# browser, and explicitly KEEP OFF the heavy desktop frameworks (KDE/Plasma
+# qt5/qt6, GNOME, systemd, pulseaudio bloat). This platform has only ONE role
+# (desktop — no cluster-node concept), so these USE flags are hardcoded
+# directly here rather than gated through the x86/RPi5 CLIENT_USE indirection
+# (which only exists to switch between a headless-node and client-desktop USE
+# set on platforms that have BOTH — this platform never builds headless).
+USE="bindist hardened pie ssp selinux seccomp"
+USE="${USE} X dbus elogind udev -systemd"
+# Lean desktop toolkit: GTK on (lxde needs it), Qt off (no Plasma).
+USE="${USE} gtk -qt5 -qt6 -kde -gnome -gnome-keyring"
+# Light audio: ALSA only (no pulseaudio/pipewire heavy stack).
+USE="${USE} alsa -pulseaudio -pipewire"
+# Disable GObject introspection: glib-2.86+ bootstraps a native copy of
+# gobject-introspection during cross-compile src_configure, but the bootstrap
+# meson build fails in the cross-emerge env (cross-file / EPYTHON mis-targeting).
+# None of the LXDE desktop packages hard-require introspection — it is an
+# optional USE-conditional dep on harfbuzz/pango/gdk-pixbuf/gtk+. Also disable
+# vala: librsvg's REQUIRED_USE enforces vala? ( introspection ), so disabling
+# vala satisfies the constraint without re-enabling introspection. Mirrors
+# specs-frite/portage/make.conf.tmpl (identical cross-compile gap).
+USE="${USE} -introspection -vala"
+
+# Only the MCS SELinux policy store (same posture as every other platform in
+# this repo): smaller build, matches the per-process MCS labelling baseline.
+POLICY_TYPES="mcs"
+INPUT_DEVICES="libinput"
+# RK3588/RK3588S ships the Mali-G610 MP4 GPU (Valhall, 10th-gen Mali). The
+# KERNEL driver is Panthor (merged Linux v6.10) but the MESA/Gentoo Gallium
+# driver keeps the NAME "panfrost" even for Panthor-kernel hardware (reached
+# OpenGL ES 3.1 conformance on Mali-G610 in Mesa 24.1.1) — so VIDEO_CARDS
+# stays "panfrost" despite the kernel side being named differently. See
+# specs-orangepi5/kernel/hardened-desktop.config's GPU/Display section for the
+# full research note on this naming split.
+VIDEO_CARDS="panfrost"
+
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="arm64 ~arm64"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+# NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
+# package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the
+# ac_cv_* cache args into packages with hand-written configure scripts that
+# reject unknown options and die. (Same rationale as the Frite/RPi5 builds.)
+
+PAX_MARKINGS="none"

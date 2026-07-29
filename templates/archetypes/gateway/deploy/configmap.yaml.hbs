@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-{{PROFILE}}-env
+  labels:
+    app.kubernetes.io/name: hugmesh-{{PROFILE}}-gateway
+    app.kubernetes.io/component: gateway
+# The gateway is fully ${ENV}-driven; this ConfigMap is where per-brand coupling
+# lives (NOT in the Java source). SPRING_APPLICATION_NAME stays the literal
+# profile/code identity (hugmesh-<profile>-gateway); the issuer/JWKS + tenancy
+# seeds carry the brand CLUSTER_DOMAIN.
+data:
+  SPRING_APPLICATION_NAME: "hugmesh-{{PROFILE}}-gateway"
+  CASDOOR_ISSUER_URI: "https://id.{{CLUSTER_DOMAIN}}"
+  CASDOOR_JWKS_URI: "https://id.{{CLUSTER_DOMAIN}}/.well-known/jwks"
+  # CSV issuerUri=domain — the multi-tenant trusted-issuer seed (empty => single-issuer).
+  APP_TENANCY_ISSUERS: "https://id.{{CLUSTER_DOMAIN}}={{CLUSTER_DOMAIN}}"
+  # CSV hostSuffix=domain — the effective Host->domain mapping (NOT a literal
+  # Host= predicate in source).
+  APP_TENANCY_HOSTS: ".{{CLUSTER_DOMAIN}}={{CLUSTER_DOMAIN}}"

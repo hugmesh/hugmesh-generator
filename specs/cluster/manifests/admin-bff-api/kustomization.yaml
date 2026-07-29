@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-backend
+resources:
+  - deployment.yaml
+  - service.yaml
+  # The cloud-backups effector ServiceAccount the pod runs as. Created WITH the
+  # admin-bff (automated sync) so it exists when the pod schedules; the
+  # least-privilege Role/RoleBinding that grant it CR-apply live in
+  # manifests/velero/rbac.yaml (manual sync, arrives with Velero). Identity without
+  # authority until backups are deliberately enabled.
+  - backups-effector-sa.yaml
+  - hpa.yaml
+  - pdb.yaml
+# First-party images now pull from the in-cluster Harbor container registry
+# (registry.hugmesh.systems = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
+# path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
+# the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
+# (ESO-materialized, see manifests/external-secrets).
+# PER-TENANT BRAND (mesh repo-templating, Phase 3 — deploy source decision): this
+# manifest is the CANONICAL deploy source (ArgoCD app specs/cluster/apps/31-admin-bff-api.yaml
+# points its `path:` here and kustomize-builds it RAW at sync). It is therefore kept
+# LITERAL + raw-kustomize-buildable and is NOT Handlebars-templated: the per-tenant
+# brand substitution of THIS tree is the EXISTING build-x86-host-stage4.sh
+# rebrand_sysroot ISO-build sed pass, which rewrites the baked cluster tree
+# (hugmesh.systems -> CLUSTER_DOMAIN, hugmesh- -> BRAND-, hugmesh-systems/
+# -> org/, "HugMesh Systems" -> BRAND_TITLE). That pass already rebrands the
+# registry HOST (registry.hugmesh.systems -> registry.<domain>) + the repo NAME
+# (hugmesh-admin-bff-api -> <brand>-admin-bff-api) + the image name: prefix
+# (hugmesh-systems/ -> <org>/). Putting {{tokens}} here instead would break the
+# raw ArgoCD kustomize sync (YAML flow-map parse error on {{ }}) and double-brand.
+# KNOWN GAP (reported, not fixed here to avoid breaking sync): the standalone Harbor
+# PROJECT segment `/hugmesh/` matches no rebrand_sysroot rule (it is neither
+# `hugmesh.systems` nor `hugmesh-…`), so it does not rebrand to the tenant
+# Harbor project — a rebrand_sysroot rule (or a first-class HARBOR_PROJECT seam) is
+# owed. namespace stays hugmesh-backend (frozen backend tier / frozen svc DNS).
+images:
+  - { name: hugmesh-systems/admin-bff-api, newName: registry.hugmesh.systems/hugmesh/hugmesh-admin-bff-api, newTag: main }
+patches:
+  - target: { kind: Deployment }
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: harbor-registry

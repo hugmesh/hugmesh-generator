@@ -1,0 +1,88 @@
+# amd64 hugmesh stage4 package list — BASE (role-independent, hardened k8s).
+# One atom per line; lines starting with # are ignored.
+#
+# The vendor-agnostic GPU stack (Mesa/Vulkan/libva) lives in packages-gpu.list
+# and is concatenated by the builder ONLY for the be+gpu / omnibus roles.
+
+# ── Kernel & firmware & bootloader & initramfs ─────────────────────
+sys-kernel/gentoo-sources
+sys-kernel/linux-firmware
+sys-firmware/intel-microcode
+sys-kernel/dracut
+# systemd-utils[boot] owns /usr/lib/systemd/boot/efi/linuxx64.efi.stub — the
+# sd-stub PE wrapper that dracut --uefi bundles kernel+initramfs+cmdline into
+# to emit the UKI. Without it dracut fails ("Can't find a uefi stub") and the Secure
+# Boot chain silently degrades to GRUB+vmlinuz. Already pulled in as the
+# profile's udev provider; USE="boot kernel-install" (package.use/containers)
+# adds the stub (kernel-install is REQUIRED_USE-mandatory with boot on >=260).
+sys-apps/systemd-utils
+sys-boot/grub
+sys-fs/dosfstools
+sys-block/parted
+app-misc/jq
+
+# ── Networking ─────────────────────────────────────────────────────
+net-misc/networkmanager
+net-misc/openssh
+net-firewall/iptables
+net-firewall/nftables
+net-firewall/firewalld
+net-firewall/conntrack-tools
+net-misc/socat
+net-dns/bind-tools
+sys-apps/ethtool
+sys-apps/iproute2
+
+# ── Secure Boot / UKI signing ────────────────────────────────────
+# sbsign: sign PE/EFI binaries (UKI, GRUB) with org key for Secure Boot.
+# efitools: cert-to-efi-sig-list + sign-efi-sig-list for db.auth generation.
+app-crypt/sbsigntools
+app-crypt/efitools
+
+# ── System / hardening ────────────────────────────────────────────
+app-admin/sudo
+sys-process/cronie
+sys-apps/haveged
+app-editors/nano
+app-misc/screen
+# SELinux LSM (native build → policy loads at build time via semodule).
+sec-policy/selinux-base
+sec-policy/selinux-base-policy
+sec-policy/selinux-container
+sec-policy/selinux-virt
+sys-apps/policycoreutils
+sys-apps/semodule-utils
+sys-apps/checkpolicy
+app-admin/setools
+sys-libs/libselinux
+sys-libs/libseccomp
+sys-process/audit
+
+# ── Container runtime + Kubernetes (worker) ───────────────────────
+app-containers/containerd
+app-containers/runc
+app-containers/cni-plugins
+app-containers/cri-tools
+app-containers/nerdctl
+sys-cluster/kubelet
+sys-cluster/kubeadm
+sys-cluster/kubectl
+
+# ── Filesystems + network backup shares ───────────────────────────
+sys-fs/e2fsprogs
+sys-fs/xfsprogs
+sys-apps/util-linux
+net-fs/nfs-utils
+net-fs/cifs-utils
+# Encryption-at-rest (LUKS2/dm-crypt) for attached data partitions that back the
+# cluster PVCs / relocated containerd|kubelet|Vault state. keys-provision's
+# provision_storage luksFormat/opens these (aes-xts-plain64, argon2id). On x86
+# (TPM-equipped) systemd-cryptenroll provides TPM2 auto-unlock; the USB-KEYS
+# keyfile is the recovery slot. See docs/ENCRYPTION-AT-REST.md.
+sys-fs/cryptsetup
+sys-fs/lvm2
+
+# NOTE: headscale + tailscale are installed as static x86_64 binaries by
+# build-x86-host-stage4.sh (mesh phase), like the RPi image. ArgoCD,
+# hugmesh.games and the backend workloads are deployed INTO the cluster
+# by ArgoCD, not emerged here.

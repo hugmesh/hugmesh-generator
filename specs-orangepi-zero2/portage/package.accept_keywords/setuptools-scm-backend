@@ -1,0 +1,15 @@
+# dev-python/vcs-versioning — build-backend keyword acceptance (fleet SELinux toolchain)
+#
+# The fleet SELinux posture pulls, on the target sysroot, this chain:
+#   sec-policy/selinux-base -> sys-apps/policycoreutils -> sys-apps/selinux-python
+#   -> app-admin/setools -> dev-python/setuptools -> dev-python/setuptools-scm
+#   -> dev-python/vcs-versioning
+# vcs-versioning is a young, PURE-PYTHON (arch-independent) build backend that Gentoo
+# keywords amd64-first. During the window before an arm64 keyword lands it is ~amd64
+# ONLY, and our cross-emerge (PORTAGE_CONFIGROOT=sysroot, ACCEPT_KEYWORDS="arm64 ~arm64")
+# cannot accept it -> "masked by: ~amd64 keyword" -> the whole light-desktop/@stage4
+# emerge dies mid-run, leaving an incomplete sysroot (missing NetworkManager/Xorg/
+# lightdm/dracut/cryptsetup...). Accept it regardless of keywording (**): it is
+# arch-independent, so this is safe and keeps the SELinux toolchain resolvable across
+# tree-keywording churn.
+dev-python/vcs-versioning **

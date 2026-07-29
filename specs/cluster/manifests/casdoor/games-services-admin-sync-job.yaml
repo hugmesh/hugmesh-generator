@@ -1,0 +1,162 @@
+# games-services-admin-sync — materializes the DERIVED Casdoor role
+# ROLE_GAMES_SERVICES_ADMIN, whose membership is the INTERSECTION the games app-store
+# admin gate requires:
+#
+#     ROLE_GAMES_SERVICES_ADMIN  =  ROLE_GAMES_SERVICES  INTERSECT  (ROLE_ADMIN UNION ROLE_MOD)
+#
+# i.e. a user becomes a games app-store admin (catalog-enable + create/run instances)
+# ONLY if they hold ROLE_GAMES_SERVICES AND (ROLE_ADMIN OR ROLE_MOD). Casdoor role
+# nesting is UNION (inheritance), never intersection, so the intersection cannot be
+# expressed by a nested "roles" array — it must be reconciled here. This Job reads
+# ROLE_GAMES_SERVICES, ROLE_ADMIN, ROLE_MOD membership from Casdoor, computes the
+# intersection, and writes EXACTLY that verified set into ROLE_GAMES_SERVICES_ADMIN's
+# users[] (idempotent: it also REMOVES anyone who no longer qualifies — default-deny).
+# ROLE_GAMES_SERVICES_ADMIN is the ONLY role on the games-services admin route-access
+# rows (/games/services/admin/** on be-gateway, /games/services/admin/** on fe-gateway —
+# see manifests/route-access/schema.sql), so the gateway's OR-of-allow-rows table yields
+# the required AND: ROLE_GAMES_SERVICES alone or ROLE_ADMIN alone never reaches it.
+#
+# A DIRECT CLONE of games-admin-sync-job.yaml (the proven intersection-Job pattern),
+# parameterized by env vars (GAMES_ADMIN_ROLE / GAMES_ROLE / PRIV_ROLES). runAsNonRoot,
+# drop ALL caps, readOnlyRootFilesystem, idempotent, ArgoCD PostSync; uses the SAME
+# Casdoor admin-session transport (login -> get-role/update-role).
+#
+# SCOPE: runs ENTIRELY inside the systems Casdoor (org "hugmesh"); it only MATERIALIZES
+# the intersection role within systems. (The games REALM Casdoor is separate and
+# untouched — see games-admin-sync-job.yaml header.)
+#
+# !!! The Casdoor REST API shape is version-specific — validate against the deployed
+# !!! casbin/casdoor-all-in-one before relying on it in production.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: games-services-admin-sync-script
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Reconcile a DERIVED role = BASE_ROLE intersect (union of PRIV_ROLES).
+    Default-deny: writes only the verified intersection and prunes everyone else.
+    Pure stdlib (urllib) — no extra packages. Parameterized by env so the same script
+    backs both games-services-admin (PRIV=ADMIN,MOD) and games-services-runner (PRIV=MOD)."""
+    import json, os, time, urllib.request, urllib.error, http.cookiejar
+
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "hugmesh")
+    # The derived role we own/materialize, the base role, and the priv side of the AND.
+    DERIVED_ROLE = os.environ.get("DERIVED_ROLE", "ROLE_GAMES_SERVICES_ADMIN")
+    BASE_ROLE    = os.environ.get("BASE_ROLE", "ROLE_GAMES_SERVICES")
+    PRIV_ROLES   = [r for r in os.environ.get("PRIV_ROLES", "ROLE_ADMIN,ROLE_MOD").split(",") if r]
+
+    ADMIN_USER = open("/secrets/admin/username").read().strip()
+    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+    def call(path, payload=None, method="GET"):
+        url = BASE + path
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json"})
+        with opener.open(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                opener.open(BASE + "/api/health", timeout=5); return
+            except Exception:
+                time.sleep(3)
+        raise SystemExit("casdoor not reachable")
+
+    def login():
+        body = {"application": "app-built-in", "organization": "built-in",
+                "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
+                "autoSignin": True}
+        return call("/api/login", body, "POST")
+
+    def role_obj(role):
+        """Full role object (so update-role can round-trip every field)."""
+        data = call(f"/api/get-role?id={ORG}/{role}")
+        return (data or {}).get("data") or {}
+
+    def members(role_object):
+        """Normalized member ids ("hugmesh/<name>") from a role object."""
+        return set((role_object or {}).get("users") or [])
+
+    wait_ready()
+    login()
+
+    base = members(role_obj(BASE_ROLE))
+    priv = set()
+    for r in PRIV_ROLES:
+        priv |= members(role_obj(r))
+    # The AND: base members who ALSO hold one of the priv roles.
+    qualified = sorted(base & priv)
+
+    target = role_obj(DERIVED_ROLE)
+    if not target:
+        raise SystemExit(f"{DERIVED_ROLE} not found — seed it in init_data.json")
+    current = members(target)
+
+    if set(qualified) == current:
+        print(f"games-services-admin-sync: {DERIVED_ROLE} already == {len(qualified)} member(s); no change")
+    else:
+        # Overwrite users[] with EXACTLY the verified intersection (ADD new, PRUNE lapsed).
+        target["users"] = qualified
+        call(f"/api/update-role?id={ORG}/{DERIVED_ROLE}", target, "POST")
+        added   = sorted(set(qualified) - current)
+        removed = sorted(current - set(qualified))
+        print(f"games-services-admin-sync: {DERIVED_ROLE} -> {len(qualified)} member(s) "
+              f"(+{len(added)} added, -{len(removed)} removed)")
+        if added:   print("  + " + ", ".join(added))
+        if removed: print("  - " + ", ".join(removed))
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: games-services-admin-sync
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: games-services-admin-sync }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.systems/pki: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: sync
+          image: python:3.12-alpine
+          command: ["python3", "/script/sync.py"]
+          env:
+            - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "hugmesh" }
+            - { name: DERIVED_ROLE, value: "ROLE_GAMES_SERVICES_ADMIN" }
+            - { name: BASE_ROLE,    value: "ROLE_GAMES_SERVICES" }
+            - { name: PRIV_ROLES,   value: "ROLE_ADMIN,ROLE_MOD" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: admin, mountPath: /secrets/admin, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: games-services-admin-sync-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed.
+        - name: admin
+          secret: { secretName: casdoor-admin }

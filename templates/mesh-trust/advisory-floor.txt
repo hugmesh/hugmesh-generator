@@ -1,0 +1,38 @@
+# advisory-floor.txt — Phase 7 PINNED OFFLINE vulnerability floor for foreign bases.
+#
+# The inbound foreign-mesh gate (scripts/ingest-foreign-base.sh, gate [d] VULN)
+# scans a foreign base's component set against THIS list and fails CLOSED on any
+# component that matches a CRITICAL row. It is a PINNED, OFFLINE, build-host-
+# verifiable floor — deliberately NOT a live feed.
+#
+# ANTI-OMISSION: the component set is NOT the self-attested SBOM alone. Because a
+# foreign base is treated as fully hostile even when validly signed, the SBOM author
+# IS the adversary — so the gate ALSO derives components from the ACTUAL tree
+# (vendored *.jar / *.whl / *.egg filenames + npm package-lock.json + pip
+# requirements*.txt) and normalises SBOM names to strip group/purl prefixes. A
+# hostile mesh therefore cannot slip a CRITICAL dep past this floor by omitting it
+# from, or misversioning/renaming it in, the SBOM it controls — as long as the dep is
+# a vendored artifact or appears in a lockfile.
+#
+# HONEST RESIDUAL (deferred to cluster): a vulnerability compiled straight from
+# IN-TREE SOURCE (no jar/wheel, no lockfile row), and the full live vuln database
+# (OSV / GitHub advisories / Trivy DB), require network and are DEFERRED to the
+# cluster (Trivy ships in Harbor with enabled:false — flip it on there). This floor is
+# the honest build-host half: known-bad (component, version) pairs that must NEVER
+# ride in on a foreign base — whether the base declares them or merely vendors them —
+# even if that base is validly signed and freshly generated.
+#
+# Format, one advisory per line:
+#   <name> <version> <SEVERITY> [advisory-id]
+# '#' comments and blank lines are ignored. Only SEVERITY == CRITICAL rows deny.
+# Match is exact on name@version (SBOM CycloneDX .components[] / SPDX .packages[]).
+#
+# Operational note: raising the floor after a CVE disclosure is ALSO enforced via
+# the per-mesh minGeneration in templates/mesh-trust/registry.json — bumping that
+# locks out a rolled-back old-but-signed base whose generation is below the floor.
+
+# ── Example CRITICAL pins (illustrative; replace with your real pinned set) ──────
+# A demonstrably-vulnerable transitive that must never enter under any signature.
+log4j-core 2.14.1 CRITICAL CVE-2021-44228
+# A prototype-pollution class that reached RCE in some pipelines.
+lodash 4.17.20 CRITICAL CVE-2020-8203

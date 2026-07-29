@@ -1,0 +1,131 @@
+# Per-POD homeserver EGRESS lock (domain-lock / no-federation foundation).
+#
+# THE FOUNDATIONAL HOLE THIS CLOSES: there is NO egress control today. The
+# tier-ingress.yaml header literally says "egress (incl. DNS) is left open" and
+# every existing NetworkPolicy is policyTypes: [Ingress] only. Federation is an
+# OUTBOUND action (akkoma/tuwunel POST to a remote /inbox, sign-and-fetch remote
+# actors), so NOTHING today can stop a domain-locked actor — or the whole
+# homeserver — from federating. This policy is the AUTHORITATIVE non-federation
+# backstop and, for Matrix/tuwunel (which has NO per-user federation control —
+# only server-wide allow/deny lists), it is the ONLY enforcement leg there is.
+#
+# MODEL: default-deny egress on the akkoma + tuwunel pods, then re-allow ONLY the
+# three things a homeserver legitimately needs to talk to:
+#   1. DNS (kube-dns / CoreDNS in kube-system) — else nothing resolves.
+#   2. the in-cluster homeserver DB (akkoma-db:5432; tuwunel embeds RocksDB
+#      in-process so it needs no DB egress).
+#   3. the FORWARD egress-proxy (manifests/egress-proxy) — ALL outbound HTTP(S)
+#      federation traffic is forced through it. The proxy holds the per-actor
+#      allowlist driven by the domain-lock reconcile loop: a domain-locked actor's
+#      outbound deliveries are dropped at the proxy. Because direct egress to the
+#      internet is denied here, the homeserver CANNOT bypass the proxy.
+#
+# k8s NetworkPolicy is ADDITIVE with no exclude, and Ingress/Egress are
+# INDEPENDENT axes — adding an Egress policy here does NOT touch the Ingress
+# isolation in homeserver-isolation.yaml (the two compose). But the moment a pod
+# is selected by ANY policy with policyTypes:[Egress], ALL egress not explicitly
+# allowed is denied for that pod. So the allow-set below MUST be complete or the
+# homeserver loses DNS/DB and breaks — hence this ships behind the SAME MANUAL/
+# validated ArgoCD app as the ingress policies (apps/08-networkpolicy.yaml) and
+# needs LIVE on-cluster connectivity validation before it is relied upon.
+#
+# GATED / SHIPS DARK: the egress-proxy allowlist enforcement is gated
+# domainlock.egress.enabled (default off — see manifests/egress-proxy): with the
+# gate OFF the proxy forwards everything (a plain pass-through) so federation
+# keeps working unchanged and this policy is a pure structural backstop (deny
+# DIRECT egress, force traffic via the proxy) without yet blocking any actor.
+# Flipping the gate on makes the per-actor force-local real.
+#
+# DEPLOY ORDERING: this egress backstop is the FOUNDATION — land it (validated)
+# BEFORE advertising domain-lock as ENFORCED. The akkoma ForceLocalForUsers MRF
+# (manifests/akkoma) is the Mastodon-specific belt on top of this braces; egress
+# is what makes "force local" true even if a delivery reaches the pod by any other
+# route, and is the only thing that can enforce tuwunel/Matrix non-federation.
+---
+# ── akkoma (Mastodon/fediverse) — EGRESS lock ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: homeserver-egress-akkoma
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: akkoma }
+  policyTypes: [Egress]
+  egress:
+    # 1. DNS — CoreDNS/kube-dns in kube-system (UDP+TCP/53). Without this, NOTHING
+    #    the pod does resolves (including reaching akkoma-db by name).
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. akkoma-db (in-cluster Postgres). Same namespace, port 5432.
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: akkoma-db }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    # 3. the FORWARD egress-proxy (hugmesh-backend). ALL outbound federation
+    #    HTTP(S) is forced through it; the proxy enforces the per-actor force-local
+    #    allowlist driven by the domain-lock loop. Direct internet egress is denied
+    #    (no rule below opens it), so the proxy cannot be bypassed.
+    - to:
+        - podSelector:
+            matchLabels: { app: egress-proxy }
+      ports:
+        - { protocol: TCP, port: 3128 }
+---
+# ── akkoma-db (Postgres) — EGRESS lock ────────────────────────────────────────
+# The DB only ever needs DNS; it accepts connections (ingress, governed by
+# homeserver-isolation.yaml) and initiates nothing outbound. Lock its egress to
+# DNS so a compromised DB pod cannot exfiltrate.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: homeserver-egress-akkoma-db
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma-db, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: akkoma-db }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# ── tuwunel (Matrix) — EGRESS lock ────────────────────────────────────────────
+# tuwunel/Conduit has NO per-user federation control (only server-wide
+# forbidden_remote_server_names / allowed_remote_server_names_experimental and
+# per-room m.federate set at create-time). So this egress lock — forcing all
+# outbound S2S federation through the egress-proxy, where the per-actor allowlist
+# lives — is the ONLY leg that can enforce per-user Matrix non-federation. tuwunel
+# embeds RocksDB in-process, so it needs NO DB egress (only DNS + the proxy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: homeserver-egress-tuwunel
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: tuwunel }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels: { app: egress-proxy }
+      ports:
+        - { protocol: TCP, port: 3128 }

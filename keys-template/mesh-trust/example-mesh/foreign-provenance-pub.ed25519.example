@@ -1,0 +1,12 @@
+# PLACEHOLDER — NOT A REAL KEY. Fails CLOSED.
+#
+# Replace (out-of-band, at keys-template/mesh-trust/example-mesh/foreign-provenance-pub.ed25519
+# — WITHOUT the .example suffix, and never committed) with the base64 of the X.509
+# SubjectPublicKeyInfo DER of the FOREIGN mesh's provenance signing PUBLIC half, i.e.
+# exactly the one-liner registry-pub.ed25519 uses:
+#
+#   openssl pkey -in FOREIGN_PROVENANCE_PRIV.pem -pubout -outform DER | base64 -w0
+#
+# NEVER place a PRIVATE key here. Until a real public half is staged at the
+# non-.example path, scripts/ingest-foreign-base.sh rejects every base claiming this
+# mesh id (no trust-on-first-use).

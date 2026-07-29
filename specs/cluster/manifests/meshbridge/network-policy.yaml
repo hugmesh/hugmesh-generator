@@ -1,0 +1,148 @@
+# meshbridge NetworkPolicy — tuwunel-only ingress + tuwunel/user-bff/Casdoor/
+# radio egress.
+#
+# The bridge is NOT user-facing: the ONLY thing allowed to talk TO it is the
+# tuwunel pod (appservice transaction push, PUT /_matrix/app/v1/transactions/…
+# on :8009, hs_token-authenticated). Everything else — gateway, BFFs, other
+# workloads — is default-denied. Its egress is the four legs the design doc
+# names (docs/MESHTASTIC-BRIDGE.md): the tuwunel CS API (:8008, in-namespace),
+# the user-bff internal mesh-devices poll, the Casdoor token endpoint
+# (client-credentials mint), and the radios themselves (LoRa-WiFi TCP:4403 /
+# MQTT broker 1883/8883 on the LAN), plus DNS.
+#
+# SAFE-BY-DEFAULT: this manifest ships only when meshbridge is deployed (the
+# whole manifests/meshbridge dir is gated behind the DEFAULT-OFF meshbridge
+# toggle), so a default build adds no policy and is byte-identical to today's
+# mainline.
+#
+# meshbridge carries app=hugmesh-meshbridge (NOT app.kubernetes.io/name in
+# the homeserver NotIn set), so the homeserver-isolation/homeserver-egress
+# backstops do NOT select it — it is a distinct app with its own policy here.
+# It IS selected by the backend tier-egress policy (union semantics), but this
+# policy stays self-contained so the allow-set is auditable in one place.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: meshbridge-allow
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: meshbridge
+spec:
+  podSelector:
+    matchLabels:
+      app: hugmesh-meshbridge
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Appservice transaction push FROM tuwunel ONLY (:8009). The pod selector
+    # matches the tuwunel pod template labels (manifests/tuwunel/tuwunel.yaml —
+    # app.kubernetes.io/name: tuwunel). Nothing else may reach the bridge; the
+    # /healthz probes are kubelet traffic and bypass NetworkPolicy.
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: tuwunel }
+      ports:
+        - { protocol: TCP, port: 8009 }
+  egress:
+    # DNS (CoreDNS in kube-system).
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # tuwunel CS API (:8008, in-namespace) — posting bridged messages, lazy
+    # @mesh-* registration, masquerade joins. The PLAIN port, not the mTLS
+    # proxy:4443: appservice tokens never transit the gateway (see the
+    # deployment header). The tuwunel-side ingress allow for this leg is the
+    # interaction policy below.
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: tuwunel }
+      ports:
+        - { protocol: TCP, port: 8008 }
+    # user-bff internal mesh-devices poll (:8080, in-namespace, HTTPS/mTLS) —
+    # the node-id -> user mapping (60 s poll, fail-soft).
+    - to:
+        - podSelector:
+            matchLabels: { app: hugmesh-user-bff-api }
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Casdoor token endpoint (hugmesh-pki:8000) — client-credentials mint
+    # for the SERVICE JWT the user-bff internal surface requires.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: hugmesh-pki }
+      ports:
+        - { protocol: TCP, port: 8000 }
+    # ── Radio / broker egress (LAN) ──────────────────────────────────────────
+    # LoRa-WiFi radios (Meshtastic TCP API, :4403) + MQTT JSON brokers
+    # (:1883 plain / :8883 TLS) live on the OPERATOR'S LAN, whose subnet is
+    # per-deployment — so this ships as the RFC1918 superset. OPERATOR: narrow
+    # these cidr blocks to the actual radio/broker subnet (e.g. 10.20.0.0/24)
+    # when you declare devices in meshbridge-devices; the port pins already
+    # keep this from becoming general LAN egress. The pod/service CIDRs are
+    # carved out so radio egress can never double as an in-cluster path.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+            except:
+              - 10.244.0.0/16   # pod CIDR
+              - 10.96.0.0/12    # service CIDR
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+      ports:
+        - { protocol: TCP, port: 4403 }   # Meshtastic TCP API (LoRa-WiFi)
+        - { protocol: TCP, port: 1883 }   # MQTT (plain) — WAN-gateway meshes
+        - { protocol: TCP, port: 8883 }   # MQTT over TLS
+---
+# ── tuwunel <-> meshbridge interaction policy ─────────────────────────────────
+# tuwunel is LOCKED DOWN on both axes by always-on policies that predate
+# meshbridge: homeserver-isolation-tuwunel allows ingress on :8008 only from a
+# NAMED pod set (gateway/BFFs/admin-sync), and homeserver-egress-tuwunel allows
+# egress ONLY to DNS + the egress-proxy. NetworkPolicy is ADDITIVE (union of
+# every policy selecting a pod), so rather than editing those always-on files —
+# which would put meshbridge references into every default build — THIS policy
+# ships WITH meshbridge and widens tuwunel by exactly the two legs the bridge
+# needs (the egress-vpn-interaction precedent, scoped to a manifest dir that
+# only deploys when the slug is installed):
+#   ingress  :8008 <- the bridge (CS API) + the register Job (admin room post)
+#   egress   :8009 -> the bridge (appservice transaction push)
+# Deleting meshbridge deletes this policy and tuwunel snaps back to its
+# baseline lockdown — nothing to un-edit.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: meshbridge-tuwunel-interaction
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: meshbridge
+spec:
+  # Selects the TUWUNEL pod (this is the widening side; the bridge's own policy
+  # is meshbridge-allow above).
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: tuwunel }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # CS API (:8008) from the bridge (message post / register / join) and from
+    # the appservice-registration PostSync Job (admin-room command post).
+    - from:
+        - podSelector:
+            matchLabels: { app: hugmesh-meshbridge }
+        - podSelector:
+            matchLabels: { app: meshbridge-register }
+      ports:
+        - { protocol: TCP, port: 8008 }
+  egress:
+    # Appservice transaction push (:8009) to the bridge. NOTE: because
+    # homeserver-egress-tuwunel already selects tuwunel on the Egress axis,
+    # this rule is a pure ADDITION to its DNS+egress-proxy allow-set — it does
+    # not loosen anything else.
+    - to:
+        - podSelector:
+            matchLabels: { app: hugmesh-meshbridge }
+      ports:
+        - { protocol: TCP, port: 8009 }

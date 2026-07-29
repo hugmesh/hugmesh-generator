@@ -1,0 +1,11 @@
+# Persistent storage for the gateway_route_access Postgres data directory.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: route-access-db
+  namespace: hugmesh-pki
+  labels: { app: route-access-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 2Gi } }

@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-pki
+resources:
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+
+# The initdb/ directory is materialized into a ConfigMap and mounted into the
+# Postgres initdb directory (/docker-entrypoint-initdb.d). The Postgres entrypoint
+# runs the files in ALPHABETICAL order on first start (empty data dir):
+#   00-hardening.sql  REVOKE PUBLIC + per-DB timeouts + scram password_encryption
+#   10-roles.sh       create the per-machine-user LEAST-PRIVILEGE login roles
+#                     (admin-bff writer; pki/be/fe-gateway readers) from per-user
+#                     Secret passwords in env — never committed
+#   20-schema.sql     the gateway_route_access table + canonical seed + the
+#                     per-role table GRANTs
+#   90-citus.sh       OPT-IN Citus sharding (no-op unless SHARDING_CITUS=on)
+#
+# entrypoint/pg-tls-entrypoint.sh is a SEPARATE ConfigMap (NOT in the schema/initdb
+# dir, or docker-entrypoint would run it as an init script). It is the GATED
+# in-cluster TLS wrapper: PG_TLS_ENABLED (default "false") selects ssl-off (default,
+# byte-identical wire path) vs ssl=on. Ships dark — see deployment.yaml +
+# docs/POSTGRES-HARDENING.md §B.
+configMapGenerator:
+  - name: route-access-schema
+    files:
+      - initdb/00-hardening.sql
+      - initdb/10-roles.sh
+      - initdb/20-schema.sql
+      - initdb/90-citus.sh
+  - name: route-access-entrypoint
+    files:
+      - entrypoint/pg-tls-entrypoint.sh
+
+# The Deployment references the ConfigMap by its fixed name; keep it stable so
+# ArgoCD self-heal does not churn the pod on every apply.
+generatorOptions:
+  disableNameSuffixHash: true

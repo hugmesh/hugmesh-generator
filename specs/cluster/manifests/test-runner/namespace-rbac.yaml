@@ -1,0 +1,96 @@
+# test-runner RBAC (ENV=test only). The orchestrator pod needs to:
+#   * READ workload readiness across fe/be/pki (Deployments/StatefulSets +
+#     Pods/Endpoints) to compute the LEAN edge,
+#   * READ Nodes (the amd64 Ready-node signal) for the HEAVY edge,
+#   * READ ArgoCD Applications (Synced+Healthy gate) and Jobs (seed Complete),
+#   * CREATE/DELETE the lean/heavy test Jobs (it renders them from the templates
+#     in this bundle, baked into the orchestrator ConfigMap).
+# Least-privilege: read-mostly cluster-wide; write ONLY Jobs, and ONLY in
+# hugmesh-backend (where the test Jobs run).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hugmesh-test-runner
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: test-runner
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hugmesh-test-runner-read
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+rules:
+  # Workload readiness for the LEAN edge (cross-namespace fe/be/pki).
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "endpoints", "services"]
+    verbs: ["get", "list", "watch"]
+  # The HEAVY edge: a Ready kubernetes.io/arch=amd64 Node.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # ArgoCD Application Synced+Healthy gate + the seed Job Complete signal.
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hugmesh-test-runner-read
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hugmesh-test-runner-read
+subjects:
+  - kind: ServiceAccount
+    name: hugmesh-test-runner
+    namespace: hugmesh-backend
+---
+# Job create/delete is scoped to hugmesh-backend ONLY (the test Jobs run here).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hugmesh-test-runner-jobs
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hugmesh-test-runner-jobs
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hugmesh-test-runner-jobs
+subjects:
+  - kind: ServiceAccount
+    name: hugmesh-test-runner
+    namespace: hugmesh-backend

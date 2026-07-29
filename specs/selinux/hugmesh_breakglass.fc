@@ -1,0 +1,25 @@
+# hugmesh_breakglass.fc
+# Give the console/loopback-only break-glass authorized_keys file an
+# sshd-readable authorized-keys context. break-glass.conf re-opens
+# `AuthorizedKeysFile /etc/ssh/break-glass.keys` for the loopback Match
+# (specs/etc/ssh/sshd_config.d/break-glass.conf); a file created at runtime
+# by a physically-present operator there would otherwise be etc_t, which
+# sshd_t does NOT read as an authorized_keys source under enforcing — so
+# the break-glass recovery would silently fail closed (no recovery path).
+#
+# ssh_home_t is the standard refpolicy type for ~/.ssh/authorized_keys and
+# is what sshd_t is permitted to read as a key source. Labelling the
+# break-glass file ssh_home_t makes the loopback recovery work on enforcing
+# without widening sshd. The file is ABSENT/empty by default (no bypass);
+# this only governs the LABEL it gets once an operator drops a key in.
+# provision_selinux()'s first-boot relabel applies this; a runtime-created
+# file needs `restorecon /etc/ssh/break-glass.keys` after it is written
+# (document in the break-glass runbook).
+#
+# registry-verify.sh (specs/usr/lib/hugmesh/registry-verify.sh) is a
+# helper invoked from the AuthorizedKeysCommand / break-glass path; it runs
+# in the caller's domain (hugmesh_authkeys_t) and needs no separate
+# entrypoint label, so no .te domain is added for it here — confine it only
+# if the AVC pass shows it transitioning.
+
+/etc/ssh/break-glass\.keys    --    gen_context(system_u:object_r:ssh_home_t,s0)

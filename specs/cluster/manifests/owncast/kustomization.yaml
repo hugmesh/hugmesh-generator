@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-owncast
+resources:
+  - namespace.yaml
+  - deployment.yaml
+
+images:
+  - { name: owncast/owncast, newName: owncast/owncast, newTag: latest }
+  - { name: hugmesh-systems/owncast-bff-api, newName: registry.hugmesh.systems/hugmesh/hugmesh-owncast-bff-api, newTag: main }
+  - { name: hugmesh-systems/owncast-ui, newName: registry.hugmesh.systems/hugmesh/hugmesh-owncast-ui, newTag: main }

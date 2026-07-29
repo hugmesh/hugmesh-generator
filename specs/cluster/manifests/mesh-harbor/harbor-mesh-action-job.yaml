@@ -1,0 +1,96 @@
+# ============================================================================
+# harbor-mesh-action-job.yaml — Phase 7 cross-mesh domain-creation PUBLISH Action.
+# ============================================================================
+#
+# The mesh Action for CROSS-MESH domain creation: when a new tenant domain is
+# created, publish its container images through Harbor into a PER-TENANT PROJECT so a
+# FOREIGN mesh (or a downstream tenant mesh) can pull them under a scoped robot.
+# EXTENDS Phase 5's manifests/harbor/harbor-provision-job.yaml (same idempotent
+# ConfigMap-python reconcile + scoped-robot + once-only Vault-write shape) — it does
+# NOT re-implement that machinery; it parameterizes it per tenant/mesh.
+#
+# WHAT IT RECONCILES (idempotent, GET-then-skip):
+#   * a per-tenant Harbor PROJECT  hugmesh-<brand>  (public:false);
+#   * a cross-mesh PULL robot       robot$<brand>-mesh-pull   (pull-only, project-
+#     scoped) whose secret is written ONCE into Vault (Harbor reveals it once);
+#   * a PUSH robot                  robot$<brand>-mesh-push   (push-only) the tenant
+#     build uses to publish images into its own project.
+# The foreign mesh receives ONLY the pull robot (scoped to that one project) — never
+# admin, never cross-project.
+#
+# >>> DEFERRED-TO-CLUSTER (never faked build-host-side): the LIVE run needs a booted
+# >>> Harbor (chart pin in apps/03a-harbor.yaml) + Vault + the cluster CA copied into
+# >>> hugmesh-pki (the SAME cluster-ca gap the Phase-5 provision job documents).
+# >>> Cross-mesh IMAGE TRUST additionally needs Trivy flipped on (it ships
+# >>> enabled:false in apps/03a-harbor.yaml) so a foreign pull is vuln-gated cluster-
+# >>> side — the honest complement to the build-host advisory floor the INBOUND gate
+# >>> (ingest-foreign-base.sh) enforces. This Job is the reviewable scaffold; validate
+# >>> endpoints against the deployed goharbor/harbor before relying on it.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: harbor-mesh-action-script
+  namespace: hugmesh-pki
+  labels:
+    app: harbor
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/name: mesh-harbor
+data:
+  # BRAND/mesh come from the ServiceCatalogEntry / domain-creation event; injected as
+  # env by the ApplicationSet that instantiates this Job per tenant. Reconcile is a
+  # thin parameterization of the Phase-5 provision reconcile.py (project + scoped
+  # robots + once-only Vault write); kept minimal here to show the seam, not to fork.
+  reconcile.py: |
+    import os, sys
+    BRAND = os.environ.get("BRAND", "").strip()
+    MESH  = os.environ.get("FOREIGN_MESH", "").strip()
+    # Fail-closed: no brand => nothing to reconcile (never create a wildcard project).
+    if not BRAND:
+        sys.stderr.write("[mesh-harbor] no BRAND — refusing (fail-closed)\n"); sys.exit(0)
+    PROJECT = "hugmesh-%s" % BRAND
+    # (1) ensure project (GET-then-POST; 409=exists=OK) — public:false.
+    # (2) ensure PULL robot robot$%s-mesh-pull  (project-scoped, pull only) for the
+    #     FOREIGN mesh; write its once-revealed secret into Vault KV.
+    # (3) ensure PUSH robot robot$%s-mesh-push  (push only) for the tenant build.
+    # The REST calls mirror manifests/harbor/harbor-provision-job.yaml exactly; this
+    # scaffold logs the intent so a reviewer can diff against that proven job.
+    print("[mesh-harbor] reconcile project=%s foreign-mesh=%s (pull-scoped robot only to the foreign mesh)" % (PROJECT, MESH or "<none>"))
+    print("[mesh-harbor] DEFERRED: live Harbor/Vault/Trivy — cluster-only (see banner)")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: harbor-mesh-action
+  namespace: hugmesh-pki
+  labels:
+    app: harbor
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/name: mesh-harbor
+  annotations:
+    # PostSync so it runs after Harbor is reconciled by the Phase-5 provision job.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # SHIP-DARK: this Job is inert until an operator sets mesh-action-enabled=true on
+    # the tenant (the domain-creation ApplicationSet only instantiates it then).
+    hugmesh.systems/mesh-action-enabled: "false"
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: { app: harbor, app.kubernetes.io/name: mesh-harbor }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mesh-action
+          image: python:3.12-alpine
+          command: ["python3", "/script/reconcile.py"]
+          env:
+            - { name: BRAND,        value: "" }        # injected per-tenant by the appset
+            - { name: FOREIGN_MESH, value: "" }        # injected per-tenant by the appset
+            - { name: HARBOR_URL,   value: "http://harbor-core.hugmesh-pki.svc.cluster.local" }
+          volumeMounts:
+            - { name: script, mountPath: /script }
+      volumes:
+        - name: script
+          configMap: { name: harbor-mesh-action-script }

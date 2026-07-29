@@ -1,0 +1,35 @@
+sys-kernel/raspberrypi-sources symlink
+sys-block/parted device-mapper
+# wifi: NM manages the Pi's wlan. -modemmanager: NM[+modemmanager] (default-on) pulls
+# net-misc/modemmanager -> net-libs/libqmi[qrtr] -> net-libs/libqrtr-glib, which
+# HARD-RDEPENDs dev-libs/gobject-introspection (IUSE has no introspection gate; it always
+# passes -Dintrospection=true) and thereby FORCES glib[introspection] back ON despite our
+# global -introspection -> glib's g-ir-scanner dies (host py3.14 vs target py3.12
+# _giscanner ABI). A headless k8s node has no cellular WWAN modem, so drop the whole
+# ModemManager stack. Safe: NM REQUIRED_USE only forces modemmanager via bluetooth, which
+# is off (-bluetooth in make.conf). This is the SOLE gobject-introspection puller.
+net-misc/networkmanager wifi -modemmanager
+# rpi-eeprom requires exactly-one-of ( pi4 pi5 ) — no "pi3" value exists (it is
+# a Pi 4/5-only bootloader/VL805 updater; verified against the live ebuild).
+# This file's baked-in default is pi5 (the historical, pre-Phase-6 default);
+# build-rpi5-stage4.sh flips this line to "pi4" in-sysroot (sed, after this
+# directory is bulk-copied) whenever --board rpi4 is selected — see its
+# BOARD-gated package.use fix-up. Do not rely on this static "pi5" surviving a
+# --board rpi4 build; it is rewritten. --board rpi3 does NOT flip this line —
+# it EXCLUDES dev-embedded/rpi-eeprom from STAGE4_PACKAGES entirely instead
+# (Pi 3 has no flashable EEPROM at all), so this line is simply inert/unused
+# on that board rather than rewritten.
+dev-embedded/rpi-eeprom pi5
+
+# networkmanager[wifi] (forced above) hard-requires wpa_supplicant[dbus] (NM drives
+# it over D-Bus). dbus is not a default USE; pre-seed it or payload resolution aborts.
+net-wireless/wpa_supplicant dbus
+
+# flashrom's asm106x programmer is +-default, but its meson.build requires libpci while
+# the ebuild OMITS asm106x from the `*? ( sys-apps/pciutils )` dependency block (upstream
+# bug) — so the cross-sysroot has no usable pciutils/pci.h and configure dies "asm106x
+# selected but dependency libpci not found". flashrom is an UNCONDITIONAL RDEPEND of
+# dev-embedded/rpi-eeprom (the Pi bootloader EEPROM updater, in packages.list), so without
+# this both silently fail to install. asm106x is a USB-SATA programmer irrelevant to Pi
+# EEPROM flashing; the other default programmers don't need libpci.
+sys-apps/flashrom -asm106x

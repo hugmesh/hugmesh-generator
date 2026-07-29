@@ -1,0 +1,36 @@
+# scripts/phone-devices.tsv — MDM phone device catalog (GrapheneOS targets).
+#
+# Provenance: fetched 2026-07-15 from https://grapheneos.org/releases — the 21
+# devices GrapheneOS ships release channels for. The wizard FAILS CLOSED on any
+# codename not listed here (exit 4): an unknown codename would make it fetch and
+# flash an artifact nobody vetted for this fleet. There is deliberately NO
+# --allow-unknown escape hatch in v1.
+#
+# To extend: check https://grapheneos.org/releases for the new device's codename,
+# confirm a release-channel file exists at
+# https://releases.grapheneos.org/<codename>-stable, then append a row below.
+#
+# Format: one device per row, exactly two TAB-separated columns:
+#   <codename>	<marketing name>
+# '#' lines and blank lines are ignored.
+oriole	Pixel 6
+raven	Pixel 6 Pro
+bluejay	Pixel 6a
+panther	Pixel 7
+cheetah	Pixel 7 Pro
+lynx	Pixel 7a
+tangorpro	Pixel Tablet
+felix	Pixel Fold
+shiba	Pixel 8
+husky	Pixel 8 Pro
+akita	Pixel 8a
+tokay	Pixel 9
+caiman	Pixel 9 Pro
+komodo	Pixel 9 Pro XL
+comet	Pixel 9 Pro Fold
+tegu	Pixel 9a
+frankel	Pixel 10
+blazer	Pixel 10 Pro
+mustang	Pixel 10 Pro XL
+rango	Pixel 10 Pro Fold
+stallion	Pixel 10a

@@ -1,0 +1,126 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# Velero BackupStorageLocation(s) — the object-store destinations the admin-bff
+# cloud-backups effector references BY NAME.
+#
+# ── HOW THE NAME MATCHES THE EFFECTOR CONTRACT ──────────────────────────────────
+# admin-bff cloudbackup/VeleroResourceFactory.storageLocationRef(set) sets the
+# Velero Backup/Restore CR's `spec.storageLocation` to the backup_set row's
+# `destination_ref` (denormalised from the brand's backup_destination row), and
+# FALLS BACK TO THE LITERAL STRING "default" when that ref is blank:
+#
+#     return (ref == null || ref.isBlank()) ? "default" : ref.trim();
+#
+# So the effector NEVER hardcodes a BSL name — it uses whatever the catalog row
+# carries, with `default` as the guaranteed fallback. THEREFORE:
+#   * the BSL named `default` below is REQUIRED — it is both the TOTAL/superadmin
+#     destination AND the safety-net any DOMAIN backup with a blank destination_ref
+#     resolves to (so a backup is never emitted referencing a non-existent BSL);
+#   * a brand that sets backup_destination.destination_ref = "<name>" MUST have a
+#     BSL of that exact `<name>` provisioned here (or by a per-brand overlay). The
+#     per-brand TEMPLATE at the bottom shows the shape; a superadmin provisions one
+#     per brand that opts into an OBJECT_STORE destination with a non-default name.
+#
+# This is the contract gap to be explicit about (documented, not invented):
+#   The effector takes the BSL name from the DB row; the generator can only
+#   pre-provision the `default` BSL and any KNOWN-AT-GENERATION per-brand BSLs.
+#   If a superadmin sets a brand's destination_ref to a name with NO matching BSL,
+#   that brand's Velero Backup CR will fail to reconcile (Velero: "backup storage
+#   location not found"), and the sweep flips the catalog row to `failed`. The fix
+#   is provisioning the BSL (here, or a per-brand overlay) — NOT a code change.
+#   Operationally: keep brands on `default` unless a per-brand bucket is wanted,
+#   and provision the per-brand BSL in the same change that sets destination_ref.
+#
+# ── CREDENTIALS: ESO/VAULT ONLY ─────────────────────────────────────────────────
+# spec.credential references the ESO-materialized Secret velero-cloud-credentials
+# (key `cloud`) — see manifests/external-secrets/velero-externalsecrets.yaml. No
+# object-store key/secret bytes appear in this file or anywhere in git.
+#
+# ── BUCKET / ENDPOINT ───────────────────────────────────────────────────────────
+# spec.objectStorage.bucket + spec.config.{region,s3Url,s3ForcePathStyle} point at
+# the cluster's S3/MinIO endpoint. These are NON-SECRET coordinates (a hostname +
+# bucket name), templated by the generator per deployment. They are NOT credentials.
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  # NAME = "default": the effector's blank-destination_ref fallback AND the
+  # TOTAL/superadmin destination. DO NOT RENAME — the effector's literal fallback
+  # string is "default".
+  name: default
+  namespace: velero
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/managed-by: hugmesh-generator
+    hugmesh.systems/backup-scope: total
+spec:
+  provider: aws
+  # The default BSL Velero writes to when a Backup CR doesn't pick another.
+  default: true
+  objectStorage:
+    # Bucket for the encrypted backup repo. Generator-templated, non-secret.
+    bucket: hugmesh-backups
+    # All hugmesh backups live under one prefix so a per-brand BSL can carve a
+    # sub-prefix (see template) without colliding with the total-cloud set.
+    prefix: total
+  # Credentials come from the ESO-materialized Secret — NEVER inline.
+  credential:
+    name: velero-cloud-credentials
+    key: cloud
+  config:
+    # S3/MinIO endpoint coordinates (non-secret). Generator-templated per deploy.
+    region: hugmesh
+    s3Url: http://minio.hugmesh-backend.svc.cluster.local:9000
+    s3ForcePathStyle: "true"
+---
+# ── VolumeSnapshotLocation (filesystem/Kopia path) ──────────────────────────────
+# The pv_snapshot services (etcd/pvc/matrix/games/tube/owncast) are captured via
+# the node-agent Kopia filesystem path (defaultVolumesToFsBackup set per-CR by the
+# effector), so no cloud CSI snapshotter is required. A VSL is still declared so
+# Velero has a named snapshot location; provider aws + the same region keeps it
+# consistent with the BSL. Kopia FS-backup does not actually call this for PVs.
+apiVersion: velero.io/v1
+kind: VolumeSnapshotLocation
+metadata:
+  name: default
+  namespace: velero
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/managed-by: hugmesh-generator
+spec:
+  provider: aws
+  config:
+    region: hugmesh
+# ════════════════════════════════════════════════════════════════════════════════
+# PER-BRAND BSL TEMPLATE (DOMAIN destinations with a non-default name)
+# --------------------------------------------------------------------------------
+# A superadmin provisions one of these per brand that sets its
+# backup_destination.destination_ref to a NON-"default" name. The BSL `name` MUST
+# equal that destination_ref string (that is the whole contract). Credentials still
+# flow via ESO — either the shared velero-cloud-credentials Secret or a per-brand
+# ESO Secret if the brand uses a distinct bucket/key. Copy, uncomment, and set
+# <BRAND-DESTINATION-REF>, <brand-bucket>, and (optionally) a per-brand credential.
+# --------------------------------------------------------------------------------
+# apiVersion: velero.io/v1
+# kind: BackupStorageLocation
+# metadata:
+#   name: <BRAND-DESTINATION-REF>          # == backup_destination.destination_ref
+#   namespace: velero
+#   labels:
+#     app.kubernetes.io/part-of: hugmesh.systems
+#     app.kubernetes.io/managed-by: hugmesh-generator
+#     hugmesh.systems/backup-scope: domain
+#     hugmesh.systems/domain: <brand-domain>
+# spec:
+#   provider: aws
+#   default: false
+#   objectStorage:
+#     bucket: <brand-bucket>               # may equal hugmesh-backups with a per-brand prefix
+#     prefix: <brand-domain>
+#   credential:
+#     name: velero-cloud-credentials       # or a per-brand ESO Secret (still ESO/Vault, never inline)
+#     key: cloud
+#   config:
+#     region: hugmesh
+#     s3Url: http://minio.hugmesh-backend.svc.cluster.local:9000
+#     s3ForcePathStyle: "true"
+# ════════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,195 @@
+# casdoor-games-init — reconciles the GAMES-realm OAuth2 application
+# (threewizards-app) in casdoor-games and injects its client-secret from Vault (via
+# the ESO Secret casdoor-games-app), and seeds the GitHub OAuth federation provider
+# (so people can sign up as a native games "player"). Mirrors the systems
+# manifests/casdoor/init-job.yaml pattern, but targets the SEPARATE games Casdoor +
+# org "threewizards". The org / role catalog / seed users themselves are seeded
+# declaratively by init_data.json (init-data-configmap.yaml). Idempotent; ArgoCD
+# re-runs it on each sync (PostSync hook).
+#
+# !!! The Casdoor REST API shape (login + application/provider CRUD) is
+# !!! version-specific. This Job is a working scaffold; validate the endpoints /
+# !!! payloads against the deployed casbin/casdoor before relying on it in production.
+# Reads admin creds from Secret casdoor-games-admin (username/password) and the
+# threewizards-app client-secret from Secret casdoor-games-app — both materialized by
+# ESO from Vault (manifests/external-secrets). Keys never touch git.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-games-init-script
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
+data:
+  reconcile.py: |
+    #!/usr/bin/env python3
+    """Ensure the threewizards-app Casdoor OAuth2 application exists with its Vault
+    client-secret, and seed the GitHub OAuth federation provider. Pure stdlib
+    (urllib) so the image needs no extra packages / network installs."""
+    import json, os, time, urllib.request, urllib.parse, urllib.error, http.cookiejar
+
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor-games.hugmesh-games.svc.cluster.local:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "threewizards")
+    APP_NAME   = os.environ.get("CASDOOR_APP_NAME", "threewizards-app")
+    CLIENT_ID  = os.environ.get("CASDOOR_CLIENT_ID", "twclient001")
+    ADMIN_USER = open("/secrets/admin/username").read().strip()
+    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+    def call(path, payload=None, method="GET"):
+        url = BASE + path
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json"})
+        with opener.open(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                opener.open(BASE + "/api/health", timeout=5); return
+            except Exception:
+                time.sleep(3)
+        raise SystemExit("casdoor-games not reachable")
+
+    def login():
+        # Casdoor admin login (session cookie). Built-in app/org host the admin.
+        body = {"application": "app-built-in", "organization": "built-in",
+                "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
+                "autoSignin": True}
+        return call("/api/login", body, "POST")
+
+    def reconcile_app():
+        # The threewizards-app client-secret (the games BFF's CASDOOR_CLIENT_SECRET).
+        secret = open("/secrets/app/clientSecret").read().strip()
+        app = {
+            "owner": "admin", "name": APP_NAME, "displayName": "HugMesh Games",
+            "organization": ORG, "clientId": CLIENT_ID, "clientSecret": secret,
+            "cert": "cert-built-in", "signingCert": "cert-built-in",
+            # reconcile.py RE-PINS these redirectUris on EVERY ArgoCD PostSync, so
+            # they MUST be parameterized on GAMES_DOMAIN at build time (the stage4
+            # parameterize_games_domain() rewrites https://hugmesh.games ->
+            # https://${GAMES_DOMAIN}) — otherwise each sync reverts them to the
+            # wrong host and games OAuth breaks. Keep in sync with init-data-configmap.
+            "redirectUris": [
+                "https://hugmesh.games/callback",
+                "https://hugmesh.games/silent-refresh.html",
+            ],
+            "grantTypes": ["authorization_code", "password", "client_credentials",
+                           "token", "id_token"],
+            "tokenFormat": "JWT", "expireInHours": 168, "refreshExpireInHours": 336,
+            "enablePassword": True, "enableSignUp": False,
+        }
+        try:
+            existing = call(f"/api/get-application?id=admin/{APP_NAME}")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call(f"/api/update-application?id=admin/{APP_NAME}", app, "POST")
+            print(f"  updated {APP_NAME}")
+        else:
+            call("/api/add-application", app, "POST")
+            print(f"  added   {APP_NAME}")
+
+    def reconcile_github_provider():
+        """Seed the GitHub OAuth federation provider (clientId/secret from Vault).
+        Skipped when the casdoor-games-github secret is absent (provider is optional);
+        lets people sign up as a native games 'player'."""
+        try:
+            cid  = open("/secrets/github/clientId").read().strip()
+            csec = open("/secrets/github/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  github provider: casdoor-games-github secret absent — skipping")
+            return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native games-player signup working).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  github provider: clientId is placeholder/empty — skipping")
+            return
+        provider = {
+            "owner": "admin", "name": "github", "displayName": "GitHub",
+            "category": "OAuth", "type": "GitHub",
+            "clientId": cid, "clientSecret": csec,
+            "scopes": "user:email read:user", "enableSignUp": True,
+        }
+        try:
+            existing = call("/api/get-provider?id=admin/github")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-provider?id=admin/github", provider, "POST")
+            print("  updated github provider")
+        else:
+            call("/api/add-provider", provider, "POST")
+            print("  added   github provider")
+
+    wait_ready()
+    login()
+    try:
+        reconcile_app()
+    except Exception as e:
+        print(f"  WARN {APP_NAME}: {e}")
+    try:
+        reconcile_github_provider()
+    except Exception as e:
+        print(f"  WARN github provider: {e}")
+    print("casdoor-games-init: done")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: casdoor-games-init
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: casdoor-games-init }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.systems/games: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: reconcile
+          image: python:3.12-alpine
+          command: ["python3", "/script/reconcile.py"]
+          env:
+            - name: CASDOOR_URL
+              value: "http://casdoor-games.hugmesh-games.svc.cluster.local:8000"
+            - name: CASDOOR_ORG
+              value: "threewizards"
+            - name: CASDOOR_APP_NAME
+              value: "threewizards-app"
+            - name: CASDOOR_CLIENT_ID
+              value: "twclient001"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: admin, mountPath: /secrets/admin, readOnly: true }
+            - { name: app, mountPath: /secrets/app, readOnly: true }
+            - { name: github, mountPath: /secrets/github, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: casdoor-games-init-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed.
+        - name: admin
+          secret: { secretName: casdoor-games-admin }
+        - name: app
+          secret: { secretName: casdoor-games-app }
+        # GitHub federation client — optional; provider seeding is skipped if absent.
+        - name: github
+          secret: { secretName: casdoor-games-github, optional: true }

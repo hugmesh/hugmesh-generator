@@ -1,0 +1,33 @@
+# Analytics DISCOVERY FLOOR (auto-sync, arch-agnostic, lightweight).
+#
+# The single-app analytics bundle was split (see apps/35-analytics-*.yaml +
+# docs/HEAVY-TIER.md) so the HEAVY amd64 datastores (kafka/clickhouse Deployments +
+# their PVCs) are MANUAL-sync (operator opt-in on the x86 host), while THIS
+# lightweight floor stays AUTO-sync. It holds only the cheap, always-safe pieces:
+# the ClusterIP Services (so `clickhouse:8123` / `kafka:9092` DNS resolves the
+# moment any consumer is deployed, even before the heavy pods schedule — the
+# selectors just match zero endpoints until then). No nodeSelector, no x86 pin,
+# no big PV — nothing here can fail to schedule on a Pi-only cluster, so it is safe
+# to auto-sync as the floor. The admin-BFF that addresses these by static DNS
+# (there is NO service-discovery registry) therefore always has a stable name to
+# resolve; usage degrades to the in-memory fallback until the heavy pods attach.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: hugmesh-backend
+  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.systems, hugmesh.systems/tier: analytics-floor }
+spec:
+  selector: { app: clickhouse }
+  ports: [{ name: http, port: 8123, targetPort: http }, { name: native, port: 9000, targetPort: native }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: hugmesh-backend
+  labels: { app: kafka, app.kubernetes.io/part-of: hugmesh.systems, hugmesh.systems/tier: analytics-floor }
+spec:
+  selector: { app: kafka }
+  ports: [{ name: kafka, port: 9092, targetPort: kafka }]

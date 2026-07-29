@@ -1,0 +1,33 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# WORKLOAD CONSOLE — the MUTATE Role (SUPERADMIN-only runtime mutations + exec).
+#
+# Bound ONLY in the APP-TIER namespaces (NEVER pki/policy/vault/devops/observability) to
+# the workload-console-mutate SA. Carries ONLY the runtime-ephemeral verbs the spec allows:
+#   - pods delete          (rollout-restart = delete the workload's pods; kill/recreate)
+#   - pods/exec create     (the DANGEROUS exec -it TTY + read-only exec; SA-only + step-up
+#                           + Lease + device/SSH-license — gated by the BFF predicate)
+#   - pods/portforward create (the DANGEROUS curated port-forward; allowlist-gated by the BFF)
+#
+# NO secrets, NO configmaps, NO deployment SPEC patch (replicas/deploy/remove are
+# GitOps-PR intents, NOT live mutations — selfHeal is law). NO bindings in any infra tier.
+# The generator lint test asserts this Role grants exactly these three and nothing wider.
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-mutate
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: workload-console
+    app.kubernetes.io/component: rbac-mutate
+    app.kubernetes.io/part-of: hugmesh.systems
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]

@@ -1,0 +1,155 @@
+# attestation-server — GrapheneOS AttestationServer (Apache-2.0), a standalone Java app
+# with its OWN embedded com.sun.net.httpserver.HttpServer (not a servlet-container WAR
+# deploy like headwind's Tomcat). SQLite file-store (attestation.db + samples.db, WAL
+# mode) — single workload, NO cluster DB engine, NO owner/app-role split, NO
+# headwind-db-auth-style password secret. Cloned from manifests/headwind/headwind.yaml's
+# shape (single-container app + PVC + Service), minus the DB leg.
+#
+# Lives in hugmesh-pki (shared control-plane namespace: harbor/vault/casdoor/
+# route-access-db/pki-gateway/superadmin-gateway/headwind all co-reside here), created
+# idempotently by apps/06-vault-pki.yaml / apps/20-gateway-pki.yaml.
+#
+# TAILNET-ONLY, reached via the EXISTING apps/22-gateway-superadmin.yaml Application
+# (see that file's new attestation-auditor/attestation-status/attestation-console
+# routes and optional-services.yaml's attestation-server slug) — NOT its own Ingress.
+# StripPrefix=1 on those gateway routes rewrites the platform-chosen /attest path
+# segment down to this app's real /auditor/**, /api/** context paths.
+#
+# workingDir: /data IS the persistence mechanism — both SQLite DB files
+# (attestation.db, samples.db) use bare RELATIVE filenames in upstream source,
+# resolved against the JVM process's CWD; there is no env var / config override for
+# the data path (source: AttestationServer.java:73-74).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: attestation-server-data
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: attestation-server }
+spec:
+  accessModes: [ReadWriteOnce]   # REQUIRED: SQLite WAL mode needs real POSIX locking — do NOT use an RWX/NFS-backed class
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 2Gi } }   # two small sqlite .db files, no upload blobs — generous headroom, not source-derived
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attestation-server
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: attestation-server, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1   # MUST stay 1 — two pods writing the same SQLite WAL files is unsafe; not horizontally scalable
+  strategy: { type: Recreate }   # avoid two pods ever mounting the RWO PVC concurrently during a rollout
+  selector: { matchLabels: { app.kubernetes.io/name: attestation-server } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: attestation-server } }
+    spec:
+      serviceAccountName: sa-attestation-server
+      nodeSelector: { hugmesh.systems/pki: "true" }   # co-locate w/ harbor/vault/casdoor/headwind
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000    # CONFIRMED by a real image build+boot: USER attestation is uid=1000
+        runAsGroup: 1000   # CONFIRMED: gid=1000(attestation)
+        fsGroup: 1000      # CONFIRMED: the smoke boot created /data/attestation.db{,-shm,-wal} owned 1000:1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions: { type: container_t, level: "s0:c79" }  # next free MCS category (headwind-db holds c77, headwind holds c78 — docs/SECURITY.md)
+      containers:
+        - name: attestation-server
+          image: registry.hugmesh.systems/hugmesh/hugmesh-attestation-server:main
+          imagePullPolicy: Always
+          ports: [{ name: http, containerPort: 8080 }]
+          workingDir: /data
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          # tcpSocket ONLY, deliberately. Source-confirmed: AttestationServer registers ZERO GET
+          # handlers — every context is POST-only (auditor/challenge, auditor/verify, auditor/submit,
+          # and all /api/* console+status paths). httpGet probes cannot target any of these; do not
+          # invent a path like headwind's verified /rest/public/name — no equivalent exists here.
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { memory: 512Mi }
+        - name: smtp-config-seeder
+          # CONFIRMED against real upstream source (no longer an open item on the
+          # table shape): AttestationServer.java@74ff42d0:186-189 —
+          #   CREATE TABLE IF NOT EXISTS Configuration (key TEXT PRIMARY KEY NOT
+          #   NULL, value ANY NOT NULL) STRICT;
+          # — a 2-column key/value STRICT table, NOT a wide emailUsername/.../
+          # emailFrom column layout. AlertDispatcher.java:52-59 confirms the read
+          # shape (6 correlated `SELECT value FROM Configuration WHERE key = '...'`
+          # scalar subqueries) and the upstream README.md's own documented INSERT
+          # example matches the key/value INSERT below.
+          image: alpine:3.20   # TODO: pin to a real internal sqlite3-cli image if the platform has one;
+                                # alpine + runtime `apk add` needs egress at pod start, flagged as a gap.
+          # Root-capable OVERRIDE of the Pod-level securityContext (runAsNonRoot:true,
+          # runAsUser:1000 above): stock alpine:3.20's /etc/apk, /lib/apk/db and
+          # /var/cache/apk are root-owned, so `apk add` as UID 1000 fails permission
+          # every time (silently swallowed by the `|| true` below) and sqlite3 is
+          # never installed — a permanent CrashLoopBackOff on this container.
+          # Kubernetes lets a container securityContext override the Pod's field-by-
+          # field, so this sidecar alone runs as root while the main container stays
+          # non-root.
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              apk add --no-cache sqlite >/dev/null 2>&1 || true
+              until [ -f /data/attestation.db ]; do
+                echo "waiting for /data/attestation.db to be created by the app on first boot..."
+                sleep 5
+              done
+              if [ ! -f /data/.smtp-seeded ]; then
+                # CONFIRMED shape: Configuration is key/value (AttestationServer.java:186-189,
+                # AlertDispatcher.java:52-59). Wrapped in an explicit transaction so a failing
+                # INSERT rolls back the DELETE instead of leaving the table wiped with no SMTP
+                # row and no retry-guard (sqlite3's CLI does not auto-wrap multiple statements).
+                # SQL-quote the secret values: these come straight from the Secret, and a single
+                # quote is a perfectly legal character in an SMTP password/username. Interpolated
+                # raw it would terminate the '...' literal early, the INSERT would fail, the whole
+                # transaction would roll back, and SMTP would be SILENTLY never seeded (alerts
+                # dead). Doubling every ' is the correct SQLite escaping (also closes the SQL
+                # injection path a crafted secret value would otherwise open).
+                sqlq() { printf '%s' "$1" | sed "s/'/''/g"; }
+                sqlite3 /data/attestation.db \
+                  "BEGIN IMMEDIATE; DELETE FROM Configuration; INSERT INTO Configuration (key, value) VALUES ('emailUsername', '$(sqlq "${ATTESTATION_SMTP_USER}")'), ('emailPassword', '$(sqlq "${ATTESTATION_SMTP_PASSWORD}")'), ('emailHost', '$(sqlq "${ATTESTATION_SMTP_HOST}")'), ('emailPort', '$(sqlq "${ATTESTATION_SMTP_PORT}")'), ('emailFrom', '$(sqlq "${ATTESTATION_SMTP_FROM}")'); COMMIT;" \
+                  && touch /data/.smtp-seeded
+              fi
+              sleep infinity
+          envFrom:
+            - secretRef: { name: attestation-server-smtp }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { memory: 64Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: attestation-server-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: attestation-server
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: attestation-server }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: attestation-server }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

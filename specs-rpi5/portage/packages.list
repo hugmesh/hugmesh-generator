@@ -1,0 +1,95 @@
+# Stage4 package list — one atom per line
+# Lines starting with # are ignored
+# Edit this file to add or remove packages from the image
+
+# ── Kernel & firmware ──────────────────────────────────────────────
+sys-kernel/raspberrypi-sources
+sys-boot/raspberrypi-firmware
+sys-firmware/raspberrypi-wifi-ucode
+dev-embedded/raspberrypi-utils
+dev-embedded/rpi-eeprom
+
+# ── RPi 5 hardware ────────────────────────────────────────────────
+sys-apps/nvme-cli
+sys-block/parted
+sys-apps/pciutils
+sys-apps/usbutils
+sys-apps/i2c-tools
+
+# ── Networking ─────────────────────────────────────────────────────
+net-misc/networkmanager
+net-misc/openssh
+net-wireless/wpa_supplicant
+net-firewall/iptables
+net-firewall/nftables
+net-firewall/firewalld
+net-firewall/conntrack-tools
+net-misc/socat
+# Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +
+# openvpn (fallback) for the node-level hugmesh-egress-vpn OpenRC service. The
+# service is DEFAULT-OFF; the optional-services gate PRUNES these two atoms when
+# the egress-VPN service is not selected (see PR6 / gate_optional_services).
+net-vpn/wireguard-tools
+net-vpn/openvpn
+# net-dns/bind-tools — DROPPED: it is now a dummy package that RDEPENDs on the
+# full net-dns/bind-9.18 server, which does NOT cross-compile for aarch64 (fails
+# src_compile). dig/host are non-essential on a k8s worker (cluster DNS is
+# CoreDNS; the node resolves via /etc/resolv.conf). To restore dig-like tooling
+# later, prefer net-dns/ldns[drill] (a clean, cross-friendly `drill`) or fix the
+# bind cross-build — validate either separately before re-adding here.
+
+# ── System ─────────────────────────────────────────────────────────
+app-admin/sudo
+sys-process/cronie
+sys-apps/haveged
+app-editors/nano
+app-misc/screen
+dev-embedded/u-boot-tools
+
+# ── Hardened / security (SELinux LSM) ──────────────────────────────
+# SELinux is the LSM (hardened/selinux profile). The policy packages'
+# pkg_postinst runs the TARGET `semodule`, which can't execute under aarch64
+# cross-emerge — so on the Pi the base policy is LOADED AT FIRST BOOT (native)
+# by keys-provision; the native x86 build loads it at build time. See SECURITY.md.
+sec-policy/selinux-base
+sec-policy/selinux-base-policy
+sec-policy/selinux-container
+sec-policy/selinux-virt
+sys-apps/policycoreutils
+sys-apps/semodule-utils
+sys-apps/checkpolicy
+app-admin/setools
+sys-libs/libselinux
+sys-libs/libseccomp
+sys-process/audit
+
+# Container runtime + Kubernetes + their k8s-specific dependencies (containerd,
+# kubelet/kubeadm/kubectl, xfsprogs for CSI/PV filesystems, ...) moved to
+# packages-k8s.list — appended by build-rpi5-stage4.sh only for cluster-node
+# roles (not --role desktop; see ROLE_CLIENT).
+
+# ── Base networking/storage tools (needed by every role, not just k8s) ────
+sys-apps/ethtool
+sys-apps/iproute2
+sys-fs/e2fsprogs
+sys-apps/util-linux
+
+# ── KEYS USB provisioning + attached storage + backups ────────────
+# jq parses the JSON manifests; dosfstools provides fsck/mkfs for the
+# FAT32 KEYS partition; util-linux (above) provides blkid/findfs/wipefs;
+# nfs-utils/cifs-utils mount network backup shares.
+app-misc/jq
+sys-fs/dosfstools
+net-fs/nfs-utils
+net-fs/cifs-utils
+# Encryption-at-rest (LUKS2/dm-crypt) for the attached data partition that backs
+# the cluster PVCs / relocated containerd|kubelet|Vault state. The Pi5 has no
+# TPM by default, so keys-provision uses the USB-KEYS keyfile (secrets/luks.key)
+# as the unlock slot (clevis-tpm2 is enrolled instead on a Pi WITH a TPM HAT).
+# See docs/ENCRYPTION-AT-REST.md.
+sys-fs/cryptsetup
+sys-fs/lvm2
+
+# NOTE: headscale and tailscale are NOT emerged here. They are installed
+# as upstream static arm64 binaries by build-rpi5-stage4.sh (the "mesh"
+# phase), which avoids overlay/keyword churn. See --skip-mesh / --skip-tailscale.

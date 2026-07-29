@@ -1,0 +1,12 @@
+# amd64 external-media-data support — appended for client desktops when the
+# media-data feature is ON (default; --no-media-data to skip). Provides:
+#  - gocryptfs : decrypt the /media/Vaults encrypted store (this fleet's Vaults
+#                are a gocryptfs ciphertext dir on the data disk).
+#  - udisks    : let the desktop user mount/unmount the attached data device.
+#  - flatpak   : present for the --steam flatpak fallback + general Flatpak use.
+#                (Native Steam is the DEFAULT — games-util/steam-launcher comes
+#                from packages-steam-native.list, gated to the gaming desktops.)
+app-crypt/gocryptfs
+sys-fs/fuse
+sys-fs/udisks
+sys-apps/flatpak

@@ -1,0 +1,45 @@
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: unix:///run/containerd/containerd.sock
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: stable
+# Stable MagicDNS control-plane endpoint (NOT a node IP) so additional
+# control-plane nodes, workers, and autodiscovering mesh nodes all target the
+# same name. keys-provision publishes kube-api.<base_domain> -> the pki node's
+# tailnet IP via headscale dns.extra_records, and writes it to /etc/hosts for
+# the first-boot window before MagicDNS converges. Override the base domain via
+# provision.json .mesh.magic_dns_domain / the name via .mesh.cp_dns_name.
+controlPlaneEndpoint: "kube-api.headnet.internal:6443"
+apiServer:
+  # SANs covering every way the API is reached: the stable MagicDNS name, the
+  # control node hostname, its tailnet + LAN IPs, and loopback. Additional CPs
+  # and the LB VIP validate against these.
+  certSANs:
+    - kube-api.headnet.internal
+    - hugmesh-pki
+    - hugmesh-pki.headnet.internal
+    - 127.0.0.1
+  # ── Encryption at rest for etcd Secrets ───────────────────────────
+  # The apiserver encrypts Secret objects before writing them to etcd using the
+  # EncryptionConfiguration at the path below. keys-provision WRITES that file
+  # (with an aescbc/secretbox key minted offline, or carried in the USB bundle)
+  # BEFORE `kubeadm init`, so the key never lives in git. extraVolumes mounts the
+  # host file into the static apiserver pod. See docs/ENCRYPTION-AT-REST.md.
+  extraArgs:
+    encryption-provider-config: /etc/kubernetes/encryption-config.yaml
+  extraVolumes:
+    - name: encryption-config
+      hostPath: /etc/kubernetes/encryption-config.yaml
+      mountPath: /etc/kubernetes/encryption-config.yaml
+      readOnly: true
+      pathType: File
+networking:
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: cgroupfs

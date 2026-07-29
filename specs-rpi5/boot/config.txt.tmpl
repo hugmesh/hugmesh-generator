@@ -1,0 +1,51 @@
+# @@BOARD_DESC@@ boot configuration — hardened
+#
+# Variables substituted at build time:
+#   @@BOARD_DESC@@       Human-readable board description (--board rpi5|rpi4|rpi3)
+#   @@RPI_KERNEL_IMG@@   Kernel image filename
+#   @@PCIE_LINE@@        PCIe Gen 3 toggle (commented or uncommented; --board
+#                        rpi5 only — Pi 4's one PCIe lane is internal-only and
+#                        Pi 3 has no PCIe controller at all, see
+#                        build-rpi5-stage4.sh)
+#   @@VC4_OVERLAY_LINE@@ VideoCore KMS overlay (--board rpi3 only — Pi 4/5
+#                        firmware already defaults to KMS with no overlay
+#                        needed; see build-rpi5-stage4.sh's VC4_OVERLAY_LINE
+#                        computation and specs-rpi5/kernel/bcm2837-pi3.config)
+#   @@INITRAMFS_LINE@@   --encrypt-root: disk-boot dracut initramfs directive
+#
+# NOTE: gpu_mem=64 / arm_boost=1 / the pwm-fan overlay / camera+display
+# auto-detect below are shared, board-agnostic defaults confirmed safe for ALL
+# THREE boards (gpu_mem/arm_boost are inert-but-harmless on a Pi 5 that ignores
+# them; the pwm-fan overlay is a generic GPIO-wired fan control mechanism, not
+# tied to any board's official fan connector — RPi firmware silently ignores
+# config.txt keys that don't apply to the detected board, the same tolerance
+# this repo already relies on for Pi 4 vs Pi 5) — see the Phase 6 (Pi 4
+# support) commit message for the research trail.
+
+arm_64bit=1
+kernel=@@RPI_KERNEL_IMG@@
+@@INITRAMFS_LINE@@
+disable_overscan=1
+dtparam=audio=on
+gpu_mem=64
+camera_auto_detect=1
+display_auto_detect=1
+
+dtparam=uart0=on
+enable_uart=1
+
+# PCIe — Gen 2 default
+@@PCIE_LINE@@
+
+# VideoCore KMS overlay — active only on --board rpi3 (Pi 4/5 default to KMS
+# with no overlay at all); see the header note above.
+@@VC4_OVERLAY_LINE@@
+
+# Fan control (active cooler / case fan)
+dtoverlay=pwm-fan,gpiopin=14,temp0=50000,temp1=60000,temp2=70000
+
+dtparam=power_led_trigger=default-on
+dtparam=pwr_led_activelow=off
+
+[all]
+arm_boost=1

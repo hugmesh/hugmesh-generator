@@ -1,0 +1,18 @@
+# Native Steam USE flags. Copied ONLY when --steam native (a standalone/full
+# desktop). Steam is a 32-bit application: it needs the multilib runtime libraries
+# built with ABI_X86_32. We scope ABI_X86_32 to steam-launcher's known runtime
+# dependency stack rather than flipping it globally, to keep the rest of the build
+# 64-bit. The builder also sets ABI_X86="64 32" in make.conf so the deps resolve.
+games-util/steam-launcher -hwgfx
+# steam-launcher[desktop-portal] pulls xdg-desktop-portal -> pipewire[X] ->
+# media-libs/libcanberra, whose REQUIRED_USE="udev? ( alsa )" is violated by the
+# profile default (udev on, alsa off). Enable alsa so the portal/sound chain
+# resolves (caught on the first standalone build, blocked BOTH thin and thick).
+media-libs/libcanberra alsa
+media-libs/mesa abi_x86_32
+media-libs/libglvnd abi_x86_32
+x11-drivers/nvidia-drivers abi_x86_32
+media-libs/vulkan-loader abi_x86_32
+media-libs/libva abi_x86_32
+virtual/opengl abi_x86_32
+sys-libs/zlib abi_x86_32

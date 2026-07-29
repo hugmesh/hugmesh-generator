@@ -1,0 +1,85 @@
+# Stage4 BASE package list — Libre Computer Le/La Frite (Amlogic arm64) LIGHT desktop
+# One atom per line; lines starting with # are ignored.
+#
+# This is the BASE (always-installed) set: kernel sources, u-boot tooling, the
+# mesh/provisioning dependencies, and a hardened base system. The lean DESKTOP
+# stack is a SEPARATE list (packages-light-desktop.list) appended by the builder
+# when --desktop light (the default for this target) is selected, so the base can
+# also produce a headless variant if ever needed.
+#
+# NOTE on the Amlogic boot chain (differs fundamentally from the RPi5 image):
+#   * The Frite boots via mainline u-boot (libretech-ac / libretech-cc defconfig)
+#     out of SPI NOR (La Frite) or microSD (Le Potato), then loads the kernel +
+#     DTB + extlinux.conf from the first (FAT/ext) partition. There is NO
+#     raspberrypi-firmware blob and NO config.txt.
+#   * The board-specific DTB ships from the KERNEL build (gentoo-sources /
+#     mainline), NOT from a vendor firmware package — see build-frite-stage4.sh
+#     §"DTB". The u-boot binary itself is built/vendored by the builder (it needs
+#     Amlogic's proprietary FIP/BL31 blobs to be flashable — see the script).
+
+# ── Kernel sources (mainline; Amlogic GXL is fully upstream) ───────
+# The S805X/S905X DTS are mainline since Linux 4.x/5.x. We build from
+# gentoo-sources (vanilla + Gentoo patches) and select the in-tree
+# arch/arm64/boot/dts/amlogic/meson-gxl-*.dtb at build time.
+sys-kernel/gentoo-sources
+sys-kernel/linux-firmware
+
+# ── Bootloader tooling ─────────────────────────────────────────────
+# u-boot-tools provides mkimage (FIT/extlinux) used to assemble the boot blob;
+# the actual u-boot binary for the board is built/fetched by the builder.
+dev-embedded/u-boot-tools
+
+# ── Board hardware / storage ──────────────────────────────────────
+sys-block/parted
+sys-apps/usbutils
+sys-apps/i2c-tools
+sys-apps/util-linux
+sys-fs/e2fsprogs
+sys-fs/dosfstools
+
+# ── Networking ─────────────────────────────────────────────────────
+net-misc/networkmanager
+net-misc/openssh
+net-firewall/iptables
+net-misc/socat
+# Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +
+# openvpn (fallback) for the node-level hugmesh-egress-vpn OpenRC service
+# (DEFAULT-OFF; pruned by the optional-services gate when not selected — PR6).
+net-vpn/wireguard-tools
+net-vpn/openvpn
+# WiFi supplicant is present so a USB WiFi dongle CAN work, but WiFi is OFF by
+# default (hardened posture; the Frite has no onboard radio anyway — see
+# harden_radios in the builder). Ethernet + the tailnet are the path.
+net-wireless/wpa_supplicant
+
+# ── System ─────────────────────────────────────────────────────────
+app-admin/sudo
+sys-process/cronie
+sys-apps/haveged
+app-editors/nano
+app-misc/screen
+app-misc/jq
+
+# ── Hardened / security (SELinux LSM) ──────────────────────────────
+# Same posture as the cluster images: SELinux is the LSM. The policy packages'
+# pkg_postinst runs the TARGET `semodule`, which can't execute under an aarch64
+# cross-emerge — so the base policy is LOADED AT FIRST BOOT (native) by
+# keys-provision (shared engine). See docs/SECURITY.md.
+sec-policy/selinux-base
+sec-policy/selinux-base-policy
+sys-apps/policycoreutils
+sys-apps/semodule-utils
+sys-apps/checkpolicy
+sys-libs/libselinux
+sys-libs/libseccomp
+sys-process/audit
+
+# ── KEYS USB provisioning + attached storage ──────────────────────
+# Same first-boot provisioning engine as every other client image: jq parses the
+# manifests, dosfstools/util-linux handle the FAT32 KEYS partition + blkid.
+net-fs/nfs-utils
+net-fs/cifs-utils
+
+# NOTE: headscale + tailscale are NOT emerged here. They are installed as
+# upstream static arm64 binaries by build-frite-stage4.sh (the "mesh" phase),
+# identical to the RPi5 image. See --skip-mesh / --skip-tailscale.

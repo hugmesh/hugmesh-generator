@@ -1,0 +1,55 @@
+# LIGHT desktop package set — Libre Computer Le/La Frite (Amlogic arm64)
+#
+# A LEAN desktop, NOT the full Plasma+gaming stage4. Appended to packages.list by
+# build-frite-stage4.sh when --desktop light (the DEFAULT for this target) is set.
+# Sized for a low-end SBC (512 MB / 1 GB DDR4, Mali-450): X11 + a lightweight WM +
+# a panel + a file manager + a terminal + a minimal browser. No KDE/GNOME/Plasma,
+# no compositor-heavy Wayland session, no gaming stack.
+#
+# Picked for arm64 cross-friendliness + small footprint. If a 512 MB board feels
+# tight, drop the browser line (or swap for a lighter one) — see RUNNING.md.
+
+# ── Display server (X11; lean) ─────────────────────────────────────
+x11-base/xorg-server
+# Materializes the X drivers from INPUT_DEVICES=libinput + VIDEO_CARDS=lima; without
+# it Xorg has no input/video driver and the greeter is unusable.
+x11-base/xorg-drivers
+x11-apps/xrandr
+x11-apps/xset
+x11-apps/setxkbmap
+x11-terms/xterm
+
+# ── Desktop session: LXDE-lite (PCManFM + Openbox + LXpanel) ───────
+# LXDE is the canonical "lean desktop": GTK-based, no compositor required, runs
+# comfortably in well under the Frite's RAM. Openbox is the WM; lxpanel the panel;
+# pcmanfm the file manager; lxsession ties the session together.
+x11-wm/openbox
+lxde-base/lxpanel
+lxde-base/lxsession
+x11-misc/pcmanfm
+lxde-base/lxappearance
+
+# ── Login / session bring-up ───────────────────────────────────────
+# LightDM is the lean display manager; on a single-user appliance you can also
+# autostart Openbox from .xinitrc and drop lightdm — see RUNNING.md.
+x11-misc/lightdm
+x11-misc/lightdm-gtk-greeter
+# The OpenRC `display-manager` init script does NOT ship with lightdm itself —
+# it is provided by gui-libs/display-manager-init (configured via
+# /etc/conf.d/display-manager DISPLAYMANAGER="lightdm", written by the builder).
+# Without this the builder would enable a service the image never provides and
+# the light-desktop image would boot to a bare console.
+gui-libs/display-manager-init
+
+# ── Minimal apps ───────────────────────────────────────────────────
+media-gfx/feh
+app-editors/nano
+# A minimal, modern browser. NetSurf is dramatically lighter than Chromium/
+# Firefox and cross-compiles cleanly for arm64 — appropriate for a 512MB SBC.
+# Swap for www-client/firefox-bin only on the 1 GB SKU if a full browser is
+# required (it is HEAVY — see the SKU note in RUNNING.md).
+www-client/netsurf
+
+# ── Fonts (so the lean desktop is legible out of the box) ──────────
+media-fonts/dejavu
+media-fonts/noto

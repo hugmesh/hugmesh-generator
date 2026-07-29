@@ -1,0 +1,23 @@
+# mesh-bff-db — dedicated Postgres for hugmesh-mesh-bff-api's datastore
+# (mesh_node_directory / mesh_room). In hugmesh-backend with the other BFF
+# dbs. Lands BEFORE mesh-bff-api (34d) so the DB + least-privilege roles exist
+# when the BFF boots its Liquibase migration.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mesh-bff-db
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/mesh-bff-db
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

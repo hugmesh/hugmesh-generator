@@ -1,0 +1,146 @@
+# akkoma-domainlock-sync — materializes the Mastodon DOMAIN-LOCK force-local set.
+#
+# This is the akkoma-side reconcile that realizes ROLE_MASTODON_DOMAINLOCKED
+# ("Mastodon local-only") into the live set the ForceLocalForUsers MRF reads at
+# delivery time (manifests/akkoma/mrf/force_local_for_users_policy.ex —
+# `force_local?/1` reads Pleroma config key {:mrf_force_local, :forced_actors}).
+# It mirrors admin-sync-job.yaml exactly (the ROLE_MOD/ROLE_ADMIN -> --moderator/
+# --admin reconcile): runAsNonRoot, drop ALL caps, readOnlyRootFilesystem,
+# Vault-sourced Casdoor creds, idempotent, ArgoCD PostSync.
+#
+# WHY ADDITIVE / DOMAIN-LOCK (not ban): a member of ROLE_MASTODON_DOMAINLOCKED
+# STILL holds ROLE_MASTODON — they keep full local access; this Job only adds their
+# actor to the force-local set so their OUTBOUND federation is dropped. Removing
+# the role drops them from the set on the next reconcile (reversal) and their
+# future posts federate again; past local-only posts correctly stay local.
+#
+# GATED / DARK: gated by homeserver.domainlock.enabled — wired into the akkoma
+# kustomization ONLY when enabled (so a plain akkoma:stable deploy without the MRF
+# never runs this). With the gate off (default) the force-local set is never
+# materialized and the MRF (if even present) is a no-op for every actor.
+#
+# !!! SKELETON: the Casdoor membership API shape + the in-pod mechanism for writing
+# !!! the Pleroma runtime config / Cachex set are version/deploy-specific. This is
+# !!! a working scaffold — VALIDATE the write transport (pleroma_ctl config set vs.
+# !!! an admin REST call vs. a shared config volume the MRF reads) against the
+# !!! deployed custom akkoma image before production.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akkoma-domainlock-sync-script
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Reconcile Casdoor ROLE_MASTODON_DOMAINLOCKED -> the akkoma force-local set
+    the ForceLocalForUsers MRF reads. Pure stdlib (urllib + subprocess)."""
+    import json, os, base64, subprocess, urllib.request, urllib.error
+
+    CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG     = os.environ.get("CASDOOR_ORG", "hugmesh")
+    PLEROMA_CTL = os.environ.get("PLEROMA_CTL", "/opt/akkoma/bin/pleroma_ctl")
+    LOCAL_HOST  = os.environ.get("AKKOMA_HOST", "mastodon.hugmesh.systems")
+    # The Mastodon domain-lock marker role. Members are forced local-only.
+    ROLE = "ROLE_MASTODON_DOMAINLOCKED"
+
+    CASDOOR_CLIENT_ID     = open("/secrets/casdoor/clientId").read().strip()
+    CASDOOR_CLIENT_SECRET = open("/secrets/casdoor/clientSecret").read().strip()
+
+    def _get(url, headers=None):
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def casdoor_members(role):
+        token = CASDOOR_CLIENT_ID + ":" + CASDOOR_CLIENT_SECRET
+        auth = {"Authorization": "Basic " + base64.b64encode(token.encode()).decode()}
+        try:
+            data = _get(f"{CASDOOR}/api/get-role?id={ORG}/{role}", auth)
+        except urllib.error.HTTPError as e:
+            print(f"  WARN get-role {role}: {e}"); return []
+        users = (data.get("data") or {}).get("users") or []
+        return [u.split("/")[-1] for u in users]   # localpart == akkoma nickname
+
+    def actor_id(nick):
+        # Akkoma local actor AP-id. The MRF's local_actor?/force_local? match on it.
+        return f"https://{LOCAL_HOST}/users/{nick}"
+
+    def materialize(actor_ids):
+        # Write the force-local set into the running akkoma's Pleroma config so the
+        # MRF reads it live (no recompile). The exact verb is image-specific:
+        #   pleroma_ctl config set/keys, OR a privileged admin REST call.
+        # SKELETON: emit the desired set + attempt the config-set; on failure WARN
+        # (NEVER hard-fail — domain-lock ships dark, the egress proxy is the backstop).
+        payload = json.dumps(actor_ids)
+        print(f"  force-local set ({len(actor_ids)}): {payload}")
+        try:
+            out = subprocess.run(
+                [PLEROMA_CTL, "config", "set", "Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy",
+                 "forced_actors", payload],
+                capture_output=True, text=True, timeout=60)
+            if out.returncode == 0:
+                print("  applied force-local set via pleroma_ctl config set")
+            else:
+                print(f"  WARN pleroma_ctl config set: rc={out.returncode} {out.stderr.strip()}")
+        except Exception as e:
+            print(f"  WARN materialize: {e}")
+
+    nicks = casdoor_members(ROLE)
+    actors = [actor_id(n) for n in nicks]
+    materialize(actors)
+    print(f"akkoma-domainlock-sync: reconciled {len(actors)} force-local actor(s)")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: akkoma-domainlock-sync
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: akkoma-domainlock-sync }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.systems/backend: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        # Runs from the CUSTOM akkoma image (the one with the MRF compiled in) so
+        # pleroma_ctl + the same config the akkoma pod serves are present. Pin the
+        # SAME digest as akkoma.yaml's custom image.
+        - name: sync
+          image: REPLACE_WITH_CUSTOM_AKKOMA_IMAGE   # built from manifests/akkoma/Dockerfile; pin a digest, match akkoma.yaml
+          command: ["python3", "/script/sync.py"]
+          env:
+            - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "hugmesh" }
+            - { name: PLEROMA_CTL, value: "/opt/akkoma/bin/pleroma_ctl" }
+            - { name: AKKOMA_HOST, value: "mastodon.hugmesh.systems" }
+          envFrom: [{ secretRef: { name: akkoma-secrets } }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script,  mountPath: /script, readOnly: true }
+            - { name: config,  mountPath: /etc/akkoma, readOnly: true }
+            - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: akkoma-domainlock-sync-script, defaultMode: 0555 }
+        - name: config
+          configMap: { name: akkoma-config }
+        # ESO-materialized from Vault — never committed. Reuses casdoor-app-secrets
+        # (the same OAuth2 client the admin-sync Job uses to read role membership).
+        - name: casdoor
+          secret: { secretName: casdoor-app-secrets }

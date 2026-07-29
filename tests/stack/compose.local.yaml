@@ -1,0 +1,1201 @@
+# compose.local.yaml — the ENTIRE HugMesh platform, built from source and run
+# locally on x86_64 (Linux AND Docker Desktop for Windows).
+#
+# WHAT THIS IS: a docker-compose translation of the k8s topology in
+# specs/cluster/ (the authoritative source). Every FIRST-PARTY service is
+# `build:`-ed from its cloned repo under ${STACK_SRC} (default ../../.stack-src,
+# i.e. ./.stack-src at the repo root; populated by scripts/clone-all-repos.sh).
+# The datastores + identity (Casdoor,
+# Postgres x3, Cassandra) come up alongside them. The heavy third-party social
+# servers (Synapse/Matrix + the full Mastodon tier) are OPT-IN behind the
+# `social` compose profile, included from compose.real.yaml — the core platform
+# comes up WITHOUT them.
+#
+# Bring up with:  make stack-up         (clone -> build -> up -d)
+# or directly:    STACK_SRC=../../.stack-src docker compose -f compose.local.yaml up -d --build
+# Tear down:      make stack-down       (docker compose down -v)
+#
+# ── ENV=test vs prod (Makefile threads these in as the variables below) ──
+#   CASDOOR_ISSUER_URI  test: http://localhost:8000     prod: https://id.<domain>
+#   PUBLIC_HOST_PORT    the published port the host (fe-gateway) listens on
+# All other creds are DEV PLACEHOLDERS matching the cluster dev placeholders
+# (route-access-db password "gateway", etc.). NO real secrets live here.
+#
+# Service names are the in-compose DNS the services resolve each other by — they
+# replace the k8s <svc>.<ns>.svc.cluster.local FQDNs (e.g.
+# r2dbc:postgresql://federation-db:5432/federation,
+# http://hugmesh-federation-api:8080).
+name: hugmesh-local
+
+# Pull in the heavy third-party social tier (Synapse + Mastodon web/sidekiq/
+# streaming + their Postgres/Redis) from the existing real-services compose.
+# Those services are tagged with the `social` profile via the override below, so
+# `docker compose up` (no profile) skips them and the core platform comes up
+# alone. Enable with `--profile social` (or `make stack-up SOCIAL=1`).
+include:
+  - path: compose.real.yaml
+  # Overlay that tags the synapse/mastodon services with the `social` profile so
+  # they are OPT-IN (`--profile social`); casdoor/cassandra stay core (always up).
+  - path: compose.social-profile.yaml
+
+# x86_64 only — first-party images are amd64 (Temurin JRE / node-alpine / nginx).
+# On Docker Desktop for Windows this matches the default linux/amd64 engine.
+
+x-amd64: &amd64
+  platform: linux/amd64
+
+services:
+  # ════════════════════════════════════════════════════════════════════
+  #  ONE-SHOT INITIALISERS. Both fill a gap between what the datastore images
+  #  ship and what the apps assume a CLUSTER already provisioned for them. They
+  #  run to completion, then the services that need them start.
+  # ════════════════════════════════════════════════════════════════════
+
+  # The three gateways open a CqlSession on `hugmesh_gateway` (frozen protocol
+  # name — NOT rebranded) and federation-api caches manifests in
+  # `hugmesh_federation`. Spring Data's schema-action CREATE_IF_NOT_EXISTS makes
+  # the TABLES but never the KEYSPACE, and the stock cassandra:5 image ships none,
+  # so all three gateways crash-looped on
+  #   InvalidKeyspaceException: Invalid keyspace hugmesh_gateway
+  # and the FRONT DOOR never opened — which then surfaces confusingly downstream as
+  # `make stack-seed` reporting "front door http://localhost:8088 is not answering".
+  # In-cluster these keyspaces are provisioned outside the app; locally this is that
+  # step. RF=1/SimpleStrategy: single-node dev cluster.
+  cassandra-init:
+    <<: *amd64
+    image: cassandra:5
+    restart: "no"
+    depends_on:
+      cassandra: { condition: service_healthy }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cqlsh cassandra 9042 -e "
+          CREATE KEYSPACE IF NOT EXISTS hugmesh_gateway
+            WITH replication = {'class':'SimpleStrategy','replication_factor':1};
+          CREATE KEYSPACE IF NOT EXISTS hugmesh_federation
+            WITH replication = {'class':'SimpleStrategy','replication_factor':1};"
+
+  # admin-bff's Liquibase changelog GRANTs table privileges to the cluster's
+  # per-machine-user role `admin_bff` (ESO provisions it in-cluster). The compose
+  # DB only has the owner `adminbff`, so the migration aborted on
+  #   ERROR: role "admin_bff" does not exist [Failed SQL: GRANT ... TO admin_bff]
+  # and admin-bff-api exited. Created as a NOLOGIN role: it exists purely so the
+  # GRANT resolves — nothing connects as it locally. Idempotent, and a one-shot
+  # service rather than an initdb.d script on purpose: initdb.d only ever runs on a
+  # FRESH volume, so it would silently skip every existing local stack.
+  admin-bff-db-init:
+    <<: *amd64
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGPASSWORD: adminbff
+    depends_on:
+      admin-bff-db: { condition: service_healthy }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        psql -h admin-bff-db -U adminbff -d adminbff -v ON_ERROR_STOP=1 -c "
+          DO \$\$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'admin_bff') THEN
+              CREATE ROLE admin_bff NOLOGIN;
+            END IF;
+          END \$\$;"
+
+  # ════════════════════════════════════════════════════════════════════
+  #  DATASTORES (postgres:16-alpine x3 + Cassandra). Cassandra + Casdoor +
+  #  casdoor-db come from compose.real.yaml (included above); the three
+  #  per-service Postgres instances are platform components defined here.
+  # ════════════════════════════════════════════════════════════════════
+
+  # route-access-db — gateway_route_access source of truth (specs/cluster/
+  # manifests/route-access). initdb/20-schema.sql seeds the table on first init.
+  # The local stack connects every gateway as the OWNER `gateway` user (dev
+  # convenience), so it mounts ONLY the table DDL — NOT the cluster's
+  # initdb/10-roles.sh per-machine-user role setup (that needs the per-user Secret
+  # passwords ESO injects in-cluster). The dev password "gateway" matches the
+  # cluster dev placeholder.
+  route-access-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gateway
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+    volumes:
+      - route-access-pg:/var/lib/postgresql/data
+      - ../../specs/cluster/manifests/route-access/initdb/20-schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 5s
+      retries: 20
+
+  # federation-db — federation-api's own Postgres (Liquibase owns the schema, so
+  # this just needs to exist EMPTY). specs/cluster/manifests/federation-db.
+  federation-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: federation
+      POSTGRES_USER: federation
+      POSTGRES_PASSWORD: federation
+    volumes:
+      - federation-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U federation -d federation"]
+      interval: 5s
+      retries: 20
+
+  # admin-bff-db — admin-bff's config datastore (Liquibase-owned schema, EMPTY DB).
+  # specs/cluster/manifests/admin-bff-db.
+  admin-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: adminbff
+      POSTGRES_USER: adminbff
+      POSTGRES_PASSWORD: adminbff
+    volumes:
+      - admin-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adminbff -d adminbff"]
+      interval: 5s
+      retries: 20
+
+  # forum-bff-db — forum-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # specs/cluster/manifests/forum-bff-db. Same shape/creds convention as
+  # admin-bff-db (owner-role connect, dev placeholder password).
+  forum-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: forumbff
+      POSTGRES_USER: forumbff
+      POSTGRES_PASSWORD: forumbff
+    volumes:
+      - forum-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forumbff -d forumbff"]
+      interval: 5s
+      retries: 20
+
+  # character-forge-bff-db — character-forge-bff's own Postgres (Liquibase-owned
+  # schema, EMPTY DB). specs/cluster/manifests/character-forge-bff-db. Same
+  # shape/creds convention as forum-bff-db above (owner-role connect, dev
+  # placeholder password).
+  character-forge-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: charforgebff
+      POSTGRES_USER: charforgebff
+      POSTGRES_PASSWORD: charforgebff
+    volumes:
+      - character-forge-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U charforgebff -d charforgebff"]
+      interval: 5s
+      retries: 20
+
+  # wiki-bff-db — wiki-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # specs/cluster/manifests/wiki-bff-db.
+  wiki-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wikibff
+      POSTGRES_USER: wikibff
+      POSTGRES_PASSWORD: wikibff
+    volumes:
+      - wiki-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wikibff -d wikibff"]
+      interval: 5s
+      retries: 20
+
+  # owncast-bff-db — owncast-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # DB/user name "owncast_bff" matches the literal r2dbc URL owncast-bff-api's
+  # deployment.yaml uses (specs/cluster/manifests/owncast/deployment.yaml) — the
+  # cluster manifest references a hugmesh-owncast-db host that has no dedicated
+  # manifest of its own yet (pre-existing cluster-side gap); this compose service
+  # is the local-stack equivalent, named like its forum/wiki siblings.
+  owncast-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: owncast_bff
+      POSTGRES_USER: owncast_bff
+      POSTGRES_PASSWORD: owncast_bff
+    volumes:
+      - owncast-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U owncast_bff -d owncast_bff"]
+      interval: 5s
+      retries: 20
+
+  # tube-bff-db — tube-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # DB/user name "tube_bff" matches the literal r2dbc URL tube-bff-api's
+  # deployment.yaml uses (specs/cluster/manifests/tube/deployment.yaml) — same
+  # pre-existing cluster-side gap (no dedicated hugmesh-tube-db manifest yet)
+  # as owncast-bff-db above.
+  tube-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tube_bff
+      POSTGRES_USER: tube_bff
+      POSTGRES_PASSWORD: tube_bff
+    volumes:
+      - tube-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tube_bff -d tube_bff"]
+      interval: 5s
+      retries: 20
+
+  # ════════════════════════════════════════════════════════════════════
+  #  GATEWAYS — ONE image (hugmesh-gateway), run 3x as pki/be/fe. The
+  #  per-gateway route table is mounted from gateway-routes/<role>.yml into
+  #  /config (SPRING_CONFIG_ADDITIONAL_LOCATION=file:/config/), translating
+  #  specs/cluster/apps/20-gateway-{pki,be,fe}.yaml's routes to compose DNS.
+  #  SPRING_APPLICATION_NAME differentiates the instance (per the chart).
+  # ════════════════════════════════════════════════════════════════════
+
+  hugmesh-pki-gateway:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
+    environment:
+      SPRING_APPLICATION_NAME: hugmesh-pki-gateway
+      PORT: "8080"
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      CASSANDRA_KEYSPACE: hugmesh_gateway
+      CASSANDRA_LOCAL_DC: datacenter1
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+    volumes:
+      - ./gateway-routes/pki:/config:ro
+    depends_on:
+      casdoor: { condition: service_started }
+      cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
+      route-access-db: { condition: service_healthy }
+    healthcheck:
+      # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
+      # GAME-MASTER/ADMIN/SUPERADMIN), so an UNAUTHENTICATED probe ALWAYS gets 401 and
+      # `curl -sf` reports the container unhealthy forever while it is serving traffic
+      # perfectly well (verified: GET / -> 200 with all three "unhealthy"). A 401 proves
+      # both that the app is up and that its security chain is wired; 000/5xx do not.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health/readiness); [ \"$$code\" = 200 ] || [ \"$$code\" = 401 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  hugmesh-be-gateway:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
+    environment:
+      SPRING_APPLICATION_NAME: hugmesh-be-gateway
+      PORT: "8080"
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      CASSANDRA_KEYSPACE: hugmesh_gateway
+      CASSANDRA_LOCAL_DC: datacenter1
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      # BFF session introspection back-channel (BffSessionAuthFilter) — same fix the
+      # fe-gateway block below carries: app.bff-session.bff-base-url defaults to the
+      # cluster-DNS 'http://admin-bff:8080', unresolvable in compose, so any browser
+      # request reaching this gateway with a bff_ session cookie (e.g. /be/api/** via
+      # the front door) would 503 session_backend_unavailable instead of authenticating.
+      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
+    volumes:
+      - ./gateway-routes/be:/config:ro
+    depends_on:
+      casdoor: { condition: service_started }
+      cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
+      route-access-db: { condition: service_healthy }
+      hugmesh-federation-api: { condition: service_started }
+      hugmesh-api: { condition: service_started }
+    healthcheck:
+      # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
+      # GAME-MASTER/ADMIN/SUPERADMIN), so an UNAUTHENTICATED probe ALWAYS gets 401 and
+      # `curl -sf` reports the container unhealthy forever while it is serving traffic
+      # perfectly well (verified: GET / -> 200 with all three "unhealthy"). A 401 proves
+      # both that the app is up and that its security chain is wired; 000/5xx do not.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health/readiness); [ \"$$code\" = 200 ] || [ \"$$code\" = 401 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # fe-gateway is the platform FRONT DOOR — published to the host so the browser
+  # reaches the whole stack at http://localhost:${PUBLIC_HOST_PORT}.
+  hugmesh-fe-gateway:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
+    environment:
+      SPRING_APPLICATION_NAME: hugmesh-fe-gateway
+      PORT: "8080"
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      CASSANDRA_KEYSPACE: hugmesh_gateway
+      CASSANDRA_LOCAL_DC: datacenter1
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      # BFF session introspection back-channel (BffSessionAuthFilter): the gateway swaps the
+      # opaque bff_ cookie for the caller's identity/roles against admin-bff. The property
+      # app.bff-session.bff-base-url defaults to the cluster-DNS 'http://admin-bff:8080', which
+      # does NOT resolve in compose -> every authenticated /bff/** returns 503
+      # session_backend_unavailable ("Failed to resolve 'admin-bff'"). Point it at the compose
+      # admin-bff service so logged-in sessions (GET /bff/session, /bff/me, role-gated routes) work.
+      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
+    volumes:
+      - ./gateway-routes/fe:/config:ro
+    ports:
+      - "${PUBLIC_HOST_PORT:-8088}:8080"
+    depends_on:
+      casdoor: { condition: service_started }
+      cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
+      route-access-db: { condition: service_healthy }
+      hugmesh-admin-bff-api: { condition: service_started }
+      hugmesh-systems-web: { condition: service_started }
+    healthcheck:
+      # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
+      # GAME-MASTER/ADMIN/SUPERADMIN), so an UNAUTHENTICATED probe ALWAYS gets 401 and
+      # `curl -sf` reports the container unhealthy forever while it is serving traffic
+      # perfectly well (verified: GET / -> 200 with all three "unhealthy"). A 401 proves
+      # both that the app is up and that its security chain is wired; 000/5xx do not.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health/readiness); [ \"$$code\" = 200 ] || [ \"$$code\" = 401 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # https-front — the HTTPS twin of the fe-gateway publish above: terminates
+  # TLS on host port ${PUBLIC_HTTPS_PORT:-8488} and proxies EVERYTHING to the
+  # same fe-gateway, so https://localhost:8488 serves the identical platform as
+  # http://localhost:8088. Unconditional (no profile) and ENV-independent: the
+  # test/prod knob changes the issuer baked into the services BEHIND the
+  # gateway, never this terminator — HTTPS works under ENV=test and ENV=prod
+  # alike. Certs are per-machine and gitignored (tests/stack/.tls-front, minted
+  # by `make stack-certs`); the committed tests/stack/certs fixtures are NOT
+  # used because their CA private key is public in the repo — a browser must
+  # never be asked to trust a CA anyone can sign with.
+  hugmesh-https-front:
+    <<: *amd64
+    image: nginx:1.27-alpine
+    volumes:
+      - ./tls-front/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./.tls-front:/etc/hugmesh-tls:ro
+    ports:
+      - "${PUBLIC_HTTPS_PORT:-8488}:8443"
+    depends_on:
+      hugmesh-fe-gateway: { condition: service_started }
+    healthcheck:
+      # busybox wget (ssl_client applet): the front page over TLS. `/` is the
+      # host shell (200, permitAll), so plain success is the right probe — it
+      # proves nginx is up, terminating TLS, AND reaching the gateway; a 502
+      # (gateway down) or refused connection both exit nonzero -> unhealthy.
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8443/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ════════════════════════════════════════════════════════════════════
+  #  SPRING BACKEND SERVICES
+  # ════════════════════════════════════════════════════════════════════
+
+  # federation-api — module-federation registry + manifest/bundles (WebFlux +
+  # R2DBC + Liquibase). specs/cluster/manifests/federation-api/deployment.yaml.
+  hugmesh-federation-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-federation-api
+    environment:
+      # federation-api is the one Casdoor resource server that actually VALIDATES a
+      # Casdoor JWT's iss in compose: the BFFs forward a caller/custody JWT here (mod
+      # moderation/findings/manifest, user cards, and the admin-bff service-reconciler
+      # poll). Casdoor stamps iss=http://casdoor:8000 (the in-DNS name login mints
+      # through), so the resource server MUST validate against that — the browser-facing
+      # http://localhost:8000 used elsewhere never matches a real token here and 401s
+      # EVERY forwarded/service call. (Cluster is uniform https://id.hugmesh.systems,
+      # so this split is compose-only.)
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      # Explicit in-DNS JWKS (key fetch) — same host, so discovery + validation agree.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_R2DBC_URL: "r2dbc:postgresql://federation-db:5432/federation"
+      SPRING_R2DBC_USERNAME: federation
+      SPRING_R2DBC_PASSWORD: federation
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://federation-db:5432/federation"
+      SPRING_LIQUIBASE_USER: federation
+      SPRING_LIQUIBASE_PASSWORD: federation
+      APP_BUNDLES_STORAGE: filesystem
+      APP_BUNDLES_DIR: /var/hugmesh/federation/bundles
+      MANIFEST_CACHE_ENABLED: "false"
+      MANIFEST_CACHE_CASSANDRA: "cassandra:9042"
+      MANIFEST_CACHE_KEYSPACE: hugmesh_federation
+      MANIFEST_CACHE_LOCAL_DC: dc1
+    volumes:
+      - federation-bundles:/var/hugmesh/federation/bundles
+    depends_on:
+      federation-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # admin-bff — the Backend-For-Frontend for the admin-ui (route-access CRUD).
+  # specs/cluster/manifests/admin-bff-api/deployment.yaml. The kafka/clickhouse
+  # analytics wiring is OMITTED here (no Kafka/ClickHouse in the local core stack)
+  # — only the "casdoor" profile is active so the route-DB CRUD surface comes up.
+  # Analytics endpoints (/bff/admin/usage) are NOT exercised locally (documented
+  # limitation).
+  hugmesh-admin-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-bff-api
+    environment:
+      # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
+      # creates org `hugmesh`, but this repo's application.yml still defaults to
+      # the pre-rename `hugmesh` — so every native login failed with
+      #   "The user: hugmesh/e2e-admin doesn't exist"
+      # immediately after a seed that verified the persona. One value, both
+      # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
+      CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
+      # admin-bff both RECEIVES and MINTS Casdoor JWTs on the native-login path:
+      #  • RECEIVES — mod-bff forwards a caller/custody JWT to admin-bff's PUBLIC
+      #    surface for a native-login mod's ban / domain-lock write (mod-bff-api#70's
+      #    AdminSuspensionClient/AdminDomainLockClient); admin-bff's resource server
+      #    validates its iss. Casdoor stamps iss=http://casdoor:8000, so — exactly like
+      #    federation-api — admin-bff MUST validate against that, not the browser-facing
+      #    http://localhost:8000 (which never matches a real token and 401s the write).
+      #  • MINTS — admin-bff's OWN appeals-console decide leg (FederationApiClient.decide,
+      #    admin-bff-api#205) custody-exchanges a native-login admin's bff_ session for a
+      #    real Casdoor JWT (loopback to its own /bff/internal/session/exchange) and
+      #    forwards THAT to federation-api. That leg ships dark behind app.bff-exchange.enabled.
+      # Cluster is uniform (https://id.hugmesh.systems everywhere Casdoor also stamps),
+      # so the issuer split is compose-only.
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      # Turn ON admin-bff's decide custody-exchange (admin-bff-api#205) so a native-login
+      # admin's POST /bff/admin/moderation/{id}/decide reaches federation-api authenticated.
+      # The loopback exchange target defaults to http://localhost:<server.port> (8080, plain
+      # HTTP in compose) and hits admin-bff's own permitAll /bff/internal/session/exchange;
+      # custody is already keyed (APP_BFF_CUSTODY_KEY below). Fail-open by design: any
+      # exchange failure falls through to the pre-fix "no bearer" behaviour.
+      APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
+      # Explicit in-DNS JWKS (key fetch) — same host as the issuer above, so discovery
+      # + iss-validation agree.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      # 'dev' disables auth-core's InternalSurfaceBootGuard (@Profile !dev&!test), which
+      # otherwise refuses to boot the /bff/internal/** surface over plain HTTP (it demands
+      # mTLS in prod). The internal surface is how user-bff's OIDC callback provisions the
+      # account + session + custody. INTERNAL_TOKEN unset -> InternalTokenWebFilter no-ops.
+      SPRING_PROFILES_ACTIVE: ${ADMIN_BFF_PROFILES:-casdoor,dev}
+      SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Provision broker (AuthController POST /provision/{matrix,mastodon}): the app
+      # defaults for broker.synapse-url / broker.mastodon-url are cluster-DNS hosts,
+      # unresolvable in compose — point them at the compose social tier (profile
+      # `social`; when it's down the provision legs fail with a named 502, same as
+      # any other absent upstream). Email domain: same contract + value as user-bff's
+      # APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN above (admin-bff-api reads
+      # broker.mastodon-email-domain <- MASTODON_EMAIL_DOMAIN).
+      SYNAPSE_URL: ${SYNAPSE_URL:-http://synapse:8008}
+      MASTODON_URL: ${ADMIN_BFF_MASTODON_URL:-http://mastodon-web:3000}
+      MASTODON_EMAIL_DOMAIN: ${MASTODON_EMAIL_DOMAIN:-e2e.local}
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      # MANAGED backing service seam: default in-stack admin-bff-db; set
+      # MANAGED_ADMIN_BFF_{R2DBC,LIQUIBASE}_URL (via STACK_ENV) to a hosted RDS/Azure-PG
+      # endpoint to validate managed mode locally. UNSET = byte-identical default.
+      SPRING_R2DBC_URL: "${MANAGED_ADMIN_BFF_R2DBC_URL:-r2dbc:postgresql://admin-bff-db:5432/adminbff}"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "${MANAGED_ADMIN_BFF_LIQUIBASE_URL:-jdbc:postgresql://admin-bff-db:5432/adminbff}"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      # OIDC/custody for the gateway's cookie->JWT step (POST /bff/internal/session/exchange):
+      # admin-bff decrypts the custody-stamped Casdoor token and refreshes it, so per-role
+      # gateway RBAC gets the real roles claim. APP_BFF_CUSTODY_KEY MUST be IDENTICAL to
+      # user-bff's (user-bff encrypts, admin-bff decrypts). The four provisioning endpoints
+      # (ensure/sessions/custody-stamp/get-account) don't need these — only the exchange does.
+      APP_BFF_OIDC_ENABLED: "true"
+      APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
+      APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
+      APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
+      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      # A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled). Platform-wide rollout
+      # (see specs/cluster/manifests/admin-bff-api/deployment.yaml): a fresh bff_session
+      # MFA stamp becomes a co-equal, license-independent step-up satisfier alongside the
+      # existing token-based step-up leg (pure additive OR — the token leg is unchanged).
+      APP_CASDOOR_MFA_ENABLED: ${APP_CASDOOR_MFA_ENABLED:-true}
+      # MFA TOTP-secret encryption key (app.mfa.factor-key) — the 256-bit AES-GCM
+      # data key MfaSecretCipher uses to encrypt each enrolled TOTP secret at rest
+      # (and seed the recovery-code keyed hash). In the cluster it comes from the ESO
+      # Secret admin-bff-mfa (see specs/cluster/manifests/admin-bff-api/deployment.yaml);
+      # compose never set it, so with APP_CASDOOR_MFA_ENABLED=true above the cipher was
+      # INERT and every TOTP enroll returned 503 "MFA factor key not provisioned" —
+      # MFA was un-exercisable on the local stack. Dev key (any 32-byte base64; the
+      # login-ui MFA enroll/challenge pages + the e2e MFA specs need it live).
+      APP_MFA_FACTOR_KEY: ${APP_MFA_FACTOR_KEY:-c25hcGRyYWdvbi1kZXYtbWZhLWZhY3Rvci1rZXktMzJieXRl}
+    depends_on:
+      admin-bff-db-init: { condition: service_completed_successfully }
+      admin-bff-db: { condition: service_healthy }
+      route-access-db: { condition: service_healthy }
+      cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # mod-bff / user-bff — the moderator + user BFFs. Not yet in specs/cluster (the
+  # admin-bff is the only BFF deployed there); wired here by analogy so the full
+  # repo set builds + runs. Each is a Spring OAuth2 resource server validating the
+  # cluster Casdoor JWT. They get the admin-bff-db handle as a placeholder config
+  # datastore; swap to dedicated DBs when their cluster manifests land.
+  hugmesh-mod-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-bff-api
+    environment:
+      # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
+      # creates org `hugmesh`, but this repo's application.yml still defaults to
+      # the pre-rename `hugmesh` — so every native login failed with
+      #   "The user: hugmesh/e2e-admin doesn't exist"
+      # immediately after a seed that verified the persona. One value, both
+      # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
+      CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
+      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      # The mod/user BFF federation client reads federation-api.base-url
+      # (env FEDERATION_API_BASE_URL) — the "API" segment is load-bearing. The old
+      # FEDERATION_BASE_URL bound NOTHING (relaxed binding -> federation-api.url,
+      # which does not exist), so the client silently used its unresolvable
+      # cluster-DNS default and every federation-backed /bff/{mod,user}/** call
+      # 500'd ("Failed to resolve ...svc.cluster.local") in compose.
+      FEDERATION_API_BASE_URL: "http://hugmesh-federation-api:8080"
+      # admin-bff base for BOTH the native-login session bridge (mod-bff-api#68's
+      # BffCookieAuthenticationWebFilter introspects bff_ sessions against
+      # GET /bff/internal/session/introspect) AND the ban/domain-lock desired-state
+      # writes (AdminSuspensionClient/AdminDomainLockClient). The app default is the
+      # cluster-DNS host, unresolvable in compose — without this every /bff/mod/**
+      # request carrying a native-login bff_ cookie fails CLOSED (503), and mod
+      # ban/domain-lock writes can never reach admin-bff.
+      ADMIN_BFF_BASE_URL: "http://hugmesh-admin-bff-api:8080"
+      # Turn ON mod-bff's native-login bearer forwarding (mod-bff-api#72's
+      # BearerForwardingFilter custody exchange — SHIPS DARK, enabled=false default).
+      # Without it a native-login MOD/ADMIN passes mod-bff's own role gate but the
+      # downstream hop to federation-api / admin-bff's public surface / owncast-bff
+      # carries NO Authorization header and 401s (mod queue/findings/modules, ban,
+      # domain-lock). The exchange reuses the adminBffInternalWebClient above
+      # (ADMIN_BFF_BASE_URL) against admin-bff's /bff/internal/session/exchange;
+      # admin-bff's serving side is already keyed below (APP_BFF_OIDC_* +
+      # APP_BFF_CUSTODY_KEY). Fail-open by design: an exchange failure degrades to
+      # the pre-fix no-header behaviour (every downstream has its own fail-closed gate).
+      APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
+      # POST /bff/mod/findings/test-seed — e2e-fixture-only route. Ships dark upstream
+      # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
+      # test env so e2e seeding scripts can prime findings data (mod-bff-api#63).
+      APP_TEST_SEED_ENABLED: "true"
+      # Placeholder config datastore (see the comment above hugmesh-mod-bff-api /
+      # hugmesh-user-bff-api higher up describing this): reuses admin-bff-db's
+      # adminbff database/credentials, no dedicated DB yet. Without this, Liquibase/
+      # R2DBC fall back to the app's own default (a cluster-DNS Postgres host), which
+      # doesn't resolve in compose and the container never boots.
+      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
+    depends_on:
+      admin-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+      hugmesh-federation-api: { condition: service_started }
+      hugmesh-admin-bff-api: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  hugmesh-user-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-bff-api
+    environment:
+      # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
+      # creates org `hugmesh`, but this repo's application.yml still defaults to
+      # the pre-rename `hugmesh` — so every native login failed with
+      #   "The user: hugmesh/e2e-admin doesn't exist"
+      # immediately after a seed that verified the persona. One value, both
+      # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
+      CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
+      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      # The mod/user BFF federation client reads federation-api.base-url
+      # (env FEDERATION_API_BASE_URL) — the "API" segment is load-bearing. The old
+      # FEDERATION_BASE_URL bound NOTHING (relaxed binding -> federation-api.url,
+      # which does not exist), so the client silently used its unresolvable
+      # cluster-DNS default and every federation-backed /bff/{mod,user}/** call
+      # 500'd ("Failed to resolve ...svc.cluster.local") in compose.
+      FEDERATION_API_BASE_URL: "http://hugmesh-federation-api:8080"
+      # ── Native SSO login (POST /bff/login). login-ui renders a first-party
+      #    username/password form and POSTs it to user-bff at /bff/login (via the front
+      #    door). user-bff generates PKCE + state SERVER-SIDE, POSTs the credentials to
+      #    the INTERNAL Casdoor /api/login (APP_BFF_OIDC_ISSUER below — the in-DNS
+      #    http://casdoor:8000, NEVER a browser-reachable URL), gets an auth code back,
+      #    exchanges it (PKCE) and provisions the account + session via admin-bff's
+      #    internal surface. The browser NEVER receives a JWT, the code_verifier, the
+      #    state, or any Casdoor URL — only the opaque bff_ session cookie.
+      #    TWO internal-Casdoor legs, TWO distinct properties (both must target the in-DNS
+      #    http://casdoor:8000, NEVER a browser-reachable URL):
+      #      • the /api/login POST      -> APP_BFF_OIDC_LOGIN_BASE (CasdoorLoginConfig reads
+      #        app.bff.oidc.login-base; its DEFAULT is the CLUSTER-DNS
+      #        http://casdoor.hugmesh-pki.svc.cluster.local:8000, which is UNREACHABLE in
+      #        compose — so it MUST be set here or /bff/login times out. The browser-facing
+      #        issuer is deliberately NEVER used for the login leg.)
+      #      • the token exchange       -> APP_BFF_OIDC_ISSUER (auth-core OidcExchangeClient).
+      #    clientId/secret/redirect BYTE-MATCH the
+      #    seeded app-user-bff (tests/stack/seed-e2e.sh ensure_app). The redirect-uri is
+      #    an INTERNAL PKCE-match string only (Casdoor validates it against the registered
+      #    app); no browser ever visits it. Ships dark upstream (app.bff.oidc.enabled=false);
+      #    turned ON for the test env. ──
+      APP_BFF_OIDC_ENABLED: "true"
+      APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
+      # The /api/login leg (separate from the exchange issuer above). Without this the
+      # login base falls to the unreachable cluster-DNS default and /bff/login fails.
+      APP_BFF_OIDC_LOGIN_BASE: ${APP_BFF_OIDC_LOGIN_BASE:-http://casdoor:8000}
+      APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
+      APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
+      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://hugmesh-user-bff-api:8080/bff/auth/callback}
+      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://hugmesh-admin-bff-api:8080}
+      # Homeserver-token custody for the hsproxy (/bff/user/{matrix,mastodon}/**): app.hs-token.key
+      # encrypts the brokered Matrix/Mastodon access tokens AT REST. Without a key the HsTokenCipher
+      # is INERT and the hsproxy 503s. Dev key (compose dev posture; any passphrase is folded to a
+      # 256-bit AES key via SHA-256). The upstream matrix/mastodon proxy URLs default to cluster DNS
+      # (tuwunel-proxy / akkoma-proxy) which are absent in compose — point them at the compose
+      # Synapse + Mastodon so the proxied CS-API / Mastodon calls reach a live homeserver.
+      APP_HS_TOKEN_KEY: ${APP_HS_TOKEN_KEY:-dev-hs-token-key-do-not-use-in-prod}
+      APP_HS_TOKEN_MATRIX_URL: ${APP_HS_TOKEN_MATRIX_URL:-http://synapse:8008}
+      APP_HS_TOKEN_MASTODON_URL: ${APP_HS_TOKEN_MASTODON_URL:-http://mastodon-web:3000}
+      # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
+      APP_SESSION_COOKIE_SECURE: "false"
+      # Homeserver service-account password the hsproxy broker mints with. The property is
+      # app.hs-token.svc-password <- env APP_HS_TOKEN_SVC_PASSWORD (EMPTY default,
+      # fail-closed 503) — user-bff never reads bare SVC_PASSWORD (that's admin-bff's
+      # ServiceTokenBroker name), so the old line below bound NOTHING and every hsproxy
+      # mint (any login mode) refused with "svc-password is unset" on the local stack.
+      # Same env-name-misnomer class as the FEDERATION_BASE_URL fix in #314.
+      APP_HS_TOKEN_SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Email domain for broker-owned Mastodon accounts (user-bff-api's mastodon mint
+      # authenticates the password grant by EMAIL and the register leg must supply one:
+      # <localpart>@<this-domain>). MUST be a domain mastodon-web accepts —
+      # tests/stack/.mastodon.env allowlists e2e.local (EMAIL_DOMAIN_ALLOWLIST), the
+      # same domain seed-e2e.sh's tootctl accounts already use. Unset → mastodon mints
+      # fail closed 503 (matrix leg unaffected).
+      APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN: ${APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN:-e2e.local}
+      # POST /bff/user/notifications/test-seed — e2e-fixture-only route. Ships dark upstream
+      # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
+      # test env so e2e seeding scripts can prime notifications data (user-bff-api#97).
+      APP_TEST_SEED_ENABLED: "true"
+      # Placeholder config datastore, same as mod-bff-api above — see that service's
+      # comment for why this is needed.
+      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
+    depends_on:
+      admin-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+      hugmesh-admin-bff-api: { condition: service_started }
+      hugmesh-federation-api: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # hugmesh-actions — the Spring "actions" service behind the be-gateway
+  # /api/** route (the hugmesh-api Deployment in specs/cluster). The two-Casdoor
+  # sync (systems<->games) is DEV-stubbed: both Casdoor URLs point at the single
+  # local Casdoor with placeholder client creds, so the sync job is inert locally
+  # (no games Casdoor in the local stack — documented limitation).
+  hugmesh-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-actions
+    environment:
+      SPRING_PROFILES_ACTIVE: casdoor
+      CASDOOR_SYSTEMS_URL: "http://casdoor:8000"
+      CASDOOR_SYSTEMS_ORG: hugmesh
+      CASDOOR_SYSTEMS_CLIENT_ID: dev-systems-client
+      CASDOOR_SYSTEMS_CLIENT_SECRET: dev-systems-secret
+      CASDOOR_GAMES_URL: "http://casdoor:8000"
+      CASDOOR_GAMES_ORG: threewizards
+      CASDOOR_GAMES_CLIENT_ID: dev-games-client
+      CASDOOR_GAMES_CLIENT_SECRET: dev-games-secret
+      GM_SYNC_SYSTEMS_ROLE: ROLE_GAMES_ADMIN
+      GM_SYNC_GAMES_ROLE: admin
+    depends_on:
+      casdoor: { condition: service_started }
+    # hugmesh-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
+    # service here, which defaults to 8080) — a healthcheck against :8080 always
+    # fails (connection refused), which is why this container showed "unhealthy"
+    # forever even though the app boots clean (verified live: its own boot log
+    # says "Netty started on port 8090"). Keep in sync with the be-gateway's
+    # hugmesh-api route in gateway-routes/be/application-routes.yml, which had
+    # the identical :8080 mismatch.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # forum-bff / wiki-bff / owncast-bff / tube-bff — the same spring-bff archetype
+  # class as admin-bff/federation-api (templates/archetypes/spring-bff: "Class
+  # members: admin/user/mod/forum/owncast/tube/wiki-bff-api + federation-api"),
+  # so they share admin-bff/federation-api's OAuth2-resource-server shape: they
+  # VALIDATE a forwarded Casdoor JWT (not their own login flow), so both
+  # CASDOOR_ISSUER_URI and CASDOOR_JWKS_URI point at the in-DNS casdoor:8000 (the
+  # host Casdoor actually stamps into iss) — same reasoning as admin-bff-api /
+  # hugmesh-federation-api above, NOT the browser-facing localhost:8000
+  # mod-bff/user-bff use for their own OIDC login legs.
+  hugmesh-forum-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      # No phpBB pod in the local core stack (hugmesh-forum's phpBB extension is
+      # a separate, isolated-namespace-only piece not wired here) — keep the
+      # upstream stub-seam OFF so forum-bff boots clean and always-audits instead
+      # of failing every forum call against an absent backend (documented
+      # limitation, same class as admin-bff's Kafka/ClickHouse omission above).
+      PHPBB_ENABLED: "false"
+      EXTERNAL_FORUM_ENABLED: "false"
+      # MANAGED backing service seam (default in-stack forum-bff-db; UNSET = default).
+      SPRING_R2DBC_URL: "${MANAGED_FORUM_BFF_R2DBC_URL:-r2dbc:postgresql://forum-bff-db:5432/forumbff}"
+      SPRING_R2DBC_USERNAME: forumbff
+      SPRING_R2DBC_PASSWORD: forumbff
+      SPRING_LIQUIBASE_URL: "${MANAGED_FORUM_BFF_LIQUIBASE_URL:-jdbc:postgresql://forum-bff-db:5432/forumbff}"
+      SPRING_LIQUIBASE_USER: forumbff
+      SPRING_LIQUIBASE_PASSWORD: forumbff
+    depends_on:
+      forum-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # character-forge-bff — the character-forge slug's BFF (saved 3D character
+  # configs + the VN→3D /map endpoint; docs/XR-CHAT.md). Same spring-bff
+  # resource-server archetype as forum-bff above; NO downstream homeserver leg —
+  # its only dependency is its own Postgres. NOTE: the repo is the MULTI-SURFACE
+  # hugmesh-character-forge-bff-api (BFF root + godot/ + frontend/); the BFF
+  # image builds from the repo ROOT.
+  hugmesh-character-forge-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-forge-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      SPRING_R2DBC_URL: "r2dbc:postgresql://character-forge-bff-db:5432/charforgebff"
+      SPRING_R2DBC_USERNAME: charforgebff
+      SPRING_R2DBC_PASSWORD: charforgebff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://character-forge-bff-db:5432/charforgebff"
+      SPRING_LIQUIBASE_USER: charforgebff
+      SPRING_LIQUIBASE_PASSWORD: charforgebff
+    depends_on:
+      character-forge-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  hugmesh-wiki-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-wiki-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      # MANAGED backing service seam (default in-stack wiki-bff-db; UNSET = default).
+      SPRING_R2DBC_URL: "${MANAGED_WIKI_BFF_R2DBC_URL:-r2dbc:postgresql://wiki-bff-db:5432/wikibff}"
+      SPRING_R2DBC_USERNAME: wikibff
+      SPRING_R2DBC_PASSWORD: wikibff
+      SPRING_LIQUIBASE_URL: "${MANAGED_WIKI_BFF_LIQUIBASE_URL:-jdbc:postgresql://wiki-bff-db:5432/wikibff}"
+      SPRING_LIQUIBASE_USER: wikibff
+      SPRING_LIQUIBASE_PASSWORD: wikibff
+    depends_on:
+      wiki-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  hugmesh-owncast-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-owncast-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      SPRING_R2DBC_URL: "r2dbc:postgresql://owncast-bff-db:5432/owncast_bff"
+      SPRING_R2DBC_USERNAME: owncast_bff
+      SPRING_R2DBC_PASSWORD: owncast_bff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://owncast-bff-db:5432/owncast_bff"
+      SPRING_LIQUIBASE_USER: owncast_bff
+      SPRING_LIQUIBASE_PASSWORD: owncast_bff
+    depends_on:
+      owncast-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # NOTE: the third-party `owncast/owncast` HLS streaming server itself (RTMP
+  # ingest + the live-video pod owncast-bff-api fronts, see
+  # specs/cluster/manifests/owncast/deployment.yaml) is intentionally NOT wired
+  # here — this task's scope is the UI+BFF pair only (the always-present
+  # federated console + its resource-server BFF), matching the task's own framing.
+  # owncast-bff-api boots and serves the console/admin-grant surface without a
+  # live streaming backend (documented limitation, same class as forum's phpBB
+  # omission above).
+
+  hugmesh-tube-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-tube-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      SPRING_R2DBC_URL: "r2dbc:postgresql://tube-bff-db:5432/tube_bff"
+      SPRING_R2DBC_USERNAME: tube_bff
+      SPRING_R2DBC_PASSWORD: tube_bff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://tube-bff-db:5432/tube_bff"
+      SPRING_LIQUIBASE_USER: tube_bff
+      SPRING_LIQUIBASE_PASSWORD: tube_bff
+      # tube.google.* is ESO-projected from Vault in-cluster. TokenCipher decodes the
+      # DEK in its CONSTRUCTOR, so a blank value is not "fails closed when the connect
+      # endpoints are exercised" — the whole service refuses to start:
+      #   IllegalStateException: tube.google.dek is required (ESO-projected from Vault)
+      #   but was blank
+      # These are DEV-ONLY placeholders of the required shape (base64 of 32 bytes),
+      # identical in spirit to the repo's own application-test.yml values, and exist
+      # only so the local stack boots. They encrypt nothing real: no Google OAuth
+      # client is configured locally, so no refresh token is ever minted. Override via
+      # the environment to exercise the real Google-connect path.
+      TUBE_GOOGLE_DEK: "${TUBE_GOOGLE_DEK:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}"
+      TUBE_GOOGLE_STATE_HMAC_KEY: "${TUBE_GOOGLE_STATE_HMAC_KEY:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}"
+      # Same story one bean over: TubeMediaTokenService refuses to construct without
+      # a media-signing key ("TUBE_MEDIA_KEY is not set — tube media URL signing
+      # cannot function"). Dev-only placeholder, same shape + provenance as above.
+      TUBE_MEDIA_KEY: "${TUBE_MEDIA_KEY:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}"
+    depends_on:
+      tube-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # NOTE: the tube-media Nginx sidecar (signed-URL-gated /tube/content/** static
+  # serving, specs/cluster/manifests/tube/deployment.yaml) is intentionally NOT
+  # wired here for the same reason as the owncast streaming server above — out of
+  # this task's UI+BFF scope (documented limitation).
+
+  # ════════════════════════════════════════════════════════════════════
+  #  STATIC FRAGMENT FLEET — the remote-fragment SYNC image (Spring-Native).
+  #  In k8s this is an nginx pod + a sync sidecar over a shared volume; for
+  #  compose we run the sync service standalone in `once`->serve mode. The
+  #  CASDOOR_CLIENT_* are dev placeholders (machine account app-fragment-sync);
+  #  with no matching Casdoor app it has no enabled fragments to pull, so it
+  #  serves an empty set — fine for bring-up (documented limitation).
+  # ════════════════════════════════════════════════════════════════════
+  hugmesh-remote-fragment:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-remote-fragment
+    environment:
+      SYNC_MODE: loop
+      SERVER_PORT: "8081"
+      SYNC_TARGET_DIR: /usr/share/nginx/html
+      FEDERATION_BASE_URL: "http://hugmesh-federation-api:8080"
+      CASDOOR_TOKEN_URL: "http://casdoor:8000/api/login/oauth/access_token"
+      CASDOOR_ORG: hugmesh
+      CASDOOR_CLIENT_ID: dev-fragment-sync-client
+      CASDOOR_CLIENT_SECRET: dev-fragment-sync-secret
+    depends_on:
+      hugmesh-federation-api: { condition: service_started }
+      casdoor: { condition: service_started }
+
+  # ════════════════════════════════════════════════════════════════════
+  #  ANGULAR HOST + FEDERATED REMOTES (each Dockerfile -> nginx :80)
+  # ════════════════════════════════════════════════════════════════════
+
+  # hugmesh-host-shell — the Angular host (front page). The fe-gateway catch-all
+  # route forwards /** here. specs/cluster/manifests/frontend/deployment.yaml.
+  # The SERVICE name stays hugmesh-systems-web on purpose: it is the compose
+  # DNS name the fe-gateway routes target (gateway-routes/fe/application-routes.yml),
+  # not a build context — renaming it would need both sides changed together.
+  hugmesh-systems-web:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-host-shell
+    environment:
+      CASDOOR_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      MATRIX_URL: ${MATRIX_URL:-http://localhost:8008}
+      MASTODON_URL: ${MASTODON_URL:-http://localhost:3000}
+      SOCIAL_UI_BASE: /social
+
+  hugmesh-admin-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-ui
+
+  hugmesh-mod-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-ui
+
+  hugmesh-user-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-ui
+
+  hugmesh-login-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-login-ui
+      args:
+        # WHICH TRANSLATION CATALOGS THIS IMAGE SHIPS. Comma-separated locale tags;
+        # EMPTY (the default) => English-only, zero catalog files in the image and
+        # zero catalog requests in the browser. English is the login-ui's SOURCE
+        # language, compiled into the bundle, so it needs no catalog — the default
+        # is genuinely the smallest artifact.
+        #
+        # A BUILD ARG, not an `environment:` entry, and that distinction is the whole
+        # point: which catalogs SHIP is decided at build time. Selecting among
+        # catalogs already baked into every image via a runtime env var would leave
+        # every image byte-identical — a knob wired to nothing. (WHICH catalog a
+        # given browser then loads IS runtime, and is answered by locale detection
+        # inside the app; that is a different question.)
+        #
+        # Threaded from the Studio: LocalMeshBootstrapConfig.web_locales ->
+        # LocalStackNode._build_env() -> `make stack-up` (STACK_ENV) -> here ->
+        # the login-ui Dockerfile's ARG SNAP_WEB_LOCALES. Provable:
+        #   docker run --rm <image> ls -R /usr/share/nginx/html/i18n
+        SNAP_WEB_LOCALES: ${SNAP_WEB_LOCALES:-}
+    # Runtime globals the login-ui nginx entrypoint writes into snap-config.js so its
+    # (already-built) NATIVE login form turns ON. The browser NEVER learns a Casdoor URL:
+    # login-ui renders a first-party username/password form and POSTs it to SNAP_BFF_URL
+    # + /bff/login (the front door), then hydrates /bff/session — user-bff does all the
+    # PKCE + internal-Casdoor work server-side. No SNAP_OIDC_ISSUER / SNAP_CASDOOR_ISSUER /
+    # SNAP_OIDC_REDIRECT_URI here BY DESIGN: handing the browser a Casdoor origin or an
+    # authorize/redirect URL is exactly what this hardening removes. SNAP_BFF_URL is the
+    # only endpoint the browser talks to for auth.
+    environment:
+      SNAP_OIDC_ENABLED: "true"
+      # EMPTY default = SAME-ORIGIN relative /bff/** calls (the SPA reads
+      # `__HUG_BFF_URL__ ?? ''`), and empty is the only value that works on
+      # BOTH front doors at once: the old absolute http://localhost:8088
+      # default made every login POST from the HTTPS door
+      # (https://localhost:8488) an active-mixed-content request the browser
+      # BLOCKS outright — and a cross-origin one besides, so the bff_session
+      # cookie would land on the wrong origin even if it hadn't been blocked.
+      # Set SNAP_BFF_URL only to point the login SPA at an EXTERNAL gateway.
+      SNAP_BFF_URL: ${SNAP_BFF_URL:-}
+      # Runtime login THEME: already-derived --sd-* token text (studio core/theme.py
+      # css_root(); Studio threads it LocalMeshBootstrapConfig.login_theme_css ->
+      # LocalStackNode._build_env() -> STACK_ENV -> here). The login-ui entrypoint
+      # (50-snap-theme.sh) writes it verbatim to snap-theme.css — an ENV VAR, not a
+      # build arg, and that distinction is the point: a rebrand is compose up with a
+      # new value, NO image rebuild. Empty (the default) => shipped default brand.
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+
+  hugmesh-mastodon-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-mastodon-ui
+
+  hugmesh-matrix-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-matrix-ui
+
+  hugmesh-api-docs:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-api-docs
+
+  # forum-ui — mounted at /social/forum/** (a PATH remote, not a forum.<domain>
+  # subdomain — the *.hugmesh.systems vanity wildcard would swallow it),
+  # congruent with the matrix-ui/mastodon-ui shells at /social/matrix,
+  # /social/mastodon (specs/cluster/apps/49-forum-ui.yaml). No env needed, same as
+  # matrix-ui/mastodon-ui above.
+  hugmesh-forum-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-ui
+
+  # wiki-ui / owncast-ui / tube-ui — federated remotes added for the full local
+  # repo set (same rationale as mod-ui/user-ui above): the cluster serves them via
+  # the dynamic module-federation remote-fragment fleet rather than a fixed
+  # gateway path, so they have no cluster route yet, but a direct /<slug>/** path
+  # here (mirroring admin-ui/mod-ui/user-ui) is reachable + e2e-testable locally.
+  hugmesh-wiki-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-wiki-ui
+
+  hugmesh-owncast-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-owncast-ui
+
+  hugmesh-tube-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-tube-ui
+
+  # character-studio-ui — mounted at /character-studio/** (already a canonical
+  # cluster route-access row, specs/cluster/manifests/route-access/initdb/20-schema.sql).
+  # No dedicated BFF: it talks to the always-present BFFs over the existing
+  # same-origin /bff/** routes (see specs/cluster/manifests/character-studio's own
+  # comment — "no dedicated BFF in this slug yet"), so no BFF/DB service is added
+  # for it here.
+  hugmesh-character-studio-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-studio-ui
+
+  # character-forge-ui — mounted at /character-forge/** (canonical cluster
+  # route-access row + fe route, specs/cluster/apps/20-gateway-fe.yaml). UNLIKE
+  # character-studio-ui it has a dedicated BFF (hugmesh-character-forge-bff-api
+  # above, /bff/character-forge/**). The frontend lives in the SAME repo as the
+  # BFF (frontend/ subdir of hugmesh-character-forge-bff-api — one repo: BFF
+  # root + godot/ + frontend/), so the build context points INTO that clone.
+  hugmesh-character-forge-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-forge-bff-api/frontend
+
+  # ── hugmesh-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
+  # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional
+  # service (docs/TOR-HIDDEN-SERVICE.md) for the LOCAL docker mesh — INBOUND
+  # reachability with NO public IP / DNS / open ports. OPT-IN behind the `tor`
+  # compose profile: `make stack-up TOR=1` (or `--profile tor`); a default stack
+  # never creates it, so the unprofiled stack is byte-identical to before. Built
+  # from ./tor (multi-arch alpine+tor, NO platform pin) so it runs natively on
+  # Linux docker AND Docker Desktop (Windows/macOS) and on arm64 hosts. tor
+  # resolves `hugmesh-fe-gateway` over the compose network and forwards the
+  # onion :80 there. The minted .onion hostname is copied to ./tor-onion/hostname
+  # (gitignored) for the host/GUI to read; the private key persists in the
+  # tor-onion-keys volume so the address is stable across restarts.
+  hugmesh-tor:
+    profiles: ["tor"]
+    build:
+      context: ./tor
+    environment:
+      TOR_ONION_UPSTREAM: ${TOR_ONION_UPSTREAM:-hugmesh-fe-gateway:8080}
+    volumes:
+      - tor-onion-keys:/var/lib/tor/hugmesh-onion
+      - ./tor-onion:/onion-out
+    depends_on:
+      hugmesh-fe-gateway:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  route-access-pg:
+  federation-pg:
+  admin-bff-pg:
+  forum-bff-pg:
+  character-forge-bff-pg:
+  wiki-bff-pg:
+  owncast-bff-pg:
+  tube-bff-pg:
+  federation-bundles:
+  # v3 onion key custody for the OPT-IN hugmesh-tor service (`--profile tor`).
+  # Persisting the key keeps the .onion address stable across restarts; only the
+  # PUBLIC hostname is ever copied out (to ./tor-onion) — the key never leaves here.
+  tor-onion-keys:

@@ -1,0 +1,19 @@
+# ============================================================================
+# gateway/recipe.yaml — ANCHORED brand-delta edits for the gateway/infra class.
+# ============================================================================
+#
+# The gateway SOURCE (application.yml) is near-zero-token: fully ${ENV}-driven
+# (issuer-uri default http://casdoor:8000 in-cluster, route predicate Path=/api/**
+# brand-neutral, Host mapping via APP_TENANCY_HOSTS env — NOT a literal predicate).
+# So the ONLY in-source brand token is the CI include org/group; everything else
+# brand-coupled lives in DEPLOY ENV (see deploy/*.hbs, class-A). Java + the
+# literal SPRING_APPLICATION_NAME (hugmesh-<profile>-gateway, code identity)
+# are NEVER templated.
+edits:
+  - file: .gitlab-ci.yml
+    optional: false
+    anchors:
+      - id: ci-include-org
+        find: "HugMesh/hugmesh-generator"
+        replace: "{{GENERATOR_ORG_GROUP}}"
+        required: true

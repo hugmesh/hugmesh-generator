@@ -1,0 +1,30 @@
+# Isolate the TTS API: it accepts traffic only from the gateways (be-gateway,
+# tailnet/external callers via ai.<domain>/v1/synthesize/**), and egresses ONLY to
+# DNS. Unlike edge-ai-analysis it calls NO in-cluster upstream (synthesis is local
+# CPU work against the baked-in voice model) — it holds no data and reaches nothing
+# else (defense-in-depth; nodes are default-deny where the CNI enforces it).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hugmesh-edge-ai-tts
+  namespace: hugmesh-inference
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  podSelector:
+    matchLabels: { app: hugmesh-edge-ai-tts }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # be-gateway (tailnet/external callers via ai.<domain>/v1/synthesize/**) reaches
+    # :8080. No other in-cluster consumer today.
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    # cluster DNS only — no upstream model server, no external calls.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

@@ -1,0 +1,97 @@
+# hugmesh-games-instances — the RESTRICTIVE PodSecurity profile every per-domain
+# game-server instance Deployment MUST carry. This is the EXEMPLAR the 13c ApplicationSet
+# template (apps/13c-games-instances.yaml) renders per instance: a runtime-class +
+# securityContext baseline so an arbitrary curated FOSS image runs with the LEAST
+# privilege the games app-store can give it.
+#
+# Arbitrary-container exec is the core risk: a curated image is digest-pinned + superadmin-
+# only, but it is still third-party code. This profile + the namespace's enforced
+# `pod-security.kubernetes.io/enforce: restricted` (namespace.yaml) + the default-deny
+# NetworkPolicy (network-policy.yaml) are the containment. The required controls:
+#   runAsNonRoot: true              — never UID 0
+#   allowPrivilegeEscalation: false — no setuid escalation
+#   capabilities.drop: [ALL]        — no Linux caps (a game server needs none)
+#   seccompProfile.type: RuntimeDefault — syscall filter
+#   readOnlyRootFilesystem: true    — writes only to the mounted world-save PVC + an
+#                                     emptyDir scratch (a tampered image cannot persist)
+#
+# This file ships as a NON-APPLIED reference Deployment (replicas: 0, a placeholder image
+# digest) so the manifest tree documents + validates the exact shape; the LIVE instances
+# are created by the 13c ApplicationSet from the admin-bff-written per-domain ConfigMaps.
+# Residuals (documented, layered on top, NOT in this PR): cosign signature verification +
+# CVE scan of the curated image; gVisor/Kata runtime isolation (runtimeClassName) for a
+# kernel-level boundary.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: games-instance-template
+  namespace: hugmesh-games-instances
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/games-instance: "true"
+    hugmesh.systems/games-instance-template: "true"
+  annotations:
+    hugmesh.systems/note: >-
+      Reference template only (replicas:0). Live instances are rendered by
+      apps/13c-games-instances.yaml from the admin-bff per-domain ConfigMaps.
+spec:
+  # NOT applied as a workload — replicas 0. The shape is what matters.
+  replicas: 0
+  selector:
+    matchLabels: { hugmesh.systems/games-instance-template: "true" }
+  template:
+    metadata:
+      labels:
+        hugmesh.systems/games-instance: "true"
+        hugmesh.systems/games-instance-template: "true"
+    spec:
+      # Pod-level hardening (PodSecurity restricted).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      automountServiceAccountToken: false
+      containers:
+        - name: game-server
+          # Placeholder digest-pinned image (re-pinned per instance by the catalog).
+          image: ghcr.io/hugmesh-systems/games/placeholder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          ports:
+            - { name: console, containerPort: 8080 }
+            - { name: game,    containerPort: 30000, protocol: UDP }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits:   { cpu: "2",  memory: 2Gi }
+          volumeMounts:
+            # World saves: per-instance RWO PVC on hugmesh-local (see the PVC template).
+            - { name: world, mountPath: /data }
+            # Scratch for a readOnlyRootFilesystem image (tmp, runtime state).
+            - { name: scratch, mountPath: /tmp }
+      volumes:
+        - name: world
+          persistentVolumeClaim: { claimName: games-instance-template-world }
+        - name: scratch
+          emptyDir: {}
+---
+# Per-instance world-save PVC exemplar — RWO on hugmesh-local (node-pinned local PV).
+# World saves are per-instance and NOT HA: an instance is pinned to its storage node (no
+# live-migration of saves). Surfaced as a residual in docs/GAMES-APPSTORE.md.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: games-instance-template-world
+  namespace: hugmesh-games-instances
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/games-instance-template: "true"
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources:
+    requests:
+      storage: 2Gi

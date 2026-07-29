@@ -1,0 +1,34 @@
+# hugmesh-forum-ui — the Angular forum micro-frontend remote that WRAPS phpBB
+# (our own UI is the single source of truth; no phpBB HTML/CSS ever reaches the
+# browser). Its own nginx (own repo + pod) in the hugmesh-frontend namespace,
+# federated into the hugmesh.systems host: it serves a remoteEntry.json the
+# host's loadRemoteModule consumes, mounted at /social/forum (forum role) —
+# congruent with the matrix/mastodon shells (/social/matrix, /social/mastodon).
+# Talks to forum-bff-api via the same-origin /bff/forum/** fe-gateway route.
+# Repo: github.com/hugmesh-net/hugmesh-forum-ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: hugmesh-forum-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-forum-ui, app.kubernetes.io/part-of: hugmesh.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-forum-ui } }
+  template:
+    metadata: { labels: { app: hugmesh-forum-ui } }
+    spec:
+      nodeSelector: { hugmesh.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          # c48 collided with api-docs; forum-ui->c58 (free).
+          type: container_t
+          level: "s0:c58"
+      containers:
+        - name: web
+          image: hugmesh-systems/forum-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: hugmesh-forum-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-forum-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

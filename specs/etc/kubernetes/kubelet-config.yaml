@@ -1,0 +1,24 @@
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: cgroupfs
+containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
+authentication:
+  anonymous:
+    enabled: false
+  webhook:
+    enabled: true
+authorization:
+  mode: Webhook
+tlsCipherSuites:
+  - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+  - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+  - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+  - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+readOnlyPort: 0
+protectKernelDefaults: true
+eventRecordQPS: 5
+rotateCertificates: true
+serverTLSBootstrap: true
+featureGates:
+  SeccompDefault: true
+seccompDefault: true

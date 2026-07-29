@@ -1,0 +1,52 @@
+# ingress-nginx (INTERNAL) — the pki node's private edge. A second ingress-nginx
+# instance, pinned hostNetwork to the pki node, serving ONLY the `nginx-internal`
+# IngressClass. It is the pki gateway's entry on the pki node's :443, reachable
+# only from inside the LAN/VPN via the `scale.<domain> -> pki-node-IP` /etc/hosts
+# alias (provision_hosts). The public backend-node ingress (class `nginx`) never
+# serves this class, so the pki gateway stays off the internet — end-user auth
+# reaches it only THROUGH the backend gateway (routing tables). Coexists with the
+# public instance via a distinct class, controllerValue, and election ID.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress-nginx-internal
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes.github.io/ingress-nginx
+    chart: ingress-nginx
+    targetRevision: 4.11.*
+    helm:
+      releaseName: ingress-nginx-internal
+      values: |
+        controller:
+          kind: DaemonSet
+          hostNetwork: true
+          hostPort:
+            enabled: true
+          dnsPolicy: ClusterFirstWithHostNet
+          # Pin to the pki (control-plane) node; internal/VPN access only.
+          nodeSelector:
+            hugmesh.systems/pki: "true"
+          # Distinct from the public instance so the two controllers coexist.
+          electionID: ingress-nginx-internal-leader
+          ingressClassResource:
+            name: nginx-internal
+            enabled: true
+            default: false
+            controllerValue: "k8s.io/ingress-nginx-internal"
+          ingressClass: nginx-internal
+          service:
+            enabled: false
+          allowSnippetAnnotations: false
+        defaultBackend:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ingress-nginx-internal
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

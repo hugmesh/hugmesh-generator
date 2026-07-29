@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-frontend
+resources:
+  - deployment.yaml
+  # HTTPRoute (Gateway API) — INERT until a gateway.networking.k8s.io controller +
+  # parent Gateway exist (the live mesh routes via Spring Cloud Gateway; see
+  # httproute.yaml). Included so the slug owns its route in one place and the
+  # build-time gate prunes it with this dir. kustomize build does NOT require the CRD
+  # to be installed, so this renders cleanly today.
+  - httproute.yaml
+
+# First-party images pull from the in-cluster Harbor container registry
+# (registry.hugmesh.systems = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
+# path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
+# the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
+# (ESO-materialized, see manifests/external-secrets). Mirrors user-ui/wiki-ui.
+images:
+  - name: hugmesh-systems/character-forge-ui
+    newName: registry.hugmesh.systems/hugmesh/hugmesh-character-forge-ui
+    newTag: main
+patches:
+  - target: { kind: Deployment }
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: harbor-registry

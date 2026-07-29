@@ -1,0 +1,65 @@
+# casdoor-games-pg — dedicated Postgres backing the GAMES-realm Casdoor
+# (casdoor-games), mirroring the systems casdoor-pg shape (manifests/casdoor/pg.yaml)
+# but for the SEPARATE games identity provider. Casdoor stores the threewizards
+# org / roles / users / applications / providers here, so the games realm survives
+# restarts independently of the systems Casdoor. Database name "threewizards"
+# matches the hugmesh.games canonical compose stack (docker-compose.yml ->
+# POSTGRES_DB: threewizards). Credentials come from the ESO-materialized Secret
+# "casdoor-games-db" (Vault path secret/<brand>/casdoor-games) — never committed.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: casdoor-games-pg-data
+  namespace: hugmesh-games
+  labels: { app: casdoor-games-pg, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casdoor-games-pg
+  namespace: hugmesh-games
+  labels: { app: casdoor-games-pg, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: casdoor-games-pg } }
+  template:
+    metadata: { labels: { app: casdoor-games-pg } }
+    spec:
+      nodeSelector: { hugmesh.systems/games: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c34"
+      containers:
+        - name: pg
+          image: postgres:16-alpine
+          ports: [{ name: pg, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB, value: threewizards }
+            - { name: POSTGRES_USER,     valueFrom: { secretKeyRef: { name: casdoor-games-db, key: username } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: casdoor-games-db, key: password } } }
+            # Use a subdir so the volume root (lost+found) doesn't upset initdb.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "threewizards", "-d", "threewizards"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: casdoor-games-pg-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: casdoor-games-pg, namespace: hugmesh-games }
+spec:
+  selector: { app: casdoor-games-pg }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]

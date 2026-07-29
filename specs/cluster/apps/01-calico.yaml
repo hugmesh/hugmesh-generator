@@ -1,0 +1,38 @@
+# Calico CNI via the Tigera operator. Installs first (sync wave -1, before any
+# workload). Its network config (pod CIDR, encapsulation, NAT, BGP) comes from
+# the KEYS provision.json `calico` block — keys-provision renders the
+# Installation CR from it at bootstrap; Calico secrets (typha mTLS, BGP
+# passwords) are Vault-managed via External Secrets (see 04-external-secrets).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: calico
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://docs.tigera.io/calico/charts
+    chart: tigera-operator
+    targetRevision: v3.29.x
+    helm:
+      releaseName: calico
+      values: |
+        # Defaults; overridden from KEYS provision.json .calico at bootstrap.
+        installation:
+          enabled: true
+          calicoNetwork:
+            bgp: Disabled
+            ipPools:
+              - name: default-ipv4-ippool
+                cidr: 10.244.0.0/16
+                encapsulation: VXLAN
+                natOutgoing: Enabled
+                blockSize: 26
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: tigera-operator
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

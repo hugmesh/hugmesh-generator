@@ -1,0 +1,79 @@
+# =============================================================================
+# prod-hygiene RUNTIME gate — ArgoCD PreSync HOOK Job.
+# =============================================================================
+# This is the AUTHORITATIVE leg of the prod-hygiene gate. It runs
+# scripts/validate-prod-hygiene.sh --runtime (mounted from the prod-hygiene-script
+# ConfigMap), which reads LIVE cluster signals — NOT a manifest grep — so it
+# catches a templated/conditional dev server that has no static fingerprint:
+#   * any RUNNING pod labelled hugmesh.systems/tier: test (the MOCK ActivityPub
+#     peer + the test-runner harness),
+#   * a RUNNING Vault container started with -dev (args) AND a dev seal-status,
+#   * a RUNNING first-party container on a :dev / *-dev image,
+#   * any seam-bearing service whose live seam-real/health endpoint still reports
+#     stub/disabled (an un-flipped no-op STUB-SEAM).
+#
+# ── WHY A HOOK (the app-of-apps restructuring) ───────────────────────────────
+# The default root app (app-of-apps.yaml) is directory.recurse + automated
+# prune/selfHeal, which CANNOT block a wave — Argo just keeps every child app in
+# sync continuously, so a plain validation Deployment could never gate anything.
+# A blocking gate therefore has to be an ArgoCD sync HOOK whose FAILURE aborts the
+# operation. We use a PreSync hook in a NEGATIVE sync-wave so it runs (and must
+# succeed) BEFORE the dependent app waves:
+#   * argocd.argoproj.io/hook: PreSync         — run before the sync's resources,
+#   * argocd.argoproj.io/sync-wave: "-10"      — earliest wave; nothing real syncs
+#                                                until this passes,
+#   * hook-delete-policy: HookSucceeded        — clean up only on success, so a
+#                                                FAILED run is left for inspection.
+# A non-zero exit FAILS the hook, which FAILS the PreSync phase, which BLOCKS the
+# whole sync — the dependent waves never apply. See docs/TEST-ARCHITECTURE.md for
+# the explicit-waved app-of-apps (apps/00-app-of-apps-waved.yaml) this slots into.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prod-hygiene-gate
+  namespace: hugmesh-policy
+  labels:
+    app.kubernetes.io/name: prod-hygiene
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/component: policy
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: prod-hygiene-gate
+        app.kubernetes.io/part-of: hugmesh.systems
+    spec:
+      restartPolicy: Never
+      serviceAccountName: prod-hygiene-gate
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: gate
+          # kubectl + bash to read live signals. Multi-arch; pruned for nothing —
+          # this bundle is the prod gate itself, so it stays. (In ENV=test the
+          # whole prod-hygiene app is not synced; see apps/00-prod-hygiene.yaml.)
+          image: docker.io/bitnami/kubectl:1.31
+          command: ["bash", "/gate/validate-prod-hygiene.sh", "--runtime"]
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits:   { cpu: 250m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: gate, mountPath: /gate, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: gate
+          configMap: { name: prod-hygiene-script, defaultMode: 0555 }
+        - name: tmp
+          emptyDir: {}

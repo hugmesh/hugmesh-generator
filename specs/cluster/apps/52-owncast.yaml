@@ -1,0 +1,21 @@
+# Owncast live-streaming — GPU-gated x86 optional service (DEFAULT-OFF).
+# Scheduled onto the amd64 GPU worker (nodeSelector in manifests/owncast).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-owncast
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/owncast
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-owncast
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

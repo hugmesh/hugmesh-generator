@@ -1,0 +1,56 @@
+# cloudflared tunnel config (PROD only). Maps the REAL public hostnames to the
+# in-cluster ingress-nginx (which then hands off to the Spring Cloud Gateways,
+# exactly as the public path documents in apps/10-ingress-nginx.yaml).
+#
+# This config is used by the token-less `cloudflared tunnel run` path when a
+# named tunnel + credentials.json are supplied. When a TUNNEL_TOKEN is used
+# instead (the default below), Cloudflare serves the ingress rules from the
+# dashboard and this ingress: block is advisory — kept here so the brand fork can
+# switch to the credentials.json path without re-deriving the hostnames.
+#
+# Hostnames are authored as hugmesh.systems so rebrand_sysroot rewrites them
+# to the brand domain in the baked tree. The service target is the public
+# ingress-nginx controller Service inside the cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: devops
+  labels:
+    app.kubernetes.io/name: cloudflared
+    app.kubernetes.io/part-of: hugmesh.systems
+data:
+  config.yaml: |
+    # No-op for the TUNNEL_TOKEN path; used by the credentials.json path.
+    # tunnel: <tunnel-uuid>            # set when using credentials.json
+    # credentials-file: /etc/cloudflared/creds/credentials.json
+    metrics: 0.0.0.0:2000
+    no-autoupdate: true
+    ingress:
+      - hostname: hugmesh.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      - hostname: api.hugmesh.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      - hostname: matrix.hugmesh.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      - hostname: mastodon.hugmesh.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      # VANITY SUBDOMAINS: *.hugmesh.systems -> the same in-cluster ingress.
+      # MUST come AFTER the reserved service hosts above (id./api./matrix./
+      # mastodon./scale.) — cloudflared matches ingress rules TOP-DOWN and the
+      # first match wins, so the explicit reserved hostnames are claimed first and
+      # the wildcard only catches the remaining <username>.<domain> hosts. The
+      # in-cluster fe-gateway ingress (apps/20-gateway-fe.yaml extraHosts) then
+      # admits the wildcard host and the fe-gateway Host=*.<domain> route resolves
+      # the public profile. (With the TUNNEL_TOKEN path this block is advisory —
+      # the equivalent wildcard public hostname must also exist in the Cloudflare
+      # dashboard tunnel config + a *.<domain> DNS record.)
+      - hostname: "*.hugmesh.systems"
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      # Catch-all (required last rule).
+      - service: http_status:404

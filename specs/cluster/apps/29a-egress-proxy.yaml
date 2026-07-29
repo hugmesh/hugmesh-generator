@@ -1,0 +1,30 @@
+# egress-proxy — the FORWARD proxy all homeserver (akkoma/tuwunel) outbound
+# federation traffic is forced through (the domain-lock / no-federation control
+# point). Deploys BEFORE akkoma/tuwunel (30) so the egress backstop exists first —
+# the homeserver-egress NetworkPolicy (manifests/networkpolicy) denies the
+# homeservers any direct internet egress, allowing egress ONLY to this proxy:3128
+# + DNS + akkoma-db. GATED domainlock.egress.enabled (default OFF -> pass-through,
+# federation unchanged). See manifests/egress-proxy/ + docs/DOMAIN-LOCK.md.
+#
+# Ships behind a MANUAL sync (NOT automated): turning the egress lock on is a
+# cluster-network change that, if the homeserver-egress allow-set is incomplete,
+# can cut homeserver DNS/DB/federation. Sync it deliberately and run the LIVE
+# connectivity validation in docs/DOMAIN-LOCK.md before flipping the gate on.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: egress-proxy
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/egress-proxy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    syncOptions: [CreateNamespace=true]

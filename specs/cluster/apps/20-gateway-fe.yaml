@@ -1,0 +1,359 @@
+# hugmesh-fe-gateway — front door for hugmesh.systems (the Angular host
+# front page) + the integrated matrix/mastodon social-ui micro-frontends.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-gateway-fe
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/hugmesh-gateway
+    helm:
+      releaseName: hugmesh-fe-gateway
+      values: |
+        instance:
+          name: hugmesh-fe-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO hugmesh-fe-gateway-mtls).
+        # The DOWNSTREAM (gateway -> BFF/federation) leg PRESENTS this client cert +
+        # validates backend server certs — gated on by HUGMESH_GATEWAY_MTLS_ENABLED
+        # below. PUBLIC/upstream callers (browsers via Cloudflare/ingress) are NOT asked
+        # for a client cert; only the downstream leg to the now-mTLS https:// backends.
+        keystore:
+          enabled: true
+        ingress:
+          enabled: true
+          # Cloudflare Tunnel (manifests/cloudflared) is the primary external
+          # edge; this nginx Ingress is the in-cluster alternative/secondary
+          # path. Either way only the gateway Service is exposed.
+          className: nginx
+          host: hugmesh.systems
+          # VANITY SUBDOMAINS: admit *.hugmesh.systems so the ingress accepts
+          # <username>.hugmesh.systems and hands it to this gateway, where the
+          # Host=*.hugmesh.systems route (below) resolves the public profile.
+          # The wildcard DNS (manifests/lan-dns in test; Cloudflare wildcard in
+          # prod) already points *.hugmesh.systems at the backend ingress; this
+          # extraHosts entry makes the fe-gateway ingress admit the vanity hosts.
+          # The reserved service hosts (id. api. matrix. mastodon. scale.
+          # headscale.) are served by the BE gateway ingress + cloudflared, not
+          # this one, so they are unaffected.
+          extraHosts:
+            - "*.hugmesh.systems"
+        nodeSelector:
+          hugmesh.systems/frontend: "true"
+        seLinux:
+          level: "s0:c13"
+        # Least-privilege DB identity: this gateway logs in as its OWN read-only
+        # role `fe_gateway` (SELECT-only on gateway_route_access), NOT the DB owner.
+        # Password from its OWN ESO Secret (route-access-fe-gateway, key password);
+        # k8s interpolates it into the R2DBC URL via $(VAR).
+        extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-fe-gateway
+                key: password
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.hugmesh-pki.svc.cluster.local:5432/gateway
+          # Activate downstream client-cert presentation + backend-cert validation
+          # for the now-mTLS https:// BFF/federation backends (hugmesh-gateway repo).
+          # Default off in the image; the UI remotes (port 80) and be-gateway stay http.
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
+            value: "true"
+          # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
+          # When enabled, the gateway's BffSessionAuthFilter calls admin-bff's
+          # GET /bff/internal/session/introspect with the bff_ session token
+          # (from the Cookie or Authorization Bearer) and builds a Spring
+          # SecurityContext from the response. Enables cookie-mode UIs (the
+          # browser holds ONLY the opaque bff_ cookie, never a JWT).
+          # BFF_BASE_URL points to admin-bff (which owns the bff_session DB);
+          # INTERNAL_TOKEN authenticates the back-channel (matches admin-bff's
+          # InternalTokenWebFilter — BLANK in dev → no-op on both sides).
+          - { name: APP_BFF_SESSION_ENABLED, value: "true" }
+          - name: BFF_BASE_URL
+            value: http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+          - name: INTERNAL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: bff-internal-token
+                key: token
+                optional: true
+        routes:
+          # Each federated micro-frontend on its own nginx remote (specific
+          # paths first)…
+          # Every federated micro-frontend below is its own standalone nginx
+          # remote (own index.html/remoteEntry.json at its OWN webroot), so —
+          # exactly like login-ui below — each needs StripPrefix to map its
+          # gateway-prefixed path back to that webroot. Missing here for years:
+          # the host's native-federation loader fetches e.g. /admin/remoteEntry.json,
+          # which without the strip forwards as literal path /admin/remoteEntry.json
+          # to a container that only has /remoteEntry.json — nginx's SPA try_files
+          # fallback then silently serves index.html instead (wrong Content-Type,
+          # wrong content), so every one of these remotes has never actually loaded
+          # via the real gateway path. Confirmed live against the compose stack's
+          # identical route table (generator's tests/stack/gateway-routes/fe):
+          # adding StripPrefix made GET .../remoteEntry.json return the real
+          # federation manifest instead of index.html, and unblocked admin-ui/
+          # matrix-ui loading + rendering end-to-end post-login. forum-ui/
+          # character-studio-ui have no compose-stack equivalent to live-test
+          # against, but share the identical architecture, so the fix is applied
+          # here for consistency — NOT independently live-verified for those two.
+          - id: matrix-ui
+            uri: http://hugmesh-matrix-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /social/matrix/**
+            filters:
+              - StripPrefix=2
+          - id: mastodon-ui
+            uri: http://hugmesh-mastodon-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /social/mastodon/**
+            filters:
+              - StripPrefix=2
+          # phpBB forum micro-frontend remote, served at the apex PATH
+          # /social/forum/** (NOT a forum. subdomain — the *.hugmesh.systems
+          # vanity wildcard would swallow forum.<domain>). Congruent with the
+          # matrix/mastodon shells. The phpBB pod itself is NEVER routed (backend-
+          # only, isolated in hugmesh-forum); only this Angular remote + the
+          # /bff/forum BFF below are public. Role floor ROLE_FORUM (route-DB).
+          - id: forum-ui
+            uri: http://hugmesh-forum-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /social/forum/**
+            filters:
+              - StripPrefix=2
+          # login-ui is a STANDALONE Angular app built with base-href=/login/, so
+          # StripPrefix=1 maps /login/<asset> back to the webroot nginx serves.
+          - id: login-ui
+            uri: http://hugmesh-login-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /login/**
+            filters:
+              - StripPrefix=1
+          - id: admin-ui
+            uri: http://hugmesh-admin-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /admin/**
+            filters:
+              - StripPrefix=1
+          # Moderation micro-frontend remote (/mod/** -> hugmesh-mod-ui). Role
+          # floor ROLE_MOD (route-DB), declared with the other path-scoped MFE
+          # remotes; the host loads its remoteEntry after a moderator logs in.
+          - id: mod-ui
+            uri: http://hugmesh-mod-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /mod/**
+            filters:
+              - StripPrefix=1
+          # Self-service user micro-frontend remote (/user/** -> hugmesh-user-ui).
+          # Role floor ROLE_USER (route-DB).
+          - id: user-ui
+            uri: http://hugmesh-user-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /user/**
+            filters:
+              - StripPrefix=1
+          # Character Studio (VN) micro-frontend remote (/character-studio/** ->
+          # hugmesh-character-studio-ui on :8080, non-root nginx). Role floor
+          # ROLE_USER (route-DB). OPTIONAL slug `character-studio`:
+          # gate_optional_services REMOVES this route when the slug is deselected.
+          - id: character-studio-ui
+            uri: http://hugmesh-character-studio-ui.hugmesh-frontend.svc.cluster.local:8080
+            path: /character-studio/**
+            filters:
+              - StripPrefix=1
+          # Character Forge (3D character maker) micro-frontend remote
+          # (/character-forge/** -> hugmesh-character-forge-ui on :8080, non-root
+          # nginx; the Service keeps the repo's DESIGN-locked hugmesh-* name).
+          # Role floor ROLE_USER (route-DB). OPTIONAL slug `character-forge`:
+          # gate_optional_services REMOVES this route (and the /bff/character-forge/**
+          # BFF route below) when the slug is deselected.
+          - id: character-forge-ui
+            uri: http://hugmesh-character-forge-ui.hugmesh-frontend.svc.cluster.local:8080
+            path: /character-forge/**
+            filters:
+              - StripPrefix=1
+          # API documentation micro-frontend remote (/apidocs/** -> hugmesh-api-docs).
+          # Role floor ROLE_ADMIN (route-DB) — the rendered OpenAPI/spec docs are
+          # admin-only, matching federation's spec floor.
+          - id: api-docs
+            uri: http://hugmesh-api-docs.hugmesh-frontend.svc.cluster.local:80
+            path: /apidocs/**
+            filters:
+              - StripPrefix=1
+          # Same-origin BFFs: the /bff/** family proxies to the role BFFs in the
+          # backend namespace, so the UIs' bff.service calls are first-party to
+          # hugmesh.systems. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER,
+          # so the MORE SPECIFIC subpaths are declared BEFORE the /bff/** catch-all:
+          #   /bff/mod/**  -> mod-bff-api   (ROLE_MOD,  +ADMIN superset)
+          #   /bff/user/** -> user-bff-api  (ROLE_USER)
+          #   /bff/**      -> admin-bff-api (the remaining /bff/login, /bff/register,
+          #                  /bff/provision, /bff/me, /bff/admin/** — /bff/admin/**
+          #                  => ROLE_ADMIN). The fe-gateway enforces the route-DB
+          #                  role rules before each proxy.
+          # https:// — the three BFFs now enforce mTLS (client-auth=need); the
+          # gateway presents its client cert on these legs (HUGMESH_GATEWAY_MTLS_ENABLED).
+          - id: hugmesh-mod-bff-api
+            uri: https://hugmesh-mod-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/mod/**
+          - id: hugmesh-user-bff-api
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/user/**
+          # Forum BFF (/bff/forum/** -> hugmesh-forum-bff-api), the SINGLE
+          # browser->phpBB path. SIBLING of /bff/mod/** + /bff/user/** above (each a
+          # non-overlapping prefix gated to its own role floor). The moderation
+          # subpath is declared FIRST (more specific) so it keeps its ROLE_FORUM_MOD
+          # gate; the /bff/forum/** floor (ROLE_FORUM) follows. Both BEFORE the
+          # /bff/** admin-bff catch-all. https:// — forum-bff enforces mTLS
+          # (client-auth=need); the gateway presents its client cert on this leg.
+          - id: hugmesh-forum-bff-api-moderation
+            uri: https://hugmesh-forum-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/forum/moderation/**
+          - id: hugmesh-forum-bff-api
+            uri: https://hugmesh-forum-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/forum/**
+          # Wiki BFF (/bff/wiki/** -> hugmesh-wiki-bff-api), the SINGLE
+          # browser->wiki path. SIBLING of /bff/forum/** + /bff/mod/** above (non-
+          # overlapping prefix, gated to its own role floor). The admin subpath is
+          # declared FIRST (more specific) so it keeps its ROLE_ADMIN gate; the
+          # /bff/wiki/** floor (ROLE_WIKI) follows. Both BEFORE the /bff/** admin-bff
+          # catch-all. https:// — wiki-bff enforces mTLS (client-auth=need); the
+          # gateway presents its client cert on this leg.
+          - id: hugmesh-wiki-bff-api-admin
+            uri: https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/wiki/admin/**
+          - id: hugmesh-wiki-bff-api
+            uri: https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/wiki/**
+          # Mesh BFF (/bff/mesh/** -> hugmesh-mesh-bff-api): the LoRa mesh
+          # node directory / mesh-enabled rooms / my-devices surfaces. SIBLING of
+          # the wiki/forum/mod rows above (non-overlapping prefix, own role floor
+          # ROLE_MESH — see route-access), declared BEFORE the /bff/** admin-bff
+          # catch-all. https:// — mesh-bff enforces mTLS (client-auth=need); the
+          # gateway presents its client cert on this leg. The bridge-sync ingest
+          # (/bff/mesh/internal/**) is NOT routed here: the meshbridge daemon
+          # calls the service in-cluster directly (ROLE_SERVICE + mTLS).
+          - id: hugmesh-mesh-bff-api
+            uri: https://hugmesh-mesh-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/mesh/**
+          # Character Forge BFF (/bff/character-forge/** -> hugmesh-character-forge-
+          # bff-api): saved 3D character configs + the VN→3D /map endpoint. SIBLING of
+          # /bff/forum/** + /bff/wiki/** above (non-overlapping prefix, ROLE_USER
+          # floor), declared BEFORE the /bff/** admin-bff catch-all below (Spring Cloud
+          # Gateway matches first-in-declared-order). https:// — character-forge-bff
+          # enforces mTLS (client-auth=need); the gateway presents its client cert on
+          # this leg. OPTIONAL slug `character-forge`: gate_optional_services REMOVES
+          # this route when the slug is deselected.
+          - id: hugmesh-character-forge-bff-api
+            uri: https://hugmesh-character-forge-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/character-forge/**
+          # SSO login/session/registration RELOCATED admin-bff -> user-bff-api: login
+          # is a user concern, so the user BFF now owns /bff/login, /bff/register,
+          # /bff/me, /bff/session, /bff/provision. These are MORE-SPECIFIC than the
+          # /bff/** admin-bff catch-all below, so — like the mod/user/forum siblings
+          # above — they MUST be declared FIRST to win the route match. (The internal
+          # bff_->JWT exchange endpoint /bff/internal/** is NOT routed here: the
+          # gateway's BffJwtExchangeWebFilter calls user-bff in-cluster directly.)
+          - id: hugmesh-user-bff-api-login
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/login
+          - id: hugmesh-user-bff-api-register
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/register/**
+          - id: hugmesh-user-bff-api-me
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/me/**
+          - id: hugmesh-user-bff-api-session
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/session
+          - id: hugmesh-user-bff-api-provision
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/provision/**
+          - id: hugmesh-admin-bff-api
+            uri: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/**
+          # DB-hosted module-federation FRAGMENT bundles (user-profile/card +
+          # admin "contained pages"). The authenticated host's loadRemoteModule
+          # fetches /_fragments/<slug>/<contentHash>/...remoteEntry.json from the
+          # remote-fragment static fleet. Content-addressed + immutable; the
+          # federation manifest only emits enabled/visible modules, so visibility
+          # is enforced upstream and these are content-addressed (non-secret) bytes
+          # — gated to the ROLE_USER floor (the host loads them after login).
+          - id: remote-fragment
+            uri: http://hugmesh-remote-fragment.hugmesh-frontend.svc.cluster.local:80
+            path: /_fragments/**
+          # Default cross-namespace scope: hugmesh.systems/be/** -> the backend
+          # gateway (StripPrefix drops /be so /be/api -> /api at the be-gateway).
+          # Ships by default; once DB-driven route definitions land (Phase 2 core,
+          # in the gateway/admin-bff repos) an admin can re-point this entry via
+          # the routing DB + admin UI without a redeploy.
+          - id: be-default
+            uri: http://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8080
+            path: /be/**
+            filters:
+              - StripPrefix=1
+          # --- VANITY SUBDOMAINS: <username>.hugmesh.systems ---
+          # A Host=*.hugmesh.systems predicate. Spring Cloud Gateway matches
+          # routes FIRST-IN-DECLARED-ORDER, so PRECEDENCE is everything here:
+          #
+          #   * The Host=*.<domain> wildcard predicate matches ANY single-label
+          #     subdomain (alice.<domain>) but NOT the apex <domain> itself (the
+          #     `*` requires at least one label), so the apex still falls through
+          #     to `frontend-host` below.
+          #   * The RESERVED service subdomains (id. api. matrix. mastodon. scale.
+          #     headscale.) are fronted by the BE gateway ingress + cloudflared and
+          #     never routed to THIS fe-gateway, so they cannot be captured here.
+          #     (Defence-in-depth: federation's VanityController also refuses those
+          #     reserved first-labels.)
+          #   * This route is declared AFTER the apex/path routes above and BEFORE
+          #     `frontend-host` (the path=/** catch-all). The earlier routes are
+          #     path-scoped and host-agnostic; a vanity host hitting one of those
+          #     specific paths (/login, /admin, …) is rare and intentional. The key
+          #     ordering guarantee is wildcard-vanity BEFORE the /** frontend-host,
+          #     so a vanity host with no special path resolves to the profile
+          #     instead of the apex front page.
+          #
+          # The request is forwarded DIRECTLY to federation-api (NOT via the
+          # be-gateway) with the path REWRITTEN to the public vanity-resolve
+          # endpoint via SetPath. The Host header is PRESERVED (Spring Cloud
+          # Gateway forwards it by default), so federation-api extracts the
+          # username from the FIRST DNS LABEL of the Host
+          # (VanityController.resolveByHost) — no username needs parsing here.
+          # federation returns the public profile-fragment descriptor; the
+          # host/remote-fragment then renders the fragment (see the federation-api
+          # README "Vanity subdomains" + its honest SERVING note).
+          #
+          # WHY DIRECT (not via be-gateway): the vanity resolve is a PUBLIC read
+          # (no JWT — it IS the public profile). The be-gateway would interpose its
+          # own auth and 401 the anonymous request. federation-api's SecurityConfig
+          # already permitAll's `GET /api/federation/vanity/**`, so a direct hop is
+          # the public path with no extra auth layer to satisfy.
+          #
+          # HONEST CROSS-SERVICE CAVEAT (deferred — needs a hugmesh-gateway
+          # change, a THIRD repo): the shared gateway image's SecurityConfig
+          # (hugmesh-gateway repo) ends every chain with
+          # `anyExchange().authenticated()` and permits only a hardcoded
+          # PUBLIC_PATHS allowlist (/api/auth, /api/registration, /api/login, the
+          # login/registration/banned remotes). `/api/federation/vanity/**` is NOT
+          # in that list, so THIS fe-gateway pod would itself 401 the anonymous
+          # vanity request before proxying. To make the public vanity host actually
+          # reachable, add `/api/federation/vanity/**` (or a Host=*.<domain> public
+          # rule) to the gateway PUBLIC_PATHS. That edit is out of scope for this
+          # two-repo pass and is documented as a deferral in the federation-api
+          # README. The generator side (wildcard ingress host + Host predicate
+          # route + direct federation target) is complete and renders clean.
+          # https:// — federation-api now enforces mTLS; this direct (non-be-gateway)
+          # hop presents the fe-gateway client cert. The vanity resolve is still a
+          # PUBLIC read at the federation app layer (permitAll GET vanity/**) — mTLS
+          # only authenticates the GATEWAY pod to federation, not the end user.
+          - id: vanity-subdomain
+            host: "*.hugmesh.systems"
+            uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
+            filters:
+              - SetPath=/api/federation/vanity
+          # …then the hugmesh.systems Angular host catches everything else
+          # (the apex + any path the routes above did not claim).
+          - id: frontend-host
+            uri: http://hugmesh-systems-web.hugmesh-frontend.svc.cluster.local:80
+            path: /**
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

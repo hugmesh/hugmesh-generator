@@ -1,0 +1,22 @@
+# hugmesh-forum-ui — the phpBB forum Angular micro-frontend, served at
+# /social/forum and federated into the hugmesh.systems host (congruent with the
+# matrix/mastodon shells at /social/matrix, /social/mastodon). Frontend Pis. Talks
+# to forum-bff-api via the same-origin /bff/forum/** fe-gateway route. Our own UI is
+# the single source of truth — no phpBB HTML/CSS ever reaches the browser.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-forum-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/forum-ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

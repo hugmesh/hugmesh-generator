@@ -1,0 +1,76 @@
+# hugmesh-edge-ai-analysis — the TASK-ORIENTED analysis API in front of the raw
+# edge-AI model server. A small stateless FastAPI wrapper that turns Ollama's
+# OpenAI-compatible model API into structured "analysis" verdicts the mesh consumes:
+#   POST /v1/analyze/image/classify   — NSFW/abuse/policy classification (llava vision)
+#   POST /v1/analyze/image/hash       — perceptual hash (pHash/aHash/dHash; CPU, no GPU)
+#   POST /v1/analyze/content/moderate — classify + hash + policy → allow|flag|reject (fail-closed)
+#   POST /v1/analyze/log/summarize    — log/anomaly triage (llama reasoning)
+# It calls the edge-ai Ollama ClusterIP upstream in-cluster; it does NOT need the GPU
+# itself (pHash is CPU; inference is delegated upstream), so it has no nodeSelector/
+# runtimeClass and schedules anywhere. ON-PREM: nothing leaves the mesh.
+#
+# DEFAULT-OFF optional slug `edge-ai-analysis` (dependsOn: edge-ai) — deployed only
+# when explicitly selected, so a default edge-ai node never schedules this (its image
+# is a separate build artifact; see image/). Source lives in image/ (FastAPI app).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-edge-ai-analysis
+  namespace: hugmesh-inference
+  labels:
+    app: hugmesh-edge-ai-analysis
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-edge-ai-analysis } }
+  template:
+    metadata: { labels: { app: hugmesh-edge-ai-analysis } }
+    spec:
+      securityContext:
+        seLinuxOptions:
+          # Unique MCS level (edge-ai=c73); edge-ai-analysis -> c49 (next free).
+          type: container_t
+          level: "s0:c49"
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: analysis
+          # Built from image/ (FastAPI + httpx + Pillow + imagehash). Remapped to the
+          # registry by kustomization.yaml. Until the image is built + pushed, keep this
+          # slug deselected (DEFAULT-OFF) so no node tries to pull it.
+          image: hugmesh-systems/edge-ai-analysis
+          ports:
+            - { name: http, containerPort: 8080, protocol: TCP }
+          env:
+            # The raw edge-AI model server (Ollama, same namespace).
+            - { name: EDGE_AI_UPSTREAM, value: "http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434" }
+            # task->model map + policy thresholds (the analysis config surface).
+            - { name: ANALYSIS_VISION_MODEL,  valueFrom: { configMapKeyRef: { name: edge-ai-analysis, key: vision-model } } }
+            - { name: ANALYSIS_REASON_MODEL,  valueFrom: { configMapKeyRef: { name: edge-ai-analysis, key: reason-model } } }
+            - { name: ANALYSIS_NSFW_THRESHOLD,  valueFrom: { configMapKeyRef: { name: edge-ai-analysis, key: nsfw-threshold } } }
+            - { name: ANALYSIS_ABUSE_THRESHOLD, valueFrom: { configMapKeyRef: { name: edge-ai-analysis, key: abuse-threshold } } }
+            # fail-closed: a policy hit on moderate -> "reject" (block); set "flag" to
+            # only queue for human review without auto-blocking.
+            - { name: ANALYSIS_MODERATE_ACTION, valueFrom: { configMapKeyRef: { name: edge-ai-analysis, key: moderate-action } } }
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        # writable scratch for uvicorn/Pillow under the read-only rootfs
+        - name: tmp
+          emptyDir: {}

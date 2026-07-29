@@ -1,0 +1,25 @@
+# Harbor provisioning — the PostSync-hook Job that creates the Harbor PROJECT
+# + pull/push ROBOT ACCOUNTS and wires Casdoor OIDC, via Harbor's REST API.
+# Separate Application (git-path/kustomize) from the Harbor Helm release itself
+# (apps/03a-harbor.yaml) because a Helm-chart-sourced Application has no `path:`
+# for extra git-managed manifests — same split as
+# apps/03-external-secrets.yaml (Helm: the ESO controller) vs.
+# apps/04-external-secrets-config.yaml (git path: the ClusterSecretStore/
+# ExternalSecret CRs that use it).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: harbor-provision
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/harbor
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

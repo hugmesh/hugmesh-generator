@@ -1,0 +1,145 @@
+# OPTIONAL headscale config override placed on the KEYS USB.
+# If present (and headscale.config_file points here), it replaces the
+# baked-in /etc/headscale/config.yaml at first boot.
+#
+# LOCAL-FIRST ENDPOINT: you usually do NOT need to set server_url here. At first
+# boot keys-provision rewrites this `server_url:` line in place to the resolved
+# endpoint (provision_headscale -> resolve_endpoint), with precedence:
+#   1. provision.json .headscale.server_url
+#   2. provision.json .mesh.endpoint
+#   3. the baked brand var HEADSCALE_URL (/etc/hugmesh/headscale-url)
+#   4. DEFAULT: http://<the pki node's primary LAN IPv4>:8080
+# So a node provisioned before any public DNS exists is reachable by LAN peers.
+# Set a PUBLIC facade below (or via the config above) ONLY once that domain is
+# published — traffic then flows tailscale-client -> backend gateway -> pki
+# gateway -> this headscale, and internal nodes resolve the same name to the pki
+# node IP via /etc/hosts (the provision_hosts facade alias). The MagicDNS
+# control-plane name stays stable across the IP->domain transition.
+server_url: https://scale.hugmesh.systems
+listen_addr: 0.0.0.0:8080
+# /metrics + /debug — bound to loopback; scrape via a node-local exporter or an
+# Endpoints that targets the pki node, and keep it off the public facade.
+metrics_listen_addr: 127.0.0.1:9090
+# Local gRPC for the headscale CLI / a co-located admin UI; remote exposure
+# (0.0.0.0:50443) requires valid certs.
+grpc_listen_addr: 127.0.0.1:50443
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+log:
+  level: info
+  format: text
+
+dns:
+  magic_dns: true
+  # ORCHESTRATION SUPERDOMAIN — the internal MagicDNS zone every mesh node joins.
+  # PERMANENTLY INTERNAL: it is <brand>.internal (default hugmesh.internal),
+  # distinct from the PUBLIC cluster_domain (the go-live apex), and is NEVER
+  # go-live-flipped. keys-provision rewrites this line in place from
+  # provision.json .mesh.magic_dns_domain (resolve_magic_dns_domain) at first boot,
+  # which scripts/gen-provision-keys.sh stamps per-brand — so this value is the
+  # fallback default (kept in sync with provision.json .mesh.magic_dns_domain and
+  # kubernetes/kubeadm-config.yaml's controlPlaneEndpoint/certSANs).
+  base_domain: hugmesh.internal
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 9.9.9.9
+    # Split DNS: route the internal zone to the cluster CoreDNS (reachable over
+    # the tailnet) so in-cluster lookups stay private. Pin the resolver address
+    # for this deployment, e.g.:
+    #   split:
+    #     hugmesh.systems:
+    #       - 100.64.0.1   # tailnet IP of the cluster DNS resolver (CoreDNS)
+
+# ACL policy — fleet full-mesh, file mode.
+#
+# Loads headscale/policy.hujson from this KEYS USB (copied to
+# /etc/headscale/policy.hujson and applied with `headscale policy set -f` by
+# provision_headscale). It is a default-deny, tag-based policy: fleet members
+# (tag:hugmesh) reach each other on all ports + the cluster pod/service
+# CIDRs, and those advertised subnet routes are auto-approved — so pods/services
+# are reachable cross-node "as one LAN". This replaces the old allow-all
+# behaviour; combined with the OIDC join below it gives two membership layers
+# (IdP gates enrolment, tagOwners gates which tags a node may claim).
+# Switch to `mode: database` only if you intend to manage policy purely via the
+# API/CLI instead of this file.
+# Ref: https://tailscale.com/kb/1018/acls/  https://headscale.net/stable/ref/acls/
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+
+# OpenID Connect — node authentication via the platform's Casdoor IdP. A node
+# joins the tailnet by logging in through Casdoor; only members of the group
+# below are admitted.
+oidc:
+  # Don't block headscale startup on the IdP — resilient first boot.
+  only_start_if_oidc_is_available: false
+  # The same authority the hugmesh-*-gateway services validate against
+  # (CASDOOR_ISSUER_URI). headscale runs on the pki node, so it must be able to
+  # resolve + reach this in-cluster address, and the value MUST equal the `iss`
+  # claim Casdoor mints. Override if Casdoor is fronted on a different origin.
+  issuer: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
+  # Casdoor clientId — MUST byte-match reconcile_app()'s "app-{name}" naming
+  # (specs/cluster/manifests/casdoor/init-job.yaml APPS["headscale"]), the same
+  # convention every other seeded app uses (app-harbor, app-fragment-sync, ...).
+  client_id: "app-headscale"
+  # Secret delivered out-of-band (Vault / ESO) to /var/lib/headscale — never in
+  # git. WIRED end-to-end (fixed 2026-07-10, flagged 2026-07-09 in PR #292):
+  # gen-cluster-secrets.sh's CASDOOR_APPS loop deterministically mints this
+  # value (the SAME one casdoor-init registers as the Casdoor Application's
+  # clientSecret) into keys-out/vault/secrets.json; gen-provision-keys.sh's
+  # provision_headscale_oidc_secret() carries it forward into the pki role's
+  # KEYS bundle at headscale/oidc_client_secret; provision_headscale()
+  # (specs/etc/keys-provision/provision.sh) explicit-copies that exact file to
+  # this path (deliberately NOT folded into the generic *.key glob, since no
+  # naming trick makes "*.key" byte-match a path with no .key suffix).
+  client_secret_path: /var/lib/headscale/oidc_client_secret
+  # Re-auth cadence once a node is authenticated ("0" = never expire).
+  expiry: 180d
+  use_expiry_from_token: false
+  scope: ["openid", "profile", "email"]
+  email_verified_required: true
+  # Hint Casdoor toward the right org/domain on the authorization request.
+  extra_params:
+    domain_hint: hugmesh.systems
+  # The "headscale" group in the "hugmesh" Casdoor org must exist and be
+  # granted to the operators allowed to enrol nodes (reconcile_superadmin() in
+  # specs/cluster/manifests/casdoor/init-job.yaml seeds/grants it for the
+  # bootstrap superadmin). MUST byte-match the value Casdoor's JWT-Custom
+  # "Existing Field: Groups" tokenAttribute actually emits in the ID token's
+  # `groups` claim — LIVE-VERIFIED (tests/casdoor/test-jwt-custom-token.sh,
+  # 2026-07-09) to be the group's internal "<owner>/<name>" id string, NOT a
+  # bare leading-slash path. A prior "/headscale" value here (matching neither
+  # this nor any real claim shape) would have silently failed every OIDC
+  # mesh-join attempt — this exact string was never minted and checked against
+  # a real token until this test existed.
+  allowed_groups:
+    - hugmesh/headscale
+  # PKCE hardens the OAuth 2.0 auth-code flow against interception (S256).
+  pkce:
+    enabled: true
+    method: S256
+
+unix_socket: /run/headscale/headscale.sock
+unix_socket_permission: "0770"

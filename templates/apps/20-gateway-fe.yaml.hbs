@@ -1,0 +1,151 @@
+# {{BRAND_TITLE}} fe-gateway — front door for {{CLUSTER_DOMAIN}} (Angular host) + MFE remotes.
+# Generated from hugmesh-generator/templates/apps/20-gateway-fe.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-gateway-fe
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/hugmesh-gateway
+    helm:
+      releaseName: {{BRAND}}-fe-gateway
+      values: |
+        # PRE-EXISTING BUG fix (found migrating the core cluster to Harbor) —
+        # see templates/apps/20-gateway-be.yaml.hbs's identical comment: the
+        # chart's default image.repository now hardcodes the reference
+        # cluster's own Harbor project, so every brand must override it here.
+        image:
+          repository: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-gateway
+        imagePullSecrets:
+          - name: harbor-registry
+        instance:
+          name: {{BRAND}}-fe-gateway
+        keystore:
+          enabled: true
+        ingress:
+          enabled: true
+          className: nginx
+          host: {{CLUSTER_DOMAIN}}
+          extraHosts:
+            - "*.{{CLUSTER_DOMAIN}}"
+        nodeSelector:
+          {{CLUSTER_DOMAIN}}/frontend: "true"
+        seLinux:
+          level: "s0:c13"
+        extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-fe-gateway
+                key: password
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.{{BRAND}}-pki.svc.cluster.local:5432/gateway
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
+            value: "true"
+          # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
+          # Mirrors specs/cluster/apps/20-gateway-fe.yaml (kept in sync by hand):
+          # BffSessionAuthFilter introspects a bff_ session against admin-bff so
+          # cookie-mode browser requests authenticate at this gateway. BLANK/absent
+          # INTERNAL_TOKEN → no-op on both sides (secret optional).
+          - { name: APP_BFF_SESSION_ENABLED, value: "true" }
+          - name: BFF_BASE_URL
+            value: http://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+          - name: INTERNAL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: bff-internal-token
+                key: token
+                optional: true
+        routes:
+          # Each remote below is its own standalone nginx bundle (own
+          # index.html/remoteEntry.json at its own webroot) — StripPrefix maps
+          # the gateway-prefixed path back to that webroot, same reasoning as
+          # login-ui's comment below. Missing for years: without it, the
+          # host's native-federation loader's remoteEntry.json fetch forwards
+          # with the prefix still attached, nginx's SPA fallback serves
+          # index.html instead (wrong Content-Type/content), and the remote
+          # never actually loads. Live-verified against the compose stack's
+          # identical route table (generator's tests/stack/gateway-routes/fe).
+          - id: matrix-ui
+            uri: http://{{BRAND}}-matrix-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /social/matrix/**
+            filters:
+              - StripPrefix=2
+          - id: mastodon-ui
+            uri: http://{{BRAND}}-mastodon-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /social/mastodon/**
+            filters:
+              - StripPrefix=2
+          - id: forum-ui
+            uri: http://{{BRAND}}-forum-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /social/forum/**
+            filters:
+              - StripPrefix=2
+          # login-ui is a STANDALONE Angular app built with base-href=/login/, so
+          # StripPrefix=1 maps /login/<asset> back to the webroot nginx serves.
+          - id: login-ui
+            uri: http://{{BRAND}}-login-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /login/**
+            filters:
+              - StripPrefix=1
+          - id: admin-ui
+            uri: http://{{BRAND}}-admin-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /admin/**
+            filters:
+              - StripPrefix=1
+          - id: mod-ui
+            uri: http://{{BRAND}}-mod-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /mod/**
+            filters:
+              - StripPrefix=1
+          - id: user-ui
+            uri: http://{{BRAND}}-user-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /user/**
+            filters:
+              - StripPrefix=1
+          - id: api-docs
+            uri: http://{{BRAND}}-api-docs.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /apidocs/**
+            filters:
+              - StripPrefix=1
+          - id: {{BRAND}}-mod-bff-api
+            uri: https://{{BRAND}}-mod-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/mod/**
+          - id: {{BRAND}}-user-bff-api
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/user/**
+          - id: {{BRAND}}-forum-bff-api-moderation
+            uri: https://{{BRAND}}-forum-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/forum/moderation/**
+          - id: {{BRAND}}-forum-bff-api
+            uri: https://{{BRAND}}-forum-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/forum/**
+          - id: {{BRAND}}-admin-bff-api
+            uri: https://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/**
+          - id: remote-fragment
+            uri: http://{{BRAND}}-remote-fragment.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /_fragments/**
+          - id: be-default
+            uri: http://{{BRAND}}-be-gateway.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /be/**
+            filters:
+              - StripPrefix=1
+          - id: vanity-subdomain
+            host: "*.{{CLUSTER_DOMAIN}}"
+            uri: https://{{BRAND}}-federation-api.{{BRAND}}-backend.svc.cluster.local:8080
+            filters:
+              - SetPath=/api/federation/vanity
+          - id: frontend-host
+            uri: http://{{BRAND}}-systems-web.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /**
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

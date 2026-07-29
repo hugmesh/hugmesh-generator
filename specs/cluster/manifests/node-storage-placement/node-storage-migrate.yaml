@@ -1,0 +1,114 @@
+# node-storage-migrate — the EXPLICIT, operator-confirmed rebalance/migration Job.
+#
+# Rebalancing a RUNNING stateful service off one node-pinned pool onto another is NEVER
+# silent auto-migration: the mesh only RECOMMENDS a move (capacity pressure / a degraded
+# pool); the operator confirms, and THIS Job performs the safe sequence with EXPLICIT
+# downtime:
+#
+#   1. scale the service to 0 (quiesce writes — the PVC is RWO, so the new PV cannot bind
+#      while the old pod holds it);
+#   2. rsync the old PV's data -> the new node-pinned PV (both mounted into this Job, which
+#      is itself pinned to the relevant node(s));
+#   3. re-point: the operator flips the assignment in the admin UI (revoke old pool + assign
+#      the new pool), which the 13b ApplicationSet realises as the new nodeAffinity + PVC;
+#   4. scale the service back up on the new node.
+#
+# The concrete source/target PVC names + node pins + the service to scale are templated per
+# migration by the operator/BFF render (the PLACEHOLDER_* tokens below). It ships INERT
+# (suspend: true, zero parallelism) and is NEVER created automatically — an operator applies a
+# rendered + un-suspended copy after confirming scale-0. It scopes node-pinned storage to
+# REPLACEABLE data; for un-backed primary databases the UI already WARNS at assign time
+# (admin-ui PR3).
+#
+# WHAT THE BODY DOES (real migration, not a no-op): installs rsync (apk add, or use a baked
+# rsync image), runs `rsync -aHAX --numeric-ids /src/ /dst/` to copy the source PV onto the
+# new node-pinned PV preserving perms/ACLs/xattrs/hardlinks/numeric ids, then VERIFIES parity
+# (a second rsync --dry-run --itemize-changes MUST report zero outstanding transfers) and
+# EXITS NON-ZERO on any failure so the Job is marked Failed (backoffLimit:0 => no silent
+# retry) and the operator does NOT re-point/scale-up onto an incomplete copy.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: PLACEHOLDER_SERVICE_NAME-storage-migrate   # <- rendered per migration
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/node-storage-migrate: "true"
+  annotations:
+    hugmesh.systems/node-storage-note: >-
+      EXPLICIT downtime migration. Scale the service to 0 BEFORE applying (the RWO PVC
+      cannot rebind otherwise). The mesh only RECOMMENDS; the operator confirms + applies.
+spec:
+  # Ships INERT: suspended + never auto-run. The operator un-suspends a rendered copy.
+  suspend: true
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app.kubernetes.io/part-of: hugmesh.systems }
+    spec:
+      restartPolicy: Never
+      # Pin the migrate Job to the SOURCE pool's node so the source PV is local (the target
+      # PV's node is reached over the rsync if cross-node, or both are local for a same-node
+      # pool swap). Rendered per migration.
+      nodeSelector:
+        hugmesh.systems/local-path: "true"
+        kubernetes.io/hostname: PLACEHOLDER_SOURCE_NODE   # <- rendered
+      securityContext:
+        seLinuxOptions:
+          type: spc_t
+      containers:
+        - name: migrate
+          # rsync available via `apk add rsync` at run, or swap for a baked rsync image (e.g.
+          # an internal mirror of instrumentisto/rsync) to avoid a network apk fetch.
+          image: alpine:3.20
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "node-storage-migrate: scale-0 MUST already be done (RWO PVC cannot rebind otherwise)."
+
+              # 1. Ensure rsync is present (baked image may already carry it).
+              if ! command -v rsync >/dev/null 2>&1; then
+                echo "rsync absent -> apk add --no-cache rsync"
+                apk add --no-cache rsync
+              fi
+              command -v rsync >/dev/null 2>&1 || { echo "FATAL: rsync unavailable after install"; exit 3; }
+
+              # 2. Copy source PV -> dest PV preserving perms/ACLs/xattrs/hardlinks + numeric
+              #    ids (no uid/gid remap across nodes). Trailing slashes copy CONTENTS of /src
+              #    into /dst. --delete makes /dst an exact mirror (the dest PVC is freshly
+              #    provisioned + empty, so --delete only matters on an operator re-run).
+              echo "rsync (copy): rsync -aHAX --numeric-ids --delete /src/ /dst/"
+              rsync -aHAX --numeric-ids --delete /src/ /dst/ \
+                || { echo "FATAL: rsync copy failed"; exit 4; }
+              sync
+
+              # 3. PARITY VERIFICATION — a second pass in --dry-run --itemize-changes MUST
+              #    report ZERO outstanding transfers. Any itemized line (a path that still
+              #    differs) means the copy is incomplete -> FAIL the Job (non-zero exit) so the
+              #    operator never re-points/scales-up onto a partial copy. (-i prefixes changed
+              #    items with a >f/cd... code; we count any data line.)
+              echo "rsync (verify parity): rsync -aHAX --numeric-ids --delete --dry-run --itemize-changes /src/ /dst/"
+              diffs="$(rsync -aHAX --numeric-ids --delete --dry-run --itemize-changes /src/ /dst/ \
+                         | grep -E '^([<>ch.][fdLDS]|\*deleting)' || true)"
+              if [ -n "${diffs}" ]; then
+                echo "FATAL: parity check FAILED — dest differs from source after copy:"
+                echo "${diffs}"
+                exit 5
+              fi
+              echo "PARITY OK: /dst is byte-identical to /src (zero outstanding transfers)."
+
+              # 4. Operator next steps (manual, OUT of this Job): confirm parity above, then
+              #    re-point the assignment (revoke old pool + assign new) in the admin UI —
+              #    the 13b ApplicationSet realises the new nodeAffinity + PVC — then scale the
+              #    service back up. See docs/NODE-STORAGE.md 'Rebalancing'.
+              echo "migration data copy + parity verified. Re-point the assignment + scale up."
+          volumeMounts:
+            - { name: src, mountPath: /src }
+            - { name: dst, mountPath: /dst }
+      volumes:
+        # Source = the current node-pinned PVC; dest = the new pool's PVC. Rendered per
+        # migration (the operator creates the dest PVC first via the new assignment).
+        - name: src
+          persistentVolumeClaim: { claimName: PLACEHOLDER_SOURCE_PVC }   # <- rendered
+        - name: dst
+          persistentVolumeClaim: { claimName: PLACEHOLDER_DEST_PVC }     # <- rendered

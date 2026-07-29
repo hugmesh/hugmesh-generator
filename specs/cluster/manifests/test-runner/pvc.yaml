@@ -1,0 +1,26 @@
+# test-reports — durable storage for the lean+heavy run artifacts.
+#
+# Layout the test Jobs write (per-run-id, content addressed by ts+commit):
+#   /reports/lean/run-<ts>-<commit>/{junit.xml, report.json, summary.json, logs/}
+#   /reports/heavy/run-<ts>-<commit>/{junit.xml, report.json, summary.json, logs/}
+# SECRETS ARE SCRUBBED at write time by the hugmesh reporter + a sed pass in
+# the Job (and re-sanitized on read by the admin-bff TestReportsController).
+#
+# RWO on hugmesh-local (the backend node's disk via the local-path
+# provisioner) — the admin-bff pod and the test Jobs both run in
+# hugmesh-backend and mount this read/write (admin-bff) / write (Job). The
+# retention policy (keep N newest run dirs) is enforced by the orchestrator's
+# prune step, not the volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-reports
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: test-reports
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 5Gi } }

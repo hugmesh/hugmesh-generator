@@ -1,0 +1,74 @@
+# Cross-compilation — @@RPI_CPU@@ — Libre Computer Le/La Frite (Amlogic GXL) — HARDENED
+#
+# This is the LIGHT-DESKTOP image's portage config (NOT a K8s cluster node).
+# It mirrors specs-rpi5/portage/make.conf.tmpl (same aarch64 cross toolchain,
+# same hardened CFLAGS/LDFLAGS, same FEATURES) but tunes the board CPU + the
+# VIDEO_CARDS for the Amlogic Mali-450 SoC and keeps a lean desktop USE set.
+#
+# Variables substituted at build time (by render_template in build-frite-stage4.sh):
+#   @@CBUILD@@           Host compiler triplet
+#   @@CROSS_TARGET@@     Target triplet (e.g. aarch64-unknown-linux-gnu)
+#   @@RPI_CPU@@          GCC -mcpu / -mtune value (cortex-a53 for S805X/S905X)
+#   @@JOBS@@             Parallel make jobs
+#   @@WORK_DIR@@         Base build directory (per-arch build root)
+
+CBUILD="@@CBUILD@@"
+CHOST="@@CROSS_TARGET@@"
+
+# Hardened CFLAGS — same posture as the rest of the fleet. The Frite SoCs (S805X /
+# S905X) are quad Cortex-A53; the builder passes -c cortex-a53 by default.
+CFLAGS="-mcpu=@@RPI_CPU@@ -mtune=@@RPI_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+MAKEOPTS="-j@@JOBS@@"
+# -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
+# mode-700 / encrypted $HOME work dir). All sandboxing off for the cross-build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline + a LEAN desktop. This is the key difference from the
+# RPi5 (K8s) image and from the full Plasma+gaming stage4: we enable just enough
+# of X11 + a minimal GTK to run a lightweight WM/panel + a terminal + a browser,
+# and explicitly KEEP OFF the heavy desktop frameworks (KDE/Plasma qt5/qt6,
+# GNOME, systemd, pulseaudio bloat). Sized for a 512 MB / 1 GB SBC.
+USE="bindist hardened pie ssp selinux seccomp"
+USE="${USE} X dbus elogind udev -systemd"
+# Lean desktop toolkit: GTK on (lxde/xfce-lite need it), Qt off (no Plasma).
+USE="${USE} gtk -qt5 -qt6 -kde -gnome -gnome-keyring"
+# Light audio: ALSA only (no pulseaudio/pipewire heavy stack on a 512MB board).
+USE="${USE} alsa -pulseaudio -pipewire"
+# Disable GObject introspection: glib-2.86+ bootstraps a native copy of
+# gobject-introspection during cross-compile src_configure, but the bootstrap
+# meson build fails in the cross-emerge env (cross-file / EPYTHON mis-targeting).
+# None of the LXDE desktop packages hard-require introspection — it is an
+# optional USE-conditional dep on harfbuzz/pango/gdk-pixbuf/gtk+.
+# Also disable vala: librsvg's REQUIRED_USE enforces vala? ( introspection ),
+# so disabling vala satisfies the constraint without re-enabling introspection.
+# Vala language bindings are development tooling; no LXDE desktop package needs them.
+USE="${USE} -introspection -vala"
+
+# Only the MCS SELinux policy store (same posture as the cluster images): smaller
+# build, and matches the per-process MCS labelling baseline. The Frite image is
+# a desktop, not a k8s node, but we keep SELinux for fleet-consistent hardening.
+POLICY_TYPES="mcs"
+INPUT_DEVICES="libinput"
+# Amlogic GXL (S805X / S905X) ships the Mali-450 GPU (Utgard generation), served
+# by the mainline `lima` DRM/Mesa driver — so the Mesa VIDEO_CARDS token is "lima".
+# (Display/KMS itself is the in-kernel meson DRM; the lean LXDE desktop runs fine
+# with software/2D even if 3D is minimal on this class of SoC.)
+VIDEO_CARDS="lima"
+
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="arm64 ~arm64"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+# NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
+# package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the
+# ac_cv_* cache args into packages with hand-written configure scripts that
+# reject unknown options and die. (Same rationale as the RPi5 build.)
+
+PAX_MARKINGS="none"

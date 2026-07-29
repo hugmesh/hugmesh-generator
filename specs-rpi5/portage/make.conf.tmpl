@@ -1,0 +1,77 @@
+# Cross-compilation — @@RPI_CPU@@ — HARDENED
+#
+# Variables substituted at build time:
+#   @@CBUILD@@           Host compiler triplet
+#   @@CROSS_TARGET@@     Target triplet (e.g. aarch64-unknown-linux-gnu)
+#   @@RPI_CPU@@          GCC -mcpu / -mtune value
+#   @@JOBS@@             Parallel make jobs
+#   @@WORK_DIR@@         Base build directory
+
+CBUILD="@@CBUILD@@"
+CHOST="@@CROSS_TARGET@@"
+
+# Hardened CFLAGS. Do NOT add -D_FORTIFY_SOURCE — the hardened profile/toolchain
+# already defines it, and a second definition makes packages that set their own
+# (e.g. sys-apps/policycoreutils, -Werror) fail "_FORTIFY_SOURCE redefined". The
+# -Wno-error=... flags downgrade GCC-15's now-default ERRORS (implicit-function-
+# declaration etc.) back to warnings so older C still cross-builds. (Mirrors the
+# x86 make.conf fix; FORTIFY/SSP/relro hardening retained.)
+CFLAGS="-mcpu=@@RPI_CPU@@ -mtune=@@RPI_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+# Persist per-package build logs so cross-compile failures (gnutls/curl/elfutils
+# etc.) are diagnosable after the temp dir is cleaned (mirrors the x86 builder).
+PORTAGE_LOGDIR="/var/log/portage/build"
+
+MAKEOPTS="-j@@JOBS@@"
+# -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
+# mode-700 / encrypted $HOME work dir). All sandboxing off for the cross-build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline + container runtime requirements.
+# -introspection: GObject-introspection generates .gir files by RUNNING g-ir-scanner,
+# which loads a compiled _giscanner.cpython-<ver>.so. In this CROSS build g-ir-scanner
+# runs under the HOST python (3.14) but the extension is built for PYTHON_SINGLE_TARGET
+# (python3_12) -> "ImportError: _giscanner.cpython-314-...so: cannot open shared object
+# file" -> glib-2.88's bundled gobject-introspection bootstrap dies in configure ->
+# NetworkManager/nmcli (a payload-MANDATORY pkg) never builds. A headless k8s node has
+# no gir consumer, so disable introspection fleet-wide for the Pi cross-build. (The x86
+# NATIVE build is unaffected: it runs g-ir-scanner inside a chroot whose python matches.)
+USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth -introspection"
+USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
+# @@CLIENT_USE@@ expands to "X gtk dbus elogind udev" for --role desktop
+# (ROLE_CLIENT) and to nothing for the k8s cluster-node roles. Appended LAST so
+# it OVERRIDES the hardened headless -X/-gtk posture above on the desktop role
+# only — mirrors build-x86-host-stage4.sh's CLIENT_USE mechanism. Without this,
+# packages-desktop.list's GTK/X11 stack (xorg-server, lxpanel, pcmanfm,
+# lightdm-gtk-greeter, ...) would build against the global -X -gtk and the
+# desktop session could not open a window under Xorg.
+USE="${USE} @@CLIENT_USE@@"
+
+# Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
+# MCS labelling both target type=mcs. Pinning this avoids relying on the profile
+# default and skips compiling the unused strict/targeted/mls stores (faster build).
+POLICY_TYPES="mcs"
+# Xorg input drivers: "libinput" for --role desktop (keyboard/mouse/touchpad),
+# empty for the headless k8s node roles. Materialized by x11-base/xorg-drivers
+# (packages-desktop.list).
+INPUT_DEVICES="@@INPUT_DEVICES@@"
+VIDEO_CARDS="v3d vc4"
+
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="arm64 ~arm64"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+# NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
+# package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the
+# ac_cv_* cache args into packages with hand-written configure scripts (e.g.
+# sys-apps/iproute2) that reject unknown options and die.
+
+# Pi nodes are always headless servers — skip documentation and man pages.
+INSTALL_MASK="/usr/share/doc /usr/share/man /usr/share/info"
+
+PAX_MARKINGS="none"

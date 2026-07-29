@@ -1,0 +1,33 @@
+# extlinux.conf — UEFI distro-boot config for the NVIDIA Jetson Orin family.
+#
+# BOOT FLOW (differs from BOTH the RPi5 and the Frite — see boot/README.md):
+# the Orin boots NVIDIA's UEFI (edk2-nvidia) out of QSPI-NOR; its L4TLauncher
+# boot application scans the boot media for /boot/extlinux/extlinux.conf and
+# boots the entry below — the SAME extlinux contract u-boot distro-boot uses on
+# the Frite, but with NO u-boot binary to build or vendor. The QSPI firmware is
+# updated out-of-band (recovery-mode tegraflash; installer/TEGRAFLASH.md).
+#
+# Variables substituted at build time (render_template in build-jetson-stage4.sh):
+#   @@JETSON_KERNEL_IMG@@   Kernel image filename in /boot (e.g. Image)
+#   @@JETSON_DTB@@          Board DTB path under /boot/dtb (e.g.
+#                           nvidia/tegra234-p3768-0000+p3767-0005.dtb)
+#   @@JETSON_INITRD_LINE@@  INITRD line, or a comment when boot is initrd-less
+#   @@JETSON_APPEND@@       Kernel cmdline (cmdline.base + root=)
+#   @@BRAND_TITLE@@         Menu label brand
+#
+# IMPORTANT (mainline kernel flavor): boot the DTB that ships WITH THE KERNEL
+# (copied to /boot/dtb by the builder), NOT the L4T DTB from the QSPI/BSP — the
+# mainline tegra234 DT differs from NVIDIA's downstream DT. extlinux's FDT line
+# points at the kernel's own DTB for exactly this reason. (On the L4T kernel
+# flavor the BSP's own DTB applies instead — documented, not automated.)
+
+DEFAULT jetson
+TIMEOUT 20
+MENU TITLE @@BRAND_TITLE@@ — Jetson Orin
+
+LABEL jetson
+    MENU LABEL @@BRAND_TITLE@@ edge-AI node
+    LINUX /boot/@@JETSON_KERNEL_IMG@@
+    FDT /boot/dtb/@@JETSON_DTB@@
+@@JETSON_INITRD_LINE@@
+    APPEND @@JETSON_APPEND@@

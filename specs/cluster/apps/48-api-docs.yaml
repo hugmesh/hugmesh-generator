@@ -1,0 +1,20 @@
+# hugmesh-api-docs — API documentation Angular micro-frontend, served at
+# /apidocs and federated into the hugmesh.systems host. Frontend Pis. The
+# rendered OpenAPI/spec docs are gated to ROLE_ADMIN at the fe-gateway.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-api-docs
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/api-docs
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -1,0 +1,7 @@
+# SELinux core/policy packages still ~arch on arm64 — accept them.
+sys-libs/libselinux ~arm64
+sys-apps/semodule-utils ~arm64
+sec-policy/selinux-base ~arm64
+sec-policy/selinux-base-policy ~arm64
+sec-policy/selinux-container ~arm64
+sec-policy/selinux-virt ~arm64

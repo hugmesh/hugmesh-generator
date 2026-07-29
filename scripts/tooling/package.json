@@ -1,0 +1,13 @@
+{
+  "name": "@hugmesh/mesh-templating-tooling",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BUILD-HOST-ONLY Handlebars render tooling for the mesh repo-templating pilot. NOT for the mesh-node root-cron path (see docs/MESH-TEMPLATING.md; Node must never run as root there).",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "handlebars": "4.7.9",
+    "js-yaml": "4.3.0"
+  }
+}

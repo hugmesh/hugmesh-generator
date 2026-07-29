@@ -1,0 +1,30 @@
+# hugmesh-deploy.yaml — the per-repo deploy descriptor (Phase 6 catalog).
+#
+# Drop this file at the ROOT of any hugmesh service repo to make its image
+# deployable on demand through ArgoCD. The catalog ApplicationSet
+# (apps/13-service-catalog.yaml) discovers every repo in the in-cluster Forgejo
+# org that contains a `hugmesh-deploy.yaml` + a `deploy/` kustomize dir and
+# generates an ArgoCD Application from it. Per-environment config flows to the pod
+# via ConfigMaps + ESO; Spring Cloud Kubernetes (added in each service) picks up
+# those ConfigMaps/Secrets.
+#
+# This file is the human-facing contract; the actual manifests live in the repo's
+# deploy/ kustomize (image tag, ports, replicas, namespace, route). An admin
+# spins up / updates instances by editing the descriptor + deploy/ and pushing.
+#
+# PEN-TEST CI (DEV/CI-pipeline only): an onboarded repo also ships the pen-test CI
+# stage so joining the ArgoCD pipeline security-tests it by default. Drop
+# catalog/ci/repo.gitlab-ci.yml into the repo as its `.gitlab-ci.yml` (it `include:`s
+# the reusable tests/pentest/ci/pentest-stage.gitlab-ci.yml — the `sca`+`dast` jobs).
+# See specs/cluster/catalog/ci/repo.gitlab-ci.yml + tests/pentest/ci/README.md. This
+# is NOT a deployed runner — public images only, no `.github/workflows`.
+name: hugmesh-example-api          # Application name
+namespace: hugmesh-backend         # target k8s namespace (must be an existing tier ns)
+image: hugmesh-systems/example-api # image repo (tag pinned in deploy/ kustomize)
+port: 8080
+replicas: 1
+# Optional gateway route the admin/BFF will seed into the routing DB (Phase 2 core):
+route:
+  gateway: hugmesh-be-gateway
+  path: /api/example/**
+  stripPrefix: 0

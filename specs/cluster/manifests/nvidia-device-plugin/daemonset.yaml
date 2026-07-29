@@ -1,0 +1,57 @@
+# nvidia-device-plugin DaemonSet — registers nvidia.com/gpu with kubelet on each
+# GPU node so the scheduler can place GPU workloads. Standard upstream plugin
+# (nvcr.io/nvidia/k8s-device-plugin), constrained to HugMesh GPU nodes.
+#
+# GPU-NODE-ONLY: the nodeSelector hugmesh.systems/compute=gpu (the label
+# keys-provision sets on be+gpu / omnibus / edge_ai) means this DaemonSet runs
+# ONLY where there is actually an NVIDIA GPU + the nvidia container runtime; on a
+# GPU-less cluster it schedules nothing.
+#
+# ⚠ SELinux (nodes boot ENFORCING — see docs/SECURITY.md): a device plugin needs
+# privileged access to the kubelet device-plugins socket + the host nvidia devices.
+# On an SELinux-enforcing node this requires the super-privileged-container type
+# (spc_t); the seLinuxOptions below request it. Verify with `getenforce`+AVC scan
+# on first GPU-cluster bring-up (specs/selinux may need an nvidia_device_plugin
+# policy module) — tracked in docs/EDGE-AI.md "GPU-cluster bring-up checklist".
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    app: nvidia-device-plugin
+spec:
+  selector:
+    matchLabels: { app: nvidia-device-plugin }
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels: { app: nvidia-device-plugin }
+    spec:
+      # Schedule ONLY onto NVIDIA GPU nodes; use the nvidia container runtime so the
+      # plugin can see the devices.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        hugmesh.systems/compute: gpu
+      runtimeClassName: nvidia
+      priorityClassName: system-node-critical
+      tolerations:
+        # tolerate the standard GPU taint if an operator taints inference nodes
+        - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      securityContext:
+        seLinuxOptions:
+          type: spc_t
+      containers:
+        - name: nvidia-device-plugin-ctr
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.15.0
+          env:
+            - { name: FAIL_ON_INIT_ERROR, value: "false" }
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - { name: device-plugin, mountPath: /var/lib/kubelet/device-plugins }
+      volumes:
+        - name: device-plugin
+          hostPath: { path: /var/lib/kubelet/device-plugins }

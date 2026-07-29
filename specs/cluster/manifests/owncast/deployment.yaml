@@ -1,0 +1,112 @@
+# Owncast + owncast-bff-api + owncast-ui — GPU-gated x86 optional service.
+# All three containers share one Deployment so the BFF and UI co-locate with
+# the Owncast process on the GPU node (amd64 + hugmesh.systems/compute=gpu).
+# owncast data directory is emptyDir for dev; swap to a PV for persistent state.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-owncast
+  namespace: hugmesh-owncast
+  labels:
+    app: hugmesh-owncast
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-owncast } }
+  template:
+    metadata: { labels: { app: hugmesh-owncast } }
+    spec:
+      # GPU-gated: require the x86_64 GPU worker (labelled by keys-provision).
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        hugmesh.systems/compute: gpu
+      securityContext:
+        seLinuxOptions:
+          # c34 was a 3-way collision (casdoor-games-pg keeps c34); owncast->c39.
+          type: container_t
+          level: "s0:c39"
+      containers:
+        # ── owncast — HLS live-streaming server ──────────────────────────────────
+        - name: owncast
+          image: owncast/owncast
+          ports:
+            - { name: http,  containerPort: 8080, protocol: TCP }
+            - { name: rtmp,  containerPort: 1935, protocol: TCP }
+          env:
+            - { name: DATA_DIRECTORY, value: /app/data }
+          resources:
+            requests: { cpu: 500m,  memory: 512Mi }
+            limits:   { cpu: "2",   memory: 2Gi }
+          volumeMounts:
+            - { name: owncast-data, mountPath: /app/data }
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+
+        # ── owncast-bff-api — Spring Boot resource server (JWT validation) ───────
+        - name: owncast-bff-api
+          image: hugmesh-systems/owncast-bff-api
+          ports:
+            - { name: bff-http, containerPort: 8080, protocol: TCP }
+          env:
+            # Systems-realm Casdoor (NOT casdoor-games): JWKS auto-discovered via
+            # CASDOOR_ISSUER_URI + /.well-known/openid-configuration.
+            - { name: CASDOOR_ISSUER_URI,
+                value: "http://casdoor.hugmesh-casdoor.svc.cluster.local:8000" }
+            - { name: SPRING_R2DBC_URL,
+                value: "r2dbc:postgresql://hugmesh-owncast-db.hugmesh-owncast.svc.cluster.local:5432/owncast_bff" }
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+
+        # ── owncast-ui — Angular remote micro-frontend ────────────────────────────
+        - name: owncast-ui
+          image: hugmesh-systems/owncast-ui
+          ports:
+            - { name: ui-http, containerPort: 8080, protocol: TCP }
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+
+      volumes:
+        - name: owncast-data
+          emptyDir: {}   # dev default; replace with a PVC for persistent streams
+
+---
+# ── Services ─────────────────────────────────────────────────────────────────
+# Three ClusterIP Services: owncast-bff (BFF on 8080), owncast-ui (UI on 8080),
+# and owncast itself (HTTP 8080 + RTMP 1935 for the ingest endpoint).
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-owncast-bff-api
+  namespace: hugmesh-owncast
+spec:
+  selector: { app: hugmesh-owncast }
+  ports:
+    - { name: http, port: 8080, targetPort: bff-http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-owncast-ui
+  namespace: hugmesh-owncast
+spec:
+  selector: { app: hugmesh-owncast }
+  ports:
+    - { name: http, port: 8080, targetPort: ui-http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-owncast
+  namespace: hugmesh-owncast
+spec:
+  selector: { app: hugmesh-owncast }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+    - { name: rtmp, port: 1935, targetPort: rtmp }

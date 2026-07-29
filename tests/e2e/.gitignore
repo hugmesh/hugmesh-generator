@@ -1,0 +1,12 @@
+node_modules/
+package-lock.json
+
+# Reporter output (junit.xml, report.json, summary.json, .last-run.json,
+# per-test trace/screenshot dirs) — see playwright.config.ts's SNAP_REPORT_DIR
+# doc comment. These are per-run artifacts, never fixtures; a stale copy was
+# accidentally committed under test-results/ once (PR #234) and got left
+# behind on `git checkout`/`git reset`, masking real run output. Runners that
+# need durable results should set SNAP_REPORT_DIR to a path outside the repo
+# (e.g. a PVC/CI artifacts dir) rather than relying on the git tree.
+test-results/
+playwright-report/

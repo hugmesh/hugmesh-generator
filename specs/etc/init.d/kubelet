@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+description="Kubernetes Kubelet"
+command="/usr/bin/kubelet"
+command_args="--config=/var/lib/kubelet/config.yaml --kubeconfig=/etc/kubernetes/kubelet.conf --v=2"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+start_stop_daemon_args="--stderr /var/log/kubelet.err --stdout /var/log/kubelet.log"
+
+depend() {
+    need containerd net
+    after firewall
+}

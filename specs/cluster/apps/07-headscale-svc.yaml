@@ -1,0 +1,23 @@
+# headscale in-cluster Service (selector-less). headscale itself is a HOST OpenRC
+# service on the pki node; this Service + a bootstrap-injected Endpoints (the pki
+# node internal IP:8080) make it reachable by the pki gateway. External tailscale
+# clients reach it via backend gateway -> pki gateway -> headscale, so the pki
+# gateway stays off the internet. bootstrap.sh creates the Endpoints (the node IP
+# is per-deployment); ArgoCD owns only the Service, so it won't prune the Endpoints.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: headscale-svc
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/headscale
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

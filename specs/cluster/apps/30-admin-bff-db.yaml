@@ -1,0 +1,29 @@
+# admin-bff-db — dedicated Postgres for hugmesh-admin-bff-api's config datastore
+# (accounts / allowlist / sessions / namespace-grants / iso_artifacts /
+# gateway_route_access). hugmesh-backend, ClusterIP. No initdb seed — admin-bff
+# owns its schema via Liquibase (applied by the app at startup), so this DB just
+# needs to exist EMPTY.
+#
+# sync-wave "1": reconcile the DB BEFORE the admin-bff app (apps/31, wave 0) so
+# Liquibase has a target. admin-bff retries (k8s restarts the pod until the DB is
+# Ready), so this ordering is helpful, not a hard gate — same posture as
+# federation-db (wave 1) / federation-api.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: admin-bff-db
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/admin-bff-db
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

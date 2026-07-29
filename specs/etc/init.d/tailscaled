@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+
+description="Tailscale node agent (tailscaled)"
+command="/usr/sbin/tailscaled"
+command_args="--state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=${PORT:-41641}"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/tailscaled.log"
+error_log="/var/log/tailscaled.err"
+
+depend() {
+    need net
+    use dns logger
+    after keys-provision firewall
+}
+
+start_pre() {
+    checkpath -d -m 0755 /var/lib/tailscale /run/tailscale
+    modprobe tun 2>/dev/null || true
+}

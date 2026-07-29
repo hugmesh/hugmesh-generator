@@ -1,0 +1,86 @@
+# Native amd64 build — HARDENED — for the hugmesh-host k8s/GPU worker.
+#
+# Variables substituted at build time:
+#   @@CHOST@@       Host triplet (x86_64-pc-linux-gnu)
+#   @@JOBS@@        Parallel make jobs
+#   @@WORK_DIR@@    Base build directory
+
+CHOST="@@CHOST@@"
+
+# Generic, portable hardened flags. -march=native would tie the image to the
+# build host's CPU; x86-64-v2 is a safe baseline for modern desktops/servers.
+# NOTE: do NOT add -D_FORTIFY_SOURCE here — the hardened profile/toolchain already
+# defines it, and a second definition on the command line makes packages that set
+# their own (e.g. sys-apps/policycoreutils, which builds -Werror) fail with
+# "_FORTIFY_SOURCE redefined [-Werror]". FORTIFY is retained via the hardened default.
+# -Wno-error=... downgrades GCC-15's now-default *errors* (implicit-function-
+# declaration etc.) back to warnings so older C (e.g. grub's makedev in getroot.c)
+# still builds; KSPP/SSP/relro hardening is unaffected.
+COMMON_FLAGS="-march=x86-64-v2 -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+# -l@@JOBS@@ lets the parallel C builds self-throttle on shared load average.
+# This is the SOLE global MAKEOPTS source (the chroot heredoc no longer exports
+# one) so that per-package package.env caps (env/llvm-lowmem.conf -> llvm/clang
+# at -j4) actually override it; an exported MAKEOPTS would shadow package.env.
+MAKEOPTS="-j@@JOBS@@ -l@@JOBS@@"
+# -userfetch/-userpriv: don't drop to the 'portage' user (can't traverse a
+# mode-700 / encrypted work dir). Sandbox off for the native chroot build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
+# Chroot-INTERNAL cache paths. The old @@WORK_DIR@@/{pkgdir,distfiles} rendered
+# to the HOST-absolute build dir, which inside the chroot resolves UNDER the
+# sysroot (sysroot/home/...): binpkgs+distfiles (2.4 GB) then got baked into
+# every stage4/.img/squashfs (var/cache IS excluded; that home path was not),
+# leaking host paths and bloating artifacts. /var/cache is excluded from the
+# stage4 tar + squashfs, so these never ship, and they persist across the 4
+# roles in one shared sysroot so role 2-4 reuse role 1's binpkgs (--usepkg).
+PKGDIR="/var/cache/binpkgs"
+DISTDIR="/var/cache/distfiles"
+# Persist per-package build logs (default temp build.log is wiped on clean, so a
+# compile failure's cause is lost). Keeps every package's log under this dir for
+# post-mortem of OOM/compile failures. Excluded from artifacts (it's under /var/log
+# which the stage4 keeps, but it's small text; harmless).
+PORTAGE_LOGDIR="/var/log/portage/build"
+
+# Hardened USE baseline + container runtime + (optional) vendor-agnostic GPU stack.
+# @@GPU_USE@@ expands to the GPU USE flags (vulkan vaapi vdpau gbm egl gles2) for
+# the be+gpu / omnibus roles, and to nothing for the headless pki/be/fe roles.
+USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
+USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
+USE="${USE} @@GPU_USE@@"
+# @@CLIENT_USE@@ expands to the desktop USE (X gtk dbus elogind udev [+pulseaudio
+# pipewire for --desktop full]) for the CLIENT roles (laptop/chromebook/desktop),
+# and to nothing for node roles. It is appended LAST so it OVERRIDES the hardened
+# headless -X/-gtk posture above on client builds only.
+USE="${USE} @@CLIENT_USE@@"
+
+# Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
+# MCS labelling both target type=mcs. Pinning this avoids relying on the profile
+# default and skips compiling the unused strict/targeted/mls stores (faster build).
+POLICY_TYPES="mcs"
+
+# Open, vendor-agnostic GPU: AMD (amdgpu/radeonsi), Intel (i915/iris),
+# NVIDIA via nouveau. No proprietary blobs. @@VIDEO_CARDS@@ expands to that list
+# for the be+gpu / omnibus roles, and to nothing (no DRI drivers) for headless
+# pki/be/fe roles.
+VIDEO_CARDS="@@VIDEO_CARDS@@"
+# Xorg input drivers: "libinput" for client desktop roles (keyboard/mouse/touchpad),
+# empty for headless nodes. Materialized by x11-base/xorg-drivers (packages-desktop).
+INPUT_DEVICES="@@INPUT_DEVICES@@"
+
+ACCEPT_LICENSE="* -@EULA"
+ACCEPT_KEYWORDS="amd64"
+
+GRUB_PLATFORMS="efi-64 pc"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+# Server nodes have no interactive users; skip documentation and man pages.
+# Client roles keep man pages (desktop users) but still drop doc/info.
+# @@INSTALL_MASK@@ is substituted by the builder based on ROLE_CLIENT.
+INSTALL_MASK="@@INSTALL_MASK@@"
+
+PAX_MARKINGS="none"

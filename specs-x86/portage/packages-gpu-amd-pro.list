@@ -1,0 +1,8 @@
+# AMD "pro" GPU stack — appended ONLY for --gpu-driver amd-pro. AMD has NO
+# proprietary Xorg driver: the OPEN amdgpu kernel driver (VIDEO_CARDS=amdgpu
+# radeonsi) IS the display driver. These add AMD's proprietary closed userspace:
+# the AMDGPU-PRO Vulkan ICD, the OpenCL runtime, and the AMF media encoder.
+# AMD-GPU-PRO-EULA accepted via package.license/amd-pro.
+media-libs/amdgpu-pro-vulkan
+dev-libs/amdgpu-pro-opencl
+media-video/amdgpu-pro-amf

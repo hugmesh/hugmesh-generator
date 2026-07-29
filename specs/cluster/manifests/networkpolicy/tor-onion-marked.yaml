@@ -1,0 +1,65 @@
+# Tor onion-service ↔ NetworkPolicy interaction (per-service opt-in, default-off).
+#
+# SCOPE OF THE `tor` OPTIONAL SERVICE: the PRIMARY capability is INBOUND onion
+# reachability — the node-level Tor daemon (net-vpn/tor, gated DEFAULT-OFF) publishes
+# the in-cluster fe-gateway as a v3 .onion. That path is entirely HOST-side (the tor
+# daemon dials the node-local fe-gateway ingress on 127.0.0.1); the fe-gateway pod
+# only ever RECEIVES that connection, which the existing tier-ingress policies already
+# permit. So the inbound onion service needs NO new pod NetworkPolicy.
+#
+# WHAT THIS POLICY IS: the SECONDARY, forward-compatible hook for the OPT-IN
+# pod-egress-via-tor capability — a pod that wants to make OUTBOUND connections
+# anonymously through the node's Tor SOCKS proxy. A pod opts in by carrying the label
+# `hugmesh.systems/tor-onion=true`; this policy then re-allows it the egress it
+# needs to reach the SOCKS proxy + resolve DNS. It is the exact mirror of
+# egress-vpn-interaction.yaml's label-gated, additive, inert-by-default model.
+#
+# WHY IT IS SAFE / DEFAULT-OFF / INERT:
+#   * A pod with NO `tor-onion` label is UNAFFECTED — this policy only ADDS an allow
+#     for the opt-in label; it removes nothing (k8s NetworkPolicy is additive).
+#   * No pod carries the label by default, so the policy matches nothing — a pure
+#     structural allow that is inert until an operator explicitly labels a workload.
+#   * The whole `tor` optional service is DEFAULT-OFF; when it is not selected the
+#     gate prunes this manifest from the kustomization (no label is ever honoured).
+#
+# ⚠ ENABLEMENT CAVEAT (honest): pod-egress-via-tor additionally requires the Tor
+# SocksPort to be reachable from the pod network (the reconcile agent binds it to
+# 127.0.0.1:9050 = HOST-LOCAL ONLY by default, so pods cannot reach it yet). Exposing
+# SOCKS to pods is a deliberate FUTURE opt-in (bind SocksPort to the node IP + a
+# firewall allow); until then this policy is a forward-hook only. The inbound onion
+# service (the primary feature) is fully functional without any of this.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tor-onion-marked
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: tor
+spec:
+  podSelector:
+    matchLabels:
+      hugmesh.systems/tor-onion: "true"
+  policyTypes: [Egress]
+  egress:
+    # DNS (CoreDNS in kube-system) — keep explicit so a tor-onion pod that is NOT also
+    # selected by homeserver-egress still resolves.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Reach the node-local Tor SOCKS proxy (9050). Cluster-internal CIDRs are EXCLUDED
+    # so ordinary cluster traffic is unaffected; only the SOCKS hop is added. Inert
+    # until SocksPort is exposed to the pod network (see the enablement caveat above).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16   # pod CIDR (cluster-internal)
+              - 10.96.0.0/12    # service CIDR (cluster-internal)
+              - 100.64.0.0/10   # tailnet/CGNAT (control plane)
+      ports:
+        - { protocol: TCP, port: 9050 }

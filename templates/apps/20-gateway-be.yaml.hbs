@@ -1,0 +1,109 @@
+# {{BRAND_TITLE}} be-gateway — front door for backend APIs + matrix + mastodon.
+# Generated from hugmesh-generator/templates/apps/20-gateway-be.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-gateway-be
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/hugmesh-gateway
+    helm:
+      releaseName: {{BRAND}}-be-gateway
+      values: |
+        # PRE-EXISTING BUG fix (found migrating the core cluster to Harbor):
+        # the chart's own default image.repository is now hardcoded to
+        # registry.hugmesh.systems/hugmesh/hugmesh-gateway — correct
+        # for the reference "hugmesh.systems" cluster, but WRONG for any
+        # other brand's gateway, which must pull from ITS OWN Harbor project
+        # instead. Override per-brand here (same {{BRAND}}-gateway image
+        # .gitlab-ci.yml pushes for all of this brand's gateway instances) so a
+        # brand-generated GitOps repo — which reuses this SAME shared Helm
+        # chart via repoURL/path above — never silently falls back to pulling
+        # the reference cluster's image.
+        image:
+          repository: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-gateway
+        imagePullSecrets:
+          - name: harbor-registry
+        instance:
+          name: {{BRAND}}-be-gateway
+        keystore:
+          enabled: true
+        ingress:
+          enabled: true
+          className: nginx
+          host: api.{{CLUSTER_DOMAIN}}
+          extraHosts:
+            - scale.{{CLUSTER_DOMAIN}}
+            - games.{{CLUSTER_DOMAIN}}
+        nodeSelector:
+          {{CLUSTER_DOMAIN}}/backend: "true"
+        seLinux:
+          level: "s0:c12"
+        extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-be-gateway
+                key: password
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://be_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.{{BRAND}}-pki.svc.cluster.local:5432/gateway
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
+            value: "true"
+          # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
+          # Mirrors specs/cluster/apps/20-gateway-be.yaml (kept in sync by hand):
+          # BffSessionAuthFilter introspects a bff_ session against admin-bff so
+          # cookie-mode browser requests authenticate at this gateway. BLANK/absent
+          # INTERNAL_TOKEN → no-op on both sides (secret optional).
+          - { name: APP_BFF_SESSION_ENABLED, value: "true" }
+          - name: BFF_BASE_URL
+            value: http://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+          - name: INTERNAL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: bff-internal-token
+                key: token
+                optional: true
+        routes:
+          - id: headscale-forward
+            host: scale.{{CLUSTER_DOMAIN}}
+            uri: http://{{BRAND}}-pki-gateway.{{BRAND}}-pki.svc.cluster.local:8080
+          - id: mastodon-oauth
+            host: mastodon.{{CLUSTER_DOMAIN}}
+            uri: https://akkoma-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /oauth/**
+          - id: mastodon-api
+            host: mastodon.{{CLUSTER_DOMAIN}}
+            uri: https://akkoma-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /api/v1/**
+          - id: mastodon-web
+            host: mastodon.{{CLUSTER_DOMAIN}}
+            uri: https://akkoma-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+          - id: matrix-api
+            host: matrix.{{CLUSTER_DOMAIN}}
+            uri: https://tuwunel-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /_matrix/**
+          - id: matrix-wellknown
+            uri: https://tuwunel-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+            path: /_matrix/**
+          - id: matrix
+            host: matrix.{{CLUSTER_DOMAIN}}
+            uri: https://tuwunel-proxy.{{BRAND}}-backend.svc.cluster.local:4443
+          - id: games
+            host: games.{{CLUSTER_DOMAIN}}
+            uri: http://{{BRAND}}-games.{{BRAND}}-games.svc.cluster.local:8080
+          - id: federation-api
+            uri: https://{{BRAND}}-federation-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /api/federation/**
+          - id: {{BRAND}}-api
+            uri: https://{{BRAND}}-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /api/**
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

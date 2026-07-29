@@ -1,0 +1,86 @@
+# Stage4 BASE package list — NVIDIA Jetson Orin (Tegra234, aarch64)
+# One atom per line; lines starting with # are ignored.
+#
+# This is the BASE (always-installed) set shared by every Jetson role:
+# kernel sources, firmware, storage/network tooling, the mesh/provisioning
+# dependencies, and the hardened SELinux base. Role payloads are layered by
+# build-jetson-stage4.sh from the SEPARATE lists:
+#   packages-k8s.list      — edge_ai | gpu-host | full  (container runtime + kubeadm)
+#   packages-edge-ai.list  — edge_ai | full             (inference-node extras)
+#   packages-desktop.list  — desktop                    (lean LXDE client desktop)
+#
+# NOTE on the boot chain (differs from BOTH the RPi5 and the Frite):
+#   * The Orin boots NVIDIA's UEFI (edk2-nvidia) out of QSPI-NOR, which
+#     distro-boots /boot/extlinux/extlinux.conf from the root filesystem —
+#     the SAME extlinux contract as the Frite, but with NO u-boot to build or
+#     vendor (the UEFI lives in QSPI and is updated out-of-band; see
+#     specs-jetson/installer/TEGRAFLASH.md).
+#   * The board DTB ships from the KERNEL build (mainline nvidia/tegra234-*),
+#     selected by extlinux's FDT line — see specs-jetson/kernel/README.md.
+
+# ── Kernel sources + firmware ──────────────────────────────────────
+# Mainline flavor: gentoo-sources + merge_config fragments (kernel/*.config).
+# linux-firmware carries the tegra/xusb firmware blobs mainline loads.
+sys-kernel/gentoo-sources
+sys-kernel/linux-firmware
+
+# ── Device tree tooling ────────────────────────────────────────────
+sys-apps/dtc
+
+# ── Board hardware / storage (SD + NVMe are the boot media) ───────
+sys-apps/nvme-cli
+sys-block/parted
+sys-apps/pciutils
+sys-apps/usbutils
+sys-apps/i2c-tools
+sys-apps/util-linux
+sys-fs/e2fsprogs
+sys-fs/dosfstools
+# lm-sensors: thermal/fan visibility (the Orin's pwm-fan + soctherm zones).
+sys-apps/lm-sensors
+
+# ── Networking ─────────────────────────────────────────────────────
+net-misc/networkmanager
+net-misc/openssh
+net-firewall/iptables
+net-misc/socat
+# Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +
+# openvpn (fallback) for the node-level hugmesh-egress-vpn OpenRC service
+# (DEFAULT-OFF; inert until enabled).
+net-vpn/wireguard-tools
+net-vpn/openvpn
+# WiFi supplicant so the devkit's M.2 radio (or a USB dongle) CAN work, but
+# WiFi is OFF by default (hardened posture; harden_radios in the builder).
+net-wireless/wpa_supplicant
+
+# ── System ─────────────────────────────────────────────────────────
+app-admin/sudo
+sys-process/cronie
+sys-apps/haveged
+app-editors/nano
+app-misc/screen
+app-misc/jq
+
+# ── Hardened / security (SELinux LSM) ──────────────────────────────
+# Same posture as the cluster images: SELinux is the LSM. The policy packages'
+# pkg_postinst runs the TARGET `semodule`, which can't execute under an aarch64
+# cross-emerge — so the base policy is LOADED AT FIRST BOOT (native) by
+# keys-provision (shared engine). See docs/SECURITY.md.
+sec-policy/selinux-base
+sec-policy/selinux-base-policy
+sys-apps/policycoreutils
+sys-apps/semodule-utils
+sys-apps/checkpolicy
+sys-libs/libselinux
+sys-libs/libseccomp
+sys-process/audit
+
+# ── KEYS USB provisioning + attached storage ──────────────────────
+# Same first-boot provisioning engine as every other image: jq parses the
+# manifests, dosfstools/util-linux handle the FAT32 KEYS partition + blkid.
+net-fs/nfs-utils
+net-fs/cifs-utils
+
+# NOTE: headscale + tailscale are NOT emerged here. They are installed as
+# upstream static arm64 binaries by build-jetson-stage4.sh (the "mesh" phase),
+# identical to the RPi5/Frite images. See --skip-mesh / --skip-tailscale.

@@ -1,0 +1,28 @@
+# EDGE-AI inference-node package set — NVIDIA Jetson Orin (aarch64).
+# One atom per line; lines starting with # are ignored.
+#
+# Appended by build-jetson-stage4.sh for the edge_ai (headline) and full roles,
+# ON TOP of packages.list + packages-k8s.list. The inference service itself
+# (Ollama, OpenAI-compatible /v1) is NOT emerged — it deploys as the SAME
+# arch-portable `edge-ai` cluster service the x86 RTX host runs (kustomize
+# manifests in specs/cluster; Ollama publishes arm64 + Jetson CUDA images).
+#
+# ── CUDA-on-Tegra reality check (the kernel decision) ─────────────────────────
+# On the DEFAULT mainline kernel flavor there is NO CUDA: the GA10B iGPU needs
+# NVIDIA's nvgpu driver + the L4T userspace (nvidia-l4t-* / JetPack .debs),
+# which are EULA-gated NVIDIA downloads — documented, not automated (see
+# specs-jetson/kernel/README.md + installer/TEGRAFLASH.md). They are NOT
+# portage atoms and deliberately do NOT appear here; x11-drivers/nvidia-drivers
+# is the DESKTOP dGPU driver and is WRONG for Tegra — never add it.
+# Until the L4T flavor is validated on hardware, the edge-ai service runs
+# CPU-only on this node (functional, slow) — the builder warns about this.
+#
+# What we CAN bake portably today:
+
+# curl: model pulls / OpenAI-API smoke checks from the node itself.
+net-misc/curl
+# htop: watching a 7B model peg six A78AE cores is diagnostics, honest.
+sys-process/htop
+# Python: the edge-ai-analysis sidecars + model-mgmt tooling expect a python3
+# on the node (the k8s workloads bring their own runtimes; this is host tooling).
+dev-lang/python

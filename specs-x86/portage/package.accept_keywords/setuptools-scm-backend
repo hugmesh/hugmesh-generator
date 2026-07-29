@@ -1,0 +1,15 @@
+# setuptools-scm + its vcs-versioning backend — SELinux-toolchain build chain.
+#
+# The x86 chroot is stable-keyworded (make.conf ACCEPT_KEYWORDS="amd64"), and the
+# fleet SELinux posture pulls app-admin/setools -> dev-python/setuptools ->
+# dev-python/setuptools-scm. In the builder image's tree window the STABLE
+# setuptools-scm (10.0.5) fails its own wheel rebuild once the new
+# dev-python/vcs-versioning-2 backend is installed ("unable to detect version",
+# observed in a real jetson host-side build 2026-07-16), while the fixed pair
+# (setuptools-scm 10.2.x + vcs-versioning 2.x) is still ~arch. Accept both
+# regardless of keywording (** — pure-python, arch-independent) so the chroot
+# takes the WORKING pair instead of dying mid-@stage4. Twin of the ARM builders'
+# host-side /etc/portage/package.accept_keywords/hugmesh-host-build-backends
+# and the ARM sysroots' setuptools-scm-backend files (#352/#360).
+dev-python/vcs-versioning **
+dev-python/setuptools-scm **

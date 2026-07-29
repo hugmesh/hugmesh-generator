@@ -1,0 +1,30 @@
+# cloudflared — the PROD/go-live external edge (OPT-IN). A Cloudflare Tunnel that
+# maps the REAL public domain (apex + api./matrix./mastodon.) to the in-cluster
+# ingress, fulfilling the manifests/cloudflared dir the gateway comments already
+# reference. Creds (TUNNEL_TOKEN) come from the keys USB via External Secrets,
+# read-if-present: absent creds => the tunnel stays down harmlessly.
+#
+# ENV GATE: present ONLY in ENV=prod images. The builders prune apps/12-
+# cloudflared.yaml from the baked tree when ENV=test (gate_env_apps), so a LAN
+# test image never references Cloudflare. The internal cluster-CA TLS (Vault-PKI)
+# stays the default issuer in BOTH envs; this app only ADDS the public edge
+# (ACME/public certs are additive, never replacing the offline CA).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudflared
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"    # after ingress + external-secrets-config
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/cloudflared
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

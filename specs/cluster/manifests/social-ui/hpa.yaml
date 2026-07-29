@@ -1,0 +1,104 @@
+# HorizontalPodAutoscalers for the social-ui federated remotes — ONE per remote
+# Deployment (matrix-ui, mastodon-ui, login-ui, admin-ui), each its own stateless
+# static nginx server in hugmesh-frontend (see deployment.yaml). Modelled
+# byte-for-byte on manifests/remote-fragment/hpa.yaml: plain autoscaling/v2,
+# Resource metrics only. Each remote scales out cleanly under load.
+#
+# REQUIRES metrics-server (apps/01-metrics-server.yaml, already live). Until the
+# metrics API answers, these HPAs stay inert and each Deployment's replicas floor
+# governs. CPU 70% + memory 80% — both Resource targets read the
+# resources.requests each Deployment already declares (cpu:50m, memory:96Mi). The
+# replicaCount floors are held at the Deployments' current values (NOT raised
+# here); min/max only widen the band each HPA may move within (min 2 keeps an HA
+# pair per remote).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hugmesh-matrix-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-matrix-ui, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hugmesh-matrix-ui
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: 80 }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hugmesh-mastodon-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-mastodon-ui, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hugmesh-mastodon-ui
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: 80 }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hugmesh-login-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-login-ui, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hugmesh-login-ui
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: 80 }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hugmesh-admin-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-admin-ui, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hugmesh-admin-ui
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: 80 }

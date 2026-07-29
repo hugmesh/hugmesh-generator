@@ -1,0 +1,31 @@
+# Tier-level NetworkPolicies (Phase 3 segmentation).
+#
+# AUTO-SYNC (enabled). The tier-ingress policies have been reviewed and the new
+# services (federation-api/db, admin-bff-api/db, remote-fragment) all live in
+# already-covered namespaces, so this Application now auto-syncs like the others.
+#
+# ⚠ VALIDATE ON THE LIVE CLUSTER right after this first syncs: a default-deny
+# ingress policy missing a real flow silently breaks connectivity, and k8s
+# NetworkPolicy bugs only surface live. Smoke-test login + each gateway hop + the
+# BFF/DB/casdoor/cassandra paths. ROLLBACK if anything is cut off: revert this
+# `automated:` block (back to manual) or `kubectl delete -k manifests/networkpolicy`
+# — the policies are ingress-only (egress stays open), so removing them fully
+# restores connectivity.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: networkpolicy
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/networkpolicy
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=false]

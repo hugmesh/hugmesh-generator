@@ -1,0 +1,30 @@
+Cassandra Vault-PKI issuing role (DB-hardening, ADR-32 — DARK, Stage 2 / TLS).
+================================================================================
+This is a DOCUMENTED patch, applied at TLS-flip time, NOT a live object — it adds
+a `cassandra` issuing role to the vault-pki-init for-app loop so Vault can mint the
+Cassandra node/client server cert (the same way each *-db Postgres role was added
+in PR-C1). It ships as a .txt (not a kustomize patch) for the SAME reason the rest
+of this overlay is inert: the vault-pki-init ConfigMap lives in the auto-synced
+tree, and editing it there would issue the cert into circulation before TLS is
+ready. Apply this diff to manifests/vault-pki/pki-init-configmap.yaml at Stage 2.
+
+In the `for app in … ; do` list (currently ending `… akkoma-proxy tuwunel-proxy`),
+add `cassandra` so the role is created:
+
+    for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
+               hugmesh-superadmin-gateway \
+               hugmesh-api hugmesh-admin-bff-api \
+               hugmesh-mod-bff-api hugmesh-user-bff-api \
+               hugmesh-forum-bff-api \
+               hugmesh-federation-api \
+               route-access-db admin-bff-db mod-bff-db user-bff-db \
+               federation-db forum-bff-db \
+               cassandra \
+               akkoma-proxy tuwunel-proxy; do
+
+The existing role body already sets server_flag=true AND client_flag=true, so the
+issued `cassandra` cert supports BOTH the node server endpoint and the internode
+client handshake. CN/SANs are minted by the ExternalSecret
+(cassandra-tls-externalsecret.yaml) as cassandra.hugmesh-pki.svc.cluster.local
+(matches the Service DNS the clients verify), covered by the role's allowed_domains
+(svc.cluster.local). After editing, re-run the vault-pki-init Job (idempotent).

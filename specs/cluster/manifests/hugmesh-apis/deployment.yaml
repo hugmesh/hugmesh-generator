@@ -1,0 +1,177 @@
+# HugMesh Spring APIs. Resource servers behind the be-gateway; they trust
+# the Casdoor JWT and the External-* identity headers the gateway appends.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-api, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-api } }
+  template:
+    metadata: { labels: { app: hugmesh-api } }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      # POD-level hardening (replicates the media-poisoner exemplar): CIS K8s
+      # 5.2.6 (runAsNonRoot) + 5.7.2 (seccompProfile RuntimeDefault). NIST 800-53
+      # AC-6/SC-39, 800-190 §4.5.3. UID 1000 = the unprivileged app user the
+      # hugmesh-actions JRE image runs as (same UID the exemplar pins).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c22"
+      # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
+      # Mirrors the hugmesh-gateway chart's build-keystore initContainer: turns
+      # the Vault-PKI-issued, ESO-synced TLS Secret (hugmesh-api-mtls:
+      # tls.crt/tls.key/ca.crt — this image is deployed in-cluster as "hugmesh-api")
+      # into keystore.p12 (identity) + truststore.p12 (cluster CA) for the
+      # server.ssl.* config to REQUIRE a client cert chaining to the cluster CA.
+      # Store password generated in-pod, kept only in the tmpfs /stores emptyDir,
+      # emitted into application.properties loaded via
+      # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
+      initContainers:
+        - name: build-keystore
+          image: hugmesh-systems/actions:dev
+          # CONTAINER-level hardening (audit: pod-only seLinux, no container ctx).
+          # CIS K8s 5.2.5 / 5.2.7-5.2.9. The store password is generated here and
+          # written ONLY to the /stores tmpfs (already a Memory emptyDir, RW);
+          # readOnlyRootFilesystem keeps the rest of the rootfs immutable.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name hugmesh-api \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              keytool -importcert -noprompt -alias hugmesh-cluster-ca \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              # FILENAME IS LOAD-BEARING — do NOT rename this back to
+              # application-tls.properties (or any application-<name>.properties).
+              # SPRING_CONFIG_ADDITIONAL_LOCATION only adds a SEARCH DIRECTORY; Spring
+              # auto-loads a profile-named doc (application-<name>.properties) from it ONLY
+              # when a profile literally named <name> is active. No manifest activates a
+              # `tls` profile, so the old application-tls.properties was silently never
+              # loaded and the store passwords fell back to the packaged application.yml's
+              # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
+              # keystore. Plain application.properties loads UNCONDITIONALLY from the
+              # additional location, with no profile needed.
+              umask 077
+              cat > /stores/application.properties <<EOF
+              server.ssl.key-store-password=${P}
+              server.ssl.trust-store-password=${P}
+              EOF
+              echo "keystore + truststore + application.properties built"
+          volumeMounts:
+            - { name: pki,    mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
+            # keytool/openssl scratch under readOnlyRootFilesystem.
+            - { name: tmp,    mountPath: /tmp }
+      containers:
+        - name: api
+          # hugmesh-actions — "Spring Actions for hugmesh hybrid architecture"
+          image: hugmesh-systems/actions:dev
+          # hugmesh-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
+          # service here, which defaults to 8080) — see application.yml's
+          # `server.port: ${PORT:8090}`. The Service below stays on the stable
+          # :8080 other manifests reference (apps/20-gateway-be.yaml,
+          # charts/hugmesh-gateway/values.yaml) via the named "http" targetPort;
+          # only the container-internal port + readinessProbe below need to match
+          # where the app actually binds. Identical fix already live in
+          # tests/stack/compose.local.yaml (generator#253's review flagged this
+          # exact mismatch here too, never actioned until now).
+          ports: [{ name: http, containerPort: 8090 }]
+          # CONTAINER-level hardening. CIS K8s 5.2.5 / 5.2.7-5.2.9. The JVM needs a
+          # writable /tmp (perfdata, JIT scratch) and the RW /stores tmpfs the init
+          # container built; everything else is read-only.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - { name: SPRING_PROFILES_ACTIVE, value: "casdoor" }
+            # ── API-to-API mTLS (server side) ─────────────────────────────────
+            # Require a client cert chaining to the cluster CA. Store passwords come
+            # from /stores/application.properties (in-pod generated, loaded via
+            # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
+            # DEPLOY-ORDER: deploy with the gateway/BFF client-cert wave (see PR body).
+            - { name: SSL_ENABLED,          value: "true" }
+            - { name: SSL_CLIENT_AUTH,      value: "need" }
+            - { name: SSL_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: SSL_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
+            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # ── Two-Casdoor sync (GameMasterAdminSyncAction) ──────────────────────
+            # hugmesh-actions polls TWO independent Casdoor instances and mirrors
+            # ONE systems role into ONE games role, one-way (systems -> games), pruning
+            # stale members. The ONLY automatic sync is:
+            #     ROLE_GAMES_ADMIN (systems)  ->  admin (games)
+            # i.e. only systems admins/mods who ALSO hold ROLE_GAMES (= the materialized
+            # ROLE_GAMES_ADMIN intersection) become games admins. Granting a user plain
+            # ROLE_GAMES does NOT auto-create a games login here; that on-demand
+            # provisioning is a separate admin-UI action, not this scheduled job.
+            #
+            # SYSTEMS side — the in-cluster systems Casdoor (org "hugmesh"). Its
+            # JWKS also backs the actions resource server (application.yml issuer-uri
+            # defaults to ${CASDOOR_SYSTEMS_URL}).
+            - { name: CASDOOR_SYSTEMS_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_SYSTEMS_ORG, value: "hugmesh" }
+            - { name: CASDOOR_SYSTEMS_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientId } } }
+            - { name: CASDOOR_SYSTEMS_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientSecret } } }
+            # GAMES side — the SEPARATE in-cluster games Casdoor (org "threewizards").
+            - { name: CASDOOR_GAMES_URL, value: "http://casdoor-games.hugmesh-games.svc.cluster.local:8000" }
+            - { name: CASDOOR_GAMES_ORG, value: "threewizards" }
+            - { name: CASDOOR_GAMES_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientId } } }
+            - { name: CASDOOR_GAMES_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientSecret } } }
+            # The single automatic mirror: ROLE_GAMES_ADMIN(systems) -> admin(games).
+            - { name: GM_SYNC_SYSTEMS_ROLE, value: "ROLE_GAMES_ADMIN" }
+            - { name: GM_SYNC_GAMES_ROLE,   value: "admin" }
+          # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
+          # so curl PRESENTS this pod's client cert and validates the server cert
+          # against the cluster CA (--resolve maps the SAN to loopback).
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve hugmesh-api:8090:127.0.0.1
+                  https://hugmesh-api:8090/actuator/health/readiness
+            initialDelaySeconds: 20
+          resources: { requests: { cpu: 100m, memory: 384Mi }, limits: { cpu: "1", memory: 1Gi } }
+          volumeMounts:
+            - { name: stores, mountPath: /stores, readOnly: true }
+            - { name: pki,    mountPath: /pki,    readOnly: true }
+            # readOnlyRootFilesystem:true => the JVM needs a writable /tmp.
+            - { name: tmp,    mountPath: /tmp }
+      volumes:
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: hugmesh-api-mtls
+        # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory
+        # JVM/keytool scratch space under readOnlyRootFilesystem.
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-api
+  namespace: hugmesh-backend
+spec:
+  selector: { app: hugmesh-api }
+  ports: [{ name: http, port: 8080, targetPort: http }]

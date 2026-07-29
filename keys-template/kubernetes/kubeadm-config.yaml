@@ -1,0 +1,31 @@
+# Override kubeadm config placed on the KEYS USB. Copied to
+# /etc/kubernetes/kubeadm-config.yaml at first boot.
+#
+# controlPlaneEndpoint MUST be a STABLE mesh name (MagicDNS), not a node IP, so
+# additional control-plane nodes + workers + autodiscovering mesh nodes all
+# target the same endpoint. keys-provision publishes kube-api.<base_domain> ->
+# the pki node's tailnet IP via headscale dns.extra_records and bridges it in
+# /etc/hosts for the first-boot window. Keep this in sync with
+# provision.json .mesh.cp_dns_name / .mesh.magic_dns_domain.
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: unix:///run/containerd/containerd.sock
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: stable
+controlPlaneEndpoint: "kube-api.headnet.internal:6443"
+apiServer:
+  certSANs:
+    - kube-api.headnet.internal
+    - hugmesh-pki
+    - hugmesh-pki.headnet.internal
+    - 127.0.0.1
+networking:
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: cgroupfs

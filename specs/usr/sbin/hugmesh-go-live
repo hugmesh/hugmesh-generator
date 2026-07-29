@@ -1,0 +1,366 @@
+#!/bin/bash
+# hugmesh-go-live — the shared, flag-driven DRIVER for the superadmin go-live
+# wizard. It is the human-facing EFFECTOR of the EXISTING RELEASE_STATE
+# mechanism: it provisions/guides the public edge (tunnel creds, DNS records)
+# and, as its TERMINAL action, TRIPS the posture switch that already ships —
+# it NEVER reimplements posture.
+#
+# ── HOW GO-LIVE ACTUALLY FLIPS (do not duplicate this here) ─────────────────────
+# The merged RELEASE_STATE feature baked:
+#   * /etc/hugmesh/release-state   (internal|public, default internal)
+#   * /etc/hugmesh/go-live         (live-override MARKER; absent by default)
+# hugmesh-firewall-reconcile (boot oneshot + 60s cron, fail-closed) flips the
+# host to PUBLIC when release-state=public OR the go-live marker EXISTS, and
+# bootstrap.sh gates ingress on the same flag. So go-live is the INVERSE of
+# stay-internal: this wizard's --commit action WRITES the marker (and, with
+# --persist-public, persists release-state=public); reconcile converges within
+# 60s — NO rebuild/reflash. Rollback = DELETE the marker.
+#
+# ── ONE SHARED DRIVER, THIN FRONT-ENDS (image-gen shape) ────────────────────────
+# This driver owns ALL the logic (context, provider dispatch, the commit gate).
+# The CLI front-end (hugmesh-go-live-cli) — and the DEFERRED ncurses/Studio/
+# web front-ends — are thin: they only ever call the subcommands below. The
+# provider catalogue lives in the registry lib (/usr/lib/hugmesh/
+# go-live-providers.sh); this driver never hard-codes a provider.
+#
+# ── SUBCOMMANDS ─────────────────────────────────────────────────────────────────
+#   status                 print the current posture (release-state + marker) and exit
+#   list                   list the providers (id, mechanism, status, one-liner)
+#   plan  --provider ID    (DEFAULT, dry-run) EMIT the provider's artifacts into
+#                          --out-dir and print the deep-links + next steps.
+#                          NEVER touches posture.
+#   commit --provider ID   the TERMINAL action: after a confirmation gate, WRITE
+#                          /etc/hugmesh/go-live (and, with --persist-public,
+#                          release-state=public). Requires -y/--yes on a
+#                          non-interactive shell (fail-safe).
+#   rollback               DELETE the marker (and, with --revert-release-state,
+#                          set release-state=internal). Re-closes within 60s.
+#
+# ── FAIL-SAFE ───────────────────────────────────────────────────────────────────
+# Preview is the DEFAULT. Nothing ever flips live without the explicit `commit`
+# subcommand AND a satisfied confirmation gate. `plan` only writes into the
+# output dir. Any provider/emit error aborts BEFORE the marker is written.
+#
+# ── ENV SEAMS (for the offline logic test; mirrors the DR_*/reconcile idiom) ─────
+#   GL_ETC_HUGMESH  base for release-state/go-live/cluster-domain (def /etc/hugmesh)
+#   GL_PROVIDERS_LIB   registry lib path (def /usr/lib/hugmesh/go-live-providers.sh)
+#   GL_OUT_DIR         default output dir (def /var/lib/hugmesh/go-live/out)
+#   GL_ASSUME_YES=1    same as passing --yes (test only)
+
+set -uo pipefail
+
+ETC="${GL_ETC_HUGMESH:-/etc/hugmesh}"
+CLUSTER_DOMAIN_FILE="${ETC}/cluster-domain"
+RELEASE_STATE_FILE="${ETC}/release-state"
+GO_LIVE_MARKER="${ETC}/go-live"
+PROVIDERS_LIB="${GL_PROVIDERS_LIB:-/usr/lib/hugmesh/go-live-providers.sh}"
+DEFAULT_OUT_DIR="${GL_OUT_DIR:-/var/lib/hugmesh/go-live/out}"
+LOG_TAG="hugmesh-go-live"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+die()  { echo "error: $*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ── Input validation (security-relevant; ported from #286 scripts/go-live.sh) ─────
+# --ddns-subdomain is interpolated into the EMITTED root-cron ddns-update.sh, and
+# --ingress-ip/--ingress-ipv6 land verbatim in the byo-domain zone/CSV, so a
+# dot/newline/metachar there would forge extra DNS rows or inject a command as
+# root. --domain lands verbatim in the byo-domain zone/CSV AND in the output
+# PATH ("${out}/${GL_DOMAIN}.zone"), so a value containing '/' or '..' would
+# escape the plan output sandbox and write a root-owned .zone file to an
+# arbitrary directory. Shape-check them ALL BEFORE any provider emit runs. The
+# duckdns registry emit re-validates the subdomain as a second line of defence.
+validate_inputs() {
+    # --domain (GL_DOMAIN_OVERRIDE) becomes GL_DOMAIN in load_context() and is
+    # used both as a path segment and verbatim in emitted zone/CSV rows. Require a
+    # strict DNS domain name (dot-separated [A-Za-z0-9-] labels, 1-63 chars each,
+    # no leading/trailing hyphen) — this rejects '/', '..', empty labels, and any
+    # other non-DNS character, closing the arbitrary-.zone-file-write sandbox escape.
+    if [ -n "${GL_DOMAIN_OVERRIDE:-}" ]; then
+        [[ "${GL_DOMAIN_OVERRIDE}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]] \
+            || die "--domain is not a valid DNS domain name (dot-separated [A-Za-z0-9-] labels; no '/', '..', or other characters)"
+    fi
+    if [ -n "${GL_INGRESS_IP:-}" ]; then
+        [[ "${GL_INGRESS_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+            || die "--ingress-ip is not a valid IPv4 address"
+    fi
+    if [ -n "${GL_INGRESS_IPV6:-}" ]; then
+        [[ "${GL_INGRESS_IPV6}" =~ ^[0-9A-Fa-f:]{2,45}(\.[0-9]{1,3}(\.[0-9]{1,3}){2})?$ ]] \
+            || die "--ingress-ipv6 is not a valid IPv6 literal"
+    fi
+    if [ -n "${GL_DDNS_SUBDOMAIN:-}" ]; then
+        [[ "${GL_DDNS_SUBDOMAIN}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+            || die "--ddns-subdomain must be a single lowercase DNS label ([a-z0-9-], 1-63 chars, no dots)"
+    fi
+    case "${GL_DDNS_SERVICE:-duckdns}" in
+        duckdns|cloudflare) ;;
+        *) die "--ddns-service must be duckdns or cloudflare" ;;
+    esac
+    # --keys-dir (GL_KEYS_DIR) becomes the DDNS token-file PATH baked into the
+    # emitted root-cron updater. The emit shell-quotes it (%q), but validate at the
+    # door too: require a plain filesystem path ([A-Za-z0-9._/-], no '..' traversal,
+    # no $/backtick/quote/;|&<>()/whitespace metachars) so a value like
+    # '$(cmd)' or 'a b;cmd' can never reach the updater as a command-injection sink.
+    if [ -n "${GL_KEYS_DIR:-}" ]; then
+        { [[ "${GL_KEYS_DIR}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${GL_KEYS_DIR}" != *".."* ]]; } \
+            || die "--keys-dir must be a plain filesystem path ([A-Za-z0-9._/-], no '..' or shell metacharacters)"
+    fi
+}
+
+# ── Brand/posture context (READ-ONLY here; only `commit`/`rollback` mutate) ──────
+read_file() { [ -r "$1" ] && tr -d '[:space:]' < "$1" 2>/dev/null || true; }
+
+load_context() {
+    # --domain (GL_DOMAIN_OVERRIDE) wins if given; else the baked apex.
+    if [ -n "${GL_DOMAIN_OVERRIDE:-}" ]; then
+        GL_DOMAIN="${GL_DOMAIN_OVERRIDE}"
+    else
+        GL_DOMAIN="$(read_file "${CLUSTER_DOMAIN_FILE}")"
+    fi
+    RELEASE_STATE="$(read_file "${RELEASE_STATE_FILE}")"; [ -n "${RELEASE_STATE}" ] || RELEASE_STATE="internal"
+    GO_LIVE="absent"; [ -e "${GO_LIVE_MARKER}" ] && GO_LIVE="present"
+    # Derived: the public hostnames the record sets / autofill target — apex plus
+    # the SAME service labels apps/12-cloudflared.yaml + the gateway promise.
+    : "${GL_SUBDOMAINS:=@ api matrix mastodon}"
+    export GL_DOMAIN GL_SUBDOMAINS
+}
+
+effective_posture() {
+    if [ "${RELEASE_STATE}" = "public" ] || [ "${GO_LIVE}" = "present" ]; then echo public; else echo internal; fi
+}
+
+# ── Registry ─────────────────────────────────────────────────────────────────────
+load_registry() {
+    [ -r "${PROVIDERS_LIB}" ] || die "provider registry not found: ${PROVIDERS_LIB}"
+    # shellcheck source=/dev/null
+    . "${PROVIDERS_LIB}" || die "failed to source provider registry: ${PROVIDERS_LIB}"
+    [ "${#GO_LIVE_PROVIDER_IDS[@]}" -gt 0 ] || die "provider registry is empty"
+}
+
+# ── Sub: status ──────────────────────────────────────────────────────────────────
+cmd_status() {
+    load_context
+    echo "domain (cluster):    ${GL_DOMAIN:-<unset: /etc/hugmesh/cluster-domain missing>}"
+    echo "release-state:       ${RELEASE_STATE}   (${RELEASE_STATE_FILE})"
+    echo "go-live marker:      ${GO_LIVE}   (${GO_LIVE_MARKER})"
+    echo "effective posture:   $(effective_posture)"
+    echo
+    echo "Posture is enforced by hugmesh-firewall-reconcile (boot + 60s cron)."
+    echo "This wizard only TRIPS it: 'commit' writes the marker; 'rollback' deletes it."
+}
+
+# ── Sub: list ────────────────────────────────────────────────────────────────────
+cmd_list() {
+    load_context; load_registry
+    printf '%-20s %-13s %-6s %s\n' "ID" "MECHANISM" "STATE" "DESCRIPTION"
+    local id
+    for id in "${GO_LIVE_PROVIDER_IDS[@]}"; do
+        printf '%-20s %-13s %-6s %s\n' \
+            "${id}" "$(glp_mechanism "${id}")" \
+            "$(glp_is_full "${id}" && echo full || echo stub)" \
+            "$(glp_label "${id}")"
+    done
+    echo
+    echo "All providers are fully implemented. 'plan --provider ID' emits that provider's"
+    echo "artifacts (records/updater/checklist + deep-links) — see docs/GO-LIVE-WIZARD.md."
+}
+
+# ── Sub: plan (DEFAULT — dry-run; NEVER flips posture) ───────────────────────────
+# The two `==> ` lines below are a determinate-progress banner pair the Studio GUI's
+# GoLiveGeneratePage parses (core/progress_parse.py track_phases("golive-plan"), the
+# SAME forward-only banner mechanism the image builders use) — keep exactly 2 and keep
+# progress-tables.json's "golive-plan" phases' `any` substrings matching if you reword them.
+cmd_plan() {
+    local provider="$1" out="$2"
+    load_context; load_registry
+    [ -n "${provider}" ] || die "plan: --provider is required (see 'hugmesh-go-live list')"
+    glp_known "${provider}" || die "plan: unknown provider '${provider}' (see 'hugmesh-go-live list')"
+    [ -n "${GL_DOMAIN}" ] || warn "cluster domain is unset (${CLUSTER_DOMAIN_FILE} missing) — emitted artifacts use an empty apex; pass --domain to override"
+
+    mkdir -p "${out}" 2>/dev/null || die "cannot create output dir: ${out}"
+
+    if [ "$(glp_public_dns "${provider}")" = "yes" ] && [ "$(glp_mechanism "${provider}")" != "ddns" ] \
+       && [ -z "${GL_INGRESS_IP:-}" ] && [ -z "${GL_TUNNEL_CNAME:-}" ]; then
+        warn "no --ingress-ip / --tunnel-cname supplied — record VALUES will be placeholders"
+    fi
+
+    echo "==> Rendering provider artifacts"
+    log "planning provider=${provider} domain=${GL_DOMAIN:-<unset>} out=${out} (DRY-RUN — posture untouched)"
+    glp_emit "${provider}" "${out}" || die "provider '${provider}' emit failed"
+
+    echo "==> Plan summary ready"
+    echo
+    echo "== go-live PLAN (preview only — nothing has flipped) =="
+    echo "provider:  ${provider} — $(glp_label "${provider}") [$(glp_is_full "${provider}" && echo IMPLEMENTED || echo STUB)]"
+    echo "mechanism: $(glp_mechanism "${provider}")"
+    echo "domain:    ${GL_DOMAIN:-<unset>}"
+    local dl; dl="$(glp_deeplink "${provider}")"
+    [ -n "${dl}" ] && echo "deep-link: ${dl}"
+    echo
+    echo "artifacts emitted under ${out}:"
+    local f
+    for f in "${out}"/*; do [ -e "${f}" ] && echo "  - ${f}"; done
+    echo
+    # onion is the ONE mechanism that needs NO public flip: the node's own Tor daemon
+    # serves the .onion outbound, reachable with the firewall CLOSED. Steering an
+    # onion-only operator to `commit` would open public 80/443 they explicitly don't
+    # want — the exact footgun the hidden service avoids. See instructions.txt.
+    if [ "$(glp_mechanism "${provider}")" = "onion" ]; then
+        echo "NEXT: the .onion is LIVE whenever the node's tor service is running (built"
+        echo "  with --with-tor) — see onion.txt / instructions.txt. NO public flip is"
+        echo "  needed: the host stays INTERNAL and stays reachable over Tor. Only run"
+        echo "  'commit' if you ALSO want a clearnet edge live alongside the onion."
+    else
+        echo "NEXT: apply the edge (records/creds above), verify propagation, THEN run:"
+        echo "  hugmesh-go-live commit --provider ${provider}   # trips /etc/hugmesh/go-live"
+        echo "posture converges to PUBLIC within 60s via hugmesh-firewall-reconcile."
+    fi
+}
+
+# ── Confirmation gate (fail-safe) ────────────────────────────────────────────────
+confirm() {
+    local prompt="$1"
+    [ "${ASSUME_YES}" = "1" ] || [ "${GL_ASSUME_YES:-0}" = "1" ] && return 0
+    if [ ! -t 0 ]; then
+        die "refusing to proceed: '${prompt}' needs confirmation but stdin is not a TTY — pass -y/--yes to confirm explicitly"
+    fi
+    local ans=""
+    read -r -p "${prompt} [y/N] " ans || return 1
+    case "${ans}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+# ── Sub: commit (TERMINAL — writes the marker; the ONLY thing that flips live) ───
+cmd_commit() {
+    local provider="$1"
+    load_context; load_registry
+    [ -n "${provider}" ] || die "commit: --provider is required"
+    glp_known "${provider}" || die "commit: unknown provider '${provider}'"
+
+    echo "About to GO LIVE for domain '${GL_DOMAIN:-<unset>}' via provider '${provider}'."
+    echo "  -> writes ${GO_LIVE_MARKER} (host flips to PUBLIC within 60s via firewall-reconcile)"
+    [ "${PERSIST_PUBLIC}" = "1" ] && echo "  -> also persists release-state=public (${RELEASE_STATE_FILE}) — survives a marker delete"
+    echo "  Current effective posture: $(effective_posture)"
+    confirm "Proceed and trip go-live?" || die "aborted — nothing changed (posture still $(effective_posture))"
+
+    mkdir -p "${ETC}" 2>/dev/null || die "cannot create ${ETC}"
+    local tmp; tmp="$(mktemp "${GO_LIVE_MARKER}.tmp.XXXXXX" 2>/dev/null)" || die "mktemp failed near ${GO_LIVE_MARKER}"
+    {
+        echo "# /etc/hugmesh/go-live — live-override MARKER written by ${LOG_TAG}."
+        echo "# Its EXISTENCE trips PUBLIC posture (hugmesh-firewall-reconcile, <=60s)."
+        echo "# Rollback: delete this file (or: hugmesh-go-live rollback)."
+        echo "written_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        echo "provider=${provider}"
+        echo "domain=${GL_DOMAIN:-}"
+        echo "operator=${SUDO_USER:-${USER:-unknown}}"
+    } > "${tmp}" || die "failed to stage the marker"
+    mv -f "${tmp}" "${GO_LIVE_MARKER}" || { rm -f "${tmp}"; die "failed to install the marker"; }
+
+    if [ "${PERSIST_PUBLIC}" = "1" ]; then
+        local rtmp; rtmp="$(mktemp "${RELEASE_STATE_FILE}.tmp.XXXXXX" 2>/dev/null)" \
+            && printf 'public\n' > "${rtmp}" && mv -f "${rtmp}" "${RELEASE_STATE_FILE}" \
+            && log "persisted release-state=public" \
+            || warn "could not persist release-state=public (marker still trips live)"
+    fi
+
+    log "GO LIVE tripped: marker=${GO_LIVE_MARKER} provider=${provider} persist_public=${PERSIST_PUBLIC}"
+    echo
+    echo "== GO LIVE tripped =="
+    echo "The host converges to PUBLIC within 60s (hugmesh-firewall-reconcile)."
+    echo "Verify:   hugmesh-go-live status"
+    echo "Rollback: hugmesh-go-live rollback"
+}
+
+# ── Sub: rollback (delete the marker; re-closes within 60s) ──────────────────────
+cmd_rollback() {
+    load_context   # rollback is registry-independent: it only deletes the marker
+    if [ ! -e "${GO_LIVE_MARKER}" ] && [ "${REVERT_RELEASE_STATE}" != "1" ]; then
+        echo "no go-live marker present (${GO_LIVE_MARKER}) — nothing to roll back."
+        [ "${RELEASE_STATE}" = "public" ] && echo "NOTE: release-state=public is still baked; pass --revert-release-state to also set it internal."
+        return 0
+    fi
+    echo "About to ROLL BACK go-live for '${GL_DOMAIN:-<unset>}':"
+    [ -e "${GO_LIVE_MARKER}" ] && echo "  -> delete ${GO_LIVE_MARKER}"
+    [ "${REVERT_RELEASE_STATE}" = "1" ] && echo "  -> set release-state=internal (${RELEASE_STATE_FILE})"
+    confirm "Proceed and re-close to internal?" || die "aborted — nothing changed"
+
+    rm -f "${GO_LIVE_MARKER}" 2>/dev/null || warn "could not delete ${GO_LIVE_MARKER}"
+    if [ "${REVERT_RELEASE_STATE}" = "1" ]; then
+        local rtmp; rtmp="$(mktemp "${RELEASE_STATE_FILE}.tmp.XXXXXX" 2>/dev/null)" \
+            && printf 'internal\n' > "${rtmp}" && mv -f "${rtmp}" "${RELEASE_STATE_FILE}" \
+            && log "reverted release-state=internal" \
+            || warn "could not revert release-state"
+    fi
+    log "rolled back: marker removed (revert_release_state=${REVERT_RELEASE_STATE})"
+    echo "== rolled back == host re-closes to internal within 60s (hugmesh-firewall-reconcile)."
+}
+
+# ── Arg parse ────────────────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+hugmesh-go-live — superadmin go-live wizard (shared driver)
+
+USAGE:
+  hugmesh-go-live status
+  hugmesh-go-live list
+  hugmesh-go-live plan   --provider ID [--out-dir DIR] [--ingress-ip IP]
+                            [--ingress-ipv6 IP6] [--tunnel-cname NAME] [--domain D] [--ttl N]
+                            [--ddns-subdomain LABEL] [--ddns-service duckdns|cloudflare]
+                            [--token-file PATH] [--keys-dir DIR]
+  hugmesh-go-live commit --provider ID [--persist-public] [-y|--yes]
+  hugmesh-go-live rollback [--revert-release-state] [-y|--yes]
+
+DEFAULT is a dry-run: 'plan' emits artifacts and NEVER changes posture.
+Only 'commit' writes /etc/hugmesh/go-live (after a confirmation gate).
+See docs/GO-LIVE-WIZARD.md.
+EOF
+}
+
+main() {
+    local cmd="${1:-status}"; shift || true
+    local provider="" out="${DEFAULT_OUT_DIR}"
+    ASSUME_YES=0 PERSIST_PUBLIC=0 REVERT_RELEASE_STATE=0
+    GL_INGRESS_IP="${GL_INGRESS_IP:-}" GL_INGRESS_IPV6="${GL_INGRESS_IPV6:-}"
+    GL_TUNNEL_CNAME="${GL_TUNNEL_CNAME:-}" GL_TTL="${GL_TTL:-300}" GL_DOMAIN_OVERRIDE=""
+    GL_DDNS_SUBDOMAIN="${GL_DDNS_SUBDOMAIN:-}" GL_DDNS_SERVICE="${GL_DDNS_SERVICE:-duckdns}"
+    GL_TOKEN_FILE="${GL_TOKEN_FILE:-}" GL_KEYS_DIR="${GL_KEYS_DIR:-${ETC}/keys}"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --provider)              provider="$2"; shift 2 ;;
+            --out-dir)               out="$2"; shift 2 ;;
+            --ingress-ip)            GL_INGRESS_IP="$2"; shift 2 ;;
+            --ingress-ipv6)          GL_INGRESS_IPV6="$2"; shift 2 ;;
+            --tunnel-cname)          GL_TUNNEL_CNAME="$2"; shift 2 ;;
+            --ddns-subdomain)        GL_DDNS_SUBDOMAIN="$2"; shift 2 ;;
+            --ddns-service)          GL_DDNS_SERVICE="$2"; shift 2 ;;
+            --token-file)            GL_TOKEN_FILE="$2"; shift 2 ;;
+            --keys-dir)              GL_KEYS_DIR="$2"; shift 2 ;;
+            --domain)                GL_DOMAIN_OVERRIDE="$2"; shift 2 ;;
+            --ttl)                   GL_TTL="$2"; shift 2 ;;
+            --persist-public)        PERSIST_PUBLIC=1; shift ;;
+            --revert-release-state)  REVERT_RELEASE_STATE=1; shift ;;
+            -y|--yes)                ASSUME_YES=1; shift ;;
+            -h|--help)               usage; exit 0 ;;
+            *) die "unknown flag '$1' (see --help)" ;;
+        esac
+    done
+    validate_inputs
+    export GL_INGRESS_IP GL_INGRESS_IPV6 GL_TUNNEL_CNAME GL_TTL
+    export GL_DDNS_SUBDOMAIN GL_DDNS_SERVICE GL_TOKEN_FILE GL_KEYS_DIR
+
+    case "${cmd}" in
+        status)   cmd_status ;;
+        list|providers|ls) cmd_list ;;
+        plan|preview|emit) cmd_plan "${provider}" "${out}" ;;
+        commit|go-live|--go-live) cmd_commit "${provider}" ;;
+        rollback|--rollback) cmd_rollback ;;
+        -h|--help|help) usage ;;
+        *) usage; die "unknown subcommand '${cmd}'" ;;
+    esac
+}
+
+# Guard main so the offline logic test can source the functions without running the flow.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+    main "$@"
+fi

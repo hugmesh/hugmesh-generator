@@ -1,0 +1,229 @@
+# Casdoor declarative seed (init_data.json) — the per-app SERVICE-IDENTITY
+# structure: one organization, the platform roles, and a machine user per
+# app/UI/API. Mounted read-only into Casdoor at /init_data.json; Casdoor imports
+# it on boot (idempotent — only missing objects are created).
+#
+# IMPORTANT: this file declares ONLY non-secret structure (orgs, roles, users).
+# NO client-secrets / passwords are committed here — the OAuth2 applications and
+# their secrets are created/injected by the casdoor-init Job from the ESO
+# Secret "casdoor-app-secrets" (sourced from Vault). The Casdoor roles map 1:1
+# to the SELinux roles in docs/SECURITY.md (ROLE_GATEWAY/ROLE_API/ROLE_ADMIN_API),
+# so a workload's container_t MCS identity and its Casdoor identity line up.
+#
+# ROLE_MOD ("Network Moderator", group 'moderator') is the network-wide
+# moderation authority — a SIBLING of ROLE_ADMIN (NOT nested under it: its
+# "roles" array stays empty so it inherits no ROLE_ADMIN authorities). It grants
+# Matrix room-level moderation (tuwunel set-power-level PL50 in the managed rooms,
+# see manifests/tuwunel/admin-sync-job.yaml — NOT server admin) and fediverse
+# moderation (akkoma --moderator, see manifests/akkoma/admin-sync-job.yaml), but
+# is DENY-by-default everywhere else: the gateway_route_access seed
+# (manifests/route-access/schema.sql) grants ROLE_MOD ONLY the Matrix/Mastodon
+# (user + moderation) URL patterns — it never matches the infra/admin rows
+# (/api/admin/**, /admin/**, /bff/admin/** stay ROLE_ADMIN) and has no route to
+# vault/k8s or observability. Members are assigned to ROLE_MOD later via the
+# Casdoor UI / admin-allowlist (users []).
+#
+# ROLE_GAMES ("Games Member") is a network-wide SIBLING of ROLE_ADMIN/ROLE_MOD
+# (empty "roles" array — no inheritance, so it grants nothing on its own and is
+# default-deny everywhere it has no route row). ROLE_GAMES_ADMIN ("Games Namespace
+# Admin") is a DERIVED/composite role whose membership =
+#   ROLE_GAMES  INTERSECT  (ROLE_ADMIN UNION ROLE_MOD).
+# That intersection is MATERIALIZED by the games-admin reconcile Job (manifests/
+# games-admin-sync/, mirroring tuwunel/akkoma-admin-sync): it reads ROLE_GAMES,
+# ROLE_ADMIN, ROLE_MOD membership from Casdoor, computes the intersection, and
+# writes ONLY that verified set into ROLE_GAMES_ADMIN (idempotent; it also removes
+# anyone who no longer qualifies). ROLE_GAMES_ADMIN stays EMPTY in this seed.
+# Holding ROLE_GAMES alone, or ROLE_ADMIN alone, does NOT grant games-namespace
+# admin — only the combination does (default-deny). The single games-admin
+# route-access row (manifests/route-access/schema.sql) is keyed on ROLE_GAMES_ADMIN
+# ONLY, so the gateway's OR-of-allow-rows table still yields the required AND.
+#
+# GAMES APP-STORE (games-services control plane) adds THREE more roles in the SAME
+# pattern (the per-domain FOSS game-server catalog + instances — distinct from the
+# games REALM above):
+#   ROLE_GAMES_SERVICES         — base app-store access (SUPERADMIN grants; a network-wide
+#                                 SIBLING with empty "roles", default-deny on its own).
+#   ROLE_GAMES_SERVICES_ADMIN   — DERIVED = ROLE_GAMES_SERVICES ∩ (ROLE_ADMIN ∪ ROLE_MOD);
+#                                 catalog-enable + create/run instances. Materialized by
+#                                 games-services-admin-sync-job.yaml (clone of
+#                                 games-admin-sync). STAYS EMPTY in this seed.
+#   ROLE_GAMES_SERVICES_RUNNER  — DERIVED = ROLE_GAMES_SERVICES ∩ ROLE_MOD; mod-delegated
+#                                 run/stop only. Materialized by
+#                                 games-services-runner-sync-job.yaml. STAYS EMPTY here.
+# Each derived role is the ONLY role on its games-services route-access rows, so the
+# gateway's OR-of-allow-rows table yields the required AND (holding any single input
+# role never reaches the games-services admin/runner surface — default-deny).
+#
+# THIS IS THE SYSTEMS CASDOOR (org "hugmesh"). The games realm is a SEPARATE,
+# INDEPENDENT Casdoor (manifests/casdoor-games, org "threewizards") that mirrors the
+# canonical hugmesh.games realm. That games Casdoor has its OWN native users and
+# roles — GitHub-OAuth players plus player / uploader / mod / publisher / play-three-
+# wizards / play-dodecahedron — which need NOT exist here in systems, and the systems
+# roles above (ROLE_GAMES, ROLE_GAMES_ADMIN, the svc-* service identities, etc.) need
+# NOT exist in the games realm. The TWO realms are wired together by EXACTLY ONE
+# automatic, scheduled mirror, run by hugmesh-actions (manifests/hugmesh-apis):
+#       ROLE_GAMES_ADMIN (systems)  ->  admin (games)
+# i.e. "only admins/mods who hold the games role in systems are added automatically"
+# as games admins. Granting a normal user ROLE_GAMES here does NOT auto-create a games
+# login: that on-demand provisioning is a separate admin-UI hugmesh-action (future),
+# NOT this scheduled job and NOT the games-admin intersection Job below.
+#
+# ROLE_MATRIX ("Matrix Access") and ROLE_MASTODON ("Mastodon Access") are the
+# per-PLATFORM access roles (siblings of ROLE_MOD/ROLE_GAMES — empty "roles" array,
+# no inheritance). They gate the homeserver client surfaces at the be-gateway:
+# ROLE_MATRIX -> /_matrix/** + /.well-known/matrix/** ; ROLE_MASTODON -> /api/v1/**,
+# /api/v2/**, /oauth/**, media/streaming (see manifests/route-access/20-schema.sql).
+# They REPLACE the previous broad ROLE_USER homeserver floor: holding ROLE_USER no
+# longer grants Matrix/Mastodon access — a principal must hold the matching platform
+# role (ADMIN/MOD remain a superset, paired on the rows). They seed EMPTY (users []);
+# membership is granted via the admin-bff/casdoor flow (the platform-ban/congruence
+# foundation removes the role to deny access).
+#
+# ⚠️ DEPLOY ORDERING — BACKFILL REQUIRED (one-time, deploy-together):
+#   The route-access change (20-schema.sql) REMOVES the broad ROLE_USER homeserver
+#   rows at the SAME flip. So BEFORE that route-flip reaches a live cluster, every
+#   user who currently has a provisioned akkoma/tuwunel account (today reachable via
+#   the ROLE_USER floor) MUST be granted ROLE_MATRIX and/or ROLE_MASTODON, or they
+#   lose homeserver access at flip time. This is a ONE-TIME seed/backfill job (grant
+#   the two roles to current homeserver holders) that runs BEFORE the gateway PR's
+#   route-flip removes the ROLE_USER homeserver rows. Sequence: (1) this seed +
+#   backfill membership -> (2) the route-flip. See the gateway PR body deploy note.
+#   NO *_BAN roles are seeded — a ban is the ABSENCE of the role (removal -> the
+#   allow-predicate becomes false), reconciled by the admin-bff loop; there is no
+#   allow=false / ban role row anywhere.
+#
+# ROLE_SUPERADMIN ("Platform Superadmin") is the CROSS-DOMAIN infrastructure
+# control-plane role — the top of the cascade superadmin -> admin -> mod -> user.
+# It is a SIBLING of ROLE_ADMIN here (empty "roles" array — no Casdoor inheritance;
+# the cascade/bypass is enforced in the gateway + BFFs, not by nesting). The
+# casdoorAuthoritiesConverter auto-maps the role name -> ROLE_SUPERADMIN, so no
+# converter change is needed for the authority to flow. It gates the superadmin
+# infra console + the arch/core image-build surface at the be-gateway:
+# /bff/superadmin/** and /bff/image-builds/arch/** (see
+# manifests/route-access/20-schema.sql). Seeds EMPTY (users []); the BUILD-TIME
+# superadmin BOOTSTRAP login is provisioned separately through the key-USB
+# key-generation flow (salted+hashed credential, NEVER committed here).
+#
+# ROLE_IMAGE_BUILDER ("Image Builder") is the GRANTED capability for the
+# mesh-WORKLOAD image-build surface (/bff/image-builds/**) — a SIBLING of
+# ROLE_ADMIN (empty "roles" array). It is NOT an admin default: it is grantable to
+# a trusted per-domain ADMIN "in some cases", and SUPERADMIN reaches the same
+# surface via the cross-domain bypass. The converter auto-maps the name ->
+# ROLE_IMAGE_BUILDER (no converter change). The route row keys on it ALONE (no
+# paired ROLE_ADMIN) so an ordinary admin does NOT reach the build surface unless
+# separately granted this role — preserving the build≠run / workload-vs-arch
+# boundary (arch/core builds stay ROLE_SUPERADMIN by longest-pattern-match). Seeds
+# EMPTY (users []); membership is granted via the admin-bff/casdoor grant flow.
+#
+# ROLE_FORUM ("Forum Access") and ROLE_WIKI ("Wiki Access") are per-service
+# access-floor roles, SIBLINGS of ROLE_TUBE/ROLE_OWNCAST/ROLE_MATRIX (empty
+# "roles" array — no inheritance; default-deny wherever they hold no route row).
+# The canonical route-access seed (manifests/route-access/initdb/20-schema.sql)
+# keys /social/forum/** + /bff/forum/** on ROLE_FORUM and /wiki/** + /bff/wiki/**
+# on ROLE_WIKI. ROLE_FORUM_MOD ("Forum Moderator") is the DERIVED composite role
+# (= ROLE_MOD INTERSECT ROLE_FORUM, cf. ROLE_GAMES_ADMIN) keying the single
+# /bff/forum/moderation/** row; like ROLE_GAMES_ADMIN it stays EMPTY in this
+# seed — the forum reconcile flow materializes membership. All three seed EMPTY
+# (users []); membership is granted via the admin-bff/casdoor grant flow. They
+# were referenced by the route-access seed + the forum admin-sync Job but never
+# seeded here, so no user could ever hold them (their routes were unreachable
+# for non-admins). Names are the LITERAL ROLE_* strings like every sibling row:
+# the gateway strips ONE leading ROLE_ then re-prefixes (Roles.canonicalRoleName
+# — no double-prefix) and route-row matching strips/uppercases both sides, so
+# the seeded name lines up with the route table end-to-end.
+#
+# ROLE_SERVICE ("Internal service-to-service") is the machine role for internal
+# client-credentials callers that need the INTERNAL/ROLE_SERVICE endpoints (e.g.
+# the signup-gate proxy calling the federation username-availability check). Its
+# only seeded member is svc-signup-gate (the app-signup-gate machine account, see
+# manifests/signup-gate/ + the casdoor-init APPS map). It grants no route-access
+# rows of its own — it exists so the federation availability endpoint can require
+# ROLE_SERVICE and the minted client-credentials token satisfies that gate.
+#
+# NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
+# against the deployed casbin/casdoor-all-in-one before relying on auto-import.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-init-data
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  init_data.json: |
+    {
+      "organizations": [
+        {
+          "owner": "admin",
+          "name": "hugmesh",
+          "displayName": "HugMesh Systems",
+          "websiteUrl": "https://hugmesh.systems",
+          "passwordType": "pbkdf2-salt",
+          "languages": ["en"],
+          "enableSoftDeletion": false,
+          "isProfilePublic": false
+        }
+      ],
+      "roles": [
+        { "owner": "hugmesh", "name": "ROLE_ADMIN",     "displayName": "Platform Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_SUPERADMIN",    "displayName": "Platform Superadmin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_IMAGE_BUILDER", "displayName": "Image Builder",       "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX_DOMAINLOCKED",   "displayName": "Matrix local-only",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON_DOMAINLOCKED", "displayName": "Mastodon local-only", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX_EXTERNAL_CLIENT",   "displayName": "Matrix external client",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon external client", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES",        "displayName": "Games App-Store Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES_ADMIN",  "displayName": "Games App-Store Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES_RUNNER", "displayName": "Games App-Store Runner", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "desktop-sudo", "displayName": "Desktop SSO sudo (governed desktop polkit gate)", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_TUBE",    "displayName": "Tube Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_WIKI",      "displayName": "Wiki Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MESH",      "displayName": "Mesh Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_FORUM",     "displayName": "Forum Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_FORUM_MOD", "displayName": "Forum Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["hugmesh/svc-pki-gateway","hugmesh/svc-be-gateway","hugmesh/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_API",       "displayName": "API service",     "users": ["hugmesh/svc-api"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["hugmesh/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_SERVICE",   "displayName": "Internal service-to-service", "users": ["hugmesh/svc-signup-gate"], "roles": [], "domains": [], "isEnabled": true }
+        { "owner": "hugmesh", "name": "ROLE_ADMIN",     "displayName": "Platform Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_SUPERADMIN",    "displayName": "Platform Superadmin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_IMAGE_BUILDER", "displayName": "Image Builder",       "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX_DOMAINLOCKED",   "displayName": "Matrix local-only",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON_DOMAINLOCKED", "displayName": "Mastodon local-only", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX_EXTERNAL_CLIENT",   "displayName": "Matrix external client",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon external client", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES",        "displayName": "Games App-Store Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES_ADMIN",  "displayName": "Games App-Store Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES_RUNNER", "displayName": "Games App-Store Runner", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "desktop-sudo", "displayName": "Desktop SSO sudo (governed desktop polkit gate)", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_TUBE",    "displayName": "Tube Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_WIKI",      "displayName": "Wiki Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_FORUM",     "displayName": "Forum Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_FORUM_MOD", "displayName": "Forum Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["hugmesh/svc-pki-gateway","hugmesh/svc-be-gateway","hugmesh/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_API",       "displayName": "API service",     "users": ["hugmesh/svc-api"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["hugmesh/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_SERVICE",   "displayName": "Internal service-to-service", "users": ["hugmesh/svc-signup-gate"], "roles": [], "domains": [], "isEnabled": true }
+      ],
+      "users": [
+        { "owner": "hugmesh", "name": "svc-pki-gateway", "displayName": "svc-pki-gateway", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-be-gateway",  "displayName": "svc-be-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-fe-gateway",  "displayName": "svc-fe-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-api",         "displayName": "svc-api",         "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-signup-gate", "displayName": "svc-signup-gate", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
+      ]
+    }

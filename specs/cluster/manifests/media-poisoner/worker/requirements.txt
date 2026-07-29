@@ -1,0 +1,11 @@
+# Lean, CPU-portable baseline for hugmesh-media-poisoner.
+# These three pins are all the SHIPPED (lean) perturbation needs, so the image
+# builds + runs on any arch, including a CPU-only test node. The GPU/SD-VAE PGD
+# and Glaze/Nightshade reference path adds torch + diffusers — kept OUT of this
+# baseline so the default image stays small and the worker is always runnable.
+# See requirements-gpu.txt and README.md "Integration roadmap".
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.31
+pillow==12.2.0
+numpy==2.2.1

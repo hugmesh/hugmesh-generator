@@ -1,0 +1,29 @@
+# namespace-and-netpol.yaml — the SUPERADMIN App-Store Kaniko build namespace + its
+# default-deny ingress NetworkPolicy. ArgoCD-managed (listed in kustomization.yaml); inert
+# until the effector creates a build Job here (kaniko-build-job.template.yaml).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hugmesh-service-catalog-builds
+  labels:
+    kubernetes.io/metadata.name: hugmesh-service-catalog-builds
+    app.kubernetes.io/part-of: hugmesh.systems
+    # Pod Security Standards: restricted — rootless Kaniko complies (no privileged,
+    # runAsNonRoot, drop ALL caps), so the namespace can enforce the strictest tier.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# Build pods serve NOTHING — no other workload should reach them. Default-deny INGRESS
+# (egress to the in-cluster registry + DNS is left open, matching the other tier policies in
+# networkpolicy/tier-ingress.yaml). Only Ingress is constrained; an empty ingress: [] denies all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: service-catalog-builds-deny-ingress
+  namespace: hugmesh-service-catalog-builds
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress: []

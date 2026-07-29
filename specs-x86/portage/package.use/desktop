@@ -1,0 +1,61 @@
+# CLIENT desktop (laptop/chromebook/desktop) ONLY — copied into the sysroot by
+# build-x86-host-stage4.sh solely for ROLE_CLIENT (nodes don't run X). The complete
+# set of USE changes the desktop payload needs, from `emerge --pretend --autounmask`
+# replayed against the build sysroot:
+#   freetype[harfbuzz] — the GTK3 stack (pango → openbox/lxpanel/lightdm-gtk-greeter)
+#   libdom[xml]        — www-client/netsurf (svgtiny/svg)
+#   nftables[...]      — net-firewall/firewalld backend (FD-06 shields-up)
+#   libdrm[radeon]     — xf86-video-ati DDX pulled by xorg-drivers (VIDEO_CARDS radeon*)
+#   discover[flatpak]  — the desktop-app-governance store backend (FD-09 inc 7 /
+#                        admin-bff #115): builds Discover's Flatpak backend so the
+#                        provision_desktop_governance() Flatpak-remote config has a
+#                        backend to drive; pulls sys-apps/flatpak. Other backends
+#                        (snap/firmware/webengine) left OFF — the governed store is
+#                        Flatpak-over-OCI only. (Discover's Qt6/KF6 deps are
+#                        Qt6-native packages, NOT gated by the make.conf -qt6, so
+#                        no qt USE override is needed here.)
+media-libs/freetype harfbuzz
+net-libs/libdom xml
+net-firewall/nftables python json xtables
+x11-libs/libdrm video_cards_radeon
+kde-plasma/discover flatpak
+# Discover's Qt6/appstream stack tightened in newer releases (the note above is now
+# stale): the AppStream backend needs qt6, xdg-utils' man pages need xmlto[text], and
+# qtmultimedia (pulled via the KF6/Qt6 multimedia libs) has REQUIRED_USE
+# "vaapi? ( opengl )" — vaapi is on from the GPU profile, so opengl must be too.
+# These apply to BOTH thin and thick (both ship Discover), hence desktop not capable.
+dev-libs/appstream qt6
+app-text/xmlto text
+# boost[python] moved to package.use/boost (calamares is not client-only).
+# Rest of the calamares payload USE closure, computed by converging the SAME
+# resolution the builder runs (chroot pretend loop against the live sysroot,
+# 2026-07-08) until it succeeded — the failure surfaces only ONE package per
+# build cycle otherwise ("--autounmask-continue is NOT applying needed USE
+# changes in this chroot", see the payload-emerge diagnostic in
+# build-x86-host-stage4.sh):
+#   libpwquality[python] — direct calamares dep (password quality page)
+#   grub[mount]          — calamares → sys-boot/os-prober needs grub-mount
+#   libcanberra[alsa]    — calamares → KF6 knotifications → libcanberra, whose
+#                          REQUIRED_USE 'udev? ( alsa )' trips because udev is
+#                          on globally; alsa (not -udev) is right for a desktop
+dev-libs/libpwquality python
+sys-boot/grub mount
+media-libs/libcanberra alsa
+# Discover is a Qt6/QML Plasma app: it pulls purpose -> prison[qml] and the wider
+# KF6/Qt6 QML framework stack. These modules USE-match qtbase[opengl=,vulkan=] and
+# need qml, so enable opengl/vulkan/qml across the chain. qtbase also needs
+# libproxy/icu/wayland for the Plasma libs. Shared by thin AND thick (both ship
+# Discover); thick's capable file only ADDS the heavier app-specific flags on top.
+# (Entries for modules a given weight doesn't pull are simply ignored by portage.)
+dev-qt/qtbase opengl libproxy icu wayland
+dev-qt/qtmultimedia qml opengl
+dev-qt/qttools opengl
+dev-qt/qtdeclarative opengl vulkan
+dev-qt/qtquick3d opengl vulkan
+dev-qt/qt5compat qml icu
+kde-frameworks/prison qml
+kde-frameworks/kconfig qml
+kde-frameworks/sonnet qml
+media-libs/mesa wayland
+sys-libs/zlib minizip
+x11-libs/gtk+ wayland

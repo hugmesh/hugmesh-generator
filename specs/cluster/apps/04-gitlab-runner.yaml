@@ -1,0 +1,35 @@
+# GitLab Runner — runs CI on the x86_64 host (privileged: ISO builds need root +
+# crossdev + loop devices). Builds all ISOs + container images and publishes the
+# ISO artifacts. Pinned to amd64; talks to the in-cluster GitLab.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitlab-runner
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://charts.gitlab.io
+    chart: gitlab-runner
+    targetRevision: 0.x.x
+    helm:
+      releaseName: gitlab-runner
+      values: |
+        gitlabUrl: https://gitlab.hugmesh.systems
+        # runnerToken from Vault/ESO secret 'gitlab-runner-secret'.
+        runners:
+          config: |
+            [[runners]]
+              [runners.kubernetes]
+                namespace = "devops"
+                privileged = true              # ISO build needs root + loop/crossdev
+                node_selector_overwrite_allowed = ".*"
+                [runners.kubernetes.node_selector]
+                  "kubernetes.io/arch" = "amd64"
+        nodeSelector: { kubernetes.io/arch: amd64 }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

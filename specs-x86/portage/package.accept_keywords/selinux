@@ -1,0 +1,8 @@
+# SELinux core/policy packages still ~amd64 — accept them.
+sys-libs/libselinux ~amd64
+sec-policy/selinux-base ~amd64
+sec-policy/selinux-base-policy ~amd64
+# policycoreutils-3.10 (via the selinux-base chain) now wants libsepol-3.11,
+# which is still ~amd64 — same convention as the pins above (2026-07-08 proof
+# build's autounmask replay demanded it for the NEXT @world resolution).
+sys-libs/libsepol ~amd64

@@ -1,0 +1,331 @@
+# user-bff — the Backend-For-Frontend the hugmesh-user-ui talks to for the
+# self-service user surfaces (/bff/user/**): profile, preferences, and block list.
+# It owns the user_profile / user_preference / user_block tables in its OWN
+# dedicated Postgres (user-bff-db) and calls federation-api (as a JWT-bearing
+# WebClient) for the user's federated module/profile data.
+#
+# It is a ClusterIP-only service in hugmesh-backend: nothing reaches it from
+# outside except via the fe-gateway, which routes same-origin /bff/user/** to it
+# AND enforces the Casdoor role rules (/bff/user/** => ROLE_USER) from the route
+# DB first.
+#
+# Security model: like federation-api, user-bff is purely an OAuth2 RESOURCE
+# SERVER. It VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, JWKS
+# auto-discovered) and FORWARDS the caller's bearer token onward to federation-api
+# — it needs NO Casdoor app or client secret of its own.
+#
+# D6: for the user's self-service /bff/user/** homeserver surfaces the homeservers
+# REJECT the Casdoor JWT, so user-bff mints a homeserver-NATIVE token,
+# AES-256-GCM-encrypts it at rest (key APP_HS_TOKEN_KEY, custody in its OWN
+# Postgres), and injects it when proxying through akkoma-proxy / tuwunel-proxy
+# (:4443 mTLS). The proxy is LIVE-BY-DEFAULT (app.hs-token.enabled default true);
+# the mint/inject DATA path is instead held closed by an independent fail-closed
+# secret gate — the AES-GCM custody cipher refuses to operate (mint → 503) until
+# APP_HS_TOKEN_KEY is provisioned via ESO/Vault. See the homeserver-token env block.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-user-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-user-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-user-bff-api } }
+  template:
+    metadata: { labels: { app: hugmesh-user-bff-api } }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c29"
+      # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
+      # Mirrors the hugmesh-gateway chart's build-keystore initContainer: turns
+      # the Vault-PKI-issued, ESO-synced TLS Secret (hugmesh-user-bff-api-mtls:
+      # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
+      # (cluster CA) for the server.ssl.* config to REQUIRE a client cert chaining
+      # to the cluster CA. Store password generated in-pod, kept only in the tmpfs
+      # /stores emptyDir, emitted into application.properties loaded via
+      # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
+      initContainers:
+        - name: build-keystore
+          image: hugmesh-systems/user-bff-api:dev
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name hugmesh-user-bff-api \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              keytool -importcert -noprompt -alias hugmesh-cluster-ca \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              # FILENAME IS LOAD-BEARING — do NOT rename this back to
+              # application-tls.properties (or any application-<name>.properties).
+              # SPRING_CONFIG_ADDITIONAL_LOCATION only adds a SEARCH DIRECTORY; Spring
+              # auto-loads a profile-named doc (application-<name>.properties) from it ONLY
+              # when a profile literally named <name> is active. No manifest activates a
+              # `tls` profile, so the old application-tls.properties was silently never
+              # loaded and the store passwords fell back to the packaged application.yml's
+              # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
+              # keystore. Plain application.properties loads UNCONDITIONALLY from the
+              # additional location, with no profile needed.
+              umask 077
+              cat > /stores/application.properties <<EOF
+              server.ssl.key-store-password=${P}
+              server.ssl.trust-store-password=${P}
+              EOF
+              echo "keystore + truststore + application.properties built"
+          volumeMounts:
+            - { name: pki,    mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
+      containers:
+        - name: hugmesh-user-bff-api
+          image: hugmesh-systems/user-bff-api:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # ── API-to-API mTLS (server side) ─────────────────────────────────
+            # Require a client cert chaining to the cluster CA. Store passwords come
+            # from /stores/application.properties (in-pod generated, loaded via
+            # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
+            # DEPLOY-ORDER: deploy with the gateway/BFF client-cert wave (see PR body).
+            - { name: SSL_ENABLED,          value: "true" }
+            - { name: SSL_CLIENT_AUTH,      value: "need" }
+            - { name: SSL_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: SSL_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
+            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # OAuth2 resource server: validate the cluster Casdoor JWT itself.
+            # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
+            # client secret needed (pure resource server, like federation-api).
+            - name: CASDOOR_ISSUER_URI
+              value: "https://id.hugmesh.systems"
+            # WebClient to the federation-api module-federation registry (the
+            # user BFF reads the user's federated module/profile data there,
+            # forwarding the caller JWT).
+            - name: FEDERATION_API_URL
+              value: "http://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
+            # ── AI-cloak / media-poisoning (poison-before-ingest) ────────────────
+            # The media-proxy (/bff/user/media/upload) routes image uploads through
+            # the OPTIONAL hugmesh-media-poisoner worker BEFORE the real homeserver
+            # upload, so bytes are cloaked before any thumbnail/federation happens.
+            # WORKER_URL is the worker's in-cluster ClusterIP DNS; the BFF probes its
+            # /health for capability (cuda|rocm|cpu|none) and POSTs /poison per upload.
+            # On a Pi5-only cluster the worker pod is Pending (nodeSelector amd64+gpu)
+            # so this Service has no Ready endpoints, the probe reports the heavy tier
+            # ABSENT, and the BFF degrades to FALLBACK_MODE (warn-before-post). HONEST
+            # framing: best-effort training-set hygiene, NOT a guarantee — the BFF marks
+            # a result 'protected' only after its round-trip survival check.
+            - { name: MEDIA_POISONING_ENABLED,        value: "false" }
+            - name: MEDIA_POISONING_WORKER_URL
+              value: "http://hugmesh-media-poisoner.hugmesh-backend.svc.cluster.local:8080"
+            - { name: MEDIA_POISONING_DEFAULT_MODE,   value: "glaze" }
+            - { name: MEDIA_POISONING_FALLBACK_MODE,  value: "warn_before_post" }
+            - { name: MEDIA_POISONING_TIMEOUT_MS,     value: "120000" }
+            # Served sizes the worker must own so no clean derivative exists (akkoma
+            # "small"; Matrix 240x240 thumbnail). CSV of the longest-edge px.
+            - { name: MEDIA_POISONING_THUMBNAIL_SIZES, value: "240,480" }
+            # Config datastore: the user_profile / user_preference / user_block
+            # tables. The app's application.yml defaults spring.r2dbc +
+            # spring.liquibase to a literal `hugmesh-pg` host that does NOT
+            # exist; OVERRIDE both here to the dedicated user-bff-db (mirrors how
+            # admin-bff/federation override to their dedicated dbs). R2DBC is the
+            # runtime handle; the JDBC handle is used by Liquibase ONCE at startup.
+            # Password sourced from Vault via External Secrets (ESO Secret
+            # user-bff-db-auth, key password) — the SAME Secret the user-bff-db
+            # pod's POSTGRES_PASSWORD mounts, so the DB and its consumer stay in sync.
+            # RUNTIME handle: log in as the dedicated NON-OWNER least-privilege role
+            # `userbff_app` (DML only, no DDL), created by user-bff-db's
+            # initdb/10-roles.sh. Password from its OWN ESO Secret
+            # user-bff-db-app-auth (the SAME the DB pod's USERBFF_APP_PASSWORD mounts).
+            - name: SPRING_R2DBC_URL
+              value: "r2dbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff"
+            - name: SPRING_R2DBC_USERNAME
+              value: "userbff_app"
+            - name: SPRING_R2DBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-app-auth
+                  key: password
+            # JDBC handle used ONLY by Liquibase at startup. DDL needs the OWNER, so
+            # Liquibase keeps the owner role `userbff` + the owner ESO Secret
+            # user-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
+            - name: SPRING_LIQUIBASE_URL
+              value: "jdbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff"
+            - name: SPRING_LIQUIBASE_USER
+              value: "userbff"
+            - name: SPRING_LIQUIBASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-auth
+                  key: password
+            # ── D6 homeserver-token proxy (mint + custody + inject) — LIVE ────────
+            # Homeservers REJECT the Casdoor JWT for the general API (tuwunel has no
+            # jwt_config; Akkoma OIDC is interactive-login-only). So for the user's
+            # self-service /bff/user/** surfaces (block / silence / profile) the
+            # user-bff mints the homeserver-NATIVE token, AES-256-GCM-encrypts it at
+            # rest, custody-holds it in its OWN Postgres (no shared table — admin-bff
+            # & user-bff use SEPARATE dbs with mutual NetworkPolicy denial), and
+            # injects the decrypted token when proxying the call through the
+            # akkoma-proxy / tuwunel-proxy nginx mTLS fronts (:4443, ssl_verify_client
+            # on, which pass the Authorization bearer through UNCHANGED).
+            #
+            # app.hs-token.enabled gates the whole mint/custody/inject surface. The
+            # Spring app binds this from APP_HS_TOKEN_ENABLED (relaxed binding), so
+            # that is the ONLY name that takes effect — a bare HS_TOKEN_ENABLED is a
+            # DEAD var the app never reads. LIVE-BY-DEFAULT: the app default is true,
+            # and controllers read @Value("${app.hs-token.enabled:false}"), so we set
+            # this true explicitly to match the shipped live-by-default design and make
+            # the intent unambiguous. This does NOT by itself expose homeserver data:
+            # the mint/inject DATA path stays fail-closed until the custody key
+            # (APP_HS_TOKEN_KEY, below) is provisioned — an unconfigured cipher refuses
+            # to operate (mint → 503). Do NOT set this false: it is the ONLY homeserver
+            # path, and darking it would break the cutover.
+            - { name: APP_HS_TOKEN_ENABLED, value: "true" }
+            # APP_HS_TOKEN_KEY — the 256-bit AES-GCM data key the homeserver-token
+            # custody cipher uses to encrypt each minted token at rest (mirrors
+            # admin-bff MfaSecretCipher: base64-decoded 32-byte key preferred, SHA-256
+            # passphrase fallback, NO plaintext fallback → inert + fail-closed when
+            # unconfigured). Sourced from the ESO Secret user-bff-hs-token (key `key`),
+            # materialized from Vault secret/<brand>/user-bff-hs-token.key. optional:
+            # true so the pod still starts if the Secret is absent (cipher stays inert,
+            # mint refuses). The KEY VALUE is NEVER a literal here — ESO/Vault only.
+            - name: APP_HS_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-hs-token
+                  key: key
+                  optional: true
+            # APP_HS_TOKEN_SVC_PASSWORD — the homeserver service-account password the
+            # ServiceTokenBroker mints with (register/password-grant). The broker is an
+            # unconditional @Service injected by the always-present proxy controllers, so
+            # the app config carries an EMPTY default and FAILS CLOSED (mint → 503) when
+            # this is blank — exactly like APP_HS_TOKEN_KEY above. Sourced from the same
+            # ESO Secret user-bff-hs-token (key `svc-password`), materialized from Vault
+            # secret/<brand>/user-bff-hs-token.svc-password. optional: true so the pod
+            # starts without it; the broker stays fail-closed (mint → 503) until it is
+            # seeded. The flag is already live (APP_HS_TOKEN_ENABLED=true above), so this
+            # password is the remaining gate before tokens actually mint. NEVER a literal
+            # here — ESO/Vault only.
+            - name: APP_HS_TOKEN_SVC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-hs-token
+                  key: svc-password
+                  optional: true
+            # Homeserver base URLs the WebClients target: the mTLS PROXY fronts
+            # (:4443), NOT the plain homeserver ports. user-bff presents its OWN
+            # cluster-CA client cert (the /stores/keystore.p12 + /stores/truststore.p12
+            # the build-keystore initContainer already assembles from the /pki PEM) to
+            # satisfy each proxy's ssl_verify_client. These OVERRIDE the app's
+            # MATRIX_URL / MASTODON_URL defaults so all homeserver traffic is mTLS.
+            # The proxy code path is the only caller that dials these; it is live by
+            # default and actually issues these calls once the custody key
+            # (APP_HS_TOKEN_KEY) is provisioned and the mint path stops failing closed.
+            - { name: MATRIX_URL,   value: "https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443" }
+            - { name: MASTODON_URL, value: "https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443" }
+            # Outbound mTLS client identity for the homeserver-proxy calls — mirrors
+            # the MEDIA_PROXY_* / federation outbound-mTLS pattern: present the in-pod
+            # keystore.p12 (this service's cluster-CA cert) + validate the proxy's
+            # server cert against the truststore.p12 (cluster CA). Store passwords come
+            # from /stores/application.properties (in-pod generated, loaded via
+            # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
+            - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
+            # ── SSO OIDC login (user-bff owns native login: POST /bff/login) ──────
+            # Enabling OIDC (app.bff.oidc.enabled) also gates AdminBffInternalClient:
+            # when false the client is a fail-closed stub and EVERY account/session op
+            # errors. Custody key (AES-256-GCM) encrypts the exchanged access/refresh
+            # tokens BEFORE handing ciphertext to admin-bff — NEVER plaintext at rest.
+            # OidcCustodyBootGuard refuses to start if enabled=true + custody-key blank.
+            - { name: APP_BFF_OIDC_ENABLED,      value: "true" }
+            # Cookie mode: the opaque bff_ session is ALSO set as an httpOnly cookie
+            # (secure=true, SameSite=Lax) in addition to the body — the gateway's
+            # BffSessionAuthFilter and BffJwtExchangeWebFilter can then resolve it.
+            - { name: APP_SESSION_COOKIE_ENABLED, value: "true" }
+            # Casdoor OIDC client identity for the login leg (user-bff-oidc ESO Secret).
+            # OPTIONAL at startup: the cipher and client boot but the ESO Secret MUST
+            # be provisioned before real OIDC logins are attempted (Casdoor rejects an
+            # incorrect/blank secret). This mirrors admin-bff's APP_MFA_FACTOR_KEY pattern.
+            - name: APP_BFF_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-oidc
+                  key: client-secret
+                  optional: true
+            # 256-bit AES-GCM key for token custody (user-bff-custody-key ESO Secret).
+            # OidcCustodyBootGuard refuses to start if this is blank AND OIDC is enabled,
+            # so populate the ESO Secret BEFORE setting APP_BFF_OIDC_ENABLED=true.
+            - name: APP_BFF_CUSTODY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-custody-key
+                  key: key
+                  optional: true
+            # Shared internal token: user-bff OUTBOUND to admin-bff (X-Internal-Token).
+            # Matches admin-bff's INBOUND InternalTokenWebFilter — both BLANK in dev (no-op);
+            # both set to the SAME value in-cluster (fail-closed 401 on mismatch).
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bff-internal-token
+                  key: token
+                  optional: true
+          # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
+          # so curl PRESENTS this pod's client cert and validates the server cert
+          # against the cluster CA (--resolve maps the SAN to loopback). See
+          # admin-bff-api for the rationale.
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve hugmesh-user-bff-api:8080:127.0.0.1
+                  https://hugmesh-user-bff-api:8080/actuator/health/readiness
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve hugmesh-user-bff-api:8080:127.0.0.1
+                  https://hugmesh-user-bff-api:8080/actuator/health/liveness
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+          volumeMounts:
+            - { name: tmp,    mountPath: /tmp }
+            - { name: stores, mountPath: /stores, readOnly: true }
+            - { name: pki,    mountPath: /pki,    readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: hugmesh-user-bff-api-mtls
+        # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory

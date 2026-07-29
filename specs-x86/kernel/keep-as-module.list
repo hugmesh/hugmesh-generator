@@ -1,0 +1,35 @@
+# keep-as-module.list — symbols that MUST stay loadable modules even when
+# --kernel-builtin is set ("compile most everything into the kernel"). These are the
+# "except where that inhibits function" cases: out-of-tree drivers, firmware/load-order
+# sensitive drivers, and things that only work when (un)loadable at runtime.
+#
+# One CONFIG_ symbol per line; '#' comments and blanks ignored. Add to this list when a
+# built-in symbol breaks a machine. CONFIG_MODULES itself is NEVER disabled by the
+# builtin sweep (out-of-tree nvidia.ko + on-demand drivers depend on module loading).
+#
+# Out-of-tree / proprietary (built via emerge as .ko; can't be in-tree builtin):
+CONFIG_NVIDIA
+CONFIG_NVIDIA_DRM
+CONFIG_ZFS
+CONFIG_VBOXGUEST
+CONFIG_VBOXSF_FS
+# nouveau MUST stay a module so the proprietary-NVIDIA images can runtime-blacklist it
+# (modprobe.d). Built-in (=y) would load nouveau before the blacklist and fight nvidia.
+CONFIG_DRM_NOUVEAU
+# Firmware/load-order sensitive radios kept as modules so NetworkManager/firmware
+# ordering and rfkill toggling work (built-in can race firmware availability at init):
+CONFIG_IWLWIFI
+CONFIG_IWLMVM
+CONFIG_MT7921E
+CONFIG_MT7921_COMMON
+CONFIG_ATH10K
+CONFIG_ATH11K
+CONFIG_ATH12K
+CONFIG_BRCMFMAC
+CONFIG_RTW88
+CONFIG_RTW89
+# Bluetooth transport modules (rfkill/(un)load + firmware ordering):
+CONFIG_BT_HCIBTUSB
+# DKMS-style / commonly-rebuilt:
+CONFIG_R8168
+CONFIG_R8125

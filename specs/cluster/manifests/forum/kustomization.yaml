@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-forum
+resources:
+  - namespace.yaml
+  - network-policy.yaml     # default-deny + ingress only forum-bff/admin-bff/sync
+  - phpbb-db.yaml           # Postgres 16 (hardened, least-privilege app role)
+  - phpbb.yaml              # phpBB + hugmesh/forum-api extension (backend-only)
+  - admin-sync-job.yaml     # Casdoor roles -> phpBB groups (declarative, stub-aware)
+
+# phpbb-db owns its hardening + the least-privilege app login role via initdb
+# (runs once on an empty data dir, alphabetical order):
+#   00-hardening.sql  REVOKE PUBLIC + per-DB timeouts + scram password_encryption
+#   10-roles.sh       the NON-OWNER least-privilege phpbb_app login role (from
+#                     PHPBB_APP_PASSWORD env) — never committed
+# phpBB OWNS its own schema (created by the install/migrate step), so no table DDL
+# is seeded here.
+configMapGenerator:
+  - name: phpbb-db-initdb
+    files:
+      - initdb/00-hardening.sql
+      - initdb/10-roles.sh
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+# The custom phpBB image (official phpBB + the baked hugmesh/forum-api extension)
+# pulls from the in-cluster Harbor container registry, like the first-party BFFs.
+# The CI in the phpBB image repo pushes :<branch> + :<sha>; we track :main for dev.
+# Pulls need the harbor-registry imagePullSecret (ESO-materialized).
+images:
+  - { name: hugmesh-systems/phpbb, newName: registry.hugmesh.systems/hugmesh/hugmesh-phpbb, newTag: main }
+patches:
+  # Add the harbor-registry pull secret to the phpbb workload (the python sync Job
+  # pulls the public python:3.12-alpine, so scope the patch to the phpbb Deployment).
+  - target: { kind: Deployment, name: phpbb }
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: harbor-registry

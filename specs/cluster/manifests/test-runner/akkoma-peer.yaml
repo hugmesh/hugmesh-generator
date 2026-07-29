@@ -1,0 +1,203 @@
+# =============================================================================
+# akkoma-peer — a TEST-ONLY second, genuinely-federating fediverse instance.
+# =============================================================================
+# ENV=test ONLY (hugmesh.systems/tier: test → pruned for prod by gate_env_apps
+# AND rejected by the prod-hygiene Kyverno ClusterPolicy + the RUNTIME hook Job —
+# a running tier:test pod FAILS the prod gate). This is the EXTERNAL OBSERVER the
+# non-federation e2e (specs 19-22) needs:
+#
+#   * It is a REAL ActivityPub peer (its own akkoma + its own Postgres), on its
+#     own host name `peer.test`, with registrations_open so the suite can create a
+#     follower account on it via the Mastodon API.
+#   * The non-federation PROOF works by OBSERVING this peer's inbox:
+#       - a domain-locked user's toot/boost/announcement MUST NOT appear here
+#         (the MRF + egress backstop force it local), while
+#       - a NON-locked CONTROL user's toot MUST appear here (the positive control
+#         / the clock — proves federation itself is wired, so the locked user's
+#         ABSENCE is enforcement, not a broken pipe).
+#
+# It deliberately carries NO domain-lock MRF and NO egress restriction — it is the
+# vantage point, not the system under test. The suite resets its DB per run
+# (an emptyDir PVC + Recreate strategy) so a prior run's follow/inbox state never
+# leaks into the next. A tiny SEAM-PROBE health endpoint is advertised so the
+# prod-hygiene RUNTIME gate (validate-prod-hygiene.sh --runtime) can SEE this peer
+# is the mock and refuse a prod sync that still runs it.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akkoma-peer-config
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: akkoma-peer
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+data:
+  config.exs: |
+    import Config
+    # The peer publishes itself as peer.test — a DISTINCT origin from the system
+    # under test (mastodon.hugmesh.systems) so federation across the two is a
+    # real cross-origin delivery, not a same-instance timeline.
+    config :pleroma, Pleroma.Web.Endpoint,
+      url: [host: "peer.test", scheme: "https", port: 443],
+      http: [ip: {0, 0, 0, 0}, port: 4000],
+      secret_key_base: System.get_env("SECRET_KEY_BASE"),
+      signing_salt: System.get_env("SIGNING_SALT")
+    config :pleroma, :instance,
+      name: "Test Federation Peer",
+      email: "peer@peer.test",
+      # OPEN registration so the e2e can make a follower account here via the API.
+      registrations_open: true
+    # NO MRF, NO domain-lock, NO egress restriction: this is the OBSERVER, not the
+    # system under test. It accepts and stores whatever federates to its inbox.
+    config :pleroma, Pleroma.Repo,
+      adapter: Ecto.Adapters.Postgres,
+      username: "akkoma",
+      password: System.get_env("DB_PASSWORD"),
+      database: "akkoma",
+      hostname: "akkoma-peer-db"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: akkoma-peer-secrets
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: akkoma-peer
+    hugmesh.systems/tier: test
+type: Opaque
+stringData:
+  # TEST-ONLY ephemeral values — this peer holds no real data and its DB is reset
+  # per run. These are NOT real secrets (the instance is unreachable outside the
+  # test cluster + pruned for prod), but keep them obviously test-scoped.
+  SECRET_KEY_BASE: "test-peer-secret-key-base-not-a-real-secret-0000000000000000"
+  SIGNING_SALT: "testpeer"
+  DB_PASSWORD: "test-peer-db-pw"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: akkoma-peer-db
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: akkoma-peer-db
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+spec:
+  replicas: 1
+  # Recreate + emptyDir == fresh DB each pod start, so per-run inbox/follow state
+  # never carries over (the non-federation assertion must start from a clean peer).
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: akkoma-peer-db } }
+  template:
+    metadata:
+      labels:
+        app: akkoma-peer-db
+        hugmesh.systems/tier: test
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: akkoma }
+            - { name: POSTGRES_DB, value: akkoma }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: akkoma-peer-secrets, key: DB_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ name: pg, containerPort: 5432 }]
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: data
+          emptyDir: {}   # per-run reset (test peer, no durable data)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: akkoma-peer-db
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma-peer-db, hugmesh.systems/tier: test }
+spec:
+  selector: { app: akkoma-peer-db }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: akkoma-peer
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: akkoma-peer
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: akkoma-peer } }
+  template:
+    metadata:
+      labels:
+        app: akkoma-peer
+        hugmesh.systems/tier: test
+      annotations:
+        # The prod-hygiene RUNTIME gate probes this seam endpoint; the test peer
+        # answers seam=stub so the gate's "un-flipped stub" check ALSO flags it as
+        # a non-prod component (belt to the tier:test pod check). FQDN host so the
+        # gate's probe pod (in hugmesh-policy) can reach it cross-namespace.
+        hugmesh.systems/seam-probe: "http://akkoma-peer.hugmesh-backend.svc.cluster.local:4000/api/v1/instance#seam"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        - name: migrate
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          command: ["/opt/akkoma/bin/pleroma_ctl", "migrate"]
+          envFrom: [{ secretRef: { name: akkoma-peer-secrets } }]
+          volumeMounts: [{ name: config, mountPath: /etc/akkoma }]
+      containers:
+        - name: akkoma
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          envFrom: [{ secretRef: { name: akkoma-peer-secrets } }]
+          ports: [{ name: http, containerPort: 4000 }]
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/akkoma }
+            - { name: uploads, mountPath: /var/lib/akkoma/uploads }
+          readinessProbe:
+            httpGet: { path: /api/v1/instance, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap: { name: akkoma-peer-config }
+        - name: uploads
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: akkoma-peer
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: akkoma-peer
+    hugmesh.systems/tier: test
+spec:
+  type: ClusterIP
+  selector: { app: akkoma-peer }
+  ports: [{ name: http, port: 4000, targetPort: http }]

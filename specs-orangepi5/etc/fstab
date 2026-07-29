@@ -1,0 +1,24 @@
+# fstab — Orange Pi 5 / 5 Plus (Rockchip RK3588/RK3588S arm64) light desktop.
+#
+# The boot media varies by board + flavor. Both boards can boot from microSD or
+# eMMC (module-dependent); the Plus additionally has an M.2 PCIe slot that MAY
+# support NVMe boot depending on mainline U-Boot/kernel support for this exact
+# board (UNVERIFIED here — see the builder's header + specs-orangepi5/README.md).
+# Like the Frite builder, this image produces LIVE/INSTALLER ISO media + a stage4
+# tarball — there is NO build_img/.img assembly step here. The LIVE flavor boots
+# a squashfs root ephemerally (this fstab is largely inert there; / is the live
+# overlay). The INSTALLER flavor (install-orangepi5.sh) partitions the target
+# medium AT INSTALL TIME and rewrites the LABEL=/PARTUUID device columns below
+# for the medium it actually wrote, so the installed system mounts the right
+# partitions. The placeholder device paths below are replaced at install time;
+# do not rely on them literally.
+#
+# <device>            <mount>  <type>   <options>                              <dump> <pass>
+LABEL=OPI5_BOOT     /boot    vfat     defaults,noatime,nosuid,nodev,noexec   0      2
+LABEL=OPI5_ROOT     /        ext4     defaults,noatime                       0      1
+tmpfs               /tmp     tmpfs    defaults,nosuid,nodev,noexec,size=256m 0      0
+tmpfs               /run     tmpfs    defaults,nosuid,nodev,mode=0755        0      0
+
+# No zram helper here (unlike the Frite 512MB SKU): both Orange Pi 5 boards ship
+# with >= 4GB RAM (typically 4/8/16/32GB SKUs), so a swap helper is not baked by
+# default. Add one post-first-boot if a low-RAM SKU needs it.

@@ -1,0 +1,26 @@
+# Kubernetes cluster-node package set — Raspberry Pi 5 (arm64)
+#
+# Appended to packages.list by build-rpi5-stage4.sh for every cluster-node role
+# (pki | backend | frontend), NOT for --role desktop (ROLE_CLIENT — see
+# packages-desktop.list instead). Split out of the base packages.list so a
+# desktop image doesn't carry containerd/kubelet/etc it will never run.
+
+# ── Container runtime ─────────────────────────────────────────────
+app-containers/containerd
+app-containers/runc
+app-containers/cni-plugins
+app-containers/cri-tools
+# nerdctl is KEYWORDS="~amd64" only in ::gentoo (no arm64 keyword at all), so it
+# can't be installed on the Pi via accept_keywords — it just masks and is
+# skipped. k8s nodes drive containerd via crictl/cri-tools, so nerdctl is an
+# x86-only dev convenience (kept in specs-x86). Omitted here on purpose.
+# app-containers/nerdctl
+
+# ── Kubernetes ─────────────────────────────────────────────────────
+sys-cluster/kubelet
+sys-cluster/kubeadm
+sys-cluster/kubectl
+
+# ── K8s-specific dependencies ──────────────────────────────────────
+# xfsprogs backs some CSI/PV filesystem choices; not needed on a client desktop.
+sys-fs/xfsprogs

@@ -1,0 +1,25 @@
+# reserved-prefixes ConfigMap — the IN-CLUSTER auditable mirror of the canonical
+# source of truth (specs/cluster/reserved-prefixes.yaml). The Kyverno
+# ClusterPolicy (reserved-prefixes-policy.yaml) reads `reserved.json` from this
+# ConfigMap at admission time, so the policy and the GitOps list cannot drift:
+# scripts/validate-reserved-prefixes.sh asserts THIS list == the canonical
+# source's `spec.reserved`.
+#
+# GENERATED FROM specs/cluster/reserved-prefixes.yaml. If you change the list,
+# change it in the canonical source and re-run scripts/sync-reserved-configmap.sh
+# (or edit both); the validate script fails the build if they disagree.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reserved-prefixes
+  namespace: hugmesh-policy
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/component: policy
+  annotations:
+    hugmesh.systems/source: specs/cluster/reserved-prefixes.yaml
+data:
+  # JSON array — consumed by the Kyverno policy via a configMap context +
+  # `parseJson` so the reserved set is a first-class list in JMESPath.
+  reserved.json: |
+    ["_fragments","_matrix","_remotes","_synapse","actuator","admin","ai","api","api-docs","apidocs","argocd","assets","attest","auth","banned","be","bff","character-forge","character-studio","docs","favicon","favicon.ico","forum","fragments","games","games-character-forge","games-dodecahedron","games-instances-console","games-rpg-maker","games-shadows-of-the-net","games-three-wizards","games-vn-maker","gitlab","gm","headscale","health","healthz","help","hmdm","id","importmap.json","index.html","login","logout","mastodon","matrix","media","metrics","mod","oauth","oauth2","owncast","phpbb","pki","play","pleroma","producer","producer-registration","public","publisher","registration","registry","remoteEntry.json","robots","root","scale","sitemap","social","static","status","superadmin","support","tube","user","users","v1","vault","wasm","wasm-fragment","well-known","wiki","www"]

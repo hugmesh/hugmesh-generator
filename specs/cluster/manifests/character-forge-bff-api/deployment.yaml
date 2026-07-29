@@ -1,0 +1,183 @@
+# character-forge-bff — the Backend-For-Frontend for the character-forge remote
+# (the 3D character maker) at /bff/character-forge/**: saved 3D character configs
+# (Char3DConfig CRUD, one-active-per-owner, cross-user lookup for the XR chat
+# room roster) + the pure VnCharacter→Char3DConfig /map endpoint. Owns the
+# character_forge_character table in its OWN dedicated Postgres
+# (character-forge-bff-db). See docs/XR-CHAT.md.
+#
+# It is a ClusterIP-only service in hugmesh-backend: nothing reaches it from
+# outside except via the fe-gateway, which routes same-origin
+# /bff/character-forge/** to it AND enforces the Casdoor role rules
+# (/bff/character-forge/** => ROLE_USER) from the route DB first.
+# Defence-in-depth: character-forge-bff re-checks role + ownership (owner =
+# jwt subject; foreign id => 404).
+#
+# Security model: like user-bff/forum-bff, character-forge-bff is an OAuth2
+# RESOURCE SERVER — it VALIDATES the cluster Casdoor JWT itself
+# (CASDOOR_ISSUER_URI, JWKS auto-discovered). Unlike forum-bff it has NO
+# downstream homeserver leg: its only dependency is its own Postgres.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-character-forge-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-character-forge-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-character-forge-bff-api } }
+  template:
+    metadata: { labels: { app: hugmesh-character-forge-bff-api } }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          # Unique MCS level (docs/SECURITY.md §3 matrix): character-forge-bff-api
+          # -> c81 (next free after the attestation-server's c79; c80 = its DB).
+          level: "s0:c81"
+      # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
+      # Mirrors the user-bff-api/gateway build-keystore initContainer: turns the
+      # Vault-PKI-issued, ESO-synced TLS Secret (hugmesh-character-forge-bff-api-mtls:
+      # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
+      # (cluster CA) for server.ssl.* to REQUIRE a client cert chaining to the
+      # cluster CA. Store password generated in-pod, kept only in the tmpfs /stores
+      # emptyDir, emitted into application.properties via
+      # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
+      initContainers:
+        - name: build-keystore
+          image: hugmesh-systems/character-forge-bff-api:dev
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name hugmesh-character-forge-bff-api \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              keytool -importcert -noprompt -alias hugmesh-cluster-ca \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              # FILENAME IS LOAD-BEARING — do NOT rename this back to
+              # application-tls.properties (or any application-<name>.properties).
+              # SPRING_CONFIG_ADDITIONAL_LOCATION only adds a SEARCH DIRECTORY; Spring
+              # auto-loads a profile-named doc (application-<name>.properties) from it ONLY
+              # when a profile literally named <name> is active. No manifest activates a
+              # `tls` profile, so the old application-tls.properties was silently never
+              # loaded and the store passwords fell back to the packaged application.yml's
+              # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
+              # keystore. Plain application.properties loads UNCONDITIONALLY from the
+              # additional location, with no profile needed.
+              umask 077
+              cat > /stores/application.properties <<EOF
+              server.ssl.key-store-password=${P}
+              server.ssl.trust-store-password=${P}
+              EOF
+              echo "keystore + truststore + application.properties built"
+          volumeMounts:
+            - { name: pki,    mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
+      containers:
+        - name: hugmesh-character-forge-bff-api
+          image: hugmesh-systems/character-forge-bff-api:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # ── API-to-API mTLS (server side) ─────────────────────────────────
+            # Require a client cert chaining to the cluster CA. Store passwords come
+            # from /stores/application.properties (in-pod generated, loaded via
+            # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
+            # DEPLOY-ORDER: deploy with the gateway/BFF client-cert wave.
+            - { name: SSL_ENABLED,          value: "true" }
+            - { name: SSL_CLIENT_AUTH,      value: "need" }
+            - { name: SSL_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: SSL_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
+            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # OAuth2 resource server: validate the cluster Casdoor JWT itself.
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
+            # NO downstream homeserver leg (unlike forum-bff's phpBB extension):
+            # the character-forge datastore below is this BFF's only dependency.
+            # Datastore: the character_forge_character table. The app's
+            # application.yml defaults spring.r2dbc + spring.liquibase to a literal
+            # `hugmesh-pg` host that does NOT exist; OVERRIDE both here to the
+            # dedicated character-forge-bff-db (mirrors how user-bff/admin-bff/federation
+            # override to their dedicated dbs). R2DBC is the runtime handle; the JDBC
+            # handle is used by Liquibase ONCE at startup.
+            # RUNTIME handle: log in as the dedicated NON-OWNER least-privilege role
+            # `charforgebff_app` (DML only), created by character-forge-bff-db's initdb/10-roles.sh.
+            # Password from its OWN ESO Secret character-forge-bff-db-app-auth (the SAME the DB
+            # pod's CHARFORGEBFF_APP_PASSWORD mounts).
+            - name: SPRING_R2DBC_URL
+              value: "r2dbc:postgresql://character-forge-bff-db.hugmesh-backend.svc.cluster.local:5432/charforgebff"
+            - name: SPRING_R2DBC_USERNAME
+              value: "charforgebff_app"
+            - name: SPRING_R2DBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: character-forge-bff-db-app-auth
+                  key: password
+            # JDBC handle used ONLY by Liquibase at startup. DDL needs the OWNER, so
+            # Liquibase keeps the owner role `charforgebff` + the owner ESO Secret
+            # character-forge-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
+            - name: SPRING_LIQUIBASE_URL
+              value: "jdbc:postgresql://character-forge-bff-db.hugmesh-backend.svc.cluster.local:5432/charforgebff"
+            - name: SPRING_LIQUIBASE_USER
+              value: "charforgebff"
+            - name: SPRING_LIQUIBASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: character-forge-bff-db-auth
+                  key: password
+          # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
+          # so curl PRESENTS this pod's client cert and validates the server cert
+          # against the cluster CA (--resolve maps the SAN to loopback).
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve hugmesh-character-forge-bff-api:8080:127.0.0.1
+                  https://hugmesh-character-forge-bff-api:8080/actuator/health/readiness
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve hugmesh-character-forge-bff-api:8080:127.0.0.1
+                  https://hugmesh-character-forge-bff-api:8080/actuator/health/liveness
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+          volumeMounts:
+            - { name: tmp,    mountPath: /tmp }
+            - { name: stores, mountPath: /stores, readOnly: true }
+            - { name: pki,    mountPath: /pki,    readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: hugmesh-character-forge-bff-api-mtls
+        # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory

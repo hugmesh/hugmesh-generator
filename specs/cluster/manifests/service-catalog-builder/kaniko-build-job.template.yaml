@@ -1,0 +1,115 @@
+# kaniko-build-job.template.yaml — the per-build ROOTLESS Kaniko Job TEMPLATE for the
+# SUPERADMIN Service Catalog DOCKERFILE (iii) + ZIP-repo (iv) service sources
+# (hugmesh-superadmin-appstore design, V2: the build:images path was an echo STUB, no
+# in-cluster builder existed — this is that builder).
+#
+# WHO INSTANTIATES IT: the admin-bff AddService task (the effector). When a service_deployment's
+# source is DOCKERFILE or ZIP, the task renders ONE copy of this Job per build with the
+# ${...} placeholders bound (build context, dest image ref, build name) and creates it in the
+# build namespace. SELECT (catalog, prebuilt image) + GIT (repo with its own CI) sources do
+# NOT use this — they reference a ready image; the admin-bff effector guards DOCKERFILE/ZIP
+# until this builder is present (AddServiceEffector: "requires the in-cluster image builder").
+#
+# WHY KANIKO (the design fork): rootless, k8s-native, no Docker daemon / privileged socket.
+# It builds from a Dockerfile in a build context and pushes the image to the in-cluster
+# registry — entirely in userspace, so it satisfies the platform's no-privileged-container
+# posture (runAsNonRoot, drop ALL caps, seccomp RuntimeDefault, readOnlyRootFilesystem except
+# the kaniko workdir).
+#
+# SHIPS DARK: this is a TEMPLATE, not a live Job — nothing applies it until the effector
+# (app.appstore.effector.enabled=true) renders + creates an instance. It is NOT listed in any
+# kustomization, so ArgoCD never syncs it directly.
+#
+# ${PLACEHOLDERS} (bound by the AddService task per build):
+#   ${BUILD_NAME}      a DNS-safe per-build id (e.g. acme-test-owncast-<short-sha>)
+#   ${BUILD_NAMESPACE} the build namespace (default hugmesh-service-catalog-builds)
+#   ${CONTEXT}         the Kaniko build context: git://<repo>#<ref> (DOCKERFILE in a repo) OR
+#                      the uploaded zip materialized to a context (ZIP); see docs.
+#   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
+#   ${DEST_IMAGE}      the destination image ref WITH a tag/digest in the in-cluster registry
+#                      (e.g. registry.hugmesh.systems/<brand>/<service>:<sha>)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: appstore-build-${BUILD_NAME}
+  namespace: ${BUILD_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: service-catalog-builder
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/appstore-build: "${BUILD_NAME}"
+spec:
+  backoffLimit: 1
+  # Reap the Job 1h after completion so finished builds don't accumulate.
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: service-catalog-builder
+        hugmesh.systems/appstore-build: "${BUILD_NAME}"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      # Pin off the pki/control-plane node; builds run on a worker.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+        # Pin a dedicated MCS identity for build pods, away from the runtime-app
+        # bands, so a build pod cannot share a category with any deployed service.
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c54"
+      containers:
+        - name: kaniko
+          # Rootless Kaniko executor. Pin a digest in production (the prod-hygiene gate
+          # rewrites :latest/:dev tags); :v1.23.2 here is the floor the generator tracks.
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - "--context=${CONTEXT}"
+            - "--dockerfile=${DOCKERFILE}"
+            - "--destination=${DEST_IMAGE}"
+            # Reproducible + rootless build hygiene.
+            - "--reproducible"
+            - "--single-snapshot"
+            - "--use-new-run"
+            # No-push-to-cache; the registry is the in-cluster Harbor registry, creds
+            # mounted below at /kaniko/.docker (ESO-materialized, NEVER in git).
+            - "--cache=false"
+          env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+          volumeMounts:
+            # Registry push credentials (the in-cluster Harbor registry pull/push secret,
+            # ESO-materialized into the build namespace as a dockerconfigjson). Read-only.
+            - name: docker-config
+              mountPath: /kaniko/.docker
+              readOnly: true
+            # Kaniko's writable workdir + tmp (readOnlyRootFilesystem above forces these
+            # onto emptyDir so the image layers + scratch never touch the node fs).
+            - name: kaniko-workdir
+              mountPath: /kaniko
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: service-catalog-builder-registry
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+        - name: kaniko-workdir
+          emptyDir: {}
+        - name: workspace
+          emptyDir: {}

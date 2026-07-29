@@ -1,0 +1,211 @@
+# fe-gateway routes (compose) — the PLATFORM FRONT DOOR. Translated from
+# specs/cluster/apps/20-gateway-fe.yaml to compose service DNS. This gateway is the
+# one published to the host (http://localhost:${PUBLIC_HOST_PORT}); it fans out to
+# the federated UI remotes, the same-origin /bff/** admin BFF, the /_fragments/**
+# static fleet, /be/** -> the be-gateway, and the catch-all -> the Angular host.
+spring:
+  cloud:
+    gateway:
+      # SCG 5.0 (Spring Boot 4): route config moved to
+      # spring.cloud.gateway.server.webflux.* (legacy prefix binds nothing under SCG 5.0).
+      server:
+        webflux:
+          routes:
+            - id: matrix-ui
+              uri: http://hugmesh-matrix-ui:80
+              predicates:
+                - Path=/social/matrix/**
+              filters:
+                - StripPrefix=2
+            - id: mastodon-ui
+              uri: http://hugmesh-mastodon-ui:80
+              predicates:
+                - Path=/social/mastodon/**
+              filters:
+                - StripPrefix=2
+            # forum-ui — a PATH remote at /social/forum (NOT a forum.<domain>
+            # subdomain, which the *.hugmesh.systems vanity wildcard would
+            # swallow), congruent with matrix-ui/mastodon-ui above
+            # (specs/cluster/apps/49-forum-ui.yaml). Its Dockerfile serves plain
+            # nginx on :80, like matrix-ui/mastodon-ui (NOT the nginx-unprivileged
+            # :8080 image the wiki/owncast/tube/character-studio remotes use below).
+            - id: forum-ui
+              uri: http://hugmesh-forum-ui:80
+              predicates:
+                - Path=/social/forum/**
+              filters:
+                - StripPrefix=2
+            # login-ui is a STANDALONE Angular app (its own index.html; no
+            # module-federation remoteEntry in this stack) built with
+            # base-href=/login/ (hugmesh-login-ui companion change), so the
+            # browser fetches its bundles + snap-config.js under /login/…;
+            # StripPrefix=1 drops the /login segment so those map to the container
+            # webroot (/main.js, /snap-config.js) nginx serves. Without BOTH the
+            # base-href and this strip, the login page's bundles resolve to the
+            # systems-web host at the origin root and 404 (Angular never boots).
+            - id: login-ui
+              uri: http://hugmesh-login-ui:80
+              predicates:
+                - Path=/login/**
+              filters:
+                - StripPrefix=1
+            - id: admin-ui
+              uri: http://hugmesh-admin-ui:80
+              predicates:
+                - Path=/admin/**
+              filters:
+                - StripPrefix=1
+            # Federated remotes added for the full local repo set (mod/user UIs +
+            # api-docs); they have no cluster route yet but are reachable here.
+            - id: mod-ui
+              uri: http://hugmesh-mod-ui:80
+              predicates:
+                - Path=/mod/**
+              filters:
+                - StripPrefix=1
+            - id: user-ui
+              uri: http://hugmesh-user-ui:80
+              predicates:
+                - Path=/user/**
+              filters:
+                - StripPrefix=1
+            - id: api-docs
+              uri: http://hugmesh-api-docs:80
+              predicates:
+                - Path=/api-docs/**
+              filters:
+                - StripPrefix=1
+            # wiki-ui / owncast-ui / tube-ui / character-studio-ui — federated
+            # remotes on nginx-unprivileged :8080 (their Dockerfiles document these
+            # exact mount paths + gate roles: "/wiki=ROLE_WIKI", "/owncast=
+            # ROLE_OWNCAST", "/tube=ROLE_TUBE" route-access gates; character-studio
+            # is already a canonical cluster route-access row). Matching
+            # gateway_route_access rows for wiki/owncast/tube are added in
+            # specs/cluster/manifests/route-access/initdb/20-schema.sql (a
+            # pre-existing gap — those repos' own Dockerfiles expected the row,
+            # it was never added).
+            - id: wiki-ui
+              uri: http://hugmesh-wiki-ui:8080
+              predicates:
+                - Path=/wiki/**
+              filters:
+                - StripPrefix=1
+            - id: owncast-ui
+              uri: http://hugmesh-owncast-ui:8080
+              predicates:
+                - Path=/owncast/**
+              filters:
+                - StripPrefix=1
+            - id: tube-ui
+              uri: http://hugmesh-tube-ui:8080
+              predicates:
+                - Path=/tube/**
+              filters:
+                - StripPrefix=1
+            - id: character-studio-ui
+              uri: http://hugmesh-character-studio-ui:8080
+              predicates:
+                - Path=/character-studio/**
+              filters:
+                - StripPrefix=1
+            # character-forge-ui — the Character Forge (3D) remote on
+            # nginx-unprivileged :8080, mirroring the cluster route
+            # (apps/20-gateway-fe.yaml route[character-forge-ui]; route-access row
+            # /character-forge/** = ROLE_USER already seeded from the same
+            # 20-schema.sql this stack initializes route-access-db with).
+            - id: character-forge-ui
+              uri: http://hugmesh-character-forge-ui:8080
+              predicates:
+                - Path=/character-forge/**
+              filters:
+                - StripPrefix=1
+            # SSO/login + user surface -> user-bff. MUST precede the /bff/** admin
+            # catch-all (SCG matches in list order). NATIVE login: the browser POSTs
+            # username/password to /bff/login (permitAll at the BFF); user-bff runs PKCE +
+            # the INTERNAL Casdoor /api/login + code exchange server-side and Set-Cookies the
+            # opaque bff_ session. /bff/session hydrates that cookie, /bff/register is the
+            # registration surface, /bff/user/** the user API. NOTE: there is deliberately NO
+            # front-door route to Casdoor — the browser NEVER reaches Casdoor's
+            # /login/oauth/authorize or its hosted UI (that origin is internal-only, in-DNS
+            # http://casdoor:8000, reachable solely by user-bff/be-gateway).
+            - id: hugmesh-user-bff-api
+              uri: http://hugmesh-user-bff-api:8080
+              predicates:
+                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**
+            # Moderator BFF surface -> mod-bff (also precedes the admin catch-all).
+            - id: hugmesh-mod-bff-api
+              uri: http://hugmesh-mod-bff-api:8080
+              predicates:
+                - Path=/bff/mod/**
+            # forum/wiki/owncast/tube BFFs — same SIBLING shape as mod-bff/user-bff
+            # above (each a non-overlapping /bff/<slug>/** prefix), so each MUST
+            # also precede the /bff/** admin catch-all below. gateway_route_access
+            # already seeds role-gated rows for these exact prefixes (ROLE_FORUM,
+            # ROLE_FORUM_MOD, ROLE_WIKI, ROLE_OWNCAST, ROLE_TUBE — specs/cluster/
+            # manifests/route-access/initdb/20-schema.sql), so no schema change was
+            # needed for the BFF routes themselves (only the wiki/owncast/tube UI
+            # mount rows above were a genuine gap).
+            - id: hugmesh-forum-bff-api
+              uri: http://hugmesh-forum-bff-api:8080
+              predicates:
+                - Path=/bff/forum/**
+            # character-forge BFF — same sibling shape (non-overlapping
+            # /bff/character-forge/** prefix, ROLE_USER row seeded in 20-schema.sql).
+            # The service name is hugmesh-character-forge-bff-api on purpose: the
+            # repo was CREATED under that DESIGN-locked name (docs/XR-CHAT.md) and
+            # never carried a pre-rename hugmesh form.
+            - id: hugmesh-character-forge-bff-api
+              uri: http://hugmesh-character-forge-bff-api:8080
+              predicates:
+                - Path=/bff/character-forge/**
+            - id: hugmesh-wiki-bff-api
+              uri: http://hugmesh-wiki-bff-api:8080
+              predicates:
+                - Path=/bff/wiki/**
+            - id: hugmesh-owncast-bff-api
+              uri: http://hugmesh-owncast-bff-api:8080
+              predicates:
+                - Path=/bff/owncast/**
+            - id: hugmesh-tube-bff-api
+              uri: http://hugmesh-tube-bff-api:8080
+              predicates:
+                - Path=/bff/tube/**
+            # Same-origin BFF: everything else under /bff/** -> the admin BFF (route-DB role
+            # rules apply). Includes /bff/internal/**, /bff/public/**, and the admin surfaces.
+            - id: hugmesh-admin-bff-api
+              uri: http://hugmesh-admin-bff-api:8080
+              predicates:
+                - Path=/bff/**
+            # The HOME PAGE's data reads. The host shell is built with
+            # federationApiBase:"" — it fetches /api/federation/capabilities (the
+            # service-card install-state projection) and /api/federation/manifest on
+            # the FRONT-DOOR origin. Without these routes the /** catch-all served the
+            # shell's own index.html where the SPA expected JSON, so the front page
+            # rendered ZERO service cards while every service was up. Forwarded
+            # DIRECT to federation-api (capabilities is permitAll there; manifest is
+            # authenticated + filtered by ManifestService). NOTE: the fe-gateway's own
+            # security floor still requires a session — anonymous front pages show no
+            # cards until the gateway repo's PUBLIC_PATHS learns capabilities (the
+            # same deferral specs/cluster/apps/20-gateway-fe.yaml documents for
+            # vanity resolves).
+            - id: federation-home-reads
+              uri: http://hugmesh-federation-api:8080
+              predicates:
+                - Path=/api/federation/capabilities,/api/federation/manifest
+            # DB-hosted module-federation FRAGMENT bundles (static fleet).
+            - id: remote-fragment
+              uri: http://hugmesh-remote-fragment:8081
+              predicates:
+                - Path=/_fragments/**
+            # hugmesh.systems/be/** -> the backend gateway (StripPrefix drops /be).
+            - id: be-default
+              uri: http://hugmesh-be-gateway:8080
+              predicates:
+                - Path=/be/**
+              filters:
+                - StripPrefix=1
+            # …then the Angular host catches everything else.
+            - id: frontend-host
+              uri: http://hugmesh-systems-web:8080
+              predicates:
+                - Path=/**

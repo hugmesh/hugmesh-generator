@@ -1,0 +1,6 @@
+app-containers/containerd btrfs device-mapper seccomp selinux
+app-containers/runc seccomp selinux
+sys-apps/ethtool -nls
+net-firewall/iptables nftables
+net-firewall/nftables python json xtables
+net-firewall/firewalld nftables

@@ -1,0 +1,21 @@
+# LocalTube (YouTube archive) — GPU-gated x86 optional service (DEFAULT-OFF).
+# tube-bff-api (R2DBC + Google OAuth queue) + tube-ui + media Nginx sidecar.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-tube
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/tube
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-tube
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

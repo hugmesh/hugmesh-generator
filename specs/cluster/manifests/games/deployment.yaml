@@ -1,0 +1,67 @@
+# hugmesh.games — scheduled onto the x86_64 GPU worker. Vendor-agnostic
+# Mesa/Vulkan: the container gets the host DRI render nodes (/dev/dri) rather
+# than a vendor device plugin, so it runs on any amdgpu/i915/nouveau card.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-games
+  namespace: hugmesh-games
+  labels: { app: hugmesh-games, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-games } }
+  template:
+    metadata: { labels: { app: hugmesh-games } }
+    spec:
+      # Require the x86_64 GPU node (labelled by keys-provision on that image).
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        hugmesh.systems/compute: gpu
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c33"
+      containers:
+        - name: games
+          image: hugmesh-systems/hugmesh.games-backend:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            # GAMES-realm Casdoor (casdoor-games, org "threewizards") — the SEPARATE,
+            # INDEPENDENT games identity provider, NOT the systems Casdoor. The games
+            # BFF reads these exact env var names (see hugmesh.games
+            # backend/src/main/resources/application.yml): CASDOOR_ENDPOINT drives both
+            # the JWKS endpoint (${CASDOOR_ENDPOINT}/.well-known/jwks) and casdoor.endpoint.
+            - { name: CASDOOR_ENDPOINT, value: "http://casdoor-games.hugmesh-games.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORGANIZATION, value: "threewizards" }
+            # threewizards-app OAuth2 client — clientId/clientSecret from the ESO-
+            # materialized casdoor-games-app Secret (Vault secret/<brand>/casdoor-games).
+            - { name: CASDOOR_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientId } } }
+            - { name: CASDOOR_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientSecret } } }
+            # Public issuer of the games realm — the value the games BFF enforces
+            # as the expected `iss`. Parameterized on GAMES_DOMAIN by
+            # parameterize_games_domain() in the stage4 builders (id.hugmesh.games
+            # -> id.${GAMES_DOMAIN}); MUST match casdoor-games origin above or the
+            # iss-strict JwtIssuerValidator rejects every games token.
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.games" }
+            # Mesa picks the best installed driver; force SW only if no GPU.
+            - { name: LIBGL_ALWAYS_SOFTWARE, value: "0" }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits:   { cpu: "4",  memory: 4Gi }
+          volumeMounts:
+            - { name: dri, mountPath: /dev/dri }
+          securityContext:
+            # /dev/dri render node access for unprivileged GPU use.
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: dri
+          hostPath: { path: /dev/dri, type: Directory }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-games
+  namespace: hugmesh-games
+spec:
+  selector: { app: hugmesh-games }
+  ports: [{ name: http, port: 8080, targetPort: http }]

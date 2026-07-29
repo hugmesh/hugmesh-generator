@@ -1,0 +1,135 @@
+# Harbor — the in-cluster OCI container registry, in the hugmesh-pki
+# namespace (control-plane/identity tier; see the harbor-provision Job comment
+# for why this namespace vs. a dedicated "registry" one).
+#
+# REPLACES GitLab's bundled container registry as the thing that actually
+# serves images (GitLab itself, and its Generic Package Registry used for ISO
+# delivery, are UNCHANGED — see .gitlab-ci.yml deliver:isos). The hostname
+# registry.{{CLUSTER_DOMAIN}} / registry.hugmesh.systems IS repointed by this
+# Application: expose.type: ingress below claims that hostname directly, and
+# GitLab's own bundled registry subchart is disabled in apps/03-gitlab.yaml
+# (registry.enabled: false) in the SAME migration so nothing else can claim it.
+#
+# Ingress class: nginx-internal, NOT the public "nginx" class
+# (apps/11-ingress-nginx-internal.yaml — LAN/VPN-reachable only, DaemonSet
+# hostNetwork pinned to the pki node). Reasoning:
+#   - apps/12-cloudflared.yaml (the prod public edge) maps ONLY the apex +
+#     api./matrix./mastodon. hosts — registry.* (like gitlab.*) is deliberately
+#     never handed to the public tunnel.
+#   - apps/03-gitlab.yaml's own header comment claims its equivalent hostname
+#     is "Reached over the VPN ... never exposed externally" — same posture.
+#   - kubelet image pulls happen FROM the cluster's own nodes (LAN/VPN-joined),
+#     never from the public internet, so nginx-internal's reachability is
+#     sufficient for the actual pull/push traffic (harbor-provision Job,
+#     image-builder push, kubelet pulls) without widening the attack surface.
+# This mirrors the pki/superadmin gateways (apps/20-gateway-pki.yaml,
+# apps/22-gateway-superadmin.yaml), the platform's existing convention for
+# every other identity/control-plane-tier hostname.
+#
+# TLS: expose.tls below (harbor-mtls, Vault-PKI issued) is consumed NATIVELY by
+# the Harbor chart's own ingress template as the Ingress object's tls.secretName
+# once expose.type: ingress — this is chart-native behavior, not a bespoke
+# pattern invented for this one app. (The pki/superadmin gateway Ingress
+# objects set NO tls block at all and rely on the nginx-internal controller's
+# own default self-signed cert; Harbor's chart doesn't offer that split, so
+# reusing the already-Vault-issued harbor-mtls secret here is the closest
+# equivalent and is strictly better — a real PKI-issued cert instead of a
+# self-signed default.)
+#
+# Reachable in-cluster at harbor-core.hugmesh-pki.svc.cluster.local
+# (unaffected by the above) for the provisioning Job (harbor-provision, see
+# manifests/harbor/) and for be-gateway/image-builder pull+push via
+# imagePullSecrets/newName (already wired, see the harbor-registry/
+# image-builder-registry ExternalSecrets and the registry.hugmesh.systems
+# newName rewrites across manifests/*/kustomization.yaml).
+#
+# NOTE (operator/DNS): registry.hugmesh.systems resolving to the pki node's
+# IP for LAN/VPN clients (mirroring the scale.<domain> facade alias
+# provision_hosts already writes) is a platform DNS-topology question that
+# predates this migration and applies identically regardless of which backend
+# (GitLab or Harbor) answers the hostname — this PR does not change or depend
+# on that wiring, only which K8s object claims the hostname once traffic
+# arrives. Track any facade/DNS gap separately.
+#
+# Modeled directly on apps/03-gitlab.yaml's shape: bundled Postgres+Redis via
+# the chart's own subcharts (this platform has no shared DB operator — every
+# service bundles its own, same as GitLab's postgresql/redis/minio above).
+# Storage pinned to hugmesh-local, matching every other stateful app here.
+#
+# mTLS: expose.tls consumes the harbor-mtls Secret (Vault-PKI issued, see
+# manifests/external-secrets/harbor-externalsecrets.yaml + the "harbor" role
+# added to manifests/vault-pki/pki-init-configmap.yaml's issuing-role loop).
+#
+# Casdoor OIDC (human login to the Harbor UI/API, admin-only — mirrors GitLab's
+# "only ROLE_ADMIN gets in" posture): wired via core.configureUserSettings is
+# NOT used here (that Helm value is a literal string baked into the core
+# container's CONFIG_OVERWRITE_JSON env — embedding the OIDC client secret
+# there would put a Vault-sourced secret in plaintext in this committed values
+# block, breaking the platform's "secrets never in git" convention). Instead
+# the SAME harbor-provision PostSync Job that does project/robot provisioning
+# also PUTs the OIDC config to Harbor's own /api/v2.0/configurations REST API,
+# reading the harbor-casdoor ExternalSecret-backed Secret at run time — see
+# manifests/harbor/harbor-provision-job.yaml for the full rationale.
+#
+# No sync-wave annotation: GitLab itself has none today (confirmed no enforced
+# ordering exists to preserve for registry-adjacent apps), so we don't invent
+# one here either.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: harbor
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://helm.goharbor.io
+    chart: harbor
+    targetRevision: 1.16.x
+    helm:
+      releaseName: harbor
+      values: |
+        # Ingress-exposed at the real registry hostname (see header comment for
+        # the nginx-internal class + harbor-mtls TLS reasoning). The chart's
+        # bundled nginx front-end still terminates TLS the same as before;
+        # expose.type: ingress additionally creates a K8s Ingress in front of it.
+        expose:
+          type: ingress
+          tls:
+            enabled: true
+            certSource: secret
+            secret:
+              secretName: harbor-mtls
+          ingress:
+            hosts:
+              core: registry.hugmesh.systems
+            className: nginx-internal
+        externalURL: https://registry.hugmesh.systems
+        harborAdminPassword: ""     # unused; existingSecret below wins
+        existingSecretAdminPassword: harbor-admin
+        existingSecretAdminPasswordKey: HARBOR_ADMIN_PASSWORD
+        # Pin everything to the pki/control-plane node, matching every other
+        # hugmesh-pki workload (casdoor, route-access-db, vault, ...).
+        nodeSelector:
+          hugmesh.systems/pki: "true"
+        persistence:
+          persistentVolumeClaim:
+            registry:      { storageClass: hugmesh-local }
+            jobservice:
+              jobLog:      { storageClass: hugmesh-local }
+            database:      { storageClass: hugmesh-local }   # bundled Postgres
+            redis:         { storageClass: hugmesh-local }   # bundled Redis
+            trivy:         { storageClass: hugmesh-local }
+        trivy:
+          enabled: false   # vulnerability scanning is a follow-up, not this migration
+        # internalTLS (pod-to-pod mTLS between Harbor's OWN bundled
+        # core/jobservice/registry/portal components) stays disabled: no app in
+        # this platform enables intra-component mTLS between a single chart's
+        # own bundled subcomponents (checked GitLab's own values here too) —
+        # only edge/ingress TLS and cross-service mTLS via the PKI issuing
+        # roles are used. Leaving this off matches that existing convention.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-pki
+  syncPolicy:
+    automated: { prune: false, selfHeal: true }   # prune off: stateful CRDs/PVCs, same as GitLab
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

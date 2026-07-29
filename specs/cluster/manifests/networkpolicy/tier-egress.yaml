@@ -1,0 +1,354 @@
+# Tier-level default-deny EGRESS (Phase 3 segmentation — CLUSTER-HARDENING-PLAN §B).
+#
+# ─────────────────────────── GATED / SHIPS DARK ───────────────────────────────
+# This file is DELIBERATELY NOT listed in this directory's kustomization.yaml
+# `resources:` list, so ArgoCD NEVER renders or applies it on a normal sync. It is
+# also fronted by a MANUAL-sync ArgoCD Application (apps/08a-networkpolicy-egress.yaml,
+# NO `automated:` block) so even after it is added to the kustomization it will not
+# auto-sync into a live cluster. Enabling is a deliberate, staged operator action:
+#   1. Validate on the live cluster FIRST (see §B "live-validate-only").
+#   2. Add ONE of the per-namespace blocks below to kustomization.yaml `resources:`
+#      (uncomment one namespace at a time — NEVER all five at once).
+#   3. Manually sync apps/08a-networkpolicy-egress.yaml and smoke-test that
+#      namespace's flows before moving to the next.
+# Until then this file is pure documentation that ships dark: it changes NOTHING.
+#
+# WHY DEFAULT-DENY EGRESS IS HIGH BLAST RADIUS (read before authoring/enabling):
+#   * k8s NetworkPolicy is ADDITIVE with NO deny/exclude, and Ingress/Egress are
+#     INDEPENDENT axes. The MOMENT a pod is selected by ANY policyTypes:[Egress]
+#     policy, ALL of its egress that is not explicitly allowed is DENIED. So the
+#     allow-set below MUST be COMPLETE for the namespace or it black-holes every
+#     pod in it (no DNS = nothing resolves; no DB = every API errors).
+#   * Because there is no exclude, a tier-wide podSelector:{} egress policy WOULD
+#     also select the DB / homeserver pods that homeserver-egress.yaml +
+#     egress-vpn-interaction.yaml already lock per-pod. Those per-pod egress locks
+#     are NARROWER (DNS + their one DB/proxy). A broad tier-egress that ALSO
+#     selected them would UNION-WIDEN their egress back open (additive!). So the
+#     tier-wide podSelector below EXCLUDES the per-pod-locked pods via the SAME
+#     matchExpressions NotIn lists used by tier-ingress.yaml / db-ingress.yaml /
+#     homeserver-egress.yaml — keep all of them in sync.
+#   * CLUSTER-HARDENING-PLAN §B: "blast radius: high … apply default-deny to ONE
+#     namespace at a time … keep a break-glass kubectl path that bypasses the mesh."
+#
+# COMMON ALLOW-SET (every block below repeats it — k8s has no policy inheritance):
+#   - DNS: kube-system CoreDNS/kube-dns, UDP+TCP/53 (copied verbatim from
+#     homeserver-egress.yaml — without it NOTHING resolves, including in-cluster
+#     Service names, so this is always rule #1).
+#   - Intra-tier / self namespace: gateway->BFF, BFF->workload, etc.
+#   - Cross-tier control paths the tier actually needs (Postgres :5432, Cassandra
+#     :9042 in hugmesh-pki, Vault :8200 in ns `vault`, headscale in
+#     hugmesh-pki, ArgoCD reconcile + kube-apiserver in `devops`).
+#   - kube-apiserver: allowed via TCP/6443 to the cluster's NODE network CIDRs (NOT
+#     the 10.96.0.1/32 ClusterIP). WHY: kube-proxy DNATs the apiserver ClusterIP
+#     (10.96.0.1:443) to the real control-plane NODE backend (<node-ip>:6443), and
+#     Calico evaluates egress AFTER DNAT — so a rule allowing 10.96.0.1/32:443 never
+#     matches the post-DNAT packet and BLACK-HOLES the apiserver (which WEDGES ArgoCD
+#     in the devops block). The node InternalIP is per-deployment (DHCP/LAN-assigned;
+#     see bootstrap.sh resolving it at runtime), so it is NOT statically knowable in a
+#     generated manifest. We therefore allow TCP/6443 to the safest static SUPERSET of
+#     where a node can land: RFC1918 LAN (10/8, 172.16/12, 192.168/16) + the tailnet
+#     (100.64.0.0/10). This preserves apiserver reach wherever the control-plane node
+#     sits while staying off the public internet.
+#     ⚠ RESIDUAL (live-validate): confirm on the live cluster which of these CIDRs the
+#       control-plane InternalIP actually falls in and TIGHTEN to that single node
+#       CIDR (e.g. the /24 the pki Pi is on) before enabling — this superset is the
+#       fail-open-safe default, not the final least-privilege rule.
+# CIDR carve-outs reused verbatim from egress-vpn-interaction.yaml:
+#   10.244.0.0/16 (pod CIDR), 10.96.0.0/12 (service CIDR), 100.64.0.0/10 (tailnet).
+#
+# ── hugmesh-frontend — default-deny egress ─────────────────────────────────
+# Frontend only ever talks to: DNS, itself (fe-gateway -> UIs), and the backend
+# tier (fe-gateway -> be-gateway /be + admin-bff /bff). No DB / Vault / Cassandra.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-egress
+  namespace: hugmesh-frontend
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # 1. DNS (always first).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. self (fe-gateway -> UIs) + backend tier (fe-gateway -> be-gateway/admin-bff).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 3. route-access-db (:5432) + Cassandra (:9042) live in hugmesh-pki; fe-gateway
+    #    reads route-access + Cassandra. Pin the namespace + ports.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 9042 }
+    # 4. kube-apiserver — TCP/6443 to the NODE network CIDRs. REPLACES the broken
+    #    `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out: kube-proxy DNATs the
+    #    apiserver ClusterIP to the control-plane node IP:6443 and Calico evaluates
+    #    egress POST-DNAT, so the ClusterIP rule never matches and black-holes the API.
+    #    Node IP is per-deployment, so allow the RFC1918 LAN + tailnet superset.
+    #    ⚠ live-validate: tighten to the actual control-plane node /24 before enabling.
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+        - ipBlock: { cidr: 100.64.0.0/10 }
+      ports:
+        - { protocol: TCP, port: 6443 }
+---
+# ── hugmesh-backend — default-deny egress ──────────────────────────────────
+# EXCLUDES the per-pod-egress-locked pods (akkoma/tuwunel/akkoma-db via
+# homeserver-egress.yaml) + the egress-proxy (its own policy, above) + the five
+# BFF/federation DB pods. Keep this NotIn set in sync with tier-ingress.yaml +
+# db-ingress.yaml + homeserver-egress.yaml + egress-vpn-interaction.yaml.
+#
+# ⚠ DOCUMENTED GAP / TODO (out of scope for this PR — note only): the five *-bff-db /
+#   federation-db pods are EXCLUDED here but have NO Egress policy anywhere
+#   (db-ingress.yaml is Ingress-ONLY; nothing selects them on the Egress axis), so
+#   their egress is DEFAULT-ALLOW. They initiate nothing outbound in normal operation
+#   (a Postgres pod is a server), so the residual risk is low, but this is a real
+#   default-allow gap. FOLLOW-UP: add a DNS-only egress policy per *-bff-db pod (mirror
+#   homeserver-egress.yaml's DNS+DB shape) so the DB tier is egress-locked too. NOT done
+#   here to keep this PR's blast radius to the tier-wide egress cutover.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-egress
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: NotIn, values: [akkoma, tuwunel, akkoma-db] }
+      # egress-proxy (Squid, app=egress-proxy) is EXCLUDED here and gets its OWN
+      # egress policy (below) — it is the homeserver federation egress path and needs
+      # public-internet (80/443) outbound, which this backend allow-set deliberately
+      # does NOT grant. Selecting it here without that allow would black-hole akkoma/
+      # tuwunel federation. Keep this NotIn in sync with the dedicated policy below.
+      - { key: app, operator: NotIn, values: [admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db, egress-proxy] }
+  policyTypes: [Egress]
+  egress:
+    # 1. DNS.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. self namespace — be-gateway -> APIs/BFFs/workloads; admin-bff -> its DBs,
+    #    clickhouse, kafka; APIs -> their *-bff-db (the DBs only accept ingress from
+    #    their consumer, governed by db-ingress.yaml); homeserver consumers ->
+    #    egress-proxy. Ports left open intra-tier (mesh-internal; ingress side is
+    #    already constrained by tier-ingress/db-ingress/homeserver-isolation).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 3. hugmesh-pki — route-access-db (:5432), Cassandra (:9042), Casdoor (JWT
+    #    validation, :8000), headscale (tailnet). The be-gateway + admin-bff-api +
+    #    federation-api reach route-access-db/Cassandra/Casdoor here.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
+    # 4. Vault (:8200) in ns `vault` — ESO / PKI cert issuance + dynamic secrets.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: vault } }
+      ports:
+        - { protocol: TCP, port: 8200 }
+    # 5. kube-apiserver — TCP/6443 to the NODE network CIDRs. REPLACES the broken
+    #    `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out (kube-proxy DNATs the
+    #    apiserver ClusterIP to the control-plane node IP:6443; Calico evaluates egress
+    #    POST-DNAT so the ClusterIP rule never matches). RFC1918 LAN + tailnet superset
+    #    because the node IP is per-deployment. ⚠ live-validate: tighten to the node /24.
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+        - ipBlock: { cidr: 100.64.0.0/10 }
+      ports:
+        - { protocol: TCP, port: 6443 }
+---
+# ── hugmesh-pki — default-deny egress ──────────────────────────────────────
+# EXCLUDES route-access-db (initiates nothing outbound) + Cassandra (gossips
+# WITHIN the pki tier — covered by the self rule below, but it carries its own
+# isolation; a broad egress would widen it). Keep the NotIn list in sync with
+# tier-ingress.yaml + db-ingress.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-egress
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: NotIn, values: [route-access-db] }
+      - { key: app.kubernetes.io/name, operator: NotIn, values: [cassandra] }
+  policyTypes: [Egress]
+  egress:
+    # 1. DNS.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. self — Casdoor -> casdoor-pg/route-access-db/Cassandra; pki/superadmin
+    #    gateways -> route-access-db/Cassandra; headscale intra-tier.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
+    # 3. Vault (:8200) — Casdoor/PKI cert + ESO dynamic secrets.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: vault } }
+      ports:
+        - { protocol: TCP, port: 8200 }
+    # 4. kube-apiserver — TCP/6443 to the NODE network CIDRs. REPLACES the broken
+    #    `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out (kube-proxy DNATs the
+    #    apiserver ClusterIP to the control-plane node IP:6443; Calico evaluates egress
+    #    POST-DNAT so the ClusterIP rule never matches). RFC1918 LAN + tailnet superset
+    #    because the node IP is per-deployment. ⚠ live-validate: tighten to the node /24.
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+        - ipBlock: { cidr: 100.64.0.0/10 }
+      ports:
+        - { protocol: TCP, port: 6443 }
+---
+# ── hugmesh-games — default-deny egress ────────────────────────────────────
+# Games BFF -> casdoor-games (self, JWT) -> casdoor-games-pg (self); games
+# workloads reached FROM backend (ingress side). Egress: DNS + self + backend
+# (hugmesh-actions sync handle) + the games-realm Casdoor stays intra-namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-egress
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # 1. DNS.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. self (games BFF -> casdoor-games -> casdoor-games-pg) + backend (sync).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 3. kube-apiserver — TCP/6443 to the NODE network CIDRs. REPLACES the broken
+    #    `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out (kube-proxy DNATs the
+    #    apiserver ClusterIP to the control-plane node IP:6443; Calico evaluates egress
+    #    POST-DNAT so the ClusterIP rule never matches). RFC1918 LAN + tailnet superset
+    #    because the node IP is per-deployment. ⚠ live-validate: tighten to the node /24.
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+        - ipBlock: { cidr: 100.64.0.0/10 }
+      ports:
+        - { protocol: TCP, port: 6443 }
+---
+# ── devops — default-deny egress (ArgoCD + observability) ─────────────────────
+# devops carries ArgoCD (self-reconcile loop) + the OTel collector path. ArgoCD
+# MUST reach: the git repo (public HTTPS egress, port 443 to 0.0.0.0/0 minus the
+# cluster-internal CIDRs) + the kube-apiserver + every workload namespace it
+# manages. The OTel collector -> uptrace is intra-tier. ⚠ A wrong allow here
+# WEDGES ArgoCD's OWN reconcile — there is no recovering it via GitOps after that,
+# only break-glass kubectl. This is the SINGLE highest-risk block; enable LAST.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-egress
+  namespace: devops
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # 1. DNS.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. self (ArgoCD components; OTel collector -> uptrace).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }
+    # 3. ArgoCD -> every workload namespace it manages (apply manifests).
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-policy } }
+    # 4. kube-apiserver — TCP/6443 to the NODE network CIDRs — ArgoCD apply.
+    #    REPLACES the broken `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out: this
+    #    was the bug that WEDGED ArgoCD — kube-proxy DNATs the apiserver ClusterIP to
+    #    the control-plane node IP:6443 and Calico evaluates egress POST-DNAT, so the
+    #    ClusterIP rule never matched and ArgoCD lost the API (no GitOps recovery, only
+    #    break-glass kubectl). Node IP is per-deployment, so allow the RFC1918 LAN +
+    #    tailnet superset. ⚠ live-validate: tighten to the control-plane node /24 first.
+    - to:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+        - ipBlock: { cidr: 100.64.0.0/10 }
+      ports:
+        - { protocol: TCP, port: 6443 }
+    # 5. ArgoCD -> the git repo over public HTTPS (and the binhost). Allow 443 to
+    #    the world MINUS the cluster-internal CIDRs (those are covered by the rules
+    #    above). NOTE: if the repo is reached via the tailnet (100.64.0.0/10) instead
+    #    of public internet, add an explicit tailnet allow here before enabling.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16   # pod CIDR  (cluster-internal — covered above)
+              - 10.96.0.0/12    # service CIDR (cluster-internal — covered above)
+              - 100.64.0.0/10   # tailnet/CGNAT (control plane — add explicit rule if repo is on tailnet)
+      ports:
+        - { protocol: TCP, port: 443 }
+---
+# ── hugmesh-backend / egress-proxy — dedicated default-deny egress ─────────
+# The Squid egress-proxy (app=egress-proxy) is the federation egress PATH for the
+# homeserver tier: akkoma/tuwunel send all outbound HTTP/S federation THROUGH it
+# (homeserver-egress.yaml denies them direct egress). It is EXCLUDED from the
+# hugmesh-backend `tier-egress` podSelector NotIn above (which has no public
+# allow-set), so this scoped policy gives it the LEAST-PRIVILEGE egress it actually
+# needs — DNS + public 80/443 — without opening the whole backend tier. Without this
+# the backend tier-egress would black-hole the proxy and break akkoma/tuwunel
+# federation. (Selecting on app=egress-proxy keeps this scoped to the 2 proxy pods.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-proxy-egress
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app: egress-proxy }
+  policyTypes: [Egress]
+  egress:
+    # 1. DNS — the proxy resolves the federation peers it dials.
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. Public internet 80/443 — the proxy's whole job (federation HTTP/S to peer
+    #    instances). World MINUS the cluster-internal CIDRs (mirrors the devops + the
+    #    egress-vpn-interaction.yaml carve-outs); peers are reached over the public
+    #    internet (or the node split-tunnel when egress-vpn is active).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16   # pod CIDR  (cluster-internal — stays intra-cluster)
+              - 10.96.0.0/12    # service CIDR (cluster-internal — stays intra-cluster)
+              - 100.64.0.0/10   # tailnet/CGNAT (control plane — direct, not via proxy)
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 80 }

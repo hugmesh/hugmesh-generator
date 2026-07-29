@@ -1,0 +1,8 @@
+# CPU-default Piper TTS. No CUDA / no nvidia base — onnxruntime (CPU) is the inference
+# backend and ships espeak-ng + its data inside the piper-tts wheel (no apt espeak-ng).
+# Pinned, no 'latest'. Bump deliberately; the container-build spike re-resolves wheels.
+piper-tts==1.4.2
+onnxruntime==1.20.1
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4

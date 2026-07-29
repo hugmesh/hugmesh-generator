@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - pvc.yaml
+# The "uptrace-auth" (pg-password / project-token) and "clickhouse-auth"
+# (password) Secrets are now materialized by External Secrets Operator from Vault
+# (ClusterSecretStore "hugmesh-vault", remote paths secret/hugmesh/uptrace
+# and secret/hugmesh/clickhouse) — see manifests/external-secrets.
+# The offline/USB path (KEYS/vault/secrets.json) is created by keys-provision.
+# The workloads keep their existing secretKeyRef usage unchanged.

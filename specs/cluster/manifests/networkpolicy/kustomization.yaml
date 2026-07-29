@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - tier-ingress.yaml
+  - db-ingress.yaml   # ADR-32 DB-hardening: per-DB-pod (Postgres :5432) + Cassandra (:9042) Ingress policies; paired with tier-ingress NotIn excludes (ships dark, MANUAL-sync, live-validate-only)
+  - harbor-ingress.yaml   # Harbor registry per-pod Ingress backstop (be-gateway + hugmesh-image-builds only); paired with the tier-ingress `app: harbor` NotIn exclude
+  - homeserver-isolation.yaml
+  - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
+  - egress-vpn-interaction.yaml   # per-service opt-in (hugmesh.systems/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)
+  - tor-onion-marked.yaml   # per-service opt-in (hugmesh.systems/tor-onion=true) egress to the node Tor SOCKS proxy; forward-hook for pod-egress-via-tor; PRUNED when tor is not selected (default-off)
+  # SHIPS DARK — tier-egress.yaml (tier-wide default-deny EGRESS, CLUSTER-HARDENING-PLAN §B)
+  # is INTENTIONALLY NOT listed here. This auto-sync app (apps/08-networkpolicy.yaml) stays
+  # INGRESS-ONLY. Default-deny egress is HIGH blast radius (a missed allow black-holes a
+  # whole namespace; a wrong devops rule wedges ArgoCD's own reconcile), so it ships dark
+  # behind the SEPARATE MANUAL-sync overlay + app:
+  #   manifests/networkpolicy-egress/  (its own kustomization, resources: [] by default)
+  #   apps/08a-networkpolicy-egress.yaml  (NO `automated:` block — manual sync)
+  # ENABLE per-namespace, one at a time, only after LIVE on-cluster validation. DO NOT
+  # add tier-egress.yaml to THIS resources: list — keep ingress (auto-sync) and egress
+  # (manual, gated) on separate ArgoCD apps so the egress cutover can never auto-apply.

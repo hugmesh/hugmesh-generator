@@ -1,0 +1,66 @@
+# ============================================================================
+# spring-bff/recipe.yaml — ANCHORED brand-delta edits for the Spring-BFF class.
+# ============================================================================
+#
+# Applied by scripts/tooling/render-recipe.js onto EACH BFF's OWN read-only base
+# (seeded from the admin-bff-api Phase-3 exemplar; generalizes to user/mod/forum/
+# owncast/tube/wiki-bff-api + federation-api). NO whole-file overlay: the base's
+# own spring.application.name / artifactId / packages-to-scan / OIDC application
+# (CODE identity, per-repo, NOT tenant brand) are left UNTOUCHED — only the
+# brand-coupled env-DEFAULT seams + the CI include org/group are rewritten.
+#
+# PRESENCE-TOLERANT: the token key-set is per-repo, not per-archetype. admin-bff
+# templates mfa.totp.issuer / admin-emails / appstore.builder.registry; user-bff
+# has NONE of those but ADDS an OIDC redirect-uri host admin lacks. Every anchor
+# below is a match-if-present edit over the class UNION, so an anchor absent in a
+# given repo simply matches 0 and no-ops (never injects phantom config).
+#
+# find  = the UPSTREAM literal (drift oracle: validate-repo-templates.sh asserts
+#         it is still present in a freshly-pulled base).
+# replace = the tenant-branded form (CLUSTER_DOMAIN / BRAND_TITLE / GENERATOR_ORG_GROUP).
+#
+# SKELETON APP_SLUG CONSTRAINT: the base-absent _skeleton is a RUNNABLE example
+# BFF whose Java package is systems.hugmesh.<app_slug>. Java packages cannot
+# contain '-', so a repos[].identity app_slug destined for a SKELETON render of
+# this archetype MUST match [a-z0-9]+ (lowercase alphanumeric, no hyphens).
+# Overlay-on-base renders are unaffected (the recipe below never touches
+# packages). See _skeleton/README.md.hbs, "APP_SLUG constraint".
+edits:
+  - file: src/main/resources/application.yml
+    optional: false          # every Spring BFF has an application.yml
+    anchors:
+      # OIDC issuer + JWKS default host (appears >=1x: issuer-uri and, nested,
+      # jwk-set-uri). REQUIRED — a BFF with no id.<domain> issuer seam is a drift.
+      - id: oidc-issuer-host
+        find: "https://id.hugmesh.systems"
+        replace: "https://id.{{CLUSTER_DOMAIN}}"
+        required: true
+      # OIDC login redirect host (user/mod/... BFFs; admin-bff lacks it -> no-op).
+      - id: oidc-redirect-host
+        find: "https://hugmesh.systems/login/callback"
+        replace: "https://{{CLUSTER_DOMAIN}}/login/callback"
+      # TOTP issuer = the authenticator display brand (admin-bff only -> no-op elsewhere).
+      # NOTE the `{{!}}` empty-comment before the closing env-brace: it stops
+      # Handlebars gluing the token's `}}` to the env-default's `}` into a `}}}`
+      # triple-mustache lex error (same trick as the Phase-3 whole-file exemplar).
+      - id: mfa-totp-issuer
+        find: "${APP_MFA_TOTP_ISSUER:HugMesh}"
+        replace: "${APP_MFA_TOTP_ISSUER:{{BRAND_TITLE}}{{!}}}"
+      # Platform admin-notification address default (admin-bff only -> no-op elsewhere).
+      - id: admin-emails-host
+        find: "admin@hugmesh.systems"
+        replace: "admin@{{CLUSTER_DOMAIN}}"
+      # Appstore builder registry host (admin-bff only -> no-op elsewhere).
+      - id: appstore-registry-host
+        find: "registry.hugmesh.systems"
+        replace: "registry.{{CLUSTER_DOMAIN}}"
+  - file: .gitlab-ci.yml
+    optional: false
+    anchors:
+      # The ONLY in-source brand token in CI: the centralized pentest-stage
+      # include org/group. The rest of each repo's CI legitimately differs
+      # (stages, mvnw verb) and is NOT overlaid — only this include line is edited.
+      - id: ci-include-org
+        find: "HugMesh/hugmesh-generator"
+        replace: "{{GENERATOR_ORG_GROUP}}"
+        required: true

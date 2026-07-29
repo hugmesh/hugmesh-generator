@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+
+description="Materialise the v3 Tor onion service (managed torrc + off-git onion keypair)"
+
+# Tor onion-service reconcile: writes the managed /etc/tor/torrc, ensures the onion
+# state dir (/var/lib/tor/hugmesh-onion, tor:tor 0700), then (re)starts the DISTRO
+# `tor` service so it mints/refreshes the v3 keypair. Runs ONCE at boot (a oneshot);
+# the 24h refresh half is a cron.d drop-in (OpenRC has no native timer; cronie is in
+# the node image). The distro `tor` service does the actual daemon supervision.
+#
+# Enabled (rc-update add) ONLY when the 'tor' optional service is selected (PR gate)
+# — otherwise it stays a baked-but-inert no-op. The agent is FAIL-SOFT: any error
+# preserves the existing keypair + torrc and exits 0, so a failed reconcile never
+# faults the boot or tears down a working onion service.
+
+command="/usr/sbin/hugmesh-tor-reconcile"
+command_background=false
+
+depend() {
+    need net
+    use dns logger
+    # After first-boot provisioning, and BEFORE the distro tor service so the managed
+    # torrc + onion state dir exist when tor first reads its config.
+    after keys-provision tailscaled
+    before tor
+}
+
+start() {
+    ebegin "Reconciling the Tor v3 onion service (off-git keypair; stable .onion hostname)"
+    "${command}"
+    eend $? "Tor reconcile reported an error (cached keypair + torrc preserved)"
+}
+
+stop() {
+    return 0
+}

@@ -1,0 +1,27 @@
+# compose.social-profile.yaml — merge overlay that puts the heavy third-party
+# SOCIAL tier (Synapse/Matrix + the full Mastodon web/sidekiq/streaming + their
+# Postgres/Redis) behind the `social` compose profile, so the core platform comes
+# up WITHOUT them. compose.local.yaml `include:`s compose.real.yaml (the service
+# definitions) AND this file (the profile tags); compose merges the two by service
+# name, so each service below just ADDS `profiles: [social]` to its real def.
+#
+# Casdoor + casdoor-db + Cassandra are NOT listed here — they are core platform
+# dependencies (identity + gateway datastore) and must always come up.
+#
+# Enable the social tier with:  make stack-up SOCIAL=1
+#                       or:     docker compose ... --profile social up -d
+name: hugmesh-local
+
+services:
+  synapse:
+    profiles: ["social"]
+  mastodon-db:
+    profiles: ["social"]
+  mastodon-redis:
+    profiles: ["social"]
+  mastodon-web:
+    profiles: ["social"]
+  mastodon-sidekiq:
+    profiles: ["social"]
+  mastodon-streaming:
+    profiles: ["social"]

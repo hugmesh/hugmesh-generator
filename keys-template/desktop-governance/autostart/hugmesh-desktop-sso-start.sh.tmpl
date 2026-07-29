@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# hugmesh-desktop-sso-start.sh (TEMPLATE)
+#   -> /etc/hugmesh/desktop-governance/hugmesh-desktop-sso-start.sh
+#
+# GEN-SSO session-start wrapper, exec'd once per login by the XDG autostart entry
+# (../autostart/hugmesh-desktop-sso.desktop). It chains the two GEN-SSO seams:
+#   1. deposit the SSO access token (oidc-token-deposit.sh) into ${XDG_RUNTIME_DIR}
+#   2. forward it as a per-user Flatpak bearer (bearer-forward.sh) to the registry
+# so Plasma/GNOME-Software/Discover sees the admin-curated store as the user.
+#
+# @@CLUSTER_DOMAIN@@ appears only in this header; the wrapper is domain-agnostic
+# (the deposited token + the rendered bearer-forward.sh carry the domain).
+#
+# GOVERNED-GATED / SHIPS-DARK: on an ungoverned image (no rendered SSSD-OIDC conf
+# and no rendered bearer-forward.sh) this exits immediately having done nothing —
+# no token deposit, no header, no sudo. The deposit + forward scripts are ALSO
+# independently governed-gated, so this is defense-in-depth.
+#
+# LOGOUT CLEAR (LXDE/XFCE, NOT Plasma): bearer-forward.sh self-installs a logout
+# clear into ~/.config/plasma-workspace/shutdown/ — which only Plasma runs and so
+# NEVER fires on this image's LXDE/XFCE sessions. We therefore install our OWN
+# logout clear into ~/.bash_logout (honored by the login shell on session exit)
+# AND clear any stale token/header at THIS session start, so a stale bearer can
+# never outlive a session on LXDE/XFCE.
+set -uo pipefail
+
+GOV_DIR="/etc/hugmesh/desktop-governance"
+DEPOSIT="${GOV_DIR}/oidc-token-deposit.sh"
+FORWARD="${GOV_DIR}/bearer-forward.sh"
+
+# is_governed(): identical signal to oidc-token-deposit.sh / provision.sh.
+is_governed() {
+    [ -r /etc/sssd/conf.d/hugmesh-oidc.conf ] && return 0
+    [ -x "${FORWARD}" ] && return 0
+    return 1
+}
+
+# Ungoverned => inert.
+is_governed || exit 0
+
+# 1. Clear any stale token + per-user header left from a previous session FIRST
+#    (LXDE/XFCE have no Plasma shutdown hook, so this start-of-session clear is the
+#    backstop that prevents a prior login's bearer leaking into this one).
+[ -x "${DEPOSIT}" ] && "${DEPOSIT}" --clear >/dev/null 2>&1 || true
+[ -x "${FORWARD}" ] && "${FORWARD}" --clear >/dev/null 2>&1 || true
+
+# 2. Install an LXDE/XFCE-compatible logout clear via ~/.bash_logout (idempotent).
+#    The login shell sources ~/.bash_logout on exit; on session end the desktop's
+#    shells terminate and the clear runs. This is the LXDE/XFCE analogue of the
+#    Plasma-only shutdown hook bearer-forward installs (which never fires here).
+install_bash_logout_clear() {
+    local rc="${HOME}/.bash_logout"
+    local marker="# hugmesh-desktop-sso: clear SSO bearer/token on logout"
+    [ -n "${HOME:-}" ] || return 0
+    # Idempotent: only add the block once.
+    if [ -f "${rc}" ] && grep -qF "${marker}" "${rc}" 2>/dev/null; then
+        return 0
+    fi
+    {
+        printf '\n%s\n' "${marker}"
+        printf '[ -x "%s" ] && "%s" --clear >/dev/null 2>&1 || true\n' "${DEPOSIT}" "${DEPOSIT}"
+        printf '[ -x "%s" ] && "%s" --clear >/dev/null 2>&1 || true\n' "${FORWARD}" "${FORWARD}"
+    } >> "${rc}" 2>/dev/null || true
+    chmod 0644 "${rc}" 2>/dev/null || true
+}
+install_bash_logout_clear
+
+# 3. Deposit this session's token, then forward it as the per-user bearer.
+if [ -x "${DEPOSIT}" ]; then
+    "${DEPOSIT}" >/dev/null 2>&1 || true
+fi
+if [ -x "${FORWARD}" ]; then
+    "${FORWARD}" >/dev/null 2>&1 || true
+fi
+
+exit 0

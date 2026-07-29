@@ -1,0 +1,224 @@
+# meshbridge-register — registers the meshbridge APPSERVICE with tuwunel.
+# Conduit-family (tuwunel) has no /_synapse-style registration API and no
+# registration-file config knob we can mount: appservices are registered via the
+# ADMIN ROOM (`!admin appservices register` + the registration YAML in a code
+# block). This PostSync reconcile Job is the hook that posts that command
+# (twinned on manifests/tuwunel/admin-sync-job.yaml: python:3.12-alpine, pure
+# stdlib urllib, runAsNonRoot, drop ALL caps, readOnlyRootFilesystem,
+# Vault-sourced admin token, idempotent, ArgoCD PostSync).
+#
+# Flow: wait for tuwunel /_matrix/client/versions; resolve the admin room alias
+# with the tuwunel-admin token (same Secret/mount the admin-sync Job uses);
+# build the registration YAML inline from the ESO-mounted meshbridge-appservice
+# token pair (id meshbridge, url -> the meshbridge Service :8009, exclusive
+# user namespace @mesh-.*); post the admin command; then poll the room briefly
+# for the bot's reply ("registered"/"already exists" -> done; a definitive
+# rejection -> fail loud; no reply -> WARN and exit 0, the PostSync hook reruns
+# on every sync so registration converges).
+#
+# TOKEN HYGIENE: the registration YAML necessarily CONTAINS as_token/hs_token —
+# it goes into the (server-admins-only) admin room over in-namespace HTTP, which
+# is exactly how tuwunel wants it delivered. But the tokens are NEVER printed:
+# every log line passes through redact().
+#
+# !!! The tuwunel admin command channel + its reply wording are version-
+# !!! specific. This is a working scaffold — validate the `appservices register`
+# !!! command (and the reply strings the poll matches on) against the deployed
+# !!! tuwunel before relying on it in production.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meshbridge-register-script
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: meshbridge
+data:
+  register.py: |
+    #!/usr/bin/env python3
+    """Register the meshbridge appservice via the tuwunel admin room.
+    Pure stdlib (urllib) — no extra packages. Idempotent: re-registering an
+    existing appservice is reported by the admin bot ("already exists") and
+    treated as success."""
+    import json, os, sys, time, urllib.request, urllib.error
+
+    MATRIX     = os.environ.get("MATRIX_URL", "http://tuwunel.hugmesh-backend.svc.cluster.local:8008")
+    SERVER     = os.environ.get("MATRIX_SERVER_NAME", "hugmesh.systems")
+    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:hugmesh.systems")
+    # The bridge's AS-push URL — must match the meshbridge Service (deployment.yaml).
+    AS_URL     = os.environ.get("MESHBRIDGE_AS_URL", "http://meshbridge.hugmesh-backend.svc.cluster.local:8009")
+
+    # Privileged Matrix access token (Secret tuwunel-admin, key token) — the same
+    # ESO-materialized credential admin-sync uses. Never committed, never printed.
+    MATRIX_TOKEN = open("/secrets/matrix/token").read().strip()
+    # The appservice registration pair (Secret meshbridge-appservice) — the SAME
+    # files the bridge Deployment mounts, so Job and bridge can never drift.
+    AS_TOKEN = open("/secrets/meshbridge/as_token").read().strip()
+    HS_TOKEN = open("/secrets/meshbridge/hs_token").read().strip()
+
+    def redact(s):
+        """NEVER print the tokens — strip them from anything logged."""
+        for t in (MATRIX_TOKEN, AS_TOKEN, HS_TOKEN):
+            if t:
+                s = s.replace(t, "<redacted>")
+        return s
+
+    def _get(url, headers=None):
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def _post(url, payload, headers=None):
+        h = {"Content-Type": "application/json"}
+        h.update(headers or {})
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers=h)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(MATRIX + "/_matrix/client/versions", timeout=5); return
+            except Exception:
+                time.sleep(3)
+        raise SystemExit("tuwunel not reachable")
+
+    def resolve_room(alias):
+        """Resolve a room alias (#name:server) to its room id, or None."""
+        h = {"Authorization": "Bearer " + MATRIX_TOKEN}
+        enc = alias.replace("#", "%23").replace(":", "%3A")
+        try:
+            room = _get(f"{MATRIX}/_matrix/client/v3/directory/room/{enc}", h)
+            return room.get("room_id")
+        except urllib.error.HTTPError as e:
+            print(f"  WARN room {alias} not resolvable: {e}"); return None
+
+    # The appservice registration (matrix-org registration.yaml shape). Built
+    # inline (plain string — the token values are opaque url-safe strings, no
+    # YAML quoting hazards) so there is exactly ONE source for it: this Job +
+    # the mounted Secret. The @mesh-.* namespace is EXCLUSIVE: tuwunel refuses
+    # normal registration of those localparts, so mesh identities cannot be
+    # squatted (docs/MESHTASTIC-BRIDGE.md "Identity model").
+    def registration_yaml():
+        return (
+            "id: meshbridge\n"
+            f"url: {AS_URL}\n"
+            f"as_token: {AS_TOKEN}\n"
+            f"hs_token: {HS_TOKEN}\n"
+            "sender_localpart: meshbridge\n"
+            "rate_limited: false\n"
+            "namespaces:\n"
+            "  users:\n"
+            "    - exclusive: true\n"
+            "      regex: \"@mesh-.*\"\n"
+            "  aliases: []\n"
+            "  rooms: []\n"
+        )
+
+    wait_ready()
+    room_id = resolve_room(ADMIN_ROOM)
+    if not room_id:
+        # No admin room yet (fresh homeserver mid-bootstrap). The PostSync hook
+        # reruns on every sync — converge later rather than crash-looping now.
+        print(f"WARN admin room {ADMIN_ROOM} not resolvable; retrying on next sync")
+        sys.exit(0)
+    rid = room_id.replace(":", "%3A")
+    h = {"Authorization": "Bearer " + MATRIX_TOKEN}
+
+    # tuwunel registers appservices via this admin-room command with the YAML in
+    # a code block (see the header caveat).
+    body = "!admin appservices register\n```yaml\n" + registration_yaml() + "```"
+    sent = _post(f"{MATRIX}/_matrix/client/v3/rooms/{rid}/send/m.room.message",
+                 {"msgtype": "m.text", "body": body}, h)
+    own_event = sent.get("event_id", "")
+    print(f"posted appservices-register command to {ADMIN_ROOM} ({own_event})")
+
+    # Poll ~60 s for the admin bot's reply mentioning "meshbridge". Our own
+    # command message also mentions it, so skip our event id.
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            msgs = _get(f"{MATRIX}/_matrix/client/v3/rooms/{rid}/messages?dir=b&limit=20", h)
+        except urllib.error.HTTPError as e:
+            print(f"  WARN messages poll: {e}"); continue
+        for ev in msgs.get("chunk") or []:
+            if ev.get("type") != "m.room.message" or ev.get("event_id") == own_event:
+                continue
+            text = ((ev.get("content") or {}).get("body") or "")
+            if "meshbridge" not in text.lower() or text.startswith("!admin"):
+                continue
+            low = text.lower()
+            if "registered" in low or "already exists" in low or "already registered" in low:
+                print("meshbridge appservice registered: " + redact(text.splitlines()[0]))
+                sys.exit(0)
+            if any(w in low for w in ("error", "failed", "invalid", "rejected", "denied")):
+                print("ERROR appservice registration rejected: " + redact(text))
+                sys.exit(1)
+    # No reply — the bot may be slow or its wording changed (header caveat).
+    # WARN and exit 0: the PostSync hook reruns each sync, and the bridge itself
+    # surfaces an unregistered state (AS pushes simply never arrive).
+    print("WARN no admin-bot reply within 60s; will retry on next sync")
+    sys.exit(0)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meshbridge-register
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: meshbridge
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      # app label referenced by meshbridge-tuwunel-interaction (network-policy.yaml):
+      # it is what lets this Job reach tuwunel:8008 past homeserver-isolation.
+      labels: { app: meshbridge-register }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.systems/backend: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: register
+          image: python:3.12-alpine
+          command: ["python3", "/script/register.py"]
+          env:
+            - { name: MATRIX_URL,         value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
+            # Registration is issued by posting into this admin room (membership
+            # of it IS server admin in Conduit-family — see admin-sync-job.yaml).
+            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:hugmesh.systems" }
+            # Where tuwunel will push AS transactions — the meshbridge Service.
+            - { name: MESHBRIDGE_AS_URL,  value: "http://meshbridge.hugmesh-backend.svc.cluster.local:8009" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script,     mountPath: /script,              readOnly: true }
+            - { name: matrix,     mountPath: /secrets/matrix,      readOnly: true }
+            - { name: meshbridge, mountPath: /secrets/meshbridge,  readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: meshbridge-register-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed.
+        # tuwunel-admin holds the privileged Matrix access token (key "token",
+        # the admin-sync credential); meshbridge-appservice holds the as/hs
+        # token pair (the SAME Secret the bridge Deployment mounts — one source,
+        # no drift between what is registered and what the bridge presents).
+        - name: matrix
+          secret: { secretName: tuwunel-admin }
+        - name: meshbridge
+          secret: { secretName: meshbridge-appservice }

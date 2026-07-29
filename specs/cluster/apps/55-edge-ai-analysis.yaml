@@ -1,0 +1,26 @@
+# edge-ai-analysis — task-oriented analysis API in front of the edge-ai model server
+# (DEFAULT-OFF, GPU-gated via its edge-ai dependency). Turns the raw OpenAI /v1 model
+# API into structured verdicts (image NSFW/abuse classify + perceptual-hash, log
+# triage) that Phase-A consumers (AIOps → @system Matrix DM; avatar vision moderation
+# → mod queue) reach over k8s + the tailnet. Opt-in: baked only when 'edge-ai-analysis'
+# is selected (--with-edge-ai-analysis / in --optional-services). dependsOn edge-ai —
+# gate_optional_services prunes it (with the edge-ai slug, or on its own deselection).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-edge-ai-analysis
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"   # after edge-ai (wave 2) so the upstream + ns exist
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/edge-ai-analysis
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-inference
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

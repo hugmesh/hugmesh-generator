@@ -1,0 +1,48 @@
+# edge-ai-models — the MODEL LIBRARY configuration exposed to the mesh. This is the
+# single knob surface for the edge-AI inference node: which models the catalog
+# offers, which are preloaded on boot, and the serving parameters (context length,
+# quantization, keep-alive, concurrency). Admin/superadmin editable (per-domain,
+# role-gated — it fits the Service-Catalog model); the stage4 builder rewrites the
+# `preload`, `runtime`, and `default-model` values from --edge-ai-models /
+# --edge-ai-runtime / --edge-ai-model-default at image build time, and a live
+# cluster can edit this ConfigMap (then restart the Deployment) to retune.
+#
+# RUNTIME: Ollama (OpenAI-compatible /v1 API on :11434). The catalog below uses
+# Ollama model tags; swap `runtime: vllm` + an OCI model ref for a vLLM backend
+# (docs/EDGE-AI.md "Runtimes").
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-ai-models
+  namespace: hugmesh-inference
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/slug: edge-ai
+data:
+  # The inference runtime: ollama (default) | vllm. Patched by --edge-ai-runtime.
+  runtime: "ollama"
+  # Models PRELOADED on first boot (comma-separated Ollama tags). Patched by
+  # --edge-ai-models. Keep this lean for an 8 GB Jetson Orin Nano; an x86 RTX host
+  # can preload more. Pulls happen in the background after the server is live.
+  preload: "llama3.2:3b,nomic-embed-text"
+  # The model returned when an OpenAI request omits an explicit model. Patched by
+  # --edge-ai-model-default.
+  default-model: "llama3.2:3b"
+  # Serving knobs (env-mapped into the Ollama container).
+  context-length: "8192"        # OLLAMA_CONTEXT_LENGTH
+  keep-alive: "30m"             # OLLAMA_KEEP_ALIVE — how long an idle model stays resident
+  max-loaded-models: "1"        # OLLAMA_MAX_LOADED_MODELS — VRAM-bound on edge GPUs
+  num-parallel: "2"             # OLLAMA_NUM_PARALLEL — concurrent requests per model
+  flash-attention: "true"       # OLLAMA_FLASH_ATTENTION
+  # The model CATALOG offered to the mesh (admin UI / Service-Catalog reads this).
+  # A model not in `preload` is pulled on first request (cold start). Curate per the
+  # node's VRAM. JSON so the admin console + federation manifest can render it.
+  catalog.json: |
+    [
+      { "tag": "llama3.2:3b",        "kind": "chat",      "params": "3B",   "quant": "Q4_K_M", "vramGiB": 3,  "note": "general chat — fits 8GB edge GPUs" },
+      { "tag": "llama3.1:8b",        "kind": "chat",      "params": "8B",   "quant": "Q4_K_M", "vramGiB": 6,  "note": "stronger chat — needs >=8GB headroom" },
+      { "tag": "qwen2.5-coder:7b",   "kind": "chat",      "params": "7B",   "quant": "Q4_K_M", "vramGiB": 6,  "note": "code assistance" },
+      { "tag": "nomic-embed-text",   "kind": "embedding", "params": "137M", "quant": "F16",    "vramGiB": 1,  "note": "RAG embeddings (/v1/embeddings)" },
+      { "tag": "llava:7b",           "kind": "vision",    "params": "7B",   "quant": "Q4_K_M", "vramGiB": 6,  "note": "vision/multimodal" },
+      { "tag": "whisper",            "kind": "asr",       "params": "—",    "quant": "—",      "vramGiB": 2,  "note": "speech-to-text (voice) — via the whisper sidecar, see docs/EDGE-AI.md" }
+    ]

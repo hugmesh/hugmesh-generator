@@ -1,0 +1,8 @@
+# Gentoo HARDENED kernel sources. sys-kernel/hardened-sources (grsecurity) was
+# removed from the tree in 2017; the modern Gentoo hardened kernel is
+# gentoo-sources built under the hardened profile + the KSPP/SELinux config
+# fragment (specs-x86/kernel/hardened-k8s.config, + gpu.config for GPU roles).
+# The `symlink` USE makes the ebuild point /usr/src/linux at these sources on
+# install, so the kernel
+# build step finds them even if run right after the package emerge.
+sys-kernel/gentoo-sources symlink

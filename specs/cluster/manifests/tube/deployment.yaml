@@ -1,0 +1,152 @@
+# LocalTube — tube-bff-api + tube-ui + tube-media Nginx sidecar.
+# GPU-gated x86 optional service (DEFAULT-OFF). All containers share one
+# Deployment so they co-locate on the amd64 GPU worker (yt-dlp transcoding
+# benefits from GPU headroom). tube-media and tube-bff share /var/tube-content
+# (emptyDir for dev; swap for a node-pinned PV for persistence).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-tube
+  namespace: hugmesh-tube
+  labels:
+    app: hugmesh-tube
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-tube } }
+  template:
+    metadata: { labels: { app: hugmesh-tube } }
+    spec:
+      # GPU-gated: require the x86_64 GPU worker (labelled by keys-provision).
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        hugmesh.systems/compute: gpu
+      securityContext:
+        seLinuxOptions:
+          # c35 collided with casdoor-games; tube->c55 (free).
+          type: container_t
+          level: "s0:c55"
+      containers:
+        # ── tube-bff-api — Spring Boot BFF (Google OAuth sync + download queue) ──
+        - name: tube-bff-api
+          image: hugmesh-systems/tube-bff-api
+          ports:
+            - { name: bff-http, containerPort: 8080, protocol: TCP }
+          env:
+            # Systems-realm Casdoor: JWKS auto-discovered via CASDOOR_ISSUER_URI.
+            - { name: CASDOOR_ISSUER_URI,
+                value: "http://casdoor.hugmesh-casdoor.svc.cluster.local:8000" }
+            - { name: SPRING_R2DBC_URL,
+                value: "r2dbc:postgresql://hugmesh-tube-db.hugmesh-tube.svc.cluster.local:5432/tube_bff" }
+            # HMAC key for tube-media signed URLs (ESO -> tube-media-key Secret).
+            - { name: TUBE_MEDIA_KEY,
+                valueFrom: { secretKeyRef: { name: tube-media-key, key: mediaKey } } }
+            # DEK for tube access-token encryption (ESO -> tube-token-dek Secret).
+            - { name: TUBE_TOKEN_DEK,
+                valueFrom: { secretKeyRef: { name: tube-token-dek, key: dek } } }
+            # Google OAuth2 client for YouTube subscription sync.
+            - { name: GOOGLE_OAUTH_CLIENT_ID,
+                valueFrom: { secretKeyRef: { name: google-oauth, key: clientId } } }
+            - { name: GOOGLE_OAUTH_CLIENT_SECRET,
+                valueFrom: { secretKeyRef: { name: google-oauth, key: clientSecret } } }
+          resources:
+            requests: { cpu: 300m, memory: 384Mi }
+            limits:   { cpu: "2",  memory: 1Gi }
+          volumeMounts:
+            - { name: tube-content, mountPath: /var/tube-content }
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+
+        # ── tube-ui — Angular remote micro-frontend ───────────────────────────────
+        - name: tube-ui
+          image: hugmesh-systems/tube-ui
+          ports:
+            - { name: ui-http, containerPort: 8080, protocol: TCP }
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+
+        # ── tube-media — Nginx sidecar serving signed-URL-gated content ──────────
+        # Serves /tube/content/** from /var/tube-content. Validates presence of the
+        # HMAC sig= query parameter as a stub gate (full HMAC-SHA256 + expiry
+        # verification is enforced inside tube-bff-api before the signed URL is
+        # issued; the gateway additionally requires ROLE_TUBE). Stub: reject if sig
+        # is absent; the real owner + expiry two-wall lives in tube-bff-api.
+        - name: tube-media
+          image: nginx
+          ports:
+            - { name: media-http, containerPort: 8081, protocol: TCP }
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: tube-content,    mountPath: /var/tube-content, readOnly: true }
+            - { name: tube-media-conf, mountPath: /etc/nginx/conf.d, readOnly: true }
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+
+      volumes:
+        - name: tube-content
+          emptyDir: {}   # dev default; replace with a node-pinned PVC
+        - name: tube-media-conf
+          configMap:
+            name: tube-media-nginx-conf
+
+---
+# tube-media nginx configuration — stub signed-URL gate.
+# Requires sig= query param; returns 403 if absent. Full HMAC-SHA256 + expiry
+# validation is the tube-bff-api's responsibility (this is defense-in-depth only).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tube-media-nginx-conf
+  namespace: hugmesh-tube
+data:
+  default.conf: |
+    server {
+      listen 8081;
+      server_name _;
+
+      location /tube/content/ {
+        # Stub signed-URL gate: reject if sig param absent.
+        # Full HMAC-SHA256 + exp= + sub= + domain= validation enforced by tube-bff.
+        if ($arg_sig = "") {
+          return 403 "missing sig";
+        }
+        alias /var/tube-content/;
+      }
+    }
+
+---
+# ── Services ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-tube-bff-api
+  namespace: hugmesh-tube
+spec:
+  selector: { app: hugmesh-tube }
+  ports:
+    - { name: http, port: 8080, targetPort: bff-http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-tube-ui
+  namespace: hugmesh-tube
+spec:
+  selector: { app: hugmesh-tube }
+  ports:
+    - { name: http, port: 8080, targetPort: ui-http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-tube-media
+  namespace: hugmesh-tube
+spec:
+  selector: { app: hugmesh-tube }
+  ports:
+    - { name: http, port: 8081, targetPort: media-http }

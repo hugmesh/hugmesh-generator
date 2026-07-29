@@ -1,0 +1,28 @@
+# casdoor-games — the GAMES-realm OAuth2 / OIDC identity provider. A SEPARATE,
+# INDEPENDENT Casdoor from the systems one (apps/05-casdoor.yaml), mirroring the
+# canonical hugmesh.games Casdoor (org "threewizards", app "threewizards-app").
+# GitHub login lets people sign up as a native games "player". Runs in the
+# hugmesh-games namespace on the games (GPU) worker, on its OWN external Postgres.
+#
+# sync-wave "1": brought up BEFORE the games BFF (apps/50-games, wave "2") and
+# hugmesh-actions (apps/30-hugmesh-apis, wave "2") so the JWKS endpoint + the
+# threewizards realm exist before those consumers come online.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: casdoor-games
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/casdoor-games
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-games
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

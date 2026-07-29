@@ -1,0 +1,430 @@
+#!/bin/bash
+# hugmesh-cloud-deploy — the shared, flag-driven DRIVER for deploying a
+# PACKAGED HugMesh x86 image (scripts/cloud-package.sh output) to a cloud /
+# virtualization target. It is the deliberate SIBLING of hugmesh-go-live
+# (same one-driver/thin-front-ends shape, same registry discipline, same
+# fail-safe gates) but a DIFFERENT LIFECYCLE: go-live flips a local posture
+# marker; cloud-deploy plans/applies/destroys REMOTE resources — so it lives in
+# its own driver + registry instead of extending the go-live one.
+#
+# ── FAIL-SAFE MODEL ─────────────────────────────────────────────────────────────
+# plan (the DEFAULT) is a PURE offline render: it writes readable FILES into
+# --out-dir and mutates NOTHING — no cloud calls, no creds reads, no state.
+# The ONLY executables it emits are the provider's apply script (apply.sh, or
+# oc-apply.sh for openshift-cnv; generic-qcow2 has none) and destroy.sh, and
+# BOTH re-confirm on their own TTY before mutating — they stay fail-safe even
+# when the operator runs them directly. The driver's own `apply`/`destroy`
+# verbs add a SECOND gate in front: a TTY confirmation (no --yes flag exists;
+# CD_ASSUME_YES=1 is honoured for hermetic tests only) plus a credentials
+# custody check (file present, 0600) BEFORE any emitted script runs. `status`
+# never calls a cloud API — it reads the state hints the apply script recorded
+# and prints the provider's check commands.
+#
+# ── CREDENTIAL CUSTODY (same bar as go-live/phone-wizard token drops) ───────────
+# Secrets never ride argv and are never copied: --creds-file is referenced by
+# PATH only (AWS_SHARED_CREDENTIALS_FILE / KUBECONFIG). azure-image refuses to
+# handle credentials at all (existing `az login` session required; its optional
+# creds file is a NON-secret defaults fragment). The driver enforces 0600 on
+# any creds file before running an emitted script.
+#
+# ── SUBCOMMANDS ─────────────────────────────────────────────────────────────────
+#   list                    list the providers (id, format, state, one-liner)
+#   plan   --provider ID    (DEFAULT, pure) EMIT the provider's artifacts into
+#                           --out-dir and print the next steps. NEVER mutates.
+#   apply  --provider ID    TTY-confirmed: creds-check, then run the plan's
+#                           emitted apply script from --out-dir.
+#   status --provider ID    print recorded state hints + the provider's check
+#                           commands (read-only; never calls cloud APIs).
+#   destroy --provider ID   TTY-confirmed: creds-check, then run the plan's
+#                           emitted destroy.sh from --out-dir.
+#
+# ── ENV SEAMS (for the offline logic test; mirrors the GL_*/DR_* idiom) ─────────
+#   CD_ETC_HUGMESH  base for cluster-domain (def /etc/hugmesh)
+#   CD_PROVIDERS_LIB   registry lib path (def /usr/lib/hugmesh/cloud-deploy-providers.sh)
+#   CD_OUT_DIR         default output dir (def /var/lib/hugmesh/cloud-deploy/out)
+#   CD_ASSUME_YES=1    skip the TTY confirmation gates (hermetic tests ONLY)
+#   CD_ENTRA_TENANT    Entra tenant id for the azure-image entra/ emits
+
+set -uo pipefail
+
+ETC="${CD_ETC_HUGMESH:-/etc/hugmesh}"
+CLUSTER_DOMAIN_FILE="${ETC}/cluster-domain"
+PROVIDERS_LIB="${CD_PROVIDERS_LIB:-/usr/lib/hugmesh/cloud-deploy-providers.sh}"
+DEFAULT_OUT_DIR="${CD_OUT_DIR:-/var/lib/hugmesh/cloud-deploy/out}"
+LOG_TAG="hugmesh-cloud-deploy"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+die()  { echo "error: $*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ── Input validation (security-relevant; go-live validate_inputs precedent) ──────
+# Every one of these values is %q-baked into EMITTED executables (apply/destroy
+# scripts an operator later runs, possibly as root) and/or used as a path
+# segment, so shape-check them ALL at the door BEFORE any emit runs — the %q in
+# the registry emits is the second line of defence, not the first.
+validate_inputs() {
+    # --domain: strict DNS name (dot-separated [A-Za-z0-9-] labels). It seeds
+    # cloud resource names (S3 bucket, Azure RG/storage-account, VM names), so
+    # '/', '..', metachars and empty labels are all rejected here.
+    if [ -n "${CD_DOMAIN_OVERRIDE:-}" ]; then
+        [[ "${CD_DOMAIN_OVERRIDE}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]] \
+            || die "--domain is not a valid DNS domain name (dot-separated [A-Za-z0-9-] labels; no '/', '..', or other characters)"
+    fi
+    # --region: a cloud region/location token (us-east-1, westeurope, eu-central-1).
+    # Lowercase alnum + hyphens only — it lands in emitted aws/az argv.
+    if [ -n "${CD_REGION:-}" ]; then
+        [[ "${CD_REGION}" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] \
+            || die "--region must be a cloud region token ([a-z0-9-], 2-32 chars, e.g. us-east-1 / westeurope)"
+    fi
+    # --image / --creds-file / --keys-dir / --out-dir: plain filesystem paths
+    # ([A-Za-z0-9._/-], no '..', no $/backtick/quote/;|&<>() /whitespace) — the
+    # same gate go-live puts on --keys-dir, since all of them are baked into the
+    # emitted root-runnable scripts.
+    local flag val
+    for flag in --image --creds-file --keys-dir --out-dir; do
+        case "${flag}" in
+            --image)      val="${CD_IMAGE:-}" ;;
+            --creds-file) val="${CD_CREDS_FILE:-}" ;;
+            --keys-dir)   val="${CD_KEYS_DIR:-}" ;;
+            --out-dir)    val="${OUT_DIR:-}" ;;
+        esac
+        [ -z "${val}" ] && continue
+        { [[ "${val}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${val}" != *".."* ]]; } \
+            || die "${flag} must be a plain filesystem path ([A-Za-z0-9._/-], no '..' or shell metacharacters)"
+    done
+    # CD_ENTRA_TENANT (env seam): a GUID or a *.onmicrosoft.com-ish label — keep
+    # it to safe chars since it is interpolated into emitted entra/ documents.
+    if [ -n "${CD_ENTRA_TENANT:-}" ]; then
+        [[ "${CD_ENTRA_TENANT}" =~ ^[A-Za-z0-9.-]+$ ]] \
+            || die "CD_ENTRA_TENANT must be a tenant GUID or domain ([A-Za-z0-9.-])"
+    fi
+    # --idp: identity-provider passthrough. casdoor (the native default) means
+    # "the mesh brings its own IdP — emit nothing extra"; external choices
+    # shape-check here because issuer/client/jwks land in emitted configs.
+    case "${CD_IDP:-casdoor}" in
+        casdoor)
+            [ -z "${CD_IDP_ISSUER:-}${CD_IDP_CLIENT_ID:-}${CD_IDP_JWKS:-}" ] \
+                || die "--idp-issuer/--idp-client-id/--idp-jwks need an external --idp (entra|aws|oidc); the casdoor default derives its own issuer" ;;
+        entra|aws|oidc)
+            [[ "${CD_IDP_ISSUER:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$ ]] \
+                || die "--idp ${CD_IDP} requires --idp-issuer (plain https:// URL — it is baked into emitted configs)"
+            if [ -n "${CD_IDP_CLIENT_ID:-}" ]; then
+                [[ "${CD_IDP_CLIENT_ID}" =~ ^[A-Za-z0-9._-]+$ ]] \
+                    || die "--idp-client-id must be a plain client identifier ([A-Za-z0-9._-])"
+            fi
+            if [ -n "${CD_IDP_JWKS:-}" ]; then
+                [[ "${CD_IDP_JWKS}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$ ]] \
+                    || die "--idp-jwks must be a plain https:// URL"
+            fi ;;
+        *) die "unknown --idp '${CD_IDP}' (valid: casdoor | entra | aws | oidc)" ;;
+    esac
+}
+
+# ── Context (READ-ONLY: the driver never writes outside --out-dir) ───────────────
+read_file() { [ -r "$1" ] && tr -d '[:space:]' < "$1" 2>/dev/null || true; }
+
+load_context() {
+    if [ -n "${CD_DOMAIN_OVERRIDE:-}" ]; then
+        CD_DOMAIN="${CD_DOMAIN_OVERRIDE}"
+    else
+        CD_DOMAIN="$(read_file "${CLUSTER_DOMAIN_FILE}")"
+    fi
+    export CD_DOMAIN
+}
+
+# ── Registry ─────────────────────────────────────────────────────────────────────
+load_registry() {
+    [ -r "${PROVIDERS_LIB}" ] || die "provider registry not found: ${PROVIDERS_LIB}"
+    # shellcheck source=/dev/null
+    . "${PROVIDERS_LIB}" || die "failed to source provider registry: ${PROVIDERS_LIB}"
+    [ "${#CLOUD_DEPLOY_PROVIDER_IDS[@]}" -gt 0 ] || die "provider registry is empty"
+}
+
+# ── Sub: list ────────────────────────────────────────────────────────────────────
+cmd_list() {
+    load_context; load_registry
+    printf '%-16s %-10s %-6s %s\n' "ID" "FORMAT" "STATE" "DESCRIPTION"
+    local id
+    for id in "${CLOUD_DEPLOY_PROVIDER_IDS[@]}"; do
+        printf '%-16s %-10s %-6s %s\n' \
+            "${id}" "$(cdp_format "${id}")" \
+            "$(cdp_is_full "${id}" && echo full || echo stub)" \
+            "$(cdp_label "${id}")"
+    done
+    echo
+    echo "FORMAT is the packaged input each provider consumes (scripts/cloud-package.sh"
+    echo "--format). 'plan --provider ID' emits that provider's artifacts — see docs."
+}
+
+# ── Sub: plan (DEFAULT — PURE offline render; NEVER mutates anything) ────────────
+# The two `==> ` lines below are a determinate-progress banner pair the Studio GUI's
+# DeployPage parses (core/progress_parse.py track_phases("clouddeploy-plan"), the SAME
+# forward-only banner mechanism the image builders use) — keep exactly 2 and keep
+# progress-tables.json's "clouddeploy-plan" phases' `any` substrings matching if reworded.
+cmd_plan() {
+    local provider="$1" out="$2"
+    load_context; load_registry
+    [ -n "${provider}" ] || die "plan: --provider is required (see 'hugmesh-cloud-deploy list')"
+    cdp_known "${provider}" || die "plan: unknown provider '${provider}' (see 'hugmesh-cloud-deploy list')"
+    [ -n "${CD_DOMAIN}" ] || warn "cluster domain is unset (${CLUSTER_DOMAIN_FILE} missing) — resource names fall back to 'hugmesh'; pass --domain to override"
+
+    mkdir -p "${out}" 2>/dev/null || die "cannot create output dir: ${out}"
+
+    if [ -z "${CD_IMAGE:-}" ]; then
+        warn "no --image supplied — the emitted apply script will refuse until re-planned with the packaged $(cdp_format "${provider}") artifact"
+    else
+        # Format sanity is a WARNING only (plan stays pure and permissive):
+        # feeding the wrong package to apply fails loudly at the cloud instead.
+        case "$(cdp_format "${provider}"):${CD_IMAGE}" in
+            raw:*.img|raw:*.raw|vhd-fixed:*.vhd|qcow2:*.qcow2) ;;
+            *) warn "--image '${CD_IMAGE}' does not look like the provider's expected format ($(cdp_format "${provider}")) — did you run scripts/cloud-package.sh --format $(cdp_format "${provider}")?" ;;
+        esac
+    fi
+    if cdp_needs_creds "${provider}" && [ -z "${CD_CREDS_FILE:-}" ]; then
+        warn "no --creds-file supplied — 'apply' will refuse until one is given (plan itself never reads credentials)"
+    fi
+
+    echo "==> Rendering provider artifacts"
+    log "planning provider=${provider} domain=${CD_DOMAIN:-<unset>} out=${out} (PURE — nothing mutated)"
+    cdp_emit "${provider}" "${out}" || die "provider '${provider}' emit failed"
+    emit_idp_artifacts "${provider}" "${out}"
+
+    echo "==> Plan summary ready"
+    echo
+    echo "== cloud-deploy PLAN (preview only — nothing has been created) =="
+    echo "provider:  ${provider} — $(cdp_label "${provider}") [$(cdp_is_full "${provider}" && echo IMPLEMENTED || echo STUB)]"
+    echo "format:    $(cdp_format "${provider}")  (scripts/cloud-package.sh --format $(cdp_format "${provider}"))"
+    echo "domain:    ${CD_DOMAIN:-<unset>}"
+    local dl; dl="$(cdp_deeplink "${provider}")"
+    [ -n "${dl}" ] && echo "deep-link: ${dl}"
+    echo
+    echo "artifacts emitted under ${out}:"
+    local f
+    for f in "${out}"/* "${out}"/entra/* "${out}"/entra/env/* "${out}"/idp/*; do [ -f "${f}" ] && echo "  - ${f}"; done
+    echo
+    local ascript; ascript="$(cdp_apply_script "${provider}")"
+    if [ -n "${ascript}" ]; then
+        echo "NEXT: READ the emitted files (especially checklist/notes), then run:"
+        echo "  hugmesh-cloud-deploy apply --provider ${provider} --out-dir ${out}$(cdp_needs_creds "${provider}" && printf ' %s' "--creds-file <0600-file>")"
+        echo "(or run ${out}/${ascript} yourself — it re-confirms on its own TTY either way)"
+    else
+        # generic-qcow2: nothing remote to mutate — the operator acts locally.
+        echo "NEXT: this provider has NO apply script (nothing remote to mutate) — run the"
+        echo "  virt-install one-liner from ${out}/virt-install.md (or see paas-upload.md)."
+    fi
+    echo "Cloud deploy NEVER changes go-live posture: the new node still ships internal"
+    echo "and goes public only via 'hugmesh-go-live commit' on that node."
+}
+
+# I7: IdP passthrough. With an EXTERNAL --idp the plan additionally emits
+# idp/idp.conf — the same shape the node builders bake as /etc/hugmesh/idp.conf
+# — plus notes, so the deployed VM and its operator agree on the issuer. The
+# casdoor default emits NOTHING (the mesh brings its own IdP). No secrets: issuer,
+# client id and JWKS URL are public identifiers.
+emit_idp_artifacts() {
+    local provider="$1" out="$2"
+    [ "${CD_IDP:-casdoor}" = "casdoor" ] && return 0
+    mkdir -p "${out}/idp"
+    local jwks="${CD_IDP_JWKS:-}"
+    if [ -z "${jwks}" ]; then
+        case "${CD_IDP}" in
+            # Entra does NOT serve /.well-known/jwks — its keys live under /discovery.
+            entra) jwks="${CD_IDP_ISSUER%/}/discovery/v2.0/keys" ;;
+            *)     jwks="${CD_IDP_ISSUER%/}/.well-known/jwks" ;;
+        esac
+    fi
+    {
+        echo "provider=${CD_IDP}"
+        echo "issuer=${CD_IDP_ISSUER}"
+        [ -n "${CD_IDP_CLIENT_ID:-}" ] && echo "client_id=${CD_IDP_CLIENT_ID}"
+        echo "jwks_uri=${jwks}"
+    } > "${out}/idp/idp.conf"
+    {
+        echo "External IdP passthrough (--idp ${CD_IDP})"
+        echo "==========================================="
+        echo
+        echo "idp.conf mirrors what 'build-*-stage4.sh --idp ${CD_IDP} --idp-issuer ...'"
+        echo "bakes into the image as /etc/hugmesh/idp.conf. If the image you are"
+        echo "deploying was built with the casdoor default, rebuild it with the same"
+        echo "--idp flags — this plan file does not retrofit a built image."
+        echo
+        echo "What external mode does NOT change (Casdoor-coupled, see"
+        echo "docs/IDENTITY-PROVIDERS.md in the generator repo): the native /bff/login"
+        echo "leg, MFA step-up stamping, role-sync jobs and signup-gate."
+        if [ "${CD_IDP}" = "aws" ] && [ "${provider}" = "aws-ec2" ]; then
+            echo
+            echo "AWS note: for a Cognito user pool the issuer is"
+            echo "  https://cognito-idp.<region>.amazonaws.com/<pool-id>"
+            echo "and group claims arrive as 'cognito:groups' (NOT 'roles') — consumers"
+            echo "keyed on the roles claim need their group-claim name remapped."
+        fi
+    } > "${out}/idp/README.md"
+}
+
+# ── Confirmation gate (fail-safe; NO --yes flag exists on this driver) ───────────
+confirm() {
+    local prompt="$1"
+    [ "${CD_ASSUME_YES:-0}" = "1" ] && return 0
+    if [ ! -t 0 ]; then
+        die "refusing to proceed: '${prompt}' needs confirmation but stdin is not a TTY (CD_ASSUME_YES=1 exists for hermetic tests only — there is deliberately no --yes flag)"
+    fi
+    local ans=""
+    read -r -p "${prompt} [y/N] " ans || return 1
+    case "${ans}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+# Credentials custody check for the mutating verbs. ANY supplied creds file is
+# custody-checked (readable + 0600/0400) — even for providers that authenticate
+# through their own CLI session (az login) — so apply's "0600-checked" line is
+# always true. The needs-creds gate governs only whether a MISSING file refuses.
+require_creds() {
+    local provider="$1"
+    if [ -n "${CD_CREDS_FILE:-}" ]; then
+        [ -r "${CD_CREDS_FILE}" ] || die "creds file not readable: ${CD_CREDS_FILE}"
+        local mode; mode="$(stat -c '%a' "${CD_CREDS_FILE}" 2>/dev/null || echo '')"
+        case "${mode}" in
+            600|400) ;;
+            *) die "creds file ${CD_CREDS_FILE} must be 0600 (or 0400), found ${mode:-unreadable} — chmod 0600 it first" ;;
+        esac
+    fi
+    cdp_needs_creds "${provider}" || return 0
+    [ -n "${CD_CREDS_FILE:-}" ] || die "provider '${provider}' requires --creds-file (referenced by PATH only — its contents never touch argv)"
+}
+
+# ── Sub: apply (TTY-confirmed; runs the plan's emitted apply script) ─────────────
+# The emitted apply.sh/oc-apply.sh itself carries the `==> ` progress banners (see
+# cloud-deploy-providers.sh's cdp_emit_<provider> functions) — this driver only runs
+# it, so its own stdout here carries whatever that script echoes straight through.
+cmd_apply() {
+    local provider="$1" out="$2"
+    load_context; load_registry
+    [ -n "${provider}" ] || die "apply: --provider is required"
+    cdp_known "${provider}" || die "apply: unknown provider '${provider}'"
+    local ascript; ascript="$(cdp_apply_script "${provider}")"
+    [ -n "${ascript}" ] || die "provider '${provider}' emits no apply script by design — run the virt-install one-liner from ${out}/virt-install.md instead"
+    [ -x "${out}/${ascript}" ] || die "no ${ascript} under ${out} — run 'plan --provider ${provider} --out-dir ${out}' first"
+    require_creds "${provider}"
+
+    echo "About to APPLY provider '${provider}' — this MUTATES cloud state:"
+    echo "  -> runs ${out}/${ascript}  (read it first; it re-confirms on its own TTY too)"
+    [ -n "${CD_CREDS_FILE:-}" ] && echo "  -> credentials: ${CD_CREDS_FILE} (referenced by path only, 0600-checked)"
+    confirm "Proceed and run the apply script?" || die "aborted — nothing mutated"
+
+    log "apply provider=${provider} out=${out} script=${ascript}"
+    bash "${out}/${ascript}" || die "apply script failed (state hints, if any, are under ${out}/state)"
+    echo
+    echo "== apply finished =="
+    echo "Check progress any time:  hugmesh-cloud-deploy status --provider ${provider} --out-dir ${out}"
+}
+
+# ── Sub: status (READ-ONLY: state hints + check commands; no cloud calls) ────────
+cmd_status() {
+    local provider="$1" out="$2"
+    load_context; load_registry
+    [ -n "${provider}" ] || die "status: --provider is required"
+    cdp_known "${provider}" || die "status: unknown provider '${provider}'"
+    echo "provider:  ${provider} — $(cdp_label "${provider}")"
+    echo "plan dir:  ${out}"
+    if [ -d "${out}/state" ]; then
+        echo "state hints recorded by the apply script:"
+        local f
+        for f in "${out}/state"/*; do
+            [ -f "${f}" ] && printf '  %-18s %s\n' "$(basename "${f}")" "$(read_file "${f}")"
+        done
+    else
+        echo "state hints: none recorded — the apply script has not completed from ${out}."
+    fi
+    echo
+    echo "check commands (run them YOURSELF — this driver never calls cloud APIs):"
+    echo "  $(cdp_check "${provider}")"
+    [ -x "${out}/status.sh" ] && echo "  bash ${out}/status.sh   # emitted read-only checker"
+    # A successful read-only status must exit 0 even when no status.sh was emitted.
+    return 0
+}
+
+# ── Sub: destroy (TTY-confirmed; runs the plan's emitted destroy.sh) ─────────────
+cmd_destroy() {
+    local provider="$1" out="$2"
+    load_context; load_registry
+    [ -n "${provider}" ] || die "destroy: --provider is required"
+    cdp_known "${provider}" || die "destroy: unknown provider '${provider}'"
+    [ -x "${out}/destroy.sh" ] || die "no destroy.sh under ${out} — run 'plan --provider ${provider} --out-dir ${out}' first"
+    require_creds "${provider}"
+
+    echo "About to DESTROY provider '${provider}' resources — this DELETES cloud state:"
+    echo "  -> runs ${out}/destroy.sh  (read it first; it re-confirms on its own TTY too)"
+    confirm "Proceed and run the destroy script?" || die "aborted — nothing deleted"
+
+    log "destroy provider=${provider} out=${out}"
+    bash "${out}/destroy.sh" || die "destroy script failed"
+    echo "== destroy finished =="
+}
+
+# ── Arg parse ────────────────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+hugmesh-cloud-deploy — deploy a packaged x86 image to a cloud target (shared driver)
+
+USAGE:
+  hugmesh-cloud-deploy list
+  hugmesh-cloud-deploy plan    --provider ID [--image FILE] [--domain D] [--region R]
+                                  [--creds-file FILE] [--out-dir DIR] [--keys-dir DIR]
+                                  [--idp casdoor|entra|aws|oidc --idp-issuer URL
+                                   [--idp-client-id ID] [--idp-jwks URL]]
+  hugmesh-cloud-deploy apply   --provider ID [--out-dir DIR] [--creds-file FILE]
+  hugmesh-cloud-deploy status  --provider ID [--out-dir DIR]
+  hugmesh-cloud-deploy destroy --provider ID [--out-dir DIR] [--creds-file FILE]
+
+DEFAULT is 'plan': a PURE offline render into --out-dir — nothing is created.
+'apply'/'destroy' are TTY-confirmed (no --yes flag exists) and only ever run the
+plan's own emitted, operator-readable scripts. Feed --image with the matching
+scripts/cloud-package.sh output (see 'list' for each provider's format).
+EOF
+}
+
+main() {
+    local cmd="${1:-plan}"; shift || true
+    local provider="" out="${DEFAULT_OUT_DIR}"
+    CD_IMAGE="${CD_IMAGE:-}" CD_REGION="${CD_REGION:-}" CD_CREDS_FILE="${CD_CREDS_FILE:-}"
+    CD_KEYS_DIR="${CD_KEYS_DIR:-${ETC}/keys}" CD_DOMAIN_OVERRIDE=""
+    CD_IDP="${CD_IDP:-casdoor}" CD_IDP_ISSUER="${CD_IDP_ISSUER:-}"
+    CD_IDP_CLIENT_ID="${CD_IDP_CLIENT_ID:-}" CD_IDP_JWKS="${CD_IDP_JWKS:-}"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --provider)   provider="$2"; shift 2 ;;
+            --image)      CD_IMAGE="$2"; shift 2 ;;
+            --domain)     CD_DOMAIN_OVERRIDE="$2"; shift 2 ;;
+            --region)     CD_REGION="$2"; shift 2 ;;
+            --creds-file) CD_CREDS_FILE="$2"; shift 2 ;;
+            --out-dir)    out="$2"; shift 2 ;;
+            --keys-dir)   CD_KEYS_DIR="$2"; shift 2 ;;
+            --idp)           CD_IDP="$2"; shift 2 ;;
+            --idp-issuer)    CD_IDP_ISSUER="$2"; shift 2 ;;
+            --idp-client-id) CD_IDP_CLIENT_ID="$2"; shift 2 ;;
+            --idp-jwks)      CD_IDP_JWKS="$2"; shift 2 ;;
+            -h|--help)    usage; exit 0 ;;
+            *) die "unknown flag '$1' (see --help; there is deliberately no --yes flag)" ;;
+        esac
+    done
+    OUT_DIR="${out}"
+    validate_inputs
+    export CD_IMAGE CD_REGION CD_CREDS_FILE CD_KEYS_DIR
+    export CD_IDP CD_IDP_ISSUER CD_IDP_CLIENT_ID CD_IDP_JWKS
+
+    case "${cmd}" in
+        list|providers|ls)  cmd_list ;;
+        plan|preview|emit)  cmd_plan "${provider}" "${out}" ;;
+        apply)              cmd_apply "${provider}" "${out}" ;;
+        status)             cmd_status "${provider}" "${out}" ;;
+        destroy)            cmd_destroy "${provider}" "${out}" ;;
+        -h|--help|help)     usage ;;
+        *) usage; die "unknown subcommand '${cmd}'" ;;
+    esac
+}
+
+# Guard main so the offline logic test can source the functions without running the flow.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+    main "$@"
+fi

@@ -1,0 +1,19 @@
+# Stage4 LIVE-ONLY package list — Libre Computer Le/La Frite (Amlogic arm64).
+# One atom per line; lines starting with # are ignored.
+#
+# Appended by build-frite-stage4.sh ONLY when the LIVE flavor is being built
+# (BUILD_LIVE=true: --flavor live | both). The LIVE flavor boots a squashfs
+# rootfs ephemerally; that requires a dracut dmsquash-live initramfs to find the
+# live medium, mount LiveOS/squashfs.img read-only, and stack a writable tmpfs
+# overlay as the ephemeral root. The bare kernel canNOT interpret root=live: /
+# rd.live.* on its own — those are dracut directives — so dracut must be present
+# in the cross sysroot to GENERATE that initramfs at build time.
+#
+# The INSTALLER flavor does NOT need this (it boots root=LABEL=FRITE_ROOT off a
+# real partitioned rootfs created by install-frite.sh), so dracut is kept OUT of
+# the always-installed base set and added here, live-only.
+
+# dracut: builds the dmsquash-live initramfs for the LIVE flavor. The builder
+# invokes it as a host tool against the aarch64 sysroot (--sysroot) so no target
+# code runs during generation.
+sys-kernel/dracut

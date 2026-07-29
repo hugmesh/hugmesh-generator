@@ -1,0 +1,31 @@
+# Analytics Kafka — HEAVY amd64 datastore. MANUAL-sync (operator opt-in).
+#
+# NO `syncPolicy.automated` block: ArgoCD will NOT auto-sync or self-heal. An
+# operator syncs it deliberately once the x86_64 host is attached (the KRaft broker
+# is amd64-pinned via nodeSelector — NOT a taint — and needs the node-local
+# kafka-data PV). The kafka Service is in the always-on floor
+# (35-analytics-discovery), so `kafka:9092` resolves before this is synced; the
+# admin BFF degrades to the in-memory usage fallback (no Kafka producer connection)
+# until the broker attaches — which is exactly what the LEAN test tier asserts.
+#
+# Split from the former single auto-sync hugmesh-analytics app — the manifests
+# were RESTRUCTURED (manifests/analytics/kafka), not deleted. See docs/HEAVY-TIER.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-analytics-kafka
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/analytics/kafka
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  # MANUAL: no automated{} — operator opt-in only (heavy amd64).
+  syncPolicy:
+    syncOptions: [CreateNamespace=true]

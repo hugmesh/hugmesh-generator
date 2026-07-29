@@ -1,0 +1,21 @@
+# Akkoma — fediverse server (replaces Mastodon). mastodon.hugmesh.systems,
+# backend namespace. Mastodon-API compatible, so hugmesh-mastodon-ui is
+# unchanged. Raw manifests (no official Akkoma Helm chart). See manifests/akkoma
+# for the one-time setup/validation notes.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: akkoma
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/akkoma
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

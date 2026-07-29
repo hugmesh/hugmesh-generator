@@ -1,0 +1,31 @@
+# hugmesh-api-docs — the API documentation Angular micro-frontend remote. Its
+# own nginx (own repo + pod) in the hugmesh-frontend namespace, federated into
+# the hugmesh.systems host: it serves a remoteEntry.json the host's
+# loadRemoteModule consumes, mounted at /apidocs (admin role — the rendered
+# OpenAPI/spec docs are gated to ROLE_ADMIN, matching federation's spec floor).
+# Repo: github.com/hugmesh-net/hugmesh-api-docs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: hugmesh-api-docs, namespace: hugmesh-frontend, labels: { app: hugmesh-api-docs, app.kubernetes.io/part-of: hugmesh.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-api-docs } }
+  template:
+    metadata: { labels: { app: hugmesh-api-docs } }
+    spec:
+      nodeSelector: { hugmesh.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c48"
+      containers:
+        - name: web
+          image: hugmesh-systems/api-docs:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: hugmesh-api-docs, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-api-docs }, ports: [{ name: http, port: 80, targetPort: http }] }

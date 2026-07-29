@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# baked at build time / mounted via PVC — never commit voice models
+*.onnx
+*.onnx.json

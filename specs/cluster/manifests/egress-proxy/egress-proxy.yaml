@@ -1,0 +1,199 @@
+# egress-proxy — the FORWARD proxy all homeserver (akkoma/tuwunel) outbound
+# federation traffic is forced through (manifests/networkpolicy/homeserver-egress.yaml
+# denies the homeservers any direct internet egress, allowing egress ONLY to this
+# proxy:3128 + DNS + akkoma-db). This is the per-actor / per-destination control
+# point for domain-lock (no-federation): the proxy's allowlist is the seam the
+# domain-lock reconcile loop materializes — when an actor is domain-locked, the
+# loop narrows the proxy's allowed destinations so that actor's outbound
+# federation deliveries are dropped here.
+#
+# A forward proxy (squid) is used rather than a custom service because squid is a
+# mature, audited HTTP/HTTPS forward proxy with native ACL/allowlist support and a
+# tiny footprint — exactly the "small squid/envoy forward proxy" the design calls
+# for. CONNECT-tunnelling is used for the homeservers' outbound HTTPS S2S
+# deliveries; squid sees the SNI/host (peer server name) but not the (TLS-encrypted)
+# request body, which is sufficient for a DESTINATION allowlist. Per-ACTOR
+# granularity (which local user is being delivered-on-behalf-of) is enforced
+# AUTHORITATIVELY at the akkoma ForceLocalForUsers MRF (manifests/akkoma) — which
+# can see the actor — with this proxy as the destination backstop / the ONLY leg
+# for tuwunel (which the MRF cannot cover).
+#
+# ─────────────────────────── GATED / SHIPS DARK ───────────────────────────────
+# domainlock.egress.enabled (env DOMAINLOCK_EGRESS_ENABLED, default "false"):
+#   - OFF (default): squid runs with the PASS-THROUGH config (http_access allow
+#     all to the standard federation ports). Federation works UNCHANGED — this is
+#     a transparent forward hop. The homeserver-egress NetworkPolicy still forces
+#     traffic through here (structural backstop) but NO actor is blocked yet. A
+#     plain akkoma:stable + tuwunel keep federating normally.
+#   - ON: squid loads the allowlist ACL from the domainlock-allowlist ConfigMap
+#     (the materialized force-local destination set the reconcile loop writes) and
+#     DENIES anything outside it. Flipping this on is what makes the per-destination
+#     force-local real. NEVER hard-fails closed at boot: with the gate off the
+#     allowlist file is ignored entirely.
+# The gate selection is done by the init wrapper (chooses squid.conf vs
+# squid.locked.conf); both configs ship here so enabling is config-only.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-proxy-config
+  namespace: hugmesh-backend
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  # Default PASS-THROUGH config (gate OFF). Forwards all federation traffic; the
+  # homeservers route through here only because the NetworkPolicy forces it.
+  squid.conf: |
+    http_port 3128
+    # Allow CONNECT only to the standard secure federation ports (https + the
+    # Matrix S2S 8448), plus plain http for webfinger/nodeinfo discovery.
+    acl SSL_ports port 443 8448
+    acl Safe_ports port 80 443 8448
+    acl CONNECT method CONNECT
+    http_access deny CONNECT !SSL_ports
+    http_access deny !Safe_ports
+    # GATE OFF: pass-through. Federation is unchanged.
+    http_access allow all
+    # Hygiene
+    forwarded_for delete
+    via off
+    cache deny all
+    access_log stdio:/dev/stdout squid
+    cache_log stdio:/dev/stderr
+    pid_filename none
+    shutdown_lifetime 5 seconds
+  # LOCKED config (gate ON). Loads the materialized allowlist of permitted
+  # destination server-names; everything else is denied. The allowlist file is
+  # mounted from the domainlock-allowlist ConfigMap (the reconcile-loop seam).
+  squid.locked.conf: |
+    http_port 3128
+    acl SSL_ports port 443 8448
+    acl Safe_ports port 80 443 8448
+    acl CONNECT method CONNECT
+    http_access deny CONNECT !SSL_ports
+    http_access deny !Safe_ports
+    # GATE ON: only destinations in the materialized allowlist are permitted.
+    # dstdomain match covers CONNECT-tunnel SNI/host + plain-http Host. When the
+    # allowlist is the LOCAL server only (a fully domain-locked instance) this
+    # drops every remote federation delivery. The reconcile loop rewrites
+    # /allowlist/federation-allowlist.txt to reflect the live force-local set.
+    acl federation_allow dstdomain "/allowlist/federation-allowlist.txt"
+    http_access allow federation_allow
+    http_access deny all
+    forwarded_for delete
+    via off
+    cache deny all
+    access_log stdio:/dev/stdout squid
+    cache_log stdio:/dev/stderr
+    pid_filename none
+    shutdown_lifetime 5 seconds
+  # init wrapper: pick the config by the gate. Default (gate off) = pass-through.
+  entrypoint.sh: |
+    #!/bin/sh
+    set -eu
+    if [ "${DOMAINLOCK_EGRESS_ENABLED:-false}" = "true" ]; then
+      echo "egress-proxy: domainlock.egress.enabled=true -> LOCKED (allowlist) config"
+      CONF=/etc/squid/squid.locked.conf
+    else
+      echo "egress-proxy: domainlock.egress.enabled=false -> PASS-THROUGH config (federation unchanged)"
+      CONF=/etc/squid/squid.conf
+    fi
+    # -N foreground, -d1 log to stderr/stdout, -f chosen config.
+    exec squid -N -d1 -f "$CONF"
+---
+# domainlock-allowlist — the SEAM the domain-lock reconcile loop materializes.
+# Ships with the LOCAL server names ONLY (a fully-locked default); the loop
+# rewrites federation-allowlist.txt to the live force-local destination set as
+# actors are locked/unlocked. Only consulted when the gate is ON (squid.locked.conf).
+# One destination server-name per line; "." prefix = match subdomains too.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: domainlock-allowlist
+  namespace: hugmesh-backend
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  federation-allowlist.txt: |
+    # Local server names — always allowed (self-delivery / local inboxes).
+    # The reconcile loop appends the per-actor permitted remote destinations here;
+    # a fully domain-locked instance keeps ONLY these local entries (no remote
+    # federation). Replace hugmesh.systems with ${CLUSTER_DOMAIN} at rebrand.
+    hugmesh.systems
+    mastodon.hugmesh.systems
+    matrix.hugmesh.systems
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress-proxy
+  namespace: hugmesh-backend
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: egress-proxy } }
+  template:
+    metadata:
+      labels: { app: egress-proxy }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          # Fresh MCS level in the backend range (akkoma c30, akkoma-db c31,
+          # tuwunel — pick an unused level; egress-proxy takes c37).
+          type: container_t
+          level: "s0:c37"
+      containers:
+        - name: squid
+          # ubuntu/squid is a small, maintained squid image. Pin a digest at
+          # deploy time (the prod-hygiene gate forbids floating tags).
+          image: ubuntu/squid:6.6-24.04_edge
+          command: ["/bin/sh", "/etc/squid/entrypoint.sh"]
+          ports:
+            - { name: proxy, containerPort: 3128 }
+          env:
+            # GATED — default OFF (pass-through; federation unchanged). Flip to
+            # "true" to enforce the materialized allowlist (force-local).
+            - { name: DOMAINLOCK_EGRESS_ENABLED, value: "false" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            tcpSocket: { port: proxy }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: proxy }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - { name: config,    mountPath: /etc/squid/squid.conf,        subPath: squid.conf,        readOnly: true }
+            - { name: config,    mountPath: /etc/squid/squid.locked.conf, subPath: squid.locked.conf, readOnly: true }
+            - { name: config,    mountPath: /etc/squid/entrypoint.sh,     subPath: entrypoint.sh,     readOnly: true }
+            - { name: allowlist, mountPath: /allowlist, readOnly: true }
+            # squid needs a writable cache/run dir even with caching denied.
+            - { name: run, mountPath: /var/run/squid }
+            - { name: spool, mountPath: /var/spool/squid }
+      volumes:
+        - name: config
+          configMap: { name: egress-proxy-config, defaultMode: 0555 }
+        - name: allowlist
+          configMap: { name: domainlock-allowlist }
+        - { name: run, emptyDir: {} }
+        - { name: spool, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy
+  namespace: hugmesh-backend
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  type: ClusterIP
+  selector: { app: egress-proxy }
+  ports:
+    - { name: proxy, port: 3128, targetPort: proxy }

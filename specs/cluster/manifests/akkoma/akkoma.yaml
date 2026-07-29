@@ -1,0 +1,284 @@
+# Akkoma — fediverse server (Pleroma fork, Elixir), replaces Mastodon. Postgres-
+# only (no Redis), lighter than Mastodon. Mastodon-API compatible, so the existing
+# hugmesh-mastodon-ui keeps working. Served on :4000; the be-gateway routes the
+# mastodon.hugmesh.systems host + /api/v1,/oauth here.
+#
+# ⚠️ VALIDATE ON CLUSTER + one-time SETUP (Akkoma is stateful/Elixir; a bare
+# Deployment won't self-configure):
+#   - secrets: SECRET_KEY_BASE + SIGNING_SALT + the akkoma DB_PASSWORD are now
+#     materialized by ESO from Vault (secret/<brand>/akkoma) into the akkoma-secrets
+#     Secret — see manifests/external-secrets/akkoma-externalsecrets.yaml. They are
+#     minted by scripts/gen-cluster-secrets.sh (openssl rand); NOTHING is committed
+#     plaintext. (Was a raw kind:Secret with REPLACE_* placeholders.)
+#   - migrate: the initContainer runs `pleroma_ctl migrate` (verify the path/cmd
+#     for the chosen image tag).
+#   - admin + OIDC(Casdoor via ueberauth_oidcc) + Mastodon->Akkoma data import are
+#     follow-ups (documented in docs/architecture).
+#   - confirm the image ref (git.akkoma.dev/AkkomaGang/akkoma OR ghcr mirror).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akkoma-config
+  namespace: hugmesh-backend
+data:
+  config.exs: |
+    import Config
+    config :pleroma, Pleroma.Web.Endpoint,
+      url: [host: "mastodon.hugmesh.systems", scheme: "https", port: 443],
+      http: [ip: {0, 0, 0, 0}, port: 4000],
+      secret_key_base: System.get_env("SECRET_KEY_BASE"),
+      signing_salt: System.get_env("SIGNING_SALT")
+    config :pleroma, :instance,
+      name: "HugMesh",
+      email: "admin@hugmesh.systems",
+      registrations_open: false
+    # --- DOMAIN-LOCK MRF (homeserver.domainlock.enabled) — GATED / SHIPS DARK ---
+    # The custom ForceLocalForUsers MRF (manifests/akkoma/mrf/, compiled into the
+    # custom image built from manifests/akkoma/Dockerfile) is the AUTHORITATIVE
+    # Mastodon leg of domain-lock: for any actor in the force-local set it filters
+    # outbound delivery to LOCAL inboxes only (ALL visibilities + boosts/replies/
+    # profile-Update/Follow), not just rewriting as:Public.
+    #
+    # SHIPS DARK: the MRF is NOT enabled below by default. A plain akkoma:stable
+    # (the image pinned in this file until the custom image is built + pinned) does
+    # NOT carry the module, so enabling it on the stock image would crash-loop —
+    # hence it is commented out. To turn domain-lock ON (homeserver.domainlock.enabled):
+    #   1. build + pin the custom image (manifests/akkoma/Dockerfile) in this file
+    #      and in domainlock-sync-job.yaml,
+    #   2. add the policy to the :mrf policies list and the empty default set below,
+    #   3. wire domainlock-sync-job.yaml into the akkoma kustomization so the
+    #      force-local set is materialized from ROLE_MASTODON_DOMAINLOCKED.
+    # Even once enabled, an EMPTY forced_actors set is a no-op for every actor.
+    #
+    # config :pleroma, :mrf,
+    #   policies: [Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy]
+    # config :pleroma, Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy,
+    #   forced_actors: []   # materialized live by akkoma-domainlock-sync
+    # --- Outbound mail (Pleroma.Mailer) — OPTIONAL, ABSENT-BY-DEFAULT ---
+    # SMTP creds come from env (AKKOMA_SMTP_*), loaded from the OPTIONAL secret
+    # akkoma-smtp (ESO <- Vault secret/<brand>/mail, seeded per the brand's
+    # MAIL_PROVIDER; default protonmail). When that secret is ABSENT the env are
+    # unset, AKKOMA_SMTP_RELAY is "" and the mailer is DISABLED (enabled: false) —
+    # Akkoma sends no mail and registration stays admin-approval (registrations_open
+    # is left as-is above). Provide the secret to switch on SMTP delivery.
+    config :pleroma, Pleroma.Mailer,
+      enabled: System.get_env("AKKOMA_SMTP_RELAY", "") != "",
+      adapter: Swoosh.Adapters.SMTP,
+      relay: System.get_env("AKKOMA_SMTP_RELAY"),
+      port: String.to_integer(System.get_env("AKKOMA_SMTP_PORT") || "587"),
+      username: System.get_env("AKKOMA_SMTP_USER"),
+      password: System.get_env("AKKOMA_SMTP_PASSWORD"),
+      # tls: "always" => :always (STARTTLS), "if_available" or "never" honored too.
+      tls: String.to_atom(System.get_env("AKKOMA_SMTP_TLS") || "if_available"),
+      auth: :always,
+      retries: 2
+    config :pleroma, :instance,
+      notify_email: System.get_env("AKKOMA_SMTP_FROM", "noreply@hugmesh.systems")
+    # --- Admin / moderation + Casdoor OIDC (ROLE_ADMIN + ROLE_MOD) ---
+    # Akkoma/Pleroma admin & moderator are per-USER DB flags (users.is_admin /
+    # users.is_moderator), NOT derived from OIDC claims automatically. OIDC login
+    # (ueberauth_oidcc against Casdoor / id.hugmesh.systems) signs users in as
+    # NORMAL accounts only. The Casdoor 'moderator' group (ROLE_MOD) is mapped to
+    # fediverse moderation by a PostSync reconcile Job (admin-sync-job.yaml) that
+    # runs `pleroma_ctl user set <nick> --moderator` for ROLE_MOD members (and
+    # --admin for ROLE_ADMIN). The moderation REST surface lives under
+    # /api/v1/pleroma/admin/** (+ legacy /api/pleroma/admin/**) and AdminFE under
+    # /pleroma/admin — those are role-gated for ROLE_MOD/ROLE_ADMIN at the
+    # be-gateway via gateway_route_access (manifests/route-access/schema.sql).
+    config :ueberauth, Ueberauth,
+      providers: [
+        # Casdoor OIDC — login only; moderation authority is the DB flag set by
+        # the admin-sync Job, not this claim. clientId/secret from Vault/ESO.
+        oidc: {Ueberauth.Strategy.Oidcc, [issuer: "https://id.hugmesh.systems"]}
+      ]
+    config :pleroma, Pleroma.Repo,
+      adapter: Ecto.Adapters.Postgres,
+      username: "akkoma",
+      password: System.get_env("DB_PASSWORD"),
+      database: "akkoma",
+      hostname: "akkoma-db"
+---
+# akkoma mTLS PROXY (nginx) sidecar config. Terminates a cluster-CA client cert on
+# :4443 (ssl_verify_client on — rejects any caller that does NOT present a cert
+# chaining to the cluster CA) and forwards plaintext to akkoma on localhost:4000.
+# Reuses the merged mTLS CLIENT-PRESENTATION machinery: the be-gateway / mod-bff /
+# admin-bff already present their Vault-PKI client certs (keystore.p12) to the
+# now-https backends, so they present the same cert here. The server cert + the
+# cluster CA come from the ESO Secret akkoma-proxy-mtls (see
+# manifests/external-secrets/homeserver-proxy-externalsecrets.yaml), mounted as PEM
+# at /pki. This is the SAME isolation pattern as the Spring APIs' server.ssl
+# client-auth=need, expressed for the non-JVM homeserver via an nginx front.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akkoma-proxy-nginx
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 1024; }
+    http {
+      access_log off;
+      server {
+        listen 4443 ssl;
+        # Server identity (Vault-PKI/ESO akkoma-proxy-mtls).
+        ssl_certificate     /pki/tls.crt;
+        ssl_certificate_key /pki/tls.key;
+        # REQUIRE a client cert chaining to the cluster CA (mutual TLS).
+        ssl_client_certificate /pki/ca.crt;
+        ssl_verify_client on;
+        ssl_verify_depth 2;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        # Forward verified traffic to akkoma in the same pod (localhost:4000).
+        location / {
+          proxy_pass http://127.0.0.1:4000;
+          proxy_set_header Host              $host;
+          proxy_set_header X-Real-IP         $remote_addr;
+          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto https;
+          # Surface the verified client identity to akkoma if it ever wants it.
+          proxy_set_header X-Client-Cert-DN  $ssl_client_s_dn;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade    $http_upgrade;
+          proxy_set_header Connection $http_connection;
+        }
+      }
+      map $http_upgrade $http_connection { default upgrade; "" close; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: akkoma-db, namespace: hugmesh-backend, labels: { app.kubernetes.io/name: akkoma-db } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: akkoma-db } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: akkoma-db } }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c31"
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: akkoma }
+            - { name: POSTGRES_DB,   value: akkoma }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: akkoma-secrets, key: DB_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ name: pg, containerPort: 5432 }]
+          volumeMounts: [{ name: db, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: db
+          persistentVolumeClaim: { claimName: akkoma-db }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: akkoma-db, namespace: hugmesh-backend }
+spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 20Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: akkoma-db, namespace: hugmesh-backend }
+spec:
+  selector: { app.kubernetes.io/name: akkoma-db }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: akkoma, namespace: hugmesh-backend, labels: { app.kubernetes.io/name: akkoma } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: akkoma } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: akkoma } }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c30"
+      initContainers:
+        - name: migrate
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          command: ["/opt/akkoma/bin/pleroma_ctl", "migrate"]
+          envFrom: [{ secretRef: { name: akkoma-secrets } }]
+          volumeMounts: [{ name: config, mountPath: /etc/akkoma }]
+      containers:
+        - name: akkoma
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          # akkoma-smtp is OPTIONAL (optional: true): when ESO has not materialized
+          # it (no SMTP creds) the env stay unset, AKKOMA_SMTP_RELAY is "" and the
+          # Pleroma.Mailer is disabled. When present it injects the AKKOMA_SMTP_*
+          # env config.exs reads to enable outbound mail.
+          envFrom:
+            - secretRef: { name: akkoma-secrets }
+            - secretRef: { name: akkoma-smtp, optional: true }
+          ports: [{ name: http, containerPort: 4000 }]
+          volumeMounts:
+            - { name: config,  mountPath: /etc/akkoma }
+            - { name: uploads, mountPath: /var/lib/akkoma/uploads }
+          readinessProbe:
+            httpGet: { path: /api/v1/instance, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+        # ── mTLS proxy sidecar (akkoma-proxy) ────────────────────────────────
+        # Fronts akkoma on :4443 requiring a cluster-CA client cert and forwards to
+        # localhost:4000. The akkoma-proxy Service points at THIS port; the
+        # be-gateway/mod-bff/admin-bff repoint their mastodon base-urls to it. See
+        # the akkoma-proxy-nginx ConfigMap above + akkoma-proxy-mtls ESO Secret.
+        - name: proxy
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          ports: [{ name: mtls, containerPort: 4443 }]
+          volumeMounts:
+            - { name: proxy-conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
+            - { name: proxy-pki,  mountPath: /pki, readOnly: true }
+          readinessProbe:
+            tcpSocket: { port: mtls }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap: { name: akkoma-config }
+        - name: uploads
+          persistentVolumeClaim: { claimName: akkoma-uploads }
+        - name: proxy-conf
+          configMap: { name: akkoma-proxy-nginx }
+        # Vault-PKI-issued server cert + cluster CA, synced by ESO (kubernetes.io/tls).
+        - name: proxy-pki
+          secret:
+            secretName: akkoma-proxy-mtls
+---
+# akkoma-proxy — the mTLS front the gateway/BFFs target instead of akkoma:4000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: akkoma-proxy
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: akkoma }
+  ports: [{ name: mtls, port: 4443, targetPort: mtls }]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: akkoma-uploads, namespace: hugmesh-backend }
+spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 20Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: akkoma
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: akkoma }
+  ports: [{ name: http, port: 4000, targetPort: http }]

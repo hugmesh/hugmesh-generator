@@ -1,0 +1,91 @@
+# hugmesh-pki-gateway — front door for the identity tier (Casdoor).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-gateway-pki
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/hugmesh-gateway
+    helm:
+      releaseName: hugmesh-pki-gateway
+      values: |
+        instance:
+          name: hugmesh-pki-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO hugmesh-pki-gateway-mtls).
+        keystore:
+          enabled: true
+        ingress:
+          # pki is NOT internet-facing. Served ONLY by the internal ingress-nginx
+          # on the pki node (class nginx-internal, 11-ingress-nginx-internal.yaml),
+          # reachable on the pki node's :443 via the scale.<domain> -> pki-node-IP
+          # /etc/hosts alias (VPN/LAN only). The public backend-node ingress
+          # (class nginx) never serves this class. End-user auth still reaches
+          # casdoor THROUGH the backend gateway (routing tables, Phase 2).
+          enabled: true
+          className: nginx-internal
+          host: scale.hugmesh.systems
+        nodeSelector:
+          hugmesh.systems/pki: "true"
+        seLinux:
+          level: "s0:c11"
+        # Role->URL external-access rules: Postgres-backed (admin-api CRUD),
+        # Cassandra-cached; the gateway denies external access unless the
+        # request's Casdoor roles are permitted for the route.
+        #
+        # Least-privilege DB identity: this gateway logs in as its OWN read-only
+        # role `pki_gateway` (SELECT-only on gateway_route_access), NOT the DB
+        # owner. The per-user password comes from its OWN ESO Secret
+        # (route-access-pki-gateway, key password); k8s interpolates it into the
+        # R2DBC URL via $(VAR). DEV placeholder secret in test; Vault/ESO in prod.
+        extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-pki-gateway
+                key: password
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://pki_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.hugmesh-pki.svc.cluster.local:5432/gateway
+        routes:
+          # PRE-SIGNUP CONFUSABLE/UNIQUENESS GATE — these two paths MINT a username
+          # (native self-signup + OAuth provider signup-completion), so they route
+          # through the signup-gate proxy FIRST (manifests/signup-gate), which calls
+          # the federation availability endpoint and rejects a confusable/look-alike
+          # before Casdoor creates the login. Casdoor's native forbidden-list is
+          # exact-only, so this proxy is the confusable enforcement seam. The proxy
+          # transparently forwards everything (incl. non-signup /api/login) to
+          # casdoor:8000; ordering matters — keep these BEFORE the casdoor-* routes.
+          # NOTE: validate /api/signup + the /api/login type=signup branch against
+          # the deployed casbin/casdoor:3.80.0 signup flow (see proxy-configmap.yaml).
+          - id: signup-gate-signup
+            uri: http://signup-gate.hugmesh-pki.svc.cluster.local:8000
+            path: /api/signup
+          - id: signup-gate-login
+            uri: http://signup-gate.hugmesh-pki.svc.cluster.local:8000
+            path: /api/login
+          - id: casdoor-auth
+            uri: http://casdoor.hugmesh-pki.svc.cluster.local:8000
+            path: /api/auth/**
+          - id: casdoor-login
+            uri: http://casdoor.hugmesh-pki.svc.cluster.local:8000
+            path: /login/**
+          - id: casdoor-oidc
+            uri: http://casdoor.hugmesh-pki.svc.cluster.local:8000
+            path: /.well-known/**
+          # headscale (VPN control server) — a HOST OpenRC service on the pki node,
+          # exposed in-cluster by the selector-less headscale Service (apps/
+          # 07-headscale-svc.yaml; Endpoints injected by bootstrap.sh). scale.<domain>
+          # arrives via the pki node's internal ingress (LAN/VPN) or forwarded from
+          # the backend gateway (external tailscale clients) — never pki-direct.
+          - id: headscale
+            host: scale.hugmesh.systems
+            uri: http://headscale.hugmesh-pki.svc.cluster.local:8080
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

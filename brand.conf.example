@@ -1,0 +1,191 @@
+# brand.conf — drop-in branding + default-account profile for the image builders.
+#
+# Copy to `brand.conf` (auto-detected) or pass with `--config FILE`. It is a
+# plain shell file the build scripts `source`. Order of precedence:
+#   built-in defaults  <  this file  <  explicit CLI flags
+#
+# The built-in defaults ARE the values below (the existing HugMesh naming),
+# so an empty/absent file changes nothing. Set any subset to rebrand the ISOs:
+# every namespace, hostname, gateway name, image org, ingress host and title in
+# the baked cluster payload is rewritten from "hugmesh"/"hugmesh.systems"
+# to your brand/domain at build time.
+
+# ── Branding ────────────────────────────────────────────────────────
+BRAND="hugmesh"                  # short slug used in names (namespaces, gateways, hosts)
+BRAND_TITLE="HugMesh Systems"    # human-readable title shown in UIs/messages
+ORG="HugMesh"            # GitHub org / container-image namespace
+CLUSTER_DOMAIN="hugmesh.systems" # base domain (id./matrix./mastodon./api. derived)
+RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | public (internet-facing)
+
+# ── Optional services (build-time excludable, add/remove-by-command) ──────────
+# The OPTIONAL (non-architecture) user-level services: akkoma (Mastodon), tuwunel
+# (Matrix), phpbb (forum), games, owncast (live streaming), tube (LocalTube).
+# Set OPTIONAL_SERVICES to the SUBSET you want baked into the image; unselected
+# slugs are pruned from the GitOps tree at build time by gate_optional_services
+# (Application YAMLs, gateway host/BFF routes, route-access rows, the per-service
+# ESO half — all enumerated by specs/cluster/optional-services.yaml) AND rendered
+# installed:"false" in the installed-services ConfigMap + the 13a ApplicationSet.
+# The rest of the stack degrades gracefully (greyed-out, never 502) when any/all
+# are omitted. Precedence: built-in default < this file < the --optional-services
+# CLI flag.
+#
+# DEFAULT-INCLUSION POLICY:
+#   * DEFAULT-ON  (the built-in default when no selection is given): akkoma, tuwunel
+#     (Matrix), phpbb.
+#   * DEFAULT-OFF (must be specifically added): games, owncast, tube (and any future
+#     user-level service). games is OPT-IN via ENABLE_GAMES / --enable-games or by
+#     listing 'games'; owncast/tube are GPU-gated x86 services.
+#   * FULL-SET: OPTIONAL_SERVICES="all" (or the --all-services CLI flag) selects
+#     EVERY user-level slug. EXCLUDE_SERVICES still subtracts (see below).
+# Leave commented to keep the DEFAULT set (akkoma tuwunel phpbb). Examples:
+#   OPTIONAL_SERVICES="akkoma tuwunel games"        # add games, drop forum
+#   OPTIONAL_SERVICES="akkoma tuwunel phpbb games"  # default set + games
+#   OPTIONAL_SERVICES="all"                         # every user-level service
+# OPTIONAL_SERVICES="akkoma tuwunel phpbb games"
+#
+# EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion list. Applied LAST, it
+# force-OFFs any user-level slug no matter how it became selected (default / this
+# file / --optional-services / OPTIONAL_SERVICES=all / the games opt-in), so it is
+# the one-liner that turns OFF an on-by-default service without re-enumerating the
+# whole positive list. Each excluded slug is pruned + rendered installed:"false"
+# exactly like an unselected one. CLI: --exclude-services "<slugs>". Examples:
+#   EXCLUDE_SERVICES="phpbb tuwunel"      # forum-less + Matrix-less appliance
+#   OPTIONAL_SERVICES="all" EXCLUDE_SERVICES="games"   # all-but-games
+
+# Games portal domain. BY DEFAULT games is served as a SUBDOMAIN of the primary
+# domain (games.<CLUSTER_DOMAIN>, e.g. games.hugmesh.systems) until the real
+# .games TLD is obtained; flip to the TLD later with GAMES_DOMAIN=<brand>.games.
+# This one value drives every games host + OIDC issuer/redirect (parameterized by
+# the builders + casdoor-games re-seed on ArgoCD sync). See docs/OPTIONAL-SERVICES.md
+# for the TLD-flip checklist (new DNS zone + wildcard + cloudflared + public TLS).
+# Leave commented to take the subdomain default. Example (real TLD):
+#   GAMES_DOMAIN="hugmesh.games"
+# GAMES_DOMAIN="games.${CLUSTER_DOMAIN}"
+
+# ── Image / disk options ────────────────────────────────────────────
+# First-boot root-grow policy baked into the .img (see --grow). The .img is
+# built compact (only ROOT_MiB + boot), so it flashes fast and is NOT padded to
+# the size of the target USB; growroot then expands the LAST partition on first
+# boot per this policy. CLI --grow / --no-grow override this file.
+#   GROW_POLICY=fill    grow the root to fill the WHOLE USB/SD/NVMe (DEFAULT)
+#   GROW_POLICY=none    do not grow; keep the compact flashed layout
+#   GROW_POLICY=<size>  cap the root filesystem, e.g. 16G, 12000M, 50% (% of dev)
+# GROW_POLICY="fill"
+
+# ── Libre Computer Le/La Frite — LIGHT-DESKTOP client image ─────────
+# An OPT-IN, lean desktop appliance image for the Amlogic arm64 Frite SBCs (NOT a
+# cluster node, and NOT in the default fleet). It joins the SAME Tailscale mesh +
+# Casdoor login + device-license SSH posture as every other client image. Built
+# by build-frite-stage4.sh — `make frite`, or `FRITE=1 ./scripts/build-all-roles.sh`.
+# These knobs are read by the Frite builder (CLI flags override them). See
+# docs/RUNNING.md §"Frite light-desktop image" + memory hugmesh-client-images.
+#
+#   FRITE_BOARD  — which board this image targets:
+#     la-frite     (DEFAULT) AML-S805X-AC, Amlogic S805X. The 512MB and 1GB RAM
+#                  SKUs are the SAME image (RAM auto-detected; 512MB leans on
+#                  zram). NOTE: La Frite has NO microSD slot — LIVE boots off USB,
+#                  the INSTALLER targets the eMMC module.
+#     le-potato    AML-S905X-CC, Amlogic S905X — the pricier sibling; HAS microSD.
+#     sweet-potato AML-S905X-CC-V2 (S905X, onboard UEFI/SystemReady).
+#   FRITE_FLAVOR — which artifact(s) the build emits:
+#     both       (DEFAULT) the LIVE image AND the INSTALLER image.
+#     live       boots-and-runs ephemerally off USB (La Frite) / SD (Le Potato).
+#     installer  a live medium that ALSO writes the desktop to onboard eMMC/SD.
+#   FRITE_UBOOT_URL — OPTIONAL prebuilt, FIP-signed board u-boot.bin to vendor in
+#     (Amlogic GXL u-boot needs proprietary BL31/FIP blobs to be flashable;
+#     mainline u-boot alone is not). e.g. a Tow-Boot release for the board.
+# FRITE_BOARD="la-frite"
+# FRITE_FLAVOR="both"
+# FRITE_UBOOT_URL=""
+
+# ── Default accounts (fallback when no USB KEYS stick is present) ───
+DEFAULT_USER="pi"                   # fallback non-root user
+DEFAULT_USER_PASS="raspberry"       # CHANGE for real builds
+ROOT_PASS="gentoo"                  # CHANGE for real builds
+ADMIN_EMAILS="admin@hugmesh.systems"   # seeded Casdoor admin (BFF allowlist)
+
+# ── Outbound mail (OPTIONAL — absent by default) ───────────────────
+# Selects the SMTP preset Casdoor (email-verify / password-reset) and Akkoma
+# (Pleroma.Mailer) use. THIS KNOB ONLY PICKS HOST/PORT/TLS PRESETS — it wires
+# NOTHING on its own. Mail is only switched on once gen-cluster-secrets.sh has a
+# real MAIL_USER + MAIL_PASSWORD (from the keys USB / prompt / env); with no
+# creds the Vault secret/<brand>/mail path stays empty, ESO never creates the
+# casdoor-smtp / akkoma-smtp Secrets, and both apps stay on native login +
+# admin-approval registration (no email needed). Safe to leave at the default.
+#
+#   MAIL_PROVIDER = protonmail (DEFAULT/RECOMMENDED) | gmail | outlook | smtp | none
+#     protonmail  Proton Mail Bridge / submission relay (DKIM-signed by Proton).
+#                 host/port/TLS below are the Bridge defaults; set MAIL_HOST to
+#                 your Bridge address. RECOMMENDED (privacy + DKIM out of the box).
+#     gmail       smtp.gmail.com:587 STARTTLS (needs an App Password as MAIL_PASSWORD).
+#     outlook     smtp.office365.com:587 STARTTLS (Microsoft 365 / Outlook.com).
+#     smtp        fully custom — set MAIL_HOST/MAIL_PORT/MAIL_TLS yourself.
+#     none        mail disabled (same effect as supplying no creds).
+MAIL_PROVIDER="protonmail"          # protonmail(default) | gmail | outlook | smtp | none
+
+# Per-provider host/port/TLS. Leave UNSET to take the preset for MAIL_PROVIDER
+# (resolved by scripts/gen-cluster-secrets.sh); set to override (required for
+# MAIL_PROVIDER=smtp). MAIL_TLS accepts starttls|tls|always (=STARTTLS) |
+# if_available | none|never; gen-cluster-secrets.sh normalizes it to the Swoosh
+# :tls atom the Akkoma mailer uses (always | if_available | never). Casdoor
+# infers TLS from the port. gmail/outlook/protonmail all STARTTLS on submission.
+#   gmail      -> smtp.gmail.com      :587 STARTTLS (always)
+#   outlook    -> smtp.office365.com  :587 STARTTLS (always)
+#   protonmail -> 127.0.0.1           :1025 STARTTLS (always)  (Proton Bridge default; override MAIL_HOST)
+# MAIL_HOST=""                      # SMTP server host (empty = provider preset)
+# MAIL_PORT=""                      # SMTP server port (empty = provider preset)
+# MAIL_TLS=""                       # starttls|always | if_available | none (empty = provider preset)
+MAIL_FROM=""                        # From: address (empty = noreply@<CLUSTER_DOMAIN>)
+# MAIL_USER / MAIL_PASSWORD are SECRETS — do NOT set them here in a committed file.
+# Provide them via the keys USB (KEYS/secrets/mail.json), the interactive prompt
+# in gen-provision-keys.sh, or the environment. Empty => mail stays disabled.
+# MAIL_USER=""                      # (SECRET) SMTP username (env / keys USB only)
+# MAIL_PASSWORD=""                  # (SECRET) SMTP password / app-password (env / keys USB only)
+# MAIL_DKIM_KEY=""                  # (SECRET) path to a DKIM private key (PEM), optional
+
+# ── OAuth federation providers (OPTIONAL — absent by default) ──────
+# Casdoor's GitHub + Discord login providers are OPTIONAL. Their client id/secret
+# are SECRETS — supply them via the environment or the keys USB (never a committed
+# file). With no creds the casdoor-init Job skips seeding the provider, so Casdoor
+# stays on native user/pass + admin-approval registration. Resolution order in
+# scripts/gen-cluster-secrets.sh: env -> keys file -> placeholder (= skipped).
+#   GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET     (env / keys USB only — do NOT commit)
+#   DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET   (env / keys USB only — do NOT commit)
+
+# ── System ──────────────────────────────────────────────────────────
+TIMEZONE="UTC"
+# HOSTNAME=""                       # leave empty to derive as <BRAND>-<role>
+
+# ── Versions ────────────────────────────────────────────────────────
+HEADSCALE_VERSION="0.23.0"
+TAILSCALE_VERSION="1.78.1"
+
+# ── Vault (cluster secrets) ─────────────────────────────────────────
+# Used by scripts/gen-cluster-secrets.sh + the External Secrets Operator.
+# Secrets live at  <VAULT_KV_MOUNT>/<BRAND>/{casdoor,clickhouse,uptrace}.
+#
+# An EMPTY VAULT_ADDR means offline / USB-only secret delivery: the generator
+# still writes keys-out/vault/{secrets.json,token} for the KEYS stick, and no
+# Vault server is contacted. Set it (plus VAULT_TOKEN in the environment, never
+# committed here) to also push the secrets into Vault for online ESO sync.
+VAULT_ADDR=""                       # e.g. https://vault.hugmesh.systems  (empty = offline/USB-only)
+VAULT_KV_MOUNT="secret"             # KV v2 mount the ClusterSecretStore reads
+
+# ── External CA (optional — use an EXISTING CA as the cert issuer) ──
+# By default the cert generator mints a fresh self-signed root CA. To instead
+# sign every generated leaf/service cert with an EXISTING CA (so the certs chain
+# to a CA you already trust, e.g. an org/offline root), point these at the CA
+# cert + its private key. The provided CA is bundled into the truststore and is
+# NEVER overwritten. When unset, the self-signed-root behavior is unchanged.
+# CA_KEY/CA_KEY_PASS are SECRETS — set real paths/passphrases here (gitignored
+# ./brand.conf) or in the environment, NOT in a committed brands/*.conf.
+# CA_CERT=""                        # path to the CA certificate (PEM)
+# CA_KEY=""                         # path to the CA private key (PEM; may be encrypted)
+# CA_KEY_PASS=""                    # passphrase for CA_KEY (only if it is encrypted)
+
+# Example rebrand (uncomment + edit to build "Acme" images on acme.example):
+#   BRAND="acme"
+#   BRAND_TITLE="Acme Corp"
+#   ORG="Acme-Inc"
+#   CLUSTER_DOMAIN="acme.example"
+#   ADMIN_EMAILS="admin@acme.example"

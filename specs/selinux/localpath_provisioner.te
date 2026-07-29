@@ -1,0 +1,71 @@
+################################################################
+# localpath_provisioner.te
+# Tight confined domains replacing spc_t for local-path-provisioner
+# (Deployment, ns devops; pinned to the amd64 host where the disks
+# live). Two domains:
+#   localpath_provisioner_t        - the controller (apiserver client,
+#                                    reads its config; does NOT mkdir on
+#                                    the host disk in this manifest).
+#   localpath_provisioner_helper_t - the busybox helper pod that runs
+#                                    mkdir -m0777 / rm -rf on the host
+#                                    storage roots.
+# v1 derived from local-path/local-path.yaml; INFERRED lines are
+# best-effort and refined in the permissive AVC pass.
+################################################################
+policy_module(localpath_provisioner, 1.0.0)
+
+require {
+	type container_file_t;       # ConfigMap mount + PV dirs on host disks
+}
+
+########################################
+# 1. Controller domain
+########################################
+container_domain_template(localpath_provisioner)
+kubernetes_container(localpath_provisioner_t)
+
+# Read its read-only config volume (/etc/config, projected container_file_t).
+read_files_pattern(localpath_provisioner_t, container_file_t, container_file_t)
+read_lnk_files_pattern(localpath_provisioner_t, container_file_t, container_file_t)
+list_dirs_pattern(localpath_provisioner_t, container_file_t, container_file_t)
+
+# kube-apiserver client (get/list/watch + create/patch PVs, emit events)
+# + cluster DNS. CERTAIN it is an apiserver client; INFERRED-WIDE port set.
+sysnet_dns_name_resolve(localpath_provisioner_t)
+allow localpath_provisioner_t self:tcp_socket create_stream_socket_perms;
+corenet_tcp_sendrecv_generic_node(localpath_provisioner_t)
+corenet_tcp_connect_all_ports(localpath_provisioner_t)   # INFERRED-WIDE; narrow to apiserver port post-AVC
+# The controller does NOT mkdir on the host disk in this manifest (no
+# helperPod template => default helper does it). Keep it this tight.
+
+########################################
+# 2. Helper-pod domain (the busybox that touches the host disks)
+########################################
+container_domain_template(localpath_provisioner_helper)
+kubernetes_container(localpath_provisioner_helper_t)
+
+# THE core privilege: create / remove / relabel PV directories on the
+# host disk. The storage roots /mnt/data/local-path + /mnt/usb/local-path
+# are labelled container_file_t by the .fc below; the helper bind-mounts
+# the parent dir. setup: mkdir -m0777 ; teardown: rm -rf.
+manage_dirs_pattern(localpath_provisioner_helper_t, container_file_t, container_file_t)
+manage_files_pattern(localpath_provisioner_helper_t, container_file_t, container_file_t)
+manage_lnk_files_pattern(localpath_provisioner_helper_t, container_file_t, container_file_t)
+allow localpath_provisioner_helper_t container_file_t:dir { rename relabelfrom relabelto };
+allow localpath_provisioner_helper_t container_file_t:file { rename relabelfrom relabelto };
+allow localpath_provisioner_helper_t container_file_t:lnk_file { rename relabelfrom relabelto };
+
+########################################
+# INFERRED + HIGHEST RISK (confirm via AVC pass, do NOT pre-grant
+# beyond this): rm -rf of a POPULATED PV touches child files the
+# CONSUMER wrote at its own MCS category (container_file_t:cXX). Under
+# enforcing, unlink/relabelfrom across categories needs the helper to
+# run at a wide MCS range (level s0:c0.c1023 in the manifest) AND may
+# need an mcs_constrained relabel exemption. The full c0.c1023 range
+# (set in the helperPod securityContext) is the intended mechanism;
+# confirm whether any constraint still denies the cross-category
+# unlink/relabel and add the minimal interface only if AVCs show it.
+#
+# NO Linux capabilities, NO privileged_container_domain, NO mount, NO
+# host-log read, NO unrelated FS write for either domain.
+################################################################

@@ -1,0 +1,29 @@
+# PodDisruptionBudget for a node-storage-placed service. A node-pinned PV has NO HA (the data
+# lives on ONE node's disk), so a voluntary disruption (drain/upgrade) of that node would take
+# the service down with no failover. This PDB makes that explicit: it BLOCKS a voluntary
+# eviction unless the operator first scales the service down (or migrates it), turning a
+# silent data-availability loss into a deliberate, surfaced operator decision.
+#
+# minAvailable: 1 with a single node-pinned replica means a drain that would evict the only
+# pod is REFUSED until the operator acts — exactly the "rebalance = EXPLICIT downtime" posture
+# (see node-storage-migrate.yaml for the scale-0 + rsync + re-point migration path).
+#
+# The selector (service label) + namespace are templated per assignment by the BFF render
+# (from service_name + namespace). With ZERO active assignments this PDB is never instantiated
+# (inert). It is OPT-IN per placement — only a stateful service flagged un-replaceable needs it.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: PLACEHOLDER_SERVICE_NAME-node-storage   # <- assignment.service_name (rendered)
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/node-storage-pdb: "true"
+  annotations:
+    hugmesh.systems/node-storage-note: >-
+      Node-pinned storage has NO HA. This PDB blocks a voluntary node drain from silently
+      taking the service down; scale to 0 (or migrate) before draining the node.
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: PLACEHOLDER_SERVICE_NAME             # <- the service's pod selector (rendered)

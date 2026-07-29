@@ -1,0 +1,85 @@
+# hugmesh-character-forge-ui — the Character Forge (3D character maker) Angular
+# native-federation REMOTE. Its own nginx pod in the hugmesh-frontend namespace,
+# federated into the hugmesh.systems host: it serves a remoteEntry.json the
+# host's loadRemoteModule consumes, mounted at /character-forge (ROLE_USER floor).
+# It embeds the Godot WASM 3D maker from its own same-origin assets and talks to
+# its OWN BFF via the same-origin /bff/character-forge/** fe-gateway route (plus
+# the always-present /bff/** routes). See docs/XR-CHAT.md.
+#
+# Repo (image source, to be built+pushed): the frontend/ dir of
+# github.com/hugmesh-net/hugmesh-character-forge-bff-api (ONE repo holds
+# the BFF root + godot/ + frontend/; the CI builds+pushes BOTH images).
+#
+# OPTIONAL service (DEFAULT-OFF, admin gate): add/remove-by-command on a generated
+# USB. When the slug is deselected, gate_optional_services() prunes this Application
+# + this manifest dir + the fe-gateway /character-forge/** + /bff/character-forge/**
+# routes + the route-access rows, and the installed-services ConfigMap renders
+# character-forge:"false" so the host greys the entry out instead of 404/502.
+#
+# CONTAINER: the first-party UI image is built FROM nginxinc/nginx-unprivileged:1.27-alpine
+# (runs as uid 101, listens on :8080 — no root, no NET_BIND privilege) and bakes the
+# Angular `dist/` remote (remoteEntry.json + chunks + the Godot web export under
+# assets/game/ once baked). The image placeholder below
+# (hugmesh-systems/character-forge-ui) is rewritten by the kustomization `images:`
+# transform to the in-cluster Harbor registry tag, matching the character-studio shape.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-character-forge-ui
+  namespace: hugmesh-frontend
+  labels:
+    app: hugmesh-character-forge-ui
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hugmesh-character-forge-ui }
+  template:
+    metadata:
+      labels: { app: hugmesh-character-forge-ui }
+    spec:
+      nodeSelector: { hugmesh.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          # Unique MCS level (docs/SECURITY.md §3 matrix); character-forge-ui -> c82
+          # (next free after character-forge-bff-api's c81; the slug takes c80-c82).
+          type: container_t
+          level: "s0:c82"
+      containers:
+        - name: web
+          # PLACEHOLDER image (rewritten by kustomization images: transform). The base
+          # is nginxinc/nginx-unprivileged:1.27-alpine — non-root (uid 101), :8080.
+          image: hugmesh-systems/character-forge-ui:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits:   { cpu: 300m, memory: 192Mi }
+          readinessProbe:
+            httpGet: { path: /remoteEntry.json, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /remoteEntry.json, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-character-forge-ui
+  namespace: hugmesh-frontend
+  labels:
+    app: hugmesh-character-forge-ui
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  selector: { app: hugmesh-character-forge-ui }
+  # The federation_modules remote_entry_url points at this Service on :8080
+  # (http://hugmesh-character-forge-ui:8080/remoteEntry.json).
+  ports: [{ name: http, port: 8080, targetPort: http }]

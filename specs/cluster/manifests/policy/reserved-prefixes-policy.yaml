@@ -1,0 +1,178 @@
+# =============================================================================
+# Kyverno ClusterPolicy — reserved-prefix / vanity-collision admission guard.
+# =============================================================================
+# This is the GITOPS/ADMISSION layer of the reserved-prefix rule. It makes the
+# reserved set (specs/cluster/reserved-prefixes.yaml, mirrored into the
+# hugmesh-policy/reserved-prefixes ConfigMap) an enforced invariant at
+# admission/sync time, so a reserved label can never be (mis)used where it would
+# create a vanity-shadowing collision on .systems or .games.
+#
+# SINGLE SOURCE OF TRUTH: every rule loads the reserved list from the ConfigMap
+# via a `context` (configMap + parseJson), so the policy and the GitOps list
+# cannot drift. scripts/validate-reserved-prefixes.sh asserts ConfigMap ==
+# canonical source and that the list covers every deployed gateway route prefix.
+#
+# DEPENDENCY: Kyverno must be installed (apps/15-kyverno.yaml deploys it; this
+# policy syncs in a later wave). If Kyverno is absent the policy is inert (no
+# CRD), which is why scripts/validate-reserved-prefixes.sh + the .gitlab-ci.yml
+# lint stage are the ALWAYS-ON drift guard and the PreSync hook is the
+# belt-and-braces sync-time guard — see docs/RESERVED-PREFIXES.md.
+#
+# SCOPE / HONESTY: Kyverno can only validate resources that EXIST in this GitOps
+# tree or are applied to the cluster. The platform itself routes via Spring Cloud
+# Gateway route tables (apps/20-gateway-*.yaml) + the route-access DB, NOT via
+# Ingress/HTTPRoute path rules, so the AUTHORITATIVE drift guard for those is the
+# validate script (it parses the gateway apps + schema.sql). This policy covers:
+#   (1) Ingress / Gateway-API HTTPRoute objects (the moment any are added),
+#   (2) defensively, any user/profile/vanity CRD handle (kind-matched; inert if
+#       the CRD is not installed).
+# Both reference the SAME reserved ConfigMap, so the rule is uniform.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: reserved-prefixes
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/component: policy
+  annotations:
+    policies.kyverno.io/title: Reserved prefixes / vanity-collision guard
+    policies.kyverno.io/category: HugMesh Routing
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Ingress, HTTPRoute, User/Profile/Vanity CRDs
+    hugmesh.systems/source: specs/cluster/reserved-prefixes.yaml
+    policies.kyverno.io/description: >-
+      Blocks resources that would let a vanity username / profile handle collide
+      with a dedicated platform route prefix or reserved subdomain. The reserved
+      set is read from the hugmesh-policy/reserved-prefixes ConfigMap (mirror
+      of specs/cluster/reserved-prefixes.yaml).
+spec:
+  validationFailureAction: Enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    # -------------------------------------------------------------------------
+    # (1) INGRESS — a vanity host is <label>.hugmesh.systems /
+    #     <label>.hugmesh.games. Any Ingress that admits a wildcard vanity
+    #     host (*.hugmesh.systems / *.hugmesh.games) is the gateway's own
+    #     vanity ingress and is exempt (it dispatches to the resolver, which does
+    #     its own reserved check). A NON-wildcard Ingress whose host's FIRST DNS
+    #     LABEL is reserved is fine when it IS the platform service for that label
+    #     (it lives in a hugmesh-* namespace) — what we forbid is some other
+    #     workload grabbing a reserved host. We approximate "platform" by the
+    #     part-of label; everything else with a reserved first-label is rejected.
+    # -------------------------------------------------------------------------
+    - name: ingress-host-not-reserved-vanity
+      match:
+        any:
+          - resources:
+              kinds:
+                - Ingress
+      preconditions:
+        all:
+          # Skip the platform's own components (gateways/cloudflared carry this).
+          - key: "{{ request.object.metadata.labels.\"app.kubernetes.io/part-of\" || '' }}"
+            operator: NotEquals
+            value: "hugmesh.systems"
+      context:
+        - name: reserved
+          configMap:
+            name: reserved-prefixes
+            namespace: hugmesh-policy
+      validate:
+        message: >-
+          Ingress host '{{ element }}' uses a RESERVED first label, which would
+          shadow a dedicated platform route/subdomain. Reserved labels live in
+          specs/cluster/reserved-prefixes.yaml (hugmesh-policy/reserved-prefixes
+          ConfigMap). Pick a non-reserved host or label the platform component
+          app.kubernetes.io/part-of=hugmesh.systems.
+        foreach:
+          - list: "request.object.spec.rules[].host"
+            # First DNS label of the host (everything before the first dot).
+            # `element` is the per-iteration host; reference it BARE inside the
+            # JMESPath (no nested mustache braces — Kyverno binds it directly).
+            deny:
+              conditions:
+                all:
+                  # only consider hugmesh.systems / .games hosts
+                  - key: "{{ regex_match('^[^.]+\\.hugmesh\\.(systems|games)$', element) }}"
+                    operator: Equals
+                    value: true
+                  # …whose first label is in the reserved set
+                  - key: "{{ split(element, '.')[0] }}"
+                    operator: AnyIn
+                    value: "{{ parse_json(reserved.data.\"reserved.json\") }}"
+
+    # -------------------------------------------------------------------------
+    # (2) GATEWAY-API HTTPRoute — same rule for hostnames, PLUS a path-prefix
+    #     guard: a HTTPRoute whose first path segment is a reserved prefix is a
+    #     dedicated platform route and must be owned by a platform component
+    #     (part-of=hugmesh.systems); anything else claiming /<reserved>/** is
+    #     a shadowing collision and is rejected.
+    # -------------------------------------------------------------------------
+    - name: httproute-host-not-reserved-vanity
+      match:
+        any:
+          - resources:
+              kinds:
+                - HTTPRoute
+      preconditions:
+        all:
+          - key: "{{ request.object.metadata.labels.\"app.kubernetes.io/part-of\" || '' }}"
+            operator: NotEquals
+            value: "hugmesh.systems"
+      context:
+        - name: reserved
+          configMap:
+            name: reserved-prefixes
+            namespace: hugmesh-policy
+      validate:
+        message: >-
+          HTTPRoute hostname '{{ element }}' uses a RESERVED first label and would
+          shadow a dedicated platform route/subdomain (see
+          specs/cluster/reserved-prefixes.yaml).
+        foreach:
+          - list: "request.object.spec.hostnames"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ regex_match('^[^.]+\\.hugmesh\\.(systems|games)$', element) }}"
+                    operator: Equals
+                    value: true
+                  - key: "{{ split(element, '.')[0] }}"
+                    operator: AnyIn
+                    value: "{{ parse_json(reserved.data.\"reserved.json\") }}"
+
+    # -------------------------------------------------------------------------
+    # (3) DEFENSIVE — user/profile/vanity CRD handle. If a User / Profile /
+    #     VanityClaim CRD is ever introduced (a handle materialized as a cluster
+    #     resource), reject one whose handle/username is a reserved label. The
+    #     rule is INERT until such a CRD exists (kind not registered => no match),
+    #     so it is safe to ship now as defence-in-depth. Mirrors the app-repo
+    #     ReservedNames check at the cluster layer.
+    # -------------------------------------------------------------------------
+    - name: vanity-handle-not-reserved
+      match:
+        any:
+          - resources:
+              kinds:
+                # Group-qualified so this only ever matches a hugmesh CRD,
+                # never some unrelated "User" kind from another API group.
+                - hugmesh.systems/v1alpha1/VanityClaim
+                - hugmesh.systems/v1alpha1/Profile
+                - hugmesh.systems/v1alpha1/User
+      context:
+        - name: reserved
+          configMap:
+            name: reserved-prefixes
+            namespace: hugmesh-policy
+      validate:
+        message: >-
+          handle '{{ request.object.spec.handle || request.object.spec.username
+          || request.object.metadata.name }}' is RESERVED and cannot be claimed
+          as a vanity username (see specs/cluster/reserved-prefixes.yaml).
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.handle || request.object.spec.username || request.object.metadata.name }}"
+                operator: AnyIn
+                value: "{{ parse_json(reserved.data.\"reserved.json\") }}"

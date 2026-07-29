@@ -1,0 +1,25 @@
+# /etc/fstab — HugMesh x86_64 host image (UEFI GPT: p1 ESP + p2 ext4 root).
+#
+# PARTUUID-based, mirroring specs-rpi5/etc/fstab's style so ONE built image
+# boots from any disk it is dd'd onto (SATA/NVMe/USB) — no device-name or
+# filesystem-UUID baking. The installer (specs-x86/installer/install-x86.sh)
+# and the .img builder substitute the real PARTUUIDs into the two __*__ tokens
+# below after partitioning the target (e.g. with: blkid -s PARTUUID -o value).
+#
+# Layout (UEFI GPT, ESP first, ext4 root LAST so growroot can expand it):
+#   p1  ESP   FAT32  -> /boot/efi   (GRUB-EFI --removable: /EFI/BOOT/BOOTX64.EFI)
+#   p2  root  ext4   -> /           (persistent; growroot expands on first boot)
+#
+# <device>                  <mount>     <type>  <options>                                <dump> <pass>
+PARTUUID=__ROOT_PARTUUID__  /           ext4    defaults,noatime                         0      1
+PARTUUID=__ESP_PARTUUID__   /boot/efi   vfat    defaults,noatime,nosuid,nodev,noexec,umask=0077 0  2
+
+# Hardening tmpfs mounts (no persistent /tmp; matches the rpi5 image).
+tmpfs                       /tmp        tmpfs   defaults,nosuid,nodev,noexec,size=2g     0      0
+tmpfs                       /run        tmpfs   defaults,nosuid,nodev,mode=0755          0      0
+tmpfs                       /var/tmp    tmpfs   defaults,nosuid,nodev,noexec,size=1g     0      0
+
+# Uncomment to also mount the ESP at /boot (kernel/initramfs there instead of
+# under the ESP's /boot/efi). The default keeps the ESP only at /boot/efi and
+# the kernel on the ext4 root, so a relabel/regen never depends on the FAT mount.
+# PARTUUID=__ESP_PARTUUID__ /boot       vfat    defaults,noatime,nosuid,nodev,noexec,umask=0077 0 2

@@ -1,0 +1,25 @@
+# The node-pinned PVC for an assigned service. Bound to hugmesh-local (the WaitForFirstConsumer
+# local-path StorageClass): the bind is DEFERRED until the pod schedules, and the pod's
+# nodeAffinity (placement-patch.yaml) pins it to the pool's node, so the PV is carved from THAT
+# node's attached-pool path (the per-node nodePathMap entry the node-agent CAS-patched, PR6) —
+# i.e. the PV BINDS TO THE CORRECT NODE.
+#
+# The name + namespace + requested size are templated per assignment by the BFF render (from
+# pvc_name / namespace / requested_bytes). The placeholders below are replaced at render time;
+# with ZERO active assignments this manifest is never instantiated (inert).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: PLACEHOLDER_PVC_NAME            # <- assignment.pvc_name (rendered)
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/node-storage-pvc: "true"
+  annotations:
+    # The pool's node-local path the local-path provisioner serves this PV from (audit).
+    hugmesh.systems/storage-pool-path: PLACEHOLDER_POOL_PATH
+spec:
+  accessModes: [ReadWriteOnce]          # node-pinned local storage is RWO by nature
+  storageClassName: hugmesh-local    # the WaitForFirstConsumer local-path class
+  resources:
+    requests:
+      storage: PLACEHOLDER_REQUESTED    # <- assignment.requested_bytes (rendered, e.g. 4Gi)

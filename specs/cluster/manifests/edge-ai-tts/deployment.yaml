@@ -1,0 +1,83 @@
+# hugmesh-edge-ai-tts — CPU-default Piper text-to-speech for the VN voice feature
+# (B3). A small stateless FastAPI wrapper around rhasspy/piper that synthesizes a
+# short line of speech AND returns an even-split viseme timeline the matrix-ui VN
+# client uses to drive 2D mouth-shape lipsync (B3-PR2):
+#   POST /v1/synthesize -> { audioBase64, sampleRate, format, durationMs, visemes[] }
+# Unlike edge-ai-analysis, this service does NOT call the edge-ai Ollama upstream —
+# synthesis is local CPU work (onnxruntime), the default voice is BAKED IN, and no
+# model is fetched at request time. It has NO dependency on edge-ai/GPU (no
+# nodeSelector/runtimeClass) and schedules ANYWHERE in the mesh. ON-PREM: nothing
+# leaves the mesh.
+#
+# DEFAULT-OFF optional slug `edge-ai-tts` (NO dependsOn) — deployed only when
+# explicitly selected. The container image is a SEPARATE build artifact (see
+# image/); keep this slug DESELECTED until the image is built+pushed so no node
+# tries to pull it. Source lives in image/ (FastAPI app + visemes.py).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-edge-ai-tts
+  namespace: hugmesh-inference
+  labels:
+    app: hugmesh-edge-ai-tts
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-edge-ai-tts } }
+  template:
+    metadata: { labels: { app: hugmesh-edge-ai-tts } }
+    spec:
+      securityContext:
+        seLinuxOptions:
+          # Unique MCS category — docs/SECURITY.md §3: "each MCS category is unique,
+          # no two workloads may share one". Categories are allocated monotonically
+          # as the next free one and the matrix is currently packed CONTIGUOUSLY
+          # c11-c71 across BOTH specs/cluster/manifests/ AND specs/cluster/apps/ (+
+          # the docs/SECURITY.md table). So c50 is NOT free — forum/phpbb-db.yaml
+          # already uses s0:c50 (sharing it would weaken inter-pod isolation).
+          # edge-ai-tts takes the next free category above the current max c71 -> c72
+          # (siblings: edge-ai=c73, edge-ai-analysis=c49).
+          type: container_t
+          level: "s0:c72"
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: tts
+          # Built from image/ (FastAPI + piper-tts + onnxruntime, CPU-only). Remapped
+          # to the registry by kustomization.yaml. Until the image is built + pushed,
+          # keep this slug deselected (DEFAULT-OFF) so no node tries to pull it.
+          image: hugmesh-systems/edge-ai-tts
+          ports:
+            - { name: http, containerPort: 8080, protocol: TCP }
+          env:
+            # Voice model location (baked in at /models; additional voices can be
+            # pulled to a PVC mounted at the same path) + Piper synthesis knobs —
+            # the TTS config surface (mirrors edge-ai-analysis's task/threshold map).
+            - { name: TTS_MODEL_DIR,      valueFrom: { configMapKeyRef: { name: edge-ai-tts, key: model-dir } } }
+            - { name: TTS_DEFAULT_VOICE,  valueFrom: { configMapKeyRef: { name: edge-ai-tts, key: default-voice } } }
+            - { name: TTS_LENGTH_SCALE,   valueFrom: { configMapKeyRef: { name: edge-ai-tts, key: length-scale } } }
+            - { name: TTS_NOISE_SCALE,    valueFrom: { configMapKeyRef: { name: edge-ai-tts, key: noise-scale } } }
+            - { name: TTS_NOISE_W,        valueFrom: { configMapKeyRef: { name: edge-ai-tts, key: noise-w } } }
+            - { name: TTS_MAX_CHARS,      valueFrom: { configMapKeyRef: { name: edge-ai-tts, key: max-chars } } }
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits:   { cpu: "2",  memory: 768Mi }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        # writable scratch for uvicorn under the read-only rootfs
+        - name: tmp
+          emptyDir: {}

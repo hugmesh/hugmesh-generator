@@ -1,0 +1,60 @@
+# GitLab — internal DevOps forge in the devops namespace (x86_64 host).
+#
+# - Login via Casdoor OIDC; only Casdoor ROLE_ADMIN users (admin group) get in
+#   (no public sign-up). Reached over the VPN at gitlab.hugmesh.systems
+#   through the fe/devops gateway — never exposed externally.
+# - Pull-mirrors every HugMesh GitHub repo (scripts/gitlab-mirror-org.sh)
+#   and runs CI (gitlab-runner) that builds all ISOs + container images.
+# - Storage on hugmesh-local (the host's device disk + attached USB).
+#
+# NOTE: GitLab is heavy; pin chart version + size it for the host. Values here
+# are a starting point — set the real domain, Casdoor client secret (Vault),
+# and resource requests before enabling.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitlab
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://charts.gitlab.io
+    chart: gitlab
+    targetRevision: 8.x.x
+    helm:
+      releaseName: gitlab
+      values: |
+        global:
+          hosts: { domain: hugmesh.systems, https: true, gitlab: { name: gitlab.hugmesh.systems } }
+          ingress: { configureCertmanager: false }   # internal/VPN only; gateway terminates TLS
+          # Casdoor OIDC — admin-only login, no public sign-up.
+          appConfig:
+            omniauth:
+              enabled: true
+              allowSingleSignOn: ["openid_connect"]
+              blockAutoCreatedUsers: true            # admin approves; ROLE_ADMIN via Casdoor group
+              providers:
+                - secret: gitlab-casdoor-oidc         # Vault/ESO-provided
+          # All persistence onto the host's device+USB disks.
+          edition: ce
+        # Pin everything to the x86_64 host.
+        nodeSelector: { kubernetes.io/arch: amd64 }
+        gitlab-runner: { install: false }            # runner is a separate app (privileged)
+        certmanager: { install: false }
+        nginx-ingress: { enabled: false }
+        # Container Registry disabled — Harbor (apps/03a-harbor.yaml) now serves
+        # registry.hugmesh.systems as the platform's full-replacement
+        # container registry; leaving this on would race Harbor's own Ingress
+        # for the same hostname.
+        registry: { enabled: false }
+        prometheus: { install: false }
+        postgresql: { global: { storageClass: hugmesh-local } }
+        redis: { global: { storageClass: hugmesh-local } }
+        minio: { persistence: { storageClass: hugmesh-local } }
+        gitlab: { gitaly: { persistence: { storageClass: hugmesh-local } } }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    automated: { prune: false, selfHeal: true }      # prune off: GitLab has stateful CRDs/PVCs
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

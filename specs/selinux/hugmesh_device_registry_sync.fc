@@ -1,0 +1,12 @@
+# hugmesh_device_registry_sync.fc
+# Label the sync daemon binary (OpenRC service + cron copy) as the
+# entrypoint of hugmesh_device_registry_sync_t. The signed-export cache
+# it writes (/etc/hugmesh/registry/*) is labelled by
+# hugmesh_authkeys.fc as hugmesh_authkeys_cache_t — the shared
+# on-disk handoff between the sync daemon (writer) and the
+# AuthorizedKeysCommand (reader). provision_selinux()'s first-boot relabel
+# (setfiles / restorecon -RF /) applies these.
+#
+# The binary is copied to /usr/sbin by the (protected) build script.
+
+/usr/sbin/hugmesh-device-registry-sync    --    gen_context(system_u:object_r:hugmesh_device_registry_sync_exec_t,s0)

@@ -1,0 +1,16 @@
+# sys-apps/policycoreutils (in packages.list) pulls the SELinux python toolchain
+# (sys-apps/selinux-python), which needs the WHOLE stack built WITH the python
+# USE flag: libselinux[python], libsemanage[python], audit[python], etc.
+# The package-set emerge's --autounmask-continue does NOT auto-apply these USE
+# changes (it stalls one-at-a-time with "no ebuilds built with USE flags to
+# satisfy ...[python]"), so pre-seed the full stack explicitly — this matches the
+# build's philosophy of EXPLICIT, reproducible USE decisions (cf. package.accept_keywords).
+sys-libs/libselinux python
+sys-process/audit python
+# Verified against selinux-python's RDEPEND + each ebuild's IUSE: ONLY libselinux
+# and audit expose an optional `python` USE flag that must be enabled. libsemanage
+# is pulled as [python(+)] but has NO `python` flag (inherits python-r1 →
+# python_targets only), so the (+) operator auto-satisfies it — adding
+# `libsemanage python` here would error with "USE flag python not found".
+# setools/checkpolicy/selinux-python are python-intrinsic (python_targets via
+# PYTHON_USEDEP, no plain `python` flag).

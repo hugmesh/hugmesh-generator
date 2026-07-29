@@ -1,0 +1,43 @@
+# register-superadmin-service-catalog.descriptor.yaml — the federation_modules registration
+# DESCRIPTOR for the SUPERADMIN Service Catalog console remote (hugmesh-superadmin-appstore design,
+# tailnet-only V6). NOT applied directly: like the optional-services federationModule entries
+# (optional-services.yaml — akkoma/tuwunel/forum/games), the actual `federation_modules` INSERT
+# is owned by the federation-api repo's Liquibase changeset (forward-referenced by name below).
+# This descriptor is the generator-side source-of-truth the federation-api wave reads, so the
+# registration's exact shape lives with the GitOps tree that deploys the gateway + route-access.
+#
+# WHY a remote-shell / internal / SUPERADMIN tier:
+#   The Service Catalog console (hugmesh-superadmin-service-catalog-ui, exposing ./ServiceCatalog) is a federated
+#   REMOTE served by the remote-fragment nginx fleet. It must be discoverable/authorized ONLY
+#   for SUPERADMIN over the TAILNET — never on the public UI. The three federation fields below
+#   pin that: kind=remote-shell (a top-level shell remote, not a per-user MFE), visibility=internal
+#   (NOT public — the ManifestService superadmin tier withholds it from the public manifest), and
+#   requiresRole=SUPERADMIN (the federation-api authz floor). Combined with the tailnet
+#   superadmin-gateway (apps/22-gateway-superadmin.yaml), the gateway route-access ROLE_SUPERADMIN
+#   rows (manifests/route-access/initdb/20-schema.sql), and the Angular superadminGuard (in the UI
+#   repo), this is the full three-lock tailnet-only surface.
+apiVersion: hugmesh.systems/v1
+kind: FederationModuleRegistration
+metadata:
+  name: superadmin-service-catalog
+  # The federation-api Liquibase changeset that performs the INSERT (forward-reference,
+  # mirroring optional-services.yaml's `changeset` field — the federation-api wave owns it).
+  changeset: "040-register-superadmin-service-catalog-module.xml"
+spec:
+  # The federation_modules row this descriptor stands for. Column shape matches the
+  # federation-api federation_modules registry (slug + remoteEntry + exposedModule + mountAt
+  # + kind + visibility + requiresRole).
+  slug: superadmin-service-catalog
+  displayName: "Superadmin Service Catalog"
+  # The remote-fragment nginx service that serves the remoteEntry + bundles for the
+  # hugmesh-superadmin-service-catalog-ui remote (exposes ./ServiceCatalog as name "service-catalog").
+  remoteEntry: "http://hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc.cluster.local:8080/remoteEntry.json"
+  exposedModule: "./ServiceCatalog"
+  mountAt: /superadmin/service-catalog
+  # ⚠ TAILNET-ONLY federation tier:
+  kind: remote-shell        # top-level superadmin console shell remote (not a per-user MFE)
+  visibility: internal      # NOT public — withheld from the public manifest (superadmin tier)
+  requiresRole: SUPERADMIN  # the federation-api authz floor for discovery + bundle access
+  # The owner of an internal/superadmin remote is the platform (no per-user owner_user_id);
+  # the federation-api seeds it as a platform-owned internal module.
+  ownerUserId: null

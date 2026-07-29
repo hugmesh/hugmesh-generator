@@ -1,0 +1,801 @@
+# HugMesh CI — runs on the in-cluster GitLab Runner (privileged, x86_64 host).
+# Builds every ISO + container image and DELIVERS the ISOs as release assets so
+# the admin UI can link to the latest builds. NOTE: ISOs contain NO keys — the
+# KEYS material is supplied from the USB stick at first boot, never baked in or
+# published.
+stages: [lint, verify, iso, images, deliver, sca, dast, load]
+
+variables:
+  # Where delivered ISOs live; the admin BFF reads "latest" links from here.
+  ISO_BASE: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/iso/latest"
+
+# Route-federation consistency / reserved-prefix drift guard. Asserts the
+# canonical reserved set (specs/cluster/reserved-prefixes.yaml) covers every
+# dedicated gateway route prefix + reserved subdomain (apps/20-gateway-*.yaml +
+# manifests/route-access/schema.sql) AND that the in-cluster ConfigMap mirror
+# matches the source. A newly added route prefix that is not reserved FAILS here,
+# catching the drift that would let a vanity username shadow a real route. Cheap,
+# so it runs first on every branch (no privileged runner needed).
+lint:reserved-prefixes:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash scripts/validate-reserved-prefixes.sh
+
+# Optional-services BUILD-TIME EXCLUSION gate. Sources the REAL gate + helper
+# functions from build-rpi5-stage4.sh and runs gate_optional_services against a
+# sandbox tree seeded from specs/cluster, proving EVERY user-level service
+# (akkoma/tuwunel/phpbb/games/owncast/tube) is build-time excludable: excluded =>
+# its Application/manifests/routes/rows OMITTED + installed-services ConfigMap
+# "false" + 13a ApplicationSet element "false"; included => present + "true". Also
+# covers the EXCLUDE_SERVICES subtractive knob. Cheap; no privileged runner needed.
+lint:optional-services-exclude:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/stack/test-optional-services-exclude.sh
+
+# Merge-conflict-marker gate. A WIP checkpoint PR once merged an UNRESOLVED
+# conflict hunk into tests/stack/gateway-routes/fe/application-routes.yml — a file
+# the fe-gateway parses at STARTUP, so the platform front door crash-looped on
+# `<<<<<<< HEAD` until someone read the container log. Nothing else catches this
+# class: YAML/shell linters only run on the files they know, and a marker is valid
+# text to git. Cheap grep, whole tree, fails on the first marker.
+lint:conflict-markers:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - |
+      if grep -rn --binary-files=without-match -E '^(<{7}( |$)|={7}$|>{7}( |$))'            --exclude-dir=.git --exclude-dir=.stack-src --exclude-dir=node_modules .; then
+        echo "unresolved merge-conflict markers committed (see matches above)"; exit 1
+      fi
+      echo "no conflict markers"
+
+# Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
+# post-clone pass that rewrites files in ./.stack-src which `docker compose build`
+# then consumes) against synthetic checkouts: the pre-rename private dependency is
+# dropped and NOTHING else is, single-line <dependency> elements and prose survive,
+# a clean pom is byte-identical, a checkout that IMPORTS the package is refused
+# rather than mangled, and every patch is idempotent. No network/docker needed.
+lint:patch-stack-src:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/stack/test-patch-stack-src.sh
+
+# HTTPS front door wiring (tests/stack/test-tls-front.sh): compose service /
+# nginx terminator / Makefile stack-certs cross-consistency (ports + mount
+# paths DERIVED, not assumed), the SNAP_BFF_URL same-origin mixed-content
+# guard, no-HSTS, .tls-front gitignore, and a real openssl mint round-trip
+# (python:3-slim ships openssl). No network/docker needed.
+lint:tls-front:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/stack/test-tls-front.sh
+
+# Supply-chain download-verification gate. Unit-tests scripts/_download-lib.sh
+# (sha256/sha512 + publisher-manifest verification ABORTS on tamper, fails closed
+# on an absent manifest entry, stage3 DIGESTS extraction) AND grep-asserts that
+# EVERY stage4 builder (rpi5/frite/jetson/x86) sources the lib and verifies the
+# stage3 seed + headscale + tailscale downloads — a builder silently dropping a
+# verification call FAILS here. No network/GPG needed; cheap.
+lint:download-verify:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-download-verify.sh
+
+# Cloud image packaging gate (scripts/cloud-package.sh, the operator-facing
+# raw->qcow2/vhd-fixed/raw re-packager). Hermetic: tiny truncate-made sparse
+# inputs + a recording qemu-img stub on the SNAP_QEMU_IMG seam — proves the
+# Azure whole-MiB round-UP math (incl. the compact 1+512+ROOT+1 no-op case),
+# input immutability, the x86-only refusal paths and the manifest contract.
+# No qemu, root or network; GNU coreutils for cp --sparse / truncate / stat -c.
+lint:cloud-package:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache coreutils findutils grep gawk
+  script:
+    - bash tests/scripts/test-cloud-package.sh
+
+# ARM cross-dracut helper (scripts/_dracut-cross-lib.sh): the --encrypt-root
+# qemu-aarch64 binfmt registration + the availability predicate the fail-fast
+# preflight evaluates. Proves preflight_ok is FALSE when qemu-aarch64 is
+# unregistered / its interpreter is missing (the pki.rpi5 failure conditions),
+# TRUE when present, register_qemu is non-fatal, the preflight dies fast with the
+# actionable message, and EVERY ARM builder sources+wires the lib. No root,
+# mocks binfmt_misc; cheap.
+lint:dracut-cross-lib:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-dracut-cross-lib.sh
+
+# media-poisoner (m)TLS entrypoint gate. Runs the worker's unittest suite:
+# the config-resolution fail-closed contract (a PARTIAL POISON_TLS_* env must
+# ABORT startup, never silently serve plaintext) + a LIVE mutual-TLS handshake
+# proof (self-signed throwaway CA; a certless client is REJECTED, a cert-bearing
+# client gets /health with transport:"mtls"). openssl+fastapi+uvicorn make the
+# live layer run (it skips itself, visibly, when they are missing); the app's
+# Form/File params hard-require python-multipart at import time, so it must be
+# installed or the served process dies on boot. Cheap; no privileged runner
+# needed.
+lint:media-poisoner-tls:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y --no-install-recommends openssl >/dev/null
+    - pip install --quiet fastapi uvicorn python-multipart
+  script:
+    - python -m unittest discover -s specs/cluster/manifests/media-poisoner/worker/tests -v
+
+# x86 kernel k8s-networking fragment lint. The x86 hardened-k8s.config used to be a
+# TRUNCATED copy of the Pi reference (no xtables match/target layer, no nft NAT/MASQ,
+# no NF_NAT_MASQUERADE, no IPv6 nf tables, no IP_NF_MANGLE) — which left ClusterIP/
+# kube-proxy/MASQUERADE/dual-stack/NetworkPolicy DEAD on x86 nodes. This offline lint
+# asserts (1) the x86 fragment carries every required arch-neutral net/cgroup/overlay/
+# bpf symbol as =y (the SAME load-bearing set the build guard greps post-olddefconfig),
+# (2) no ARM/Pi-only symbol leaked in, (3) BTF stays OUT of both fragments (a separate
+# pahole-gated follow-up), and (4) both builders' fail-closed guards reference the
+# load-bearing net subset. A re-truncation of the fragment, or a build guard that stops
+# asserting the net symbols, FAILS here. Cheap; no privileged runner needed.
+lint:x86-kernel-net-symbols:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-x86-kernel-net-symbols.sh
+
+# Shell-injection remediation regression suite. Runs the fail-closed identity /
+# path / manifest validators added by the shell-injection hardening (build-x86 /
+# rpi5 / frite, gen-keystores, generate-brand-repos, provision.sh) against
+# injection payloads, asserting each is REJECTED and legit values still pass. These
+# are the merged security fixes' regression tests — orphaned until now. Cheap; no
+# privileged runner needed. NOTE reviewer: confirm per-test runtime deps against the
+# runner (jq/openssl added below); split into separate jobs if any test needs more.
+lint:shellinj-regression:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache jq openssl
+  script:
+    - bash tests/scripts/test-x86-identity-injection.sh
+    - bash tests/scripts/test-rpi5-builder-input-validation.sh
+    - bash tests/scripts/test-frite-builder-input-validation.sh
+    - bash tests/scripts/test-brand-path-validation.sh
+    - bash tests/scripts/test-provision-manifest-injection.sh
+
+# gen-provision-keys.sh escrow-clobber guard: its leading `rm -rf keys-out` must
+# REFUSE when the existing tree holds vault-seed/device files another tool
+# escrowed (e.g. the phone-wizard's enterprise-profile.pass — the only copy able
+# to unlock an already-created on-device work profile), while still allowing
+# reruns over its own regenerable output. Offline; no privileged runner needed.
+lint:provision-keys-escrow-guard:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache jq openssl openssh-keygen python3 coreutils findutils grep sed
+  script:
+    - bash tests/scripts/test-provision-keys-escrow-guard.sh
+
+# MDM phone wizard gate. Offline logic test for scripts/phone-wizard.sh
+# (the GrapheneOS-on-Pixel onboarding driver): adb/fastboot/curl are PATH-shim
+# stubs, but the sshsig supply-chain crypto is REAL (an ephemeral ed25519 key
+# signs the fixture artifact; the driver verifies via dlv_verify_sshsig).
+# Asserts plan is offline/dry-run, tamper -> exit 3 + artifact DELETED, the
+# signer-fingerprint pin fails closed, destructive verbs refuse on a non-TTY,
+# escrow lands 0600 under vault-seed/, and a secret sweep proves no pre-auth
+# key or passphrase ever reaches stdout/stderr/argv. No network, no root, no
+# device, no privileged runner needed.
+lint:phone-wizard:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache jq openssh-keygen coreutils findutils grep sed python3 libarchive-tools
+  script:
+    - bash tests/phone/test-phone-wizard.sh
+
+# MDM provider registry gate. Offline unit test for the pluggable MDM provider
+# registry (specs/usr/lib/hugmesh/mdm-providers.sh) the phone wizard drives —
+# the co-equal-provider analogue of the go-live provider registry. Sources the
+# lib and asserts its shape (MDM_PROVIDER_IDS + parallel assoc arrays + one
+# mdmp_emit_<id> per id, no orphans), that the DEFAULT is the SOVEREIGN provider
+# (headwind, first), the dpc-adb vs os-enrollment mechanism split the driver
+# branches on, and that the azure-intune emit renders the Graph remoteLock +
+# unlock-asymmetry + sovereignty-forfeiture runbook while NEVER emitting any
+# tenant/client-secret material (custody is server-side only). No network, no
+# root, no device.
+lint:mdm-providers:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache coreutils grep sed
+  script:
+    - bash tests/phone/test-mdm-providers.sh
+
+# Headwind entrypoint gate. Offline e2e of the DERIVED docker-entrypoint.sh
+# against the REAL vendored templates: the esc/xml/sql escaping layers round-trip
+# a hostile SQL_PASS through a strict XML parse (Tomcat's bar), init.sql gets
+# quote-doubling + the h-mdm.com URL rewrite, ROOT.xml lands 0600, the psql wait
+# loop retries with the password on env (never argv), the CMD is exec'd (PID-1
+# proof), and a missing required env fails closed BEFORE any render (regression:
+# set -u inside $() once left an empty-host ROOT.xml that the idempotence guard
+# would pin forever). No docker, no network, no root.
+lint:headwind-entrypoint:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache python3 coreutils findutils grep sed
+  script:
+    - bash tests/phone/e2e-headwind-entrypoint.sh
+
+# MDM phone END-TO-END gate. Onboards a MOCKED stock-Android Pixel through
+# scripts/phone-wizard.sh's real verb chain in sequence against ONE stateful mock
+# device (detect -> enroll[pending->joined] -> mdm-enroll -> attest -> profile ->
+# ingest -> status -> remove-profile -> re-ingest). adb/fastboot/curl/apksigner are
+# PATH-shim stubs modelling observable handset state transitions: install makes the
+# package appear; adb push CAPTURES the DPC init.json so its payload is asserted;
+# create-user grows the user list (foreclosing device-owner mode); dpm set-device-
+# owner LATCHES one-shot like AOSP; tailscale0 has no CGNAT addr until the operator
+# joins; the curl stub REFUSES an identity-less POST (so mTLS is enforced, not just
+# requested). openssl mints a REAL throwaway client cert. Every negative control
+# fires: a bad signer digest -> exit 3, a refused dpm -> exit 1, an undetectable OS
+# -> exit 2, an identity-less POST rejected, a datestamp-impostor ROM not promoted
+# to GrapheneOS, and a POSITIVE control proving the argv secret-sweep actually bites.
+# Proves os=android is a first-class join (no --force), the phone-ingest/v1 record
+# folds every step (init.json payload + identity facts included), the ordering
+# foreclosure bites (exit 2), remove-profile retires the record, the no-USB
+# operator-attested path folds to ingest, and no pre-auth key / passphrase ever
+# leaks to stdout/stderr/argv. No network, no root, no device, no privileged runner.
+lint:phone-android-e2e:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache jq coreutils findutils grep sed gawk openssl
+  script:
+    - bash tests/phone/e2e-android-join.sh
+
+# Makefile phone-* FACE gate. Offline threading test for the 13 phone-* delegate
+# targets and the _PHONE_ARGS seam: the REAL repo Makefile is the SUT (run via
+# `make -f` from a staged tmpdir whose scripts/phone-wizard.sh is an
+# argv-capture stub — the real wizard never executes). Proves every target
+# delegates the right verb; HEADWIND_*/AUDITOR_*/ATTESTATION_URL/SERIAL knobs
+# thread to their exact flags; unset knobs leave flags ABSENT (exact-argv
+# negative control); AUTHKEY_FILE/PASS_FILE/INTERNAL_TOKEN_FILE forward PATHS
+# only (secret contents swept off argv/stdout/stderr with a proven-armed
+# detector); phone-flash without SERIAL refuses via $(error) and never invokes
+# the wizard; and the `"$$VAR"` shell-substitution quoting is load-bearing —
+# spaces/quotes survive as one argv element and `$(...)`/backticks are NEVER
+# executed (the seam was a past injection-fix site). apk bash supplies the
+# /bin/bash the Makefile's SHELL := /bin/bash needs (the bash:5 image only
+# ships /usr/local/bin/bash). No device, no docker, no build, no network.
+lint:make-phone-face:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash make coreutils grep sed
+  script:
+    - bash tests/phone/test-make-phone-face.sh
+
+# MDM manifests RENDER gate. kustomize-renders specs/cluster/manifests/headwind/
+# + attestation-server/ (kubectl kustomize; mirrors test-coturn-optional-service's
+# pure-render pattern) and asserts the load-bearing invariants on the RENDERED
+# stream: the 3 per-app SAs land in the right set (automount off), both
+# custom-image Deployments stay runAsNonRoot uid-1000 (the attestation seeder's
+# deliberate root override confined to that one sidecar), every Service is
+# ClusterIP (8080+31000 on headwind; no NodePort/LoadBalancer anywhere —
+# tailnet-only posture), PROTOCOL=http survives, ADMIN_EMAIL comes from Secret
+# headwind-admin and the dead HEADWIND_ADMIN_USERNAME/PASSWORD vars stay
+# removed, attestation probes stay tcpSocket (upstream serves NO GET routes),
+# the smtp seeder + its Secret are wired, and images follow the
+# registry.hugmesh.systems/hugmesh/... convention. Negative controls on
+# STAGED COPIES prove the render gate and the PROTOCOL invariant both bite.
+# Cheap; no cluster, no privileged runner needed.
+lint:mdm-manifests-render:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache kubectl coreutils grep sed gawk
+  script:
+    - bash tests/stack/test-mdm-manifests-render.sh
+
+# MDM Dockerfile PATCH-GATE lint, fully offline (the two manifest Dockerfiles
+# were proven by real builds; CI never rebuilds them). EXTRACTS the sed+grep RUN
+# blocks from the REAL Dockerfile text (the Dockerfile is the SUT) and executes
+# them against committed fixtures replicating the exact upstream declaration
+# shapes at the pinned AttestationServer commit 98b6c130 — including the
+# LINE-WRAPPED release-digest declaration the first real build tripped over.
+# Proves each patch lands + each fail-loud grep gate passes with the committed
+# ARG defaults; the placeholder posture holds (a green run does NOT imply a real
+# AUDITOR_SIGNER_DIGEST was pinned); only the RELEASE pin is repointed; and
+# mutation controls fire: a changed digest literal / reshaped declaration FAILS
+# the extracted gates loud, a benign one-line rewrap still patches, and the
+# headwind build.properties randomize step mints fresh 48-hex secrets on the
+# real committed file (reshaped placeholder trips the `! grep` gate; a deleted
+# line — invisible to that gate — is caught by the suite's own hex check).
+lint:attestation-dockerfile-patches:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache coreutils grep sed
+  script:
+    - bash tests/stack/test-attestation-dockerfile-patches.sh
+
+# Studio identity-allowlist unit tests: the fail-closed validators in
+# studio/hugmesh_studio/core/validate.py (DNS-label / hostname / username /
+# accent allowlists + the trailing-newline re.fullmatch regression). Cheap; no
+# privileged runner needed.
+lint:studio-identity-validation:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pytest
+  script:
+    - python -m pytest -q studio/tests/test_identity_validation.py
+
+# Production-hygiene gate. Bakes a PROD copy of the GitOps tree (the same
+# transforms gate_env_apps applies: prune 09-lan-dns + the test wave, pin :dev
+# first-party tags) and asserts scripts/validate-prod-hygiene.sh PASSES on it, AND
+# that it FAILS on an injected vault `-dev` + a test-only peer (so the gate itself
+# is proven to bite). A floating :dev tag, a dev-only server, a test-only
+# component, or an un-pruned test wave surviving a prod bake FAILS here. Cheap; no
+# privileged runner needed.
+lint:prod-hygiene:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    # 0) The in-cluster copy (manifests/prod-hygiene/validate-prod-hygiene.sh,
+    #    materialized into the prod-hygiene-script ConfigMap the PreSync hook Job
+    #    mounts) MUST equal the canonical scripts/ copy byte-for-byte — kustomize
+    #    forbids loading a file outside the bundle root, so the copy is the mirror.
+    - diff -u scripts/validate-prod-hygiene.sh specs/cluster/manifests/prod-hygiene/validate-prod-hygiene.sh
+    # Bake a prod tree.
+    - RELEASE_TAG="${CI_COMMIT_SHORT_SHA:-$(date -u +%Y%m%d)}"
+    - rm -rf /tmp/prodbake && mkdir -p /tmp/prodbake && cp -r specs/cluster /tmp/prodbake/cluster
+    - rm -f /tmp/prodbake/cluster/apps/09-lan-dns.yaml /tmp/prodbake/cluster/apps/99-test-runner.yaml /tmp/prodbake/cluster/apps/00-app-of-apps-waved.yaml
+    - rm -rf /tmp/prodbake/cluster/manifests/test-runner
+    - >
+      find /tmp/prodbake/cluster -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 |
+      while IFS= read -r -d '' f; do
+        if grep -qE 'image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*:dev([[:space:]]|$)' "$f"; then
+          sed -i -E "s|(image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*):dev|\\1:${RELEASE_TAG}|g" "$f";
+        fi;
+      done
+    # 1) the baked prod tree must PASS.
+    - ENV=prod bash scripts/validate-prod-hygiene.sh /tmp/prodbake/cluster
+    # 2) the gate must FAIL on an injected vault -dev + a test-only peer.
+    - mkdir -p /tmp/prodbake/cluster/manifests/inject
+    - |
+      cat > /tmp/prodbake/cluster/manifests/inject/bad.yaml <<'EOF'
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: vault-injected, namespace: hugmesh-pki }
+      spec:
+        selector: { matchLabels: { app: vault } }
+        template:
+          metadata: { labels: { app: vault } }
+          spec:
+            containers:
+              - { name: vault, image: hashicorp/vault:1.15, args: ["server","-dev"] }
+      EOF
+    - if ENV=prod bash scripts/validate-prod-hygiene.sh /tmp/prodbake/cluster >/dev/null 2>&1; then echo "GATE DID NOT BITE on injected vault -dev"; exit 1; else echo "gate correctly failed on injected violation"; fi
+
+# Nuclei template lint — validates every *.yaml in tests/pentest/nuclei/ against
+# the fixture servers (no live platform, loopback only). Proves each template FIRES
+# on the deliberately-vulnerable fixture at its expected path AND stays silent on
+# the hardened fixture. Requires nuclei (pinned v3.9.0), node, and curl on the runner.
+# COVERAGE gate: an unpaired template (no positive+negative case) fails the job
+# with "GATE DID NOT BITE", so a new template that ships without fixtures is caught here.
+lint:pentest-templates:
+  stage: lint
+  tags: [hugmesh-x86]
+  variables:
+    NUCLEI_VERSION: "3.9.0"
+  before_script:
+    - |
+      # Download pinned nuclei if the runner doesn't already have it.
+      NEED_INSTALL=true
+      if command -v nuclei >/dev/null 2>&1; then
+        INSTALLED="$(nuclei -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        [ "${INSTALLED}" = "${NUCLEI_VERSION}" ] && NEED_INSTALL=false
+      fi
+      if [ "${NEED_INSTALL}" = "true" ]; then
+        echo "[nuclei] installing v${NUCLEI_VERSION} to /usr/local/bin/"
+        curl -sL \
+          "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" \
+          -o /tmp/nuclei.zip
+        unzip -qo /tmp/nuclei.zip nuclei -d /usr/local/bin/
+        chmod +x /usr/local/bin/nuclei
+        rm -f /tmp/nuclei.zip
+      fi
+      nuclei -version
+  script:
+    - bash tests/pentest/nuclei/test-templates.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# =============================================================================
+# verify — the MANDATORY pre-flip gate for the casdoor JWT-Custom token shape.
+#
+# GEN2 set casdoor tokenFormat=JWT-Custom with an empirically-pinned allow-list
+# that (a) closes the default-JWT secret leak — totpSecret / recoveryCodes /
+# password / passwordSalt are excluded BY OMISSION — and (b) carries the MFA
+# outcome claims (mfa_satisfied + mfa_satisfied_at) the BFF stamps into the user's
+# Properties. A WRONG/EMPTY tokenFields set silently strips roles/permissions/
+# isAdmin and breaks ALL authz across ~11 repos, OR re-opens the secret leak — and
+# NO Java test catches it (it's Casdoor-config-level only). So this gate mints a
+# REAL RS256 token against casbin/casdoor:3.80.0 and asserts the 4 secrets ABSENT
+# + the authz claims present + the MFA claim shape, BEFORE the config can flip live.
+#
+# Spins the casdoor + postgres containers via the host docker socket (same idiom as
+# build:isos / .dast-base — no `image:`, on the privileged x86 runner). The script
+# SKIPs (exit 0) with a reason when no container runtime is present, so it never
+# blocks a runner that lacks docker; a runtime-present runner MUST pass. To run
+# this against a mirror, set CASDOOR_IMAGE / POSTGRES_IMAGE (e.g. a $CI_REGISTRY
+# proxy) — no secret is committed.
+casdoor-jwt-custom-gate:
+  stage: verify
+  tags: [hugmesh-x86, privileged]
+  script:
+    - bash tests/casdoor/test-jwt-custom-token.sh
+  rules:
+    # BLOCKING pre-flip gate: always run (and fail the pipeline) when the casdoor
+    # config that this guards changes, OR the test/gate itself changes.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/cluster/manifests/casdoor/**/*
+        - tests/casdoor/test-jwt-custom-token.sh
+        - .gitlab-ci.yml
+    # And on the default branch so a merged casdoor change is re-validated before
+    # it can ship (the live flip happens off main).
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Domain-registry -> brand-repo bridge (#4) consumer test: the OFFLINE verify +
+# emit matrix for the signed #118 cross-domain export (byte-exact canonical bytes;
+# genuine ACCEPT; tampered/unsigned/foreign/rollback REJECT; defaults INERT). Needs
+# only bash + jq + openssl + base64 (no docker, no cluster) so it runs on any runner;
+# the test itself SKIPs (exit 0) if a tool is absent. Mirrors the device-registry /
+# node-storage / egress-vpn consumer tests (which are otherwise CI-unwired today).
+domain-registry-reconcile-verify:
+  stage: verify
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/domain-registry/test-domain-reconcile-verify.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/usr/sbin/hugmesh-domain-reconcile
+        - specs/usr/lib/hugmesh/domain-verify.sh
+        - tests/domain-registry/test-domain-reconcile-verify.sh
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Build the three Pi role ISOs + the x86 host ISO. Needs root + crossdev + qemu
+# on the runner host (the x86_64 node). Tag-select that runner.
+build:isos:
+  stage: iso
+  tags: [hugmesh-x86, privileged]
+  script:
+    - ./scripts/build-all-roles.sh -j "$(nproc)"          # pki/backend/frontend (aarch64)
+    - ./build-x86-host-stage4.sh -j "$(nproc)" -w x86-host-build
+    - mkdir -p out && cp rpi5-stage4-build/*.iso x86-host-build/*.iso out/ 2>/dev/null || true
+  artifacts:
+    paths: [out/*.iso]
+    expire_in: 30 days
+
+build:images:
+  stage: images
+  tags: [hugmesh-x86]
+  # Dispatch into the IN-CLUSTER Kaniko image-build pipeline
+  # (specs/cluster/manifests/image-builder/) instead of the former echo STUB. The pipeline
+  # is OPT-IN: its namespace ships only when an operator enables the ArgoCD Application
+  # (apps-optional/60-image-builder.yaml). This job is therefore guarded — it runs the real
+  # in-cluster build ONLY when IMAGE_BUILDER_ENABLED is set (and KUBECONFIG points at the
+  # cluster); otherwise it is a documented no-op so merging changes nothing live and the
+  # pipeline stays green before the (kernel-blocked) cluster exists.
+  #
+  # GATED to the default branch + release tags (the canonical sibling `build:image` posture
+  # in hugmesh-gateway / hugmesh-forum-bff-api): never on a plain feature MR, so a build
+  # only ever runs for a mergeable ref. Combined with the IMAGE_BUILDER_ENABLED guard, NOTHING
+  # kicks off uncontrolled builds on merge — the default-branch run is still a no-op until an
+  # operator opts in.
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  variables:
+    # The in-cluster build namespace (must match manifests/image-builder/namespace-and-netpol.yaml).
+    BUILD_NAMESPACE: "hugmesh-image-builds"
+    # The per-app source repo + Dockerfile + destination image. Override per pipeline
+    # (CI variables / matrix) to build each first-party app. Destination matches the app
+    # kustomizations' newName convention (registry.hugmesh.systems/hugmesh/<app>:<tag>).
+    # HARBOR MIGRATION: this hostname is now served by Harbor, not GitLab's bundled
+    # registry (see specs/cluster/apps/03a-harbor.yaml) — the push credential the
+    # build pod mounts (image-builder-registry, see the `script:` comment below) is
+    # Harbor's push-scoped robot account, minted by manifests/harbor/
+    # harbor-provision-job.yaml. The hostname itself is UNCHANGED on purpose.
+    IMAGE_APP: "hugmesh-gateway"
+    IMAGE_CONTEXT: "git://github.com/hugmesh-net/hugmesh-gateway.git#${CI_COMMIT_SHA}"
+    IMAGE_DOCKERFILE: "Dockerfile"
+    # Where the built image lands. <app> is IMAGE_APP; the tags are computed in `script`.
+    DEST_REPO: "registry.hugmesh.systems/hugmesh/hugmesh-gateway"
+  script:
+    - |
+      if [ -z "${IMAGE_BUILDER_ENABLED:-}" ]; then
+        echo "in-cluster image-builder is OPT-IN and disabled (IMAGE_BUILDER_ENABLED unset)."
+        echo "to enable: sync apps-optional/60-image-builder.yaml into specs/cluster/apps/,"
+        echo "point KUBECONFIG at the cluster, and set IMAGE_BUILDER_ENABLED=1."
+        exit 0
+      fi
+      # TAG SCHEME — mirrors the canonical sibling `build:image` (gateway / forum-bff-api):
+      #   IMMUTABLE = a release tag if this is a tag pipeline, else the short SHA. Never moves.
+      #   MOVING    = the branch ref slug (the default branch resolves to `main`), which the app
+      #               kustomizations track via `newTag: main` for dev. Re-pointed each build.
+      # Kaniko pushes BOTH from the ONE build (two --destination flags in the template), so the
+      # moving + immutable tags are always byte-identical layers.
+      IMMUTABLE_TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+      MOVING_TAG="${CI_COMMIT_REF_SLUG}"
+      DEST_IMAGE="${DEST_REPO}:${IMMUTABLE_TAG}"
+      DEST_IMAGE_MOVING="${DEST_REPO}:${MOVING_TAG}"
+      echo "building ${IMAGE_APP}: immutable=${DEST_IMAGE}  moving=${DEST_IMAGE_MOVING}"
+      # Render the ships-dark Kaniko Job template with this build's parameters and apply it
+      # into the in-cluster build namespace. The template lives in the GitOps repo; the build
+      # pod (rootless Kaniko) pushes to registry.hugmesh.systems using the ESO-materialized
+      # image-builder-registry dockerconfigjson. No secrets are passed from CI.
+      BUILD_NAME="${IMAGE_APP}-${CI_COMMIT_SHORT_SHA}"
+      # Use | as the sed delimiter (the git-ref CONTEXT contains '#', so '#' must not delimit).
+      sed \
+        -e "s|\${BUILD_NAME}|${BUILD_NAME}|g" \
+        -e "s|\${BUILD_NAMESPACE}|${BUILD_NAMESPACE}|g" \
+        -e "s|\${CONTEXT}|${IMAGE_CONTEXT}|g" \
+        -e "s|\${DOCKERFILE}|${IMAGE_DOCKERFILE}|g" \
+        -e "s|\${DEST_IMAGE_MOVING}|${DEST_IMAGE_MOVING}|g" \
+        -e "s|\${DEST_IMAGE}|${DEST_IMAGE}|g" \
+        specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml \
+        | kubectl -n "${BUILD_NAMESPACE}" apply -f -
+      kubectl -n "${BUILD_NAMESPACE}" wait --for=condition=complete \
+        "job/image-build-${BUILD_NAME}" --timeout=1800s
+
+# NOTE: there is no longer a bundled `hugmesh-pentest-runner` image stage. The
+# pen-test is DEV/CI-pipeline-only: the `sca` + `dast` stages below run the OWASP
+# toolchain from PUBLIC images directly (owasp/dependency-check for SCA;
+# ghcr.io/zaproxy/zaproxy:stable, pulled by the harness, for DAST), and the reusable
+# per-repo stage template (tests/pentest/ci/pentest-stage.gitlab-ci.yml) does the
+# same — so no in-cluster CronJob image needs to be built or published.
+
+# Publish each ISO to the generic package registry under a stable "latest" path
+# so the admin UI's download links never change.
+deliver:isos:
+  stage: deliver
+  tags: [hugmesh-x86]
+  needs: ["build:isos"]
+  script:
+    - |
+      for f in out/*.iso; do
+        n="$(basename "$f")"
+        curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+             --upload-file "$f" "${ISO_BASE}/${n}"
+        echo "delivered ${ISO_BASE}/${n}"
+      done
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# =============================================================================
+# sca — OWASP Dependency-Check SCA over the org's first-party repos.
+#
+# A parallel:matrix fans one job out per repo so a single noisy repo's CVEs don't
+# mask the others, and so the HTML+SARIF artifacts are per-repo. Each job clones
+# the target repo from the GitLab org mirror, runs Dependency-Check with
+# --failOnCVSS 7 (a CVSS>=7 finding fails THAT repo's job), and persists the NVD
+# feed in a CI cache keyed on the feed month so re-runs don't re-download ~250MB.
+#
+# hugmesh.games is DELIBERATELY EXCLUDED from this matrix: it is a DISTINCT
+# stack with its OWN .gitlab-ci.yml that runs SCA in its own pipeline (incl. its
+# Rust bridge) — see hugmesh-pentest-standard "TWO SEPARATE WORKFLOWS" + PR6.
+# Likewise the static sites (usidiamond.github.io) + the generator-meta repos that
+# carry no dependency manifest are out of scope here.
+sca:dependency-check:
+  stage: sca
+  image:
+    name: owasp/dependency-check:latest
+    entrypoint: [""]
+  tags: [hugmesh-x86]
+  parallel:
+    matrix:
+      - REPO:
+          - hugmesh-gateway
+          - hugmesh-fe-gateway
+          - hugmesh-be-gateway
+          - hugmesh-pki-gateway
+          - hugmesh-admin-bff-api
+          - hugmesh-mod-bff-api
+          - hugmesh-user-bff-api
+          - hugmesh-forum-bff-api
+          - hugmesh-federation-api
+          - hugmesh-admin-ui
+          - hugmesh-mod-ui
+          - hugmesh-user-ui
+          - hugmesh-login-ui
+          - hugmesh-forum-ui
+          - hugmesh-matrix-ui
+          - hugmesh-mastodon-ui
+          - hugmesh-remote-fragment
+          - hugmesh-actions
+          - hugmesh-api-docs
+          - hugmesh-generator
+        # NOTE: hugmesh.games is intentionally NOT in this list — it owns its
+        # own pipeline + SCA stage (the games two-Casdoor stack, incl. the Rust
+        # hugmesh-bridge). Adding it here would double-scan + cross workflows.
+  cache:
+    # Persist the NVD feed across runs. Keyed on the feed month so the monthly
+    # full-feed refresh rotates the cache without an unbounded stale entry.
+    key: "nvd-cache-$CI_COMMIT_REF_SLUG-$(date +%Y%m 2>/dev/null || echo feed)"
+    paths: [.nvd-cache/]
+  variables:
+    GIT_STRATEGY: none   # we clone the *target* repo, not check this one out.
+  before_script:
+    - mkdir -p .nvd-cache reports/${REPO}
+    # Clone the matrix repo from the same org mirror this pipeline lives in,
+    # using the CI job token (read-only, no secret committed).
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - git clone --depth 1 "${ORG_BASE}/${REPO}.git" "src/${REPO}" || git clone --depth 1 "${ORG_BASE%/}/${REPO}.git" "src/${REPO}"
+  script:
+    - >
+      /usr/share/dependency-check/bin/dependency-check.sh
+      --project "hugmesh-${REPO}"
+      --scan "src/${REPO}"
+      --out "reports/${REPO}"
+      --data ".nvd-cache"
+      --failOnCVSS 7
+      --enableExperimental
+      --format HTML --format SARIF --format JSON
+      ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - reports/${REPO}/dependency-check-report.html
+      - reports/${REPO}/dependency-check-report.sarif
+      - reports/${REPO}/dependency-check-report.json
+    reports:
+      # Surface findings in the MR security widget (GitLab reads SARIF here).
+      sast: reports/${REPO}/dependency-check-report.sarif
+  rules:
+    # On every MR + the default branch (gate new High/Critical) and on schedule
+    # (the nightly full feed refresh). NEVER on the games-only ref.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+# =============================================================================
+# dast — authenticated OWASP ZAP DAST against a spun-up two-brand env-test-build,
+# driven by the SHARED harness (tests/pentest/run-pentest.sh). The harness stands
+# up the compose env-test-build, seeds the attacker + load personas across
+# brandA/brandB (seed-personas.sh, creds from CI variables — NEVER git), scans as
+# every persona, and merges ZAP+SCA+probe findings into the scorecard + SARIF.
+#
+#   dast:main-baseline  runs on every MR + the default branch — fast feedback:
+#                       passiveScan + spider + the custom boundary probes.
+#   dast:main-full      runs ONLY on a scheduled pipeline (the nightly cadence) —
+#                       the above + the ENABLED activeScan.
+#
+# Needs Docker (the harness spins compose + runs the zaproxy image), so it lands
+# on the privileged x86 runner, same tag convention as build:isos.
+.dast-base:
+  stage: dast
+  tags: [hugmesh-x86, privileged]
+  variables:
+    # The harness reads creds for the throwaway TEST realm from CI variables at
+    # runtime (masked/protected in GitLab) and never writes them to git. See
+    # tests/pentest/seed-personas.sh + the test-seed-passwords contract.
+    PENTEST_REPORTS: "${CI_PROJECT_DIR}/out/pentest"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [out/pentest/]
+  # The env-test-build stand-up is inherently flaky (two stacks + empty-Casdoor
+  # first boot); a non-blocking retry on the runner-system/stuck classes only.
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure]
+
+dast:main-baseline:
+  extends: .dast-base
+  script:
+    - bash tests/pentest/run-pentest.sh --env compose --scan baseline --pipeline main
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+dast:main-full:
+  extends: .dast-base
+  timeout: 3h   # active scan over every persona/brand is long.
+  script:
+    - bash tests/pentest/run-pentest.sh --env compose --scan full --pipeline main
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+# =============================================================================
+# load — the OPT-IN k6 LOAD / DoS-resilience stage. DEV / CI-PIPELINE ONLY and
+# OFF BY DEFAULT: it is gated on the CI variable PENTEST_LOAD ("1"), set either by
+# triggering the manual job or by a GitLab Schedule that defines PENTEST_LOAD=1
+# (see docs/PENTEST-SCHEDULES.md). It is slow/heavy (a full ramp + hold + the
+# stress past-the-limit run), so it never runs on a plain MR or default-branch
+# push — only when PENTEST_LOAD is explicitly set.
+#
+# It reuses the SAME harness as the dast stage: run-pentest.sh stands up the
+# two-brand compose env-test-build, seeds the attacker + LOAD personas across
+# brandA/brandB (seed-personas.sh, creds from CI variables — NEVER git), then the
+# --load flag drives tests/pentest/load/main-mixed.js AS the real seeded roles
+# reading the SAME per-persona tokens.env the ZAP harness mints. The k6 scenarios:
+#   realistic-mixed  per-(role x domain) pools at prod-shaped ratios (browse-heavy
+#                    reads, login burst, occasional admin write) — ramp 0->target
+#                    2m, hold 5m; the SLO gate (p95/p99 latency + <1% 5xx).
+#   stress           ramp PAST the nginx limit_req zone rates to force 429s and
+#                    verify graceful degradation — a 429 is EXPECTED/PASS, a 5xx is
+#                    FAIL (the error budget separates the two).
+# load-report.py renders throughput / p50-p99 latency / error-rate HTML in the
+# test-standard style with the gated thresholds shown pass/fail.
+#
+# Needs Docker (compose + the public grafana/k6 image), so it lands on the same
+# privileged x86 runner as the dast stage.
+.load-base:
+  stage: load
+  tags: [hugmesh-x86, privileged]
+  variables:
+    PENTEST_REPORTS: "${CI_PROJECT_DIR}/out/pentest"
+    # k6 load intensity — overridable per-schedule (a heavier nightly, a lighter
+    # manual smoke). Defaults live in main-mixed.js.
+    PENTEST_LOAD_PROFILES: "realistic-mixed stress"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [out/pentest/]
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure]
+
+load:main:
+  extends: .load-base
+  # The whole staged ramp (realistic-mixed hold + the stress past-limit run) is
+  # long; give it room. The soak profile (nightly) extends this further via
+  # PENTEST_LOAD_PROFILES + PENTEST_LOAD_SOAK_DURATION (see PENTEST-SCHEDULES.md).
+  timeout: 4h
+  script:
+    - bash tests/pentest/run-pentest.sh --env compose --pipeline main --load
+  rules:
+    # OFF BY DEFAULT. Only when PENTEST_LOAD is set:
+    #   * a SCHEDULED pipeline that defines PENTEST_LOAD=1 (the nightly load run),
+    #   * or a manual run with PENTEST_LOAD=1 (a dev kicking it from the UI/API).
+    # NEVER on a plain MR or default-branch push (no `merge_request_event` /
+    # `$CI_COMMIT_BRANCH` rule here), so it cannot slow normal CI.
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $PENTEST_LOAD == "1"'
+    - if: '$PENTEST_LOAD == "1"'
+      when: manual
+      allow_failure: true

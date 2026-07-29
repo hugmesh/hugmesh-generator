@@ -1,0 +1,26 @@
+# hugmesh-service-catalog-builder — the SUPERADMIN Service Catalog Kaniko build namespace + its
+# default-deny ingress NetworkPolicy (hugmesh-superadmin-appstore design, V2 builder).
+#
+# This Application syncs ONLY the build NAMESPACE + NetworkPolicy (manifests/service-catalog-builder
+# kustomization). The per-build Kaniko Job is a TEMPLATE the admin-bff AddService task
+# instantiates per DOCKERFILE/ZIP build — it is NOT in the kustomization, so ArgoCD never
+# applies it. The namespace + policy are inert until a build lands there (ships dark).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: service-catalog-builder
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/service-catalog-builder
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    # The kustomization creates its own namespace resource; ArgoCD must not also try.
+    syncOptions: [CreateNamespace=false]

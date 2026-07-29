@@ -1,0 +1,18 @@
+# OPTIONAL GPU / SD-VAE PGD extras for hugmesh-media-poisoner — NOT installed
+# in the lean default image. Layer these on top of requirements.txt in a GPU image
+# variant (Dockerfile build-arg POISON_VARIANT=gpu) to enable the real PGD-against-
+# Stable-Diffusion-VAE backend. CUDA vs ROCm is chosen by which torch wheel index
+# you point pip at (see README):
+#   CUDA:  --index-url https://download.pytorch.org/whl/cu124
+#   ROCm:  --index-url https://download.pytorch.org/whl/rocm6.2
+#
+# LICENSE: torch/diffusers are permissive (BSD/Apache). The SD VAE weights are
+# CreativeML OpenRAIL-M — verify acceptability for the deployment. Do NOT add the
+# University of Chicago SAND Lab Glaze/Nightshade binaries here: they are
+# NON-COMMERCIAL research licenses and must not ship in a default-on federated
+# (and possibly branded) deployment. Use the OPEN PyTorch reference instead.
+#
+# torch       (pin to a wheel from the CUDA or ROCm index above)
+# diffusers   (for the StableDiffusion VAE/encoder used as the PGD target)
+# transformers
+# accelerate

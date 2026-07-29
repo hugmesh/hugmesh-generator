@@ -1,0 +1,18 @@
+# Gentoo binary-package host — devops namespace, x86_64 host, served on the VPN.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: binhost
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/binhost
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

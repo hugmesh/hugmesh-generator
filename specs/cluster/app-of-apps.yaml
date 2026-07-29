@@ -1,0 +1,48 @@
+# Root "app-of-apps". Applied once by the bootstrap on the pki control-plane;
+# ArgoCD then syncs every Application under cluster/apps/ from the GitOps repo.
+#
+# repoURL / targetRevision are patched at bootstrap time from
+# /etc/hugmesh/gitops.env (HUGMESH_GITOPS_REPO / _REV), default below.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-root
+  namespace: devops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      # KEYSTONE for the LIVE optional-services toggle (docs/OPTIONAL-SERVICES.md
+      # §7/§10): make selfHeal RESPECT the ignoreDifferences below so it does not
+      # revert the admin-bff OptionalServiceReconciler's runtime write of the
+      # optional-services ApplicationSet element list. Without this, selfHeal
+      # re-applies git's inert `installed:"false"` baseline every sync and the whole
+      # CRD+controller mechanism is a no-op.
+      - RespectIgnoreDifferences=true
+  # The admin-bff OptionalServiceReconciler is the SINGLE writer of the
+  # optional-services ApplicationSet's inline list-generator element `installed`
+  # flags (reconciled from the OptionalService CRs). Let ONLY that field diverge from
+  # git; every other field on the ApplicationSet stays selfHeal-enforced.
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: ApplicationSet
+      name: optional-services
+      namespace: devops
+      jsonPointers:
+        - /spec/generators/0/list/elements

@@ -1,0 +1,30 @@
+# Analytics DISCOVERY FLOOR — the AUTO-sync floor of the split analytics bundle.
+#
+# The previous single hugmesh-analytics app (auto-sync prune+selfHeal over the
+# whole kafka+clickhouse bundle) was split (see docs/HEAVY-TIER.md) into:
+#   * THIS app (35-analytics-discovery)  — AUTO-sync, lightweight, arch-agnostic:
+#       just the clickhouse/kafka ClusterIP Services, so their DNS always resolves
+#       (the floor a Pi-only cluster can always satisfy).
+#   * 35-analytics-clickhouse / 35-analytics-kafka — MANUAL-sync HEAVY amd64
+#       datastores (operator opt-in on the x86 host); 36-observability likewise.
+#
+# Why: on a Pi-only cluster the heavy amd64 pods are unschedulable, so a single
+# auto-sync app churned forever Synced-but-Progressing. The floor auto-syncs
+# cleanly; the heavy tier is attached deliberately when the x86 host is present.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-analytics-discovery
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/analytics/discovery
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

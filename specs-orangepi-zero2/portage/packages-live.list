@@ -1,0 +1,21 @@
+# Stage4 LIVE-ONLY package list — Orange Pi Zero 2 (Allwinner H616, arm64).
+# One atom per line; lines starting with # are ignored.
+#
+# Appended by build-orangepi-zero2-stage4.sh ONLY when a bootable flavor is
+# being built (BUILD_LIVE or BUILD_INSTALLER: --flavor live | installer | both).
+# The LIVE flavor boots a squashfs rootfs ephemerally; that requires a dracut
+# dmsquash-live initramfs to find the live medium, mount LiveOS/squashfs.img
+# read-only, and stack a writable tmpfs overlay as the ephemeral root. The bare
+# kernel canNOT interpret root=live: / rd.live.* on its own — those are dracut
+# directives — so dracut must be present in the cross sysroot to GENERATE that
+# initramfs at build time. Mirrors specs-frite/specs-orangepi5's identical
+# packages-live.list.
+#
+# The INSTALLER flavor's OWN medium is ALSO a live boot (see the builder's
+# build_installer_iso), so dracut is needed whenever EITHER bootable flavor is
+# selected; it stays out of the always-installed base set and is added here.
+
+# dracut: builds the dmsquash-live initramfs (and, for --encrypt-root, the
+# separate disk-boot crypt-capable initramfs). The builder invokes it as a host
+# tool pointed at the aarch64 sysroot (qemu-chroot preferred; see the builder).
+sys-kernel/dracut

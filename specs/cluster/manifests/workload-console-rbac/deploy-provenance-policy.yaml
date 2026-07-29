@@ -1,0 +1,53 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# WORKLOAD CONSOLE — deploy provenance Kyverno policy (DECISION 7).
+#
+# A console DEPLOY intent (catalog -> GitOps PR) may only land a DIGEST-PINNED image from
+# the platform's OWN registry. The admin-bff rejects a tag-only ref at PR-gen time AND the
+# 110 changelog has a DB CHECK; this ClusterPolicy is the cluster-admission backstop: any
+# Pod/Deployment in an app-tier namespace whose container image is NOT pinned to
+# `@sha256:<64 hex>` is REJECTED. Games / App-Store deploys inherit the same gate.
+#
+# Enforce mode + Fail failurePolicy so a mis-provenanced image is admission-rejected, not
+# merely audited. Mirrors the prod-hygiene clusterpolicy.yaml shape.
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: workload-console-deploy-digest-pinned
+  labels:
+    app.kubernetes.io/name: workload-console
+    app.kubernetes.io/component: policy
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  validationFailureAction: Enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    - name: app-tier-images-digest-pinned
+      match:
+        any:
+          - resources:
+              kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet"]
+              namespaces:
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-forum
+                - hugmesh-games
+                - hugmesh-games-instances
+                - hugmesh-tube
+                - hugmesh-owncast
+      validate:
+        message: >-
+          App-tier container images must be digest-pinned to the own registry
+          (repo@sha256:<64 hex>). A tag-only or foreign-registry image is rejected
+          (workload-console deploy provenance — DECISION 7).
+        foreach:
+          - list: >-
+              request.object.spec.containers ||
+              request.object.spec.template.spec.containers || `[]`
+            deny:
+              conditions:
+                any:
+                  - key: "{{ regex_match('^.+@sha256:[a-f0-9]{64}$', '{{ element.image }}') }}"
+                    operator: Equals
+                    value: false

@@ -1,0 +1,115 @@
+# phpbb-db — dedicated Postgres 16 for phpBB (phpBB supports Postgres natively).
+# Lives in the isolated hugmesh-forum namespace; reachable ONLY from the phpbb
+# pod (+ the reconcile Job) per network-policy.yaml. ClusterIP-only, never routed.
+#
+# Postgres (not MariaDB/MySQL): parity with akkoma/tuwunel/the BFF dbs (the
+# hardened storage class, SCRAM-SHA-256, the same initdb hardening pattern). The
+# phpBB image must ship the pgsql DBAL driver (config.php $dbms = postgres).
+#
+# Credentials (ESO-only, no plaintext in git): the OWNER POSTGRES_PASSWORD comes
+# from Vault via ESO (Secret phpbb-secrets, key DB_PASSWORD); phpBB itself logs in
+# at RUNTIME as the dedicated NON-OWNER least-privilege role `phpbb_app` (its OWN
+# password, ESO Secret phpbb-db-app-auth, created by initdb/10-roles.sh) — the
+# owner role is reserved for the one-time install/migrate. Mirrors the
+# user-bff-db owner/app split (docs/POSTGRES-HARDENING.md).
+#
+# Encryption-at-rest: the PVC uses the hardened hugmesh-local storage class
+# (LUKS2 node disks already merged) + etcd Secret encryption for the ESO-materialized
+# secrets; SCRAM password hashing. Confirm the kube-apiserver EncryptionConfiguration
+# + storage-class LUKS cover hugmesh-forum PVCs on the live cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phpbb-db
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb-db, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over a RWO PVC
+  selector: { matchLabels: { app.kubernetes.io/name: phpbb-db } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: phpbb-db } }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c50"
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "phpbb" }
+            # OWNER role (install/migrate). Password from ESO Secret phpbb-secrets.
+            - { name: POSTGRES_USER, value: "phpbb" }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: phpbb-secrets
+                  key: DB_PASSWORD
+            # Per-machine-user least-privilege role password (consumed by
+            # initdb/10-roles.sh to create phpbb_app). phpBB's RUNTIME config.php
+            # logs in as phpbb_app with THIS password (ESO Secret phpbb-db-app-auth).
+            - name: PHPBB_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: phpbb-db-app-auth
+                  key: password
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          # Server-level hardening (every boot): scram, capped connections, logged
+          # connections + slow statements. Per-DB timeouts are in 00-hardening.sql.
+          args:
+            - -c
+            - password_encryption=scram-sha-256
+            - -c
+            - max_connections=50
+            - -c
+            - log_connections=on
+            - -c
+            - log_disconnections=on
+            - -c
+            - log_min_duration_statement=2000
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "phpbb", "-d", "phpbb"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "phpbb", "-d", "phpbb"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: phpbb-db }
+        - name: initdb
+          configMap: { name: phpbb-db-initdb }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: phpbb-db
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: phpbb-db
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb-db }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: phpbb-db }
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }

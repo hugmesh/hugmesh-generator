@@ -1,0 +1,21 @@
+# admin-bff — Backend-For-Frontend for the hugmesh-admin-ui. ClusterIP in
+# hugmesh-backend; the ONLY way in is the fe-gateway /bff/** route (same
+# origin as hugmesh.systems). Writes the gateway_route_access table that the
+# gateways read-cache for their external access rules.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: admin-bff-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/admin-bff-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

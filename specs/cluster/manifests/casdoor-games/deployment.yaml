@@ -1,0 +1,82 @@
+# casdoor-games — the GAMES-realm Casdoor identity provider, a SEPARATE, INDEPENDENT
+# Casdoor instance from the systems one (manifests/casdoor/). It mirrors the canonical
+# hugmesh.games Casdoor (org "threewizards", app "threewizards-app"): it issues the
+# OAuth2/OIDC JWTs the games BFF (manifests/games) validates, and owns its OWN native
+# users/roles (GitHub-OAuth players, player / uploader / mod / publisher / play-* roles)
+# that need NOT exist in the systems Casdoor. Runs in the hugmesh-games namespace on
+# its OWN external Postgres (casdoor-games-pg, db "threewizards").
+#
+# The ONLY cross-realm coupling is the scheduled hugmesh-actions job that mirrors the
+# systems ROLE_GAMES_ADMIN set into this realm's "admin" role (one-way systems->games);
+# everything else here is independent of hugmesh.systems.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casdoor-games
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: casdoor-games }
+  template:
+    metadata:
+      labels: { app: casdoor-games }
+    spec:
+      nodeSelector:
+        hugmesh.systems/games: "true"
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c35"
+      containers:
+        - name: casdoor
+          image: casbin/casdoor:3.80.0
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - name: RUNNING_IN_DOCKER
+              value: "true"
+            # External Postgres credentials — interpolated into conf/app.conf
+            # (casdoor-games-app-conf). Materialized by ESO from Vault.
+            - name: CASDOOR_DB_USER
+              valueFrom: { secretKeyRef: { name: casdoor-games-db, key: username } }
+            - name: CASDOOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-games-db, key: password } }
+            # GitHub OAuth federation client credentials — lets people sign up as a
+            # NATIVE games "player" (mirrors the hugmesh.games GitHub provider).
+            # Created by an admin in Casdoor, or seeded by the casdoor-games-init Job.
+            - name: GITHUB_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: casdoor-games-github, key: clientId, optional: true } }
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: casdoor-games-github, key: clientSecret, optional: true } }
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            # app.conf override that points Casdoor at the external Postgres
+            # (casdoor-games-pg). NOTE: the conf path is image-version-specific
+            # (casbin/casdoor reads conf/app.conf from its workdir) — validate
+            # against the deployed image.
+            - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
+            # Declarative seed (threewizards org / role catalog / seed users), mirrored
+            # from the hugmesh.games init_data.json.tpl. Casdoor imports
+            # init_data.json from its working dir on boot. NOTE: the exact mount path
+            # depends on the casbin/casdoor workdir — validate/adjust if auto-import
+            # doesn't fire; the casdoor-games-init Job seeds the OAuth2 application +
+            # client-secret + GitHub provider regardless.
+            - { name: init-data, mountPath: /init_data.json, subPath: init_data.json, readOnly: true }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+      volumes:
+        # DB state lives in casdoor-games-pg (external Postgres); this configMap
+        # just points Casdoor at it.
+        - name: app-conf
+          configMap:
+            name: casdoor-games-app-conf
+        - name: init-data
+          configMap:
+            name: casdoor-games-init-data

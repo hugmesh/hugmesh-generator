@@ -1,0 +1,13 @@
+# ClusterIP — reached only in-cluster: the admin-bff writes it, the three
+# hugmesh-*-gateway releases read it (R2DBC) to load their access rules.
+apiVersion: v1
+kind: Service
+metadata:
+  name: route-access-db
+  namespace: hugmesh-pki
+  labels: { app: route-access-db }
+spec:
+  type: ClusterIP
+  selector: { app: route-access-db }
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }

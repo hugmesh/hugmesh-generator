@@ -1,0 +1,186 @@
+# test-runner orchestrator (ENV=test only). A single long-lived control-loop pod
+# that owns BOTH readiness edges and spawns the lean/heavy test Jobs. It is a thin
+# kubectl+curl loop (no app code) so the logic is auditable in one place.
+#
+#   LEAN edge  : required fe/be/pki Deployments availableReplicas==desired AND
+#                their ArgoCD Applications Synced+Healthy AND the seed Jobs
+#                Complete -> kubectl apply the LEAN Job (once).
+#   HEAVY edge : kafka+clickhouse availableReplicas>=1 AND a Ready amd64 Node
+#                (the ACTUAL workloads, not Application-Synced) -> apply the HEAVY
+#                Job. Edge-debounced (cooldown + last-applied node generation) so
+#                a NotReady->Ready flap does not re-fire.
+#
+# The Job templates live in the test-job-* ConfigMaps (mounted read-only); the
+# orchestrator envsubst-renders a per-run-id name and kubectl-applies them.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-runner-orchestrator
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: test-runner
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+data:
+  orchestrator.sh: |
+    #!/usr/bin/env bash
+    # The readiness-watch + spawn loop. Pure kubectl + jq.
+    set -uo pipefail
+
+    # ── tunables (env-overridable via the Deployment) ───────────────────────
+    POLL="${POLL_SECONDS:-15}"
+    HEAVY_COOLDOWN="${HEAVY_COOLDOWN_SECONDS:-300}"   # debounce the x86-attach edge
+    NS_FE="${NS_FRONTEND:-hugmesh-frontend}"
+    NS_BE="${NS_BACKEND:-hugmesh-backend}"
+    NS_PKI="${NS_PKI:-hugmesh-pki}"
+    # REQUIRED workloads (ENUMERATED, not "every Deployment") whose readiness
+    # gates the LEAN run. Name:namespace. Keep in step with the deployed apps.
+    REQUIRED_LEAN="${REQUIRED_LEAN:-hugmesh-systems-web:${NS_FE} hugmesh-admin-bff-api:${NS_BE} hugmesh-federation-api:${NS_BE}}"
+    # ArgoCD Applications that must be Synced+Healthy before the lean run.
+    REQUIRED_APPS="${REQUIRED_APPS:-frontend admin-bff-api federation-api}"
+    # Seed/admin-sync Jobs that must be Complete (positive seed signal).
+    REQUIRED_SEED_JOBS="${REQUIRED_SEED_JOBS:-casdoor-init:${NS_PKI} akkoma-admin-sync:${NS_BE}}"
+    # HEAVY workloads — the ACTUAL amd64 pods (NOT Application-Synced).
+    HEAVY_WORKLOADS="${HEAVY_WORKLOADS:-kafka:${NS_BE} clickhouse:${NS_BE}}"
+
+    log() { echo "[orchestrator $(date -u +%H:%M:%S)] $*"; }
+
+    # availableReplicas>=desired for a Deployment name:ns (treats absent as not-ready).
+    dep_ready() {
+      local name="${1%%:*}" ns="${1##*:}"
+      local got want
+      got="$(kubectl -n "$ns" get deploy "$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null)"
+      want="$(kubectl -n "$ns" get deploy "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null)"
+      [ -n "$got" ] && [ -n "$want" ] && [ "$got" -ge "$want" ] 2>/dev/null
+    }
+
+    app_synced_healthy() {
+      local app="$1" sync health
+      sync="$(kubectl -n devops get application "$app" -o jsonpath='{.status.sync.status}' 2>/dev/null)"
+      health="$(kubectl -n devops get application "$app" -o jsonpath='{.status.health.status}' 2>/dev/null)"
+      [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ]
+    }
+
+    job_complete() {
+      local name="${1%%:*}" ns="${1##*:}" c
+      c="$(kubectl -n "$ns" get job "$name" -o jsonpath='{.status.succeeded}' 2>/dev/null)"
+      [ -n "$c" ] && [ "$c" -ge 1 ] 2>/dev/null
+    }
+
+    # A Ready node with kubernetes.io/arch=amd64 (the heavy-tier x86 host).
+    amd64_node_ready() {
+      kubectl get nodes -l kubernetes.io/arch=amd64 \
+        -o jsonpath='{range .items[*]}{range .status.conditions[?(@.type=="Ready")]}{.status}{end} {end}' 2>/dev/null \
+        | grep -q 'True'
+    }
+    # A monotonically-changing token identifying the current amd64 node set, so a
+    # flap (node leaves+rejoins) produces a NEW token and is allowed to re-fire,
+    # but a steady Ready node does not. = sorted node UIDs.
+    amd64_node_generation() {
+      kubectl get nodes -l kubernetes.io/arch=amd64 \
+        -o jsonpath='{range .items[*]}{.metadata.uid}{"\n"}{end}' 2>/dev/null | sort | tr '\n' ','
+    }
+
+    lean_ready() {
+      local w a j
+      for w in $REQUIRED_LEAN;      do dep_ready "$w"        || { log "lean: $w not ready"; return 1; }; done
+      for a in $REQUIRED_APPS;      do app_synced_healthy "$a" || { log "lean: app $a not Synced+Healthy"; return 1; }; done
+      for j in $REQUIRED_SEED_JOBS; do job_complete "$j"     || { log "lean: seed job $j not Complete"; return 1; }; done
+      return 0
+    }
+
+    heavy_ready() {
+      local w
+      amd64_node_ready || { log "heavy: no Ready amd64 node"; return 1; }
+      for w in $HEAVY_WORKLOADS; do dep_ready "$w" || { log "heavy: $w not ready"; return 1; }; done
+      return 0
+    }
+
+    # Render a Job from its template with a unique run-id and apply it.
+    spawn() {
+      local tier="$1" tmpl="$2"
+      local rid="run-$(date -u +%Y%m%d-%H%M%S)-${SOURCE_COMMIT:-dev}"
+      log "spawning ${tier} test Job (${rid})"
+      RUN_ID="$rid" TIER="$tier" envsubst '${RUN_ID} ${TIER} ${SOURCE_COMMIT}' < "$tmpl" \
+        | kubectl apply -f - 2>&1 | sed 's/^/  /'
+    }
+
+    log "test-runner orchestrator up (poll=${POLL}s, heavy-cooldown=${HEAVY_COOLDOWN}s)"
+    LEAN_DONE=0
+    LAST_HEAVY_GEN=""
+    LAST_HEAVY_AT=0
+    while true; do
+      if [ "$LEAN_DONE" = "0" ] && lean_ready; then
+        spawn LEAN /templates/test-job-lean.yaml && LEAN_DONE=1
+      fi
+      if heavy_ready; then
+        gen="$(amd64_node_generation)"
+        now="$(date +%s)"
+        if [ "$gen" != "$LAST_HEAVY_GEN" ] && [ $((now - LAST_HEAVY_AT)) -ge "$HEAVY_COOLDOWN" ]; then
+          spawn HEAVY /templates/test-job-heavy.yaml && { LAST_HEAVY_GEN="$gen"; LAST_HEAVY_AT="$now"; }
+        fi
+      fi
+      sleep "$POLL"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-test-runner
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: test-runner
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-test-runner } }
+  strategy: { type: Recreate }
+  template:
+    metadata:
+      labels:
+        app: hugmesh-test-runner
+        hugmesh.systems/tier: test
+    spec:
+      serviceAccountName: hugmesh-test-runner
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: orchestrator
+          # kubectl + bash + jq + envsubst; pin a real digest before prod (n/a in
+          # prod — this whole bundle is pruned for ENV=prod).
+          image: docker.io/bitnami/kubectl:1.31
+          command: ["bash", "/orchestrator/orchestrator.sh"]
+          env:
+            - { name: POLL_SECONDS, value: "15" }
+            - { name: HEAVY_COOLDOWN_SECONDS, value: "300" }
+            # Stamped at build time; default dev. Surfaces in the run-id.
+            - { name: SOURCE_COMMIT, value: "dev" }
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: orchestrator, mountPath: /orchestrator, readOnly: true }
+            - { name: templates, mountPath: /templates, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: orchestrator
+          configMap: { name: test-runner-orchestrator, defaultMode: 0555 }
+        - name: templates
+          projected:
+            sources:
+              - configMap:
+                  name: test-job-lean
+                  items: [{ key: test-job-lean.yaml, path: test-job-lean.yaml }]
+              - configMap:
+                  name: test-job-heavy
+                  items: [{ key: test-job-heavy.yaml, path: test-job-heavy.yaml }]
+        - name: tmp
+          emptyDir: {}

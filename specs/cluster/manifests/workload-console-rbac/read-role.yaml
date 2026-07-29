@@ -1,0 +1,41 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# WORKLOAD CONSOLE — the READ Role (one identical Role + RoleBinding per APP-TIER
+# namespace; namespaced, NOT a ClusterRole on the admin-read path).
+#
+# DELIBERATELY MINIMAL — the read Role has:
+#   - get/list/watch on pods, pods/log, events, services, endpoints, persistentvolumeclaims
+#   - get/list/watch on apps/* (deployments/statefulsets/daemonsets/replicasets) for topology
+#   - get/list/watch on networking.k8s.io networkpolicies for the network view
+#   - get/list on metrics.k8s.io pods for the stats view
+#
+# It has NO secrets, NO configmaps, NO pods/exec, NO pods/portforward, NO delete, NO
+# create/update/patch — the generator lint test enforces this. A granted admin literally
+# cannot exec/port-forward/mutate/read-secrets through this token even if the BFF were
+# tricked, and the Role is bound ONLY in the app-tier namespaces (never pki/policy/vault/
+# devops/observability), so a cross-TIER reach is impossible.
+#
+# ⚠ This file is the TEMPLATE namespace (hugmesh-backend). The bindings.yaml binds the
+# SAME logical Role in every app-tier namespace via per-namespace Role + RoleBinding pairs.
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-read
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: workload-console
+    app.kubernetes.io/component: rbac-read
+    app.kubernetes.io/part-of: hugmesh.systems
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]

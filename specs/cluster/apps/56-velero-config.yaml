@@ -1,0 +1,52 @@
+# =============================================================================
+# 56-velero-config — the BackupStorageLocation(s) + ESO credential wiring +
+# least-privilege RBAC + status-sweep CronJob that make the Velero server
+# (apps/55-velero.yaml) usable by the admin-bff cloud-backups effector.
+# =============================================================================
+# Synced AFTER the Velero server + its CRDs (wave 1) so the velero.io
+# BackupStorageLocation CRD exists before this applies a BSL (wave 2). Everything
+# here is GitOps-owned in manifests/velero so the BSL NAMES + brand layout match
+# the effector contract (VeleroResourceFactory.storageLocationRef → the catalog
+# row's destination_ref, falling back to the BSL named `default`) and are
+# reviewable in one place.
+#
+# WHAT IT APPLIES (manifests/velero):
+#   - backupstoragelocation.yaml — the `default` BSL (TOTAL/superadmin + the
+#     effector's blank-ref fallback) + an OPTIONAL per-brand BSL TEMPLATE
+#     (commented) for DOMAIN destinations whose name a brand sets as its
+#     backup_destination.destination_ref.
+#   - rbac.yaml — the least-privilege ServiceAccount + Role the admin-bff effector
+#     uses to create/get velero.io Backup/Restore CRs (NOT cluster-admin, NOT the
+#     Velero server SA).
+#   - sweep-cronjob.yaml — reads Velero CR .status.phase and mirrors RUNNING→
+#     terminal onto the CR (the read half); the catalog-write half is an admin-bff
+#     hand-off (see docs/CLOUD-BACKUPS.md + the sweep file header).
+#
+# ── SHIPS DARK ──────────────────────────────────────────────────────────────
+# Manual sync (like apps/55-velero.yaml). The BSL, RBAC, and sweep are inert until
+# a superadmin (a) syncs Velero + this config and (b) flips the admin-bff effector
+# flag app.backups.effector.enabled=true. The sweep CronJob is gated suspend:true
+# until the effector is on (it has nothing to reconcile while dark).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: velero-config
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    hugmesh.systems/ships-dark: "manual-sync + sweep suspend:true until effector enabled"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/velero
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: velero
+  syncPolicy:
+    # NON-automated to match apps/55; synced deliberately by the superadmin
+    # AFTER the Velero server + CRDs are up.
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

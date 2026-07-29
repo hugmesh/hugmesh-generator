@@ -1,0 +1,234 @@
+# tuwunel — Matrix homeserver (Rust Conduit/conduwuit fork), replaces Synapse.
+# Single binary + embedded RocksDB → far lighter than Synapse on a Pi. Serves the
+# Matrix client/server API on :8008 (the be-gateway already routes /_matrix/** and
+# the matrix.hugmesh.systems host here). Matrix-spec compatible, so the existing
+# hugmesh-matrix-ui keeps working.
+#
+# ⚠️ VALIDATE ON CLUSTER: confirm the image tag + the exact config keys/env-prefix
+# against the tuwunel docs (github.com/matrix-construct/tuwunel) — Conduit-family
+# config has churned (CONDUIT_* / CONDUWUIT_* / TUWUNEL_*). This ships a config.toml
+# via env to avoid prefix ambiguity. OIDC/Casdoor + Synapse→tuwunel migration are
+# follow-ups (Conduit-family OIDC support must be confirmed).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tuwunel-config
+  namespace: hugmesh-backend
+data:
+  tuwunel.toml: |
+    [global]
+    server_name = "hugmesh.systems"
+    address = "0.0.0.0"
+    port = 8008
+    database_path = "/var/lib/tuwunel"
+    database_backend = "rocksdb"
+    allow_registration = false
+    allow_federation = true
+    # The client/server .well-known is served by the gateway host
+    # matrix.hugmesh.systems (be-gateway route matrix-wellknown).
+    well_known_client = "https://matrix.hugmesh.systems"
+    well_known_server = "matrix.hugmesh.systems:443"
+    trusted_servers = ["matrix.org"]
+    # --- Matrix authority: ROLE_ADMIN = server-admin / ROLE_MOD = room-moderator ---
+    # Conduit-family (tuwunel) has NO Synapse-style /_synapse/admin REST API, no
+    # OIDC-group->admin auto-promotion, and NO homeserver moderator tier: server
+    # admin == membership of the auto-created admin room (#admins:hugmesh.systems).
+    # The tuwunel admin bot honours ban/redact/room-management commands from members
+    # of that room.
+    #   ROLE_ADMIN is mapped to Matrix SERVER admin by reconciling members INTO
+    #     #admins (network-wide ban/redact/rooms).
+    #   ROLE_MOD is mapped to room-level MODERATOR (power level 50: ban/redact/kick)
+    #     in the managed community/public rooms via the admin bot's set-power-level
+    #     command — NOT admin-room membership, NOT server admin, NOT PL100. (Since
+    #     Conduit-family has no homeserver moderator tier, room PL50 is how mod is
+    #     expressed.)
+    # See the PostSync Job below (tuwunel-admin-sync). Neither mapping exposes any
+    # extra HTTP surface at the be-gateway (so the route-access boundary is unchanged).
+    #
+    # emergency_password is the break-glass promotion of the @conduit server user.
+    # It is NEVER committed: sourced from Vault/ESO into the Secret tuwunel-admin
+    # and injected at runtime (TUWUNEL_EMERGENCY_PASSWORD), so this manifest holds
+    # intent only. Leave it unset here.
+    # emergency_password = "<from Vault/ESO via Secret tuwunel-admin>"
+    admin_room_default = "#admins:hugmesh.systems"
+    # --- TURN/STUN (optional service: coturn) — DARK / GATED ---------------------
+    # When the OPTIONAL, DEFAULT-OFF coturn relay is deployed, tuwunel advertises its
+    # TURN URIs + mints time-limited credentials so Matrix WebRTC calls can relay
+    # through it (clients fetch them via GET /_matrix/client/v3/voip/turnServer).
+    #
+    # SAFE-BY-DEFAULT (dark/gated): turn_secret is the SWITCH. It is EMPTY here and
+    # is only filled at runtime from the SHARED Secret coturn-shared-secret (env
+    # TUWUNEL_TURN_SECRET below, sourced with optional:true). When coturn is OFF the
+    # Secret does not exist, the env override is absent, turn_secret stays EMPTY, and
+    # tuwunel returns EMPTY TURN creds — so Matrix clients keep host-only ICE
+    # (iceServers:[]), byte-identical to today's mainline. When coturn is ON the
+    # SAME shared secret coturn validates against is injected, so the minted creds
+    # authenticate against the relay (one source of truth, no drift).
+    #
+    # turn_uris is harmless to leave set even when coturn is off: it only matters if
+    # a client receives a non-empty turn_secret (it never does while coturn is off).
+    # It points at the in-cluster coturn Service; for OFF-LAN clients the operator
+    # must additionally expose coturn publicly (NodePort/LoadBalancer + external-ip)
+    # and may set turn_uris to that public address — see docs/COTURN.md (DEFERRED).
+    turn_uris = ["turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=udp", "turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=tcp"]
+    turn_secret = ""    # DARK: filled at runtime by TUWUNEL_TURN_SECRET only when coturn is up
+    turn_ttl = 86400
+---
+# tuwunel mTLS PROXY (nginx) sidecar config. Terminates a cluster-CA client cert on
+# :4443 (ssl_verify_client on) and forwards plaintext to tuwunel on localhost:8008.
+# Reuses the merged mTLS CLIENT-PRESENTATION machinery (be-gateway/mod-bff/admin-bff
+# present their Vault-PKI client certs). Server cert + cluster CA from the ESO Secret
+# tuwunel-proxy-mtls (manifests/external-secrets/homeserver-proxy-externalsecrets.yaml),
+# mounted as PEM at /pki. Matrix sync (long-poll /_matrix) needs WebSocket/keepalive
+# upgrade passthrough, handled below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tuwunel-proxy-nginx
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 1024; }
+    http {
+      access_log off;
+      map $http_upgrade $http_connection { default upgrade; "" close; }
+      server {
+        listen 4443 ssl;
+        # Server identity (Vault-PKI/ESO tuwunel-proxy-mtls).
+        ssl_certificate     /pki/tls.crt;
+        ssl_certificate_key /pki/tls.key;
+        # REQUIRE a client cert chaining to the cluster CA (mutual TLS).
+        ssl_client_certificate /pki/ca.crt;
+        ssl_verify_client on;
+        ssl_verify_depth 2;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        # Forward verified traffic to tuwunel in the same pod (localhost:8008).
+        location / {
+          proxy_pass http://127.0.0.1:8008;
+          proxy_set_header Host              $host;
+          proxy_set_header X-Real-IP         $remote_addr;
+          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Client-Cert-DN  $ssl_client_s_dn;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade    $http_upgrade;
+          proxy_set_header Connection $http_connection;
+          proxy_read_timeout 300s;   # Matrix /sync long-poll
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tuwunel
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: tuwunel
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single RocksDB writer
+  selector:
+    matchLabels: { app.kubernetes.io/name: tuwunel }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: tuwunel }
+    spec:
+      nodeSelector:
+        hugmesh.systems/backend: "true"
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c32"
+      containers:
+        - name: tuwunel
+          image: ghcr.io/matrix-construct/tuwunel:v1.7.0
+          ports:
+            - { name: http, containerPort: 8008 }
+          env:
+            - { name: TUWUNEL_CONFIG, value: /etc/tuwunel/tuwunel.toml }
+            # DARK/GATED TURN secret (optional service: coturn). Conduit-family
+            # honours TUWUNEL_<KEY> env overrides, so TUWUNEL_TURN_SECRET overrides
+            # the empty turn_secret in tuwunel.toml — but ONLY when the SHARED Secret
+            # coturn-shared-secret exists. optional:true means tuwunel starts FINE
+            # when coturn is OFF (Secret absent => env unset => turn_secret stays
+            # empty => empty TURN creds => host-only ICE, today's behaviour). When
+            # coturn is ON the same shared secret it validates against is injected.
+            - name: TUWUNEL_TURN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: coturn-shared-secret
+                  key: secret
+                  optional: true
+          volumeMounts:
+            - { name: config, mountPath: /etc/tuwunel }
+            - { name: data,   mountPath: /var/lib/tuwunel }
+          readinessProbe:
+            httpGet: { path: /_matrix/client/versions, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+        # ── mTLS proxy sidecar (tuwunel-proxy) ───────────────────────────────
+        # Fronts tuwunel on :4443 requiring a cluster-CA client cert and forwards to
+        # localhost:8008. The tuwunel-proxy Service points at THIS port; the
+        # be-gateway/mod-bff/admin-bff repoint their matrix base-urls to it. See the
+        # tuwunel-proxy-nginx ConfigMap above + tuwunel-proxy-mtls ESO Secret.
+        - name: proxy
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          ports: [{ name: mtls, containerPort: 4443 }]
+          volumeMounts:
+            - { name: proxy-conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
+            - { name: proxy-pki,  mountPath: /pki, readOnly: true }
+          readinessProbe:
+            tcpSocket: { port: mtls }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap: { name: tuwunel-config }
+        - name: data
+          persistentVolumeClaim: { claimName: tuwunel-data }
+        - name: proxy-conf
+          configMap: { name: tuwunel-proxy-nginx }
+        # Vault-PKI-issued server cert + cluster CA, synced by ESO (kubernetes.io/tls).
+        - name: proxy-pki
+          secret:
+            secretName: tuwunel-proxy-mtls
+---
+# tuwunel-proxy — the mTLS front the gateway/BFFs target instead of tuwunel:8008.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tuwunel-proxy
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: tuwunel }
+  ports: [{ name: mtls, port: 4443, targetPort: mtls }]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tuwunel-data
+  namespace: hugmesh-backend
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tuwunel
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: tuwunel
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: tuwunel
+  ports:
+    - { name: http, port: 8008, targetPort: http }

@@ -1,0 +1,135 @@
+# akkoma-admin-sync — maps the Casdoor 'moderator' group (ROLE_MOD) and
+# ROLE_ADMIN to Akkoma (Pleroma) moderation/admin. Akkoma admin & moderator are
+# per-USER DB flags (users.is_admin / users.is_moderator), set via `pleroma_ctl
+# user set <nick> --admin|--moderator` — NOT derived from an OIDC group claim
+# automatically. So this PostSync reconcile Job is the hook that realises the
+# Casdoor-group -> fediverse-moderation link (mirroring the casdoor-init + the
+# tuwunel-admin-sync pattern: runAsNonRoot, drop ALL caps, readOnlyRootFilesystem,
+# Vault-sourced creds, idempotent, ArgoCD PostSync).
+#
+# Mapping (matches the task's wording — "moderators get fediverse moderation"):
+#   ROLE_MOD   -> pleroma_ctl user set <nick> --moderator   (moderation only)
+#   ROLE_ADMIN -> pleroma_ctl user set <nick> --admin       (full admin)
+# The moderation REST surface (/api/v1/pleroma/admin/**, legacy /api/pleroma/admin/**)
+# and AdminFE (/pleroma/admin) are role-gated for ROLE_MOD/ROLE_ADMIN at the
+# be-gateway via gateway_route_access (manifests/route-access/schema.sql).
+#
+# !!! The Casdoor membership API shape + the in-pod pleroma_ctl invocation are
+# !!! version/deploy-specific. This is a working scaffold — validate the exec
+# !!! transport (kubectl exec vs. a sidecar vs. shipping the script into the pod)
+# !!! and the pleroma_ctl flags against the deployed akkoma before production.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akkoma-admin-sync-script
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Reconcile Casdoor ROLE_MOD -> akkoma --moderator and ROLE_ADMIN -> --admin.
+    Pure stdlib (urllib + subprocess) — no extra packages."""
+    import json, os, base64, subprocess, urllib.request, urllib.error
+
+    CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG     = os.environ.get("CASDOOR_ORG", "hugmesh")
+    PLEROMA_CTL = os.environ.get("PLEROMA_CTL", "/opt/akkoma/bin/pleroma_ctl")
+    # Casdoor role -> pleroma_ctl flag. ROLE_MOD is moderation-only; ROLE_ADMIN full.
+    ROLE_FLAGS = [("ROLE_MOD", "--moderator"), ("ROLE_ADMIN", "--admin")]
+
+    CASDOOR_CLIENT_ID     = open("/secrets/casdoor/clientId").read().strip()
+    CASDOOR_CLIENT_SECRET = open("/secrets/casdoor/clientSecret").read().strip()
+
+    def _get(url, headers=None):
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def casdoor_members(role):
+        token = CASDOOR_CLIENT_ID + ":" + CASDOOR_CLIENT_SECRET
+        auth = {"Authorization": "Basic " + base64.b64encode(token.encode()).decode()}
+        try:
+            data = _get(f"{CASDOOR}/api/get-role?id={ORG}/{role}", auth)
+        except urllib.error.HTTPError as e:
+            print(f"  WARN get-role {role}: {e}"); return []
+        users = (data.get("data") or {}).get("users") or []
+        return [u.split("/")[-1] for u in users]   # localpart == akkoma nickname
+
+    def set_flag(nick, flag):
+        # pleroma_ctl user set <nick> --moderator|--admin (idempotent; sets the DB flag).
+        try:
+            out = subprocess.run([PLEROMA_CTL, "user", "set", nick, flag],
+                                 capture_output=True, text=True, timeout=60)
+            tag = "moderator" if flag == "--moderator" else "admin"
+            if out.returncode == 0:
+                print(f"  set {nick} {tag}")
+            else:
+                print(f"  WARN {nick} {tag}: rc={out.returncode} {out.stderr.strip()}")
+        except Exception as e:
+            print(f"  WARN {nick} {flag}: {e}")
+
+    seen = set()
+    for role, flag in ROLE_FLAGS:
+        for nick in casdoor_members(role):
+            # ROLE_ADMIN is a superset; if a member already got --moderator via
+            # ROLE_MOD, ROLE_ADMIN still upgrades them to --admin below.
+            key = (nick, flag)
+            if key in seen:
+                continue
+            seen.add(key)
+            set_flag(nick, flag)
+    print(f"akkoma-admin-sync: applied {len(seen)} moderation/admin assignment(s)")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: akkoma-admin-sync
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: akkoma-admin-sync }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.systems/backend: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        # Runs pleroma_ctl from the akkoma image against the shared akkoma config
+        # + DB, so --moderator/--admin flags land in the same users table the
+        # akkoma pod serves. The image already ships pleroma_ctl + reads the same
+        # config volume; the python sync script is layered in read-only.
+        - name: sync
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag (match akkoma.yaml)
+          command: ["python3", "/script/sync.py"]
+          env:
+            - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "hugmesh" }
+            - { name: PLEROMA_CTL, value: "/opt/akkoma/bin/pleroma_ctl" }
+          envFrom: [{ secretRef: { name: akkoma-secrets } }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script,  mountPath: /script, readOnly: true }
+            - { name: config,  mountPath: /etc/akkoma, readOnly: true }
+            - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: akkoma-admin-sync-script, defaultMode: 0555 }
+        - name: config
+          configMap: { name: akkoma-config }
+        # ESO-materialized from Vault — never committed. casdoor-app-secrets holds
+        # the OAuth2 client used to read ROLE_MOD/ROLE_ADMIN membership.
+        - name: casdoor
+          secret: { secretName: casdoor-app-secrets }

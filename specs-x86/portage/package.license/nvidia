@@ -1,0 +1,6 @@
+# Explicit acceptance of the proprietary NVIDIA driver EULA (NVIDIA-r2) for the
+# NVIDIA stack only. Copied into the sysroot ONLY when NVIDIA_PROPRIETARY. A
+# hardened image is deliberate about which proprietary licences it accepts, rather
+# than relying on the blanket make.conf ACCEPT_LICENSE="* -@EULA".
+x11-drivers/nvidia-drivers NVIDIA-r2
+dev-util/nvidia-cuda-toolkit NVIDIA-CUDA

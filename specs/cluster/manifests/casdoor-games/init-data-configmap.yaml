@@ -1,0 +1,102 @@
+# casdoor-games declarative seed (init_data.json) for the GAMES realm — MIRRORED
+# from the canonical hugmesh.games Casdoor (casdoor/init_data.json.tpl):
+#   org         "threewizards"   (displayName "HugMesh Games")
+#   application  "threewizards-app" (clientId twclient001), enableSignUp:false
+#   role catalog admin, player, uploader, mod, publisher,
+#                play-three-wizards, play-dodecahedron
+# This is the SEPARATE, INDEPENDENT games identity provider — its native users/roles
+# (GitHub-OAuth players, the player/uploader/mod/publisher/play-* roles) exist ONLY
+# here and need NOT exist in the systems Casdoor, and vice versa. There is NO "member"
+# role: plain gameplay just needs an authenticated JWT (the games BFF's Spring Security
+# grants ROLE_USER to any valid principal automatically). A GitHub OAuth provider (seeded
+# by casdoor-games-init) lets people sign up as a native games "player".
+#
+# Casdoor imports init_data.json on boot (idempotent — only missing objects are created).
+# Mounted read-only into casdoor-games at /init_data.json.
+#
+# IMPORTANT: this file declares ONLY non-secret structure (org, application shell, roles,
+# seed users WITHOUT passwords). NO client-secret / seed-user passwords are committed here
+# — the threewizards-app clientSecret and the GitHub provider are injected by the
+# casdoor-games-init Job from the ESO Secret "casdoor-games-app" / "casdoor-games-github"
+# (sourced from Vault). The canonical .tpl's per-user password placeholders
+# (CASDOOR_*_PASS_VALUE) are deliberately omitted; admins set seed-user passwords (or
+# delete the seed users) post-boot via the Casdoor UI.
+#
+# The game-scoped mod-*/publisher-* and player1..3 fixtures from the canonical .tpl are
+# dev/e2e conveniences (their passwords come from env in the compose stack); they are
+# omitted from this in-cluster seed to avoid committing accounts without credentials. The
+# CANONICAL role catalog (the seven roles above) is reproduced faithfully.
+#
+# NOTE: the init_data.json object schema is Casdoor-version-specific. Validate against the
+# deployed casbin/casdoor before relying on auto-import.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-games-init-data
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
+# NOTE: the websiteUrl/homepageUrl + redirectUris in the init_data.json below are
+# parameterized on GAMES_DOMAIN by parameterize_games_domain() in the stage4
+# builders (https://hugmesh.games -> https://${GAMES_DOMAIN}). They MUST point
+# at the real games host or the OAuth callback is rejected. The default GAMES_DOMAIN
+# serves games as a subdomain (games.<CLUSTER_DOMAIN>); flip to the .games TLD with
+# GAMES_DOMAIN=<brand>.games. Keep in sync with init-job.yaml (reconcile.py re-pins
+# the same redirectUris on every PostSync). (No comments INSIDE the JSON — invalid.)
+data:
+  init_data.json: |
+    {
+      "organizations": [
+        {
+          "owner": "admin",
+          "name": "threewizards",
+          "displayName": "HugMesh Games",
+          "websiteUrl": "https://hugmesh.games",
+          "favicon": "",
+          "passwordType": "pbkdf2-salt",
+          "phonePrefix": "1",
+          "defaultAvatar": "",
+          "tags": [],
+          "languages": ["en"],
+          "isProfilePublic": false
+        }
+      ],
+      "applications": [
+        {
+          "owner": "admin",
+          "name": "threewizards-app",
+          "displayName": "HugMesh Games",
+          "logo": "",
+          "homepageUrl": "https://hugmesh.games",
+          "description": "HugMesh Games — Player Portal",
+          "organization": "threewizards",
+          "cert": "cert-built-in",
+          "enablePassword": true,
+          "enableSignUp": false,
+          "clientId": "twclient001",
+          "redirectUris": [
+            "https://hugmesh.games/callback",
+            "https://hugmesh.games/silent-refresh.html"
+          ],
+          "tokenFormat": "JWT",
+          "expireInHours": 168,
+          "refreshExpireInHours": 336,
+          "grantTypes": ["authorization_code", "password", "client_credentials", "token", "id_token"],
+          "signingCert": "cert-built-in",
+          "formOffset": 2
+        }
+      ],
+      "roles": [
+        { "owner": "threewizards", "name": "admin",     "displayName": "Administrator",  "description": "Full admin console access; can manage uploads, roles, and federation manifest.", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "threewizards", "name": "player",    "displayName": "Player",         "description": "Standard player; can access the portal and play unlocked levels.",              "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "threewizards", "name": "uploader",  "displayName": "Game Uploader",  "description": "Can upload + replace game bundles; cannot manage roles.",                         "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "threewizards", "name": "mod",       "displayName": "Moderator",      "description": "Per-game moderator: stop sessions and kick players for games scoped via mod_game_scopes.", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "threewizards", "name": "publisher", "displayName": "Publisher",      "description": "Upload game bundles + grant mod role for owned games. Cannot grant publisher role.", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "threewizards", "name": "play-three-wizards", "displayName": "Play: Three Wizards",     "description": "Permits launching the Three Wizards in a Trenchcoat game.", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "threewizards", "name": "play-dodecahedron",  "displayName": "Play: Dodecahedron Demo", "description": "Permits launching the Dodecahedron Demo game.",            "users": [], "roles": [], "domains": [], "isEnabled": true }
+      ],
+      "permissions": [
+        { "owner": "threewizards", "name": "upload-games",       "displayName": "Upload games",       "description": "POST /api/admin/games/upload + replace registered games.",                              "users": [], "roles": ["threewizards/admin", "threewizards/uploader", "threewizards/publisher"], "resource": "/api/admin/games/upload", "actions": ["Read", "Write"], "effect": "Allow", "isEnabled": true },
+        { "owner": "threewizards", "name": "moderate-sessions",  "displayName": "Moderate sessions",  "description": "Stop sessions and kick players for games scoped via mod_game_scopes.",                  "users": [], "roles": ["threewizards/admin", "threewizards/mod"],                          "resource": "/api/mod/**",             "actions": ["Read", "Write"], "effect": "Allow", "isEnabled": true },
+        { "owner": "threewizards", "name": "publish-games",      "displayName": "Publish games",      "description": "Upload bundles + grant the mod role to other users for the publisher's games.",        "users": [], "roles": ["threewizards/admin", "threewizards/publisher"],                    "resource": "/api/publisher/**",       "actions": ["Read", "Write"], "effect": "Allow", "isEnabled": true }
+      ]
+    }

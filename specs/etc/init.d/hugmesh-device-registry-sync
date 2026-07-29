@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+
+description="Sync + verify the signed device-license-registry export (Layer-B sshd enforcement)"
+
+# Layer-B convergence service: runs the fetch/verify/atomic-cache/gate-flip/sweep
+# agent ONCE at boot (a oneshot). The 60s timer half is a cron.d drop-in
+# (/etc/cron.d/hugmesh-device-registry-sync) — OpenRC has no native timer and
+# cronie is already in the node image (provision.sh writes /etc/cron.d/* for
+# backups). The BFF push-with-ack (FIX-REVOKE) drives FAST propagation; this
+# boot-oneshot + cron pull is the convergence FLOOR.
+#
+# Installed (rc-update add) ONLY on ADMIN-owned / mesh-extension (registry-enforced)
+# nodes by provision_device_registry(). The agent itself is FAIL-CLOSED: on any
+# fetch/verify failure it keeps the last-good cache and exits 0, so a failed sync
+# never faults the boot.
+
+depend() {
+    need net
+    use dns logger
+    # Run AFTER first-boot provisioning (which bakes node.env + the public key)
+    # and after tailscaled brings the node onto the mesh so the in-cluster BFF is
+    # reachable for the first sync.
+    after keys-provision tailscaled
+    before sshd local
+}
+
+command="/usr/sbin/hugmesh-device-registry-sync"
+# Oneshot: the agent does one fetch/verify/cache pass and exits; the cron drop-in
+# re-triggers it every 60s. Do NOT background or supervise (it is not a daemon).
+command_background=false
+
+start() {
+    ebegin "Syncing device-license-registry export (fail-closed; keeps last-good cache on error)"
+    "${command}"
+    # The agent always exits 0 (fail-closed = keep cache, never fault boot). A
+    # non-zero here would only be an unexpected crash; surface it but don't block.
+    eend $? "device-registry sync reported an unexpected error (cache preserved)"
+}
+
+stop() {
+    return 0
+}

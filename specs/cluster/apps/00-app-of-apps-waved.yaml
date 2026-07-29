@@ -1,0 +1,70 @@
+# =============================================================================
+# 00-app-of-apps-waved — the EXPLICIT-WAVED root that makes a BLOCKING gate real.
+# =============================================================================
+# The default root (../app-of-apps.yaml) is `directory.recurse: true` + automated
+# prune/selfHeal. That topology CANNOT block: ArgoCD just keeps every child app
+# continuously in sync, so there is no phase a failing test/gate could halt. To
+# make "the prod-hygiene gate (and, in ENV=test, the seed+lean gate) must pass
+# BEFORE the dependent app waves proceed" realizable, the gate is expressed as an
+# ArgoCD sync HOOK whose FAILURE aborts the sync:
+#
+#   * the prod-hygiene RUNTIME gate (apps/00-prod-hygiene.yaml → the PreSync HOOK
+#     Job at hook sync-wave -10) runs first and BLOCKS the sync on a violation;
+#   * the app waves (kyverno -1, policy/prod-hygiene -2, … the services, the
+#     test-runner at 99) proceed only once the hook passes.
+#
+# This app is an ALTERNATIVE root you point the bootstrap at when you want the
+# wave-ordered, hook-gated topology (instead of the default recurse root). It is
+# ENV=test-relevant for the seed+lean gate and ENV=prod-relevant for the hygiene
+# gate; the build PRUNES it from the baked prod tree (the prod root is assembled by
+# the operator) — see build-x86-host-stage4.sh + docs/TEST-ARCHITECTURE.md.
+#
+# It syncs the SAME apps/ directory, but with sync-waves honored and
+# ApplyOutOfSyncOnly so the hook ordering is meaningful. The per-app sync-wave
+# annotations already on each Application (kyverno -1, prod-hygiene -2, analytics
+# 0, test-runner 99, …) provide the ordering; this root just enables it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-root-waved
+  namespace: devops
+  annotations:
+    hugmesh.systems/topology: waved-hook-gated
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/apps
+    directory:
+      recurse: true
+      # Exclude THIS file + the default root so the two roots never manage each
+      # other (a root app applying itself + its sibling root loops).
+      exclude: '{00-app-of-apps-waved.yaml}'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    # NON-automated: the waved/hook-gated root is synced deliberately so the
+    # PreSync gate's block is observable (an automated root would just retry past
+    # the human). The hook Job's failure aborts the manual sync = the wave blocks.
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      # KEYSTONE (mirrors ../app-of-apps.yaml): RESPECT the ignoreDifferences below
+      # so a deliberate sync of THIS root does not revert the admin-bff
+      # OptionalServiceReconciler's runtime write of the optional-services
+      # ApplicationSet element list. See docs/OPTIONAL-SERVICES.md §7/§10.
+      - RespectIgnoreDifferences=true
+  # Single-writer field owned by the admin-bff OptionalServiceReconciler (the
+  # optional-services ApplicationSet element `installed` flags). Kept identical to
+  # the default recurse root so BOTH topologies honour the runtime toggle.
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: ApplicationSet
+      name: optional-services
+      namespace: devops
+      jsonPointers:
+        - /spec/generators/0/list/elements

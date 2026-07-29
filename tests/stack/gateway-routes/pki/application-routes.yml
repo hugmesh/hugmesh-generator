@@ -1,0 +1,22 @@
+# pki-gateway routes (compose). Translated from specs/cluster/apps/20-gateway-pki.yaml
+# to compose service DNS. Loaded via SPRING_CONFIG_ADDITIONAL_LOCATION=file:/config/.
+spring:
+  cloud:
+    gateway:
+      # SCG 5.0 (Spring Boot 4): route config moved to
+      # spring.cloud.gateway.server.webflux.* (legacy prefix binds nothing under SCG 5.0).
+      server:
+        webflux:
+          routes:
+            - id: casdoor-auth
+              uri: http://casdoor:8000
+              predicates:
+                - Path=/api/auth/**
+            - id: casdoor-login
+              uri: http://casdoor:8000
+              predicates:
+                - Path=/login/**
+            - id: casdoor-oidc
+              uri: http://casdoor:8000
+              predicates:
+                - Path=/.well-known/**

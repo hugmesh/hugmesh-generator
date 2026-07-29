@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+
+description="Pull changed Gentoo binpkgs from the tailnet binhost (DEFAULT-ON auto-update; one poll at boot)"
+
+# Host-binary auto-update boot oneshot: runs the hugmesh-update poller ONCE at
+# boot (a fresh node catches up to the binhost before the 60-min+ cron cadence).
+# The cadence timer half is a cron.d drop-in (OpenRC has no native timer; cronie is
+# already in every node image). The poller is FAIL-SAFE: a missing binhost /
+# unreachable cluster / transient emerge error keeps last-good + exits 0, so a
+# failed pull never faults the boot.
+#
+# DEFAULT-ON: linked into the default runlevel on EVERY generated host/node + client
+# image. The live devops/hugmesh-update-policy ConfigMap (superadmin) only ADJUSTS
+# or DISABLES; its ABSENCE means ON. The poller reads the policy itself, so a
+# superadmin `enabled:false` makes this oneshot a no-op without re-imaging.
+
+depend() {
+    need net
+    use dns logger
+    # After first-boot provisioning (which writes /etc/hugmesh/update.json + the
+    # cron drop-in + PORTAGE_BINHOST), and after the mesh is up (the binhost is on
+    # the tailnet). Soft on tailscaled/keys-provision so a keyless boot still tries.
+    after keys-provision tailscaled
+}
+
+command="/usr/local/sbin/hugmesh-update"
+command_background=false
+
+start() {
+    ebegin "Polling the binhost for changed binpkgs (fail-safe; keeps last-good on error)"
+    "${command}"
+    eend $? "hugmesh-update reported an unexpected error (last-good preserved)"
+}
+
+stop() {
+    return 0
+}

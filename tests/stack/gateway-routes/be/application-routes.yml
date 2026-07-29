@@ -1,0 +1,48 @@
+# be-gateway routes (compose). Translated from specs/cluster/apps/20-gateway-be.yaml
+# to compose service DNS. The mastodon/* + matrix routes target the OPT-IN social
+# tier (mastodon-web:3000 / synapse:8008); they only resolve when the stack is
+# brought up with `--profile social` (otherwise those routes simply 503 — the rest
+# of the be-gateway works). federation-api MUST precede the /api/** catch-all.
+spring:
+  cloud:
+    gateway:
+      # SCG 5.0 (Spring Boot 4): route config moved to
+      # spring.cloud.gateway.server.webflux.* (legacy prefix binds nothing under SCG 5.0).
+      server:
+        webflux:
+          routes:
+            # --- Mastodon (opt-in social tier) ---
+            - id: mastodon-oauth
+              uri: http://mastodon-web:3000
+              predicates:
+                - Path=/oauth/**
+            - id: mastodon-api
+              uri: http://mastodon-web:3000
+              predicates:
+                - Path=/api/v1/**
+            # --- Matrix (opt-in social tier) ---
+            - id: matrix-api
+              uri: http://synapse:8008
+              predicates:
+                - Path=/_matrix/**
+            # --- hugmesh-federation-api (MORE specific than /api/** — declared first) ---
+            - id: federation-api
+              uri: http://hugmesh-federation-api:8080
+              predicates:
+                - Path=/api/federation/**
+            # --- HugMesh Spring APIs (hugmesh-actions) ---
+            # hugmesh-actions' Dockerfile EXPOSEs 8090 (it does not use the
+            # platform-standard 8080) — a route pointed at :8080 gets a bare TCP
+            # connection-refused (verified live: `docker logs
+            # hugmesh-local-hugmesh-api-1` shows "Netty started on port
+            # 8090", while the be-gateway logged "Connection refused:
+            # hugmesh-api/<ip>:8080" for every /api/** request that fell
+            # through to this catch-all, e.g. an otherwise-ALLOWED
+            # /api/admin/route-access for a ROLE_ADMIN principal 500'd here
+            # instead of reaching the backend). Keep in sync with the
+            # hugmesh-api healthcheck in compose.local.yaml, which has the
+            # same port mismatch.
+            - id: hugmesh-api
+              uri: http://hugmesh-api:8090
+              predicates:
+                - Path=/api/**

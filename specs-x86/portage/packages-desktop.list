@@ -1,0 +1,72 @@
+# x86 CLIENT desktop stack (thin) — appended onto packages.list for ROLE_CLIENT
+# builds (laptop/chromebook/desktop). Mirrors the proven specs-frite light desktop
+# (LXDE/openbox + lightdm) plus x86 laptop bits. The --desktop full weight adds
+# packages-desktop-full.list on top. See docs/CLIENT-IMAGES.md.
+
+# Display server + basic X utilities
+x11-base/xorg-server
+# Materializes the X drivers from INPUT_DEVICES (libinput: keyboard/mouse/touchpad)
+# and VIDEO_CARDS (amdgpu/intel/nouveau DDX). Without it Xorg has no input/video
+# driver and the greeter is unusable (modesetting/simpledrm still cover QEMU + UEFI
+# fallback, but real touchpads/keyboards need xf86-input-libinput).
+x11-base/xorg-drivers
+x11-apps/xrandr
+x11-apps/xset
+x11-apps/setxkbmap
+x11-terms/xterm
+
+# Session: LXDE-lite — openbox WM + lxpanel + pcmanfm (lean, turnkey)
+x11-wm/openbox
+lxde-base/lxpanel
+lxde-base/lxsession
+x11-misc/pcmanfm
+lxde-base/lxappearance
+
+# Login / seat: lightdm + greeter + the OpenRC `display-manager` service
+# (gui-libs/display-manager-init provides the service; lightdm ships none).
+x11-misc/lightdm
+x11-misc/lightdm-gtk-greeter
+gui-libs/display-manager-init
+
+# System bus + seat/login manager (enabled in the client runlevel)
+sys-apps/dbus
+sys-auth/elogind
+
+# Networking UI + laptop power management
+gnome-extra/nm-applet
+sys-power/acpid
+
+# Firewall — FD-06 superadmin shields-up uses firewalld; harmless on all clients
+net-firewall/firewalld
+
+# CPU microcode + firmware blobs (Intel/AMD laptops, wifi/bt firmware)
+sys-firmware/intel-microcode
+sys-kernel/linux-firmware
+
+# Lean browser for the thin profile (full profile swaps in firefox/chromium)
+www-client/netsurf
+
+# Fonts + a file/image viewer + console editor
+media-fonts/dejavu
+media-fonts/noto
+media-gfx/feh
+app-editors/nano
+
+# Desktop app governance (FD-09 increment 7 / admin-bff PR #115) — the
+# admin-curated, domain-locked "Plasma Discover store" the keys-provision
+# provision_desktop_governance() config targets. Discover is pointed at the
+# admin-bff registry endpoint (a single Flatpak remote, Flathub removed, empty
+# default) and installs governed apps as Flatpaks; without these packages the
+# baked/USB-delivered #115 config has nothing to apply to.
+#   sys-apps/flatpak       — the runtime the `flatpak remote` config + bearer-
+#                            forward rely on (stable on amd64).
+#   kde-plasma/discover    — the store front-end; USE=flatpak (package.use/desktop)
+#                            builds its Flatpak backend → sys-apps/flatpak.
+# DEP-WEIGHT NOTE: Discover is a Qt6/KF6 app and pulls the full Qt6 + KDE
+# Frameworks 6 stack (qtbase/qtdeclarative/qtwebview + kconfig/kio/kirigami/…)
+# onto this otherwise LXDE/openbox image — a material build-size/time increase.
+# This is the lightest way to satisfy the design's "Plasma Discover" intent
+# (the feature UI/contract is built around Discover specifically); no full
+# Plasma desktop/meta package is added.
+sys-apps/flatpak
+kde-plasma/discover

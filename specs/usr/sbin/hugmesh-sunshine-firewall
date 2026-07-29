@@ -1,0 +1,73 @@
+#!/bin/bash
+# hugmesh-sunshine-firewall — mesh-scoped nftables fence for the thin-desktop
+# stream host (Sunshine). Renders + loads a SINGLE, independently-owned
+# nftables table (hugmesh_thin_desktop) that admits Sunshine's port set ONLY
+# from the tailnet and pins the pairing web UI to loopback:
+#
+#   * stream/pairing ports — TCP 47984 (HTTPS), 47989 (HTTP), 48010 (RTSP);
+#     UDP 47998-48002 (video/control/audio/mic) — accepted ONLY on the
+#     tailscale interface (tailscale0 — Linux tailscaled's iface name; the
+#     Android side of this pairing names its VpnService iface tun0) AND only
+#     from the tailnet CGNAT range (100.64.0.0/10, the SAME CIDR the
+#     release-gate backstop and the tier-egress NetworkPolicy allow-list use).
+#     Both conditions together: a spoofed 100.64/10 source on the LAN iface
+#     stays dropped, and a non-CGNAT source riding tailscale0 stays dropped.
+#   * web UI — TCP 47990: LOOPBACK ONLY. Pairing PINs are entered at
+#     https://localhost:47990 on the node's own console (or an SSH tunnel);
+#     the pairing surface is never reachable off-host, not even mesh-side.
+#   * everything else in the port set DROPS — Sunshine has no native
+#     bind-to-interface option, so this netfilter fence IS the "bound to the
+#     tailscale iface only" guarantee (docs/MDM.md 'Thin desktop').
+#
+# OWNS its own table end-to-end (create-if-missing, flush, redefine — never
+# `flush ruleset`), mirroring hugmesh-firewall-reconcile: firewalld and the
+# release-gate table run alongside untouched. Runs once at boot via the
+# hugmesh-sunshine-firewall OpenRC oneshot (before any desktop session can
+# start Sunshine) + a 60s cron as the convergence floor.
+#
+# FAIL-CLOSED: any render/apply error KEEPS the existing ruleset; if nft is
+# absent the script exits 0 without touching anything (the OpenRC eend line
+# reports it) — Sunshine itself is still loopback-paired and tailnet-routed.
+
+set -uo pipefail
+
+TABLE="hugmesh_thin_desktop"
+TS_IFACE="${HUGMESH_TS_IFACE:-tailscale0}"
+LOG_TAG="hugmesh-sunshine-firewall"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+
+command -v nft >/dev/null 2>&1 || { warn "nft not found — cannot (re)load the thin-desktop fence"; exit 0; }
+
+TMP="$(mktemp)" || { warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
+trap 'rm -f "${TMP}"' EXIT
+cat > "${TMP}" <<RULES
+#!/usr/sbin/nft -f
+# Managed by ${LOG_TAG} — DO NOT hand-edit (rewritten at boot + every 60s).
+# Sunshine (thin-desktop stream host) is TAILNET-ONLY; web UI is LOOPBACK-ONLY.
+
+table inet ${TABLE} {}
+flush table inet ${TABLE}
+
+table inet ${TABLE} {
+    chain input {
+        type filter hook input priority filter + 20; policy accept;
+        # Pairing web UI: loopback only — PINs are entered on the node itself.
+        iifname "lo" tcp dport 47990 accept
+        tcp dport 47990 drop
+        # Stream/pairing ports: tailscale iface AND tailnet CGNAT source only.
+        iifname "${TS_IFACE}" ip saddr 100.64.0.0/10 tcp dport { 47984, 47989, 48010 } accept
+        iifname "${TS_IFACE}" ip saddr 100.64.0.0/10 udp dport 47998-48002 accept
+        tcp dport { 47984, 47989, 48010 } drop
+        udp dport 47998-48002 drop
+    }
+}
+RULES
+
+if ! NFT_ERR="$(nft -f "${TMP}" 2>&1)"; then
+    warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed)"
+    exit 0
+fi
+log "applied: Sunshine ports fenced to ${TS_IFACE}+100.64.0.0/10; web UI 47990 loopback-only"
+exit 0

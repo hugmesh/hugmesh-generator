@@ -1,0 +1,44 @@
+# DARK — latency/RPS KEDA ScaledObject for the admin-bff-api.
+# See fe-gateway-scaledobject.yaml in this dir for the full rationale, the DARK
+# (manual-sync) mechanism, the fail-safe design, and the Prometheus METRIC SOURCE
+# DEPENDENCY (NO Prometheus exists yet — LIVE-GATED). The existing v2 CPU+memory
+# HPA (manifests/admin-bff-api/hpa.yaml, min 2 / max 6) must be RETIRED on this
+# Deployment before this ScaledObject is enabled — KEDA will not co-own an HPA.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: hugmesh-admin-bff-api-latency
+  namespace: hugmesh-backend
+  labels:
+    app: hugmesh-admin-bff-api
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/autoscaler: latency-rps
+  annotations:
+    hugmesh.systems/dark: "true"
+    hugmesh.systems/metric-source: "prometheus (ABSENT — see README)"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hugmesh-admin-bff-api
+  minReplicaCount: 2                   # matches manifests/admin-bff-api/hpa.yaml floor
+  maxReplicaCount: 6                   # matches that HPA's ceiling
+  pollingInterval: 30
+  cooldownPeriod: 300
+  advanced:
+    restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies: [{ type: Pods, value: 1, periodSeconds: 120 }]
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies: [{ type: Pods, value: 2, periodSeconds: 60 }]
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-server.observability.svc.cluster.local:80
+        query: |
+          sum(rate(http_server_requests_seconds_count{app="hugmesh-admin-bff-api"}[1m]))
+        threshold: "40"

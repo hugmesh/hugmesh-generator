@@ -1,0 +1,34 @@
+# kind-local — a single-node local cluster used to VALIDATE a curated slice of
+# the HugMesh GitOps tree (Vault + PKI + Casdoor + Harbor, see
+# bootstrap-kind.sh / README.md for the exact scope) before it ever touches the
+# real multi-Pi hardware. This is a validation tool, not a topology simulation:
+# the real cluster is heterogeneous (pki Pi, backend/frontend Pis, an x86_64
+# host carrying several capability labels); kind gives us one node that we
+# label with every capability the curated app subset needs instead.
+#
+# Single control-plane node is sufficient — nothing in the curated subset needs
+# a second node, and kind's control-plane node is already amd64 (matches the
+# real x86_64 host that carries devops=true / pki=true et al).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: hugmesh-local
+nodes:
+  - role: control-plane
+    # extraPortMappings: ingress-nginx-internal (apps/11-ingress-nginx-internal)
+    # runs as a hostNetwork DaemonSet pinned to hugmesh.systems/pki=true —
+    # i.e. it binds directly to THIS node's network namespace on :80/:443. Map
+    # those container ports out to the docker host so `curl --resolve
+    # <host>:443:127.0.0.1 ...` from the dev machine (see README) can reach it
+    # without touching /etc/hosts or DNS.
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP
+    # No extraMounts: the hugmesh-local StorageClass (rancher.io/local-path)
+    # just mkdir -p's /mnt/data/local-path + /mnt/usb/local-path INSIDE the kind
+    # node container's own filesystem once the node carries
+    # hugmesh.systems/local-path=true — there is no real block device to
+    # bind-mount for this validation pass (see bootstrap-kind.sh).

@@ -1,0 +1,16 @@
+# ClusterIP — the in-cluster consumption endpoint for the analysis API. Reached by
+# the be-gateway (ai.<domain> /v1/analyze/** route) for tailnet/external callers, and
+# directly in-cluster by Phase-A consumers (the AIOps consumer, user-bff avatar
+# moderation) at http://hugmesh-edge-ai-analysis.hugmesh-inference.svc:8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-edge-ai-analysis
+  namespace: hugmesh-inference
+  labels:
+    app: hugmesh-edge-ai-analysis
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  selector: { app: hugmesh-edge-ai-analysis }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

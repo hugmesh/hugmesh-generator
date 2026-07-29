@@ -1,0 +1,13 @@
+# ClusterIP only — reachable solely through the fe-gateway's /bff/wiki/** route, so
+# /bff is same-origin with hugmesh.systems and is role-checked at the gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-wiki-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-wiki-bff-api }
+spec:
+  type: ClusterIP
+  selector: { app: hugmesh-wiki-bff-api }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

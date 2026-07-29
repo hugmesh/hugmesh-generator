@@ -1,0 +1,347 @@
+# ============================================================================
+# PER-TENANT TEMPLATE (Phase 5): this is the {{HARBOR_PROJECT}}/{{BRAND}}-tokenised
+# form of specs/cluster/manifests/harbor/harbor-provision-job.yaml. Rendered per
+# brand it creates a PER-TENANT Harbor PROJECT + project-scoped robots and routes
+# the once-only robot secrets to Vault base secret/{{BRAND}}/harbor-robots (ESO
+# "base segment == brand slug" convention). The upstream non-templated file stays
+# the shared-project default. See docs/PHASE5-DECISIONS.md (decision #3) for the
+# per-tenant-vs-shared tradeoff and the DEFERRED per-tenant prerequisites
+# (per-tenant harbor-admin/ESO base path, cluster-ca copy into hugmesh-pki,
+# Harbor REST 1.16.x scaffold re-incurred per tenant).
+#
+# TOKENS: {{HARBOR_PROJECT}} (Harbor project slug, == ORG slug rule) and {{BRAND}}
+# (Vault KV base + resource-name prefix). ROBOT accounts are already project-scoped
+# (robot$<project>+pull / +push, permissions namespaced to the project) so with the
+# project templated they auto-become per-tenant scoped robots — NO logic change.
+# ============================================================================
+# harbor-provision — PostSync-hook Job that finishes bootstrapping the Harbor
+# release deployed by apps/03a-harbor.yaml: creates the registry PROJECT,
+# mints the two scoped ROBOT ACCOUNTS (pull-only / push-only) images consume,
+# and configures Casdoor OIDC login on the Harbor instance itself. Modeled on
+# manifests/casdoor/init-job.yaml's shape (ConfigMap-embedded Python reconcile
+# script + idempotent REST calls), extended with a direct Vault KV v2 write
+# because — UNLIKE every other secret in this platform — a Harbor robot
+# account's secret is returned EXACTLY ONCE at creation time and can never be
+# re-read from Harbor afterwards, so ESO's normal "materialize FROM Vault"
+# direction doesn't apply here: this Job must capture the secret the moment
+# Harbor mints it and WRITE it INTO Vault itself.
+#
+# THIS REPLACES the fully-manual placeholder path in scripts/gen-cluster-secrets.sh
+# (GITLAB_REGISTRY_TOKEN / IMAGE_BUILDER_REGISTRY_TOKEN env vars an operator used
+# to paste a GitLab deploy token into) with real automation. Those two env vars
+# still exist as a manual-override escape hatch for local/offline testing, but
+# the header comment there has been updated to point at this Job as the primary
+# path — see scripts/gen-cluster-secrets.sh.
+#
+# IDEMPOTENCY: project creation and OIDC config are naturally idempotent
+# (GET-then-skip / PUT-is-a-full-overwrite). Robot-account creation is NOT
+# idempotent in the usual sense — Harbor cannot re-reveal an old robot's
+# secret — so this Job picks ONE clear, safe behaviour: if a robot with the
+# expected name already exists, SKIP creating it and leave whatever secret is
+# already in Vault untouched. (The alternative — delete+recreate on every
+# sync to "rotate" — was rejected: ArgoCD may re-run this Job on any sync, and
+# silently rotating a credential every reconcile would break every consumer's
+# already-mounted imagePullSecret without warning. An operator who wants to
+# rotate does so deliberately: delete the robot in Harbor, delete the Vault
+# key, then let this Job re-run.)
+#
+# NAMESPACE: hugmesh-pki, per explicit instruction ("within our pki
+# namespace and protected"). Note for reviewers: today this namespace also
+# hosts Casdoor/Cassandra/route-access/signup-gate/Forgejo/headscale — it is
+# the control-plane/identity tier as a whole, not literally PKI-only. Redirect
+# this if a narrower/dedicated "registry" namespace was actually intended.
+#
+# !!! Harbor's REST API shape (POST /api/v2.0/projects, /api/v2.0/robots,
+# !!! PUT /api/v2.0/configurations) is version-specific to the chart pin in
+# !!! apps/03a-harbor.yaml (targetRevision: 1.16.x). This Job is a working
+# !!! scaffold; validate the endpoints/payloads against the deployed
+# !!! goharbor/harbor before relying on it in production.
+#
+# !!! KNOWN GAP: this Job talks to Vault's HTTPS listener directly (to WRITE
+# !!! the robot secrets, which ESO cannot do) and needs the cluster CA to
+# !!! verify it. That CA (Secret `cluster-ca`) is today offline-provisioned by
+# !!! keys-provision only into the `vault` namespace (see manifests/vault-pki/
+# !!! pki-init-job.yaml) — NOT into hugmesh-pki. Until keys-provision is
+# !!! extended to also copy `cluster-ca` into hugmesh-pki, the `ca` volume
+# !!! below is empty and this Job WARNS + skips TLS verification on its Vault
+# !!! calls (still bearer-token-authenticated; only the transport is
+# !!! unverified). Close this gap by adding the copy to keys-provision.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{BRAND}}-harbor-provision-script
+  namespace: hugmesh-pki
+  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.systems, hugmesh.systems/brand: "{{BRAND}}" }
+data:
+  reconcile.py: |
+    #!/usr/bin/env python3
+    """Idempotently ensure the Harbor project + pull/push robot accounts exist,
+    and configure Casdoor OIDC login on Harbor. Pure stdlib (urllib/ssl) so the
+    image needs no extra packages / network installs — same approach as
+    manifests/casdoor/init-job.yaml's reconcile.py."""
+    import json, os, ssl, time, base64, urllib.request, urllib.error
+
+    HARBOR_URL = os.environ.get("HARBOR_URL", "http://harbor-core.hugmesh-pki.svc.cluster.local")
+    PROJECT    = os.environ.get("HARBOR_PROJECT", "hugmesh")
+    VAULT_ADDR = os.environ.get("VAULT_ADDR", "https://vault.vault.svc.cluster.local:8200")
+    VAULT_KV_MOUNT = os.environ.get("VAULT_KV_MOUNT", "secret")
+    VAULT_KV_BASE  = os.environ.get("VAULT_KV_BASE", "hugmesh")
+    CASDOOR_OIDC_ENDPOINT = os.environ.get("CASDOOR_OIDC_ENDPOINT", "https://id.hugmesh.systems")
+
+    ADMIN_USER = open("/secrets/admin/username").read().strip()
+    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+    _auth = base64.b64encode(f"{ADMIN_USER}:{ADMIN_PASS}".encode()).decode()
+    HARBOR_AUTH_HEADER = f"Basic {_auth}"
+
+    VAULT_TOKEN = None
+    try:
+        VAULT_TOKEN = open("/secrets/vault/token").read().strip()
+    except FileNotFoundError:
+        pass
+
+    # ── Vault TLS trust ──────────────────────────────────────────────────────
+    # cluster-ca is only offline-provisioned into the `vault` namespace today
+    # (see !!! KNOWN GAP above); mount it here too once keys-provision copies
+    # it into hugmesh-pki. Until then we WARN and skip verification rather
+    # than silently failing closed or silently trusting nothing.
+    _vault_ssl_ctx = ssl.create_default_context()
+    if os.path.exists("/ca/tls.crt"):
+        _vault_ssl_ctx.load_verify_locations("/ca/tls.crt")
+    else:
+        print("  WARN: /ca/tls.crt absent (cluster-ca not yet copied into hugmesh-pki) "
+              "— Vault TLS verification DISABLED for this run (bearer token still required)")
+        _vault_ssl_ctx.check_hostname = False
+        _vault_ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    def harbor_call(path, payload=None, method="GET"):
+        url = HARBOR_URL + path
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, method=method, headers={
+            "Content-Type": "application/json",
+            "Authorization": HARBOR_AUTH_HEADER,
+        })
+        with urllib.request.urlopen(req, timeout=15) as r:
+            body = r.read()
+            return r.status, (json.loads(body) if body else None)
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                req = urllib.request.Request(HARBOR_URL + "/api/v2.0/ping")
+                urllib.request.urlopen(req, timeout=5)
+                return
+            except Exception:
+                time.sleep(5)
+        raise SystemExit("harbor-core not reachable")
+
+    def vault_get(path):
+        req = urllib.request.Request(f"{VAULT_ADDR}/v1/{VAULT_KV_MOUNT}/data/{path}",
+                                      headers={"X-Vault-Token": VAULT_TOKEN})
+        try:
+            with urllib.request.urlopen(req, timeout=15, context=_vault_ssl_ctx) as r:
+                return json.loads(r.read()).get("data", {}).get("data", {})
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return {}
+            raise
+
+    def vault_put_merge(path, new_data):
+        """Read-merge-write so writing the pull robot's secret never clobbers
+        the push robot's (or vice versa) — both live under the same KV path."""
+        if not VAULT_TOKEN:
+            print(f"  WARN: no Vault token mounted — NOT writing {path} to Vault "
+                  f"(secret would be LOST; re-run with /secrets/vault/token present)")
+            return
+        current = vault_get(path)
+        current.update(new_data)
+        body = json.dumps({"data": current}).encode()
+        req = urllib.request.Request(f"{VAULT_ADDR}/v1/{VAULT_KV_MOUNT}/data/{path}",
+                                      data=body, method="POST",
+                                      headers={"X-Vault-Token": VAULT_TOKEN,
+                                               "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15, context=_vault_ssl_ctx) as r:
+            r.read()
+        print(f"  wrote {VAULT_KV_MOUNT}/{path} (keys: {list(new_data.keys())})")
+
+    def ensure_project():
+        status, resp = harbor_call(f"/api/v2.0/projects?name={PROJECT}&page_size=1")
+        if resp:
+            for p in resp:
+                if p.get("project_name") == PROJECT:
+                    print(f"  project {PROJECT!r} already exists (id={p.get('project_id')}) — skipping create")
+                    return
+        harbor_call("/api/v2.0/projects", {
+            "project_name": PROJECT,
+            "metadata": {"public": "false"},
+        }, "POST")
+        print(f"  created project {PROJECT!r}")
+
+    def existing_robot_names():
+        try:
+            _, robots = harbor_call(f"/api/v2.0/projects/{PROJECT}/robots")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return set()
+            raise
+        return {r.get("name") for r in (robots or [])}
+
+    def ensure_robot(short_name, action, vault_key):
+        """Create a project-scoped robot account with a single `action`
+        (pull|push) if it doesn't already exist. Harbor prefixes the name it
+        actually stores with `robot$<project>+`; we match on that full form."""
+        full_name = f"robot${PROJECT}+{short_name}"
+        if full_name in existing_robot_names():
+            print(f"  robot {full_name!r} already exists — SKIPPING (Harbor cannot "
+                  f"re-reveal its secret; delete+recreate manually to rotate)")
+            return
+        robot = {
+            "name": short_name,
+            "duration": -1,   # never expires; rotate manually if that changes
+            "level": "project",
+            "permissions": [{
+                "kind": "project",
+                "namespace": PROJECT,
+                "access": [{"resource": "repository", "action": action}],
+            }],
+        }
+        _, resp = harbor_call("/api/v2.0/robots", robot, "POST")
+        secret = (resp or {}).get("secret")
+        if not secret:
+            print(f"  WARN: robot {full_name!r} create response had no secret — check Harbor API version")
+            return
+        vault_put_merge(f"{VAULT_KV_BASE}/harbor-robots", {
+            "project": PROJECT,
+            f"{vault_key}_name": full_name,
+            f"{vault_key}_secret": secret,
+        })
+        print(f"  created robot {full_name!r} (action={action}); secret captured to Vault, never re-read")
+
+    def configure_oidc():
+        """Wire Harbor's system Configurations to Casdoor OIDC login (admin-
+        only — mirrors GitLab's ROLE_ADMIN-only posture). We use Harbor's
+        /api/v2.0/configurations REST endpoint rather than the chart's
+        core.configureUserSettings Helm value: that value is a literal string
+        baked into the core container's CONFIG_OVERWRITE_JSON env, which would
+        put the Casdoor client SECRET in plaintext inside a committed Helm
+        values block — this platform never puts secrets in git. This call
+        reads the SAME harbor-casdoor Secret content (ExternalSecret-backed
+        from Vault) that the Casdoor app-harbor OAuth2 application already
+        uses, so the two are always in sync."""
+        try:
+            client_id  = open("/secrets/casdoor/clientId").read().strip()
+            client_secret = open("/secrets/casdoor/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  oidc: harbor-casdoor secret absent — skipping (Harbor keeps local/admin auth)")
+            return
+        if not client_id or not client_secret:
+            print("  oidc: clientId/clientSecret empty — skipping")
+            return
+        cfg = {
+            "auth_mode": "oidc_auth",
+            "oidc_name": "Casdoor",
+            "oidc_endpoint": CASDOOR_OIDC_ENDPOINT,
+            "oidc_client_id": client_id,
+            "oidc_client_secret": client_secret,
+            "oidc_scope": "openid,profile,email",
+            "oidc_group_claim_name": "roles",
+            "oidc_user_claim": "name",
+            "oidc_verify_cert": True,
+            "oidc_auto_onboard": True,
+        }
+        harbor_call("/api/v2.0/configurations", cfg, "PUT")
+        print("  oidc: configured Casdoor OIDC auth_mode on Harbor")
+
+    wait_ready()
+    try:
+        ensure_project()
+    except Exception as e:
+        print(f"  WARN ensure_project: {e}")
+    try:
+        ensure_robot("pull", "pull", "pull")
+    except Exception as e:
+        print(f"  WARN ensure_robot(pull): {e}")
+    try:
+        ensure_robot("push", "push", "push")
+    except Exception as e:
+        print(f"  WARN ensure_robot(push): {e}")
+    try:
+        configure_oidc()
+    except Exception as e:
+        print(f"  WARN configure_oidc: {e}")
+    print("harbor-provision: done")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{BRAND}}-harbor-provision
+  namespace: hugmesh-pki
+  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.systems, hugmesh.systems/brand: "{{BRAND}}" }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: harbor-provision }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.systems/pki: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: reconcile
+          image: python:3.12-alpine
+          command: ["python3", "/script/reconcile.py"]
+          env:
+            - name: HARBOR_URL
+              value: "http://harbor-core.hugmesh-pki.svc.cluster.local"
+            - name: HARBOR_PROJECT
+              value: "{{HARBOR_PROJECT}}"
+            - name: VAULT_ADDR
+              value: "https://vault.vault.svc.cluster.local:8200"
+            - name: VAULT_KV_MOUNT
+              value: "secret"
+            # Per-tenant Vault base: robot secrets land at secret/{{BRAND}}/harbor-robots
+            # (ESO "base segment == brand slug" convention, secretstore.yaml).
+            - name: VAULT_KV_BASE
+              value: "{{BRAND}}"
+            - name: CASDOOR_OIDC_ENDPOINT
+              value: "https://id.hugmesh.systems"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: admin, mountPath: /secrets/admin, readOnly: true }
+            - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
+            - { name: vault-token, mountPath: /secrets/vault, readOnly: true }
+            - { name: ca, mountPath: /ca, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: {{BRAND}}-harbor-provision-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed. harbor-admin is the SHARED
+        # Harbor-instance admin credential (one Harbor, one admin) — NOT per-tenant;
+        # only the PROJECT + robots + Vault base are per-tenant (decision #3).
+        - name: admin
+          secret: { secretName: harbor-admin }
+        # Casdoor OIDC client for Harbor's own login — optional; configure_oidc()
+        # skips gracefully if absent (Harbor keeps local/admin auth).
+        - name: casdoor
+          secret: { secretName: harbor-casdoor, optional: true }
+        # Same vault-token Secret the other hugmesh-pki ExternalSecret
+        # generators use (route-access-db-mtls, etc.) — provisioned offline by
+        # keys-provision. Needed here (unlike casdoor-init) because THIS Job
+        # writes to Vault directly (robot secrets), not just reads via ESO.
+        - name: vault-token
+          secret: { secretName: vault-token, optional: true }
+        # See !!! KNOWN GAP above — absent until keys-provision also copies
+        # cluster-ca into hugmesh-pki; the script warns and falls back to
+        # unverified TLS against Vault when this is empty.
+        - name: ca
+          secret: { secretName: cluster-ca, optional: true }

@@ -1,0 +1,23 @@
+# HashiCorp Vault — the cluster secret store. Persistent + auto-unsealing: Raft
+# integrated storage on a LUKS-backed PVC, a TLS listener, and a sidecar that
+# auto-unseals from the USB-KEYS-seeded vault-unseal Secret on restart (see
+# manifests/vault/deployment.yaml; multi-replica Raft HA is a documented
+# follow-up). External Secrets Operator reads from it (HTTPS, cluster-CA trust)
+# to materialize the workload Secrets.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/vault
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

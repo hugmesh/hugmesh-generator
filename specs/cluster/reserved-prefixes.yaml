@@ -1,0 +1,326 @@
+# =============================================================================
+# CANONICAL RESERVED PREFIX / USERNAME LIST — single auditable source of truth.
+# =============================================================================
+# These labels are RESERVED: a vanity username / profile handle
+# (<label>.hugmesh.systems, hugmesh.systems/<label>, and the equivalent
+# *.hugmesh.games surfaces) may NEVER be one of these, because each label is
+# (or may become) a DEDICATED app path-prefix or subdomain route on the
+# fe/be/pki gateways. If a user could register one of these handles their vanity
+# host/path would SHADOW (or be shadowed by) a real platform route — a
+# vanity-collision. So this list is the union of:
+#
+#   * every dedicated fe/be/pki gateway route PREFIX (path first-segment),
+#   * every reserved service SUBDOMAIN (first DNS label),
+#   * the hugmesh.games app prefixes, and
+#   * defensive standard web names (well-known/favicon/robots/health/…).
+#
+# THE RULE (enforced here + in the app repos):
+#   Every dedicated gateway route prefix MUST appear in `reserved`. A newly
+#   added route prefix that is NOT in this list is DRIFT and the route-consistency
+#   check (scripts/validate-reserved-prefixes.sh) FAILS the build/sync.
+#
+# WHO ELSE HOLDS A COPY (keep in sync — see docs/RESERVED-PREFIXES.md):
+#   federation-api   ReservedNames  (vanity-resolve  VanityController)
+#   user-bff-api     ReservedNames  (profile DB / registration)
+#   hugmesh-actions             (registration guard)
+#   admin-bff-api    ReservedNames  (admin route management)
+#   THIS repo (GitOps)             reserved-prefixes.yaml  <-- canonical source
+#
+# HOW IT IS ENFORCED IN THE CLUSTER:
+#   * reserved-prefixes-configmap.yaml mirrors the `reserved` list below into a
+#     ConfigMap (hugmesh-policy/reserved-prefixes) — the in-cluster auditable
+#     copy the Kyverno policy reads at admission time.
+#   * manifests/policy/reserved-prefixes-policy.yaml (Kyverno ClusterPolicy)
+#     validates Ingress / Gateway-API HTTPRoute hosts (and, defensively, any
+#     user/profile/vanity CRD handle) against that ConfigMap so a reserved label
+#     cannot be used where it would create a vanity-shadowing collision.
+#   * scripts/validate-reserved-prefixes.sh asserts `reserved` ⊇ every deployed
+#     gateway route prefix (drift check), wired into .gitlab-ci.yml.
+#
+# IMPORTANT: this file is the SOURCE. If you edit the list, ALSO update the
+# ConfigMap is unnecessary — the ConfigMap is generated to match; just re-run
+# scripts/sync-reserved-configmap.sh (or edit both). The validate script asserts
+# the ConfigMap and this file agree.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ReservedPrefixSpec          # informational kind (not a CRD) — a plain data doc
+metadata:
+  name: hugmesh-reserved-prefixes
+  # Bump when the list changes so app-repo copies can detect a newer source.
+  # revision 1 -> 2: added the publicly-routable homeserver surface prefixes
+  # (`media`, `_synapse`) that the route-access seed already deploys, plus the
+  # PLANNED `forum`/`phpbb` reserves (see the planned subsection below). The four
+  # app-repo ReservedNames copies must add the same labels to stay in sync (the
+  # validate script's code-copy assertion flags them when the sibling repos are
+  # present in CI).
+  # revision 2 -> 3: reconcile the canonical YAML with the four app-repo
+  # ReservedNames copies (drift). Added the DEPLOYED publicly-routable prefixes the
+  # YAML was missing — `tube` (the `/tube/content/**` be-gateway media route,
+  # ROLE_TUBE) and `games-instances-console` (the per-instance game-server console
+  # dispatcher Service the `/games/servers/**` route targets) — plus the optional
+  # video/wiki services `owncast` + `wiki` as FORWARD-RESERVES (sibling of
+  # forum/phpbb): real services whose only public surfaces today ride already-
+  # reserved prefixes (`/bff/owncast/**`, `/bff/wiki/**`, `/social/wiki/**`), so a
+  # vanity `owncast.`/`wiki.` handle is forbidden before any future subdomain ships.
+  # revision 3 -> 4: route-consistency check (stage 3) caught two DEPLOYED
+  # publicly-routable prefixes the YAML was missing — `character-studio` (the
+  # `/character-studio/**` fe-gateway route to hugmesh-character-studio-ui,
+  # apps/20-gateway-fe.yaml route[character-studio-ui].path) and `v1` (the
+  # `/v1/analyze/**` be-gateway route to the edge-ai-analysis service,
+  # apps/20-gateway-be.yaml route[edge-ai-analysis].path, also seeded in
+  # route-access schema.sql as url_pattern '/v1/analyze/**'). The app-repo
+  # ReservedNames copies MUST add `character-studio` + `v1` too to stay in sync.
+  # revision 4 -> 5: parity fix for the gateway CanonicalSeed fe() anonymous-SPA-
+  # shell + public-federation-reads rows added by hugmesh-gateway PR #72 (the
+  # same rows were dual-write-added to route-access schema.sql, see
+  # manifests/route-access/initdb/20-schema.sql fe-gateway section). Most of
+  # those new url_patterns first-segment onto already-reserved labels (`assets`,
+  # `api`) or an empty segment (`/*.js`, `/*.css` start with the glob, so they
+  # contribute no literal first segment) — but FOUR are DEDICATED first-segment
+  # route prefixes the route-consistency check does not yet cover: `index.html`,
+  # `favicon.ico`, `importmap.json`, `remoteEntry.json` (the exact webroot
+  # filenames — distinct literal first-segments from the already-reserved bare
+  # `favicon` label, since the validator matches literal path segments, not
+  # prefixes of them). The app-repo ReservedNames copies should add these four
+  # too to stay in sync.
+  # revision 5 -> 6: route-consistency check flags `ai` (host `ai.hugmesh.systems`,
+  # apps/20-gateway-be.yaml route[edge-ai].host + route[edge-ai-analysis].host — the
+  # edge-AI inference tier, model API + `/v1/analyze/**` analysis API) as a DEPLOYED
+  # publicly-routable host the YAML was missing, introduced by PR #189 (commit
+  # 25f6b473) and undetected until this pass. The app-repo ReservedNames copies
+  # should add `ai` too to stay in sync.
+  # revision 6 -> 7: reserve `hmdm` for the Headwind MDM optional-service's
+  # tailnet-only superadmin-gateway routes (`/hmdm/manage/**` human console,
+  # `/hmdm/rest/**` device check-in — both on hugmesh-superadmin-gateway,
+  # apps/22-gateway-superadmin.yaml). Ships ATOMICALLY with the route in the
+  # same PR that adds apps/23-headwind.yaml (NOT a forum/phpbb-style forward-
+  # reserve — see the "planned" subsection for that distinct category). The
+  # four app-repo ReservedNames copies should add `hmdm` too to stay in sync.
+  # revision 7 -> 8: reserve `attest` for the AttestationServer optional-
+  # service's tailnet-only superadmin-gateway routes (`/attest/auditor/**`
+  # device/Auditor-app check-in, `/attest/api/status` device status,
+  # `/attest/api/**` human console — all on hugmesh-superadmin-gateway,
+  # apps/22-gateway-superadmin.yaml). Ships ATOMICALLY with the routes in the
+  # same PR that adds apps/24-attestation-server.yaml — same rationale as
+  # `hmdm`, the literal route first-segment, not the app name. The four
+  # app-repo ReservedNames copies should add `attest` too to stay in sync.
+  # revision 8 -> 9: reserve `character-forge` for the Character Forge (3D)
+  # optional-service's fe-gateway routes (`/character-forge/**` UI remote +
+  # `/bff/character-forge/**` BFF — apps/20-gateway-fe.yaml
+  # route[character-forge-ui] + route[hugmesh-character-forge-bff-api], both
+  # seeded in route-access schema.sql). Ships ATOMICALLY with the routes in the
+  # same PR that adds apps/{38b,39b,49c}-character-forge-*.yaml — same rationale
+  # as `hmdm`/`attest`, a DEDICATED first-segment route prefix. ALSO reserves the
+  # games-side slugs `games-character-forge` (the 3D maker published into
+  # hugmesh.games as a wasm-game) + `games-shadows-of-the-net` (the XR chat
+  # room game) per the existing games-* naming pattern (games-rpg-maker /
+  # games-vn-maker siblings; see docs/XR-CHAT.md). The four app-repo
+  # ReservedNames copies should add all three labels too to stay in sync.
+  revision: "9"
+spec:
+  # The canonical reserved set (82 labels). KEEP SORTED BY CATEGORY (comments) but
+  # the validator treats it as an unordered SET. Do not duplicate; the validator
+  # also asserts there are no duplicates.
+  #
+  # SCOPE — what belongs here (and what does NOT):
+  #   This is the union of PUBLICLY-ROUTABLE first-segment route prefixes and
+  #   reserved service SUBDOMAINS — the labels a vanity username could SHADOW on a
+  #   real gateway route. It is NOT a list of every Kubernetes Service. Internal,
+  #   non-publicly-routable Services (akkoma-proxy / tuwunel-proxy mTLS sidecars,
+  #   *-db / *-pg datastores, kafka / cassandra / clickhouse, lan-dns,
+  #   the per-pod helpers) are reached ONLY in-cluster behind an already-reserved
+  #   public host (mastodon./matrix./api.) or are isolated by namespace — they are
+  #   NEVER a public first-label, so reserving them would only bloat the username
+  #   namespace. The validate script enforces this scope: it requires a label here
+  #   for every PUBLICLY-ROUTABLE route prefix (gateway route path/host first-seg +
+  #   route-access url_pattern first-seg + reserved gateway hosts), and treats the
+  #   internal Services as exempt via an allowlist — see
+  #   scripts/validate-reserved-prefixes.sh.
+  reserved:
+    # --- platform / role gateway route prefixes (fe/be/pki) ---
+    - admin
+    # `superadmin`: the TAILNET superadmin Service Catalog console remote is served at
+    # /superadmin/service-catalog/** on the superadmin-gateway (gateway_route_access seed,
+    # apps/22-gateway-superadmin.yaml) — a DEDICATED first-segment route prefix, so a
+    # vanity username equal to it would shadow a live route. The app-repo ReservedNames
+    # copies SHOULD add `superadmin` too to stay in sync.
+    - superadmin
+    # `hmdm`: Headwind MDM's device console + device check-in are served at
+    # /hmdm/manage/** and /hmdm/rest/** on the SAME TAILNET superadmin-gateway
+    # `superadmin` above is reserved for (hugmesh-superadmin-gateway,
+    # apps/22-gateway-superadmin.yaml) — a DEDICATED first-segment route prefix,
+    # same rationale as `superadmin`. The app-repo ReservedNames copies SHOULD
+    # add `hmdm` too to stay in sync.
+    - hmdm
+    # `attest`: AttestationServer's device/Auditor-app check-in + human console
+    # are served at /attest/auditor/**, /attest/api/status, /attest/api/** on the
+    # SAME TAILNET superadmin-gateway `superadmin` above is reserved for
+    # (hugmesh-superadmin-gateway, apps/22-gateway-superadmin.yaml) — a
+    # DEDICATED first-segment route prefix, same rationale as `hmdm`. The
+    # app-repo ReservedNames copies SHOULD add `attest` too to stay in sync.
+    - attest
+    - apidocs
+    - api-docs
+    - be
+    - bff
+    - _fragments
+    - fragments
+    - login
+    - logout
+    - mod
+    - user
+    - users
+    - api
+    - docs
+    # --- federated social / identity surfaces ---
+    - _matrix
+    - matrix
+    - mastodon
+    # `ai`: the edge-AI inference tier is served on its own host
+    # `ai.hugmesh.systems` (apps/20-gateway-be.yaml route[edge-ai].host +
+    # route[edge-ai-analysis].host — the raw model API catchall plus the more
+    # specific `/v1/analyze/**` analysis API) — a DEDICATED reserved host, so a
+    # vanity `ai` handle would shadow it. Added by the route-consistency check
+    # (stage 3); PR #189 (commit 25f6b473) introduced the host without reserving
+    # the label. The app-repo ReservedNames copies MUST add `ai` too.
+    - ai
+    # `_synapse` + `media`: PUBLICLY-ROUTABLE homeserver client surfaces deployed by
+    # the route-access seed (manifests/route-access/initdb/20-schema.sql) on the
+    # be-gateway — `/_synapse/**` (Matrix Synapse-compat, host-scoped on the matrix
+    # host) and `/media/**` (Mastodon media). They are real first-segment route
+    # prefixes, so a vanity username equal to either would shadow a live route. The
+    # route-consistency check surfaces them; reserved here for parity. The app-repo
+    # ReservedNames copies MUST add `_synapse` + `media` too.
+    - _synapse
+    - media
+    # `pleroma`: akkoma's AdminFE is served at /pleroma/admin/** on the be-gateway
+    # (gateway_route_access seed), a DEDICATED first-segment route prefix — so it
+    # must be reserved too. Added by the route-consistency check (it is the ONE
+    # deployed prefix beyond the original 60-label union). The app-repo
+    # ReservedNames copies (federation-api/user-bff-api/hugmesh-actions/
+    # admin-bff-api) MUST add `pleroma` as well to stay in sync.
+    - pleroma
+    - oauth
+    - oauth2
+    - id
+    - auth
+    - social
+    - gm
+    # --- VPN / mesh / identity subdomains ---
+    - scale
+    - headscale
+    # --- reserved service subdomains + defensive web names ---
+    - www
+    - root
+    - static
+    - assets
+    - public
+    - health
+    - healthz
+    - actuator
+    - metrics
+    - well-known
+    - favicon
+    - robots
+    - sitemap
+    - status
+    - support
+    - help
+    # --- DEPLOYED route prefixes added in revision 5 (gateway PR #72 parity) ---
+    # The exact webroot filenames the fe-gateway route-access seed's anonymous
+    # SPA-shell rows now reference as literal first-segment url_patterns
+    # (manifests/route-access/initdb/20-schema.sql) — DISTINCT literal segments
+    # from the already-reserved bare `favicon` label above, since the validator
+    # matches literal path first-segments, not prefixes.
+    - index.html
+    - favicon.ico
+    - importmap.json
+    - remoteEntry.json
+    # --- infra / ops names (never a user) ---
+    - pki
+    - vault
+    - argocd
+    - gitlab
+    - registry
+    # --- hugmesh.games app prefixes ---
+    - games
+    - play
+    - wasm
+    - producer
+    - publisher
+    - banned
+    - _remotes
+    - producer-registration
+    - registration
+    - wasm-fragment
+    - games-dodecahedron
+    - games-rpg-maker
+    - games-three-wizards
+    - games-vn-maker
+    # games-side slugs of the XR-chat track (revision 9; docs/XR-CHAT.md): the
+    # character-forge 3D maker published into hugmesh.games as a wasm-game +
+    # the "Shadows of the Net" XR chat room game. Same games-* naming pattern as
+    # games-rpg-maker/games-vn-maker above.
+    - games-character-forge
+    - games-shadows-of-the-net
+    # --- optional-service / games-console DEPLOYED route prefixes --------------
+    # `tube`: the LocalTube media route `/tube/content/**` is a DEDICATED first-
+    # segment route on the be-gateway (gateway_route_access seed, ROLE_TUBE signed-
+    # URL content serving) — a real publicly-routable prefix, so a vanity `tube`
+    # handle would shadow it. The route-consistency check (stage 3) demands it.
+    # `games-instances-console`: the per-instance game-server console dispatcher
+    # Service the `/games/servers/**` route uri TARGETS
+    # (apps/20-gateway-be.yaml route[games-servers-console]). Its public path first-
+    # segment is `games` (already reserved), but the scoped Service-drift check
+    # (stage 4) requires the routed Service's first-label be reserved or allowlisted;
+    # reserving the label here keeps it the source of truth (the app-repo copies
+    # already carry it). Both were added to the four ReservedNames copies in the
+    # prior tube/games-instances-console fix; this brings the canonical YAML to match.
+    - tube
+    - games-instances-console
+    # --- DEPLOYED route prefixes added in revision 4 ----------------------------
+    # `character-studio`: the Character Studio (VN) micro-frontend remote is
+    # served at `/character-studio/**` on the fe-gateway
+    # (apps/20-gateway-fe.yaml route[character-studio-ui].path) — a DEDICATED
+    # first-segment route prefix, so a vanity `character-studio` handle would
+    # shadow it. Also seeded in route-access schema.sql as a url_pattern.
+    # `v1`: the edge-AI analysis API is served at `/v1/analyze/**` on the
+    # be-gateway (apps/20-gateway-be.yaml route[edge-ai-analysis].path), a
+    # DEDICATED first-segment route prefix seeded in route-access schema.sql as
+    # url_pattern '/v1/analyze/**' — so a vanity `v1` handle would shadow it.
+    - character-studio
+    - v1
+    # --- DEPLOYED route prefixes added in revision 9 ----------------------------
+    # `character-forge`: the Character Forge (3D) micro-frontend remote is served
+    # at `/character-forge/**` on the fe-gateway (apps/20-gateway-fe.yaml
+    # route[character-forge-ui].path) and its BFF at `/bff/character-forge/**`
+    # (route[hugmesh-character-forge-bff-api].path; first-segment `bff` is
+    # already reserved) — a DEDICATED first-segment route prefix, so a vanity
+    # `character-forge` handle would shadow it. Both seeded in route-access
+    # schema.sql as url_patterns. Ships ATOMICALLY with the character-forge
+    # optional-service slug (docs/XR-CHAT.md).
+    - character-forge
+    # --- planned / not-yet-deployed publicly-routable services -----------------
+    # These have NO kind:Service / gateway route in the GitOps tree YET, so the
+    # route-consistency drift check will NOT demand them — they are reserved here
+    # PROACTIVELY so a user cannot squat the handle before the service ships. The
+    # phpBB community forum is referenced as a planned/announced surface in
+    # hugmesh.systems/src/app/announcements/announcement.model.ts. When the
+    # forum lands (a `forum.hugmesh.systems` subdomain + a be/fe gateway route),
+    # move these up into the routable categories above; until then they are a
+    # forward-reserve, NOT drift. The app-repo ReservedNames copies should add them
+    # too so the handle is forbidden at registration before the route exists.
+    #
+    # `owncast` (Owncast live-streaming) and `wiki` (the Kiwix/Postgres wiki) are
+    # the same shape: REAL optional services (deployed manifests / dedicated repos)
+    # whose ONLY public surfaces today ride an already-reserved prefix —
+    # `/bff/owncast/**`, `/bff/wiki/**` (first-segment `bff`) and `/social/wiki/**`
+    # (first-segment `social`). Neither has its OWN top-level `/owncast/**`,
+    # `/wiki/**` route or `owncast.`/`wiki.` subdomain in the GitOps tree yet, so
+    # the route-consistency check does not demand them; they are forward-reserved so
+    # a vanity `owncast.`/`wiki.` handle can never collide if/when one ships. The
+    # federation-api / user-bff-api ReservedNames copies already carried both.
+    - forum
+    - phpbb
+    - owncast
+    - wiki

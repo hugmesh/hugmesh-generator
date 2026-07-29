@@ -1,0 +1,25 @@
+# {{BRAND_TITLE}} mod-ui — moderation Angular MFE remote (/mod/**).
+# Generated from hugmesh-generator/templates/apps/46-mod-ui.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-mod-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/mod-ui
+    kustomize:
+      namespace: {{BRAND}}-frontend
+      images:
+        - name: hugmesh-systems/mod-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-mod-ui
+          newTag: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

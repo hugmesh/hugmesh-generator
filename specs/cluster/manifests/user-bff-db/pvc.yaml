@@ -1,0 +1,12 @@
+# Persistent storage for the hugmesh-user-bff-api Postgres data directory
+# (the user_profile / user_preference / user_block tables).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: user-bff-db
+  namespace: hugmesh-backend
+  labels: { app: user-bff-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 2Gi } }

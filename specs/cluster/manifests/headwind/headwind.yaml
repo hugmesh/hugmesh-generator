@@ -1,0 +1,183 @@
+# headwind — Headwind MDM (Apache-2.0), Tomcat9/JDK11 WAR server, packaging=war ROOT
+# context. Admin-only devops tool (namespace hugmesh-pki), TAILNET-ONLY, reached
+# via the EXISTING apps/22-gateway-superadmin.yaml Application (see that file's new
+# `headwind-console`/`headwind-checkin` routes and optional-services.yaml's headwind
+# slug) — NOT its own Ingress. StripPrefix=1 on those gateway routes rewrites the
+# platform-chosen /hmdm path segment down to this app's real ROOT-context paths
+# (/manage/**, /rest/**) before the request reaches Tomcat.
+#
+# WAR PROVENANCE: BUILD-FROM-SOURCE, baked into a custom image pushed to the
+# in-cluster Harbor registry — mirrors the phpBB precedent exactly
+# (manifests/forum/kustomization.yaml: official-upstream + a HugMesh-owned
+# build, tracked via images:/newName+newTag). NOT the upstream Docker recipe
+# (which itself curls an unsigned prebuilt WAR from h-mdm.com at build time —
+# pinning that image by digest would only pin the download *recipe*, not the
+# WAR's actual source provenance). See §3 of the top-level spec for the full
+# rationale. Image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main
+# (built FROM tomcat:9-jdk11/eclipse-temurin, Maven-built ROOT.war baked into
+# webapps/, explicit non-root USER — mirrors phpbb.yaml's rootless rationale;
+# stock tomcat:9-jdk11 runs as root, so the custom Dockerfile needs USER + a
+# chown of /usr/local/tomcat/{work,logs,temp}).
+#
+# hugmesh-pki is NOT in the Kyverno digest-pin enforced-namespace list
+# (verified: manifests/workload-console-rbac/deploy-provenance-policy.yaml lists
+# only backend/frontend/forum/games/games-instances/tube/owncast), so a mutable
+# :main tag is admission-legal here, matching harbor/vault's own tag-pin posture.
+#
+# DB role wiring — VERIFIED against the real h-mdm/hmdm-server source (no
+# init/main split like phpbb.yaml's): Liquibase (migrations) and MyBatis
+# (runtime queries) read the SAME single JDBC.username/JDBC.password context
+# init-params, and Liquibase runs on EVERY pod start (Initializer.getModules()
+# adds LiquibaseModule unconditionally) — the role can never be demoted to
+# runtime-only after first boot. So Tomcat runs with the single OWNER role
+# `headwind` (headwind-db-auth) for BOTH legs, always — not a placeholder, this
+# is the confirmed shape. See the ConfigMap/env block below (SQL_* vars) and
+# headwind-db.yaml's matching comment.
+#
+# MQTT port 31000 (device push): exposed here ONLY as a ClusterIP Service port.
+# True tailnet (headscale-mesh) device reachability is DEFERRED operator/
+# cluster-topology work — mirrors coturn's own still-open, documented gap
+# (manifests/coturn/deployment.yaml Service comment; optional-services.yaml
+# coturn.gatewayHost comment). Do not invent a NodePort/stream-passthrough
+# config with no working precedent in this repo. See §4/§6 below.
+#
+# ADMIN CREDENTIALS — VERIFIED against h-mdm/hmdm-docker's docker-entrypoint.sh
+# (no HEADWIND_ADMIN_USERNAME/PASSWORD anywhere in it or its templates) + h-mdm/
+# hmdm-server's Liquibase db.changelog.xml (changeSet 18.02.18-20:20 unconditionally
+# seeds login=admin/password=admin, MD5 21232f297a57a5a743894a0e4a801fc3). GO-LIVE
+# CHECKLIST ITEM: log in with admin/admin right after first boot and rotate the
+# password via Headwind's own Admin > user-settings UI — there is no env-var or
+# other out-of-band provisioning path. See the container env block below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: headwind-config
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  # VERIFIED real env shape (github.com/h-mdm/hmdm-docker docker-entrypoint.sh):
+  # these are templated into $CATALINA_BASE/conf/Catalina/localhost/ROOT.xml as
+  # JDBC.url/JDBC.username/JDBC.password etc at container start. envFrom below
+  # injects each key here directly as a container env var — SQL_USER is the
+  # single OWNER role, used for BOTH Liquibase-migrate and runtime (see header
+  # comment; verified not separable).
+  SQL_HOST: headwind-db.hugmesh-pki.svc.cluster.local
+  SQL_PORT: "5432"
+  SQL_BASE: headwind
+  SQL_USER: headwind
+  # CRITICAL: upstream default is PROTOCOL=https on :8443 with a hardcoded
+  # self-signed JKS (password 123456). We terminate TLS at the gateway
+  # (apps/22-gateway-superadmin.yaml), so force http on :8080 here.
+  PROTOCOL: http
+  # CONFIRMED against the now-vendored Dockerfile docker/templates/conf/
+  # context_template.xml: the entrypoint substitutes _BASE_DOMAIN_ into the
+  # context's `base.url` Parameter (_PROTOCOL_://_BASE_DOMAIN_) — this key is
+  # exactly what the derived docker-entrypoint.sh reads.
+  BASE_DOMAIN: superadmin.hugmesh.systems
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: headwind
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over the RWO files PVC (phpbb.yaml precedent)
+  selector: { matchLabels: { app.kubernetes.io/name: headwind } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: headwind } }
+    spec:
+      serviceAccountName: sa-headwind
+      nodeSelector: { hugmesh.systems/pki: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000    # CONFIRMED by a real image build+boot: USER hmdm is uid=1000/gid=1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions: { type: container_t, level: "s0:c78" }  # next free MCS category (headwind-db takes c77)
+      containers:
+        - name: headwind
+          image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: mqtt, containerPort: 31000, protocol: TCP }
+          envFrom:
+            - configMapRef: { name: headwind-config }
+          env:
+            # SQL_PASS for the OWNER role (SQL_USER=headwind in the ConfigMap
+            # above) — used for BOTH Liquibase-migrate and runtime; see header
+            # comment.
+            - name: SQL_PASS
+              valueFrom: { secretKeyRef: { name: headwind-db-auth, key: password } }
+            # VERIFIED (h-mdm/hmdm-docker docker-entrypoint.sh line 67 + templates/
+            # sql/hmdm_init.en.sql line 6): ADMIN_EMAIL is the ONLY admin-provisioning
+            # env var the entrypoint honors — it is templated into hmdm_init.sql as
+            # `_ADMIN_EMAIL_`, setting the SEEDED admin user's email and forcing
+            # passwordReset=true + a fresh passwordResetToken. There is NO env-var path
+            # for admin username/password: the WAR's Liquibase migration (h-mdm/hmdm-
+            # server db.changelog.xml, changeSet 18.02.18-20:20) unconditionally seeds
+            # a HARDCODED default admin (login=admin, password=admin, MD5
+            # 21232f297a57a5a743894a0e4a801fc3) on every boot. HEADWIND_ADMIN_USERNAME/
+            # PASSWORD were confirmed dead (never read anywhere in the entrypoint or its
+            # templates) and have been removed.
+            # GO-LIVE REQUIREMENT: operator must log in with admin/admin immediately
+            # after first boot and change the password via Headwind's own
+            # Admin > user-settings UI — there is no other provisioning path.
+            - name: ADMIN_EMAIL
+              valueFrom: { secretKeyRef: { name: headwind-admin, key: email } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          readinessProbe:
+            # VERIFIED: no /ping or /health endpoint upstream. GET /rest/public/name
+            # is no-auth, returns a small JSON payload, and only serves once Guice/
+            # MyBatis/Liquibase init succeeded — i.e. DB-aware readiness.
+            httpGet: { path: /rest/public/name, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /rest/public/name, port: http }
+            initialDelaySeconds: 90
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { cpu: "2",  memory: 1536Mi }
+          volumeMounts:
+            # CONFIRMED against the vendored context_template.xml: hmdm's
+            # base.directory IS /usr/local/tomcat/work, and files.directory /
+            # plugins.files.directory / log4j.config all live beneath it — this
+            # single mount persists uploaded APKs, plugin files, init.sql and
+            # logs across restarts.
+            - { name: data, mountPath: /usr/local/tomcat/work }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: headwind-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: headwind-data
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: headwind }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 10Gi } }
+---
+# ClusterIP only. :8080 is consumed by the superadmin-gateway's two new routes
+# (apps/22-gateway-superadmin.yaml). :31000 (MQTT) has no cluster-external path
+# yet — see the header comment's DEFERRED note.
+apiVersion: v1
+kind: Service
+metadata:
+  name: headwind
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: headwind }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: headwind }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+    - { name: mqtt, port: 31000, targetPort: mqtt }

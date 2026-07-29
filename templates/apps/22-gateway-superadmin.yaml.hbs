@@ -1,0 +1,68 @@
+# {{BRAND_TITLE}} superadmin-gateway — the TAILNET-ONLY front door for the SUPERADMIN
+# infra control plane (the Service Catalog console + service-catalog-ui federated remote).
+# Generated from hugmesh-generator/templates/apps/22-gateway-superadmin.yaml.hbs
+#
+# ⚠ TAILNET-ONLY by THREE locks (V6): network (nginx-internal + pki nodeSelector,
+# NO public ingress + NO be-gateway forward of the superadmin host — the
+# be-gateway headscale-forward route is the counter-example to avoid), route-access
+# ROLE_SUPERADMIN rows under this gateway name, and the Angular superadminGuard.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-gateway-superadmin
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/hugmesh-gateway
+    helm:
+      releaseName: {{BRAND}}-superadmin-gateway
+      values: |
+        # PRE-EXISTING BUG fix (found migrating the core cluster to Harbor) —
+        # see templates/apps/20-gateway-be.yaml.hbs's identical comment: the
+        # chart's default image.repository now hardcodes the reference
+        # cluster's own Harbor project, so every brand must override it here.
+        image:
+          repository: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-gateway
+        imagePullSecrets:
+          - name: harbor-registry
+        instance:
+          name: {{BRAND}}-superadmin-gateway
+        keystore:
+          enabled: true
+        ingress:
+          enabled: true
+          className: nginx-internal
+          host: superadmin.{{CLUSTER_DOMAIN}}
+        nodeSelector:
+          {{CLUSTER_DOMAIN}}/pki: "true"
+        seLinux:
+          level: "s0:c14"
+        extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-superadmin-gateway
+                key: password
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://superadmin_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.{{BRAND}}-pki.svc.cluster.local:5432/gateway
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
+            value: "true"
+        routes:
+          - id: superadmin-bff
+            uri: https://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/superadmin/**
+          - id: superadmin-service-catalog-ui
+            uri: http://{{BRAND}}-superadmin-service-catalog-ui.{{BRAND}}-frontend.svc.cluster.local:8080
+            path: /superadmin/service-catalog/**
+          - id: superadmin-federation
+            uri: https://{{BRAND}}-federation-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /api/federation/**
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

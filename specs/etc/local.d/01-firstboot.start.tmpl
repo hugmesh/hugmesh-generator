@@ -1,0 +1,136 @@
+#!/bin/bash
+# First-boot finaliser — runs once, then self-destructs.
+#
+# Ordering: the keys-provision service runs earlier in the boot (it is
+# declared "before local"), so by the time this fires the USB KEYS
+# partition has already been processed. This script only fills in the
+# gaps:
+#
+#   * locale generation
+#   * Kubernetes kernel modules + sysctl
+#   * CNI plugin staging
+#   * a FALLBACK default user — created ONLY when keys-provision did not
+#     create any users (i.e. you booted without a KEYS stick), so you are
+#     never locked out of a fresh image.
+#
+# SUPPLY-CHAIN / OWASP: this finaliser NO LONGER bakes a known default password
+# into the image. Earlier, the builders substituted @@DEFAULT_USER_PASS@@ /
+# @@ROOT_PASS@@ (e.g. "raspberry"/"gentoo"/"hugmesh") into the line below, so
+# every image of a given flavour shipped with the SAME well-known credentials —
+# a classic "default creds baked into image" finding. The real credentials come
+# from the KEYS USB (users.json $6$-hashes via keys-provision; see
+# scripts/gen-provision-keys.sh + specs/etc/keys-provision/provision.sh). The
+# fallback below exists ONLY for a keyless boot and now mints a RANDOM one-time
+# password at first boot (never a known default), locks root, and forces a
+# password change on first login. Nothing secret is in the image or in git.
+#
+# Variables substituted at build time:
+#   @@HOSTNAME@@           Target hostname
+#   @@DEFAULT_USER@@       Fallback non-root user (NAME ONLY — no baked password)
+#   @@STANDALONE@@         "true" for a self-contained STANDALONE desktop image
+#   @@LOCAL_PASSHASH@@     STANDALONE only — crypt(3) hash of the --local-pass
+#                          password (yescrypt $y$ where the build host supports
+#                          it, SHA-512 crypt $6$ fallback — scripts/_passhash-lib.sh;
+#                          the plaintext is NEVER baked). Empty => random one-time
+#                          password.
+
+locale-gen
+eselect locale set en_US.utf8
+env-update && source /etc/profile
+
+# ── STANDALONE desktop: a normal LOCAL USER with a build-set password ─────────
+# A standalone hardened desktop has NO KEYS USB, NO Casdoor/OIDC SSO and NO mesh.
+# The user logs in at the lightdm greeter with the password supplied at build time
+# (--local-pass, hashed here as @@LOCAL_PASSHASH@@). If no password was supplied the
+# block below falls through to the keyless random-password path. wheel = the sudo
+# escalation path (no SSO desktop-sudo governance on a standalone box).
+if [ "@@STANDALONE@@" = "true" ] && [ ! -f /var/lib/keys-provision/users.created ]; then
+    if ! id "@@DEFAULT_USER@@" &>/dev/null; then
+        useradd -m -G wheel,audio,video,usb,plugdev,games -s /bin/bash "@@DEFAULT_USER@@"
+    fi
+    grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+    if [ -n "@@LOCAL_PASSHASH@@" ]; then
+        # Apply the build-time crypt(3) hash (NOT plaintext) to /etc/shadow.
+        # chpasswd -e takes the hash verbatim ($y$ and $6$ both land as-is).
+        echo '@@DEFAULT_USER@@:@@LOCAL_PASSHASH@@' | chpasswd -e
+        echo "Standalone desktop: local user @@DEFAULT_USER@@ ready (password set at build time)."
+    else
+        if command -v openssl >/dev/null 2>&1; then FB_PW="$(openssl rand -base64 18)"; else FB_PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"; fi
+        echo "@@DEFAULT_USER@@:${FB_PW}" | chpasswd
+        chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || true
+        echo ""; echo "############################################################"
+        echo "#  STANDALONE desktop — no --local-pass was set at build."
+        echo "#    user: @@DEFAULT_USER@@   pass: ${FB_PW}   (CHANGE IT)"
+        echo "############################################################"; echo ""
+        unset FB_PW
+    fi
+    passwd -l root
+    touch /var/lib/keys-provision/users.created   # don't also run the keyless fallback below
+fi
+
+# ── Fallback user (only when KEYS provisioning created none) ───────
+if [ ! -f /var/lib/keys-provision/users.created ]; then
+    echo "No users provisioned from KEYS — creating fallback @@DEFAULT_USER@@ with a RANDOM one-time password"
+    if ! id "@@DEFAULT_USER@@" &>/dev/null; then
+        useradd -m -G wheel,audio,video,usb -s /bin/bash "@@DEFAULT_USER@@"
+        # Mint a random one-time password at FIRST BOOT — never a baked default.
+        # Prefer openssl; fall back to /dev/urandom so this works on a minimal
+        # image. The plaintext is printed ONCE to the boot console below and is
+        # NOT stored anywhere (only the crypt hash lands in /etc/shadow).
+        if command -v openssl >/dev/null 2>&1; then
+            FB_PW="$(openssl rand -base64 18)"
+        else
+            FB_PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+        fi
+        echo "@@DEFAULT_USER@@:${FB_PW}" | chpasswd
+        # Root login stays LOCKED on a keyless boot (matches the hardened
+        # keys-provision default: root is `passwd -l`'d unless a hash is supplied).
+        passwd -l root
+        # Force the fallback user to change the random password at first login.
+        chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || passwd -e "@@DEFAULT_USER@@" 2>/dev/null || true
+        echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+        echo ""
+        echo "###############################################################"
+        echo "#  KEYLESS BOOT — random one-time login (CHANGE IT IMMEDIATELY) "
+        echo "#    user: @@DEFAULT_USER@@"
+        echo "#    pass: ${FB_PW}"
+        echo "#  root is LOCKED. This password is shown ONCE and not stored.  "
+        echo "###############################################################"
+        echo ""
+        unset FB_PW
+    fi
+else
+    echo "Users were provisioned from KEYS — skipping fallback user"
+fi
+
+# ── Kubernetes kernel modules + sysctl ─────────────────────────────
+for mod in overlay br_netfilter ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh nf_conntrack vxlan; do
+    modprobe "${mod}" 2>/dev/null || true
+done
+sysctl --system
+
+if [ -d /usr/libexec/cni ] && [ -z "$(ls -A /opt/cni/bin 2>/dev/null)" ]; then
+    cp /usr/libexec/cni/* /opt/cni/bin/
+fi
+
+if [ -b /dev/nvme0n1 ]; then
+    echo "NVMe detected: $(nvme id-ctrl /dev/nvme0n1 -H 2>/dev/null | grep 'Model Number' || echo '/dev/nvme0n1')"
+fi
+
+echo ""
+echo "=== @@BRAND_TITLE@@ first boot (@@HOSTNAME@@) ==="
+echo "  Hostname:    $(cat /etc/hostname 2>/dev/null || echo @@HOSTNAME@@)"
+echo "  Kubernetes:  $(kubelet --version 2>/dev/null || echo 'installed')"
+echo "  containerd:  $(containerd --version 2>/dev/null || echo 'installed')"
+echo "  Headscale:   $(headscale version 2>/dev/null || echo 'installed')"
+echo ""
+echo "  Provisioned from USB KEYS:  see /var/log/keys-provision.log"
+echo "  Control plane:  kubeadm init --config /etc/kubernetes/kubeadm-config.yaml"
+echo "  Worker node:    kubeadm join <cp>:6443 --token <tok> --discovery-token-ca-cert-hash <hash>"
+echo ""
+echo "  SSH: key-only — keys come from the USB KEYS users.json / ssh/ directory."
+echo "  If you booted WITHOUT a KEYS stick, log in as the fallback user above"
+echo "  and CHANGE ALL DEFAULT PASSWORDS IMMEDIATELY."
+echo "========================================================"
+
+rm -f /etc/local.d/01-firstboot.start

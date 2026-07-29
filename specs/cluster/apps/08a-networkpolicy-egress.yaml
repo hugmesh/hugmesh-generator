@@ -1,0 +1,54 @@
+# Tier-wide default-deny EGRESS NetworkPolicies (Phase 3 segmentation — §B follow-on).
+#
+# MANUAL-sync, SHIPS DARK. This is the "08a" sibling of apps/08-networkpolicy.yaml
+# (which stays INGRESS-ONLY + auto-sync). It is split out so the high-blast-radius
+# EGRESS cutover NEVER shares ArgoCD resource ownership with the ingress policies and
+# NEVER auto-applies.
+#
+# WHY NO `automated:` BLOCK (unlike 08-networkpolicy): default-deny egress is the
+# single highest-risk NetworkPolicy change in the cluster. k8s NetworkPolicy is
+# ADDITIVE with no exclude and bugs ONLY surface at runtime, so a missed allow rule
+# silently black-holes a whole namespace, and a wrong rule in the `devops` block can
+# WEDGE ArgoCD's own reconcile loop (after which only break-glass `kubectl` recovers
+# it). CLUSTER-HARDENING-PLAN §B mandates: "live-validate-only … apply default-deny to
+# ONE namespace at a time … keep a break-glass kubectl path that bypasses the mesh."
+#
+# CURRENT STATE: the overlay it points at (manifests/networkpolicy-egress) has
+# `resources: []`, so this Application renders to ZERO objects and is inert. It is a
+# placeholder that ships the wiring without applying anything.
+#
+# TO ENABLE (deliberate, staged, operator-driven — DO NOT until the gate below is met):
+#   GATE: live cluster validated.
+#   1. On the live cluster, dry-run / trace the egress allow-set for ONE namespace.
+#   2. Uncomment ONLY that namespace's policy into manifests/networkpolicy-egress
+#      (see its kustomization.yaml header) — NEVER all namespaces at once.
+#   3. `argocd app sync networkpolicy-egress` (MANUAL — there is no auto-sync here),
+#      then smoke-test that namespace: DNS resolves, every gateway hop works, each
+#      BFF reaches its DB, ESO reaches Vault, and (for devops LAST) ArgoCD still
+#      self-reconciles and reaches the git repo.
+#   4. Repeat per namespace. Leave `devops` for LAST (ArgoCD self-wedge risk).
+#
+# ROLLBACK: re-comment the namespace in the overlay kustomization and manual-sync (or
+# `kubectl delete networkpolicy tier-egress -n <ns>`). Egress policies are independent
+# of the ingress axis, so removing them fully restores egress connectivity.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: networkpolicy-egress
+  namespace: devops
+  annotations:
+    # Reuse the parent's sync-wave (mirrors the 31 -> 31a follow-on convention).
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/networkpolicy-egress
+  destination:
+    server: https://kubernetes.default.svc
+  # NO `syncPolicy.automated:` — MANUAL sync only. Egress default-deny must be applied
+  # deliberately, per-namespace, after live validation (see header). DO NOT add an
+  # `automated:` block here until the egress allow-set is live-validated for every tier.
+  syncPolicy:
+    syncOptions: [CreateNamespace=false]

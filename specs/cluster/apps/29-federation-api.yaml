@@ -1,0 +1,30 @@
+# hugmesh-federation-api — module-federation REGISTRY + manifest/bundles API
+# (reactive WebFlux + R2DBC + Liquibase). hugmesh-backend, ClusterIP, reached
+# via the be-gateway /api/federation/** route. Pure OAuth2 resource server (no
+# outbound creds / Casdoor app of its own).
+#
+# UPSTREAM of two runtime clients: admin-bff (JWT client) and the
+# hugmesh-remote-fragment sync sidecar (polls the manifest/bundles). Both retry,
+# so reconcile order is best-effort: sync-wave "2" puts federation AFTER its DB
+# (apps/28-federation-db.yaml, wave "1") and after the systems Casdoor (apps/05,
+# wave "0") so the JWT issuer/JWKS exists. The unannotated clients (admin-bff,
+# remote-fragment) default to wave "0" but retry until federation is up.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-federation-api
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/federation-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

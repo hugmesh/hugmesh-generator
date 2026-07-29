@@ -1,0 +1,19 @@
+# lan-dns Service — in-cluster ClusterIP for the resolver. The PRIMARY LAN access
+# path is the hostPort 53 binding on the backend node (see deployment.yaml); this
+# Service exists so in-cluster clients and Prometheus can reach CoreDNS by name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lan-dns
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: lan-dns
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: lan-dns
+  ports:
+    - { name: dns,     port: 53,   targetPort: 53, protocol: UDP }
+    - { name: dns-tcp, port: 53,   targetPort: 53, protocol: TCP }
+    - { name: metrics, port: 9153, targetPort: 9153, protocol: TCP }

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# hugmesh-stack — run the whole HugMesh stack on THIS box, dockerized, or
+# join an existing tailnet as a dockerized mesh node. Dropped into ~/hugmesh-stack
+# by hugmesh-home-setup when the image was built with --home-seed-code stack|mesh.
+#
+#   ./hugmesh-stack fetch     # clone/update the org repos (needs auth for private)
+#   ./hugmesh-stack up        # bring the full stack up (docker compose)
+#   ./hugmesh-stack mesh-up   # bring up as a tailnet-joined mesh node
+#   ./hugmesh-stack down | ps | logs [svc] | pull
+#
+# The compose files build from the cloned repos' own Dockerfiles, so this tracks
+# whatever you have checked out. Infra (Postgres + Casdoor) comes up first; app
+# services are behind compose PROFILES so you can bring up only what you need.
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${HERE}"
+
+compose(){ if docker compose version >/dev/null 2>&1; then docker compose "$@"; else docker-compose "$@"; fi; }
+
+case "${1:-help}" in
+    fetch)   [ -x ./fetch-repos.sh ] && ./fetch-repos.sh || echo "no fetch-repos.sh (repos may be bundled already)";;
+    up)      compose -f docker-compose.yml --profile infra --profile app up -d "${@:2}";;
+    mesh-up) compose -f docker-compose.yml -f docker-compose.mesh.yml --profile infra --profile mesh up -d "${@:2}";;
+    down)    compose -f docker-compose.yml -f docker-compose.mesh.yml down "${@:2}";;
+    ps)      compose -f docker-compose.yml ps;;
+    logs)    compose -f docker-compose.yml logs -f "${@:2}";;
+    pull)    compose -f docker-compose.yml pull;;
+    *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//';;
+esac

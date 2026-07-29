@@ -1,0 +1,79 @@
+# Forgejo — the cluster's PRIMARY writable git, on the pki control-plane node.
+# Lightweight (SQLite + a single PVC), ARM-friendly, VPN/LAN-only (the pki tier
+# NetworkPolicy keeps it off the internet; ArgoCD in devops is allowed in). Once
+# seeded (mirror of the GitHub org) it becomes the GitOps source of truth; backend
+# + devops carry pull-mirror replicas (see the README note in 09-forgejo.yaml).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: forgejo
+  namespace: hugmesh-pki
+  labels:
+    app.kubernetes.io/name: forgejo
+spec:
+  serviceName: forgejo
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: forgejo
+    spec:
+      nodeSelector:
+        hugmesh.systems/pki: "true"
+      securityContext:
+        fsGroup: 1000
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c16"
+      containers:
+        - name: forgejo
+          # Pinned to a fixed patch (NIST 800-190 §4.3 image provenance; CIS
+          # Docker 4.x). Was the floating major tag :9; pin the final 9.x patch so
+          # an upstream re-push of the moving tag can't silently change the image.
+          image: codeberg.org/forgejo/forgejo:9.0.3
+          ports:
+            - { name: http, containerPort: 3000 }
+            - { name: ssh,  containerPort: 22 }
+          env:
+            # Behind the gateways; addressed in-cluster as forgejo.hugmesh-pki.
+            - { name: FORGEJO__server__DOMAIN,           value: forgejo.hugmesh-pki.svc.cluster.local }
+            - { name: FORGEJO__server__ROOT_URL,         value: http://forgejo.hugmesh-pki.svc.cluster.local:3000/ }
+            - { name: FORGEJO__server__SSH_DOMAIN,       value: forgejo.hugmesh-pki.svc.cluster.local }
+            - { name: FORGEJO__database__DB_TYPE,        value: sqlite3 }
+            # GitOps-configured: skip the web installer, lock down sign-ups.
+            - { name: FORGEJO__security__INSTALL_LOCK,   value: "true" }
+            - { name: FORGEJO__service__DISABLE_REGISTRATION, value: "true" }
+            - { name: FORGEJO__service__REQUIRE_SIGNIN_VIEW,  value: "true" }
+            - { name: FORGEJO__openid__ENABLE_OPENID_SIGNIN,  value: "true" }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            httpGet: { path: /api/healthz, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forgejo
+  namespace: hugmesh-pki
+  labels:
+    app.kubernetes.io/name: forgejo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: forgejo
+  ports:
+    - { name: http, port: 3000, targetPort: http }
+    - { name: ssh,  port: 22,   targetPort: ssh }

@@ -1,0 +1,57 @@
+# Per-package USE flags — Libre Computer Le/La Frite (Amlogic arm64) light desktop.
+
+# gentoo-sources: install the source symlink so the kernel build can find it.
+sys-kernel/gentoo-sources symlink
+
+# parted needs device-mapper for the installer's partitioning helpers.
+sys-block/parted device-mapper
+
+# NetworkManager: keep wifi USE (a USB dongle may be present) but the radio is
+# rfkill-blocked + module-blacklisted by default (harden_radios in the builder).
+net-misc/networkmanager wifi
+
+# Lean desktop USE trims:
+#   xterm: no toolbar bloat.
+#   lxpanel/pcmanfm: GTK only, no extra plugins.
+x11-terms/xterm -toolbar
+
+# freetype needs harfbuzz to satisfy pango, which openbox, GTK+, elogind, dbus,
+# and dracut all depend on transitively. Without this the entire desktop stack
+# fails to emerge (autounmask stops backtracking and per-package fallback repeats
+# the same failure for every package in that dep chain).
+media-libs/freetype harfbuzz
+
+# ngtcp2 needs gnutls to satisfy net-fs/samba pulled in by net-fs/cifs-utils[acl].
+net-libs/ngtcp2 gnutls
+
+# libdom needs xml to satisfy www-client/netsurf[svgtiny,svg].
+net-libs/libdom xml
+
+# gtk+ rsvg USE disabled: librsvg is a Rust crate; cross-compiling it to aarch64
+# requires the aarch64-unknown-linux-gnu Rust stdlib target on the host, which is
+# absent from the system dev-lang/rust installation (only x86_64 and i686 targets
+# are installed). SVG cursor/icon rendering is non-essential on a minimal LXDE SBC.
+# adwaita-icon-theme is listed in profile/package.provided (below) to satisfy gtk+'s
+# RDEPEND without actually building the package (which also needs librsvg).
+x11-libs/gtk+ -rsvg
+
+# libfm automount disabled: with +automount, libfm unconditionally requires
+# gnome-base/gvfs. gvfs has +gcr by default which requires app-crypt/gcr:4=, which
+# requires gui-libs/gtk-4, which fails to cross-compile. gvfs[keyring] also pulls
+# in app-crypt/libsecret, which in turn pulls gnome-keyring → gcr-3 → virtual/
+# secret-service. Disabling automount removes the ENTIRE gvfs dep and its cascading
+# GTK4/libsecret chain. pcmanfm still functions for local filesystem browsing;
+# USB auto-mounting can be added post-first-boot via native emerge.
+x11-libs/libfm -automount
+
+# networkmanager modemmanager USE disabled: +modemmanager pulls modemmanager →
+# libqmi[qrtr] → net-libs/libqrtr-glib → dev-libs/gobject-introspection → glib with
+# introspection enabled. Our global -introspection breaks this chain. Cellular modems
+# are absent from these SBC targets; disabling modemmanager has no functional impact.
+net-misc/networkmanager -modemmanager
+
+# pinentry gtk USE disabled: +gtk causes pinentry to require app-crypt/gcr:4[gtk],
+# which in turn requires gui-libs/gtk-4 (fails cross-configure). The ncurses/curses
+# pinentry backend (kept via the global gtk USE not applying to pinentry's own -gtk)
+# is sufficient for passphrase prompts on this headless/lean-desktop SBC.
+app-crypt/pinentry -gtk

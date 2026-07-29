@@ -1,0 +1,16 @@
+# ClusterIP — the in-cluster consumption endpoint for the TTS API. Reached by
+# the be-gateway (ai.<domain> /v1/synthesize/** route) for tailnet/external callers
+# (the matrix-ui VN voice client), and directly in-cluster by any future Phase-A
+# consumer at http://hugmesh-edge-ai-tts.hugmesh-inference.svc:8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-edge-ai-tts
+  namespace: hugmesh-inference
+  labels:
+    app: hugmesh-edge-ai-tts
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  selector: { app: hugmesh-edge-ai-tts }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

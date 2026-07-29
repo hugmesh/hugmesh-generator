@@ -1,0 +1,54 @@
+# Explicit Cassandra authenticator/authorizer settings (DB-hardening, ADR-32 — DARK).
+#
+# The prompt requires `authenticator: PasswordAuthenticator` +
+# `authorizer: CassandraAuthorizer` to be configured EXPLICITLY (not left to the
+# bitnami image's implicit "password present -> auth on" behaviour). There are two
+# supported, chart-version-robust ways to set them on bitnami/cassandra 12.3.11;
+# pick ONE in the values overlay (cassandra-values-overlay.yaml):
+#
+# PREFERRED — extraEnvVars (the bitnami image renders these into cassandra.yaml at
+# start; survives chart bumps, no full-file override):
+#   extraEnvVars:
+#     - { name: CASSANDRA_AUTHENTICATOR, value: PasswordAuthenticator }
+#     - { name: CASSANDRA_AUTHORIZER,    value: CassandraAuthorizer }
+#     # Role/permission caches reduce auth round-trips under the gateways' read load.
+#     - { name: CASSANDRA_ROLE_MANAGER,  value: CassandraRoleManager }
+#
+# ALTERNATIVE — existingConfiguration (point the chart at a FULL cassandra.yaml
+# ConfigMap). Use ONLY if you already manage a complete cassandra.yaml; the two
+# load-bearing lines are exactly:
+#
+#     authenticator: PasswordAuthenticator
+#     authorizer: CassandraAuthorizer
+#     role_manager: CassandraRoleManager
+#
+# This ConfigMap below is the AUTHORITATIVE record of those settings (for audit +
+# the §3 SELinux/identity review) and is consumed by NOTHING at render time — it
+# documents the intended cassandra.yaml deltas. Both mechanisms above produce the
+# same effect: PasswordAuthenticator requires every connection to authenticate;
+# CassandraAuthorizer makes permissions DENY-by-default (a role reads/writes only
+# what it is GRANTed — see bootstrap-roles-configmap.yaml). This FAILS CLOSED.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-auth-config
+  namespace: hugmesh-pki
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: db-hardening
+    hugmesh.systems/ships: dark
+data:
+  # The cassandra.yaml deltas this hardening enables (reference; see header for
+  # how they are actually applied via extraEnvVars at flip time).
+  auth.cassandra.yaml: |
+    # Require authentication on every client/internode login.
+    authenticator: PasswordAuthenticator
+    # Deny-by-default permissions; roles read/write only what they are GRANTed.
+    authorizer: CassandraAuthorizer
+    # Role storage backed by Cassandra's system_auth keyspace.
+    role_manager: CassandraRoleManager
+    # Tighten system_auth replication when scaling past one node (RF must be > 1
+    # so auth survives a node loss): for a single-replica dev cluster RF=1 is fine;
+    # raise to 3 (NetworkTopologyStrategy) before going multi-node.
+    # ALTER KEYSPACE system_auth WITH replication =
+    #   {'class':'NetworkTopologyStrategy','dc1':3};

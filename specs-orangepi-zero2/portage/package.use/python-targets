@@ -1,0 +1,21 @@
+# ── Keep the python3.12 target enabled through the tree's python transition ──
+# The image payloads are resolved around dev-lang/python:3.12 (the stage3 seed's
+# libselinux, portage/gemato, systemd-utils and the whole SELinux/python
+# toolchain are built for 3.12), but the Gentoo tree's profile-default
+# PYTHON_TARGETS has moved past it — freshly-pulled ebuilds (setuptools-83 /
+# setuptools-scm-10.2 → jaraco-text → jaraco-context, hatchling, flit-core,
+# urllib3, jinja2, cython, …) come up with python_targets_python3_12 UNSET and
+# the @world/payload emerge ABORTS behind a wall of
+#     "The following USE changes are necessary to proceed:
+#      >=dev-python/…  python_targets_python3_12"
+# (real jetson edge_ai fleet failure 2026-07-16 01:31, session 20260715-235432;
+# the x86 fleet logs queue up the identical proposals). Keyword and mask
+# decisions stay explicit in package.accept_keywords/ / package.mask/ — this
+# only widens a USE flag, enabling the 3.12 target everywhere at once instead
+# of chasing per-package autounmask lines sync after sync. Harmless where an
+# ebuild's PYTHON_COMPAT no longer lists 3.12 (a nonexistent flag is ignored);
+# effective everywhere else. PYTHON_SINGLE_TARGET is deliberately NOT set here:
+# two enabled single-targets violate REQUIRED_USE (^^ exactly-one), and the
+# resolver already derives the right single target from the installed 3.12
+# interpreter.
+*/* PYTHON_TARGETS: python3_12

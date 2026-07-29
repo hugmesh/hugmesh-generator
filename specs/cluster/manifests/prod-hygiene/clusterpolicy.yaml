@@ -1,0 +1,116 @@
+# =============================================================================
+# Kyverno ClusterPolicy — prod-hygiene ADMISSION guard.
+# =============================================================================
+# The ADMISSION/SYNC leg of the prod-hygiene gate (the RUNTIME leg is the PreSync
+# hook Job in job.yaml + scripts/validate-prod-hygiene.sh --runtime). Kyverno
+# blocks the OBVIOUS, statically-visible dev-only artifacts at admission so they
+# can never even be created in a prod cluster:
+#
+#   (1) ANY resource labelled hugmesh.systems/tier: test — the MOCK ActivityPub
+#       peer, the whole test-runner harness, the lean/heavy Jobs. (Defence in depth
+#       to the build's gate_env_apps prune: even if a tier:test manifest leaked
+#       into the prod GitOps tree, Kyverno rejects it.)
+#   (2) ANY Pod/Deployment running Vault in dev mode (a container arg/command
+#       containing `-dev`, or a VAULT_DEV_* env) — the templated dev server a
+#       static tree grep can miss is still a concrete container spec at admission.
+#   (3) ANY first-party container image on a floating :dev tag or a *-dev repo.
+#
+# SCOPE/HONESTY: this CANNOT detect a dev server whose "dev-ness" is purely a
+# runtime config value with no spec fingerprint (e.g. an in-image default). That
+# is EXACTLY why the PreSync hook Job (job.yaml) probes LIVE seam/seal signals —
+# Kyverno is the cheap always-on admission backstop; the Job is the authoritative
+# runtime check. The policy is INERT in ENV=test (it lives in manifests/prod-hygiene
+# which is only synced by apps/00-prod-hygiene.yaml; you may also key it to a
+# cluster env label if you run a single multi-env Argo — see the precondition).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: prod-hygiene
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/component: policy
+  annotations:
+    policies.kyverno.io/title: Prod hygiene — no dev-only server / no test harness
+    policies.kyverno.io/category: HugMesh Release
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/subject: Pod, Deployment, Job, any tier:test resource
+    policies.kyverno.io/description: >-
+      Blocks dev-only servers and the ENV=test e2e harness from a prod cluster:
+      any hugmesh.systems/tier:test resource, a Vault dev server, and floating
+      :dev / *-dev first-party images. The authoritative RUNTIME check is the
+      prod-hygiene PreSync hook Job (scripts/validate-prod-hygiene.sh --runtime).
+spec:
+  validationFailureAction: Enforce
+  background: true
+  failurePolicy: Fail
+  rules:
+    # (1) No tier:test resource at all. Match the label on ANY kind.
+    - name: no-tier-test-resources
+      match:
+        any:
+          - resources:
+              kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Service", "ConfigMap"]
+      validate:
+        message: >-
+          A hugmesh.systems/tier: test resource is forbidden in a prod cluster
+          (the e2e test-runner harness / MOCK ActivityPub peer is ENV=test only).
+        pattern:
+          metadata:
+            labels:
+              # MUST NOT equal "test". (=(value) means "if the key exists it must
+              # not be test"; resources without the label are unaffected.)
+              =(hugmesh.systems/tier): "!test"
+
+    # (2) No Vault dev server: forbid a -dev arg/command or a VAULT_DEV_* env on
+    #     any Pod template container. Matches Pods directly + the Pod templates.
+    - name: no-vault-dev-server
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+          - resources:
+              kinds: ["Deployment", "StatefulSet", "DaemonSet", "Job"]
+      validate:
+        message: >-
+          A container is started in Vault dev mode (`-dev` arg/command or VAULT_DEV_*
+          env). The prod Vault must be the persistent/auto-unseal server, never
+          `vault server -dev` (in-memory, unsealed root).
+        foreach:
+          - list: "request.object.spec.containers || request.object.spec.template.spec.containers || `[]`"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ to_string(element.args || `[]`) }}"
+                    operator: AnyIn
+                    value: ["-dev"]
+                  - key: "{{ to_string(element.command || `[]`) }}"
+                    operator: AnyIn
+                    value: ["-dev"]
+                  - key: "{{ element.env[?name=='VAULT_DEV_ROOT_TOKEN_ID'] | length(@) }}"
+                    operator: GreaterThan
+                    value: 0
+
+    # (3) No floating :dev / *-dev first-party image. Match Pods + Pod templates.
+    - name: no-dev-image-tags
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+          - resources:
+              kinds: ["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"]
+      validate:
+        message: >-
+          A first-party container image uses a floating :dev tag or a *-dev repo.
+          Prod images must be pinned to the immutable release tag (the build's
+          rewrite_prod_image_tags does this; a survivor is a release-blocker).
+        foreach:
+          - list: "request.object.spec.containers || request.object.spec.template.spec.containers || `[]`"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ regex_match('^.*hugmesh[^:[:space:]]*:dev$', element.image) }}"
+                    operator: Equals
+                    value: true
+                  - key: "{{ regex_match('^.*-dev(:.*)?$', element.image) }}"
+                    operator: Equals
+                    value: true

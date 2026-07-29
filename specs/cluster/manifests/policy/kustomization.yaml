@@ -1,0 +1,13 @@
+# Reserved-prefix admission-policy bundle. The namespace is created by
+# namespaces/namespaces.yaml; this bundles the in-cluster reserved list mirror
+# (ConfigMap) + the Kyverno ClusterPolicy that reads it. Deployed by the
+# reserved-prefixes-policy ArgoCD Application (apps/16-reserved-prefixes-policy.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - reserved-prefixes-configmap.yaml
+  - reserved-prefixes-policy.yaml
+  # Runtime install-state of the OPTIONAL services, rendered from
+  # specs/cluster/optional-services.yaml — read by the optional-services
+  # ApplicationSet (apps/13a-optional-services.yaml) + the admin console.
+  - installed-services-configmap.yaml

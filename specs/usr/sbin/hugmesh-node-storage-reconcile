@@ -1,0 +1,337 @@
+#!/bin/bash
+# hugmesh-node-storage-reconcile — the NODE-STORAGE reconcile agent (Layer-B).
+#
+# Runs on a node an operator has attached + registered a storage pool to. It is the
+# pull-half twin of the device-registry sync agent (hugmesh-device-registry-sync) and
+# REUSES its idioms verbatim: a boot oneshot + a 60s cron floor, fetch over the in-cluster
+# mTLS SUPERADMIN identity, the SHARED Ed25519 verify + strict-monotonic rollback guard, and
+# FAIL-CLOSED-keep-last-good on ANY error.
+#
+# FLOW (every step FAIL-CLOSED — on ANY fetch/verify/rollback failure KEEP the last-good
+# cache; an unknown node fp gets an EMPTY signed body and provisions NOTHING):
+#   1. lsblk detect candidate disks (unmounted, non-root, whole disks) and PUBLISH them to a
+#      local /candidates file (an operator/registrar reads it to pick a disk_serial; this
+#      agent never auto-claims a disk it was not told about by the signed export).
+#   2. fetch GET <BFF>/bff/admin/device-storage-pools/export?node=<MACHINE_KEY_FP> over mTLS.
+#   3. verify: signed==true, detached Ed25519 over the EXACT storage canonical bytes against
+#      the BAKED public key, AND strict-monotonic generation (> last-good). node guard:
+#      body.nodeFp must equal MACHINE_KEY_FP.
+#   4. atomically swap the cache + bump last-good.
+#   5. RECONCILE each pool in the export: resolve its disk by serial via lsblk, write/refresh
+#      a `.storage.devices[]` element with a `pool:{}` marker into the local pool-manifest,
+#      run `provision_storage --pool` (FDE reuse, ,nofail), label THIS node
+#      hugmesh.systems/local-path=true, and CAS-patch the local-path-config nodePathMap so
+#      THIS node serves PVs from the attached disk's path (PV binds to the correct node).
+#   6. /ack: POST the applied generation back to the BFF so the UI propagation chip flips
+#      pending->applied (best-effort; the BFF reconciles forward regardless).
+
+set -uo pipefail
+
+NODE_ENV="/etc/hugmesh/registry/node.env"
+PUB_KEY="/etc/hugmesh/registry/registry-pub.ed25519"
+CACHE_DIR="/var/lib/hugmesh/node-storage"
+EXPORT_JSON="${CACHE_DIR}/export.json"
+LAST_GOOD="${CACHE_DIR}/last-good-generation"
+CANDIDATES="${CACHE_DIR}/candidates"
+POOL_MANIFEST="${CACHE_DIR}/pool-manifest.json"
+VERIFY_LIB="/usr/lib/hugmesh/storage-verify.sh"
+PROVISION="/etc/keys-provision/provision.sh"
+KUBECTL_KUBECONFIG="/etc/kubernetes/admin.conf"
+LP_NS="devops"
+LP_CONFIGMAP="local-path-config"
+LOG_TAG="hugmesh-node-storage"
+
+# Test seams (overridable via env in the logic test; default to the real paths/cmds).
+: "${NS_KUBECTL:=kubectl}"
+: "${NS_PROVISION_CMD:=}"          # default: bash ${PROVISION} --pool (set in main)
+: "${NS_LSBLK:=lsblk}"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+read_env() {
+    local k="$1" line
+    line="$(grep -E "^${k}=" "${NODE_ENV}" 2>/dev/null | head -1)" || return 1
+    [ -n "${line}" ] || return 1
+    printf '%s' "${line#*=}" | tr -d '"'"'"' '
+}
+
+# ── (1) lsblk candidate detection ─────────────────────────────────────────────
+# Publish UNMOUNTED whole-disk block devices (TYPE==disk, no MOUNTPOINT on the disk or any
+# child) as attach candidates. The agent NEVER auto-claims one — it only advertises; the
+# operator registers a chosen disk's serial via the admin UI/BFF, and the signed export is
+# the sole authority on which serial to provision. JSON lines: {name,serial,size}.
+detect_candidates() {
+    have "${NS_LSBLK}" || { warn "lsblk absent — cannot detect candidates"; return 0; }
+    mkdir -p "${CACHE_DIR}" 2>/dev/null || true
+    # -dn: no children, no header; columns NAME,TYPE,SIZE,SERIAL,MOUNTPOINT.
+    "${NS_LSBLK}" -dn -o NAME,TYPE,SIZE,SERIAL,MOUNTPOINT 2>/dev/null \
+        | awk '$2=="disk" && $5=="" {
+              printf "{\"name\":\"/dev/%s\",\"serial\":\"%s\",\"size\":\"%s\"}\n", $1, $4, $3
+          }' > "${CANDIDATES}.tmp" 2>/dev/null || true
+    mv -f "${CANDIDATES}.tmp" "${CANDIDATES}" 2>/dev/null || true
+    log "candidate disks: $(wc -l < "${CANDIDATES}" 2>/dev/null || echo 0)"
+}
+
+# ── (2) fetch the signed per-node storage export over mTLS ────────────────────
+fetch_export() {
+    local out="$1"
+    [ -n "${BFF_URL}" ] || { warn "BFF_EXPORT_URL unset — bootstrap/offline, keeping cache"; return 1; }
+    have curl || { warn "curl absent — keeping cache"; return 1; }
+    local url="${BFF_URL%/}/bff/admin/device-storage-pools/export?node=${MACHINE_KEY_FP}"
+    local args=(-sS -m 15 --fail -o "${out}")
+    [ -f "${MTLS_CA}" ] && args+=(--cacert "${MTLS_CA}")
+    if [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && [ -f "${MTLS_CERT}" ] && [ -f "${MTLS_KEY}" ]; then
+        args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    else
+        warn "mTLS client cert/key absent — /export rejected (SUPERADMIN|mTLS); keeping cache"; return 1
+    fi
+    if curl "${args[@]}" "${url}" 2>/dev/null; then
+        [ -s "${out}" ] && return 0
+        warn "empty export body — keeping cache"; return 1
+    fi
+    warn "fetch failed (${url}) — keeping cache"; return 1
+}
+
+# ── (4) atomic cache swap + last-good bump ────────────────────────────────────
+commit_cache() {
+    local newjson="$1" newgen="$2"
+    local tmp="${EXPORT_JSON}.tmp.$$"
+    cp -f "${newjson}" "${tmp}" 2>/dev/null || { warn "cache stage failed"; return 1; }
+    have sync && sync 2>/dev/null || true
+    mv -f "${tmp}" "${EXPORT_JSON}" 2>/dev/null || { warn "cache rename failed"; rm -f "${tmp}"; return 1; }
+    local lgt="${LAST_GOOD}.tmp.$$"
+    printf '%s\n' "${newgen}" > "${lgt}" 2>/dev/null && mv -f "${lgt}" "${LAST_GOOD}" 2>/dev/null || rm -f "${lgt}"
+    log "accepted storage export gen=${newgen} node=${MACHINE_KEY_FP} (cache swapped)"
+    return 0
+}
+
+# ── (5a) build the local pool-manifest from the verified export ───────────────
+# Map each export pool -> a .storage.devices[] element with a `pool:{}` marker that
+# provision_storage --pool consumes. The disk is matched by SERIAL (resolved to a /dev path
+# by lsblk); mountpoint is the export's poolPath's parent (we mount the disk AT poolPath so
+# the provisioner's nodePathMap entry resolves). format/encrypt default to the cluster
+# posture (format only when the disk is blank — provision_storage is idempotent on an
+# already-LUKS/already-formatted disk, so re-runs never destroy data).
+build_pool_manifest() {
+    local export_json="$1"
+    have jq || { warn "jq absent — cannot build pool manifest"; return 1; }
+    # Resolve each pool's diskSerial to a /dev path via lsblk (SERIAL column). A serial with
+    # no matching disk yields an empty match -> provision_storage warns + skips (fail-closed,
+    # no wrong-disk claim).
+    local serial_map; serial_map="$(serial_to_dev_map)"
+    jq -n --argjson smap "${serial_map:-{}}" --slurpfile e <(jq '.body' "${export_json}") '
+        ($e[0].pools // []) as $pools
+        | { storage: { devices: [
+            $pools[] | {
+                match: ($smap[.diskSerial] // ("LABEL=missing-" + .diskSerial)),
+                mountpoint: .poolPath,
+                filesystem: (.filesystem // "ext4"),
+                format: false,
+                encrypt: true,
+                pool: { id: .poolId, exclusive: .isExclusive, reserved_bytes: .reservedBytes }
+            }
+          ] } }
+    ' > "${POOL_MANIFEST}.tmp" 2>/dev/null \
+        && mv -f "${POOL_MANIFEST}.tmp" "${POOL_MANIFEST}" 2>/dev/null \
+        || { warn "pool-manifest build failed"; rm -f "${POOL_MANIFEST}.tmp"; return 1; }
+    log "pool-manifest: $(jq '.storage.devices | length' "${POOL_MANIFEST}" 2>/dev/null || echo 0) pool(s)"
+    return 0
+}
+
+# Build a JSON object { "<serial>": "/dev/<name>", ... } from lsblk so build_pool_manifest
+# can resolve a registered serial to its current device path.
+serial_to_dev_map() {
+    have "${NS_LSBLK}" || { echo '{}'; return 0; }
+    "${NS_LSBLK}" -dn -o NAME,TYPE,SERIAL 2>/dev/null \
+        | awk '$2=="disk" && $3!="" { printf "%s\t/dev/%s\n", $3, $1 }' \
+        | jq -R -s 'split("\n") | map(select(length>0) | split("\t")) | map({(.[0]): .[1]}) | add // {}' 2>/dev/null \
+        || echo '{}'
+}
+
+# ── (5b) provision the pool device(s) (FDE reuse) ─────────────────────────────
+provision_pools() {
+    local cmd="${NS_PROVISION_CMD}"
+    [ -n "${cmd}" ] || cmd="bash ${PROVISION} --pool"
+    # provision.sh reads its manifest from BASE/provision.json; point BASE at our cache so
+    # the --pool run consumes the pool-manifest we just built. provision_storage is
+    # idempotent (already-mounted / already-LUKS disks are no-ops) and skips system disks.
+    HUGMESH_PROVISION_MANIFEST="${POOL_MANIFEST}" ${cmd} || warn "provision_storage --pool reported a non-zero (pool may be degraded)"
+}
+
+# ── (5b') graceful degrade: detect a mount-lost pool + ack `degraded` ──────────
+# A removed pool disk DEGRADES the pool (the `,nofail` crypttab/fstab from PR5 keeps the
+# node BOOTING). After provisioning, check each export pool's poolPath: if it is NOT a live
+# mountpoint, the pool is DEGRADED — its PVs are unavailable but the node + cluster stay up.
+# We ack `degraded` per affected pool so the UI propagation chip turns red, and we leave the
+# placement in place (the operator decides: re-attach the disk, or migrate via the rsync Job
+# stub — node-storage-migrate.yaml). We NEVER auto-delete data or silently migrate. Echoes
+# the degraded pool ids to stdout (for the test) and returns 1 iff any pool is degraded.
+detect_degraded_pools() {
+    local export_json="$1"
+    have jq || return 0
+    local degraded=0 pid path
+    while IFS=$'\t' read -r pid path; do
+        [ -n "${path}" ] || continue
+        if ! is_mounted "${path}"; then
+            warn "pool ${pid} path ${path} is NOT mounted — DEGRADED (disk removed/unreadable). PVs on it are unavailable; node stays up (,nofail). Re-attach the disk or migrate (node-storage-migrate Job)."
+            ack_pool_state "${pid}" "degraded"
+            echo "${pid}"
+            degraded=1
+        fi
+    done < <(jq -r '.body.pools[]? | "\(.poolId)\t\(.poolPath)"' "${export_json}" 2>/dev/null)
+    return "${degraded}"
+}
+
+# Is <path> a live mountpoint? Prefer mountpoint(1), fall back to a /proc/mounts scan so the
+# logic test can stub it. Returns 0 iff mounted.
+is_mounted() {
+    local path="$1"
+    if have mountpoint; then mountpoint -q "${path}" 2>/dev/null && return 0 || return 1; fi
+    grep -qE " ${path} " /proc/mounts 2>/dev/null
+}
+
+# Best-effort POST the per-pool propagation state (applied|degraded) to the BFF so the UI
+# chip reflects reality. The BFF reconciles forward regardless (best-effort, never blocks).
+ack_pool_state() {
+    local pid="$1" state="$2"
+    [ -n "${BFF_URL}" ] || return 0
+    have curl || return 0
+    local url="${BFF_URL%/}/bff/admin/device-storage-pools/ack?pool=${pid}&state=${state}"
+    local args=(-sS -m 10 --fail -X POST -o /dev/null)
+    [ -f "${MTLS_CA}" ] && args+=(--cacert "${MTLS_CA}")
+    [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    curl "${args[@]}" "${url}" 2>/dev/null || log "ack pool ${pid} state=${state} best-effort failed"
+    return 0
+}
+
+# ── (5c) label THIS node local-path=true + CAS-patch the nodePathMap ──────────
+# The DaemonSet (PR5) schedules a provisioner on every hugmesh.systems/local-path=true
+# node; the nodePathMap entry makes THIS node's provisioner serve PVs from the pool path.
+# Together with WaitForFirstConsumer + the service's nodeAffinity (PR7) this guarantees a PV
+# BINDS TO THE CORRECT NODE (the one the disk is physically attached to).
+label_and_patch_nodepathmap() {
+    local export_json="$1"
+    local hostname; hostname="$(read_env NODE_NAME)" || hostname=""
+    [ -n "${hostname}" ] || hostname="$(hostname 2>/dev/null)"
+    [ -n "${hostname}" ] || { warn "cannot resolve node name — skipping label/patch"; return 1; }
+    have jq || return 1
+
+    # The paths THIS node should serve (one per pool's poolPath).
+    local paths; paths="$(jq -r '[.body.pools[]?.poolPath] | map(select(length>0)) | @json' "${export_json}" 2>/dev/null)"
+    [ -n "${paths}" ] && [ "${paths}" != "null" ] || paths='[]'
+
+    # 1) label the node (idempotent).
+    "${NS_KUBECTL}" --kubeconfig "${KUBECONFIG_OVERRIDE:-${KUBECTL_KUBECONFIG}}" \
+        label node "${hostname}" "hugmesh.systems/local-path=true" --overwrite >/dev/null 2>&1 \
+        || warn "node label failed (kubectl unreachable?) — provisioner DaemonSet won't schedule here yet"
+
+    # 2) CAS-patch the nodePathMap: read the current config.json, add/replace THIS node's
+    #    entry (keyed by node name), write it back. NEVER touch the DEFAULT entry (back-compat).
+    local cur; cur="$("${NS_KUBECTL}" --kubeconfig "${KUBECONFIG_OVERRIDE:-${KUBECTL_KUBECONFIG}}" \
+        -n "${LP_NS}" get configmap "${LP_CONFIGMAP}" -o jsonpath='{.data.config\.json}' 2>/dev/null)"
+    [ -n "${cur}" ] || { warn "cannot read ${LP_CONFIGMAP} config.json — skipping nodePathMap patch"; return 1; }
+
+    local newcfg
+    newcfg="$(printf '%s' "${cur}" | jq --arg node "${hostname}" --argjson paths "${paths}" '
+        .nodePathMap = (
+            ( [ .nodePathMap[]? | select(.node != $node) ] )      # keep all OTHER entries (incl. DEFAULT)
+            + ( if ($paths | length) > 0 then [ { node: $node, paths: $paths } ] else [] end )
+        )
+    ' 2>/dev/null)"
+    [ -n "${newcfg}" ] || { warn "nodePathMap patch compute failed — keeping current config"; return 1; }
+    # idempotent: if unchanged, skip the apply.
+    if [ "${newcfg}" = "${cur}" ]; then
+        log "nodePathMap already current for ${hostname}"
+        return 0
+    fi
+    local patch; patch="$(jq -n --arg cfg "${newcfg}" '{data:{"config.json":$cfg}}' 2>/dev/null)"
+    if "${NS_KUBECTL}" --kubeconfig "${KUBECONFIG_OVERRIDE:-${KUBECTL_KUBECONFIG}}" \
+            -n "${LP_NS}" patch configmap "${LP_CONFIGMAP}" --type merge -p "${patch}" >/dev/null 2>&1; then
+        log "CAS-patched ${LP_CONFIGMAP} nodePathMap for ${hostname} (paths=${paths})"
+    else
+        warn "nodePathMap patch apply failed — keeping current config"
+    fi
+}
+
+# ── (6) /ack the applied generation (best-effort) ─────────────────────────────
+ack_generation() {
+    local gen="$1"
+    [ -n "${BFF_URL}" ] || return 0
+    have curl || return 0
+    local url="${BFF_URL%/}/bff/admin/device-storage-pools/ack?node=${MACHINE_KEY_FP}&generation=${gen}"
+    local args=(-sS -m 10 --fail -X POST -o /dev/null)
+    [ -f "${MTLS_CA}" ] && args+=(--cacert "${MTLS_CA}")
+    [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    curl "${args[@]}" "${url}" 2>/dev/null && log "acked gen=${gen}" \
+        || log "ack best-effort failed (BFF reconciles forward regardless)"
+    return 0
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+main() {
+    [ -r "${VERIFY_LIB}" ] || { warn "verify lib missing (${VERIFY_LIB}) — keeping cache"; exit 0; }
+    [ -r "${NODE_ENV}" ]   || { warn "node.env missing — not a registry node? keeping cache"; exit 0; }
+    [ -r "${PUB_KEY}" ]    || { warn "baked public key missing — keeping cache"; exit 0; }
+    # shellcheck source=/dev/null
+    . "${VERIFY_LIB}" 2>/dev/null || { warn "failed to source verify lib — keeping cache"; exit 0; }
+    have jq      || { warn "jq absent — keeping cache"; exit 0; }
+    have openssl || { warn "openssl absent — keeping cache"; exit 0; }
+    mkdir -p "${CACHE_DIR}" 2>/dev/null || true
+
+    MACHINE_KEY_FP="$(read_env MACHINE_KEY_FP)" || { warn "node.env missing MACHINE_KEY_FP — keeping cache"; exit 0; }
+    [ -n "${MACHINE_KEY_FP}" ] || { warn "empty MACHINE_KEY_FP — keeping cache"; exit 0; }
+    BFF_URL="$(read_env BFF_EXPORT_URL)"   || BFF_URL=""
+    MTLS_CERT="$(read_env BFF_CLIENT_CERT)" || MTLS_CERT=""
+    MTLS_KEY="$(read_env BFF_CLIENT_KEY)"   || MTLS_KEY=""
+    MTLS_CA="$(read_env BFF_CA)"            || MTLS_CA="/etc/hugmesh/pki/ca-chain.crt"
+
+    # (1) always publish candidates (cheap, side-effect-free, helps the operator register).
+    detect_candidates
+
+    local fetched; fetched="$(mktemp 2>/dev/null)" || { warn "mktemp failed — keeping cache"; exit 0; }
+    trap 'rm -f "${fetched}" 2>/dev/null || true' EXIT
+
+    # (2) fetch.
+    if ! fetch_export "${fetched}"; then exit 0; fi
+
+    # (3) verify (signed + Ed25519 over storage canonical bytes + strict monotonic) + node guard.
+    if ! storage_verify_export "${fetched}" "${PUB_KEY}" "${LAST_GOOD}"; then
+        warn "fetched storage export FAILED verification/rollback (unsigned/tampered/foreign/gen<=last-good) — keeping cache"
+        exit 0
+    fi
+    local node_fp; node_fp="$(sv_node_fp "${fetched}")"
+    # An unknown-fp export is the fail-closed EMPTY body (nodeFp==""): nothing to provision.
+    if [ -z "${node_fp}" ]; then
+        log "empty signed export (no pools registered for this node) — nothing to provision"
+        commit_cache "${fetched}" "$(rv_gen "${fetched}")" || true
+        exit 0
+    fi
+    if [ "${node_fp}" != "${MACHINE_KEY_FP}" ]; then
+        warn "export nodeFp=${node_fp} != baked ${MACHINE_KEY_FP} — refusing, keeping cache"; exit 0
+    fi
+    local gen; gen="$(rv_gen "${fetched}")"
+
+    # (4) atomic swap.
+    commit_cache "${fetched}" "${gen}" || exit 0
+
+    # (5) reconcile: build pool-manifest -> provision --pool -> label + nodePathMap patch.
+    if build_pool_manifest "${EXPORT_JSON}"; then
+        provision_pools
+        label_and_patch_nodepathmap "${EXPORT_JSON}"
+    fi
+
+    # (5b') graceful degrade: ack `degraded` for any pool whose disk is no longer mounted
+    # (the ,nofail boot survived; the PVs are just unavailable). Never auto-migrates.
+    detect_degraded_pools "${EXPORT_JSON}" >/dev/null || true
+
+    # (6) ack the applied generation.
+    ack_generation "${gen}"
+    exit 0
+}
+
+# Guard main so the logic test can source the functions without executing the flow.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+    main "$@"
+fi

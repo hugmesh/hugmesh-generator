@@ -1,0 +1,5 @@
+# dev-lang/python cross-compile fixups — see env/python-cross.conf
+# (forces the chflags/lchflags configure-cache values that the aarch64 cross
+# configure otherwise mis-detects, which broke Modules/posixmodule.c). Scoped to
+# python so the ac_cv_* args don't leak into other packages' configure scripts.
+dev-lang/python python-cross.conf

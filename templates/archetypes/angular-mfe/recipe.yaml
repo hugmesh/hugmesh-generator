@@ -1,0 +1,45 @@
+# ============================================================================
+# angular-mfe/recipe.yaml — ANCHORED brand-delta edits for the Angular-MFE class.
+# ============================================================================
+#
+# Applied by scripts/tooling/render-recipe.js onto EACH UI's OWN read-only base
+# (seeded from the login-ui Phase-2 exemplar; generalizes to admin/user/mod/
+# matrix/mastodon/owncast/tube/wiki/forum-ui + api-docs + character-studio-ui +
+# superadmin-service-catalog-ui). NO whole-file overlay of package.json/index.html:
+# those embed the repo's OWN identity (npm segment, `ng build <slug>` target,
+# <snap-<slug>-root> selector) — a whole-file swap from login-ui would rename
+# @scope/user->@scope/login, break `ng build` (no such project), and bootstrap the
+# wrong root element. Only the brand-coupled substrings are anchor-edited.
+#
+# Per-repo IDENTITY comes from the repos[].identity row: APP_SLUG (npm segment,
+# left-as-is ng target + <snap-APP_SLUG-root> selector) and TITLE_WORD (per-UI
+# tab-title differentiator). BOTH find and replace are rendered with the token
+# context, so a single recipe matches every UI's own base.
+edits:
+  - file: package.json
+    optional: false
+    anchors:
+      # npm scope rebrand ONLY: @hugmesh/<slug> -> @<NPM_SCOPE>/<slug>. The
+      # <slug> segment (== the ng project name / build target) is repo identity
+      # and is preserved on BOTH sides, so `ng build <slug>` still resolves.
+      - id: npm-scope
+        find: "@hugmesh/{{APP_SLUG}}"
+        replace: "@{{NPM_SCOPE}}/{{APP_SLUG}}"
+        required: true
+  - file: src/index.html
+    optional: false
+    anchors:
+      # Per-UI tab title: rebrand the leading word only, keep the role word
+      # (TITLE_WORD) + "(remote)". The <snap-<slug>-root> bootstrap selector is
+      # NOT touched (repo identity — must match the app's own root component).
+      - id: tab-title
+        find: "<title>HugMesh {{TITLE_WORD}} (remote)</title>"
+        replace: "<title>{{BRAND_TITLE}} {{TITLE_WORD}} (remote)</title>"
+        required: true
+  - file: .gitlab-ci.yml
+    optional: false
+    anchors:
+      - id: ci-include-org
+        find: "HugMesh/hugmesh-generator"
+        replace: "{{GENERATOR_ORG_GROUP}}"
+        required: true

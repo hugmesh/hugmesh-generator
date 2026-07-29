@@ -1,0 +1,140 @@
+# hugmesh-media-poisoner — the OPTIONAL x86/GPU AI-cloak/poison worker.
+#
+# Applies a bounded perturbation to image bytes BEFORE the homeserver ingests them
+# (poison-before-ingest). The ONLY caller is hugmesh-user-bff-api's media-proxy
+# (/bff/user/media/upload): the BFF holds the uploaded bytes, calls POST /poison
+# here, then does the REAL homeserver upload of the poisoned bytes via the existing
+# akkoma-proxy / tuwunel-proxy mTLS proxies. This worker NEVER mounts the homeserver
+# RWO PVCs (akkoma-uploads / tuwunel-data are ReadWriteOnce, already mounted by the
+# homeserver pod) and reaches no homeserver directly — it is a pure byte-in/byte-out
+# perturbation service.
+#
+# SCHEDULING (clones the hugmesh-games contract verbatim): it requires the x86_64
+# GPU node (nodeSelector arch=amd64 + hugmesh.systems/compute=gpu) and gets the
+# host DRI render nodes (/dev/dri hostPath) for vendor-agnostic GPU use — NO vendor
+# device plugin, so it runs on any amdgpu/i915/nouveau card. On a Pi5-only cluster
+# this pod stays Pending, the Service below has NO Ready endpoints, and the BFF's
+# /bff/user/media/capability probe reports the heavy tier ABSENT -> lean fallback
+# (warn-before-post). That degradation is pure k8s protocol-probe availability — no
+# Eureka/Config/Task, consistent with the rest of the heavy tier.
+#
+# Placed in hugmesh-backend (the BFF's namespace, same-origin DNS) — the x86_64
+# host carries backend=true AND compute=gpu, so the nodeSelector still pins it there.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-media-poisoner
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-media-poisoner, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  # Single writer of the compute path. concurrency=1 is enforced in-process
+  # (uvicorn --workers 1) so the CPU path can't starve the control/data plane; this
+  # replica floor pairs with that.
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-media-poisoner } }
+  strategy: { type: Recreate }
+  template:
+    metadata: { labels: { app: hugmesh-media-poisoner } }
+    spec:
+      # Require the x86_64 GPU node (labelled by keys-provision on that image) —
+      # IDENTICAL to hugmesh-games. Absent that node => Pending => lean fallback.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        hugmesh.systems/compute: gpu
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          # Fresh MCS level in the backend range (analytics clickhouse c19, kafka
+          # c20, admin/user/mod-bff in their own). c34 was a 3-way collision
+          # (casdoor-games-pg keeps c34); this worker takes c18 (free).
+          type: container_t
+          level: "s0:c18"
+      # Seed the model weights ONCE into the shared volume. The lean (shipped)
+      # backend needs NO weights, so this is a no-op placeholder for the GPU/SD-VAE
+      # follow-up: a GPU image variant would fetch/copy the SD VAE here. Kept as a
+      # tiny busybox so the PVC + mount wiring is proven now and the GPU path only
+      # has to swap the image + command. Runs even on the lean image (cheap).
+      initContainers:
+        - name: model-weights-seed
+          image: busybox:1.37
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              # Lean backend uses no weights; mark the dir seeded so the GPU follow-up
+              # can replace this with the real SD-VAE fetch without changing the wiring.
+              [ -f /models/.seeded ] || echo "lean: no weights required" > /models/.seeded
+              echo "model-weights volume ready at /models"
+          volumeMounts:
+            - { name: model-weights, mountPath: /models }
+      containers:
+        - name: media-poisoner
+          # First-party image, rewritten to the in-cluster Harbor registry by the
+          # kustomization (like every other app). :dev tracked for dev.
+          image: hugmesh-systems/hugmesh-media-poisoner:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # Where the (future GPU) backend reads model weights from. Lean ignores it.
+            - { name: POISON_MODEL_DIR, value: "/models" }
+            # Leave POISON_BACKEND UNSET so the worker probes (cuda|rocm|cpu) and
+            # reports the truth to the BFF. Set to "cpu" to force the lean path.
+            #
+            # LIVE worker-terminated mTLS: POISON_TLS_CERT / POISON_TLS_KEY /
+            # POISON_TLS_CLIENT_CA point at the PEM files projected from the ESO
+            # Secret media-poisoner-mtls (media-poisoner-externalsecrets.yaml, SAME
+            # Vault-PKI -> ESO -> kubernetes.io/tls pattern as the akkoma-proxy /
+            # tuwunel-proxy homeserver mTLS certs) — see the pki volumeMount below.
+            # app/serve.py then serves TLS with REQUIRED client-cert verification.
+            # A partial config CrashLoops (fail-closed, never silent plaintext);
+            # /health reports transport:"mtls". The readiness/liveness probes below
+            # are tcpSocket (not httpGet): the mTLS handshake REJECTS the kubelet's
+            # certless probe, so an httpGet probe would CrashLoop the pod.
+            - { name: POISON_TLS_CERT,      value: "/pki/tls.crt" }
+            - { name: POISON_TLS_KEY,       value: "/pki/tls.key" }
+            - { name: POISON_TLS_CLIENT_CA, value: "/pki/ca.crt" }
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            # Modest CPU baseline so the lean path can't starve the node; the GPU
+            # path uses /dev/dri, not a cpu reservation. Bump for a GPU image.
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { cpu: "2",  memory: 2Gi }
+          volumeMounts:
+            # /dev/dri render node access for unprivileged, vendor-agnostic GPU use
+            # (same as hugmesh-games). Harmless/unused on the lean CPU path.
+            - { name: dri, mountPath: /dev/dri }
+            - { name: model-weights, mountPath: /models, readOnly: true }
+            # readOnlyRootFilesystem: true => give uvicorn/python a writable /tmp.
+            - { name: tmp, mountPath: /tmp }
+            # Vault-PKI-issued server cert + client-verify CA (ESO Secret
+            # media-poisoner-mtls), read by app/serve.py via POISON_TLS_* above.
+            - { name: pki, mountPath: /pki, readOnly: true }
+      volumes:
+        - name: dri
+          hostPath: { path: /dev/dri, type: Directory }
+        - name: model-weights
+          persistentVolumeClaim: { claimName: media-poisoner-models }
+        - name: tmp
+          emptyDir: {}
+        # Vault-PKI-issued server cert + cluster CA, synced by ESO (kubernetes.io/tls
+        # tls.crt/tls.key/ca.crt) — same shape as the akkoma-proxy/tuwunel-proxy
+        # proxy-pki volumes (manifests/akkoma, manifests/tuwunel), mounted straight
+        # into this container instead of an nginx sidecar.
+        - name: pki
+          secret:
+            secretName: media-poisoner-mtls

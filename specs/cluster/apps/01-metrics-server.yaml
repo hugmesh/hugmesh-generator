@@ -1,0 +1,38 @@
+# metrics-server — the cluster resource-metrics API (kubectl top + HPA).
+# Without it, HorizontalPodAutoscalers (e.g. the remote-fragment fleet's
+# manifests/remote-fragment/hpa.yaml) are INERT — they can't read CPU/memory and
+# the Deployment just sits at its replicas floor. Deploy early (sync-wave "-1",
+# alongside calico/ingress) so the metrics API exists before autoscaled workloads.
+#
+# --kubelet-insecure-tls: kubeadm/bare-metal nodes serve the kubelet with a
+# self-signed cert that metrics-server won't trust by default; this cluster's
+# kubelets are not fronted by a public CA, so skip kubelet cert verification
+# (standard for on-prem). Revisit if kubelet serving certs are later signed by
+# the cluster CA.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: metrics-server
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # before autoscaled workloads (like calico/ingress)
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes-sigs.github.io/metrics-server/
+    chart: metrics-server
+    targetRevision: 3.12.*
+    helm:
+      releaseName: metrics-server
+      values: |
+        args:
+          - --kubelet-insecure-tls
+          - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+        # Multi-arch (arm64 pki/frontend + amd64 backend) — the upstream image is
+        # multi-arch, so no nodeSelector pin is needed.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

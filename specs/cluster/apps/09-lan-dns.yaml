@@ -1,0 +1,35 @@
+# lan-dns — in-cluster wildcard DNS for LAN clients (the LAN-resolution gap).
+#
+# NODES already resolve peers via /etc/hosts (provision_hosts). This app serves
+# LAN CLIENTS (browsers, the e2e runner) that are NOT on the mesh: it answers
+# EVERY name under the brand domain (apex + id./api./matrix./mastodon./scale./*)
+# with the backend ingress node's LAN IP, so a real LAN browser hitting
+# id.<domain> reaches the cluster edge. CoreDNS runs hostNetwork on the backend
+# node and binds host :53 (udp+tcp); see manifests/lan-dns.
+#
+# ENV GATE: this app is present ONLY in ENV=test images. The builders prune
+# apps/09-lan-dns.yaml from the baked tree when ENV=prod (gate_env_apps), where
+# public DNS is authoritative instead — so it never hijacks the real domain.
+#
+# One-time operator step: point the LAN router/clients' DNS at the backend node's
+# IP:53. Then every LAN device resolves *.<domain> to the cluster. See
+# docs/LOCAL-TESTING.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lan-dns
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # before workloads (alongside ingress)
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/lan-dns
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

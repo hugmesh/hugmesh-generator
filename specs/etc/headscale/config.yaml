@@ -1,0 +1,81 @@
+# Headscale control-server configuration (default / fallback).
+#
+# This is the baseline config baked into the image. Override it at first
+# boot by placing your own headscale/config.yaml on the USB KEYS partition
+# (see keys-template/headscale/config.yaml).
+#
+# Tested against headscale 0.23.x. Newer/older releases occasionally rename
+# keys — check the upstream example-config if headscale refuses to start.
+
+# The externally reachable URL of this control server.
+#
+# LOCAL-FIRST: this loopback value is ONLY an ultimate fallback. At first boot
+# keys-provision (provision_headscale -> resolve_endpoint) rewrites this single
+# line in place to the resolved endpoint BEFORE starting headscale, with
+# precedence:
+#   1. provision.json .headscale.server_url
+#   2. provision.json .mesh.endpoint
+#   3. the baked brand var HEADSCALE_URL (/etc/hugmesh/headscale-url)
+#   4. DEFAULT: http://<this node's primary LAN IPv4>:8080
+# So a node provisioned before any public DNS exists is reachable by LAN peers,
+# and a public domain can be published later without re-imaging.
+server_url: http://127.0.0.1:8080
+
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+# ACL policy — fleet full-mesh, file mode.
+#
+# Loads the shipped /etc/headscale/policy.hujson: a default-deny policy that
+# opens fleet-internal traffic (tag:hugmesh <-> tag:hugmesh, all ports)
+# plus the cluster pod (10.244.0.0/16) and service (10.96.0.0/12) CIDRs, and
+# auto-approves those advertised subnet routes. Nodes self-apply tag:hugmesh
+# (+ a per-role tag) and advertise the two CIDRs at `tailscale up`; every node
+# runs --accept-routes, so pods/ClusterIPs become reachable cross-node "as one
+# LAN". keys-provision also runs `headscale policy set -f` on this file so the
+# DB/file stay in sync. No internet-wide grant; fleet-scoped by design.
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+
+# Tailnet address ranges handed out to nodes.
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+  update_frequency: 24h
+
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+log:
+  level: info
+  format: text
+
+dns:
+  magic_dns: true
+  base_domain: headnet.internal
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 9.9.9.9
+
+unix_socket: /run/headscale/headscale.sock
+unix_socket_permission: "0770"

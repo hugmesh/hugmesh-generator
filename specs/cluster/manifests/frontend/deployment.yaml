@@ -1,0 +1,76 @@
+# hugmesh.systems Angular host — the gateway-forwarded front page.
+# Built from github.com/hugmesh-net/hugmesh.systems (Dockerfile +
+# nginx.conf in that repo). Shows Matrix/Mastodon links to logged-in users;
+# login/registration is delegated to Casdoor (Google + admin accounts).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-systems-web
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-systems-web, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hugmesh-systems-web } }
+  template:
+    metadata: { labels: { app: hugmesh-systems-web } }
+    spec:
+      nodeSelector: { hugmesh.systems/frontend: "true" }
+      # POD-level hardening (replicates the media-poisoner exemplar pattern):
+      # CIS K8s 5.2.6 (runAsNonRoot), 5.7.2 (seccompProfile RuntimeDefault),
+      # NIST 800-53 AC-6 (least privilege) / SC-39 (process isolation),
+      # NIST 800-190 §4.5.3 (run as non-root). The first-party hugmesh.systems
+      # nginx image is built to serve on an unprivileged port as UID 101 (the
+      # nginx-unprivileged convention), so dropping ALL caps + non-root is safe.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c40"
+      containers:
+        - name: web
+          image: hugmesh-systems/hugmesh.systems:dev
+          ports: [{ name: http, containerPort: 8080 }]  # nginx-unprivileged listens on 8080 (non-root can't bind 80); probe + Service targetPort follow the named 'http' port
+          # CONTAINER-level hardening (audit: pod-only seLinuxOptions had NO
+          # container securityContext). CIS K8s 5.2.5 (allowPrivilegeEscalation:
+          # false), 5.2.7-5.2.9 (drop ALL caps), 5.2.x (readOnlyRootFilesystem).
+          # UID 101 = the `nginx` user baked into the image; readOnlyRootFilesystem
+          # requires an emptyDir for every path nginx writes (cache/pid/temp).
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # The host reads these at runtime to render the social links and
+            # drive the Casdoor login button (no external login UI of its own).
+            - { name: CASDOOR_ISSUER, value: "https://id.hugmesh.systems" }
+            - { name: MATRIX_URL,   value: "https://matrix.hugmesh.systems" }
+            - { name: MASTODON_URL, value: "https://mastodon.hugmesh.systems" }
+            - { name: SOCIAL_UI_BASE, value: "/social" }
+          readinessProbe: { httpGet: { path: /, port: http }, initialDelaySeconds: 5 }
+          resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          # readOnlyRootFilesystem:true => every path nginx writes must be a
+          # writable emptyDir (tmpfs). nginx writes the worker temp dirs under
+          # /var/cache/nginx, the pid under /var/run, and request bodies to /tmp.
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: nginx-cache, mountPath: /var/cache/nginx }
+            - { name: nginx-run, mountPath: /var/run }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-systems-web
+  namespace: hugmesh-frontend
+spec:
+  selector: { app: hugmesh-systems-web }
+  ports: [{ name: http, port: 80, targetPort: http }]

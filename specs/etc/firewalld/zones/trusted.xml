@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Trusted zone — pre-assigned to the Tailscale VPN interface and loopback.
+  All inter-cluster traffic (K8s API, kubelet, etcd, SSH via tailnet) arrives
+  on tailscale0 and is accepted unconditionally.
+
+  CNI virtual interfaces (cni0, flannel.1, cilium_host) are added to this zone
+  by provision.sh after the CNI is initialised, so pod-to-pod traffic on the
+  same node is not blocked.
+-->
+<zone target="ACCEPT">
+  <short>Trusted</short>
+  <description>Trusted zone for Tailscale VPN and loopback.</description>
+  <interface name="tailscale0"/>
+  <interface name="lo"/>
+  <forward/>
+</zone>

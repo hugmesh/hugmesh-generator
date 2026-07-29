@@ -1,0 +1,43 @@
+# edge-ai-tts — the TTS config surface (voice model location + Piper synthesis
+# knobs). Admin/superadmin editable per-domain (Service-Catalog model, like
+# edge-ai-models / edge-ai-analysis). The response schema returned by
+# POST /v1/synthesize is documented below so matrix-ui (the VN voice client,
+# B3-PR2) can code against a stable contract.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-ai-tts
+  namespace: hugmesh-inference
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/slug: edge-ai-tts
+data:
+  # Where voice files (<id>.onnx + <id>.onnx.json) live. The default voice is baked
+  # in at build time; additional voices can be pulled to a PVC mounted at the same
+  # path and selected per-request via the `voice` field.
+  model-dir: "/models"
+  default-voice: "en_US-amy-medium"
+  # Piper synthesis knobs: length_scale (>1 slower, <1 faster), noise_scale
+  # (generator noise), noise_w (phoneme-width noise).
+  length-scale: "1.0"
+  noise-scale: "0.667"
+  noise-w: "0.8"
+  # Hard ceiling on request text length (VN lines are short); requests over this
+  # are rejected 413. A separate, larger validation-layer max_length (8000) guards
+  # against a large-body memory-pressure DoS regardless of this knob.
+  max-chars: "800"
+  # The stable response contract (consumers code against this).
+  response-schema.json: |
+    {
+      "audioBase64": "string (base64; WAV or raw 16-bit mono PCM per `format`)",
+      "sampleRate": "number (Hz; measured from the produced PCM)",
+      "format": "wav | pcm16",
+      "durationMs": "number (measured from the produced PCM)",
+      "voice": "string (the voice id actually used)",
+      "visemes": [
+        { "key": "rest | AI | E | O | U | L | MBP", "startMs": "number", "durMs": "number" }
+      ],
+      "tenant_id": "string (from X-Tenant-ID; gateway-validated)",
+      "user_id": "string (from X-User-ID)",
+      "timestamp": "RFC3339"
+    }

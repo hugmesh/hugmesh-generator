@@ -1,0 +1,14 @@
+# ClusterIP — reached only in-cluster by hugmesh-mesh-bff-api (R2DBC runtime +
+# the JDBC handle Liquibase uses at startup). DNS:
+#   mesh-bff-db.hugmesh-backend.svc.cluster.local:5432
+apiVersion: v1
+kind: Service
+metadata:
+  name: mesh-bff-db
+  namespace: hugmesh-backend
+  labels: { app: mesh-bff-db }
+spec:
+  type: ClusterIP
+  selector: { app: mesh-bff-db }
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }

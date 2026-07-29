@@ -1,0 +1,82 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# ESO config: the ClusterSecretStore "hugmesh-vault" + one ExternalSecret per
+# k8s Secret materialized from Vault. The ESO controller + CRDs themselves are
+# installed via Helm (apps/03-external-secrets.yaml).
+resources:
+  - secretstore.yaml
+  # Per-app mTLS certs issued by Vault PKI (pki_int/issue/<app>) and synced into
+  # kubernetes.io/tls Secrets <app>-mtls. Requires the Vault PKI engine (set up
+  # by apps/06-vault-pki.yaml) + a per-namespace vault-token Secret.
+  #
+  # ALSO holds the per-DB Postgres server certs (<db>-mtls for route-access-db /
+  # admin-bff-db / mod-bff-db / user-bff-db / federation-db / forum-bff-db) added
+  # by DB-hardening PR-C1. Those SHIP DARK: the cert is mounted on each PG pod but
+  # Postgres is NOT started with ssl=on and no consumer URL sets sslMode yet —
+  # flipping ssl=on + sslMode=require is the deferred PR-C2 enablement step.
+  - pki-externalsecrets.yaml
+  # Homeserver mTLS proxy SERVER certs + homeserver ADMIN tokens backing the gated
+  # admin-effect seam. SPLIT PER-SERVICE (was homeserver-proxy-externalsecrets.yaml)
+  # so gate_optional_services can remove ONE homeserver's ESO half without orphaning
+  # the other's — driven by optional-services.yaml {akkoma,tuwunel}.esoFile. When a
+  # slug is deselected the build prunes BOTH its app(s) AND its line here.
+  - akkoma-externalsecrets.yaml    # akkoma-proxy-mtls + akkoma-admin
+  - tuwunel-externalsecrets.yaml   # tuwunel-proxy-mtls + tuwunel-admin
+  # media-poisoner worker mTLS server+client-verify cert (media-poisoner-mtls).
+  # SAME Vault-PKI -> ESO -> kubernetes.io/tls shape as the homeserver proxy
+  # certs above, but mounted straight into the worker container itself (no
+  # sidecar) — see manifests/media-poisoner/deployment.yaml.
+  - media-poisoner-externalsecrets.yaml   # media-poisoner-mtls
+  # Harbor registry server cert (harbor-mtls) — SAME Vault-PKI -> ESO shape as
+  # media-poisoner above, consumed by apps/03a-harbor.yaml's expose.tls.
+  - harbor-externalsecrets.yaml   # harbor-mtls
+  # Headwind MDM (managed phones) — DEFAULT-OFF optional-service (slug
+  # headwind, optional-services.yaml). TWO ExternalSecrets (headwind-db-auth /
+  # headwind-admin) from ONE Vault path (secret/<brand>/headwind) — OWNER role
+  # only, VERIFIED not separable from runtime (hmdm shares one datasource for
+  # migrate+runtime; see headwind-db.yaml). Deselecting headwind prunes THIS
+  # line + the file via gate_optional_services(), same mechanism as
+  # akkoma/tuwunel above.
+  - headwind-externalsecrets.yaml   # headwind-db-auth, headwind-admin
+  # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF optional-
+  # service (slug attestation-server, optional-services.yaml). ONE ExternalSecret
+  # (attestation-server-smtp) reusing the EXISTING shared outbound-mail Vault doc
+  # (secret/hugmesh/mail) — same document casdoor-smtp/akkoma-smtp already
+  # read; no new Vault path. Deselecting attestation-server prunes THIS line +
+  # the file via gate_optional_services(), same mechanism as headwind above.
+  - attestation-server-externalsecrets.yaml   # attestation-server-smtp
+  # coturn TURN/STUN long-term-credential SHARED SECRET (key `secret`), ESO/Vault
+  # only (secret/hugmesh/coturn-shared-secret) — NEVER inline. Materializes only
+  # once that Vault path is populated; coturn is DEFAULT-OFF so a default build never
+  # mounts it. The SAME Secret is consumed by both coturn (validates client creds)
+  # and tuwunel (mints them) so there is one source of truth and no drift.
+  - coturn-externalsecrets.yaml    # coturn-shared-secret
+  # Velero object-store credentials (ns velero, key `cloud`) — the Velero server +
+  # BSL credential, templated from Vault secret/<brand>/velero. ESO/Vault only,
+  # never inline. Materializes only once the velero namespace exists + the Vault
+  # path is populated (ships dark with the rest of the cloud-backups feature).
+  - velero-externalsecrets.yaml    # velero-cloud-credentials
+  # image-builder PUSH credential (ns hugmesh-image-builds, dockerconfigjson) —
+  # now sourced from the Harbor PUSH-scoped robot account (distinct from the
+  # harbor-registry pull-scoped robot secret above) that
+  # manifests/harbor/harbor-provision-job.yaml mints and writes to
+  # secret/hugmesh/harbor-robots (push_name/push_secret). ESO/Vault only;
+  # inert until the opt-in apps-optional/60-image-builder.yaml Application
+  # creates the namespace (ships dark).
+  - image-builder-externalsecrets.yaml   # image-builder-registry
+  # Azure Intune (Graph) phone-lock credential — DEFAULT-OFF, OPT-IN. Intune is a
+  # CO-EQUAL second MDM provider alongside the sovereign self-hosted Headwind DPC;
+  # Headwind is the DEFAULT. This leg routes lock traffic through Microsoft
+  # Graph/Intune (a third-party SaaS control plane) — enabling it FORFEITS the
+  # sovereign posture for the affected fleet. Left COMMENTED OUT so a default build
+  # never renders it: an operator uncomments this line AND sets
+  # app.phone-lock.azure-intune.enabled=true on admin-bff to opt in. See
+  # docs/MDM.md "MDM providers" + azure-intune-externalsecrets.yaml's header.
+  # - azure-intune-externalsecrets.yaml   # azure-intune-phone-lock (ns hugmesh-backend)
+  # SSO OIDC secrets — user-bff OIDC client credential (user-bff-oidc, ns
+  # hugmesh-backend) + token custody key (user-bff-custody-key, ns
+  # hugmesh-backend) + shared BFF back-channel token (bff-internal-token,
+  # in BOTH hugmesh-backend AND hugmesh-frontend for gateway→admin-bff
+  # BffSessionAuthFilter). Vault paths: secret/hugmesh/user-bff-oidc,
+  # secret/hugmesh/user-bff-custody-key, secret/hugmesh/bff-internal-token.
+  - sso-externalsecrets.yaml

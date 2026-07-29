@@ -1,0 +1,54 @@
+# meshbridge-devices — the OPERATOR SURFACE for radio attachments (docs/
+# MESHTASTIC-BRIDGE.md "Device attachments"). The bridge reads devices.json
+# (mounted at /etc/meshbridge/devices.json) at start; the DEFAULT is an EMPTY
+# list, so a freshly-enabled meshbridge idles harmlessly (healthy pod, no radio,
+# no traffic) until an operator declares a device here.
+#
+# Three transport shapes (each entry needs a unique "id" — it is what room
+# opt-in state events reference as "device"):
+#
+#   * tcp — a LoRa-WiFi device (Meshtastic TCP API, port 4403). Works from any
+#     node the pod schedules on; the NetworkPolicy's documented RFC1918:4403
+#     egress block covers it (narrow that block to the radio subnet).
+#       { "id": "default", "transport": "tcp", "host": "10.20.0.50", "port": 4403 }
+#
+#   * serial — a USB-attached radio. ALSO requires uncommenting the hostPath
+#     volume + nodeSelector pin + supplementalGroups in deployment.yaml so the
+#     pod lands on the node the radio is plugged into.
+#       { "id": "field-usb", "transport": "serial", "path": "/dev/serial/by-id/usb-RAK_WisCore...-if00" }
+#
+#   * mqtt — a WAN-linked / LoRaWAN-gateway-style mesh reached via Meshtastic's
+#     MQTT JSON integration on the operator's broker. Uplink: the bridge
+#     subscribes <topicRoot>/2/json/<channelName>/#; downlink: it publishes to
+#     <topicRoot>/2/json/mqtt/ (the gateway device must have json_enabled set
+#     and a downlink_enabled channel named "mqtt" — see docs/MESHTASTIC-BRIDGE.md).
+#     username/passwordFile are OPTIONAL (authenticated brokers only; the
+#     password rides the meshbridge-appservice Secret, key mqtt_password).
+#       { "id": "wan-mesh", "transport": "mqtt", "host": "mqtt.lan", "port": 1883,
+#         "topicRoot": "msh/US", "channelName": "LongFast", "gatewayNodeNum": 2130636288,
+#         "username": "optional", "passwordFile": "/run/secrets/meshbridge/mqtt_password (optional)",
+#         "tls": false }
+#     The NetworkPolicy's documented RFC1918 1883/8883 egress block covers the
+#     broker leg (narrow it to the broker subnet; 8883 + "tls": true for TLS).
+#
+# NO SECRETS HERE: this ConfigMap carries hosts/paths/topics only — broker
+# credentials live in the ESO-synced meshbridge-appservice Secret and are
+# referenced by FILE PATH (passwordFile), never inline.
+#
+# Admin-driven per-node attachment (device_registry-linked rows + signed
+# per-node export + on-node reconcile writing this ConfigMap, the node-storage
+# idiom) is the planned follow-up; this ConfigMap is the operator surface until
+# then.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meshbridge-devices
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: meshbridge
+data:
+  # Default: NO devices. See the header for the tcp / serial / mqtt shapes.
+  devices.json: |
+    { "devices": [] }

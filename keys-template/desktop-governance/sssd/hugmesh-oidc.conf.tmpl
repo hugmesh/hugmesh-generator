@@ -1,0 +1,43 @@
+# hugmesh-oidc.conf (TEMPLATE) -> /etc/sssd/conf.d/hugmesh-oidc.conf
+#
+# SSSD-OIDC integration for the governed client desktop's SSO login. This is the
+# bridge that turns the `desktop-sudo` OIDC claim into local `desktop-sudo` group
+# membership, which the polkit rule (../polkit/49-hugmesh-desktop-sudo.rules)
+# uses as the SOLE sudo gate.
+#
+# @@CLUSTER_DOMAIN@@ is substituted at FIRST BOOT by provision_desktop_governance()
+# with the node's own domain (from /etc/hugmesh/domains). The OIDC issuer is
+# the per-domain Casdoor at id.<domain> (matches the casdoor manifest origin
+# `https://id.hugmesh.systems` rebranded per CLUSTER_DOMAIN).
+#
+# DEFAULT-DENY: a user who authenticates but whose token carries NO `desktop-sudo`
+# claim is NOT added to the `desktop-sudo` group, so polkit denies them sudo.
+
+[sssd]
+services = nss, pam
+config_file_version = 2
+domains = @@CLUSTER_DOMAIN@@
+
+[domain/@@CLUSTER_DOMAIN@@]
+# OIDC / OAuth2 identity for the per-domain Casdoor issuer.
+id_provider = oidc
+auth_provider = oidc
+oidc_issuer = https://id.@@CLUSTER_DOMAIN@@/
+# The desktop SSO client (PKCE public client) registered for this device class.
+oidc_client_id = hugmesh-desktop
+# We do NOT bake a client secret into the image (PKCE public client).
+oidc_use_pkce = True
+
+# Claim -> local UNIX group mapping. The `desktop-sudo` claim/role present in the
+# token for THIS domain maps the user into the local `desktop-sudo` group. No
+# claim => no group => no sudo (polkit default-deny). The admin-bff sudo-grant
+# is what places `desktop-sudo` into the user's role/claim set at the IdP.
+oidc_group_claim = roles
+# Only this single group is honored from the token; we deliberately do NOT honor
+# `wheel`/`sudo`-named claims so the ONLY path to escalation is `desktop-sudo`.
+oidc_groups_allowlist = desktop-sudo
+
+# Local override group so SSSD can manage `desktop-sudo` membership without it
+# being a static /etc/group entry granting standing privilege.
+[domain/@@CLUSTER_DOMAIN@@/local-groups]
+desktop-sudo =

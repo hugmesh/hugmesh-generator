@@ -1,0 +1,62 @@
+# ingress-nginx — the cluster's external facade. REPLACES the cloudflared tunnel.
+#
+# The home router forwards public 443/80 to the BACKEND node; this controller runs
+# hostNetwork pinned to that node and terminates the edge, then hands off to the
+# Spring Cloud Gateways through the gateways' existing `className: nginx` Ingress
+# objects (see the hugmesh-gateway chart). It makes NO routing/authz decisions
+# of its own — the be-gateway remains the routing authority (admin-ui/BFF + the
+# gateway routing tables). pki/frontend nodes stay off the public path; the pki
+# gateway is served only by a separate INTERNAL ingress-nginx on the pki node
+# (11-ingress-nginx-internal.yaml), reachable on the pki node's :443 via the
+# scale.<domain> -> pki-node-IP /etc/hosts alias (VPN/LAN only).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress-nginx
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # before workloads (like calico)
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes.github.io/ingress-nginx
+    chart: ingress-nginx
+    targetRevision: 4.11.*
+    helm:
+      releaseName: ingress-nginx
+      values: |
+        controller:
+          kind: DaemonSet
+          # Bind the node's :80/:443 directly so the router can forward to it.
+          hostNetwork: true
+          hostPort:
+            enabled: true
+          dnsPolicy: ClusterFirstWithHostNet
+          # Pin the public edge to the backend node only (the router's target).
+          nodeSelector:
+            hugmesh.systems/backend: "true"
+          # arm64 + amd64 nodes both run here; the image is multi-arch.
+          # Two ingress-nginx instances coexist (public here; internal on pki):
+          # each needs a distinct class name, controllerValue, and election ID.
+          electionID: ingress-nginx-public-leader
+          ingressClassResource:
+            name: nginx
+            enabled: true
+            default: true
+            controllerValue: "k8s.io/ingress-nginx"
+          ingressClass: nginx
+          # hostNetwork edge: no cloud LB / NodePort Service needed.
+          service:
+            enabled: false
+          allowSnippetAnnotations: false
+          config:
+            # Cloudflare/edge sets X-Forwarded-*; trust it for real client IPs.
+            use-forwarded-headers: "true"
+        defaultBackend:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ingress-nginx
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

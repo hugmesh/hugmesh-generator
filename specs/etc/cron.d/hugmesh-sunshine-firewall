@@ -1,0 +1,14 @@
+# hugmesh-sunshine-firewall — thin-desktop nftables-fence convergence timer (60s).
+#
+# The TIMER half of the Sunshine mesh fence (the OpenRC oneshot renders + loads
+# the hugmesh_thin_desktop table once at boot; this cron re-runs it every 60s
+# so a hand-flushed table or a late-created tailscale iface converges without a
+# reboot). cronie reads /etc/cron.d — the same mechanism every other hugmesh
+# reconcile timer uses. STAGED like the vpn/tor crons: this file only lands in
+# /etc/cron.d on images built --with-sunshine.
+#
+# The reconcile is idempotent + FAIL-CLOSED: a render/apply error leaves the
+# existing ruleset in place.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/hugmesh-sunshine-firewall >> /var/log/hugmesh-sunshine-firewall.log 2>&1

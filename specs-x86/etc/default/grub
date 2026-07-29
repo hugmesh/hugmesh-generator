@@ -1,0 +1,12 @@
+# GRUB defaults for the installed x86_64 host image.
+#
+# Mirrors the SELinux + KSPP hardening kernel parameters that the RPi5 image
+# bakes into specs-rpi5/boot/cmdline.txt, so both architectures boot with the same
+# LSM, audit and slab/ASLR hardening. The installer's grub-mkconfig reads this.
+# root= is added per-image by build_img's hand-written grub.cfg (the .img path runs NO
+# grub-mkconfig). console=tty0+ttyS0 are set explicitly so the image logs to a serial
+# console (ttyS0 last = primary: full boot log + getty) as well as local VGA — needed
+# for headless server management AND the QEMU serial boot-verify harness (launch-x86.sh
+# captures -serial). Mirrors the RPi5 console=ttyAMA0 serial console for arch parity.
+GRUB_TIMEOUT=5
+GRUB_CMDLINE_LINUX="lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1 vsyscall=none cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 slab_nomerge init_on_alloc=1 page_alloc.shuffle=1 randomize_kstack_offset=on console=tty0 console=ttyS0,115200"

@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-pki
+
+# Cassandra DB-hardening overlay (auth + TLS) — SHIPS DARK (ADR-32).
+# ============================================================================
+# This overlay is INERT: it is NOT referenced by the auto-synced ArgoCD tree
+# (apps/00-cassandra.yaml uses the bitnami chart values directly; nothing under
+# apps/ points here). It renders the real k8s objects so they can be validated
+# with `kustomize build` + dry-run, and is applied DELIBERATELY by the operator
+# at the auth/TLS flip (see ../../../docs/CLUSTER-HARDENING-PLAN.md §H and
+# cassandra-values-overlay.yaml for the enable order). The matching MANUAL-sync
+# ArgoCD Application (apps/00a-cassandra-hardening.yaml) points at the EMPTY
+# sibling overlay (../cassandra-hardening-empty), so even that app renders nothing
+# until an operator switches its source — belt-and-braces (mirrors held PR #132).
+#
+# Reference-only files NOT included here (documentation / flip-time patches):
+#   cassandra-values-overlay.yaml      — the helm.values diff for apps/00-cassandra
+#   cassandra-auth-config.yaml comment — extraEnvVars vs existingConfiguration
+#   cassandra-pki-role.patch.txt       — the vault-pki-init for-app loop edit
+#   client-credentials-patch.md        — consumer env additions
+# (cassandra-auth-config.yaml ITSELF is a real ConfigMap and IS included — it is
+#  the authoritative authenticator/authorizer record.)
+
+resources:
+  # Stage 1 — authentication.
+  - cassandra-externalsecrets.yaml        # cassandra-admin + cassandra-app-creds (ESO)
+  - cassandra-auth-config.yaml            # explicit authenticator/authorizer record
+  - bootstrap-roles-configmap.yaml        # per-app least-privilege CQL bootstrap
+  - bootstrap-roles-job.yaml              # runs the bootstrap at flip time
+  # Stage 2 — TLS.
+  - cassandra-tls-externalsecret.yaml     # cassandra-mtls (Vault-PKI server cert)
+  - cassandra-tls-keystore-builder.yaml   # PEM -> JKS stores + passwords + RBAC

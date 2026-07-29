@@ -1,0 +1,127 @@
+# user-bff-db — dedicated Postgres for hugmesh-user-bff-api's config datastore
+# (the user_profile / user_preference / user_block tables the user BFF owns).
+# Lives in hugmesh-backend next to the BFF it serves. ClusterIP only.
+#
+# NOTE: like admin-bff, the user-bff app's application.yml defaults its
+# spring.r2dbc/spring.liquibase to a literal `hugmesh-pg` host that does NOT
+# exist anywhere in the cluster; this dedicated `user-bff-db` Service is the real
+# backing store, and the user-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to
+# point here (mirrors how federation-db backs federation, admin-bff-db backs admin-bff).
+#
+# Schema bootstrap: NO initdb schema.sql — user-bff owns its schema via Liquibase
+# (classpath:db/changelog/db.changelog-master.xml), applied by the app at boot.
+# This DB only needs to exist EMPTY (POSTGRES_DB).
+#
+# Credentials: the OWNER POSTGRES_PASSWORD is sourced from Vault via External
+# Secrets (ESO Secret user-bff-db-auth, key password). The OWNER role is now used by
+# the user-bff app for DDL/Liquibase ONLY. At RUNTIME the app logs in as the
+# dedicated NON-OWNER least-privilege role `userbff_app` (its OWN password, ESO
+# Secret user-bff-db-app-auth, created by initdb/10-roles.sh). See the role/grant
+# matrix in docs/POSTGRES-HARDENING.md.
+#
+# Sharding (opt-in, default OFF): set SHARDING_CITUS=on AND switch the image to a
+# Citus-enabled Postgres (citusdata/citus:12-pg16); the default path is unchanged.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-bff-db
+  namespace: hugmesh-backend
+  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over a RWO PVC
+  selector: { matchLabels: { app: user-bff-db } }
+  template:
+    metadata: { labels: { app: user-bff-db } }
+    spec:
+      nodeSelector: { hugmesh.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          # c36 collided with signup-gate; user-bff-db takes c38 (free).
+          type: container_t
+          level: "s0:c38"
+        # Live-verify fix: the <db>-mtls cert Secret mounts root-owned 0600, so
+        # postgres (uid 70) cannot read tls.key when PG_TLS_ENABLED=true → crash-loop.
+        # fsGroup:70 (postgres group) makes the mounted cert/key group-readable; it
+        # is harmless while ssl is off and makes the future ssl=on flip pure-config.
+        fsGroup: 70
+      containers:
+        - name: postgres
+          # DEFAULT (single-node): postgres:16-alpine. To shard, override to a
+          # Citus-enabled image (citusdata/citus:12-pg16) AND set SHARDING_CITUS=on.
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "userbff" }
+            # OWNER role (DDL/Liquibase). Same ESO Secret the user-bff app's
+            # SPRING_LIQUIBASE_PASSWORD mounts.
+            - { name: POSTGRES_USER, value: "userbff" }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-auth
+                  key: password
+            # Per-machine-user least-privilege role password (consumed by
+            # initdb/10-roles.sh to create userbff_app). PRODUCTION sources this from
+            # its OWN ESO Secret user-bff-db-app-auth (key password); the user-bff
+            # app's RUNTIME SPRING_R2DBC_PASSWORD mounts the SAME Secret.
+            - name: USERBFF_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-app-auth
+                  key: password
+            # Opt-in Citus sharding (default off => 90-citus.sh is a no-op).
+            - { name: SHARDING_CITUS, value: "off" }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+            # GATED in-cluster TLS — DEFAULT OFF (ships dark). When "false" the
+            # pg-tls-entrypoint.sh wrapper runs Postgres with the SAME static args
+            # as before (no `-c ssl=on`); the mounted cert stays unused and the wire
+            # path is byte-identical. Flip to "true" ONLY after the Vault-PKI server
+            # cert is provisioned (ESO Secret user-bff-db-mtls materialized) — then
+            # Postgres serves TLS. See docs/POSTGRES-HARDENING.md §B.
+            - { name: PG_TLS_ENABLED, value: "false" }
+          # Server-level hardening (every boot): scram, capped connections, logged
+          # connections + slow statements. Per-DB timeouts are in 00-hardening.sql.
+          # The static args now live in the pg-tls-entrypoint.sh wrapper, which
+          # appends `-c ssl=on …` ONLY when PG_TLS_ENABLED=true (gated; default off).
+          # The wrapper exec's the stock docker-entrypoint.sh so initdb is unchanged.
+          command: ["/bin/sh", "/usr/local/bin/pg-tls-entrypoint.sh"]
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "userbff", "-d", "userbff"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "userbff", "-d", "userbff"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            # GATED-TLS entrypoint wrapper (separate from initdb so it is NOT run as
+            # an init script). Selects ssl-off (default) vs ssl=on by PG_TLS_ENABLED.
+            - { name: entrypoint, mountPath: /usr/local/bin/pg-tls-entrypoint.sh, subPath: pg-tls-entrypoint.sh, readOnly: true }
+            # SHIPS DARK: Vault-PKI server cert mounted READ-ONLY but UNUSED while
+            # PG_TLS_ENABLED=false (default) — the wrapper does NOT add `-c ssl=on`,
+            # so the wire path is byte-identical. PR-C2 enablement (gated on this cert
+            # being provisioned) = flip PG_TLS_ENABLED to "true" (config-only); the
+            # wrapper then serves TLS from these files. Optionally add `?sslMode=require`
+            # (R2DBC)/`sslmode=require` (JDBC) to consumers once all negotiate TLS.
+            - { name: pg-tls, mountPath: /etc/postgres-tls, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: user-bff-db }
+        - name: initdb
+          configMap: { name: user-bff-db-initdb }
+        - name: entrypoint
+          configMap: { name: user-bff-db-entrypoint, defaultMode: 0555 }
+        # Vault-PKI server cert (kubernetes.io/tls Secret user-bff-db-mtls, wired in
+        # external-secrets/pki-externalsecrets.yaml). Mounted but unused until PR-C2.
+        - name: pg-tls
+          secret:
+            secretName: user-bff-db-mtls
+            optional: true   # SHIPS DARK: pod still starts before ESO materializes it
+            defaultMode: 0600

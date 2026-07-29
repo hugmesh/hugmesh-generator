@@ -1,0 +1,147 @@
+# kaniko-build-job.template.yaml — the GENERIC, REUSABLE per-build ROOTLESS Kaniko Job
+# TEMPLATE for building a first-party HugMesh APP IMAGE in-cluster and pushing it to the
+# in-cluster Harbor registry (registry.hugmesh.systems; see apps/03a-harbor.yaml).
+#
+# WHY THIS EXISTS: the `.gitlab-ci.yml` `build:images` job was an ECHO STUB — app images
+# (gateway, frontends, BFFs, games, …) built only in the GitLab org mirror; there was no
+# IN-CLUSTER build path. This template is that path. It is modeled 1:1 on the proven #110
+# Service-Catalog Kaniko builder (manifests/service-catalog-builder/kaniko-build-job.template.yaml)
+# — same rootless executor, same security posture, same dockerconfigjson push-secret contract —
+# but GENERALIZED: it builds ANY app repo's Dockerfile, not just Service-Catalog DOCKERFILE/ZIP
+# sources.
+#
+# HOW IT IS DRIVEN (parameterized, ArgoCD/Argo-Workflows/CI-instantiable): a driver renders ONE
+# copy of this Job per build with the ${...} placeholders bound and creates it in the build
+# namespace. Drivers (any of):
+#   * the `.gitlab-ci.yml` `build:images` job (kubectl-applies a rendered copy — the documented
+#     dispatch into the in-cluster pipeline that replaces the echo stub);
+#   * ArgoCD (the Job rendered into a Sync hook / PostSync Application);
+#   * Argo-Workflows (a WorkflowTemplate step), if/when the Workflows controller is installed.
+# No driver is wired live by default — this ships dark (see SHIPS DARK below).
+#
+# WHY KANIKO (matches the #110 fork): rootless, k8s-native, no Docker daemon / privileged
+# socket. Builds from a Dockerfile in a build context and pushes to the in-cluster registry
+# entirely in userspace, satisfying the platform's no-privileged-container posture (runAsNonRoot,
+# drop ALL caps, seccomp RuntimeDefault, readOnlyRootFilesystem except the kaniko workdir).
+#
+# SHIPS DARK: this is a TEMPLATE, not a live Job — nothing applies it. It is NOT listed in any
+# kustomization, so ArgoCD never syncs it directly even when the (opt-in) image-builder
+# Application is enabled. The namespace + NetworkPolicy (namespace-and-netpol.yaml) are the only
+# ArgoCD-managed resources; they are inert until a build lands here.
+#
+# ${PLACEHOLDERS} (bound by the driver per build):
+#   ${BUILD_NAME}      a DNS-safe per-build id (e.g. gateway-be-<short-sha>)
+#   ${BUILD_NAMESPACE} the build namespace (default hugmesh-image-builds)
+#   ${CONTEXT}         the Kaniko build context: git://<repo>#<ref> (e.g.
+#                      git://github.com/hugmesh-net/hugmesh-gateway.git#main)
+#   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
+#   ${DEST_IMAGE}      the IMMUTABLE destination image ref WITH a tag/digest in the in-cluster
+#                      registry, matching the app kustomizations' newName convention, e.g.
+#                      registry.hugmesh.systems/hugmesh/hugmesh-gateway:<sha> (or :<tag>
+#                      for a release). Kaniko pushes this in the same build.
+#   ${DEST_IMAGE_MOVING} the MOVING destination ref the deploy/kustomize tracks for dev, e.g.
+#                      registry.hugmesh.systems/hugmesh/hugmesh-gateway:<ref-slug>
+#                      (the default branch resolves to :main, matching the app kustomizations'
+#                      newTag: main). Kaniko pushes BOTH destinations from the ONE build, so the
+#                      moving + immutable tags always point at byte-identical layers. A driver
+#                      that wants only the immutable tag binds ${DEST_IMAGE_MOVING} to the SAME
+#                      value as ${DEST_IMAGE} (Kaniko de-dups identical destinations).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: image-build-${BUILD_NAME}
+  namespace: ${BUILD_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: image-builder
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/image-build: "${BUILD_NAME}"
+spec:
+  backoffLimit: 1
+  # Reap the Job 1h after completion so finished builds don't accumulate.
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: image-builder
+        hugmesh.systems/image-build: "${BUILD_NAME}"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+        # Pin a dedicated MCS identity for app-image build pods, distinct from the #110
+        # Service-Catalog builder (s0:c54) and away from the runtime-app bands, so a build
+        # pod cannot share a category with any deployed service. Keep in sync with the MCS
+        # identity matrix in docs/SECURITY.md §3.
+        # Was c55, a PRE-EXISTING collision with the tube deployment (s0:c55); moved to
+        # the next free category c75 above the current max.
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c75"
+      containers:
+        - name: kaniko
+          # Rootless Kaniko executor. Pin a digest in production (the prod-hygiene gate
+          # rewrites :latest/:dev tags); :v1.23.2 here is the floor the generator tracks —
+          # identical to the #110 builder so the two builders stay lockstep.
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - "--context=${CONTEXT}"
+            - "--dockerfile=${DOCKERFILE}"
+            # Push BOTH the immutable (SHA/release-tag) and the moving (branch/dev)
+            # destinations from the ONE build, so they always reference byte-identical
+            # layers. Kaniko accepts multiple --destination flags and de-dups identical
+            # values (a driver that wants only the immutable tag binds both the same).
+            - "--destination=${DEST_IMAGE}"
+            - "--destination=${DEST_IMAGE_MOVING}"
+            # Reproducible + rootless build hygiene.
+            - "--reproducible"
+            - "--single-snapshot"
+            - "--use-new-run"
+            # The registry is the in-cluster Harbor registry; creds mounted below at
+            # /kaniko/.docker (ESO-materialized, NEVER in git).
+            - "--cache=false"
+          env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+          volumeMounts:
+            # Registry push credentials (the in-cluster Harbor registry push secret,
+            # ESO-materialized into the build namespace as a dockerconfigjson). Read-only.
+            - name: docker-config
+              mountPath: /kaniko/.docker
+              readOnly: true
+            # Kaniko's writable workdir + tmp (readOnlyRootFilesystem above forces these
+            # onto emptyDir so the image layers + scratch never touch the node fs).
+            - name: kaniko-workdir
+              mountPath: /kaniko
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: docker-config
+          secret:
+            # ESO-materialized PUSH secret for this builder's namespace, created by the
+            # image-builder-registry ExternalSecret (manifests/external-secrets/
+            # image-builder-externalsecrets.yaml): a dockerconfigjson with write_registry scope
+            # for registry.hugmesh.systems, sourced from Vault secret/<brand>/harbor-robots (push_name/push_secret) via the harbor-provision Job.
+            # NEVER in git. Mirrors the #110 service-catalog-builder-registry contract.
+            secretName: image-builder-registry
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+        - name: kaniko-workdir
+          emptyDir: {}
+        - name: workspace
+          emptyDir: {}

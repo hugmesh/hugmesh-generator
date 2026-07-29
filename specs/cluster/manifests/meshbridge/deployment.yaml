@@ -1,0 +1,209 @@
+# meshbridge — Meshtastic LoRa mesh <-> Matrix (tuwunel) bridge.
+# OPTIONAL SERVICE, DEFAULT-OFF, RUNTIME-ONLY (the coturn pattern: see
+# specs/cluster/optional-services.yaml + the apps/13a ApplicationSet element
+# installed:"false"). When NOT deployed, nothing references it — a default build
+# is byte-identical to a build without this feature.
+#
+# Lives in hugmesh-backend ALONGSIDE tuwunel: the bridge is a Matrix
+# APPSERVICE (exclusive user namespace @mesh-.*), so it talks the plain
+# in-namespace CS API (tuwunel:8008, like the tuwunel-admin-sync Job) — NOT the
+# mTLS tuwunel-proxy:4443: appservice tokens are not user-custody tokens and
+# never transit the gateway, so the proxy's revocation-filter trade-off does not
+# apply (docs/MESHTASTIC-BRIDGE.md "Architecture"). tuwunel pushes room traffic
+# BACK to the bridge via AS transactions (PUT /_matrix/app/v1/transactions/…)
+# on the Service below (:8009) — that push is the only ingress this pod accepts
+# (see network-policy.yaml).
+#
+# The app itself is dependency-free Python 3.12 (stdlib only, python:3.12-alpine
+# — the tuwunel-admin-sync precedent), mounted from the kustomize-generated
+# meshbridge-app ConfigMap (name-suffix hash kept so code changes roll the pod).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-meshbridge
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: meshbridge
+    app: hugmesh-meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: meshbridge
+spec:
+  replicas: 1                  # single writer: per-device serial/TCP/MQTT sessions + txn dedupe are in-process
+  selector:
+    matchLabels:
+      app: hugmesh-meshbridge
+  template:
+    metadata:
+      labels:
+        app: hugmesh-meshbridge
+        app.kubernetes.io/name: meshbridge
+        app.kubernetes.io/part-of: hugmesh.systems
+        hugmesh.systems/optional-service: meshbridge
+    spec:
+      serviceAccountName: sa-meshbridge
+      automountServiceAccountToken: false
+      nodeSelector:
+        hugmesh.systems/backend: "true"
+      # ── USB-serial LoRa attachment (OPTIONAL — ships commented-out) ─────────
+      # A `serial` device (devices.json transport:"serial") needs the host device
+      # file, and a hostPath only exists on the ONE node the radio is physically
+      # plugged into — so serial attachments REQUIRE pinning the pod to that node
+      # (docs/MESHTASTIC-BRIDGE.md "Device attachments"). TCP (LoRa-WiFi) and
+      # mqtt devices work from any backend node and need none of this. To attach
+      # a USB radio, uncomment ALL FOUR blocks below (nodeSelector pin,
+      # supplementalGroups, volumeMount, volume) and set the real by-id path +
+      # hostname:
+      #
+      # nodeSelector:
+      #   hugmesh.systems/backend: "true"
+      #   kubernetes.io/hostname: <frontend-node-with-radio>   # the node the radio is plugged into
+      securityContext:
+        # Unique MCS category s0:c76 (docs/SECURITY.md §3 matrix row). No two
+        # workloads may share a category — meshbridge is isolated from tuwunel
+        # (c32) et al. even though it co-resides in hugmesh-backend.
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c76"
+        # supplementalGroups: [20]   # dialout — group-owner of /dev/serial/* device
+        #                            # files; required to open the USB radio as
+        #                            # runAsUser 1000 (uncomment WITH the hostPath).
+      containers:
+        - name: meshbridge
+          image: python:3.12-alpine
+          command: ["python3", "/app/main.py"]
+          env:
+            # ── Matrix (tuwunel) — in-namespace CS API + AS listener ──────────
+            - { name: MATRIX_URL,         value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
+            # The AS HTTP listener (tuwunel pushes PUT /_matrix/app/v1/transactions
+            # here) + /healthz share this port; must match the Service/registration.
+            - { name: MESHBRIDGE_LISTEN_PORT, value: "8009" }
+            # The bridge's own sender (@meshbridge:<server>) — must match the
+            # sender_localpart in the appservice registration (register Job).
+            - { name: MESHBRIDGE_SENDER_LOCALPART, value: "meshbridge" }
+            # Appservice token pair — FILE paths (ESO-mounted Secret
+            # meshbridge-appservice; see manifests/external-secrets/
+            # meshbridge-externalsecrets.yaml). Never env literals, never logged.
+            - { name: MESHBRIDGE_AS_TOKEN_FILE, value: "/run/secrets/meshbridge/as_token" }
+            - { name: MESHBRIDGE_HS_TOKEN_FILE, value: "/run/secrets/meshbridge/hs_token" }
+            # ── Device attachments (operator surface) ─────────────────────────
+            - { name: MESHBRIDGE_DEVICES_FILE, value: "/etc/meshbridge/devices.json" }
+            # ── user-bff node-id registration poll ────────────────────────────
+            # The node-id -> platform-user mapping lives in user-bff; the bridge
+            # polls its INTERNAL surface every MESHBRIDGE_REG_POLL_SECONDS and
+            # keeps the last good copy on failure (fail-soft: attribution
+            # degrades to anonymous, never blocks traffic). That surface is
+            # gated hasRole('SERVICE') — a Casdoor CLIENT-CREDENTIALS JWT — so
+            # the bridge holds a Casdoor OIDC client (below), NOT a bespoke
+            # shared token (the signup-gate/app-fragment-sync machine-client
+            # precedent). NOTE: user-bff-api also REQUIRES a cluster-CA mTLS
+            # client cert at the transport layer (SSL_CLIENT_AUTH=need) — see
+            # the network-policy header for the follow-up on that leg.
+            - { name: MESHBRIDGE_USERBFF_MESH_DEVICES_URL, value: "https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/user/internal/mesh-devices" }
+            - { name: MESHBRIDGE_REG_POLL_SECONDS, value: "60" }
+            # ── Casdoor client-credentials (mints the SERVICE JWT above) ──────
+            # In-cluster Casdoor token endpoint (same DNS the admin-sync Jobs +
+            # signup-gate use). Client id/secret are ESO-mounted FILES from the
+            # same meshbridge-appservice Secret — see the ESO header for the
+            # (manual) client provisioning contract.
+            - { name: MESHBRIDGE_OIDC_TOKEN_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/api/login/oauth/access_token" }
+            - { name: MESHBRIDGE_OIDC_CLIENT_ID_FILE,     value: "/run/secrets/meshbridge/oidc_client_id" }
+            - { name: MESHBRIDGE_OIDC_CLIENT_SECRET_FILE, value: "/run/secrets/meshbridge/oidc_client_secret" }
+            # ── mTLS client identity for the user-bff leg (SSL_CLIENT_AUTH=need
+            # on :8080): Vault-PKI-issued via ESO (meshbridge-client-mtls below +
+            # the VaultDynamicSecret in external-secrets/meshbridge-externalsecrets.yaml).
+            - { name: MESHBRIDGE_USERBFF_CLIENT_CERT_FILE, value: "/run/secrets/meshbridge-mtls/tls.crt" }
+            - { name: MESHBRIDGE_USERBFF_CLIENT_KEY_FILE,  value: "/run/secrets/meshbridge-mtls/tls.key" }
+            - { name: MESHBRIDGE_USERBFF_CA_FILE,          value: "/run/secrets/meshbridge-mtls/ca.crt" }
+            # ── OPTIONAL mesh-bff sync leg: node directory + mesh-room snapshot
+            # push. Unset by default — mesh-bff-api is its own optional service;
+            # the bridge is fully functional without it (user-bff leg only).
+            # - { name: MESHBRIDGE_MESHBFF_SYNC_URL, value: "https://hugmesh-mesh-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/mesh/internal/bridge-sync" }
+          ports:
+            - { name: as-http, containerPort: 8009 }
+          resources:
+            requests: { cpu: 50m,  memory: 96Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8009 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8009 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          volumeMounts:
+            - { name: app,     mountPath: /app,                   readOnly: true }
+            - { name: devices, mountPath: /etc/meshbridge,        readOnly: true }
+            - { name: secrets, mountPath: /run/secrets/meshbridge, readOnly: true }
+            - { name: mtls,    mountPath: /run/secrets/meshbridge-mtls, readOnly: true }
+            - { name: tmp,     mountPath: /tmp }
+            # ── USB-serial LoRa attachment (uncomment WITH the hostPath volume,
+            # the nodeSelector pin and supplementalGroups above) ──
+            # - { name: radio-serial, mountPath: /dev/serial/by-id/usb-EXAMPLE, readOnly: false }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        # Bridge code — kustomize-generated (name-suffix hash rolls the pod on
+        # any app/*.py change; kustomize rewrites this reference).
+        - name: app
+          configMap: { name: meshbridge-app }
+        # Radio attachments (devices.json) — the operator surface. tcp + mqtt
+        # entries work from any backend node; serial needs the hostPath below.
+        - name: devices
+          configMap: { name: meshbridge-devices }
+        # ESO-synced appservice + OIDC-client (+ optional MQTT broker) secrets.
+        # The pod is only scheduled when meshbridge is selected at runtime; until
+        # the Vault path is provisioned the Secret is absent and the pod stays
+        # Pending (no literal ever on git).
+        - name: secrets
+          secret:
+            secretName: meshbridge-appservice
+        # Vault-PKI mTLS client pair for the user-bff internal leg (ESO
+        # VaultDynamicSecret meshbridge-client-mtls; kubernetes.io/tls + ca.crt).
+        # Optional at pod level so a cluster without the PKI role still schedules
+        # (the user-bff leg then degrades to anonymous attribution, logged).
+        - name: mtls
+          secret:
+            secretName: meshbridge-client-mtls
+            optional: true
+        # Scratch for the read-only rootfs (reconnect state, temp buffers).
+        - name: tmp
+          emptyDir: {}
+        # ── USB-serial LoRa attachment (uncomment WITH the blocks above) ──────
+        # The radio's stable udev by-id path, passed through at the SAME path so
+        # devices.json entries are copy-pasteable between host and pod. CharDevice
+        # type => the mount FAILS FAST if the radio is unplugged/renamed instead
+        # of silently creating a directory.
+        # - name: radio-serial
+        #   hostPath:
+        #     path: /dev/serial/by-id/usb-EXAMPLE
+        #     type: CharDevice
+---
+# ── Service ───────────────────────────────────────────────────────────────────
+# ClusterIP AS-push target: tuwunel delivers appservice transactions (room
+# traffic for rooms any @mesh-* user or @meshbridge is joined to) to THIS DNS
+# name — it is the `url:` in the appservice registration the register Job posts
+# (meshbridge-register-job.yaml). In-cluster only; meshbridge owns NO gateway
+# host and NO gateway routes (nothing user-facing speaks HTTP to it).
+apiVersion: v1
+kind: Service
+metadata:
+  name: meshbridge
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/optional-service: meshbridge
+spec:
+  type: ClusterIP
+  selector:
+    app: hugmesh-meshbridge
+  ports:
+    - { name: as-http, port: 8009, targetPort: as-http }

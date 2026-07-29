@@ -1,0 +1,168 @@
+# =============================================================================
+# Kyverno ClusterPolicy — Pod securityContext baseline (AUDIT / report-only).
+# =============================================================================
+# The GITOPS/ADMISSION layer of the container-hardening invariant. The audit
+# (hugmesh-pentest-standard: CIS K8s 5.2/5.3, NIST 800-190 §4.5, NIST 800-53
+# AC-6/SC-39) found that workloads set only POD-level seLinuxOptions and had NO
+# container-level securityContext, and that no admission policy enforced the
+# hardened pattern the media-poisoner exemplar already follows (runAsNonRoot +
+# drop ALL + readOnlyRootFilesystem + seccompProfile RuntimeDefault).
+#
+# >>> THIS POLICY IS AUDIT-ONLY. validationFailureAction: Audit. <<<
+#   It REPORTS drift (PolicyReport / admission warning + Kyverno event) and does
+#   NOT block any pod. Stateful workloads (postgres/clickhouse/kafka/vault/akkoma
+#   /tuwunel/forgejo/casdoor) are crash-loop-risky and are hardened one-at-a-time
+#   per docs/CLUSTER-HARDENING-PLAN.md; until that rollout completes this policy
+#   only surfaces which workloads still drift. The Audit -> Enforce flip is a
+#   DELIBERATE, separate change gated on the drift report being clean (see the
+#   plan). failurePolicy: Ignore so an admission-webhook hiccup never wedges the
+#   cluster while we are in report-only mode.
+#
+# DEPENDENCY: Kyverno (apps/15-kyverno.yaml). Inert without the CRD. Deployed by
+# the reserved-prefixes-policy ArgoCD Application (apps/16-reserved-prefixes-
+# policy.yaml -> manifests/policy), the same bundle as the reserved-prefix guard.
+#
+# SCOPE: only the HugMesh application namespaces (hugmesh-*, devops). The
+# kube-system / kyverno / calico-system / ingress-nginx system namespaces are
+# excluded — their components legitimately need root/host access and are governed
+# by their own upstream charts.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: securitycontext-baseline
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/component: policy
+  annotations:
+    policies.kyverno.io/title: Pod securityContext baseline (audit)
+    policies.kyverno.io/category: HugMesh Hardening
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod, Deployment, StatefulSet, DaemonSet, Job
+    hugmesh.systems/control-ids: "CIS-K8s-5.2.5,5.2.6,5.2.7,5.2.8,5.2.9,5.3.2;NIST-800-190-4.5;NIST-800-53-AC-6,SC-39"
+    policies.kyverno.io/description: >-
+      Report-only (Audit) baseline asserting the media-poisoner hardened pattern
+      across the HugMesh app namespaces: runAsNonRoot, every container drops
+      ALL capabilities, allowPrivilegeEscalation:false, seccompProfile
+      RuntimeDefault, and automountServiceAccountToken:false. Reports drift; does
+      NOT block. The Audit -> Enforce flip is sequenced in
+      docs/CLUSTER-HARDENING-PLAN.md after the per-workload rollout clears.
+spec:
+  # AUDIT, NOT Enforce — reports/records violations, never blocks a pod.
+  validationFailureAction: Audit
+  background: true
+  # Report-only: never let an admission hiccup wedge a sync while we audit.
+  failurePolicy: Ignore
+  rules:
+    # -------------------------------------------------------------------------
+    # (1) runAsNonRoot — pod OR every container must set runAsNonRoot:true.
+    #     CIS K8s 5.2.6 / NIST 800-190 §4.5.3.
+    # -------------------------------------------------------------------------
+    - name: require-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces:
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
+                - devops
+      validate:
+        message: >-
+          (audit) runAsNonRoot must be true at the pod or container level
+          (CIS K8s 5.2.6). Replicate the media-poisoner exemplar.
+        anyPattern:
+          - spec:
+              securityContext:
+                runAsNonRoot: true
+          - spec:
+              containers:
+                - securityContext:
+                    runAsNonRoot: true
+
+    # -------------------------------------------------------------------------
+    # (2) Drop ALL capabilities + no privilege escalation + seccomp, on EVERY
+    #     container (and initContainer). CIS K8s 5.2.5/5.2.7-5.2.9/5.7.2.
+    # -------------------------------------------------------------------------
+    - name: require-drop-all-and-no-privesc
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces:
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
+                - devops
+      validate:
+        message: >-
+          (audit) every container must drop ALL capabilities and set
+          allowPrivilegeEscalation:false (CIS K8s 5.2.5/5.2.7-5.2.9).
+        pattern:
+          spec:
+            =(initContainers):
+              - securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+
+    # -------------------------------------------------------------------------
+    # (3) seccompProfile RuntimeDefault — pod OR every container. CIS K8s 5.7.2.
+    # -------------------------------------------------------------------------
+    - name: require-seccomp-runtime-default
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces:
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
+                - devops
+      validate:
+        message: >-
+          (audit) seccompProfile must be RuntimeDefault (or Localhost) at the
+          pod or container level (CIS K8s 5.7.2).
+        anyPattern:
+          - spec:
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault | Localhost
+          - spec:
+              containers:
+                - securityContext:
+                    seccompProfile:
+                      type: RuntimeDefault | Localhost
+
+    # -------------------------------------------------------------------------
+    # (4) automountServiceAccountToken:false — a pod that never calls the k8s API
+    #     should not have its ServiceAccount token mounted. NIST 800-53 AC-6,
+    #     800-190 §4.5.5. Audited at the pod spec; set it on the workload
+    #     template (or the ServiceAccount) to clear.
+    # -------------------------------------------------------------------------
+    - name: require-no-automount-sa-token
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces:
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
+                - devops
+      validate:
+        message: >-
+          (audit) automountServiceAccountToken should be false for pods that do
+          not call the Kubernetes API (NIST 800-53 AC-6 least privilege).
+        pattern:
+          spec:
+            automountServiceAccountToken: false

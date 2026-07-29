@@ -1,0 +1,33 @@
+# hugmesh-media-poisoner — the OPTIONAL x86/GPU AI-cloak/poison worker.
+#
+# OPTIONAL + MANUAL by design: there is deliberately NO `syncPolicy.automated` here
+# (unlike the always-on apps), so an operator EXPLICITLY syncs it only on a cluster
+# that has the x86_64 GPU node. On a Pi5-only cluster you simply never sync it (or, if
+# synced, the Deployment's nodeSelector arch=amd64 + compute=gpu keeps the pod
+# Pending) and the hugmesh-user-bff-api media-proxy degrades to its lean fallback
+# (warn-before-post) via the /health capability probe. Mirrors how hugmesh-games
+# rides the same x86 GPU contract, but games is automated wave "2"; this worker is
+# kept manual so a no-GPU operator is never surprised by a permanently-Pending pod.
+#
+# sync-wave "3": AFTER the homeservers (akkoma/tuwunel, wave "30"-range apps) and the
+# user-bff-api so the BFF media-proxy exists before its compute backend. (Wave value
+# only orders within a manual sync; it does not auto-trigger.)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-media-poisoner
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/media-poisoner
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  # NO `automated:` block => MANUAL sync (operator opt-in on a GPU-equipped cluster).
+  syncPolicy:
+    syncOptions: [CreateNamespace=true]

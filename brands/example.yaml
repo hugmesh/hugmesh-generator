@@ -1,0 +1,95 @@
+# brands/example.yaml — STRUCTURED brand schema (mesh templating pilot, Phase 1).
+#
+# This is the forward-looking, structured shape for a brand profile. It is
+# ADDITIVE: the shell-sourced brands/*.conf path is unchanged and remains the
+# default. This YAML DEGRADES CLEANLY to today's 7 scalars via the loader
+# scripts/tooling/load-brand-schema.js, which emits shell KEY=VALUE lines that
+# any existing .conf consumer can `source` (so it stays shape-compatible).
+#
+# Mapping to the 7 legacy scalars:
+#   brand            -> BRAND
+#   title            -> BRAND_TITLE
+#   org              -> ORG
+#   domains[0]       -> CLUSTER_DOMAIN   (first domain = primary cluster domain)
+#   release_state    -> RELEASE_STATE
+#   mesh.headscale_url -> HEADSCALE_URL
+#   mesh.tag         -> MESH_TAG
+#   (HARBOR_PROJECT stays DERIVED from org by the shell, single source of truth)
+#
+# NEVER put secrets (ROOT_PASS, *_SECRET, *_TOKEN, VAULT_*, CA_KEY, MAIL_*) in a
+# committed brand file — structured or scalar. See scripts/tooling/tokens.json.
+
+brand: example
+title: Example Corp
+org: Example-Inc
+
+# domains[] is a LIST; the first entry is the primary CLUSTER_DOMAIN. Additional
+# entries are reserved for the multi-domain future (vanity/subdomain routing).
+domains:
+  - example.test
+
+release_state: internal            # internal (default) | public
+
+mesh:
+  headscale_url: https://headscale.example.test
+  tag: tag:example
+
+# services[] with an explicit `installed` flag — the structured replacement for
+# today's implicit "everything is on". Consumed later by the app-gate; ignored by
+# the scalar-degrade path (which only needs the 7 tokens).
+services:
+  - name: harbor
+    installed: true
+  - name: gateway
+    installed: true
+  - name: social-ui
+    installed: true
+  - name: forum-ui
+    installed: false
+
+# repos[] TENANT-SET manifest (Phase 4): {name, archetype, installed, identity}.
+# `overlay` is now archetype-derived (templates/archetypes/<archetype>), NOT a
+# per-repo hand overlay; `base` defaults to hugmesh-<name>. Read as STRUCTURED
+# data by the Node driver (render-tenant-set.js) ONLY — never degraded to shell.
+# See brands/acme.yaml for a full N-repo example.
+repos:
+  - { name: login-ui,     archetype: angular-mfe, installed: true, identity: { app_slug: login, title_word: Login } }
+  - { name: admin-bff-api, archetype: spring-bff, installed: true }
+  - { name: gateway,      archetype: gateway,     installed: true, identity: { profile: be } }
+  - { name: forum-ui,     archetype: angular-mfe, installed: false, identity: { app_slug: forum, title_word: Forum } }
+
+  # ── Example-codebase archetypes (all four) — COMMENTED illustrative rows ─────
+  # Uncomment a row (and set `installed: true`) to instantiate that archetype's
+  # RUNNABLE example. The example TRIO — spring-bff API + angular-mfe remote +
+  # angular-host shell — plus the remote-fragment runtime-bundle pod is the
+  # end-to-end module-federation walkthrough in docs/FEDERATION-EXAMPLES.md. Each
+  # renders from its `_skeleton/` when the Tier-2 base is unpullable (two-tier
+  # fallback), so these need no base clone to try (bar remote-fragment; see below).
+  #
+  # spring-bff — runnable Spring Boot 4 WebFlux BFF skeleton. identity.app_slug
+  #   MUST be [a-z0-9]+ (no hyphens): it is the Java package segment
+  #   systems.hugmesh.<app_slug>. Serves GET /api/<app_slug>/hello + actuator.
+  # - { name: hello-bff-api, archetype: spring-bff, installed: false, identity: { app_slug: hello } }
+  #
+  # angular-mfe — runnable Angular 22 native-federation REMOTE skeleton; exposes
+  #   ./routes for the host shell. app_slug = npm segment / ng target / remote
+  #   name; title_word = the per-UI tab-title word.
+  # - { name: hello-ui, archetype: angular-mfe, installed: false, identity: { app_slug: hello, title_word: Hello } }
+  #
+  # angular-host — runnable Angular native-federation HOST shell skeleton (the
+  #   fe-gateway /** catch-all). Dynamic /api/federation/manifest unioned over a
+  #   static floor. HOST_NAME is brand-derived (<BRAND>-host), but the skeleton's
+  #   ONE example remote IS per-repo identity: app_slug names it (static-floor key,
+  #   mount path, menu slug) and title_word is its menu label — the same pair the
+  #   angular-mfe row above sets and docs/FEDERATION-EXAMPLES.md renders with
+  #   `--set APP_SLUG=hello --set TITLE_WORD=Hello`. Omit them and the floor /
+  #   REMOTE_ROUTES / menu render EMPTY (a non-mounting host). Exemplar base =
+  #   the site shell, published as hugmesh-host-shell, so the row name `host-shell`
+  #   resolves through the normal pull (HOST_SHELL_BASE_DIR only for offline use).
+  # - { name: host-shell, archetype: angular-host, installed: false, identity: { app_slug: hello, title_word: Hello } }
+  #
+  # remote-fragment — runtime federation-bundle delivery pod (Spring-Native sync
+  #   sidecar + static nginx). NO runnable skeleton (base-required): the REAL base
+  #   IS the example codebase — point REMOTE_FRAGMENT_BASE_DIR at a clone. Brand
+  #   surface = one CI-include anchor; no per-repo identity.
+  # - { name: remote-fragment, archetype: remote-fragment, installed: false }

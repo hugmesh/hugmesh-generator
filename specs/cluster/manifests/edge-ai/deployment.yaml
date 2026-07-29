@@ -1,0 +1,109 @@
+# hugmesh-edge-ai — the mesh inference node. Runs Ollama on a GPU node and serves
+# an OpenAI-COMPATIBLE API (/v1/chat/completions, /v1/embeddings, /v1/models) on
+# :11434. Any mesh pod consumes it in-cluster at
+#   http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434/v1
+# and any tailnet node/device reaches it through the be-gateway host route
+#   https://ai.${CLUSTER_DOMAIN}/v1   (role-gated by the route-access DB).
+#
+# GPU-SCHEDULED: nodeSelector pins it to an NVIDIA GPU worker; runtimeClassName
+# nvidia + the nvidia.com/gpu resource request route it through the nvidia container
+# runtime (advertised by the nvidia-device-plugin DaemonSet, apps/01d). On a Jetson
+# Orin Nano the same manifest applies (arch arm64 — overridden by the jetson kustomize
+# overlay; see specs-jetson).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-edge-ai
+  namespace: hugmesh-inference
+  labels:
+    app: hugmesh-edge-ai
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  replicas: 1
+  # Models are big; never run two pods fighting over one GPU's VRAM during a rollout.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: hugmesh-edge-ai } }
+  template:
+    metadata: { labels: { app: hugmesh-edge-ai } }
+    spec:
+      # GPU-gated: require an NVIDIA GPU worker (labelled by keys-provision). On a
+      # dedicated inference node this is the edge_ai role; be+gpu / omnibus also match.
+      nodeSelector:
+        hugmesh.systems/compute: gpu
+      runtimeClassName: nvidia
+      securityContext:
+        seLinuxOptions:
+          # Unique MCS level (docs/SECURITY.md §3 matrix); edge-ai -> c73.
+          # Was c41, a PRE-EXISTING collision with social-ui host-web (s0:c41);
+          # moved to the next free category above the current max. MCS categories
+          # are self-contained isolation labels referenced nowhere else, so the
+          # reassignment is safe (no external reference to update).
+          type: container_t
+          level: "s0:c73"
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - { name: http, containerPort: 11434, protocol: TCP }
+          env:
+            - { name: OLLAMA_HOST,    value: "0.0.0.0:11434" }
+            - { name: OLLAMA_MODELS,  value: "/root/.ollama" }
+            # Serving knobs sourced from the edge-ai-models ConfigMap (the model-library
+            # config exposed to the mesh) so a retune is a ConfigMap edit + restart.
+            - { name: OLLAMA_CONTEXT_LENGTH,    valueFrom: { configMapKeyRef: { name: edge-ai-models, key: context-length } } }
+            - { name: OLLAMA_KEEP_ALIVE,        valueFrom: { configMapKeyRef: { name: edge-ai-models, key: keep-alive } } }
+            - { name: OLLAMA_MAX_LOADED_MODELS, valueFrom: { configMapKeyRef: { name: edge-ai-models, key: max-loaded-models } } }
+            - { name: OLLAMA_NUM_PARALLEL,      valueFrom: { configMapKeyRef: { name: edge-ai-models, key: num-parallel } } }
+            - { name: OLLAMA_FLASH_ATTENTION,   valueFrom: { configMapKeyRef: { name: edge-ai-models, key: flash-attention } } }
+            - { name: EDGE_AI_PRELOAD,          valueFrom: { configMapKeyRef: { name: edge-ai-models, key: preload } } }
+          resources:
+            # One GPU; CPU/mem are the host-side serving overhead, not the model VRAM.
+            requests: { cpu: "1",  memory: 2Gi }
+            limits:
+              cpu: "4"
+              memory: 8Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - { name: models-cache, mountPath: /root/.ollama }
+          # Preload the configured models in the BACKGROUND once the server is up, so
+          # readiness is not blocked on multi-GB pulls. /api/tags responds as soon as
+          # the server is live; preloaded models then appear as they finish.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    ( for m in $(echo "${EDGE_AI_PRELOAD}" | tr ',' ' '); do
+                        [ -n "$m" ] && ollama pull "$m" || true
+                      done ) >/tmp/edge-ai-preload.log 2>&1 &
+          readinessProbe:
+            httpGet: { path: /api/tags, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/tags, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: models-cache
+          persistentVolumeClaim: { claimName: edge-ai-models-cache }
+---
+# ClusterIP Service — the in-cluster (k8s mesh) consumption endpoint. The be-gateway
+# host route ai.${CLUSTER_DOMAIN} (apps/20-gateway-be.yaml) fronts THIS Service for
+# tailnet/external access.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-edge-ai
+  namespace: hugmesh-inference
+  labels:
+    app: hugmesh-edge-ai
+    app.kubernetes.io/part-of: hugmesh.systems
+spec:
+  selector: { app: hugmesh-edge-ai }
+  ports:
+    - { name: http, port: 11434, targetPort: http }

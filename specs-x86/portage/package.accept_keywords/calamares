@@ -1,0 +1,6 @@
+# ~amd64 keyword unmask for the graphical Qt installer. Copied ONLY when
+# --installer-ui calamares|all (WANT_CALAMARES). calamares + its KPMcore partitioning
+# backend are ~amd64. Unversioned for tree-bump durability. (A full in-chroot pretend
+# may surface transitive ~amd64 deps — run it like the payload graph before shipping.)
+app-admin/calamares ~amd64
+sys-libs/kpmcore ~amd64

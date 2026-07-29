@@ -1,0 +1,136 @@
+# Per-POD homeserver ISOLATION (ban/congruence foundation — network backstop).
+#
+# The tier-level tier-ingress.yaml policy in hugmesh-backend admits the WHOLE
+# hugmesh-backend namespace + hugmesh-frontend (fe-gateway) to EVERY pod
+# (podSelector: {}). akkoma + tuwunel (and their Postgres/RocksDB state) live in
+# that namespace, so under tier-ingress alone any backend or frontend pod could
+# reach the homeservers DIRECTLY — bypassing the be-gateway route-access checks,
+# the mod-bff/admin-bff platform-role enforcement, and the homeserver-token
+# revocation that a platform ban relies on.
+#
+# This file is the per-pod backstop that makes the ban REAL at the network layer:
+# the homeserver client/admin surfaces become reachable ONLY from the legitimate
+# callers — the be-gateway (user/mod traffic, route-access-gated), the mod-bff-api
+# (immediate ban deactivate), the admin-bff-api (the reconcile loop +
+# ServiceTokenBroker), the user-bff-api (the D6 self-service homeserver-proxy
+# caller — SHIPS DARK behind app.hs-token.enabled), and the akkoma/tuwunel
+# admin-sync jobs (backstop reconcile). Everything else (hugmesh-frontend, the
+# rest of hugmesh-backend, games, observability) is DENIED by the default-deny
+# these per-pod policies create.
+#
+# IMPORTANT — k8s NetworkPolicy is ADDITIVE (union of all selecting policies), it
+# has NO deny/exclude. So this isolation only holds if the BROAD tier-ingress
+# policy STOPS selecting the homeserver pods (else its open from-set re-admits the
+# whole namespace + frontend). tier-ingress.yaml (hugmesh-backend) was therefore
+# narrowed with a podSelector matchExpressions that EXCLUDES the homeserver +
+# homeserver-proxy + homeserver-db pods (app.kubernetes.io/name NotIn the set
+# below). These two files are a PAIR — keep them in sync.
+#
+# Reachability into the homeservers is intended to be the mTLS PROXY sidecar
+# (:4443, akkoma-proxy / tuwunel-proxy Services — see manifests/akkoma|tuwunel),
+# which terminates a cluster-CA client cert and forwards to localhost:4000/:8008.
+# The proxy runs as a sidecar in the SAME pod as akkoma/tuwunel, so a from-rule
+# that reaches the akkoma/tuwunel pod reaches the proxy port too; the policies
+# below select the homeserver app pods (which carry the proxy) + the DB pods.
+#
+# DEPLOY ORDERING: ship this NetworkPolicy + the mTLS sidecars BEFORE advertising a
+# platform ban as ENFORCED. Until both land, a ban is DEGRADED (role removed on the
+# JWT legs only; a live homeserver session could still reach the pod directly).
+# Ships behind the same MANUAL-sync ArgoCD app as tier-ingress (apps/08-networkpolicy)
+# and needs LIVE on-cluster connectivity validation before it is relied upon.
+---
+# ── akkoma (Mastodon/fediverse) — app pod + proxy sidecar ──────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: homeserver-isolation-akkoma
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: akkoma }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # be-gateway — user/mod client traffic, already route-access-gated to the
+        # platform roles (ROLE_MASTODON/ROLE_MOD/ROLE_ADMIN). It presents the mTLS
+        # client cert to the akkoma-proxy:4443 sidecar.
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: hugmesh-be-gateway }
+        # mod-bff-api — immediate ban deactivate (MastodonAdminClient.doBlock seam).
+        - podSelector:
+            matchLabels: { app: hugmesh-mod-bff-api }
+        # admin-bff-api — the reconcile loop + ServiceTokenBroker register/login.
+        - podSelector:
+            matchLabels: { app: hugmesh-admin-bff-api }
+        # user-bff-api — the D6 self-service homeserver-proxy caller. user-bff mints
+        # + custody-holds the homeserver-NATIVE token server-side and forwards it
+        # through akkoma-proxy:4443 (the nginx mTLS front passes the bearer through
+        # unchanged), so the user's /bff/user/** self-service surfaces reach akkoma
+        # WITHOUT the be-gateway hop. It presents its OWN cluster-CA client cert
+        # (hugmesh-user-bff-api-mtls — the same PEM its server keystore is built
+        # from). SHIPS DARK: this rule only OPENS the network path; the user-bff
+        # hs-token mint/proxy code stays inert behind app.hs-token.enabled (default
+        # false), so until that flag flips no traffic actually flows on it.
+        - podSelector:
+            matchLabels: { app: hugmesh-user-bff-api }
+        # akkoma admin-sync Job — the ROLE_MOD/ROLE_ADMIN (+ ban-absence) backstop.
+        - podSelector:
+            matchLabels: { app: akkoma-admin-sync }
+      ports:
+        - { protocol: TCP, port: 4443 }   # mTLS proxy sidecar (cluster-CA client certs)
+        - { protocol: TCP, port: 4000 }   # akkoma http (in-pod localhost; sync job exec/REST)
+---
+# ── akkoma-db (Postgres) — reachable ONLY from the akkoma app pod ──────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: homeserver-isolation-akkoma-db
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma-db, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: akkoma-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: akkoma }
+        - podSelector:
+            matchLabels: { app: akkoma-admin-sync }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── tuwunel (Matrix) — app pod + proxy sidecar ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: homeserver-isolation-tuwunel
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: tuwunel }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: hugmesh-be-gateway }
+        - podSelector:
+            matchLabels: { app: hugmesh-mod-bff-api }
+        - podSelector:
+            matchLabels: { app: hugmesh-admin-bff-api }
+        # user-bff-api — the D6 self-service homeserver-proxy caller (Matrix side).
+        # Forwards the server-side-held tuwunel-NATIVE token through tuwunel-proxy:4443
+        # for the user's /bff/user/** self-service surfaces, presenting its own
+        # cluster-CA client cert. SHIPS DARK behind app.hs-token.enabled (default
+        # false) — this rule only OPENS the path; no traffic flows until it flips.
+        - podSelector:
+            matchLabels: { app: hugmesh-user-bff-api }
+        - podSelector:
+            matchLabels: { app: tuwunel-admin-sync }
+      ports:
+        - { protocol: TCP, port: 4443 }   # mTLS proxy sidecar (cluster-CA client certs)
+        - { protocol: TCP, port: 8008 }   # tuwunel http (in-pod localhost; sync job admin-room)
+# tuwunel embeds RocksDB in-process (no separate DB pod), so there is no
+# tuwunel-db policy — its state is local to the tuwunel pod, already isolated above.

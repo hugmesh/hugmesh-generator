@@ -1,0 +1,11 @@
+# RuntimeClass `nvidia` — selects the containerd nvidia-container-runtime so a pod
+# gets the NVIDIA driver libs + /dev/nvidia* devices injected (CDI). Workloads that
+# need the GPU set `runtimeClassName: nvidia` AND request `nvidia.com/gpu`. The
+# runtime binary (/usr/bin/nvidia-container-runtime) is provided on GPU nodes by
+# app-containers/nvidia-container-toolkit, and the matching containerd runtime block
+# is baked into /etc/containerd/config.toml by the stage4 builder.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: nvidia
+handler: nvidia

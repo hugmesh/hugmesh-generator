@@ -1,0 +1,148 @@
+# hugmesh-superadmin-gateway — the TAILNET-ONLY front door for the SUPERADMIN
+# infra control plane (the Service Catalog console + service-catalog-ui federated remote).
+#
+# ⚠ TAILNET-ONLY by THREE locks (hugmesh-superadmin-appstore design, V6):
+#   1. NETWORK: served ONLY by the internal ingress-nginx on the pki node
+#      (class nginx-internal, 11-ingress-nginx-internal.yaml), reachable on the pki
+#      node's :443 via the `superadmin.<domain> -> pki-node-IP` /etc/hosts alias
+#      (VPN/LAN only) + the tier-ingress NetworkPolicy. The public backend-node
+#      ingress (class nginx) NEVER serves this class. Crucially — UNLIKE the
+#      headscale-forward route on the be-gateway (apps/20-gateway-be.yaml, the
+#      explicit counter-example) — there is NO be-gateway forward of the
+#      superadmin host. The superadmin surface is off EVERY public-ingress gateway.
+#   2. ROUTE-ACCESS: every route here is gated ROLE_SUPERADMIN in the
+#      gateway_route_access table under THIS gateway name (manifests/route-access).
+#   3. AUTHGUARD: the service-catalog-ui carries an Angular superadminGuard (in the UI repo).
+#
+# Mirrors the pki-gateway (apps/20-gateway-pki.yaml): nginx-internal class + the pki
+# nodeSelector, its OWN least-privilege read-only route-access DB role. It does NOT
+# duplicate the be-gateway's public hosts/routes — it serves ONLY the superadmin
+# surface.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-gateway-superadmin
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/hugmesh-gateway
+    helm:
+      releaseName: hugmesh-superadmin-gateway
+      values: |
+        instance:
+          name: hugmesh-superadmin-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO hugmesh-superadmin-gateway-mtls).
+        keystore:
+          enabled: true
+        ingress:
+          # superadmin is NOT internet-facing. Served ONLY by the internal
+          # ingress-nginx on the pki node (class nginx-internal). NO public (class
+          # nginx) ingress and NO be-gateway forward serve this host — the only path
+          # is the pki node's :443 via the superadmin.<domain> -> pki-node-IP
+          # /etc/hosts alias (VPN/LAN only).
+          enabled: true
+          className: nginx-internal
+          host: superadmin.hugmesh.systems
+        nodeSelector:
+          hugmesh.systems/pki: "true"
+        seLinux:
+          # Own MCS category, distinct from pki (c11) / be (c12) / fe (c13).
+          # c14 is owned by casdoor-pg; this gateway takes c17 (free, adjacent
+          # to the gateway band c11-c13) to resolve that collision.
+          level: "s0:c17"
+        # Least-privilege DB identity: this gateway logs in as its OWN read-only role
+        # `superadmin_gateway` (SELECT-only on gateway_route_access), NOT the DB owner.
+        # Password from its OWN ESO Secret (route-access-superadmin-gateway, key
+        # password); k8s interpolates it into the R2DBC URL via $(VAR).
+        extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-superadmin-gateway
+                key: password
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://superadmin_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.hugmesh-pki.svc.cluster.local:5432/gateway
+          # Present the downstream client cert to the now-mTLS admin-bff + the
+          # remote-fragment nginx serving the service-catalog-ui (same as be-gateway).
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
+            value: "true"
+        routes:
+          # The SUPERADMIN Service Catalog BFF control plane (admin-bff /bff/superadmin/**).
+          # Tailnet-only here; the route-access rows under this gateway gate it
+          # ROLE_SUPERADMIN. https:// — admin-bff enforces mTLS (client-auth=need).
+          - id: superadmin-bff
+            uri: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/superadmin/**
+          # The service-catalog-ui federated REMOTE (remoteEntry + bundles), served by the
+          # remote-fragment nginx fleet. The federation registration marks it
+          # kind=remote-shell, visibility=internal, requiresRole=SUPERADMIN so it is
+          # discoverable/authorized ONLY for superadmin over the tailnet.
+          - id: superadmin-service-catalog-ui
+            uri: http://hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc.cluster.local:8080
+            path: /superadmin/service-catalog/**
+          # The federation manifest/bundles the superadmin console shell reads to
+          # mount the service-catalog remote (the internal-visibility tier is enforced
+          # inside federation-api by requiresRole=SUPERADMIN; this coarse row is the
+          # tailnet-gateway floor). https:// — federation-api enforces mTLS.
+          - id: superadmin-federation
+            uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
+            path: /api/federation/**
+          # Headwind MDM human console (JSP, no Angular guard — locks 1+2 [network +
+          # route-access] are the enforcement boundary here, not lock 3; see the
+          # Phase-1 spec §0). ROOT-context WAR mounted at /manage/**; StripPrefix=1
+          # removes the platform-chosen /hmdm path segment before it reaches Tomcat.
+          - id: headwind-console
+            uri: http://headwind.hugmesh-pki.svc.cluster.local:8080
+            path: /hmdm/manage/**
+            filters:
+              - StripPrefix=1
+          # Headwind device check-in / MDM push REST surface. Network-locked (same
+          # tailnet-only Ingress as the row above) but NOT Casdoor-role-gated at the
+          # platform layer — Headwind's own per-device enrollment token governs
+          # inside (route-access role='PUBLIC', see 20-schema.sql). ROOT-context WAR
+          # mounted at /rest/**.
+          - id: headwind-checkin
+            uri: http://headwind.hugmesh-pki.svc.cluster.local:8080
+            path: /hmdm/rest/**
+            filters:
+              - StripPrefix=1
+          # AttestationServer device/Auditor-app surface (AppPostHandler — requires
+          # ABSENCE of an Origin header). Real paths: /auditor/challenge,
+          # /auditor/verify, /auditor/submit. Network-locked only (route-access
+          # role='PUBLIC', see 20-schema.sql) — no app-layer auth.
+          - id: attestation-auditor
+            uri: http://attestation-server.hugmesh-pki.svc.cluster.local:8080
+            path: /attest/auditor/**
+            filters:
+              - StripPrefix=1
+          # /api/status is device-facing (AppPostHandler) despite living under
+          # /api/, unlike every other /api/* path on this server — MUST be
+          # evaluated before attestation-console below or the exact-match status
+          # check-in gets swallowed by the console prefix route (route-access
+          # role='PUBLIC', see 20-schema.sql).
+          - id: attestation-status
+            uri: http://attestation-server.hugmesh-pki.svc.cluster.local:8080
+            path: /attest/api/status
+            filters:
+              - StripPrefix=1
+          # AttestationServer human console (PostHandler — requires matching
+          # Origin/Content-Type/Sec-Fetch-*): login, create-account, devices.json,
+          # attestation-history.json, account, configuration, delete-device,
+          # rotate, logout(-everywhere), change-password. /api/create-account has
+          # NO app-level auth/invite gate — this route's ROLE_SUPERADMIN gate
+          # (route-access, see 20-schema.sql) is the only guard against open
+          # self-signup.
+          - id: attestation-console
+            uri: http://attestation-server.hugmesh-pki.svc.cluster.local:8080
+            path: /attest/api/**
+            filters:
+              - StripPrefix=1
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

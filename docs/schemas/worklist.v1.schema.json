@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hugmesh.systems/schemas/worklist.v1.schema.json",
+  "title": "HugMesh worklist envelope (v1)",
+  "description": "The frozen wire format for a mesh build worklist: an envelope around one base ImageConfig plus a list of per-image entries (one per role x platform). Emitted by the Studio (core/worklist.py WorklistConfig.to_dict) and the web admin-ui; validated by a Studio test AND the admin-bff bean validator (spec item 10). The `schema` key is the mandatory discriminator: ImageConfig.load rejects any JSON carrying it, and worklist.load_any routes it here. Anything WITHOUT a top-level `schema` key is a flat single-image ImageConfig and is NOT described by this schema.",
+  "type": "object",
+  "required": ["schema", "base", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "description": "Version discriminator. MUST be present and exact for the envelope to be recognized.",
+      "const": "hugmesh-worklist/v1"
+    },
+    "base": {
+      "$ref": "#/$defs/imageConfig"
+    },
+    "entries": {
+      "description": "One entry per image the worklist builds (one per role x platform combo).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/worklistEntry" }
+    }
+  },
+  "$defs": {
+    "worklistEntry": {
+      "type": "object",
+      "description": "A single image: a role x platform pair plus its per-image axes. `id` is the STABLE identity `f\"{role}.{platform}\"` used for domain attachment (Domain.images) and the derived per-image build_subdir `wl-<id>` (build_subdir is NOT stored on the wire).",
+      "required": ["role", "platform"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable entry id `{role}.{platform}`. Derived from role/platform when omitted; honored verbatim on load for an exact round-trip.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*\\.[A-Za-z0-9._+-]+$"
+        },
+        "role": { "type": "string", "minLength": 1 },
+        "platform": {
+          "type": "string",
+          "enum": ["x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2"]
+        },
+        "board": { "type": "string", "default": "" },
+        "flavor": { "type": "string", "default": "" },
+        "desktop": { "type": "string", "default": "" },
+        "encrypt_root": {
+          "description": "Per-image root-encryption override. `default` inherits the worklist-wide Home-page default; jetson rows are forced off in materialize regardless.",
+          "enum": ["default", "on", "off"],
+          "default": "default"
+        },
+        "packages_add": {
+          "type": "string",
+          "description": "Space-separated Portage atoms added to this image on top of the builder-derived default set. Each atom MUST match ^[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+._-]+$ (validate_package_atoms).",
+          "default": ""
+        },
+        "packages_drop": {
+          "type": "string",
+          "description": "Space-separated Portage atoms removed from this image's default set (honoring the mandatory-payload floor). Same per-atom charset as packages_add.",
+          "default": ""
+        }
+      }
+    },
+    "imageConfig": {
+      "type": "object",
+      "description": "A serialized ImageConfig (core/config.py ImageConfig.to_dict). The single-image plane — identity, network, domains, users, system, disk-encryption default. Only the load-bearing shared fields are pinned here; the full field set evolves with the dataclass, so unknown keys are tolerated (from_dict drops them). Plaintext SECRET_FIELDS (local_pass/luks_pass/user_password/root_password) are ALWAYS blanked on the wire.",
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "enum": ["standalone", "cloud", "mesh"] },
+        "role": { "type": "string" },
+        "platform": {
+          "enum": ["x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2"]
+        },
+        "brand": { "type": "string" },
+        "brand_title": { "type": "string" },
+        "org": { "type": "string" },
+        "cluster_domain": { "type": "string" },
+        "superdomain": {
+          "type": "string",
+          "description": "Orchestration superdomain all mesh nodes join; \"\" = derived <brand>.internal. NON_ARGV: manifest + KEYS channel, never a builder flag; permanently internal (I7)."
+        },
+        "domains": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/domain" }
+        },
+        "users": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/user" }
+        }
+      }
+    },
+    "domain": {
+      "type": "object",
+      "description": "A cluster domain. `images` holds worklist entry-id refs this domain attaches to (empty = every eligible image). The legacy `games: bool` field was DROPPED — from_dict migrates a truthy value into optional_services += [\"games\"].",
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string" },
+        "title": { "type": "string" },
+        "images": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "optional_services": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "user": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "username": { "type": "string" },
+        "domain": { "type": "string" },
+        "role": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    }
+  }
+}

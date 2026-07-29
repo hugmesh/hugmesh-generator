@@ -1,0 +1,5 @@
+# Accept the Valve Steam licence for the native Steam launcher. Copied ONLY when
+# --steam native. Steam's installer/runtime are proprietary (the launcher is a
+# thin GPL-ish wrapper, but the runtime pulls the Valve EULA).
+games-util/steam-launcher Steam ValveSteamLicense
+games-util/steam-meta Steam ValveSteamLicense

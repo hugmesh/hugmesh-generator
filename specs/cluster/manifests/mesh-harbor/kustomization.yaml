@@ -1,0 +1,11 @@
+# mesh-harbor — Phase 7 cross-mesh domain-creation PUBLISH Action (SHIP-DARK).
+# Extends manifests/harbor/harbor-provision-job.yaml (per-tenant project + scoped
+# pull/push robots + once-only Vault write). Live run is cluster-only (DEFERRED —
+# needs booted Harbor + Vault + cluster-ca copy + Trivy enabled; see the Job banner).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - harbor-mesh-action-job.yaml
+commonLabels:
+  app.kubernetes.io/part-of: hugmesh.systems
+  app.kubernetes.io/name: mesh-harbor

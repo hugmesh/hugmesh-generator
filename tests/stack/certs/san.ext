@@ -1,0 +1,2 @@
+subjectAltName = DNS:hugmesh.systems,DNS:*.hugmesh.systems,DNS:id.hugmesh.systems,DNS:matrix.hugmesh.systems,DNS:mastodon.hugmesh.systems,DNS:localhost,IP:127.0.0.1
+extendedKeyUsage = serverAuth

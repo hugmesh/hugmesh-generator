@@ -1,0 +1,742 @@
+# casdoor-init — reconciles the per-app OAuth2 APPLICATIONS in Casdoor and
+# injects their client-secrets from Vault (via the ESO Secret casdoor-app-secrets),
+# so no secret is ever committed. The org/roles/service-users themselves are
+# seeded declaratively by init_data.json (init-data-configmap.yaml). Idempotent;
+# ArgoCD re-runs it on each sync (PostSync hook).
+#
+# !!! The Casdoor REST API shape (login + application CRUD) is version-specific.
+# !!! This Job is a working scaffold; validate the endpoints/payloads against the
+# !!! deployed casbin/casdoor-all-in-one before relying on it in production.
+# Reads admin creds from Secret casdoor-admin (username/password) and per-app
+# client-secrets from Secret casdoor-app-secrets — both materialized by ESO from
+# Vault (manifests/external-secrets). Keys never touch git or any web interface.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-init-script
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+data:
+  reconcile.py: |
+    #!/usr/bin/env python3
+    """Ensure each app's Casdoor OAuth2 application exists with its Vault secret.
+    Pure stdlib (urllib) so the image needs no extra packages / network installs."""
+    import json, os, time, urllib.request, urllib.parse, urllib.error, http.cookiejar
+
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "hugmesh")
+    ADMIN_USER = open("/secrets/admin/username").read().strip()
+    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+
+    # app name -> (redirectUris, role). Mirrors init_data.json + SECURITY.md.
+    APPS = {
+        "pki-gateway": "ROLE_GATEWAY", "be-gateway": "ROLE_GATEWAY",
+        "fe-gateway": "ROLE_GATEWAY",
+        "api": "ROLE_API", "admin-bff": "ROLE_ADMIN_API",
+        # user-bff is the SSO TOKEN-HANDLER confidential client: login-ui renders a
+        # NATIVE username/password form that POSTs to user-bff, which generates
+        # PKCE+state server-side, calls Casdoor's internal /api/login directly (no
+        # browser redirect to Casdoor at all) and does the code->token exchange +
+        # refresh, custody-holding the JWT keyed to the opaque bff_ session (the
+        # browser never sees the JWT, the code, the verifier, or any Casdoor URL).
+        # reconcile_app() gives it the OIDC-specific overrides (refresh_token grant
+        # + the internal PKCE-match redirect_uri, below).
+        "user-bff": "ROLE_API",
+        "matrix": "ROLE_USER", "mastodon": "ROLE_USER",
+        # client-credentials machine app for the remote-fragment sync sidecar: it
+        # mints a SERVICE JWT to read the federation manifest/bundles. ROLE_USER is
+        # the floor (manifest/bundles only need authenticated()); the minted token
+        # then sees the PUBLIC fragments. Bind it to a ROLE_INTERNAL/ROLE_ADMIN-
+        # mapping role here + in init_data.json IF internal fragments must sync.
+        "fragment-sync": "ROLE_USER",
+        # client-credentials machine app for the signup-gate proxy: it mints a
+        # SERVICE JWT to call the INTERNAL/ROLE_SERVICE federation username
+        # availability endpoint (GET /api/federation/username/{candidate}/
+        # availability) BEFORE a self-signup username is accepted, rejecting a
+        # confusable/look-alike collision Casdoor's exact-only forbidden-list misses.
+        # See manifests/signup-gate/. Bound to ROLE_SERVICE in init_data.json so the
+        # minted token satisfies the endpoint's INTERNAL/ROLE_SERVICE gate.
+        "signup-gate": "ROLE_SERVICE",
+        # Harbor registry web UI/API login — reuses ROLE_ADMIN rather than a
+        # narrow ROLE_REGISTRY: Harbor is an internal devops tool (same posture
+        # as GitLab, which is also admin-only/no-public-signup), and once a
+        # user is IN Harbor its OWN project-level RBAC (not a Casdoor claim)
+        # governs what they can do there. The clientId/clientSecret this
+        # produces is consumed by manifests/harbor/harbor-provision-job.yaml
+        # (via the harbor-casdoor ExternalSecret) to configure Harbor's OIDC
+        # auth_mode directly through its REST API — Harbor's Helm chart has no
+        # secret-safe way to set this via values (see that Job's comments).
+        "harbor": "ROLE_ADMIN",
+        # headscale mesh-node OIDC login (keys-template/headscale/config.yaml
+        # oidc.client_id="app-headscale", oidc.client_secret_path on the pki
+        # node). GAP FOUND 2026-07-09 auditing PR #280 (superadmin mesh-join):
+        # nothing previously created this Application at all, so headscale's
+        # OIDC login had NO registered client to authenticate against —
+        # independent of and prior to the /headscale group-membership question
+        # PR #280 fixed. reconcile_app() gives it the headscale-specific
+        # redirectUris override below (its OIDC callback path is FIXED by the
+        # headscale binary at "<server_url>/oidc/callback", not the generic
+        # "https://<name>.hugmesh.systems/callback" other apps use).
+        "headscale": "ROLE_USER",
+    }
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+    def call(path, payload=None, method="GET"):
+        url = BASE + path
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json"})
+        with opener.open(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                opener.open(BASE + "/api/health", timeout=5); return
+            except Exception:
+                time.sleep(3)
+        raise SystemExit("casdoor not reachable")
+
+    def login():
+        # Casdoor admin login (session cookie). Built-in app/org host the admin.
+        body = {"application": "app-built-in", "organization": "built-in",
+                "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
+                "autoSignin": True}
+        return call("/api/login", body, "POST")
+
+    # --- D6+D8 JWT-Custom token shape (LYNCHPIN-VALIDATED against casbin/casdoor:3.80.0) ---
+    # The DEFAULT tokenFormat=JWT serializes the FULL user object as flat claims, leaking
+    # totpSecret / recoveryCodes / password / passwordSalt into every minted token (a real
+    # secret-leak that exists TODAY, independent of MFA — any place a casdoor JWT is
+    # stored/logged/XSS-reachable, or written to a device file by GEN-SSO #135, exposes them).
+    # tokenFormat=JWT-Custom is an ALLOW-LIST: ONLY the listed tokenFields/tokenAttributes are
+    # emitted, so the secrets are excluded BY OMISSION. This SAME config also carries the MFA
+    # outcome the BFF stamps into the user's Properties (flat snake_case top-level claims
+    # `mfa_satisfied` + `mfa_satisfied_at`, emitted as STRINGS — casdoor properties are
+    # map[string]string, so the gateway must Long.parseLong the *_at value).
+    # ⚠ An EMPTY/WRONG tokenFields set strips roles/permissions/isAdmin and breaks ALL authz
+    # across 11 repos — the curated set below is empirically pinned and guarded by the
+    # held-until-live token-mint regression test (tests/casdoor/test-jwt-custom-token.sh).
+    JWT_CUSTOM_TOKEN_FIELDS = [
+        "Id", "Name", "Email", "IsAdmin",
+        "Properties.mfa_satisfied", "Properties.mfa_satisfied_at",
+    ]
+    # "groups" added 2026-07-09 (same Existing-Field mechanism as roles/permissions
+    # above — mirrors, not guesses: this is the one other relation-shaped User field
+    # in this list). headscale's OIDC config (keys-template/headscale/config.yaml
+    # allowed_groups: [hugmesh/headscale]) gates node-join on a literal "groups"
+    # ID-token claim (confirmed against the headscale binary's own compiled string
+    # table — "groups" appears alongside its oidc.allowed_groups config key).
+    # Casdoor's User.Groups is what reconcile_superadmin() below writes
+    # hugmesh/headscale into (PR #280); without this attribute that membership
+    # was written but NEVER reached any token, so the mesh-join gate could never
+    # pass for anyone. LIVE-VERIFIED (tests/casdoor/test-jwt-custom-token.sh) that
+    # this tokenAttribute emits the group's "<owner>/<name>" id string exactly —
+    # PR #280's original comments assumed a bare "/headscale" path, which this
+    # test proved was never actually minted; allowed_groups is corrected to match
+    # the real claim shape. Additive to every app's token (shared allow-list) — no
+    # app relied on groups' ABSENCE, so nothing downstream should notice besides
+    # gaining the claim.
+    JWT_CUSTOM_TOKEN_ATTRIBUTES = [
+        {"name": "roles",       "category": "Existing Field", "value": "Roles",       "type": "Array"},
+        {"name": "permissions", "category": "Existing Field", "value": "Permissions", "type": "Array"},
+        {"name": "groups",      "category": "Existing Field", "value": "Groups",      "type": "Array"},
+    ]
+    # NOTE: EXCLUDED by omission (allow-list) — totpSecret, recoveryCodes, password,
+    # passwordSalt, passwordType, preferredMfaType, mfaEmailEnabled, mfaPhoneEnabled,
+    # webauthnCredentials, accessKey/accessSecret, AND the bare "Properties" map (we emit
+    # ONLY the two named Properties.* keys, never the whole map).
+
+    def reconcile_app(name, role):
+        secret = open(f"/secrets/apps/{name}").read().strip()
+        appname = f"app-{name}"
+        app = {
+            "owner": "admin", "name": appname, "displayName": f"hugmesh {name}",
+            "organization": ORG, "clientId": appname, "clientSecret": secret,
+            "redirectUris": [f"https://{name}.hugmesh.systems/callback"],
+            # password grant kept (custom BFF login uses it) + authorization_code +
+            # client_credentials (existing machine apps).
+            "grantTypes": ["authorization_code", "client_credentials", "password"],
+            "expireInHours": 168, "enablePassword": True, "enableSignUp": False,
+            # D6+D8: JWT-Custom allow-list — fixes the secret-leak AND emits the MFA claim.
+            "tokenFormat": "JWT-Custom",
+            "tokenSigningMethod": "RS256",
+            "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,
+            "tokenAttributes": JWT_CUSTOM_TOKEN_ATTRIBUTES,
+        }
+        # SSO token-handler overrides for the user-bff confidential client. user-bff
+        # itself calls Casdoor's internal /api/login (never a browser-facing
+        # /login/oauth/authorize redirect) and does the server-side
+        # authorization_code -> token exchange, so it needs the refresh_token grant
+        # + a redirect_uri that is purely an INTERNAL PKCE-match string (must
+        # byte-match APP_BFF_OIDC_REDIRECT_URI on the user-bff side; no browser ever
+        # dereferences it) + a shorter access-token lifetime (refresh_token covers
+        # longevity, keeping the held-JWT/MFA-freshness window short). Single-domain
+        # seed (…hugmesh.systems) matching the confidential apps' convention;
+        # per-brand hosts layer via the rebrand/handlebars path, not here.
+        if name == "user-bff":
+            app["grantTypes"] = app["grantTypes"] + ["refresh_token"]
+            app["redirectUris"] = ["https://hugmesh.systems/login/callback"]
+            app["expireInHours"] = 4
+        # headscale's OIDC callback path is FIXED by the headscale binary itself
+        # at "<server_url>/oidc/callback" (confirmed in its compiled string
+        # table) — not the generic "https://<name>.hugmesh.systems/callback"
+        # every other app gets. server_url defaults to the baked
+        # https://scale.hugmesh.systems (keys-template/headscale/config.yaml),
+        # so that is what we register here.
+        # !!! CAVEAT: like user-bff's callback, this is a single-domain bootstrap
+        # !!! seed. keys-provision CAN rewrite server_url at first boot (LAN-IP
+        # !!! fallback, or an operator-supplied endpoint via provision.json/brand
+        # !!! var — see that file's header comment) — if it does, THIS redirectUri
+        # !!! no longer matches what headscale sends and Casdoor will reject the
+        # !!! callback (invalid_redirect_uri). Re-running this reconcile after any
+        # !!! server_url change (with the new value substituted here) is a
+        # !!! follow-up, not yet automated.
+        if name == "headscale":
+            app["redirectUris"] = ["https://scale.hugmesh.systems/oidc/callback"]
+        try:
+            existing = call(f"/api/get-application?id=admin/{appname}")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call(f"/api/update-application?id=admin/{appname}", app, "POST")
+            print(f"  updated {appname} (role {role})")
+        else:
+            call("/api/add-application", app, "POST")
+            print(f"  added   {appname} (role {role})")
+
+    def reconcile_desktop_client():
+        """D6+D8 / GEN-SSO #135 — seed the hugmesh-desktop PKCE PUBLIC client.
+
+        The OIDC client the GOVERNED desktop images log into. sssd-oidc.conf.tmpl
+        references oidc_client_id=hugmesh-desktop with oidc_use_pkce=True, but the
+        client was NEVER seeded in Casdoor. Without this client the desktop SSO login
+        can obtain NO token, so the `desktop-sudo` sudo claim is never issuable AND the
+        bearer forwarded to the BFF app-store registry never exists — i.e. the whole
+        desktop-governance feature is inert (RESIDUAL #9a; see
+        specs/etc/hugmesh/desktop-governance/README.md). The `desktop-sudo`
+        claim/role is what the admin-bff sudo-grant places on the user at the IdP; the
+        on-device SSSD maps that claim into the local `desktop-sudo` group (oidc_group_
+        claim=roles) and polkit gates sudo on it (default-deny). The `desktop-sudo`
+        Casdoor role itself is seeded declaratively in init_data.json
+        (init-data-configmap.yaml).
+
+        GEN-SSO #135 deposits the minted token to a device file (${XDG_RUNTIME_DIR}/
+        hugmesh/oidc-token); under casdoor's DEFAULT tokenFormat=JWT that file would
+        contain totpSecret/recoveryCodes/password/passwordSalt. We seed it here with the
+        SAME JWT-Custom allow-list as the systems apps so the on-device token is clean
+        and carries the MFA claim AND the `roles` claim (incl. desktop-sudo) SSSD-OIDC
+        reads.
+
+        PUBLIC client: clientSecret is EMPTY (PKCE, no secret baked into the image),
+        isPublic=True marks it as a public client; redirectUris are the native loopback
+        + OOB URIs the desktop OIDC flow uses. Idempotent (update-if-exists).
+        Single-domain seed today, matching the confidential apps' `…hugmesh.systems`
+        convention — per-brand domains are layered by the rebrand path, not by this
+        bootstrap seed.
+
+        !!! The PKCE-public-client object shape (isPublic vs empty clientSecret,
+        !!! tokenFormat key, native-redirect handling) is Casdoor-version-specific —
+        !!! validate against the deployed Casdoor. Failing this reconcile leaves the
+        !!! feature ships-dark (no token => empty store + no sudo), not broken.
+        """
+        appname = "hugmesh-desktop"
+        app = {
+            "owner": "admin", "name": appname,
+            "displayName": "HugMesh Desktop (PKCE)",
+            "organization": ORG, "clientId": appname,
+            # PUBLIC client — NO secret (PKCE). Empty string, never read from Vault.
+            "clientSecret": "",
+            "isPublic": True,
+            # Native loopback (RFC 8252) + OOB redirects for the desktop SSO flow.
+            "redirectUris": [
+                "http://127.0.0.1/callback", "http://localhost/callback",
+                "urn:ietf:wg:oauth:2.0:oob",
+            ],
+            # PKCE authorization_code (+ device_code for a headless/seat enrolment);
+            # refresh_token so the device can refresh after the BFF stamps the MFA
+            # Property. NO password / client_credentials for a public client.
+            "grantTypes": [
+                "authorization_code",
+                "refresh_token",
+                "urn:ietf:params:oauth:grant-type:device_code",
+            ],
+            "expireInHours": 168, "enablePassword": False, "enableSignUp": False,
+            # D6+D8: SAME JWT-Custom allow-list as the systems apps — leak-fix + MFA claim.
+            # JWT-Custom still carries the `roles` claim (incl. desktop-sudo) via
+            # tokenAttributes, which SSSD-OIDC maps to the local desktop-sudo group.
+            "tokenFormat": "JWT-Custom",
+            "tokenSigningMethod": "RS256",
+            "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,
+            "tokenAttributes": JWT_CUSTOM_TOKEN_ATTRIBUTES,
+        }
+        try:
+            existing = call(f"/api/get-application?id=admin/{appname}")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call(f"/api/update-application?id=admin/{appname}", app, "POST")
+            print(f"  updated {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
+        else:
+            call("/api/add-application", app, "POST")
+            print(f"  added   {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
+
+    def reconcile_org_mfa():
+        """D8 — enable the org MFA CAPABILITY (WebAuthn + TOTP available) and set the
+        WebAuthn RP / TOTP issuer. SHIPS DARK: we make MFA AVAILABLE but do NOT mark it
+        required — enforcement is a later, operator-flipped step. GET-then-merge so we
+        never clobber org fields seeded by init_data.json (passwordType, languages, ...).
+        """
+        org_id = f"admin/{ORG}"
+        try:
+            resp = call(f"/api/get-organization?id={org_id}")
+            org = (resp.get("data") or {}) if resp else {}
+        except Exception as e:
+            print(f"  WARN org-mfa: failed to fetch organization {ORG}: {e}")
+            return
+        if not org:
+            print(f"  org-mfa: organization {ORG} not found yet — skipping (init_data import pending)")
+            return
+        # Capability ON, NOT required (dark): mfaItems list MFA types that are AVAILABLE.
+        # `rule: "Optional"` => offered but not forced (enforcement flipped later).
+        org["enableMfa"] = True
+        org["mfaItems"] = [
+            {"name": "WebAuthn", "rule": "Optional"},
+            {"name": "TOTP",     "rule": "Optional"},
+        ]
+        # WebAuthn relying-party + TOTP issuer scope the platform brand.
+        org["mfaRememberInHours"] = 0
+        org["websiteUrl"] = org.get("websiteUrl") or "https://hugmesh.systems"
+        try:
+            call(f"/api/update-organization?id={org_id}", org, "POST")
+            print(f"  org-mfa: enabled MFA capability (WebAuthn+TOTP available, NOT required) on {ORG}")
+        except Exception as e:
+            print(f"  WARN org-mfa: update-organization failed: {e}")
+
+    def reconcile_google_provider():
+        """Seed the Google OAuth federation provider (clientId/secret from Vault).
+        Skipped when the casdoor-google secret is absent (provider is optional)."""
+        try:
+            cid  = open("/secrets/google/clientId").read().strip()
+            csec = open("/secrets/google/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  google provider: casdoor-google secret absent — skipping")
+            return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native login + admin-approval).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  google provider: clientId is placeholder/empty — skipping")
+            return
+        provider = {
+            "owner": "admin", "name": "google", "displayName": "Google",
+            "category": "OAuth", "type": "Google",
+            "clientId": cid, "clientSecret": csec,
+            "scopes": "profile email", "enableSignUp": True,
+        }
+        try:
+            existing = call("/api/get-provider?id=admin/google")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-provider?id=admin/google", provider, "POST")
+            print("  updated google provider")
+        else:
+            call("/api/add-provider", provider, "POST")
+            print("  added   google provider")
+
+    def reconcile_github_provider():
+        """Seed the GitHub OAuth federation provider (clientId/secret from Vault).
+        Skipped when the casdoor-github secret is absent (provider is optional).
+        Available to ALL roles; registration -> admin-approval assigns the role."""
+        try:
+            cid  = open("/secrets/github/clientId").read().strip()
+            csec = open("/secrets/github/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  github provider: casdoor-github secret absent — skipping")
+            return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native login + admin-approval).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  github provider: clientId is placeholder/empty — skipping")
+            return
+        provider = {
+            "owner": "admin", "name": "github", "displayName": "GitHub",
+            "category": "OAuth", "type": "GitHub",
+            "clientId": cid, "clientSecret": csec,
+            "scopes": "user:email read:user", "enableSignUp": True,
+        }
+        try:
+            existing = call("/api/get-provider?id=admin/github")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-provider?id=admin/github", provider, "POST")
+            print("  updated github provider")
+        else:
+            call("/api/add-provider", provider, "POST")
+            print("  added   github provider")
+
+    def reconcile_discord_provider():
+        """Seed the Discord OAuth federation provider (clientId/secret from Vault).
+        Skipped when the casdoor-discord secret is absent (provider is optional).
+        Discord is a Custom-category OAuth provider in Casdoor; supply the OAuth2
+        endpoints explicitly. Available to ALL roles; registration ->
+        admin-approval assigns the role. (The Discord registration UI +
+        admin-bff allowlist already exist — this just seeds the casdoor side.)"""
+        try:
+            cid  = open("/secrets/discord/clientId").read().strip()
+            csec = open("/secrets/discord/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  discord provider: casdoor-discord secret absent — skipping")
+            return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native login + admin-approval).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  discord provider: clientId is placeholder/empty — skipping")
+            return
+        provider = {
+            "owner": "admin", "name": "discord", "displayName": "Discord",
+            "category": "OAuth", "type": "Custom", "customType": "Discord",
+            "clientId": cid, "clientSecret": csec,
+            "customAuthUrl":     "https://discord.com/oauth2/authorize",
+            "customTokenUrl":    "https://discord.com/api/oauth2/token",
+            "customUserInfoUrl": "https://discord.com/api/users/@me",
+            "scopes": "identify email", "enableSignUp": True,
+        }
+        try:
+            existing = call("/api/get-provider?id=admin/discord")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-provider?id=admin/discord", provider, "POST")
+            print("  updated discord provider")
+        else:
+            call("/api/add-provider", provider, "POST")
+            print("  added   discord provider")
+
+    def reconcile_signup_webhook():
+        """Register the POST-signup reconcile webhook so Casdoor notifies the
+        signup-gate proxy AFTER a user signup/update. This is the BACKSTOP to the
+        pre-signup proxy gate (manifests/signup-gate): the proxy re-checks the new
+        username against the federation availability endpoint and disables
+        (setForbidden) any confusable that slipped past the pre-gate (race /
+        backfill / ICU skeleton shift). The PRIMARY gate is the proxy in front of
+        the signup endpoint — Casdoor webhooks fire AFTER the fact, so they cannot
+        veto a signup, only reconcile it. Optional shared-secret from
+        signup-gate-webhook (header X-Signup-Gate-Secret).
+
+        !!! Casdoor's webhook object schema (events[], headers[], isEnabled) is
+        !!! version-specific — validate against the deployed casbin/casdoor before
+        !!! relying on auto-import; the pre-signup proxy gate works regardless."""
+        try:
+            secret = open("/secrets/webhook/secret").read().strip()
+        except FileNotFoundError:
+            secret = ""
+        url = ("http://signup-gate.hugmesh-pki.svc.cluster.local:8000"
+               "/casdoor/webhook")
+        webhook = {
+            "owner": "admin", "name": "signup-gate-reconcile",
+            "organization": ORG, "url": url, "method": "POST",
+            "contentType": "application/json",
+            # signup + user mutations — the events that can introduce a confusable.
+            "events": ["signup", "add-user", "update-user"],
+            "isUserExtended": True, "isEnabled": True,
+            "headers": ([{"name": "X-Signup-Gate-Secret", "value": secret}]
+                        if secret else []),
+        }
+        try:
+            existing = call("/api/get-webhook?id=admin/signup-gate-reconcile")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-webhook?id=admin/signup-gate-reconcile", webhook, "POST")
+            print("  updated signup-gate-reconcile webhook")
+        else:
+            call("/api/add-webhook", webhook, "POST")
+            print("  added   signup-gate-reconcile webhook")
+
+    def reconcile_superadmin():
+        """Create the platform SUPERADMIN bootstrap user and assign ROLE_SUPERADMIN.
+        Reads credentials from /secrets/superadmin/{username,password}, materialised
+        from Vault via ESO as Secret casdoor-superadmin (optional: true). Skips
+        gracefully when the Secret is absent so deployments without a pre-provisioned
+        superadmin still work — the operator adds the user manually in that case."""
+        try:
+            username = open("/secrets/superadmin/username").read().strip()
+            password = open("/secrets/superadmin/password").read().strip()
+        except FileNotFoundError:
+            print("  superadmin: /secrets/superadmin absent (optional Secret not synced) — skipping bootstrap user")
+            return
+        if not username or not password:
+            print("  superadmin: username/password empty — skipping")
+            return
+
+        user_id = f"{ORG}/{username}"
+        user = {
+            "owner": ORG, "name": username,
+            "displayName": "Platform Superadmin",
+            "type": "normal-user", "password": password,
+            "isAdmin": False, "isForbidden": False, "isDeleted": False,
+        }
+        try:
+            existing = call(f"/api/get-user?id={user_id}")
+        except Exception:
+            existing = None
+        if existing and existing.get("data"):
+            call(f"/api/update-user?id={user_id}", user, "POST")
+            print(f"  superadmin: updated user {username} in org {ORG}")
+        else:
+            call("/api/add-user", user, "POST")
+            print(f"  superadmin: created user {username} in org {ORG}")
+
+        # Assign ROLE_SUPERADMIN: GET current role, add the user, PUT back.
+        role_id = f"{ORG}/ROLE_SUPERADMIN"
+        try:
+            role_resp = call(f"/api/get-role?id={role_id}")
+            role = role_resp.get("data") or {}
+        except Exception as e:
+            print(f"  WARN superadmin: failed to fetch ROLE_SUPERADMIN: {e}")
+            return
+        users = role.get("users") or []
+        full_name = f"{ORG}/{username}"
+        if full_name not in users:
+            users.append(full_name)
+        role["owner"] = ORG
+        role["name"] = "ROLE_SUPERADMIN"
+        role["users"] = users
+        try:
+            call(f"/api/update-role?id={role_id}", role, "POST")
+            print(f"  superadmin: assigned ROLE_SUPERADMIN to {username}")
+        except Exception as e:
+            print(f"  WARN superadmin: role assignment failed: {e}")
+
+        # --- Mesh-join: grant /headscale Casdoor group membership -----------------
+        # headscale OIDC node-join GATES enrolment on allowed_groups:
+        # [hugmesh/headscale] (keys-template/headscale/config.yaml — this is the
+        # group's real "<owner>/<name>" claim shape, LIVE-VERIFIED below, not a bare
+        # "/headscale" path). ROLE_SUPERADMIN alone does NOT put
+        # the user in that group, so without this a superadmin CANNOT join the mesh
+        # via OIDC. Nothing else seeds the group (the headscale config only asserts it
+        # "must exist"), so ENSURE it first, then mirror the ROLE_SUPERADMIN block
+        # above: GET the group, append the user, POST update-group. We ALSO stamp the
+        # membership onto the USER object (user.groups) because Casdoor emits the OIDC
+        # `groups` claim headscale matches on from User.Groups — belt-and-suspenders so
+        # the claim is carried regardless of which representation the deployed Casdoor
+        # treats as canonical. This grants MESH DATA-PLANE reach only; SSH reach
+        # (tag:superadmin) is a separate, deliberately-manual control — see
+        # docs/SUPERADMIN-MESH-CLIENT.md.
+        # LIVE-VERIFIED 2026-07-09 (tests/casdoor/test-jwt-custom-token.sh) against
+        # casbin/casdoor:3.80.0: user.groups persists via the GET-then-mutate-
+        # same-object-then-POST pattern used below (a hand-built update-user
+        # payload that doesn't round-trip the real "id" field is REJECTED with
+        # "The ID is immutable" — this code avoids that by never constructing the
+        # payload from scratch). group.users needs the SAME re-fetch-before-update
+        # discipline: the first version of this code built the group dict LOCALLY
+        # after add-group (no re-fetch) and update-group returned {"status":"ok"}
+        # while SILENTLY not persisting membership — caught live by the same test.
+        # The token's `groups` claim (via the JWT-Custom "Existing Field: Groups"
+        # tokenAttribute) emits the group's internal "<owner>/<name>" id string —
+        # "hugmesh/headscale" — NOT a bare "/headscale" path
+        # (keys-template/headscale/config.yaml allowed_groups is set to match this
+        # exactly). Re-validate this claim shape against any future Casdoor
+        # version bump. NOTE: the claim itself is sourced from user.groups, not
+        # group.users — group.users is Casdoor-console-visibility only, but it
+        # must still be correct (an admin reading the group membership page
+        # should see the truth), hence still fixing it below rather than treating
+        # it as cosmetic.
+        group_name = "headscale"
+        group_id = f"{ORG}/{group_name}"
+        member = f"{ORG}/{username}"
+        try:
+            grp_resp = call(f"/api/get-group?id={group_id}")
+            group = (grp_resp.get("data") or {}) if grp_resp else {}
+        except Exception:
+            group = {}
+        if not group:
+            # Seed the group — nothing else creates it. Virtual so it never collides
+            # with a user's single physical group; top-level org group. The token
+            # claim value this produces is "hugmesh/headscale" (owner/name), not
+            # a bare "/headscale" path — see the LIVE-VERIFIED note above.
+            new_group = {
+                "owner": ORG, "name": group_name,
+                "displayName": "Headscale mesh operators",
+                "type": "Virtual", "parentId": ORG,
+                "isTopGroup": True, "isEnabled": True, "users": [],
+            }
+            try:
+                call("/api/add-group", new_group, "POST")
+                print(f"  superadmin: created Casdoor group /{group_name}")
+                # RE-FETCH rather than reusing new_group for the update below —
+                # Casdoor may populate server-side fields (createdTime, an
+                # internal id, ...) that a blind local-dict POST won't round-trip,
+                # which is exactly what silently dropped the membership before
+                # this fix (update-group reported "Affected" but users stayed []).
+                grp_resp = call(f"/api/get-group?id={group_id}")
+                group = (grp_resp.get("data") or {}) if grp_resp else new_group
+            except Exception as e:
+                print(f"  WARN superadmin: add-group /{group_name} failed: {e}")
+                group = new_group
+        members = group.get("users") or []
+        if member not in members:
+            members.append(member)
+        group["owner"] = ORG
+        group["name"] = group_name
+        group["users"] = members
+        # BEST-EFFORT, KNOWN-UNRELIABLE on casbin/casdoor:3.80.0: LIVE-VERIFIED
+        # (tests/casdoor/test-jwt-custom-token.sh) that /api/update-group's
+        # "users" field is a no-op on an EXISTING group — it returns
+        # {"status":"ok","data":"Affected"} while NOT persisting membership,
+        # with or without a re-fetched payload or a ?columns=users hint. Only
+        # /api/add-group honors "users", and only at creation. This call is kept
+        # (harmless, and may start working on a future Casdoor version) but we
+        # VERIFY by re-reading rather than trusting the HTTP status, because that
+        # status is misleading here. This does NOT affect the actual OIDC gate —
+        # the `groups` token claim is sourced from user.groups (verified working
+        # below), not group.users; this is Casdoor-admin-console visibility only.
+        try:
+            call(f"/api/update-group?id={group_id}", group, "POST")
+            verify_resp = call(f"/api/get-group?id={group_id}")
+            verify_members = ((verify_resp.get("data") or {}).get("users") or []) if verify_resp else []
+            if member in verify_members:
+                print(f"  superadmin: added {username} to Casdoor group /{group_name}")
+            else:
+                print(f"  NOTE superadmin: update-group reported success but did not persist "
+                      f"group.users on /{group_name} (known casdoor:3.80.0 limitation — the "
+                      f"OIDC gate is unaffected, it reads user.groups, set below)")
+        except Exception as e:
+            print(f"  WARN superadmin: group membership (update-group) failed: {e}")
+        # Reflect membership on the user record too — this is what Casdoor emits as
+        # the OIDC `groups` claim headscale gates on. GET the user, merge the group
+        # id, PUT it back (never clobber any groups already present).
+        try:
+            u_resp = call(f"/api/get-user?id={user_id}")
+            u = (u_resp.get("data") or {}) if u_resp else {}
+            if u:
+                u_groups = u.get("groups") or []
+                if group_id not in u_groups:
+                    u_groups.append(group_id)
+                    u["groups"] = u_groups
+                    call(f"/api/update-user?id={user_id}", u, "POST")
+                    print(f"  superadmin: set user.groups={u_groups} on {username}")
+        except Exception as e:
+            print(f"  WARN superadmin: user.groups update failed: {e}")
+
+    wait_ready()
+    login()
+    # D8: enable the org MFA capability (dark — available, not required) BEFORE the
+    # apps so the WebAuthn RP / TOTP issuer scope exists when clients are reconciled.
+    try:
+        reconcile_org_mfa()
+    except Exception as e:
+        print(f"  WARN org-mfa: {e}")
+    for name, role in APPS.items():
+        try:
+            reconcile_app(name, role)
+        except Exception as e:
+            print(f"  WARN {name}: {e}")
+    # D6+D8 / GEN-SSO #135 / RESIDUAL #9a: seed the hugmesh-desktop PKCE public
+    # client (JWT-Custom). A failure here leaves the desktop feature ships-dark (no
+    # token => empty store, no sudo claim), never broken — so we warn and continue.
+    try:
+        reconcile_desktop_client()
+    except Exception as e:
+        print(f"  WARN hugmesh-desktop client: {e}")
+    try:
+        reconcile_google_provider()
+    except Exception as e:
+        print(f"  WARN google provider: {e}")
+    try:
+        reconcile_github_provider()
+    except Exception as e:
+        print(f"  WARN github provider: {e}")
+    try:
+        reconcile_discord_provider()
+    except Exception as e:
+        print(f"  WARN discord provider: {e}")
+    try:
+        reconcile_signup_webhook()
+    except Exception as e:
+        print(f"  WARN signup-gate webhook: {e}")
+    try:
+        reconcile_superadmin()
+    except Exception as e:
+        print(f"  WARN superadmin bootstrap: {e}")
+    print("casdoor-init: done")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: casdoor-init
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: casdoor-init }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.systems/pki: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: reconcile
+          image: python:3.12-alpine
+          command: ["python3", "/script/reconcile.py"]
+          env:
+            - name: CASDOOR_URL
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
+            - name: CASDOOR_ORG
+              value: "hugmesh"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: admin, mountPath: /secrets/admin, readOnly: true }
+            - { name: apps, mountPath: /secrets/apps, readOnly: true }
+            - { name: google, mountPath: /secrets/google, readOnly: true }
+            - { name: github, mountPath: /secrets/github, readOnly: true }
+            - { name: discord, mountPath: /secrets/discord, readOnly: true }
+            - { name: webhook, mountPath: /secrets/webhook, readOnly: true }
+            - { name: superadmin, mountPath: /secrets/superadmin, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: casdoor-init-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed.
+        - name: admin
+          secret: { secretName: casdoor-admin }
+        - name: apps
+          secret: { secretName: casdoor-app-secrets }
+        # Google federation client — optional; provider seeding is skipped if absent.
+        - name: google
+          secret: { secretName: casdoor-google, optional: true }
+        # GitHub federation client — optional; provider seeding is skipped if absent.
+        - name: github
+          secret: { secretName: casdoor-github, optional: true }
+        # Discord federation client — optional; provider seeding is skipped if absent.
+        - name: discord
+          secret: { secretName: casdoor-discord, optional: true }
+        # signup-gate reconcile-webhook shared-secret — optional; the webhook is
+        # registered without a secret header if absent (pre-signup proxy gate is
+        # the primary enforcement regardless).
+        - name: webhook
+          secret: { secretName: signup-gate-webhook, optional: true }
+        # Platform SUPERADMIN bootstrap user — optional: absent when no superadmin
+        # was generated by gen-cluster-secrets.sh (no Vault path written yet); the
+        # reconcile_superadmin() function skips gracefully in that case.
+        - name: superadmin
+          secret: { secretName: casdoor-superadmin, optional: true }

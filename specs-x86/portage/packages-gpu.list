@@ -1,0 +1,9 @@
+# amd64 GPU package list — vendor-agnostic open GPU stack (Mesa / Vulkan).
+# Concatenated onto packages.list by the builder ONLY for be+gpu / omnibus roles.
+# pki/be/fe images skip these entirely (no Mesa/Vulkan emerge, slimmer image).
+
+media-libs/mesa
+media-libs/vulkan-loader
+dev-util/vulkan-tools
+x11-libs/libdrm
+media-libs/libva

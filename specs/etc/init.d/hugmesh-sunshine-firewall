@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+
+description="Render + load the thin-desktop (Sunshine) mesh-scoped nftables fence (tailnet-only stream ports, loopback-only pairing UI)"
+
+# Runs ONCE at boot (a oneshot), AFTER firewalld and the release-gate backstop
+# (cosmetic layering — each owns its own nftables table and never conflicts)
+# and BEFORE tailscaled/any desktop session can start Sunshine, so the fence
+# is live before the first stream port ever opens. The 60s cron half
+# (cron.d/hugmesh-sunshine-firewall) is the convergence floor.
+
+depend() {
+    need net
+    after firewall hugmesh-firewall-reconcile
+    before tailscaled
+}
+
+command="/usr/sbin/hugmesh-sunshine-firewall"
+command_background=false
+
+start() {
+    ebegin "Reconciling the thin-desktop (Sunshine) nftables fence (fail-closed to the existing ruleset on error)"
+    "${command}"
+    eend $? "sunshine firewall reconcile reported an unexpected error (existing ruleset preserved)"
+}
+
+stop() {
+    return 0
+}

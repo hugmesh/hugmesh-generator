@@ -1,0 +1,20 @@
+# HugMesh: Privoxy filtering proxy on 127.0.0.1:8118, chained to the local Squid
+# cache (forward / 127.0.0.1:3128). Firefox is pointed at this (see the enterprise
+# policy), so the desktop browser gets ad/tracker filtering + local caching by default.
+confdir /etc/privoxy
+logdir /var/log/privoxy
+listen-address 127.0.0.1:8118
+
+# Stock action/filter files shipped by net-proxy/privoxy provide the filtering rules.
+actionsfile match-all.action
+actionsfile default.action
+actionsfile user.action
+filterfile default.filter
+filterfile user.filter
+
+# Forward ALL requests to the local Squid cache (Privoxy filters, Squid caches).
+forward / 127.0.0.1:3128
+
+# Keep the management interface off by default.
+enable-remote-toggle 0
+enable-edit-actions 0

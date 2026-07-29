@@ -1,0 +1,79 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.image-gen — the admin-bff-api image-gen builder worker.
+#
+# This is the container image admin-bff-api's k8s Job runs (as
+# registry.hugmesh.systems/hugmesh/image-gen:latest — see
+# hugmesh-admin-bff-api's src/main/resources/jobs/image-gen-job.yaml,
+# read-only source of truth for the exact env/mount contract this image and
+# docker/build-image.sh implement). It bundles:
+#   1. The SAME self-contained Gentoo builder toolchain as Dockerfile.build
+#      (crossdev + the aarch64 cross-toolchain, image/loop/fs tools, SELinux
+#      policy tools, archivers, etc.) — reused AS-IS, not duplicated.
+#   2. This repo's own checkout (build-*-stage4.sh + specs*/ + brands/), baked
+#      in rather than bind-mounted: unlike the local `make build-all` dev flow
+#      (which bind-mounts $(CURDIR):/src at `docker run` time), the k8s Job has
+#      no such mount, so the scripts have to already be inside the image.
+#   3. docker/build-image.sh at the fixed path the Job invokes it from.
+#
+# Build (two steps — the FIRST is the existing, already-documented toolchain
+# layer; the SECOND is this file, layered on top of it):
+#   docker build -f Dockerfile.build -t hugmesh-builder .     # (or: make docker-image)
+#   docker build -f docker/Dockerfile.image-gen -t registry.hugmesh.systems/hugmesh/image-gen:latest .
+#   # (or: make image-gen-docker-image, which also passes
+#   # --build-arg GIT_SHA=<short HEAD sha> so GENERATOR_REV below carries the
+#   # real revision instead of staying empty — see the GIT_SHA ARG further down)
+#
+# This PR ships the image SOURCE only. An operator must still build + push it
+# to the registry and flip admin-bff-api's imagegen.launch.enabled for any of
+# this to actually run (see that repo's ImageGenConfig) — out of scope here.
+
+# hugmesh-builder has no versioned-tag scheme anywhere in this repo (see
+# Dockerfile.build / the Makefile's `IMAGE ?= hugmesh-builder`) — it is
+# always the one locally-built toolchain image, not pulled from a registry, so
+# pinning a release tag (hadolint DL3007) does not apply here.
+# hadolint ignore=DL3007
+FROM hugmesh-builder:latest
+
+LABEL org.opencontainers.image.title="hugmesh-image-gen" \
+      org.opencontainers.image.description="admin-bff-api image-build worker: runs one on-request device image build and reports the terminal result back to the BFF ingest endpoint." \
+      org.opencontainers.image.source="https://github.com/hugmesh-net/hugmesh-generator"
+
+# net-misc/openssh isn't part of the Dockerfile.build toolchain (that image is
+# scoped to the build/image/test toolchain the local dev flow needs); this
+# worker additionally needs ssh-keygen to derive the dial PUBLIC key from the
+# mounted private key (see docker/build-image.sh) — never to generate or store
+# a private key of its own for that purpose.
+RUN emerge --verbose --noreplace net-misc/openssh
+
+# Bake the whole generator checkout in (see header comment: the k8s Job has no
+# bind-mount of the repo). .dockerignore already keeps this context free of
+# build output / *.img / *.iso / VCS metadata.
+WORKDIR /opt/hugmesh-generator
+COPY . .
+RUN chmod +x build-*-stage4.sh scripts/*.sh
+
+# The Job's command is `/bin/sh /builder/build-image.sh` (see
+# admin-bff-api's jobs/image-gen-job.yaml) — ship the worker script there.
+# (COPY creates /builder itself; no separate mkdir needed.)
+COPY docker/build-image.sh /builder/build-image.sh
+RUN chmod 0755 /builder/build-image.sh
+
+ENV GENERATOR_DIR=/opt/hugmesh-generator
+
+# OPTIONAL git revision this image was built from, baked in here (rather than
+# read from a .git checkout — .dockerignore strips VCS metadata from the
+# context above) so build-image.sh's own `GENERATOR_REV="${GENERATOR_REV:-}"`
+# picks it up from the image's ENV and reports it in the terminal ingest
+# message (see docker/build-image.sh). Left EMPTY by default: an unset/blank
+# GIT_SHA build-arg (e.g. a bare `docker build` per the two-line recipe above)
+# must stay empty here too, matching build-image.sh's existing bash `:+`
+# empty-is-absent semantics, rather than baking in a misleading placeholder.
+ARG GIT_SHA=
+ENV GENERATOR_REV=${GIT_SHA}
+
+# No custom ENTRYPOINT: the Job always overrides `command` explicitly to
+# ["/bin/sh","/builder/build-image.sh"]. CMD here just makes the image
+# runnable stand-alone (`docker run --privileged -e ... image-gen`) for local
+# testing without having to repeat that command on every invocation.
+CMD ["/bin/sh", "/builder/build-image.sh"]

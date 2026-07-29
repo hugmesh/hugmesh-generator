@@ -1,0 +1,64 @@
+# lan-dns Corefile — CoreDNS configured as the LAN-facing wildcard resolver for
+# the brand domain. It answers EVERY name under hugmesh.systems (apex + any
+# subdomain: id. / api. / matrix. / mastodon. / scale. / *) with the backend
+# ingress node's LAN IP, so a browser or the e2e runner on the LAN resolves the
+# brand subdomains to the cluster edge (where ingress-nginx already listens on
+# 80/443). Anything NOT under the brand domain is forwarded to upstream resolvers.
+#
+# Two templated values:
+#   - the brand domain — authored as hugmesh.systems here so the builder's
+#     rebrand_sysroot rewrites it to the brand's domain (e.g. hugmesh.test) in
+#     the baked tree. The CoreDNS `template` regex therefore matches the concrete
+#     brand domain at apply time.
+#   - __LAN_INGRESS_IP__ — the backend ingress node InternalIP, PATCHED into this
+#     ConfigMap by specs/cluster/bootstrap/bootstrap.sh (the IP is per-deployment,
+#     mirroring how the headscale Endpoints PKI_IP is injected). Until it is
+#     patched, CoreDNS answers the brand domain with the placeholder and logs;
+#     bootstrap reloads it with the real IP.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lan-dns-corefile
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: lan-dns
+    app.kubernetes.io/part-of: hugmesh.systems
+data:
+  Corefile: |
+    # Authoritative zone for the brand domain — wildcard -> backend ingress IP.
+    # The server block scopes the template plugin to this zone (apex + every
+    # subdomain), so NO `match` regex is needed — every A query under the brand
+    # domain is answered with the LAN ingress IP. (Avoiding a `match` regex also
+    # keeps the zone rebrand-safe: the build's domain rewrite only has to touch
+    # the zone name on the line below, not an escaped-dot regex.)
+    hugmesh.systems {
+        errors
+        # Every A query in this zone -> the LAN ingress IP.
+        template IN A {
+            answer "{{ .Name }} 60 IN A __LAN_INGRESS_IP__"
+        }
+        # AAAA -> NODATA (no fabricated IPv6) so clients use the A record.
+        template IN AAAA {
+            rcode NOERROR
+        }
+        # Health/readiness + Prometheus metrics for the resolver itself.
+        prometheus :9153
+        log
+    }
+    # Everything else: forward to the resolvers in this pod's /etc/resolv.conf,
+    # with a small in-memory cache. NOTE: the Deployment runs
+    # dnsPolicy=ClusterFirstWithHostNet, so /etc/resolv.conf is the in-cluster DNS
+    # (kube-dns), which then recurses out via the node's real upstreams — one extra
+    # hop, but it keeps lan-dns a drop-in LAN resolver clients can point at
+    # wholesale (brand domain authoritative; everything else forwarded). The brand
+    # zone above is self-contained (no forward), so id.<domain> keeps resolving
+    # even if cluster DNS is down. The `loop` plugin guards against a forward loop.
+    . {
+        errors
+        health :8080
+        ready :8181
+        cache 30
+        forward . /etc/resolv.conf
+        reload
+        loop
+    }

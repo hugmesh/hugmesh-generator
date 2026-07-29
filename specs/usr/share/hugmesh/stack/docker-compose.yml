@@ -1,0 +1,51 @@
+# HugMesh stack — local dockerized run. Brought up by ./hugmesh-stack up.
+# Infra (Postgres + Casdoor) is always needed; app services build from the repos
+# fetched next to this file and are gated behind the "app" profile so you can
+# start only what you want:  ./hugmesh-stack up admin-bff login-ui
+#
+# This is a SCAFFOLD that tracks your checked-out repos — extend the `app` block
+# with the services/UIs you want to run (each just needs a build context + the
+# DB/Casdoor env the BFFs already expect).
+services:
+  postgres:
+    image: postgres:16
+    profiles: ["infra"]
+    environment:
+      POSTGRES_USER: hugmesh
+      POSTGRES_PASSWORD: ${HUGMESH_DB_PASS:-changeme}
+      POSTGRES_DB: hugmesh
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hugmesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  casdoor:
+    image: casbin/casdoor:latest
+    profiles: ["infra"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      RUNNING_IN_DOCKER: "true"
+    ports: ["8000:8000"]
+
+  admin-bff:
+    profiles: ["app"]
+    build: { context: ./admin-bff }
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/hugmesh
+      SPRING_DATASOURCE_USERNAME: hugmesh
+      SPRING_DATASOURCE_PASSWORD: ${HUGMESH_DB_PASS:-changeme}
+    ports: ["8081:8080"]
+
+  login-ui:
+    profiles: ["app"]
+    build: { context: ./login-ui }
+    ports: ["4200:80"]
+
+volumes:
+  pgdata:

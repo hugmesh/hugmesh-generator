@@ -1,0 +1,88 @@
+{
+  // HugMesh fleet mesh ACL policy (headscale 0.23.x, file mode).
+  //
+  // GOAL: a flat L3 mesh — every fleet node reaches every other fleet node on
+  // every port, AND pods/ClusterIP services on one node are reachable from any
+  // node as though on one LAN. Fleet-scoped and least-surprising: this is a
+  // default-deny policy that ONLY opens fleet-internal traffic + the cluster's
+  // pod/service CIDRs. There is NO internet-wide ("*") grant and NO autogroup
+  // exit-node access.
+  //
+  // hujson = JSON with comments + trailing commas; headscale parses it natively.
+  // This particular file is also strict JSON (no trailing commas) so it lints
+  // with a plain `jq` after comments are stripped.
+
+  // ── Who may apply which tags ──────────────────────────────────────────────
+  // Tags are self-applied by each node at join via `tailscale up
+  // --advertise-tags=...`. A node may only claim a tag whose owner is the
+  // headscale user its preauth key was minted under — here, "hugmesh"
+  // (see provision_headscale: `headscale users create hugmesh` + preauthkey
+  // --user hugmesh). tag:hugmesh is the fleet-wide membership tag; the
+  // per-role tags are reserved for future segmentation (all owned by the same
+  // user, so any node can self-tag).
+  "tagOwners": {
+    "tag:hugmesh": ["hugmesh"],
+    "tag:pki": ["hugmesh"],
+    "tag:be": ["hugmesh"],
+    "tag:fe": ["hugmesh"],
+    "tag:host": ["hugmesh"]
+  },
+
+  // ── Subnet-route auto-approval ────────────────────────────────────────────
+  // Each fleet node advertises the cluster-wide pod + service CIDRs
+  // (--advertise-routes=10.244.0.0/16,10.96.0.0/12). Listing those exact
+  // prefixes here, owned by tag:hugmesh, makes headscale auto-approve them
+  // the moment a tagged node advertises them — no manual
+  // `headscale nodes approve-routes` step. Routes outside these prefixes are
+  // NOT auto-approved.
+  "autoApprovers": {
+    "routes": {
+      "10.244.0.0/16": ["tag:hugmesh"],
+      "10.96.0.0/12": ["tag:hugmesh"]
+    }
+  },
+
+  // ── Access rules (default-deny; only these accepts apply) ─────────────────
+  // Layer-A (device-license registry) [FIX-DROPMESHRULE]: the any-to-any
+  //   {src:[tag:hugmesh], dst:[tag:hugmesh:*]}
+  // rule is DROPPED — it exposed EVERY node's :22 to every other node and that
+  // hole need not exist at any time. NOTE: the builders now bake
+  // policy.bootstrap.hujson AS the initial /etc/headscale/policy.hujson, so this
+  // file is retained for reference / non-Layer-A callers only; the runtime
+  // policy is the bootstrap policy until the first verified Layer-A sync
+  // re-renders it from policy.hujson.tmpl with the generated per-edge ssh block.
+  "acls": [
+    // "One LAN" reachability: any fleet node -> any pod IP or ClusterIP, all
+    // ports (k8s pod/ClusterIP data plane — NOT SSH). Combined with the
+    // advertised+auto-approved subnet routes above, every tailnet member reaches
+    // pods/services on any node (incl. non-k8s admin members + off-node
+    // ClusterIP access). This is the rule Layer-A KEEPS.
+    {
+      "action": "accept",
+      "src": ["tag:hugmesh"],
+      "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
+    }
+  ],
+
+  // ── Tailscale SSH (privileged-user-only) ──────────────────────────────────
+  // Hardened default: ONLY the image's PRIVILEGED user (the superadmin for the
+  // primary core/cluster-node images; the building admin for admin-created
+  // mesh-extension images) may SSH into a fleet node over the tailnet. root and
+  // every other local account are DENIED an SSH session — `tailscale up --ssh`
+  // exposes Tailscale SSH and this rule scopes which tailnet identities may open
+  // it AS which local users. The "users" list below is the single privileged
+  // username; "autogroup:nonroot" would broaden it and "root" is deliberately
+  // excluded. keys-provision rewrites @@TS_SSH_USER@@ to the provisioned
+  // privileged user (provision.json .tailscale.ssh_user, default = the admin
+  // account in users.json) before `headscale policy set`. SSH is reachable on
+  // the tailnet only (tailscaled binds the tailnet; the public iface is not
+  // exposed by Tailscale SSH).
+  "ssh": [
+    {
+      "action": "accept",
+      "src": ["tag:hugmesh"],
+      "dst": ["tag:hugmesh"],
+      "users": ["@@TS_SSH_USER@@"]
+    }
+  ]
+}

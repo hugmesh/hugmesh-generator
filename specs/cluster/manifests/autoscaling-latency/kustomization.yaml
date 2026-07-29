@@ -1,0 +1,17 @@
+# DARK latency/RPS autoscaling component — KEDA ScaledObjects for the
+# representative high-traffic edges (the two gateways + the admin/user BFFs).
+#
+# INERT BY CONSTRUCTION: NO base/service kustomization references this directory.
+# The ONLY consumer is the MANUAL-sync ArgoCD Application
+# apps/01c-autoscaling-latency.yaml (no automated{} => created Out-Of-Sync,
+# applies nothing until an operator syncs it). KEDA the operator is already live
+# (apps/01b-keda.yaml); these ScaledObjects are the deferred event-driven "2nd
+# pass" it documented. See ./README.md for the one-line enable switch and the
+# Prometheus metric-source dependency (NO Prometheus exists yet).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - fe-gateway-scaledobject.yaml
+  - be-gateway-scaledobject.yaml
+  - admin-bff-api-scaledobject.yaml
+  - user-bff-api-scaledobject.yaml

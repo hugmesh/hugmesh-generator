@@ -1,0 +1,167 @@
+# =============================================================================
+# 55-velero — the Velero backup/restore server + node-agent (the GitOps leg that
+# makes the merged admin-bff cloud-backups feature REAL when a superadmin opts in).
+# =============================================================================
+# Installs the upstream Velero Helm chart (server Deployment + node-agent DaemonSet
+# for filesystem/PV backups via Kopia + the velero.io CRDs), PINNED. The admin-bff
+# cloudbackup VeleroBackupEffector (PR #76, behind app.backups.effector.enabled=
+# false by DEFAULT) server-side-applies velero.io/v1 Backup/Restore CRs into the
+# `velero` namespace; this app is what makes those CRs reconcile to a real backup.
+#
+# The companion BackupStorageLocation + ESO-sourced object-store credentials +
+# least-privilege RBAC + the status-sweep CronJob live in
+# manifests/velero (apps/56-velero-config.yaml). The chart here is the SERVER ONLY.
+#
+# ── SHIPS DARK (deliberate, superadmin-opt-in) ──────────────────────────────
+# Installing Velero must NOT silently enable real backups. Two independent gates
+# keep the feature dark:
+#   1. This app is NON-automated (manual sync) like apps/29a-egress-proxy.yaml —
+#      a superadmin syncs it deliberately. Until synced, no Velero runs.
+#   2. EVEN ONCE Velero is installed, the admin-bff effector stays OFF
+#      (app.backups.effector.enabled=false, the NoopBackupEffector) until the
+#      superadmin flips it (see apps/56-velero-config.yaml + docs/CLOUD-BACKUPS.md).
+#      So a created backup_set sits at `pending` and NO Velero CR is emitted until
+#      BOTH Velero is installed AND the effector is enabled.
+#
+# ── Credentials: ESO/Vault ONLY, never inline ───────────────────────────────
+# The chart's credentials.useSecret=true + existingSecret=velero-cloud-credentials
+# points Velero at a Secret that is MATERIALIZED BY ESO from Vault
+# (manifests/external-secrets/velero-externalsecrets.yaml). No object-store key/
+# secret bytes appear anywhere in this git tree.
+#
+# Pins: chart 12.0.3 / Velero appVersion 1.18.1 / velero-plugin-for-aws v1.14.1.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: velero
+  namespace: devops
+  annotations:
+    # Wave 1 so the CRDs + server land before the config app (wave 2) applies the
+    # BackupStorageLocation (a velero.io CRD) + RBAC + sweep.
+    argocd.argoproj.io/sync-wave: "1"
+    hugmesh.systems/ships-dark: "manual-sync + app.backups.effector.enabled=false"
+spec:
+  project: default
+  source:
+    repoURL: https://vmware-tanzu.github.io/helm-charts
+    chart: velero
+    targetRevision: 12.0.3
+    helm:
+      releaseName: velero
+      values: |
+        # ── Velero CRDs (Backup/Restore/BackupStorageLocation/…) ──────────────
+        # Install + keep the velero.io CRDs current via the chart (the effector's
+        # GenericKubernetesResource apply targets velero.io/v1 Backup/Restore).
+        installCRDs: true
+        upgradeCRDs: true
+
+        # Pin the server image to the chart's appVersion (no floating :latest).
+        image:
+          repository: velero/velero
+          tag: v1.18.1
+          pullPolicy: IfNotPresent
+
+        # ── Object-store plugin (S3/MinIO-compatible) ─────────────────────────
+        # The AWS plugin speaks the S3 API the kopia/restic AES repo + MinIO use.
+        # initContainers run once to drop the plugin into the server pod.
+        initContainers:
+          - name: velero-plugin-for-aws
+            image: velero/velero-plugin-for-aws:v1.14.1
+            imagePullPolicy: IfNotPresent
+            volumeMounts:
+              - mountPath: /target
+                name: plugins
+
+        # ── Credentials: ESO-materialized Secret, NEVER inline ────────────────
+        # credentials.existingSecret references the Secret ESO materializes from
+        # Vault (manifests/external-secrets/velero-externalsecrets.yaml). The key
+        # `cloud` holds the AWS-style credential file. No bytes live in git.
+        credentials:
+          useSecret: true
+          existingSecret: velero-cloud-credentials
+
+        # ── BackupStorageLocation / VolumeSnapshotLocation ────────────────────
+        # The chart can seed a `default` BSL. We DISABLE the chart-seeded BSL/VSL
+        # and instead provision them in manifests/velero (GitOps-owned, so their
+        # names + brand layout match the effector contract exactly and are
+        # reviewable in one place). configuration.backupStorageLocation: [] keeps
+        # the chart from minting an unmanaged `default`.
+        configuration:
+          backupStorageLocation: []
+          volumeSnapshotLocation: []
+          # Kopia is the uploader for filesystem/PV backups (node-agent path).
+          uploaderType: kopia
+          # Default the FS-backup behaviour OFF; the effector sets
+          # defaultVolumesToFsBackup per-Backup-CR for pv_snapshot services only.
+          defaultVolumesToFsBackup: false
+
+        # ── node-agent DaemonSet (filesystem/PV backups) ──────────────────────
+        # Required for Kopia filesystem backups of PVs (the pv_snapshot services:
+        # etcd/pvc/matrix/games/tube/owncast). Scheduled on the hugmesh nodes
+        # that actually carry app-tier PVs.
+        deployNodeAgent: true
+        nodeAgent:
+          tolerations: []
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          # ── SELinux MCS isolation (node-agent pod) ──────────────────────────
+          # The node-agent is a SEPARATE pod from the Velero server, so per the
+          # docs/SECURITY.md §3 contract it carries its OWN unique MCS category
+          # `s0:c65` (the server takes `s0:c64`). Set at BOTH the pod level (the
+          # volume-relabel context) and the container level — the same supported
+          # values-override shape the cassandra leg uses (apps/00-cassandra.yaml),
+          # only `seLinuxOptions.level` set, every other chart securityContext
+          # default left untouched (no fork, no template patch).
+          podSecurityContext:
+            seLinuxOptions:
+              level: "s0:c65"
+          containerSecurityContext:
+            seLinuxOptions:
+              level: "s0:c65"
+
+        # ── Velero server ─────────────────────────────────────────────────────
+        # Pin the server onto a devops/amd64 node (same placement ArgoCD uses).
+        nodeSelector:
+          kubernetes.io/arch: amd64
+        resources:
+          requests: { cpu: 100m, memory: 256Mi }
+          limits:   { cpu: "1",  memory: 1Gi }
+
+        # ── SELinux MCS isolation (server pod) ────────────────────────────────
+        # docs/SECURITY.md §3: the Velero server gets the first free unique MCS
+        # category `s0:c64` so a compromised server pod cannot read another
+        # workload's category-isolated volumes. Set at BOTH pod level (governs the
+        # volume relabel context) and container level, mirroring the cassandra
+        # precedent (apps/00-cassandra.yaml) — a clean, supported values override
+        # of ONLY `seLinuxOptions.level`; all other chart securityContext defaults
+        # untouched (no fork). The node-agent (above) carries `s0:c65`.
+        podSecurityContext:
+          seLinuxOptions:
+            level: "s0:c64"
+        containerSecurityContext:
+          seLinuxOptions:
+            level: "s0:c64"
+
+        # Server metrics for the observability stack (no public exposure).
+        metrics:
+          enabled: true
+
+        # The chart creates the `velero` ServiceAccount for the SERVER. The
+        # admin-bff effector uses a SEPARATE least-privilege SA in
+        # hugmesh-backend (manifests/velero/rbac.yaml) — it only needs to
+        # CREATE/GET the Backup/Restore CRs, not run Velero.
+        serviceAccount:
+          server:
+            create: true
+            name: velero
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: velero
+  syncPolicy:
+    # NON-automated: installing the backup engine is a deliberate superadmin act
+    # (mirrors apps/29a-egress-proxy.yaml). Ships dark until synced; even then the
+    # effector flag stays off (see apps/56-velero-config.yaml).
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

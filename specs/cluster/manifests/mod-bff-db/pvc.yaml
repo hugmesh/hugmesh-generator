@@ -1,0 +1,12 @@
+# Persistent storage for the hugmesh-mod-bff-api Postgres data directory
+# (the mod_action moderation-audit table).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mod-bff-db
+  namespace: hugmesh-backend
+  labels: { app: mod-bff-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 2Gi } }

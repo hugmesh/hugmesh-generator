@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-backend
+# HEAVY amd64 datastore — MANUAL-sync (apps/35-analytics-kafka.yaml). The kafka
+# Service is in the auto-sync floor (../discovery); this is the broker pod + PV.
+resources:
+  - deployment.yaml

@@ -1,0 +1,28 @@
+# WORKLOAD CONSOLE RBAC — the two least-privilege app-tier ServiceAccounts (read app-tier-
+# only / mutate) bound ONLY in the app-tier namespaces, the SUPERADMIN cluster-read SA +
+# ClusterRole (read-only), and the deploy-provenance Kyverno ClusterPolicy (digest-pinned
+# own-registry only). Backs the admin-bff WorkloadAdminController / WorkloadSuperadminController
+# (the /bff/{admin,superadmin}/workloads/** surface). The admin-bff enforces the whole authz
+# predicate itself (the central WebFilter); this RBAC is the in-cluster least-privilege backstop
+# (the read Role has NO exec/portforward/delete/secrets/configmaps and NO binding in any infra
+# tier). SHIPS DARK: the admin-bff leaves app.workload-console.k8s.enabled=false until
+# deliberately enabled, so these tokens are unused. ⚠ gate_optional_services REMOVES this
+# Application + the manifests + the route-access rows when the workloadConsole slug is
+# deselected (default: deselected).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: workload-console-rbac
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/workload-console-rbac
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=false]

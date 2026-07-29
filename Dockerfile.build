@@ -1,0 +1,288 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.build — self-contained Gentoo builder image (Phase 5).
+#
+# Goal: the DEFAULT `make build-all` runs INSIDE this image so the HOST needs
+# ZERO build toolchain and ZERO sudo. The image ships the full toolchain the
+# build/flash/test scripts need (crossdev + the aarch64 cross-toolchain, the
+# image/loop/fs tools, the SELinux policy tools, archivers, etc.). It runs as
+# root, so the native scripts run WITHOUT sudo inside it.
+#
+# The repo is bind-mounted at /src and the output dir at /out at RUNTIME
+# (`docker run -v $(CURDIR):/src -v $(WORK_DIR):/out`). Nothing about a
+# particular checkout is baked in — only the toolchain.
+#
+# WARNING: the cross-toolchain build (`crossdev`) compiles binutils + gcc +
+# glibc + linux-headers for aarch64 from source. The FIRST `make docker-image`
+# is LONG (tens of minutes to hours, depending on the host). It is fully cached
+# in this image layer, so subsequent runs reuse it instantly.
+#
+# CROSSDEV=0 skips that cross-toolchain stage entirely (several GB smaller and
+# the slowest step gone) for hosts that only build x86 targets — e.g. a
+# space-constrained box proofing `make x86-*`. ARM builds (`rpi-*`, `frite`,
+# `jetson*`) fail in such an image at their aarch64-gcc prerequisite check;
+# rebuild with the default CROSSDEV=1 to restore them (the shared x86 layers
+# stay cached, so only the crossdev stage is paid).
+#
+# Build:  make docker-image      (or: docker build -f Dockerfile.build -t hugmesh-builder .)
+#         make docker-image CROSSDEV=0   — x86-only variant (no aarch64 toolchain)
+# Run:    make build-all         (Docker is the default path — see the Makefile)
+
+# Selects the final stage below: cross-1 (full, WITH the aarch64 cross-toolchain
+# — the default) or cross-0 (x86-only). Declared before the first FROM so it is
+# usable in FROM interpolation (global ARG scope).
+ARG CROSSDEV=1
+
+# ── Stage 0: fetch a CURRENT Gentoo amd64 stage3 ──────────────────────────────
+# Docker Hub's docker.io/gentoo/stage3:amd64 is ABANDONED — stuck at 2021-06
+# (gcc-10.3.0 / python-3.9 / glibc-2.33). After a webrsync to today's tree the
+# very first `emerge` hits an unsatisfiable wall (gcc-10 is package.mask'd; the
+# whole @system would need an impossible in-place bootstrap). Instead pull the
+# autobuild stage3 tarball from the official mirror onto a scratch rootfs.
+# STAGE3_URL is overridable; bump the dated default when the snapshot rotates off
+# the mirror (latest pointer:
+#   https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-openrc.txt).
+FROM alpine:3 AS stage3-fetch
+ARG STAGE3_URL=https://distfiles.gentoo.org/releases/amd64/autobuilds/20260621T164603Z/stage3-amd64-openrc-20260621T164603Z.tar.xz
+RUN apk add --no-cache curl tar xz \
+ && mkdir /rootfs \
+ && curl -fSL "$STAGE3_URL" -o /tmp/stage3.tar.xz \
+ && tar --numeric-owner -xpJf /tmp/stage3.tar.xz -C /rootfs \
+ && rm /tmp/stage3.tar.xz
+
+# ── Stage 1: a synced Gentoo base with an up-to-date portage tree ─────────────
+FROM scratch AS base
+COPY --from=stage3-fetch /rootfs/ /
+
+# Non-interactive emerge; keep going where a single optional dep fails the merge.
+ENV FEATURES="-news binpkg-multi-instance" \
+    EMERGE_DEFAULT_OPTS="--quiet-build=y --jobs=4 --load-average=8" \
+    MAKEOPTS="-j4"
+
+# Refresh the portage tree. emerge-webrsync ships a snapshot tarball and needs
+# no rsync mirror handshake, so it is the most reliable inside a container; fall
+# back to `emerge --sync` if the snapshot is unavailable. `getuto` seeds the
+# binpkg trust keyring used by gentoo's stage3.
+RUN getuto 2>/dev/null || true; \
+    emerge-webrsync || emerge --sync
+
+# ── Stage 2: the toolchain image ─────────────────────────────────────────────
+FROM base AS toolchain
+
+# The portage profile/USE flags the host SELinux policy + grub EFI tools need.
+RUN mkdir -p /etc/portage/package.use && \
+    printf '%s\n' 'sys-boot/grub:2 grub_platforms_efi-64' \
+      > /etc/portage/package.use/hugmesh-builder && \
+    printf '%s\n' 'sys-apps/util-linux caps' \
+      >> /etc/portage/package.use/hugmesh-builder
+
+# The FULL build/image/test toolchain the scripts call so the HOST needs none:
+#   sys-devel/crossdev          — builds the aarch64 cross-toolchain (below)
+#   sys-block/parted            — partition the image (build_img)
+#   sys-fs/dosfstools           — mkfs.vfat for the ESP
+#   sys-fs/e2fsprogs            — mkfs.ext4 for the rootfs
+#   sys-apps/util-linux         — losetup / mount / blkid (loop-mount the image)
+#   dev-libs/libisoburn         — xorriso / xorrisofs (build the x86 live ISO)
+#   sys-fs/mtools               — mformat/mcopy (grub-mkrescue's embedded EFI FAT image)
+#   sys-fs/squashfs-tools       — mksquashfs (live ISO squashfs)
+#   sys-boot/grub:2[efi-64]     — grub-install / grub-mkimage (EFI boot)
+#   sys-apps/checkpolicy        — checkpolicy/checkmodule (host SELinux policy)
+#   sys-apps/semodule-utils     — semodule_package (host SELinux policy)
+#   sys-devel/m4                — m4 (SELinux policy macro expansion)
+#   app-arch/{tar,xz-utils,zstd}— stage4 .fs.tar.xz / artifact (de)compression
+#   net-misc/curl               — fetch stage3 / firmware / sources
+#   sys-apps/file               — file(1) artifact/type detection
+#   dev-vcs/git                 — clone sources where the scripts need it
+# (The host-side Secure Boot chain — sbsigntools / efitools / shim — is merged
+#  in the FINAL stage below so adding it never invalidates the cached crossdev
+#  stage that follows this layer.)
+RUN emerge --verbose --noreplace \
+        sys-devel/crossdev \
+        sys-block/parted \
+        sys-fs/dosfstools \
+        sys-fs/e2fsprogs \
+        sys-apps/util-linux \
+        dev-libs/libisoburn \
+        sys-fs/mtools \
+        sys-fs/squashfs-tools \
+        sys-boot/grub:2 \
+        sys-apps/checkpolicy \
+        sys-apps/semodule-utils \
+        sys-devel/m4 \
+        sys-devel/bc \
+        app-arch/tar \
+        app-arch/xz-utils \
+        app-arch/zstd \
+        net-misc/curl \
+        sys-apps/file \
+        dev-vcs/git
+
+# ── Stage 3: the cross-toolchain (slow; cached in this layer) ─────────────────
+# Split into its own stage so CROSSDEV=0 can skip it: BuildKit only builds the
+# stages the selected final stage actually depends on.
+FROM toolchain AS cross-1
+# crossdev needs its own overlay to drop the generated cross ebuilds into.
+RUN mkdir -p /var/db/repos/crossdev/{metadata,profiles} && \
+    echo 'crossdev' > /var/db/repos/crossdev/profiles/repo_name && \
+    printf '%s\n' 'masters = gentoo' 'thin-manifests = true' \
+      > /var/db/repos/crossdev/metadata/layout.conf && \
+    mkdir -p /etc/portage/repos.conf && \
+    printf '%s\n' '[crossdev]' 'location = /var/db/repos/crossdev' 'masters = gentoo' 'priority = 10' \
+      > /etc/portage/repos.conf/crossdev.conf
+
+# Build binutils + gcc + glibc + linux-headers for aarch64. THIS IS THE LONG
+# STEP — it compiles a full cross-toolchain from source and is cached here.
+RUN crossdev --stable -t aarch64-unknown-linux-gnu
+
+# ── Stage 3b: the x86-only variant (CROSSDEV=0) ───────────────────────────────
+# No aarch64 cross-toolchain: ARM targets fail their aarch64-gcc prerequisite
+# check in this image. The marker file lets tooling (and humans in a shell)
+# tell the variants apart, since both are tagged hugmesh-builder.
+FROM toolchain AS cross-0
+RUN echo 'x86-only (built with CROSSDEV=0): no aarch64 cross-toolchain' \
+      > /etc/hugmesh-builder-variant
+
+# ── Runtime defaults ──────────────────────────────────────────────────────────
+FROM cross-${CROSSDEV} AS final
+# Host-side Secure Boot chain: build-x86-host-stage4.sh signs OUTSIDE the chroot
+# (so the org key never enters the image) and copies shim off the build host —
+# i.e. off THIS container under the default Docker path:
+#   app-crypt/sbsigntools — sbsign: sign the UKI + grubx64.efi with the org key
+#   app-crypt/efitools    — cert-to-efi-sig-list + sign-efi-sig-list (the db.auth
+#                           firmware-enrollment payload next to the org cert)
+#   sys-boot/shim         — shim + MokManager under /usr/share/shim, picked up by
+#                           the .img ESP install and the live-ISO post-processing
+# Deliberately merged HERE (not in the toolchain stage) so the hours-long cached
+# crossdev stage above is not invalidated by this addition.
+# Also merged HERE (not the cached toolchain stage) so the crossdev layer stays cached:
+#   sys-kernel/dracut  — HOST dracut, invoked directly by build-x86-host-stage4.sh to
+#                        generate the disk-boot + --uefi UKI initramfs (grep :3930/:3959;
+#                        the :3677 preflight `for b in grub-install dracut parted ...`
+#                        hard-requires it). ARM boards (frite/opi5/rpi5) run dracut via
+#                        chroot into the target sysroot, so they do not need the host one —
+#                        but x86 does, and without it the x86 image/UKI build fails.
+#   sys-apps/gptfdisk  — sgdisk: create/inspect the GPT (ESP+root) the x86 .img uses.
+#   app-emulation/qemu — STATIC qemu-aarch64 USER emulator (/usr/bin/qemu-aarch64). The
+#                        ARM boards generate their arm64 disk-boot/live initramfs by
+#                        chrooting INTO the target sysroot and running the sysroot's own
+#                        dracut under this emulator (Strategy 1 in build_disk_initramfs);
+#                        it is the ONLY strategy that emits a correct arm64 initramfs (the
+#                        host is amd64). An --encrypt-root ARM build is UNBOOTABLE without
+#                        it (live log: "no usable dracut" -> refuse). Configured just below
+#                        with static-user (MANDATORY: build_disk_initramfs copies the
+#                        interpreter INTO the arm64 sysroot and execs it under chroot, where
+#                        only a STATICALLY linked binary can run) + QEMU_USER_TARGETS=aarch64,
+#                        and -qemu_softmmu_targets_x86_64 to cancel the amd64 profile's
+#                        QEMU_SOFTMMU_TARGETS="x86_64" (arch/amd64/make.defaults) so ONLY the
+#                        small, fast aarch64 user emulator is built — no x86_64 system
+#                        emulator, no firmware blobs. USE_EXPAND variables cannot be set
+#                        per-package via package.env (portage ignores USE there) and qemu has
+#                        no plain `softmmu` USE flag, so the expanded per-package flag in
+#                        package.use is the ONLY correct mechanism. qemu's static-user DEPEND
+#                        pulls dev-libs/glib:2[static-libs(+)], virtual/zlib:=[static-libs(+)]
+#                        and (USE=xattr is on in the base profile) sys-apps/attr[static-libs(+)]
+#                        — all of which HAVE a real, default-OFF static-libs flag (so the (+)
+#                        default does NOT apply), and glib forwards static-libs to
+#                        dev-libs/libpcre2 — so package.use below must enable static-libs on
+#                        that whole closure or the emerge halts with 'USE changes necessary'
+#                        (autounmask is off; empirically reproduced with a fresh-stage3-like
+#                        portage config). This mirrors the Gentoo Embedded Handbook
+#                        qemu-user-chroot recipe.
+#                        binfmt_misc registration is a kernel-GLOBAL, RUN-time concern (a
+#                        build-time registration does not survive into a fresh `docker run`),
+#                        so it is done at run time by dracut_cross_register_qemu() in
+#                        scripts/_dracut-cross-lib.sh — the image only ships the binary.
+# ALL of the above are merged HERE, in the FINAL stage, NOT in the cached toolchain/
+# crossdev stages, so adding them never invalidates the hours-long crossdev layer.
+# Write qemu's portage config first (in the FINAL stage so the crossdev cache is
+# preserved), then emerge it alongside the rest.
+RUN mkdir -p /etc/portage/package.use && \
+    printf '%s\n' \
+      'app-emulation/qemu static-user qemu_user_targets_aarch64 -qemu_softmmu_targets_x86_64' \
+      'dev-libs/glib static-libs' \
+      'dev-libs/libpcre2 static-libs' \
+      'sys-apps/attr static-libs' \
+      'virtual/zlib static-libs' \
+      'sys-libs/zlib static-libs' \
+      > /etc/portage/package.use/hugmesh-qemu-user
+# HOST-side (container /) build-backend keyword acceptance: the cross-emerge
+# resolves BDEPEND against THIS amd64 root, so the sysroot's per-board
+# specs-*/portage/package.accept_keywords files cannot cover the "to /" batch.
+# dev-python/vcs-versioning (setuptools-scm's backend, pulled by the fleet
+# SELinux toolchain) is keyworded amd64-first upstream — bake the acceptance in
+# so a fresh image tree can never mask the host half of the chain. The ARM
+# stage4 scripts ALSO write this file at run time (belt-and-braces for images
+# built before this line existed).
+RUN mkdir -p /etc/portage/package.accept_keywords && \
+    printf '%s\n' \
+      '# pure-python/arch-independent build backend; amd64-first keyworded upstream.' \
+      '# Host-side twin of specs-*/portage/package.accept_keywords/setuptools-scm-backend.' \
+      'dev-python/vcs-versioning **' \
+      'dev-python/setuptools-scm **' \
+      '# HOST twins of the sysroot SELinux 3.11 userspace: libselinux-3.11 /' \
+      '# policycoreutils-3.11 pkg_postinst run HOST sefcontext_compile / semodule' \
+      '# on the ROOT!=/ merge (real jetson cross-build failure, session' \
+      '# 20260716-160638-f8c153); the 3.11 window is still ~amd64 and host tool' \
+      '# versions must be >= the target 3.11 policy toolchain.' \
+      'sys-libs/libsepol ~amd64' \
+      'sys-libs/libselinux ~amd64' \
+      '# policycoreutils-3.11 RDEPENDs >=libsemanage-3.11 (pretend-resolve proven).' \
+      'sys-libs/libsemanage ~amd64' \
+      'sys-apps/policycoreutils ~amd64' \
+      > /etc/portage/package.accept_keywords/hugmesh-host-build-backends
+# Same host-half logic for USE: the tree's default PYTHON_TARGETS has moved past
+# this root's dev-lang/python:3.12, so the accepted setuptools-scm-10.2 chain
+# (vcs-versioning → setuptools-83 → jaraco-*) aborts the "to /" batch with
+# "USE changes are necessary: >=dev-python/… python_targets_python3_12"
+# (reproduced against the failed 2026-07-16 jetson fleet sysroot). Bake the
+# 3.12-target seed in; the ARM stage4 scripts also write it at run time.
+RUN mkdir -p /etc/portage/package.use && \
+    printf '%s\n' \
+      '# Keep the python3.12 target enabled for host-side (BDEPEND "to /") installs —' \
+      '# twin of the sysroot/chroot specs' \
+      '# portage/package.use/python-targets seed (see that file for the rationale).' \
+      '# python3_13 rides along: the image-installed python ecosystem carries the' \
+      '# 3_13 target, and a 3_12-only seed flips -python3_13 on rebuilds, wedging' \
+      '# the resolver in a setuptools-scm slot conflict (hit by the host SELinux' \
+      '# 3.11 tools emerge; additive 3_12+3_13 resolves cleanly).' \
+      '*/* PYTHON_TARGETS: python3_12 python3_13' \
+      '# The 3.12 tooling cascade pulls host dev-lang/python:3.12 → util-linux[pam] →' \
+      '# pam-1.7.2, whose pambase→passwdqc chain requires pam[audit] (twin of the' \
+      '# sysroot package.use/pam-audit seed; harmless in the build container).' \
+      'sys-libs/pam audit' \
+      '# Host policycoreutils-3.11 (SELinux 3.11 parity tools) needs the python' \
+      '# bindings halves of its dep chain (autounmask-proven pretend resolve):' \
+      '# policycoreutils -> libselinux[python], selinux-python -> audit[python].' \
+      'sys-libs/libselinux python' \
+      'sys-process/audit python' \
+      > /etc/portage/package.use/hugmesh-host-build-backends
+RUN emerge --verbose --noreplace \
+        sys-boot/shim \
+        app-crypt/sbsigntools \
+        app-crypt/efitools \
+        sys-kernel/dracut \
+        sys-apps/gptfdisk \
+        app-emulation/qemu \
+        sys-libs/libselinux \
+        sys-apps/policycoreutils
+# ── Host-safety marker (belt-and-braces) ───────────────────────────────────────
+# scripts/_host-guard-lib.sh refuses to seed /etc/portage or run a host emerge
+# unless it can PROVE this root is disposable. Under Docker /.dockerenv (created
+# by the daemon in every container) already proves it — which is precisely why
+# STALE images built before this marker existed keep working with no rebuild.
+# This file is the redundant second proof: it earns its keep under podman with a
+# scrubbed /run, and it makes the container's self-identification greppable and
+# auditable by tests/scripts/test-host-mutation-guard.sh. Baked LAST, in the
+# FINAL stage, so the hours-long crossdev layers are untouched (see the rule at
+# the top of this stage).
+RUN printf '%s\n' \
+      'hugmesh builder container — build-*-stage4.sh may mutate THIS root'"'"'s /etc/portage.' \
+      > /etc/hugmesh-builder-container
+LABEL org.hugmesh.builder-container="1"
+# The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
+# do NOT want to hide `make`, so the container is a thin `make` wrapper. The
+# default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path
+# and writes to the mounted /out. Override by appending a make target to
+# `docker run ... hugmesh-builder <target>`.
+WORKDIR /src
+CMD ["make", "build-all", "NATIVE=1", "WORK_DIR=/out"]

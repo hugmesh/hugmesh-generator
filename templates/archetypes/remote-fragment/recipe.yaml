@@ -1,0 +1,33 @@
+# ============================================================================
+# remote-fragment/recipe.yaml — ANCHORED brand-delta edits for the
+# REMOTE-FRAGMENT class (runtime-delivered federation bundles).
+# ============================================================================
+#
+# EXEMPLAR MEMBER = hugmesh-remote-fragment: the Spring-Native sync sidecar +
+# static-nginx pod that pulls PUBLISHED remote bundles (federation-api
+# `/api/federation/manifest` -> nginx docroot) so a tenant can serve remotes it
+# does not build. See docs/FEDERATION-EXAMPLES.md, "remote-fragment runtime
+# bundles".
+#
+# The fragment source is near-zero-token: the sync loop / Casdoor client-
+# credentials machinery / nginx conf are CODE identity; every runtime seam
+# (manifest URL, Casdoor token endpoint, sync cadence) is already ${ENV}-driven
+# in the base's application.yml and set by deploy env — NOT source literals. So
+# the ONLY brand-coupled source line in the whole repo is the CI include
+# org/group, and this recipe is that single required anchor.
+#
+# NO class-A files, DELIBERATELY: the base OWNS deploy/** (deployment/hpa/
+# kustomization/nginx.conf) and every other path — an archetype whole-file at a
+# base-owned path would have to render byte-identical forever (drift trap) for
+# zero brand value. Class-B only.
+edits:
+  - file: .gitlab-ci.yml
+    optional: false
+    anchors:
+      # The ONLY in-source brand token: the centralized pentest-stage include
+      # org/group. The rest of the CI (two-image build: sync + nginx) is code
+      # identity and is NOT overlaid.
+      - id: ci-include-org
+        find: "HugMesh/hugmesh-generator"
+        replace: "{{GENERATOR_ORG_GROUP}}"
+        required: true

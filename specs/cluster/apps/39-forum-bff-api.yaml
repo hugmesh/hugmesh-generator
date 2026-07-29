@@ -1,0 +1,29 @@
+# forum-bff — Backend-For-Frontend for the hugmesh-forum-ui. ClusterIP in
+# hugmesh-backend; the ONLY way in is the fe-gateway /bff/forum/** route (same
+# origin as hugmesh.systems). It is the SINGLE browser->phpBB path and the
+# egress source into the isolated hugmesh-forum namespace. Owns the
+# forum_user_role / forum_action tables in forum-bff-db.
+#
+# DEPLOY ORDERING: lands AFTER forum-bff-db (38) + phpBB (30) + its mTLS/db ESO
+# secrets. Its phpBB legs (PHPBB_ENABLED + EXTERNAL_FORUM_ENABLED) are ON since
+# PR #164 (forum-api extension live-proven 2026-06-23); the stub-seam remains the
+# graceful-degradation path (typed degraded envelopes) if phpBB is unreachable, so
+# boot order stays soft. Deploy with the gateway/BFF client-cert mTLS wave
+# (SSL_CLIENT_AUTH=need).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: forum-bff-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/forum-bff-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

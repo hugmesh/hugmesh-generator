@@ -1,0 +1,86 @@
+# LEAN test Job template (ENV=test only). Rendered by the orchestrator with a
+# unique ${RUN_ID} and kubectl-applied. Runs the REAL-services Playwright suite
+# against the in-cluster fe/be/pki services when the LEAN edge fires (x86/heavy
+# ABSENT). Writes JUnit/JSON/summary + sanitized logs to the test-reports PVC and
+# POSTs per-suite/per-role events to the admin-bff ingest endpoint.
+#
+# The Job IMAGE bundles tests/e2e + tests/qemu/seed-accounts.sh (built by the
+# generator's test-runner image stage). LEAN asserts the x86-absent fallback:
+# SNAP_EXPECT_HEAVY=0 so spec assertions require the in-memory-fallback usage
+# marker and NO Kafka producer connection.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-runner-lean-${RUN_ID}
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: test-runner
+    app.kubernetes.io/part-of: hugmesh.systems
+    hugmesh.systems/tier: test
+    hugmesh.systems/test-tier: lean
+  annotations:
+    hugmesh.systems/run-id: "${RUN_ID}"
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: test-runner-lean
+        hugmesh.systems/tier: test
+    spec:
+      restartPolicy: Never
+      serviceAccountName: hugmesh-test-runner
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: e2e
+          # Generator-built image bundling tests/e2e (Playwright) + Chromium +
+          # seed-accounts.sh. Pinned by the build; :dev here, pruned for prod.
+          image: registry.hugmesh.systems/hugmesh-test-runner:dev
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              export SNAP_REPORT_DIR="/reports/lean/${RUN_ID}"
+              export SNAP_REPORT_TIER=LEAN
+              export SNAP_REAL_SERVICES=1
+              export SNAP_EXPECT_HEAVY=0
+              export SNAP_RUN_ID="${RUN_ID}"
+              mkdir -p "$SNAP_REPORT_DIR/logs"
+              # Run the real-services suite; never abort the report on test failure.
+              node_modules/.bin/playwright test 2>&1 | tee "$SNAP_REPORT_DIR/logs/run.log" || true
+              # Belt-and-braces secret scrub on the durable artifacts (the custom
+              # reporter already scrubs; this catches stray tokens in raw logs).
+              find "$SNAP_REPORT_DIR" -type f \( -name '*.log' -o -name '*.json' -o -name '*.xml' \) \
+                -exec sed -i -E 's/(Bearer|access_token"?[:=]"?)[[:space:]]*[A-Za-z0-9._-]+/\1 REDACTED/g' {} + || true
+          env:
+            - { name: SNAP_BASE_URL, value: "https://hugmesh-systems-web.hugmesh-frontend.svc.cluster.local:8443" }
+            - { name: SYSTEMS_CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: LIVE_GATEWAY, value: "1" }
+            # The admin-bff ingest endpoint the reporter POSTs live events to.
+            - { name: SNAP_INGEST_URL, value: "http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/admin/test-reports/ingest" }
+            # Shared swarm password + per-role passwords come from the test-seed
+            # Secret (rendered by seed-accounts.sh --roles, never committed).
+          envFrom:
+            - secretRef: { name: test-seed-passwords, optional: true }
+          resources:
+            requests: { cpu: 250m, memory: 768Mi }
+            limits:   { cpu: "2",  memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: reports, mountPath: /reports }
+            - { name: tmp, mountPath: /tmp }
+            - { name: home, mountPath: /home/runner }
+      volumes:
+        - name: reports
+          persistentVolumeClaim: { claimName: test-reports }
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
