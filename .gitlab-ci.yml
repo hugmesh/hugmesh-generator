@@ -368,6 +368,38 @@ lint:studio-identity-validation:
   script:
     - python -m pytest -q studio/tests/test_identity_validation.py
 
+# The FULL Studio suite (75 test files / ~3000 tests) — until now CI ran exactly
+# ONE of them (the identity-validation job above), so every GUI/driver/session
+# guard the suite carries was dev-machine-only and a red main was invisible to
+# CI. Recipe proven in this exact image before landing: PySide6 offscreen needs
+# libgl1/libegl1/libxkbcommon0/libdbus-1-3/libfontconfig1/libglib2.0-0 (that
+# last one is the sneaky import failure — without it the qt.py shim silently
+# falls through to a nonexistent PyQt6), and squashfs-tools so the build
+# preflight's mksquashfs probe reports a healthy host (its absence fails the two
+# memory-guard wording tests on an otherwise-green tree).
+# Deselected, with reasons — NOT expected failures, environments this job
+# does not have:
+#   * test_e2e_builds_start::test_mesh_node_worklist_starts_all_images — the
+#     end-to-end dispatch drives the real key-zip generation step, which needs
+#     host keystore tooling the slim image lacks; passes on a dev host. TODO:
+#     make the keys step probeable/skippable so this can rejoin.
+# (test_mesh_node's docker-gated tests self-skip via their own skipif guards.)
+test:studio-suite:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y
+        libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0
+        squashfs-tools git > /dev/null
+    - pip install --quiet pytest PySide6
+  script:
+    # NB the deselect node id is ROOTDIR-relative: studio/pytest.ini makes rootdir
+    # studio/, so ids are tests/…, NOT studio/tests/… — the studio-prefixed form
+    # is silently ignored (proven: --co counts 8 with it, 7 with this one).
+    - QT_QPA_PLATFORM=offscreen python -m pytest -q studio/tests -p no:cacheprovider
+        --deselect tests/test_e2e_builds_start.py::test_mesh_node_worklist_starts_all_images
+
 # Production-hygiene gate. Bakes a PROD copy of the GitOps tree (the same
 # transforms gate_env_apps applies: prune 09-lan-dns + the test wave, pin :dev
 # first-party tags) and asserts scripts/validate-prod-hygiene.sh PASSES on it, AND
