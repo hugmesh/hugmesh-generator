@@ -1571,6 +1571,7 @@ run_nongating_smokes() {
                 "sharedbinpkg-pool-fingerprint:${REPO_DIR}/tests/scripts/test-binpkg-pool-fingerprint.sh" \
                 "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh" \
                 "package-completeness:${REPO_DIR}/tests/build-package-completeness.sh" \
+                "arm-payload-gates:${REPO_DIR}/tests/build-arm-payload-gates.sh" \
                 "spec-use-parity:${REPO_DIR}/tests/scripts/test-spec-use-parity.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then

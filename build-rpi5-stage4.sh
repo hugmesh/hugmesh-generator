@@ -71,6 +71,14 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
+# Requested-atom completeness gate (cross-build twin of build-x86-host-stage4.sh's
+# in-chroot gate, PR #461/#465): after the --keep-going payload emerge, every
+# requested atom must be in the TARGET sysroot's vdb or the build fails listing
+# the gaps — the binary probe below it misses anything without a probed binary
+# (session 20260719-103006-a775c2 shipped three rpi5 images with firewalld
+# skipped and a dangling 'firewall' runlevel service; see the lib header).
+# shellcheck source=scripts/_payload-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_payload-gate-lib.sh"
 
 WORK_DIR=""
 # Per-BOARD build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
@@ -93,6 +101,15 @@ WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-}"   # empty sentinel ⇒ per-board default resolved after --board (SIGILL isolation); env/--build-subdir override wins
 DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
 PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then exit BEFORE image assembly (kernel/img/iso/tar). Host/CI build-phase flag, NOT a Studio ImageConfig field.
+# --allow-missing-packages : accept a KNOWINGLY degraded image. The payload emerge
+# runs --keep-going so one unbuildable optional package can't throw away hours of
+# work; the requested-atom completeness gate after it then FAILS the build when any
+# requested atom did not actually install (before this gate, such a build emitted
+# artifacts silently missing packages — session 20260719-103006-a775c2 shipped
+# pki/be/fe rpi5 images with NO firewall). Escape hatch only — never a Studio
+# field. NB: it can NOT bypass the kernel tier (a kernel-less image is unbootable,
+# not degraded; --skip-kernel is the only sanctioned kernel opt-out).
+ALLOW_MISSING_PACKAGES=false
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
 # ── BOARD TABLE (--board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]) ──────
@@ -706,6 +723,15 @@ OPTIONS
         Skip kernel compilation.  Useful when iterating on userspace
         packages only.
 
+    --allow-missing-packages
+        Ship the image even if some requested packages failed to merge.
+        The payload emerge uses --keep-going, and the completeness gate
+        after it normally FAILS the build listing every atom that did not
+        install — this downgrades that to a warning.  Cannot bypass the
+        kernel check (a kernel-less image cannot boot; use --skip-kernel
+        to deliberately build without one).  Use only when you have read
+        the missing-atom list and accept a degraded image.
+
     --skip-iso
         Alias for --no-iso: do not build the installer ISO (the default).
         Retained for backwards compatibility; with the .img default this
@@ -869,6 +895,9 @@ while [[ $# -gt 0 ]]; do
         -w|--work-dir)        WORK_DIR="$2";           shift 2 ;;
         --distdir)            DISTDIR_SRC="$2";        shift 2 ;;
         --packages-only)      PACKAGES_ONLY=true;      shift   ;;
+        # Accept an image whose requested package set did not fully merge (the
+        # completeness gate warns instead of failing; kernel tier stays fatal).
+        --allow-missing-packages) ALLOW_MISSING_PACKAGES=true; shift ;;
         --build-subdir)       BUILD_SUBDIR="$2";       shift 2 ;;
         -s|--specs-dir)       SPECS_DIR="$2";          shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";       shift 2 ;;
@@ -3823,6 +3852,28 @@ if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" 
 fi
 info "Stage4 payload verified (${_payload_bins[*]})"
 
+# ── REQUESTED-ATOM COMPLETENESS GATE (scripts/_payload-gate-lib.sh) ───────────
+# The binary probe above only covers a HANDFUL of well-known commands, so a
+# package that fails under --keep-going ships a SILENTLY DEGRADED image that
+# still looks like a clean build. Not theoretical on THIS builder: session
+# 20260719-103006-a775c2's pki/be/fe rpi5 logs all carry "WARNING:   skipped
+# net-firewall/firewalld" (a glib[introspection] USE conflict), the very next
+# assert printed "Stage4 payload verified (...)" (pki log line 3817), and all
+# three .img.xz artifacts shipped with NO firewall plus a dangling 'firewall'
+# runlevel entry (DEFAULT_SVCS below enables it unconditionally). So: every
+# atom we asked for must be in the TARGET sysroot's vdb — cross_emerge() merges
+# with ROOT="${SYSROOT}", so that is the vdb the gate queries (never the
+# host's). The kernel tier (sys-kernel/raspberrypi-sources) fails the build
+# even under --allow-missing-packages: without it Phase 3 warn-skips and the
+# default .img artifact hard-fails HOURS later at Phase 5 — fail here, before
+# the mesh fetch and the multi-minute kernel phase, while the emerge output is
+# still on screen. --skip-kernel is the only sanctioned kernel opt-out.
+_kernel_gate_atom="sys-kernel/raspberrypi-sources"
+${SKIP_KERNEL} && _kernel_gate_atom=""
+requested_atom_gate "${SYSROOT}" "${BUILD_ROOT}" "build-rpi5" \
+    "${ALLOW_MISSING_PACKAGES}" "${_kernel_gate_atom}" "${STAGE4_PACKAGES[@]}" \
+    || { err "requested-atom completeness gate failed (see the missing-atom list above)."; exit 1; }
+
 # ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
 # The cross_emerge above populated PKGDIR (${BUILD_ROOT}/pkgdir) under
 # FEATURES=buildpkg, and the payload assert just confirmed the pool built the role
@@ -3922,8 +3973,26 @@ else
 
     KERNEL_SRC=$(find "${SYSROOT}/usr/src/" -maxdepth 1 -name 'linux-*raspberrypi*' -type d 2>/dev/null | sort -V | tail -1)
     if [ -z "${KERNEL_SRC}" ]; then
-        warn "No raspberrypi-sources found in sysroot, skipping kernel build."
-        warn "You will need to provide a kernel separately."
+        # No source tree despite the completeness gate proving raspberrypi-sources
+        # is in the vdb (or the gate being bypassed). ONE legitimate shape: a
+        # --resume onto a sysroot whose Phase-8 clean already removed /usr/src/*
+        # but whose /boot still carries the previously-built kernel — reuse it.
+        # Anything else means the artifact would have NOTHING to boot: before
+        # this check the build warn-skipped here and only failed at Phase 5
+        # (.img), hours later — or NOT AT ALL with --no-img, exiting 0 with a
+        # kernel-less stage4 tarball ("provide a kernel separately" was the
+        # whole handling). Fail now, loudly.
+        if [ -f "${SYSROOT}/boot/${RPI_KERNEL_IMG}" ]; then
+            warn "No raspberrypi-sources tree under ${SYSROOT}/usr/src — but a previously-built"
+            warn "kernel exists at /boot/${RPI_KERNEL_IMG} (cleaned --resume sysroot); reusing it."
+        else
+            err "No raspberrypi-sources tree under ${SYSROOT}/usr/src AND no previously-built"
+            err "kernel at ${SYSROOT}/boot/${RPI_KERNEL_IMG} — nothing to boot. The kernel phase"
+            err "cannot run; refusing to continue toward a kernel-less artifact."
+            err "(sys-kernel/raspberrypi-sources must merge, or pass --skip-kernel to a sysroot"
+            err "that already carries a kernel.)"
+            exit 1
+        fi
     else
         info "Building kernel from ${KERNEL_SRC}..."
         info "Board: ${BOARD_DESC}  Defconfig: ${RPI_DEFCONFIG}  CPU: ${RPI_CPU}"

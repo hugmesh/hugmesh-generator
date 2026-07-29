@@ -84,6 +84,16 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # CHOST but differ in -mcpu, and portage's --binpkg-respect-use ignores CFLAGS.
 # shellcheck source=scripts/_binpkg-pool-lib.sh
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
+# Requested-atom completeness gate (cross-build twin of build-x86-host-stage4.sh's
+# in-chroot gate, PR #461/#465): after the --keep-going payload emerge, every
+# requested atom must be in the TARGET sysroot's vdb or the build fails listing
+# the gaps — the binary assert below it misses anything without a probed binary
+# (the exact hole that shipped firewalld-less rpi5 images, see the lib header).
+# The kernel tier also closes THIS builder's worst degradation: a failed
+# sys-kernel/gentoo-sources emerge used to warn-skip Phase 3 and exit 0 with an
+# UNBOOTABLE kernel-less artifact.
+# shellcheck source=scripts/_payload-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_payload-gate-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
@@ -91,6 +101,12 @@ WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-frite}"   # per-arch isolation (never shares the Pi/x86 sysroot)
 DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
 PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then exit BEFORE image assembly (kernel/img/iso/tar). Host/CI build-phase flag, NOT a Studio ImageConfig field.
+# --allow-missing-packages : accept a KNOWINGLY degraded image. The payload emerge
+# runs --keep-going; the requested-atom completeness gate after it then FAILS the
+# build when any requested atom did not actually install. Escape hatch only —
+# never a Studio field. NB: it can NOT bypass the kernel tier (a kernel-less
+# image is unbootable, not degraded; --skip-kernel is the only kernel opt-out).
+ALLOW_MISSING_PACKAGES=false
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
 
@@ -288,6 +304,12 @@ OPTIONS
 
   Phases
     --skip-kernel / --skip-clean / --resume
+    --allow-missing-packages
+                        Ship the image even if some requested packages failed to
+                        merge: the completeness gate warns instead of failing.
+                        Cannot bypass the kernel check (a kernel-less image
+                        cannot boot; use --skip-kernel to deliberately build
+                        without one). Read the missing-atom list first.
 
   General
     -w, --work-dir DIR  products land here (default ./out).
@@ -341,6 +363,9 @@ while [[ $# -gt 0 ]]; do
         -w|--work-dir)        WORK_DIR="$2";              shift 2 ;;
         --distdir)            DISTDIR_SRC="$2";           shift 2 ;;
         --packages-only)      PACKAGES_ONLY=true;         shift ;;
+        # Accept an image whose requested package set did not fully merge (the
+        # completeness gate warns instead of failing; kernel tier stays fatal).
+        --allow-missing-packages) ALLOW_MISSING_PACKAGES=true; shift ;;
         --build-subdir)       BUILD_SUBDIR="$2";          shift 2 ;;
         -s|--specs-dir)       SPECS_DIR="$2";             shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";          shift 2 ;;
@@ -1527,6 +1552,25 @@ if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" 
 fi
 info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
 
+# ── REQUESTED-ATOM COMPLETENESS GATE (scripts/_payload-gate-lib.sh) ───────────
+# The binary assert above only covers a HANDFUL of role-defining commands, so a
+# package that fails under --keep-going ships a SILENTLY DEGRADED image that
+# still looks like a clean build (the class that shipped firewalld-less rpi5
+# images in session 20260719-103006-a775c2 — see the lib header). Every atom we
+# asked for must be in the TARGET sysroot's vdb — cross_emerge() merges with
+# ROOT="${SYSROOT}", so that is the vdb the gate queries (never the host's).
+# The kernel tier (sys-kernel/gentoo-sources) fails the build even under
+# --allow-missing-packages: without it Phase 3 warn-skipped and this builder
+# exited 0 with an UNBOOTABLE kernel-less artifact (the LIVE flavor silently
+# skipped, only the stage4 tarball emitted). Fail HERE, before the mesh fetch
+# and the multi-minute kernel phase, while the emerge output is still on
+# screen. --skip-kernel is the only sanctioned kernel opt-out.
+_kernel_gate_atom="sys-kernel/gentoo-sources"
+${SKIP_KERNEL} && _kernel_gate_atom=""
+requested_atom_gate "${SYSROOT}" "${BUILD_ROOT}" "build-frite" \
+    "${ALLOW_MISSING_PACKAGES}" "${_kernel_gate_atom}" "${STAGE4_PACKAGES[@]}" \
+    || { err "requested-atom completeness gate failed (see the missing-atom list above)."; exit 1; }
+
 # ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
 # The cross_emerge above populated PKGDIR (${BUILD_ROOT}/pkgdir) under
 # FEATURES=buildpkg, and the payload assert just confirmed the pool built the role
@@ -1610,7 +1654,22 @@ else
     banner "Phase 3: Cross-compiling hardened kernel"
     KERNEL_SRC=$(find "${SYSROOT}/usr/src/" -maxdepth 1 -name 'linux-*' -type d 2>/dev/null | sort -V | tail -1)
     if [ -z "${KERNEL_SRC}" ]; then
-        warn "No kernel sources found in sysroot — ensure sys-kernel/gentoo-sources installed. Skipping kernel."
+        # No source tree despite the completeness gate proving gentoo-sources is
+        # in the vdb (or the gate being bypassed). ONE legitimate shape: a
+        # --resume onto a sysroot whose clean phase already removed /usr/src/*
+        # but whose /boot still carries the previously-built kernel — reuse it.
+        # Anything else used to warn-skip here and exit 0 with an UNBOOTABLE
+        # kernel-less artifact (LIVE silently skipped, stage4-only output).
+        if [ -f "${SYSROOT}/boot/${FRITE_KERNEL_IMG}" ]; then
+            warn "No kernel source tree under ${SYSROOT}/usr/src — but a previously-built kernel"
+            warn "exists at /boot/${FRITE_KERNEL_IMG} (cleaned --resume sysroot); reusing it."
+        else
+            err "No kernel source tree under ${SYSROOT}/usr/src AND no previously-built kernel at"
+            err "${SYSROOT}/boot/${FRITE_KERNEL_IMG} — nothing to boot; refusing to continue toward"
+            err "a kernel-less artifact. (sys-kernel/gentoo-sources must merge, or pass"
+            err "--skip-kernel to a sysroot that already carries a kernel.)"
+            exit 1
+        fi
     else
         info "Building kernel from ${KERNEL_SRC} (defconfig: ${FRITE_DEFCONFIG}, CPU: ${RPI_CPU})"
         pushd "${KERNEL_SRC}" >/dev/null
@@ -1701,7 +1760,18 @@ if [ -f "${SYSROOT}/boot/${FRITE_KERNEL_IMG}" ]; then
     cp "${SYSROOT}/boot/${FRITE_KERNEL_IMG}" "${BOOT_STAGE}/"
     cp -r "${SYSROOT}/boot/dtb/." "${BOOT_STAGE}/dtb/" 2>/dev/null || true
 else
-    warn "Kernel ${FRITE_KERNEL_IMG} not in sysroot — the boot tree will be incomplete."
+    # Kernel-less at boot staging with the kernel phase ENABLED means Phase 3
+    # was supposed to stage /boot/${FRITE_KERNEL_IMG} this run and did not —
+    # everything downstream (extlinux, LIVE, INSTALLER) is dead weight. Only
+    # --skip-kernel makes a kernel-less boot tree a deliberate operator choice
+    # (stage4-tarball-only build).
+    if ${SKIP_KERNEL}; then
+        warn "Kernel ${FRITE_KERNEL_IMG} not in sysroot (--skip-kernel) — the boot tree will be incomplete."
+    else
+        err "Kernel ${FRITE_KERNEL_IMG} not in sysroot after the kernel phase — the boot tree"
+        err "would be incomplete and every bootable artifact dead. Review Phase 3 above."
+        exit 1
+    fi
 fi
 
 # ── 11b. Build the LIVE dmsquash-live initramfs (the boot fix) ─────
@@ -1953,15 +2023,33 @@ build_live_iso() {
     if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
         warn "mksquashfs/tar2sqfs missing — skipping LIVE image."; return 0
     fi
-    [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || { warn "no kernel in boot stage — skipping LIVE image."; return 0; }
+    if [ ! -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ]; then
+        # The LIVE flavor was REQUESTED (we are only called under BUILD_LIVE).
+        # Skipping it with exit 0 is exactly the silent-degradation class this
+        # file keeps re-shipping: the run ends "complete" with LIVE "(not
+        # built)". Only --skip-kernel makes that a deliberate operator choice —
+        # the INSTALLER twin of this check (build_installer_iso) already errs.
+        ${SKIP_KERNEL} || { err "no kernel in boot stage — the requested LIVE image cannot boot. The kernel phase was enabled; review it above."; exit 1; }
+        warn "no kernel in boot stage (--skip-kernel) — skipping LIVE image."; return 0
+    fi
 
     # The LIVE flavor is unbootable without the dmsquash-live initramfs (the
     # cmdline below is all dracut directives). Refuse to package a LIVE image that
     # has no initramfs rather than ship a known-dead boot.
     if [ -z "${FRITE_LIVE_INITRD}" ] || [ ! -s "${FRITE_LIVE_INITRD}" ]; then
-        warn "No live initramfs was generated (Phase 4 §11b). The LIVE image would NOT"
-        warn "boot (root=live:/rd.live.* need a dracut dmsquash-live initramfs). Skipping"
-        warn "the LIVE image. Build with dracut available, or use --flavor installer."
+        # The LIVE cmdline is ALL dracut directives (root=live:/rd.live.*) — no
+        # initramfs means no bootable LIVE medium, period. This used to skip
+        # with exit 0 ("LIVE image: (not built)") while the INSTALLER twin of
+        # this exact check errs — same posture now, unless --skip-kernel made
+        # the whole boot half a deliberate non-goal.
+        if ! ${SKIP_KERNEL}; then
+            err "No live initramfs was generated (Phase 4 §11b). The requested LIVE image"
+            err "would NOT boot (root=live:/rd.live.* need a dracut dmsquash-live initramfs)."
+            err "Ensure the dracut cross-generation above succeeded (qemu-user binfmt on the"
+            err "build host), or use --flavor installer / --skip-kernel deliberately."
+            exit 1
+        fi
+        warn "No live initramfs was generated (--skip-kernel). Skipping the LIVE image."
         return 0
     fi
 

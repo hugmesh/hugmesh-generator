@@ -79,6 +79,17 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # CHOST but differ in -mcpu, and portage's --binpkg-respect-use ignores CFLAGS.
 # shellcheck source=scripts/_binpkg-pool-lib.sh
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
+# Requested-atom completeness gate (cross-build twin of build-x86-host-stage4.sh's
+# in-chroot gate, PR #461/#465): after the --keep-going payload emerge, every
+# requested atom must be in the TARGET sysroot's vdb or the build fails listing
+# the gaps — the binary assert below it misses anything without a probed binary
+# (the exact hole that shipped firewalld-less rpi5 images, see the lib header).
+# The kernel tier also closes THIS builder's worst degradation: a failed
+# sys-kernel/gentoo-sources emerge used to warn-skip Phase 3 and exit 0 with a
+# kernel-less stage4 and NO .img ("stage4 is still usable via TEGRAFLASH.md
+# layering" — true only when the operator CHOSE that with --skip-kernel).
+# shellcheck source=scripts/_payload-gate-lib.sh
+source "${SCRIPT_DIR}/scripts/_payload-gate-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
@@ -86,6 +97,12 @@ WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-jetson}"  # per-arch isolation (never shares the Pi/Frite/x86 sysroot)
 DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
 PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then exit BEFORE image assembly (kernel/img/iso/tar). Host/CI build-phase flag, NOT a Studio ImageConfig field.
+# --allow-missing-packages : accept a KNOWINGLY degraded image. The payload emerge
+# runs --keep-going; the requested-atom completeness gate after it then FAILS the
+# build when any requested atom did not actually install. Escape hatch only —
+# never a Studio field. NB: it can NOT bypass the kernel tier (a kernel-less
+# image is unbootable, not degraded; --skip-kernel is the only kernel opt-out).
+ALLOW_MISSING_PACKAGES=false
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
 
@@ -271,6 +288,12 @@ OPTIONS
 
   Phases
     --skip-kernel / --skip-clean / --resume / --image-only
+    --allow-missing-packages
+                        Ship the image even if some requested packages failed to
+                        merge: the completeness gate warns instead of failing.
+                        Cannot bypass the kernel check (a kernel-less image
+                        cannot boot; use --skip-kernel to deliberately build
+                        without one). Read the missing-atom list first.
 
   General
     -w, --work-dir DIR  products land here (default ./out).
@@ -323,6 +346,9 @@ while [[ $# -gt 0 ]]; do
         -w|--work-dir)        WORK_DIR="$2";              shift 2 ;;
         --distdir)            DISTDIR_SRC="$2";           shift 2 ;;
         --packages-only)      PACKAGES_ONLY=true;         shift ;;
+        # Accept an image whose requested package set did not fully merge (the
+        # completeness gate warns instead of failing; kernel tier stays fatal).
+        --allow-missing-packages) ALLOW_MISSING_PACKAGES=true; shift ;;
         --build-subdir)       BUILD_SUBDIR="$2";          shift 2 ;;
         -s|--specs-dir)       SPECS_DIR="$2";             shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";          shift 2 ;;
@@ -1501,6 +1527,24 @@ if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" 
 fi
 info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
 
+# ── REQUESTED-ATOM COMPLETENESS GATE (scripts/_payload-gate-lib.sh) ───────────
+# The binary assert above only covers a HANDFUL of role-defining commands, so a
+# package that fails under --keep-going ships a SILENTLY DEGRADED image that
+# still looks like a clean build (the class that shipped firewalld-less rpi5
+# images in session 20260719-103006-a775c2 — see the lib header). Every atom we
+# asked for must be in the TARGET sysroot's vdb — cross_emerge() merges with
+# ROOT="${SYSROOT}", so that is the vdb the gate queries (never the host's).
+# The kernel tier (sys-kernel/gentoo-sources) fails the build even under
+# --allow-missing-packages: without it Phase 3 warn-skipped and the run ended
+# exit 0 with a kernel-less stage4 and no .img. Fail HERE, before the mesh
+# fetch and the multi-minute kernel phase, while the emerge output is still on
+# screen. --skip-kernel is the only sanctioned kernel opt-out.
+_kernel_gate_atom="sys-kernel/gentoo-sources"
+${SKIP_KERNEL} && _kernel_gate_atom=""
+requested_atom_gate "${SYSROOT}" "${BUILD_ROOT}" "build-jetson" \
+    "${ALLOW_MISSING_PACKAGES}" "${_kernel_gate_atom}" "${STAGE4_PACKAGES[@]}" \
+    || { err "requested-atom completeness gate failed (see the missing-atom list above)."; exit 1; }
+
 # ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
 # The cross_emerge above populated PKGDIR (${BUILD_ROOT}/pkgdir) under
 # FEATURES=buildpkg, and the payload assert just confirmed the pool built the role
@@ -1573,7 +1617,22 @@ else
     banner "Phase 3: Cross-compiling hardened mainline kernel (Tegra234)"
     KERNEL_SRC=$(find "${SYSROOT}/usr/src/" -maxdepth 1 -name 'linux-*' -type d 2>/dev/null | sort -V | tail -1)
     if [ -z "${KERNEL_SRC}" ]; then
-        warn "No kernel sources found in sysroot — ensure sys-kernel/gentoo-sources installed. Skipping kernel."
+        # No source tree despite the completeness gate proving gentoo-sources is
+        # in the vdb (or the gate being bypassed). ONE legitimate shape: a
+        # --resume onto a sysroot whose clean phase already removed /usr/src/*
+        # but whose /boot still carries the previously-built kernel — reuse it.
+        # Anything else used to warn-skip here and exit 0 with a kernel-less
+        # stage4 and no .img.
+        if [ -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ]; then
+            warn "No kernel source tree under ${SYSROOT}/usr/src — but a previously-built kernel"
+            warn "exists at /boot/${JETSON_KERNEL_IMG} (cleaned --resume sysroot); reusing it."
+        else
+            err "No kernel source tree under ${SYSROOT}/usr/src AND no previously-built kernel at"
+            err "${SYSROOT}/boot/${JETSON_KERNEL_IMG} — nothing to boot; refusing to continue toward"
+            err "a kernel-less artifact. (sys-kernel/gentoo-sources must merge, or pass"
+            err "--skip-kernel to a sysroot that already carries a kernel.)"
+            exit 1
+        fi
     else
         info "Building kernel from ${KERNEL_SRC} (defconfig: ${JETSON_DEFCONFIG}, CPU: ${RPI_CPU})"
         pushd "${KERNEL_SRC}" >/dev/null
@@ -1814,7 +1873,18 @@ else
 fi
 render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${SYSROOT}/boot/extlinux/extlinux.conf"
 if [ ! -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ]; then
-    warn "Kernel ${JETSON_KERNEL_IMG} not in sysroot /boot — the image will not boot until one is added."
+    # Kernel-less here with the kernel phase ENABLED means Phase 3 was supposed
+    # to stage /boot/${JETSON_KERNEL_IMG} this run and did not. Only
+    # --skip-kernel makes a kernel-less stage4 a deliberate operator choice
+    # (the documented TEGRAFLASH.md layering flow, where NVIDIA's L4T kernel is
+    # layered on afterwards).
+    if ${SKIP_KERNEL}; then
+        warn "Kernel ${JETSON_KERNEL_IMG} not in sysroot /boot (--skip-kernel) — the image will not boot until one is added (TEGRAFLASH.md layering)."
+    else
+        err "Kernel ${JETSON_KERNEL_IMG} not in sysroot /boot after the kernel phase — the"
+        err "artifact cannot boot. Review Phase 3 above."
+        exit 1
+    fi
 fi
 
 banner "Phase 4: Packaging stage4 tarball"
@@ -1836,7 +1906,17 @@ build_img() {
     # to the medium on first boot.
     [ -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ] || {
         ${ENCRYPT_ROOT} && { err "no kernel in sysroot /boot — cannot build the .img required by --encrypt-root (the only artifact this platform produces)"; exit 1; }
-        warn "no kernel in sysroot /boot — skipping the .img (stage4 is still usable via TEGRAFLASH.md layering)."
+        # The .img is this platform's only directly bootable artifact. Skipping
+        # it with exit 0 is the silent-degradation class the completeness gate
+        # exists to end; only --skip-kernel makes the kernel-less stage4 (the
+        # documented TEGRAFLASH.md layering flow) a deliberate operator choice.
+        if ! ${SKIP_KERNEL}; then
+            err "no kernel in sysroot /boot — cannot build the .img. The kernel phase was"
+            err "enabled and produced nothing; review Phase 3 above. (Pass --skip-kernel +"
+            err "--no-img for a deliberate TEGRAFLASH-layering stage4-only build.)"
+            exit 1
+        fi
+        warn "no kernel in sysroot /boot (--skip-kernel) — skipping the .img (stage4 is still usable via TEGRAFLASH.md layering)."
         IMG_PATH="(not built — kernel missing)"; return 0; }
 
     IMG_PATH="${WORK_DIR}/${ART_PREFIX}.img"
