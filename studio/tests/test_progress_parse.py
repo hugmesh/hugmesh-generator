@@ -20,12 +20,22 @@ def _banner(text: str) -> str:
 
 
 # ── drift probe ──────────────────────────────────────────────────────────────────────
+# TWO call-site shapes count as banners: the host-side `banner "..."` helper, AND bare
+# `echo "==> ..."` lines — build-x86-host-stage4.sh emits its five "Emerge group:" banners
+# with echo INSIDE the unquoted CHROOT heredocs (build-x86-host-stage4.sh:4444 etc.),
+# where the host's banner() shell function does not exist (the chroot runs a fresh
+# /bin/bash from the sysroot). The parser matches the rendered `==> ` TEXT (_BANNER_RE),
+# so both shapes reach it identically; counting only `banner "` would leave this probe
+# blind to heredoc banner drift. (Same call-site shape the track probes below count in
+# the go-live / cloud-deploy driver scripts, for the same no-banner()-function reason.)
 _BANNER_CALLSITE = re.compile(r'^\s*banner\s+"')
+_ECHO_BANNER_CALLSITE = re.compile(r'^\s*echo "==> ')
 
 
 def _count_banner_callsites(script_path: str) -> int:
     with open(script_path, encoding="utf-8") as fh:
-        return sum(1 for ln in fh if _BANNER_CALLSITE.match(ln))
+        return sum(1 for ln in fh
+                   if _BANNER_CALLSITE.match(ln) or _ECHO_BANNER_CALLSITE.match(ln))
 
 
 @pytest.mark.parametrize("platform,script", sorted(BUILDER_SCRIPTS.items()))

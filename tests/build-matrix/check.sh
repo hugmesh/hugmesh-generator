@@ -1353,6 +1353,94 @@ run_flag_coverage() {
     grep '^FLAGCOV FAIL' "${out}" >&2 || true
 }
 
+# ── emerge-group banner probe (EGB) ─────────────────────────────────────────────
+# The Studio's per-package progress GUI (studio/hugmesh_studio/core/emerge_packages.py)
+# sub-lists emerged packages under image|tools|dependencies|system|world by matching the
+# literal "==> Emerge group: <group>" banner each builder emits immediately before an
+# emerge invocation. Two failure classes this bucket pins, both dry (pure grep — the
+# builders are never executed):
+#   (a) DRIFT: a builder loses/renames a group banner, or gains one nobody classified —
+#       each builder's emitted group multiset is compared against the expected table
+#       below (which also catches a typo'd group name: "sistem" != "system"). x86 emits
+#       its five as bare `echo "==> ..."` lines INSIDE the unquoted CHROOT heredocs
+#       (banner() does not exist in the chroot — it runs a fresh /bin/bash from the
+#       sysroot); the ARM cross-builders emit theirs host-side via banner(). Studio's
+#       test_progress_parse.py drift probe counts the SAME call sites against
+#       progress-tables.json; this bucket pins the TEXT + grouping, that one the table.
+#   (b) HEREDOC EXPANSION: the x86 banners live in UNQUOTED heredocs, where the HOST
+#       shell expands $ and backticks in every line — comment lines included (they are
+#       just text to the host). An unescaped '$' sneaking onto a feature line would be
+#       host-expanded and silently corrupt the chroot payload. Scope: every maximal run
+#       of consecutive comment lines that either mentions the feature ("EMERGE-GROUP"/
+#       "Emerge group") or ends at a group banner/echo line, plus the banner lines
+#       themselves — NOT just lines containing the phrase (a mutation test proved the
+#       phrase-only version was blind to a '$' on a block's continuation line). All
+#       selected lines must be free of backticks and of any '$' not escaped as '\$'
+#       (enforced uniformly, host-side lines too — a banner line has no business
+#       interpolating anything).
+# FAIL-CLOSED: 7 expected (6 builder multisets + 1 heredoc-safety sweep).
+EGB_EXPECTED=7
+EGB_PASS=0; EGB_FAIL=0
+run_emerge_group_banner_checks() {
+    local out="${TMP_DIR}/egb.out"
+    local spec builder expect got
+    for spec in \
+        "build-x86-host-stage4.sh:dependencies image system tools world" \
+        "build-rpi5-stage4.sh:image system tools" \
+        "build-jetson-stage4.sh:image system tools" \
+        "build-frite-stage4.sh:image system tools" \
+        "build-orangepi5-stage4.sh:image system tools" \
+        "build-orangepi-zero2-stage4.sh:image system tools"
+    do
+        builder="${spec%%:*}"; expect="${spec#*:}"
+        # both call-site shapes; sed prints ONLY the captured group name
+        got="$( { sed -nE 's/^[[:space:]]*banner "Emerge group: ([a-z]+)".*/\1/p' "${builder}"
+                  sed -nE 's/^[[:space:]]*echo "==> Emerge group: ([a-z]+)".*/\1/p' "${builder}"
+                } | sort | tr '\n' ' ' | sed 's/ $//')"
+        if [ "${got}" != "${expect}" ]; then
+            printf '%s\n  expected groups: %s\n  found groups:    %s\n' \
+                "${builder}" "${expect}" "${got:-<none>}" >"${out}"
+            _fail EGB "${builder}" "emerge-group banner set drifted" "${out}"
+            EGB_FAIL=$((EGB_FAIL+1))
+        else
+            EGB_PASS=$((EGB_PASS+1))
+        fi
+    done
+    # comment-RUN selector: buffer consecutive comment lines; emit the whole run when
+    # any line in it mentions the feature (blk) OR the run ends at a group banner/echo
+    # (isb — covers the "# image:"-style sub-blocks that sit right above their echo);
+    # always emit the banner/echo line itself. Non-comment, non-banner lines flush the
+    # buffer unselected, so unrelated comment blocks are never swept in.
+    if awk '
+        function flush(sel,  i) { if (sel) for (i = 1; i <= n; i++) print buf[i]; n = 0; blk = 0 }
+        {
+            line = FILENAME ":" FNR ":" $0
+            if ($0 ~ /^[[:space:]]*#/) {
+                buf[++n] = line
+                if ($0 ~ /EMERGE-GROUP|Emerge group/) blk = 1
+                next
+            }
+            isb = ($0 ~ /^[[:space:]]*(banner|echo) "(==> )?Emerge group: /)
+            flush(blk || isb)
+            if (isb) print line
+        }
+        END { flush(blk) }' \
+            build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh \
+            build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh \
+        | grep -P '(?<!\\)\$|`' >"${out}"; then
+        _fail EGB "heredoc-safety" "unescaped \$ or backtick on an emerge-group line" "${out}"
+        EGB_FAIL=$((EGB_FAIL+1))
+    else
+        EGB_PASS=$((EGB_PASS+1))
+    fi
+    # fail-closed: a silently-skipped (or silently-added) check trips one failure —
+    # either direction means this bucket and EGB_EXPECTED drifted apart
+    if [ $((EGB_PASS + EGB_FAIL)) -ne "${EGB_EXPECTED}" ]; then
+        _fail EGB "completeness" "$((EGB_PASS + EGB_FAIL))/${EGB_EXPECTED} checks ran"
+        EGB_FAIL=$((EGB_FAIL + 1))
+    fi
+}
+
 # ── four-choice taxonomy parity (TAXO) ──────────────────────────────────────────
 # The Studio GUI (gui/pages/mode.py) is the REFERENCE implementation of the flow's
 # four-choice opening screen (docs/STUDIO-WIZARD-FLOW.md). This bucket proves the SAME
@@ -1612,12 +1700,13 @@ run_gui_threading_checks
 run_negative_checks
 run_gui_gating_checks
 run_flag_coverage
+run_emerge_group_banner_checks
 run_parity_taxonomy_checks
 run_catalog_checks
 run_nongating_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + TAXO_PASS + CAT_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + TAXO_FAIL + CAT_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -1644,6 +1733,7 @@ printf  'JOB  (build-image.sh):  %3d passed, %d failed\n' "${JOB_PASS}"  "${JOB_
 printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_FAIL}"
 printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
 printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_FAIL}"
+printf  'EGB  (emerge-group banners): %3d passed, %d failed\n' "${EGB_PASS}" "${EGB_FAIL}"
 printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
 printf  'CAT  (web-catalog honesty): %3d passed, %d failed\n' "${CAT_PASS}" "${CAT_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"

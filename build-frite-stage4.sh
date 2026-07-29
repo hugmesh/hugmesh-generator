@@ -1060,6 +1060,12 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
     readarray -t HOST_POLICY_TOOLS < <(printf '%s\n' "${HOST_POLICY_TOOLS[@]}" | sort -u)
     if hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
         warn "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]} — emerging natively"
+        # EMERGE-GROUP BANNER (tools): checkpolicy/semodule-utils/m4/libselinux/
+        # policycoreutils are BUILD-HOST helpers the sysroot's SELinux merges shell
+        # out to — they never ship in the image — so they are the 'tools' group, not
+        # 'system'. Conditional (only when a tool is missing AND we may mutate the
+        # host), which the Studio's forward-only phase matcher steps over cleanly.
+        banner "Emerge group: tools"
         emerge --noreplace --quiet "${HOST_POLICY_TOOLS[@]}" \
             || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; exit 1; }
     else
@@ -1468,6 +1474,21 @@ banner "Phase 1: Cross-building @system (hardened)"
 pool_fingerprint_preflight "${BUILD_ROOT}/pkgdir" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-}" \
     || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
 
+# ── EMERGE-GROUP BANNER (system) ──────────────────────────────────────────────
+# Tells the Studio which of image|tools|dependencies|system|world the FOLLOWING
+# ">>> Emerging (N of M) cat/pn-ver" stream belongs to, so the GUI sub-lists
+# packages under the right group. This builder produces CLIENT images only (it
+# has no node-role axis — ROLE is a naming marker, default "desktop"): they are
+# mesh-affiliated by default and standalone with --standalone (which flips
+# SKIP_MESH/SKIP_TAILSCALE, see the STANDALONE posture block above). The posture
+# only changes which atoms resolve_stage4_packages() returns and whether the
+# LATER Phase 2.5 mesh-VPN step runs — never WHICH emerge invocations exist —
+# so this one banner set covers the platform's mesh AND standalone builds alike.
+# ONE banner per contiguous run of the same group (a group is a SECTION of the
+# stream; the parser holds it until the next transition), so baselayout and
+# @system share this one rather than emitting a meaningless second step.
+# baselayout + @system are the base layer/profile set — 'system', not payload.
+banner "Emerge group: system"
 cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
@@ -1483,6 +1504,10 @@ mapfile -t STAGE4_PACKAGES < <(resolve_stage4_packages)
 [ "${#STAGE4_PACKAGES[@]}" -gt 0 ] || { err "no stage4 packages resolved from the package lists — refusing to build a payload-less image."; exit 1; }
 info "Package count: ${#STAGE4_PACKAGES[@]}"
 _SKIPPED_PKGS=()
+# EMERGE-GROUP BANNER (image): STAGE4_PACKAGES IS the role package set — the image
+# payload. The per-package retry loop below is the SAME group (it re-runs the very
+# atoms this batch just failed on), so it deliberately does NOT re-announce.
+banner "Emerge group: image"
 if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}"; then
     warn "Batch emerge failed (unsatisfiable atom?); retrying per-package so the rest still install"
     for _pkg in "${STAGE4_PACKAGES[@]}"; do

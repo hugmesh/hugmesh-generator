@@ -4384,10 +4384,21 @@ if ${ROLE_CLIENT}; then SNAP_ROLE_BINS="Xorg lightdm openbox"; else SNAP_ROLE_BI
 # rely on Gentoo's canonical repositories.xml entry rather than hardcoding a URL.
 # Non-fatal: if the overlay can't sync (offline build), Steam just won't merge and
 # the operator can rebuild with --steam flatpak. Expanded into the heredoc below.
+#
+# EMERGE-GROUP BANNER (tools): app-eselect/eselect-repository is a portage HELPER —
+# it exists to register the steam-overlay repo, never to ship in the role payload —
+# so it is the 'tools' group. The banner is a bare echo "==> ..." (not banner()):
+# this text is executed INSIDE the chroot payload, where the host's banner() shell
+# function does not exist (chroot runs a fresh /bin/bash from the sysroot). The
+# Studio parser matches the "==> " TEXT, not how it was produced (core/
+# progress_parse.py:39 _BANNER_RE), so an echo is fully equivalent. Heredoc-safe:
+# this string is single-quoted here (no host expansion) and a parameter expansion's
+# RESULT is not re-scanned when it lands in the unquoted <<CHROOT heredoc below.
 STEAM_OVERLAY_SETUP=""
 if ${STEAM_NATIVE}; then
     STEAM_OVERLAY_SETUP='
 echo "[build-x86] Native Steam: enabling + syncing the steam-overlay"
+echo "==> Emerge group: tools"
 emerge --noreplace --quiet-build app-eselect/eselect-repository 2>/dev/null || emerge --quiet-build app-eselect/eselect-repository || true
 eselect repository enable steam-overlay 2>/dev/null || true
 emaint sync -r steam-overlay 2>/dev/null || emerge --sync steam-overlay 2>/dev/null || echo "[build-x86] WARN: steam-overlay sync failed; native Steam may not resolve (rebuild with --steam flatpak)"'
@@ -4429,6 +4440,27 @@ ldconfig 2>/dev/null || true
 if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
     emerge-webrsync
 fi
+# ── EMERGE-GROUP BANNERS (Studio package sub-listing) ─────────────────────────
+# Each "==> Emerge group: GROUP" line tells the Studio which of image|tools|
+# dependencies|system|world the FOLLOWING ">>> Emerging (N of M) cat/pn-ver"
+# stream belongs to, so the GUI can sub-list packages under the right group for
+# BOTH mesh/node and standalone/client roles (they share this builder — the role
+# only changes \${PKGS}, never which emerges run).
+# One banner per contiguous run of the SAME group, not one per emerge command: a
+# group is a SECTION of the stream (the parser holds the group until the next
+# transition), so re-announcing "system" between baselayout and gettext would add
+# a second, meaningless step to the job-level phase ladder.
+# echo, not banner(): this runs inside the chroot payload, where the host's
+# banner() shell function does not exist. progress_parse.py matches the "==> "
+# TEXT (_BANNER_RE, progress_parse.py:39), so the two are equivalent.
+# HEREDOC SAFETY: this sits in the UNQUOTED CHROOT heredoc — every line added
+# here (comments INCLUDED, see the locale-gen note above) is deliberately free of
+# unescaped dollar signs, backticks and dollar-parens, so the HOST shell expands
+# nothing of it. tests/build-matrix/check.sh's emerge-group-banners probe
+# re-verifies that mechanically on every run.
+# system: sys-apps/baselayout + the gettext downgrade are profile/base-layer
+# packages (the filesystem layout and the .mo-collision pin), not payload.
+echo "==> Emerge group: system"
 emerge --oneshot --update --newuse sys-apps/baselayout || true
 # gettext-0.23.x empty-\$(DOMAIN) .mo-collision pin (see package.mask/gettext):
 # the stage3 seed ships gettext-0.23.2, so the mask (which only blocks upgrades)
@@ -4440,6 +4472,8 @@ emerge --oneshot --update "<sys-devel/gettext-0.23" \
     || echo "[build-x86] WARN: gettext downgrade to <0.23 unavailable; relying on INSTALL_MASK"
 ${STEAM_OVERLAY_SETUP}
 # Apply our profile/USE across @world without churning the toolchain.
+# world: the literal @world set — its own group.
+echo "==> Emerge group: world"
 emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
     || echo "[build-x86] WARN: @world had package failures (--keep-going); continuing"
 # Ensure the stage4 package set is present (deps included).
@@ -4448,6 +4482,11 @@ emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
 # bare emerge does), but --autounmask-keep-keywords / -keep-masks keep keyword &
 # mask decisions EXPLICIT — those are pre-seeded in package.accept_keywords for a
 # reproducible hardened build rather than silently pulling unstable/masked pkgs.
+# image: \${PKGS} IS the role package set — the image payload itself. NOTE the
+# --pretend AUTOUNMASK-PRETEND diagnostic in the failure branch below gets NO
+# banner: --pretend merges nothing and emits no ">>> Emerging (N of M)" lines, so
+# announcing a group there would open an empty group in the Studio.
+echo "==> Emerge group: image"
 emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
     ${EMERGE_EXCLUDE} ${PKGS} \
@@ -4687,7 +4726,18 @@ else
 KBUILTIN=${KERNEL_BUILTIN}
 # (Re)ensure the hardened kernel sources are installed and /usr/src/linux is set
 # — independent of whether the main stage4 emerge completed.
+# EMERGE-GROUP BANNER (dependencies): sys-kernel/gentoo-sources is also listed in
+# the image set (specs-x86/portage/packages.list:8), but THIS invocation is not
+# the payload emerge — it is a guarded top-up whose only job is to satisfy the
+# kernel build's /usr/src/linux dependency when the payload emerge did not
+# complete. Grouping it under "image" would make the Studio re-open the already
+# finished image group hours later to list one package, so it is "dependencies":
+# it exists purely to satisfy another build step's dependency.
+# Bare echo, and no dollar/backtick/dollar-paren anywhere in these lines: this is
+# the UNQUOTED CHROOT heredoc, where the HOST shell expands comments too (same
+# rule as the payload heredoc above).
 if [ ! -e /usr/src/linux/Makefile ]; then
+    echo "==> Emerge group: dependencies"
     emerge --noreplace --quiet-build sys-kernel/gentoo-sources \
         || emerge --quiet-build sys-kernel/gentoo-sources
 fi

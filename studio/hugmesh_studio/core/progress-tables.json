@@ -1,7 +1,8 @@
 {
   "_meta": {
     "purpose": "Ordered per-platform builder phase tables that map `==> ` banner lines to a determinate step-K-of-M progress estimate. Data-driven (not code) so the admin-bff pod-log follower ports the SAME tables + regexes for web progress parity (design 2.9 / spec 10).",
-    "source": "The `banner \"...\"` call sites in each build-<platform>-stage4.sh, in source order. A drift probe (test_progress_parse.py) greps those call sites per builder and asserts the count equals the total number of match patterns here, so a builder banner change fails CI until this file is updated.",
+    "source": "The `banner \"...\"` call sites in each build-<platform>-stage4.sh, in source order, PLUS bare `echo \"==> ...\"` banner lines (build-x86-host-stage4.sh emits its five 'Emerge group:' banners that way inside the unquoted CHROOT heredocs, where the host banner() function does not exist). A drift probe (test_progress_parse.py) greps BOTH call-site shapes per builder and asserts the count equals the total number of match patterns here, so a builder banner change fails CI until this file is updated.",
+    "emerge_group_banners": "The `Emerge group: <image|tools|dependencies|system|world>` banners are NOT job-ladder boundaries — they tell core/emerge_packages.py which group the following `>>> Emerging (N of M)` package stream belongs to (per-package sub-listing in the GUI). Each is listed here as an ALTERNATE pattern of the phase whose banner precedes it in source order, so the drift probe counts it while the forward-only matcher treats it as a same-phase no-op (a matched phase is never re-entered, so the intra-phase emerge fraction is not reset). tests/build-matrix/check.sh's EGB bucket pins the banner TEXT + per-builder group sets; this table only has to stay count-consistent.",
     "banner_regex": "^==>\\s*(.*)$",
     "ansi_regex": "\\x1b\\[[0-9;]*[A-Za-z]",
     "emerge_regex": ">>> (?:Emerging|Installing) \\((\\d+) of (\\d+)\\)",
@@ -11,7 +12,7 @@
   },
   "platforms": {
     "x86": {
-      "banner_callsites": 21,
+      "banner_callsites": 26,
       "phases": [
         {"label": "Rebrand baked config", "any": ["Rebranding baked config"]},
         {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
@@ -23,9 +24,9 @@
         {"label": "Brand desktop image", "any": ["Branding desktop image"]},
         {"label": "Stage egress VPN", "any": ["Staging egress VPN"]},
         {"label": "Restore toolchain libs", "any": ["Restoring toolchain static libs"]},
-        {"label": "Emerge packages", "any": ["Native emerge inside chroot"]},
+        {"label": "Emerge packages", "any": ["Native emerge inside chroot", "Emerge group: tools", "Emerge group: system", "Emerge group: world", "Emerge group: image"]},
         {"label": "Mesh VPN", "any": ["Installing mesh VPN", "Mesh VPN SKIPPED"]},
-        {"label": "Kernel", "any": ["Building Gentoo hardened kernel", "Kernel SKIPPED"]},
+        {"label": "Kernel", "any": ["Building Gentoo hardened kernel", "Kernel SKIPPED", "Emerge group: dependencies"]},
         {"label": "Clean sysroot", "any": ["Cleaning sysroot"]},
         {"label": "Package stage4", "any": ["Packaging stage4 tarball"]},
         {"label": "Raw .img", "any": ["Building raw .img", "SKIPPED .img"]},
@@ -34,17 +35,17 @@
       ]
     },
     "rpi5": {
-      "banner_callsites": 20,
+      "banner_callsites": 23,
       "phases": [
         {"label": "Rebrand baked config", "any": ["Rebranding baked config"]},
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
         {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
         {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
         {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
         {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Emerge group: system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Emerge group: image"]},
         {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
         {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
         {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
@@ -54,16 +55,16 @@
       ]
     },
     "jetson": {
-      "banner_callsites": 20,
+      "banner_callsites": 23,
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
         {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
         {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
         {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
         {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
         {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
         {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened mainline kernel", "Phase 3: SKIPPED"]},
         {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
@@ -73,16 +74,16 @@
       ]
     },
     "frite": {
-      "banner_callsites": 22,
+      "banner_callsites": 25,
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
         {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
         {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
         {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
         {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
         {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
         {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
         {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
@@ -94,16 +95,16 @@
       ]
     },
     "orangepi5": {
-      "banner_callsites": 22,
+      "banner_callsites": 25,
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
         {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
         {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
         {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
         {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
         {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
         {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
         {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
@@ -115,16 +116,16 @@
       ]
     },
     "orangepizero2": {
-      "banner_callsites": 22,
+      "banner_callsites": 25,
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
         {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
         {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
         {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
         {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
         {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
         {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
         {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
