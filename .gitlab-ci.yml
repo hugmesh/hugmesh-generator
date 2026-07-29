@@ -69,6 +69,18 @@ lint:patch-stack-src:
   script:
     - bash tests/stack/test-patch-stack-src.sh
 
+# HTTPS front door wiring (tests/stack/test-tls-front.sh): compose service /
+# nginx terminator / Makefile stack-certs cross-consistency (ports + mount
+# paths DERIVED, not assumed), the SNAP_BFF_URL same-origin mixed-content
+# guard, no-HSTS, .tls-front gitignore, and a real openssl mint round-trip
+# (python:3-slim ships openssl). No network/docker needed.
+lint:tls-front:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/stack/test-tls-front.sh
+
 # Supply-chain download-verification gate. Unit-tests scripts/_download-lib.sh
 # (sha256/sha512 + publisher-manifest verification ABORTS on tamper, fails closed
 # on an absent manifest entry, stage3 DIGESTS extraction) AND grep-asserts that

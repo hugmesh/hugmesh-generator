@@ -477,7 +477,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.open_web_btn = QtWidgets.QPushButton("Open web UI")
         self.open_web_btn.setToolTip(
             "Open the running stack's front door (http://localhost:8088) in your "
-            "browser. Does nothing destructive; if the stack is down the browser "
+            "browser. The same platform is also served over TLS at "
+            "https://localhost:8488 (self-minted per-machine CA — import "
+            "tests/stack/.tls-front/ca.crt or accept the browser warning). "
+            "Does nothing destructive; if the stack is down the browser "
             "just shows a connection error.")
         self.open_web_btn.clicked.connect(self._open_web_ui)
         brow.addWidget(self.open_web_btn)

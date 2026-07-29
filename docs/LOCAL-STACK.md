@@ -65,9 +65,15 @@ also run `make stack-seed` (`tests/stack/seed-e2e.sh`) — it creates the org/
 roles/personas that back every login, and is a **required** follow-up step, not
 optional (see "Seeding the e2e fixtures" below).
 
-Then open **http://localhost:8088** (the fe-gateway front door) and sign in at its
-**native login form** (`/login`) — the browser POSTs credentials to `/bff/login`
-and never touches Casdoor. Casdoor is still published at **http://localhost:8000**
+Then open **http://localhost:8088** (the fe-gateway front door) — or its HTTPS
+twin **https://localhost:8488** — and sign in at the **native login form**
+(`/login`); the browser POSTs credentials to `/bff/login` and never touches
+Casdoor. Both doors serve the identical platform in ENV=test *and* ENV=prod:
+the `https-front` nginx terminator proxies everything to the same fe-gateway,
+using a **per-machine** CA + leaf that `make stack-certs` mints automatically
+on first `stack-up` (gitignored under `tests/stack/.tls-front/`). Import
+`tests/stack/.tls-front/ca.crt` into your browser for a green lock, or just
+accept the self-signed warning. `rm -rf tests/stack/.tls-front` re-mints. Casdoor is still published at **http://localhost:8000**
 in this dev stack, but ONLY as an admin/seed convenience (the `seed-e2e.sh`
 provisioning transport); it is **not** part of the login path and has no
 browser-facing role. In the cluster Casdoor gets no public ingress at all.
@@ -77,6 +83,7 @@ Useful overrides:
 ```bash
 make stack-up SOCIAL=1                       # also bring up Synapse + Mastodon
 make stack-up PUBLIC_HOST_PORT=9090          # publish the front door elsewhere
+make stack-up PUBLIC_HTTPS_PORT=9443         # publish the HTTPS front door elsewhere
 make stack-up STACK_SRC=/srv/snap-src        # clone/build from a different dir
 make stack-clone GIT_BASE=https://gitlab.hugmesh.systems/hugmesh  # VPN mirror
 make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.systems     # prod mode
@@ -219,6 +226,7 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | URL | Service |
 |---|---|
 | http://localhost:8088 | **Front door** — fe-gateway (Angular host + remotes, /bff, /_fragments, /be) |
+| https://localhost:8488 | **Front door (HTTPS)** — same fe-gateway via the `https-front` TLS terminator; per-machine CA at `tests/stack/.tls-front/ca.crt` (knob: `PUBLIC_HTTPS_PORT`) |
 | http://localhost:8000 | Casdoor (OIDC identity) — **admin/seed transport only**, not the login path; the browser never uses it (in-cluster it has no public ingress) |
 | http://localhost:8008 | Synapse / Matrix (only with `SOCIAL=1`) |
 | http://localhost:3000 | Mastodon web (only with `SOCIAL=1`) |
@@ -365,9 +373,12 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   Mastodon (and to skip a manual `rails db:prepare`), use
   `tests/stack/up-real.sh` (the dedicated real-services bring-up), which
   still handles that step.
-- **No TLS / no ingress / no SELinux-MCS.** The cluster's mTLS, nginx ingress,
-  and per-pod SELinux levels are k8s concerns and are not reproduced here; the
-  front door is plain HTTP on localhost.
+- **No mTLS / no ingress / no SELinux-MCS.** The cluster's service-to-service
+  mTLS, nginx ingress, and per-pod SELinux levels are k8s concerns and are not
+  reproduced here. The *front door* does offer browser-facing TLS
+  (https://localhost:8488 via the `https-front` terminator, ENV=test and
+  ENV=prod alike); inter-service traffic inside the compose network stays
+  plain HTTP.
 - **prod creds are NOT committed.** `ENV=prod` only changes the issuer URL; you
   must inject real secrets yourself (see ENV section). Nothing secret lives in
   this repo — only dev placeholders matching the cluster's dev placeholders.
