@@ -74,15 +74,23 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 #                                 hugmesh-build-config, so build-config MUST precede it.
 #   hugmesh-commons   2.1.0  — incl. the -tests classifier jar (admin-bff's test scope
 #                                 compiles against it even with -DskipTests).
-#   hugmesh-auth-core 2.4.0  — user-bff + admin-bff main (the old 2.3.3/2.3.4 split
-#                                 collapsed to one coordinate-only-renamed 2.4.0).
+#   hugmesh-auth-core 2.4.1  — user-bff + admin-bff main. 2.4.1 = auth-core #38
+#                                 (ReservedNames sync: hmdm/attest/character-forge +
+#                                 2 games wasm slugs). The 2.4.0 pin outlived its
+#                                 consumers: both BFFs bumped to 2.4.1 upstream and
+#                                 the operator's cold `make stack-up` then died at
+#                                 user-bff with "Could not find artifact
+#                                 systems.hugmesh:hugmesh-auth-core:jar:2.4.1 in
+#                                 gitlab-maven" — the registry served only 2.4.0.
+#                                 tests/stack/test-m2-bootstrap.sh's pin-drift guard
+#                                 now fails BEFORE a 25-minute build does.
 # The org repos have NO git tags, hence SHA pins. Order matters: build-config FIRST
 # (parent's plugin dep), then parent (everything else's <parent>), then commons/auth-core.
 PINS=(
   "hugmesh-build-config|7f5f643d8f08ced145569d3a9db6b4be8849516f|hugmesh-build-config|0.5.0|jar"
   "hugmesh-parent|389f34e98c6da846b21bda9e1553cf1418dc92eb|hugmesh-parent|2.8.0|pom"
   "hugmesh-commons|4eaeb58876fb389f8929caff99aae3a06de22586|hugmesh-commons|2.1.0|jar+tests"
-  "hugmesh-auth-core|140d061dfd73f7da05bbc989e967929d5c4bb78f|hugmesh-auth-core|2.4.0|jar"
+  "hugmesh-auth-core|bd6a0b91842ecfc74e845d6cbc927daca4d1c5b4|hugmesh-auth-core|2.4.1|jar"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"
