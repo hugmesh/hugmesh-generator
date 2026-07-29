@@ -13,6 +13,24 @@ free because the Review page is a commit page. Nothing here fakes a percent — 
 builder has not yet hit a known phase banner shows an indeterminate (busy) bar, exactly as
 :class:`~...core.progress_parse.ProgressParser` reports it.
 
+PACKAGES (third level): under the stage that is emerging, every package portage reports
+gets its OWN row — JOB -> STAGE -> GROUP -> PACKAGE — fed by the Qt-free
+:class:`~...core.emerge_packages.EmergePackageParser` (the per-package sibling of the
+banner parser). The GROUP nodes are the five emerge groups the builders announce with the
+pinned ``==> Emerge group: <g>`` banner (image/tools/dependencies/system/world). The group
+is a LEVEL, not a stage, on purpose: the stage list is pinned 1:1 to the platform's phase
+table (StageTracker "invents no taxonomy of its own", stage_tracker.py), and that table is
+drift-probed against the builders' real ``banner`` call sites — while the emerge groups cut
+ACROSS stages differently per platform (x86 runs all five emerge invocations inside its one
+"Emerge packages" stage, build-x86-host-stage4.sh:4355-4450; the ARM builders split them
+over "Phase 1: @system" and "Phase 2: stage4"). Making groups stages would fork the phase
+taxonomy per platform and break the drift probe; a level under whichever stage was RUNNING
+when the group's packages appeared preserves both truths. Each package row carries a real
+QProgressBar (driven by the parser's ladder-derived, monotonic percent), its USE flags in
+the Flags column (read from the per-package portage log's elog header), the latest
+build-tool telemetry line compacted next to the bar, the full elog header + telemetry in
+the row tooltip, and click-to-open of the package's own emerge log in the shared log pane.
+
 LAYOUT: the job/stage TREE is the primary surface and the log is secondary, so the two sit
 in a vertical QSplitter (tree ~2 : log ~1, i.e. the log takes at most a third) that the
 operator can drag. The log panel — header + log + "watch it in a terminal" help — can be
@@ -36,6 +54,9 @@ from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..tray import write_build_status
 from ...core import build_sessions
 from ...core import flash_targets
+from ...core.emerge_packages import (
+    EmergePackageParser, PackageProgress, STEP_DONE, STEP_FAILED, STEP_QUEUED,
+    find_package_log)
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
@@ -78,8 +99,40 @@ _STAGE_GLYPH = {
     "stopped": ("■", "#888888"),
 }
 
-# tree column indices.
-_COL_NAME, _COL_PROGRESS, _COL_TIME = 0, 1, 2
+# per-PACKAGE glyphs: queued/done/failed mirror the stage palette; every mid-ladder step
+# (unpack..install) renders the running blue dot — the ladder position itself is conveyed
+# by the row's progress bar, not by six more glyphs.
+_PKG_GLYPH = {
+    STEP_QUEUED: ("○", "#888888"),
+    STEP_DONE: ("✓", "#188038"),
+    STEP_FAILED: ("✗", "#c5221f"),
+}
+_PKG_RUNNING_GLYPH = ("●", "#1a73e8")
+
+# tree column indices — SYMBOLIC ONLY (renumbered when Flags landed; nothing may hardcode
+# these). Flags sits between Progress and Time so a package row reads
+# name -> bar+tool -> USE flags, and the Time column stays the trailing narrow one.
+_COL_NAME, _COL_PROGRESS, _COL_FLAGS, _COL_TIME = 0, 1, 2, 3
+
+# the shared-log-pane read of a package's on-disk emerge log is TAIL-BOUNDED: a real
+# compile log can run to hundreds of MB (inkscape's is 1.2 MB, libreoffice's far larger)
+# and QPlainTextEdit must never be handed one wholesale. 2 MiB comfortably covers every
+# normal log while keeping the worst case a bounded read; the watch-help still names the
+# full file for a terminal `tail -F`.
+_PKG_LOG_TAIL_BYTES = 2 * 1024 * 1024
+
+# tool_info is stored VERBATIM by the parser (its documented contract: a real ninja
+# compile line can be ~4 KB — inkscape's g++ invocation), so the GUI must elide: the
+# in-row label keeps a short head, the tooltip a longer one. Neither ever truncates the
+# parser's own state — only what is painted.
+_TOOL_CELL_CHARS = 72
+_TOOL_TIP_CHARS = 300
+
+
+def _elide(text: str, limit: int) -> str:
+    """Head-elide for the tool-telemetry surfaces (the informative part of a ninja/make
+    line is its head — the [N/M] counter and the tool name; the tail is argv noise)."""
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _fmt_elapsed(secs: float | None) -> str:
@@ -182,13 +235,23 @@ class _DetachedLogWindow(QtWidgets.QWidget):
 class _Row:
     """The per-image UI + parse state (one worklist entry)."""
 
-    def __init__(self, index: int, label: str, platform: str):
+    def __init__(self, index: int, label: str, platform: str, log_root: str = ""):
         self.index = index
         self.label = label
+        self.log_root = log_root
         self.parser = ProgressParser(platform)
         # StageTracker reuses the parser's EXACT ordered phase table (no parallel taxonomy)
         # so the nested stages and the bar can never disagree.
         self.tracker = StageTracker(platform_phases(platform or "x86"))
+        # the per-PACKAGE sibling of the banner parser. log_root points at the build's
+        # <workdir>/wl-<id>/sysroot/var/log/portage/build — the SAME path shape for every
+        # builder (all six set SYSROOT="${BUILD_ROOT}/sysroot", e.g.
+        # build-x86-host-stage4.sh:1799, build-rpi5-stage4.sh:1396, and BUILD_ROOT is
+        # ${WORK_DIR}/${BUILD_SUBDIR} with BUILD_SUBDIR = entry.build_subdir = wl-<id>,
+        # worklist.py:116/249) — so USE flags + per-package logs resolve as portage writes
+        # them. Empty log_root (direct-slot tests) keeps the parser a pure stream parser
+        # with no filesystem access, per its documented contract.
+        self.pkg_parser = EmergePackageParser(log_root)
         self.buffer: deque[str] = deque(maxlen=4000)   # authoritative full raw job log
         self.terminal = False
         self.job_t_start: float | None = None
@@ -200,6 +263,18 @@ class _Row:
         # tree items (wired by ProgressPage._build_row)
         self.job_item: QtWidgets.QTreeWidgetItem | None = None
         self.stage_items: list[QtWidgets.QTreeWidgetItem] = []
+        # per-package tree state (wired lazily by ProgressPage._render_package as portage
+        # reports each package — a --capable build emerges HUNDREDS, so everything below
+        # is dict-keyed for O(1) per-line updates and NOTHING is ever rebuilt wholesale).
+        self.group_items: dict[str, QtWidgets.QTreeWidgetItem] = {}   # group -> node
+        self.pkg_items: dict[str, QtWidgets.QTreeWidgetItem] = {}     # atom -> row item
+        self.pkg_bars: dict[str, QtWidgets.QProgressBar] = {}
+        self.pkg_tools: dict[str, QtWidgets.QLabel] = {}              # compact tool_info
+        self.pkg_progress: dict[str, PackageProgress] = {}            # live parser rows
+        # last-painted fingerprint per atom -> skip every no-op widget write (the parser
+        # returns a row for tool_info-only updates too, and 74,998 lines of a real build
+        # are ninja counters alone — the fingerprint keeps those a cheap tuple compare).
+        self.pkg_shown: dict[str, tuple] = {}
 
 
 class ProgressPage(QtWidgets.QWizardPage):
@@ -246,10 +321,14 @@ class ProgressPage(QtWidgets.QWizardPage):
         # phase table. The #348 PART bar is embedded into a job's Progress column via
         # setItemWidget, so row.bar stays the SAME widget object every existing test reads.
         self.tree = QtWidgets.QTreeWidget()
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Job / Stage", "Progress", "Time"])
+        self.tree.setColumnCount(4)
+        # Flags: per-PACKAGE USE flags from the elog header of the package's own portage
+        # log (there is NO stream-side source — the whole 3.16M-line reference transcript
+        # contains zero "USE:" lines; see emerge_packages.py). Job/stage rows leave it "".
+        self.tree.setHeaderLabels(["Job / Stage / Package", "Progress", "Flags", "Time"])
         self.tree.setColumnWidth(_COL_NAME, 320)
         self.tree.setColumnWidth(_COL_PROGRESS, 220)
+        self.tree.setColumnWidth(_COL_FLAGS, 180)
         self.tree.setMinimumHeight(180)
         # NO setMaximumHeight: the tree is the PRIMARY surface and must grow with the
         # window. It used to be capped at 340px, which (once the stretch below was fixed)
@@ -394,6 +473,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._rows: list[_Row] = []
         self._selected = 0
         self._selected_stage: int | None = None   # None = the job's raw log is shown
+        # package drill-down: (job index, atom) while a PACKAGE row's emerge log is shown
+        # in the shared pane, else None. Mutually exclusive with the stage/job stream view
+        # — while set, _on_line never appends stream lines to the pane (the pane shows a
+        # FILE, followed by the 1s tick), and _load_detail clears it on any job/stage click.
+        self._selected_pkg: tuple[int, str] | None = None
+        self._pkg_log_size = -1                   # last-loaded size, for the tick follow
         self._all_terminal = False
         self._manifest_path = ""
         self._keys_done: list[str] = []
@@ -585,8 +670,24 @@ class ProgressPage(QtWidgets.QWizardPage):
         use — never guessed: build_sessions.image_log_name(entry_id) is the studio twin of
         the builders' IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log", and
         _session.log_path is the shared build.log. A STAGE selection shows its JOB's path:
-        stages are slices of that one file, so there is no per-stage file to name.
+        stages are slices of that one file, so there is no per-stage file to name. A
+        PACKAGE selection names the package's OWN portage log — that file genuinely
+        exists per package (unlike stages), so `tail -F` on it is the real per-package
+        follow. A package whose log is not on disk yet falls through to the job-level
+        help: the job stream IS where that package's output currently lands.
         """
+        if self._selected_pkg is not None:
+            i, atom = self._selected_pkg
+            if 0 <= i < len(self._rows):
+                pkg_path = self._pkg_log_path(self._rows[i], atom)
+                if pkg_path and os.path.isfile(pkg_path):
+                    self._help_cmd = self._watch_command(pkg_path)
+                    self.log_copy_btn.setEnabled(True)
+                    self.log_help.setText(
+                        "This package's own portage log — the same file this pane "
+                        "shows. Watch it in a terminal:\n"
+                        f"    {self._help_cmd}")
+                    return
         if not self._dispatched or self._session is None or not self._rows:
             self._help_cmd = ""
             self.log_help.setText("No build session yet — no log file exists on disk.")
@@ -658,7 +759,16 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._sync_back_button()
             return
         for i, (entry, cfg) in enumerate(materialized):
-            self._build_row(i, entry.id, cfg.platform or "x86")
+            # per-package portage logs (USE flags + click-to-log) live under the entry's
+            # own build tree: <session>/wl-<id>/sysroot/var/log/portage/build — verified
+            # on the real session 20260725-140638-09692d and identical for every builder
+            # (see the log_root note in _Row.__init__). No per-platform or per-role
+            # branch: EVERY worklist entry (mesh node roles and standalone/client roles
+            # alike) gets the same package instrumentation.
+            self._build_row(i, entry.id, cfg.platform or "x86",
+                            log_root=os.path.join(
+                                self._session.workdir, entry.build_subdir, "sysroot",
+                                "var", "log", "portage", "build"))
         self._select_row(0)
         self._refresh_overall()             # seed the K-of-N label before the run starts
         if problems:
@@ -688,10 +798,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         # this page no longer tracks. _redock_log is a no-op when already docked.
         self._redock_log()
         self._dispatched = False        # nothing is running -> no log file to point at yet
-        self.tree.clear()               # drops every job + stage item (and its embedded bar)
+        self.tree.clear()               # drops every job + stage + package item (and bars)
         self._rows = []
         self._selected = 0
         self._selected_stage = None
+        self._selected_pkg = None
+        self._pkg_log_size = -1
         self._failures = []
         self._fail_ptr = -1
         self.next_fail_btn.setEnabled(False)
@@ -718,8 +830,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._refresh_overall()                   # zero the overall block
         write_build_status("idle")                # clear any prior badge on the tray
 
-    def _build_row(self, index: int, label: str, platform: str) -> None:
-        row = _Row(index, label, platform)
+    def _build_row(self, index: int, label: str, platform: str,
+                   log_root: str = "") -> None:
+        row = _Row(index, label, platform, log_root)
         # JOB item (top-level) — the GitHub-Actions "all jobs listed up front" seam.
         job_item = QtWidgets.QTreeWidgetItem(self.tree)
         job_item.setData(_COL_NAME, Qt.ItemDataRole.UserRole, (index, None))
@@ -817,12 +930,23 @@ class ProgressPage(QtWidgets.QWizardPage):
         if delta.any():
             for j in delta.touched():
                 self._render_stage(row, j, now)
+        # per-PACKAGE parse — AFTER tracker.feed so tracker.cur already reflects the stage
+        # a just-crossed banner opened (a package's group node nests under the stage that
+        # is emerging it). feed() is O(1) per line (first-char gated) and returns the ONE
+        # row a line moved, or None — so the tree is touched for at most one package per
+        # line and never rebuilt. strip_ansi is idempotent, so the _display_safe()d line
+        # parses identically to the raw one (same reasoning as the parser/tracker above).
+        pkg = row.pkg_parser.feed(line)
+        if pkg is not None:
+            self._render_package(row, pkg)
         self._write_status()
         self._refresh_overall()
         # live drill-down append: only when the arriving line's target matches the current
         # selection — the whole job (stage None) gets every line; a selected stage gets a
-        # line only while it is the running stage of that job.
-        if i == self._selected:
+        # line only while it is the running stage of that job. A selected PACKAGE shows a
+        # FILE (its portage log, tick-followed), never the stream — appending here would
+        # interleave whole-job lines into it.
+        if i == self._selected and self._selected_pkg is None:
             if self._selected_stage is None or row.tracker.cur == self._selected_stage:
                 self.log.appendPlainText(line)
 
@@ -1052,6 +1176,112 @@ class ProgressPage(QtWidgets.QWizardPage):
         item.setText(_COL_PROGRESS, st.state)
         item.setText(_COL_TIME, _fmt_elapsed(st.elapsed(now)))
 
+    # ---- per-package rendering (JOB -> STAGE -> GROUP -> PACKAGE) -----------------
+    def _group_item(self, row: _Row, group: str) -> QtWidgets.QTreeWidgetItem:
+        """Get-or-create the GROUP node for one of the parser's emerge groups, nested
+        under the stage that was RUNNING when the group's first package appeared (the
+        builder banners into a stage, then emerges inside it — so that stage owns the
+        work). A package seen before ANY stage banner (tracker.cur == -1, possible only
+        for a builder that emerges before its first `banner` call — none of the six do
+        today) nests under the job itself rather than a fabricated stage."""
+        item = row.group_items.get(group)
+        if item is not None:
+            return item
+        parent = (row.stage_items[row.tracker.cur] if row.tracker.cur >= 0
+                  else row.job_item)
+        item = QtWidgets.QTreeWidgetItem(parent)
+        item.setData(_COL_NAME, Qt.ItemDataRole.UserRole, (row.index, ("group", group)))
+        # GROUP_UNKNOWN ("") = packages portage reported before any `==> Emerge group:`
+        # banner. Rendered as "ungrouped" — honestly NOT filed under "image" (the pinned
+        # contract: pre-banner group must never be guessed).
+        item.setText(_COL_NAME, group or "ungrouped")
+        if not group:
+            item.setToolTip(_COL_NAME, "The builder announced no emerge group before "
+                                       "these packages (pre-banner output).")
+        row.group_items[group] = item
+        return item
+
+    def _pkg_tooltip(self, pkg: PackageProgress) -> str:
+        """The row tooltip: the FULL elog header block (Package/Repository/Maintainer/
+        USE/FEATURES — whatever portage actually wrote; a binary merge lacks Maintainer)
+        plus the latest build-tool telemetry line. The tool line is elided for the
+        tooltip only — a real ninja line can be ~4 KB and Qt renders a plain-text
+        tooltip unwrapped."""
+        lines = [pkg.atom]
+        for key, val in pkg.header.items():
+            lines.append(f"{key}: {val}")
+        if not pkg.header:
+            lines.append("elog header not read yet — no per-package log found so far")
+        if pkg.tool_info:
+            lines.append(f"tool: {_elide(pkg.tool_info, _TOOL_TIP_CHARS)}")
+        return "\n".join(lines)
+
+    def _render_package(self, row: _Row, pkg: PackageProgress) -> None:
+        """Reflect ONE package's live parser row onto its tree item — called only when
+        feed() reported that row moved, and every widget write below is guarded by the
+        last-painted fingerprint, so the 74,998 ninja-counter lines of a real build cost
+        a tuple compare + a bar/label write each, and non-package lines cost nothing."""
+        atom = pkg.atom
+        item = row.pkg_items.get(atom)
+        if item is None:
+            gitem = self._group_item(row, pkg.group)
+            item = QtWidgets.QTreeWidgetItem(gitem)
+            item.setData(_COL_NAME, Qt.ItemDataRole.UserRole,
+                         (row.index, ("pkg", atom)))
+            # the same setItemWidget idiom as the job bar (#348), plus a compact grey
+            # tool-telemetry label NEXT TO the bar — live while this package is the
+            # current one, keeping its last line afterwards (every row keeps state).
+            cell = QtWidgets.QWidget()
+            cl = QtWidgets.QHBoxLayout(cell)
+            cl.setContentsMargins(0, 0, 0, 0)
+            cl.setSpacing(6)
+            bar = QtWidgets.QProgressBar()
+            bar.setRange(0, 100)                # ladder percent is ALWAYS determinate
+            bar.setValue(pkg.percent)
+            tool = QtWidgets.QLabel("")
+            tool.setStyleSheet("color: gray;")
+            cl.addWidget(bar, 1)
+            cl.addWidget(tool, 1)
+            self.tree.setItemWidget(item, _COL_PROGRESS, cell)
+            row.pkg_items[atom] = item
+            row.pkg_bars[atom] = bar
+            row.pkg_tools[atom] = tool
+            row.pkg_progress[atom] = pkg         # live shared object (parser contract)
+        shown = (pkg.step, pkg.percent, pkg.failed, len(pkg.use_flags),
+                 len(pkg.header), pkg.tool_info)
+        last = row.pkg_shown.get(atom)
+        if shown == last:
+            return
+        row.pkg_shown[atom] = shown
+        if last is None or last[0] != pkg.step or last[2] != pkg.failed:
+            sym, colour = _PKG_GLYPH.get(pkg.step, _PKG_RUNNING_GLYPH)
+            item.setText(_COL_NAME, f"{sym}  {atom}")
+            item.setForeground(_COL_NAME, QtGui.QBrush(QtGui.QColor(colour)))
+            # step transitions also (re)compute the group counter — done counts change
+            # exactly then, and (N of M) totals only on Emerging lines (a step change).
+            # totals() is only meaningful for the parser's CURRENT group (its documented
+            # contract), so past groups keep their last-painted, frozen text.
+            if pkg.group == row.pkg_parser.group():
+                done, total = row.pkg_parser.totals()
+                row.group_items[pkg.group].setText(
+                    _COL_PROGRESS, f"{done} of {total} done")
+            if pkg.failed:
+                # failure focus, package edition: surface the red row (the job/stage
+                # failure focus in _on_entry_done lands on the stage's log slice; the
+                # expanded group is what makes the culprit PACKAGE visible in the tree).
+                self.tree.expandItem(row.group_items[pkg.group])
+        if last is None or last[1] != pkg.percent:
+            row.pkg_bars[atom].setValue(pkg.percent)
+        if pkg.use_flags and (last is None or last[3] != len(pkg.use_flags)):
+            flags = " ".join(pkg.use_flags)
+            item.setText(_COL_FLAGS, flags)
+            item.setToolTip(_COL_FLAGS, flags)   # the cell elides; the tip is the full set
+        if pkg.tool_info and (last is None or last[5] != pkg.tool_info):
+            tool = row.pkg_tools[atom]
+            tool.setText(_elide(pkg.tool_info, _TOOL_CELL_CHARS))
+            tool.setToolTip(_elide(pkg.tool_info, _TOOL_TIP_CHARS))
+        item.setToolTip(_COL_NAME, self._pkg_tooltip(pkg))
+
     def _on_tick(self) -> None:
         """Make the running job + its active stage visibly tick their elapsed time. One
         pass over the (at most one) running row — a couple of label writes per second."""
@@ -1063,6 +1293,11 @@ class ProgressPage(QtWidgets.QWizardPage):
                 row.job_item.setText(_COL_TIME, _fmt_elapsed(now - row.job_t_start))
             if row.tracker.cur >= 0:
                 self._render_stage(row, row.tracker.cur, now)
+        # the package-log follow rides the SAME 1s tick (no second timer): while a
+        # package row is selected its on-disk log grows as portage writes it, and the
+        # pane reloads only when the file's SIZE changed — a stat per second, a read
+        # only on growth.
+        self._follow_package_log()
 
     # ---- drill-down selection ---------------------------------------------------
     def _on_item_clicked(self, item, _col: int = 0) -> None:
@@ -1070,6 +1305,22 @@ class ProgressPage(QtWidgets.QWizardPage):
         if not data:
             return
         i, j = data
+        # payloads: JOB (i, None) / STAGE (i, int) / GROUP (i, ("group", g)) /
+        # PACKAGE (i, ("pkg", atom)) — all 2-tuples, so _on_tree_menu's unpack holds.
+        if isinstance(j, tuple):
+            kind, key = j
+            if kind == "pkg":
+                self._load_package_detail(i, key)
+            else:
+                # a GROUP header drills to its OWNING node's log (the stage it nests
+                # under, or the job for the pre-stage case) — the group itself has no
+                # log of its own and faking one would violate the pane's honesty.
+                pdata = item.parent().data(_COL_NAME, Qt.ItemDataRole.UserRole) \
+                    if item.parent() is not None else None
+                if pdata:
+                    pi, pj = pdata
+                    self._load_detail(pi, pj if isinstance(pj, int) else None)
+            return
         self._load_detail(i, j)
 
     def _load_detail(self, i: int, stage_j: int | None) -> None:
@@ -1080,6 +1331,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         row = self._rows[i]
         self._selected = i
         self._selected_stage = stage_j
+        self._selected_pkg = None            # back to the stream view
         if stage_j is None:
             self.log.setPlainText("\n".join(row.buffer))
             self.log_header.setText(f"Log — {row.label}")
@@ -1090,6 +1342,99 @@ class ProgressPage(QtWidgets.QWizardPage):
         # the single funnel for every selection change (_on_item_clicked, _focus_node,
         # failure navigation), so the watch-help always names the SELECTED job's log.
         self._refresh_log_help()
+
+    # ---- package drill-down: the emerge log FILE in the shared pane ---------------
+    def _pkg_log_path(self, row: _Row, atom: str) -> str:
+        """The package's on-disk emerge log: the parser's resolved path when it has one
+        (which, for a failure, is the exact file portage NAMED), else a fresh lookup —
+        covering the click-before-resolution window (the parser resolves lazily on step
+        transitions). "" when no log exists yet."""
+        pkg = row.pkg_progress.get(atom)
+        if pkg is not None and pkg.log_path and os.path.isfile(pkg.log_path):
+            return pkg.log_path
+        return find_package_log(row.log_root, atom)
+
+    def _read_pkg_log(self, path: str) -> str:
+        """A TAIL-BOUNDED, display-safe read of a per-package portage log. The elog
+        header (and any compile output) arrives ANSI-coloured, and Qt paints a box per
+        escape byte (the 2026-07-17 report) — so the whole block goes through the same
+        _display_safe used for stream lines (its control-byte class deliberately spares
+        LF/TAB, so it is block-safe). Unreadable -> an honest error line, never a silent
+        empty pane."""
+        try:
+            size = os.path.getsize(path)
+            with open(path, "rb") as fh:
+                if size > _PKG_LOG_TAIL_BYTES:
+                    fh.seek(size - _PKG_LOG_TAIL_BYTES)
+                text = fh.read().decode("utf-8", errors="replace")
+        except OSError as e:
+            return f"Could not read the emerge log {path}: {e}"
+        text = _display_safe(text)
+        if size > _PKG_LOG_TAIL_BYTES:
+            mib = size / (1024 * 1024)
+            text = (f"… showing the last 2 MiB of {mib:.0f} MiB — "
+                    f"full file: {path}\n{text}")
+        return text
+
+    def _load_package_detail(self, i: int, atom: str) -> None:
+        """Load a PACKAGE's own emerge log into the shared pane (the same single pane +
+        header idiom every other selection uses — no second log widget). A log that
+        portage has not written yet is said OUT LOUD in the pane, never shown as an
+        empty box that reads as an empty log."""
+        if not (0 <= i < len(self._rows)):
+            return
+        row = self._rows[i]
+        self._selected = i
+        self._selected_stage = None
+        self._selected_pkg = (i, atom)
+        pkg = row.pkg_progress.get(atom)
+        group = (pkg.group if pkg is not None and pkg.group else "ungrouped")
+        path = self._pkg_log_path(row, atom)
+        if path and os.path.isfile(path):
+            try:
+                self._pkg_log_size = os.path.getsize(path)
+            except OSError:
+                self._pkg_log_size = -1
+            self.log.setPlainText(self._read_pkg_log(path))
+            self.log_header.setText(f"Log — {row.label} ▸ {group} ▸ {atom}")
+        else:
+            self._pkg_log_size = -1
+            where = row.log_root or "<the build's sysroot>/var/log/portage/build"
+            if row.terminal:
+                self.log.setPlainText(
+                    f"No emerge log was written for {atom} in this run.\n"
+                    f"Portage writes one under\n    {where}\n"
+                    f"when an ebuild starts; this build finished without one for this "
+                    f"package (it may never have started, or was merged without "
+                    f"logging).")
+            else:
+                self.log.setPlainText(
+                    f"No emerge log for {atom} yet.\n"
+                    f"Portage writes it under\n    {where}\n"
+                    f"the moment the ebuild starts — this view loads it automatically "
+                    f"once it exists.")
+            self.log_header.setText(
+                f"Log — {row.label} ▸ {group} ▸ {atom} (no log yet)")
+        self._refresh_log_help()
+
+    def _follow_package_log(self) -> None:
+        """Tick-driven tail-follow of the selected package's log FILE: reload only when
+        its size changed (or when a not-yet-written log first appears). One stat per
+        second; the bounded reload runs only on growth."""
+        if self._selected_pkg is None:
+            return
+        i, atom = self._selected_pkg
+        if not (0 <= i < len(self._rows)):
+            return
+        path = self._pkg_log_path(self._rows[i], atom)
+        if not path or not os.path.isfile(path):
+            return                       # still honest "no log yet" — keep waiting
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return
+        if size != self._pkg_log_size:
+            self._load_package_detail(i, atom)
 
     def _focus_node(self, i: int, stage_j: int | None) -> None:
         """Expand the job, select the target node, and load its log slice — the shared
