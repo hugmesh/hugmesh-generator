@@ -147,6 +147,75 @@ CHROOT"' _ "${BODY}" > "${RENDER}"
   fi
 fi
 
+echo "-- D) the gate's DECISION, executed (not just parsed) --"
+# Section C proves the payload PARSES. It cannot prove the gate DECIDES right —
+# and that gap shipped a build-breaking bug: python's print("\n".join([])) writes
+# a bare newline, `[ -s file ]` is TRUE for that 1-byte file, and so the gate
+# failed EVERY clean build with "1 requested package(s) are NOT installed"
+# followed by a blank line. It killed a real x86 pki mesh build on 2026-07-29
+# (out/sessions/20260729-065121-ce11e0/build-pki.x86.log) AFTER a fully
+# successful emerge. So: extract the decision block and RUN it against both a
+# clean result and a dirty one.
+DECIDE="$(mktemp)"; trap 'rm -f "${BODY}" "${RENDER}" "${DECIDE}"' EXIT
+# The decision spans from wherever it starts examining the missing-list to the
+# end of its if/else. Anchor on EITHER shape — the current count-based one or the
+# older `[ -s … ]` one — so this section keeps executing (and keeps failing) if
+# the fix is ever reverted, instead of quietly reporting "could not extract" and
+# proving nothing.
+awk '/^_missing_n=/ || /^if \[ -s \/tmp\/hugmesh-missing-atoms\.txt \]/ {f=1}
+     f{print} f&&/^fi$/{exit}' "${RENDER}" > "${DECIDE}"
+if [ ! -s "${DECIDE}" ]; then
+  bad "could not extract the gate decision block from the rendered payload"
+else
+  ok "extracted the decision block ($(wc -l < "${DECIDE}") lines)"
+  # (1) CLEAN, 0-byte file: nothing missing and nothing written at all.
+  #     NB this case alone would NOT have caught the shipped bug — a hand-written
+  #     empty file is 0 bytes, while the bug's file was 1 byte (a bare newline).
+  #     Case (3) below is the one that bites; the emit-guard assertion after this
+  #     block covers the other half (that the builder writes 0 bytes, not "\n").
+  : > /tmp/hugmesh-missing-atoms.txt
+  printf 'sys-apps/portage\napp-office/libreoffice\n' > /tmp/hugmesh-requested-atoms.txt
+  if out="$(bash "${DECIDE}" 2>&1)"; then
+    case "${out}" in
+      *"Package completeness: all"*) ok "clean build PASSES the gate (${out##*: })" ;;
+      *) bad "clean build passed but printed something unexpected: ${out}" ;;
+    esac
+  else
+    bad "GATE FAILS A CLEAN BUILD — the empty-list false positive is back: ${out}"
+  fi
+  # (2) DIRTY: two genuinely missing atoms must fail, and must NAME them.
+  printf 'net-firewall/firewalld\napp-office/libreoffice\n' > /tmp/hugmesh-missing-atoms.txt
+  if out="$(bash "${DECIDE}" 2>&1)"; then
+    bad "gate PASSED a build with 2 missing packages: ${out}"
+  else
+    case "${out}" in
+      *"2 requested package(s) are NOT installed"*) ok "dirty build fails with the right COUNT" ;;
+      *) bad "dirty build failed but miscounted: ${out}" ;;
+    esac
+    case "${out}" in
+      *firewalld*) ok "the missing atom is NAMED in the failure" ;;
+      *) bad "failure did not name the missing atom: ${out}" ;;
+    esac
+  fi
+  # (3) A blank-but-present file (whitespace only) must still count as CLEAN —
+  #     that is the exact shape the bug turned into a failure.
+  printf '\n   \n' > /tmp/hugmesh-missing-atoms.txt
+  if bash "${DECIDE}" >/dev/null 2>&1; then
+    ok "a whitespace-only missing-list counts as clean"
+  else
+    bad "whitespace-only missing-list still fails the build (the original bug)"
+  fi
+  rm -f /tmp/hugmesh-missing-atoms.txt /tmp/hugmesh-requested-atoms.txt
+  # The producing half: the gate's python must SUPPRESS output for an empty list.
+  # Without this guard it writes "\n" (1 byte) and the consumer sees a non-empty
+  # file — the exact shipped failure.
+  if awk '/^if out:/{g=1} /print\("\\n"\.join\(out\)\)/{if(!g) bare=1} END{exit(bare?1:0)}' "${RENDER}"; then
+    ok "the gate's python only prints when something is actually missing"
+  else
+    bad "the gate's python prints unconditionally — an empty list writes a bare newline, which the consumer reads as one missing package"
+  fi
+fi
+
 echo
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

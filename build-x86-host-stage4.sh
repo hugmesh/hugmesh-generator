@@ -4498,13 +4498,23 @@ with open("/tmp/hugmesh-requested-atoms.txt") as fh:
                 out.append(atom)
         except Exception as exc:
             out.append("%s  (unparsable atom: %s)" % (atom, exc))
-print("\n".join(out))
+# Emit NOTHING when nothing is missing. `print("\n".join([]))` writes a bare
+# newline, which is a 1-byte file — and `[ -s file ]` is TRUE for that, so the
+# gate failed EVERY clean build with "1 requested package(s) are NOT installed"
+# followed by a blank line. That is exactly what killed the 2026-07-29 x86 pki
+# mesh build (out/sessions/20260729-065121-ce11e0/build-pki.x86.log) after a
+# fully successful emerge. The shell side below now also counts NON-BLANK lines,
+# so either guard alone is sufficient.
+if out:
+    print("\n".join(out))
 PYEOF
 else
     echo "[build-x86] WARN: python3 absent — requested-atom completeness gate SKIPPED" >&2
 fi
-if [ -s /tmp/hugmesh-missing-atoms.txt ]; then
-    echo "[build-x86] ERROR: \$(wc -l < /tmp/hugmesh-missing-atoms.txt) requested package(s) are NOT installed:"
+_missing_n=\$(grep -c '[^[:space:]]' /tmp/hugmesh-missing-atoms.txt 2>/dev/null || true)
+[ -n "\${_missing_n}" ] || _missing_n=0
+if [ "\${_missing_n}" -gt 0 ]; then
+    echo "[build-x86] ERROR: \${_missing_n} requested package(s) are NOT installed:"
     sed 's/^/[build-x86]          /' /tmp/hugmesh-missing-atoms.txt
     echo "[build-x86]        The emerge above ran with --keep-going, so these failed WITHOUT"
     echo "[build-x86]        aborting it. Their per-package logs are in /var/log/portage/build/."
