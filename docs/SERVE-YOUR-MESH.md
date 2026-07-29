@@ -87,13 +87,18 @@ logs) and tells you the exact public address.
                  PUBLICLY REACHABLE
 ```
 
-## Previewing the login page first
+## Previewing the themed platform first
 
-Before you serve anything you can preview the **real** login page with your brand theme:
-**Studio → Branding / Login theme → “Preview the real login page in your browser…”**. It
-writes the captured production login page (your derived theme substituted in) to a temp
-file and opens it in your default browser; if no browser can be launched automatically it
-shows the file path so you can open it by hand.
+Before you serve anything you can preview your brand theme across the platform:
+**Studio → Branding / Login theme → “Preview the themed platform in your browser…”**. It
+writes ONE self-contained page to `~/.cache/hugmesh-studio/preview/` and opens it in your
+default browser: the **real** captured production login page (your derived theme
+substituted in — the same `:root:root` token text that ships) beside a Matrix chat, an
+Akkoma feed and a forum thread pane painted from the same `--sd-*` tokens. The three
+non-login panes are *representative mockups* and say so in-pane — the live chat/feed/forum
+UIs are separate Angular apps and only the login page has a captured snapshot. The result
+note under the button always names the written file and the open mechanism used; if no
+browser can be launched (or the launch could not be verified) open that file by hand.
 
 ## See also
 

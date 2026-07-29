@@ -10,11 +10,13 @@ HONESTY SPLIT (what each surface can guarantee):
   * The in-window TOKEN BOARD shows the real derived hex values and live-measured
     WCAG ratios straight from core/theme.py — the values cannot drift from what
     ships, by construction. It makes NO layout claim and says so.
-  * The "Preview in browser" button substitutes the derived css into the CAPTURED
-    real login page (core/login_preview.py) and opens it in the operator's REAL
-    browser — the actual runtime target. NOT QtWebEngine: that exists under PySide6
-    (the test venv) and not under the operator's PyQt6, so a WebEngine preview
-    would pass every test and be dead on the machine that matters.
+  * The "Preview in browser" button substitutes the derived css into ONE themed
+    PLATFORM page (core/platform_preview.py): the CAPTURED real login page
+    (core/login_preview.py) plus representative matrix/akkoma/forum panes painted
+    from the SAME --sd-* tokens, opened in the operator's REAL browser — the actual
+    runtime target. NOT QtWebEngine: that exists under PySide6 (the test venv) and
+    not under the operator's PyQt6, so a WebEngine preview would pass every test
+    and be dead on the machine that matters.
 
 Slots here NEVER raise (an unhandled exception in a Qt slot aborts PyQt6):
 ``compose_css()`` returns "" and records ``error_text()`` instead of raising, and
@@ -23,11 +25,10 @@ hosts surface that text (red note + refusing to launch a verb with bad input).
 from __future__ import annotations
 
 import os
-import tempfile
 
 from ..qt import QtCore, QtGui, QtWidgets
 from ...core import fonts as core_fonts
-from ...core import login_preview, theme
+from ...core import login_preview, platform_preview, theme
 from ._widgets import _file_picker, _row
 
 _HEX_PLACEHOLDER = "#RRGGBB — empty keeps the shipped colour"
@@ -148,7 +149,18 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         self.error_note.setVisible(False)
         lay.addWidget(self.error_note)
 
-        self.preview_btn = QtWidgets.QPushButton("Preview the real login page in your browser…")
+        # Caption is honest about scope: the login pane is the REAL captured page,
+        # the other three panes are labelled representative mockups (the operator
+        # asked for "way more than the login … an example matrix chat as well as an
+        # akkoma feed with test msgs and a forum thread discussion").
+        self.preview_btn = QtWidgets.QPushButton(
+            "Preview the themed platform in your browser…")
+        self.preview_btn.setToolTip(
+            "Writes ONE self-contained page — the real captured login page plus "
+            "representative Matrix chat / Akkoma feed / forum thread panes, all "
+            "painted from the same --sd-* tokens — and opens it in your default "
+            f"browser. The three mock panes say “{platform_preview.HONESTY_LABEL}” "
+            "in-pane; only the login pane is a captured real UI.")
         self.preview_btn.clicked.connect(self._open_preview)
         lay.addWidget(self.preview_btn)
 
@@ -323,14 +335,27 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         self.compose_css()   # refresh error state live
 
     def _open_preview(self, *_):
-        """Write the captured real login page with the CURRENT theme substituted and
-        open it in the operator's default browser (the actual runtime target).
+        """Write the themed PLATFORM preview — the real captured login snapshot plus
+        representative matrix/akkoma/forum panes (core/platform_preview.py) — and
+        open it in the operator's default browser.
 
-        Robust open: Qt's QDesktopServices.openUrl first, then the Qt-free
-        login_preview.open_in_browser fallback (stdlib webbrowser + xdg-open/$BROWSER)
-        — and if NOTHING can launch a browser (headless / minimal / Wayland desktop
-        with no registered handler), the file path is surfaced for a manual open so
-        the button never silently does nothing."""
+        Open-path lesson (this button's history IS "the preview isn't working"
+        reports): the old order trusted QDesktopServices.openUrl FIRST and reported
+        its True as success — but on Linux that True means "the launch was
+        dispatched", not "something rendered" (xdg-open can exit 2 'no handler' a
+        beat after Qt already returned true), so the Qt-free fallback never ran and
+        the note lied green while the operator saw nothing. New order:
+          1. login_preview.open_in_browser — VERIFIED openers (waits for the
+             opener's own exit code);
+          2. QDesktopServices.openUrl only as the LAST resort (portal-only desktops
+             with no CLI opener), and its success is reported as UNVERIFIED;
+          3. the note ALWAYS carries the file path + the mechanism used, so even a
+             browser that never appears leaves the operator one manual open away —
+             never a silent no-op, and the mechanism name makes the next failure
+             report diagnosable.
+        The file lands in login_preview.preview_out_dir() (~/.cache), NOT
+        gettempdir(): $TMPDIR can point into build scratch that portage sweeps
+        mid-session, which deletes the preview before/while the browser reads it."""
         self.preview_note.setVisible(False)
         css = self.compose_css()
         if self._error:
@@ -340,22 +365,35 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
             self.preview_note.setText("Fix the theme error above before previewing.")
             self.preview_note.setVisible(True)
             return
-        out_dir = os.path.join(tempfile.gettempdir(), "hugmesh-studio-preview")
+        out_dir = login_preview.preview_out_dir()
         try:
-            path = login_preview.write_preview(css, out_dir)
+            path = platform_preview.write_platform_preview(css, out_dir)
         except (OSError, RuntimeError) as exc:
             self.error_note.setText(f"preview failed: {exc}")
             self.error_note.setVisible(True)
             return
-        opened = bool(QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path)))
-        if not opened:
-            opened, _how = login_preview.open_in_browser(path)
-        if opened:
+        opened, how = login_preview.open_in_browser(path)
+        if not opened and bool(
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))):
+            opened, how = True, ("unverified: QDesktopServices.openUrl — Qt reports "
+                                 "the launch was dispatched, not that a browser "
+                                 "rendered anything")
+        if opened and how.startswith("verified"):
             self.preview_note.setStyleSheet("color: #2e7d32;")
-            self.preview_note.setText(f"Preview opened in your browser.\nFile: {path}")
+            self.preview_note.setText(
+                f"Platform preview opened ({how}).\nFile: {path}")
+        elif opened:
+            # Dispatched but unverifiable — the historical lie, now labelled amber
+            # with the manual path instead of claimed green.
+            self.preview_note.setStyleSheet("color: #a65d00;")
+            self.preview_note.setText(
+                f"A browser open was dispatched but cannot be confirmed ({how}).\n"
+                f"If no tab appeared, open this file manually:\n{path}\n"
+                "(Linux: check `xdg-settings get default-web-browser` — a missing or "
+                "non-browser handler is the usual cause of a silent no-op.)")
         else:
             self.preview_note.setStyleSheet("color: #b00020;")
             self.preview_note.setText(
-                "Could not launch a browser automatically. Open this file manually:\n"
-                + path)
+                f"Could not launch a browser automatically ({how}).\n"
+                f"Open this file manually:\n{path}")
         self.preview_note.setVisible(True)

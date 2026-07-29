@@ -99,25 +99,72 @@ def test_cfg_login_theme_css_matches_the_group_composition(qapp):
     assert cfg.login_theme_css() == g.compose_css() != ""
 
 
-def test_preview_button_writes_the_substituted_page_and_opens_it(qapp, tmp_path,
-                                                                 monkeypatch):
+def test_preview_button_writes_the_platform_page_and_opens_it(qapp, tmp_path,
+                                                              monkeypatch):
     import hugmesh_studio.gui.pages._logintheme as lt
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))   # -> preview_out_dir()
     opened = []
-    monkeypatch.setattr(lt.QtGui.QDesktopServices, "openUrl",
-                        staticmethod(lambda url: opened.append(url) or True))
-    monkeypatch.setattr(lt.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(lt.login_preview, "open_in_browser",
+                        lambda p: (bool(opened.append(p)) or True,
+                                   "verified: test-opener exited 0"))
+    # QDesktopServices is the LAST resort now (its True is dispatch-only — the
+    # historical false-positive); it must not fire when a verified opener worked.
+    monkeypatch.setattr(
+        lt.QtGui.QDesktopServices, "openUrl",
+        staticmethod(lambda url: pytest.fail(
+            "QDesktopServices must not run when the verified opener succeeded")))
     g = LoginThemeGroup()
     g.primary.setText("#e91e63")
     g._open_preview()
     assert len(opened) == 1
-    path = opened[0].toLocalFile()
+    path = opened[0]
+    from hugmesh_studio.core import platform_preview
+    assert path.endswith(platform_preview.PLATFORM_PREVIEW_BASENAME)
+    assert str(tmp_path) in path             # stable cache dir, NOT gettempdir()
     text = open(path, encoding="utf-8").read()
     assert "--sd-primary: #e91e63;" in text
-    assert 'data-testid="login-submit"' in text      # the REAL captured page
-    # invalid input: preview refuses (no second write) instead of lying
+    # the REAL captured login page rides along inside the platform page (srcdoc)
+    assert "data-testid=&quot;login-submit&quot;" in text
+    for pane in ("pane-login", "pane-matrix", "pane-akkoma", "pane-forum"):
+        assert f'id="{pane}"' in text
+    # result feedback: mechanism + path, selectable for a manual open
+    assert "verified" in g.preview_note.text() and path in g.preview_note.text()
+    assert g.preview_note.isVisibleTo(g)
+    # invalid input: preview refuses (no second write/open) instead of lying
     g.primary.setText("nope")
     g._open_preview()
     assert len(opened) == 1
+    assert "Fix the theme error" in g.preview_note.text()
+
+
+def test_preview_feedback_is_never_silent_and_always_names_the_file(qapp, tmp_path,
+                                                                    monkeypatch):
+    """The operator's actual bug report ("the login page preview isn't working"):
+    every open outcome must leave a visible note carrying the file path — verified
+    green, dispatched-but-unconfirmed amber (the old code showed GREEN here, the
+    lie that made the failure undiagnosable), and total-miss red."""
+    import hugmesh_studio.gui.pages._logintheme as lt
+    from hugmesh_studio.core import platform_preview
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(lt.login_preview, "open_in_browser",
+                        lambda p: (False, "no browser opener worked (test)"))
+    monkeypatch.setattr(lt.QtGui.QDesktopServices, "openUrl",
+                        staticmethod(lambda url: True))
+    g = LoginThemeGroup()
+    g.primary.setText("#336699")
+    g._open_preview()
+    note = g.preview_note.text()
+    assert "cannot be confirmed" in note          # amber: honest about openUrl's True
+    assert platform_preview.PLATFORM_PREVIEW_BASENAME in note
+    assert "manually" in note
+    # total miss: red, still names the file for a manual open
+    monkeypatch.setattr(lt.QtGui.QDesktopServices, "openUrl",
+                        staticmethod(lambda url: False))
+    g._open_preview()
+    note = g.preview_note.text()
+    assert "Could not launch a browser" in note
+    assert platform_preview.PLATFORM_PREVIEW_BASENAME in note
+    assert g.preview_note.isVisibleTo(g)
 
 
 def test_real_font_upload_is_validated_and_reaches_the_css(qapp, monkeypatch):
