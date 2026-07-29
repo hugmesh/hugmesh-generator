@@ -4132,6 +4132,25 @@ configure_root_login() {
 }
 configure_root_login "${SYSROOT}"
 
+# CUDA host-compiler preflight: detect the CUDA-vs-seed-toolchain IMPOSSIBLE
+# combination now, in seconds, instead of after the multi-hour @world pass. The
+# edge_ai.x86 role emitted ZERO artifacts on 2026-07-19 because nvidia-cuda-
+# toolkit's default gcc leg (<gcc-15_pre) had no candidate at all: the seed gcc
+# is 15 and EMERGE_EXCLUDE's name-level `--exclude sys-devel/gcc` masked every
+# installable gcc:14 — a RESOLUTION failure, so --keep-going could not help and
+# NOT ONE payload package merged (build-edge_ai.x86.log:153744). The fix rides
+# specs-x86/portage/package.use/nvidia (USE=clang -> the clang-19 leg); this
+# preflight fails the build loudly whenever that combination ever re-forms
+# (USE line dropped, new toolkit ebuild moving its caps, seed jumping again).
+# Called HOST-side against ${SYSROOT} deliberately — inside the unquoted CHROOT
+# heredoc every '$' would need escaping (the script's own integration note).
+if ${NVIDIA_CUDA}; then
+    _cuda_pf_args=(--sysroot "${SYSROOT}")
+    ${REBUILD_TOOLCHAIN:-false} && _cuda_pf_args+=(--gcc-not-excluded)
+    bash "${SCRIPT_DIR}/scripts/preflight-cuda-host-compiler.sh" "${_cuda_pf_args[@]}" \
+        || { err "CUDA host-compiler preflight failed — this payload emerge CANNOT resolve (see above)."; exit 1; }
+fi
+
 # ── 5. Chroot setup + native emerge ────────────────────────────────
 banner "Native emerge inside chroot"
 

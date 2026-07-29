@@ -52,6 +52,18 @@ All three front-ends expose the same knobs (**all-menus parity**):
 The `edge_ai` role defaults `--gpu-driver nvidia` and turns CUDA on; pass an explicit
 `--gpu-driver` to override (an AMD/Intel ROCm edge node is a future path).
 
+**CUDA host compiler = clang, on purpose.** `dev-util/nvidia-cuda-toolkit` caps its
+host compiler below the toolchain the amd64 hardened stage3 seed ships (12.9.2 caps
+at gcc 14; the seed carries gcc 15), and the x86 builder keeps the seed toolchain
+(`--exclude sys-devel/gcc`) — with the toolkit's default gcc leg that combination made
+`edge_ai.x86` structurally unbuildable (session `20260719-103006-a775c2`: resolution
+aborted, zero artifacts). The image therefore builds the toolkit with `USE=clang`
+(`specs-x86/portage/package.use/nvidia`, which documents the full evidence), pulling
+the stable, slotted `llvm-core/clang-19`. Compile CUDA code on the node with
+`nvcc -ccbin clang++-19 …`. The invariant is guarded by
+`scripts/preflight-cuda-host-compiler.sh` (static repo mode runs in CI; a `--sysroot`
+mode is ready for the builder to call right before the payload emerge).
+
 ---
 
 ## 2. How the mesh consumes it

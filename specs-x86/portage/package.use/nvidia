@@ -14,3 +14,40 @@ x11-drivers/nvidia-drivers kernel-open persistenced -static-libs
 # VIDEO_CARDS="… nvidia" (set in make.conf by the builder) makes x11-base/xorg-drivers
 # pull x11-drivers/nvidia-drivers; the open Mesa stack stays co-installed for
 # llvmpipe / non-NVIDIA GPUs. NVIDIA owns GLX/EGL/Vulkan ICDs at runtime via eselect.
+#
+# CUDA host compiler: the CLANG leg, NOT the gcc leg — the gcc leg is
+# STRUCTURALLY UNSATISFIABLE in this builder. dev-util/nvidia-cuda-toolkit
+# hard-caps its host compiler (nvidia-cuda-toolkit-12.9.2.ebuild: GCC_MAX_VER="14",
+# CLANG_MAX_VER="19"):
+#     RDEPEND="!clang? ( <sys-devel/gcc-15_pre[cxx] )
+#              clang?  ( <llvm-core/clang-20_pre ) …"
+# but the amd64 hardened stage3 seed already ships gcc 15 (seed
+# stage3-amd64-hardened-openrc-20260719T170103Z: "gcc (Gentoo Hardened 15.3.0 p8)"),
+# and build-x86-host-stage4.sh keeps the seed toolchain with a NAME-level
+# `--exclude sys-devel/gcc` (EMERGE_EXCLUDE) — which masks EVERY installable
+# gcc:14 candidate too, not just rebuilds of the seed slot. With the default
+# USE=-clang the dep therefore had no candidate at all, dependency resolution
+# aborted, and — resolution failure, so --keep-going could not help — NOT ONE
+# payload package merged. Verbatim, from role edge_ai.x86 (out/sessions/
+# 20260719-103006-a775c2/build-edge_ai.x86.log:153744):
+#     !!! All ebuilds that could satisfy "<sys-devel/gcc-15_pre[cxx]" have been masked.
+#     - sys-devel/gcc-14.3.1_p20260604::gentoo (masked by: exclude option)
+#     (dependency required by "dev-util/nvidia-cuda-toolkit-12.9.2::gentoo[-clang]" [ebuild])
+#     …
+#     [build-x86] ERROR: stage4 payload incomplete — missing: grub-install dracut parted jq nmcli kubelet kubeadm containerd
+# → the edge_ai x86 role emitted ZERO artifacts.
+#
+# USE=clang flips the toolkit onto its clang host-compiler leg, satisfied by
+# llvm-core/clang-19.1.7-r1 — STABLE amd64 (KEYWORDS "…amd64…"), SLOT=19 (slotted,
+# co-installable with any newer llvm/clang the payload pulls), and NOT touched by
+# EMERGE_EXCLUDE (which excludes only sys-devel/gcc, sys-libs/glibc,
+# sys-devel/binutils). The alternative — co-installing sys-devel/gcc:14 next to
+# the seed — needs the builder to stop name-excluding gcc (an EMERGE_EXCLUDE
+# change owned by build-x86-host-stage4.sh) and is a similarly large from-source
+# build; the clang leg needs NO builder change. USE=clang changes nothing else in
+# the ebuild but the dep leg + a pkg_setup version warning (nvidia-cuda-toolkit is
+# a prepackaged-binary install; the host compiler is used AFTER boot, by nvcc).
+# On the image, compile CUDA code with:  nvcc -ccbin clang++-19 …
+# Guarded by scripts/preflight-cuda-host-compiler.sh (wired into
+# tests/build-matrix/check.sh via tests/scripts/test-edge-ai-cuda-host-compiler.sh).
+dev-util/nvidia-cuda-toolkit clang
