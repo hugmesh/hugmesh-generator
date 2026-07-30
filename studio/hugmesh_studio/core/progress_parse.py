@@ -23,6 +23,17 @@ same way an image build differs between x86/rpi5). :class:`ProgressParser` accep
 image ``platform`` (unchanged contract) or an explicit ``phases`` table (the track path) —
 the SAME ``==> `` banner regex and forward-only matching drive both, exactly the reuse this
 module's docstring always intended.
+
+UNIFORMITY (2026-07): every phase row now carries a CANONICAL stage ``id`` from
+``_meta.canonical_stages`` — the same work has the same id, the same label and the same
+relative position on every platform, and a canonical stage a platform does not have is
+declared with a REASON in that platform's ``not_applicable`` map (:func:`not_applicable`)
+instead of being silently absent. Renaming builder banners would ordinarily blank the bar
+of a build that was already running when the operator upgraded, so each row may also carry
+a ``compat`` list of banner substrings an EARLIER release emitted: the matcher accepts
+``any`` + ``compat`` identically, while :func:`pattern_count` (the drift probe's input)
+counts ``any`` ONLY — so ``compat`` can never be used to dodge the probe. See
+``_meta.compat_policy``.
 """
 from __future__ import annotations
 
@@ -66,9 +77,64 @@ def platform_phases(platform: str) -> list[dict]:
 
 
 def pattern_count(platform: str) -> int:
-    """Total number of match patterns across all phases — what the drift probe compares
-    to the count of ``banner "..."`` call sites in the corresponding builder script."""
+    """Total number of CURRENT match patterns across all phases — what the drift probe
+    compares to the count of ``banner "..."`` call sites in the corresponding builder
+    script. Deliberately counts ``any`` ONLY: the legacy ``compat`` patterns describe
+    banners no builder emits any more, so counting them would break the 1:1 call-site
+    invariant and turn ``compat`` into a hole in the drift probe."""
     return sum(len(ph["any"]) for ph in platform_phases(platform))
+
+
+def phase_patterns(phase: dict) -> list[str]:
+    """Every substring that matches this phase: the CURRENT banners (``any``) plus the
+    transitional legacy ones (``compat``). This — not ``any`` alone — is what the matcher
+    uses, so an archived log and a build that started before a Studio upgrade both keep
+    advancing the bar. See ``_meta.compat_policy``."""
+    return list(phase["any"]) + list(phase.get("compat", ()))
+
+
+# ── canonical stage ladder ───────────────────────────────────────────────────────────
+def canonical_stages() -> list[dict]:
+    """The ONE ordered ``[{id, label}]`` build ladder every platform table is a
+    subsequence of."""
+    return list(_TABLES["_meta"]["canonical_stages"])
+
+
+def canonical_labels() -> dict[str, str]:
+    return {s["id"]: s["label"] for s in canonical_stages()}
+
+
+def stage_ids(platform: str) -> list[str]:
+    """The canonical stage ids this platform's ladder actually contains, in order."""
+    return [ph["id"] for ph in platform_phases(platform)]
+
+
+def not_applicable(platform: str) -> dict[str, str]:
+    """``{canonical stage id: reason}`` for every canonical stage this platform does NOT
+    have. Union with :func:`stage_ids` is the whole canonical ladder — that is the
+    explicit-absence rule: a rung a board genuinely lacks is declared with its reason so
+    the GUI can render it greyed, never silently dropped."""
+    plats = _TABLES["platforms"]
+    entry = plats.get(platform or "x86") or plats["x86"]
+    return dict(entry.get("not_applicable", {}))
+
+
+# ── canonical emerge-group taxonomy ──────────────────────────────────────────────────
+def emerge_group_order() -> list[str]:
+    """The five emerge groups in canonical emission order. Same names as
+    ``emerge_packages.EMERGE_GROUPS`` (asserted in the tests); this pins the ORDER."""
+    return list(_TABLES["_meta"]["emerge_groups"]["order"])
+
+
+def emerge_groups(platform: str) -> dict:
+    """``{"emitted": [...], "not_applicable": {group: reason}}`` for one platform. The two
+    together always cover all five canonical groups — a group a platform does not emit is
+    declared with a reason, never silently missing."""
+    plats = _TABLES["platforms"]
+    entry = plats.get(platform or "x86") or plats["x86"]
+    g = entry.get("emerge_groups", {})
+    return {"emitted": list(g.get("emitted", ())),
+            "not_applicable": dict(g.get("not_applicable", {}))}
 
 
 def declared_callsites(platform: str) -> int:
@@ -175,10 +241,13 @@ class ProgressParser:
         return self.state()
 
     def _match_phase(self, banner_text: str) -> int | None:
-        """Earliest not-yet-passed phase whose any-pattern is a substring of the banner —
-        forward-only so the estimate is monotonic and skips conditional phases cleanly."""
+        """Earliest not-yet-passed phase whose pattern is a substring of the banner —
+        forward-only so the estimate is monotonic and skips conditional phases cleanly.
+        Both the CURRENT banners and the transitional ``compat`` ones match (see
+        :func:`phase_patterns`), so an archived log — and a build that was already running
+        when the operator upgraded the Studio mid-build — still advance the bar."""
         for j in range(self.phase_index + 1, self.phase_count):
-            for pat in self.phases[j]["any"]:
+            for pat in phase_patterns(self.phases[j]):
                 if pat in banner_text:
                     return j
         return None

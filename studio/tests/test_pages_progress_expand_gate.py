@@ -11,10 +11,13 @@ test_pages_progress_packages.py / test_pages_progress_jobs.py):
 
 * the control EXISTS from the first paint and is disabled + greyed + honestly explained,
   before emerge, on an x86 AND on an ARM platform;
-* it enables on the FIRST real emerge signal — and on ARM too, which is the whole point of
-  not matching a stage label: x86's phase table says "Emerge packages" while every ARM table
-  says "Phase 1: @system" / "Phase 2: stage4" (core/progress-tables.json). A label rule would
-  silently never enable on ARM, and the label assertions below would catch it;
+* it enables on the FIRST real emerge signal — and on ARM too. When this gate shipped the
+  tables named their emerge stages differently per platform ("Emerge packages" on x86,
+  "Phase 1: @system" on ARM), so a label rule would silently never have enabled on ARM;
+  the uniformity pass has since made the labels canonical and SHARED ("Emerge @system" /
+  "Emerge role payload" everywhere), but the gate still keys on the emerge-group SIGNAL,
+  never the label — the enable tests below prove it with real banner streams, and the
+  pre-uniformity ARM banners in this module double as a compat-policy regression test;
 * it is PER JOB: two images in different phases, two different states;
 * it never regresses — collapse/expand, a later stage, and a finished build all keep it live;
 * nothing on this path can escape a Qt slot. The operator runs PyQt6, where an unhandled
@@ -137,8 +140,8 @@ def _feed(page, i, lines):
 
 # ── 1. present, but disabled + greyed + explained, BEFORE emerge ───────────────────────
 @pytest.mark.parametrize("platform,pre,emerge_stage_label", [
-    ("x86", _X86_PRE_EMERGE, "Emerge packages"),
-    ("rpi5", _ARM_PRE_EMERGE, "Phase 1: @system"),
+    ("x86", _X86_PRE_EMERGE, "Emerge @system"),
+    ("rpi5", _ARM_PRE_EMERGE, "Emerge @system"),
 ])
 def test_affordance_is_present_but_disabled_before_emerge(wiz, platform, pre,
                                                           emerge_stage_label):
@@ -164,17 +167,24 @@ def test_affordance_is_present_but_disabled_before_emerge(wiz, platform, pre,
     assert row.tracker.cur < labels.index(emerge_stage_label)
 
 
-def test_the_two_platforms_do_not_share_an_emerge_stage_label(wiz):
-    """The reason the gate may not match a stage LABEL: x86 and every ARM table name
-    their emerge stages differently, so a label rule would silently never enable on ARM."""
-    x86 = [p["label"] for p in platform_phases("x86")]
-    assert "Emerge packages" in x86
-    for arm in ("rpi5", "jetson", "frite", "orangepi5", "orangepizero2w",
-                "orangepizero3"):
-        arm_labels = [p["label"] for p in platform_phases(arm)]
-        assert "Emerge packages" not in arm_labels, arm
-        assert any(lbl.startswith("Phase 1") or lbl.startswith("Phase 2")
-                   for lbl in arm_labels), arm
+def test_every_platform_shares_the_canonical_emerge_stage_labels(wiz):
+    """HISTORY, INVERTED ON PURPOSE. This test used to pin that x86 ("Emerge packages")
+    and ARM ("Phase 1: @system") did NOT share an emerge-stage label — the fact that made
+    a label-matching gate silently dead on ARM. The uniformity pass made the labels
+    canonical and identical everywhere (that is its entire point), so the old assertion
+    now pins the opposite of the intended state. What survives of the original intent:
+    the gate must key on the emerge-group SIGNAL, never the label — proven by the enable
+    tests in this module, which drive it with real (including pre-uniformity/compat)
+    banner streams. Here we pin the new deliberate fact instead: every platform's table
+    names its emerge stages with the SAME canonical labels."""
+    for platform in ("x86", "rpi5", "jetson", "frite", "orangepi5", "orangepizero2",
+                     "orangepizero2w", "orangepizero3", "orangepi3-lts",
+                     "orangepi4-lts"):
+        labels = [p["label"] for p in platform_phases(platform)]
+        assert "Emerge @system" in labels, platform
+        assert "Emerge role payload" in labels, platform
+        assert not any(lbl.startswith("Phase ") for lbl in labels), (
+            f"{platform}: a pre-uniformity 'Phase N' label survives: {labels}")
 
 
 # ── 2. it enables on the FIRST real emerge signal ──────────────────────────────────────

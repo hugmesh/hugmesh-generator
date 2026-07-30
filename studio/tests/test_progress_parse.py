@@ -66,7 +66,11 @@ def test_strip_ansi_removes_sgr():
 def test_banner_matched_through_ansi():
     p = pp.ProgressParser("x86")
     st = p.feed(_banner("Verifying prerequisites"))
-    assert st.phase_index == 1  # "Rebranding baked config" (idx 0) is conditional/skipped
+    # "Verify prerequisites" is canonical rung 0 on EVERY platform. (It used to be rung 1
+    # behind "Rebrand baked config" — but every builder calls rebrand_sysroot() well after
+    # the seed is installed, so that rung was mis-ordered and therefore unreachable; the
+    # uniformity pass moved it to its real position, after "Install spec files".)
+    assert st.phase_index == 0
     assert "Verify prerequisites" in st.phase_label
 
 

@@ -113,7 +113,10 @@ for b in "${BUILDERS[@]}"; do
   gate_ln=$(grep -n 'requested_atom_gate "${SYSROOT}"' "${f}" | head -1 | cut -d: -f1)
   emer_ln=$(grep -n 'cross_emerge --update --deep --newuse --keep-going' "${f}" | head -1 | cut -d: -f1)
   pkgo_ln=$(grep -n 'packages-only: per-board binpkg pool prebuilt' "${f}" | head -1 | cut -d: -f1)
-  kern_ln=$(grep -n 'banner "Phase 3' "${f}" | head -1 | cut -d: -f1)
+  # Kernel-phase anchor: the canonical taxonomy banner ("Building hardened kernel",
+  # uniform across every cross builder) — with the pre-taxonomy "Phase 3" wording as
+  # a fallback so this gate still orders correctly on an old checkout/branch.
+  kern_ln=$(grep -nE 'banner "(Building hardened kernel|Phase 3: Cross-compiling)' "${f}" | head -1 | cut -d: -f1)
   if [ -n "${gate_ln}" ] && [ -n "${emer_ln}" ] && [ -n "${pkgo_ln}" ] && [ -n "${kern_ln}" ] \
      && [ "${gate_ln}" -gt "${emer_ln}" ] && [ "${gate_ln}" -lt "${pkgo_ln}" ] \
      && [ "${gate_ln}" -lt "${kern_ln}" ]; then

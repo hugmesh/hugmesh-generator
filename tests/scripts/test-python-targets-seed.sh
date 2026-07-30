@@ -48,7 +48,8 @@ SPEC_DIRS=(specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 specs-ora
            specs-orangepi-zero3 specs-orangepi3-lts specs-orangepi4-lts specs-jetson specs-x86)
 ARM_BUILDERS=(build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh
               build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh
-              build-orangepi-zero3-stage4.sh build-jetson-stage4.sh)
+              build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh
+              build-orangepi4-lts-stage4.sh build-jetson-stage4.sh)
 ALL_BUILDERS=("${ARM_BUILDERS[@]}" build-x86-host-stage4.sh)
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/python-targets-guard.XXXXXX")"
@@ -145,7 +146,10 @@ for s in "${ALL_BUILDERS[@]}"; do
         ok "${s}: seed derivation (line ${apply_ln}) runs after the make.conf render"
     fi
     if [ "${s}" = "build-x86-host-stage4.sh" ]; then
-        emerge_ln="$(grep -nE '^banner "Native emerge inside chroot"' "${f}" | head -1 | cut -d: -f1)"
+        # Canonical taxonomy banner first ("Emerging @system (hardened, native chroot)"),
+        # with the pre-taxonomy "Native emerge inside chroot" wording as a fallback so
+        # the ordering probe still anchors on an old checkout/branch.
+        emerge_ln="$(grep -nE '^banner "(Emerging @system|Native emerge inside chroot)' "${f}" | head -1 | cut -d: -f1)"
     else
         emerge_ln="$(grep -nE '^[[:space:]]*cross_emerge ' "${f}" | head -1 | cut -d: -f1)"
     fi

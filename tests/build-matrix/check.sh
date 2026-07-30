@@ -1505,8 +1505,17 @@ run_flag_coverage() {
 #       selected lines must be free of backticks and of any '$' not escaped as '\$'
 #       (enforced uniformly, host-side lines too — a banner line has no business
 #       interpolating anything).
-# FAIL-CLOSED: 11 expected (10 builder multisets + 1 heredoc-safety sweep).
-EGB_EXPECTED=11
+#   (c) TAXONOMY DECLARATION: the uniformity pass made progress-tables.json declare, per
+#       platform, which of the five canonical groups that builder emits and — for the
+#       ones it does not — WHY. That declaration is a third copy of the same fact, so it
+#       is cross-checked here against this bucket's expected multisets: emitted must
+#       equal the multiset above, emitted+not_applicable must cover all five canonical
+#       groups, and every absence must carry a real reason. Without this an ARM builder
+#       could declare "world: emitted" (or drop `dependencies` silently) and only the
+#       Studio-side suite would notice.
+# FAIL-CLOSED: 12 expected (10 builder multisets + 1 heredoc-safety sweep + 1 taxonomy
+# declaration cross-check).
+EGB_EXPECTED=12
 EGB_PASS=0; EGB_FAIL=0
 run_emerge_group_banner_checks() {
     local out="${TMP_DIR}/egb.out"
@@ -1565,6 +1574,61 @@ run_emerge_group_banner_checks() {
         EGB_FAIL=$((EGB_FAIL+1))
     else
         EGB_PASS=$((EGB_PASS+1))
+    fi
+    # (c) the progress-tables.json group declaration must agree with the multisets above
+    # and must account for ALL FIVE canonical groups (emitted, or absent WITH a reason).
+    if "${PYTHON}" - "${REPO_DIR}" >"${out}" 2>&1 <<'PY'
+import json, os, sys
+repo = sys.argv[1]
+tables = json.load(open(os.path.join(
+    repo, "studio/hugmesh_studio/core/progress-tables.json")))
+# the SAME expected multisets this bucket pins for the source grep, keyed by platform id
+expect = {
+    "x86":            {"dependencies", "image", "system", "tools", "world"},
+    "rpi5":           {"image", "system", "tools"},
+    "jetson":         {"image", "system", "tools"},
+    "frite":          {"image", "system", "tools"},
+    "orangepi5":      {"image", "system", "tools"},
+    "orangepizero2":  {"image", "system", "tools"},
+    "orangepizero2w": {"image", "system", "tools"},
+    "orangepizero3":  {"image", "system", "tools"},
+    "orangepi3-lts":  {"image", "system", "tools"},
+    "orangepi4-lts":  {"image", "system", "tools"},
+}
+canon = set(tables["_meta"]["emerge_groups"]["order"])
+bad = []
+if canon != {"dependencies", "image", "system", "tools", "world"}:
+    bad.append(f"_meta.emerge_groups.order is {sorted(canon)}, not the canonical five")
+for plat, want in expect.items():
+    entry = tables["platforms"].get(plat)
+    if entry is None:
+        bad.append(f"{plat}: no platform entry in progress-tables.json")
+        continue
+    g = entry.get("emerge_groups", {})
+    emitted, absent = set(g.get("emitted", ())), dict(g.get("not_applicable", {}))
+    if emitted != want:
+        bad.append(f"{plat}: declares emitted={sorted(emitted)}, builders emit {sorted(want)}")
+    if emitted | set(absent) != canon:
+        bad.append(f"{plat}: emitted+not_applicable={sorted(emitted | set(absent))} "
+                   f"does not cover the canonical five")
+    if emitted & set(absent):
+        bad.append(f"{plat}: {sorted(emitted & set(absent))} both emitted and not-applicable")
+    for grp, reason in absent.items():
+        if not isinstance(reason, str) or len(reason.strip()) < 20:
+            bad.append(f"{plat}/{grp}: absence has no real reason ({reason!r})")
+missing = set(tables["platforms"]) - set(expect)
+if missing:
+    bad.append(f"platform(s) {sorted(missing)} in the table are unknown to this bucket")
+for b in bad:
+    print(b)
+sys.exit(1 if bad else 0)
+PY
+    then
+        EGB_PASS=$((EGB_PASS+1))
+    else
+        _fail EGB "taxonomy-declaration" \
+            "progress-tables.json emerge-group declaration disagrees with the builders" "${out}"
+        EGB_FAIL=$((EGB_FAIL+1))
     fi
     # fail-closed: a silently-skipped (or silently-added) check trips one failure —
     # either direction means this bucket and EGB_EXPECTED drifted apart

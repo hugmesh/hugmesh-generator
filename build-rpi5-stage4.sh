@@ -3076,7 +3076,7 @@ info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
 # the per-image log too — keep every chunk attributable to its run.
 echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND} role=${ROLE} env=${ENV} ===="
 
-banner "Fetching latest arm64 stage3 seed tarball"
+banner "Fetching stage3 seed (arm64)"
 
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
 STAGE3_FILE=$(curl -sL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
@@ -3107,7 +3107,7 @@ if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}.DIGESTS"; then
     exit 1
 fi
 
-banner "Extracting seed stage3 into sysroot"
+banner "Extracting stage3 into sysroot"
 
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
@@ -3763,7 +3763,7 @@ cross_emerge() {
         "$@"
 }
 
-banner "Phase 1: Cross-building @system (hardened)"
+banner "Emerging @system (hardened, cross-compiled)"
 
 # A cross-built stage4 must NOT (cross-)rebuild the toolchain. Cross-building a
 # target gcc/glibc/binutils and their target libs fails under crossdev with
@@ -3809,7 +3809,7 @@ cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
 
-banner "Phase 2: Cross-building stage4 packages"
+banner "Emerging role payload (stage4, cross-compiled)"
 
 # Resolved via resolve_stage4_packages() (defined above "Verifying
 # prerequisites") — the SAME single-sourced resolver the qemu preflight
@@ -3926,9 +3926,9 @@ if [ -d "${SYSROOT}/boot" ]; then
 fi
 
 if ${SKIP_MESH}; then
-    banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
+    banner "SKIPPED mesh VPN (--skip-mesh)"
 else
-    banner "Phase 2.5: Installing mesh VPN (headscale + tailscale)"
+    banner "Installing mesh VPN (headscale + tailscale, arm64)"
 
     # Pinned versions (HEADSCALE_VERSION / TAILSCALE_VERSION) + publisher checksum
     # verification: headscale releases ship checksums.txt; tailscale ships a
@@ -3995,9 +3995,9 @@ else
 fi
 
 if ${SKIP_KERNEL}; then
-    banner "Phase 3: SKIPPED (--skip-kernel)"
+    banner "SKIPPED kernel (--skip-kernel)"
 else
-    banner "Phase 3: Cross-compiling hardened kernel"
+    banner "Building hardened kernel (cross-compiled: raspberrypi-sources)"
 
     KERNEL_SRC=$(find "${SYSROOT}/usr/src/" -maxdepth 1 -name 'linux-*raspberrypi*' -type d 2>/dev/null | sort -V | tail -1)
     if [ -z "${KERNEL_SRC}" ]; then
@@ -4247,7 +4247,7 @@ if ${ENCRYPT_ROOT} && ${BUILD_ISO}; then
 fi
 
 if ${SKIP_CLEAN}; then
-    banner "Cleaning: SKIPPED (--skip-clean)"
+    banner "SKIPPED sysroot clean (--skip-clean)"
 else
     banner "Cleaning sysroot"
 
@@ -4288,7 +4288,7 @@ else
     info "Sysroot cleaned: locale/static-libs/pyc/ko-dbg/elf stripped."
 fi
 
-banner "Phase 4: Packaging stage4 tarball"
+banner "Packaging stage4 tarball"
 
 STAGE4_TARBALL="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 
@@ -4538,7 +4538,7 @@ build_img() {
 }
 
 if ${BUILD_IMG}; then
-    banner "Phase 5: Building raw .img"
+    banner "Building raw .img"
     # The .img is the DEFAULT artifact — the only directly bootable Pi
     # deliverable, and the .fs.tar.xz is produced inside build_img too. A
     # missing kernel means the build already failed (raspberrypi-sources
@@ -4552,14 +4552,14 @@ if ${BUILD_IMG}; then
     fi
     build_img
 else
-    banner "Phase 5: SKIPPED .img (--no-img)"
+    banner "SKIPPED raw .img (--no-img)"
 fi
 
 if ${SKIP_ISO}; then
-    banner "Phase 6: SKIPPED installer ISO (default; pass --iso to build it)"
+    banner "SKIPPED INSTALLER image (default; pass --iso to build it)"
     ISO_PATH="(not built)"
 else
-    banner "Phase 6: Building bootable installer ISO"
+    banner "Building INSTALLER image (bootable installer ISO)"
 
     # A bootable ISO needs the kernel. The ISO is opt-in (--iso), so if it was
     # requested and the kernel is absent (kernel build skipped or

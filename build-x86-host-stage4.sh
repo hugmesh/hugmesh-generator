@@ -3093,7 +3093,7 @@ info "Work dir:   ${WORK_DIR}  (products land here)"
 info "Build root: ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 
 # ── 2. Seed stage3 ─────────────────────────────────────────────────
-banner "Fetching amd64 hardened stage3 seed"
+banner "Fetching stage3 seed (amd64 hardened)"
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
 STAGE3_FILE=$(curl -sL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 # Per-arch: the amd64 seed must not be reused by (or clobber) the aarch64 build.
@@ -3159,7 +3159,7 @@ acquire_build_lock() {
 }
 
 # ── 3. Extract ─────────────────────────────────────────────────────
-banner "Extracting stage3"
+banner "Extracting stage3 into sysroot"
 acquire_build_lock
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot populated and --resume — skipping extraction"
@@ -3213,7 +3213,7 @@ printf 'Defaults !requiretty\nportage ALL=(ALL) NOPASSWD: ALL\n' \
 chmod 440 "${SYSROOT}/etc/sudoers.d/build-notty"
 
 # ── 4. Install spec files ──────────────────────────────────────────
-banner "Installing spec files"
+banner "Installing spec files into sysroot (hardened profile)"
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.license,package.mask,profile,env}
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 # ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
@@ -4234,7 +4234,7 @@ if ${NVIDIA_CUDA}; then
 fi
 
 # ── 5. Chroot setup + native emerge ────────────────────────────────
-banner "Native emerge inside chroot"
+banner "Emerging @system (hardened, native chroot)"
 
 # Guard: chrooting needs an amd64 sysroot. The amd64 and aarch64 builds now keep
 # their sysroots in SEPARATE per-arch subdirs (snap-build-x86 vs snap-build-pi5),
@@ -4632,6 +4632,11 @@ _emerge_notice_sink() {
 echo "==> Emerge group: world"
 emerge --update --deep --newuse --keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world 2>&1 | _emerge_notice_sink \
     || echo "[build-x86] WARN: @world had package failures (--keep-going); continuing"
+# The role payload is its own rung on the canonical ladder (stage id
+# emerge-payload) on every platform; x86 used to fold it into one big
+# 'Emerge packages' stage. Announced with echo for the same reason the
+# group banners are: banner() does not exist inside the chroot.
+echo "==> Emerging role payload (stage4, native chroot)"
 # Ensure the stage4 package set is present (deps included).
 # --autounmask-continue auto-applies any required USE-flag change and continues
 # the merge (so a dep needing e.g. a USE flag doesn't ABORT resolution the way a
@@ -4840,7 +4845,7 @@ fi
 
 # ── 6. Mesh VPN (amd64 static binaries) ────────────────────────────
 if ${SKIP_MESH}; then
-    banner "Mesh VPN SKIPPED"
+    banner "SKIPPED mesh VPN (--skip-mesh)"
 else
     banner "Installing mesh VPN (headscale + tailscale, amd64)"
     # Pinned versions (HEADSCALE_VERSION / TAILSCALE_VERSION) + publisher checksum
@@ -4899,9 +4904,9 @@ fi
 # package emerge may have aborted, so it re-ensures the sources + /usr/src/linux
 # symlink exist before building, and fails loudly if core hardening didn't take.
 if ${SKIP_KERNEL}; then
-    banner "Kernel SKIPPED"
+    banner "SKIPPED kernel (--skip-kernel)"
 else
-    banner "Building Gentoo hardened kernel (gentoo-sources + KSPP/SELinux + k8s fragment)"
+    banner "Building hardened kernel (native: gentoo-sources + KSPP/SELinux + k8s fragment)"
     # Base (role-independent) hardening+k8s fragment; append the DRM driver block
     # ONLY for GPU roles. Headless roles keep just the virtio-gpu console FB.
     cp "${SPECS_DIR}/kernel/hardened-k8s.config" "${SYSROOT}/tmp/k.config"
@@ -5329,6 +5334,11 @@ if ! ${SKIP_CLEAN}; then
     fi
 
     info "Sysroot cleaned: locale/static-libs/pyc/ko-dbg/elf stripped; firmware pruned."
+else
+    # Every cross builder has always announced this skip; x86 accepted
+    # --skip-clean but printed nothing, so the Clean-sysroot rung silently
+    # vanished from the operator's ladder instead of reporting itself skipped.
+    banner "SKIPPED sysroot clean (--skip-clean)"
 fi
 
 # ── 9. Stage4 tarball ──────────────────────────────────────────────
@@ -5699,7 +5709,7 @@ if ${BUILD_IMG}; then
         build_img
     fi
 else
-    banner "SKIPPED .img (--no-img)"
+    banner "SKIPPED raw .img (--no-img)"
 fi
 
 # ── 11. ISOs (live + installer, both opt-in) ───────────────────────
@@ -5710,7 +5720,7 @@ if ! ${SKIP_ISO}; then
 
     if ${LIVE_ISO} && [ -n "${VMLINUZ}" ] && [ -n "${KVER}" ]; then
         ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.live.iso"
-        banner "Building bootable LIVE ISO (grub-mkrescue + squashfs)"
+        banner "Building LIVE image (bootable ISO: grub-mkrescue + squashfs)"
         # Live initramfs (dmsquash-live) built inside the chroot.
         mount_chroot; trap umount_chroot EXIT
         chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT || warn "live-initramfs dracut step FAILED (live ISO will be skipped)"
@@ -6031,7 +6041,7 @@ CHROOT
 
     if ${INSTALLER_ISO}; then
         INSTALLER_ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.installer.iso"
-        banner "Building installer ISO (stage4 + install-x86.sh; boot a live USB to install)"
+        banner "Building INSTALLER image (installer ISO: stage4 + install-x86.sh; boot a live USB to install)"
         INST_DIR="${BUILD_ROOT}/isoroot-installer"
         rm -rf "${INST_DIR}"; mkdir -p "${INST_DIR}/stage4"
         cp "${STAGE4}" "${INST_DIR}/stage4/"

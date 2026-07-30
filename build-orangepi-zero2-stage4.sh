@@ -817,6 +817,7 @@ ZRAM_EOF
 # ── rebrand_sysroot (lightweight: this image has no cluster GitOps tree) ──
 rebrand_sysroot() {
     [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] && return 0
+    banner "Rebranding baked config -> brand=${BRAND} domain=${CLUSTER_DOMAIN} org=${ORG}"
     local org_lc; org_lc="$(echo "${ORG}" | tr '[:upper:]' '[:lower:]')"
     # All of these land on the REPLACEMENT side of `sed s|..|VALUE|` across the baked
     # /etc/hugmesh tree (config the device reads as root); escape sed metacharacters
@@ -1205,7 +1206,7 @@ info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
 # the per-image log too — keep every chunk attributable to its run.
 echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND} role=${ROLE} env=${ENV} ===="
 
-banner "Fetching latest arm64 stage3 seed tarball"
+banner "Fetching stage3 seed (arm64)"
 STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
@@ -1228,7 +1229,7 @@ if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}.DIGESTS"; then
     exit 1
 fi
 
-banner "Extracting seed stage3 into sysroot"
+banner "Extracting stage3 into sysroot"
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
 else
@@ -1576,11 +1577,11 @@ done
 unset _devspec _devname _devargs
 
 if ${IMAGE_ONLY}; then
-    banner "Phase 1: SKIPPED (--image-only)"
-    banner "Phase 2: SKIPPED (--image-only)"
+    banner "SKIPPED @system (--image-only)"
+    banner "SKIPPED role payload (--image-only)"
 else
 
-banner "Phase 1: Cross-building @system (hardened)"
+banner "Emerging @system (hardened, cross-compiled)"
 # ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
 # Before the FIRST --usepkg cross_emerge consumes ${BUILD_ROOT}/pkgdir, verify the
 # pool's fingerprint (CHOST + exact CFLAGS/-mcpu + CXXFLAGS + profile, read from the
@@ -1610,7 +1611,7 @@ cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
 
-banner "Phase 2: Cross-building stage4 packages"
+banner "Emerging role payload (stage4, cross-compiled)"
 # Resolved via resolve_stage4_packages() (defined above "Verifying
 # prerequisites") — the SAME single-sourced resolver the qemu preflight
 # consulted at t=0, so the two can never drift.
@@ -1707,9 +1708,9 @@ fi
 
 # ── 7. Install mesh VPN (headscale + tailscale) — same as every sibling ─────
 if ${SKIP_MESH}; then
-    banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
+    banner "SKIPPED mesh VPN (--skip-mesh)"
 else
-    banner "Phase 2.5: Installing mesh VPN (headscale + tailscale)"
+    banner "Installing mesh VPN (headscale + tailscale, arm64)"
     # Pinned versions + publisher checksum verification (headscale checksums.txt /
     # tailscale <tgz>.sha256): ABORT on any sha256 mismatch so a tampered binary
     # cannot reach the mesh runlevel. file(1) ELF-arch check kept as defense-in-depth.
@@ -1771,9 +1772,9 @@ fi  # IMAGE_ONLY skip of Phase 1+2
 # ${SYSROOT}/lib/modules/. Empty if the kernel is skipped/unbuilt.
 OPIZ2_KVER=""
 if ${SKIP_KERNEL}; then
-    banner "Phase 3: SKIPPED (--skip-kernel)"
+    banner "SKIPPED kernel (--skip-kernel)"
 else
-    banner "Phase 3: Cross-compiling hardened kernel"
+    banner "Building hardened kernel (cross-compiled)"
     KERNEL_SRC=$(find "${SYSROOT}/usr/src/" -maxdepth 1 -name 'linux-*' -type d 2>/dev/null | sort -V | tail -1)
     if [ -z "${KERNEL_SRC}" ]; then
         # No source tree despite the completeness gate proving gentoo-sources is
@@ -1856,9 +1857,9 @@ fi
 
 # ── 9. U-Boot for the board (NO proprietary blob needed — see the header) ──
 if ${SKIP_UBOOT}; then
-    banner "Phase 3.5: SKIPPED u-boot (--skip-uboot)"
+    banner "SKIPPED bootloader (--skip-uboot)"
 else
-    banner "Phase 3.5: Staging u-boot (${OPIZ2_UBOOT_DEFCONFIG})"
+    banner "Staging bootloader (u-boot ${OPIZ2_UBOOT_DEFCONFIG})"
     mkdir -p "${STAGE_DIR}/uboot"
     if [ -n "${OPIZ2_UBOOT_URL}" ]; then
         if curl -fL -o "${STAGE_DIR}/uboot/u-boot.bin" "${OPIZ2_UBOOT_URL}"; then
@@ -1879,7 +1880,7 @@ else
 fi
 
 if ${SKIP_CLEAN}; then
-    banner "Cleaning: SKIPPED (--skip-clean)"
+    banner "SKIPPED sysroot clean (--skip-clean)"
 else
     banner "Cleaning sysroot"
     rm -rf "${SYSROOT}"/usr/share/doc/* "${SYSROOT}"/usr/share/man/* \
@@ -1891,7 +1892,7 @@ else
     info "Sysroot cleaned and binaries stripped."
 fi
 
-banner "Phase 4: Staging the boot tree"
+banner "Staging the boot tree"
 BOOT_STAGE="${STAGE_DIR}/boot"
 rm -rf "${BOOT_STAGE}"; mkdir -p "${BOOT_STAGE}/extlinux" "${BOOT_STAGE}/dtb"
 APPEND_BASE="$(cat "${SPECS_DIR}/boot/cmdline.base")"
@@ -2134,7 +2135,7 @@ if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY};
     fi
 fi
 
-banner "Phase 4: Packaging stage4 tarball"
+banner "Packaging stage4 tarball"
 STAGE4_TARBALL="${WORK_DIR}/${ART_PREFIX}.stage4.tar.xz"
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner --owner=0 --group=0 \
     --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' \
@@ -2346,11 +2347,11 @@ build_installer_iso() {
 }
 
 if ${BUILD_LIVE}; then
-    banner "Phase 5: Building LIVE image (boots-and-runs ephemerally off microSD/USB)"
+    banner "Building LIVE image (boots-and-runs ephemerally off microSD/USB)"
     build_live_iso
 fi
 if ${BUILD_INSTALLER}; then
-    banner "Phase 6: Building INSTALLER image (writes the appliance to microSD/USB)"
+    banner "Building INSTALLER image (writes the appliance to microSD/USB)"
     build_installer_iso
 fi
 

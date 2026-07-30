@@ -1,272 +1,643 @@
 {
   "_meta": {
-    "purpose": "Ordered per-platform builder phase tables that map `==> ` banner lines to a determinate step-K-of-M progress estimate. Data-driven (not code) so the admin-bff pod-log follower ports the SAME tables + regexes for web progress parity (design 2.9 / spec 10).",
-    "source": "The `banner \"...\"` call sites in each build-<platform>-stage4.sh, in source order, PLUS bare `echo \"==> ...\"` banner lines (build-x86-host-stage4.sh emits its five 'Emerge group:' banners that way inside the unquoted CHROOT heredocs, where the host banner() function does not exist). A drift probe (test_progress_parse.py) greps BOTH call-site shapes per builder and asserts the count equals the total number of match patterns here, so a builder banner change fails CI until this file is updated.",
-    "emerge_group_banners": "The `Emerge group: <image|tools|dependencies|system|world>` banners are NOT job-ladder boundaries — they tell core/emerge_packages.py which group the following `>>> Emerging (N of M)` package stream belongs to (per-package sub-listing in the GUI). Each is listed here as an ALTERNATE pattern of the phase whose banner precedes it in source order, so the drift probe counts it while the forward-only matcher treats it as a same-phase no-op (a matched phase is never re-entered, so the intra-phase emerge fraction is not reset). tests/build-matrix/check.sh's EGB bucket pins the banner TEXT + per-builder group sets; this table only has to stay count-consistent.",
-    "banner_regex": "^==>\\s*(.*)$",
-    "ansi_regex": "\\x1b\\[[0-9;]*[A-Za-z]",
-    "emerge_regex": ">>> (?:Emerging|Installing) \\((\\d+) of (\\d+)\\)",
-    "failure_regex": "^\\s*!!",
-    "matching": "A phase is reached when a banner line contains ANY of that phase's `any` substrings. Matching is forward-only (monotonic): the parser advances to the earliest not-yet-passed phase whose pattern matches, so conditional/SKIPPED banners never regress the bar. Alternative banners for the SAME boundary (e.g. 'Installing mesh VPN' vs 'Mesh VPN SKIPPED') are grouped into one phase but counted as distinct patterns for the drift probe.",
-    "tracks_purpose": "The sibling `tracks` map covers non-image-build tracks that stream a subprocess line-by-line the SAME way (go-live `plan`, cloud-deploy `plan`/`apply`) but have no build platform to key on. A FLAT track (golive-plan, clouddeploy-plan) uses one phases list for every provider — both drivers' `plan` is a quick, provider-agnostic offline render. A NESTED track (clouddeploy-apply) keys `providers` by cloud-deploy provider id, because the emitted apply.sh genuinely differs per provider (aws-ec2's EBS import-snapshot poll loop vs azure-image's blob upload vs openshift-cnv's oc apply), the same way an image build differs by platform. generic-qcow2 has no apply script (cdp_apply_script returns empty) so it has no entry — track_phases() honestly returns [] for it, staying indeterminate. See core/progress_parse.py:track_phases()."
+      "purpose": "Ordered per-platform builder phase tables that map `==> ` banner lines to a determinate step-K-of-M progress estimate. Data-driven (not code) so the admin-bff pod-log follower ports the SAME tables + regexes for web progress parity (design 2.9 / spec 10). Since the platform-build-uniformity pass every phase carries a CANONICAL `id` drawn from `_meta.canonical_stages`: the same work has the same id, the same label and the same relative position on every platform, and a stage a platform does not have is declared in that platform's `not_applicable` map WITH A REASON rather than being silently absent.",
+      "source": "The `banner \"...\"` call sites in each build-<platform>-stage4.sh, in source order, PLUS bare `echo \"==> ...\"` banner lines (build-x86-host-stage4.sh emits its emerge-group banners and its role-payload banner that way inside the unquoted CHROOT heredocs, where the host banner() function does not exist). A drift probe (test_progress_parse.py) greps BOTH call-site shapes per builder and asserts the count equals the total number of `any` patterns here, so a builder banner change fails CI until this file is updated.",
+      "emerge_group_banners": "The `Emerge group: <image|tools|dependencies|system|world>` banners are NOT job-ladder boundaries — they tell core/emerge_packages.py which group the following `>>> Emerging (N of M)` package stream belongs to (per-package sub-listing in the GUI). Each is listed here as an ALTERNATE pattern of the phase whose banner precedes it in source order, so the drift probe counts it while the forward-only matcher treats it as a same-phase no-op (a matched phase is never re-entered, so the intra-phase emerge fraction is not reset). tests/build-matrix/check.sh's EGB bucket pins the banner TEXT + per-builder group sets; this table only has to stay count-consistent.",
+      "banner_regex": "^==>\\s*(.*)$",
+      "ansi_regex": "\\x1b\\[[0-9;]*[A-Za-z]",
+      "emerge_regex": ">>> (?:Emerging|Installing) \\((\\d+) of (\\d+)\\)",
+      "failure_regex": "^\\s*!!",
+      "matching": "A phase is reached when a banner line contains ANY of that phase's `any` substrings. Matching is forward-only (monotonic): the parser advances to the earliest not-yet-passed phase whose pattern matches, so conditional/SKIPPED banners never regress the bar. Alternative banners for the SAME boundary (e.g. 'Installing mesh VPN' vs 'Mesh VPN SKIPPED') are grouped into one phase but counted as distinct patterns for the drift probe.",
+      "tracks_purpose": "The sibling `tracks` map covers non-image-build tracks that stream a subprocess line-by-line the SAME way (go-live `plan`, cloud-deploy `plan`/`apply`) but have no build platform to key on. A FLAT track (golive-plan, clouddeploy-plan) uses one phases list for every provider — both drivers' `plan` is a quick, provider-agnostic offline render. A NESTED track (clouddeploy-apply) keys `providers` by cloud-deploy provider id, because the emitted apply.sh genuinely differs per provider (aws-ec2's EBS import-snapshot poll loop vs azure-image's blob upload vs openshift-cnv's oc apply), the same way an image build differs by platform. generic-qcow2 has no apply script (cdp_apply_script returns empty) so it has no entry — track_phases() honestly returns [] for it, staying indeterminate. See core/progress_parse.py:track_phases().",
+      "canonical_stages": [
+          {
+              "id": "verify-prereqs",
+              "label": "Verify prerequisites"
+          },
+          {
+              "id": "prepare-dirs",
+              "label": "Prepare build dirs"
+          },
+          {
+              "id": "fetch-seed",
+              "label": "Fetch stage3 seed"
+          },
+          {
+              "id": "verify-seed",
+              "label": "Verify seed"
+          },
+          {
+              "id": "extract-seed",
+              "label": "Extract stage3"
+          },
+          {
+              "id": "install-specs",
+              "label": "Install spec files"
+          },
+          {
+              "id": "brand-desktop",
+              "label": "Brand desktop image"
+          },
+          {
+              "id": "stage-egress-vpn",
+              "label": "Stage egress VPN"
+          },
+          {
+              "id": "rebrand-config",
+              "label": "Rebrand baked config"
+          },
+          {
+              "id": "restore-toolchain",
+              "label": "Restore toolchain libs"
+          },
+          {
+              "id": "emerge-system",
+              "label": "Emerge @system"
+          },
+          {
+              "id": "emerge-payload",
+              "label": "Emerge role payload"
+          },
+          {
+              "id": "mesh-vpn",
+              "label": "Install mesh VPN"
+          },
+          {
+              "id": "kernel",
+              "label": "Build kernel"
+          },
+          {
+              "id": "bootloader",
+              "label": "Stage bootloader"
+          },
+          {
+              "id": "clean-sysroot",
+              "label": "Clean sysroot"
+          },
+          {
+              "id": "boot-tree",
+              "label": "Stage boot tree"
+          },
+          {
+              "id": "package-stage4",
+              "label": "Package stage4"
+          },
+          {
+              "id": "image-raw",
+              "label": "Build raw .img"
+          },
+          {
+              "id": "image-live",
+              "label": "Build LIVE image"
+          },
+          {
+              "id": "image-installer",
+              "label": "Build INSTALLER image"
+          }
+      ],
+      "canonical_stages_purpose": "The ONE ordered build ladder. Every platform's `phases` array is a SUBSEQUENCE of this list (same ids, same labels, same relative order); every id it omits appears in that platform's `not_applicable` map. studio/tests/test_progress_uniformity.py asserts both directions, so a builder that grows a stage, or a platform that quietly drops one, fails CI. It ALSO replays each builder's own banner call sites against this order — modelling the two things that make execution order differ from file order (a banner inside a shell function runs at the CALL site; if/else arms are alternatives, not a sequence) — because a row parked at the wrong index strands every rung before it and the forward-only matcher can never recover. Platform-specific detail lives in the BANNER text's parenthetical (\"Building hardened kernel (cross-compiled: mainline Tegra234)\"), never in the label — labels are what the operator compares across two builds side by side.",
+      "compat_policy": "TRANSITIONAL BANNER COMPATIBILITY. `any` holds the banner substrings the CURRENT builders emit — that list, and only that list, is what the drift probe counts against the builders' `banner \"...\"` / `echo \"==> ...\"` call sites. `compat` holds banner substrings emitted by an EARLIER release of the same builder. The forward-only matcher accepts `any` + `compat` identically, so (a) an archived log still replays into a full progress ladder and (b) a build that was ALREADY RUNNING when the operator upgraded the Studio keeps advancing its bar instead of freezing at the last pre-upgrade rung. `compat` is deliberately excluded from `pattern_count()` so it can never be used to dodge the drift probe, and studio/tests/test_progress_uniformity.py::test_compat_patterns_are_truly_legacy asserts no `compat` string still appears in any builder — parking a live banner there fails CI. The same module proves the policy WORKS rather than merely existing: test_legacy_banner_vocabulary_still_drives_a_full_ladder replays the previous release's wording and requires it to walk every rung 0..n-1, and test_archived_real_logs_still_advance_the_bar replays the operator's own archived build logs (out/sessions, or HUGMESH_ARCHIVED_SESSIONS) under this table. Retire a `compat` entry only once no log old enough to contain it is still replayed (they are cheap: pure substrings).",
+      "not_applicable_purpose": "Per platform, `not_applicable` maps a canonical stage id this platform does not have to the REASON it does not have it. The operator's ladder can therefore render every canonical rung on every platform and grey out the ones this board genuinely lacks, with the reason as the tooltip — the explicit-absence rule the uniformity pass exists to enforce. A stage that is merely skipped by a FLAG at runtime is NOT listed here: it stays in `phases` and its SKIPPED banner is one of its `any` patterns.",
+      "emerge_groups": {
+          "order": [
+              "tools",
+              "system",
+              "world",
+              "image",
+              "dependencies"
+          ],
+          "purpose": "The canonical emerge-group taxonomy, in canonical emission order. Matches EMERGE_GROUPS in core/emerge_packages.py (same five names; that constant is the parser-side set, this array pins the ORDER). Every platform declares, per group, either that it emits it (`emitted`, which must be a subsequence of this order) or why it cannot (`not_applicable`) — the two together must cover all five. tests/build-matrix/check.sh's EGB bucket re-derives `emitted` from the builders' own banner call sites and fails if the declaration and the source disagree.",
+          "meanings": {
+              "tools": "build-host / build-chroot helpers that never ship in the image (x86: the in-chroot eselect-repository helper under --steam; cross: the host SELinux policy toolchain, merged natively on the build host only when one is missing). Both are conditional, and both are the FIRST group a build emits.",
+              "system": "the profile base layer — x86 merges the three bootstrap one-shots (portage, baselayout, gettext) inside the chroot before its @world pass; the cross lane merges baselayout plus the whole @system set.",
+              "world": "a full `@world --update --deep --newuse` reconciliation pass. x86 only; declared not-applicable by every cross builder with a reason.",
+              "image": "the role payload (x86 ${PKGS} / cross ${STAGE4_PACKAGES[@]}) — the one group that was already uniform, and the model for the rest.",
+              "dependencies": "packages merged solely to satisfy another build step (x86: sys-kernel/gentoo-sources during the kernel stage). Declared not-applicable by every cross builder with a reason."
+          }
+      }
   },
   "platforms": {
     "x86": {
-      "banner_callsites": 26,
+      "banner_callsites": 28,
+      "not_applicable": {
+              "bootloader": "GRUB-EFI is installed inside the raw .img stage (UEFI GPT ESP), not as a separate bootloader stage",
+              "boot-tree": "the raw .img / ISO stages write the boot tree directly; there is no separate staged boot tree"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "world",
+                      "image",
+                      "dependencies"
+              ],
+              "not_applicable": {}
+      },
       "phases": [
-        {"label": "Rebrand baked config", "any": ["Rebranding baked config"]},
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching amd64 hardened stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Brand desktop image", "any": ["Branding desktop image"]},
-        {"label": "Stage egress VPN", "any": ["Staging egress VPN"]},
-        {"label": "Restore toolchain libs", "any": ["Restoring toolchain static libs"]},
-        {"label": "Emerge packages", "any": ["Native emerge inside chroot", "Emerge group: tools", "Emerge group: system", "Emerge group: world", "Emerge group: image"]},
-        {"label": "Mesh VPN", "any": ["Installing mesh VPN", "Mesh VPN SKIPPED"]},
-        {"label": "Kernel", "any": ["Building Gentoo hardened kernel", "Kernel SKIPPED", "Emerge group: dependencies"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot"]},
-        {"label": "Package stage4", "any": ["Packaging stage4 tarball"]},
-        {"label": "Raw .img", "any": ["Building raw .img", "SKIPPED .img"]},
-        {"label": "Live ISO", "any": ["Building bootable LIVE ISO"]},
-        {"label": "Installer ISO", "any": ["Building installer ISO"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching amd64 hardened stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "brand-desktop", "label": "Brand desktop image", "any": ["Branding desktop image"]},
+        {"id": "stage-egress-vpn", "label": "Stage egress VPN", "any": ["Staging egress VPN"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "restore-toolchain", "label": "Restore toolchain libs", "any": ["Restoring toolchain static libs"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "Emerge group: tools", "Emerge group: system", "Emerge group: world"], "compat": ["Native emerge inside chroot"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "Emerge group: image"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"], "compat": ["Mesh VPN SKIPPED"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel", "Emerge group: dependencies"], "compat": ["Building Gentoo hardened kernel", "Kernel SKIPPED"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-raw", "label": "Build raw .img", "any": ["Building raw .img", "SKIPPED raw .img"], "compat": ["SKIPPED .img (--no-img)"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"], "compat": ["Building bootable LIVE ISO"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"], "compat": ["Building installer ISO"]}
       ]
     },
     "rpi5": {
       "banner_callsites": 23,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "bootloader": "the Raspberry Pi boot chain is closed-source firmware blobs (bootcode/start.elf) shipped by the firmware package — nothing is built or staged",
+              "boot-tree": "the raw .img stage writes /boot directly from the sysroot",
+              "image-live": "no LIVE media target on this platform — the raw .img IS the bootable medium"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Rebrand baked config", "any": ["Rebranding baked config"]},
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Raw .img", "any": ["Phase 5: Building raw .img", "Phase 5: SKIPPED .img"]},
-        {"label": "Phase 6: Installer ISO", "any": ["Phase 6: Building bootable installer ISO", "Phase 6: SKIPPED installer ISO"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-raw", "label": "Build raw .img", "any": ["Building raw .img", "SKIPPED raw .img"], "compat": ["Phase 5: SKIPPED .img"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image", "SKIPPED INSTALLER image"], "compat": ["Phase 6: Building bootable installer ISO", "Phase 6: SKIPPED installer ISO"]}
       ]
     },
     "jetson": {
-      "banner_callsites": 23,
+      "banner_callsites": 24,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "bootloader": "the Tegra boot chain is NVIDIA's signed bootloader in QSPI, flashed by the L4T host tools — the image only supplies the extlinux boot tree",
+              "image-live": "no LIVE media target on this platform — the raw .img IS the bootable medium",
+              "image-installer": "no INSTALLER media target on this platform — the raw .img is flashed directly to SD/NVMe"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened mainline kernel", "Phase 3: SKIPPED"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: extlinux boot config", "any": ["Phase 4: Rendering the extlinux boot config"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Raw .img", "any": ["Phase 5: Building the flashable raw .img", "Phase 5: SKIPPED .img"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened mainline kernel", "Phase 3: SKIPPED"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"], "compat": ["Rendering the extlinux boot config"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-raw", "label": "Build raw .img", "any": ["Building raw .img", "SKIPPED raw .img"], "compat": ["Building the flashable raw .img", "Phase 5: SKIPPED .img"]}
       ]
     },
     "frite": {
-      "banner_callsites": 25,
+      "banner_callsites": 26,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
-        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "bootloader", "label": "Stage bootloader", "any": ["Staging bootloader", "SKIPPED bootloader"], "compat": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"]}
       ]
     },
     "orangepi5": {
-      "banner_callsites": 25,
+      "banner_callsites": 26,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
-        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "bootloader", "label": "Stage bootloader", "any": ["Staging bootloader", "SKIPPED bootloader"], "compat": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"]}
       ]
     },
     "orangepizero2w": {
-      "banner_callsites": 25,
+      "banner_callsites": 26,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
-        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "bootloader", "label": "Stage bootloader", "any": ["Staging bootloader", "SKIPPED bootloader"], "compat": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"]}
       ]
     },
     "orangepizero3": {
-      "banner_callsites": 25,
+      "banner_callsites": 26,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
-        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "bootloader", "label": "Stage bootloader", "any": ["Staging bootloader", "SKIPPED bootloader"], "compat": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"]}
       ]
     },
     "orangepi3-lts": {
-      "banner_callsites": 25,
+      "banner_callsites": 26,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
-        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "bootloader", "label": "Stage bootloader", "any": ["Staging bootloader", "SKIPPED bootloader"], "compat": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"]}
       ]
     },
     "orangepi4-lts": {
-      "banner_callsites": 25,
+      "banner_callsites": 26,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
-        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "bootloader", "label": "Stage bootloader", "any": ["Staging bootloader", "SKIPPED bootloader"], "compat": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"]}
       ]
     },
     "orangepizero2": {
-      "banner_callsites": 25,
+      "banner_callsites": 26,
+      "not_applicable": {
+              "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
+              "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
+              "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
+      },
+      "emerge_groups": {
+              "emitted": [
+                      "tools",
+                      "system",
+                      "image"
+              ],
+              "not_applicable": {
+                      "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
+                      "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
       "phases": [
-        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
-        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
-        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
-        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
-        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
-        {"label": "Install spec files", "any": ["Installing spec files"]},
-        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
-        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
-        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
-        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
-        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
-        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
-        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
-        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
-        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
-        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+        {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"id": "fetch-seed", "label": "Fetch stage3 seed", "any": ["Fetching stage3 seed"], "compat": ["Fetching latest arm64 stage3 seed"]},
+        {"id": "verify-seed", "label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"id": "extract-seed", "label": "Extract stage3", "any": ["Extracting stage3"], "compat": ["Extracting seed stage3"]},
+        {"id": "install-specs", "label": "Install spec files", "any": ["Installing spec files"]},
+        {"id": "rebrand-config", "label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"id": "emerge-system", "label": "Emerge @system", "any": ["Emerging @system", "SKIPPED @system", "Emerge group: system"], "compat": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "SKIPPED role payload", "Emerge group: image"], "compat": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"]},
+        {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel"], "compat": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"id": "bootloader", "label": "Stage bootloader", "any": ["Staging bootloader", "SKIPPED bootloader"], "compat": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"], "compat": ["Cleaning: SKIPPED"]},
+        {"id": "boot-tree", "label": "Stage boot tree", "any": ["Staging the boot tree"]},
+        {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"]},
+        {"id": "image-installer", "label": "Build INSTALLER image", "any": ["Building INSTALLER image"]}
       ]
     }
   },
   "tracks": {
-    "golive-plan": {
-      "banner_callsites": 2,
-      "phases": [
-        {"label": "Render provider artifacts", "any": ["Rendering provider artifacts"]},
-        {"label": "Plan summary ready", "any": ["Plan summary ready"]}
-      ]
-    },
-    "clouddeploy-plan": {
-      "banner_callsites": 2,
-      "phases": [
-        {"label": "Render provider artifacts", "any": ["Rendering provider artifacts"]},
-        {"label": "Plan summary ready", "any": ["Plan summary ready"]}
-      ]
-    },
-    "clouddeploy-apply": {
-      "providers": {
-        "aws-ec2": {
-          "banner_callsites": 5,
+      "golive-plan": {
+          "banner_callsites": 2,
           "phases": [
-            {"label": "Upload image to S3", "any": ["Uploading image to S3"]},
-            {"label": "Ensure vmimport IAM role", "any": ["Ensuring the vmimport IAM role"]},
-            {"label": "Import EBS snapshot (may take a while)", "any": ["Importing EBS snapshot (may take a while)"]},
-            {"label": "Register AMI (UEFI + ENA)", "any": ["Registering the AMI"]},
-            {"label": "Record apply state", "any": ["Recording apply state"]}
+              {
+                  "label": "Render provider artifacts",
+                  "any": [
+                      "Rendering provider artifacts"
+                  ]
+              },
+              {
+                  "label": "Plan summary ready",
+                  "any": [
+                      "Plan summary ready"
+                  ]
+              }
           ]
-        },
-        "azure-image": {
-          "banner_callsites": 5,
+      },
+      "clouddeploy-plan": {
+          "banner_callsites": 2,
           "phases": [
-            {"label": "Create resource group", "any": ["Creating resource group"]},
-            {"label": "Create storage account + container", "any": ["Creating storage account and container"]},
-            {"label": "Upload VHD blob", "any": ["Uploading VHD blob"]},
-            {"label": "Create Gen2 managed image", "any": ["Creating Gen2 managed image"]},
-            {"label": "Record apply state", "any": ["Recording apply state"]}
+              {
+                  "label": "Render provider artifacts",
+                  "any": [
+                      "Rendering provider artifacts"
+                  ]
+              },
+              {
+                  "label": "Plan summary ready",
+                  "any": [
+                      "Plan summary ready"
+                  ]
+              }
           ]
-        },
-        "openshift-cnv": {
-          "banner_callsites": 3,
-          "phases": [
-            {"label": "Ensure namespace", "any": ["Ensuring namespace"]},
-            {"label": "Apply DataVolume + VirtualMachine", "any": ["Applying DataVolume and VirtualMachine"]},
-            {"label": "Record apply state", "any": ["Recording apply state"]}
-          ]
-        }
+      },
+      "clouddeploy-apply": {
+          "providers": {
+              "aws-ec2": {
+                  "banner_callsites": 5,
+                  "phases": [
+                      {
+                          "label": "Upload image to S3",
+                          "any": [
+                              "Uploading image to S3"
+                          ]
+                      },
+                      {
+                          "label": "Ensure vmimport IAM role",
+                          "any": [
+                              "Ensuring the vmimport IAM role"
+                          ]
+                      },
+                      {
+                          "label": "Import EBS snapshot (may take a while)",
+                          "any": [
+                              "Importing EBS snapshot (may take a while)"
+                          ]
+                      },
+                      {
+                          "label": "Register AMI (UEFI + ENA)",
+                          "any": [
+                              "Registering the AMI"
+                          ]
+                      },
+                      {
+                          "label": "Record apply state",
+                          "any": [
+                              "Recording apply state"
+                          ]
+                      }
+                  ]
+              },
+              "azure-image": {
+                  "banner_callsites": 5,
+                  "phases": [
+                      {
+                          "label": "Create resource group",
+                          "any": [
+                              "Creating resource group"
+                          ]
+                      },
+                      {
+                          "label": "Create storage account + container",
+                          "any": [
+                              "Creating storage account and container"
+                          ]
+                      },
+                      {
+                          "label": "Upload VHD blob",
+                          "any": [
+                              "Uploading VHD blob"
+                          ]
+                      },
+                      {
+                          "label": "Create Gen2 managed image",
+                          "any": [
+                              "Creating Gen2 managed image"
+                          ]
+                      },
+                      {
+                          "label": "Record apply state",
+                          "any": [
+                              "Recording apply state"
+                          ]
+                      }
+                  ]
+              },
+              "openshift-cnv": {
+                  "banner_callsites": 3,
+                  "phases": [
+                      {
+                          "label": "Ensure namespace",
+                          "any": [
+                              "Ensuring namespace"
+                          ]
+                      },
+                      {
+                          "label": "Apply DataVolume + VirtualMachine",
+                          "any": [
+                              "Applying DataVolume and VirtualMachine"
+                          ]
+                      },
+                      {
+                          "label": "Record apply state",
+                          "any": [
+                              "Recording apply state"
+                          ]
+                      }
+                  ]
+              }
+          }
       }
-    }
   }
 }

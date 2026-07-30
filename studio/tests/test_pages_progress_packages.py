@@ -185,11 +185,14 @@ def test_packages_nest_under_the_emerging_stage_grouped_by_group(wiz):
     row = page._rows[0]
     for ln in _PKG_STREAM:
         page._on_line(0, ln)
-    # the group node is a child of the stage that was RUNNING when the packages appeared
-    # (x86 phase 10, "Emerge packages" — the "Native emerge inside chroot" banner)
-    assert row.tracker.cur == 10
+    # the group node is a child of the stage that was RUNNING when the packages appeared.
+    # Under the canonical ladder the "Native emerge inside chroot" banner is compat for
+    # x86 stage 10 ("Emerge @system") and the "Emerge group: image" banner advances to
+    # stage 11 ("Emerge role payload") — image is the role payload's group, so that is
+    # the honest owner.
+    assert row.tracker.cur == 11
     gitem = row.group_items["image"]
-    assert gitem.parent() is row.stage_items[10]
+    assert gitem.parent() is row.stage_items[11]
     assert gitem.text(progress_mod._COL_NAME) == "image"
     # the package row is a child of the GROUP node, showing the full atom
     item = row.pkg_items["dev-lang/duktape-2.7.0-r3"]
@@ -376,8 +379,9 @@ def test_clicking_a_group_header_falls_back_to_the_stage_slice(wiz):
         page._on_line(0, ln)
     page._on_item_clicked(row.group_items["image"])
     # the group has no log of its own; the pane shows the OWNING stage's slice
+    # (stage 11, "Emerge role payload" — the canonical stage the image group belongs to)
     assert page._selected_pkg is None
-    assert page._selected_stage == 10
+    assert page._selected_stage == 11
     assert "Emerging" in page.log.toPlainText()
 
 

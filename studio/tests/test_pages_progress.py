@@ -51,9 +51,13 @@ def _isolated_state_dir(tmp_path, monkeypatch):
 # actually advance for real build output" so the symptom can't silently return.
 _A = "\x1b[1;36m"
 _R = "\x1b[0m"
+# NB: banner ORDER mirrors the builder's real execution order, which the canonical
+# ladder now encodes: rebrand_sysroot() is CALLED after the egress-VPN stage, so its
+# banner sits at canonical stage 8 — the old mock put it first because the old table
+# (wrongly) listed it at index 0, which made that rung unreachable in real streams.
+# Several banners keep the PRE-taxonomy wording on purpose: they exercise the
+# `compat` half of the matcher (an archived log / in-flight build must still climb).
 CAPTURED_X86_STREAM = [
-    f"{_A}==> Rebranding baked config{_R}",
-    "  writing /etc/os-release",
     f"{_A}==> Verifying prerequisites{_R}",
     "==> Preparing build directories",
     "==> Fetching amd64 hardened stage3 seed",
@@ -63,6 +67,8 @@ CAPTURED_X86_STREAM = [
     "==> Installing spec files",
     "==> Branding desktop image",
     "==> Staging egress VPN",
+    f"{_A}==> Rebranding baked config{_R}",
+    "  writing /etc/os-release",
     "==> Restoring toolchain static libs",
     "==> Native emerge inside chroot",
     ">>> Emerging (1 of 8) sys-apps/foo-1.0",
