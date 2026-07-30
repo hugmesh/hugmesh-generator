@@ -275,6 +275,8 @@ hardware:
 | Frite | the target itself (live→installer flow) | same | **no** |
 | Orange Pi 5 / 5 Plus | the target itself (live→installer flow) | same | **no** |
 | Orange Pi Zero 2 | the target itself (live→installer flow) | same | **no** |
+| Orange Pi Zero 2W | the target itself (live→installer flow) | same | **no** |
+| Orange Pi Zero 3 | the target itself (live→installer flow) | same | **no** |
 | RPi5 (rpi5/rpi4/rpi3 boards) | a **build/dev host**, writing the SD card/eMMC | **the Pi**, a different machine | **yes** — `--pbkdf-memory 262144 --iter-time 2000 --pbkdf-parallel 4` |
 | Jetson Orin | n/a — **`--encrypt-root` is blocked outright**, see below | n/a | n/a |
 
@@ -312,9 +314,9 @@ its own, deliberately **not** attempted here. Until that lands, Jetson has
 **no standalone/LUKS story at all** (on top of its pre-existing, separately
 deferred no-live/installer-split gap).
 
-### Orange Pi Zero 2: headless, so no lightdm/desktop session
+### Orange Pi Zero 2 / Zero 2W / Zero 3: headless, so no lightdm/desktop session
 
-Orange Pi Zero 2's `--standalone` composes onto its **`appliance`** role, not a
+Orange Pi Zero 2's (and its H618 siblings the Zero 2W's and Zero 3's) `--standalone` composes onto its **`appliance`** role, not a
 `desktop` role — this platform has no GPU-driven display path at all (the
 Allwinner H616's display engine has no mainline kernel driver), so "local
 user, no mesh" here means an SSH/console login on a headless box, not a

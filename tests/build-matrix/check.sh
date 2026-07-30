@@ -74,6 +74,8 @@ builder_for() {
         jetson)    echo build-jetson-stage4.sh ;;
         orangepi5) echo build-orangepi5-stage4.sh ;;
         orangepizero2) echo build-orangepi-zero2-stage4.sh ;;
+        orangepizero2w) echo build-orangepi-zero2w-stage4.sh ;;
+        orangepizero3) echo build-orangepi-zero3-stage4.sh ;;
         *)      return 1 ;;
     esac
 }
@@ -97,7 +99,7 @@ check_cli() { # platform role env board flavor desktop
         want_role="desktop"
         standalone_probe=true
     fi
-    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; } \
        && [ "${flavor}" = standalone ]; then
         want_flavor="installer"
         standalone_probe=true
@@ -107,7 +109,7 @@ check_cli() { # platform role env board flavor desktop
         jetson)    args=(--role "${role}" --board "${board}") ;;
         rpi5)      args=(--role "${want_role}"); [ -n "${board}" ] && args+=(--board "${board}") ;;
         orangepi5) args=(--board "${board}" --flavor "${want_flavor}") ;;
-        orangepizero2) args=(--flavor "${want_flavor}") ;;
+        orangepizero2|orangepizero2w|orangepizero3) args=(--flavor "${want_flavor}") ;;
         *)      args=(--role "${role}") ;;
     esac
     if ${standalone_probe}; then
@@ -142,9 +144,9 @@ check_cli() { # platform role env board flavor desktop
         grep -qx "PLAN_BOARD=${board}"   "${out}" || miss+=" PLAN_BOARD=${board}"
         grep -qx "PLAN_FLAVOR=${want_flavor}" "${out}" || miss+=" PLAN_FLAVOR=${want_flavor}"
     fi
-    if [ "${platform}" = orangepizero2 ]; then
-        # No PLAN_BOARD key at all — this platform has NO --board axis (a
-        # single board, unlike Frite/Orange-Pi-5's board tables).
+    if [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; then
+        # No PLAN_BOARD key at all — these platforms have NO --board axis (a
+        # single board each, unlike Frite/Orange-Pi-5's board tables).
         grep -qx "PLAN_FLAVOR=${want_flavor}" "${out}" || miss+=" PLAN_FLAVOR=${want_flavor}"
     fi
     if [ -n "${miss}" ]; then
@@ -169,6 +171,10 @@ check_make() { # platform role env board flavor desktop
                    vars=("ORANGEPI5_BOARD=${board}" "ORANGEPI5_FLAVOR=${flavor}") ;;
         orangepizero2) target="orangepizero2"
                    vars=("ORANGEPIZERO2_FLAVOR=${flavor}") ;;
+        orangepizero2w) target="orangepizero2w"
+                   vars=("ORANGEPIZERO2W_FLAVOR=${flavor}") ;;
+        orangepizero3) target="orangepizero3"
+                   vars=("ORANGEPIZERO3_FLAVOR=${flavor}") ;;
     esac
     local row="make ${target} ENV=${env}${vars[0]:+ ${vars[*]}}"
     if ! make -n "${target}" NATIVE=1 "ENV=${env}" "${vars[@]}" >"${out}" 2>&1; then
@@ -200,7 +206,7 @@ check_make() { # platform role env board flavor desktop
                 grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
             fi
             ;;
-        orangepizero2)
+        orangepizero2|orangepizero2w|orangepizero3)
             grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
             ;;
         *)
@@ -290,6 +296,10 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
                 OPT_ORANGEPI5_BOARD="${board}" OPT_ORANGEPI5_FLAVOR="${flavor}" ;;
         orangepizero2) target="orangepizero2"
                 OPT_ORANGEPIZERO2_FLAVOR="${flavor}" ;;
+        orangepizero2w) target="orangepizero2w"
+                OPT_ORANGEPIZERO2W_FLAVOR="${flavor}" ;;
+        orangepizero3) target="orangepizero3"
+                OPT_ORANGEPIZERO3_FLAVOR="${flavor}" ;;
         *)      echo "MENU FAIL ${platform}/${role}/${env} unknown platform"; continue ;;
     esac
     row="${target} ENV=${env}"
@@ -318,6 +328,12 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     if [ "${platform}" = orangepizero2 ]; then
         has_elem "ORANGEPIZERO2_FLAVOR=${flavor}" || miss+=" ORANGEPIZERO2_FLAVOR=${flavor}"
     fi
+    if [ "${platform}" = orangepizero2w ]; then
+        has_elem "ORANGEPIZERO2W_FLAVOR=${flavor}" || miss+=" ORANGEPIZERO2W_FLAVOR=${flavor}"
+    fi
+    if [ "${platform}" = orangepizero3 ]; then
+        has_elem "ORANGEPIZERO3_FLAVOR=${flavor}" || miss+=" ORANGEPIZERO3_FLAVOR=${flavor}"
+    fi
     if [ -n "${miss}" ]; then
         echo "MENU FAIL ${row} — missing:${miss} (argv: ${RUN_MAKE[*]})"
     else
@@ -332,7 +348,7 @@ done < "${MATRIX}"
 # land in the builder argv on every platform. Catches the silent-drop class
 # where the menu emits a make-var (IMG_FLAGS= / STANDALONE_FLAGS=) that the
 # target's recipe never consumes (the jetson/frite re-verify findings).
-for target in rpi-backend x86-pki frite jetson-edge_ai orangepi5 orangepizero2; do
+for target in rpi-backend x86-pki frite jetson-edge_ai orangepi5 orangepizero2 orangepizero2w orangepizero3; do
     reset_opts
     OPT_IMGFLAGS='--menu-imgflags-probe'
     OPT_EXTRA_FLAGS='--menu-extraflags-probe'
@@ -430,6 +446,10 @@ if [ -n "${rolesetthr_recipe:-}" ]; then
     case "${rolesetthr_recipe}" in *"RPI_ROLES='pki backend frontend desktop'"*) ;; *) miss+=" RPI_ROLES" ;; esac
     case "${rolesetthr_recipe}" in *"ORANGEPIZERO2='1'"*) ;; *) miss+=" ORANGEPIZERO2" ;; esac
     case "${rolesetthr_recipe}" in *"ORANGEPIZERO2_FLAVOR="*) ;; *) miss+=" ORANGEPIZERO2_FLAVOR" ;; esac
+    case "${rolesetthr_recipe}" in *"ORANGEPIZERO2W='1'"*) ;; *) miss+=" ORANGEPIZERO2W" ;; esac
+    case "${rolesetthr_recipe}" in *"ORANGEPIZERO2W_FLAVOR="*) ;; *) miss+=" ORANGEPIZERO2W_FLAVOR" ;; esac
+    case "${rolesetthr_recipe}" in *"ORANGEPIZERO3='1'"*) ;; *) miss+=" ORANGEPIZERO3" ;; esac
+    case "${rolesetthr_recipe}" in *"ORANGEPIZERO3_FLAVOR="*) ;; *) miss+=" ORANGEPIZERO3_FLAVOR" ;; esac
     if [ -n "${miss}" ]; then
         echo "ROLESETTHR FAIL build-everything — dropped at the docker-run boundary:${miss}"
     else
@@ -462,9 +482,9 @@ MENU_EOF
     MENU_PASS=$(grep -c '^MENU PASS' "${out}" || true)
     MENU_FAIL=$(grep -c '^MENU FAIL' "${out}" || true)
     # the child's MENU→MAKE threading probes count toward the THRD bucket;
-    # FAIL-CLOSED like everything else: 12 probes expected, shortfall = failures.
-    #   6 IMGFLAGS/EXTRA_FLAGS threading (rpi-backend, x86-pki, frite, jetson-edge_ai,
-    #     orangepi5, orangepizero2)
+    # FAIL-CLOSED like everything else: 14 probes expected, shortfall = failures.
+    #   8 IMGFLAGS/EXTRA_FLAGS threading (rpi-backend, x86-pki, frite, jetson-edge_ai,
+    #     orangepi5, orangepizero2, orangepizero2w, orangepizero3)
     # + 1 installer-ui menu DEFAULT i0 (build-menu.sh's pristine OPT_INSTALLER_UI)
     # + 4 installer-ui role-class parity i1 (x86-pki, x86-be, x86-fe, x86-omnibus)
     # + 1 installer-ui parity i2 (x86-standalone-thick)
@@ -474,7 +494,7 @@ MENU_EOF
     local mthr_pass
     mthr_pass=$(grep -c '^MENUTHR PASS' "${out}" || true)
     THR_PASS=$((THR_PASS + mthr_pass))
-    THR_FAIL=$((THR_FAIL + 12 - mthr_pass))
+    THR_FAIL=$((THR_FAIL + 14 - mthr_pass))
     # same fail-closed accounting for the fleet-option (build-all/build-everything)
     # threading probes: 2 expected (one per fleet target).
     local fthr_pass
@@ -521,7 +541,7 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
     if [ "${platform}" = rpi5 ] && [ "${role}" = standalone-desktop ]; then
         gui_role=desktop; standalone=true
     fi
-    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; } \
        && [ "${flavor}" = standalone ]; then
         gui_flavor=installer; standalone=true
     fi
@@ -533,6 +553,8 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
                 [ "${role}" = desktop ] && gui_role=jetson-desktop ;;
         orangepi5) mode=cloud; gui_role=orangepi5 ;;
         orangepizero2) mode=cloud; gui_role=orangepizero2 ;;
+        orangepizero2w) mode=cloud; gui_role=orangepizero2w ;;
+        orangepizero3) mode=cloud; gui_role=orangepizero3 ;;
         x86)    case "${role}" in
                     standalone-*)             mode=standalone ;;
                     laptop|chromebook|desktop) mode=cloud ;;
@@ -558,7 +580,7 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
         # operator who never touched the board field — ImageConfig.board
         # defaults to "" -> no --board flag, the builder's own rpi5 default).
         printf ',"board":"%s"' "${board}"
-    elif [ "${platform}" = orangepizero2 ]; then
+    elif [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; then
         printf ',"flavor":"%s"' "${gui_flavor}"
     fi
     printf '}\n'
@@ -586,7 +608,7 @@ check_gui() { # platform role env board flavor desktop
         want_role="desktop"
         standalone_probe=true
     fi
-    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; } \
        && [ "${flavor}" = standalone ]; then
         want_flavor="installer"
         standalone_probe=true
@@ -613,7 +635,7 @@ check_gui() { # platform role env board flavor desktop
     elif [ "${platform}" = orangepi5 ]; then
         grep -q -- "--board ${board}"   "${out}" || miss+=" '--board ${board}'"
         grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
-    elif [ "${platform}" = orangepizero2 ]; then
+    elif [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; then
         grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
     else
         grep -q -- "--role ${want_role}" "${out}" || miss+=" '--role ${want_role}'"
@@ -724,9 +746,11 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
         jetson) hw="jetson.${role}.${board}"; type=primary ;;
         orangepi5)     hw="orangepi5.${board}.${flavor}"; type=client ;;
         orangepizero2) hw="orangepizero2.${flavor}"; type=client ;;
+        orangepizero2w) hw="orangepizero2w.${flavor}"; type=client ;;
+        orangepizero3) hw="orangepizero3.${flavor}"; type=client ;;
         *)      echo "JOB FAIL ${row} — unknown platform"; continue ;;
     esac
-    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; } \
        && [ "${flavor}" = both ]; then
         # flavor=both builds TWO artifacts; the worker's single-imageRef
         # ingest contract deliberately REJECTS it (build-image.sh's frite
@@ -756,7 +780,7 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
         expect_role="desktop"
         expect_standalone=true
     fi
-    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ] || [ "${platform}" = orangepizero2w ] || [ "${platform}" = orangepizero3 ]; } \
        && [ "${flavor}" = standalone ]; then
         expect_flavor="installer"
         expect_standalone=true
@@ -794,6 +818,18 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
             [ "${ORANGEPIZERO2_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" ORANGEPIZERO2_FLAVOR_OUT(got '${ORANGEPIZERO2_FLAVOR_OUT}')"
             if ${expect_standalone}; then
                 [ "${ORANGEPIZERO2_STANDALONE}" = true ] || miss+=" ORANGEPIZERO2_STANDALONE(got '${ORANGEPIZERO2_STANDALONE}')"
+            fi
+            ;;
+        orangepizero2w)
+            [ "${ORANGEPIZERO2W_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" ORANGEPIZERO2W_FLAVOR_OUT(got '${ORANGEPIZERO2W_FLAVOR_OUT}')"
+            if ${expect_standalone}; then
+                [ "${ORANGEPIZERO2W_STANDALONE}" = true ] || miss+=" ORANGEPIZERO2W_STANDALONE(got '${ORANGEPIZERO2W_STANDALONE}')"
+            fi
+            ;;
+        orangepizero3)
+            [ "${ORANGEPIZERO3_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" ORANGEPIZERO3_FLAVOR_OUT(got '${ORANGEPIZERO3_FLAVOR_OUT}')"
+            if ${expect_standalone}; then
+                [ "${ORANGEPIZERO3_STANDALONE}" = true ] || miss+=" ORANGEPIZERO3_STANDALONE(got '${ORANGEPIZERO3_STANDALONE}')"
             fi
             ;;
         *)
@@ -861,7 +897,7 @@ JOB_EOF
 # the same guarantee is probed end-to-end inside run_menu_channel's child.)
 run_threading_checks() {
     local t out="${TMP_DIR}/thr.out"
-    for t in x86-pki x86-standalone-thin jetson jetson-edge_ai frite orangepi5 orangepizero2; do
+    for t in x86-pki x86-standalone-thin jetson jetson-edge_ai frite orangepi5 orangepizero2 orangepizero2w orangepizero3; do
         if make -n "${t}" NATIVE=1 STANDALONE_FLAGS='--matrix-sf-probe' >"${out}" 2>&1 \
            && grep -q -- '--matrix-sf-probe' "${out}"; then
             THR_PASS=$((THR_PASS+1))
@@ -870,7 +906,7 @@ run_threading_checks() {
             THR_FAIL=$((THR_FAIL+1))
         fi
     done
-    for t in rpi-backend x86-pki frite jetson jetson-edge_ai orangepi5 orangepizero2; do
+    for t in rpi-backend x86-pki frite jetson jetson-edge_ai orangepi5 orangepizero2 orangepizero2w orangepizero3; do
         if make -n "${t}" NATIVE=1 IMG_FLAGS='--matrix-if-probe' >"${out}" 2>&1 \
            && grep -q -- '--matrix-if-probe' "${out}"; then
             THR_PASS=$((THR_PASS+1))
@@ -891,10 +927,9 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=61   # fail-closed: keep in sync with the guithr call list below
-GUITHR_EXPECTED=62   # fail-closed: keep in sync with the guithr call list below
-                     # (was stale at 57 while 61 probes existed — the main merge
-                     # added probes without bumping it; 62 = those 61 + sunshine)
+GUITHR_EXPECTED=66   # fail-closed: keep in sync with the guithr call list below
+                     # (62 on main — 61 probes + sunshine — plus the 2
+                     # orangepizero2w + 2 orangepizero3 probes from this branch)
                      # (51 + packages_add/packages_drop, WS-BUILDER emission flip;
                      # + superdomain mesh-x86/mesh-rpi5/standalone-absent, WS-SUPER-B;
                      # + chromebook standalone-desktop discoverability)
@@ -1172,6 +1207,22 @@ run_gui_threading_checks() {
         '{"platform":"orangepizero2","role":"orangepizero2","mode":"cloud","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
         '--hostname myhost' '--timezone America/New_York' '--user bob'
 
+    # ── orangepizero2w (the Zero 2's H618 sibling — same emission shape) ──
+    guithr g35-uboot-opz2w \
+        '{"platform":"orangepizero2w","role":"orangepizero2w","mode":"cloud","env":"test","uboot_defconfig":"foo_defconfig","skip_uboot":true,"dtb":"sun50i-h618.dtb"}' \
+        '--uboot-defconfig foo_defconfig' '--skip-uboot' '--dtb sun50i-h618.dtb'
+    guithr g26-identity-opz2w \
+        '{"platform":"orangepizero2w","role":"orangepizero2w","mode":"cloud","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
+        '--hostname myhost' '--timezone America/New_York' '--user bob'
+
+    # ── orangepizero3 (the Zero 2's H618 sibling — same emission shape) ──
+    guithr g35-uboot-opz2w \
+        '{"platform":"orangepizero3","role":"orangepizero3","mode":"cloud","env":"test","uboot_defconfig":"foo_defconfig","skip_uboot":true,"dtb":"sun50i-h618.dtb"}' \
+        '--uboot-defconfig foo_defconfig' '--skip-uboot' '--dtb sun50i-h618.dtb'
+    guithr g26-identity-opz2w \
+        '{"platform":"orangepizero3","role":"orangepizero3","mode":"cloud","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
+        '--hostname myhost' '--timezone America/New_York' '--user bob'
+
     # fail-closed completeness: a skipped/miscounted probe list is a failure,
     # never silently fewer checks (mirrors the MENUTHR shortfall accounting).
     if [ "${GUITHR_RUN}" -ne "${GUITHR_EXPECTED}" ]; then
@@ -1233,6 +1284,22 @@ run_negative_checks() {
         ./build-orangepi5-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
     expect_fail "orangepizero2: --role path-traversal rejected" \
         ./build-orangepi-zero2-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
+    # orangepizero2w: same negative surface as its Zero 2 template sibling
+    # (flavor-only, no --board flag, marker-only --role allow-listed).
+    expect_fail "orangepizero2w: invalid flavor" ./build-orangepi-zero2w-stage4.sh --flavor bogus --print-plan
+    expect_fail "orangepizero2w: invalid env"    ./build-orangepi-zero2w-stage4.sh --env staging --print-plan
+    expect_fail "orangepizero2w: --board is not a flag on this builder" \
+        ./build-orangepi-zero2w-stage4.sh --board bogus --print-plan
+    expect_fail "orangepizero2w: --role path-traversal rejected" \
+        ./build-orangepi-zero2w-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
+    # orangepizero3: same negative surface as its Zero 2 template sibling
+    # (flavor-only, no --board flag, marker-only --role allow-listed).
+    expect_fail "orangepizero3: invalid flavor" ./build-orangepi-zero3-stage4.sh --flavor bogus --print-plan
+    expect_fail "orangepizero3: invalid env"    ./build-orangepi-zero3-stage4.sh --env staging --print-plan
+    expect_fail "orangepizero3: --board is not a flag on this builder" \
+        ./build-orangepi-zero3-stage4.sh --board bogus --print-plan
+    expect_fail "orangepizero3: --role path-traversal rejected" \
+        ./build-orangepi-zero3-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
     # UNAFFILIATED desktop: branding flags are a HARD conflict (no brand identity
     # at all), and --unaffiliated composes onto desktop/client roles only — a
     # cluster node is HugMesh platform machinery by definition.
@@ -1316,6 +1383,12 @@ run_gui_gating_checks() {
     gui_gate "orangepizero2: branding assets are x86-only" \
         '{"platform":"orangepizero2","role":"orangepizero2","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
         '--theme' '--wallpaper' '--brand-locked'
+    gui_gate "orangepizero2w: branding assets are x86-only" \
+        '{"platform":"orangepizero2w","role":"orangepizero2w","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
+        '--theme' '--wallpaper' '--brand-locked'
+    gui_gate "orangepizero3: branding assets are x86-only" \
+        '{"platform":"orangepizero3","role":"orangepizero3","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
+        '--theme' '--wallpaper' '--brand-locked'
     # jetson encrypt-root/standalone: HARD-FAIL, not silent drop — the Orin's
     # single boot+root partition cannot boot LUKS2-encrypted (by design).
     printf '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","encrypt_root":true}\n' >"${TMP_DIR}/jet-enc.json"
@@ -1330,13 +1403,13 @@ run_gui_gating_checks() {
 
 # ── builder-flag coverage differ (tests/build-matrix/flag-coverage.sh) ──────────
 # Diffs every builder's parsed arg surface against the Studio's real per-platform
-# emission (PLATFORM_FIELD_SUPPORT-driven): 6 forward checks (every parsed flag
-# fielded or documented-out-of-scope) + 6 reverse checks (every emitted flag
-# parsed) + 12 packages-delta checks (--packages-add/--packages-drop, both
-# parsed AND fielded, on all six builders — WS-BUILDER's atomic flip) + 6
-# superdomain checks (--superdomain parsed AND fielded on all six — WS-SUPER-B's
-# flip). FAIL-CLOSED: 30 expected, shortfall = failures.
-COV_EXPECTED=30
+# emission (PLATFORM_FIELD_SUPPORT-driven): 8 forward checks (every parsed flag
+# fielded or documented-out-of-scope) + 8 reverse checks (every emitted flag
+# parsed) + 16 packages-delta checks (--packages-add/--packages-drop, both
+# parsed AND fielded, on all eight builders — WS-BUILDER's atomic flip) + 8
+# superdomain checks (--superdomain parsed AND fielded on all eight — WS-SUPER-B's
+# flip). FAIL-CLOSED: 40 expected, shortfall = failures.
+COV_EXPECTED=40
 COV_PASS=0; COV_FAIL=0
 run_flag_coverage() {
     local out="${TMP_DIR}/flagcov.out"
@@ -1378,8 +1451,8 @@ run_flag_coverage() {
 #       selected lines must be free of backticks and of any '$' not escaped as '\$'
 #       (enforced uniformly, host-side lines too — a banner line has no business
 #       interpolating anything).
-# FAIL-CLOSED: 7 expected (6 builder multisets + 1 heredoc-safety sweep).
-EGB_EXPECTED=7
+# FAIL-CLOSED: 9 expected (8 builder multisets + 1 heredoc-safety sweep).
+EGB_EXPECTED=9
 EGB_PASS=0; EGB_FAIL=0
 run_emerge_group_banner_checks() {
     local out="${TMP_DIR}/egb.out"
@@ -1390,7 +1463,9 @@ run_emerge_group_banner_checks() {
         "build-jetson-stage4.sh:image system tools" \
         "build-frite-stage4.sh:image system tools" \
         "build-orangepi5-stage4.sh:image system tools" \
-        "build-orangepi-zero2-stage4.sh:image system tools"
+        "build-orangepi-zero2-stage4.sh:image system tools" \
+        "build-orangepi-zero2w-stage4.sh:image system tools" \
+        "build-orangepi-zero3-stage4.sh:image system tools"
     do
         builder="${spec%%:*}"; expect="${spec#*:}"
         # both call-site shapes; sed prints ONLY the captured group name
@@ -1427,6 +1502,7 @@ run_emerge_group_banner_checks() {
         END { flush(blk) }' \
             build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh \
             build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh \
+            build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
         | grep -P '(?<!\\)\$|`' >"${out}"; then
         _fail EGB "heredoc-safety" "unescaped \$ or backtick on an emerge-group line" "${out}"
         EGB_FAIL=$((EGB_FAIL+1))

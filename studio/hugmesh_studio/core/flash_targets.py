@@ -265,7 +265,8 @@ def list_targets() -> list[FlashTarget]:
 
 
 # ── argv builder (delegates the destructive write to flash-disk.sh) ──────────────────
-_ARM64_PLATFORMS = ("rpi5", "orangepi5", "orangepizero2", "frite", "jetson")
+_ARM64_PLATFORMS = ("rpi5", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3",
+                    "frite", "jetson")
 
 # flash-disk.sh accepts only these --role tokens; any client/desktop role maps to the
 # generic 'host' artifact glob (same set as ProgressPage._FLASH_ROLES).
@@ -331,6 +332,8 @@ _PLATFORM_FLAVORS = {
     "frite": ("live", "installer"),
     "orangepi5": ("live", "installer"),
     "orangepizero2": ("live", "installer"),
+    "orangepizero2w": ("live", "installer"),
+    "orangepizero3": ("live", "installer"),
 }
 FLAVOR_LABELS = {
     FLAVOR_AUTO: "auto — newest built (.img preferred)",

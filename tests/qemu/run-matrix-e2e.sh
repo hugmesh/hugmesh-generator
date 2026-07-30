@@ -6,7 +6,7 @@
 # (operator-supplied image; SKIP-clean when absent so CI stays green).
 #
 # Enumeration is the SAME single source of truth every channel uses:
-# tests/build-matrix/matrix.tsv (118 cells; check.sh already walks it). We reuse
+# tests/build-matrix/matrix.tsv (134 cells; check.sh already walks it). We reuse
 # check.sh's exact `while IFS=$'\t' read -r platform role env board flavor desktop`
 # parse so a new row is auto-covered. The JOB-channel pseudo-roles (rpi5
 # standalone-desktop; ARM flavor=standalone) are translated to their real
@@ -20,7 +20,7 @@
 #                        otherwise SKIP-clean (exit 0). Per row, a missing artifact is a
 #                        per-row SKIP (exit-0 accounting), never a FAIL.
 #
-# SCALE: 118 cells under TCG is many hours and the ARM rows have no KVM on an x86 host;
+# SCALE: 134 cells under TCG is many hours and the ARM rows have no KVM on an x86 host;
 # keep the full walk nightly/operator-only and use --only / MATRIX_FILTER for a subset.
 # EXPERIMENTAL boards (frite/jetson/orangepi) may be INCONCLUSIVE under -M virt (no
 # vendor firmware) — those are recorded as soft-pass, not FAIL.
@@ -86,7 +86,7 @@ launcher_for() {
     case "$1" in
         x86)  echo "launch-x86.sh" ;;
         rpi5) echo "launch-pi.sh" ;;
-        frite|jetson|orangepi5|orangepizero2) echo "launch-arm.sh" ;;
+        frite|jetson|orangepi5|orangepizero2|orangepizero2w|orangepizero3) echo "launch-arm.sh" ;;
         *)    echo "" ;;
     esac
 }
@@ -101,6 +101,8 @@ builder_for() {
         jetson)        echo "build-jetson-stage4.sh" ;;
         orangepi5)     echo "build-orangepi5-stage4.sh" ;;
         orangepizero2) echo "build-orangepi-zero2-stage4.sh" ;;
+        orangepizero2w) echo "build-orangepi-zero2w-stage4.sh" ;;
+        orangepizero3) echo "build-orangepi-zero3-stage4.sh" ;;
         *)             echo "" ;;
     esac
 }

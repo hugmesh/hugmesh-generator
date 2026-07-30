@@ -74,7 +74,8 @@ if ${ENCRYPT} && [ ! -f "${SCRIPT_DIR}/boot/disk-initrd.img" ]; then
 fi
 
 # mmcblk / nvme style devices use a 'p' partition infix; plain sdX do not
-# (mirrors install-frite.sh/install-orangepi5.sh/install-orangepi-zero2.sh —
+# (mirrors install-frite.sh/install-orangepi5.sh/install-orangepi-zero2.sh/
+# install-orangepi-zero2w.sh/install-orangepi-zero3.sh —
 # a write host with a built-in SD-card slot, e.g. another SBC, enumerates the
 # target as /dev/mmcblkN just like eMMC, not /dev/sdX).
 case "${DEV}" in

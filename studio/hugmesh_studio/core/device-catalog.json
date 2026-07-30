@@ -218,6 +218,30 @@
       "notes": "single 'orangepizero2' headless-appliance role (flavor axis only)"
     },
     {
+      "id": "orange-pi-zero2w",
+      "label": "Orange Pi Zero 2W",
+      "family": "orange-pi",
+      "arch": "arm64",
+      "soc": "Allwinner H618 (4x Cortex-A53)",
+      "builder": {"platform": "orangepizero2w", "board": ""},
+      "status": "experimental",
+      "reason": "hardware validation pending (specs-orangepi-zero2w/README.md) — fail-loud preflight; HEADLESS APPLIANCE: no desktop mode EVER, no board axis (single-board platform), NO onboard Ethernet (USB-Ethernet-first)",
+      "role_allow": null,
+      "notes": "single 'orangepizero2w' headless-appliance role (flavor axis only)"
+    },
+    {
+      "id": "orange-pi-zero3",
+      "label": "Orange Pi Zero 3",
+      "family": "orange-pi",
+      "arch": "arm64",
+      "soc": "Allwinner H618 (4x Cortex-A53)",
+      "builder": {"platform": "orangepizero3", "board": ""},
+      "status": "experimental",
+      "reason": "hardware validation pending (specs-orangepi-zero3/README.md) — fail-loud preflight; HEADLESS APPLIANCE: no desktop mode EVER, no board axis (single-board platform); onboard Gigabit Ethernet is BACK (Ethernet-first, unlike the Zero 2W)",
+      "role_allow": null,
+      "notes": "single 'orangepizero3' headless-appliance role (flavor axis only)"
+    },
+    {
       "id": "rpi400",
       "label": "Raspberry Pi 400 (keyboard PC)",
       "family": "raspberry-pi",
@@ -370,18 +394,6 @@
       "builder": null,
       "status": "unsupported",
       "reason": "RK3588 variant with newer LPDDR5/boot bits; the board row is unverified against the opi5 recipe — a promotion path exists (opi5 board axis + fail-loud preflight) but is not claimed until verified",
-      "role_allow": null,
-      "notes": ""
-    },
-    {
-      "id": "opi-zero2w",
-      "label": "Orange Pi Zero 2W",
-      "family": "orange-pi",
-      "arch": "arm64",
-      "soc": "Allwinner H618 (4x Cortex-A53)",
-      "builder": null,
-      "status": "unsupported",
-      "reason": "the zero2 builder has NO --board axis (single-board platform); H618 is a close H616 sibling but promotion needs a new board axis — a real builder change, not a selection",
       "role_allow": null,
       "notes": ""
     },

@@ -66,6 +66,26 @@
 # role: the H616's display engine has no mainline driver, so this platform is
 # headless-only by design, not an oversight.)
 #
+# The Orange Pi Zero 2W (Allwinner H618) HEADLESS appliance image is OPT-IN too —
+# EXPERIMENTAL: hardware validation pending (specs-orangepi-zero2w/README.md).
+# One board, one role (appliance) — no board/role axis, just flavor:
+#   ORANGEPIZERO2W=1      ./scripts/build-all-roles.sh  # ALSO build it (both flavors)
+#   ORANGEPIZERO2W_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip everything else)
+#   ORANGEPIZERO2W_FLAVOR=live ORANGEPIZERO2W=1 ./scripts/build-all-roles.sh   # live image only
+# (build-orangepi-zero2w-stage4.sh — see specs-orangepi-zero2w/README.md. Same
+# headless-only H616-family DE33 rationale as the Zero 2; NO onboard Ethernet
+# on this board — USB-Ethernet-first.)
+#
+# The Orange Pi Zero 3 (Allwinner H618) HEADLESS appliance image is OPT-IN too —
+# EXPERIMENTAL: hardware validation pending (specs-orangepi-zero3/README.md).
+# One board, one role (appliance) — no board/role axis, just flavor:
+#   ORANGEPIZERO3=1      ./scripts/build-all-roles.sh  # ALSO build it (both flavors)
+#   ORANGEPIZERO3_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip everything else)
+#   ORANGEPIZERO3_FLAVOR=live ORANGEPIZERO3=1 ./scripts/build-all-roles.sh   # live image only
+# (build-orangepi-zero3-stage4.sh — see specs-orangepi-zero3/README.md. Same
+# headless-only H616-family DE33 rationale as the Zero 2/Zero 2W; onboard
+# Gigabit Ethernet is back on this board — Ethernet-first, like the Zero 2.)
+#
 # Pen-test build OPTION (DEV / CI-pipeline only) — run the OWASP pen-test harness
 # as part of the build (memory hugmesh-pentest-standard "an OPTION in the BUILD
 # pipeline"). It is NOT a deployed runner; it drives tests/pentest/run-pentest.sh
@@ -104,6 +124,8 @@ BUILD_FRITE="${REPO_DIR}/build-frite-stage4.sh"
 BUILD_JETSON="${REPO_DIR}/build-jetson-stage4.sh"
 BUILD_ORANGEPI5="${REPO_DIR}/build-orangepi5-stage4.sh"
 BUILD_ORANGEPIZERO2="${REPO_DIR}/build-orangepi-zero2-stage4.sh"
+BUILD_ORANGEPIZERO2W="${REPO_DIR}/build-orangepi-zero2w-stage4.sh"
+BUILD_ORANGEPIZERO3="${REPO_DIR}/build-orangepi-zero3-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
@@ -236,12 +258,40 @@ elif [ "${ORANGEPIZERO2:-0}" = "1" ]; then
 fi
 ORANGEPIZERO2_FLAVOR_SEL="${ORANGEPIZERO2_FLAVOR:-both}"
 
+# Orange Pi Zero 2W (Allwinner H618) headless appliance is OPT-IN (EXPERIMENTAL
+# — hardware validation pending). ORANGEPIZERO2W_ONLY=1 builds ONLY it (skip
+# everything else) — same shape as ORANGEPIZERO2_ONLY above. No board axis (one
+# board) and no role axis (appliance only — headless, no desktop role).
+BUILD_ORANGEPIZERO2W_IMG=false
+if [ "${ORANGEPIZERO2W_ONLY:-0}" = "1" ]; then
+    BUILD_ORANGEPIZERO2W_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=(); BUILD_FRITE_IMG=false; BUILD_JETSON_IMG=false; BUILD_ORANGEPI5_IMG=false; BUILD_ORANGEPIZERO2_IMG=false
+elif [ "${ORANGEPIZERO2W:-0}" = "1" ]; then
+    BUILD_ORANGEPIZERO2W_IMG=true
+fi
+ORANGEPIZERO2W_FLAVOR_SEL="${ORANGEPIZERO2W_FLAVOR:-both}"
+
+# Orange Pi Zero 3 (Allwinner H618) headless appliance is OPT-IN (EXPERIMENTAL
+# — hardware validation pending). ORANGEPIZERO3_ONLY=1 builds ONLY it (skip
+# everything else) — same shape as ORANGEPIZERO2_ONLY above. No board axis (one
+# board) and no role axis (appliance only — headless, no desktop role).
+BUILD_ORANGEPIZERO3_IMG=false
+if [ "${ORANGEPIZERO3_ONLY:-0}" = "1" ]; then
+    BUILD_ORANGEPIZERO3_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=(); BUILD_FRITE_IMG=false; BUILD_JETSON_IMG=false; BUILD_ORANGEPI5_IMG=false; BUILD_ORANGEPIZERO2_IMG=false; BUILD_ORANGEPIZERO2W_IMG=false
+elif [ "${ORANGEPIZERO3:-0}" = "1" ]; then
+    BUILD_ORANGEPIZERO3_IMG=true
+fi
+ORANGEPIZERO3_FLAVOR_SEL="${ORANGEPIZERO3_FLAVOR:-both}"
+
 echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}  (board=${RPI_BOARD_SEL})"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
 echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL}, desktop=${FRITE_DESKTOP_SEL})" || echo '(off — set FRITE=1)')"
 echo "==> Jetson:      $([ "${BUILD_JETSON_IMG}" = true ] && echo "${JETSON_BOARD_SEL} roles: ${JETSON_BUILD_ROLES[*]} (kernel=${JETSON_KFLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set JETSON=1)')"
 echo "==> Orange Pi 5: $([ "${BUILD_ORANGEPI5_IMG}" = true ] && echo "${ORANGEPI5_BOARD_SEL} (flavor=${ORANGEPI5_FLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set ORANGEPI5=1)')"
 echo "==> OPi Zero 2:  $([ "${BUILD_ORANGEPIZERO2_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO2_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO2=1)')"
+echo "==> OPi Zero 2W: $([ "${BUILD_ORANGEPIZERO2W_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO2W_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO2W=1)')"
+echo "==> OPi Zero 3: $([ "${BUILD_ORANGEPIZERO3_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO3_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO3=1)')"
 echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "==> Pen-test:    $([ "${PENTEST}" = 1 ] && echo "ON (env=${PENTEST_ENV:-compose} scan=${PENTEST_SCAN:-baseline} pipeline=${PENTEST_PIPELINE:-main})$([ "${PENTEST_ONLY:-0}" = 1 ] && echo ' [PENTEST_ONLY]')" || echo '(off — set PENTEST=1 / --pentest)')"
 echo "    Work/target dir: ${WORK_DIR}"
@@ -320,6 +370,22 @@ if [ "${BUILD_ORANGEPIZERO2_IMG}" = true ]; then
         || { echo "!! Orange Pi Zero 2 build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepizero2"); }
 fi
 
+if [ "${BUILD_ORANGEPIZERO2W_IMG}" = true ]; then
+    echo "############################################################"
+    echo "#  Building Orange Pi Zero 2W headless appliance (flavor=${ORANGEPIZERO2W_FLAVOR_SEL}) — EXPERIMENTAL"
+    echo "############################################################"
+    "${BUILD_ORANGEPIZERO2W}" --flavor "${ORANGEPIZERO2W_FLAVOR_SEL}" "$@" \
+        || { echo "!! Orange Pi Zero 2W build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepizero2w"); }
+fi
+
+if [ "${BUILD_ORANGEPIZERO3_IMG}" = true ]; then
+    echo "############################################################"
+    echo "#  Building Orange Pi Zero 3 headless appliance (flavor=${ORANGEPIZERO3_FLAVOR_SEL}) — EXPERIMENTAL"
+    echo "############################################################"
+    "${BUILD_ORANGEPIZERO3}" --flavor "${ORANGEPIZERO3_FLAVOR_SEL}" "$@" \
+        || { echo "!! Orange Pi Zero 3 build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepizero3"); }
+fi
+
 # ── Generate provisioning keys ───────────────────────────────────────
 # All images are built first; keys are created LAST, in one pass over every
 # built role. gen-provision-keys.sh only knows the RPi/host role names, so we
@@ -393,6 +459,26 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
             KEYS_FAILED+=(orangepizero2)
         fi
     fi
+    # Orange Pi Zero 2W: same headless-appliance 'host' worker-key profile as
+    # the Zero 2 above.
+    if [ "${BUILD_ORANGEPIZERO2W_IMG}" = true ]; then
+        echo "==> Generating keys folder: ${WORK_DIR}/keys-orangepizero2w (host profile)"
+        if ! "${GENKEYS}" --role host --out "${WORK_DIR}/keys-orangepizero2w" --random; then
+            echo "!! keys generation FAILED for orangepizero2w — removing partial ${WORK_DIR}/keys-orangepizero2w" >&2
+            rm -rf "${WORK_DIR}/keys-orangepizero2w"
+            KEYS_FAILED+=(orangepizero2w)
+        fi
+    fi
+    # Orange Pi Zero 3: same headless-appliance 'host' worker-key profile as
+    # the Zero 2 above.
+    if [ "${BUILD_ORANGEPIZERO3_IMG}" = true ]; then
+        echo "==> Generating keys folder: ${WORK_DIR}/keys-orangepizero3 (host profile)"
+        if ! "${GENKEYS}" --role host --out "${WORK_DIR}/keys-orangepizero3" --random; then
+            echo "!! keys generation FAILED for orangepizero3 — removing partial ${WORK_DIR}/keys-orangepizero3" >&2
+            rm -rf "${WORK_DIR}/keys-orangepizero3"
+            KEYS_FAILED+=(orangepizero3)
+        fi
+    fi
 fi
 
 echo
@@ -432,7 +518,7 @@ if [ "${#BUILDS_FAILED[@]}" -gt 0 ]; then
     echo >&2
     echo "!! IMAGE BUILD FAILED for: ${BUILDS_FAILED[*]}  (the other roles + keys were still produced)" >&2
     echo "!! Re-run a failed role with its per-arch builder:" >&2
-    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>  |  ./build-jetson-stage4.sh --role <r>  |  ./build-orangepi5-stage4.sh --board <b>  |  ./build-orangepi-zero2-stage4.sh --flavor <f>" >&2
+    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>  |  ./build-jetson-stage4.sh --role <r>  |  ./build-orangepi5-stage4.sh --board <b>  |  ./build-orangepi-zero2-stage4.sh --flavor <f>  |  ./build-orangepi-zero2w-stage4.sh --flavor <f>  |  ./build-orangepi-zero3-stage4.sh --flavor <f>" >&2
 fi
 # A run whose keys folders failed has NO usable provisioning deliverable for those roles.
 if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
@@ -441,12 +527,14 @@ if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
     echo "!! The partial keys folders were removed. Re-run gen-provision-keys.sh per role:" >&2
     for _r in "${KEYS_FAILED[@]}"; do
         # Map the appliance names back to the key profile gen-provision-keys knows:
-        # frite + jetson workers/desktop + orangepi5 + orangepizero2 -> host;
-        # jetson 'full' (single-node CP) -> pki.
+        # frite + jetson workers/desktop + orangepi5 + orangepizero2 +
+        # orangepizero2w + orangepizero3 -> host; jetson 'full' (single-node CP) -> pki.
         case "${_r}" in
             frite)          _kp=host ;;
             orangepi5)      _kp=host ;;
             orangepizero2)  _kp=host ;;
+            orangepizero2w) _kp=host ;;
+            orangepizero3) _kp=host ;;
             jetson-full)    _kp=pki ;;
             jetson-*)       _kp=host ;;
             *)              _kp="${_r}" ;;

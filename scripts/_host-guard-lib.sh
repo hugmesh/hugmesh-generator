@@ -2,7 +2,9 @@
 # _host-guard-lib.sh — SOURCED helper: never mutate the operator's real system.
 #
 # WHY THIS EXISTS
-# Every ARM builder (frite/rpi5/orangepi5/orangepi-zero2/jetson) seeds HOST
+# Every ARM builder (frite/rpi5/orangepi5/orangepi-zero2/orangepi-zero2w/
+# orangepi-zero3/jetson)
+# seeds HOST
 # /etc/portage files and runs a HOST `emerge`, and _dracut-cross-lib.sh registers
 # a KERNEL-GLOBAL binfmt_misc interpreter. All of that is correct and REQUIRED
 # inside the ephemeral builder container — it is why the fleet builds work at all

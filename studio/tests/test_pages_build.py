@@ -193,6 +193,10 @@ def test_role_frite_uboot_fields_flow(wiz):
     ("orangepi5", "orangepi5_uboot_url", "orangepi5_uboot_defconfig", "orangepi5_skip_uboot"),
     ("orangepizero2", "orangepizero2_uboot_url", "orangepizero2_uboot_defconfig",
      "orangepizero2_skip_uboot"),
+    ("orangepizero2w", "orangepizero2w_uboot_url", "orangepizero2w_uboot_defconfig",
+     "orangepizero2w_skip_uboot"),
+    ("orangepizero3", "orangepizero3_uboot_url", "orangepizero3_uboot_defconfig",
+     "orangepizero3_skip_uboot"),
 ])
 def test_role_orangepi_uboot_fields_flow(wiz, role, url_attr, def_attr, skip_attr):
     page = pick_role(wiz, role)

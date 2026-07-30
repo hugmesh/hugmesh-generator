@@ -10,6 +10,8 @@
 #   build-jetson-stage4.sh    aarch64 (Tegra234 Orin) edge-AI node -> .img (EXPERIMENTAL)
 #   build-orangepi5-stage4.sh aarch64 (Rockchip RK3588/RK3588S) light desktop -> live/installer ISO (EXPERIMENTAL)
 #   build-orangepi-zero2-stage4.sh aarch64 (Allwinner H616) HEADLESS APPLIANCE -> live/installer ISO (EXPERIMENTAL)
+#   build-orangepi-zero2w-stage4.sh aarch64 (Allwinner H618) HEADLESS APPLIANCE -> live/installer ISO (EXPERIMENTAL)
+#   build-orangepi-zero3-stage4.sh aarch64 (Allwinner H618) HEADLESS APPLIANCE -> live/installer ISO (EXPERIMENTAL)
 #   scripts/build-all-roles.sh   the default fleet (3 Pi + x86 pki/be/fe/be+gpu)
 #                                (+ FRITE=1 / JETSON=1 / build-everything for the full matrix)
 #   scripts/flash-disk.sh        write a role image (.img preferred, else .iso) to a disk
@@ -85,6 +87,10 @@ ORANGEPI5      ?=
 ORANGEPI5_ONLY ?=
 ORANGEPIZERO2      ?=
 ORANGEPIZERO2_ONLY ?=
+ORANGEPIZERO2W      ?=
+ORANGEPIZERO2W_ONLY ?=
+ORANGEPIZERO3      ?=
+ORANGEPIZERO3_ONLY ?=
 X86_OMNIBUS ?=
 X86_ALL     ?=
 X86_ROLES   ?=
@@ -113,6 +119,10 @@ ROLESET_ENVVARS := FRITE='$(FRITE)' FRITE_ONLY='$(FRITE_ONLY)' \
                    ORANGEPI5_BOARD='$(ORANGEPI5_BOARD)' ORANGEPI5_FLAVOR='$(ORANGEPI5_FLAVOR)' \
                    ORANGEPIZERO2='$(ORANGEPIZERO2)' ORANGEPIZERO2_ONLY='$(ORANGEPIZERO2_ONLY)' \
                    ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)' \
+                   ORANGEPIZERO2W='$(ORANGEPIZERO2W)' ORANGEPIZERO2W_ONLY='$(ORANGEPIZERO2W_ONLY)' \
+                   ORANGEPIZERO2W_FLAVOR='$(ORANGEPIZERO2W_FLAVOR)' \
+                   ORANGEPIZERO3='$(ORANGEPIZERO3)' ORANGEPIZERO3_ONLY='$(ORANGEPIZERO3_ONLY)' \
+                   ORANGEPIZERO3_FLAVOR='$(ORANGEPIZERO3_FLAVOR)' \
                    RPI_BOARD='$(RPI_BOARD)' RPI_ROLES='$(RPI_ROLES)' SKIP_RPI='$(SKIP_RPI)' \
                    X86_OMNIBUS='$(X86_OMNIBUS)' X86_ALL='$(X86_ALL)' X86_ROLES='$(X86_ROLES)' \
                    X86_STANDALONE='$(X86_STANDALONE)' X86_STANDALONE_ONLY='$(X86_STANDALONE_ONLY)' \
@@ -257,6 +267,8 @@ FRITE_BUILD := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(
 JETSON_BUILD := $(BRAND_ENV) $(SUDO) ./build-jetson-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ORANGEPI5_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ORANGEPIZERO2_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero2-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+ORANGEPIZERO2W_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero2w-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+ORANGEPIZERO3_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero3-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
@@ -309,10 +321,30 @@ ORANGEPI5_PASS   := ORANGEPI5_BOARD='$(ORANGEPI5_BOARD)' ORANGEPI5_FLAVOR='$(ORA
 ORANGEPIZERO2_FLAVOR ?= both
 ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
 
+# Orange Pi Zero 2W (Allwinner H618 arm64) — EXPERIMENTAL (hardware validation
+# pending; see specs-orangepi-zero2w/README.md). A HEADLESS APPLIANCE, not a
+# desktop client — no --board axis (one board), no --role/--desktop knob (one
+# role: "appliance"), just --flavor. Mirrors the orangepizero2 single-
+# dedicated-platform pattern (its H616 template sibling).
+#   ORANGEPIZERO2W_FLAVOR = both (DEFAULT) | live | installer
+ORANGEPIZERO2W_FLAVOR ?= both
+ORANGEPIZERO2W_PASS    := ORANGEPIZERO2W_FLAVOR='$(ORANGEPIZERO2W_FLAVOR)'
+
+# Orange Pi Zero 3 (Allwinner H618 arm64) — EXPERIMENTAL (hardware validation
+# pending; see specs-orangepi-zero3/README.md). A HEADLESS APPLIANCE, not a
+# desktop client — no --board axis (one board), no --role/--desktop knob (one
+# role: "appliance"), just --flavor. Mirrors the orangepizero2/orangepizero2w
+# single-dedicated-platform pattern (the Zero 2W is its same-SoC H618 template).
+#   ORANGEPIZERO3_FLAVOR = both (DEFAULT) | live | installer
+ORANGEPIZERO3_FLAVOR ?= both
+ORANGEPIZERO3_PASS    := ORANGEPIZERO3_FLAVOR='$(ORANGEPIZERO3_FLAVOR)'
+
 .DEFAULT_GOAL := help
 .PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
         rpi x86 omnibus prebuild-binaries frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
+        orangepizero2w orangepizero2w-live orangepizero2w-installer \
+        orangepizero3 orangepizero3-live orangepizero3-installer \
         phone-plan phone-detect phone-fetch phone-flash phone-mdm-enroll phone-attest phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
@@ -339,7 +371,8 @@ help: ## list targets
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
 	@echo "              Per-arch build trees: ./out/snap-build-pi5 + ./out/snap-build-x86"
 	@echo "              + ./out/snap-build-frite + ./out/snap-build-jetson + ./out/snap-build-orangepi5"
-	@echo "              + ./out/snap-build-orangepizero2 (never share a sysroot)."
+	@echo "              + ./out/snap-build-orangepizero2 + ./out/snap-build-orangepizero2w"
+	@echo "              + ./out/snap-build-orangepizero3 (never share a sysroot)."
 	@echo "  Platforms:  rpi (3 cluster roles + rpi-desktop client; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]) |"
 	@echo "              x86 (nodes+omnibus+edge_ai+clients+standalone) |"
 	@echo "              frite (arm64 light desktop) | jetson (arm64 Tegra edge-AI — EXPERIMENTAL,"
@@ -347,7 +380,13 @@ help: ## list targets
 	@echo "              orangepi5 (arm64 Rockchip RK3588/RK3588S light desktop — EXPERIMENTAL,"
 	@echo "              ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, hardware validation pending) |"
 	@echo "              orangepizero2 (arm64 Allwinner H616 HEADLESS APPLIANCE — EXPERIMENTAL,"
-	@echo "              no desktop mode ever — see specs-orangepi-zero2/README.md, hardware validation pending)."
+	@echo "              no desktop mode ever — see specs-orangepi-zero2/README.md, hardware validation pending) |"
+	@echo "              orangepizero2w (arm64 Allwinner H618 HEADLESS APPLIANCE — EXPERIMENTAL,"
+	@echo "              no desktop mode ever, NO onboard Ethernet — see specs-orangepi-zero2w/README.md,"
+	@echo "              hardware validation pending) |"
+	@echo "              orangepizero3 (arm64 Allwinner H618 HEADLESS APPLIANCE — EXPERIMENTAL,"
+	@echo "              no desktop mode ever, onboard GbE back — see specs-orangepi-zero3/README.md,"
+	@echo "              hardware validation pending)."
 	@echo "  Matrix:     make build-everything = the FULL documented matrix (honors ENV);"
 	@echo "              make matrix-check = dry-run validate every role/flag combo via the"
 	@echo "              builders' --print-plan (no root, no writes; tests/build-matrix/check.sh)."
@@ -743,7 +782,7 @@ endif
 PREBUILD_ROLE_X86     ?= omnibus
 PREBUILD_ROLE_RPI     ?= backend
 PREBUILD_JETSON_BOARD ?= orin-nano
-prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi5|frite|jetson|orangepi5|orangepizero2 [BOARD=]); compile once, reuse via --usepkg
+prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi5|frite|jetson|orangepi5|orangepizero2|orangepizero2w|orangepizero3 [BOARD=]); compile once, reuse via --usepkg
 	@_pl='$(ARCH)'; _list=$$(mktemp); \
 	 echo "==> computing $$_pl role-union package set (prebuild_union)"; \
 	 PYTHONPATH=studio python3 -m hugmesh_studio.core.prebuild_union "$$_pl" > "$$_list" \
@@ -757,7 +796,9 @@ prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi
 	   jetson)        $(JETSON_BUILD) --board $(PREBUILD_JETSON_BOARD) --role $(JETSON_ROLE) --packages-only --packages-add "$$_atoms" ;; \
 	   orangepi5)     $(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor installer --packages-only --packages-add "$$_atoms" ;; \
 	   orangepizero2) $(ORANGEPIZERO2_BUILD) --flavor installer --packages-only --packages-add "$$_atoms" ;; \
-	   *) echo "prebuild-binaries: ARCH must be x86|rpi5|frite|jetson|orangepi5|orangepizero2 (got '$$_pl')"; rm -f "$$_list"; exit 1 ;; \
+	   orangepizero2w) $(ORANGEPIZERO2W_BUILD) --flavor installer --packages-only --packages-add "$$_atoms" ;; \
+	   orangepizero3) $(ORANGEPIZERO3_BUILD) --flavor installer --packages-only --packages-add "$$_atoms" ;; \
+	   *) echo "prebuild-binaries: ARCH must be x86|rpi5|frite|jetson|orangepi5|orangepizero2|orangepizero2w|orangepizero3 (got '$$_pl')"; rm -f "$$_list"; exit 1 ;; \
 	 esac; \
 	 rm -f "$$_list"
 
@@ -869,12 +910,42 @@ orangepizero2-live: ## build the Orange Pi Zero 2 headless appliance LIVE image 
 orangepizero2-installer: ## build the Orange Pi Zero 2 headless appliance INSTALLER image only (writes to microSD/USB)
 	$(MAKE) orangepizero2 ORANGEPIZERO2_FLAVOR=installer
 
+orangepizero2w: ## build the Orange Pi Zero 2W HEADLESS APPLIANCE (EXPERIMENTAL; no desktop mode ever; ORANGEPIZERO2W_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make orangepizero2w NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO2W_PASS)
+else
+	@$(ORANGEPIZERO2W_BUILD) --flavor $(ORANGEPIZERO2W_FLAVOR) $(STANDALONE_FLAGS)
+	$(chown-artifacts)
+endif
+
+orangepizero2w-live: ## build the Orange Pi Zero 2W headless appliance LIVE image only (boots ephemerally off microSD/USB)
+	$(MAKE) orangepizero2w ORANGEPIZERO2W_FLAVOR=live
+
+orangepizero2w-installer: ## build the Orange Pi Zero 2W headless appliance INSTALLER image only (writes to microSD/USB)
+	$(MAKE) orangepizero2w ORANGEPIZERO2W_FLAVOR=installer
+
+orangepizero3: ## build the Orange Pi Zero 3 HEADLESS APPLIANCE (EXPERIMENTAL; no desktop mode ever; ORANGEPIZERO3_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make orangepizero3 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO3_PASS)
+else
+	@$(ORANGEPIZERO3_BUILD) --flavor $(ORANGEPIZERO3_FLAVOR) $(STANDALONE_FLAGS)
+	$(chown-artifacts)
+endif
+
+orangepizero3-live: ## build the Orange Pi Zero 3 headless appliance LIVE image only (boots ephemerally off microSD/USB)
+	$(MAKE) orangepizero3 ORANGEPIZERO3_FLAVOR=live
+
+orangepizero3-installer: ## build the Orange Pi Zero 3 headless appliance INSTALLER image only (writes to microSD/USB)
+	$(MAKE) orangepizero3 ORANGEPIZERO3_FLAVOR=installer
+
 # build-everything delegates to build-all with the ROLE-SELECTOR knobs set on the
 # sub-make COMMAND LINE (not as env prefixes: $(ALL)'s own ROLESET_ENVVARS would
 # re-assign the empty defaults AFTER an env prefix and clobber it). Command-line
 # make vars override the `?=` defaults inside the sub-make, so ROLESET_ENVVARS is
 # rebuilt there with the full-matrix values; ENV/BRAND/IMG_FLAGS pass through.
-build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+omnibus+edge_ai+clients+standalone incl. unaffiliated) + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 (honors ENV=test|prod)
+build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+omnibus+edge_ai+clients+standalone incl. unaffiliated) + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 + Orange Pi Zero 2W + Orange Pi Zero 3 (honors ENV=test|prod)
 	$(MAKE) build-all \
 	  X86_ROLES='$(X86_EVERY_ROLE)' \
 	  FRITE=1 FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' \
@@ -882,7 +953,9 @@ build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+
 	  JETSON=1 JETSON_ROLES='edge_ai gpu-host full desktop' \
 	  JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)' \
 	  ORANGEPI5=1 ORANGEPI5_BOARD='$(ORANGEPI5_BOARD)' ORANGEPI5_FLAVOR='$(ORANGEPI5_FLAVOR)' \
-	  ORANGEPIZERO2=1 ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
+	  ORANGEPIZERO2=1 ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)' \
+	  ORANGEPIZERO2W=1 ORANGEPIZERO2W_FLAVOR='$(ORANGEPIZERO2W_FLAVOR)' \
+	  ORANGEPIZERO3=1 ORANGEPIZERO3_FLAVOR='$(ORANGEPIZERO3_FLAVOR)'
 
 matrix-check: ## dry-run validate the whole build matrix via --print-plan (tests/build-matrix/check.sh)
 	@test -f tests/build-matrix/check.sh \

@@ -573,6 +573,174 @@
         ]
       }
     },
+    "orangepizero2w": {
+      "packages": {
+        "gate": "base",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/gentoo-sources",
+              "sys-kernel/linux-firmware"
+            ],
+            "title": "Kernel sources (mainline; the H618/Zero-2W device tree is upstream)"
+          },
+          {
+            "atoms": [
+              "dev-embedded/u-boot-tools"
+            ],
+            "title": "Bootloader tooling"
+          },
+          {
+            "atoms": [
+              "sys-block/parted",
+              "sys-apps/usbutils",
+              "sys-apps/util-linux",
+              "sys-fs/e2fsprogs",
+              "sys-fs/dosfstools"
+            ],
+            "title": "Board hardware / storage"
+          },
+          {
+            "atoms": [
+              "net-misc/networkmanager",
+              "net-misc/openssh",
+              "net-firewall/iptables",
+              "net-misc/socat",
+              "net-vpn/wireguard-tools",
+              "net-vpn/openvpn",
+              "net-wireless/wpa_supplicant"
+            ],
+            "title": "Networking"
+          },
+          {
+            "atoms": [
+              "app-admin/sudo",
+              "sys-process/cronie",
+              "sys-apps/haveged",
+              "app-editors/nano",
+              "app-misc/screen",
+              "app-misc/jq"
+            ],
+            "title": "System"
+          },
+          {
+            "atoms": [
+              "sec-policy/selinux-base",
+              "sec-policy/selinux-base-policy",
+              "sys-apps/policycoreutils",
+              "sys-apps/semodule-utils",
+              "sys-apps/checkpolicy",
+              "sys-libs/libselinux",
+              "sys-libs/libseccomp",
+              "sys-process/audit"
+            ],
+            "title": "Hardened / security (SELinux LSM)"
+          },
+          {
+            "atoms": [
+              "net-fs/nfs-utils",
+              "net-fs/cifs-utils"
+            ],
+            "title": "KEYS USB provisioning + attached storage"
+          }
+        ]
+      },
+      "packages-live": {
+        "gate": "live",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/dracut"
+            ],
+            "title": ""
+          }
+        ]
+      }
+    },
+    "orangepizero3": {
+      "packages": {
+        "gate": "base",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/gentoo-sources",
+              "sys-kernel/linux-firmware"
+            ],
+            "title": "Kernel sources (mainline; the H618/Zero-3 device tree is upstream)"
+          },
+          {
+            "atoms": [
+              "dev-embedded/u-boot-tools"
+            ],
+            "title": "Bootloader tooling"
+          },
+          {
+            "atoms": [
+              "sys-block/parted",
+              "sys-apps/usbutils",
+              "sys-apps/util-linux",
+              "sys-fs/e2fsprogs",
+              "sys-fs/dosfstools"
+            ],
+            "title": "Board hardware / storage"
+          },
+          {
+            "atoms": [
+              "net-misc/networkmanager",
+              "net-misc/openssh",
+              "net-firewall/iptables",
+              "net-misc/socat",
+              "net-vpn/wireguard-tools",
+              "net-vpn/openvpn",
+              "net-wireless/wpa_supplicant"
+            ],
+            "title": "Networking"
+          },
+          {
+            "atoms": [
+              "app-admin/sudo",
+              "sys-process/cronie",
+              "sys-apps/haveged",
+              "app-editors/nano",
+              "app-misc/screen",
+              "app-misc/jq"
+            ],
+            "title": "System"
+          },
+          {
+            "atoms": [
+              "sec-policy/selinux-base",
+              "sec-policy/selinux-base-policy",
+              "sys-apps/policycoreutils",
+              "sys-apps/semodule-utils",
+              "sys-apps/checkpolicy",
+              "sys-libs/libselinux",
+              "sys-libs/libseccomp",
+              "sys-process/audit"
+            ],
+            "title": "Hardened / security (SELinux LSM)"
+          },
+          {
+            "atoms": [
+              "net-fs/nfs-utils",
+              "net-fs/cifs-utils"
+            ],
+            "title": "KEYS USB provisioning + attached storage"
+          }
+        ]
+      },
+      "packages-live": {
+        "gate": "live",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/dracut"
+            ],
+            "title": ""
+          }
+        ]
+      }
+    },
     "rpi5": {
       "packages": {
         "gate": "base",
@@ -1471,6 +1639,88 @@
     },
     "orangepizero2": {
       "orangepizero2": {
+        "available": [
+          "sys-kernel/dracut"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": []
+      }
+    },
+    "orangepizero2w": {
+      "orangepizero2w": {
+        "available": [
+          "sys-kernel/dracut"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": []
+      }
+    },
+    "orangepizero3": {
+      "orangepizero3": {
         "available": [
           "sys-kernel/dracut"
         ],

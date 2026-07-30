@@ -637,6 +637,64 @@
     {
       "arch": "arm64",
       "config_axes": {
+        "board": "",
+        "platform": "orangepizero2w"
+      },
+      "family": "orange-pi",
+      "id": "orange-pi-zero2w",
+      "label": "Orange Pi Zero 2W",
+      "notes": "single 'orangepizero2w' headless-appliance role (flavor axis only)",
+      "reason": "hardware validation pending (specs-orangepi-zero2w/README.md) \u2014 fail-loud preflight; HEADLESS APPLIANCE: no desktop mode EVER, no board axis (single-board platform), NO onboard Ethernet (USB-Ethernet-first)",
+      "roles": {
+        "cloud": [
+          {
+            "label": "Orange Pi Zero 2W arm64 HEADLESS APPLIANCE \u2014 EXPERIMENTAL (live/installer flavor only; no board/desktop axis)",
+            "role": "orangepizero2w"
+          }
+        ],
+        "mesh": [],
+        "standalone": [
+          {
+            "label": "Orange Pi Zero 2W arm64 standalone HEADLESS APPLIANCE \u2014 EXPERIMENTAL (FDE; flavor only)",
+            "role": "orangepizero2w"
+          }
+        ]
+      },
+      "soc": "Allwinner H618 (4x Cortex-A53)",
+      "status": "experimental"
+    },
+    {
+      "arch": "arm64",
+      "config_axes": {
+        "board": "",
+        "platform": "orangepizero3"
+      },
+      "family": "orange-pi",
+      "id": "orange-pi-zero3",
+      "label": "Orange Pi Zero 3",
+      "notes": "single 'orangepizero3' headless-appliance role (flavor axis only)",
+      "reason": "hardware validation pending (specs-orangepi-zero3/README.md) \u2014 fail-loud preflight; HEADLESS APPLIANCE: no desktop mode EVER, no board axis (single-board platform); onboard Gigabit Ethernet is BACK (Ethernet-first, unlike the Zero 2W)",
+      "roles": {
+        "cloud": [
+          {
+            "label": "Orange Pi Zero 3 arm64 HEADLESS APPLIANCE \u2014 EXPERIMENTAL (live/installer flavor only; no board/desktop axis)",
+            "role": "orangepizero3"
+          }
+        ],
+        "mesh": [],
+        "standalone": [
+          {
+            "label": "Orange Pi Zero 3 arm64 standalone HEADLESS APPLIANCE \u2014 EXPERIMENTAL (FDE; flavor only)",
+            "role": "orangepizero3"
+          }
+        ]
+      },
+      "soc": "Allwinner H618 (4x Cortex-A53)",
+      "status": "experimental"
+    },
+    {
+      "arch": "arm64",
+      "config_axes": {
         "board": "rpi4",
         "platform": "rpi5"
       },
@@ -930,18 +988,6 @@
       "arch": "arm64",
       "config_axes": null,
       "family": "orange-pi",
-      "id": "opi-zero2w",
-      "label": "Orange Pi Zero 2W",
-      "notes": "",
-      "reason": "the zero2 builder has NO --board axis (single-board platform); H618 is a close H616 sibling but promotion needs a new board axis \u2014 a real builder change, not a selection",
-      "roles": {},
-      "soc": "Allwinner H618 (4x Cortex-A53)",
-      "status": "unsupported"
-    },
-    {
-      "arch": "arm64",
-      "config_axes": null,
-      "family": "orange-pi",
       "id": "opi6",
       "label": "Orange Pi 6 / 6 Plus",
       "notes": "",
@@ -1228,6 +1274,8 @@
     "jetson": "NVIDIA Jetson Orin (arm64) \u2014 EXPERIMENTAL: hardware validation pending",
     "orangepi5": "Orange Pi 5 / 5 Plus (Rockchip RK3588/RK3588S, arm64) \u2014 EXPERIMENTAL: hardware validation pending",
     "orangepizero2": "Orange Pi Zero 2 (Allwinner H616, arm64) \u2014 HEADLESS APPLIANCE, no desktop mode ever \u2014 EXPERIMENTAL: hardware validation pending",
+    "orangepizero2w": "Orange Pi Zero 2W (Allwinner H618, arm64) \u2014 HEADLESS APPLIANCE, no desktop mode ever \u2014 EXPERIMENTAL: hardware validation pending",
+    "orangepizero3": "Orange Pi Zero 3 (Allwinner H618, arm64) \u2014 HEADLESS APPLIANCE, no desktop mode ever \u2014 EXPERIMENTAL: hardware validation pending",
     "rpi5": "Raspberry Pi 5 / 4 / 3 (arm64) \u2014 desktop OR mesh node; --board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only, no node]",
     "x86": "x86_64 host"
   },
@@ -1254,6 +1302,8 @@
       "full",
       "gpu-host",
       "orangepizero2",
+      "orangepizero2w",
+      "orangepizero3",
       "generic"
     ]
   },
@@ -1387,6 +1437,40 @@
           }
         ],
         "role": "orangepizero2"
+      },
+      {
+        "image_class": "node",
+        "label": "Orange Pi Zero 2W arm64 HEADLESS APPLIANCE \u2014 EXPERIMENTAL (live/installer flavor only; no board/desktop axis)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepizero2w"
+          }
+        ],
+        "role": "orangepizero2w"
+      },
+      {
+        "image_class": "node",
+        "label": "Orange Pi Zero 3 arm64 HEADLESS APPLIANCE \u2014 EXPERIMENTAL (live/installer flavor only; no board/desktop axis)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepizero3"
+          }
+        ],
+        "role": "orangepizero3"
       }
     ],
     "mesh": [
@@ -1724,6 +1808,40 @@
           }
         ],
         "role": "orangepizero2"
+      },
+      {
+        "image_class": "node",
+        "label": "Orange Pi Zero 2W arm64 standalone HEADLESS APPLIANCE \u2014 EXPERIMENTAL (FDE; flavor only)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepizero2w"
+          }
+        ],
+        "role": "orangepizero2w"
+      },
+      {
+        "image_class": "node",
+        "label": "Orange Pi Zero 3 arm64 standalone HEADLESS APPLIANCE \u2014 EXPERIMENTAL (FDE; flavor only)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepizero3"
+          }
+        ],
+        "role": "orangepizero3"
       },
       {
         "image_class": "desktop",

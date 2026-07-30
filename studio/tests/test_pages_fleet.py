@@ -103,6 +103,8 @@ GOLDEN_CHOICES = {
         orangepi5=True, orangepi5_only=True, orangepi5_board="orange-pi-5",
         orangepi5_flavor="installer",
         orangepizero2=True, orangepizero2_only=True, orangepizero2_flavor="live",
+        orangepizero2w=True, orangepizero2w_only=True, orangepizero2w_flavor="installer",
+        orangepizero3=True, orangepizero3_only=True, orangepizero3_flavor="installer",
         skip_keys=True, pentest=True, pentest_only=True, pentest_env="cluster",
         pentest_scan="full", pentest_pipeline="games",
         headscale_url="https://hs.example.org",
@@ -122,13 +124,17 @@ _EVERYTHING_ENV = [
     "SKIP_X86=1", "X86_OMNIBUS=1", "X86_ALL=1", "X86_STANDALONE=1",
     "X86_STANDALONE_ONLY=1", "SKIP_RPI=1", "FRITE=1", "FRITE_ONLY=1",
     "JETSON=1", "JETSON_ONLY=1", "ORANGEPI5=1", "ORANGEPI5_ONLY=1",
-    "ORANGEPIZERO2=1", "ORANGEPIZERO2_ONLY=1", "SKIP_KEYS=1", "PENTEST=1",
+    "ORANGEPIZERO2=1", "ORANGEPIZERO2_ONLY=1", "ORANGEPIZERO2W=1",
+    "ORANGEPIZERO2W_ONLY=1", "ORANGEPIZERO3=1",
+    "ORANGEPIZERO3_ONLY=1", "SKIP_KEYS=1", "PENTEST=1",
     "PENTEST_ONLY=1", "X86_ROLES=pki omnibus",
     "RPI_ROLES=pki backend frontend desktop", "RPI_BOARD=rpi4",
     "FRITE_BOARD=le-potato", "FRITE_FLAVOR=live", "FRITE_DESKTOP=none",
     "JETSON_ROLES=edge_ai desktop", "JETSON_BOARD=orin-nx-16gb",
     "JETSON_KERNEL_FLAVOR=l4t", "ORANGEPI5_BOARD=orange-pi-5",
     "ORANGEPI5_FLAVOR=installer", "ORANGEPIZERO2_FLAVOR=live",
+    "ORANGEPIZERO2W_FLAVOR=installer",
+    "ORANGEPIZERO3_FLAVOR=installer",
     "PENTEST_ENV=cluster", "PENTEST_SCAN=full", "PENTEST_PIPELINE=games",
     "HEADSCALE_URL=https://hs.example.org",
 ]
@@ -586,6 +592,14 @@ def test_derive_fleet_label_families():
         "fleet: frite, jetson"
     assert bs.derive_fleet_label(FleetConfig(orangepizero2_only=True, pentest=True)) == \
         "fleet: orangepizero2, pentest"
+    # regression pin: the Zero 2W and Zero 3 are SEPARATE families — a co-selected
+    # pair must list both (a copy-paste once made the zero3 knob clobber zero2w's),
+    # and ORANGEPIZERO3_ONLY must zero every earlier family including the Zero 2W.
+    assert bs.derive_fleet_label(FleetConfig(
+        skip_x86=True, skip_rpi=True, orangepizero2w=True, orangepizero3=True)) == \
+        "fleet: orangepizero2w, orangepizero3"
+    assert bs.derive_fleet_label(FleetConfig(orangepizero2w=True, orangepizero3_only=True)) == \
+        "fleet: orangepizero3"
     assert bs.derive_fleet_label(FleetConfig(x86_standalone_only=True)) == "fleet: x86"
     assert bs.derive_fleet_label(FleetConfig(skip_x86=True, skip_rpi=True)) == \
         "fleet: (nothing selected)"

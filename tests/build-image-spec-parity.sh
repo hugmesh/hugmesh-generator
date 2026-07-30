@@ -8,7 +8,7 @@
 #   the Studio's own `--print-command` prints for that same config, PLUS exactly
 #   the worker's operational/tenancy overlay (server-derived --cluster-domain,
 #   BUILD_ID-derived -H, worker -w/-j/--env, and the single-artifact --no-*iso/
-#   --no-tar policy) appended last. Because the six builders parse repeated scalar
+#   --no-tar policy) appended last. Because the stage4 builders parse repeated scalar
 #   flags last-wins, that appended overlay authoritatively overrides the spec on
 #   the overlap — which is how tenancy DOMAIN stays server-derived (I6) while every
 #   other flag rides through unchanged. ONE flag-translation source, two surfaces.

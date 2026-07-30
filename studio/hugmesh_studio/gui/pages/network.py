@@ -667,7 +667,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # not mode (G16): x86 AND rpi5 parse them on every role — notably standalone
         # rpi5 'generic', the one standalone role that could never reach them while
         # these boxes were mode-gated. gate_widgets() below greys them wherever the
-        # builder has no flag (G12: frite/orangepi5/orangepizero2/jetson).
+        # builder has no flag (G12: frite/orangepi5/orangepizero2[w]/orangepizero3/jetson).
         self.character_studio.setVisible(True)
         self.character_forge.setVisible(True)
         self.edge_ai_tts.setVisible(True)

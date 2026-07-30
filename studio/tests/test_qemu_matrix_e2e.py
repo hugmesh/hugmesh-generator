@@ -9,7 +9,7 @@ artifacts, and — under TCG on an x86 host — many hours. Enable with HUGMESH_
 (and qemu installed). Everything ELSE in this file is HERMETIC and always runs: the
 matrix enumeration, the launcher resolution, the pseudo-role translation, the compact
 image-size formula, the ``img_size=``-from-``--print-plan`` parser, and the shell
-driver's ``--dry-run`` (which enumerates all 118 rows with no root/boot/builder).
+driver's ``--dry-run`` (which enumerates all 134 rows with no root/boot/builder).
 """
 import os
 import re
@@ -29,9 +29,11 @@ LAUNCH_ARM = os.path.join(QEMU_DIR, "launch-arm.sh")
 ASSERTIONS = os.path.join(QEMU_DIR, "matrix-assertions.sh")
 
 # Expected per-platform row counts — the canonical census of matrix.tsv (frite 38,
-# jetson 14, orangepi5 14, orangepizero2 8, rpi5 20, x86 24; 118 total).
+# jetson 14, orangepi5 14, orangepizero2 8, orangepizero2w 8, orangepizero3 8,
+# rpi5 20, x86 24; 134 total).
 EXPECTED_COUNTS = {"frite": 38, "jetson": 14, "orangepi5": 14,
-                   "orangepizero2": 8, "rpi5": 20, "x86": 24}
+                   "orangepizero2": 8, "orangepizero2w": 8, "orangepizero3": 8,
+                   "rpi5": 20, "x86": 24}
 
 _qemu = shutil.which("qemu-system-x86_64")
 
@@ -48,9 +50,9 @@ def test_harness_scripts_exist_and_are_executable():
 
 
 # ── always-run: hermetic matrix enumeration (no builder, no boot) ─────────────────
-def test_matrix_enumerates_118_rows_by_platform():
+def test_matrix_enumerates_134_rows_by_platform():
     rows = bm.matrix_rows()
-    assert len(rows) == sum(EXPECTED_COUNTS.values()) == 118
+    assert len(rows) == sum(EXPECTED_COUNTS.values()) == 134
     assert bm.platform_counts() == EXPECTED_COUNTS
 
 
@@ -132,13 +134,13 @@ def test_declared_ram_mb_is_positive():
             assert isinstance(d.ram_mb, int) and d.ram_mb > 0, f"{d.id}: bad ram_mb {d.ram_mb!r}"
 
 
-# ── always-run: the shell driver's --dry-run enumerates all 118 rows ──────────────
+# ── always-run: the shell driver's --dry-run enumerates all 134 rows ──────────────
 def test_driver_dry_run_enumerates_all_rows():
     r = subprocess.run(["bash", DRIVER, "--dry-run"], capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, f"dry-run failed:\n{r.stdout}\n{r.stderr}"
     rows = [ln for ln in r.stdout.splitlines() if ln.startswith("ROW ")]
-    assert len(rows) == 118
-    assert "DRY-RUN enumerated 118 matrix rows" in r.stdout
+    assert len(rows) == 134
+    assert "DRY-RUN enumerated 134 matrix rows" in r.stdout
 
 
 def test_driver_subset_filter():

@@ -1,0 +1,33 @@
+# Per-package USE flags — Orange Pi Zero 3 (Allwinner H618, arm64) headless
+# appliance. Much shorter than the desktop platforms' equivalent file: with NO
+# X11/GTK/browser stack at all, most of Frite/Orange-Pi-5's cross-compile-gap
+# trims (rsvg/harfbuzz/libfm/pinentry-gtk/...) simply do not apply here — there
+# is no gtk+/netsurf/lightdm in this platform's package set to trim USE flags on.
+
+# gentoo-sources: install the source symlink so the kernel build can find it.
+sys-kernel/gentoo-sources symlink
+
+# parted needs device-mapper for the installer's partitioning helpers.
+sys-block/parted device-mapper
+
+# NetworkManager: keep wifi USE compiled in case a USB WiFi dongle with its OWN
+# mainline driver is ever attached — the ONBOARD Unisoc UWE5622 radio (same die
+# as the Zero 2's "AW859A" module)
+# has NO mainline driver at all (see the kernel fragment + README) and is not
+# what this USE flag is for. rfkill-blocked + module-blacklisted by default
+# regardless (harden_radios() in the builder).
+net-misc/networkmanager wifi
+
+# networkmanager modemmanager USE disabled: +modemmanager pulls modemmanager ->
+# libqmi[qrtr] -> net-libs/libqrtr-glib -> dev-libs/gobject-introspection ->
+# glib with introspection enabled. Cellular modems are absent from this SBC;
+# disabling modemmanager has no functional impact. Mirrors
+# specs-frite/specs-orangepi5's identical trim.
+net-misc/networkmanager -modemmanager
+
+# pinentry gtk USE disabled: +gtk causes pinentry to require app-crypt/gcr:4[gtk],
+# which in turn requires gui-libs/gtk-4 (fails cross-configure) — and this
+# platform has no GTK stack at all to make +gtk meaningful anyway. The ncurses/
+# curses pinentry backend is sufficient for the rare interactive passphrase
+# prompt (--encrypt-root install time).
+app-crypt/pinentry -gtk

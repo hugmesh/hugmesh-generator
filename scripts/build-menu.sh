@@ -166,6 +166,14 @@ OPT_ORANGEPI5_FLAVOR="both"              # both (DEFAULT) | live | installer
 # toggle (no desktop mode, ever — see specs-orangepi-zero2/README.md) — just
 # --flavor. ───────────────────────────────────────────────────────────────
 OPT_ORANGEPIZERO2_FLAVOR="both"          # both (DEFAULT) | live | installer
+# ── Orange Pi Zero 2W (arm64 Allwinner H618 HEADLESS APPLIANCE; EXPERIMENTAL —
+# hardware validation pending). Same single-board/flavor-only shape as the
+# Zero 2 (its H616 template sibling — see specs-orangepi-zero2w/README.md). ──
+OPT_ORANGEPIZERO2W_FLAVOR="both"         # both (DEFAULT) | live | installer
+# ── Orange Pi Zero 3 (arm64 Allwinner H618 HEADLESS APPLIANCE; EXPERIMENTAL —
+# hardware validation pending). Same single-board/flavor-only shape as the
+# Zero 2W (its same-SoC H618 template — see specs-orangepi-zero3/README.md). ──
+OPT_ORANGEPIZERO3_FLAVOR="both"         # both (DEFAULT) | live | installer
 # ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
 OPT_SA_GPU="all-free"         # all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro
 OPT_SA_STEAM="native"         # native | flatpak | none
@@ -253,6 +261,8 @@ save_conf() {
         printf 'OPT_ORANGEPI5_BOARD=%q\n'  "${OPT_ORANGEPI5_BOARD}"
         printf 'OPT_ORANGEPI5_FLAVOR=%q\n' "${OPT_ORANGEPI5_FLAVOR}"
         printf 'OPT_ORANGEPIZERO2_FLAVOR=%q\n' "${OPT_ORANGEPIZERO2_FLAVOR}"
+        printf 'OPT_ORANGEPIZERO2W_FLAVOR=%q\n' "${OPT_ORANGEPIZERO2W_FLAVOR}"
+        printf 'OPT_ORANGEPIZERO3_FLAVOR=%q\n' "${OPT_ORANGEPIZERO3_FLAVOR}"
         # Standalone-desktop NON-secret options (passwords are NEVER persisted).
         printf 'OPT_SA_GPU=%q\n'        "${OPT_SA_GPU}"
         printf 'OPT_SA_STEAM=%q\n'      "${OPT_SA_STEAM}"
@@ -431,9 +441,9 @@ ui_password() {
 }
 
 # arm_secrets_prompt LABEL — masked, non-persisted --local-pass/--luks-pass
-# entry point for the 5 platforms whose --standalone posture has no dedicated
+# entry point for the 7 platforms whose --standalone posture has no dedicated
 # screen of its own (rpi5 desktop / frite / jetson desktop / orangepi5 /
-# orangepizero2 — unlike x86, which has standalone_screen()). Without this,
+# orangepizero2 / orangepizero2w / orangepizero3 — unlike x86, which has standalone_screen()). Without this,
 # the only way to set these secrets on those platforms is typing them into
 # the unmasked, persisted "Extra builder flags" field — see
 # _arm_standalone_flags() for how these fold into STANDALONE_FLAGS instead.
@@ -492,7 +502,7 @@ menu_build_alive() {
 # PID, or nothing.
 foreign_build_pid() {
     local p
-    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite|jetson|orangepi5|orangepi-zero2)-stage4\.sh' 2>/dev/null | head -n1)"
+    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite|jetson|orangepi5|orangepi-zero2|orangepi-zero2w|orangepi-zero3)-stage4\.sh' 2>/dev/null | head -n1)"
     [ -z "${p}" ] && p="$(pgrep -f "docker run.*${BUILDER_IMAGE}" 2>/dev/null | head -n1)"
     printf '%s' "${p}"
 }
@@ -556,8 +566,9 @@ _redacted_run_make() {
     printf '%s' "${arr[*]}"
 }
 
-# _arm_standalone_flags — compose STANDALONE_FLAGS for the 5 ARM single-role
-# targets (rpi-%/frite/jetson-%/orangepi5/orangepizero2): folds the masked
+# _arm_standalone_flags — compose STANDALONE_FLAGS for the 7 ARM single-role
+# targets (rpi-%/frite/jetson-%/orangepi5/orangepizero2/orangepizero2w/
+# orangepizero3): folds the masked
 # ARM_LOCAL_PASS/ARM_LUKS_PASS secrets in FIRST (each shell-quoted via
 # _shell_quote — see there for why), then the freeform "Extra builder flags"
 # field LAST so it can still override — mirrors the x86 `bf` string's own
@@ -600,7 +611,7 @@ build_make_cmd() {
     # macros already contain $(IMG_FLAGS)).
     local imgflags="${OPT_IMGFLAGS}"
     case "${target}" in
-        x86-*|jetson-*|frite|orangepi5|orangepizero2|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
+        x86-*|jetson-*|frite|orangepi5|orangepizero2|orangepizero2w|orangepizero3|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
         *) [ -n "${OPT_EXTRA_FLAGS}" ] && imgflags="${imgflags:+${imgflags} }${OPT_EXTRA_FLAGS}" ;;
     esac
     # Shared READ-ONLY distfiles (shared-binpkg Lane 3): a --distdir cache path is
@@ -696,6 +707,20 @@ build_make_cmd() {
     # them; an unknown flag hard-fails it) — mirrors the orangepi5 block above.
     if [ "${target}" = orangepizero2 ]; then
         RUN_MAKE+=("ORANGEPIZERO2_FLAVOR=${OPT_ORANGEPIZERO2_FLAVOR}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
+    fi
+    # ── Orange Pi Zero 2W (EXPERIMENTAL): same flavor-only axis + STANDALONE_FLAGS
+    # escape hatch as its Zero 2 template sibling above (one board, no --desktop —
+    # see specs-orangepi-zero2w/README.md).
+    if [ "${target}" = orangepizero2w ]; then
+        RUN_MAKE+=("ORANGEPIZERO2W_FLAVOR=${OPT_ORANGEPIZERO2W_FLAVOR}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
+    fi
+    # ── Orange Pi Zero 3 (EXPERIMENTAL): same flavor-only axis + STANDALONE_FLAGS
+    # escape hatch as its Zero 2 template sibling above (one board, no --desktop —
+    # see specs-orangepi-zero3/README.md).
+    if [ "${target}" = orangepizero3 ]; then
+        RUN_MAKE+=("ORANGEPIZERO3_FLAVOR=${OPT_ORANGEPIZERO3_FLAVOR}")
         { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
     fi
     # ── Builder flags threaded via STANDALONE_FLAGS (x86-* targets) ─────────────
@@ -1434,7 +1459,7 @@ options_screen() {
                      case "${iu}" in default|"") OPT_INSTALLER_UI="" ;; *) OPT_INSTALLER_UI="${iu}" ;; esac ;;
             imgflags) OPT_IMGFLAGS="$(ui_input "Image flags" "IMG_FLAGS (e.g. --no-iso, --no-img, empty = both)" "${OPT_IMGFLAGS}")" ;;
             distdir) OPT_DISTDIR="$(ui_input "Shared distfiles" "Path to a shared READ-ONLY distfiles (source-tarball) cache reused across builds (--distdir / SNAP_DISTDIR_SRC; shared-binpkg Lane 3). Arch-independent, safe fleet-wide; new fetches still land in each build's private DISTDIR. Empty = private only" "${OPT_DISTDIR}")" ;;
-            extraflags) OPT_EXTRA_FLAGS="$(ui_input "Extra builder flags" "Extra builder flags, threaded VERBATIM onto the single-role builder invocation (x86/jetson/frite/orangepi5/orangepizero2/rpi-<role> via STANDALONE_FLAGS; the rpi/x86/omnibus FLEET targets — multiple roles per build — via IMG_FLAGS instead, since a standalone-shaped flag has no single role to apply to there). The escape hatch guaranteeing all-options-in-all-menus. Empty = none" "${OPT_EXTRA_FLAGS}")" ;;
+            extraflags) OPT_EXTRA_FLAGS="$(ui_input "Extra builder flags" "Extra builder flags, threaded VERBATIM onto the single-role builder invocation (x86/jetson/frite/orangepi5/orangepizero2/orangepizero2w/orangepizero3/rpi-<role> via STANDALONE_FLAGS; the rpi/x86/omnibus FLEET targets — multiple roles per build — via IMG_FLAGS instead, since a standalone-shaped flag has no single role to apply to there). The escape hatch guaranteeing all-options-in-all-menus. Empty = none" "${OPT_EXTRA_FLAGS}")" ;;
             rootlogin) case "${OPT_ROOT_LOGIN}" in
                            no) OPT_ROOT_LOGIN=prohibit-password ;;
                            prohibit-password) OPT_ROOT_LOGIN=yes ;;
@@ -1455,6 +1480,8 @@ single_role_screen() {
         jetson "Jetson Orin Nano (arm64, EXPERIMENTAL — hardware validation pending)" \
         orangepi5 "Orange Pi 5 / 5 Plus (arm64, EXPERIMENTAL — hardware validation pending)" \
         orangepizero2 "Orange Pi Zero 2 — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode ever)" \
+        orangepizero2w "Orange Pi Zero 2W — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode ever, no onboard Ethernet)" \
+        orangepizero3 "Orange Pi Zero 3 — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode ever, onboard GbE)" \
         back "‹ back")" || return 0
     case "${arch}" in
         rpi)
@@ -1586,6 +1613,50 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             arm_secrets_prompt "Orange Pi Zero 2 headless appliance"
             save_conf
             build_make_cmd orangepizero2 "Orange Pi Zero 2 headless appliance (${flavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+            launch_build ;;
+        orangepizero2w)
+            # Orange Pi Zero 2W — arm64 Allwinner H618 HEADLESS APPLIANCE
+            # (specs-orangepi-zero2w/). EXPERIMENTAL: hardware validation
+            # pending; dispatches the Makefile orangepizero2w target. Same
+            # ONE-role / one-board / flavor-only shape as its Zero 2 template
+            # sibling above (see specs-orangepi-zero2w/README.md — note this
+            # board has NO onboard Ethernet; wired networking is a USB
+            # Ethernet adapter). Any Orange Pi Zero 2W builder flag (incl.
+            # --standalone/--encrypt-root) stays reachable via 'Extra builder
+            # flags' (the escape hatch).
+            local wflavor
+            wflavor="$(ui_menu "Orange Pi Zero 2W flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPIZERO2W_FLAVOR}). EXPERIMENTAL — hardware validation pending, see specs-orangepi-zero2w/README.md:" \
+                both "both       — live + installer (DEFAULT)" \
+                live "live       — ephemeral microSD/USB boot" \
+                installer "installer  — writes to microSD/USB" \
+                back "‹ back")" || return 0
+            [ "${wflavor}" = back ] && return 0
+            OPT_ORANGEPIZERO2W_FLAVOR="${wflavor}"
+            arm_secrets_prompt "Orange Pi Zero 2W headless appliance"
+            save_conf
+            build_make_cmd orangepizero2w "Orange Pi Zero 2W headless appliance (${wflavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+            launch_build ;;
+        orangepizero3)
+            # Orange Pi Zero 3 — arm64 Allwinner H618 HEADLESS APPLIANCE
+            # (specs-orangepi-zero3/). EXPERIMENTAL: hardware validation
+            # pending; dispatches the Makefile orangepizero3 target. Same
+            # ONE-role / one-board / flavor-only shape as its Zero 2/Zero 2W
+            # template siblings above (see specs-orangepi-zero3/README.md —
+            # unlike the Zero 2W, this board HAS onboard Gigabit Ethernet,
+            # Motorcomm YT8531 PHY). Any Orange Pi Zero 3 builder flag (incl.
+            # --standalone/--encrypt-root) stays reachable via 'Extra builder
+            # flags' (the escape hatch).
+            local wflavor
+            wflavor="$(ui_menu "Orange Pi Zero 3 flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPIZERO3_FLAVOR}). EXPERIMENTAL — hardware validation pending, see specs-orangepi-zero3/README.md:" \
+                both "both       — live + installer (DEFAULT)" \
+                live "live       — ephemeral microSD/USB boot" \
+                installer "installer  — writes to microSD/USB" \
+                back "‹ back")" || return 0
+            [ "${wflavor}" = back ] && return 0
+            OPT_ORANGEPIZERO3_FLAVOR="${wflavor}"
+            arm_secrets_prompt "Orange Pi Zero 3 headless appliance"
+            save_conf
+            build_make_cmd orangepizero3 "Orange Pi Zero 3 headless appliance (${wflavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
         *) return 0 ;;
     esac
@@ -2029,7 +2100,7 @@ build_screen() {
     local choice
     choice="$(ui_menu "Build" "What do you want to build?  (path=${OPT_PATH}, ENV=${OPT_ENV}, -j${OPT_JOBS}, IdP=${OPT_IDP})" \
         all  "Default fleet — 3 Pi + 4 x86 roles" \
-        everything "★ FULL matrix — 3 Pi + 12 x86 + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 (build-everything)" \
+        everything "★ FULL matrix — 3 Pi + 12 x86 + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 + Zero 2W + Zero 3 (build-everything)" \
         rpi  "All 3 Raspberry Pi roles" \
         x86  "All 4 default x86 roles" \
         one  "A single arch + role …" \
@@ -2040,7 +2111,7 @@ build_screen() {
         back "‹ back to main menu")" || return 0
     case "${choice}" in
         all)   build_make_cmd build-all "default fleet (3 Pi + 4 x86)" 7; launch_build ;;
-        everything) build_make_cmd build-everything "full documented matrix (3 Pi + 12 x86 + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2)" 20; launch_build ;;
+        everything) build_make_cmd build-everything "full documented matrix (3 Pi + 12 x86 + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 + Zero 2W + Zero 3)" 22; launch_build ;;
         rpi)   build_make_cmd rpi "all 3 Pi roles (${OPT_RPI_BOARD})" 3; launch_build ;;
         x86)   build_make_cmd x86 "all 4 x86 roles" 4; launch_build ;;
         one)   single_role_screen ;;
@@ -2065,6 +2136,8 @@ prebuild_screen() {
         jetson        "Jetson Orin (arm64; board = ${OPT_JETSON_BOARD})" \
         orangepi5     "Orange Pi 5 (arm64; board = ${OPT_ORANGEPI5_BOARD})" \
         orangepizero2 "Orange Pi Zero 2 (arm64)" \
+        orangepizero2w "Orange Pi Zero 2W (arm64)" \
+        orangepizero3 "Orange Pi Zero 3 (arm64)" \
         back "‹ back")" || return 0
     [ "${arch}" = back ] || [ -z "${arch}" ] && return 0
     build_make_cmd prebuild-binaries "prebuild ${arch} role-union binpkg pool (compile once)" 1

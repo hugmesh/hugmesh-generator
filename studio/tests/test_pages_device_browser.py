@@ -312,6 +312,28 @@ def test_emission_orange_pi_zero2_live_golden_argv(wiz):
     assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
 
 
+def test_emission_orange_pi_zero2w_live_golden_argv(wiz):
+    """Same flavor-only emission shape as its Zero 2 template sibling above."""
+    page = _drive_single_image(wiz, "cloud", "orange-pi-zero2w", "orangepizero2w")
+    page.orangepizero2w_flavor.setCurrentText("live")
+    advance_to(wiz, wizard_mod.HardwarePage)
+    c = wiz.cfg
+    assert (c.role, c.platform, c.board, c.flavor) == \
+        ("orangepizero2w", "orangepizero2w", "", "live")
+    assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
+
+
+def test_emission_orange_pi_zero3_live_golden_argv(wiz):
+    """Same flavor-only emission shape as its Zero 2 template sibling above."""
+    page = _drive_single_image(wiz, "cloud", "orange-pi-zero3", "orangepizero3")
+    page.orangepizero3_flavor.setCurrentText("live")
+    advance_to(wiz, wizard_mod.HardwarePage)
+    c = wiz.cfg
+    assert (c.role, c.platform, c.board, c.flavor) == \
+        ("orangepizero3", "orangepizero3", "", "live")
+    assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
+
+
 def test_emission_experimental_rpi400_builds_as_rpi4(wiz):
     """An EXPERIMENTAL alias device maps to the accepted builder row — no builder
     change, no invented axes."""
@@ -429,7 +451,8 @@ def test_worklist_search_filters_rows(wiz):
 def test_select_machine_shim_selects_platform_default_device(wiz):
     page = advance_to(wiz, wizard_mod.RolePage)
     for plat, want in (("x86", "x86-pc"), ("rpi5", "rpi5"), ("frite", "la-frite"),
-                       ("orangepi5", "orange-pi-5-plus"), ("orangepizero2", "orange-pi-zero2")):
+                       ("orangepi5", "orange-pi-5-plus"), ("orangepizero2", "orange-pi-zero2"),
+                       ("orangepizero2w", "orange-pi-zero2w")):
         page.select_machine(plat)
         assert page._selected_device() == want, plat
         assert page._selected_machine() == plat

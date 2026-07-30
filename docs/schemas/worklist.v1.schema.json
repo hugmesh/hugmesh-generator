@@ -35,7 +35,7 @@
         "role": { "type": "string", "minLength": 1 },
         "platform": {
           "type": "string",
-          "enum": ["x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2"]
+          "enum": ["x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3"]
         },
         "board": { "type": "string", "default": "" },
         "flavor": { "type": "string", "default": "" },
@@ -65,7 +65,7 @@
         "mode": { "enum": ["standalone", "cloud", "mesh"] },
         "role": { "type": "string" },
         "platform": {
-          "enum": ["x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2"]
+          "enum": ["x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3"]
         },
         "brand": { "type": "string" },
         "brand_title": { "type": "string" },

@@ -158,3 +158,23 @@ orangepizero2	appliance	prod	-	both	-
 # See docker/build-image.sh's header comment.
 orangepizero2	appliance	test	-	standalone	-
 orangepizero2	appliance	prod	-	standalone	-
+# orangepizero2w — the Zero 2's Allwinner H618 sibling (EXPERIMENTAL, headless
+# appliance, one board, flavor-only). Same 6+2 row shape as orangepizero2.
+orangepizero2w	appliance	test	-	live	-
+orangepizero2w	appliance	test	-	installer	-
+orangepizero2w	appliance	test	-	both	-
+orangepizero2w	appliance	prod	-	live	-
+orangepizero2w	appliance	prod	-	installer	-
+orangepizero2w	appliance	prod	-	both	-
+orangepizero2w	appliance	test	-	standalone	-
+orangepizero2w	appliance	prod	-	standalone	-
+# orangepizero3 — the Zero 2's Allwinner H618 sibling (EXPERIMENTAL, headless
+# appliance, one board, flavor-only). Same 6+2 row shape as orangepizero2.
+orangepizero3	appliance	test	-	live	-
+orangepizero3	appliance	test	-	installer	-
+orangepizero3	appliance	test	-	both	-
+orangepizero3	appliance	prod	-	live	-
+orangepizero3	appliance	prod	-	installer	-
+orangepizero3	appliance	prod	-	both	-
+orangepizero3	appliance	test	-	standalone	-
+orangepizero3	appliance	prod	-	standalone	-

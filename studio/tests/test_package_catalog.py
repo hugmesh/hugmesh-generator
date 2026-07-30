@@ -15,7 +15,7 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # raw (non-deduped) per-platform atom totals — pinned to the tree (design 2.8 counts).
 # x86 = 149 since main added sys-apps/systemd-utils to packages.list (boot-chain #307).
 _RAW_TOTALS = {"x86": 149, "rpi5": 74, "jetson": 66, "frite": 52,
-               "orangepi5": 53, "orangepizero2": 32}
+               "orangepi5": 53, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [
     ("x86 omnibus node", ImageConfig(mode="mesh", role="omnibus", platform="x86")),
@@ -31,6 +31,10 @@ _CONFIGS = [
                                      flavor="both", desktop="light")),
     ("opz2 appliance", ImageConfig(mode="standalone", role="orangepizero2",
                                    platform="orangepizero2", flavor="live")),
+    ("opz2w appliance", ImageConfig(mode="standalone", role="orangepizero2w",
+                                    platform="orangepizero2w", flavor="live")),
+    ("opz2w appliance", ImageConfig(mode="standalone", role="orangepizero3",
+                                    platform="orangepizero3", flavor="live")),
 ]
 
 

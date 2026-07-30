@@ -300,6 +300,8 @@ def test_print_command_new_emitted_fields_ride_config_and_reach_argv(tmp_path):
     ("frite", "build-frite-stage4.sh"),
     ("orangepi5", "build-orangepi5-stage4.sh"),
     ("orangepizero2", "build-orangepi-zero2-stage4.sh"),
+    ("orangepizero2w", "build-orangepi-zero2w-stage4.sh"),
+    ("orangepizero3", "build-orangepi-zero3-stage4.sh"),
 ])
 def test_print_command_iso_unset_flavor_resolves_to_single(tmp_path, platform, builder):
     """G2 source fix on the FLAT single-build channel: an unset flavor on the ARM ISO

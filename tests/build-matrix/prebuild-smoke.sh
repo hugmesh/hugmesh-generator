@@ -27,9 +27,11 @@ declare -A BUILDER=(
   [jetson]=build-jetson-stage4.sh
   [orangepi5]=build-orangepi5-stage4.sh
   [orangepizero2]=build-orangepi-zero2-stage4.sh
+  [orangepizero2w]=build-orangepi-zero2w-stage4.sh
+  [orangepizero3]=build-orangepi-zero3-stage4.sh
 )
 
-for arch in x86 rpi5 frite jetson orangepi5 orangepizero2; do
+for arch in x86 rpi5 frite jetson orangepi5 orangepizero2 orangepizero2w orangepizero3; do
     out="$(make -n prebuild-binaries ARCH="${arch}" 2>&1)" || { bad "${arch}: make -n exited non-zero"; continue; }
     miss=""
     grep -q -- '--packages-only' <<<"${out}"                          || miss+=" --packages-only"

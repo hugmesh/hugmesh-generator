@@ -63,7 +63,7 @@ runner polls until `--timeout`. Console output is captured to
 | `verify-client.sh` | Client desktop: non-root boot + console-assertion verification (laptop/chromebook/desktop). |
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
 | `launch-pi.sh` | Boot a Pi kernel+stage4 under `-M virt` with a KEYS disk. |
-| `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2) under `-M virt` (kernel+DTB direct). |
+| `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2[w]/orangepizero3) under `-M virt` (kernel+DTB direct). |
 | `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
 | `matrix-assertions.sh` | `assert_size` / `assert_build_load` / `assert_runtime_load` helpers (limits read from the code). |
 | `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |

@@ -335,6 +335,12 @@ def test_scope_reject_reason_names_the_axis_that_actually_rejected():
         ("mesh", "jetson-desktop", "jetson", "platform"),
         ("standalone", "laptop", "x86", None),
         ("standalone", "orangepizero2", "orangepizero2", None),
+        # the Zero 2's H618 sibling is the SAME node-class-but-standalone appliance
+        # (_APPLIANCE_ROLES carries both), so the same "never rejected" pin applies.
+        ("standalone", "orangepizero2w", "orangepizero2w", None),
+        # the Zero 2's H618 sibling is the SAME node-class-but-standalone appliance
+        # (_APPLIANCE_ROLES carries both), so the same "never rejected" pin applies.
+        ("standalone", "orangepizero3", "orangepizero3", None),
     )
     for mode, role, plat, want in cases:
         cfg = ImageConfig(mode=mode, role=role, platform=plat)

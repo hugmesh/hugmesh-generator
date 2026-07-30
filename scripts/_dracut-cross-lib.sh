@@ -2,7 +2,8 @@
 # _dracut-cross-lib.sh — SOURCED helper for the ARM cross-dracut initramfs path.
 #
 # WHY THIS EXISTS
-# An --encrypt-root ARM installer (rpi5/frite/orangepi5/orangepi-zero2, and
+# An --encrypt-root ARM installer (rpi5/frite/orangepi5/orangepi-zero2/
+# orangepi-zero2w/orangepi-zero3, and
 # jetson once it gains a split boot partition) needs a *disk-boot* initramfs
 # that carries the `crypt` dracut module so the firmware-loaded boot stage can
 # unlock the LUKS2 root. That initramfs is arm64, but the builder runs on an

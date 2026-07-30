@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.join(_GEN_ROOT, "studio"))
 from hugmesh_studio.core import device_catalog  # noqa: E402
 from hugmesh_studio.core.config import (  # noqa: E402
     DESKTOP_ROLES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS, NODE_ROLES,
-    ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS,
-    ROLE_CHOICES, image_class, rpi_boards_for_role,
+    ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS,
+    ORANGEPIZERO3_FLAVORS, PLATFORM_LABELS, ROLE_CHOICES, image_class, rpi_boards_for_role,
 )
 
 DEFAULT_OUT = os.path.join("docs", "catalog", "image-catalog.json")
@@ -56,6 +56,10 @@ def platform_axes(platform: str, role: str) -> dict:
         axes["flavor"] = list(ORANGEPI5_FLAVORS)
     elif platform == "orangepizero2":
         axes["flavor"] = list(ORANGEPIZERO2_FLAVORS)
+    elif platform == "orangepizero2w":
+        axes["flavor"] = list(ORANGEPIZERO2W_FLAVORS)
+    elif platform == "orangepizero3":
+        axes["flavor"] = list(ORANGEPIZERO3_FLAVORS)
     return axes
 
 

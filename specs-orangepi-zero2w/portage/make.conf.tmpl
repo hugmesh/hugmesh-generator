@@ -1,0 +1,73 @@
+# Cross-compilation — @@OPIZ2W_CPU@@ — Orange Pi Zero 2W (Allwinner H618) —
+# HARDENED, HEADLESS APPLIANCE
+#
+# This is the HEADLESS APPLIANCE image's portage config (NOT a K8s cluster node,
+# and NOT a desktop client — this platform has ONE role, a network appliance;
+# see the builder header and specs-orangepi-zero2w/README.md for the HDMI/
+# mainline-driver research that justifies the headless-only scope). It mirrors
+# specs-frite/specs-orangepi5's make.conf.tmpl shape (same aarch64 cross
+# toolchain, same hardened CFLAGS/LDFLAGS/FEATURES) but is DELIBERATELY MUCH
+# SHORTER: no X/gtk/qt USE flags, no VIDEO_CARDS, no INPUT_DEVICES — there is no
+# display stack to configure at all on this platform, ever.
+#
+# Variables substituted at build time (by render_template in
+# build-orangepi-zero2w-stage4.sh):
+#   @@CBUILD@@           Host compiler triplet
+#   @@CROSS_TARGET@@     Target triplet (e.g. aarch64-unknown-linux-gnu)
+#   @@OPIZ2W_CPU@@        GCC -mcpu / -mtune value (cortex-a53 default — H618 is
+#                        a quad-core Cortex-A53, no big.LITTLE split; the SAME
+#                        core Orange Pi 5's LITTLE cluster uses)
+#   @@JOBS@@             Parallel make jobs
+#   @@WORK_DIR@@         Base build directory (per-arch build root)
+
+CBUILD="@@CBUILD@@"
+CHOST="@@CROSS_TARGET@@"
+
+# Hardened CFLAGS — same posture as the rest of the fleet. H618 is a quad
+# Cortex-A53 (no big.LITTLE — unlike RK3588's cortex-a76.cortex-a55 mix), so a
+# plain single -mcpu value is correct here.
+CFLAGS="-mcpu=@@OPIZ2W_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+MAKEOPTS="-j@@JOBS@@"
+# -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
+# mode-700 / encrypted $HOME work dir). All sandboxing off for the cross-build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline for a HEADLESS APPLIANCE — NO X11/GTK/Qt anywhere (this
+# platform never has a desktop mode, unlike Frite's --desktop light|none). dbus
+# is kept (NetworkManager depends on it); elogind/seat-management is dropped —
+# there is no local login session to manage on an SSH-only appliance.
+USE="bindist hardened pie ssp selinux seccomp"
+USE="${USE} dbus udev -X -qt5 -qt6 -kde -gnome -gnome-keyring -systemd"
+# No audio at all — this is a headless network appliance, not a media device.
+USE="${USE} -alsa -pulseaudio -pipewire"
+# Disable GObject introspection: glib-2.86+ bootstraps a native copy of
+# gobject-introspection during cross-compile src_configure, but the bootstrap
+# meson build fails in the cross-emerge env (cross-file / EPYTHON
+# mis-targeting). Mirrors specs-frite/specs-orangepi5 (identical cross-compile
+# gap; NetworkManager itself pulls in glib transitively even on a headless box).
+USE="${USE} -introspection -vala"
+
+# Only the MCS SELinux policy store (same posture as every other platform in
+# this repo): smaller build, matches the per-process MCS labelling baseline.
+POLICY_TYPES="mcs"
+# Deliberately NO INPUT_DEVICES / VIDEO_CARDS lines: those select X11 input/
+# video drivers, and this platform never emerges x11-base/xorg-server or any
+# GPU/DRM userspace stack — there is nothing for these variables to select.
+
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="arm64 ~arm64"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+# NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
+# package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the
+# ac_cv_* cache args into packages with hand-written configure scripts that
+# reject unknown options and die. (Same rationale as every other platform here.)
+
+PAX_MARKINGS="none"

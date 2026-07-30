@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # test-arm-ro-distdir.sh — regression test for the shared READ-ONLY distfiles wiring
-# added to the 5 ARM builders (shared-binpkg track, Lane 3).
+# added to the 6 ARM builders (shared-binpkg track, Lane 3).
 #
 # WHAT / WHY: distfiles are arch-independent SOURCE tarballs, so a single fleet-wide
 # cache is safe across every board (no ABI/-mcpu risk). x86 already reused an
 # external cache read-only via PORTAGE_RO_DISTDIRS; Lane 3 generalizes that to the
-# five cross builders (rpi5/frite/jetson/orangepi5/orangepi-zero2) via a --distdir
+# seven cross builders (rpi5/frite/jetson/orangepi5/orangepi-zero2[w]/orangepi-zero3) via a --distdir
 # DIR flag (+ SNAP_DISTDIR_SRC env). When set to an existing dir the builder appends
 # PORTAGE_RO_DISTDIRS="<dir>" to the rendered make.conf; new fetches still land in
 # the build's PRIVATE ${BUILD_ROOT}/distfiles, so the shared pool is never written.
@@ -20,7 +20,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ARM_BUILDERS=(build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh \
-              build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh)
+              build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh)
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }

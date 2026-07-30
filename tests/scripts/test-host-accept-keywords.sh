@@ -24,7 +24,7 @@ bad() { echo "  FAIL $*"; F=$((F+1)); }
 echo "== host-side accept_keywords guard =="
 
 for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-jetson-stage4.sh; do
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh; do
     f="${GEN}/${s}"
     if [ ! -f "${f}" ]; then bad "${s}: script missing"; continue; fi
     if grep -q 'package.accept_keywords/hugmesh-host-build-backends' "${f}" \
@@ -63,7 +63,7 @@ fi
 
 # The sysroot-side file (#352) must ALSO survive — the two are twins, not
 # alternatives (host emerges vs cross-emerges read different config roots).
-for d in specs-frite specs-rpi5 specs-orangepi5 specs-jetson specs-orangepi-zero2; do
+for d in specs-frite specs-rpi5 specs-orangepi5 specs-jetson specs-orangepi-zero2 specs-orangepi-zero2w specs-orangepi-zero3; do
     f="${GEN}/${d}/portage/package.accept_keywords/setuptools-scm-backend"
     if [ -f "${f}" ] && grep -q "dev-python/vcs-versioning \*\*" "${f}"; then
         ok "${d}: sysroot-side acceptance (#352) intact"

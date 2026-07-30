@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # launch-arm.sh — boot a golden aarch64 .img for the NON-Pi ARM builders
-# (frite / jetson / orangepi5 / orangepizero2) under qemu-system-aarch64 -M virt
+# (frite / jetson / orangepi5 / orangepizero2[w] / orangepizero3) under qemu-system-aarch64 -M virt
 # by loading its kernel DIRECTLY (-kernel Image -dtb <board.dtb> -append 'root=...').
 #
 # This is the generalization of launch-pi.sh to the four ARM platforms the Pi
@@ -33,8 +33,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ── Defaults ───────────────────────────────────────────────────────────────
-PLATFORM="${PLATFORM:-frite}"  # frite | jetson | orangepi5 | orangepizero2
-BOARD="${BOARD:-}"             # board id (empty on the boardless zero2 platform)
+PLATFORM="${PLATFORM:-frite}"  # frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3
+BOARD="${BOARD:-}"             # board id (empty on the boardless zero2/zero2w/zero3 platforms)
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 ROLE="${ROLE:-desktop}"
 IMG=""                         # explicit .img (else autodetect)
@@ -70,9 +70,9 @@ Usage: $0 --platform PLAT [--board BOARD] [OPTIONS]
   overlay protects the golden image and lets growroot demonstrate expansion.
 
 Platform / board:
-  -p, --platform PLAT  frite | jetson | orangepi5 | orangepizero2. Default: ${PLATFORM}
+  -p, --platform PLAT  frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3. Default: ${PLATFORM}
   -b, --board BOARD    Board id (la-frite|le-potato|sweet-potato | orin-nano[-4gb]|
-                       orin-nx-8gb|orin-nx-16gb | orange-pi-5[-plus]). Empty on zero2.
+                       orin-nx-8gb|orin-nx-16gb | orange-pi-5[-plus]). Empty on zero2/zero2w/zero3.
 
 Artifact selection (shared with launch-pi.sh / flash-disk.sh):
   -w, --work-dir DIR   Dir to autodetect the .img/kernel/DTB from. Default: ${WORK_DIR}
@@ -99,6 +99,8 @@ Examples:
   $0 --platform frite --board la-frite --role desktop --foreground
   $0 --platform jetson --board orin-nano-4gb --img /var/tmp/snap/...-jetson-orin-nano-4gb-*.img
   $0 --platform orangepizero2 --role appliance
+  $0 --platform orangepizero2w --role appliance
+  $0 --platform orangepizero3 --role appliance
 EOF
 exit "${1:-0}"
 }
@@ -159,6 +161,8 @@ board_defaults() {
         orangepi5:orange-pi-5)      DEF_DTB="rockchip/rk3588s-orangepi-5.dtb";      DEF_CPU="cortex-a76"; DEF_SUBDIR="snap-build-orangepi5" ;;
         orangepi5:orange-pi-5-plus) DEF_DTB="rockchip/rk3588-orangepi-5-plus.dtb"; DEF_CPU="cortex-a76"; DEF_SUBDIR="snap-build-orangepi5" ;;
         orangepizero2:*)    DEF_DTB="allwinner/sun50i-h616-orangepi-zero2.dtb";   DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero2" ;;
+        orangepizero2w:*)   DEF_DTB="allwinner/sun50i-h618-orangepi-zero2w.dtb"; DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero2w" ;;
+        orangepizero3:*)   DEF_DTB="allwinner/sun50i-h618-orangepi-zero3.dtb"; DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero3" ;;
         *) die "no board table entry for platform=${plat} board=${board} (pass --dtb/--cpu/--build-subdir explicitly)" ;;
     esac
 }

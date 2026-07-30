@@ -39,6 +39,8 @@ CONFIG_BOARDS = {
     "jetson": JETSON_BOARDS,
     "orangepi5": ORANGEPI5_BOARDS,
     "orangepizero2": ("",),
+    "orangepizero2w": ("",),
+    "orangepizero3": ("",),
 }
 
 
@@ -210,16 +212,23 @@ def test_frite_and_opi5_board_allowlists_match_and_single_role_platforms_have_no
     frite = _builder_text("frite")
     opi5 = _builder_text("orangepi5")
     opz2 = _builder_text("orangepizero2")
+    opz2w = _builder_text("orangepizero2w")
+    opz2w = _builder_text("orangepizero3")
     assert _allowlist(frite, "board") == set(FRITE_BOARDS)
     assert _allowlist(opi5, "board") == set(ORANGEPI5_BOARDS)
     # single-role platforms: --role is only a hostname marker, so the builders carry
     # NO '--role must be one of' allowlist — matching the catalog's single-role
     # derivation (and no --board line at all in the zero2 builder).
-    for name, text in (("frite", frite), ("orangepi5", opi5), ("orangepizero2", opz2)):
+    for name, text in (("frite", frite), ("orangepi5", opi5), ("orangepizero2", opz2),
+                       ("orangepizero2w", opz2w)):
         assert "--role must be one of" not in text, \
             f"build-{name} grew a --role allowlist — update the catalog derivation"
     assert "--board must be one of" not in opz2, \
         "build-orangepi-zero2 grew a --board axis — update the catalog"
+    assert "--board must be one of" not in opz2w, \
+        "build-orangepi-zero2w grew a --board axis — update the catalog"
+    assert "--board must be one of" not in opz2w, \
+        "build-orangepi-zero3 grew a --board axis — update the catalog"
 
 
 # ── the buildable() honesty predicate, catalog-wide ───────────────────────────────

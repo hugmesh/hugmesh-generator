@@ -124,7 +124,8 @@
 # (^[A-Za-z0-9._-]{1,64}$ — no "+", no ":"):
 #
 #   "<platform>.<role>[.<extra>]"   platform ∈ {x86, rpi5, frite, jetson,
-#                        orangepi5, orangepizero2}
+#                        orangepi5, orangepizero2, orangepizero2w,
+#                        orangepizero3}
 #
 #   x86 node roles      (primary | mesh-extension): pki | be | fe | be-gpu
 #                        (-> --role be+gpu) | omnibus | edge_ai
@@ -187,6 +188,14 @@
 #                        flavor=standalone behaves exactly as frite's does
 #                        (normalized to installer + --standalone/--local-user
 #                        appended by run_orangepizero2_build()).
+#   orangepizero2w (EXPERIMENTAL; client only): "<flavor>" — identical grammar
+#                        to orangepizero2 above (the Zero 2's H618 sibling;
+#                        headless appliance, no --role/--board axis); handled
+#                        by run_orangepizero2w_build().
+#   orangepizero3 (EXPERIMENTAL; client only): "<flavor>" — identical grammar
+#                        to orangepizero2 above (the Zero 2's H618 sibling;
+#                        headless appliance, no --role/--board axis); handled
+#                        by run_orangepizero3_build().
 #
 #   A bare token with no platform prefix (e.g. HARDWARE_CLASS="pki") is
 #   accepted as a legacy/convenience alias for the matching x86 role.
@@ -340,14 +349,19 @@ its flags/tokens like this — the same four choices, one clarity layer:
        IMAGE_TYPE=client, HARDWARE_CLASS =
          x86.laptop | x86.chromebook | x86.desktop
          | frite.<board>.<flavor> | orangepi5.<...> | orangepizero2.<...>
+         | orangepizero2w.<...>
+         | orangepizero3.<...>
        (the SSO / key-zip client roles). make face: `make x86-<role>` / `make frite`
-         / `make orangepi5` / `make orangepizero2`.
+         / `make orangepi5` / `make orangepizero2` / `make orangepizero2w`
+         / `make orangepizero3`.
 
   4. Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop (no mesh/SSO)
        HARDWARE_CLASS =
          x86.standalone-thin | x86.standalone-thick | x86.standalone-unaffiliated
          | rpi5.standalone-desktop | frite.<board>.standalone
          | orangepi5.<board>.standalone | orangepizero2.standalone
+         | orangepizero2w.standalone
+         | orangepizero3.standalone
        (the --standalone / --local-user LUKS2 local-login posture). make face:
          `make x86-standalone-thin` … (see the standalone screen in `make menu`).
 
@@ -441,6 +455,10 @@ ORANGEPI5_FLAVOR_OUT=""
 ORANGEPI5_STANDALONE=false
 ORANGEPIZERO2_FLAVOR_OUT=""
 ORANGEPIZERO2_STANDALONE=false
+ORANGEPIZERO2W_FLAVOR_OUT=""
+ORANGEPIZERO2W_STANDALONE=false
+ORANGEPIZERO3_FLAVOR_OUT=""
+ORANGEPIZERO3_STANDALONE=false
 KEYS_ROLE=""
 
 cleanup_scratch() {
@@ -654,7 +672,8 @@ fi
 
 [ -d "$GENERATOR_DIR" ] || die ERROR "GENERATOR_DIR '${GENERATOR_DIR}' not found (broken image build?)"
 for f in build-x86-host-stage4.sh build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh \
-         build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh; do
+         build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh \
+         build-orangepi-zero3-stage4.sh; do
   [ -x "${GENERATOR_DIR}/${f}" ] || die ERROR "generator build script missing/not executable: ${GENERATOR_DIR}/${f}"
 done
 
@@ -698,6 +717,8 @@ resolve_build_target() {
   FRITE_STANDALONE=false
   ORANGEPI5_STANDALONE=false
   ORANGEPIZERO2_STANDALONE=false
+  ORANGEPIZERO2W_STANDALONE=false
+  ORANGEPIZERO3_STANDALONE=false
 
   if [ -z "$HARDWARE_CLASS" ]; then
     case "$IMAGE_TYPE" in
@@ -826,6 +847,38 @@ resolve_build_target() {
         esac
         PLATFORM="orangepizero2"
         ;;
+      orangepizero2w)
+        [ "$IMAGE_TYPE" != "client" ] && return 1
+        ORANGEPIZERO2W_FLAVOR_OUT="${p2:-installer}"
+        # "both" rejected for the same single-imageRef reason as frite above.
+        case "$ORANGEPIZERO2W_FLAVOR_OUT" in
+          standalone)
+            # --standalone forces the installer flavor internally, same as
+            # frite/orangepi5/orangepizero2 above.
+            ORANGEPIZERO2W_STANDALONE=true
+            ORANGEPIZERO2W_FLAVOR_OUT="installer"
+            ;;
+          live|installer) ;;
+          *) return 1 ;;
+        esac
+        PLATFORM="orangepizero2w"
+        ;;
+      orangepizero3)
+        [ "$IMAGE_TYPE" != "client" ] && return 1
+        ORANGEPIZERO3_FLAVOR_OUT="${p2:-installer}"
+        # "both" rejected for the same single-imageRef reason as frite above.
+        case "$ORANGEPIZERO3_FLAVOR_OUT" in
+          standalone)
+            # --standalone forces the installer flavor internally, same as
+            # frite/orangepi5/orangepizero2 above.
+            ORANGEPIZERO3_STANDALONE=true
+            ORANGEPIZERO3_FLAVOR_OUT="installer"
+            ;;
+          live|installer) ;;
+          *) return 1 ;;
+        esac
+        PLATFORM="orangepizero3"
+        ;;
       *)
         # Bare legacy token, no platform prefix -> x86 alias.
         case "$IMAGE_TYPE" in
@@ -908,6 +961,8 @@ resolve_spec_target() {
       */build-jetson-stage4.sh|build-jetson-stage4.sh)             PLATFORM="jetson" ;;
       */build-orangepi5-stage4.sh|build-orangepi5-stage4.sh)       PLATFORM="orangepi5" ;;
       */build-orangepi-zero2-stage4.sh|build-orangepi-zero2-stage4.sh) PLATFORM="orangepizero2" ;;
+      */build-orangepi-zero2w-stage4.sh|build-orangepi-zero2w-stage4.sh) PLATFORM="orangepizero2w" ;;
+      */build-orangepi-zero3-stage4.sh|build-orangepi-zero3-stage4.sh) PLATFORM="orangepizero3" ;;
     esac
     [ -n "$PLATFORM" ] && break
   done
@@ -948,7 +1003,7 @@ resolve_spec_target() {
         *) die FAILED "the image-spec resolved to platform=jetson with role='${BUILD_ROLE:-<none>}', which build-jetson-stage4.sh rejects (it accepts only: edge_ai | gpu-host | full | desktop). The Studio does not validate role×platform, so a jetson ImageConfig that leaves role at the base default materializes the x86 client role 'standalone-thick' — set a jetson role explicitly." ;;
       esac
       ;;
-    frite|orangepi5|orangepizero2)
+    frite|orangepi5|orangepizero2|orangepizero2w|orangepizero3)
       # --flavor both emits TWO artifacts (live + installer); the ingest contract
       # carries a single imageRef, so the collector would die at artifact
       # collection AFTER the full build. Reject it here like resolve_build_target
@@ -964,7 +1019,7 @@ resolve_spec_target() {
 
   case "$PLATFORM" in
     frite|orangepi5) build_desc="${_sb:-?}.${_sf:-?}" ;;
-    orangepizero2)   build_desc="${_sf:-?}" ;;
+    orangepizero2|orangepizero2w|orangepizero3)   build_desc="${_sf:-?}" ;;
     *)               build_desc="${BUILD_ROLE:-spec}" ;;
   esac
 
@@ -1017,7 +1072,7 @@ if [ "$TOR_ONION" = "true" ]; then
 fi
 
 case "$PLATFORM" in
-  jetson|orangepi5|orangepizero2)
+  jetson|orangepi5|orangepizero2|orangepizero2w|orangepizero3)
     warn "${PLATFORM} is EXPERIMENTAL in the generator (hardware validation pending) — proceeding anyway since it was explicitly requested"
     ;;
 esac
@@ -1113,6 +1168,30 @@ run_orangepizero2_build() {
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
   dispatch_builder ./build-orangepi-zero2-stage4.sh "$@"
+}
+
+run_orangepizero2w_build() {
+  set -- -w "${SCRATCH_DIR}/work" -j "$JOBS" --env "$IMG_BUILD_ENV" \
+         --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
+         --flavor "$ORANGEPIZERO2W_FLAVOR_OUT"
+  [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  if [ "$ORANGEPIZERO2W_STANDALONE" = "true" ]; then
+    set -- "$@" --standalone
+    [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
+  fi
+  dispatch_builder ./build-orangepi-zero2w-stage4.sh "$@"
+}
+
+run_orangepizero3_build() {
+  set -- -w "${SCRATCH_DIR}/work" -j "$JOBS" --env "$IMG_BUILD_ENV" \
+         --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
+         --flavor "$ORANGEPIZERO3_FLAVOR_OUT"
+  [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  if [ "$ORANGEPIZERO3_STANDALONE" = "true" ]; then
+    set -- "$@" --standalone
+    [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
+  fi
+  dispatch_builder ./build-orangepi-zero3-stage4.sh "$@"
 }
 
 # dispatch_builder ARGV... — execute the fully-assembled builder command, OR
@@ -1278,6 +1357,8 @@ if [ "$BUILD_MODE" != "spec" ]; then
     frite)         build_desc="${FRITE_BOARD_OUT}.${FRITE_FLAVOR_OUT}" ;;
     orangepi5)     build_desc="${ORANGEPI5_BOARD_OUT}.${ORANGEPI5_FLAVOR_OUT}" ;;
     orangepizero2) build_desc="${ORANGEPIZERO2_FLAVOR_OUT}" ;;
+    orangepizero2w) build_desc="${ORANGEPIZERO2W_FLAVOR_OUT}" ;;
+    orangepizero3) build_desc="${ORANGEPIZERO3_FLAVOR_OUT}" ;;
     *)             build_desc="${BUILD_ROLE}" ;;
   esac
 fi
@@ -1295,6 +1376,8 @@ else
     jetson)        forward_and_wait run_jetson_build         || build_ok=false ;;
     orangepi5)     forward_and_wait run_orangepi5_build      || build_ok=false ;;
     orangepizero2) forward_and_wait run_orangepizero2_build  || build_ok=false ;;
+    orangepizero2w) forward_and_wait run_orangepizero2w_build || build_ok=false ;;
+    orangepizero3) forward_and_wait run_orangepizero3_build || build_ok=false ;;
   esac
 fi
 if [ "$build_ok" = "false" ]; then
@@ -1312,7 +1395,7 @@ fi
 # ── 6. locate the produced artifact + copy it into ARTIFACT_DIR ─────────────
 case "$PLATFORM" in
   x86|rpi5|jetson)             artifact_glob='*.img'; artifact_glob_xz='*.img.xz' ;;
-  frite|orangepi5|orangepizero2) artifact_glob='*.iso'; artifact_glob_xz='*.iso.xz' ;;
+  frite|orangepi5|orangepizero2|orangepizero2w|orangepizero3) artifact_glob='*.iso'; artifact_glob_xz='*.iso.xz' ;;
 esac
 # Fail loud (never nondeterministically pick-and-silently-discard) if the
 # build tree holds anything other than EXACTLY one matching artifact. The

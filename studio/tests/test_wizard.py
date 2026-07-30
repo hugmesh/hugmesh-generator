@@ -183,6 +183,36 @@ def test_orangepizero2_flavor_survives_a_loaded_config_round_trip(wiz):
     assert wiz.cfg.board == ""
 
 
+def test_orangepizero2w_flavor_survives_a_loaded_config_round_trip(wiz):
+    wiz.cfg.mode = "cloud"
+    wiz.cfg.role = "orangepizero2w"
+    wiz.cfg.platform = "orangepizero2w"
+    wiz.cfg.flavor = "installer"
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.RolePage)
+    assert page.orangepizero2w_box.isVisible()
+    assert page.orangepizero2w_flavor.currentText() == "installer"
+    wiz.next()
+    assert wiz.cfg.platform == "orangepizero2w"
+    assert wiz.cfg.flavor == "installer"
+    assert wiz.cfg.board == ""
+
+
+def test_orangepizero3_flavor_survives_a_loaded_config_round_trip(wiz):
+    wiz.cfg.mode = "cloud"
+    wiz.cfg.role = "orangepizero3"
+    wiz.cfg.platform = "orangepizero3"
+    wiz.cfg.flavor = "installer"
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.RolePage)
+    assert page.orangepizero3_box.isVisible()
+    assert page.orangepizero3_flavor.currentText() == "installer"
+    wiz.next()
+    assert wiz.cfg.platform == "orangepizero3"
+    assert wiz.cfg.flavor == "installer"
+    assert wiz.cfg.board == ""
+
+
 def _rpi5_board_items(page):
     return [page.rpi5_board.itemText(i) for i in range(page.rpi5_board.count())]
 

@@ -14,7 +14,7 @@
 # the failed sysroot once the trio is merged.
 #
 # Mirrors test-host-accept-keywords.sh: BOTH halves must hold or this bites —
-#   * runtime half: all 5 ARM builders probe the two tools into
+#   * runtime half: all 6 ARM builders probe the two tools into
 #     HOST_POLICY_TOOLS and carry the ~amd64 window in their HOSTKW heredoc;
 #   * baked half: Dockerfile.build carries the same keyword lines AND emerges
 #     the two packages in the FINAL stage (fresh images: zero runtime cost).
@@ -29,10 +29,10 @@ bad() { echo "  FAIL $*"; F=$((F+1)); }
 echo "== host SELinux 3.11 tool-parity guard =="
 
 BUILDERS=(build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh
-          build-orangepi-zero2-stage4.sh build-jetson-stage4.sh)
+          build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh)
 KW_ATOMS=(sys-libs/libsepol sys-libs/libselinux sys-libs/libsemanage sys-apps/policycoreutils)
 
-# ── runtime half: the probe + the keyword window in all 5 ARM builders ──
+# ── runtime half: the probe + the keyword window in all 6 ARM builders ──
 for s in "${BUILDERS[@]}"; do
     f="${GEN}/${s}"
     if [ ! -f "${f}" ]; then bad "${s}: script missing"; continue; fi

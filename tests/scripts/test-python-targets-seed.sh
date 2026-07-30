@@ -25,8 +25,8 @@ bad() { echo "  FAIL $*"; F=$((F+1)); }
 
 echo "== python-targets seed guard =="
 
-# The seed line, in every config root (5 ARM sysroots + the x86 chroot).
-for d in specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 \
+# The seed line, in every config root (7 ARM sysroots + the x86 chroot).
+for d in specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 specs-orangepi-zero2w specs-orangepi-zero3 \
          specs-jetson specs-x86; do
     f="${GEN}/${d}/portage/package.use/python-targets"
     if [ -f "${f}" ] && grep -qF '*/* PYTHON_TARGETS: python3_12' "${f}"; then
@@ -38,7 +38,7 @@ done
 
 # PYTHON_SINGLE_TARGET must NOT be forced globally — two enabled single-targets
 # violate REQUIRED_USE (^^) and would break every python_single_target package.
-for d in specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 \
+for d in specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 specs-orangepi-zero2w specs-orangepi-zero3 \
          specs-jetson specs-x86; do
     f="${GEN}/${d}/portage/package.use/python-targets"
     if [ -f "${f}" ] && grep -qE '^\s*\*/\*\s+PYTHON_SINGLE_TARGET' "${f}"; then
@@ -51,7 +51,7 @@ done
 # Every ARM builder must copy the spec's package.use/* into the sysroot with no
 # filtering — the seed rides that copy.
 for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-jetson-stage4.sh; do
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh; do
     f="${GEN}/${s}"
     if [ ! -f "${f}" ]; then bad "${s}: script missing"; continue; fi
     if grep -qE 'cp "\$\{SPECS_DIR\}/portage/package\.use/"\*' "${f}"; then
@@ -74,7 +74,7 @@ fi
 # write the host-side package.use twin at run time, and Dockerfile.build must
 # bake the same file (belt-and-braces, mirroring the #360/#366 keyword split).
 for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-jetson-stage4.sh; do
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh; do
     f="${GEN}/${s}"
     if [ -f "${f}" ] \
        && grep -q 'package.use/hugmesh-host-build-backends' "${f}" \
@@ -96,7 +96,7 @@ fi
 # fully clean — emerge -p rc=0, zero USE-change blocks — with BOTH roots
 # seeded). Sysroot/chroot half = specs file; host half rides the same
 # run-time/baked package.use file as the python-targets seed.
-for d in specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 \
+for d in specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 specs-orangepi-zero2w specs-orangepi-zero3 \
          specs-jetson specs-x86; do
     f="${GEN}/${d}/portage/package.use/pam-audit"
     if [ -f "${f}" ] && grep -qE '^\s*sys-libs/pam\s+audit' "${f}"; then
@@ -106,7 +106,7 @@ for d in specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 \
     fi
 done
 for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-jetson-stage4.sh; do
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh; do
     if grep -qE '^\s*sys-libs/pam\s+audit' "${GEN}/${s}"; then
         ok "${s}: HOST-side pam[audit] seed present"
     else

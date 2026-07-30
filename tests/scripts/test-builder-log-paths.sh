@@ -24,7 +24,7 @@ bad() { echo "  FAIL $*"; F=$((F+1)); }
 echo "== builder log-paths guard =="
 
 ALL=(build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh
-     build-orangepi-zero2-stage4.sh build-jetson-stage4.sh build-x86-host-stage4.sh)
+     build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh build-x86-host-stage4.sh)
 
 # 1+2. every builder: exact IMAGE_LOG_FILE derivation + a tee naming BOTH files.
 for s in "${ALL[@]}"; do

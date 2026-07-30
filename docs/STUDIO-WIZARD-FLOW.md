@@ -109,7 +109,8 @@ A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `
 
 - **Machine-first single-image picker** (`role.py`). The user picks the **target machine
   as a card** (the platform union of `ROLE_CHOICES[mode]` — x86 / Raspberry Pi / La Frite /
-  Orange Pi 5 / Orange Pi Zero 2; jetson is mesh-only, so it gets no card here), then the
+  Orange Pi 5 / Orange Pi Zero 2 / Orange Pi Zero 2W; jetson is mesh-only, so it gets no
+  card here), then the
   **image type** filtered to what that machine supports, with the board/flavor/desktop
   knobs inline underneath. The redundant standalone "Platform" combo is **removed** — the
   card **is** the platform. Chromebook stays an x86 *image type*, not its own card. The

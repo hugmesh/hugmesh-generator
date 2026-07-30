@@ -133,8 +133,8 @@ EXCEPTION" note in `docker/build-image.sh`'s own header).
 ## The canonical matrix — `tests/build-matrix/matrix.tsv`
 
 One row per buildable image cell `(platform, role, env, board, flavor,
-desktop)`; `-` marks an axis a platform does not have. **118 cells** today
-(includes 8 JOB-channel-only standalone-posture probe rows — see below):
+desktop)`; `-` marks an axis a platform does not have. **134 cells** today
+(includes 12 JOB-channel-only standalone-posture probe rows — see below):
 
 | Platform | Builder | Cells | Axes |
 |---|---|---|---|
@@ -144,6 +144,8 @@ desktop)`; `-` marks an axis a platform does not have. **118 cells** today
 | **jetson** *(EXPERIMENTAL)* | `build-jetson-stage4.sh` | 4 roles × 2 env on `orin-nano` + 3 boards × 2 env on `edge_ai` = **14** | roles `edge_ai gpu-host full desktop`; board `orin-nano\|orin-nano-4gb\|orin-nx-8gb\|orin-nx-16gb` (non-default boards carried on the headline `edge_ai` role); deliberately **no** standalone token (see above) |
 | **orangepi5** *(EXPERIMENTAL)* | `build-orangepi5-stage4.sh` | 2 boards × 3 flavors × 2 env = 12 + 2 `standalone` probe rows → **14** | board `orange-pi-5-plus\|orange-pi-5` (RK3588 vs RK3588S), flavor `live\|installer\|both`; `desktop` is the only role (no cluster-node roles on this platform); JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 | **orangepizero2** *(EXPERIMENTAL)* | `build-orangepi-zero2-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; headless only — Allwinner H616 has no mainline display-engine driver, so this platform never gets a `desktop` role; JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
+| **orangepizero2w** *(EXPERIMENTAL)* | `build-orangepi-zero2w-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; the Zero 2's Allwinner H618 sibling — same headless-only rationale (identical DE33 display engine, no mainline driver) and NO onboard Ethernet (USB-Ethernet-first); JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
+| **orangepizero3** *(EXPERIMENTAL)* | `build-orangepi-zero3-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; the Zero 2's Allwinner H618 sibling — same headless-only rationale (identical DE33 display engine, no mainline driver) but onboard Gigabit Ethernet is BACK (Ethernet-first, unlike the Zero 2W); JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 
 Adding an image option means adding/extending rows here — the harness then
 holds every channel to it.
@@ -234,16 +236,17 @@ including a **completeness gate**: every channel's pass count must equal the
 row count (a crashed channel child or a silently skipped row fails the run,
 never degrades it).
 
-It also runs **24 flag-threading probes**: `STANDALONE_FLAGS` must reach the
+It also runs **30 flag-threading probes**: `STANDALONE_FLAGS` must reach the
 builder argv on the `x86-%` / `x86-standalone-thin` / `jetson` / `jetson-%` /
-`frite` / `orangepi5` / `orangepizero2` recipes (the menu's and Studio's
-extra-flags escape hatch rides it — 7 probes), `IMG_FLAGS` must reach it on
-`rpi-%` / `x86-%` / `frite` / `jetson` / `jetson-%` / `orangepi5` /
-`orangepizero2` (every platform offers the image-flags knob — 7 probes), 6
+`frite` / `orangepi5` / `orangepizero2` / `orangepizero2w` / `orangepizero3` recipes (the menu's
+and Studio's extra-flags escape hatch rides it — 9 probes), `IMG_FLAGS` must
+reach it on `rpi-%` / `x86-%` / `frite` / `jetson` / `jetson-%` / `orangepi5` /
+`orangepizero2` / `orangepizero2w` / `orangepizero3` (every platform offers the image-flags knob
+— 9 probes), 8
 end-to-end MENU→MAKE probes prove `build_make_cmd`'s composed invocation lands
 both `OPT_IMGFLAGS` and `OPT_EXTRA_FLAGS` in the builder argv on one target per
 platform (`rpi-backend`, `x86-pki`, `frite`, `jetson-edge_ai`, `orangepi5`,
-`orangepizero2`), 2 fleet-option threading probes prove
+`orangepizero2`, `orangepizero2w`, `orangepizero3`), 2 fleet-option threading probes prove
 `RESUME`/`PENTEST`/`X86_OMNIBUS`/`FRITE`/`JETSON` all gate to both
 `build-all` and `build-everything`, 1 unaffiliated-menu probe proves the
 `x86-standalone-unaffiliated` recipe carries `--role standalone-unaffiliated`
@@ -274,18 +277,19 @@ secure-boot family, node fallback creds, services/games, cluster plane,
 branding assets), and 2 prove the jetson encrypt-root and jetson standalone
 hard-blocks still refuse `--print-command` outright. Finally the
 **flag-coverage differ** (`tests/build-matrix/flag-coverage.sh`, the `COVG`
-bucket, 12 checks) parses each builder's live arg-parser case arms and diffs
+bucket, 40 checks) parses each builder's live arg-parser case arms and diffs
 them against the Studio's *real* emission vocabulary (computed by exercising
 `ImageConfig.to_cli_args()` over a capability-table-driven sample battery) in
 both directions: a builder flag with no Studio field and no documented
 allowlist reason, or a Studio-emitted flag no builder parses, fails the run.
 Every probe family is fail-closed behind an expected-count gate. Current
 totals (as reported by the harness bucket summary):
-118 cells × 5 channels + 91 threading probes (30 menu + 61 GUI — incl. the 4
+134 cells × 5 channels + 102 threading probes (36 menu + 66 GUI — incl. the 4
 `character-forge` probes: the tri-state flag pair on x86 AND rpi5 plus the
-`--optional-services` checklist path) + 46 negatives + 30 flag-coverage checks
-+ 16 taxonomy-parity + 6 web-catalog honesty =
-**779 checks**.
+`--optional-services` checklist path) + 56 negatives + 40 flag-coverage checks
++ 9 emerge-group banner probes (`EGB`: 8 builder multisets + the heredoc-safety
+sweep) + 16 taxonomy-parity + 6 web-catalog honesty =
+**899 checks**.
 
 ```sh
 make matrix-check                 # or: bash tests/build-matrix/check.sh
@@ -355,9 +359,11 @@ appliances, not cluster nodes, and/or still EXPERIMENTAL):
 | `JETSON=1` | the Jetson Orin edge-AI platform *(EXPERIMENTAL)* |
 | `ORANGEPI5=1` | Orange Pi 5 / 5 Plus *(EXPERIMENTAL)* |
 | `ORANGEPIZERO2=1` | Orange Pi Zero 2 headless appliance *(EXPERIMENTAL)* |
+| `ORANGEPIZERO2W=1` | Orange Pi Zero 2W headless appliance *(EXPERIMENTAL)* |
+| `ORANGEPIZERO3=1` | Orange Pi Zero 3 headless appliance *(EXPERIMENTAL)* |
 
 Each also has an `_ONLY=1` variant (`FRITE_ONLY=1`, `JETSON_ONLY=1`,
-`ORANGEPI5_ONLY=1`, `ORANGEPIZERO2_ONLY=1`) that builds **only** that platform,
+`ORANGEPI5_ONLY=1`, `ORANGEPIZERO2_ONLY=1`, `ORANGEPIZERO2W_ONLY=1`, `ORANGEPIZERO3_ONLY=1`) that builds **only** that platform,
 skipping every other one. `SKIP_X86=1` / `SKIP_RPI=1` drop those instead. See
 `scripts/build-all-roles.sh`'s header comment for the full knob list — it is
 independent of (and not verified by) the `matrix.tsv`/`check.sh` harness above,
@@ -369,10 +375,12 @@ wiring, not as an afterthought.
 
 - Channel parity per feature area: [`docs/STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md),
   [`docs/CLIENT-IMAGES.md`](CLIENT-IMAGES.md), [`docs/EDGE-AI.md`](EDGE-AI.md) §1/§5.
-- The three **EXPERIMENTAL** platforms (hardware validation pending):
+- The four **EXPERIMENTAL** platforms (hardware validation pending):
   [`specs-jetson/README.md`](../specs-jetson/README.md) (NVIDIA Jetson Orin),
   [`specs-orangepi5/README.md`](../specs-orangepi5/README.md) (Orange Pi 5 / 5 Plus),
-  [`specs-orangepi-zero2/README.md`](../specs-orangepi-zero2/README.md) (Orange Pi Zero 2, headless).
+  [`specs-orangepi-zero2/README.md`](../specs-orangepi-zero2/README.md) (Orange Pi Zero 2, headless),
+  [`specs-orangepi-zero2w/README.md`](../specs-orangepi-zero2w/README.md) (Orange Pi Zero 2W, headless),
+  [`specs-orangepi-zero3/README.md`](../specs-orangepi-zero3/README.md) (Orange Pi Zero 3, headless).
 - Unit companions: `tests/menu/build_menu_cmd_test.sh` (menu command
   composition) and the Studio pytest suite (`studio/tests/`).
 - **🔭 planned**: run `make matrix-check` as a fail-closed GitLab lint stage

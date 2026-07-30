@@ -136,7 +136,7 @@ def main(argv=None) -> int:
             cfg = ImageConfig.load(args.config) if args.config else ImageConfig()
             # Resolve platform defaults on this fresh throwaway cfg BEFORE dispatch — the
             # single-build flat path bypasses worklist._materialize_one, so without this a
-            # standalone frite/orangepi5/orangepizero2 with an unset flavor would print
+            # standalone frite/orangepi5/orangepizero2[w]/orangepizero3 with an unset flavor would print
             # `--flavor both` and build TWO ISOs the worker can't disambiguate (G2). Same
             # #337 resolver the materialize path uses; in-place mutation is safe here.
             resolve_platform_defaults(cfg)

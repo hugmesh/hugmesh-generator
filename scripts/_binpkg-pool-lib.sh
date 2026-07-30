@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # _binpkg-pool-lib.sh — SOURCED helper: per-board binpkg-pool fingerprint guard.
-# Shared-binpkg track, Lane 4d. Sourced by all six stage4 builders.
+# Shared-binpkg track, Lane 4d. Sourced by all eight stage4 builders.
 #
 # WHY THIS EXISTS — THE LOAD-BEARING SIGILL SAFETY NET (over directory isolation).
 # Binpkg reuse (`--usepkg`) is ONLY safe when {CHOST, exact CFLAGS/-mcpu, CXXFLAGS,

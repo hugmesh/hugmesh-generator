@@ -40,7 +40,7 @@ SELECTABLE_STATUSES = ("supported", "experimental")
 
 # Platforms whose builder has NO --board flag (the device's board axis is ""):
 # x86 targets any UEFI machine; the zero2 builder is a single-board platform.
-BOARDLESS_PLATFORMS = ("x86", "orangepizero2")
+BOARDLESS_PLATFORMS = ("x86", "orangepizero2", "orangepizero2w", "orangepizero3")
 
 # The standing caveat every EXPERIMENTAL badge/tooltip carries (mirrors the
 # PLATFORM_LABELS tag text + the fail-loud-preflight convention from #351).
@@ -188,7 +188,8 @@ def buildable(device_id: str, mode: str, role_id: str) -> bool:
 
 def config_axes(device_id: str) -> dict[str, str]:
     """The exact cfg fields selecting this device writes: ``{"platform", "board"}``.
-    ``board`` is "" for platforms with no --board flag (x86, orangepizero2) and the
+    ``board`` is "" for platforms with no --board flag (x86, orangepizero2,
+    orangepizero2w, orangepizero3) and the
     exact builder ``--board`` value otherwise — emission identity by construction.
     Raises for an unsupported device (it has no builder axes to write)."""
     dev = load_catalog().device(device_id)

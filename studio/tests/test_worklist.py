@@ -369,6 +369,8 @@ def test_envelope_conforms_to_frozen_schema():
     ("frite", "frite"),      # ROLE_CHOICES role-id == platform name (no --role emitted)
     ("orangepi5", "orangepi5"),
     ("orangepizero2", "orangepizero2"),
+    ("orangepizero2w", "orangepizero2w"),
+    ("orangepizero3", "orangepizero3"),
 ])
 def test_materialize_unset_role_resolves_to_platform_default(platform, expect_role):
     """An UNSET entry.role on a non-x86 platform resolves to that platform's canonical
@@ -397,7 +399,7 @@ def test_materialize_x86_default_role_leak_resolved_for_role_platforms(platform,
     assert materialized.to_cli_args()[materialized.to_cli_args().index("--role") + 1] == expect_role
 
 
-@pytest.mark.parametrize("platform", ["frite", "orangepi5", "orangepizero2"])
+@pytest.mark.parametrize("platform", ["frite", "orangepi5", "orangepizero2", "orangepizero2w"])
 def test_materialize_unset_flavor_defaults_to_installer(platform):
     """An unset flavor on the ARM ISO platforms materializes to the single-artifact
     'installer' (not to_cli_args's two-artifact 'both'), so the worker's one-imageRef
@@ -410,7 +412,7 @@ def test_materialize_unset_flavor_defaults_to_installer(platform):
     assert cfg.to_cli_args()[cfg.to_cli_args().index("--flavor") + 1] == "installer"
 
 
-@pytest.mark.parametrize("platform", ["frite", "orangepi5", "orangepizero2"])
+@pytest.mark.parametrize("platform", ["frite", "orangepi5", "orangepizero2", "orangepizero2w"])
 def test_materialize_explicit_flavor_is_honored(platform):
     """An explicitly-set flavor is never overridden by the installer default."""
     wl = WorklistConfig(base=ImageConfig(mode="standalone"),
@@ -598,6 +600,8 @@ def test_roles_for_platform_inversion():
     assert roles_for_platform("frite") == frozenset({"frite"})
     assert roles_for_platform("orangepi5") == frozenset({"orangepi5"})
     assert roles_for_platform("orangepizero2") == frozenset({"orangepizero2"})
+    assert roles_for_platform("orangepizero2w") == frozenset({"orangepizero2w"})
+    assert roles_for_platform("orangepizero3") == frozenset({"orangepizero3"})
     assert roles_for_platform("rpi5") == frozenset({"generic", "rpi5-desktop", "pki", "be", "fe"})
     assert roles_for_platform("jetson") == frozenset({"edge_ai", "full", "gpu-host", "jetson-desktop"})
     assert "standalone-thick" in roles_for_platform("x86")

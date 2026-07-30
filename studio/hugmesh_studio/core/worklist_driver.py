@@ -55,6 +55,8 @@ KEY_PROFILE: dict[str, str] = {
     "gpu-host": "host",      # jetson GPU worker -> host
     "generic": "host",       # plain arm64 server appliance
     "orangepizero2": "host",  # headless appliance
+    "orangepizero2w": "host",  # headless appliance (Zero 2's H618 sibling)
+    "orangepizero3": "host",  # headless appliance (Zero 2's H618 sibling)
 }
 
 GENKEYS_SCRIPT = os.path.join("scripts", "gen-provision-keys.sh")

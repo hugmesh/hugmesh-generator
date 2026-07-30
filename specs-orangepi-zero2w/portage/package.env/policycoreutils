@@ -1,0 +1,9 @@
+# sys-apps/policycoreutils cross-compile fixups — see env/policycoreutils-cross.conf
+# Its setfiles/ component uses a hand-written Makefile (no econf), so it never
+# receives portage's auto --with-sysroot and calls bare host pkg-config. The env
+# file bakes --sysroot=${ESYSROOT} into CC (fixes <stdio.h>/<fts.h> not found) and
+# routes pkg-config through the crossdev wrapper at the target sysroot (fixes
+# "Package 'libselinux'/'libsemanage' not found"). Scoped here so the --sysroot CC
+# override and PKG_CONFIG_* don't leak into the 100+ econf packages that already
+# get the sysroot correctly from econf's --with-sysroot.
+sys-apps/policycoreutils policycoreutils-cross.conf

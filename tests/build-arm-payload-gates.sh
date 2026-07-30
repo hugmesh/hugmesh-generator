@@ -2,7 +2,7 @@
 # build-arm-payload-gates.sh — guards the ARM/cross-builder halves of the
 # "broken artifacts with exit 0" forensic findings:
 #
-#   1. SILENT PACKAGE LOSS. The five cross builders' payload emerges run
+#   1. SILENT PACKAGE LOSS. The ARM cross builders' payload emerges run
 #      --keep-going and their post-emerge asserts were hand-maintained BINARY
 #      lists — session 20260719-103006-a775c2 shipped pki/be/fe rpi5 .img.xz
 #      artifacts whose logs all say "WARNING:   skipped net-firewall/firewalld"
@@ -10,7 +10,8 @@
 #      (pki line 3817): no firewall on the image AND a dangling 'firewall'
 #      runlevel service. Fix: scripts/_payload-gate-lib.sh, the cross twin of
 #      build-x86-host-stage4.sh's REQUESTED-ATOM COMPLETENESS GATE (#461/#465),
-#      wired into all five builders.
+#      wired into all of them (originally the five of PR #470; the Orange Pi
+#      Zero 2W / Zero 3 forks are wired identically from birth).
 #
 #   2. KERNEL-LESS ARTIFACTS WITH EXIT 0. A failed sys-kernel/*-sources emerge
 #      degraded to a warn-skipped kernel phase and warn-only downstream
@@ -49,9 +50,12 @@ declare -A KATOM=(
   [build-jetson-stage4.sh]=sys-kernel/gentoo-sources
   [build-orangepi5-stage4.sh]=sys-kernel/gentoo-sources
   [build-orangepi-zero2-stage4.sh]=sys-kernel/gentoo-sources
+  [build-orangepi-zero2w-stage4.sh]=sys-kernel/gentoo-sources
+  [build-orangepi-zero3-stage4.sh]=sys-kernel/gentoo-sources
 )
 BUILDERS=(build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh
-          build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh)
+          build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh
+          build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh)
 
 echo "== ARM payload gates (requested-atom completeness + kernel tier) =="
 
@@ -219,7 +223,8 @@ done
 grep -q 'warn "No raspberrypi-sources found in sysroot, skipping kernel build."' "${REPO}/build-rpi5-stage4.sh" \
   && bad "rpi5 still warn-skips a missing kernel source tree" \
   || ok "rpi5 old warn-skip is gone"
-for b in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh; do
+for b in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh \
+         build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh; do
   f="${REPO}/${b}"
   grep -q 'warn "no kernel in boot stage — skipping LIVE image."' "${f}" \
     && bad "${b}: LIVE image still silently skippable without --skip-kernel" \
@@ -227,7 +232,9 @@ for b in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-st
   grep -q 'err "no kernel in boot stage — the requested LIVE image cannot boot' "${f}" \
     && ok "${b}: kernel-less LIVE is a hard error otherwise" \
     || bad "${b}: no hard error for a kernel-less LIVE request"
-  grep -q 'warn "Kernel ${'"$(echo "${b}" | sed 's/build-frite.*/FRITE_KERNEL_IMG/;s/build-orangepi5.*/OPI5_KERNEL_IMG/;s/build-orangepi-zero2.*/OPIZ2_KERNEL_IMG/')"'} not in sysroot — the boot tree will be incomplete."' "${f}" \
+  # NB: the zero2w/zero3 rules must precede the zero2 rule — sed runs the
+  # expressions in order and 'build-orangepi-zero2.*' would swallow both.
+  grep -q 'warn "Kernel ${'"$(echo "${b}" | sed 's/build-frite.*/FRITE_KERNEL_IMG/;s/build-orangepi5.*/OPI5_KERNEL_IMG/;s/build-orangepi-zero2w.*/OPIZ2W_KERNEL_IMG/;s/build-orangepi-zero3.*/OPIZ3_KERNEL_IMG/;s/build-orangepi-zero2.*/OPIZ2_KERNEL_IMG/')"'} not in sysroot — the boot tree will be incomplete."' "${f}" \
     && bad "${b}: boot tree still built kernel-less with only a warn" \
     || ok "${b}: kernel-less boot tree hard-fails unless --skip-kernel"
 done

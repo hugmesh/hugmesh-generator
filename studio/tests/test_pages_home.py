@@ -527,7 +527,8 @@ def test_home_standalone_hidden_and_dropped_on_a_mesh_node(qapp):
     assert "--standalone" not in cfg.to_cli_args()
 
 
-def test_home_standalone_live_on_the_orangepizero2_node_class_appliance(qapp):
+@pytest.mark.parametrize("appliance", ["orangepizero2", "orangepizero2w", "orangepizero3"])
+def test_home_standalone_live_on_the_orangepizero2_node_class_appliance(qapp, appliance):
     """REGRESSION PIN (review finding 1) — the GUI half.
 
     The first cut declared --standalone classes=("desktop",) flat, which hid this checkbox
@@ -539,12 +540,14 @@ def test_home_standalone_live_on_the_orangepizero2_node_class_appliance(qapp):
     orangepizero2 is node-class AND standalone: build-orangepi-zero2-stage4.sh has zero
     ROLE_CLIENT/ROLE_K8S and composes ${STANDALONE} unconditionally (:218-226), and
     ROLE_CHOICES calls the role a "standalone HEADLESS APPLIANCE". There is no builder rule
-    to honour here, so the wizard must not invent one."""
-    cfg = ImageConfig(mode="standalone", role="orangepizero2", platform="orangepizero2")
+    to honour here, so the wizard must not invent one. The Zero 2W (H618) sibling is the
+    same node-class-but-standalone appliance — _APPLIANCE_ROLES carries both — so the pin
+    covers both roles."""
+    cfg = ImageConfig(mode="standalone", role=appliance, platform=appliance)
     page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
     assert page.standalone.isVisibleTo(page), (
-        "--standalone hidden on the orangepizero2 appliance — the flow's whole point is "
+        f"--standalone hidden on the {appliance} appliance — the flow's whole point is "
         "unreachable in the wizard")
     page.standalone.setChecked(True)
     assert page.validatePage()

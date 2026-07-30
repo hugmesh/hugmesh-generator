@@ -132,6 +132,11 @@ def test_flash_argv_askpass_and_artifact():
 def test_arch_for_platform():
     assert ft.arch_for_platform("rpi5") == "arm64"
     assert ft.arch_for_platform("orangepi5") == "arm64"
+    # regression pin: the boardless appliances must flash arm64 artifacts, never
+    # fall through to the x86 default (orangepizero3 did exactly that once).
+    assert ft.arch_for_platform("orangepizero2") == "arm64"
+    assert ft.arch_for_platform("orangepizero2w") == "arm64"
+    assert ft.arch_for_platform("orangepizero3") == "arm64"
     assert ft.arch_for_platform("x86") == "x86"
     assert ft.arch_for_platform("") == "x86"
 

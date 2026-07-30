@@ -27,7 +27,8 @@ from ...core import device_catalog, hw_scan, profiles
 from ...core.config import (
     FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES,
     JETSON_BOARDS, KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
-    ORANGEPIZERO2_FLAVORS, ROLE_CHOICES, RPI_BOARDS, UNAFFILIATED_ROLE,
+    ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ROLE_CHOICES, RPI_BOARDS,
+    UNAFFILIATED_ROLE,
     rpi_boards_for_role,
 )
 from ._widgets import _row, status_badge
@@ -35,7 +36,8 @@ from .network import _tri_state, _tri_value
 
 # canonical machine order — x86 first (the default platform), matching today's
 # default-platform behaviour; ARM boards follow in a stable order.
-_MACHINE_ORDER = ("x86", "rpi5", "frite", "orangepi5", "orangepizero2", "jetson")
+_MACHINE_ORDER = ("x86", "rpi5", "frite", "orangepi5", "orangepizero2", "orangepizero2w",
+                  "orangepizero3", "jetson")
 
 
 def _machine_sort_key(plat: str) -> int:
@@ -236,6 +238,36 @@ class RolePage(QtWidgets.QWizardPage):
          self.orangepizero2_skip_uboot) = self._uboot_rows(
             oz2l, "prebuilt U-Boot URL (optional; empty = builder default)")
         lay.addWidget(self.orangepizero2_box)
+
+        # orange pi zero 2w flavor-only knob (visible only when platform ==
+        # orangepizero2w — headless appliance, no board/role axis at all; the
+        # Zero 2's H618 template sibling)
+        self.orangepizero2w_box = QtWidgets.QGroupBox("Orange Pi Zero 2W options")
+        oz2wl = QtWidgets.QVBoxLayout(self.orangepizero2w_box)
+        self.orangepizero2w_flavor = QtWidgets.QComboBox()
+        self.orangepizero2w_flavor.addItems(list(ORANGEPIZERO2W_FLAVORS))
+        self.orangepizero2w_flavor.setCurrentText("both")
+        oz2wl.addWidget(_row("Flavor", self.orangepizero2w_flavor))
+        # opz2w's u-boot override is optional convenience, not flashability-critical (G35)
+        (self.orangepizero2w_uboot_url, self.orangepizero2w_uboot_defconfig,
+         self.orangepizero2w_skip_uboot) = self._uboot_rows(
+            oz2wl, "prebuilt U-Boot URL (optional; empty = builder default)")
+        lay.addWidget(self.orangepizero2w_box)
+
+        # orange pi zero 3 flavor-only knob (visible only when platform ==
+        # orangepizero3 — headless appliance, no board/role axis at all; the
+        # Zero 2's H618 template sibling)
+        self.orangepizero3_box = QtWidgets.QGroupBox("Orange Pi Zero 3 options")
+        oz3l = QtWidgets.QVBoxLayout(self.orangepizero3_box)
+        self.orangepizero3_flavor = QtWidgets.QComboBox()
+        self.orangepizero3_flavor.addItems(list(ORANGEPIZERO3_FLAVORS))
+        self.orangepizero3_flavor.setCurrentText("both")
+        oz3l.addWidget(_row("Flavor", self.orangepizero3_flavor))
+        # opz3's u-boot override is optional convenience, not flashability-critical (G35)
+        (self.orangepizero3_uboot_url, self.orangepizero3_uboot_defconfig,
+         self.orangepizero3_skip_uboot) = self._uboot_rows(
+            oz3l, "prebuilt U-Boot URL (optional; empty = builder default)")
+        lay.addWidget(self.orangepizero3_box)
 
         # x86 client knobs: desktop weight + Steam delivery + the composable
         # payload/affiliation flags (G21/G22)
@@ -500,6 +532,8 @@ class RolePage(QtWidgets.QWizardPage):
         self.rpi5_box.setVisible(machine == "rpi5")
         self.orangepi5_box.setVisible(machine == "orangepi5")
         self.orangepizero2_box.setVisible(machine == "orangepizero2")
+        self.orangepizero2w_box.setVisible(machine == "orangepizero2w")
+        self.orangepizero3_box.setVisible(machine == "orangepizero3")
         # desktop weight / Steam are x86 desktop-image knobs (client + standalone)
         self.client_box.setVisible(machine == "x86"
                                    and self.wiz.cfg.mode in ("standalone", "cloud"))
@@ -628,6 +662,10 @@ class RolePage(QtWidgets.QWizardPage):
                 self.orangepi5_flavor.setCurrentText(c.flavor)
             elif c.platform == "orangepizero2":
                 self.orangepizero2_flavor.setCurrentText(c.flavor)
+            elif c.platform == "orangepizero2w":
+                self.orangepizero2w_flavor.setCurrentText(c.flavor)
+            elif c.platform == "orangepizero3":
+                self.orangepizero3_flavor.setCurrentText(c.flavor)
             else:
                 self.flavor.setCurrentText(c.flavor)
         if c.platform == "frite" and c.desktop:
@@ -643,7 +681,9 @@ class RolePage(QtWidgets.QWizardPage):
                 (self.orangepi5_uboot_url, self.orangepi5_uboot_defconfig,
                  self.orangepi5_skip_uboot),
                 (self.orangepizero2_uboot_url, self.orangepizero2_uboot_defconfig,
-                 self.orangepizero2_skip_uboot)):
+                 self.orangepizero2_skip_uboot),
+                (self.orangepizero2w_uboot_url, self.orangepizero2w_uboot_defconfig,
+                 self.orangepizero2w_skip_uboot)):
             url_w.setText(c.uboot_url)
             defconfig_w.setText(c.uboot_defconfig)
             skip_w.setChecked(c.skip_uboot)
@@ -801,6 +841,20 @@ class RolePage(QtWidgets.QWizardPage):
             c.uboot_url = self.orangepizero2_uboot_url.text().strip()
             c.uboot_defconfig = self.orangepizero2_uboot_defconfig.text().strip()
             c.skip_uboot = self.orangepizero2_skip_uboot.isChecked()
+        elif c.platform == "orangepizero2w":
+            c.board = ""
+            c.flavor = self.orangepizero2w_flavor.currentText()
+            c.desktop = ""
+            c.uboot_url = self.orangepizero2w_uboot_url.text().strip()
+            c.uboot_defconfig = self.orangepizero2w_uboot_defconfig.text().strip()
+            c.skip_uboot = self.orangepizero2w_skip_uboot.isChecked()
+        elif c.platform == "orangepizero3":
+            c.board = ""
+            c.flavor = self.orangepizero3_flavor.currentText()
+            c.desktop = ""
+            c.uboot_url = self.orangepizero3_uboot_url.text().strip()
+            c.uboot_defconfig = self.orangepizero3_uboot_defconfig.text().strip()
+            c.skip_uboot = self.orangepizero3_skip_uboot.isChecked()
         else:
             c.board = ""
             c.flavor = ""

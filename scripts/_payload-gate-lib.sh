@@ -47,7 +47,7 @@
 # own tooling misfired would be worse than the hole it closes (same posture as
 # the x86 gate). Only a REAL missing package (or kernel) is fatal.
 #
-# Shared so the five cross builders cannot drift on the load-bearing bit (same
+# Shared so the seven cross builders cannot drift on the load-bearing bit (same
 # reasoning as _binpkg-pool-lib.sh / _dracut-cross-lib.sh).
 
 # requested_atom_gate SYSROOT WORKDIR TAG ALLOW_MISSING KERNEL_ATOM ATOM...

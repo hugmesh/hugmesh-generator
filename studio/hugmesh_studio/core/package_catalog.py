@@ -41,6 +41,8 @@ SPECS_SUBDIR = {
     "x86": "specs-x86", "rpi5": "specs-rpi5", "jetson": "specs-jetson",
     "frite": "specs-frite", "orangepi5": "specs-orangepi5",
     "orangepizero2": "specs-orangepi-zero2",
+    "orangepizero2w": "specs-orangepi-zero2w",
+    "orangepizero3": "specs-orangepi-zero3",
 }
 PLATFORMS = tuple(SPECS_SUBDIR)
 
@@ -185,6 +187,14 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
         ListSpec("packages-live", "live", _flavor_live),
     ),
     "orangepizero2": (
+        ListSpec("packages", "base", _ALWAYS),
+        ListSpec("packages-live", "live", _flavor_live),
+    ),
+    "orangepizero2w": (
+        ListSpec("packages", "base", _ALWAYS),
+        ListSpec("packages-live", "live", _flavor_live),
+    ),
+    "orangepizero3": (
         ListSpec("packages", "base", _ALWAYS),
         ListSpec("packages-live", "live", _flavor_live),
     ),

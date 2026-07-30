@@ -83,6 +83,20 @@ orangepizero2 --target — host-side cross-toolchain plumbing, deliberately not 
 orangepizero2 --role — undocumented marker-only escape hatch (no real role axis; path-traversal-gated in the builder)
 orangepizero2 --live — pure alias of '--flavor live' (the fielded axis)
 orangepizero2 --installer — pure alias of '--flavor installer' (the fielded axis)
+orangepizero2w --user-password — deprecated no-op on this builder (warn+ignore)
+orangepizero2w --root-password — deprecated no-op on this builder (warn+ignore)
+orangepizero2w --specs-dir — host-side build plumbing, deliberately not a GUI knob
+orangepizero2w --target — host-side cross-toolchain plumbing, deliberately not a GUI knob
+orangepizero2w --role — undocumented marker-only escape hatch (no real role axis; path-traversal-gated in the builder)
+orangepizero2w --live — pure alias of '--flavor live' (the fielded axis)
+orangepizero2w --installer — pure alias of '--flavor installer' (the fielded axis)
+orangepizero3 --user-password — deprecated no-op on this builder (warn+ignore)
+orangepizero3 --root-password — deprecated no-op on this builder (warn+ignore)
+orangepizero3 --specs-dir — host-side build plumbing, deliberately not a GUI knob
+orangepizero3 --target — host-side cross-toolchain plumbing, deliberately not a GUI knob
+orangepizero3 --role — undocumented marker-only escape hatch (no real role axis; path-traversal-gated in the builder)
+orangepizero3 --live — pure alias of '--flavor live' (the fielded axis)
+orangepizero3 --installer — pure alias of '--flavor installer' (the fielded axis)
 all --packages-only — host/CI PREBUILD-phase flag (shared-binpkg): run the emerge that populates PKGDIR then exit BEFORE image assembly; NOT a Studio ImageConfig field (same class as --specs-dir; driven by the prebuild-binaries make target, not a GUI knob)
 all --allow-missing-packages — build-phase ESCAPE HATCH, not a product knob: it downgrades the requested-atom completeness gate (which fails a build whose package set did not fully merge under --keep-going) to a warning. Deliberately NOT a Studio field — a GUI checkbox for "ship a degraded image" is exactly the silent-degradation this gate exists to end; an operator who wants it must type it on the command line after reading the missing-atom list. Was x86-only; now every builder carries the gate (the 5 cross builders via scripts/_payload-gate-lib.sh, whose kernel tier this flag can NOT bypass)
 rpi5 --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir). x86 DOES field it; the cross builders take it as host plumbing only
@@ -90,6 +104,8 @@ frite --distdir — host-side build plumbing (shared READ-ONLY distfiles cache p
 jetson --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
 orangepi5 --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
 orangepizero2 --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
+orangepizero2w --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
+orangepizero3 --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
 EOF
 
 allow_reason() { # platform flag -> print reason, rc 0 if allowlisted
@@ -115,6 +131,8 @@ BASELINES = {
     "jetson": dict(mode="mesh", role="edge_ai", platform="jetson"),
     "orangepi5": dict(mode="cloud", role="orangepi5", platform="orangepi5"),
     "orangepizero2": dict(mode="cloud", role="orangepizero2", platform="orangepizero2"),
+    "orangepizero2w": dict(mode="cloud", role="orangepizero2w", platform="orangepizero2w"),
+    "orangepizero3": dict(mode="cloud", role="orangepizero3", platform="orangepizero3"),
 }
 
 # field -> LIST of override dicts (tri-states get an on AND an off variant so
@@ -361,6 +379,8 @@ check_builder frite         build-frite-stage4.sh
 check_builder jetson        build-jetson-stage4.sh
 check_builder orangepi5     build-orangepi5-stage4.sh
 check_builder orangepizero2 build-orangepi-zero2-stage4.sh
+check_builder orangepizero2w build-orangepi-zero2w-stage4.sh
+check_builder orangepizero3 build-orangepi-zero3-stage4.sh
 
 # ── packages-delta coverage (WS-BUILDER atomic flip) ────────────────────────────
 # --packages-add / --packages-drop are the two flags that landed on ALL SIX
@@ -392,6 +412,8 @@ check_packages_delta frite         build-frite-stage4.sh
 check_packages_delta jetson        build-jetson-stage4.sh
 check_packages_delta orangepi5     build-orangepi5-stage4.sh
 check_packages_delta orangepizero2 build-orangepi-zero2-stage4.sh
+check_packages_delta orangepizero2w build-orangepi-zero2w-stage4.sh
+check_packages_delta orangepizero3 build-orangepi-zero3-stage4.sh
 
 # ── superdomain coverage (WS-SUPER-B) ───────────────────────────────────────────
 # --superdomain is the ONE flag that landed on ALL SIX builders in the WS-SUPER-B
@@ -419,5 +441,7 @@ check_superdomain frite         build-frite-stage4.sh
 check_superdomain jetson        build-jetson-stage4.sh
 check_superdomain orangepi5     build-orangepi5-stage4.sh
 check_superdomain orangepizero2 build-orangepi-zero2-stage4.sh
+check_superdomain orangepizero2w build-orangepi-zero2w-stage4.sh
+check_superdomain orangepizero3 build-orangepi-zero3-stage4.sh
 
 [ "${FAILS}" -eq 0 ]

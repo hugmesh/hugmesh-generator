@@ -50,7 +50,7 @@ from ...core import build_sessions
 from ...core.config import (
     ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS,
     KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
-    ORANGEPIZERO2_FLAVORS, RPI_BOARDS,
+    ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, RPI_BOARDS,
 )
 from ...core.fleet import FleetConfig, FleetDriver
 from ._widgets import _file_picker, _row
@@ -141,9 +141,17 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepizero2 = QtWidgets.QCheckBox(
             "Orange Pi Zero 2 headless appliance (ORANGEPIZERO2=1 — EXPERIMENTAL)")
         self.orangepizero2_only = QtWidgets.QCheckBox("ONLY the Zero 2 (ORANGEPIZERO2_ONLY=1)")
+        self.orangepizero2w = QtWidgets.QCheckBox(
+            "Orange Pi Zero 2W headless appliance (ORANGEPIZERO2W=1 — EXPERIMENTAL)")
+        self.orangepizero2w_only = QtWidgets.QCheckBox("ONLY the Zero 2W (ORANGEPIZERO2W_ONLY=1)")
+        self.orangepizero3 = QtWidgets.QCheckBox(
+            "Orange Pi Zero 3 headless appliance (ORANGEPIZERO3=1 — EXPERIMENTAL)")
+        self.orangepizero3_only = QtWidgets.QCheckBox("ONLY the Zero 3 (ORANGEPIZERO3_ONLY=1)")
         for w in (self.frite, self.frite_only, self.jetson, self.jetson_only,
                   self.orangepi5, self.orangepi5_only,
-                  self.orangepizero2, self.orangepizero2_only):
+                  self.orangepizero2, self.orangepizero2_only,
+                  self.orangepizero2w, self.orangepizero2w_only,
+                  self.orangepizero3, self.orangepizero3_only):
             ol.addWidget(w)
         l1.addWidget(optin_grp)
         pt_grp = QtWidgets.QGroupBox("Pen-test harness")
@@ -221,6 +229,16 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepizero2_flavor = _default_combo(ORANGEPIZERO2_FLAVORS)
         ozl.addWidget(_row("OPZ2 flavor", self.orangepizero2_flavor))
         l2.addWidget(self.orangepizero2_group)
+        self.orangepizero2w_group = QtWidgets.QGroupBox("Orange Pi Zero 2W")
+        ozwl = QtWidgets.QVBoxLayout(self.orangepizero2w_group)
+        self.orangepizero2w_flavor = _default_combo(ORANGEPIZERO2W_FLAVORS)
+        ozwl.addWidget(_row("OPZ2W flavor", self.orangepizero2w_flavor))
+        l2.addWidget(self.orangepizero2w_group)
+        self.orangepizero3_group = QtWidgets.QGroupBox("Orange Pi Zero 3")
+        oz3l = QtWidgets.QVBoxLayout(self.orangepizero3_group)
+        self.orangepizero3_flavor = _default_combo(ORANGEPIZERO3_FLAVORS)
+        oz3l.addWidget(_row("OPZ3 flavor", self.orangepizero3_flavor))
+        l2.addWidget(self.orangepizero3_group)
         self.pentest_group = QtWidgets.QGroupBox("Pen-test")
         ptl = QtWidgets.QVBoxLayout(self.pentest_group)
         self.pentest_env = _default_combo(("compose", "local", "cluster"))
@@ -306,6 +324,8 @@ class FleetPage(QtWidgets.QWidget):
         for cb in (self.skip_x86, self.skip_rpi, self.frite, self.frite_only,
                    self.jetson, self.jetson_only, self.orangepi5, self.orangepi5_only,
                    self.orangepizero2, self.orangepizero2_only,
+                   self.orangepizero2w, self.orangepizero2w_only,
+                   self.orangepizero3, self.orangepizero3_only,
                    self.pentest, self.pentest_only):
             cb.toggled.connect(self._update_group_visibility)
         self._update_group_visibility()
@@ -338,6 +358,12 @@ class FleetPage(QtWidgets.QWidget):
             orangepizero2=self.orangepizero2.isChecked(),
             orangepizero2_only=self.orangepizero2_only.isChecked(),
             orangepizero2_flavor=self.orangepizero2_flavor.currentData(),
+            orangepizero2w=self.orangepizero2w.isChecked(),
+            orangepizero2w_only=self.orangepizero2w_only.isChecked(),
+            orangepizero2w_flavor=self.orangepizero2w_flavor.currentData(),
+            orangepizero3=self.orangepizero3.isChecked(),
+            orangepizero3_only=self.orangepizero3_only.isChecked(),
+            orangepizero3_flavor=self.orangepizero3_flavor.currentData(),
             skip_keys=self.skip_keys.isChecked(),
             pentest=self.pentest.isChecked(), pentest_only=self.pentest_only.isChecked(),
             pentest_env=self.pentest_env.currentData(),
@@ -383,6 +409,12 @@ class FleetPage(QtWidgets.QWidget):
         self.orangepizero2.setChecked(cfg.orangepizero2)
         self.orangepizero2_only.setChecked(cfg.orangepizero2_only)
         combo(self.orangepizero2_flavor, cfg.orangepizero2_flavor)
+        self.orangepizero2w.setChecked(cfg.orangepizero2w)
+        self.orangepizero2w_only.setChecked(cfg.orangepizero2w_only)
+        combo(self.orangepizero2w_flavor, cfg.orangepizero2w_flavor)
+        self.orangepizero3.setChecked(cfg.orangepizero3)
+        self.orangepizero3_only.setChecked(cfg.orangepizero3_only)
+        combo(self.orangepizero3_flavor, cfg.orangepizero3_flavor)
         self.skip_keys.setChecked(cfg.skip_keys)
         self.pentest.setChecked(cfg.pentest)
         self.pentest_only.setChecked(cfg.pentest_only)
@@ -452,6 +484,10 @@ class FleetPage(QtWidgets.QWidget):
             self.orangepi5.isChecked() or self.orangepi5_only.isChecked())
         self.orangepizero2_group.setVisible(
             self.orangepizero2.isChecked() or self.orangepizero2_only.isChecked())
+        self.orangepizero2w_group.setVisible(
+            self.orangepizero2w.isChecked() or self.orangepizero2w_only.isChecked())
+        self.orangepizero3_group.setVisible(
+            self.orangepizero3.isChecked() or self.orangepizero3_only.isChecked())
         self.pentest_group.setVisible(
             self.pentest.isChecked() or self.pentest_only.isChecked())
 

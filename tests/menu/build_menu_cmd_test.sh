@@ -309,6 +309,10 @@ build_make_cmd orangepi5 "orangepi5, arm secrets" 1
 assert_has "orangepi5: ARM_LOCAL_PASS threads"  "--local-pass 'Sup3rSecret!'"
 build_make_cmd orangepizero2 "orangepizero2, arm secrets" 1
 assert_has "orangepizero2: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+build_make_cmd orangepizero2w "orangepizero2w, arm secrets" 1
+assert_has "orangepizero2w: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+build_make_cmd orangepizero3 "orangepizero3, arm secrets" 1
+assert_has "orangepizero3: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
 
 # ordering: ARM_LOCAL_PASS/ARM_LUKS_PASS come BEFORE the freeform extra-flags
 # field, so an operator can still override via Extra builder flags if needed —
@@ -455,6 +459,42 @@ build_make_cmd x86-be "be" 1
 assert_not "x86: no ORANGEPIZERO2_FLAVOR leak" "ORANGEPIZERO2_FLAVOR="
 build_make_cmd frite "frite" 1
 assert_not "frite: no ORANGEPIZERO2_FLAVOR leak" "ORANGEPIZERO2_FLAVOR="
+
+# ── orangepizero2w (EXPERIMENTAL): same flavor-only make-var shape as its
+# Zero 2 template sibling above (one board, no --role/--desktop —
+# see specs-orangepi-zero2w/README.md) ──────────────────────────────────────
+reset_opts; OPT_ORANGEPIZERO2W_FLAVOR=live
+build_make_cmd orangepizero2w "orangepizero2w" 1
+assert_eq  "orangepizero2w: target"          "${RUN_MAKE[0]}" "orangepizero2w"
+assert_has "orangepizero2w: flavor"          "ORANGEPIZERO2W_FLAVOR=live"
+reset_opts; OPT_ORANGEPIZERO2W_FLAVOR=both
+build_make_cmd orangepizero2w "orangepizero2w default" 1
+assert_has "orangepizero2w: default flavor"  "ORANGEPIZERO2W_FLAVOR=both"
+# x86-*/frite/orangepizero2 targets must NEVER pick up ORANGEPIZERO2W_FLAVOR —
+# guards against a careless glob widening the orangepizero2w-only threading.
+reset_opts; OPT_ORANGEPIZERO2W_FLAVOR=live
+build_make_cmd x86-be "be" 1
+assert_not "x86: no ORANGEPIZERO2W_FLAVOR leak" "ORANGEPIZERO2W_FLAVOR="
+build_make_cmd orangepizero2 "orangepizero2" 1
+assert_not "orangepizero2: no ORANGEPIZERO2W_FLAVOR leak" "ORANGEPIZERO2W_FLAVOR="
+
+# ── orangepizero3 (EXPERIMENTAL): same flavor-only make-var shape as its
+# Zero 2 template sibling above (one board, no --role/--desktop —
+# see specs-orangepi-zero3/README.md) ──────────────────────────────────────
+reset_opts; OPT_ORANGEPIZERO3_FLAVOR=live
+build_make_cmd orangepizero3 "orangepizero3" 1
+assert_eq  "orangepizero3: target"          "${RUN_MAKE[0]}" "orangepizero3"
+assert_has "orangepizero3: flavor"          "ORANGEPIZERO3_FLAVOR=live"
+reset_opts; OPT_ORANGEPIZERO3_FLAVOR=both
+build_make_cmd orangepizero3 "orangepizero3 default" 1
+assert_has "orangepizero3: default flavor"  "ORANGEPIZERO3_FLAVOR=both"
+# x86-*/frite/orangepizero2 targets must NEVER pick up ORANGEPIZERO3_FLAVOR —
+# guards against a careless glob widening the orangepizero3-only threading.
+reset_opts; OPT_ORANGEPIZERO3_FLAVOR=live
+build_make_cmd x86-be "be" 1
+assert_not "x86: no ORANGEPIZERO3_FLAVOR leak" "ORANGEPIZERO3_FLAVOR="
+build_make_cmd orangepizero2 "orangepizero2" 1
+assert_not "orangepizero2: no ORANGEPIZERO3_FLAVOR leak" "ORANGEPIZERO3_FLAVOR="
 build_make_cmd jetson-edge_ai "jetson" 1
 assert_not "jetson: no ORANGEPIZERO2_FLAVOR leak" "ORANGEPIZERO2_FLAVOR="
 
