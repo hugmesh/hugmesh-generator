@@ -39,7 +39,12 @@ spec:
       securityContext:
         seLinuxOptions:
           type: container_t
-          level: "s0:c80"
+          # Unique MCS level (docs/SECURITY.md §3 matrix): character-forge-bff-db
+          # -> c82. NOT c80/c81 — those are the mesh-bff slug's (mesh-bff-api /
+          # mesh-bff-db, manifests/mesh-bff-*), which landed one PR earlier in the
+          # SAME namespace; sharing a category would make the two slugs mutually
+          # readable and void the isolation this field exists for.
+          level: "s0:c82"
         # Live-verify fix: the <db>-mtls cert Secret mounts root-owned 0600, so
         # postgres (uid 70) cannot read tls.key when PG_TLS_ENABLED=true → crash-loop.
         # fsGroup:70 (postgres group) makes the mounted cert/key group-readable; it

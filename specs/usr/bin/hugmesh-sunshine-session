@@ -15,6 +15,14 @@
 #     (hugmesh-sunshine-firewall) admits stream traffic ONLY there, so
 #     starting earlier is harmless but pointless; starts anyway after the
 #     wait so a not-yet-approved node still gets its pairing UI on loopback;
+#   * REFUSES to launch unless the mesh fence is live. Sunshine has no
+#     bind-to-interface option, so the nftables table hugmesh_thin_desktop IS
+#     the "tailnet-only" guarantee: without it Sunshine listens on every LAN
+#     and WAN address with nothing dropping. hugmesh-sunshine-firewall writes
+#     ${FENCE_STATE} (in /run, a boot-scoped tmpfs) only AFTER nft accepted
+#     the ruleset and the table was confirmed present, and removes it on every
+#     error path — so an absent/foreign marker means "no fence" and this
+#     launcher exits non-zero instead of exposing the stream ports;
 #   * launches with the MANAGED config /etc/hugmesh/thin-desktop/sunshine.conf
 #     (upnp off, loopback-scoped web UI origin — the mesh fence owns network
 #     reachability). Per-user pairing state stays in ~/.config/sunshine as
@@ -24,6 +32,8 @@ set -u
 
 CONF="/etc/hugmesh/thin-desktop/sunshine.conf"
 TS_IFACE="${HUGMESH_TS_IFACE:-tailscale0}"
+FENCE_TABLE="hugmesh_thin_desktop"
+FENCE_STATE="${HUGMESH_SUNSHINE_FENCE_STATE:-/run/hugmesh-sunshine-fence.state}"
 
 command -v sunshine >/dev/null 2>&1 || exit 0
 pgrep -u "$(id -u)" -x sunshine >/dev/null 2>&1 && exit 0
@@ -35,6 +45,18 @@ done
 
 LOG_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/hugmesh"
 mkdir -p "${LOG_DIR}"
+
+# FAIL-CLOSED fence gate. The oneshot runs at boot (before any session) and a
+# 60s cron reconciles, so a transient miss self-heals on the next autostart;
+# never start Sunshine while the fence is down.
+if ! grep -qx "table=${FENCE_TABLE}" "${FENCE_STATE}" 2>/dev/null; then
+    printf '%s hugmesh-sunshine-session: REFUSING to start Sunshine — the mesh fence (%s) is not loaded (no %s). Run /usr/sbin/hugmesh-sunshine-firewall as root and check its log.\n' \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${FENCE_TABLE}" "${FENCE_STATE}" \
+        | tee -a "${LOG_DIR}/sunshine.log" >&2
+    command -v logger >/dev/null 2>&1 && \
+        logger -t hugmesh-sunshine-session -- "refused to start Sunshine: fence ${FENCE_TABLE} not loaded" 2>/dev/null
+    exit 1
+fi
 if [ -r "${CONF}" ]; then
     exec sunshine "${CONF}" >> "${LOG_DIR}/sunshine.log" 2>&1
 else

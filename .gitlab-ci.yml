@@ -23,6 +23,47 @@ lint:reserved-prefixes:
   script:
     - bash scripts/validate-reserved-prefixes.sh
 
+# Cluster-manifest REFERENTIAL INTEGRITY gate. Every existing lint reads one file
+# in isolation or greps for a string; none of them notices that a merge fused two
+# Kubernetes objects into one document, parked a workload in a namespace the
+# rebrand deleted, seeded route-access rows for a gateway id that no longer
+# exists, line-continued two `for app in ...` headers into one word list, mounted
+# an *-mtls Secret nothing provisions, handed two workloads the same SELinux
+# MCS category, or left a SERVICE-only `/…/internal/**` ingest receiver governed
+# only by its tier's `**` ALLOW floor (route-access decides on the LONGEST
+# matching pattern, so a `**` floor SUBSUMES every internal path beneath it).
+# All of those SHIPPED on main at once; this job is the gate
+# that would have stopped them. Includes its own negative controls (each check is
+# re-run against a corrupted copy of the tree and must bite), so a green run
+# cannot be vacuous. Offline, no cluster, no privileged runner.
+lint:cluster-manifest-integrity:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    # NB: the [pki-roles] check EXECUTES the ConfigMap's init-pki.sh under a vault
+    # stub, so bash (present in python:3-slim, Debian) is a hard requirement — a
+    # regex cannot tell what a fused `for app in ...` word list expands to.
+    - bash tests/scripts/test-cluster-manifest-integrity.sh
+
+# Thin-desktop (Sunshine) mesh-fence composition gate. Executes BOTH halves of
+# the fence for real (only nft/sunshine/ip/pgrep/logger are PATH stubs) and
+# asserts (a) the tailnet admit is DUAL-STACK — an `ip saddr` match inside an
+# `inet` table can never match IPv6, so an IPv4-only accept pair silently drops
+# every stream Moonlight opens against the host's MagicDNS AAAA record — and
+# (b) the renderer/launcher handshake is genuinely fail-CLOSED: Sunshine has no
+# bind-to-interface option, so a renderer that exits 0 with no table loaded next
+# to a launcher that starts Sunshine anyway publishes 47984/47989/48010 +
+# UDP 47998-48002 on every LAN/WAN address. Both halves carry negative controls.
+lint:sunshine-fence:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-sunshine-fence.sh
+
 # Optional-services BUILD-TIME EXCLUSION gate. Sources the REAL gate + helper
 # functions from build-rpi5-stage4.sh and runs gate_optional_services against a
 # sandbox tree seeded from specs/cluster, proving EVERY user-level service

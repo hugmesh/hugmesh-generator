@@ -5,7 +5,7 @@
 # ROLE_SERVICE), mesh-enabled room listings, and the caller's own registered
 # devices view (proxied from user-bff's internal mesh-devices surface).
 #
-# It is a ClusterIP-only service in snapdragon-backend: nothing reaches it from
+# It is a ClusterIP-only service in hugmesh-backend: nothing reaches it from
 # outside except via the gateway, which routes same-origin /bff/mesh/** to it
 # AND enforces the Casdoor role rules (/bff/mesh/** => ROLE_MESH, +ADMIN/
 # SUPERADMIN supersets) from the route DB first.
@@ -18,14 +18,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-mesh-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-mesh-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-mesh-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-mesh-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-mesh-bff-api } }
+  selector: { matchLabels: { app: hugmesh-mesh-bff-api } }
   template:
-    metadata: { labels: { app: snapdragon-mesh-bff-api } }
+    metadata: { labels: { app: hugmesh-mesh-bff-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
@@ -39,7 +39,7 @@ spec:
           level: "s0:c80"
       # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
       # Mirrors the snapdragon-gateway chart's build-keystore initContainer: turns
-      # the Vault-PKI-issued, ESO-synced TLS Secret (snapdragon-mesh-bff-api-mtls:
+      # the Vault-PKI-issued, ESO-synced TLS Secret (hugmesh-mesh-bff-api-mtls:
       # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
       # (cluster CA) for the server.ssl.* config to REQUIRE a client cert chaining
       # to the cluster CA. Store password generated in-pod, kept only in the tmpfs
@@ -57,9 +57,9 @@ spec:
             - |
               P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
               openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
-                -certfile /pki/ca.crt -name snapdragon-mesh-bff-api \
+                -certfile /pki/ca.crt -name hugmesh-mesh-bff-api \
                 -out /stores/keystore.p12 -passout "pass:${P}"
-              keytool -importcert -noprompt -alias snapdragon-cluster-ca \
+              keytool -importcert -noprompt -alias hugmesh-cluster-ca \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
                 -storetype PKCS12 -storepass "${P}"
               # FILENAME IS LOAD-BEARING — do NOT rename this back to
@@ -82,7 +82,7 @@ spec:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
       containers:
-        - name: snapdragon-mesh-bff-api
+        - name: hugmesh-mesh-bff-api
           image: snapdragon-systems/mesh-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
@@ -106,7 +106,7 @@ spec:
             # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
             # client secret needed (pure resource server, like federation-api).
             - name: CASDOOR_ISSUER_URI
-              value: "https://id.snapdragon.systems"
+              value: "https://id.hugmesh.systems"
             # ── user-bff registration mapping (the registered-device attribution
             # source). GATED default-off in application.yml; flipped ON in-cluster.
             # The WebClient presents this pod's mTLS client cert (the same /pki
@@ -117,7 +117,7 @@ spec:
             # provisioned manually in Casdoor alongside the role grant; see
             # external-secrets/mesh-bff-externalsecrets.yaml).
             - name: APP_CASDOOR_SYSTEMS_BASE_URL
-              value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
             - name: APP_CASDOOR_SYSTEMS_CLIENT_ID
               valueFrom:
                 secretKeyRef: { name: mesh-bff-casdoor-client, key: client_id }
@@ -126,7 +126,7 @@ spec:
                 secretKeyRef: { name: mesh-bff-casdoor-client, key: client_secret }
             # Config datastore: the mesh_node_directory + mesh_room tables. The app's
             # application.yml defaults spring.r2dbc + spring.liquibase to a literal
-            # `snapdragon-pg` host that does NOT exist; OVERRIDE both here to the
+            # `hugmesh-pg` host that does NOT exist; OVERRIDE both here to the
             # dedicated mesh-bff-db (mirrors how admin-bff/federation override to
             # their dedicated dbs). R2DBC is the runtime handle; the JDBC handle is
             # used by Liquibase ONCE at startup. Password sourced from Vault via
@@ -138,7 +138,7 @@ spec:
             # initdb/10-roles.sh. Password from its OWN ESO Secret
             # mesh-bff-db-app-auth (the SAME the DB pod's MESHBFF_APP_PASSWORD mounts).
             - name: SPRING_R2DBC_URL
-              value: "r2dbc:postgresql://mesh-bff-db.snapdragon-backend.svc.cluster.local:5432/meshbff"
+              value: "r2dbc:postgresql://mesh-bff-db.hugmesh-backend.svc.cluster.local:5432/meshbff"
             - name: SPRING_R2DBC_USERNAME
               value: "meshbff_app"
             - name: SPRING_R2DBC_PASSWORD
@@ -150,7 +150,7 @@ spec:
             # Liquibase keeps the owner role `meshbff` + the owner ESO Secret
             # mesh-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
             - name: SPRING_LIQUIBASE_URL
-              value: "jdbc:postgresql://mesh-bff-db.snapdragon-backend.svc.cluster.local:5432/meshbff"
+              value: "jdbc:postgresql://mesh-bff-db.hugmesh-backend.svc.cluster.local:5432/meshbff"
             - name: SPRING_LIQUIBASE_USER
               value: "meshbff"
             - name: SPRING_LIQUIBASE_PASSWORD
@@ -173,8 +173,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-mesh-bff-api:8080:127.0.0.1
-                  https://snapdragon-mesh-bff-api:8080/actuator/health/readiness
+                  --resolve hugmesh-mesh-bff-api:8080:127.0.0.1
+                  https://hugmesh-mesh-bff-api:8080/actuator/health/readiness
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
@@ -184,8 +184,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-mesh-bff-api:8080:127.0.0.1
-                  https://snapdragon-mesh-bff-api:8080/actuator/health/liveness
+                  --resolve hugmesh-mesh-bff-api:8080:127.0.0.1
+                  https://hugmesh-mesh-bff-api:8080/actuator/health/liveness
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
@@ -201,7 +201,7 @@ spec:
         # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
         - name: pki
           secret:
-            secretName: snapdragon-mesh-bff-api-mtls
+            secretName: hugmesh-mesh-bff-api-mtls
         # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
         - name: stores
           emptyDir:

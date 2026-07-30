@@ -172,6 +172,28 @@ spec:
       ports:
         - { protocol: TCP, port: 5432 }
 ---
+# ── mesh-bff-db (Postgres, hugmesh-backend) ─────────────────────────────────
+# Consumer: mesh-bff-api only (the meshbff datasource — R2DBC runtime role +
+# the JDBC/Liquibase DDL leg both dial this pod). The meshbridge daemon does NOT
+# talk to this DB directly: it calls the BFF's /bff/mesh/internal/** surface, so
+# it is deliberately NOT admitted here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-mesh-bff-db
+  namespace: hugmesh-backend
+  labels: { app: mesh-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+spec:
+  podSelector:
+    matchLabels: { app: mesh-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: hugmesh-mesh-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
 # ── character-forge-bff-db (Postgres, hugmesh-backend) ─────────────────────────
 # Consumer: character-forge-bff-api only (charforgebff datasource). Ships with the
 # OPTIONAL character-forge slug's manifests-adjacent policy: the policy is inert

@@ -100,7 +100,7 @@ A domain either runs the platform's NS or points at an external one:
 
 - **Optional service `chirpstack`** (RUNTIME-ONLY, the coturn/meshbridge
   pattern: `apps/13a` element + `installed-services` flag, default off,
-  namespace `snapdragon-backend`): ChirpStack v4 (integrated NS+AS, Rust) +
+  namespace `hugmesh-backend`): ChirpStack v4 (integrated NS+AS, Rust) +
   its Gateway Bridge, backed by its own small Postgres + the cluster MQTT
   broker. Gateways at the sites point their packet-forwarder at the domain's
   Gateway Bridge endpoint.

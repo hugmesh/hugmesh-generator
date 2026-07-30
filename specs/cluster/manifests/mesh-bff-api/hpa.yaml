@@ -1,4 +1,4 @@
-# HorizontalPodAutoscaler for snapdragon-mesh-bff-api. Modelled byte-for-byte on
+# HorizontalPodAutoscaler for hugmesh-mesh-bff-api. Modelled byte-for-byte on
 # manifests/remote-fragment/hpa.yaml (the first HPA in the cluster): plain
 # autoscaling/v2, Resource metrics only. The mesh-bff is a stateless Spring Boot resource server, so it scales out cleanly under load.
 #
@@ -11,14 +11,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-mesh-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-mesh-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-mesh-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-mesh-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-mesh-bff-api
+    name: hugmesh-mesh-bff-api
   minReplicas: 2
   maxReplicas: 6
   metrics:

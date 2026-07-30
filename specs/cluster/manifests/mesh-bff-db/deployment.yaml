@@ -1,9 +1,9 @@
-# mesh-bff-db — dedicated Postgres for snapdragon-mesh-bff-api's config datastore
+# mesh-bff-db — dedicated Postgres for hugmesh-mesh-bff-api's config datastore
 # (the mesh_node_directory / mesh_room tables the mesh BFF owns). Lives in
-# snapdragon-backend next to the BFF it serves. ClusterIP only.
+# hugmesh-backend next to the BFF it serves. ClusterIP only.
 #
 # NOTE: like admin-bff, the mesh-bff-api app's application.yml defaults its
-# spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that does NOT
+# spring.r2dbc/spring.liquibase to a literal `hugmesh-pg` host that does NOT
 # exist anywhere in the cluster; this dedicated `mesh-bff-db` Service is the real
 # backing store, and the mesh-bff-api Deployment OVERRIDES the R2DBC/Liquibase URLs
 # to point here (mirrors how federation-db backs federation, admin-bff-db backs admin-bff).
@@ -25,8 +25,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mesh-bff-db
-  namespace: snapdragon-backend
-  labels: { app: mesh-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: mesh-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

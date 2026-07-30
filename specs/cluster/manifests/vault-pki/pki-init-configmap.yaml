@@ -114,26 +114,18 @@ data:
     #    real Service name is harbor-core, not harbor, so harbor-externalsecrets.yaml
     #    requests harbor-core SANs the generic "${app},${app}.svc.cluster.local"
     #    pattern doesn't cover.
-    for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
-               snapdragon-superadmin-gateway \
-               snapdragon-api snapdragon-admin-bff-api \
-               snapdragon-mod-bff-api snapdragon-user-bff-api \
-               snapdragon-forum-bff-api \
-               snapdragon-wiki-bff-api \
-               snapdragon-mesh-bff-api \
-               snapdragon-federation-api \
-               route-access-db admin-bff-db mod-bff-db user-bff-db \
-               federation-db forum-bff-db wiki-bff-db mesh-bff-db \
     for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
                hugmesh-superadmin-gateway \
                hugmesh-api hugmesh-admin-bff-api \
                hugmesh-mod-bff-api hugmesh-user-bff-api \
                hugmesh-forum-bff-api \
                hugmesh-wiki-bff-api \
+               hugmesh-mesh-bff-api \
                snapdragon-character-forge-bff-api \
                hugmesh-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
-               federation-db forum-bff-db wiki-bff-db character-forge-bff-db \
+               federation-db forum-bff-db wiki-bff-db mesh-bff-db \
+               character-forge-bff-db \
                akkoma-proxy tuwunel-proxy; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \

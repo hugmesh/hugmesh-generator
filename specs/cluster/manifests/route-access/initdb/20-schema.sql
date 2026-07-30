@@ -472,6 +472,33 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-fe-gateway',  '/bff/mod/**',           'ROLE_MOD',       true),  -- moderation BFF (mod floor)
   ('hugmesh-fe-gateway',  '/bff/mod/**',           'ROLE_ADMIN',     true),  -- (admins superset)
   ('hugmesh-fe-gateway',  '/bff/user/**',          'ROLE_USER',      true),  -- user self-service BFF
+  -- ── SERVICE-ONLY INTERNAL INGEST SURFACES: explicit DENY ───────────────────
+  -- `/bff/**` is Ant-matched, so a `**` floor row SUBSUMES every deeper path
+  -- under it — including the service-to-service `/…/internal/**` receivers that
+  -- three comments in this tree describe as "not gateway-routed". They ARE
+  -- routed: apps/20-gateway-fe.yaml carries `/bff/user/**` -> user-bff,
+  -- `/bff/mesh/**` -> mesh-bff and the `/bff/**` -> admin-bff catch-all, and
+  -- Spring's AntPathMatcher happily matches /bff/user/internal/mesh-devices
+  -- against /bff/user/**. Without these rows the DECIDING (longest-matching)
+  -- rule for an internal path is the tier floor above, so:
+  --   * any ROLE_USER  reaches user-bff's  /bff/user/internal/**  (mesh-device
+  --     registry + the PENDING->ACTIVE character-moderation flip),
+  --   * any ROLE_MESH  reaches mesh-bff's  /bff/mesh/internal/bridge-sync (the
+  --     meshbridge node-directory / mesh-room ingest),
+  --   * any AUTHENTICATED principal reaches admin-bff's /bff/internal/** — which
+  --     has NO governing row at all today, so the gateway returns NO_RULE and
+  --     FORWARDS on the coarse authenticated() floor, and admin-bff's own
+  --     SecurityConfig permitAll()s that prefix (its InternalTokenWebFilter is the
+  --     only wall, and it is inert when app.internal.token is unset).
+  -- Each receiver is meant to be reached ONLY in-cluster (ROLE_SERVICE client-
+  -- credentials JWT + cluster-CA mTLS + X-Internal-Token), never through a
+  -- gateway. Deny-wins at the longest match, and `gateway_route_access` governs
+  -- EXTERNAL traffic only, so these rows cannot touch the in-cluster legs
+  -- (meshbridge -> user-bff/mesh-bff, gateway -> admin-bff session exchange).
+  -- Same shape as the /attest/api/create-account DENY further down.
+  ('hugmesh-fe-gateway',  '/bff/user/internal/**', 'ROLE_USER',      false), -- explicit DENY: SERVICE-only ingest (meshbridge/moderation)
+  ('hugmesh-fe-gateway',  '/bff/mesh/internal/**', 'ROLE_USER',      false), -- explicit DENY: SERVICE-only bridge-sync ingest
+  ('hugmesh-fe-gateway',  '/bff/internal/**',      'ROLE_USER',      false), -- explicit DENY: admin-bff internal API (permitAll app-side)
   -- Forum BFF (/bff/forum/** -> hugmesh-forum-bff-api), the SINGLE
   -- browser->phpBB path. SIBLING of /bff/mod/** + /bff/user/** above. Most-specific
   -- match wins, so the subpaths are gated tighter than the floor:
@@ -502,18 +529,16 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- Do NOT pair ROLE_ADMIN on the ROLE_WIKI floor row: the gateway admin-bypass
   -- already passes admins through; pairing ROLE_ADMIN would incorrectly expose
   -- every wiki-floor endpoint to admins who have not been granted wiki access.
-  ('snapdragon-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
-  ('snapdragon-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
-  -- Mesh BFF (/bff/mesh/** -> snapdragon-mesh-bff-api): LoRa mesh node
+  ('hugmesh-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
+  ('hugmesh-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
+  -- Mesh BFF (/bff/mesh/** -> hugmesh-mesh-bff-api): LoRa mesh node
   -- directory / rooms / my-devices. ROLE_MESH = "may use the mesh surfaces"
   -- (granted by admin, same grant model as ROLE_WIKI). Do NOT pair ROLE_ADMIN
   -- here: the gateway admin-bypass already passes admins through (the wiki-row
   -- rationale above applies verbatim). The internal bridge-sync surface
-  -- (/bff/mesh/internal/**) is not gateway-routed at all.
-  ('snapdragon-fe-gateway',  '/bff/mesh/**',        'ROLE_MESH',  true),  -- mesh BFF (mesh-access floor)
-  -- Owncast BFF (/bff/owncast/** -> snapdragon-owncast-bff-api). Admins reach
-  ('hugmesh-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
-  ('hugmesh-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
+  -- (/bff/mesh/internal/**) IS matched by this `**` row, so it carries its own
+  -- explicit DENY row above — see the "SERVICE-ONLY INTERNAL INGEST" block.
+  ('hugmesh-fe-gateway',  '/bff/mesh/**',        'ROLE_MESH',  true),  -- mesh BFF (mesh-access floor)
   -- Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-bff-
   -- api): saved 3D character configs + the VN→3D /map endpoint. Authenticated floor
   -- (ROLE_USER, matching the /character-forge/** UI-mount row above) — ownership is

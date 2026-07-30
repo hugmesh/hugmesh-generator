@@ -20,7 +20,7 @@ command_background=false
 start() {
     ebegin "Reconciling the thin-desktop (Sunshine) nftables fence (fail-closed to the existing ruleset on error)"
     "${command}"
-    eend $? "sunshine firewall reconcile reported an unexpected error (existing ruleset preserved)"
+    eend $? "sunshine firewall reconcile FAILED (existing ruleset preserved; the fence-ready marker is cleared, so hugmesh-sunshine-session will refuse to start Sunshine)"
 }
 
 stop() {

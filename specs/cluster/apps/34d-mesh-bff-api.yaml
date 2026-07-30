@@ -1,6 +1,6 @@
 # mesh-bff — Backend-For-Frontend for the platform's LoRa mesh surfaces
 # (node directory / mesh-enabled rooms / my-devices; the meshbridge daemon's
-# bridge-sync ingest). ClusterIP in snapdragon-backend; the ONLY browser way in
+# bridge-sync ingest). ClusterIP in hugmesh-backend; the ONLY browser way in
 # is the fe-gateway /bff/mesh/** route (ROLE_MESH floor). Owns the
 # mesh_node_directory / mesh_room tables in mesh-bff-db. The future
 # user-mesh-ui remote is its primary consumer; matrix-ui's mesh features and
@@ -18,12 +18,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/mesh-bff-api
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

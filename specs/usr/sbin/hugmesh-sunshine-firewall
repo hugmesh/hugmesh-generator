@@ -8,10 +8,15 @@
 #     UDP 47998-48002 (video/control/audio/mic) — accepted ONLY on the
 #     tailscale interface (tailscale0 — Linux tailscaled's iface name; the
 #     Android side of this pairing names its VpnService iface tun0) AND only
-#     from the tailnet CGNAT range (100.64.0.0/10, the SAME CIDR the
-#     release-gate backstop and the tier-egress NetworkPolicy allow-list use).
-#     Both conditions together: a spoofed 100.64/10 source on the LAN iface
-#     stays dropped, and a non-CGNAT source riding tailscale0 stays dropped.
+#     from a tailnet source address. The tailnet is DUAL-STACK
+#     (etc/headscale/config.yaml prefixes: v4 100.64.0.0/10 + v6
+#     fd7a:115c:a1e0::/48), so BOTH families are admitted — an `ip saddr`
+#     match inside an `inet` table carries an implicit ipv4 dependency and
+#     never matches an IPv6 packet, so an IPv4-only accept pair would let the
+#     family-agnostic catch-all drops below silently kill every stream that
+#     Moonlight opened against the host's MagicDNS AAAA record.
+#     Both conditions together: a spoofed tailnet source on the LAN iface
+#     stays dropped, and a non-tailnet source riding tailscale0 stays dropped.
 #   * web UI — TCP 47990: LOOPBACK ONLY. Pairing PINs are entered at
 #     https://localhost:47990 on the node's own console (or an SSH tunnel);
 #     the pairing surface is never reachable off-host, not even mesh-side.
@@ -25,22 +30,35 @@
 # hugmesh-sunshine-firewall OpenRC oneshot (before any desktop session can
 # start Sunshine) + a 60s cron as the convergence floor.
 #
-# FAIL-CLOSED: any render/apply error KEEPS the existing ruleset; if nft is
-# absent the script exits 0 without touching anything (the OpenRC eend line
-# reports it) — Sunshine itself is still loopback-paired and tailnet-routed.
+# FAIL-CLOSED: any render/apply error KEEPS the existing ruleset AND leaves no
+# fence-ready marker, so the in-session launcher (hugmesh-sunshine-session)
+# REFUSES to start Sunshine at all. That composition is the whole point: a
+# script that exits 0 with no table loaded, next to a launcher that starts
+# Sunshine unconditionally, is fail-OPEN — Sunshine has no bind-to-interface
+# option, so it would listen on every LAN/WAN address with nothing dropping.
+# The marker (${STATE_FILE}, /run = tmpfs, boot-scoped) is written ONLY after
+# nft has accepted the ruleset and the table is confirmed present, and is
+# REMOVED on every error path. Hard failures also exit non-zero so the OpenRC
+# eend line and the cron log record them.
 
 set -uo pipefail
 
 TABLE="hugmesh_thin_desktop"
 TS_IFACE="${HUGMESH_TS_IFACE:-tailscale0}"
+# Tailnet source ranges — MUST track specs/etc/headscale/config.yaml `prefixes`.
+TS_V4_PREFIX="${HUGMESH_TS_V4_PREFIX:-100.64.0.0/10}"
+TS_V6_PREFIX="${HUGMESH_TS_V6_PREFIX:-fd7a:115c:a1e0::/48}"
+STATE_FILE="${HUGMESH_SUNSHINE_FENCE_STATE:-/run/hugmesh-sunshine-fence.state}"
 LOG_TAG="hugmesh-sunshine-firewall"
 
 log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
 warn() { log "WARNING: $*"; }
+# Drop the fence-ready marker so hugmesh-sunshine-session refuses to launch.
+clear_marker() { rm -f "${STATE_FILE}" 2>/dev/null || true; }
 
-command -v nft >/dev/null 2>&1 || { warn "nft not found — cannot (re)load the thin-desktop fence"; exit 0; }
+command -v nft >/dev/null 2>&1 || { clear_marker; warn "nft not found — cannot (re)load the thin-desktop fence; Sunshine will REFUSE to start"; exit 1; }
 
-TMP="$(mktemp)" || { warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
+TMP="$(mktemp)" || { clear_marker; warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 1; }
 trap 'rm -f "${TMP}"' EXIT
 cat > "${TMP}" <<RULES
 #!/usr/sbin/nft -f
@@ -56,9 +74,14 @@ table inet ${TABLE} {
         # Pairing web UI: loopback only — PINs are entered on the node itself.
         iifname "lo" tcp dport 47990 accept
         tcp dport 47990 drop
-        # Stream/pairing ports: tailscale iface AND tailnet CGNAT source only.
-        iifname "${TS_IFACE}" ip saddr 100.64.0.0/10 tcp dport { 47984, 47989, 48010 } accept
-        iifname "${TS_IFACE}" ip saddr 100.64.0.0/10 udp dport 47998-48002 accept
+        # Stream/pairing ports: tailscale iface AND tailnet source only.
+        # DUAL-STACK: `ip saddr` only matches ipv4 packets inside an inet
+        # table, so the v6 half needs its OWN rule or the drops below eat
+        # every IPv6 stream (MagicDNS hands out AAAA records).
+        iifname "${TS_IFACE}" ip saddr ${TS_V4_PREFIX} tcp dport { 47984, 47989, 48010 } accept
+        iifname "${TS_IFACE}" ip saddr ${TS_V4_PREFIX} udp dport 47998-48002 accept
+        iifname "${TS_IFACE}" ip6 saddr ${TS_V6_PREFIX} tcp dport { 47984, 47989, 48010 } accept
+        iifname "${TS_IFACE}" ip6 saddr ${TS_V6_PREFIX} udp dport 47998-48002 accept
         tcp dport { 47984, 47989, 48010 } drop
         udp dport 47998-48002 drop
     }
@@ -66,8 +89,23 @@ table inet ${TABLE} {
 RULES
 
 if ! NFT_ERR="$(nft -f "${TMP}" 2>&1)"; then
-    warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed)"
-    exit 0
+    clear_marker
+    warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed); Sunshine will REFUSE to start"
+    exit 1
 fi
-log "applied: Sunshine ports fenced to ${TS_IFACE}+100.64.0.0/10; web UI 47990 loopback-only"
+# Confirm the table really is live before advertising the fence as ready — a
+# marker written on the strength of nft's exit code alone would be a second
+# fail-open seam.
+if ! nft list table inet "${TABLE}" >/dev/null 2>&1; then
+    clear_marker
+    warn "table inet ${TABLE} is not present after a successful load — refusing to mark the fence ready"
+    exit 1
+fi
+if ! ( umask 022 && printf 'table=%s\niface=%s\nv4=%s\nv6=%s\n' \
+        "${TABLE}" "${TS_IFACE}" "${TS_V4_PREFIX}" "${TS_V6_PREFIX}" > "${STATE_FILE}" ) 2>/dev/null; then
+    clear_marker
+    warn "could not write the fence-ready marker ${STATE_FILE} — Sunshine will REFUSE to start"
+    exit 1
+fi
+log "applied: Sunshine ports fenced to ${TS_IFACE}+${TS_V4_PREFIX}+${TS_V6_PREFIX}; web UI 47990 loopback-only"
 exit 0

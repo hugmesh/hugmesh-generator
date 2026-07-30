@@ -8,7 +8,10 @@
 # /etc/cron.d on images built --with-sunshine.
 #
 # The reconcile is idempotent + FAIL-CLOSED: a render/apply error leaves the
-# existing ruleset in place.
+# existing ruleset in place, REMOVES the fence-ready marker
+# (/run/hugmesh-sunshine-fence.state) so hugmesh-sunshine-session refuses to
+# launch Sunshine, and exits non-zero into this log (stdout+stderr are captured
+# here, so cron never mails root).
 #
 # Field order: min hour dom month dow user command
 * * * * * root /usr/sbin/hugmesh-sunshine-firewall >> /var/log/hugmesh-sunshine-firewall.log 2>&1

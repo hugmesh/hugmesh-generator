@@ -97,11 +97,11 @@ Vault-managed mTLS keystore:
 | `headwind-db` (Headwind MDM Postgres — optional, default-off) | `sa-headwind-db` | `s0:c77` | (DB) | (non-Java: PEM, no JKS) |
 | `headwind` (Headwind MDM app — optional, default-off) | `sa-headwind` | `s0:c78` | — (LocalAuth admin, not Casdoor — see headwind-admin ESO) | (Java/Tomcat: no JKS — plain HTTP, TLS terminated at gateway) |
 | `attestation-server` (GrapheneOS AttestationServer — optional, default-off, single pod, no DB leg) | `sa-attestation-server` | `s0:c79` | — (SQLite-local accounts, not Casdoor — `/attest/api/**` gated ROLE_SUPERADMIN at the gateway) | (Java: no JKS — plain HTTP, TLS terminated at gateway) |
-| `mesh-bff-api` (LoRa mesh BFF: node directory / bridge-sync) | (pod default SA) | `s0:c80` | `mesh-bff-casdoor-client` (client-credentials → ROLE_SERVICE, manual — see secretstore ESO) | `snapdragon-mesh-bff-api.snapdragon-backend.svc` |
+| `mesh-bff-api` (LoRa mesh BFF: node directory / bridge-sync) | (pod default SA) | `s0:c80` | `mesh-bff-casdoor-client` (client-credentials → ROLE_SERVICE, manual — see secretstore ESO) | `hugmesh-mesh-bff-api.hugmesh-backend.svc` |
 | `mesh-bff-db` (dedicated Postgres for mesh-bff-api) | (pod default SA) | `s0:c81` | (DB) | (non-Java: PEM, no JKS) |
-| `character-forge-bff-db` (character-forge — optional, default-off) | per-app SA | `s0:c80` | (DB) | (non-Java: PEM, no JKS) |
-| `character-forge-bff-api` (character-forge — optional, default-off) | per-app SA | `s0:c81` | `svc-character-forge-bff` / `ROLE_CHARACTER_FORGE_API` | `snapdragon-character-forge-bff-api.hugmesh-backend.svc` |
-| `character-forge-ui` (character-forge — optional, default-off) | per-app SA | `s0:c82` | — | — |
+| `character-forge-bff-db` (character-forge — optional, default-off) | per-app SA | `s0:c82` | (DB) | (non-Java: PEM, no JKS) |
+| `character-forge-bff-api` (character-forge — optional, default-off) | per-app SA | `s0:c83` | `svc-character-forge-bff` / `ROLE_CHARACTER_FORGE_API` | `snapdragon-character-forge-bff-api.hugmesh-backend.svc` |
+| `character-forge-ui` (character-forge — optional, default-off) | per-app SA | `s0:c84` | — | — |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created

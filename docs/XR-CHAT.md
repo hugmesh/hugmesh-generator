@@ -46,7 +46,7 @@ A MULTI-APP slug shaped like phpbb (BFF db + BFF api + UI remote), registered in
   The Services keep the repo's DESIGN-locked `snapdragon-character-forge-*`
   names.
 - **Manifests:** `manifests/character-forge{,-bff-api,-bff-db}` — unique SELinux
-  MCS levels `s0:c80`/`s0:c81`/`s0:c82` per the [`SECURITY.md`](SECURITY.md) §3
+  MCS levels `s0:c82`/`s0:c83`/`s0:c84` per the [`SECURITY.md`](SECURITY.md) §3
   matrix, ESO secrets riding the SHARED `external-secrets` files (forum-bff
   pattern), per-pod db-ingress NetworkPolicy, inert HTTPRoute.
 - **Gateway:** two fe-gateway routes in `apps/20-gateway-fe.yaml` —

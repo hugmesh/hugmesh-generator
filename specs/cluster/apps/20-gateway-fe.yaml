@@ -220,16 +220,19 @@ spec:
           - id: hugmesh-wiki-bff-api
             uri: https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/wiki/**
-          # Mesh BFF (/bff/mesh/** -> snapdragon-mesh-bff-api): the LoRa mesh
+          # Mesh BFF (/bff/mesh/** -> hugmesh-mesh-bff-api): the LoRa mesh
           # node directory / mesh-enabled rooms / my-devices surfaces. SIBLING of
           # the wiki/forum/mod rows above (non-overlapping prefix, own role floor
           # ROLE_MESH — see route-access), declared BEFORE the /bff/** admin-bff
           # catch-all. https:// — mesh-bff enforces mTLS (client-auth=need); the
           # gateway presents its client cert on this leg. The bridge-sync ingest
-          # (/bff/mesh/internal/**) is NOT routed here: the meshbridge daemon
-          # calls the service in-cluster directly (ROLE_SERVICE + mTLS).
-          - id: snapdragon-mesh-bff-api
-            uri: https://snapdragon-mesh-bff-api.snapdragon-backend.svc.cluster.local:8080
+          # (/bff/mesh/internal/**) is meant for the meshbridge daemon only, which
+          # calls the service in-cluster directly (ROLE_SERVICE + mTLS) — but this
+          # `**` predicate DOES match it, so route-access carries an explicit DENY
+          # row for /bff/mesh/internal/** (see 20-schema.sql "SERVICE-ONLY INTERNAL
+          # INGEST"). Do NOT drop that row believing the path is unroutable.
+          - id: hugmesh-mesh-bff-api
+            uri: https://hugmesh-mesh-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/mesh/**
           # Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-
           # bff-api): saved 3D character configs + the VN→3D /map endpoint. SIBLING of
@@ -247,8 +250,12 @@ spec:
           # /bff/me, /bff/session, /bff/provision. These are MORE-SPECIFIC than the
           # /bff/** admin-bff catch-all below, so — like the mod/user/forum siblings
           # above — they MUST be declared FIRST to win the route match. (The internal
-          # bff_->JWT exchange endpoint /bff/internal/** is NOT routed here: the
-          # gateway's BffJwtExchangeWebFilter calls user-bff in-cluster directly.)
+          # bff_->JWT exchange endpoint /bff/internal/** is not a route of its OWN
+          # here — the gateway's BffJwtExchangeWebFilter calls the BFF in-cluster
+          # directly — but the /bff/** admin-bff catch-all BELOW still matches it,
+          # and admin-bff permitAll()s that prefix app-side. route-access therefore
+          # carries an explicit DENY row for /bff/internal/** — see 20-schema.sql
+          # "SERVICE-ONLY INTERNAL INGEST".)
           - id: hugmesh-user-bff-api-login
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/login

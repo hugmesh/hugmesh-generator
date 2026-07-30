@@ -42,10 +42,11 @@ spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
         seLinuxOptions:
-          # Unique MCS level (docs/SECURITY.md §3 matrix); character-forge-ui -> c82
-          # (next free after character-forge-bff-api's c81; the slug takes c80-c82).
+          # Unique MCS level (docs/SECURITY.md §3 matrix); character-forge-ui -> c84
+          # (next free after character-forge-bff-api's c83; the slug takes c82-c84,
+          # since c80/c81 are the mesh-bff slug's).
           type: container_t
-          level: "s0:c82"
+          level: "s0:c84"
       containers:
         - name: web
           # PLACEHOLDER image (rewritten by kustomization images: transform). The base
