@@ -16,12 +16,61 @@ variables:
 # matches the source. A newly added route prefix that is not reserved FAILS here,
 # catching the drift that would let a vanity username shadow a real route. Cheap,
 # so it runs first on every branch (no privileged runner needed).
+#
+# THE SIBLING CLONES ARE PART OF THE GATE, NOT A CONVENIENCE. The script's most
+# valuable stage is the code-copy assertion: it parses the ReservedNames.java in
+# each app repo and asserts the set EQUALS the canonical YAML. Until 2026-07-29
+# that stage printed `[SKIP] … (not checked out)` here and the job still went
+# green — so the assertion had never actually run in a pipeline, while a real
+# drift (hugmesh-actions missing character-forge/hmdm/attest + the two games
+# slugs) sat on main. The script now exits 3 (INCOMPLETE) when a copy is absent,
+# so this job MUST provide them. Same clone recipe as sca:dependency-check: the
+# org mirror derived from CI_REPOSITORY_URL, which carries the read-only CI job
+# token — no secret committed. A clone failure fails the job, on purpose.
+#   NB image: `python:3` (not `-slim`) — we need git, and the full image also
+#   ships PyYAML's build deps; pyyaml itself is still installed explicitly (the
+#   script FATALs on exit 2 without it, exactly as lint:cluster-manifest-integrity
+#   already assumes for the same base image).
 lint:reserved-prefixes:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    # Where the sibling ReservedNames.java copies get cloned to; the script reads
+    # this instead of looking for checkouts next to the repo.
+    RESERVED_SIBLING_ROOT: "${CI_PROJECT_DIR}/.reserved-siblings"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${RESERVED_SIBLING_ROOT}"
+    # The three physical ReservedNames copies (auth-core's is the shared one that
+    # user-bff-api + admin-bff-api both consume as a Maven dependency). Keep this
+    # list in lockstep with CODE_COPIES in scripts/validate-reserved-prefixes.sh —
+    # a repo listed there but not cloned here now makes the job INCOMPLETE (exit
+    # 3) rather than silently green.
+    - |
+      for r in hugmesh-federation-api hugmesh-actions hugmesh-auth-core; do
+        git clone --depth 1 "${ORG_BASE}/${r}.git" "${RESERVED_SIBLING_ROOT}/${r}"
+      done
+  script:
+    - bash scripts/validate-reserved-prefixes.sh
+
+# Guards the guard: proves validate-reserved-prefixes.sh cannot report a clean
+# PASS when its ReservedNames.java code-copy assertion did not actually run — the
+# silent-skip hole that let a five-label hugmesh-actions drift sit on a "green"
+# main. Synthesises the sibling trees from the canonical YAML in a temp dir
+# (absent / present / drifted / partial), so it needs no clones and no network,
+# and it carries the drift case as a negative control so a green run cannot be
+# vacuous. It also asserts the job ABOVE still clones every declared copy — i.e.
+# that the gate is honest AND wired to succeed honestly.
+lint:reserved-prefixes-gate-honesty:
   stage: lint
   image: python:3-slim
   tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
   script:
-    - bash scripts/validate-reserved-prefixes.sh
+    - bash tests/scripts/test-reserved-prefix-copy-gate.sh
 
 # Cluster-manifest REFERENTIAL INTEGRITY gate. Every existing lint reads one file
 # in isolation or greps for a string; none of them notices that a merge fused two

@@ -59,9 +59,10 @@ against it. It currently holds **65** labels (`metadata.revision: "2"`):
   so a vanity `forum`/`phpbb` handle (or a future `forum.<domain>` subdomain)
   can never collide.
 
-The four app-repo `ReservedNames` copies must add the same labels to stay in
-sync (the validate script's **code-copy assertion** flags them mechanically when
-the sibling repos are checked out — see below).
+The three app-repo `ReservedNames` copies must add the same labels to stay in
+sync (the validate script's **code-copy assertion** flags them mechanically, and
+a run that could not reach those copies reports `INCOMPLETE`, not `PASS` — see
+below).
 
 ### What is NOT reserved (and why)
 
@@ -166,16 +167,48 @@ The script runs **five stages** (each fails the build on a violation):
    first-label is neither reserved nor allowlisted is drift. This is the
    **scoped** check — it never demands a label for a non-routable internal
    Service, so it is not red day-one;
-5. **code-copy assertion**: when the four app repos are checked out next to this
-   one (or `RESERVED_SIBLING_ROOT` is set), each `ReservedNames.java`
+5. **code-copy assertion**: each app-repo `ReservedNames.java`
    `RESERVED[_LABELS]` set is parsed and asserted **== the canonical set**
-   (mechanical, replaces hand-counting). **Skip-if-absent**: a copy not present
-   is reported `SKIP`, not failed, so this repo's own GitLab CI (which does not
-   check out the app repos) stays green — the app repos run their own
-   `ReservedNamesTest`. The **deployed-but-defensive** reserves (`forum`/`phpbb`,
-   `owncast`/`wiki`) are expected in the canonical set **without a dedicated
-   first-segment route of their own** (their public surfaces ride already-reserved
-   prefixes), so stages 3/4 never flag them.
+   (mechanical, replaces hand-counting). Copies are looked up under
+   `RESERVED_SIBLING_ROOT` (default: checkouts next to this repo). The
+   **deployed-but-defensive** reserves (`forum`/`phpbb`, `owncast`/`wiki`) are
+   expected in the canonical set **without a dedicated first-segment route of
+   their own** (their public surfaces ride already-reserved prefixes), so
+   stages 3/4 never flag them.
+
+### Stage 5 is REQUIRED — an unrun assertion is not a pass
+
+Until 2026-07-29 an absent copy was reported `[SKIP]` and the run still ended
+`RESULT: PASS`, exit 0 — while this repo's own CI job checked out no siblings, so
+the assertion had **never once run in a pipeline**. That is how a
+`hugmesh-actions` copy missing five canonical labels (`character-forge`, `hmdm`,
+`attest`, `games-character-forge`, `games-shadows-of-the-net`) sat on a green
+main. Now the verdict is honest:
+
+| outcome | exit | meaning |
+| --- | --- | --- |
+| `RESULT: PASS` | 0 | consistent, **and every declared copy was checked** |
+| `RESULT: FAIL` | 1 | drift / mismatch (offending labels printed) |
+| *fatal* | 2 | environment problem (missing input, no python3/PyYAML) |
+| `RESULT: INCOMPLETE` | 3 | no drift in the stages that ran, but ≥1 copy was absent so the code-copy assertion **did not run** |
+
+Partial coverage counts as INCOMPLETE: 2 of 3 copies present is not a pass, since
+the drifted copy could be the absent one.
+
+To get a real PASS locally, point the gate at a tree holding the copies:
+
+```bash
+RESERVED_SIBLING_ROOT=/path/to/checkouts scripts/validate-reserved-prefixes.sh
+```
+
+`RESERVED_ALLOW_MISSING_COPIES=1` downgrades INCOMPLETE to exit 0 for a working
+copy that genuinely has no siblings — but the verdict still reads
+`RESULT: PASS (INCOMPLETE …)`, never a clean PASS. **Never set it in CI**:
+`.gitlab-ci.yml`'s `lint:reserved-prefixes` clones the three sibling repos from
+the org mirror (CI job token, same recipe as `sca:dependency-check`) so the
+assertion genuinely runs, and `lint:reserved-prefixes-gate-honesty`
+(`tests/scripts/test-reserved-prefix-copy-gate.sh`) proves the gate cannot go back
+to reporting a clean PASS on a skipped run.
 
 ## Adding a new dedicated route prefix (the workflow)
 
@@ -183,10 +216,14 @@ The script runs **five stages** (each fails the build on a violation):
 2. Add the new first-segment label to `spec.reserved` in
    `specs/cluster/reserved-prefixes.yaml`.
 3. Run `scripts/sync-reserved-configmap.sh` to regenerate the ConfigMap mirror.
-4. Run `scripts/validate-reserved-prefixes.sh` — it must PASS.
-5. **Add the same label to the app-repo `ReservedNames` copies**
-   (federation-api / user-bff-api / hugmesh-actions / admin-bff-api) so the
-   resolve/registration/admin layers agree.
+4. **Add the same label to the app-repo `ReservedNames` copies** so the
+   resolve/registration/admin layers agree. Three physical copies:
+   `hugmesh-federation-api`, `hugmesh-actions`, and `hugmesh-auth-core` (the
+   shared one `user-bff-api` + `admin-bff-api` consume as a Maven dependency —
+   they no longer carry their own file).
+5. Run `RESERVED_SIBLING_ROOT=… scripts/validate-reserved-prefixes.sh` — it must
+   print `RESULT: PASS`. A bare `RESULT: INCOMPLETE` means step 4 was **not
+   verified**; do not treat it as done.
 
 ## Honest scope / deferrals
 
@@ -196,15 +233,17 @@ The script runs **five stages** (each fails the build on a violation):
   guard for those (and the PreSync-style guard, since the same script can run as
   an ArgoCD resource hook). This split is intentional and documented above.
 - The app-repo `ReservedNames` copies are **not** auto-generated from this
-  source (they live in four other repos). Step 5 above is a manual sync; the
-  validate script's **code-copy assertion** mechanically verifies the sync when
-  the repos are checked out together, but a follow-up could publish
-  `reserved.json` as a build artifact the app repos pull.
+  source (they live in three other repos). Step 4 above is a manual sync; the
+  validate script's **code-copy assertion** mechanically verifies it — CI now
+  clones those repos so the assertion actually runs on every pipeline instead of
+  skipping to a green result. A follow-up could publish `reserved.json` as a
+  build artifact the app repos pull, removing the manual sync entirely.
 - `pleroma` (revision 1) and now `_synapse` / `media` / `forum` / `phpbb`
-  (revision 2) were added to the canonical set; the four app repos
-  (`federation-api` / `user-bff-api` / `hugmesh-actions` / `admin-bff-api`)
-  must add the same labels to reach parity (the code-copy assertion FAILs until
-  they do — that is the intended signal).
+  (revision 2) were added to the canonical set; the three copies
+  (`hugmesh-federation-api` / `hugmesh-actions` / `hugmesh-auth-core`, the last
+  covering `user-bff-api` + `admin-bff-api` via the Maven dependency) must add the
+  same labels to reach parity (the code-copy assertion FAILs until they do — that
+  is the intended signal).
 - The scoped Service-name drift check (stage 4) keys on the route `uri` host, so
   it only sees Services a **gateway route** targets. A Service exposed by some
   other mechanism (a future Ingress/HTTPRoute) is covered by the Kyverno host

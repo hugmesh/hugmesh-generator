@@ -28,18 +28,38 @@
 #      "scoped" check: a naive "every kind:Service must be reserved" rule would be
 #      RED on day one (akkoma-proxy/kafka/*-db are Services but never public), so
 #      we scope to what a route actually exposes and exempt the rest by allowlist;
-#   5) CODE-COPY assertion — when the sibling app repos are checked out next to
-#      this one (or REReservedNames paths are given), parse each ReservedNames.java
-#      RESERVED[_LABELS] set and assert it EQUALS the canonical set. SKIPPED (not
-#      failed) for any copy not present, so this repo's own CI stays green while a
-#      developer with the siblings checked out gets the mechanical drift check that
-#      replaces hand-counting. PLANNED reserves (forum/phpbb) are expected in the
-#      canonical set without a deployed route — they are NEVER flagged by stage 3/4.
+#   5) CODE-COPY assertion — parse each app-repo ReservedNames.java
+#      RESERVED[_LABELS] set and assert it EQUALS the canonical set. REQUIRED:
+#      every declared copy must be present and checked. PLANNED reserves
+#      (forum/phpbb) are expected in the canonical set without a deployed route —
+#      they are NEVER flagged by stage 3/4.
 #
-# Wired into .gitlab-ci.yml (lint stage). Uses python3 + PyYAML (present in CI)
-# for robust YAML parsing; degrades to a clear error if python3/PyYAML is absent.
+# WHY STAGE 5 IS NO LONGER "SKIP AND STILL PASS". Until 2026-07-29 an absent
+# sibling checkout printed `[SKIP] … (not checked out)` and the run still ended
+# `RESULT: PASS`. That is a gate reporting green *because it skipped its own most
+# valuable check* — and drift in exactly those copies is the failure this repo has
+# hit TWICE (hugmesh-actions missing `character-forge`/`hmdm`/`attest`/the two
+# games slugs; and before that the #42 gap the copies' own javadoc records). The
+# repo's own CI checked out no siblings, so the assertion had NEVER once run in a
+# pipeline while advertising PASS. Now: a copy that cannot be checked makes the
+# run INCOMPLETE (exit 3, distinct result line), and .gitlab-ci.yml's
+# lint:reserved-prefixes clones the three sibling repos so it genuinely runs.
 #
-# Exit 0 = consistent; non-zero = drift / mismatch (prints the offending labels).
+# Wired into .gitlab-ci.yml (lint stage). Uses python3 + PyYAML for robust YAML
+# parsing; degrades to a clear error if python3/PyYAML is absent.
+#
+# EXIT CODES
+#   0  PASS       — consistent, and every stage (including the code-copy
+#                   assertion) actually ran.
+#   1  FAIL       — drift / mismatch (prints the offending labels).
+#   2  FATAL      — environment problem (missing input file, no python3/PyYAML).
+#   3  INCOMPLETE — no violation found, but the code-copy assertion could NOT run
+#                   (one or more ReservedNames.java copies absent). Non-zero on
+#                   purpose: an unrun assertion is not a pass. Point
+#                   RESERVED_SIBLING_ROOT at a tree holding the copies, or set
+#                   RESERVED_ALLOW_MISSING_COPIES=1 to opt out DELIBERATELY (that
+#                   downgrades to exit 0 but still prints the distinct
+#                   `RESULT: PASS (INCOMPLETE …)` line — never a clean PASS).
 set -euo pipefail
 
 # Repo-root-relative paths (resolve from this script's location).
@@ -53,11 +73,17 @@ GATEWAY_GLOB="${REPO_ROOT}/specs/cluster/apps"
 MANIFESTS_DIR="${REPO_ROOT}/specs/cluster/manifests"
 
 # Where to look for the app-repo ReservedNames.java copies (stage 5, code-copy
-# assertion). Default: sibling checkouts next to this repo (…/GitHub/<repo>). Any
-# absent copy is SKIPPED, not failed — so this repo's own CI (which does not check
-# out the app repos) stays green; a developer with the siblings present gets the
-# mechanical drift check. Override the search root with RESERVED_SIBLING_ROOT.
+# assertion). Default: sibling checkouts next to this repo (…/GitHub/<repo>).
+# Override the search root with RESERVED_SIBLING_ROOT (CI clones them into a temp
+# dir and points this at it). An absent copy makes the run INCOMPLETE (exit 3) —
+# see the EXIT CODES block above.
 SIBLING_ROOT="${RESERVED_SIBLING_ROOT:-$(cd "${REPO_ROOT}/.." && pwd)}"
+
+# Deliberate opt-out for a working copy that genuinely has no siblings checked
+# out. Downgrades INCOMPLETE (exit 3) to exit 0 — but the verdict line still says
+# PASS (INCOMPLETE …), so no run can be mistaken for a complete one. NEVER set
+# this in CI: the whole point of the CI clone below is that the assertion runs.
+ALLOW_MISSING_COPIES="${RESERVED_ALLOW_MISSING_COPIES:-0}"
 
 for f in "$CANONICAL" "$CONFIGMAP" "$SCHEMA_SQL"; do
   [[ -f "$f" ]] || { echo "FATAL: missing required file: $f" >&2; exit 2; }
@@ -70,7 +96,8 @@ fi
 
 # Hand off to python for the actual set-logic (YAML + SQL parsing). The script
 # prints a human report and exits non-zero on any violation.
-python3 - "$CANONICAL" "$CONFIGMAP" "$SCHEMA_SQL" "$GATEWAY_GLOB" "$MANIFESTS_DIR" "$SIBLING_ROOT" <<'PY'
+python3 - "$CANONICAL" "$CONFIGMAP" "$SCHEMA_SQL" "$GATEWAY_GLOB" "$MANIFESTS_DIR" \
+         "$SIBLING_ROOT" "$ALLOW_MISSING_COPIES" <<'PY'
 import glob
 import json
 import os
@@ -84,7 +111,11 @@ import sys
     gateway_dir,
     manifests_dir,
     sibling_root,
-) = sys.argv[1:7]
+    allow_missing_copies_raw,
+) = sys.argv[1:8]
+
+allow_missing_copies = allow_missing_copies_raw.strip().lower() in {
+    "1", "true", "yes", "on"}
 
 try:
     import yaml
@@ -346,11 +377,14 @@ else:
 # checking auth-core covers both BFFs, which no longer carry their own file. (The
 # old userbff/profile + adminbff/reserved paths were removed when the copy was
 # consolidated into auth-core; listing them here only produced silent SKIPs and
-# left the real shared copy unchecked.) SKIP-IF-ABSENT: a copy not checked out next
-# to this repo is reported as SKIP, not failed, so this repo's own CI stays green —
-# the app repos run their own ReservedNamesTest. Override the search root with
-# RESERVED_SIBLING_ROOT. Handles both field names in use (RESERVED_LABELS in
-# federation-api; RESERVED in hugmesh-actions/hugmesh-auth-core).
+# left the real shared copy unchecked.) NOT SKIP-AND-PASS: a copy that is not
+# present is reported [MISSING] and makes the whole run INCOMPLETE (exit 3) — an
+# assertion that did not run is not a pass, and the previous skip-and-still-PASS
+# behaviour is precisely why the hugmesh-actions drift survived in a "green" tree.
+# Point RESERVED_SIBLING_ROOT at a tree holding the copies (CI clones them), or
+# set RESERVED_ALLOW_MISSING_COPIES=1 to opt out deliberately. Handles both field
+# names in use (RESERVED_LABELS in federation-api; RESERVED in
+# hugmesh-actions/hugmesh-auth-core).
 CODE_COPIES = [
     ("federation-api", "hugmesh-federation-api",
      "src/main/java/systems/hugmesh/federation/controller/ReservedNames.java"),
@@ -425,11 +459,16 @@ print(f"sibling search root : {sibling_root}")
 # on purpose (they match literal route path segments like `/remoteEntry.json`, where
 # case is significant) — only THIS stage folds it.
 reserved_set_lower = {r.lower() for r in reserved_set}
-any_checked = False
+# Copies the assertion could NOT run against. Tracked PER COPY, not as a single
+# "did anything get checked" flag: with the old `any_checked` boolean, 2 present +
+# 1 absent still reported a clean PASS, i.e. the ONE copy that drifted could be
+# the very one that was silently skipped.
+missing_copies = []
 for label, repo, rel in CODE_COPIES:
     jpath = os.path.join(sibling_root, repo, rel)
     if not os.path.isfile(jpath):
-        print(f"  [SKIP] {label:<16} (not checked out: {repo})")
+        missing_copies.append((label, repo, jpath))
+        print(f"  [MISSING] {label:<13} NOT CHECKED — no such file: {jpath}")
         continue
     parsed = parse_java_reserved(jpath)
     if parsed is None:
@@ -437,7 +476,6 @@ for label, repo, rel in CODE_COPIES:
         print(f"  [FAIL] {label:<16} could NOT parse RESERVED[_LABELS] Set.of(...) "
               f"in {jpath}", file=sys.stderr)
         continue
-    any_checked = True
     only_canon = sorted(reserved_set_lower - parsed)
     only_copy = sorted(parsed - reserved_set_lower)
     if only_canon or only_copy:
@@ -450,16 +488,43 @@ for label, repo, rel in CODE_COPIES:
     else:
         print(f"  [OK]   {label:<16} ({len(parsed)} labels == canonical)")
 
-if not any_checked:
-    print("  note: no app-repo copies were present — code-copy assertion skipped.")
-    print("        (run with the app repos checked out, or set RESERVED_SIBLING_ROOT,")
-    print("         to mechanically verify the four ReservedNames.java sets.)")
+incomplete = bool(missing_copies)
+if incomplete:
+    print()
+    print(f"INCOMPLETE: the code-copy assertion could NOT run for "
+          f"{len(missing_copies)} of {len(CODE_COPIES)} ReservedNames.java "
+          f"copies:", file=sys.stderr)
+    for label, repo, jpath in missing_copies:
+        print(f"  - {label} ({repo}) -> {jpath}", file=sys.stderr)
+    print(file=sys.stderr)
+    print("This stage is what mechanically proves the app-repo copies match the", file=sys.stderr)
+    print("canonical set; an unrun assertion is NOT a pass. Fix by either:", file=sys.stderr)
+    print(f"  * checking the repos out under the sibling root ({sibling_root}), or", file=sys.stderr)
+    print("  * RESERVED_SIBLING_ROOT=/path/to/tree scripts/validate-reserved-prefixes.sh, or", file=sys.stderr)
+    print("  * RESERVED_ALLOW_MISSING_COPIES=1 to accept an INCOMPLETE run on purpose", file=sys.stderr)
+    print("    (never in CI — .gitlab-ci.yml's lint:reserved-prefixes clones them).", file=sys.stderr)
+else:
+    print(f"  all {len(CODE_COPIES)} declared copies were present and checked.")
 
 # ---- final verdict ----------------------------------------------------------
+# Three distinct verdicts, three distinct exit codes — see the EXIT CODES block at
+# the top of this file. A run that skipped the code-copy assertion must never be
+# indistinguishable from one that ran it.
 print()
 if failed:
     print("RESULT: FAIL — see the violations above.", file=sys.stderr)
     sys.exit(1)
+if incomplete:
+    if allow_missing_copies:
+        print("RESULT: PASS (INCOMPLETE — code-copy assertion SKIPPED for "
+              f"{len(missing_copies)}/{len(CODE_COPIES)} copies; exit 0 forced by "
+              "RESERVED_ALLOW_MISSING_COPIES=1). The other stages are consistent; "
+              "the copies were NOT verified.")
+        sys.exit(0)
+    print("RESULT: INCOMPLETE — no drift found in the stages that ran, but the "
+          f"code-copy assertion did NOT run ({len(missing_copies)}/"
+          f"{len(CODE_COPIES)} copies absent). NOT a pass.", file=sys.stderr)
+    sys.exit(3)
 print("RESULT: PASS — canonical reserved set is consistent across all stages.")
 sys.exit(0)
 PY
