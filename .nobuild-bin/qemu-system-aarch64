@@ -1,3 +1,0 @@
-#!/bin/sh
-echo "BLOCKED: qemu-system-aarch64 disabled in this lane" >&2
-exit 127

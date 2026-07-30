@@ -129,3 +129,8 @@ brand.conf
 scripts/__pycache__/
 specs/cluster/manifests/meshbridge/app/__pycache__/
 tests/meshbridge/__pycache__/
+
+# Session sandbox: PATH-shadowing no-build stubs (sudo/docker/emerge/qemu -> exit 127).
+# Never part of the product — created ad hoc by review/CI sandboxes; see the
+# workflow-no-real-builds convention. Ignored so a sandbox run cannot commit them.
+.nobuild-bin/

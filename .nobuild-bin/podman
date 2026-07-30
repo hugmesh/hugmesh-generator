@@ -1,3 +1,0 @@
-#!/bin/sh
-echo "BLOCKED: podman disabled in this lane" >&2
-exit 127
