@@ -78,6 +78,61 @@ routes:
 # all — see that file's comment); do not re-set it here.
 extraEnv: []
 
+# ── MFA ENFORCEMENT (gateway) — SHIPS DARK, EVERY FLAG DEFAULT OFF ───────────
+# The gateway is the component that actually ENFORCES MFA at route level: its
+# GatewayRouteAccessFilter.decide() honours the per-row
+# gateway_route_access.mfa_required gate and the privileged floor. Three
+# properties in the gateway image drive it (hugmesh-gateway
+# src/main/resources/application.yml, "D8 MFA floor"):
+#
+#   app.mfa.enabled                 <- APP_MFA_ENABLED                  (false)
+#   app.mfa.freshness-window        <- APP_MFA_FRESHNESS_WINDOW        (600000)
+#   app.mfa.enforce-privileged-floor<- APP_MFA_ENFORCE_PRIVILEGED_FLOOR (false)
+#
+# Until this block existed, NO file in this repo set any of the three, so no
+# deployment the generator produces could ever turn gateway MFA enforcement on —
+# the enforcement leg was unreachable from GitOps. (The admin-bff *step-up* leg,
+# APP_CASDOOR_MFA_ENABLED, was already wired; that is a different component.)
+#
+# Declared ONCE here because all four gateway instances deploy THIS chart
+# (apps/20-gateway-be.yaml, 20-gateway-fe.yaml, 20-gateway-pki.yaml,
+# 22-gateway-superadmin.yaml all point at specs/cluster/charts/hugmesh-gateway),
+# and templates/deployment.yaml renders the three env vars from it. Override per
+# instance in that instance's Application `helm.values:` block — Helm deep-merges
+# maps, so `mfa: {enabled: true}` there keeps the other two defaults.
+#
+# THE DEFAULTS BELOW REPRODUCE THE IMAGE DEFAULTS EXACTLY. A cluster that sets
+# nothing behaves identically to before this block existed: the MFA_SATISFIED
+# authority is never derived, the gateway_route_access.mfa_required column stays
+# inert, and the privileged-floor check never runs. The deliverable is that MFA
+# becomes SETTABLE, not that it becomes on.
+#
+# OPERATIONAL CAVEAT — `enabled: true` ALONE IS A NO-OP. The per-row gate can
+# only fire on a gateway_route_access row whose mfa_required is true, and nothing
+# in the platform writes true today: admin-bff's AddServiceEffector constructs
+# rows through the false back-compat constructor, and the gateway's CanonicalSeed
+# bakes false. Flipping this flag on a cluster therefore changes nothing
+# observable until an operator also sets mfa_required=true on some row.
+# enforcePrivilegedFloor is likewise inert without BOTH `enabled: true` AND such
+# a row.
+mfa:
+  # app.mfa.enabled — derive the NON-role MFA_SATISFIED authority from the
+  # BFF-written, freshness-validated `mfa_satisfied_at` JWT-Custom claim AND
+  # enforce the per-row gateway_route_access.mfa_required gate (fail-closed).
+  # The marker is never sourced from roles/permissions (reserved-prefix guard).
+  enabled: false
+  # app.mfa.freshness-window — millis. A stamp is fresh iff
+  # 0 <= now - ts <= window (a FUTURE stamp is rejected). 600000 = 10 min,
+  # independent of the session TTL. Same value as the image default.
+  freshnessWindow: 600000
+  # app.mfa.enforce-privileged-floor — HARD privileged floor, checked ABOVE the
+  # SUPERADMIN cross-domain bypass and the ADMIN/GAME-MASTER own-domain bypass,
+  # so a privileged principal on an mfa_required surface must carry a FRESH
+  # MFA_SATISFIED or be DENIED (SUPERADMIN is NOT exempt). Cold-start
+  # (route-access not yet primed) fails closed with 503 for those principals.
+  # SEPARATE sub-flag: requires `enabled: true` to have any effect at all.
+  enforcePrivilegedFloor: false
+
 # Per-app mTLS keystore, built at startup from the Vault-PKI-issued, ESO-synced
 # TLS Secret (manifests/external-secrets/pki-externalsecrets.yaml). When enabled,
 # an initContainer assembles keystore.p12 (identity) + truststore.p12 (cluster

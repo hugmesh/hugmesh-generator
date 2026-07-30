@@ -1220,9 +1220,27 @@ ESHAPES="k8s env lists ('- name:' / 'value:' on separate lines, either order), m
   && ok "nothing under specs/ or in the compose stack sets APP_MFA_ENFORCE_PRIVILEGED_FLOOR to a true value, in any of the shapes this scan understands — ${ESHAPES} ($(e DEFERRED) site(s) defer it to a chart value, audited by the chart-values arm above: $(sed -n 's/^DEFERRED_AT //p' "${W}/env.out" | tr '\n' ';')). It fails CLOSED with 503 for privileged principals while route-access primes, and GatewayRouteAccessFilter checks it WITHOUT consulting app.mfa.enabled, so it must stay off until operators have enrolled" \
   || bad "$(e FLOOR_TRUE) site(s) default APP_MFA_ENFORCE_PRIVILEGED_FLOOR true: $(sed -n 's/^FLOOR_AT //p' "${W}/env.out" | tr '\n' ';')"
 
-[ "$(e ENABLED_TRUE)" = "0" ] \
-  && ok "…and none of those shapes hardcodes APP_MFA_ENABLED true either — including the shared chart template that renders env into ALL FOUR gateway pods, which the ArgoCD-Application parse above cannot reach and a per-line grep could not read (name and value are on different lines)" \
-  || bad "$(e ENABLED_TRUE) site(s) default APP_MFA_ENABLED true: $(sed -n 's/^ENABLED_AT //p' "${W}/env.out" | tr '\n' ';')"
+# APP_MFA_ENABLED is deliberately ASYMMETRIC (docs/MFA-ROLLOUT.md §0): the CLUSTER ships it
+# OFF, the COMPOSE DEV STACK defaults it ON so the enforcement leg is exercisable locally.
+# A flat "zero sites anywhere" verdict encodes only half of that and fails on the compose
+# half BY DESIGN — so partition by root and assert each side's real requirement. The cluster
+# side keeps the original strength; the compose side is not merely tolerated but pinned.
+ENABLED_CLUSTER_AT="$(sed -n 's/^ENABLED_AT //p' "${W}/env.out" | grep -v '^tests/stack/' || true)"
+ENABLED_COMPOSE_AT="$(sed -n 's/^ENABLED_AT //p' "${W}/env.out" | grep '^tests/stack/' || true)"
+ENABLED_CLUSTER_N="$(printf '%s' "${ENABLED_CLUSTER_AT}" | grep -c . || true)"
+ENABLED_COMPOSE_N="$(printf '%s' "${ENABLED_COMPOSE_AT}" | grep -c . || true)"
+
+[ "${ENABLED_CLUSTER_N}" = "0" ] \
+  && ok "…and nothing OUTSIDE the compose dev stack hardcodes APP_MFA_ENABLED true — including the shared chart template that renders env into ALL FOUR gateway pods, which the ArgoCD-Application parse above cannot reach and a per-line grep could not read (name and value are on different lines)" \
+  || bad "${ENABLED_CLUSTER_N} CLUSTER-side site(s) default APP_MFA_ENABLED true: $(printf '%s' "${ENABLED_CLUSTER_AT}" | tr '\n' ';') — the cluster posture is OFF; flipping it is an explicit operator action"
+
+# Every compose default-ON site must stay OPERATOR-OVERRIDABLE. `${APP_MFA_ENABLED:-true}`
+# lets `APP_MFA_ENABLED=false make stack-up` turn it back off; a bare `true` would not, which
+# is a different posture from the one that was chosen.
+COMPOSE_HARDCODED="$(printf '%s' "${ENABLED_COMPOSE_AT}" | grep -v 'shell default is true' || true)"
+[ -z "${COMPOSE_HARDCODED}" ] \
+  && ok "the compose dev stack's ${ENABLED_COMPOSE_N} APP_MFA_ENABLED default(s) are all the OVERRIDABLE \${APP_MFA_ENABLED:-true} form, so APP_MFA_ENABLED=false still turns the dev stack's enforcement off" \
+  || bad "compose site(s) hardcode APP_MFA_ENABLED true with no override: $(printf '%s' "${COMPOSE_HARDCODED}" | tr '\n' ';') — the dev stack defaults ON, but an operator must still be able to set it false"
 
 [ "$(e UNDECIDABLE)" = "0" ] \
   && ok "no APP_MFA_* env value in that sweep is undecidable (a valueFrom Secret/ConfigMap reference, or a literal true inside an open Helm {{ if }} block)" \

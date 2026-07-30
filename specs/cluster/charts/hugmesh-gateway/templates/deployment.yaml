@@ -161,6 +161,22 @@ spec:
               value: {{ .Values.cassandra.keyspace | quote }}
             - name: CASSANDRA_LOCAL_DC
               value: {{ .Values.cassandra.localDc | quote }}
+            # ── MFA enforcement (gateway) — see values.yaml's `mfa:` block for the
+            # full rationale and the operational caveat. Rendered UNCONDITIONALLY so
+            # the deployed contract is explicit in the manifest (and drift is
+            # visible in `kubectl describe`) rather than depending on the image's
+            # own ${VAR:default} fallbacks. The chart defaults reproduce those
+            # image defaults exactly (false / 600000 / false), so a release that
+            # overrides nothing is behaviourally unchanged; each instance's
+            # Application can override the values (Helm deep-merges the map).
+            # These sit BEFORE the extraEnv passthrough deliberately: extraEnv is
+            # the raw escape hatch and must stay last in the list.
+            - name: APP_MFA_ENABLED
+              value: {{ .Values.mfa.enabled | quote }}
+            - name: APP_MFA_FRESHNESS_WINDOW
+              value: {{ .Values.mfa.freshnessWindow | quote }}
+            - name: APP_MFA_ENFORCE_PRIVILEGED_FLOOR
+              value: {{ .Values.mfa.enforcePrivilegedFloor | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

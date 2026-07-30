@@ -34,6 +34,19 @@ spec:
       values: |
         instance:
           name: hugmesh-superadmin-gateway
+        # NOTE: MFA enforcement is deliberately NOT enabled here. Every cluster
+        # instance inherits the chart's default-off `mfa:` block (mfa.enabled /
+        # mfa.freshnessWindow / mfa.enforcePrivilegedFloor in
+        # specs/cluster/charts/hugmesh-gateway/values.yaml, rendered as
+        # APP_MFA_ENABLED / APP_MFA_FRESHNESS_WINDOW /
+        # APP_MFA_ENFORCE_PRIVILEGED_FLOOR). Flipping it is an explicit operator
+        # action, gated on ONE precondition: every operator holding a privileged
+        # role must already have a second factor enrolled, because
+        # enforcePrivilegedFloor is NOT exempt for SUPERADMIN and would lock them
+        # out of the privileged plane. tests/stack/test-gateway-mfa-env.sh
+        # assertion (4b) fails the build if this file — or any other Application —
+        # commits the flip. The step-by-step rollout runbook arrives with the
+        # route-access mfa_required change (it documents both halves together).
         # Cross-namespace mTLS client identity (Vault-PKI/ESO hugmesh-superadmin-gateway-mtls).
         keystore:
           enabled: true

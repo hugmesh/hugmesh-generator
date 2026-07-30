@@ -285,6 +285,37 @@ services:
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: datacenter1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      # ── MFA ENFORCEMENT (gateway) — ON for the local dev stack ────────────────
+      # The gateway is what ENFORCES MFA at route level (GatewayRouteAccessFilter
+      # .decide() honours gateway_route_access.mfa_required + the privileged floor);
+      # app.mfa.enabled / .freshness-window / .enforce-privileged-floor read these
+      # three env vars. Nothing in this repo set them before, so the local stack
+      # could not exercise the enforcement leg at all.
+      #
+      # DELIBERATE ASYMMETRY vs the cluster: this dev stack defaults
+      # APP_MFA_ENABLED=true so the enforcement leg is exercisable end-to-end here,
+      # while the cluster chart keeps it OFF (specs/cluster/charts/hugmesh-gateway/
+      # values.yaml `mfa:` block) because enabling the floor before operators have
+      # enrolled a second factor locks them out of the privileged plane. Turning
+      # the cluster on is therefore an operator action with ONE precondition —
+      # every privileged operator already holds an enrolled second factor; the
+      # step-by-step runbook arrives with the route-access mfa_required change,
+      # which is the other half of the same rollout. tests/stack/
+      # test-gateway-mfa-env.sh pins this asymmetry in both directions.
+      # Override with APP_MFA_ENABLED=false to get the old behaviour back.
+      #
+      # enforce-privileged-floor stays OFF even here: it is a SEPARATE sub-flag, it
+      # is not exempt for SUPERADMIN, and it fails CLOSED with a 503 for privileged
+      # principals during route-access cold start — not what you want as a dev
+      # default. Flip it per-run when specifically testing the floor.
+      #
+      # CAVEAT: APP_MFA_ENABLED=true ALONE IS A NO-OP. The per-row gate needs a
+      # gateway_route_access row with mfa_required=true and nothing writes true
+      # today (admin-bff AddServiceEffector uses the false back-compat ctor; the
+      # gateway's CanonicalSeed bakes false) — seed such a row when testing.
+      APP_MFA_ENABLED: ${APP_MFA_ENABLED:-true}
+      APP_MFA_FRESHNESS_WINDOW: ${APP_MFA_FRESHNESS_WINDOW:-600000}
+      APP_MFA_ENFORCE_PRIVILEGED_FLOOR: ${APP_MFA_ENFORCE_PRIVILEGED_FLOOR:-false}
     volumes:
       - ./gateway-routes/pki:/config:ro
     depends_on:
@@ -333,6 +364,12 @@ services:
       # request reaching this gateway with a bff_ session cookie (e.g. /be/api/** via
       # the front door) would 503 session_backend_unavailable instead of authenticating.
       APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
+      # MFA enforcement (gateway) — ON for the dev stack; identical stanza to the
+      # pki-gateway block above, where the full rationale, the cluster-vs-compose
+      # asymmetry and the mfa_required-row caveat live.
+      APP_MFA_ENABLED: ${APP_MFA_ENABLED:-true}
+      APP_MFA_FRESHNESS_WINDOW: ${APP_MFA_FRESHNESS_WINDOW:-600000}
+      APP_MFA_ENFORCE_PRIVILEGED_FLOOR: ${APP_MFA_ENFORCE_PRIVILEGED_FLOOR:-false}
     volumes:
       - ./gateway-routes/be:/config:ro
     depends_on:
@@ -386,6 +423,14 @@ services:
       # session_backend_unavailable ("Failed to resolve 'admin-bff'"). Point it at the compose
       # admin-bff service so logged-in sessions (GET /bff/session, /bff/me, role-gated routes) work.
       APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
+      # MFA enforcement (gateway) — ON for the dev stack; identical stanza to the
+      # pki-gateway block above, where the full rationale, the cluster-vs-compose
+      # asymmetry and the mfa_required-row caveat live.
+      # This is the platform FRONT DOOR, so this is the instance an operator flips
+      # first when smoke-testing the route-level MFA gate.
+      APP_MFA_ENABLED: ${APP_MFA_ENABLED:-true}
+      APP_MFA_FRESHNESS_WINDOW: ${APP_MFA_FRESHNESS_WINDOW:-600000}
+      APP_MFA_ENFORCE_PRIVILEGED_FLOOR: ${APP_MFA_ENFORCE_PRIVILEGED_FLOOR:-false}
     volumes:
       - ./gateway-routes/fe:/config:ro
     ports:

@@ -28,6 +28,14 @@
 # containers on some hosts, so the registry is itself a container) and
 # GITLAB_GROUP_ID.
 #
+# WHY THERE IS NO `environment:` ANYWHERE IN THIS FILE (and why runtime env such
+# as the gateway APP_MFA_* trio must NOT be copied here for "parity"): this file is
+# a BUILD-time override only — `build.context` + `build.args`. Compose deep-merges
+# `-f compose.local.yaml -f compose.m2-local.yaml`, so every service here INHERITS
+# compose.local.yaml's entire `environment:` map unchanged. Re-declaring a runtime
+# var here would be dead duplication and a second place to drift out of sync.
+# tests/stack/test-gateway-mfa-env.sh asserts this file stays env-free.
+#
 # No ci_job_token secret is wired: every Dockerfile guards the secret mount
 # (`if [ -f /run/secrets/ci_job_token ]`) and the static registry ignores auth
 # headers, so builds succeed without any token. BuildKit itself (the

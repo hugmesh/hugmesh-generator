@@ -135,6 +135,56 @@ lint:mfa-required-rules:
   script:
     - bash tests/scripts/test-mfa-required-rules.sh
 
+# Gateway MFA-ENFORCEMENT env gate. The gateway is what enforces MFA at route level
+# (GatewayRouteAccessFilter.decide() honours gateway_route_access.mfa_required plus
+# the privileged floor), and its three properties — app.mfa.enabled /
+# .freshness-window / .enforce-privileged-floor — appeared in NO file in this repo,
+# so enforcement was unreachable from GitOps and from the local stack. This job
+# locks in both the wiring and the DELIBERATELY ASYMMETRIC posture the operator
+# chose: the cluster chart ships MFA OFF for all four gateway instances (the
+# privileged floor is NOT exempt for SUPERADMIN, so enabling it before operators
+# have enrolled a second factor locks them out of the privileged plane — flipping it
+# is an explicit operator action), while the compose dev stack defaults it ON so the
+# enforcement leg is exercisable end-to-end locally.
+# The assertion that earns this job its slot is (4b): nothing ArgoCD syncs from
+# specs/cluster/apps may set mfa.enabled true. That regression has ALREADY shipped
+# once here and had to be undone by hand — a comment asking people not to do it is
+# not a gate. Its reach is deliberately ArgoCD's, not a convenient glob: every
+# .yaml/.yml/.json under that directory RECURSIVELY, ApplicationSet templates as
+# well as Applications, and all five ways a source can hand helm a value (values,
+# valuesObject, parameters, fileParameters, valueFiles — the last two are reported
+# as unreadable and FAIL rather than passing as default-off). An earlier revision
+# of this job checked only top-level `*.yaml` and only the `values` string, and
+# stayed green while a gateway Application turned MFA on three different ways.
+# A gateway instance — cluster Application or compose service — cannot be added
+# without being declared to the test, and the mutation controls (8a-8t) plant each
+# of those regressions on a staged copy every run, so a green run cannot be vacuous.
+# "Which Applications deploy the gateway chart" is decided on the CANONICAL
+# source.path, because ArgoCD resolves it against the repo root: `./specs/…`,
+# `specs/…/` and `specs/…/./…` are one directory to Argo. A raw string compare made
+# a fifth gateway spelled any of those ways invisible to the consumer, release AND
+# unreadable-input checks — it scored a clean sheet while carrying a valueFiles
+# entry nothing could read (controls 8r.1-8r.5; 8s pins that canonicalisation is
+# spelling-only and does not sweep in a different chart).
+# WHAT IT CANNOT SEE: an Application applied out of band, i.e. not committed under
+# specs/cluster/apps at all. WHAT IT DECLINES TO MODEL: multi-source Applications
+# (spec.sources) — it says so in those words and fails, rather than guessing which
+# source is the chart (control 8t).
+# Offline: python3 + PyYAML + bash, no cluster, no helm, no docker, no network.
+# The script preflights every external tool it uses and refuses to emit a pass/fail
+# count if one is missing — it runs under `set -uo pipefail` without `-e`, so a
+# `python:3-slim` short of `sort`/`find`/`cp` would otherwise distort the tally
+# rather than fail. It also declares a floor on the number of assertions that must
+# run, so checks cannot silently stop being counted.
+lint:gateway-mfa-env:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/stack/test-gateway-mfa-env.sh
+
 # Thin-desktop (Sunshine) mesh-fence composition gate. Executes BOTH halves of
 # the fence for real (only nft/sunshine/ip/pgrep/logger are PATH stubs) and
 # asserts (a) the tailnet admit is DUAL-STACK — an `ip saddr` match inside an
