@@ -302,6 +302,29 @@ sweep) + 16 taxonomy-parity + 6 web-catalog honesty =
 make matrix-check                 # or: bash tests/build-matrix/check.sh
 ```
 
+### The full inventory — every advertised image × every channel
+
+**✅ shipped.** `matrix.tsv` is a *curated sample* of the image grammar; the
+**full inventory** is the other half of the standing rule. `scripts/emit-image-inventory.py`
+expands [`docs/catalog/image-catalog.json`](catalog/image-catalog.json)'s grammar
+into **every** advertised image (mode × platform × role × board/flavor/desktop)
+and probes all six channels for each one — CLI (`--print-plan`), `make -n`, the
+ncurses menu's real `ui_menu` pickers, the Studio's `--print-command`, the k8s
+Job worker's `resolve_build_target()` (really executed), and a materialized
+`hugmesh-worklist/v1` envelope — recording per image whether each channel has a
+first-class selection, only an escape hatch, or nothing. The result is committed
+as [`docs/catalog/image-inventory.json`](catalog/image-inventory.json) +
+[`docs/IMAGE-INVENTORY.md`](IMAGE-INVENTORY.md) (channel gaps, phantom catalog
+entries and undocumented targets each get their own table), and
+`tests/build-matrix/inventory-check.sh` regenerates + re-proves it five ways
+(DRIFT/CLI/JOB/INV/BASE) so the channels and the documented inventory can never
+silently disagree:
+
+```sh
+make inventory-check              # or: bash tests/build-matrix/inventory-check.sh
+make image-inventory              # regenerate after a deliberate channel/grammar change
+```
+
 ### Shared-binpkg prebuild flags (host/CI build-phase, not GUI options)
 
 The shared-binpkg track (**✅ shipped**, see

@@ -1,0 +1,3149 @@
+{
+  "failures": [],
+  "generated_by": "scripts/render-all-images.py",
+  "image_count": 134,
+  "images": {
+    "cloud/frite/frite/la-frite/both/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.la-frite.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/la-frite/both/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.la-frite.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/la-frite/installer/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/la-frite/installer/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/la-frite/live/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/la-frite/live/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/le-potato/both/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.le-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/le-potato/both/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.le-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/le-potato/installer/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/le-potato/installer/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/le-potato/live/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/le-potato/live/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/sweet-potato/both/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.sweet-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/sweet-potato/both/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.sweet-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/sweet-potato/installer/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/sweet-potato/installer/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/sweet-potato/live/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/frite/frite/sweet-potato/live/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi3-lts/orangepi3-lts/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi3-lts.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi3-lts"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi3-lts/orangepi3-lts/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi3-lts"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi3-lts/orangepi3-lts/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi3-lts"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi4-lts/orangepi4-lts/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi4-lts.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi4-lts"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi4-lts/orangepi4-lts/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi4-lts"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi4-lts/orangepi4-lts/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi4-lts"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi5/orangepi5/orange-pi-5-plus/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5-plus.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi5/orangepi5/orange-pi-5-plus/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi5/orangepi5/orange-pi-5-plus/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi5/orangepi5/orange-pi-5/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi5/orangepi5/orange-pi-5/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepi5/orangepi5/orange-pi-5/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero2/orangepizero2/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero2.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero2/orangepizero2/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero2/orangepizero2/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero2w/orangepizero2w/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero2w.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2w"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero2w/orangepizero2w/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2w"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero2w/orangepizero2w/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2w"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero3/orangepizero3/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero3.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero3"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero3/orangepizero3/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero3"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/orangepizero3/orangepizero3/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero3"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/rpi5/rpi5-desktop/rpi3": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/rpi5/rpi5-desktop/rpi4": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/rpi5/rpi5-desktop/rpi5": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/x86/chromebook/full": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-chromebook",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/x86/chromebook/thin": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-chromebook"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/x86/desktop/full": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/x86/desktop/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=full)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-desktop",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/x86/laptop/full": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-laptop",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "cloud/x86/laptop/thin": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-laptop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/edge_ai/orin-nano": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-edge_ai"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/edge_ai/orin-nano-4gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-edge_ai"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/edge_ai/orin-nx-16gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-edge_ai"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/edge_ai/orin-nx-8gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-edge_ai"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/full/orin-nano": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/full/orin-nano-4gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/full/orin-nx-16gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/full/orin-nx-8gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/gpu-host/orin-nano": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-gpu-host"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/gpu-host/orin-nano-4gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-gpu-host"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/gpu-host/orin-nx-16gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-gpu-host"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/gpu-host/orin-nx-8gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-gpu-host"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/jetson-desktop/orin-nano": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/jetson-desktop/orin-nano-4gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/jetson-desktop/orin-nx-16gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/jetson/jetson-desktop/orin-nx-8gb": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "jetson-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/be/rpi4": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-backend"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/be/rpi5": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-backend"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/fe/rpi4": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-frontend"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/fe/rpi5": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-frontend"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/pki/rpi4": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-pki"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/pki/rpi5": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-pki"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/rpi5-desktop/rpi3": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/rpi5-desktop/rpi4": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/rpi5/rpi5-desktop/rpi5": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-desktop"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/be+gpu/full": {
+      "cli": {
+        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-be+gpu",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/be+gpu/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-be+gpu",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/be/full": {
+      "cli": {
+        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-be",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/be/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-be",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/edge_ai/full": {
+      "cli": {
+        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-edge_ai",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/edge_ai/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-edge_ai",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/fe/full": {
+      "cli": {
+        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-fe",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/fe/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-fe",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/omnibus/full": {
+      "cli": {
+        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-omnibus",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/omnibus/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-omnibus",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/pki/full": {
+      "cli": {
+        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-pki",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "mesh/x86/pki/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "primary",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-pki",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/la-frite/both/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.la-frite.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/la-frite/both/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.la-frite.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/la-frite/installer/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/la-frite/installer/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/la-frite/live/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/la-frite/live/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/le-potato/both/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.le-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/le-potato/both/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.le-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/le-potato/installer/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/le-potato/installer/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/le-potato/live/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/le-potato/live/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/sweet-potato/both/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.sweet-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/sweet-potato/both/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.sweet-potato.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/sweet-potato/installer/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/sweet-potato/installer/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/sweet-potato/live/light": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/frite/frite/sweet-potato/live/none": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "frite",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi3-lts/orangepi3-lts/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi3-lts.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi3-lts",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi3-lts/orangepi3-lts/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi3-lts",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi3-lts/orangepi3-lts/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi3-lts",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi4-lts/orangepi4-lts/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi4-lts.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi4-lts",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi4-lts/orangepi4-lts/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi4-lts",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi4-lts/orangepi4-lts/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi4-lts",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi5/orangepi5/orange-pi-5-plus/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5-plus.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi5/orangepi5/orange-pi-5-plus/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi5/orangepi5/orange-pi-5-plus/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi5/orangepi5/orange-pi-5/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepi5.orange-pi-5.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi5/orangepi5/orange-pi-5/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepi5/orangepi5/orange-pi-5/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepi5",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero2/orangepizero2/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero2.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero2/orangepizero2/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero2/orangepizero2/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero2w/orangepizero2w/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero2w.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2w",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero2w/orangepizero2w/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2w",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero2w/orangepizero2w/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero2w",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero3/orangepizero3/both": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=orangepizero3.both",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero3",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero3/orangepizero3/installer": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero3",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/orangepizero3/orangepizero3/live": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolved to a DIFFERENT image: standalone posture dropped (resolves to the mesh-affiliated image)",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "orangepizero3",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/rpi5/generic/rpi4": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi4",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-generic",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/rpi5/generic/rpi5": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "reason": "job=no: resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=rpi5.generic.rpi5",
+        "status": "skipped"
+      },
+      "make": {
+        "status": "pass",
+        "target": "rpi-generic",
+        "via": "STANDALONE_FLAGS=--skip-mesh"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/chromebook/full": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-chromebook",
+        "via": "STANDALONE_FLAGS=--desktop full --no-tailscale --no-sso"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/chromebook/thin": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-chromebook",
+        "via": "STANDALONE_FLAGS=--no-tailscale --no-sso"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/standalone-thick/full": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-standalone-thick"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/standalone-thick/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=full+capable)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-standalone-thick",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/standalone-thin/full": {
+      "cli": {
+        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=thin)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-standalone-thin",
+        "via": "STANDALONE_FLAGS=--desktop full"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/standalone-thin/thin": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-standalone-thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/standalone-unaffiliated/full": {
+      "cli": {
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-standalone-unaffiliated"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    },
+    "standalone/x86/standalone-unaffiliated/thin": {
+      "cli": {
+        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=full+capable)",
+        "status": "skipped"
+      },
+      "gui": {
+        "status": "pass"
+      },
+      "job": {
+        "image_type": "client",
+        "status": "pass"
+      },
+      "make": {
+        "status": "pass",
+        "target": "x86-standalone-unaffiliated",
+        "via": "STANDALONE_FLAGS=--desktop thin"
+      },
+      "worklist": {
+        "status": "pass"
+      }
+    }
+  },
+  "inventory_schema": "hugmesh-image-inventory/v1",
+  "mesh_worklists": {
+    "__all__": {
+      "entries": 37,
+      "status": "pass"
+    },
+    "jetson": {
+      "entries": 16,
+      "status": "pass"
+    },
+    "rpi5": {
+      "entries": 9,
+      "status": "pass"
+    },
+    "x86": {
+      "entries": 12,
+      "status": "pass"
+    }
+  },
+  "per_channel": {
+    "cli": {
+      "fail": 0,
+      "pass": 118,
+      "skipped": 16
+    },
+    "gui": {
+      "fail": 0,
+      "pass": 134,
+      "skipped": 0
+    },
+    "job": {
+      "fail": 0,
+      "pass": 93,
+      "skipped": 41
+    },
+    "make": {
+      "fail": 0,
+      "pass": 134,
+      "skipped": 0
+    },
+    "worklist": {
+      "fail": 0,
+      "pass": 134,
+      "skipped": 0
+    }
+  },
+  "schema": "hugmesh-image-render-report/v1"
+}

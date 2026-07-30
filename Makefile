@@ -370,7 +370,7 @@ ORANGEPI4LTS_FLAVOR ?= both
 ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
+.PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check inventory-check image-inventory pentest pentest-seed rebuild \
         rpi x86 omnibus prebuild-binaries frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         orangepizero2w orangepizero2w-live orangepizero2w-installer \
@@ -430,6 +430,10 @@ help: ## list targets
 	@echo "  Matrix:     make build-everything = the FULL documented matrix (honors ENV);"
 	@echo "              make matrix-check = dry-run validate every role/flag combo via the"
 	@echo "              builders' --print-plan (no root, no writes; tests/build-matrix/check.sh)."
+	@echo "              make inventory-check = prove the committed FULL image inventory"
+	@echo "              (docs/IMAGE-INVENTORY.md — every advertised image x which channels"
+	@echo "              can express it) still matches all six channels (dry-run;"
+	@echo "              tests/build-matrix/inventory-check.sh)."
 
 menu: ## interactive console menu to build images (progress + quit-without-stopping)
 	@bash scripts/build-menu.sh
@@ -1035,6 +1039,18 @@ matrix-check: ## dry-run validate the whole build matrix via --print-plan (tests
 	@test -f tests/build-matrix/check.sh \
 	  || { echo "tests/build-matrix/check.sh not found — the build-matrix harness is not in this checkout yet."; exit 1; }
 	bash tests/build-matrix/check.sh
+
+# matrix-check proves the 150 CURATED matrix.tsv cells; inventory-check proves the
+# other half — that the committed FULL inventory (every image the catalog grammar
+# advertises, x which of the six channels can express it) still matches reality.
+# Both are dry-run: --print-plan / make -n / command printing, no root, no docker.
+inventory-check: ## prove docs/IMAGE-INVENTORY.md still matches all six build channels (tests/build-matrix/inventory-check.sh)
+	@test -f tests/build-matrix/inventory-check.sh \
+	  || { echo "tests/build-matrix/inventory-check.sh not found — the inventory gate is not in this checkout yet."; exit 1; }
+	bash tests/build-matrix/inventory-check.sh
+
+image-inventory: ## regenerate docs/catalog/image-inventory.json + docs/IMAGE-INVENTORY.md from the live channels
+	python3 scripts/emit-image-inventory.py
 
 ## ── docker (cross-platform builder; Phase 5) ──────────────────────────
 # CROSSDEV=0 builds the x86-only image variant (skips the slow, several-GB
