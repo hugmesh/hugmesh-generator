@@ -354,6 +354,225 @@
         ]
       }
     },
+    "orangepi3-lts": {
+      "packages": {
+        "gate": "base",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/gentoo-sources",
+              "sys-kernel/linux-firmware"
+            ],
+            "title": "upstream \u2014 there is NO -lts variant in mainline, see the README)"
+          },
+          {
+            "atoms": [
+              "dev-embedded/u-boot-tools"
+            ],
+            "title": "Bootloader tooling"
+          },
+          {
+            "atoms": [
+              "sys-block/parted",
+              "sys-apps/usbutils",
+              "sys-apps/util-linux",
+              "sys-fs/e2fsprogs",
+              "sys-fs/dosfstools"
+            ],
+            "title": "Board hardware / storage"
+          },
+          {
+            "atoms": [
+              "net-misc/networkmanager",
+              "net-misc/openssh",
+              "net-firewall/iptables",
+              "net-misc/socat",
+              "net-vpn/wireguard-tools",
+              "net-vpn/openvpn",
+              "net-wireless/wpa_supplicant"
+            ],
+            "title": "Networking"
+          },
+          {
+            "atoms": [
+              "app-admin/sudo",
+              "sys-process/cronie",
+              "sys-apps/haveged",
+              "app-editors/nano",
+              "app-misc/screen",
+              "app-misc/jq"
+            ],
+            "title": "System"
+          },
+          {
+            "atoms": [
+              "sec-policy/selinux-base",
+              "sec-policy/selinux-base-policy",
+              "sys-apps/policycoreutils",
+              "sys-apps/semodule-utils",
+              "sys-apps/checkpolicy",
+              "sys-libs/libselinux",
+              "sys-libs/libseccomp",
+              "sys-process/audit"
+            ],
+            "title": "Hardened / security (SELinux LSM)"
+          },
+          {
+            "atoms": [
+              "net-fs/nfs-utils",
+              "net-fs/cifs-utils"
+            ],
+            "title": "KEYS USB provisioning + attached storage"
+          }
+        ]
+      },
+      "packages-live": {
+        "gate": "live",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/dracut"
+            ],
+            "title": ""
+          }
+        ]
+      }
+    },
+    "orangepi4-lts": {
+      "packages": {
+        "gate": "base",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/gentoo-sources",
+              "sys-kernel/linux-firmware"
+            ],
+            "title": "Kernel sources (mainline; the Orange Pi RK3399 device tree is upstream)"
+          },
+          {
+            "atoms": [
+              "dev-embedded/u-boot-tools"
+            ],
+            "title": "Bootloader tooling"
+          },
+          {
+            "atoms": [
+              "sys-block/parted",
+              "sys-apps/usbutils",
+              "sys-apps/i2c-tools",
+              "sys-apps/util-linux",
+              "sys-fs/e2fsprogs",
+              "sys-fs/dosfstools",
+              "sys-apps/pciutils"
+            ],
+            "title": "Board hardware / storage"
+          },
+          {
+            "atoms": [
+              "net-misc/networkmanager",
+              "net-misc/openssh",
+              "net-firewall/iptables",
+              "net-misc/socat",
+              "net-vpn/wireguard-tools",
+              "net-vpn/openvpn",
+              "net-wireless/wpa_supplicant"
+            ],
+            "title": "Networking"
+          },
+          {
+            "atoms": [
+              "app-admin/sudo",
+              "sys-process/cronie",
+              "sys-apps/haveged",
+              "app-editors/nano",
+              "app-misc/screen",
+              "app-misc/jq"
+            ],
+            "title": "System"
+          },
+          {
+            "atoms": [
+              "sec-policy/selinux-base",
+              "sec-policy/selinux-base-policy",
+              "sys-apps/policycoreutils",
+              "sys-apps/semodule-utils",
+              "sys-apps/checkpolicy",
+              "sys-libs/libselinux",
+              "sys-libs/libseccomp",
+              "sys-process/audit"
+            ],
+            "title": "Hardened / security (SELinux LSM)"
+          },
+          {
+            "atoms": [
+              "net-fs/nfs-utils",
+              "net-fs/cifs-utils"
+            ],
+            "title": "KEYS USB provisioning + attached storage"
+          }
+        ]
+      },
+      "packages-desktop": {
+        "gate": "desktop",
+        "sections": [
+          {
+            "atoms": [
+              "x11-base/xorg-server",
+              "x11-base/xorg-drivers",
+              "x11-apps/xrandr",
+              "x11-apps/xset",
+              "x11-apps/setxkbmap",
+              "x11-terms/xterm"
+            ],
+            "title": "Display server (X11; lean)"
+          },
+          {
+            "atoms": [
+              "x11-wm/openbox",
+              "lxde-base/lxpanel",
+              "lxde-base/lxsession",
+              "x11-misc/pcmanfm",
+              "lxde-base/lxappearance"
+            ],
+            "title": "Desktop session: LXDE-lite (PCManFM + Openbox + LXpanel)"
+          },
+          {
+            "atoms": [
+              "x11-misc/lightdm",
+              "x11-misc/lightdm-gtk-greeter",
+              "gui-libs/display-manager-init"
+            ],
+            "title": "Login / session bring-up"
+          },
+          {
+            "atoms": [
+              "media-gfx/feh",
+              "app-editors/nano",
+              "www-client/netsurf"
+            ],
+            "title": "Minimal apps"
+          },
+          {
+            "atoms": [
+              "media-fonts/dejavu",
+              "media-fonts/noto"
+            ],
+            "title": "Fonts (so the lean desktop is legible out of the box)"
+          }
+        ]
+      },
+      "packages-live": {
+        "gate": "live",
+        "sections": [
+          {
+            "atoms": [
+              "sys-kernel/dracut"
+            ],
+            "title": ""
+          }
+        ]
+      }
+    },
     "orangepi5": {
       "packages": {
         "gate": "base",
@@ -1538,6 +1757,109 @@
           "sys-apps/i2c-tools",
           "sys-apps/lm-sensors",
           "sys-apps/nvme-cli",
+          "sys-apps/pciutils",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie",
+          "x11-base/xorg-server",
+          "x11-misc/lightdm",
+          "x11-wm/openbox"
+        ],
+        "removable": [
+          "gui-libs/display-manager-init",
+          "lxde-base/lxappearance",
+          "lxde-base/lxpanel",
+          "lxde-base/lxsession",
+          "media-fonts/dejavu",
+          "media-fonts/noto",
+          "media-gfx/feh",
+          "www-client/netsurf",
+          "x11-apps/setxkbmap",
+          "x11-apps/xrandr",
+          "x11-apps/xset",
+          "x11-base/xorg-drivers",
+          "x11-misc/lightdm-gtk-greeter",
+          "x11-misc/pcmanfm",
+          "x11-terms/xterm"
+        ]
+      }
+    },
+    "orangepi3-lts": {
+      "orangepi3-lts": {
+        "available": [
+          "sys-kernel/dracut"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/policycoreutils",
+          "sys-apps/semodule-utils",
+          "sys-apps/usbutils",
+          "sys-apps/util-linux",
+          "sys-block/parted",
+          "sys-fs/dosfstools",
+          "sys-fs/e2fsprogs",
+          "sys-kernel/gentoo-sources",
+          "sys-kernel/linux-firmware",
+          "sys-libs/libseccomp",
+          "sys-libs/libselinux",
+          "sys-process/audit",
+          "sys-process/cronie"
+        ],
+        "removable": []
+      }
+    },
+    "orangepi4-lts": {
+      "orangepi4-lts": {
+        "available": [
+          "sys-kernel/dracut"
+        ],
+        "essential": [
+          "app-admin/sudo",
+          "app-editors/nano",
+          "app-misc/jq",
+          "app-misc/screen",
+          "dev-embedded/u-boot-tools",
+          "net-firewall/iptables",
+          "net-fs/cifs-utils",
+          "net-fs/nfs-utils",
+          "net-misc/networkmanager",
+          "net-misc/openssh",
+          "net-misc/socat",
+          "net-vpn/openvpn",
+          "net-vpn/wireguard-tools",
+          "net-wireless/wpa_supplicant",
+          "sec-policy/selinux-base",
+          "sec-policy/selinux-base-policy",
+          "sys-apps/checkpolicy",
+          "sys-apps/haveged",
+          "sys-apps/i2c-tools",
           "sys-apps/pciutils",
           "sys-apps/policycoreutils",
           "sys-apps/semodule-utils",

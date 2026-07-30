@@ -125,12 +125,15 @@ materialize frite_unset  '{"platform":"frite"}'
 materialize op5_unset    '{"platform":"orangepi5"}'
 materialize opz2_unset   '{"platform":"orangepizero2"}'
 materialize opz2w_unset  '{"platform":"orangepizero2w"}'
-materialize opz2w_unset  '{"platform":"orangepizero3"}'
+materialize opz3_unset   '{"platform":"orangepizero3"}'
+materialize opi3lts_unset '{"platform":"orangepi3-lts"}'
 materialize jetson_unset '{"platform":"jetson"}'
 accept_case frite-unset-resolved  "$work/frite_unset.json"  client
 accept_case op5-unset-resolved    "$work/op5_unset.json"    client
 accept_case opz2-unset-resolved   "$work/opz2_unset.json"   client
 accept_case opz2w-unset-resolved  "$work/opz2w_unset.json"  client
+accept_case opz3-unset-resolved   "$work/opz3_unset.json"   client
+accept_case opi3lts-unset-resolved "$work/opi3lts_unset.json" client
 accept_case jetson-unset-resolved "$work/jetson_unset.json" primary
 
 echo "── G2/G3 (b): the worker still FAILS CLOSED on a spec that explicitly carries the bad value ──"
@@ -141,12 +144,15 @@ materialize frite_both     '{"platform":"frite","flavor":"both"}'
 materialize op5_both       '{"platform":"orangepi5","flavor":"both"}'
 materialize opz2_both      '{"platform":"orangepizero2","flavor":"both"}'
 materialize opz2w_both     '{"platform":"orangepizero2w","flavor":"both"}'
-materialize opz2w_both     '{"platform":"orangepizero3","flavor":"both"}'
+materialize opz3_both      '{"platform":"orangepizero3","flavor":"both"}'
+materialize opi3lts_both   '{"platform":"orangepi3-lts","flavor":"both"}'
 materialize jetson_badrole '{"platform":"jetson","role":"not-a-jetson-role"}'
 reject_case frite-flavor-both  "$work/frite_both.json"     client  "--flavor both"
 reject_case op5-flavor-both    "$work/op5_both.json"       client  "--flavor both"
 reject_case opz2-flavor-both   "$work/opz2_both.json"      client  "--flavor both"
 reject_case opz2w-flavor-both  "$work/opz2w_both.json"     client  "--flavor both"
+reject_case opz3-flavor-both   "$work/opz3_both.json"      client  "--flavor both"
+reject_case opi3lts-flavor-both "$work/opi3lts_both.json"  client  "--flavor both"
 reject_case jetson-bad-role    "$work/jetson_badrole.json" primary "edge_ai | gpu-host | full | desktop"
 
 echo "── positive controls: valid specs still assemble (no false reject) ──"

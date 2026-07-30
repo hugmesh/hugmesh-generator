@@ -261,7 +261,7 @@ else
 fi
 
 # ── 8. builder wiring: every ARM builder sources the lib + wires register + preflight ──
-for b in rpi5 frite orangepi5 orangepi-zero2 orangepi-zero2w orangepi-zero3 jetson; do
+for b in rpi5 frite orangepi5 orangepi-zero2 orangepi-zero2w orangepi-zero3 orangepi3-lts orangepi4-lts jetson; do
     BF="${REPO}/build-${b}-stage4.sh"
     [ -f "${BF}" ] || { bad "build-${b}-stage4.sh missing"; continue; }
     grep -qE 'source .*_dracut-cross-lib\.sh' "${BF}" \

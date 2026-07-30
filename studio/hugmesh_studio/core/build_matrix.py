@@ -35,7 +35,7 @@ MATRIX_TSV = os.path.join(_REPO_DIR, "tests", "build-matrix", "matrix.tsv")
 # (q35+OVMF); rpi5 kernel-direct-boots via launch-pi.sh; every other aarch64
 # platform kernel-direct-boots the generalized launch-arm.sh (same -M virt path).
 _ARM_VIRT_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orangepizero2w",
-                       "orangepizero3")
+                       "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ class MatrixRow:
         the SAME way check.sh's CLI leg does (see matrix.tsv's header comments):
 
         * rpi5 ``standalone-desktop`` -> ``--role desktop --standalone`` ;
-        * ARM ``flavor=standalone`` (frite/orangepi5/orangepizero2[w]/orangepizero3,
+        * ARM ``flavor=standalone`` (frite/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts,
           which have no role axis) -> ``flavor=installer --standalone``
           (--standalone forces the installer
           path internally anyway).
@@ -144,7 +144,8 @@ def row_ram_mb(row: MatrixRow) -> int | None:
     (platform, board) -> device -> ``ram_mb``. ``None`` when the catalog declares no
     machine-readable RAM for that device (many boards ship in several RAM SKUs) — the
     harness then SKIPs the runtime-load re-boot for the row rather than guessing a
-    ceiling. Boardless platforms (x86, orangepizero2, orangepizero2w, orangepizero3) map on board=""."""
+    ceiling. Boardless platforms (x86, orangepizero2, orangepizero2w, orangepizero3,
+    orangepi3-lts, orangepi4-lts) map on board=""."""
     try:
         device_id = dc.device_for_axes(row.platform, row.board)
     except ValueError:

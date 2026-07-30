@@ -904,7 +904,7 @@ class BuildPage(QtWidgets.QWizardPage):
         try:
             # DISPLAY the same command the real build will run: the actual build path
             # (WorklistDriver over synthesize->materialize) applies resolve_platform_defaults,
-            # so a standalone frite/orangepi5/orangepizero2[w]/orangepizero3 with an unset flavor builds a
+            # so a standalone frite/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts with an unset flavor builds a
             # single ISO (--flavor installer), not `both`. Resolve on a DEEPCOPY — self.wiz.cfg
             # is shared and re-edited/saved, so it must never be mutated by a preview render.
             pc = copy.deepcopy(c)

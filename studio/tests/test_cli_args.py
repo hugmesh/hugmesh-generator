@@ -853,7 +853,8 @@ def test_g17_rpi5_reachable_in_cloud_mode():
 @pytest.mark.parametrize("role,plat", [("frite", "frite"), ("orangepi5", "orangepi5"),
                                        ("orangepizero2", "orangepizero2"),
                                        ("orangepizero2w", "orangepizero2w"),
-                                       ("orangepizero3", "orangepizero3")])
+                                       ("orangepizero3", "orangepizero3"),
+                                       ("orangepi3-lts", "orangepi3-lts")])
 def test_g17_arm_clients_reachable_in_standalone_mode(role, plat):
     flat = {(r, p) for r, plats, _ in ROLE_CHOICES["standalone"] for p in plats}
     assert (role, plat) in flat
@@ -1300,7 +1301,8 @@ def test_edge_ai_tts_force_off():
 @pytest.mark.parametrize("platform,role", [("frite", "frite"), ("orangepi5", "orangepi5"),
                                            ("orangepizero2", "orangepizero2"),
                                            ("orangepizero2w", "orangepizero2w"),
-                                           ("orangepizero3", "orangepizero3")])
+                                           ("orangepizero3", "orangepizero3"),
+                                           ("orangepi3-lts", "orangepi3-lts")])
 def test_g35_uboot_chain(platform, role):
     args = ImageConfig(mode="cloud", role=role, platform=platform,
                        uboot_url="http://x/u.bin", uboot_defconfig="foo_defconfig",
@@ -1402,7 +1404,7 @@ def test_non_argv_fields_set():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _PROBE_PLATFORMS = ("x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2",
-                    "orangepizero2w", "orangepizero3")
+                    "orangepizero2w", "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 
 # baseline valid config per platform, chosen so every field that CAN emit does emit
 # (x86 uses a cloud CLIENT role so the cluster/person plane is live).
@@ -1415,6 +1417,8 @@ _BASELINES = {
     "orangepizero2": dict(mode="cloud", role="orangepizero2", platform="orangepizero2"),
     "orangepizero2w": dict(mode="cloud", role="orangepizero2w", platform="orangepizero2w"),
     "orangepizero3": dict(mode="cloud", role="orangepizero3", platform="orangepizero3"),
+    "orangepi3-lts": dict(mode="cloud", role="orangepi3-lts", platform="orangepi3-lts"),
+    "orangepi4-lts": dict(mode="cloud", role="orangepi4-lts", platform="orangepi4-lts"),
 }
 
 # field -> overrides that make a supporting builder's argv change. Multi-key entries
@@ -1562,7 +1566,8 @@ def test_platform_field_support_unaffiliated_is_x86_only():
 # reused because superdomain emits ONLY in mesh mode (WS-SUPER-B).
 _MESH_ROLE = {"x86": "omnibus", "rpi5": "be", "frite": "frite", "jetson": "edge_ai",
               "orangepi5": "orangepi5", "orangepizero2": "orangepizero2",
-              "orangepizero2w": "orangepizero2w", "orangepizero3": "orangepizero3"}
+              "orangepizero2w": "orangepizero2w", "orangepizero3": "orangepizero3",
+              "orangepi3-lts": "orangepi3-lts", "orangepi4-lts": "orangepi4-lts"}
 
 
 def test_platform_field_support_superdomain_is_all_platforms_mesh_gated():
@@ -1661,7 +1666,8 @@ def test_packages_add_drop_reach_argv():
                         ("orangepi5", dict(mode="cloud", role="orangepi5")),
                         ("orangepizero2", dict(mode="cloud", role="orangepizero2")),
                         ("orangepizero2w", dict(mode="cloud", role="orangepizero2w")),
-                        ("orangepizero3", dict(mode="cloud", role="orangepizero3"))):
+                        ("orangepizero3", dict(mode="cloud", role="orangepizero3")),
+                        ("orangepi3-lts", dict(mode="cloud", role="orangepi3-lts"))):
         args = ImageConfig(platform=plat, packages_add="app-editors/vim app-misc/tmux",
                            packages_drop="games-util/steam", **extra).to_cli_args()
         assert ("--packages-add", "app-editors/vim app-misc/tmux") in pairs(args)
@@ -1846,7 +1852,8 @@ def test_image_class_desktop_vs_node():
         assert image_class("cloud", role) == "desktop", role
     # node-class cluster infra + headless appliances
     for role in ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai", "full", "gpu-host",
-                 "orangepizero2", "orangepizero2w", "orangepizero3", "generic"):
+                 "orangepizero2", "orangepizero2w", "orangepizero3", "orangepi3-lts",
+                 "generic"):
         assert image_class("mesh", role) == "node", role
     # membership sets are disjoint and cover the mesh/x86 catalogs
     assert set(DESKTOP_ROLES).isdisjoint(NODE_ROLES)

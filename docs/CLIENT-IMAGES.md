@@ -14,11 +14,12 @@ platform UI — not a cluster node.
 > (Steam + gocryptfs Vaults). Those are the *opposite* of the mesh-joined clients
 > below; the `--standalone` / `--skip-sso` flags also compose onto these roles.
 > **This standalone posture is not x86-only** — `build-frite-stage4.sh`,
-> `build-rpi5-stage4.sh` (rpi5/rpi4/rpi3 boards), and `build-orangepi5-stage4.sh`
+> `build-rpi5-stage4.sh` (rpi5/rpi4/rpi3 boards), `build-orangepi5-stage4.sh` and
+> `build-orangepi4-lts-stage4.sh`
 > all have their own `desktop` role composable with `--standalone --encrypt-root`,
 > and `build-orangepi-zero2-stage4.sh` / `build-orangepi-zero2w-stage4.sh` /
-> `build-orangepi-zero3-stage4.sh` have the same posture on their headless
-> `appliance` role — see STANDALONE-DESKTOP.md's "ARM platforms" section.
+> `build-orangepi-zero3-stage4.sh` / `build-orangepi3-lts-stage4.sh` have the
+> same posture on their headless `appliance` role — see STANDALONE-DESKTOP.md's "ARM platforms" section.
 > **`build-jetson-stage4.sh` is the one exception**: `--encrypt-root` (and
 > `--standalone`, which forces it on) is hard-blocked outright on this platform —
 > its single boot+root partition means the UEFI firmware can't find a kernel once

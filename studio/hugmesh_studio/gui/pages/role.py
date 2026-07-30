@@ -27,7 +27,9 @@ from ...core import device_catalog, hw_scan, profiles
 from ...core.config import (
     FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES,
     JETSON_BOARDS, KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
-    ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ROLE_CHOICES, RPI_BOARDS,
+    ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS, ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS,
+    ORANGEPI4LTS_FLAVORS,
+    ROLE_CHOICES, RPI_BOARDS,
     UNAFFILIATED_ROLE,
     rpi_boards_for_role,
 )
@@ -37,7 +39,7 @@ from .network import _tri_state, _tri_value
 # canonical machine order — x86 first (the default platform), matching today's
 # default-platform behaviour; ARM boards follow in a stable order.
 _MACHINE_ORDER = ("x86", "rpi5", "frite", "orangepi5", "orangepizero2", "orangepizero2w",
-                  "orangepizero3", "jetson")
+                  "orangepizero3", "orangepi3-lts", "jetson")
 
 
 def _machine_sort_key(plat: str) -> int:
@@ -268,6 +270,40 @@ class RolePage(QtWidgets.QWizardPage):
          self.orangepizero3_skip_uboot) = self._uboot_rows(
             oz3l, "prebuilt U-Boot URL (optional; empty = builder default)")
         lay.addWidget(self.orangepizero3_box)
+
+        # orange pi 3 lts flavor-only knob (visible only when platform ==
+        # orangepi3-lts — headless appliance, no board/role axis at all;
+        # Allwinner H6, a SoC generation BEFORE the Zero 2's H616 (NOT its
+        # sibling), and it boots the PLAIN OPi3's mainline DTB)
+        self.orangepi3lts_box = QtWidgets.QGroupBox("Orange Pi 3 LTS options")
+        o3ll = QtWidgets.QVBoxLayout(self.orangepi3lts_box)
+        self.orangepi3lts_flavor = QtWidgets.QComboBox()
+        self.orangepi3lts_flavor.addItems(list(ORANGEPI3LTS_FLAVORS))
+        self.orangepi3lts_flavor.setCurrentText("both")
+        o3ll.addWidget(_row("Flavor", self.orangepi3lts_flavor))
+        # opi3-lts's u-boot override is optional convenience, not flashability-critical (G35)
+        (self.orangepi3lts_uboot_url, self.orangepi3lts_uboot_defconfig,
+         self.orangepi3lts_skip_uboot) = self._uboot_rows(
+            o3ll, "prebuilt U-Boot URL (optional; empty = builder default)")
+        lay.addWidget(self.orangepi3lts_box)
+
+        # orange pi 4 lts flavor-only knob (visible only when platform ==
+        # orangepi4-lts). Rockchip RK3399 LIGHT DESKTOP — the one Orange Pi
+        # platform here that is NOT a headless appliance (enabled Mali-T860
+        # GPU + HDMI in the mainline DTB it boots). Still no board axis:
+        # mainline ships one Orange Pi RK3399 DTB/defconfig for the whole
+        # 4/4B/4 LTS family. No --desktop toggle either, same as orangepi5.
+        self.orangepi4lts_box = QtWidgets.QGroupBox("Orange Pi 4 LTS options")
+        o4ll = QtWidgets.QVBoxLayout(self.orangepi4lts_box)
+        self.orangepi4lts_flavor = QtWidgets.QComboBox()
+        self.orangepi4lts_flavor.addItems(list(ORANGEPI4LTS_FLAVORS))
+        self.orangepi4lts_flavor.setCurrentText("both")
+        o4ll.addWidget(_row("Flavor", self.orangepi4lts_flavor))
+        # opi4-lts's u-boot override is optional convenience, not flashability-critical (G35)
+        (self.orangepi4lts_uboot_url, self.orangepi4lts_uboot_defconfig,
+         self.orangepi4lts_skip_uboot) = self._uboot_rows(
+            o4ll, "prebuilt U-Boot URL (optional; empty = builder default)")
+        lay.addWidget(self.orangepi4lts_box)
 
         # x86 client knobs: desktop weight + Steam delivery + the composable
         # payload/affiliation flags (G21/G22)
@@ -534,6 +570,8 @@ class RolePage(QtWidgets.QWizardPage):
         self.orangepizero2_box.setVisible(machine == "orangepizero2")
         self.orangepizero2w_box.setVisible(machine == "orangepizero2w")
         self.orangepizero3_box.setVisible(machine == "orangepizero3")
+        self.orangepi3lts_box.setVisible(machine == "orangepi3-lts")
+        self.orangepi4lts_box.setVisible(machine == "orangepi4-lts")
         # desktop weight / Steam are x86 desktop-image knobs (client + standalone)
         self.client_box.setVisible(machine == "x86"
                                    and self.wiz.cfg.mode in ("standalone", "cloud"))
@@ -666,6 +704,10 @@ class RolePage(QtWidgets.QWizardPage):
                 self.orangepizero2w_flavor.setCurrentText(c.flavor)
             elif c.platform == "orangepizero3":
                 self.orangepizero3_flavor.setCurrentText(c.flavor)
+            elif c.platform == "orangepi3-lts":
+                self.orangepi3lts_flavor.setCurrentText(c.flavor)
+            elif c.platform == "orangepi4-lts":
+                self.orangepi4lts_flavor.setCurrentText(c.flavor)
             else:
                 self.flavor.setCurrentText(c.flavor)
         if c.platform == "frite" and c.desktop:
@@ -683,7 +725,13 @@ class RolePage(QtWidgets.QWizardPage):
                 (self.orangepizero2_uboot_url, self.orangepizero2_uboot_defconfig,
                  self.orangepizero2_skip_uboot),
                 (self.orangepizero2w_uboot_url, self.orangepizero2w_uboot_defconfig,
-                 self.orangepizero2w_skip_uboot)):
+                 self.orangepizero2w_skip_uboot),
+                (self.orangepizero3_uboot_url, self.orangepizero3_uboot_defconfig,
+                 self.orangepizero3_skip_uboot),
+                (self.orangepi3lts_uboot_url, self.orangepi3lts_uboot_defconfig,
+                 self.orangepi3lts_skip_uboot),
+                (self.orangepi4lts_uboot_url, self.orangepi4lts_uboot_defconfig,
+                 self.orangepi4lts_skip_uboot)):
             url_w.setText(c.uboot_url)
             defconfig_w.setText(c.uboot_defconfig)
             skip_w.setChecked(c.skip_uboot)
@@ -855,6 +903,21 @@ class RolePage(QtWidgets.QWizardPage):
             c.uboot_url = self.orangepizero3_uboot_url.text().strip()
             c.uboot_defconfig = self.orangepizero3_uboot_defconfig.text().strip()
             c.skip_uboot = self.orangepizero3_skip_uboot.isChecked()
+        elif c.platform == "orangepi3-lts":
+            c.board = ""
+            c.flavor = self.orangepi3lts_flavor.currentText()
+            c.desktop = ""
+            c.uboot_url = self.orangepi3lts_uboot_url.text().strip()
+            c.uboot_defconfig = self.orangepi3lts_uboot_defconfig.text().strip()
+            c.skip_uboot = self.orangepi3lts_skip_uboot.isChecked()
+        elif c.platform == "orangepi4-lts":
+            c.board = ""
+            c.flavor = self.orangepi4lts_flavor.currentText()
+            # no --desktop axis (one role, no headless variant) — same as orangepi5
+            c.desktop = ""
+            c.uboot_url = self.orangepi4lts_uboot_url.text().strip()
+            c.uboot_defconfig = self.orangepi4lts_uboot_defconfig.text().strip()
+            c.skip_uboot = self.orangepi4lts_skip_uboot.isChecked()
         else:
             c.board = ""
             c.flavor = ""

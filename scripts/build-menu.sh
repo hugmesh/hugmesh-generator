@@ -174,6 +174,16 @@ OPT_ORANGEPIZERO2W_FLAVOR="both"         # both (DEFAULT) | live | installer
 # hardware validation pending). Same single-board/flavor-only shape as the
 # Zero 2W (its same-SoC H618 template — see specs-orangepi-zero3/README.md). ──
 OPT_ORANGEPIZERO3_FLAVOR="both"         # both (DEFAULT) | live | installer
+# ── Orange Pi 3 LTS (arm64 Allwinner H6 HEADLESS APPLIANCE; EXPERIMENTAL —
+# hardware validation pending). Same single-board/flavor-only shape as the
+# Zero 2 (its sunxi template — see specs-orangepi3-lts/README.md; boots the
+# PLAIN OPi3's mainline DTB/defconfig, USB-Ethernet-first). ─────────────────
+OPT_ORANGEPI3LTS_FLAVOR="both"          # both (DEFAULT) | live | installer
+# ── Orange Pi 4 LTS (arm64 Rockchip RK3399 LIGHT DESKTOP; EXPERIMENTAL —
+# hardware validation pending). Single-board/flavor-only shape like the
+# appliances above, but this board IS a desktop client (enabled Mali-T860 +
+# HDMI in the mainline DTB it boots — see specs-orangepi4-lts/README.md). ──
+OPT_ORANGEPI4LTS_FLAVOR="both"          # both (DEFAULT) | live | installer
 # ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
 OPT_SA_GPU="all-free"         # all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro
 OPT_SA_STEAM="native"         # native | flatpak | none
@@ -263,6 +273,8 @@ save_conf() {
         printf 'OPT_ORANGEPIZERO2_FLAVOR=%q\n' "${OPT_ORANGEPIZERO2_FLAVOR}"
         printf 'OPT_ORANGEPIZERO2W_FLAVOR=%q\n' "${OPT_ORANGEPIZERO2W_FLAVOR}"
         printf 'OPT_ORANGEPIZERO3_FLAVOR=%q\n' "${OPT_ORANGEPIZERO3_FLAVOR}"
+        printf 'OPT_ORANGEPI3LTS_FLAVOR=%q\n' "${OPT_ORANGEPI3LTS_FLAVOR}"
+        printf 'OPT_ORANGEPI4LTS_FLAVOR=%q\n' "${OPT_ORANGEPI4LTS_FLAVOR}"
         # Standalone-desktop NON-secret options (passwords are NEVER persisted).
         printf 'OPT_SA_GPU=%q\n'        "${OPT_SA_GPU}"
         printf 'OPT_SA_STEAM=%q\n'      "${OPT_SA_STEAM}"
@@ -441,9 +453,9 @@ ui_password() {
 }
 
 # arm_secrets_prompt LABEL — masked, non-persisted --local-pass/--luks-pass
-# entry point for the 7 platforms whose --standalone posture has no dedicated
+# entry point for the 8 platforms whose --standalone posture has no dedicated
 # screen of its own (rpi5 desktop / frite / jetson desktop / orangepi5 /
-# orangepizero2 / orangepizero2w / orangepizero3 — unlike x86, which has standalone_screen()). Without this,
+# orangepizero2 / orangepizero2w / orangepizero3 / orangepi3-lts / orangepi4-lts — unlike x86, which has standalone_screen()). Without this,
 # the only way to set these secrets on those platforms is typing them into
 # the unmasked, persisted "Extra builder flags" field — see
 # _arm_standalone_flags() for how these fold into STANDALONE_FLAGS instead.
@@ -502,7 +514,7 @@ menu_build_alive() {
 # PID, or nothing.
 foreign_build_pid() {
     local p
-    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite|jetson|orangepi5|orangepi-zero2|orangepi-zero2w|orangepi-zero3)-stage4\.sh' 2>/dev/null | head -n1)"
+    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite|jetson|orangepi5|orangepi-zero2|orangepi-zero2w|orangepi-zero3|orangepi3-lts|orangepi4-lts)-stage4\.sh' 2>/dev/null | head -n1)"
     [ -z "${p}" ] && p="$(pgrep -f "docker run.*${BUILDER_IMAGE}" 2>/dev/null | head -n1)"
     printf '%s' "${p}"
 }
@@ -566,9 +578,9 @@ _redacted_run_make() {
     printf '%s' "${arr[*]}"
 }
 
-# _arm_standalone_flags — compose STANDALONE_FLAGS for the 7 ARM single-role
+# _arm_standalone_flags — compose STANDALONE_FLAGS for the 9 ARM single-role
 # targets (rpi-%/frite/jetson-%/orangepi5/orangepizero2/orangepizero2w/
-# orangepizero3): folds the masked
+# orangepizero3/orangepi3-lts/orangepi4-lts): folds the masked
 # ARM_LOCAL_PASS/ARM_LUKS_PASS secrets in FIRST (each shell-quoted via
 # _shell_quote — see there for why), then the freeform "Extra builder flags"
 # field LAST so it can still override — mirrors the x86 `bf` string's own
@@ -611,7 +623,7 @@ build_make_cmd() {
     # macros already contain $(IMG_FLAGS)).
     local imgflags="${OPT_IMGFLAGS}"
     case "${target}" in
-        x86-*|jetson-*|frite|orangepi5|orangepizero2|orangepizero2w|orangepizero3|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
+        x86-*|jetson-*|frite|orangepi5|orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts|orangepi4-lts|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
         *) [ -n "${OPT_EXTRA_FLAGS}" ] && imgflags="${imgflags:+${imgflags} }${OPT_EXTRA_FLAGS}" ;;
     esac
     # Shared READ-ONLY distfiles (shared-binpkg Lane 3): a --distdir cache path is
@@ -721,6 +733,23 @@ build_make_cmd() {
     # see specs-orangepi-zero3/README.md).
     if [ "${target}" = orangepizero3 ]; then
         RUN_MAKE+=("ORANGEPIZERO3_FLAVOR=${OPT_ORANGEPIZERO3_FLAVOR}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
+    fi
+    # ── Orange Pi 3 LTS (EXPERIMENTAL): same flavor-only axis + STANDALONE_FLAGS
+    # escape hatch as its Zero 2 template sibling above (one board, no --desktop —
+    # see specs-orangepi3-lts/README.md).
+    if [ "${target}" = orangepi3-lts ]; then
+        RUN_MAKE+=("ORANGEPI3LTS_FLAVOR=${OPT_ORANGEPI3LTS_FLAVOR}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
+    fi
+    # ── Orange Pi 4 LTS (EXPERIMENTAL): same flavor-only axis + STANDALONE_FLAGS
+    # escape hatch as the appliances above (one board — mainline ships one Orange
+    # Pi RK3399 DTB/defconfig for the whole 4/4B/4 LTS family). No --desktop knob
+    # either, for the orangepi5 reason rather than the appliance one: this board
+    # IS a desktop, it just has no headless variant to gate.
+    # See specs-orangepi4-lts/README.md.
+    if [ "${target}" = orangepi4-lts ]; then
+        RUN_MAKE+=("ORANGEPI4LTS_FLAVOR=${OPT_ORANGEPI4LTS_FLAVOR}")
         { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
     fi
     # ── Builder flags threaded via STANDALONE_FLAGS (x86-* targets) ─────────────
@@ -1482,6 +1511,8 @@ single_role_screen() {
         orangepizero2 "Orange Pi Zero 2 — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode ever)" \
         orangepizero2w "Orange Pi Zero 2W — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode ever, no onboard Ethernet)" \
         orangepizero3 "Orange Pi Zero 3 — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode ever, onboard GbE)" \
+        orangepi3-lts "Orange Pi 3 LTS — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode; boots the plain OPi3 DTB, USB-Ethernet-first)" \
+        orangepi4-lts "Orange Pi 4 LTS — LIGHT DESKTOP (arm64 RK3399, EXPERIMENTAL — Mali-T860/panfrost; boots the shared mainline Orange Pi RK3399 DTB)" \
         back "‹ back")" || return 0
     case "${arch}" in
         rpi)
@@ -1657,6 +1688,51 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
             arm_secrets_prompt "Orange Pi Zero 3 headless appliance"
             save_conf
             build_make_cmd orangepizero3 "Orange Pi Zero 3 headless appliance (${wflavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+            launch_build ;;
+        orangepi3-lts)
+            # Orange Pi 3 LTS — arm64 Allwinner H6 HEADLESS APPLIANCE
+            # (specs-orangepi3-lts/). EXPERIMENTAL: hardware validation
+            # pending; dispatches the Makefile orangepi3-lts target. Same
+            # ONE-role / one-board / flavor-only shape as its Zero 2 template
+            # sibling above (see specs-orangepi3-lts/README.md — headless by
+            # SCOPE decision here, and the onboard GbE jack is DEAD on the
+            # mainline DTB, so USB-Ethernet-first like the Zero 2W). Any
+            # Orange Pi 3 LTS builder flag (incl. --standalone/--encrypt-root)
+            # stays reachable via 'Extra builder flags' (the escape hatch).
+            local wflavor
+            wflavor="$(ui_menu "Orange Pi 3 LTS flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPI3LTS_FLAVOR}). EXPERIMENTAL — hardware validation pending, see specs-orangepi3-lts/README.md:" \
+                both "both       — live + installer (DEFAULT)" \
+                live "live       — ephemeral microSD/USB boot" \
+                installer "installer  — writes to microSD/eMMC/USB" \
+                back "‹ back")" || return 0
+            [ "${wflavor}" = back ] && return 0
+            OPT_ORANGEPI3LTS_FLAVOR="${wflavor}"
+            arm_secrets_prompt "Orange Pi 3 LTS headless appliance"
+            save_conf
+            build_make_cmd orangepi3-lts "Orange Pi 3 LTS headless appliance (${wflavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+            launch_build ;;
+        orangepi4-lts)
+            # Orange Pi 4 LTS — arm64 Rockchip RK3399 LIGHT DESKTOP
+            # (specs-orangepi4-lts/). EXPERIMENTAL: hardware validation
+            # pending; dispatches the Makefile orangepi4-lts target. Flavor-only
+            # like the appliances above (mainline ships ONE Orange Pi RK3399
+            # DTB/defconfig for the whole 4/4B/4 LTS family, so there is no real
+            # board axis) — but unlike them this board is a genuine desktop
+            # client, and like orangepi5 it has no --desktop toggle because
+            # there is no headless variant to gate. Any builder flag (incl.
+            # --standalone/--encrypt-root) stays reachable via 'Extra builder
+            # flags' (the escape hatch).
+            local wflavor
+            wflavor="$(ui_menu "Orange Pi 4 LTS flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPI4LTS_FLAVOR}). EXPERIMENTAL — hardware validation pending, see specs-orangepi4-lts/README.md:" \
+                both "both       — live + installer (DEFAULT)" \
+                live "live       — ephemeral microSD/USB boot" \
+                installer "installer  — writes to onboard eMMC/microSD" \
+                back "‹ back")" || return 0
+            [ "${wflavor}" = back ] && return 0
+            OPT_ORANGEPI4LTS_FLAVOR="${wflavor}"
+            arm_secrets_prompt "Orange Pi 4 LTS light desktop"
+            save_conf
+            build_make_cmd orangepi4-lts "Orange Pi 4 LTS light desktop (${wflavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
         *) return 0 ;;
     esac
@@ -2138,6 +2214,8 @@ prebuild_screen() {
         orangepizero2 "Orange Pi Zero 2 (arm64)" \
         orangepizero2w "Orange Pi Zero 2W (arm64)" \
         orangepizero3 "Orange Pi Zero 3 (arm64)" \
+        orangepi3-lts "Orange Pi 3 LTS (arm64)" \
+        orangepi4-lts "Orange Pi 4 LTS (arm64)" \
         back "‹ back")" || return 0
     [ "${arch}" = back ] || [ -z "${arch}" ] && return 0
     build_make_cmd prebuild-binaries "prebuild ${arch} role-union binpkg pool (compile once)" 1

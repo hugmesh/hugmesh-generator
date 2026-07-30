@@ -73,6 +73,12 @@ class FleetConfig:
     orangepizero3: bool = False       # ORANGEPIZERO3=1
     orangepizero3_only: bool = False  # ORANGEPIZERO3_ONLY=1
     orangepizero3_flavor: str = ""    # ORANGEPIZERO3_FLAVOR
+    orangepi3lts: bool = False        # ORANGEPI3LTS=1
+    orangepi3lts_only: bool = False   # ORANGEPI3LTS_ONLY=1
+    orangepi3lts_flavor: str = ""     # ORANGEPI3LTS_FLAVOR
+    orangepi4lts: bool = False        # ORANGEPI4LTS=1
+    orangepi4lts_only: bool = False   # ORANGEPI4LTS_ONLY=1
+    orangepi4lts_flavor: str = ""     # ORANGEPI4LTS_FLAVOR
     # ── per-role KEYS folders + pen-test harness ──
     skip_keys: bool = False            # SKIP_KEYS=1 (keys folders are the default)
     pentest: bool = False              # PENTEST=1 run the OWASP harness after the build
@@ -132,6 +138,10 @@ class FleetConfig:
             ("ORANGEPIZERO2W_ONLY", self.orangepizero2w_only),
             ("ORANGEPIZERO3", self.orangepizero3),
             ("ORANGEPIZERO3_ONLY", self.orangepizero3_only),
+            ("ORANGEPI3LTS", self.orangepi3lts),
+            ("ORANGEPI3LTS_ONLY", self.orangepi3lts_only),
+            ("ORANGEPI4LTS", self.orangepi4lts),
+            ("ORANGEPI4LTS_ONLY", self.orangepi4lts_only),
             ("SKIP_KEYS", self.skip_keys),
             ("PENTEST", self.pentest), ("PENTEST_ONLY", self.pentest_only),
         ):
@@ -149,6 +159,8 @@ class FleetConfig:
             ("ORANGEPIZERO2_FLAVOR", self.orangepizero2_flavor),
             ("ORANGEPIZERO2W_FLAVOR", self.orangepizero2w_flavor),
             ("ORANGEPIZERO3_FLAVOR", self.orangepizero3_flavor),
+            ("ORANGEPI3LTS_FLAVOR", self.orangepi3lts_flavor),
+            ("ORANGEPI4LTS_FLAVOR", self.orangepi4lts_flavor),
             ("PENTEST_ENV", self.pentest_env), ("PENTEST_SCAN", self.pentest_scan),
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),

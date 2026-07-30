@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # launch-arm.sh — boot a golden aarch64 .img for the NON-Pi ARM builders
-# (frite / jetson / orangepi5 / orangepizero2[w] / orangepizero3) under qemu-system-aarch64 -M virt
+# (frite / jetson / orangepi5 / orangepizero2[w] / orangepizero3 / orangepi3-lts /
+# orangepi4-lts) under qemu-system-aarch64 -M virt
 # by loading its kernel DIRECTLY (-kernel Image -dtb <board.dtb> -append 'root=...').
 #
 # This is the generalization of launch-pi.sh to the four ARM platforms the Pi
@@ -33,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ── Defaults ───────────────────────────────────────────────────────────────
-PLATFORM="${PLATFORM:-frite}"  # frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3
+PLATFORM="${PLATFORM:-frite}"  # frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3 | orangepi3-lts | orangepi4-lts
 BOARD="${BOARD:-}"             # board id (empty on the boardless zero2/zero2w/zero3 platforms)
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 ROLE="${ROLE:-desktop}"
@@ -70,7 +71,7 @@ Usage: $0 --platform PLAT [--board BOARD] [OPTIONS]
   overlay protects the golden image and lets growroot demonstrate expansion.
 
 Platform / board:
-  -p, --platform PLAT  frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3. Default: ${PLATFORM}
+  -p, --platform PLAT  frite | jetson | orangepi5 | orangepizero2 | orangepizero2w | orangepizero3 | orangepi3-lts | orangepi4-lts. Default: ${PLATFORM}
   -b, --board BOARD    Board id (la-frite|le-potato|sweet-potato | orin-nano[-4gb]|
                        orin-nx-8gb|orin-nx-16gb | orange-pi-5[-plus]). Empty on zero2/zero2w/zero3.
 
@@ -101,6 +102,8 @@ Examples:
   $0 --platform orangepizero2 --role appliance
   $0 --platform orangepizero2w --role appliance
   $0 --platform orangepizero3 --role appliance
+  $0 --platform orangepi3-lts --role appliance
+  $0 --platform orangepi4-lts --role desktop
 EOF
 exit "${1:-0}"
 }
@@ -163,6 +166,10 @@ board_defaults() {
         orangepizero2:*)    DEF_DTB="allwinner/sun50i-h616-orangepi-zero2.dtb";   DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero2" ;;
         orangepizero2w:*)   DEF_DTB="allwinner/sun50i-h618-orangepi-zero2w.dtb"; DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero2w" ;;
         orangepizero3:*)   DEF_DTB="allwinner/sun50i-h618-orangepi-zero3.dtb"; DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepizero3" ;;
+        orangepi3-lts:*)   DEF_DTB="allwinner/sun50i-h6-orangepi-3.dtb"; DEF_CPU="cortex-a53"; DEF_SUBDIR="snap-build-orangepi3-lts" ;;
+        # RK3399: mainline has ONE Orange Pi RK3399 DTB and no -lts variant, so
+        # this boots the shared rk3399-orangepi.dtb. CPU is the A72 big core.
+        orangepi4-lts:*)   DEF_DTB="rockchip/rk3399-orangepi.dtb"; DEF_CPU="cortex-a72"; DEF_SUBDIR="snap-build-orangepi4-lts" ;;
         *) die "no board table entry for platform=${plat} board=${board} (pass --dtb/--cpu/--build-subdir explicitly)" ;;
     esac
 }

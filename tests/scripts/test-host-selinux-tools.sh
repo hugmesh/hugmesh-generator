@@ -29,7 +29,8 @@ bad() { echo "  FAIL $*"; F=$((F+1)); }
 echo "== host SELinux 3.11 tool-parity guard =="
 
 BUILDERS=(build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh
-          build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh)
+          build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh
+          build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh build-jetson-stage4.sh)
 KW_ATOMS=(sys-libs/libsepol sys-libs/libselinux sys-libs/libsemanage sys-apps/policycoreutils)
 
 # ── runtime half: the probe + the keyword window in all 6 ARM builders ──

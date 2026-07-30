@@ -31,7 +31,8 @@ bad() { echo "  FAIL $*"; F=$((F+1)); }
 echo "== host-mutation container-gate guard =="
 
 ARM=(build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh
-     build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh)
+     build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh
+     build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh build-jetson-stage4.sh)
 LIB="${GEN}/scripts/_host-guard-lib.sh"
 DXC="${GEN}/scripts/_dracut-cross-lib.sh"
 DOCKERFILE="${GEN}/Dockerfile.build"
@@ -245,7 +246,8 @@ fi
 
 # ── CLASS D: host-tool honesty ──────────────────────────────────────
 for s in build-x86-host-stage4.sh build-frite-stage4.sh build-orangepi5-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh; do
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+         build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh build-jetson-stage4.sh; do
     f="${GEN}/${s}"; [ -f "${f}" ] || { bad "${s}: script missing"; continue; }
     grep -qE '^[[:space:]]*(if ! )?hostguard_require_host_tools ' "${f}" \
         && ok "${s}: preflights host tools via hostguard_require_host_tools" \
@@ -258,7 +260,8 @@ grep -qE '^source "\$\{SCRIPT_DIR\}/scripts/_host-guard-lib\.sh"$' "${GEN}/build
 # The squasher is the proven gap (measured ABSENT on the operator's host while
 # PRESENT in the builder image), so assert the alternatives group survives.
 for s in build-x86-host-stage4.sh build-frite-stage4.sh build-orangepi5-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh; do
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+         build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh; do
     f="${GEN}/${s}"; [ -f "${f}" ] || continue
     grep -qE '^[[:space:]]*(-- )?"mksquashfs\|tar2sqfs"' "${f}" \
         && ok "${s}: squasher (mksquashfs|tar2sqfs) is preflighted" \
@@ -272,7 +275,8 @@ done
 # mksquashfs is the ONE tool proven absent on the operator's host, so that is the
 # message most likely to be seen for real. Prose belongs in --hint (free text).
 for s in build-x86-host-stage4.sh build-frite-stage4.sh build-orangepi5-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-jetson-stage4.sh; do
+         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+         build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh build-jetson-stage4.sh; do
     f="${GEN}/${s}"; [ -f "${f}" ] || continue
     # PARSE the atoms arg, don't pattern-match near it. (A first cut here used
     # `grep -q ... | grep -v ...` — a dead pipeline, since -q exits before writing
@@ -309,7 +313,7 @@ if [ -f "${GEN}/build-x86-host-stage4.sh" ]; then
         || bad "x86: --installer-iso preflight lost --soft — a missing xorriso now KILLS a build that used to leave a tree"
 fi
 # ...and the ARM LIVE-only xorriso sites likewise leave a tree.
-for s in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh; do
+for s in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh; do
     f="${GEN}/${s}"; [ -f "${f}" ] || continue
     grep -qE '^[[:space:]]*hostguard_require_host_tools "the LIVE ISO" "dev-libs/libisoburn" --soft \\$' "${f}" \
         && ok "${s}: LIVE-only xorriso preflight is --soft (tree fallback survives)" \

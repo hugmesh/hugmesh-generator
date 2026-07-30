@@ -5,7 +5,8 @@
 # WHAT / WHY: distfiles are arch-independent SOURCE tarballs, so a single fleet-wide
 # cache is safe across every board (no ABI/-mcpu risk). x86 already reused an
 # external cache read-only via PORTAGE_RO_DISTDIRS; Lane 3 generalizes that to the
-# seven cross builders (rpi5/frite/jetson/orangepi5/orangepi-zero2[w]/orangepi-zero3) via a --distdir
+# nine cross builders (rpi5/frite/jetson/orangepi5/orangepi-zero2[w]/orangepi-zero3/
+# orangepi3-lts/orangepi4-lts) via a --distdir
 # DIR flag (+ SNAP_DISTDIR_SRC env). When set to an existing dir the builder appends
 # PORTAGE_RO_DISTDIRS="<dir>" to the rendered make.conf; new fetches still land in
 # the build's PRIVATE ${BUILD_ROOT}/distfiles, so the shared pool is never written.
@@ -20,7 +21,8 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ARM_BUILDERS=(build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh \
-              build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh)
+              build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh
+              build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh)
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }

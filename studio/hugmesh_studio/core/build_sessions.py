@@ -143,10 +143,17 @@ def fleet_platform_families(cfg) -> list[str]:
     opz3 = cfg.orangepizero3 or cfg.orangepizero3_only
     if cfg.orangepizero3_only:
         rpi = x86 = frite = jetson = opi5 = opz2 = opz2w = False
+    opi3lts = cfg.orangepi3lts or cfg.orangepi3lts_only
+    if cfg.orangepi3lts_only:
+        rpi = x86 = frite = jetson = opi5 = opz2 = opz2w = opz3 = False
+    opi4lts = cfg.orangepi4lts or cfg.orangepi4lts_only
+    if cfg.orangepi4lts_only:
+        rpi = x86 = frite = jetson = opi5 = opz2 = opz2w = opz3 = opi3lts = False
     fams = [name for name, on in (
         ("rpi5", rpi), ("x86", x86), ("frite", frite), ("jetson", jetson),
         ("orangepi5", opi5), ("orangepizero2", opz2),
-        ("orangepizero2w", opz2w), ("orangepizero3", opz3)) if on]
+        ("orangepizero2w", opz2w), ("orangepizero3", opz3),
+        ("orangepi3-lts", opi3lts), ("orangepi4-lts", opi4lts)) if on]
     if cfg.pentest:
         fams.append("pentest")
     return fams

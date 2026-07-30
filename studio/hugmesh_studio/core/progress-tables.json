@@ -157,6 +157,48 @@
         {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
       ]
     },
+    "orangepi3-lts": {
+      "banner_callsites": 25,
+      "phases": [
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
+        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
+        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
+        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
+        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
+        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
+        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+      ]
+    },
+    "orangepi4-lts": {
+      "banner_callsites": 25,
+      "phases": [
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED", "Emerge group: system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED", "Emerge group: image"]},
+        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
+        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
+        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
+        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
+        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
+        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+      ]
+    },
     "orangepizero2": {
       "banner_callsites": 25,
       "phases": [

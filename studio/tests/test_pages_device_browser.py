@@ -334,6 +334,17 @@ def test_emission_orange_pi_zero3_live_golden_argv(wiz):
     assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
 
 
+def test_emission_orange_pi_3_lts_live_golden_argv(wiz):
+    """Same flavor-only emission shape as its Zero 2 template sibling above."""
+    page = _drive_single_image(wiz, "cloud", "orange-pi-3-lts", "orangepi3-lts")
+    page.orangepi3lts_flavor.setCurrentText("live")
+    advance_to(wiz, wizard_mod.HardwarePage)
+    c = wiz.cfg
+    assert (c.role, c.platform, c.board, c.flavor) == \
+        ("orangepi3-lts", "orangepi3-lts", "", "live")
+    assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
+
+
 def test_emission_experimental_rpi400_builds_as_rpi4(wiz):
     """An EXPERIMENTAL alias device maps to the accepted builder row — no builder
     change, no invented axes."""

@@ -86,6 +86,23 @@
 # headless-only H616-family DE33 rationale as the Zero 2/Zero 2W; onboard
 # Gigabit Ethernet is back on this board — Ethernet-first, like the Zero 2.)
 #
+# The Orange Pi 3 LTS (Allwinner H6) HEADLESS appliance image is OPT-IN too —
+# EXPERIMENTAL: hardware validation pending (specs-orangepi3-lts/README.md).
+# One board, one role (appliance) — no board/role axis, just flavor:
+#   ORANGEPI3LTS=1      ./scripts/build-all-roles.sh  # ALSO build it (both flavors)
+#   ORANGEPI3LTS_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip everything else)
+#   ORANGEPI3LTS_FLAVOR=live ORANGEPI3LTS=1 ./scripts/build-all-roles.sh   # live image only
+#
+# Orange Pi 4 LTS (Rockchip RK3399 arm64 LIGHT DESKTOP) is OFF by default too —
+# EXPERIMENTAL: hardware validation pending (specs-orangepi4-lts/README.md).
+#   ORANGEPI4LTS=1      ./scripts/build-all-roles.sh  # ALSO build it (both flavors)
+#   ORANGEPI4LTS_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip everything else)
+#   ORANGEPI4LTS_FLAVOR=live ORANGEPI4LTS=1 ./scripts/build-all-roles.sh   # live image only
+# (build-orangepi3-lts-stage4.sh — see specs-orangepi3-lts/README.md. Headless
+# by SCOPE decision (H6 display support exists in mainline but is partial and
+# the DTB is the PLAIN OPi3's — mainline has no -lts variant); onboard GbE is
+# DEAD on that DTB, so this appliance is USB-Ethernet-first like the Zero 2W.)
+#
 # Pen-test build OPTION (DEV / CI-pipeline only) — run the OWASP pen-test harness
 # as part of the build (memory hugmesh-pentest-standard "an OPTION in the BUILD
 # pipeline"). It is NOT a deployed runner; it drives tests/pentest/run-pentest.sh
@@ -126,6 +143,8 @@ BUILD_ORANGEPI5="${REPO_DIR}/build-orangepi5-stage4.sh"
 BUILD_ORANGEPIZERO2="${REPO_DIR}/build-orangepi-zero2-stage4.sh"
 BUILD_ORANGEPIZERO2W="${REPO_DIR}/build-orangepi-zero2w-stage4.sh"
 BUILD_ORANGEPIZERO3="${REPO_DIR}/build-orangepi-zero3-stage4.sh"
+BUILD_ORANGEPI3LTS="${REPO_DIR}/build-orangepi3-lts-stage4.sh"
+BUILD_ORANGEPI4LTS="${REPO_DIR}/build-orangepi4-lts-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
@@ -284,6 +303,34 @@ elif [ "${ORANGEPIZERO3:-0}" = "1" ]; then
 fi
 ORANGEPIZERO3_FLAVOR_SEL="${ORANGEPIZERO3_FLAVOR:-both}"
 
+# Orange Pi 3 LTS (Allwinner H6) headless appliance is OPT-IN (EXPERIMENTAL
+# — hardware validation pending). ORANGEPI3LTS_ONLY=1 builds ONLY it (skip
+# everything else) — same shape as ORANGEPIZERO2_ONLY above. No board axis (one
+# board) and no role axis (appliance only — headless, no desktop role).
+BUILD_ORANGEPI3LTS_IMG=false
+if [ "${ORANGEPI3LTS_ONLY:-0}" = "1" ]; then
+    BUILD_ORANGEPI3LTS_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=(); BUILD_FRITE_IMG=false; BUILD_JETSON_IMG=false; BUILD_ORANGEPI5_IMG=false; BUILD_ORANGEPIZERO2_IMG=false; BUILD_ORANGEPIZERO2W_IMG=false; BUILD_ORANGEPIZERO3_IMG=false
+elif [ "${ORANGEPI3LTS:-0}" = "1" ]; then
+    BUILD_ORANGEPI3LTS_IMG=true
+fi
+ORANGEPI3LTS_FLAVOR_SEL="${ORANGEPI3LTS_FLAVOR:-both}"
+
+# Orange Pi 4 LTS (Rockchip RK3399) LIGHT DESKTOP is OPT-IN (EXPERIMENTAL —
+# hardware validation pending). ORANGEPI4LTS_ONLY=1 builds ONLY it (skip
+# everything else) — same shape as ORANGEPI3LTS_ONLY above. No board axis (one
+# mainline DTB/defconfig for the whole RK3399 Orange Pi family). UNLIKE every
+# other Orange Pi platform here this one IS a desktop client, but it still has
+# no role axis: one role, and no headless variant to gate.
+BUILD_ORANGEPI4LTS_IMG=false
+if [ "${ORANGEPI4LTS_ONLY:-0}" = "1" ]; then
+    BUILD_ORANGEPI4LTS_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=(); BUILD_FRITE_IMG=false; BUILD_JETSON_IMG=false; BUILD_ORANGEPI5_IMG=false; BUILD_ORANGEPIZERO2_IMG=false; BUILD_ORANGEPIZERO2W_IMG=false; BUILD_ORANGEPIZERO3_IMG=false; BUILD_ORANGEPI3LTS_IMG=false
+elif [ "${ORANGEPI4LTS:-0}" = "1" ]; then
+    BUILD_ORANGEPI4LTS_IMG=true
+fi
+ORANGEPI4LTS_FLAVOR_SEL="${ORANGEPI4LTS_FLAVOR:-both}"
+
 echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}  (board=${RPI_BOARD_SEL})"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
 echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL}, desktop=${FRITE_DESKTOP_SEL})" || echo '(off — set FRITE=1)')"
@@ -292,6 +339,8 @@ echo "==> Orange Pi 5: $([ "${BUILD_ORANGEPI5_IMG}" = true ] && echo "${ORANGEPI
 echo "==> OPi Zero 2:  $([ "${BUILD_ORANGEPIZERO2_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO2_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO2=1)')"
 echo "==> OPi Zero 2W: $([ "${BUILD_ORANGEPIZERO2W_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO2W_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO2W=1)')"
 echo "==> OPi Zero 3: $([ "${BUILD_ORANGEPIZERO3_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO3_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO3=1)')"
+echo "==> OPi 3 LTS:  $([ "${BUILD_ORANGEPI3LTS_IMG}" = true ] && echo "(flavor=${ORANGEPI3LTS_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPI3LTS=1)')"
+echo "==> OPi 4 LTS:  $([ "${BUILD_ORANGEPI4LTS_IMG}" = true ] && echo "(flavor=${ORANGEPI4LTS_FLAVOR_SEL}; EXPERIMENTAL, light desktop)" || echo '(off — set ORANGEPI4LTS=1)')"
 echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "==> Pen-test:    $([ "${PENTEST}" = 1 ] && echo "ON (env=${PENTEST_ENV:-compose} scan=${PENTEST_SCAN:-baseline} pipeline=${PENTEST_PIPELINE:-main})$([ "${PENTEST_ONLY:-0}" = 1 ] && echo ' [PENTEST_ONLY]')" || echo '(off — set PENTEST=1 / --pentest)')"
 echo "    Work/target dir: ${WORK_DIR}"
@@ -384,6 +433,21 @@ if [ "${BUILD_ORANGEPIZERO3_IMG}" = true ]; then
     echo "############################################################"
     "${BUILD_ORANGEPIZERO3}" --flavor "${ORANGEPIZERO3_FLAVOR_SEL}" "$@" \
         || { echo "!! Orange Pi Zero 3 build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepizero3"); }
+fi
+
+if [ "${BUILD_ORANGEPI3LTS_IMG}" = true ]; then
+    echo "############################################################"
+    echo "#  Building Orange Pi 3 LTS headless appliance (flavor=${ORANGEPI3LTS_FLAVOR_SEL}) — EXPERIMENTAL"
+    echo "############################################################"
+    "${BUILD_ORANGEPI3LTS}" --flavor "${ORANGEPI3LTS_FLAVOR_SEL}" "$@" \
+        || { echo "!! Orange Pi 3 LTS build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi3-lts"); }
+fi
+
+if [ "${BUILD_ORANGEPI4LTS_IMG}" = true ]; then
+    echo
+    echo "#  Building Orange Pi 4 LTS light desktop (flavor=${ORANGEPI4LTS_FLAVOR_SEL}) — EXPERIMENTAL"
+    "${BUILD_ORANGEPI4LTS}" --flavor "${ORANGEPI4LTS_FLAVOR_SEL}" "$@" \
+        || { echo "!! Orange Pi 4 LTS build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi4-lts"); }
 fi
 
 # ── Generate provisioning keys ───────────────────────────────────────

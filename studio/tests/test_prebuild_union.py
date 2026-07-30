@@ -15,7 +15,7 @@ from hugmesh_studio.core import prebuild_union as pu
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _PLATFORMS = ("x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2",
-              "orangepizero2w", "orangepizero3")
+              "orangepizero2w", "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 
 
 @pytest.mark.parametrize("platform", _PLATFORMS)

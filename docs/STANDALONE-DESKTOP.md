@@ -277,6 +277,7 @@ hardware:
 | Orange Pi Zero 2 | the target itself (live→installer flow) | same | **no** |
 | Orange Pi Zero 2W | the target itself (live→installer flow) | same | **no** |
 | Orange Pi Zero 3 | the target itself (live→installer flow) | same | **no** |
+| Orange Pi 3 LTS | the target itself (live→installer flow) | same | **no** |
 | RPi5 (rpi5/rpi4/rpi3 boards) | a **build/dev host**, writing the SD card/eMMC | **the Pi**, a different machine | **yes** — `--pbkdf-memory 262144 --iter-time 2000 --pbkdf-parallel 4` |
 | Jetson Orin | n/a — **`--encrypt-root` is blocked outright**, see below | n/a | n/a |
 
@@ -314,16 +315,28 @@ its own, deliberately **not** attempted here. Until that lands, Jetson has
 **no standalone/LUKS story at all** (on top of its pre-existing, separately
 deferred no-live/installer-split gap).
 
-### Orange Pi Zero 2 / Zero 2W / Zero 3: headless, so no lightdm/desktop session
+### Orange Pi Zero 2 / Zero 2W / Zero 3 / Orange Pi 3 LTS: headless, so no lightdm/desktop session
 
-Orange Pi Zero 2's (and its H618 siblings the Zero 2W's and Zero 3's) `--standalone` composes onto its **`appliance`** role, not a
-`desktop` role — this platform has no GPU-driven display path at all (the
-Allwinner H616's display engine has no mainline kernel driver), so "local
+Orange Pi Zero 2's (and its H618 siblings the Zero 2W's and Zero 3's, plus the
+H6 Orange Pi 3 LTS's) `--standalone` composes onto its **`appliance`** role, not a
+`desktop` role — the H616-family boards have no GPU-driven display path at all
+(the H616's display engine has no mainline kernel driver), and the Orange Pi 3
+LTS is headless by scope decision (see specs-orangepi3-lts/README.md), so "local
 user, no mesh" here means an SSH/console login on a headless box, not a
 graphical greeter. Every other guarantee (LUKS2 FDE, local user + hashed
 password, no mesh/SSO) still applies identically.
 
-Because this is the only standalone-capable platform with **no GUI console at
+#### Orange Pi 4 LTS is the exception: a real desktop
+
+The Orange Pi 4 LTS does **not** belong to the paragraph above. Its `--standalone`
+composes onto a **`desktop`** role exactly like Orange Pi 5 / Frite, because the
+mainline `rk3399-orangepi` device tree it boots has an enabled Mali-T860 GPU
+(`panfrost`), enabled HDMI and both VOPs — there is a real display path, so
+"local user, no mesh" there means a graphical lightdm greeter, not a console
+login. See `specs-orangepi4-lts/README.md`.
+
+Because the Zero 2 family is the only standalone-capable platform group with
+**no GUI console at
 all**, `--standalone` also writes a `00-standalone-password-auth.conf` sshd
 drop-in that re-enables `PasswordAuthentication` for the local (non-root)
 user — standalone mode has no mesh, so there is no KEYS-USB

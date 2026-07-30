@@ -341,6 +341,7 @@ def test_scope_reject_reason_names_the_axis_that_actually_rejected():
         # the Zero 2's H618 sibling is the SAME node-class-but-standalone appliance
         # (_APPLIANCE_ROLES carries both), so the same "never rejected" pin applies.
         ("standalone", "orangepizero3", "orangepizero3", None),
+        ("standalone", "orangepi3-lts", "orangepi3-lts", None),
     )
     for mode, role, plat, want in cases:
         cfg = ImageConfig(mode=mode, role=role, platform=plat)

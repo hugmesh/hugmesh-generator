@@ -213,6 +213,21 @@ def test_orangepizero3_flavor_survives_a_loaded_config_round_trip(wiz):
     assert wiz.cfg.board == ""
 
 
+def test_orangepi3lts_flavor_survives_a_loaded_config_round_trip(wiz):
+    wiz.cfg.mode = "cloud"
+    wiz.cfg.role = "orangepi3-lts"
+    wiz.cfg.platform = "orangepi3-lts"
+    wiz.cfg.flavor = "installer"
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.RolePage)
+    assert page.orangepi3lts_box.isVisible()
+    assert page.orangepi3lts_flavor.currentText() == "installer"
+    wiz.next()
+    assert wiz.cfg.platform == "orangepi3-lts"
+    assert wiz.cfg.flavor == "installer"
+    assert wiz.cfg.board == ""
+
+
 def _rpi5_board_items(page):
     return [page.rpi5_board.itemText(i) for i in range(page.rpi5_board.count())]
 

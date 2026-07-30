@@ -41,6 +41,8 @@ CONFIG_BOARDS = {
     "orangepizero2": ("",),
     "orangepizero2w": ("",),
     "orangepizero3": ("",),
+    "orangepi3-lts": ("",),
+    "orangepi4-lts": ("",),
 }
 
 

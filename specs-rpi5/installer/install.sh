@@ -75,7 +75,8 @@ fi
 
 # mmcblk / nvme style devices use a 'p' partition infix; plain sdX do not
 # (mirrors install-frite.sh/install-orangepi5.sh/install-orangepi-zero2.sh/
-# install-orangepi-zero2w.sh/install-orangepi-zero3.sh —
+# install-orangepi-zero2w.sh/install-orangepi-zero3.sh/install-orangepi3-lts.sh/
+# install-orangepi4-lts.sh —
 # a write host with a built-in SD-card slot, e.g. another SBC, enumerates the
 # target as /dev/mmcblkN just like eMMC, not /dev/sdX).
 case "${DEV}" in

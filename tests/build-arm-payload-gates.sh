@@ -52,10 +52,13 @@ declare -A KATOM=(
   [build-orangepi-zero2-stage4.sh]=sys-kernel/gentoo-sources
   [build-orangepi-zero2w-stage4.sh]=sys-kernel/gentoo-sources
   [build-orangepi-zero3-stage4.sh]=sys-kernel/gentoo-sources
+  [build-orangepi3-lts-stage4.sh]=sys-kernel/gentoo-sources
+  [build-orangepi4-lts-stage4.sh]=sys-kernel/gentoo-sources
 )
 BUILDERS=(build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh
           build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh
-          build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh)
+          build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh
+          build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh)
 
 echo "== ARM payload gates (requested-atom completeness + kernel tier) =="
 
@@ -224,7 +227,8 @@ grep -q 'warn "No raspberrypi-sources found in sysroot, skipping kernel build."'
   && bad "rpi5 still warn-skips a missing kernel source tree" \
   || ok "rpi5 old warn-skip is gone"
 for b in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh \
-         build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh; do
+         build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+         build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh; do
   f="${REPO}/${b}"
   grep -q 'warn "no kernel in boot stage — skipping LIVE image."' "${f}" \
     && bad "${b}: LIVE image still silently skippable without --skip-kernel" \
@@ -234,7 +238,7 @@ for b in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-st
     || bad "${b}: no hard error for a kernel-less LIVE request"
   # NB: the zero2w/zero3 rules must precede the zero2 rule — sed runs the
   # expressions in order and 'build-orangepi-zero2.*' would swallow both.
-  grep -q 'warn "Kernel ${'"$(echo "${b}" | sed 's/build-frite.*/FRITE_KERNEL_IMG/;s/build-orangepi5.*/OPI5_KERNEL_IMG/;s/build-orangepi-zero2w.*/OPIZ2W_KERNEL_IMG/;s/build-orangepi-zero3.*/OPIZ3_KERNEL_IMG/;s/build-orangepi-zero2.*/OPIZ2_KERNEL_IMG/')"'} not in sysroot — the boot tree will be incomplete."' "${f}" \
+  grep -q 'warn "Kernel ${'"$(echo "${b}" | sed 's/build-frite.*/FRITE_KERNEL_IMG/;s/build-orangepi4-lts.*/OPI4LTS_KERNEL_IMG/;s/build-orangepi5.*/OPI5_KERNEL_IMG/;s/build-orangepi-zero2w.*/OPIZ2W_KERNEL_IMG/;s/build-orangepi-zero3.*/OPIZ3_KERNEL_IMG/;s/build-orangepi3-lts.*/OPI3LTS_KERNEL_IMG/;s/build-orangepi-zero2.*/OPIZ2_KERNEL_IMG/')"'} not in sysroot — the boot tree will be incomplete."' "${f}" \
     && bad "${b}: boot tree still built kernel-less with only a warn" \
     || ok "${b}: kernel-less boot tree hard-fails unless --skip-kernel"
 done

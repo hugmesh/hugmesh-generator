@@ -36,6 +36,8 @@ pool's producer and the consumer.
 | Orange Pi Zero 2  | `build-orangepi-zero2-stage4.sh`    | `cortex-a53`   | ARMv8.0-A |
 | Orange Pi Zero 2W | `build-orangepi-zero2w-stage4.sh`   | `cortex-a53`   | ARMv8.0-A |
 | Orange Pi Zero 3 | `build-orangepi-zero3-stage4.sh`   | `cortex-a53`   | ARMv8.0-A |
+| Orange Pi 3 LTS  | `build-orangepi3-lts-stage4.sh`    | `cortex-a53`   | ARMv8.0-A |
+| Orange Pi 4 LTS  | `build-orangepi4-lts-stage4.sh`    | `cortex-a72.cortex-a53` | ARMv8.0-A |
 | x86               | `build-x86-host-stage4.sh`          | `-march=x86-64-v2`  | — |
 
 A binpkg tuned for `cortex-a76` (LSE atomics + dotprod) executed on an
@@ -72,6 +74,8 @@ A pool is the `pkgdir` under a build's per-board `BUILD_SUBDIR`:
 | orangepi-zero2 | `snap-build-orangepizero2` |
 | orangepi-zero2w | `snap-build-orangepizero2w` |
 | orangepi-zero3 | `snap-build-orangepizero3` |
+| orangepi3-lts | `snap-build-orangepi3-lts` |
+| orangepi4-lts | `snap-build-orangepi4-lts` |
 
 > **Lane 2 fix.** Before this track `build-rpi5` used the single literal
 > `snap-build-pi5` for **all three** Pi boards (set before argv parse; `--board`

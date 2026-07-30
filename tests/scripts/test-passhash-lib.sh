@@ -115,6 +115,7 @@ fi
 
 # ── 5. every caller sources the lib ──────────────────────────────────────────
 for b in build-frite-stage4.sh build-jetson-stage4.sh build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+         build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh \
          build-orangepi5-stage4.sh build-rpi5-stage4.sh build-x86-host-stage4.sh \
          scripts/gen-provision-keys.sh; do
   BF="${REPO}/${b}"

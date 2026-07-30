@@ -313,6 +313,8 @@ build_make_cmd orangepizero2w "orangepizero2w, arm secrets" 1
 assert_has "orangepizero2w: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
 build_make_cmd orangepizero3 "orangepizero3, arm secrets" 1
 assert_has "orangepizero3: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+build_make_cmd orangepi3-lts "orangepi3-lts, arm secrets" 1
+assert_has "orangepi3-lts: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
 
 # ordering: ARM_LOCAL_PASS/ARM_LUKS_PASS come BEFORE the freeform extra-flags
 # field, so an operator can still override via Extra builder flags if needed —
@@ -497,6 +499,24 @@ build_make_cmd orangepizero2 "orangepizero2" 1
 assert_not "orangepizero2: no ORANGEPIZERO3_FLAVOR leak" "ORANGEPIZERO3_FLAVOR="
 build_make_cmd jetson-edge_ai "jetson" 1
 assert_not "jetson: no ORANGEPIZERO2_FLAVOR leak" "ORANGEPIZERO2_FLAVOR="
+
+# ── orangepi3-lts (EXPERIMENTAL): same flavor-only make-var shape as its
+# Zero 2 template sibling above (one board, no --role/--desktop —
+# see specs-orangepi3-lts/README.md) ───────────────────────────────────────
+reset_opts; OPT_ORANGEPI3LTS_FLAVOR=live
+build_make_cmd orangepi3-lts "orangepi3-lts" 1
+assert_eq  "orangepi3-lts: target"          "${RUN_MAKE[0]}" "orangepi3-lts"
+assert_has "orangepi3-lts: flavor"          "ORANGEPI3LTS_FLAVOR=live"
+reset_opts; OPT_ORANGEPI3LTS_FLAVOR=both
+build_make_cmd orangepi3-lts "orangepi3-lts default" 1
+assert_has "orangepi3-lts: default flavor"  "ORANGEPI3LTS_FLAVOR=both"
+# x86-*/orangepizero3 targets must NEVER pick up ORANGEPI3LTS_FLAVOR — guards
+# against a careless glob widening the orangepi3-lts-only threading.
+reset_opts; OPT_ORANGEPI3LTS_FLAVOR=live
+build_make_cmd x86-be "be" 1
+assert_not "x86: no ORANGEPI3LTS_FLAVOR leak" "ORANGEPI3LTS_FLAVOR="
+build_make_cmd orangepizero3 "orangepizero3" 1
+assert_not "orangepizero3: no ORANGEPI3LTS_FLAVOR leak" "ORANGEPI3LTS_FLAVOR="
 
 # ── jetson (EXPERIMENTAL): jetson-% targets — OWN axes as make-vars; the x86 ────
 # knobs (--optional-services/--with-tor/edge-AI model-library/branding/installer

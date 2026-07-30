@@ -1,0 +1,24 @@
+# fstab — Orange Pi 4 LTS (Rockchip RK3399 arm64) light desktop.
+#
+# The boot media varies by flavor. This board boots from microSD or its onboard
+# 16GB eMMC. There is NO M.2/NVMe slot on the Orange Pi 4 LTS — unlike the
+# Orange Pi 5 Plus this file was forked from (see specs-orangepi4-lts/README.md).
+# Like the Frite builder, this image produces LIVE/INSTALLER ISO media + a stage4
+# tarball — there is NO build_img/.img assembly step here. The LIVE flavor boots
+# a squashfs root ephemerally (this fstab is largely inert there; / is the live
+# overlay). The INSTALLER flavor (install-orangepi4-lts.sh) partitions the target
+# medium AT INSTALL TIME and rewrites the LABEL=/PARTUUID device columns below
+# for the medium it actually wrote, so the installed system mounts the right
+# partitions. The placeholder device paths below are replaced at install time;
+# do not rely on them literally.
+#
+# <device>            <mount>  <type>   <options>                              <dump> <pass>
+LABEL=OPI4L_BOOT     /boot    vfat     defaults,noatime,nosuid,nodev,noexec   0      2
+LABEL=OPI4L_ROOT     /        ext4     defaults,noatime                       0      1
+tmpfs               /tmp     tmpfs    defaults,nosuid,nodev,noexec,size=256m 0      0
+tmpfs               /run     tmpfs    defaults,nosuid,nodev,mode=0755        0      0
+
+# No zram helper here (unlike the Frite 512MB SKU): the Orange Pi 4 LTS ships
+# 4GB of LPDDR4, so a swap helper is not baked by default. Add one
+# post-first-boot if a workload needs it. Note this is the LOW end of the range
+# the Orange Pi 5 fork assumed (4/8/16/32GB) — 4GB is all there is here.

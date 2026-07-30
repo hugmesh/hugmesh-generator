@@ -80,7 +80,7 @@ def test_pickable_devices_span_the_mode_platform_union(wiz, mode):
     pickable = _pickable_devices(page)
     assert {cat.device(d).builder_platform for d in pickable} == union
     assert union == {"x86", "rpi5", "frite", "orangepi5", "orangepizero2", "orangepizero2w",
-                     "orangepizero3"}
+                     "orangepizero3", "orangepi3-lts", "orangepi4-lts"}
     assert not any(cat.device(d).builder_platform == "jetson" for d in pickable)
     # …but the jetson devices are still LISTED (visibility, #351), with the reason text
     assert "orin-nano" in page._device_items

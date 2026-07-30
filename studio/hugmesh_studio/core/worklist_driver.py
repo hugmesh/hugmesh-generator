@@ -57,6 +57,10 @@ KEY_PROFILE: dict[str, str] = {
     "orangepizero2": "host",  # headless appliance
     "orangepizero2w": "host",  # headless appliance (Zero 2's H618 sibling)
     "orangepizero3": "host",  # headless appliance (Zero 2's H618 sibling)
+    "orangepi3-lts": "host",  # headless appliance (Allwinner H6, pre-H616 gen)
+    "orangepi4-lts": "host",  # light DESKTOP (Rockchip RK3399) — no flash-disk.sh
+                              # desktop role token exists, so it maps to the generic
+                              # host artifact glob like every other client image
 }
 
 GENKEYS_SCRIPT = os.path.join("scripts", "gen-provision-keys.sh")

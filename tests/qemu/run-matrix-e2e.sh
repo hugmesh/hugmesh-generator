@@ -86,7 +86,7 @@ launcher_for() {
     case "$1" in
         x86)  echo "launch-x86.sh" ;;
         rpi5) echo "launch-pi.sh" ;;
-        frite|jetson|orangepi5|orangepizero2|orangepizero2w|orangepizero3) echo "launch-arm.sh" ;;
+        frite|jetson|orangepi5|orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts|orangepi4-lts) echo "launch-arm.sh" ;;
         *)    echo "" ;;
     esac
 }
@@ -103,6 +103,8 @@ builder_for() {
         orangepizero2) echo "build-orangepi-zero2-stage4.sh" ;;
         orangepizero2w) echo "build-orangepi-zero2w-stage4.sh" ;;
         orangepizero3) echo "build-orangepi-zero3-stage4.sh" ;;
+        orangepi3-lts) echo "build-orangepi3-lts-stage4.sh" ;;
+        orangepi4-lts) echo "build-orangepi4-lts-stage4.sh" ;;
         *)             echo "" ;;
     esac
 }

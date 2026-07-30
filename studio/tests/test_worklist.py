@@ -371,6 +371,7 @@ def test_envelope_conforms_to_frozen_schema():
     ("orangepizero2", "orangepizero2"),
     ("orangepizero2w", "orangepizero2w"),
     ("orangepizero3", "orangepizero3"),
+    ("orangepi3-lts", "orangepi3-lts"),
 ])
 def test_materialize_unset_role_resolves_to_platform_default(platform, expect_role):
     """An UNSET entry.role on a non-x86 platform resolves to that platform's canonical
@@ -602,6 +603,7 @@ def test_roles_for_platform_inversion():
     assert roles_for_platform("orangepizero2") == frozenset({"orangepizero2"})
     assert roles_for_platform("orangepizero2w") == frozenset({"orangepizero2w"})
     assert roles_for_platform("orangepizero3") == frozenset({"orangepizero3"})
+    assert roles_for_platform("orangepi3-lts") == frozenset({"orangepi3-lts"})
     assert roles_for_platform("rpi5") == frozenset({"generic", "rpi5-desktop", "pki", "be", "fe"})
     assert roles_for_platform("jetson") == frozenset({"edge_ai", "full", "gpu-host", "jetson-desktop"})
     assert "standalone-thick" in roles_for_platform("x86")

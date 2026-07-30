@@ -1,0 +1,95 @@
+# Cross-compilation — @@OPI4LTS_CPU@@ — Orange Pi 4 LTS (Rockchip RK3399) — HARDENED
+#
+# This is the LIGHT-DESKTOP image's portage config (NOT a K8s cluster node —
+# this platform has ONE role, mirroring build-frite-stage4.sh exactly; see the
+# builder header). It mirrors specs-frite/portage/make.conf.tmpl (same aarch64
+# cross toolchain, same hardened CFLAGS/LDFLAGS, same FEATURES) but tunes the
+# board CPU for RK3399's big.LITTLE core mix and the VIDEO_CARDS for the
+# Mali-T860 GPU.
+#
+# Variables substituted at build time (by render_template in build-orangepi4-lts-stage4.sh):
+#   @@CBUILD@@           Host compiler triplet
+#   @@CROSS_TARGET@@     Target triplet (e.g. aarch64-unknown-linux-gnu)
+#   @@OPI4LTS_CPU@@          GCC -mcpu / -mtune value (cortex-a72.cortex-a53 default —
+#                        RK3399's 2x Cortex-A72 + 4x Cortex-A53 big.LITTLE mix)
+#   @@JOBS@@             Parallel make jobs
+#   @@WORK_DIR@@         Base build directory (per-arch build root)
+
+CBUILD="@@CBUILD@@"
+CHOST="@@CROSS_TARGET@@"
+
+# Hardened CFLAGS — same posture as the rest of the fleet. RK3399 is a
+# big.LITTLE hexa-core (2x Cortex-A72 + 4x Cortex-A53 — both compatibles
+# confirmed in the upstream rk3399-base.dtsi);
+# GCC's combined "big.cLITTLE" -mcpu form (cortex-a72.cortex-a53) tunes
+# scheduling for BOTH clusters rather than favoring only one. The builder passes
+# -c cortex-a72.cortex-a53 by default (confirmed as a real, working Gentoo/GCC
+# flag for this exact SoC — see specs-orangepi4-lts/README.md's research notes).
+CFLAGS="-mcpu=@@OPI4LTS_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+MAKEOPTS="-j@@JOBS@@"
+# -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
+# mode-700 / encrypted $HOME work dir). All sandboxing off for the cross-build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline + a LEAN desktop. Same rationale as Frite: enable just
+# enough of X11 + a minimal GTK to run a lightweight WM/panel + a terminal + a
+# browser, and explicitly KEEP OFF the heavy desktop frameworks (KDE/Plasma
+# qt5/qt6, GNOME, systemd, pulseaudio bloat). This platform has only ONE role
+# (desktop — no cluster-node concept), so these USE flags are hardcoded
+# directly here rather than gated through the x86/RPi5 CLIENT_USE indirection
+# (which only exists to switch between a headless-node and client-desktop USE
+# set on platforms that have BOTH — this platform never builds headless).
+USE="bindist hardened pie ssp selinux seccomp"
+USE="${USE} X dbus elogind udev -systemd"
+# Lean desktop toolkit: GTK on (lxde needs it), Qt off (no Plasma).
+USE="${USE} gtk -qt5 -qt6 -kde -gnome -gnome-keyring"
+# Light audio: ALSA only (no pulseaudio/pipewire heavy stack).
+USE="${USE} alsa -pulseaudio -pipewire"
+# Disable GObject introspection: glib-2.86+ bootstraps a native copy of
+# gobject-introspection during cross-compile src_configure, but the bootstrap
+# meson build fails in the cross-emerge env (cross-file / EPYTHON mis-targeting).
+# None of the LXDE desktop packages hard-require introspection — it is an
+# optional USE-conditional dep on harfbuzz/pango/gdk-pixbuf/gtk+. Also disable
+# vala: librsvg's REQUIRED_USE enforces vala? ( introspection ), so disabling
+# vala satisfies the constraint without re-enabling introspection. Mirrors
+# specs-frite/portage/make.conf.tmpl (identical cross-compile gap).
+USE="${USE} -introspection -vala"
+
+# Only the MCS SELinux policy store (same posture as every other platform in
+# this repo): smaller build, matches the per-process MCS labelling baseline.
+POLICY_TYPES="mcs"
+INPUT_DEVICES="libinput"
+# RK3399 ships the Mali-T860 MP4 GPU (MIDGARD), declared upstream as
+# compatible = "rockchip,rk3399-mali", "arm,mali-t860". Midgard is driven by
+# the PANFROST kernel driver (NOT Panthor, which is for the RK3588's Valhall
+# Mali-G610), and Mesa's Gallium driver is likewise "panfrost" — so VIDEO_CARDS
+# stays "panfrost" despite the kernel side being named differently. See
+# specs-orangepi4-lts/kernel/hardened-desktop.config's GPU/Display section for the
+# full research note on this naming split.
+VIDEO_CARDS="panfrost"
+
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="arm64 ~arm64"
+
+# PYTHON_TARGETS / PYTHON_SINGLE_TARGET are DELIBERATELY NOT SET HERE.
+# They are DERIVED FROM THE STAGE3 SEED at build time and appended to the
+# rendered make.conf by scripts/_python-targets-lib.sh (pt_apply_seed_targets).
+# A frozen python3_NN literal in this file is a BUG: the seed's python floats per
+# arch and per snapshot (amd64 20260726 ships 3.13+3.14 and no 3.12; arm64 ships
+# 3.14 only; the 2026-07 jetson seed shipped 3.12+3.14), and a USE_EXPAND
+# assignment here REPLACES the profile default rather than widening it — which is
+# what wedged the 2026-07-29 mesh build in a dev-python slot conflict, and, in
+# mirror image, what produced the 2026-07-16 jetson "USE changes are necessary:
+# python_targets_python3_12" wall. See docs/PYTHON-TARGETS-SEED-DRIFT.md.
+
+# NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
+# package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the
+# ac_cv_* cache args into packages with hand-written configure scripts that
+# reject unknown options and die. (Same rationale as the Frite/RPi5 builds.)
+
+PAX_MARKINGS="none"

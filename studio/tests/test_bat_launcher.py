@@ -32,10 +32,10 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 BAT_PATH = os.path.join(STUDIO_ROOT, "hugmesh-studio.bat")
 
-# any of the seven builder scripts is a valid "a command was emitted" marker (the qemu
+# any of the builder scripts is a valid "a command was emitted" marker (the qemu
 # harness greps the same set).
 BUILDER_CMD_RE = re.compile(
-    r"build-(x86-host|rpi5|frite|jetson|orangepi5|orangepi-zero2|orangepi-zero2w|orangepi-zero3)-stage4\.sh")
+    r"build-(x86-host|rpi5|frite|jetson|orangepi5|orangepi-zero2|orangepi-zero2w|orangepi-zero3|orangepi3-lts)-stage4\.sh")
 
 
 # ── 1. BAT VALIDITY (static, no qemu) ──────────────────────────────────────────────────

@@ -45,7 +45,7 @@ ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }
 
 SPEC_DIRS=(specs-frite specs-rpi5 specs-orangepi5 specs-orangepi-zero2 specs-orangepi-zero2w
-           specs-orangepi-zero3 specs-jetson specs-x86)
+           specs-orangepi-zero3 specs-orangepi3-lts specs-orangepi4-lts specs-jetson specs-x86)
 ARM_BUILDERS=(build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh
               build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh
               build-orangepi-zero3-stage4.sh build-jetson-stage4.sh)

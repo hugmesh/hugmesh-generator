@@ -242,6 +242,32 @@
       "notes": "single 'orangepizero3' headless-appliance role (flavor axis only)"
     },
     {
+      "id": "orange-pi-3-lts",
+      "label": "Orange Pi 3 LTS",
+      "family": "orange-pi",
+      "arch": "arm64",
+      "soc": "Allwinner H6 (4x Cortex-A53)",
+      "ram_mb": 2048,
+      "builder": {"platform": "orangepi3-lts", "board": ""},
+      "status": "experimental",
+      "reason": "hardware validation pending (specs-orangepi3-lts/README.md) — fail-loud preflight; HEADLESS APPLIANCE: no desktop mode, no board axis (single-board platform); boots the PLAIN Orange Pi 3's mainline DTB/defconfig (mainline has no -lts variant) and the onboard GbE jack is DEAD on that DTB — USB-Ethernet-first, like the Zero 2W",
+      "role_allow": null,
+      "notes": "single 'orangepi3-lts' headless-appliance role (flavor axis only)"
+    },
+    {
+      "id": "orange-pi-4-lts",
+      "label": "Orange Pi 4 LTS",
+      "family": "orange-pi",
+      "arch": "arm64",
+      "soc": "Rockchip RK3399 (2x Cortex-A72 + 4x Cortex-A53, Mali-T860 MP4)",
+      "ram_mb": 4096,
+      "builder": {"platform": "orangepi4-lts", "board": ""},
+      "status": "experimental",
+      "reason": "hardware validation pending (specs-orangepi4-lts/README.md) — fail-loud preflight; LIGHT DESKTOP (not an appliance: the mainline rk3399-orangepi DTB it boots has an enabled Mali-T860 GPU, enabled HDMI and both VOPs); no board axis (single-board platform — mainline ships one Orange Pi RK3399 DTB/defconfig for the whole 4/4B/4 LTS family); onboard GbE works via the SoC GMAC, and the boot chain is blob-free (mainline U-Boot TPL + mainline TF-A BL31)",
+      "role_allow": null,
+      "notes": "single 'orangepi4-lts' light-desktop role (flavor axis only)"
+    },
+    {
       "id": "rpi400",
       "label": "Raspberry Pi 400 (keyboard PC)",
       "family": "raspberry-pi",
@@ -339,13 +365,13 @@
     },
     {
       "id": "opi3",
-      "label": "Orange Pi 3 / 3 LTS",
+      "label": "Orange Pi 3 (non-LTS)",
       "family": "orange-pi",
       "arch": "arm64",
       "soc": "Allwinner H6 (4x Cortex-A53)",
       "builder": null,
       "status": "unsupported",
-      "reason": "mainline u-boot/kernel/DTB exist, but there is no validated recipe: the closest sibling is the H616 zero2 flow and it would need a net-new specs-orangepi3/ builder — not board-axis coverage (#351)",
+      "reason": "the LTS revision now has its own platform (orangepi3-lts / specs-orangepi3-lts, which ironically boots THIS board's own mainline DTB/defconfig — mainline has no -lts variant), so promoting the non-LTS board is a validation task, not a builder task — but its board row (AP6256 radio, 1/2GB RAM SKUs, PCIe) is unverified against that recipe and is not claimed until a real board proves it (#351 honesty rule)",
       "role_allow": null,
       "notes": ""
     },
@@ -357,7 +383,7 @@
       "soc": "Rockchip RK3399 (2x Cortex-A72 + 4x Cortex-A53)",
       "builder": null,
       "status": "unsupported",
-      "reason": "mature mainline support, but the RK3588 recipe is NOT reusable (different rkbin DDR blob, TF-A platform, Mali) — would be a new 'orangepi4' platform + builder (#351)",
+      "reason": "the LTS revision now has its own platform (orangepi4-lts / specs-orangepi4-lts, which boots THIS board's own mainline DTB and U-Boot defconfig — mainline has no -lts variant of either), so promoting the non-LTS board is a validation task, not a builder task. Its board row (no onboard eMMC, differing RAM SKUs) is unverified against that recipe and is not claimed until a real board proves it (#351 honesty rule)",
       "role_allow": null,
       "notes": ""
     },
@@ -369,7 +395,7 @@
       "soc": "unconfirmed SKU",
       "builder": null,
       "status": "unsupported",
-      "reason": "UNCONFIRMED SKU — folds into the Orange Pi 4 verdict only IF proven RK3399 (#351)",
+      "reason": "UNCONFIRMED SKU — folds into the Orange Pi 4 verdict only IF proven RK3399 (#351). If proven, it would ride the orangepi4-lts platform rather than needing a new builder",
       "role_allow": null,
       "notes": ""
     },

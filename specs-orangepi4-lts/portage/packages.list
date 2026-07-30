@@ -1,0 +1,103 @@
+# Stage4 BASE package list — Orange Pi 4 LTS (Rockchip RK3399, arm64) LIGHT
+# desktop. One atom per line; lines starting with # are
+# ignored.
+#
+# This is the BASE (always-installed) set: kernel sources, U-Boot tooling, the
+# mesh/provisioning dependencies, and a hardened base system. The lean DESKTOP
+# stack is a SEPARATE list (packages-desktop.list) appended by the builder
+# unconditionally (this platform has ONE role — no headless/none toggle the way
+# Frite has --desktop none; see the builder header).
+#
+# NOTE on the RK3399 boot chain (EXPERIMENTAL — see specs-orangepi4-lts/README.md):
+#   * Boots via mainline U-Boot (orangepi-rk3399_defconfig) and needs NO
+#     proprietary blob: mainline U-Boot's TPL initialises RK3399 DRAM natively
+#     (drivers/ram/rockchip/sdram_rk3399.c) and mainline ARM Trusted Firmware
+#     carries a real rk3399 BL31 port (plat/rockchip/rk3399) — both confirmed
+#     present upstream. This is the OPPOSITE of the RK3588 boards this list was
+#     forked from, which do need Rockchip's rkbin blobs. U-Boot's distro-boot
+#     then scans the first partition for /extlinux/extlinux.conf, same mechanism
+#     as Frite. There is NO raspberrypi-firmware blob and NO config.txt.
+#   * The board-specific DTB ships from the KERNEL build (gentoo-sources /
+#     mainline), NOT from a vendor firmware package — see the builder's
+#     "DTB" section. This builder does not compile U-Boot itself; the binary is
+#     fetched via --uboot-url or supplied by the operator.
+
+# ── Kernel sources (mainline; the Orange Pi RK3399 device tree is upstream) ────
+# Mainline carries exactly ONE Orange Pi RK3399 device tree,
+# rk3399-orangepi.dtb, and no "-4-lts" variant (confirmed by direct fetch of the
+# upstream arch/arm64/boot/dts/rockchip/Makefile). Unlike the RK3588 fork there
+# is no 6.13+ HDMI floor here — the RK3399 display stack has been mainline for
+# years.
+sys-kernel/gentoo-sources
+sys-kernel/linux-firmware
+
+# ── Bootloader tooling ─────────────────────────────────────────────
+# u-boot-tools provides mkimage (FIT/extlinux) used to assemble the boot blob;
+# the actual U-Boot binary for the board is built/fetched by the builder (see
+# --uboot-url; needs Rockchip's rkbin DDR-init + TF-A BL31 blobs to be
+# flashable — mainline U-Boot alone is not, mirroring Frite's Amlogic FIP/BL31
+# situation).
+dev-embedded/u-boot-tools
+
+# ── Board hardware / storage ──────────────────────────────────────
+sys-block/parted
+sys-apps/usbutils
+sys-apps/i2c-tools
+sys-apps/util-linux
+sys-fs/e2fsprogs
+sys-fs/dosfstools
+sys-apps/pciutils
+
+# ── Networking ─────────────────────────────────────────────────────
+net-misc/networkmanager
+net-misc/openssh
+net-firewall/iptables
+net-misc/socat
+# Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +
+# openvpn (fallback) for the node-level hugmesh-egress-vpn OpenRC service
+# (DEFAULT-OFF; same plumbing as every other client image).
+net-vpn/wireguard-tools
+net-vpn/openvpn
+# WiFi supplicant is present for the onboard brcmfmac radio, which the mainline
+# device tree this image boots DOES describe and enable. WiFi is still OFF BY
+# DEFAULT purely for the fleet-wide hardened posture, not because of a driver
+# gap (contrast the Orange Pi 5). Ethernet + the tailnet remain the primary
+# path; onboard gigabit ethernet works via the SoC GMAC on this board.
+net-wireless/wpa_supplicant
+
+# ── System ─────────────────────────────────────────────────────────
+app-admin/sudo
+sys-process/cronie
+sys-apps/haveged
+app-editors/nano
+app-misc/screen
+app-misc/jq
+
+# ── Hardened / security (SELinux LSM) ──────────────────────────────
+# Same posture as the cluster images: SELinux is the LSM. The policy packages'
+# pkg_postinst runs the TARGET `semodule`, which can't execute under an aarch64
+# cross-emerge — so the base policy is LOADED AT FIRST BOOT (native) by
+# keys-provision (shared engine). See docs/SECURITY.md.
+sec-policy/selinux-base
+sec-policy/selinux-base-policy
+sys-apps/policycoreutils
+sys-apps/semodule-utils
+sys-apps/checkpolicy
+sys-libs/libselinux
+sys-libs/libseccomp
+sys-process/audit
+
+# NOTE: sys-fs/cryptsetup is NOT listed here — it is appended by the builder
+# ONLY when --encrypt-root is set (mirrors specs-frite/portage/packages.list's
+# equivalent comment); install-orangepi4-lts.sh is what actually runs
+# luksFormat/open/close on the target hardware at install time.
+
+# ── KEYS USB provisioning + attached storage ──────────────────────
+# Same first-boot provisioning engine as every other client image: jq parses the
+# manifests, dosfstools/util-linux handle the FAT32 KEYS partition + blkid.
+net-fs/nfs-utils
+net-fs/cifs-utils
+
+# NOTE: headscale + tailscale are NOT emerged here. They are installed as
+# upstream static arm64 binaries by build-orangepi4-lts-stage4.sh (the "mesh"
+# phase), identical to the Frite/RPi5 images. See --skip-mesh / --skip-tailscale.

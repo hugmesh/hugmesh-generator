@@ -178,3 +178,34 @@ orangepizero3	appliance	prod	-	installer	-
 orangepizero3	appliance	prod	-	both	-
 orangepizero3	appliance	test	-	standalone	-
 orangepizero3	appliance	prod	-	standalone	-
+# orangepi3-lts — Allwinner H6, a generation BEFORE the Zero 2's H616 and NOT
+# its sibling (EXPERIMENTAL, headless
+# appliance; boots the PLAIN OPi3's mainline DTB/defconfig — no -lts variant
+# upstream; USB-Ethernet-first: the GbE jack is dead on that DTB). Same
+# flavor-only shape; "standalone" is the same JOB-channel-only probe token.
+orangepi3-lts	appliance	test	-	live	-
+orangepi3-lts	appliance	test	-	installer	-
+orangepi3-lts	appliance	test	-	both	-
+orangepi3-lts	appliance	prod	-	live	-
+orangepi3-lts	appliance	prod	-	installer	-
+orangepi3-lts	appliance	prod	-	both	-
+orangepi3-lts	appliance	test	-	standalone	-
+orangepi3-lts	appliance	prod	-	standalone	-
+
+# orangepi4-lts — Rockchip RK3399 (EXPERIMENTAL). The FIRST Orange Pi platform
+# here that is a genuine LIGHT DESKTOP rather than a headless appliance: the
+# mainline rk3399-orangepi.dts it boots has an enabled Mali-T860 &gpu, an
+# enabled &hdmi and both VOPs, so the role column is "desktop" (matching
+# orangepi5), NOT "appliance". Single board though — mainline ships ONE Orange
+# Pi RK3399 DTB/defconfig for the whole 4/4B/4 LTS family, so the board column
+# is "-" like the appliances rather than orangepi5's two-board axis. No desktop
+# column value for the same reason orangepi5 has none: one role, no headless
+# variant to gate. "standalone" is the same JOB-channel-only probe token.
+orangepi4-lts	desktop	test	-	live	-
+orangepi4-lts	desktop	test	-	installer	-
+orangepi4-lts	desktop	test	-	both	-
+orangepi4-lts	desktop	prod	-	live	-
+orangepi4-lts	desktop	prod	-	installer	-
+orangepi4-lts	desktop	prod	-	both	-
+orangepi4-lts	desktop	test	-	standalone	-
+orangepi4-lts	desktop	prod	-	standalone	-

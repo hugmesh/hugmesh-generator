@@ -1,0 +1,26 @@
+# fstab — Orange Pi 3 LTS (Allwinner H6, arm64) headless appliance.
+#
+# Installed-root targets: microSD, the onboard 8GB eMMC (unlike the Zero 2/
+# Zero 3 siblings this board HAS one, and the mainline sun50i-h6-orangepi-3.dts
+# enables its mmc2 node), or USB — no NVMe (the H6's quirky PCIe is not usable
+# in mainline; see specs-orangepi3-lts/README.md's storage confidence notes).
+# Like the Frite/Orange-Pi-5 builders, this image produces LIVE/
+# INSTALLER ISO media + a stage4 tarball — there is NO build_img/.img assembly
+# step here. The LIVE flavor boots a squashfs root ephemerally (this fstab is
+# largely inert there; / is the live overlay). The INSTALLER flavor
+# (install-orangepi3-lts.sh) partitions the target medium AT INSTALL TIME and
+# rewrites the LABEL=/PARTUUID device columns below for the medium it actually
+# wrote, so the installed system mounts the right partitions. The placeholder
+# device paths below are replaced at install time; do not rely on them literally.
+#
+# <device>              <mount>  <type>   <options>                              <dump> <pass>
+LABEL=OPI3L_BOOT     /boot    vfat     defaults,noatime,nosuid,nodev,noexec   0      2
+LABEL=OPI3L_ROOT     /        ext4     defaults,noatime                       0      1
+tmpfs                /tmp     tmpfs    defaults,nosuid,nodev,noexec,size=128m 0      0
+tmpfs                /run     tmpfs    defaults,nosuid,nodev,mode=0755        0      0
+
+# zram swap: this is a small, cheap appliance board (a single 2GB LPDDR3 SKU
+# per the vendor's spec sheet — see the README); a zram helper is configured at
+# first boot by the builder (mirrors La Frite's 512MB SKU handling) rather than
+# baked as a fixed swap partition here, keeping the image byte-similar to its
+# Zero 2 template.

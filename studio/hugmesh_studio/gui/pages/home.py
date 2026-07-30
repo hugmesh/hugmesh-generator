@@ -156,7 +156,7 @@ class HomePage(QtWidgets.QWizardPage):
         self.standalone = QtWidgets.QCheckBox(
             "Standalone: no mesh/SSO, local user below logs in with a build-time password "
             "(--standalone; client roles only — laptop/chromebook/desktop, rpi5-desktop/"
-            "frite/orangepi5/orangepizero2[w]/orangepizero3. NOT jetson — --encrypt-root is hard-blocked "
+            "frite/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts. NOT jetson — --encrypt-root is hard-blocked "
             "on that platform, see docs/STANDALONE-DESKTOP.md)")
         ll.addWidget(self.standalone)
         self.local_note = QtWidgets.QLabel(

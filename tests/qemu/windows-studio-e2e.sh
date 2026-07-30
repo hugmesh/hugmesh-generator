@@ -209,7 +209,7 @@ if ! mcopy -i "${WORK}/payload.fat" "::/studio/MARKER.txt" "${MARKER}" 2>/dev/nu
 fi
 echo "── MARKER.txt ──"; cat "${MARKER}"
 if ! grep -q 'EXITCODE=0' "${MARKER}" \
-   || ! grep -qE 'build-(x86-host|rpi5|frite|jetson|orangepi5|orangepi-zero2|orangepi-zero2w|orangepi-zero3)-stage4\.sh' "${MARKER}"; then
+   || ! grep -qE 'build-(x86-host|rpi5|frite|jetson|orangepi5|orangepi-zero2|orangepi-zero2w|orangepi-zero3|orangepi3-lts|orangepi4-lts)-stage4\.sh' "${MARKER}"; then
     echo "FAIL: MARKER present but missing EXITCODE=0 and/or a builder command."
     echo "── serial log tail ──"; tail -n 25 "${SERIAL}" 2>/dev/null || true
     exit 1

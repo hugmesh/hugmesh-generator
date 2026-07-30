@@ -695,6 +695,64 @@
     {
       "arch": "arm64",
       "config_axes": {
+        "board": "",
+        "platform": "orangepi3-lts"
+      },
+      "family": "orange-pi",
+      "id": "orange-pi-3-lts",
+      "label": "Orange Pi 3 LTS",
+      "notes": "single 'orangepi3-lts' headless-appliance role (flavor axis only)",
+      "reason": "hardware validation pending (specs-orangepi3-lts/README.md) \u2014 fail-loud preflight; HEADLESS APPLIANCE: no desktop mode, no board axis (single-board platform); boots the PLAIN Orange Pi 3's mainline DTB/defconfig (mainline has no -lts variant) and the onboard GbE jack is DEAD on that DTB \u2014 USB-Ethernet-first, like the Zero 2W",
+      "roles": {
+        "cloud": [
+          {
+            "label": "Orange Pi 3 LTS arm64 HEADLESS APPLIANCE \u2014 EXPERIMENTAL (live/installer flavor only; no board/desktop axis)",
+            "role": "orangepi3-lts"
+          }
+        ],
+        "mesh": [],
+        "standalone": [
+          {
+            "label": "Orange Pi 3 LTS arm64 standalone HEADLESS APPLIANCE \u2014 EXPERIMENTAL (FDE; flavor only)",
+            "role": "orangepi3-lts"
+          }
+        ]
+      },
+      "soc": "Allwinner H6 (4x Cortex-A53)",
+      "status": "experimental"
+    },
+    {
+      "arch": "arm64",
+      "config_axes": {
+        "board": "",
+        "platform": "orangepi4-lts"
+      },
+      "family": "orange-pi",
+      "id": "orange-pi-4-lts",
+      "label": "Orange Pi 4 LTS",
+      "notes": "single 'orangepi4-lts' light-desktop role (flavor axis only)",
+      "reason": "hardware validation pending (specs-orangepi4-lts/README.md) \u2014 fail-loud preflight; LIGHT DESKTOP (not an appliance: the mainline rk3399-orangepi DTB it boots has an enabled Mali-T860 GPU, enabled HDMI and both VOPs); no board axis (single-board platform \u2014 mainline ships one Orange Pi RK3399 DTB/defconfig for the whole 4/4B/4 LTS family); onboard GbE works via the SoC GMAC, and the boot chain is blob-free (mainline U-Boot TPL + mainline TF-A BL31)",
+      "roles": {
+        "cloud": [
+          {
+            "label": "Orange Pi 4 LTS arm64 LIGHT DESKTOP client \u2014 EXPERIMENTAL (live/installer flavor only; single board, no board axis)",
+            "role": "orangepi4-lts"
+          }
+        ],
+        "mesh": [],
+        "standalone": [
+          {
+            "label": "Orange Pi 4 LTS arm64 standalone LIGHT DESKTOP \u2014 EXPERIMENTAL (FDE local desktop; flavor only, single board)",
+            "role": "orangepi4-lts"
+          }
+        ]
+      },
+      "soc": "Rockchip RK3399 (2x Cortex-A72 + 4x Cortex-A53, Mali-T860 MP4)",
+      "status": "experimental"
+    },
+    {
+      "arch": "arm64",
+      "config_axes": {
         "board": "rpi4",
         "platform": "rpi5"
       },
@@ -929,9 +987,9 @@
       "config_axes": null,
       "family": "orange-pi",
       "id": "opi3",
-      "label": "Orange Pi 3 / 3 LTS",
+      "label": "Orange Pi 3 (non-LTS)",
       "notes": "",
-      "reason": "mainline u-boot/kernel/DTB exist, but there is no validated recipe: the closest sibling is the H616 zero2 flow and it would need a net-new specs-orangepi3/ builder \u2014 not board-axis coverage (#351)",
+      "reason": "the LTS revision now has its own platform (orangepi3-lts / specs-orangepi3-lts, which ironically boots THIS board's own mainline DTB/defconfig \u2014 mainline has no -lts variant), so promoting the non-LTS board is a validation task, not a builder task \u2014 but its board row (AP6256 radio, 1/2GB RAM SKUs, PCIe) is unverified against that recipe and is not claimed until a real board proves it (#351 honesty rule)",
       "roles": {},
       "soc": "Allwinner H6 (4x Cortex-A53)",
       "status": "unsupported"
@@ -943,7 +1001,7 @@
       "id": "opi4",
       "label": "Orange Pi 4",
       "notes": "",
-      "reason": "mature mainline support, but the RK3588 recipe is NOT reusable (different rkbin DDR blob, TF-A platform, Mali) \u2014 would be a new 'orangepi4' platform + builder (#351)",
+      "reason": "the LTS revision now has its own platform (orangepi4-lts / specs-orangepi4-lts, which boots THIS board's own mainline DTB and U-Boot defconfig \u2014 mainline has no -lts variant of either), so promoting the non-LTS board is a validation task, not a builder task. Its board row (no onboard eMMC, differing RAM SKUs) is unverified against that recipe and is not claimed until a real board proves it (#351 honesty rule)",
       "roles": {},
       "soc": "Rockchip RK3399 (2x Cortex-A72 + 4x Cortex-A53)",
       "status": "unsupported"
@@ -955,7 +1013,7 @@
       "id": "opi4-pro",
       "label": "Orange Pi 4 Pro",
       "notes": "",
-      "reason": "UNCONFIRMED SKU \u2014 folds into the Orange Pi 4 verdict only IF proven RK3399 (#351)",
+      "reason": "UNCONFIRMED SKU \u2014 folds into the Orange Pi 4 verdict only IF proven RK3399 (#351). If proven, it would ride the orangepi4-lts platform rather than needing a new builder",
       "roles": {},
       "soc": "unconfirmed SKU",
       "status": "unsupported"
@@ -1272,6 +1330,8 @@
   "platform_labels": {
     "frite": "Libre AML-S805X La Frite family (arm64)",
     "jetson": "NVIDIA Jetson Orin (arm64) \u2014 EXPERIMENTAL: hardware validation pending",
+    "orangepi3-lts": "Orange Pi 3 LTS (Allwinner H6, arm64) \u2014 HEADLESS APPLIANCE, no desktop mode \u2014 EXPERIMENTAL: hardware validation pending",
+    "orangepi4-lts": "Orange Pi 4 LTS (Rockchip RK3399, arm64) \u2014 LIGHT DESKTOP (Mali-T860/panfrost) \u2014 EXPERIMENTAL: hardware validation pending",
     "orangepi5": "Orange Pi 5 / 5 Plus (Rockchip RK3588/RK3588S, arm64) \u2014 EXPERIMENTAL: hardware validation pending",
     "orangepizero2": "Orange Pi Zero 2 (Allwinner H616, arm64) \u2014 HEADLESS APPLIANCE, no desktop mode ever \u2014 EXPERIMENTAL: hardware validation pending",
     "orangepizero2w": "Orange Pi Zero 2W (Allwinner H618, arm64) \u2014 HEADLESS APPLIANCE, no desktop mode ever \u2014 EXPERIMENTAL: hardware validation pending",
@@ -1290,7 +1350,8 @@
       "rpi5-desktop",
       "jetson-desktop",
       "frite",
-      "orangepi5"
+      "orangepi5",
+      "orangepi4-lts"
     ],
     "node": [
       "pki",
@@ -1304,6 +1365,7 @@
       "orangepizero2",
       "orangepizero2w",
       "orangepizero3",
+      "orangepi3-lts",
       "generic"
     ]
   },
@@ -1471,6 +1533,40 @@
           }
         ],
         "role": "orangepizero3"
+      },
+      {
+        "image_class": "node",
+        "label": "Orange Pi 3 LTS arm64 HEADLESS APPLIANCE \u2014 EXPERIMENTAL (live/installer flavor only; no board/desktop axis)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepi3-lts"
+          }
+        ],
+        "role": "orangepi3-lts"
+      },
+      {
+        "image_class": "desktop",
+        "label": "Orange Pi 4 LTS arm64 LIGHT DESKTOP client \u2014 EXPERIMENTAL (live/installer flavor only; single board, no board axis)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepi4-lts"
+          }
+        ],
+        "role": "orangepi4-lts"
       }
     ],
     "mesh": [
@@ -1842,6 +1938,40 @@
           }
         ],
         "role": "orangepizero3"
+      },
+      {
+        "image_class": "node",
+        "label": "Orange Pi 3 LTS arm64 standalone HEADLESS APPLIANCE \u2014 EXPERIMENTAL (FDE; flavor only)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepi3-lts"
+          }
+        ],
+        "role": "orangepi3-lts"
+      },
+      {
+        "image_class": "desktop",
+        "label": "Orange Pi 4 LTS arm64 standalone LIGHT DESKTOP \u2014 EXPERIMENTAL (FDE local desktop; flavor only, single board)",
+        "platforms": [
+          {
+            "axes": {
+              "flavor": [
+                "live",
+                "installer",
+                "both"
+              ]
+            },
+            "platform": "orangepi4-lts"
+          }
+        ],
+        "role": "orangepi4-lts"
       },
       {
         "image_class": "desktop",

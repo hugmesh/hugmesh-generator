@@ -25,9 +25,12 @@ def host(is_root=True, has_docker=True):
 def cfg_for(platform, tmp_path):
     role = {"x86": "omnibus", "rpi5": "pki", "frite": "frite", "jetson": "edge_ai",
             "orangepi5": "orangepi5", "orangepizero2": "orangepizero2",
-            "orangepizero2w": "orangepizero2w", "orangepizero3": "orangepizero3"}[platform]
+            "orangepizero2w": "orangepizero2w", "orangepizero3": "orangepizero3",
+            "orangepi3-lts": "orangepi3-lts",
+            "orangepi4-lts": "orangepi4-lts"}[platform]
     mode = "cloud" if platform in ("frite", "orangepi5", "orangepizero2",
-                                   "orangepizero2w", "orangepizero3") else "mesh"
+                                   "orangepizero2w", "orangepizero3",
+                                   "orangepi3-lts", "orangepi4-lts") else "mesh"
     return ImageConfig(mode=mode, role=role, platform=platform, tailscale=True,
                        output_dir=str(tmp_path / "out"), jobs=4)
 

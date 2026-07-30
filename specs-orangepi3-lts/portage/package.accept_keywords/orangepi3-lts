@@ -1,0 +1,10 @@
+# Keyword acceptances — Orange Pi 3 LTS (Allwinner H6, arm64) headless
+# appliance.
+#
+# Kept deliberately minimal. Mainline gentoo-sources + linux-firmware + the
+# headless appliance package set are all stable on arm64. Add ~arm64 lines here
+# only if a specific atom you pull in is testing-keyworded on arm64 (validate
+# against the tree first).
+
+# u-boot-tools: mkimage for the FIT/extlinux boot blob.
+dev-embedded/u-boot-tools ~arm64

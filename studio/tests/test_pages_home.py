@@ -527,7 +527,8 @@ def test_home_standalone_hidden_and_dropped_on_a_mesh_node(qapp):
     assert "--standalone" not in cfg.to_cli_args()
 
 
-@pytest.mark.parametrize("appliance", ["orangepizero2", "orangepizero2w", "orangepizero3"])
+@pytest.mark.parametrize("appliance", ["orangepizero2", "orangepizero2w", "orangepizero3",
+                                       "orangepi3-lts"])
 def test_home_standalone_live_on_the_orangepizero2_node_class_appliance(qapp, appliance):
     """REGRESSION PIN (review finding 1) — the GUI half.
 

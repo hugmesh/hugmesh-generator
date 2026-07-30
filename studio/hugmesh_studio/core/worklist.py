@@ -93,7 +93,7 @@ class WorklistEntry:
     platform: str = "x86"
     id: str = ""                     # STABLE f"{role}.{platform}"; derived if blank
     board: str = ""                  # rpi5 / jetson / frite / orangepi5 board axis
-    flavor: str = ""                 # frite / orangepi5 / orangepizero2[w] / orangepizero3 live|installer axis
+    flavor: str = ""                 # frite / orangepi5 / orangepizero2[w] / orangepizero3 / orangepi3-lts live|installer axis
     desktop: str = ""                # frite / orangepi5 (and x86 thin|full) desktop axis
     encrypt_root: str = "default"    # "default" | "on" | "off"; jetson rows forced "off"
     packages_add: str = ""           # per-image Portage atoms to add (space-separated)

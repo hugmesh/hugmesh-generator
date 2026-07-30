@@ -65,7 +65,8 @@ def test_platform_flavour_menus_mirror_the_builders_artifact_lists():
     assert ft.flavors_for_platform("x86") == ("auto", "img", "live", "installer")
     assert ft.flavors_for_platform("rpi5") == ("auto", "img")
     assert ft.flavors_for_platform("jetson") == ("auto", "img")
-    for p in ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3"):
+    for p in ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3",
+              "orangepi3-lts"):
         assert ft.flavors_for_platform(p) == ("auto", "live", "installer")
     assert ft.flavors_for_platform("") == ft.flavors_for_platform("x86")
     for p, flavors in ft._PLATFORM_FLAVORS.items():

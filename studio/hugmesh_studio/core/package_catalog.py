@@ -43,6 +43,8 @@ SPECS_SUBDIR = {
     "orangepizero2": "specs-orangepi-zero2",
     "orangepizero2w": "specs-orangepi-zero2w",
     "orangepizero3": "specs-orangepi-zero3",
+    "orangepi3-lts": "specs-orangepi3-lts",
+    "orangepi4-lts": "specs-orangepi4-lts",
 }
 PLATFORMS = tuple(SPECS_SUBDIR)
 
@@ -196,6 +198,18 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
     ),
     "orangepizero3": (
         ListSpec("packages", "base", _ALWAYS),
+        ListSpec("packages-live", "live", _flavor_live),
+    ),
+    "orangepi3-lts": (
+        ListSpec("packages", "base", _ALWAYS),
+        ListSpec("packages-live", "live", _flavor_live),
+    ),
+    # UNLIKE every other Orange Pi platform here, this one also concatenates
+    # packages-desktop.list unconditionally: it is a light desktop with ONE role
+    # and no headless variant to gate, exactly like orangepi5 above.
+    "orangepi4-lts": (
+        ListSpec("packages", "base", _ALWAYS),
+        ListSpec("packages-desktop", "desktop", _ALWAYS),
         ListSpec("packages-live", "live", _flavor_live),
     ),
 }

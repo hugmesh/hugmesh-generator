@@ -137,6 +137,7 @@ def test_arch_for_platform():
     assert ft.arch_for_platform("orangepizero2") == "arm64"
     assert ft.arch_for_platform("orangepizero2w") == "arm64"
     assert ft.arch_for_platform("orangepizero3") == "arm64"
+    assert ft.arch_for_platform("orangepi3-lts") == "arm64"
     assert ft.arch_for_platform("x86") == "x86"
     assert ft.arch_for_platform("") == "x86"
 

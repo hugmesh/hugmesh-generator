@@ -33,8 +33,10 @@ _CONFIGS = [
                                    platform="orangepizero2", flavor="live")),
     ("opz2w appliance", ImageConfig(mode="standalone", role="orangepizero2w",
                                     platform="orangepizero2w", flavor="live")),
-    ("opz2w appliance", ImageConfig(mode="standalone", role="orangepizero3",
-                                    platform="orangepizero3", flavor="live")),
+    ("opz3 appliance", ImageConfig(mode="standalone", role="orangepizero3",
+                                   platform="orangepizero3", flavor="live")),
+    ("opi3lts appliance", ImageConfig(mode="standalone", role="orangepi3-lts",
+                                      platform="orangepi3-lts", flavor="live")),
 ]
 
 

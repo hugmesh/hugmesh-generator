@@ -17,7 +17,11 @@ validation pending; the Zero 2's H618 sibling, same HEADLESS-APPLIANCE
 flavor-only shape; see specs-orangepi-zero2w/README.md),
 orangepizero3 -> build-orangepi-zero3-stage4.sh (EXPERIMENTAL — hardware
 validation pending; the H618 sibling with onboard Ethernet, same
-HEADLESS-APPLIANCE flavor-only shape; see specs-orangepi-zero3/README.md).
+HEADLESS-APPLIANCE flavor-only shape; see specs-orangepi-zero3/README.md),
+orangepi3-lts -> build-orangepi3-lts-stage4.sh (EXPERIMENTAL — hardware
+validation pending; Allwinner H6, boots the PLAIN OPi3's mainline DTB/
+defconfig, USB-Ethernet-first, same HEADLESS-APPLIANCE flavor-only shape;
+see specs-orangepi3-lts/README.md).
 """
 from __future__ import annotations
 
@@ -130,6 +134,8 @@ BUILDER_SCRIPTS = {
     "orangepizero2": "build-orangepi-zero2-stage4.sh",
     "orangepizero2w": "build-orangepi-zero2w-stage4.sh",
     "orangepizero3": "build-orangepi-zero3-stage4.sh",
+    "orangepi3-lts": "build-orangepi3-lts-stage4.sh",
+    "orangepi4-lts": "build-orangepi4-lts-stage4.sh",
 }
 
 # GUI-facing platform labels (Jetson/Orange Pi 5/Orange Pi Zero 2 are
@@ -144,6 +150,8 @@ PLATFORM_LABELS = {
     "orangepizero2": "Orange Pi Zero 2 (Allwinner H616, arm64) — HEADLESS APPLIANCE, no desktop mode ever — EXPERIMENTAL: hardware validation pending",
     "orangepizero2w": "Orange Pi Zero 2W (Allwinner H618, arm64) — HEADLESS APPLIANCE, no desktop mode ever — EXPERIMENTAL: hardware validation pending",
     "orangepizero3": "Orange Pi Zero 3 (Allwinner H618, arm64) — HEADLESS APPLIANCE, no desktop mode ever — EXPERIMENTAL: hardware validation pending",
+    "orangepi3-lts": "Orange Pi 3 LTS (Allwinner H6, arm64) — HEADLESS APPLIANCE, no desktop mode — EXPERIMENTAL: hardware validation pending",
+    "orangepi4-lts": "Orange Pi 4 LTS (Rockchip RK3399, arm64) — LIGHT DESKTOP (Mali-T860/panfrost) — EXPERIMENTAL: hardware validation pending",
 }
 
 # The full role catalog, grouped by Studio mode: (role id, supported platforms, label).
@@ -163,6 +171,8 @@ ROLE_CHOICES = {
         ("orangepizero2", ("orangepizero2",), "Orange Pi Zero 2 arm64 standalone HEADLESS APPLIANCE — EXPERIMENTAL (FDE; flavor only)"),
         ("orangepizero2w", ("orangepizero2w",), "Orange Pi Zero 2W arm64 standalone HEADLESS APPLIANCE — EXPERIMENTAL (FDE; flavor only)"),
         ("orangepizero3", ("orangepizero3",), "Orange Pi Zero 3 arm64 standalone HEADLESS APPLIANCE — EXPERIMENTAL (FDE; flavor only)"),
+        ("orangepi3-lts", ("orangepi3-lts",), "Orange Pi 3 LTS arm64 standalone HEADLESS APPLIANCE — EXPERIMENTAL (FDE; flavor only)"),
+        ("orangepi4-lts", ("orangepi4-lts",), "Orange Pi 4 LTS arm64 standalone LIGHT DESKTOP — EXPERIMENTAL (FDE local desktop; flavor only, single board)"),
         # A coreboot/UEFI Chromebook is a laptop-class DESKTOP image (build-x86: the
         # chromebook role == a laptop image targeting coreboot-UEFI, ADR-16). It is
         # reachable standalone (no mesh/SSO) as well as as a cloud client — mirroring
@@ -186,6 +196,8 @@ ROLE_CHOICES = {
         ("orangepizero2", ("orangepizero2",), "Orange Pi Zero 2 arm64 HEADLESS APPLIANCE — EXPERIMENTAL (live/installer flavor only; no board/desktop axis)"),
         ("orangepizero2w", ("orangepizero2w",), "Orange Pi Zero 2W arm64 HEADLESS APPLIANCE — EXPERIMENTAL (live/installer flavor only; no board/desktop axis)"),
         ("orangepizero3", ("orangepizero3",), "Orange Pi Zero 3 arm64 HEADLESS APPLIANCE — EXPERIMENTAL (live/installer flavor only; no board/desktop axis)"),
+        ("orangepi3-lts", ("orangepi3-lts",), "Orange Pi 3 LTS arm64 HEADLESS APPLIANCE — EXPERIMENTAL (live/installer flavor only; no board/desktop axis)"),
+        ("orangepi4-lts", ("orangepi4-lts",), "Orange Pi 4 LTS arm64 LIGHT DESKTOP client — EXPERIMENTAL (live/installer flavor only; single board, no board axis)"),
     ],
     "mesh": [
         # pki/be/fe are node images buildable on x86 OR a Raspberry Pi 4/5 board (Pi 3
@@ -261,6 +273,21 @@ ORANGEPIZERO2W_FLAVORS = ("live", "installer", "both")
 # ONE-role / one-board / flavor-only shape as its Zero 2 template sibling
 # (and NO onboard Ethernet on this board — USB-Ethernet-first appliance).
 ORANGEPIZERO3_FLAVORS = ("live", "installer", "both")
+
+# build-orangepi3-lts-stage4.sh --flavor (Allwinner H6). EXPERIMENTAL —
+# hardware validation pending; see specs-orangepi3-lts/README.md. Same
+# ONE-role / one-board / flavor-only shape as its Zero 2 template sibling.
+# Boots the PLAIN Orange Pi 3's mainline DTB/defconfig (mainline has no -lts
+# variant), and the onboard GbE jack is dead on that DTB — USB-Ethernet-first.
+ORANGEPI3LTS_FLAVORS = ("live", "installer", "both")
+
+# build-orangepi4-lts-stage4.sh --flavor (Rockchip RK3399). EXPERIMENTAL —
+# hardware validation pending; see specs-orangepi4-lts/README.md. Flavor-only
+# like the appliances (mainline ships ONE Orange Pi RK3399 DTB/defconfig for
+# the whole 4/4B/4 LTS family, so no board axis) — but this board IS a light
+# desktop, and like orangepi5 there is no --desktop toggle because there is no
+# headless variant to gate.
+ORANGEPI4LTS_FLAVORS = ("live", "installer", "both")
 
 # ── BOARD-EXPANSION MATRIX — logged decisions (Orange Pi 2/3/4/4pro/5/6 +
 # Raspberry Pi 2/3/4/5/6 + Chromebook). The honesty rule (no selectable board whose
@@ -454,16 +481,17 @@ SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 # widgets, so they are intentionally absent. See NON_ARGV_FIELDS for fields delivered
 # out-of-band (never argv) which must stay shown regardless of platform.
 _ALL_PLATFORMS = ("x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2", "orangepizero2w",
-                  "orangepizero3")
+                  "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 _ARM_PLATFORMS = ("rpi5", "frite", "jetson", "orangepi5", "orangepizero2", "orangepizero2w",
-                  "orangepizero3")
+                  "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 _ENC_PLATFORMS = ("x86", "rpi5", "frite", "orangepi5", "orangepizero2", "orangepizero2w",
-                  "orangepizero3")   # --encrypt-root: all but jetson
-_UBOOT_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3")
+                  "orangepizero3", "orangepi3-lts", "orangepi4-lts")   # --encrypt-root: all but jetson
+_UBOOT_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3",
+                    "orangepi3-lts", "orangepi4-lts")
 _DTB_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orangepizero2w",
-                  "orangepizero3")   # rpi5 uses --dtb-prefix
+                  "orangepizero3", "orangepi3-lts", "orangepi4-lts")   # rpi5 uses --dtb-prefix
 _IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orangepizero2w",
-                         "orangepizero3")
+                         "orangepizero3", "orangepi3-lts", "orangepi4-lts")
 _X86 = ("x86",)
 _X86_RPI5 = ("x86", "rpi5")
 
@@ -591,7 +619,11 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
 # Person-desktop / standalone-desktop family (themeable + home-provisionable). Cites
 # X86_CLIENT_ROLES + UNAFFILIATED_ROLE above; the ARM desktop role ids mirror ROLE_CHOICES.
 _STANDALONE_DESKTOP_ROLES = ("standalone-thin", "standalone-thick", UNAFFILIATED_ROLE)
-_ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5")
+# orangepi4-lts belongs HERE and not in _APPLIANCE_ROLES: RK3399 has an enabled
+# &gpu (Mali-T860/panfrost), an enabled &hdmi and both VOPs in the mainline DTB it
+# boots, so it is a real desktop client like orangepi5 — unlike every OTHER Orange
+# Pi platform here, which are headless appliances.
+_ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5", "orangepi4-lts")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
 # covers pki/be/fe/be+gpu/omnibus/edge_ai (x86 AND rpi5 share pki/be/fe; edge_ai is shared
@@ -599,7 +631,8 @@ DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLE
 # rpi5 "generic" server are headless nodes too. Everything not an explicit desktop role
 # is treated as a node (fail-safe: infra never accidentally exposes theming/home surfaces).
 _JETSON_NODE_ROLES = ("full", "gpu-host")
-_APPLIANCE_ROLES = ("orangepizero2", "orangepizero2w", "orangepizero3", "generic")
+_APPLIANCE_ROLES = ("orangepizero2", "orangepizero2w", "orangepizero3", "orangepi3-lts",
+                    "generic")
 NODE_ROLES = X86_NODE_ROLES + _JETSON_NODE_ROLES + _APPLIANCE_ROLES
 
 # The theming + home-provisioning field families gated by role-class. Both families are
@@ -930,6 +963,8 @@ PLATFORM_DEFAULT_ROLE = {
     "orangepizero2": "orangepizero2",
     "orangepizero2w": "orangepizero2w",
     "orangepizero3": "orangepizero3",
+    "orangepi3-lts": "orangepi3-lts",
+    "orangepi4-lts": "orangepi4-lts",
 }
 
 # The two "unset / at-the-x86-default" role shapes that trigger role resolution: a
@@ -942,7 +977,8 @@ _DEFAULT_LEAK_ROLES = ("", PLATFORM_DEFAULT_ROLE["x86"])
 # The ARM ISO platforms whose builders take a live|installer|both --flavor. An unset
 # flavor resolves to the single-artifact "installer" here (the legacy worker-channel
 # default) rather than to_cli_args's "both", so the worker's one-artifact ingest holds.
-_ISO_FLAVOR_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3")
+_ISO_FLAVOR_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3",
+                         "orangepi3-lts", "orangepi4-lts")
 
 
 def roles_for_platform(platform: str) -> frozenset:
@@ -1814,6 +1850,10 @@ class ImageConfig:
             a = self._orangepizero2w_args()
         elif plat == "orangepizero3":
             a = self._orangepizero3_args()
+        elif plat == "orangepi3-lts":
+            a = self._orangepi3lts_args()
+        elif plat == "orangepi4-lts":
+            a = self._orangepi4lts_args()
         else:
             raise ValueError(f"unknown platform: {self.platform!r} "
                              f"(known: {', '.join(BUILDER_SCRIPTS)})")
@@ -2262,6 +2302,53 @@ class ImageConfig:
         specs-orangepi-zero2w/README.md for the honest hardware deltas, incl.
         NO onboard Ethernet), so there is no --desktop toggle to emit here
         either."""
+        a: list[str] = ["--flavor", self.flavor or "both"]
+        if self.dtb:
+            a += ["--dtb", self.dtb]
+        a += self._uboot_args()
+        a += self._arm_common_args()
+        a += self._encrypt_root_args()
+        if self.image_only:
+            a += ["--image-only"]
+        return a
+
+    def _orangepi3lts_args(self) -> list[str]:
+        """build-orangepi3-lts-stage4.sh — arm64 HEADLESS APPLIANCE: flavor
+        only, no --role AND no --board (a single board). EXPERIMENTAL (hardware
+        validation pending): byte-identical emission shape to
+        _orangepizero2_args() — the Orange Pi 3 LTS is a faithful derivation of
+        the Zero 2 template (Allwinner H6; boots the PLAIN OPi3's mainline
+        DTB/defconfig since mainline has no -lts variant, and its onboard GbE
+        jack is dead on that DTB — USB-Ethernet-first; see
+        specs-orangepi3-lts/README.md for the honest hardware deltas), so
+        there is no --desktop toggle to emit here either."""
+        a: list[str] = ["--flavor", self.flavor or "both"]
+        if self.dtb:
+            a += ["--dtb", self.dtb]
+        a += self._uboot_args()
+        a += self._arm_common_args()
+        a += self._encrypt_root_args()
+        if self.image_only:
+            a += ["--image-only"]
+        return a
+
+    def _orangepi4lts_args(self) -> list[str]:
+        """build-orangepi4-lts-stage4.sh — arm64 LIGHT-DESKTOP CLIENT: flavor
+        only, no --role and no --board. EXPERIMENTAL (hardware validation
+        pending).
+
+        Emission shape is _orangepi5_args() MINUS --board, NOT the appliance
+        shape the other Orange Pi platforms use. Two independent reasons, and
+        they pull in opposite directions:
+          * DESKTOP, like orangepi5: the mainline rk3399-orangepi.dts this
+            image boots has an ENABLED &gpu ("arm,mali-t860" -> panfrost), an
+            ENABLED &hdmi and both VOPs, so there is a real display pipeline.
+            Hence orangepi4-lts is in _ARM_DESKTOP_ROLES. Like orangepi5 there
+            is no headless variant to gate, so no --desktop toggle is emitted.
+          * SINGLE-BOARD, like the appliances: mainline ships exactly one
+            Orange Pi RK3399 DTB and one U-Boot defconfig for the whole
+            4/4B/4 LTS family, so a --board axis would be a fake axis.
+        See specs-orangepi4-lts/README.md."""
         a: list[str] = ["--flavor", self.flavor or "both"]
         if self.dtb:
             a += ["--dtb", self.dtb]
