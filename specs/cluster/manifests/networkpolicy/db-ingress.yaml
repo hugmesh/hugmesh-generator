@@ -211,7 +211,7 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-character-forge-bff-api }
+            matchLabels: { app: hugmesh-character-forge-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---

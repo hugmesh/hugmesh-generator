@@ -107,7 +107,7 @@ metadata:
   # revision 8 -> 9: reserve `character-forge` for the Character Forge (3D)
   # optional-service's fe-gateway routes (`/character-forge/**` UI remote +
   # `/bff/character-forge/**` BFF — apps/20-gateway-fe.yaml
-  # route[character-forge-ui] + route[snapdragon-character-forge-bff-api], both
+  # route[character-forge-ui] + route[hugmesh-character-forge-bff-api], both
   # seeded in route-access schema.sql). Ships ATOMICALLY with the routes in the
   # same PR that adds apps/{38b,39b,49c}-character-forge-*.yaml — same rationale
   # as `hmdm`/`attest`, a DEDICATED first-segment route prefix. ALSO reserves the
@@ -294,7 +294,7 @@ spec:
     # `character-forge`: the Character Forge (3D) micro-frontend remote is served
     # at `/character-forge/**` on the fe-gateway (apps/20-gateway-fe.yaml
     # route[character-forge-ui].path) and its BFF at `/bff/character-forge/**`
-    # (route[snapdragon-character-forge-bff-api].path; first-segment `bff` is
+    # (route[hugmesh-character-forge-bff-api].path; first-segment `bff` is
     # already reserved) — a DEDICATED first-segment route prefix, so a vanity
     # `character-forge` handle would shadow it. Both seeded in route-access
     # schema.sql as url_patterns. Ships ATOMICALLY with the character-forge

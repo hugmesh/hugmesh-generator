@@ -16,10 +16,10 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: snapdragon-character-forge-ui
+  name: hugmesh-character-forge-ui
   namespace: hugmesh-frontend
   labels:
-    app: snapdragon-character-forge-ui
+    app: hugmesh-character-forge-ui
     app.kubernetes.io/part-of: hugmesh.systems
 spec:
   # parentRefs MUST be set to the cluster's frontend Gateway when the Gateway API is
@@ -31,5 +31,5 @@ spec:
     - matches:
         - path: { type: PathPrefix, value: /character-forge }
       backendRefs:
-        - name: snapdragon-character-forge-ui
+        - name: hugmesh-character-forge-ui
           port: 8080

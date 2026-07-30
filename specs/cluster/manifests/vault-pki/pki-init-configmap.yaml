@@ -121,7 +121,7 @@ data:
                hugmesh-forum-bff-api \
                hugmesh-wiki-bff-api \
                hugmesh-mesh-bff-api \
-               snapdragon-character-forge-bff-api \
+               hugmesh-character-forge-bff-api \
                hugmesh-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
                federation-db forum-bff-db wiki-bff-db mesh-bff-db \

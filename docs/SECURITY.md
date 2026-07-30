@@ -100,7 +100,7 @@ Vault-managed mTLS keystore:
 | `mesh-bff-api` (LoRa mesh BFF: node directory / bridge-sync) | (pod default SA) | `s0:c80` | `mesh-bff-casdoor-client` (client-credentials → ROLE_SERVICE, manual — see secretstore ESO) | `hugmesh-mesh-bff-api.hugmesh-backend.svc` |
 | `mesh-bff-db` (dedicated Postgres for mesh-bff-api) | (pod default SA) | `s0:c81` | (DB) | (non-Java: PEM, no JKS) |
 | `character-forge-bff-db` (character-forge — optional, default-off) | per-app SA | `s0:c82` | (DB) | (non-Java: PEM, no JKS) |
-| `character-forge-bff-api` (character-forge — optional, default-off) | per-app SA | `s0:c83` | `svc-character-forge-bff` / `ROLE_CHARACTER_FORGE_API` | `snapdragon-character-forge-bff-api.hugmesh-backend.svc` |
+| `character-forge-bff-api` (character-forge — optional, default-off) | per-app SA | `s0:c83` | `svc-character-forge-bff` / `ROLE_CHARACTER_FORGE_API` | `hugmesh-character-forge-bff-api.hugmesh-backend.svc` |
 | `character-forge-ui` (character-forge — optional, default-off) | per-app SA | `s0:c84` | — | — |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each

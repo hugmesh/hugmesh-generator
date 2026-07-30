@@ -386,7 +386,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- ⚠ gate_optional_services REMOVES this row when the character-studio slug is
   -- deselected (so a matched route to a pruned upstream cannot stale-grant / 502).
   ('hugmesh-fe-gateway',  '/character-studio/**',  'ROLE_USER',      true),  -- character-studio VN UI
-  -- Character Forge (3D) micro-frontend UI (snapdragon-character-forge-ui at
+  -- Character Forge (3D) micro-frontend UI (hugmesh-character-forge-ui at
   -- /character-forge/**). Authenticated floor — any logged-in principal reaches it.
   -- ⚠ gate_optional_services REMOVES this row when the character-forge slug is
   -- deselected (so a matched route to a pruned upstream cannot stale-grant / 502).
@@ -539,7 +539,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- (/bff/mesh/internal/**) IS matched by this `**` row, so it carries its own
   -- explicit DENY row above — see the "SERVICE-ONLY INTERNAL INGEST" block.
   ('hugmesh-fe-gateway',  '/bff/mesh/**',        'ROLE_MESH',  true),  -- mesh BFF (mesh-access floor)
-  -- Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-bff-
+  -- Character Forge BFF (/bff/character-forge/** -> hugmesh-character-forge-bff-
   -- api): saved 3D character configs + the VN→3D /map endpoint. Authenticated floor
   -- (ROLE_USER, matching the /character-forge/** UI-mount row above) — ownership is
   -- enforced in the BFF (owner = jwt subject; foreign id => 404), so no dedicated

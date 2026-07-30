@@ -1,4 +1,4 @@
-# ClusterIP — reached only in-cluster by snapdragon-character-forge-bff-api (R2DBC runtime +
+# ClusterIP — reached only in-cluster by hugmesh-character-forge-bff-api (R2DBC runtime +
 # the JDBC handle Liquibase uses at startup). DNS:
 #   character-forge-bff-db.hugmesh-backend.svc.cluster.local:5432
 apiVersion: v1

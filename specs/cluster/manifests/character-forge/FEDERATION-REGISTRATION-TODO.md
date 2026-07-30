@@ -53,7 +53,7 @@ field-for-field, with the character-forge-specific slug / mountAt / role.
         'character-forge' slug is absent, so re-running over an existing DB is a
         no-op. remote_entry_url is the platform service-DNS placeholder the
         deployment's Service wires at runtime
-        (http://snapdragon-character-forge-ui:8080/remoteEntry.json).
+        (http://hugmesh-character-forge-ui:8080/remoteEntry.json).
     -->
 
     <changeSet id="037-1-register-character-forge-module" author="federation">
@@ -66,7 +66,7 @@ field-for-field, with the character-forge-specific slug / mountAt / role.
             <column name="slug" value="character-forge"/>
             <column name="display_name" value="Character Forge (3D)"/>
             <column name="kind" value="remote-shell"/>
-            <column name="remote_entry_url" value="http://snapdragon-character-forge-ui:8080/remoteEntry.json"/>
+            <column name="remote_entry_url" value="http://hugmesh-character-forge-ui:8080/remoteEntry.json"/>
             <column name="exposed_module" value="./routes"/>
             <column name="version" value="0.1.0"/>
             <column name="visibility" value="internal"/>

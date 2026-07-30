@@ -1,4 +1,4 @@
-# snapdragon-character-forge-ui — the Character Forge (3D character maker) Angular
+# hugmesh-character-forge-ui — the Character Forge (3D character maker) Angular
 # native-federation REMOTE. Its own nginx pod in the hugmesh-frontend namespace,
 # federated into the hugmesh.systems host: it serves a remoteEntry.json the
 # host's loadRemoteModule consumes, mounted at /character-forge (ROLE_USER floor).
@@ -7,7 +7,7 @@
 # the always-present /bff/** routes). See docs/XR-CHAT.md.
 #
 # Repo (image source, to be built+pushed): the frontend/ dir of
-# github.com/Snapdragon-Systems/snapdragon-character-forge-bff-api (ONE repo holds
+# github.com/Snapdragon-Systems/hugmesh-character-forge-bff-api (ONE repo holds
 # the BFF root + godot/ + frontend/; the CI builds+pushes BOTH images).
 #
 # OPTIONAL service (DEFAULT-OFF, admin gate): add/remove-by-command on a generated
@@ -26,18 +26,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-character-forge-ui
+  name: hugmesh-character-forge-ui
   namespace: hugmesh-frontend
   labels:
-    app: snapdragon-character-forge-ui
+    app: hugmesh-character-forge-ui
     app.kubernetes.io/part-of: hugmesh.systems
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: snapdragon-character-forge-ui }
+    matchLabels: { app: hugmesh-character-forge-ui }
   template:
     metadata:
-      labels: { app: snapdragon-character-forge-ui }
+      labels: { app: hugmesh-character-forge-ui }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -74,13 +74,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-character-forge-ui
+  name: hugmesh-character-forge-ui
   namespace: hugmesh-frontend
   labels:
-    app: snapdragon-character-forge-ui
+    app: hugmesh-character-forge-ui
     app.kubernetes.io/part-of: hugmesh.systems
 spec:
-  selector: { app: snapdragon-character-forge-ui }
+  selector: { app: hugmesh-character-forge-ui }
   # The federation_modules remote_entry_url points at this Service on :8080
-  # (http://snapdragon-character-forge-ui:8080/remoteEntry.json).
+  # (http://hugmesh-character-forge-ui:8080/remoteEntry.json).
   ports: [{ name: http, port: 8080, targetPort: http }]

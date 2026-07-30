@@ -274,12 +274,15 @@ SERVICE_ALLOW_EXACT = {
     # hugmesh-* family pattern below but not this Service) — reached only via the
     # frontend-host /** catch-all, never a public first-label of its own.
     "snapdragon-systems-web",
-    # character-forge Services keep the repo's DESIGN-locked snapdragon-* names
-    # (the repo was CREATED as snapdragon-character-forge-bff-api; docs/XR-CHAT.md).
-    # Both are reached only via the reserved `/character-forge/**` +
-    # `/bff/character-forge/**` route prefixes (stage 3/5-enforced), never a public
-    # first-label of their own.
-    "snapdragon-character-forge-bff-api", "snapdragon-character-forge-ui",
+    # NOTE: the two character-forge Services used to need EXACT entries here
+    # (they were created pre-rebrand as snapdragon-character-forge-{bff-api,ui}).
+    # The Snapdragon->HugMesh rebrand renamed them to
+    # hugmesh-character-forge-{bff-api,ui}, so they are now covered by the
+    # `^hugmesh-.*$` family pattern below and the exact entries were removed.
+    # (Their PUBLIC surface — the reserved `/character-forge/**` +
+    # `/bff/character-forge/**` route prefixes — is still what stages 3/5 enforce;
+    # the `character-forge` LABEL itself stays reserved, it is a feature slug and
+    # was NOT rebranded.)
 }
 # Regex patterns for routed-but-internal Service families:
 #   * ALL `hugmesh-*` Services — the platform's own gateways / BFFs / UIs /

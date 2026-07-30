@@ -114,7 +114,7 @@ spring:
             # /character-forge/** = ROLE_USER already seeded from the same
             # 20-schema.sql this stack initializes route-access-db with).
             - id: character-forge-ui
-              uri: http://snapdragon-character-forge-ui:8080
+              uri: http://hugmesh-character-forge-ui:8080
               predicates:
                 - Path=/character-forge/**
               filters:
@@ -151,11 +151,13 @@ spring:
                 - Path=/bff/forum/**
             # character-forge BFF — same sibling shape (non-overlapping
             # /bff/character-forge/** prefix, ROLE_USER row seeded in 20-schema.sql).
-            # The service name is snapdragon-character-forge-bff-api on purpose: the
-            # repo was CREATED under that DESIGN-locked name (docs/XR-CHAT.md) and
-            # never carried a pre-rename hugmesh form.
-            - id: snapdragon-character-forge-bff-api
-              uri: http://snapdragon-character-forge-bff-api:8080
+            # The service name MUST stay byte-identical to the compose service in
+            # compose.local.yaml and to the cluster Service in
+            # manifests/character-forge-bff-api/service.yaml — it was renamed
+            # snapdragon-* -> hugmesh-* by the rebrand (docs/XR-CHAT.md); the
+            # `character-forge` PATH prefix is a feature slug and did NOT change.
+            - id: hugmesh-character-forge-bff-api
+              uri: http://hugmesh-character-forge-bff-api:8080
               predicates:
                 - Path=/bff/character-forge/**
             - id: hugmesh-wiki-bff-api

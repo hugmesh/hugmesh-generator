@@ -1,4 +1,4 @@
-# character-forge-bff-db — dedicated Postgres for snapdragon-character-forge-bff-api's
+# character-forge-bff-db — dedicated Postgres for hugmesh-character-forge-bff-api's
 # datastore (the character_forge_character table: saved 3D character configs). In
 # hugmesh-backend with the other BFF dbs (forum-bff-db/wiki-bff-db). Lands
 # BEFORE character-forge-bff-api (39b) so the DB + least-privilege roles exist

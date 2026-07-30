@@ -21,7 +21,7 @@ The pieces, by repo:
 
 | Piece | Repo | What it is |
 |---|---|---|
-| **Character Forge** (3D maker) | `snapdragon-character-forge-bff-api` (DESIGN-locked name; one multi-surface repo) | Spring BFF at the root (`/bff/character-forge/**`: Char3DConfig CRUD, one-active-per-owner, cross-user lookup, VN→3D `/map`), `godot/character-forge/` (the Godot 4 maker game + the CANONICAL `character_assembler.gd`), `frontend/` (Angular native-federation remote mounted at `/character-forge`) |
+| **Character Forge** (3D maker) | `hugmesh-character-forge-bff-api` (one multi-surface repo; created as `snapdragon-character-forge-bff-api` and renamed by the Snapdragon→HugMesh rebrand) | Spring BFF at the root (`/bff/character-forge/**`: Char3DConfig CRUD, one-active-per-owner, cross-user lookup, VN→3D `/map`), `godot/character-forge/` (the Godot 4 maker game + the CANONICAL `character_assembler.gd`), `frontend/` (Angular native-federation remote mounted at `/character-forge`) |
 | **The room** | `hugmesh.games` repo, `games/shadows-of-the-net/` | Godot WASM chat chamber; dual mode — `mode=session` (games-portal wasm-game contract) and `mode=matrix` (all I/O via the host page `Chat3D` JS bridge) |
 | **Matrix integration** | `hugmesh-matrix-ui` | `systems.snapdragon.chat3d*` state events (room enable/config, scene placements, per-user avatar), room-settings section, iframe host for the room, full-mesh WebRTC audio + pose/blendshape data channels, self-hosted MediaPipe face tracking |
 | **Platform slug** | THIS repo | everything in §2 |
@@ -43,8 +43,11 @@ A MULTI-APP slug shaped like phpbb (BFF db + BFF api + UI remote), registered in
   server, own Liquibase-owned `character_forge_character` table),
   `apps/49c-character-forge-ui.yaml` (the Angular remote, `hugmesh-frontend`,
   nginx-unprivileged :8080 serving the Godot WASM maker from same-origin assets).
-  The Services keep the repo's DESIGN-locked `snapdragon-character-forge-*`
-  names.
+  The Services are named `hugmesh-character-forge-{bff-api,ui}` (renamed from
+  `snapdragon-character-forge-*` by the Snapdragon→HugMesh rebrand). The
+  `character-forge` FEATURE SLUG — manifest dir names, route paths, DB/table
+  names, the federated remote name and the reserved-prefix label — was NOT
+  renamed; only the brand prefix on the repo/Service/image identifiers was.
 - **Manifests:** `manifests/character-forge{,-bff-api,-bff-db}` — unique SELinux
   MCS levels `s0:c82`/`s0:c83`/`s0:c84` per the [`SECURITY.md`](SECURITY.md) §3
   matrix, ESO secrets riding the SHARED `external-secrets` files (forum-bff
@@ -70,8 +73,8 @@ A MULTI-APP slug shaped like phpbb (BFF db + BFF api + UI remote), registered in
   `OptionalService` seed CR render `character-forge: "false"` so the host greys
   the entry instead of 404/502.
 - **Local stack:** `tests/stack/compose.local.yaml` services
-  (`character-forge-bff-db`, `snapdragon-character-forge-bff-api`,
-  `snapdragon-character-forge-ui`) + the fe gateway-routes mirror +
+  (`character-forge-bff-db`, `hugmesh-character-forge-bff-api`,
+  `hugmesh-character-forge-ui`) + the fe gateway-routes mirror +
   `scripts/clone-all-repos.sh`.
 
 **Federation registration** (`federation_modules`, kind `remote-shell`, mounted

@@ -1,4 +1,4 @@
-# snapdragon-character-forge-ui — the Character Forge (3D character maker) Angular
+# hugmesh-character-forge-ui — the Character Forge (3D character maker) Angular
 # micro-frontend, federated into the hugmesh.systems host at /character-forge
 # (ROLE_USER floor). Frontend Pis. Embeds the Godot WASM maker from its own
 # same-origin assets; saves via /bff/character-forge/** (39b). OPTIONAL service
@@ -9,7 +9,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-character-forge-ui
+  name: hugmesh-character-forge-ui
   namespace: devops
 spec:
   project: default

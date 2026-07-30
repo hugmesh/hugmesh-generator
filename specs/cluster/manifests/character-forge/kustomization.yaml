@@ -17,7 +17,7 @@ resources:
 # (ESO-materialized, see manifests/external-secrets). Mirrors user-ui/wiki-ui.
 images:
   - name: snapdragon-systems/character-forge-ui
-    newName: registry.hugmesh.systems/hugmesh/snapdragon-character-forge-ui
+    newName: registry.hugmesh.systems/hugmesh/hugmesh-character-forge-ui
     newTag: main
 patches:
   - target: { kind: Deployment }

@@ -12,7 +12,7 @@ resources:
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
-  - { name: snapdragon-systems/character-forge-bff-api, newName: registry.hugmesh.systems/hugmesh/snapdragon-character-forge-bff-api, newTag: main }
+  - { name: snapdragon-systems/character-forge-bff-api, newName: registry.hugmesh.systems/hugmesh/hugmesh-character-forge-bff-api, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

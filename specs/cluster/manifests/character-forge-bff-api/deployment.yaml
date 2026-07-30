@@ -19,14 +19,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-character-forge-bff-api
+  name: hugmesh-character-forge-bff-api
   namespace: hugmesh-backend
-  labels: { app: snapdragon-character-forge-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-character-forge-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-character-forge-bff-api } }
+  selector: { matchLabels: { app: hugmesh-character-forge-bff-api } }
   template:
-    metadata: { labels: { app: snapdragon-character-forge-bff-api } }
+    metadata: { labels: { app: hugmesh-character-forge-bff-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
@@ -40,7 +40,7 @@ spec:
           level: "s0:c83"
       # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
       # Mirrors the user-bff-api/gateway build-keystore initContainer: turns the
-      # Vault-PKI-issued, ESO-synced TLS Secret (snapdragon-character-forge-bff-api-mtls:
+      # Vault-PKI-issued, ESO-synced TLS Secret (hugmesh-character-forge-bff-api-mtls:
       # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
       # (cluster CA) for server.ssl.* to REQUIRE a client cert chaining to the
       # cluster CA. Store password generated in-pod, kept only in the tmpfs /stores
@@ -58,7 +58,7 @@ spec:
             - |
               P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
               openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
-                -certfile /pki/ca.crt -name snapdragon-character-forge-bff-api \
+                -certfile /pki/ca.crt -name hugmesh-character-forge-bff-api \
                 -out /stores/keystore.p12 -passout "pass:${P}"
               keytool -importcert -noprompt -alias hugmesh-cluster-ca \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
@@ -83,7 +83,7 @@ spec:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
       containers:
-        - name: snapdragon-character-forge-bff-api
+        - name: hugmesh-character-forge-bff-api
           image: snapdragon-systems/character-forge-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
@@ -148,8 +148,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-character-forge-bff-api:8080:127.0.0.1
-                  https://snapdragon-character-forge-bff-api:8080/actuator/health/readiness
+                  --resolve hugmesh-character-forge-bff-api:8080:127.0.0.1
+                  https://hugmesh-character-forge-bff-api:8080/actuator/health/readiness
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
@@ -159,8 +159,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-character-forge-bff-api:8080:127.0.0.1
-                  https://snapdragon-character-forge-bff-api:8080/actuator/health/liveness
+                  --resolve hugmesh-character-forge-bff-api:8080:127.0.0.1
+                  https://hugmesh-character-forge-bff-api:8080/actuator/health/liveness
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
@@ -176,7 +176,7 @@ spec:
         # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
         - name: pki
           secret:
-            secretName: snapdragon-character-forge-bff-api-mtls
+            secretName: hugmesh-character-forge-bff-api-mtls
         # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
         - name: stores
           emptyDir:

@@ -1687,7 +1687,7 @@ gate_optional_services() {
                 # Character Forge (3D) — MULTI-APP slug (DEFAULT-OFF, admin gate): BFF db +
                 # BFF api + UI remote (phpbb shape). Owns its three bootstrap Applications +
                 # three manifest dirs + its TWO fe-gateway path routes (character-forge-ui +
-                # snapdragon-character-forge-bff-api) + its TWO route-access rows (no gateway
+                # hugmesh-character-forge-bff-api) + its TWO route-access rows (no gateway
                 # HOST; its ESO secrets ride the SHARED secretstore/pki files like forum-bff's
                 # — inert without their consumer pods, so NOT pruned here). When deselected
                 # the host greys the /character-forge entry out (installed-services "false").
@@ -1698,7 +1698,7 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/character-forge" \
                        "${tree}/manifests/character-forge-bff-api" \
                        "${tree}/manifests/character-forge-bff-db"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-forge-ui snapdragon-character-forge-bff-api
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-forge-ui hugmesh-character-forge-bff-api
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/character-forge/**' '/bff/character-forge/**'
                 ;;

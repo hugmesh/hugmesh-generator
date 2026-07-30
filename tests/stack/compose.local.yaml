@@ -859,15 +859,16 @@ services:
   # configs + the VN→3D /map endpoint; docs/XR-CHAT.md). Same spring-bff
   # resource-server archetype as forum-bff above; NO downstream homeserver leg —
   # its only dependency is its own Postgres. NOTE: the repo is the MULTI-SURFACE
-  # snapdragon-character-forge-bff-api (BFF root + godot/ + frontend/); the BFF
+  # hugmesh-character-forge-bff-api (BFF root + godot/ + frontend/); the BFF
   # image builds from the repo ROOT.
   #
   # OPT-IN (`--profile charforge`) because this repo CANNOT BUILD today, and an
   # unbuildable service in the default set fails `docker compose build` — i.e. it
   # takes the WHOLE local mesh down with it, for a surface nothing else depends on
   # (verified: zero depends_on references to this service anywhere in the stack).
-  # The repo never got the Snapdragon->HugMesh rebrand: its pom still declares the
-  # pre-rename parent `systems.snapdragon:snapdragon-parent:2.7.0` and dependency
+  # The repo was created AFTER the org-wide Snapdragon->HugMesh sweep and so missed
+  # it entirely: its pom declares the pre-rename parent
+  # `systems.snapdragon:snapdragon-parent:2.7.0` and dependency
   # `systems.snapdragon:snapdragon-commons`, neither of which is published any
   # more (m2-bootstrap.sh builds and serves systems.hugmesh:hugmesh-parent:2.8.0 /
   # hugmesh-commons:2.1.0). It is also absent from compose.m2-local.yaml, so it is
@@ -877,15 +878,18 @@ services:
   # re-coordinating the pom would leave the code importing packages the renamed
   # artifact does not contain. scripts/patch-stack-src.sh refuses it for exactly
   # that reason (drop_pre_rename_commons_dep bails when the dep is IMPORTED).
-  # UPSTREAM FIX: rebrand snapdragon-character-forge-bff-api (coords + imports),
-  # then drop this profile and add it to compose.m2-local.yaml. Until then:
+  # The coords+imports rebrand lands in the character-forge REPO (separate PR); the
+  # rename of the compose/service/image IDENTIFIERS below (snapdragon-* ->
+  # hugmesh-*, incl. the clone directory name in scripts/clone-all-repos.sh) is all
+  # this repo can do. UPSTREAM FIX: once that repo PR is on main, drop this profile
+  # and add the service to compose.m2-local.yaml. Until then:
   #   make stack-up            -> mesh comes up, character-forge omitted
   #   docker compose ... --profile charforge  -> opt in and watch it fail honestly
-  snapdragon-character-forge-bff-api:
+  hugmesh-character-forge-bff-api:
     <<: *amd64
     profiles: ["charforge"]
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-forge-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-forge-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
@@ -1176,23 +1180,23 @@ services:
 
   # character-forge-ui — mounted at /character-forge/** (canonical cluster
   # route-access row + fe route, specs/cluster/apps/20-gateway-fe.yaml). UNLIKE
-  # character-studio-ui it has a dedicated BFF (snapdragon-character-forge-bff-api
+  # character-studio-ui it has a dedicated BFF (hugmesh-character-forge-bff-api
   # above, /bff/character-forge/**). The frontend lives in the SAME repo as the
-  # BFF (frontend/ subdir of snapdragon-character-forge-bff-api — one repo: BFF
+  # BFF (frontend/ subdir of hugmesh-character-forge-bff-api — one repo: BFF
   # root + godot/ + frontend/), so the build context points INTO that clone.
   # OPT-IN under the SAME `charforge` profile as its BFF: with the BFF profiled
   # out this page has no /bff/character-forge/** to call, and it would render
   # blank regardless — scripts/patch-stack-src.sh's --base-href injection is keyed
   # by REPO DIRECTORY name and this is the only UI whose build context points into
-  # a SUBDIR of another repo (…/snapdragon-character-forge-bff-api/frontend), so
+  # a SUBDIR of another repo (…/hugmesh-character-forge-bff-api/frontend), so
   # the patch structurally cannot reach it and the app ships `<base href="/">`
   # under a /character-forge/ mount (the exact defect fixed fleet-wide in #459).
   # Keeping the slug whole-hog opt-in beats shipping half of it broken by default.
-  snapdragon-character-forge-ui:
+  hugmesh-character-forge-ui:
     <<: *amd64
     profiles: ["charforge"]
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-forge-bff-api/frontend
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-forge-bff-api/frontend
 
   # ── hugmesh-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
   # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional

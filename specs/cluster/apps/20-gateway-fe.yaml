@@ -158,13 +158,16 @@ spec:
             filters:
               - StripPrefix=1
           # Character Forge (3D character maker) micro-frontend remote
-          # (/character-forge/** -> snapdragon-character-forge-ui on :8080, non-root
-          # nginx; the Service keeps the repo's DESIGN-locked snapdragon-* name).
+          # (/character-forge/** -> hugmesh-character-forge-ui on :8080, non-root
+          # nginx). The `character-forge` PATH is the feature slug (frozen); the
+          # Service NAME carries the brand prefix and was renamed snapdragon-* ->
+          # hugmesh-* by the rebrand — it MUST stay byte-identical to
+          # manifests/character-forge/deployment.yaml's Service.
           # Role floor ROLE_USER (route-DB). OPTIONAL slug `character-forge`:
           # gate_optional_services REMOVES this route (and the /bff/character-forge/**
           # BFF route below) when the slug is deselected.
           - id: character-forge-ui
-            uri: http://snapdragon-character-forge-ui.hugmesh-frontend.svc.cluster.local:8080
+            uri: http://hugmesh-character-forge-ui.hugmesh-frontend.svc.cluster.local:8080
             path: /character-forge/**
             filters:
               - StripPrefix=1
@@ -234,7 +237,7 @@ spec:
           - id: hugmesh-mesh-bff-api
             uri: https://hugmesh-mesh-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/mesh/**
-          # Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-
+          # Character Forge BFF (/bff/character-forge/** -> hugmesh-character-forge-
           # bff-api): saved 3D character configs + the VN→3D /map endpoint. SIBLING of
           # /bff/forum/** + /bff/wiki/** above (non-overlapping prefix, ROLE_USER
           # floor), declared BEFORE the /bff/** admin-bff catch-all below (Spring Cloud
@@ -242,8 +245,8 @@ spec:
           # enforces mTLS (client-auth=need); the gateway presents its client cert on
           # this leg. OPTIONAL slug `character-forge`: gate_optional_services REMOVES
           # this route when the slug is deselected.
-          - id: snapdragon-character-forge-bff-api
-            uri: https://snapdragon-character-forge-bff-api.hugmesh-backend.svc.cluster.local:8080
+          - id: hugmesh-character-forge-bff-api
+            uri: https://hugmesh-character-forge-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/character-forge/**
           # SSO login/session/registration RELOCATED admin-bff -> user-bff-api: login
           # is a user concern, so the user BFF now owns /bff/login, /bff/register,
