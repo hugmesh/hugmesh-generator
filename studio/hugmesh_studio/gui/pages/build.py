@@ -12,13 +12,38 @@ The retired free-text extra-packages field is replaced by a "Packages…" button
 per-image :class:`~.packages_dialog.PackagesDialog` (mesh gets one per worklist row, in a
 summary table). "Build builder image now" stays — it builds the Docker builder image, not an
 OS image.
+
+ONE WIDGET IDIOM PER KIND OF CONTROL (operator report, 2026-07-29: "there's a mixture of
+sections in the build area that are dropdowns instead of buttons for the same kinds of
+thing, organize this build page better"). The reported mixture was real: the Artifacts box
+interleaved three '(builder default)/on/off' DROPDOWNS (root image / live ISO / rootfs tar)
+among five CHECKBOX siblings answering the same kind of question ("do I get this
+artifact?"), and Secure Boot was a fourth such dropdown. The page's rule, stated once and
+applied everywhere:
+
+* pick-one VALUE enumerations (backend engine, --env, installer front-end, --grow policy)
+  are DROPDOWNS — they choose one named value among several, exactly what a combo is for
+  (the grow combo stays editable: a size cap like "16G" types straight in);
+* on/off build toggles are CHECKBOXES — tri-state where the builder has a --flag/--no-flag
+  pair (the NetworkPage G34 idiom: the part-checked square = leave the builder default,
+  which is the property the old dropdowns existed for — see _tri_check);
+* actions (Packages… / Preview / Refresh preview / Build builder image now) are PUSH
+  BUTTONS.
+
+Related controls are grouped into the wizard's Collapsible sections (_widgets.collapsible
+— the NetworkPage house pattern): Build execution / mesh worklist / Image options /
+Artifacts / Secure Boot / Build plumbing. Collapsing is PRESENTATION ONLY (see
+_widgets.Collapsible): validatePage/_preview read widget VALUES, which a folded widget
+keeps, and clear_unsupported keys on the capability table, never on visibility.
 """
 from __future__ import annotations
 
 import copy
 import os
 
-from ..qt import QtCore, QtWidgets, Signal
+from dataclasses import MISSING
+
+from ..qt import Qt, QtCore, QtWidgets, Signal
 from ._scroll import scrollable
 from ...core import build_sessions
 from ...core import flash_targets
@@ -31,7 +56,7 @@ from ...core.worklist_driver import WorklistDriver
 from ._device_table import DeviceTable
 from ._gating import (clear_unsupported, gate_widgets, gate_widgets_role_class,
                       platform_supports, unsupported_note)
-from ._widgets import _file_picker, _row
+from ._widgets import _file_picker, _row, collapsible
 from .packages_dialog import PackagesDialog
 
 # mesh roles whose image carries a GPU stack (the summary "GPU" chip).
@@ -61,22 +86,82 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
             f"standalone role to pick a different front-end.")
 
 
-def _tri_combo(default_label="(builder default)"):
-    """A tri-state flag-pair combo (the NetworkPage proxy-stack pattern): '' leaves
-    the builder default, 'on'/'off' emit the --flag / --no-flag pair. A checkbox
-    would collapse the default to an explicit on/off the first time the page is
-    visited, so the builder's own default could never round-trip."""
-    box = QtWidgets.QComboBox()
-    box.addItem(default_label, "")
-    box.addItem("on", "on")
-    box.addItem("off", "off")
+# The same meaning as _TRI_TIP below, but VISIBLE on the page. NetworkPage learned this
+# the hard way (its tri-state services were reported as "partially selected but it's not
+# clear why" when the explanation lived only in a hover tooltip) — so the legend ships
+# with the boxes from day one here, not after the same report a second time.
+_TRI_LEGEND = (
+    "3-state boxes: ■ part-checked (the default) leaves the builder's own choice alone · "
+    "☑ checked forces the flag ON · ☐ unchecked forces it OFF (the --flag / --no-flag "
+    "pair). The square means \"don't override\", not \"partly enabled\"."
+)
+
+_TRI_TIP = ("3-state: checked = force ON (--flag), unchecked = force OFF (--no-flag), "
+            "part-checked square = leave the builder default.")
+
+# config tri-state value <-> Qt CheckState. The config domain stays byte-identical to
+# what the old dropdowns' currentData() carried ('' / 'on' / 'off'), so nothing about
+# emission or save/load changes — only the widget changed shape.
+_TRI_STATES = {
+    "": Qt.CheckState.PartiallyChecked,
+    "on": Qt.CheckState.Checked,
+    "off": Qt.CheckState.Unchecked,
+}
+
+
+def _tri_check(text):
+    """A tri-state flag-pair CHECKBOX (the NetworkPage G34 idiom): part-checked square =
+    leave the builder default (emit neither flag), checked = --flag, unchecked = --no-flag.
+
+    Replaces this page's old '(builder default)/on/off' _tri_combo DROPDOWNS. The combo
+    existed for one property — the builder's own default must round-trip, which a
+    two-state box can never do (it collapses the default to an explicit on/off on first
+    visit) — but it bought that property at the cost the operator reported (2026-07-29):
+    the Artifacts box interleaved three dropdowns among five checkbox siblings that
+    answer the SAME KIND of question, "do I get this artifact?". A tri-state checkbox
+    keeps the round-trip property (the square is the emit-nothing state) while looking
+    like what it is: an on/off toggle, same as its neighbours."""
+    box = QtWidgets.QCheckBox(text)
+    box.setTristate(True)
+    box.setCheckState(Qt.CheckState.PartiallyChecked)   # default: leave the builder's own
+    box.setToolTip(_TRI_TIP)
     return box
 
 
 def _set_tri(box, value):
-    """Select the combo entry for a tri-state config value (bools normalize the
-    same way config.py's emission does)."""
-    box.setCurrentIndex(max(0, box.findData(ImageConfig._tri(value))))
+    """Show a tri-state config value on its checkbox (bools normalize the same way
+    config.py's emission does — ImageConfig._tri is the single authority)."""
+    box.setCheckState(_TRI_STATES.get(ImageConfig._tri(value),
+                                      Qt.CheckState.PartiallyChecked))
+
+
+def _tri_value(box):
+    """Checkbox state -> the tri-state config value ('' / 'on' / 'off') — the exact
+    domain the old combos' currentData() emitted, so config/argv semantics are
+    untouched by the widget change."""
+    s = box.checkState()
+    if s == Qt.CheckState.Checked:
+        return "on"
+    if s == Qt.CheckState.Unchecked:
+        return "off"
+    return ""
+
+
+def _hint(text):
+    """A small word-wrapped gray helper label (the page-clarity pattern used across the
+    wizard — same as NetworkPage._hint)."""
+    lab = QtWidgets.QLabel(text)
+    lab.setWordWrap(True)
+    lab.setStyleSheet("color: gray;")
+    return lab
+
+
+def _field_default(name):
+    """An ImageConfig field's declared default (mirrors NetworkPage._field_default and
+    _gating.clear_unsupported's lookup) — the default-expansion rule compares against
+    the dataclass's own truth, never literals restated in the GUI."""
+    f = ImageConfig.__dataclass_fields__[name]
+    return f.default_factory() if f.default is MISSING else f.default
 
 
 def _picker_row(parent, line_edit, caption, file_filter="All files (*)", directory=False):
@@ -173,38 +258,39 @@ class BuildPage(QtWidgets.QWizardPage):
         self._assigned_keys_dir = ""
 
         lay = scrollable(self)
+
+        # ── section: Build execution — HOW and WHERE the build runs (backend engine,
+        # stack env, output dir, parallelism). Each Collapsible carries the section
+        # title, so the group boxes underneath are untitled — the NetworkPage pattern.
+        # Backend / env are pick-one VALUE enumerations, so they stay DROPDOWNS (the
+        # page's idiom rule, module docstring): a radio row per engine would spend a
+        # line per value on choices that are almost never touched.
+        self.exec_box = QtWidgets.QGroupBox("")
+        ex = QtWidgets.QVBoxLayout(self.exec_box)
         self.backend = QtWidgets.QComboBox()
         self.backend.addItems(["auto", "native", "docker"])
-        lay.addWidget(_row("Backend", self.backend))
+        ex.addWidget(_row("Backend", self.backend))
         # --env: which stack environment the image bakes (every builder parses it)
         self.env = QtWidgets.QComboBox()
         self.env.addItems(list(ENV_CHOICES))
-        lay.addWidget(_row("Environment (--env)", self.env))
+        ex.addWidget(_row("Environment (--env)", self.env))
         self.outdir = QtWidgets.QLineEdit()
         obtn = _file_picker(self, self.outdir, "Output dir", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.outdir, 1); h.addWidget(obtn)
-        lay.addWidget(_row("Output dir", w))
+        ex.addWidget(_row("Output dir", w))
         self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(1, 256); self.jobs.setValue(8)
-        lay.addWidget(_row("Parallel jobs", self.jobs))
-        self.installer_ui = QtWidgets.QComboBox()
-        self.installer_ui.addItems(["all", "cli", "ncurses", "calamares"])
-        # Keep the ROW (label + combo): the role-class gate below greys the label with
-        # its widget — gating the bare combo would strand a live "Installer UI" label
-        # beside a dead control.
-        self.installer_ui_row = _row("Installer UI", self.installer_ui)
-        lay.addWidget(self.installer_ui_row)
-        # --img-size MiB: every builder parses it; 0 = "(role default)" emits nothing
-        # (the builders size the compact root per role/desktop payload themselves).
-        self.img_size = QtWidgets.QSpinBox()
-        self.img_size.setRange(0, 1 << 20)
-        self.img_size.setSuffix(" MiB")
-        self.img_size.setSpecialValueText("(role default)")
-        lay.addWidget(_row("Root image size", self.img_size))
+        ex.addWidget(_row("Parallel jobs", self.jobs))
+        # Expanded and never auto-folded: backend/outdir are the first things preflight
+        # problems point at, so they must be on screen when the page loads.
+        self.exec_section = collapsible("Build execution", self.exec_box)
+        lay.addWidget(self.exec_section)
 
         # ── mesh worklist summary (design 3.12) — one row per image with per-entry
-        # Packages…/Preview and the node key-zip opt-out. Shown only in mesh.
-        self.worklist_group = QtWidgets.QGroupBox("Mesh worklist — one image per row")
+        # Packages…/Preview and the node key-zip opt-out. Shown only in mesh: the
+        # SECTION is mode-gated alongside the group in initializePage (the NetworkPage
+        # tailnet pattern — hiding only the content would leave an orphan header).
+        self.worklist_group = QtWidgets.QGroupBox("")
         wg = QtWidgets.QVBoxLayout(self.worklist_group)
         self.worklist_table = QtWidgets.QTableWidget(0, 4)
         self.worklist_table.setHorizontalHeaderLabels(["Image", "Facts", "", ""])
@@ -216,16 +302,42 @@ class BuildPage(QtWidgets.QWizardPage):
             "Generate node key-zips after each successful node build (mesh)")
         self.gen_keys.setChecked(True)
         wg.addWidget(self.gen_keys)
-        lay.addWidget(self.worklist_group)
+        self.worklist_section = collapsible("Mesh worklist — one image per row",
+                                            self.worklist_group)
+        lay.addWidget(self.worklist_section)
 
-        # ── single-image Packages… (standalone/cloud) — replaces the retired free-text
-        # extra-packages field with the per-image tri-tier dialog.
+        # ── section: Image options — WHAT the image contains / how it is stamped
+        # (installer front-end, root size, packages, the x86 ISO finish knobs, grow
+        # policy, version stamps). These sat LOOSE on the page — six bare checkboxes
+        # and five bare rows between the boxed groups, which is the "flat wall" half
+        # of the operator's organize-this-better report.
+        self.image_box = QtWidgets.QGroupBox("")
+        im = QtWidgets.QVBoxLayout(self.image_box)
+        self.installer_ui = QtWidgets.QComboBox()
+        self.installer_ui.addItems(["all", "cli", "ncurses", "calamares"])
+        # Keep the ROW (label + combo): the role-class gate below greys the label with
+        # its widget — gating the bare combo would strand a live "Installer UI" label
+        # beside a dead control.
+        self.installer_ui_row = _row("Installer UI", self.installer_ui)
+        im.addWidget(self.installer_ui_row)
+        # --img-size MiB: every builder parses it; 0 = "(role default)" emits nothing
+        # (the builders size the compact root per role/desktop payload themselves).
+        self.img_size = QtWidgets.QSpinBox()
+        self.img_size.setRange(0, 1 << 20)
+        self.img_size.setSuffix(" MiB")
+        self.img_size.setSpecialValueText("(role default)")
+        im.addWidget(_row("Root image size", self.img_size))
+        # single-image Packages… (standalone/cloud) — replaces the retired free-text
+        # extra-packages field with the per-image tri-tier dialog. An ACTION, so a
+        # push button (idiom rule). The whole ROW is mode-gated in initializePage:
+        # gating only the button used to leave an orphan "Packages" label in mesh.
         self.packages_btn = QtWidgets.QPushButton("Packages…")
         self.packages_btn.clicked.connect(self._open_packages_single)
-        lay.addWidget(_row("Packages", self.packages_btn))
-
+        self.packages_row = _row("Packages", self.packages_btn)
+        im.addWidget(self.packages_row)
         # x86 ISO finish knobs (like the installer-UI choice, the arm builders parse
-        # none of these — the widgets grey out off-x86, and config.py emits x86-only)
+        # none of these — the widgets grey out off-x86, and config.py emits x86-only).
+        # Single-direction flags -> plain two-state checkboxes (idiom rule).
         self.cached = QtWidgets.QCheckBox(
             "Cached ISO — embed the binpkg cache (+distfiles) for offline rebuild / fast reinstall")
         self.live_toram = QtWidgets.QCheckBox(
@@ -241,35 +353,48 @@ class BuildPage(QtWidgets.QWizardPage):
         self.bundle_note.setVisible(False)
         self.compress = QtWidgets.QCheckBox("Compress the finished image(s) (xz -9)")
         self.resume = QtWidgets.QCheckBox("Resume — reuse an existing sysroot")
-        lay.addWidget(self.cached)
-        lay.addWidget(self.live_toram)
-        lay.addWidget(self.bundle_source)
-        lay.addWidget(self.bundle_note)
-        lay.addWidget(self.compress)
-        lay.addWidget(self.resume)
-        # --grow fill|none|<size> first-boot root-growth policy (G25): editable so a
-        # size cap ("16G", "50%") types straight in; "" leaves the builder default.
+        im.addWidget(self.cached)
+        im.addWidget(self.live_toram)
+        im.addWidget(self.bundle_source)
+        im.addWidget(self.bundle_note)
+        im.addWidget(self.compress)
+        im.addWidget(self.resume)
+        # --grow fill|none|<size> first-boot root-growth policy (G25): a dropdown by
+        # the idiom rule (named values fill/none), kept EDITABLE so a size cap ("16G",
+        # "50%") types straight in; "" leaves the builder default.
         self.grow = QtWidgets.QComboBox()
         self.grow.setEditable(True)
         self.grow.addItems(["", "fill", "none"])
         self.grow.lineEdit().setPlaceholderText("fill | none | <size e.g. 16G, 50%>  (empty = builder default)")
-        lay.addWidget(_row("First-boot root growth (--grow)", self.grow))
+        im.addWidget(_row("First-boot root growth (--grow)", self.grow))
         # image stamps (G30): -v/--version is all-platform, --release-tag x86-only
         self.version = QtWidgets.QLineEdit()
         self.version.setPlaceholderText("-v/--version image stamp (empty = builder default)")
         self.release_tag = QtWidgets.QLineEdit()
         self.release_tag.setPlaceholderText("--release-tag image stamp (empty = deterministic build stamp)")
-        lay.addWidget(_row("Version stamp", self.version))
-        lay.addWidget(_row("Release tag", self.release_tag))
+        im.addWidget(_row("Version stamp", self.version))
+        im.addWidget(_row("Release tag", self.release_tag))
+        # Expanded and never auto-folded: it carries the per-mode musts (the Packages…
+        # entry point, the installer-UI honesty combo) and the unaffiliated bundle note.
+        self.image_section = collapsible("Image options", self.image_box)
+        lay.addWidget(self.image_section)
 
-        # artifact selection matrix (G23 x86 / G24 ARM) — per-field platform-gated,
-        # so exactly the axes THIS builder parses stay live
-        art = QtWidgets.QGroupBox("Artifacts")
+        # ── section: Artifacts — the selection matrix (G23 x86 / G24 ARM), per-field
+        # platform-gated so exactly the axes THIS builder parses stay live. EVERY
+        # control here answers one kind of question — "do I get this artifact?" — so
+        # every control is a CHECKBOX: tri-state (G34) where the builder has a
+        # --flag/--no-flag pair, two-state where it has a single flag. This box is
+        # where the reported dropdown/checkbox mixture lived (three _tri_combo
+        # dropdowns between five checkboxes).
+        art = QtWidgets.QGroupBox("")
         arl = QtWidgets.QVBoxLayout(art)
-        self.build_img = _tri_combo()
-        arl.addWidget(_row("Root image (--img/--no-img)", self.build_img))
-        self.live_iso = _tri_combo()
-        arl.addWidget(_row("Live ISO (--live-iso/--no-live-iso)", self.live_iso))
+        self.artifacts_box = art
+        self.tri_legend = _hint(_TRI_LEGEND)
+        arl.addWidget(self.tri_legend)
+        self.build_img = _tri_check("Root image (--img / --no-img)")
+        arl.addWidget(self.build_img)
+        self.live_iso = _tri_check("Live ISO (--live-iso / --no-live-iso)")
+        arl.addWidget(self.live_iso)
         self.installer_iso = QtWidgets.QCheckBox(
             "Installer ISO (--installer-iso — direct, no longer only an encrypt-root side effect)")
         arl.addWidget(self.installer_iso)
@@ -279,34 +404,50 @@ class BuildPage(QtWidgets.QWizardPage):
         arl.addWidget(self.build_iso)
         self.sd_only = QtWidgets.QCheckBox("SD-card image only (--sd-only; rpi5)")
         arl.addWidget(self.sd_only)
-        self.build_tar = _tri_combo()
-        arl.addWidget(_row("Rootfs tar (--tar/--no-tar)", self.build_tar))
+        self.build_tar = _tri_check("Rootfs tar (--tar / --no-tar)")
+        arl.addWidget(self.build_tar)
         self.skip_iso = QtWidgets.QCheckBox("Skip the ISO stage (--skip-iso)")
         arl.addWidget(self.skip_iso)
         self.image_only = QtWidgets.QCheckBox(
             "Image only — skip the live/installer media (--image-only; frite/jetson/orangepi*)")
         arl.addWidget(self.image_only)
-        lay.addWidget(art)
+        self.artifacts_section = collapsible("Artifacts", art)
+        lay.addWidget(self.artifacts_section)
 
         # per-device flash / keys assignment table (replaces the old single-target
         # flash-with-build checkbox+dropdown). Every row defaults to "(none)" so no
         # flashing is ever the commit default; the actual write still goes through
         # scripts/flash-disk.sh on the ProgressPage (post-build, TOCTOU re-checked),
         # and a Keys-USB assignment writes through the existing keys_usb field below.
+        # Deliberately NOT wrapped in a Collapsible: DeviceTable is already its own
+        # titled QGroupBox with a live scan lifecycle (refresh-on-entry, Scanning…
+        # button state, hot-plug re-scan), and folding a hardware-discovery surface
+        # would hide a just-plugged USB stick behind a closed header at exactly the
+        # moment the operator plugged it in to be seen. Its per-row Image/Role combos
+        # are table-CELL enumerations — the dropdown idiom is correct there.
         self.device_table = DeviceTable(images_provider=self._flash_image_choices,
                                         keys_gate=self._keys_gate,
                                         on_assignment_changed=self._on_device_assignment)
         lay.addWidget(self.device_table)
 
-        # Secure Boot + KEYS-USB signing chain (G5; x86 only). The builder default is
-        # ON with a THROWAWAY org key — threading the existing fleet key/cert PATHS
-        # here is what keeps GUI images in the fleet's SB chain. Paths only: the
-        # Studio never reads the key material itself.
-        sb = QtWidgets.QGroupBox("Secure Boot signing (x86)")
+        # ── section: Secure Boot + KEYS-USB signing chain (G5; x86 only). The builder
+        # default is ON with a THROWAWAY org key — threading the existing fleet
+        # key/cert PATHS here is what keeps GUI images in the fleet's SB chain. Paths
+        # only: the Studio never reads the key material itself. The platform gate in
+        # initializePage targets the SECTION (not this box), so hiding on ARM takes
+        # the header too — no orphan "Secure Boot signing" header over nothing (the
+        # NetworkPage egress-section lesson).
+        sb = QtWidgets.QGroupBox("")
         sbl = QtWidgets.QVBoxLayout(sb)
         self.sb_box = sb
-        self.secure_boot = _tri_combo("(builder default: on — throwaway org key)")
-        sbl.addWidget(_row("Secure Boot (--secure-boot/--no-secure-boot)", self.secure_boot))
+        # The on/off/default toggle is a tri-state CHECKBOX like its Artifacts kin
+        # (it was the fourth _tri_combo dropdown); the old combo's default label
+        # "(builder default: on — throwaway org key)" moves to a visible hint so the
+        # information survives the widget change.
+        sbl.addWidget(_hint("Builder default: ON, signed with a throwaway org key — "
+                            "supply the fleet paths below to stay in the fleet chain."))
+        self.secure_boot = _tri_check("Secure Boot (--secure-boot / --no-secure-boot)")
+        sbl.addWidget(self.secure_boot)
         self.keys_usb = QtWidgets.QLineEdit()
         self.keys_usb.setPlaceholderText("KEYS USB dir providing Keys/kernel_key.{pem,der} (--keys-usb)")
         sbl.addWidget(_row("KEYS USB dir", _picker_row(self, self.keys_usb, "KEYS USB dir",
@@ -319,12 +460,20 @@ class BuildPage(QtWidgets.QWizardPage):
         self.secureboot_cert.setPlaceholderText("SB signing cert PEM/DER path (--secureboot-cert)")
         sbl.addWidget(_row("Signing cert", _picker_row(self, self.secureboot_cert, "SB signing cert",
                                                        "Certs (*.pem *.der *.crt);;All files (*)")))
-        lay.addWidget(sb)
+        self.sb_section = collapsible("Secure Boot signing (x86)", sb)
+        lay.addWidget(self.sb_section)
 
-        # build plumbing (G38) — phases / seed / distfiles knobs that change baked
-        # content, not artifacts
-        plumb = QtWidgets.QGroupBox("Build plumbing (advanced)")
+        # ── section: build plumbing (G38) — phases / seed / distfiles knobs that
+        # change baked content, not artifacts. The formerly-loose PENTEST env toggle
+        # and the extra-flags escape hatch are consolidated here (they are the same
+        # kind of rarely-touched build-input knob, and they sat bare on the page
+        # directly under this box anyway — consolidation, not relocation). The one
+        # section that FOLDS by default: everything in it ships a sane default, and
+        # _apply_default_expansion re-opens it whenever a loaded config carries a
+        # non-default value (the NetworkPage security-section rule).
+        plumb = QtWidgets.QGroupBox("")
         pl = QtWidgets.QVBoxLayout(plumb)
+        self.plumbing_box = plumb
         self.skip_kernel = QtWidgets.QCheckBox("Skip the kernel build (--skip-kernel)")
         self.skip_clean = QtWidgets.QCheckBox("Keep docs/headers/symbols (--skip-clean)")
         pl.addWidget(self.skip_kernel)
@@ -339,18 +488,24 @@ class BuildPage(QtWidgets.QWizardPage):
         self.seed_url = QtWidgets.QLineEdit()
         self.seed_url.setPlaceholderText("stage3 seed index URL (--seed-url)")
         pl.addWidget(_row("Seed URL", self.seed_url))
-        lay.addWidget(plumb)
-
         # OWASP pen-test bake (G40) — PENTEST=1 is a FLEET/ENV knob the build driver
         # forwards to the build environment, never a per-builder argv flag.
         self.pentest = QtWidgets.QCheckBox(
             "OWASP pen-test bake (PENTEST=1 — env knob forwarded to the build, not a builder flag)")
-        lay.addWidget(self.pentest)
+        pl.addWidget(self.pentest)
         # escape hatch: EVERY builder CLI option stays expressible, fielded or not
         self.extra_flags = QtWidgets.QLineEdit()
         self.extra_flags.setPlaceholderText(
             "appended verbatim, shell-quoted (for any builder flag without a field)")
-        lay.addWidget(_row("Extra builder flags", self.extra_flags))
+        pl.addWidget(_row("Extra builder flags", self.extra_flags))
+        self.plumbing_section = collapsible("Build plumbing (advanced)", plumb,
+                                            expanded=False)
+        lay.addWidget(self.plumbing_section)
+
+        # The command / preflight / log panes and their action buttons stay UNsectioned
+        # at the bottom: they are the Review page's OUTPUT — the thing the page exists
+        # to show — not an option group anyone should be able to fold away and then
+        # commit blind.
         self.cmd = QtWidgets.QPlainTextEdit(); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(120)
         lay.addWidget(QtWidgets.QLabel("Command:")); lay.addWidget(self.cmd)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
@@ -468,8 +623,13 @@ class BuildPage(QtWidgets.QWizardPage):
         self.extra_flags.setText(c.extra_flags)
         # mesh shows the per-image worklist summary + node-key opt-out; standalone/cloud
         # show the single-image Packages… button (each image's tri-tier package dialog).
+        # The worklist SECTION is gated alongside its group (the NetworkPage tailnet
+        # pattern): hiding only the content would leave an orphan collapsible header.
+        # The packages ROW is gated as one unit — gating just the button used to leave
+        # a stray "Packages" label on the mesh page.
         self.worklist_group.setVisible(mesh)
-        self.packages_btn.setVisible(not mesh)
+        self.worklist_section.setVisible(mesh)
+        self.packages_row.setVisible(not mesh)
         if mesh:
             self._refresh_worklist_table()
         # per-platform capability gating for the new fields (grow / version /
@@ -489,11 +649,48 @@ class BuildPage(QtWidgets.QWizardPage):
             "build_tar": self.build_tar,
             "skip_iso": self.skip_iso,
             "image_only": self.image_only,
-            "secure_boot": self.sb_box,
+            # the SECTION, not sb_box: sb_box is now the section's collapsible CONTENT,
+            # and Collapsible.set_expanded drives the content's setVisible — a gate
+            # pinned on the content would be fought by every expand. Hiding the section
+            # also takes the header with it (no orphan header on ARM), and the gate's
+            # every-visit setVisible(True) restores it the moment the platform supports
+            # Secure Boot again.
+            "secure_boot": self.sb_section,
             "distdir": self.distdir_row,
         }, hide=True)
+        # gate_widgets blanks the tooltip on every SUPPORTED widget it gates — restore
+        # the 3-state explanation on the live tri-state boxes (an unsupported one keeps
+        # the platform note the gate set), the NetworkPage restore idiom. secure_boot's
+        # gate rides its SECTION, so the box's own tooltip is never blanked — set it
+        # anyway so all four tri-boxes stay uniform whatever the gate map becomes.
+        for tri_fld, tri_box in (("build_img", self.build_img),
+                                 ("live_iso", self.live_iso),
+                                 ("build_tar", self.build_tar),
+                                 ("secure_boot", self.secure_boot)):
+            if platform_supports(tri_fld, c.platform):
+                tri_box.setToolTip(_TRI_TIP)
         self.device_table.refresh()          # auto-refresh the device table on entry
+        self._apply_default_expansion()
         self._preview()
+
+    def _apply_default_expansion(self):
+        """Fold the advanced plumbing section when EVERY field it carries is at its
+        dataclass default, and only then (the NetworkPage security-section rule,
+        applied through set_default_expanded so a section the operator opened by hand
+        is never re-folded underneath them). Compared against ImageConfig's OWN
+        declared defaults (_field_default), never restated literals, and re-derived on
+        every visit so a loaded config's --skip-kernel or a stashed extra-flags line is
+        opened INTO view, not folded out of it. The other sections never auto-fold:
+        execution/image/artifacts/Secure Boot all carry things a Review page must show
+        (and existing tests read e.g. sb_box.isVisible() as the PLATFORM gate's signal,
+        which a default-fold would alias — the exact collapse-vs-gate confusion
+        _widgets.Collapsible exists to avoid)."""
+        c = self.wiz.cfg
+        plumbing_default = all(
+            getattr(c, f) == _field_default(f)
+            for f in ("skip_kernel", "skip_clean", "distdir", "build_subdir",
+                      "seed_url", "pentest", "extra_flags"))
+        self.plumbing_section.set_default_expanded(not plumbing_default)
 
     def _backend(self):
         b = self.backend.currentText()
@@ -548,15 +745,19 @@ class BuildPage(QtWidgets.QWizardPage):
         c.grow = self.grow.currentText().strip()
         c.version = self.version.text().strip()
         c.release_tag = self.release_tag.text().strip()
-        c.build_img = self.build_img.currentData()
-        c.live_iso = self.live_iso.currentData()
+        # tri-state checkboxes collect through _tri_value — the same ''/'on'/'off'
+        # domain the retired _tri_combo dropdowns' currentData() carried, so the
+        # emission (and every save/load round-trip) is byte-identical to before the
+        # widget change.
+        c.build_img = _tri_value(self.build_img)
+        c.live_iso = _tri_value(self.live_iso)
         c.installer_iso = self.installer_iso.isChecked()
         c.build_iso = self.build_iso.isChecked()
         c.sd_only = self.sd_only.isChecked()
-        c.build_tar = self.build_tar.currentData()
+        c.build_tar = _tri_value(self.build_tar)
         c.skip_iso = self.skip_iso.isChecked()
         c.image_only = self.image_only.isChecked()
-        c.secure_boot = self.secure_boot.currentData()
+        c.secure_boot = _tri_value(self.secure_boot)
         c.keys_usb = self.keys_usb.text().strip()
         c.secureboot_key = self.secureboot_key.text().strip()
         c.secureboot_cert = self.secureboot_cert.text().strip()

@@ -323,10 +323,12 @@ def test_build_x86_artifact_matrix(wiz):
     # inapplicable artifact axes are now HIDDEN (setVisible False), not greyed
     for w in (build.build_iso, build.sd_only, build.image_only):
         assert not w.isVisible(), w
-    build.build_img.setCurrentIndex(build.build_img.findData("off"))
-    build.live_iso.setCurrentIndex(build.live_iso.findData("on"))
+    # tri-state flag-pairs are G34 tri-CHECKBOXES now (the build-page idiom fix:
+    # ☑=--flag, ☐=--no-flag, ■=leave the builder default); emission is unchanged.
+    build.build_img.setCheckState(Qt.CheckState.Unchecked)
+    build.live_iso.setCheckState(Qt.CheckState.Checked)
     build.installer_iso.setChecked(True)
-    build.build_tar.setCurrentIndex(build.build_tar.findData("off"))
+    build.build_tar.setCheckState(Qt.CheckState.Unchecked)
     build.skip_iso.setChecked(True)
     build._preview()
     args = wiz.cfg.to_cli_args()
@@ -363,7 +365,7 @@ def test_build_rpi5_artifacts(wiz):
         assert not w.isVisible(), w
     build.build_iso.setChecked(True)     # bootable installer ISO for an UNencrypted image
     build.sd_only.setChecked(True)
-    build.build_tar.setCurrentIndex(build.build_tar.findData("on"))
+    build.build_tar.setCheckState(Qt.CheckState.Checked)
     build._preview()
     args = wiz.cfg.to_cli_args()
     assert "--iso" in args and "--sd-only" in args and "--tar" in args
@@ -432,7 +434,7 @@ def test_build_preview_resolves_unset_flavor_on_deepcopy(monkeypatch, wiz):
 
 def test_build_x86_artifact_picks_clear_on_arm(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
-    build.live_iso.setCurrentIndex(build.live_iso.findData("on"))
+    build.live_iso.setCheckState(Qt.CheckState.Checked)
     build.installer_iso.setChecked(True)
     build._preview()
     assert "--live-iso" in wiz.cfg.to_cli_args()
@@ -450,7 +452,7 @@ def test_build_x86_artifact_picks_clear_on_arm(wiz):
 def test_build_secure_boot_off(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert build.sb_box.isVisible()
-    build.secure_boot.setCurrentIndex(build.secure_boot.findData("off"))
+    build.secure_boot.setCheckState(Qt.CheckState.Unchecked)
     build._preview()
     args = wiz.cfg.to_cli_args()
     assert "--no-secure-boot" in args and "--secure-boot" not in args
@@ -460,7 +462,7 @@ def test_build_secure_boot_fleet_key_paths(wiz):
     """The fleet SB-chain continuity path: key/cert PATHS thread through (the
     Studio never reads the key material — paths only, they aren't secrets)."""
     build = advance_to(wiz, wizard_mod.BuildPage)
-    build.secure_boot.setCurrentIndex(build.secure_boot.findData("on"))
+    build.secure_boot.setCheckState(Qt.CheckState.Checked)
     build.keys_usb.setText("/media/KEYS")
     build.secureboot_key.setText("/media/KEYS/Keys/kernel_key.pem")
     build.secureboot_cert.setText("/media/KEYS/Keys/kernel_key.der")
