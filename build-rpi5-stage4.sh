@@ -73,6 +73,10 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
+# shellcheck source=scripts/_selinux-policy-lib.sh
+source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
+# ── END shared block: SELinux node-policy lib ─────────────────────────────────
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 # Requested-atom completeness gate (cross-build twin of build-x86-host-stage4.sh's
@@ -4287,6 +4291,23 @@ else
 
     info "Sysroot cleaned: locale/static-libs/pyc/ko-dbg/elf stripped."
 fi
+
+# ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
+# Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into
+# ${SYSROOT}/usr/share/selinux/<type>/ — the exact directory provision_selinux()
+# already globs at first boot (`semodule -s "${type}" -i /usr/share/selinux/
+# "${type}"/*.pp`, specs/etc/keys-provision/provision.sh:2563), so this needs NO
+# provision.sh change. NEVER compiled on the target: checkmodule/semodule_package/
+# m4 are x86 BUILD-host binaries, the same reason selinux-base builds base.pp here
+# and defers only the load. Placed at this point because the sysroot is complete
+# (payload emerged, kernel/bootloader staged, both arms of the sysroot clean done)
+# and nothing has been packaged or imaged yet.
+# The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
+# any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
+# HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
+# ── END shared block: SELinux node-policy modules ─────────────────────────────
 
 banner "Packaging stage4 tarball"
 

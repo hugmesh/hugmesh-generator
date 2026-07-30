@@ -174,6 +174,10 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
+# shellcheck source=scripts/_selinux-policy-lib.sh
+source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
+# ── END shared block: SELinux node-policy lib ─────────────────────────────────
 # Requested-atom completeness gate (cross-build twin of build-x86-host-stage4.sh's
 # in-chroot gate, PR #461/#465): after the --keep-going payload emerge, every
 # requested atom must be in the TARGET sysroot's vdb or the build fails listing
@@ -1150,6 +1154,10 @@ fi
 # copies can't run).
 HOST_POLICY_TOOLS=()
 command -v checkpolicy      &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
+# checkmodule (same package as checkpolicy) is what compiles specs/selinux/*.te
+# in scripts/_selinux-policy-lib.sh — probe it by NAME so a host that somehow has
+# one binary and not the other is caught here, not mid-compile.
+command -v checkmodule      &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
 command -v semodule_package &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/semodule-utils)
 command -v m4               &>/dev/null || HOST_POLICY_TOOLS+=(sys-devel/m4)
 # HOST tool halves of the sysroot's SELinux 3.11 userspace (see the HOSTKW
@@ -2145,6 +2153,23 @@ if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY};
         exit 1
     fi
 fi
+
+# ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
+# Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into
+# ${SYSROOT}/usr/share/selinux/<type>/ — the exact directory provision_selinux()
+# already globs at first boot (`semodule -s "${type}" -i /usr/share/selinux/
+# "${type}"/*.pp`, specs/etc/keys-provision/provision.sh:2563), so this needs NO
+# provision.sh change. NEVER compiled on the target: checkmodule/semodule_package/
+# m4 are x86 BUILD-host binaries, the same reason selinux-base builds base.pp here
+# and defers only the load. Placed at this point because the sysroot is complete
+# (payload emerged, kernel/bootloader staged, both arms of the sysroot clean done)
+# and nothing has been packaged or imaged yet.
+# The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
+# any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
+# HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
+# ── END shared block: SELinux node-policy modules ─────────────────────────────
 
 banner "Packaging stage4 tarball"
 STAGE4_TARBALL="${WORK_DIR}/${ART_PREFIX}.stage4.tar.xz"

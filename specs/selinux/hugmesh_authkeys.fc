@@ -13,3 +13,108 @@
 /usr/sbin/hugmesh-authorized-keys-lookup    --    gen_context(system_u:object_r:hugmesh_authkeys_exec_t,s0)
 
 /etc/hugmesh/registry(/.*)?                       gen_context(system_u:object_r:hugmesh_authkeys_cache_t,s0)
+
+################################################################
+# FOLDED-IN: hugmesh_breakglass.fc (was a LABEL-ONLY .fc with no .te)
+#
+# docs/selinux-module-loading.md's step (b) note: a .fc with no .te has
+# nothing for the refpolicy devel Makefile to compile into a standalone .pp,
+# so it would ship as a SILENTLY MISSING label. Of the two clean options the
+# doc gives, option (1) — fold the lines into a sibling module that DOES have
+# a .te — is the recommended one, and is what happened here; no stub .te was
+# invented. hugmesh_authkeys is the login-CREDENTIAL module (it already owns
+# the sshd AuthorizedKeysCommand domain and its cache), so both folded
+# contributions are credential-file labels consumed by a login path.
+# The doc names this exact fold: "add the break-glass line to hugmesh_authkeys.fc".
+# The original file's documentation is preserved verbatim below.
+#
+# NOTE: these lines only carry FILE CONTEXTS. They add no type, no domain and
+# no allow rule to hugmesh_authkeys_t — the referenced types (ssh_home_t,
+# user_runtime_t) are base refpolicy types, resolved when semodule builds the
+# store. scripts/_selinux-policy-lib.sh enforces the .fc<->.te pairing so a
+# future label-only file cannot be dropped silently again.
+################################################################
+# Give the console/loopback-only break-glass authorized_keys file an
+# sshd-readable authorized-keys context. break-glass.conf re-opens
+# `AuthorizedKeysFile /etc/ssh/break-glass.keys` for the loopback Match
+# (specs/etc/ssh/sshd_config.d/break-glass.conf); a file created at runtime
+# by a physically-present operator there would otherwise be etc_t, which
+# sshd_t does NOT read as an authorized_keys source under enforcing — so
+# the break-glass recovery would silently fail closed (no recovery path).
+#
+# ssh_home_t is the standard refpolicy type for ~/.ssh/authorized_keys and
+# is what sshd_t is permitted to read as a key source. Labelling the
+# break-glass file ssh_home_t makes the loopback recovery work on enforcing
+# without widening sshd. The file is ABSENT/empty by default (no bypass);
+# this only governs the LABEL it gets once an operator drops a key in.
+# provision_selinux()'s first-boot relabel applies this; a runtime-created
+# file needs `restorecon /etc/ssh/break-glass.keys` after it is written
+# (document in the break-glass runbook).
+#
+# registry-verify.sh (specs/usr/lib/hugmesh/registry-verify.sh) is a
+# helper invoked from the AuthorizedKeysCommand / break-glass path; it runs
+# in the caller's domain (hugmesh_authkeys_t) and needs no separate
+# entrypoint label, so no .te domain is added for it here — confine it only
+# if the AVC pass shows it transitioning.
+
+/etc/ssh/break-glass\.keys    --    gen_context(system_u:object_r:ssh_home_t,s0)
+
+################################################################
+# FOLDED-IN: hugmesh_oidc_token.fc (was a LABEL-ONLY .fc with no .te)
+#
+# docs/selinux-module-loading.md's step (b) note: a .fc with no .te has
+# nothing for the refpolicy devel Makefile to compile into a standalone .pp,
+# so it would ship as a SILENTLY MISSING label. Of the two clean options the
+# doc gives, option (1) — fold the lines into a sibling module that DOES have
+# a .te — is the recommended one, and is what happened here; no stub .te was
+# invented. hugmesh_authkeys is the login-CREDENTIAL module (it already owns
+# the sshd AuthorizedKeysCommand domain and its cache), so both folded
+# contributions are credential-file labels consumed by a login path.
+# The doc's preferred home is "the desktop-session module", which does not exist yet; until the fleet adds a confined desktop domain this is the closest real sibling. Moving it there later is a one-line move.
+# The original file's documentation is preserved verbatim below.
+#
+# NOTE: these lines only carry FILE CONTEXTS. They add no type, no domain and
+# no allow rule to hugmesh_authkeys_t — the referenced types (ssh_home_t,
+# user_runtime_t) are base refpolicy types, resolved when semodule builds the
+# store. scripts/_selinux-policy-lib.sh enforces the .fc<->.te pairing so a
+# future label-only file cannot be dropped silently again.
+################################################################
+# Label the per-user OIDC-token deposit directory that the SSO desktop-login
+# integration writes (the bearer-forward GEN-SSO artifact reads it). The token
+# lands at ${XDG_RUNTIME_DIR}/hugmesh/oidc-token == /run/user/%{uid}/hugmesh/
+# oidc-token, user-private 0600, wiped on logout
+# (specs/etc/hugmesh/desktop-governance/discover/bearer-forward.sh.tmpl reads
+# it and configures the PER-USER flatpak http.extra-headers Bearer).
+#
+# WHY this label: /run/user/%{uid} is the user runtime dir (refpolicy
+# user_runtime_t under systemd / user_tmp_t historically). A hugmesh subdir
+# created at session start under it would otherwise inherit the parent's
+# context, which is usually fine — but pinning it to the desktop user runtime
+# type makes the contract explicit so the SSO depositor (the writer) and
+# bearer-forward.sh (the reader, running in the user's desktop/login session
+# domain) agree on the label, and a future confined desktop domain can be given
+# a single narrow rule against this type instead of all of user_runtime_t.
+# user_runtime_t is the modern systemd /run/user/UID type; if the target's
+# refpolicy predates it, swap to user_tmp_t (the .te-less label-only change).
+#
+# IMPORTANT (PROTECTED INSTALL HOOK — DO NOT EDIT THOSE FILES): the
+# bearer-forward template + its session-start/SSO-deposit install hook land on
+# the PROTECTED specs-x86/ + clients/ desktop images (build-x86-host-stage4.sh /
+# the client image leg), which are FLEET-OWNED. This .fc file lives in the
+# EDITABLE specs/selinux/ so it ships with the rest of the node-policy modules;
+# wiring WHERE it is compiled/installed is the same fleet build-script change
+# described in docs/selinux-module-loading.md. Nothing here edits the protected
+# desktop artifacts — it only declares the label their runtime path must carry.
+#
+# This is a label-only contribution: there is NO hugmesh_oidc_token.te.
+# user_runtime_t is a base refpolicy type (no module declares it here), so this
+# .fc must be compiled into a module that `require {}`s it OR (preferred) folded
+# into the desktop-session module when the fleet adds a confined desktop domain.
+# As a standalone .fc it is applied by provision_selinux()'s restorecon; the
+# 0600 file's own restorecon at session start keeps a runtime-created path
+# correctly labelled (document in the desktop-session runbook).
+#
+# NOTE: %{uid} is the refpolicy file_contexts per-user expansion; setfiles /
+# restorecon expand it per real uid at relabel time.
+
+/run/user/%{uid}/hugmesh(/.*)?    gen_context(system_u:object_r:user_runtime_t,s0)

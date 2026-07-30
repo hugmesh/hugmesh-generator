@@ -1826,6 +1826,40 @@ PY
     CAT_FAIL=$((CAT_FAIL + CAT_EXPECTED - passed))
 }
 
+# ── BEGIN shared block: SELinux node-policy install (SLX) ───────────────────────
+# GATING. specs/selinux/ carried nine refpolicy modules that NOTHING compiled or
+# installed for the whole life of the tree, and specs/etc/init.d/selinux-enforce-gate
+# was shipped by no builder — both invisible to every existing check. A builder
+# quietly losing scripts/_selinux-policy-lib.sh's call site would regress to exactly
+# that state, so this bucket is in TOTAL rather than in the informational smokes.
+# The delegate script does the work (static wiring + executing the real lib against a
+# fake sysroot); this bucket only runs it and folds its own PASS/FAIL tally in.
+# FAIL-CLOSED: the delegate emits a FIXED number of assertions (its host-dependent
+# branches emit a SKIP-pass so the count never moves), and a short tally is charged
+# as failures — a delegate that dies half-way cannot come back green.
+SLX_EXPECTED=80
+SLX_PASS=0; SLX_FAIL=0
+run_selinux_policy_checks() {
+    local out="${TMP_DIR}/selinux-policy.out"
+    local script="${REPO_DIR}/tests/scripts/test-selinux-policy-install.sh"
+    if [ ! -f "${script}" ]; then
+        _fail SLX "tests/scripts/test-selinux-policy-install.sh" "gate script missing"
+        SLX_FAIL=${SLX_EXPECTED}; return 0
+    fi
+    bash "${script}" >"${out}" 2>&1 || true
+    SLX_PASS="$(grep -c '^  PASS ' "${out}" || true)"
+    SLX_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
+    grep '^  FAIL ' "${out}" >&2 || true
+    local seen=$((SLX_PASS + SLX_FAIL))
+    if [ "${seen}" -ne "${SLX_EXPECTED}" ]; then
+        _fail SLX "assertion count" "emitted ${seen} assertions, expected ${SLX_EXPECTED} (update SLX_EXPECTED deliberately)" "${out}"
+        SLX_FAIL=$((SLX_FAIL + SLX_EXPECTED - seen))
+        [ "${SLX_FAIL}" -lt 1 ] && SLX_FAIL=1
+    fi
+    return 0
+}
+# ── END shared block: SELinux node-policy install (SLX) ─────────────────────────
+
 # ── NON-GATING developer smokes ─────────────────────────────────────────────────
 # The worklist-envelope parity smoke (WS-MODEL) and the JOB-channel image-spec
 # parity fixture (WS-JOB) exercise the redesign's end-to-end command-translation
@@ -1902,10 +1936,13 @@ run_flag_coverage
 run_emerge_group_banner_checks
 run_parity_taxonomy_checks
 run_catalog_checks
+# ── BEGIN shared block: SELinux node-policy install (SLX) ──
+run_selinux_policy_checks
+# ── END shared block: SELinux node-policy install (SLX) ────
 run_nongating_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -1935,6 +1972,7 @@ printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_
 printf  'EGB  (emerge-group banners): %3d passed, %d failed\n' "${EGB_PASS}" "${EGB_FAIL}"
 printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
 printf  'CAT  (web-catalog honesty): %3d passed, %d failed\n' "${CAT_PASS}" "${CAT_FAIL}"
+printf  'SLX  (selinux policy install): %3d passed, %d failed\n' "${SLX_PASS}" "${SLX_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
 if [ -n "${SMOKE_REPORT}" ]; then
     echo "── non-gating smokes (informational; NOT in TOTAL) ─────────"

@@ -10,6 +10,33 @@ depend() {
 MARKER=/var/lib/keys-provision/selinux-settled
 CONFIG=/etc/selinux/config
 TYPE=mcs
+# Build-time manifest of the node-policy modules THIS image actually installed,
+# written by scripts/_selinux-policy-lib.sh next to the .pp files it installs.
+MODULE_MANIFEST=/usr/share/hugmesh/selinux-modules.list
+
+# ── DEFAULT-OFF SWITCH ───────────────────────────────────────────────────────
+# Sourced by OpenRC from /etc/conf.d/selinux-enforce-gate, which the builders
+# ship with SELINUX_ENFORCE_GATE="no". This is the SECOND of two independent
+# locks: the first is that the builders do not link this service into any
+# runlevel unless HUGMESH_SELINUX_ENFORCE_GATE=1 was set at build time. Both must
+# be opened before a node can ever leave permissive, so an operator who
+# `rc-update add`s the service by hand still gets a no-op until they also flip
+# this — no surprise flips.
+#
+# WHY DEFAULT OFF: specs/selinux/*.te still carry rules tagged
+# '# INFERRED-WIDE: narrow after QEMU enforcing AVC pass'. Those can only be
+# narrowed against real AVC denials from a real protected build + boot. Going
+# enforcing on unnarrowed rules risks a node that boots into a broken state,
+# with no console to fix it from. Permissive + loaded modules + logged AVCs is
+# the honest posture; enforcing is the follow-up once someone has run that pass.
+: "${SELINUX_ENFORCE_GATE:=no}"
+
+check_enabled() {
+    case "${SELINUX_ENFORCE_GATE}" in
+        [Yy][Ee][Ss]|1|[Tt][Rr][Uu][Ee]) return 0 ;;
+    esac
+    return 1
+}
 
 check_relabel_clean() {
     # /.autorelabel consumed by the relabel boot, and a dry-run reports
@@ -22,9 +49,38 @@ check_relabel_clean() {
     return 0
 }
 
+# ── required-module list, RECONCILED with what the build actually installed ──
+# The original hardcoded list was `base container otel_collector
+# localpath_provisioner`, which could never be satisfied: nothing compiled or
+# installed otel_collector/localpath_provisioner, and `container` only exists on
+# images that merge sec-policy/selinux-container. Now the list is DERIVED:
+#   * `base`                      — always required; without it no policy loaded.
+#   * every name in MODULE_MANIFEST — exactly the modules this image built and
+#     installed (comment lines in the manifest record the ones that were skipped
+#     WITH THE REASON, e.g. the two k8s exemplars on a non-container image, and
+#     are deliberately NOT required here).
+#   * `container`                 — required only on images that actually run
+#     containers (containerd present), which is where the exemplar modules and
+#     the container_t AVC surface live.
+# An image with no manifest predates this wiring; refuse rather than flip on an
+# unknown policy set.
+required_modules() {
+    echo base
+    if [ -r "${MODULE_MANIFEST}" ]; then
+        sed -e 's/#.*//' -e 's/[[:space:]]//g' "${MODULE_MANIFEST}" | grep -v '^$'
+    fi
+    [ -x /etc/init.d/containerd ] && echo container
+    return 0
+}
+
 check_modules() {
-    local l; l=$(semodule -s "${TYPE}" -l 2>/dev/null) || return 1
-    for m in base container otel_collector localpath_provisioner; do
+    if [ ! -r "${MODULE_MANIFEST}" ]; then
+        ewarn "flip-gate: ${MODULE_MANIFEST} absent — this image predates the policy-module"
+        ewarn "flip-gate: install step, so the required set is unknown. Refusing to flip."
+        return 1
+    fi
+    local l m; l=$(semodule -s "${TYPE}" -l 2>/dev/null) || return 1
+    for m in $(required_modules); do
         printf '%s\n' "${l}" | grep -q "^${m}\b" || { ewarn "flip-gate: module ${m} not loaded"; return 1; }
     done
     return 0
@@ -33,6 +89,12 @@ check_modules() {
 check_avc_clean() {
     command -v ausearch >/dev/null 2>&1 || return 0
     local d='container_t|container_runtime_t|spc_t|kernel_t|init_t|otel_collector_t|localpath_provisioner_t|localpath_provisioner_helper_t'
+    # The hugmesh host domains this wiring now actually loads — an AVC against any
+    # of them is exactly the signal the INFERRED-WIDE rules must be narrowed
+    # against, so it must block the flip just like the core/exemplar domains do.
+    d="${d}|hugmesh_authkeys_t|hugmesh_device_registry_sync_t|hugmesh_domain_reconcile_t"
+    d="${d}|hugmesh_node_storage_t|hugmesh_policy_sync_t|hugmesh_tor_reconcile_t"
+    d="${d}|hugmesh_vpn_runner_t|hugmesh_vpn_reconcile_t"
     if ausearch -m AVC,USER_AVC -ts boot 2>/dev/null | grep -Eq "(scontext|tcontext)=[^ ]*:(${d}):"; then
         ewarn "flip-gate: outstanding AVCs for core/custom domains — staying permissive"
         return 1
@@ -48,6 +110,13 @@ check_mode_sane() {
 
 start() {
     ebegin "SELinux enforce-gate"
+    # OPT-IN LOCK — checked FIRST, before the marker is even written, so a
+    # default image can never take a step down this path.
+    if ! check_enabled; then
+        einfo "disabled (SELINUX_ENFORCE_GATE=${SELINUX_ENFORCE_GATE} in /etc/conf.d/selinux-enforce-gate)"
+        einfo "node stays PERMISSIVE with its policy modules loaded and AVCs logged"
+        eend 0; return 0
+    fi
     # Marker guard: write it the FIRST time we run so the flip can only
     # happen on the SECOND (or later) boot, never the relabel boot.
     if [ ! -e "${MARKER}" ]; then

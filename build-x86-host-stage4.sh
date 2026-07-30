@@ -42,6 +42,10 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
+# shellcheck source=scripts/_selinux-policy-lib.sh
+source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
+# ── END shared block: SELinux node-policy lib ─────────────────────────────────
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
@@ -3075,6 +3079,29 @@ if ${SECURE_BOOT}; then
         || warn "no shim under /usr/share/shim or /usr/lib/shim (install sys-boot/shim in the builder): artifacts boot via bare GRUB (no shim Secure Boot chain)"
 fi
 
+# ── BEGIN shared block: SELinux node-policy host tools ────────────────────────
+# The other NINE builders already gate the host SELinux policy toolchain
+# (HOST_POLICY_TOOLS, e.g. build-rpi5-stage4.sh:3013) because selinux-base's
+# `emake base` shells out to it. This builder never needed it — until now: the
+# SELinux node-policy step (scripts/_selinux-policy-lib.sh, called before
+# "Packaging stage4 tarball") compiles specs/selinux/*.te with exactly these
+# three host binaries. Asserting them HERE, in the prereq block, means a missing
+# toolchain fails in the first minute with the exact emerge line instead of after
+# the multi-hour @world pass. Same reasoning as the .img/--live-iso preflights
+# above: this step is ON BY DEFAULT, so silently losing it would be dishonest.
+# Skippable only by an explicit, deliberate operator choice.
+if [ "${HUGMESH_SELINUX_MODULES:-1}" != "0" ]; then
+    hostguard_require_host_tools "SELinux node-policy modules" \
+        "sys-apps/checkpolicy sys-apps/semodule-utils sys-devel/m4" \
+        --hint "Or set HUGMESH_SELINUX_MODULES=0 to build deliberately without the hugmesh node policy (the image then boots permissive with only the distro base policy)." \
+        -- m4 checkmodule semodule_package \
+        || { err "SELinux node-policy modules need m4 + checkmodule + semodule_package on the BUILD HOST."; \
+             err "Install: emerge sys-apps/checkpolicy sys-apps/semodule-utils sys-devel/m4"; \
+             err "Or set HUGMESH_SELINUX_MODULES=0 to build deliberately without node policy."; exit 1; }
+    info "Host SELinux policy build tools present (checkmodule, semodule_package, m4)"
+fi
+# ── END shared block: SELinux node-policy host tools ──────────────────────────
+
 # ── 1. Directories ─────────────────────────────────────────────────
 banner "Preparing build directories"
 mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir} "${SYSROOT}" "${ISO_DIR}"
@@ -5342,6 +5369,23 @@ else
 fi
 
 # ── 9. Stage4 tarball ──────────────────────────────────────────────
+# ── BEGIN shared block: SELinux node-policy modules ───────────────────────────
+# Compile specs/selinux/*.te into .pp ON THE X86 BUILD HOST and install them into
+# ${SYSROOT}/usr/share/selinux/<type>/ — the exact directory provision_selinux()
+# already globs at first boot (`semodule -s "${type}" -i /usr/share/selinux/
+# "${type}"/*.pp`, specs/etc/keys-provision/provision.sh:2563), so this needs NO
+# provision.sh change. NEVER compiled on the target: checkmodule/semodule_package/
+# m4 are x86 BUILD-host binaries, the same reason selinux-base builds base.pp here
+# and defers only the load. Placed at this point because the sysroot is complete
+# (payload emerged, kernel/bootloader staged, both arms of the sysroot clean done)
+# and nothing has been packaged or imaged yet.
+# The image still boots PERMISSIVE: the enforce-gate service ships INERT (not in
+# any runlevel, /etc/conf.d/selinux-enforce-gate SELINUX_ENFORCE_GATE=no) unless
+# HUGMESH_SELINUX_ENFORCE_GATE=1 is set at build time. See the lib header for why.
+slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
+# ── END shared block: SELinux node-policy modules ─────────────────────────────
+
 banner "Packaging stage4 tarball"
 # Filename-safe role tag. be+gpu keeps the legacy 'host' tag so existing
 # flashers/launchers/gen-provision-keys examples that reference 'host' keep
