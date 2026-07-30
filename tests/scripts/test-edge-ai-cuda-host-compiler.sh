@@ -170,6 +170,62 @@ run_sysroot_case "seed gcc 16 / cap 15 / no clang" 1 "${TMP}/sr-gcc16"
 # --gcc-not-excluded (REBUILD_TOOLCHAIN=true) dissolves the combination.
 run_sysroot_case "broken combo but gcc not excluded" 0 "${TMP}/sr-broken" --gcc-not-excluded
 
+echo "-- 4) builder wiring (the call-site the runtime leg depends on) --"
+# Sections 1-3 prove the DETECTOR and the SPEC; none of them notice if the
+# builder stops CALLING the detector. That is a live hazard, not a theoretical
+# one: the call-site was added in a SEPARATE commit from the script itself
+# (PR #471's first commit deliberately left build-x86-host-stage4.sh alone
+# because a concurrent branch owned it), so the wiring lives in one 6-line
+# block in the builder's hottest region — exactly the kind of hunk a careless
+# merge-conflict resolution drops with every check above still green. Without
+# it the sysroot-mode leg never runs and a future seed/cap drift goes back to
+# failing after hours instead of seconds. Pin the call-site's four properties.
+BUILDER_LIVE="${REPO}/build-x86-host-stage4.sh"
+
+# (a) a NON-COMMENT line invokes the script (comments discussing it must not
+# count — the WHY-block right above the call names the guard's mechanics).
+call_line="$(awk '/^[[:space:]]*#/ { next }
+                  /preflight-cuda-host-compiler\.sh/ { print NR; exit }' "${BUILDER_LIVE}")"
+[ -n "${call_line}" ] \
+    && ok "builder invokes preflight-cuda-host-compiler.sh (non-comment, line ${call_line})" \
+    || bad "build-x86-host-stage4.sh never invokes preflight-cuda-host-compiler.sh — the sysroot-mode runtime leg is UNWIRED (repo-mode CI still passes, so nothing else will catch this)"
+
+# (b) HOST-side: strictly before the first CHROOT heredoc opener. Inside the
+# unquoted heredoc every '$' needs \$-escaping and bash -n cannot see the body
+# (it is one string to the outer parse) — the house hazard this repo documents
+# in tests/build-package-completeness.sh.
+heredoc_line="$(awk '/^[[:space:]]*#/ { next }
+                     /<<CHROOT/ { print NR; exit }' "${BUILDER_LIVE}")"
+if [ -n "${call_line}" ] && [ -n "${heredoc_line}" ] && [ "${call_line}" -lt "${heredoc_line}" ]; then
+    ok "call-site (line ${call_line}) is HOST-side, before the first CHROOT heredoc (line ${heredoc_line})"
+else
+    bad "call-site is not provably before the first CHROOT heredoc (call=${call_line:-none}, heredoc=${heredoc_line:-none})"
+fi
+
+# (c) gated on NVIDIA_CUDA (a non-CUDA build must not run or fail on it) and
+# REBUILD_TOOLCHAIN=true must translate to --gcc-not-excluded (that combination
+# IS resolvable and must not be refused). Both live within the call block.
+if [ -n "${call_line}" ]; then
+    win_start=$(( call_line > 6 ? call_line - 6 : 1 ))
+    window="$(sed -n "${win_start},$(( call_line + 1 ))p" "${BUILDER_LIVE}")"
+    printf '%s\n' "${window}" | grep -qF 'if ${NVIDIA_CUDA}; then' \
+        && ok "call-site is gated on \${NVIDIA_CUDA}" \
+        || bad "call-site is not gated on \${NVIDIA_CUDA} — every x86 build would run (and possibly die on) a CUDA-only check"
+    printf '%s\n' "${window}" | grep -q 'REBUILD_TOOLCHAIN.*--gcc-not-excluded' \
+        && ok "REBUILD_TOOLCHAIN=true passes --gcc-not-excluded" \
+        || bad "REBUILD_TOOLCHAIN=true does not pass --gcc-not-excluded — a toolchain-rebuild CUDA build (resolvable!) would be refused"
+    # (d) FATAL on detection: the block must exit 1, not warn-and-continue —
+    # a warn here reproduces the original failure mode (hours, then zero
+    # artifacts) with a nicer message at the top.
+    printf '%s\n' "${window}" | grep -q 'exit 1' \
+        && ok "preflight failure is fatal (exit 1) at the call-site" \
+        || bad "preflight failure is NOT fatal at the call-site — the impossible emerge would still run for hours"
+else
+    bad "call-site absent: cannot check the NVIDIA_CUDA gate"
+    bad "call-site absent: cannot check --gcc-not-excluded pass-through"
+    bad "call-site absent: cannot check fatality"
+fi
+
 echo
 echo "edge-ai-cuda-host-compiler: ${P} passed, ${F} failed"
 [ "${F}" -eq 0 ]
