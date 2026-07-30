@@ -1,0 +1,329 @@
+# PROVENANCE — verbatim excerpt, lines 84-387 (304 lines) of the operator's real
+# parallel-emerge transcript:
+#   out/sessions/20260729-065121-ce11e0/build-pki.rpi5.log   (22025 lines, 1526922 bytes)
+# an rpi5 arm64 pki image cross-built 2026-07-29. That build ran portage's PARALLEL
+# scheduler (build-rpi5-stage4.sh:3754 `--jobs="${CROSS_EMERGE_JOBS:-1}"`), so unlike the
+# serial x86 transcript this stream carries ">>> Jobs: ..." scheduler lines — 1752 of them
+# in the full file, alongside 283 ">>> Emerging" lines.
+#
+# The excerpt was chosen (not synthesised) because these 304 lines contain, in one
+# contiguous run, every shape the jobs leg has to handle:
+#   * ">>> Jobs: 0 of 0 complete" (an emerge invocation with nothing to do)
+#   * ">>> Jobs: N of M complete"                         + Load avg
+#   * ">>> Jobs: N of M complete, 1 running"              + Load avg
+#   * ">>> Jobs: N of M complete, 1 merge wait"           + Load avg
+#   * ">>> Emerging (N of M) <atom>::gentoo for <ROOT>/"  (the ROOT-targeted majority)
+#   * ">>> Emerging (N of M) <atom>::gentoo"              (BDEPENDs merged into /)
+#   * the ">>> Installing"/">>> Completed" twins of both, with and without " to <ROOT>/"
+#   * real portage ANSI SGR + cursor-move escapes ("\x1b[A", "\x1b[72C") interleaved
+# Verbatim tallies of the 304 excerpt lines (counted, not remembered):
+#   169 ">>> Jobs:"  ·  28 ">>> Emerging"  ·  28 ">>> Installing"  ·  28 ">>> Completed ("
+#   20 of the 28 Emerging lines carry " for <ROOT>/", 8 do not  ·  2 are "0 of 0 complete"
+#   23 lines carry at least one ESC byte  ·  every Load avg field is 2-decimal here
+#   (the full file also has 1-decimal ones, e.g. "Load avg: 10.1, 28.1, 19.9" at L2308)
+# Lines beginning with "#" are this header only; the parser matches nothing on them, which
+# the tests assert.
+
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.68 s (backtrack: 0/20).
+
+>>> Jobs: 0 of 0 complete                                               Load avg: 7.02, 6.89, 5.96
+
+>>> Auto-cleaning packages...
+
+>>> Using system located in ROOT tree /out/wl-pki.rpi5/sysroot/
+
+>>> No outdated packages were found on your system.
+Calculating dependencies  ... done!
+Dependency resolution took 3.32 s (backtrack: 0/20).
+
+>>> Verifying ebuild manifests
+>>> Running pre-merge checks for sys-libs/libxcrypt-4.5.2
+>>> Running pre-merge checks for app-crypt/libb2-0.98.1-r3
+>>> Running pre-merge checks for sys-devel/gettext-0.23.2
+>>> Running pre-merge checks for sys-apps/util-linux-2.41.4-r1
+>>> Running pre-merge checks for dev-libs/gmp-6.3.0-r2
+ [32;01m*[0m Using generic C implementation on non-amd64/x86 with USE=cpudetection
+ [32;01m*[0m --enable-fat is a no-op on alternative arches.
+ [32;01m*[0m To obtain an optimized build, set USE=-cpudetection, but binpkgs should not then be made.
+>>> Running pre-merge checks for sys-libs/libcap-ng-0.9.3
+>>> Running pre-merge checks for net-libs/libmicrohttpd-1.0.5
+ [32m*[0m Determining the location of the kernel source code
+ [33;01m*[0m Unable to find kernel sources at /out/wl-pki.rpi5/sysroot/usr/src/linux
+ [32m*[0m Please ensure that the KERNEL_DIR environment variable points at full Linux sources of the kernel you wish to compile against.
+ [33;01m*[0m Unable to calculate Linux Kernel version for build, attempting to use running version
+ [32m*[0m Checking for suitable kernel configuration options ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+>>> Running pre-merge checks for sys-apps/portage-3.0.81.2
+ [32m*[0m Determining the location of the kernel source code
+ [33;01m*[0m Unable to find kernel sources at /usr/src/linux
+ [32m*[0m Please make sure that /usr/src/linux points at your running kernel, 
+ [32m*[0m (or the kernel you wish to build against).
+ [32m*[0m Alternatively, set the KERNEL_DIR environment variable to the kernel sources location
+ [33;01m*[0m Unable to calculate Linux Kernel version for build, attempting to use running version
+ [32m*[0m Checking for suitable kernel configuration options ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+>>> Running pre-merge checks for dev-lang/python-3.14.6_p1
+>>> Running pre-merge checks for app-arch/tar-1.35-r1
+>>> Running pre-merge checks for sys-apps/util-linux-2.42.2
+>>> Running pre-merge checks for sys-apps/portage-3.0.81.2
+ [32m*[0m Determining the location of the kernel source code
+ [33;01m*[0m Unable to find kernel sources at /out/wl-pki.rpi5/sysroot/usr/src/linux
+ [32m*[0m Please ensure that the KERNEL_DIR environment variable points at full Linux sources of the kernel you wish to compile against.
+ [33;01m*[0m Unable to calculate Linux Kernel version for build, attempting to use running version
+ [32m*[0m Checking for suitable kernel configuration options ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+>>> Running pre-merge checks for net-misc/openssh-10.4_p1
+>>> Jobs: 0 of 149 complete, 1 running                                  Load avg: 6.71, 6.83, 5.95
+>>> Emerging (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 0 of 149 complete, 1 running                                  Load avg: 6.71, 6.83, 5.95
+>>> Jobs: 0 of 149 complete                                             Load avg: 6.73, 6.83, 5.96
+>>> Installing (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 0 of 149 complete, 1 merge wait                               Load avg: 6.73, 6.83, 5.96
+>>> Completed (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 0 of 149 complete                                             Load avg: 6.73, 6.83, 5.96
+>>> Jobs: 1 of 149 complete                                             Load avg: 6.73, 6.83, 5.96
+>>> Jobs: 1 of 149 complete, 1 running                                  Load avg: 6.73, 6.83, 5.96
+>>> Emerging (2 of 149) dev-lang/python-exec-conf-2.4.6::gentoo
+>>> Jobs: 1 of 149 complete, 1 running                                  Load avg: 6.73, 6.83, 5.96
+>>> Jobs: 1 of 149 complete                                             Load avg: 6.91, 6.87, 5.97
+>>> Installing (2 of 149) dev-lang/python-exec-conf-2.4.6::gentoo
+>>> Jobs: 1 of 149 complete, 1 merge wait                               Load avg: 6.91, 6.87, 5.97
+>>> Completed (2 of 149) dev-lang/python-exec-conf-2.4.6::gentoo
+>>> Jobs: 1 of 149 complete                                             Load avg: 6.91, 6.87, 5.97
+>>> Jobs: 2 of 149 complete                                             Load avg: 6.91, 6.87, 5.97
+>>> Jobs: 2 of 149 complete, 1 running                                  Load avg: 6.91, 6.87, 5.97
+>>> Emerging (3 of 149) net-libs/libnfnetlink-1.0.2::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 2 of 149 complete, 1 running                                  Load avg: 6.91, 6.87, 5.97
+>>> Jobs: 2 of 149 complete                                             Load avg: 6.76, 6.84, 5.97
+>>> Installing (3 of 149) net-libs/libnfnetlink-1.0.2::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 2 of 149 complete, 1 merge wait                               Load avg: 6.76, 6.84, 5.97
+>>> Completed (3 of 149) net-libs/libnfnetlink-1.0.2::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 2 of 149 complete                                             Load avg: 6.76, 6.84, 5.97
+>>> Jobs: 3 of 149 complete                                             Load avg: 6.76, 6.84, 5.97
+>>> Jobs: 3 of 149 complete, 1 running                                  Load avg: 6.76, 6.84, 5.97
+>>> Emerging (4 of 149) net-misc/ethertypes-0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 3 of 149 complete, 1 running                                  Load avg: 6.76, 6.84, 5.97
+>>> Jobs: 3 of 149 complete                                             Load avg: 6.62, 6.81, 5.96
+>>> Installing (4 of 149) net-misc/ethertypes-0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 3 of 149 complete, 1 merge wait                               Load avg: 6.62, 6.81, 5.96
+>>> Completed (4 of 149) net-misc/ethertypes-0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 3 of 149 complete                                             Load avg: 6.62, 6.81, 5.96
+>>> Jobs: 4 of 149 complete                                             Load avg: 6.62, 6.81, 5.96
+>>> Jobs: 4 of 149 complete, 1 running                                  Load avg: 6.62, 6.81, 5.96
+>>> Emerging (5 of 149) sys-apps/diffutils-3.12::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 4 of 149 complete, 1 running                                  Load avg: 6.62, 6.81, 5.96
+>>> Jobs: 4 of 149 complete                                             Load avg: 6.60, 6.79, 5.97
+>>> Installing (5 of 149) sys-apps/diffutils-3.12::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 4 of 149 complete, 1 merge wait                               Load avg: 6.60, 6.79, 5.97
+>>> Completed (5 of 149) sys-apps/diffutils-3.12::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 4 of 149 complete                                             Load avg: 6.60, 6.79, 5.97
+>>> Jobs: 5 of 149 complete                                             Load avg: 6.60, 6.79, 5.97
+>>> Jobs: 5 of 149 complete, 1 running                                  Load avg: 6.60, 6.79, 5.97
+>>> Emerging (6 of 149) dev-lang/python-exec-2.4.10::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 5 of 149 complete, 1 running                                  Load avg: 6.60, 6.79, 5.97
+>>> Jobs: 5 of 149 complete                                             Load avg: 6.47, 6.76, 5.97
+>>> Installing (6 of 149) dev-lang/python-exec-2.4.10::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 5 of 149 complete, 1 merge wait                               Load avg: 6.47, 6.76, 5.97
+>>> Completed (6 of 149) dev-lang/python-exec-2.4.10::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 5 of 149 complete                                             Load avg: 6.47, 6.76, 5.97
+>>> Jobs: 6 of 149 complete                                             Load avg: 6.47, 6.76, 5.97
+>>> Jobs: 6 of 149 complete, 1 running                                  Load avg: 6.47, 6.76, 5.97
+>>> Emerging (7 of 149) sys-apps/sandbox-2.49::gentoo
+>>> Jobs: 6 of 149 complete, 1 running                                  Load avg: 6.47, 6.76, 5.97
+>>> Jobs: 6 of 149 complete                                             Load avg: 6.41, 6.73, 5.97
+>>> Installing (7 of 149) sys-apps/sandbox-2.49::gentoo
+>>> Jobs: 6 of 149 complete, 1 merge wait                               Load avg: 6.41, 6.73, 5.97
+>>> Completed (7 of 149) sys-apps/sandbox-2.49::gentoo
+>>> Jobs: 6 of 149 complete                                             Load avg: 6.41, 6.73, 5.97
+>>> Jobs: 7 of 149 complete                                             Load avg: 6.41, 6.73, 5.97
+>>> Jobs: 7 of 149 complete, 1 running                                  Load avg: 6.41, 6.73, 5.97
+>>> Emerging (8 of 149) sys-libs/libseccomp-2.6.0-r3::gentoo
+>>> Jobs: 7 of 149 complete, 1 running                                  Load avg: 6.41, 6.73, 5.97
+>>> Jobs: 7 of 149 complete                                             Load avg: 6.46, 6.73, 5.98
+>>> Installing (8 of 149) sys-libs/libseccomp-2.6.0-r3::gentoo
+>>> Jobs: 7 of 149 complete, 1 merge wait                               Load avg: 6.46, 6.73, 5.98
+>>> Completed (8 of 149) sys-libs/libseccomp-2.6.0-r3::gentoo
+>>> Jobs: 7 of 149 complete                                             Load avg: 6.34, 6.70, 5.98
+>>> Jobs: 8 of 149 complete                                             Load avg: 6.34, 6.70, 5.98
+>>> Jobs: 8 of 149 complete, 1 running                                  Load avg: 6.34, 6.70, 5.98
+>>> Emerging (9 of 149) sys-libs/timezone-data-2026c::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 8 of 149 complete, 1 running                                  Load avg: 6.34, 6.70, 5.98
+>>> Jobs: 8 of 149 complete                                             Load avg: 6.34, 6.70, 5.98
+>>> Installing (9 of 149) sys-libs/timezone-data-2026c::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 8 of 149 complete, 1 merge wait                               Load avg: 6.34, 6.70, 5.98
+>>> Completed (9 of 149) sys-libs/timezone-data-2026c::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 8 of 149 complete                                             Load avg: 6.55, 6.74, 5.99
+>>> Jobs: 9 of 149 complete                                             Load avg: 6.55, 6.74, 5.99
+>>> Jobs: 9 of 149 complete, 1 running                                  Load avg: 6.55, 6.74, 5.99
+>>> Emerging (10 of 149) sys-apps/attr-2.6.0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 9 of 149 complete, 1 running                                  Load avg: 6.55, 6.74, 5.99
+>>> Jobs: 9 of 149 complete                                             Load avg: 6.43, 6.71, 5.99
+>>> Installing (10 of 149) sys-apps/attr-2.6.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 9 of 149 complete, 1 merge wait                               Load avg: 6.43, 6.71, 5.99
+>>> Completed (10 of 149) sys-apps/attr-2.6.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 9 of 149 complete                                             Load avg: 6.43, 6.71, 5.99
+>>> Jobs: 10 of 149 complete                                            Load avg: 6.43, 6.71, 5.99
+>>> Jobs: 10 of 149 complete, 1 running                                 Load avg: 6.43, 6.71, 5.99
+>>> Emerging (11 of 149) app-arch/xz-utils-5.8.3::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 10 of 149 complete, 1 running                                 Load avg: 6.43, 6.71, 5.99
+>>> Jobs: 10 of 149 complete                                            Load avg: 6.84, 6.79, 6.02
+>>> Installing (11 of 149) app-arch/xz-utils-5.8.3::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 10 of 149 complete, 1 merge wait                              Load avg: 6.84, 6.79, 6.02
+>>> Completed (11 of 149) app-arch/xz-utils-5.8.3::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 10 of 149 complete                                            Load avg: 6.69, 6.76, 6.01
+>>> Jobs: 11 of 149 complete                                            Load avg: 6.69, 6.76, 6.01
+>>> Jobs: 11 of 149 complete, 1 running                                 Load avg: 6.69, 6.76, 6.01
+>>> Emerging (12 of 149) sys-apps/acl-2.4.0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 11 of 149 complete, 1 running                                 Load avg: 6.69, 6.76, 6.01
+>>> Jobs: 11 of 149 complete                                            Load avg: 6.88, 6.79, 6.03
+>>> Installing (12 of 149) sys-apps/acl-2.4.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 11 of 149 complete, 1 merge wait                              Load avg: 6.88, 6.79, 6.03
+>>> Completed (12 of 149) sys-apps/acl-2.4.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 11 of 149 complete                                            Load avg: 6.88, 6.79, 6.03
+>>> Jobs: 12 of 149 complete                                            Load avg: 6.88, 6.79, 6.03
+>>> Jobs: 12 of 149 complete, 1 running                                 Load avg: 6.88, 6.79, 6.03
+>>> Emerging (13 of 149) dev-libs/libunistring-1.4.2::gentoo
+>>> Jobs: 12 of 149 complete, 1 running                                 Load avg: 6.88, 6.79, 6.03
+>>> Jobs: 12 of 149 complete                                            Load avg: 5.82, 6.48, 5.97
+>>> Installing (13 of 149) dev-libs/libunistring-1.4.2::gentoo
+>>> Jobs: 12 of 149 complete, 1 merge wait                              Load avg: 5.82, 6.48, 5.97
+>>> Completed (13 of 149) dev-libs/libunistring-1.4.2::gentoo
+>>> Jobs: 12 of 149 complete                                            Load avg: 5.82, 6.48, 5.97
+>>> Jobs: 13 of 149 complete                                            Load avg: 5.82, 6.48, 5.97
+>>> Jobs: 13 of 149 complete, 1 running                                 Load avg: 5.82, 6.48, 5.97
+>>> Emerging (14 of 149) sys-libs/gdbm-1.26::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 13 of 149 complete, 1 running                                 Load avg: 5.82, 6.48, 5.97
+>>> Jobs: 13 of 149 complete                                            Load avg: 5.78, 6.45, 5.96
+>>> Installing (14 of 149) sys-libs/gdbm-1.26::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 13 of 149 complete, 1 merge wait                              Load avg: 5.78, 6.45, 5.96
+>>> Completed (14 of 149) sys-libs/gdbm-1.26::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 13 of 149 complete                                            Load avg: 5.78, 6.45, 5.96
+>>> Jobs: 14 of 149 complete                                            Load avg: 5.78, 6.45, 5.96
+>>> Jobs: 14 of 149 complete, 1 running                                 Load avg: 5.78, 6.45, 5.96
+>>> Emerging (15 of 149) app-shells/bash-5.3_p9-r2::gentoo
+>>> Jobs: 14 of 149 complete, 1 running                                 Load avg: 5.78, 6.45, 5.96
+>>> Jobs: 14 of 149 complete                                            Load avg: 5.64, 6.37, 5.95
+>>> Installing (15 of 149) app-shells/bash-5.3_p9-r2::gentoo
+>>> Jobs: 14 of 149 complete, 1 merge wait                              Load avg: 5.64, 6.37, 5.95
+>>> Completed (15 of 149) app-shells/bash-5.3_p9-r2::gentoo
+>>> Jobs: 14 of 149 complete                                            Load avg: 5.64, 6.37, 5.95
+>>> Jobs: 15 of 149 complete                                            Load avg: 5.64, 6.37, 5.95
+>>> Jobs: 15 of 149 complete, 1 running                                 Load avg: 5.64, 6.37, 5.95
+>>> Emerging (16 of 149) app-shells/bash-5.3_p15::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 15 of 149 complete, 1 running                                 Load avg: 5.64, 6.37, 5.95
+>>> Jobs: 15 of 149 complete                                            Load avg: 5.97, 6.38, 5.97
+>>> Installing (16 of 149) app-shells/bash-5.3_p15::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 15 of 149 complete, 1 merge wait                              Load avg: 5.97, 6.38, 5.97
+>>> Completed (16 of 149) app-shells/bash-5.3_p15::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 15 of 149 complete                                            Load avg: 5.97, 6.38, 5.97
+>>> Jobs: 16 of 149 complete                                            Load avg: 5.97, 6.38, 5.97
+>>> Jobs: 16 of 149 complete, 1 running                                 Load avg: 5.97, 6.38, 5.97
+>>> Emerging (17 of 149) net-libs/nghttp2-1.68.0::gentoo
+>>> Jobs: 16 of 149 complete, 1 running                                 Load avg: 5.97, 6.38, 5.97
+>>> Jobs: 16 of 149 complete                                            Load avg: 6.00, 6.37, 5.97
+>>> Installing (17 of 149) net-libs/nghttp2-1.68.0::gentoo
+>>> Jobs: 16 of 149 complete, 1 merge wait                              Load avg: 6.00, 6.37, 5.97
+>>> Completed (17 of 149) net-libs/nghttp2-1.68.0::gentoo
+>>> Jobs: 16 of 149 complete                                            Load avg: 6.00, 6.37, 5.97
+>>> Jobs: 17 of 149 complete                                            Load avg: 6.00, 6.37, 5.97
+>>> Jobs: 17 of 149 complete, 1 running                                 Load avg: 6.00, 6.37, 5.97
+>>> Emerging (18 of 149) net-libs/nghttp3-1.9.0::gentoo
+>>> Jobs: 17 of 149 complete, 1 running                                 Load avg: 6.00, 6.37, 5.97
+>>> Jobs: 17 of 149 complete                                            Load avg: 5.92, 6.34, 5.96
+>>> Installing (18 of 149) net-libs/nghttp3-1.9.0::gentoo
+>>> Jobs: 17 of 149 complete, 1 merge wait                              Load avg: 5.92, 6.34, 5.96
+>>> Completed (18 of 149) net-libs/nghttp3-1.9.0::gentoo
+>>> Jobs: 17 of 149 complete                                            Load avg: 6.08, 6.37, 5.97
+>>> Jobs: 18 of 149 complete                                            Load avg: 6.08, 6.37, 5.97
+>>> Jobs: 18 of 149 complete, 1 running                                 Load avg: 6.08, 6.37, 5.97
+>>> Emerging (19 of 149) net-libs/ngtcp2-1.22.0::gentoo
+>>> Jobs: 18 of 149 complete, 1 running                                 Load avg: 6.08, 6.37, 5.97
+>>> Jobs: 18 of 149 complete                                            Load avg: 5.92, 6.33, 5.96
+>>> Installing (19 of 149) net-libs/ngtcp2-1.22.0::gentoo
+>>> Jobs: 18 of 149 complete, 1 merge wait                              Load avg: 5.92, 6.33, 5.96
+>>> Completed (19 of 149) net-libs/ngtcp2-1.22.0::gentoo
+>>> Jobs: 18 of 149 complete                                            Load avg: 5.92, 6.33, 5.96
+>>> Jobs: 19 of 149 complete                                            Load avg: 5.92, 6.33, 5.96
+>>> Jobs: 19 of 149 complete, 1 running                                 Load avg: 5.92, 6.33, 5.96
+>>> Emerging (20 of 149) dev-libs/libffi-3.7.1::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 19 of 149 complete, 1 running                                 Load avg: 5.92, 6.33, 5.96
+>>> Jobs: 19 of 149 complete                                            Load avg: 5.84, 6.30, 5.96
+>>> Installing (20 of 149) dev-libs/libffi-3.7.1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 19 of 149 complete, 1 merge wait                              Load avg: 5.84, 6.30, 5.96
+>>> Completed (20 of 149) dev-libs/libffi-3.7.1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 19 of 149 complete                                            Load avg: 5.78, 6.28, 5.95
+>>> Jobs: 20 of 149 complete                                            Load avg: 5.78, 6.28, 5.95
+>>> Jobs: 20 of 149 complete, 1 running                                 Load avg: 5.78, 6.28, 5.95
+>>> Emerging (21 of 149) net-libs/libnftnl-1.3.1::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 20 of 149 complete, 1 running                                 Load avg: 5.78, 6.28, 5.95
+>>> Jobs: 20 of 149 complete                                            Load avg: 5.95, 6.31, 5.96
+>>> Installing (21 of 149) net-libs/libnftnl-1.3.1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 20 of 149 complete, 1 merge wait                              Load avg: 5.95, 6.31, 5.96
+>>> Completed (21 of 149) net-libs/libnftnl-1.3.1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 20 of 149 complete                                            Load avg: 5.95, 6.31, 5.96
+>>> Jobs: 21 of 149 complete                                            Load avg: 5.95, 6.31, 5.96
+>>> Jobs: 21 of 149 complete, 1 running                                 Load avg: 5.95, 6.31, 5.96
+>>> Emerging (22 of 149) dev-libs/popt-1.19-r1::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 21 of 149 complete, 1 running                                 Load avg: 5.95, 6.31, 5.96
+>>> Jobs: 21 of 149 complete                                            Load avg: 5.88, 6.29, 5.96
+>>> Installing (22 of 149) dev-libs/popt-1.19-r1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 21 of 149 complete, 1 merge wait                              Load avg: 5.88, 6.29, 5.96
+>>> Completed (22 of 149) dev-libs/popt-1.19-r1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 21 of 149 complete                                            Load avg: 5.81, 6.27, 5.95
+>>> Jobs: 22 of 149 complete                                            Load avg: 5.81, 6.27, 5.95
+>>> Jobs: 22 of 149 complete, 1 running                                 Load avg: 5.81, 6.27, 5.95
+>>> Emerging (23 of 149) dev-build/make-4.4.1-r102::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 22 of 149 complete, 1 running                                 Load avg: 5.81, 6.27, 5.95
+>>> Jobs: 22 of 149 complete                                            Load avg: 5.90, 6.28, 5.96
+>>> Installing (23 of 149) dev-build/make-4.4.1-r102::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 22 of 149 complete, 1 merge wait                              Load avg: 5.90, 6.28, 5.96
+>>> Completed (23 of 149) dev-build/make-4.4.1-r102::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 22 of 149 complete                                            Load avg: 5.90, 6.28, 5.96
+>>> Jobs: 23 of 149 complete                                            Load avg: 5.90, 6.28, 5.96
+>>> Jobs: 23 of 149 complete, 1 running                                 Load avg: 5.90, 6.28, 5.96
+>>> Emerging (24 of 149) dev-libs/libgpg-error-1.61::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 23 of 149 complete, 1 running                                 Load avg: 5.90, 6.28, 5.96
+>>> Jobs: 23 of 149 complete                                            Load avg: 5.84, 6.25, 5.95
+>>> Installing (24 of 149) dev-libs/libgpg-error-1.61::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 23 of 149 complete, 1 merge wait                              Load avg: 5.84, 6.25, 5.95
+>>> Completed (24 of 149) dev-libs/libgpg-error-1.61::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 23 of 149 complete                                            Load avg: 5.85, 6.25, 5.95
+>>> Jobs: 24 of 149 complete                                            Load avg: 5.85, 6.25, 5.95
+>>> Jobs: 24 of 149 complete, 1 running                                 Load avg: 5.85, 6.25, 5.95
+>>> Emerging (25 of 149) net-dns/c-ares-1.34.8::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 24 of 149 complete, 1 running                                 Load avg: 5.85, 6.25, 5.95
+>>> Jobs: 24 of 149 complete                                            Load avg: 6.11, 6.29, 5.97
+>>> Installing (25 of 149) net-dns/c-ares-1.34.8::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 24 of 149 complete, 1 merge wait                              Load avg: 6.11, 6.29, 5.97
+>>> Completed (25 of 149) net-dns/c-ares-1.34.8::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 24 of 149 complete                                            Load avg: 6.02, 6.27, 5.97
+>>> Jobs: 25 of 149 complete                                            Load avg: 6.02, 6.27, 5.97
+>>> Jobs: 25 of 149 complete, 1 running                                 Load avg: 6.02, 6.27, 5.97
+>>> Emerging (26 of 149) net-libs/nghttp2-1.69.0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 25 of 149 complete, 1 running                                 Load avg: 6.02, 6.27, 5.97
+>>> Jobs: 25 of 149 complete                                            Load avg: 5.87, 6.23, 5.95
+>>> Installing (26 of 149) net-libs/nghttp2-1.69.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 25 of 149 complete, 1 merge wait                              Load avg: 5.87, 6.23, 5.95
+>>> Completed (26 of 149) net-libs/nghttp2-1.69.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 25 of 149 complete                                            Load avg: 5.87, 6.23, 5.95
+>>> Jobs: 26 of 149 complete                                            Load avg: 5.87, 6.23, 5.95
+>>> Jobs: 26 of 149 complete, 1 running                                 Load avg: 5.87, 6.23, 5.95
+>>> Emerging (27 of 149) net-libs/nghttp3-1.17.0::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 26 of 149 complete, 1 running                                 Load avg: 5.87, 6.23, 5.95
+>>> Jobs: 26 of 149 complete                                            Load avg: 5.80, 6.21, 5.95
+>>> Installing (27 of 149) net-libs/nghttp3-1.17.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 26 of 149 complete, 1 merge wait                              Load avg: 5.80, 6.21, 5.95
+>>> Completed (27 of 149) net-libs/nghttp3-1.17.0::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 26 of 149 complete                                            Load avg: 5.65, 6.17, 5.94
+>>> Jobs: 27 of 149 complete                                            Load avg: 5.65, 6.17, 5.94
+>>> Jobs: 27 of 149 complete, 1 running                                 Load avg: 5.65, 6.17, 5.94
+>>> Emerging (28 of 149) app-editors/nano-9.1::gentoo for /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 27 of 149 complete, 1 running                                 Load avg: 5.65, 6.17, 5.94
+>>> Jobs: 27 of 149 complete                                            Load avg: 5.67, 6.14, 5.93
+>>> Installing (28 of 149) app-editors/nano-9.1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 27 of 149 complete, 1 merge wait                              Load avg: 5.67, 6.14, 5.93
+>>> Completed (28 of 149) app-editors/nano-9.1::gentoo to /out/wl-pki.rpi5/sysroot/
+>>> Jobs: 27 of 149 complete                                            Load avg: 5.67, 6.14, 5.93
+>>> Jobs: 28 of 149 complete                                            Load avg: 5.67, 6.14, 5.93

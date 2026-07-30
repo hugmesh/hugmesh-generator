@@ -212,24 +212,15 @@ def test_a_cross_build_lists_host_tools_AND_target_packages():
     assert "dev-libs/xxhash-0.8.3-r2" in seen and "acct-group/messagebus-0-r3" in seen
 
 
-_RPI5_LOG = ("/home/magus/GitHub/hugmesh-generator/out/sessions/"
-             "20260729-065121-ce11e0/build-pki.rpi5.log")
-
-
-@pytest.mark.skipif(not os.path.exists(_RPI5_LOG),
-                    reason="operator's real cross-build log not present on this box")
-def test_replay_of_the_real_cross_build_log_tracks_every_package():
-    """Ground truth, computed independently of the parser:
-    ``grep -o '>>> Emerging ([0-9]* of [0-9]*) [^ ]*' … | awk '{print $NF}' | sort -u``
-    reports 266 unique atoms across 283 Emerging lines (222 of them tailed). Before the
-    tail was matched this replay tracked 60."""
-    p = ep.EmergePackageParser()
-    with open(_RPI5_LOG, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            p.feed(line.rstrip("\n"))
-    rows = p.packages()
-    assert len(rows) == 266, f"tracked {len(rows)} of 266 real packages"
-    assert all(x.percent == 100 for x in rows), "every Completed row must reach 100%"
+# The skipif-guarded replay of the operator's real cross-build log (266 rows, every one
+# reaching 100%) lives in test_emerge_packages_parallel.py ::
+# test_real_parallel_rpi5_transcript_replays_every_package — it is the same replay of the
+# same transcript asserting the same 266, so it is kept in ONE place rather than two. That
+# copy resolves the transcript through _operator_log() (several candidate session dirs plus
+# a $HUGMESH_STUDIO_SESSIONS override) instead of one hard-coded path, and additionally
+# pins the scheduler aggregate, the empty in-flight set, no-failures, percent == 100, and
+# that a --jobs=1 build is NOT reported as parallel. The x86 serial transcript has a
+# matching anchor beside it. The non-replay tail tests above are the ones unique to here.
 
 
 def test_non_package_lines_return_none():

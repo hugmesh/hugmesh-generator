@@ -30,6 +30,11 @@ QProgressBar (driven by the parser's ladder-derived, monotonic percent), its USE
 the Flags column (read from the per-package portage log's elog header), the latest
 build-tool telemetry line compacted next to the bar, the full elog header + telemetry in
 the row tooltip, and click-to-open of the package's own emerge log in the shared log pane.
+Each JOB row carries a "Packages ▸" control that opens that image's groups in one click —
+present from the first paint but DISABLED and greyed, with the reason in its tooltip, until
+that job's OWN emerge phase begins (_sync_pkg_expand / _emerge_started: the group banner,
+the first named atom, or portage's scheduler line — never a stage label, which differs per
+platform, and never a timer or a percent).
 
 LAYOUT: the job/stage TREE is the primary surface and the log is secondary, so the two sit
 in a vertical QSplitter (tree ~2 : log ~1, i.e. the log takes at most a third) that the
@@ -56,8 +61,8 @@ from ...core import build_sessions
 from ...core import flash_targets
 from ...core import secret_files
 from ...core.emerge_packages import (
-    EmergePackageParser, PackageProgress, STEP_DONE, STEP_FAILED, STEP_QUEUED,
-    find_package_log)
+    EmergePackageParser, GROUP_UNKNOWN, PackageProgress, STEP_DONE, STEP_FAILED,
+    STEP_QUEUED, find_package_log)
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
@@ -128,6 +133,22 @@ _PKG_LOG_TAIL_BYTES = 2 * 1024 * 1024
 # parser's own state — only what is painted.
 _TOOL_CELL_CHARS = 72
 _TOOL_TIP_CHARS = 300
+
+# ── the per-JOB package-list affordance ────────────────────────────────────────────────
+# Operator, 2026-07-29, after watching a live build with the per-package tree: "we can see
+# the packages now in the current builder and this is good leave this as a default with the
+# option to expand greyed out until things reach the emerge phase". They had opened the tree
+# while the job was still at "Verify seed" — a control that looks live and yields nothing
+# reads as a broken feature, so the control is present from the first paint but DISABLED
+# (Qt greys a disabled QToolButton; the :disabled rule below pins the grey rather than
+# trusting the active style) and carries the honest reason as its tooltip. It enables per
+# job, the moment THAT job's emerge phase really starts — see ProgressPage._sync_pkg_expand.
+_PKG_EXPAND_TEXT = "Packages ▸"
+_PKG_EXPAND_HINT = "packages appear once the build reaches the emerge phase"
+_PKG_EXPAND_READY_HINT = ("Show this image's packages — expands its emerge groups "
+                          "in the tree")
+_PKG_EXPAND_QSS = ("QToolButton { padding: 0px 6px; } "
+                   "QToolButton:disabled { color: #888888; }")
 
 
 def _elide(text: str, limit: int) -> str:
@@ -276,6 +297,21 @@ class _Row:
         # returns a row for tool_info-only updates too, and 74,998 lines of a real build
         # are ninja counters alone — the fingerprint keeps those a cheap tuple compare).
         self.pkg_shown: dict[str, tuple] = {}
+        # PARALLEL emerge (--jobs). The same skip-the-no-op discipline, one level up: the
+        # parser bumps SchedulerState.revision whenever its ">>> Jobs:" figures or its
+        # in-flight atom set change, and 1752 of a real rpi5 build's 22,025 lines are those
+        # status lines — so the aggregate is repainted on a revision change, not per line.
+        self.sched_rev = -1
+        self.pkg_parallel_shown = False   # group node auto-expanded once, on detection
+        # one-shot latch: a fault on the per-package log-follow path disables the follow for
+        # this row instead of re-raising every tick (see ProgressPage._poll_packages).
+        self.pkg_poll_off = False
+        # the per-job package-list affordance + its ONE-WAY latch. False = this job has not
+        # reached its emerge phase, so the control is present but disabled and greyed; it
+        # flips exactly once, on this job's own first emerge evidence, and never back (a
+        # finished build keeps its packages browsable). See ProgressPage._sync_pkg_expand.
+        self.pkg_btn: QtWidgets.QToolButton | None = None
+        self.pkg_expandable = False
 
 
 class ProgressPage(QtWidgets.QWizardPage):
@@ -943,6 +979,19 @@ class ProgressPage(QtWidgets.QWizardPage):
         row.bar.setRange(0, 100)
         row.bar.setValue(0)
         self.tree.setItemWidget(job_item, _COL_PROGRESS, row.bar)
+        # the PACKAGE-LIST affordance, in the job row's otherwise-empty Flags cell (the same
+        # setItemWidget idiom as the bar above; only PACKAGE rows write Flags text). Created
+        # DISABLED with the honest hint — nothing enables it but this job's own emerge phase
+        # beginning (_sync_pkg_expand). It lives on the top-level job row, so collapsing or
+        # re-expanding the job never touches it.
+        row.pkg_btn = QtWidgets.QToolButton()
+        row.pkg_btn.setText(_PKG_EXPAND_TEXT)
+        row.pkg_btn.setAutoRaise(True)
+        row.pkg_btn.setStyleSheet(_PKG_EXPAND_QSS)
+        row.pkg_btn.setEnabled(False)
+        row.pkg_btn.setToolTip(_PKG_EXPAND_HINT)
+        row.pkg_btn.clicked.connect(lambda _=False, i=index: self._expand_packages(i))
+        self.tree.setItemWidget(job_item, _COL_FLAGS, row.pkg_btn)
         # off-tree phase label — no longer shown (the running STAGE conveys the phase) but
         # still updated so every existing assertion on row.phase.text() holds.
         row.phase = QtWidgets.QLabel("queued")
@@ -1038,6 +1087,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         pkg = row.pkg_parser.feed(line)
         if pkg is not None:
             self._render_package(row, pkg)
+        # PARALLEL emerge: portage's ">>> Jobs: N of M complete, R running" scheduler line
+        # names no package, so feed() correctly returns None for it — but it carries the
+        # aggregate the operator asked to see. Revision-gated, so this costs one integer
+        # compare on every other line.
+        self._render_scheduler(row)
+        # the per-job package-list affordance: greyed until THIS job's emerge phase really
+        # begins, then live for good. Placed AFTER the package/scheduler feed so the very
+        # line that proves emerging (group banner, first atom, or portage's own scheduler
+        # line) is the line that enables it. One bool test per line once latched.
+        self._sync_pkg_expand(row)
         self._write_status()
         self._refresh_overall()
         # live drill-down append: only when the arriving line's target matches the current
@@ -1308,6 +1367,194 @@ class ProgressPage(QtWidgets.QWizardPage):
         row.group_items[group] = item
         return item
 
+    def _group_progress_text(self, row: _Row, group: str) -> str:
+        """The GROUP node's Progress cell: our own reconstructed "<done> of <total> done",
+        plus portage's live PARALLEL-emerge aggregate when portage has actually spoken.
+
+        The two halves are kept textually distinct rather than merged into one number. Ours
+        counts rows that reached ``Completed (N of M)``; portage's ``running`` / ``merge
+        wait`` counts are its scheduler's own view and legitimately lead ours (it reports a
+        job running on the line BEFORE the ``Emerging`` that names the atom). Showing both
+        is what answers the operator's question — "which packages are actually compiling
+        right now" — without inventing a reconciled figure neither side stated.
+
+        The suffix appears ONLY once a ``>>> Jobs:`` line has been parsed AND some clause is
+        non-zero, so a serial build's cell is unchanged, and portage's own "0 of 0 complete"
+        (20 of them in the real rpi5 transcript — an emerge invocation with nothing to do)
+        adds no noise."""
+        done, total = row.pkg_parser.totals()
+        text = f"{done} of {total} done"
+        sched = row.pkg_parser.scheduler()
+        if sched.seen:
+            parts = []
+            if sched.running:
+                parts.append(f"{sched.running} running")
+            if sched.merge_wait:
+                parts.append(f"{sched.merge_wait} merge wait")
+            if sched.failed:
+                parts.append(f"{sched.failed} failed")
+            if parts:
+                text += "  ·  " + "  ·  ".join(parts)
+        return text
+
+    def _render_scheduler(self, row: _Row) -> None:
+        """Repaint the parallel-emerge aggregate onto the CURRENT group node, and (once)
+        open that node so the several simultaneously-live package rows are actually visible.
+
+        Revision-gated against the parser's SchedulerState, which is the whole point: this
+        is called from the per-line path AND from the 1s tick, and on a real build the
+        scheduler line repeats thousands of times with identical figures. No group node yet
+        (the aggregate arrived before the first package) is a normal early state, not an
+        error — the next package creates the node and paints it."""
+        sched = row.pkg_parser.scheduler()
+        if sched.revision == row.sched_rev:
+            return
+        group = row.pkg_parser.group()
+        item = row.group_items.get(group)
+        if item is None:
+            # NOTE the revision is deliberately NOT consumed here: the figures are real,
+            # they just have nowhere to go yet, so the very next call paints them once the
+            # first package of the group creates its node.
+            return
+        row.sched_rev = sched.revision
+        item.setText(_COL_PROGRESS, self._group_progress_text(row, group))
+        if row.pkg_parser.parallel() and not row.pkg_parallel_shown:
+            # Serial builds are left collapsed exactly as before. Under --jobs the point of
+            # the feature is that SEVERAL rows are live at once, so the tree opens itself
+            # the first time the parser proves that — once, never fighting the operator's
+            # own collapse afterwards.
+            row.pkg_parallel_shown = True
+            self.tree.expandItem(item)
+
+    # ---- the package-list affordance: greyed until THIS job is really emerging --------
+    @staticmethod
+    def _emerge_started(row: _Row) -> bool:
+        """Has THIS job's emerge phase actually begun?
+
+        Read off the SAME parser that builds the package level of the tree, never off a
+        stage LABEL, a percent or a clock:
+
+        * ``pkg_items`` — portage has already named a package for this job (a
+          ``>>> Emerging (N of M) <atom>`` line); the strongest possible proof, and the
+          one that also covers a builder that emerges before any group banner (the
+          honest GROUP_UNKNOWN case, which the tree renders as "ungrouped");
+        * ``pkg_parser.group()`` — the builders' pinned ``==> Emerge group: <g>`` banner,
+          printed immediately BEFORE the emerge invocation it names, so it is the
+          earliest honest "we are emerging now" the stream carries. It is the very
+          signal the GROUP nodes are keyed on;
+        * ``scheduler().seen`` — portage's own ``>>> Jobs: N of M complete`` scheduler
+          line: emerge is running and talking, even if no atom has been named yet.
+
+        A stage-label match was deliberately NOT used: platforms name their emerge stages
+        differently ("Emerge packages" on x86 vs "Phase 1: @system" / "Phase 2: stage4" on
+        every ARM builder, core/progress-tables.json), so a label rule would silently
+        never enable on ARM. The three signals above are platform-independent because the
+        BANNERS are — the same reason the group level is a level and not a stage.
+        """
+        if row.pkg_items:
+            return True
+        parser = row.pkg_parser
+        if parser.group() != GROUP_UNKNOWN:
+            return True
+        return bool(parser.scheduler().seen)
+
+    def _sync_pkg_expand(self, row: _Row) -> None:
+        """Flip one job's package-list affordance from greyed to live, ONCE.
+
+        Called from the per-line path and from the 1s tick, both of which are Qt slots on
+        the operator's PyQt6 build — where an unhandled exception calls qFatal and ABORTS
+        the Studio mid-build — so every step is guarded and a fault leaves the control in
+        its current (honest) state instead of ending the session. The latch is one-way by
+        construction: `pkg_expandable` is only ever set True, so a settled/collapsed job
+        keeps its packages browsable and nothing can re-grey a control the operator has
+        already seen go live. It is also strictly PER JOB — each row carries its own latch
+        and its own parser, so in a multi-image worklist an image still fetching its seed
+        stays greyed while the one that is emerging does not."""
+        if row.pkg_expandable:
+            return                       # latched: one integer-cheap test per call after
+        try:
+            if not self._emerge_started(row):
+                return
+            row.pkg_expandable = True
+            if row.pkg_btn is not None:
+                row.pkg_btn.setEnabled(True)
+                row.pkg_btn.setToolTip(_PKG_EXPAND_READY_HINT)
+        except Exception:                # noqa: BLE001 - see docstring (PyQt6 qFatal)
+            # Deliberately silent and NOT latched: the next line/tick re-evaluates. The
+            # only realistic fault here is a widget whose C++ object went away with the
+            # page, and a log line about that would be noise on top of a teardown.
+            return
+
+    def _expand_packages(self, i: int) -> None:
+        """Open job `i`'s package list — the action behind the affordance.
+
+        Expands the job, the stage(s) hosting its emerge groups and the group nodes
+        themselves, then scrolls to the first group. It EXPANDS only; it never collapses
+        anything the operator opened, and it is inert while the job's latch is still
+        closed (belt and braces — the disabled button cannot emit `clicked` in the first
+        place, so this also covers a programmatic call).
+
+        Defensive for the same reason as _poll_packages: this is a Qt slot, and on PyQt6
+        an unhandled exception here would qFatal-ABORT the operator's Studio."""
+        try:
+            if not (0 <= i < len(self._rows)):
+                return
+            row = self._rows[i]
+            if not row.pkg_expandable:
+                return
+            if row.job_item is not None:
+                self.tree.expandItem(row.job_item)
+            first = None
+            for item in row.group_items.values():
+                parent = item.parent()
+                if parent is not None:
+                    self.tree.expandItem(parent)   # the stage the group nests under
+                self.tree.expandItem(item)
+                if first is None:
+                    first = item
+            if first is not None:
+                self.tree.scrollToItem(first)
+            elif 0 <= row.tracker.cur < len(row.stage_items):
+                # emerging, but portage has not named a group/package yet: open the
+                # running stage so the rows land in view as they arrive.
+                self.tree.expandItem(row.stage_items[row.tracker.cur])
+        except Exception as exc:         # noqa: BLE001 - see docstring (PyQt6 qFatal)
+            self.log.appendPlainText(
+                f"NOTE: could not open the package list ({type(exc).__name__}: {exc}) — "
+                f"the tree's own expand arrows still work.")
+
+    def _poll_packages(self, row: _Row, now: float) -> None:
+        """PARALLEL emerge, live rows: let the parser tail each in-flight package's OWN
+        portage build log and repaint the ones that moved.
+
+        Under ``--jobs`` portage diverts each concurrent package's compile output to that
+        package's log instead of the shared stdout, so the stream this page receives carries
+        nothing that could move those bars — which is exactly why several rows used to sit
+        frozen at 'emerge' with no percent. EmergePackageParser.poll() does the reading
+        (bounded: a byte offset per atom, a capped chunk per atom per pass, at most a few
+        dozen atoms) and returns only the rows that changed, so the fingerprint-guarded
+        _render_package still does one bar/label write per moved row and nothing is rebuilt.
+
+        DEFENSIVE BY REQUIREMENT, not by taste. This runs inside a QTimer slot, and the
+        operator's Studio runs on PyQt6, where an unhandled exception in a Qt slot calls
+        qFatal and ABORTS the process (PySide6 merely prints it) — so a transient fault
+        while reading inside the build's chroot could kill the whole application mid-build.
+        Everything is caught, reported ONCE into the log pane, and the follow is then
+        latched off for that row: a degraded live view is a bug, a dead Studio is a
+        catastrophe."""
+        if row.pkg_poll_off:
+            return
+        try:
+            for pkg in row.pkg_parser.poll(now):
+                self._render_package(row, pkg)
+            self._render_scheduler(row)
+        except Exception as exc:                      # noqa: BLE001 - see docstring
+            row.pkg_poll_off = True
+            self.log.appendPlainText(
+                f"NOTE: live per-package log follow disabled for {row.label} "
+                f"({type(exc).__name__}: {exc}) — the build and its own logs are "
+                f"unaffected; package rows still advance from the build stream.")
+
     def _pkg_tooltip(self, pkg: PackageProgress) -> str:
         """The row tooltip: the FULL elog header block (Package/Repository/Maintainer/
         USE/FEATURES — whatever portage actually wrote; a binary merge lacks Maintainer)
@@ -1369,9 +1616,8 @@ class ProgressPage(QtWidgets.QWizardPage):
             # totals() is only meaningful for the parser's CURRENT group (its documented
             # contract), so past groups keep their last-painted, frozen text.
             if pkg.group == row.pkg_parser.group():
-                done, total = row.pkg_parser.totals()
                 row.group_items[pkg.group].setText(
-                    _COL_PROGRESS, f"{done} of {total} done")
+                    _COL_PROGRESS, self._group_progress_text(row, pkg.group))
             if pkg.failed:
                 # failure focus, package edition: surface the red row (the job/stage
                 # failure focus in _on_entry_done lands on the stage's log slice; the
@@ -1400,6 +1646,15 @@ class ProgressPage(QtWidgets.QWizardPage):
                 row.job_item.setText(_COL_TIME, _fmt_elapsed(now - row.job_t_start))
             if row.tracker.cur >= 0:
                 self._render_stage(row, row.tracker.cur, now)
+            # PARALLEL emerge: the concurrent packages' live step/percent/tool line come
+            # off their own portage logs, and this existing 1 Hz tick is the poll clock
+            # (no second timer). A no-op on a serial build — the parser's poll() returns
+            # immediately unless the stream has PROVEN --jobs parallelism.
+            self._poll_packages(row, now)
+            # second (cheap, latched) drive of the package-list affordance: the poll path
+            # can be what first proves this job is emerging, and the tick is the one clock
+            # that runs even when the stream has gone quiet mid-compile.
+            self._sync_pkg_expand(row)
         # the package-log follow rides the SAME 1s tick (no second timer): while a
         # package row is selected its on-disk log grows as portage writes it, and the
         # pane reloads only when the file's SIZE changed — a stat per second, a read
