@@ -44,6 +44,7 @@
 //   * a resolved path (realpath — symlinked parents included) escaping the
 //     target tree on either side;
 //   * a CONTRACT-DENYLISTED name on either side — snapdragon-deploy.yaml +
+//     hugmesh-deploy.yaml (BOTH descriptor spellings are live) +
 //     .snapdragon-provenance.json + .snapdragon-mesh-admitted (renaming those
 //     breaks the 13d pathsExist discovery filter, the provenance manifest's
 //     fixed name, and the publish launder-refusal stamp checks) plus their
@@ -112,6 +113,10 @@ function renderGated(str, ctx, label) {
 // names, so a recipe may never move them either.
 const RENAME_CONTRACT_DENYLIST = new Set([
   'snapdragon-deploy.yaml',
+  // The post-rebrand spelling of the SAME contract: 3 org repos carry this name
+  // and both 13-service-catalog + 13d filter on it, so moving it breaks discovery
+  // exactly as moving the legacy name does. Registered in catalog/adopters.yaml.
+  'hugmesh-deploy.yaml',
   '.snapdragon-provenance.json',
   '.snapdragon-provenance.json.sig',
   '.snapdragon-mesh-admitted',

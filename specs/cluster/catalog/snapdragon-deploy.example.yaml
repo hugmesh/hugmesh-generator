@@ -1,12 +1,20 @@
 # snapdragon-deploy.yaml — the per-repo deploy descriptor (Phase 6 catalog).
 #
-# Drop this file at the ROOT of any snapdragon service repo to make its image
-# deployable on demand through ArgoCD. The catalog ApplicationSet
-# (apps/13-service-catalog.yaml) discovers every repo in the in-cluster Forgejo
-# org that contains a `snapdragon-deploy.yaml` + a `deploy/` kustomize dir and
-# generates an ArgoCD Application from it. Per-environment config flows to the pod
+# Drop this file at the ROOT of any service repo to make its image deployable on
+# demand through ArgoCD. The catalog ApplicationSet (apps/13-service-catalog.yaml)
+# discovers every repo in the in-cluster Forgejo org that contains a deploy
+# descriptor + a `deploy/` kustomize dir and generates an ArgoCD Application from
+# it. Per-environment config flows to the pod
 # via ConfigMaps + ESO; Spring Cloud Kubernetes (added in each service) picks up
 # those ConfigMaps/Secrets.
+#
+# FILENAME. Two spellings are contract and both are matched by a generator filter:
+# `snapdragon-deploy.yaml` (this example, and what 5 adopting repos ship) and
+# `hugmesh-deploy.yaml` (what the 3 repos whose rebrand renamed it ship). Prefer
+# this one for a NEW adopter — it is the name templates/archetypes/generator/
+# recipe.yaml records as frozen and the one publish-tenant-set.sh synthesises.
+# Ship exactly ONE of the two, and register the repo + the name it ships in
+# catalog/adopters.yaml, or scripts/validate-catalog-discovery.sh fails the build.
 #
 # This file is the human-facing contract; the actual manifests live in the repo's
 # deploy/ kustomize (image tag, ports, replicas, namespace, route). An admin

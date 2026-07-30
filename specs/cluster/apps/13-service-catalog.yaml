@@ -1,9 +1,11 @@
 # Service catalog (Phase 6) — turns "a deploy descriptor in each repo" into
 # deployable ArgoCD Applications. An ApplicationSet scans the in-cluster Forgejo
-# org and generates one Application per repo that opts in by carrying a
-# `snapdragon-deploy.yaml` + a `deploy/` kustomize dir (see catalog/
-# snapdragon-deploy.example.yaml). Admins spin up / update instances by editing
-# the descriptor + deploy/ and pushing — no hand-written Application per service.
+# org and generates one Application per repo that opts in by carrying a deploy
+# descriptor — EITHER `snapdragon-deploy.yaml` (legacy) OR `hugmesh-deploy.yaml`
+# (post-rebrand); both are live in the org — plus a `deploy/` kustomize dir (see
+# catalog/snapdragon-deploy.example.yaml). Admins spin up / update instances by
+# editing the descriptor + deploy/ and pushing — no hand-written Application per
+# service. The registered adoption state is catalog/adopters.yaml.
 #
 # CI SIDE (dev/CI-pipeline only): an onboarded repo also ships the pen-test CI stage
 # (catalog/ci/repo.gitlab-ci.yml, which include:s tests/pentest/ci/
@@ -12,7 +14,7 @@
 #
 # ⚠️ PREREQUISITES (scaffold until met): Forgejo seeded with the org repos
 # (Phase 5 activation); a read token in Secret forgejo-scm-token (ns devops);
-# repos adopting the snapdragon-deploy.yaml + deploy/ convention. Confirm the
+# repos adopting the <descriptor> + deploy/ convention. Confirm the
 # ApplicationSet controller is installed with ArgoCD (it is, in recent versions).
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -31,9 +33,32 @@ spec:
           tokenRef:
             secretName: forgejo-scm-token
             key: token
+        # TWO filter entries = a DISJUNCTION over the descriptor filename.
+        # ArgoCD's scmProvider evaluates `filters` as OR (a repo is emitted if it
+        # matches ANY entry) while the conditions INSIDE one entry are ANDed —
+        # and `pathsExist` is itself an AND-list, so ["a","b"] means BOTH must
+        # exist. There is therefore no way to express "either descriptor name"
+        # inside a single entry; the generator's own supported mechanism for a
+        # disjunction is a second entry. A repo carrying BOTH names still yields
+        # exactly ONE Application (the repo/branch list is deduped before the
+        # template is rendered, not once per matching filter).
+        #
+        # WHY BOTH NAMES. The HugMesh rebrand renamed the descriptor to
+        # `hugmesh-deploy.yaml` in 3 of the 9 adopting repos (be-gateway,
+        # mod-bff-api, remote-fragment) while 5 kept `snapdragon-deploy.yaml`
+        # (admin-bff-api, federation-api, forum-bff-api, forum-ui, user-bff-api).
+        # A single-name filter makes one of those groups INVISIBLE to the catalog
+        # — silently: an scmProvider that matches nothing is not an error, it just
+        # generates no Application. Renaming the file inside a repo this GitOps
+        # tree does not own is not an option either, so BOTH names are contract.
+        # The live adoption state is registered in catalog/adopters.yaml and
+        # scripts/validate-catalog-discovery.sh FAILS if any registered adopter's
+        # descriptor is not matched by an entry here.
         filters:
           - repositoryMatch: "^hugmesh-"
             pathsExist: ["snapdragon-deploy.yaml", "deploy"]
+          - repositoryMatch: "^hugmesh-"
+            pathsExist: ["hugmesh-deploy.yaml", "deploy"]
   template:
     metadata:
       name: "{{ .repository }}"

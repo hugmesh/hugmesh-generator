@@ -1,0 +1,110 @@
+# =============================================================================
+# CANONICAL SERVICE-CATALOG ADOPTER REGISTRY — the declared discovery state.
+# =============================================================================
+# Every org repo that has opted INTO the service catalog by shipping a deploy
+# descriptor + a `deploy/` kustomize dir, and WHICH SPELLING of the descriptor it
+# ships. This file is the single auditable answer to "which repos does the catalog
+# ApplicationSet actually generate an Application for?".
+#
+# WHY IT EXISTS. The catalog generators
+# (specs/cluster/apps/13-service-catalog.yaml, templates/apps/13d-brand-repos.yaml.hbs)
+# discover repos by `pathsExist` on a FIXED descriptor filename. The HugMesh
+# rebrand renamed that file to `hugmesh-deploy.yaml` in 3 of the 9 adopting repos
+# and left `snapdragon-deploy.yaml` in the other 6. Nothing anywhere noticed: an
+# scmProvider filter that matches no repo is not an error — the ApplicationSet
+# simply generates nothing, no event, no degraded Application, no log line. Three
+# repos were invisible to the catalog while their own descriptors' header comments
+# asserted they were discovered. THAT SILENCE is the defect this registry closes:
+#
+#   scripts/validate-catalog-discovery.sh (wired into .gitlab-ci.yml as
+#   lint:catalog-descriptor-discovery) FAILS the pipeline if any repo listed here
+#   carries a descriptor that NO generator filter matches, or if the registry has
+#   drifted from what the repos actually ship.
+#
+# HOW TO KEEP IT TRUE
+#   * A repo adopts the catalog  -> add it here with the descriptor name it ships.
+#   * A repo changes the spelling -> update `descriptor` here (the gate compares
+#     this file against the real repo trees, so it will fail until you do).
+#   * A NEW spelling appears      -> it must ALSO be added as a filter entry to
+#     BOTH generators, or the gate fails naming the now-invisible repo.
+#   * The CI clone list in .gitlab-ci.yml's lint:catalog-descriptor-discovery must
+#     stay in lockstep with `spec.adopters` — a repo listed here but not cloned
+#     makes the run INCOMPLETE (exit 3), never a silent green.
+#   * RE-SWEEP AGAINST THE ORG, NEVER AGAINST YOUR CHECKOUTS. `spec.sweep` below
+#     records how the adopter list was obtained; the gate FAILS if the sweep did
+#     not cover every repo the org has. The first cut of this registry was built
+#     from the operator's 33 local checkouts while the org had 38 repos, and it
+#     silently missed a real adopter (hugmesh-character-forge-bff-api) that had no
+#     local clone. That is what `spec.sweep` exists to make impossible to repeat.
+#
+# NOT a Kubernetes object and not referenced by any kustomization — it is a
+# registry, exactly like specs/cluster/reserved-prefixes.yaml.
+# -----------------------------------------------------------------------------
+apiVersion: hugmesh.systems/v1
+kind: ServiceCatalogAdopters
+metadata:
+  name: catalog-adopters
+spec:
+  # The org whose repos the upstream catalog generator scans (13-service-catalog).
+  org: Snapdragon-Systems
+
+  # PROVENANCE of the `adopters` list below — machine-checked by stage 1 of
+  # scripts/validate-catalog-discovery.sh, which FAILS when `sweptRepos` is less
+  # than `orgRepos`. A registry built from a partial sweep that CLAIMS to be
+  # complete is exactly how hugmesh-character-forge-bff-api went missing.
+  sweep:
+    date: "2026-07-30"
+    # How the repo list was ENUMERATED (must cover the org, not a local tree):
+    #   env -u GH_TOKEN gh repo list Snapdragon-Systems --limit 200 \
+    #     --json name,defaultBranchRef -q '.[] | select(.name|startswith("hugmesh-"))'
+    # and, per repo, the ROOT tree at its DEFAULT branch:
+    #   env -u GH_TOKEN gh api "repos/Snapdragon-Systems/<repo>/contents/?ref=<branch>"
+    # (default branch, not literally `main`: hugmesh-user-mesh-ui defaults to
+    # wip/scaffold, and the catalog scmProvider likewise scans the default branch.)
+    method: gh-api-org-listing
+    # Every `hugmesh-*` repo the org has, and how many of them were actually read.
+    # These MUST be equal; the gate fails otherwise.
+    orgRepos: 38
+    sweptRepos: 38
+  # Result of that sweep: 9 adopters, 6 legacy spelling + 3 rebranded, every one of
+  # them also carrying a root `deploy/`. No repo carries `deploy/` without a
+  # descriptor, and no repo carries both spellings.
+  adopters:
+    # ── legacy spelling: snapdragon-deploy.yaml (6) ──────────────────────────
+    - repo: hugmesh-admin-bff-api
+      descriptor: snapdragon-deploy.yaml
+    # No local checkout existed when this registry was first written, which is why
+    # it was missed; its descriptor's own header explains it deliberately kept the
+    # legacy spelling for exactly this discovery contract.
+    - repo: hugmesh-character-forge-bff-api
+      descriptor: snapdragon-deploy.yaml
+    - repo: hugmesh-federation-api
+      descriptor: snapdragon-deploy.yaml
+    - repo: hugmesh-forum-bff-api
+      descriptor: snapdragon-deploy.yaml
+    - repo: hugmesh-forum-ui
+      descriptor: snapdragon-deploy.yaml
+    - repo: hugmesh-user-bff-api
+      descriptor: snapdragon-deploy.yaml
+    # ── rebranded spelling: hugmesh-deploy.yaml (3) ──────────────────────────
+    # Renamed by each repo's own rebrand PR. This GitOps tree does not own those
+    # repos, so the generators accept the name rather than the repos reverting it.
+    - repo: hugmesh-be-gateway
+      descriptor: hugmesh-deploy.yaml
+    - repo: hugmesh-mod-bff-api
+      descriptor: hugmesh-deploy.yaml
+    - repo: hugmesh-remote-fragment
+      descriptor: hugmesh-deploy.yaml
+
+  # Every descriptor spelling the platform's own tooling emits, protects or
+  # documents. The gate asserts each is matched by a generator filter, so a name
+  # that in-tree machinery can PRODUCE can never be one the catalog cannot SEE.
+  emitters:
+    - name: snapdragon-deploy.yaml
+      where: scripts/publish-tenant-set.sh (ensure_discovery_contract synthesises it)
+    - name: snapdragon-deploy.yaml
+      where: specs/cluster/catalog/snapdragon-deploy.example.yaml (the documented example)
+    - name: snapdragon-deploy.yaml
+      where: scripts/tooling/render-recipe.js (RENAME_CONTRACT_DENYLIST)
+    - name: hugmesh-deploy.yaml
+      where: scripts/tooling/render-recipe.js (RENAME_CONTRACT_DENYLIST)

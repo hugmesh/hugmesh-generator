@@ -584,11 +584,14 @@ render): absolute paths; any `..` segment; a realpath (symlinked parents
 included) escaping the target tree; renaming a **directory** (files only — a dir
 rename could silently move the `deploy/` discovery contract); clobbering an
 existing destination; and the hardcoded **contract denylist** —
-`snapdragon-deploy.yaml`, `.snapdragon-provenance.json`,
+`snapdragon-deploy.yaml`, `hugmesh-deploy.yaml`, `.snapdragon-provenance.json`,
 `.snapdragon-mesh-admitted` (renaming those breaks the 13d `pathsExist`
 discovery filter, the fixed provenance manifest name, and the publish
 launder-refusal stamp reads) plus their siblings (`.sig`, base-origin/base-ref
-markers). A missing optional `from` no-ops (presence-tolerant, like anchors);
+markers). BOTH deploy-descriptor spellings are denylisted because both are live:
+the rebrand renamed the file in 3 of the 9 adopting repos, so 13d and
+13-service-catalog each carry a filter entry for each name
+(`specs/cluster/catalog/adopters.yaml`). A missing optional `from` no-ops (presence-tolerant, like anchors);
 `required: true` refuses. The recipe-touched backstop scan in
 `render-repo-tree.sh` follows the rename map so a moved file is still scanned.
 

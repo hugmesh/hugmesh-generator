@@ -69,7 +69,8 @@ edits:
 # renames[] PILOT (the first per-org FILE rename in the pipeline): the branding
 # doc is re-filed under the tenant's org slug so N orgs' generator copies carry
 # distinctly-named branding docs (safe, NON-CONTRACT file — the engine refuses
-# contract names like snapdragon-deploy.yaml / .snapdragon-provenance.json /
+# contract names like snapdragon-deploy.yaml + hugmesh-deploy.yaml (both deploy-
+# descriptor spellings are live and filtered on) / .snapdragon-provenance.json /
 # .snapdragon-mesh-admitted outright). Applied AFTER edits; both sides rendered
 # through the same fail-closed classifier gate.
 renames:

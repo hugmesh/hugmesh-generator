@@ -309,8 +309,14 @@ remotes (the `social-ui` ArgoCD grouping), and hugmesh.games. See
 > already configured to scan the in-cluster Forgejo) and the deploy contract
 > (`catalog/snapdragon-deploy.example.yaml`) all exist — but the source flip is
 > **live-gated** (needs a booted Forgejo + admin + OIDC + the org mirror +
-> `forgejo-scm-token`), and **no service repo has adopted `snapdragon-deploy.yaml`
-> + a `deploy/` kustomize tree yet** (prep-able now). See [`DEVOPS.md`](DEVOPS.md).
+> `forgejo-scm-token`). **9 service repos have adopted the descriptor + a
+> `deploy/` kustomize tree** — 6 as `snapdragon-deploy.yaml`, 3 as
+> `hugmesh-deploy.yaml` after the rebrand, all ships-dark until the flip. The
+> generators filter on **both** names; the live adoption state is registered in
+> [`catalog/adopters.yaml`](../specs/cluster/catalog/adopters.yaml) and enforced by
+> `scripts/validate-catalog-discovery.sh`. The org has **38** `hugmesh-*` repos,
+> **32** of which produce a container image, so **23 have not adopted yet**
+> (prep-able now, no cluster needed). See [`DEVOPS.md`](DEVOPS.md).
 
 ### Autoscaling
 

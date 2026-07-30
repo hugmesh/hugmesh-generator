@@ -47,13 +47,35 @@ source-of-truth is **scaffolded but not cut over**:
   (`http://forgejo.hugmesh-pki.svc.cluster.local:3000`, `repositoryMatch
   ^hugmesh-`) — and the deploy contract
   (`specs/cluster/catalog/snapdragon-deploy.example.yaml`).
+- ✅ **Adoption started (9 of the 32 image-producing repos, all ships-dark).**
+  Counted over the whole org, not a local tree: `gh repo list Snapdragon-Systems`
+  returns **38** `hugmesh-*` repos, **32** of which ship a root `Dockerfile` (the
+  six that do not are `auth-core`, `build-config`, `commons`, `games`, `generator`,
+  `parent`). Registered in `specs/cluster/catalog/adopters.yaml`, whose `spec.sweep`
+  block records that provenance and is itself gate-checked:
+  - `snapdragon-deploy.yaml` + `deploy/` — `admin-bff-api`,
+    `character-forge-bff-api`, `federation-api`, `forum-bff-api`, `forum-ui`,
+    `user-bff-api` (the pilot).
+  - `hugmesh-deploy.yaml` + `deploy/` — `be-gateway`, `mod-bff-api`,
+    `remote-fragment`; their rebrand PRs renamed the descriptor.
+  The catalog generators filter on **both** filenames (two `filters` entries — the
+  scmProvider ORs across entries and ANDs inside one, and `pathsExist` is itself an
+  AND-list, so a single entry cannot express the disjunction). Until 2026-07-30 they
+  matched the legacy name only, which made those 3 repos **silently invisible** to
+  the catalog. `scripts/validate-catalog-discovery.sh` (CI job
+  `lint:catalog-descriptor-discovery`) now fails the pipeline if any adopting repo
+  ships a descriptor no generator matches.
 - ⏳ **Remaining (live-gated):** the actual GitOps **source flip** needs a booted
   Forgejo + an admin + OIDC + the GitHub→Forgejo org mirror + a read token in the
   `forgejo-scm-token` Secret (ns `devops`) before the ApplicationSet can scan
-  anything real (the manifest itself flags these as prerequisites). And **no
-  service repo has adopted `snapdragon-deploy.yaml` + a `deploy/` kustomize tree
-  yet** — that adoption is prep-able now (no live cluster required), it just hasn't
-  been done.
+  anything real (the manifest itself flags these as prerequisites).
+- ⏳ **Remaining (NOT gated):** the other **23** image-producing repos have not
+  adopted a descriptor + `deploy/` tree yet — prep-able now, no live cluster
+  required, using the 9 above as exemplars. Register each one in
+  `catalog/adopters.yaml` (and add it to the CI clone list) as it lands. **Re-sweep
+  the org, never your checkouts:** `character-forge-bff-api` had adopted the
+  descriptor for months and was missed because the first sweep only looked at the
+  33 repos that happened to be cloned locally.
 
 ## Fast binary OS updates via the binhost
 

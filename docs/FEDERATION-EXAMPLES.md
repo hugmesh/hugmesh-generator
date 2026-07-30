@@ -159,8 +159,9 @@ Adding a remote to a live mesh touches eight places. The example trio exercises
    rule; a per-brand `domain` scope keeps a brand-Y grant from ever reaching a
    brand-X caller.
 
-8. **k8s + ArgoCD.** The remote's `deploy/` (Deployment/Service/nginx) +
-   `snapdragon-deploy.yaml` catalog descriptor, discovered by the brand-repo
+8. **k8s + ArgoCD.** The remote's `deploy/` (Deployment/Service/nginx) + its
+   catalog descriptor (`snapdragon-deploy.yaml` or `hugmesh-deploy.yaml` — the
+   generators filter on both), discovered by the brand-repo
    ApplicationSet (`13d`) and, for optional services, gated by the
    optional-services operator (`13a`/`13d`) which prunes the whole
    `manifests/<slug>/` dir when the slug is deselected.

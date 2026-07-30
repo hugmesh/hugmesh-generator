@@ -11,10 +11,12 @@
 #  >>> FORGEJO — matching the only working ApplicationSet (13-service-catalog).  <<<
 #
 # WHAT IT DOES, per rendered repo dir out/<brand>-<repo>/:
-#   1. DISCOVERY CONTRACT: ensure the tree ships `snapdragon-deploy.yaml` + a
-#      `deploy/` kustomize dir (the 13-catalog / 13d-brand-repos appset filter
-#      requires BOTH to discover the repo). The render-tenant-set trees do NOT
-#      carry them, so we synthesise a minimal, brand-scoped pair when absent.
+#   1. DISCOVERY CONTRACT: ensure the tree ships a deploy descriptor
+#      (`snapdragon-deploy.yaml` OR `hugmesh-deploy.yaml` — the appsets filter on
+#      both) + a `deploy/` kustomize dir (the 13-catalog / 13d-brand-repos appset
+#      filter requires BOTH a descriptor and deploy/ to discover the repo). The
+#      render-tenant-set trees do NOT carry them, so we synthesise a minimal,
+#      brand-scoped pair when NEITHER descriptor spelling is present.
 #   2. PROVENANCE: write `.snapdragon-provenance.json` (+ detached Ed25519 .sig
 #      when a signing key is provided out-of-band) — see scripts/provenance.sh.
 #   3. SECRET-SCAN GATE: scripts/secret-scan.sh over the WHOLE tree (incl. the
@@ -256,15 +258,25 @@ forgejo_ensure_pr() {
   esac
 }
 
-# ── DISCOVERY CONTRACT: ensure snapdragon-deploy.yaml + deploy/ exist ────────
-# The 13d appset filter requires BOTH. render-tenant-set trees do not carry them,
-# so synthesise a minimal, brand-scoped pair when absent. Idempotent: only writes
-# when missing, and the content is a pure function of (brand, repo) so re-runs are
-# byte-stable. These are DISCOVERY SCAFFOLDS — a live tenant replaces deploy/ with
-# the repo's real kustomize overlay; the descriptor marks the repo as catalog-opted-in.
+# ── DISCOVERY CONTRACT: ensure a deploy descriptor + deploy/ exist ───────────
+# The 13d appset filter requires a descriptor AND deploy/. render-tenant-set trees
+# do not carry them, so synthesise a minimal, brand-scoped pair when absent.
+# Idempotent: only writes when missing, and the content is a pure function of
+# (brand, repo) so re-runs are byte-stable. These are DISCOVERY SCAFFOLDS — a live
+# tenant replaces deploy/ with the repo's real kustomize overlay; the descriptor
+# marks the repo as catalog-opted-in.
+#
+# EITHER descriptor spelling satisfies the contract (13d filters on both since the
+# HugMesh rebrand left `hugmesh-deploy.yaml` in some org repos and
+# `snapdragon-deploy.yaml` in others). A tree that already ships EITHER name is
+# left alone — synthesising a second descriptor next to an existing one would put
+# two conflicting contracts in one repo, and the appset would still emit exactly
+# one Application, so the extra file is pure drift. New scaffolds keep the legacy
+# spelling: it is the name templates/archetypes/generator/recipe.yaml records as
+# frozen and the one catalog/snapdragon-deploy.example.yaml documents.
 ensure_discovery_contract() {
   local dir="$1" brand="$2" repo="$3"
-  if [[ ! -f "${dir}/snapdragon-deploy.yaml" ]]; then
+  if [[ ! -f "${dir}/snapdragon-deploy.yaml" && ! -f "${dir}/hugmesh-deploy.yaml" ]]; then
     cat > "${dir}/snapdragon-deploy.yaml" <<EOF
 # snapdragon-deploy.yaml — catalog opt-in descriptor (Phase 5 discovery contract).
 # Presence of THIS file + a deploy/ kustomize dir is what the brand-repo

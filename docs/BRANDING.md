@@ -10,8 +10,10 @@ renders a tenant copy, this very file is re-filed as
 `docs/BRANDING-<org-slug>.md`, so each org's copy carries a distinctly-named
 branding doc. It is a deliberately safe, **non-contract** file — the rename
 engine (scripts/tooling/render-recipe.js) refuses to rename the contract set
-(`snapdragon-deploy.yaml`, `.snapdragon-provenance.json`,
-`.snapdragon-mesh-admitted`, and their marker siblings) outright.
+(`snapdragon-deploy.yaml` **and** `hugmesh-deploy.yaml` — both descriptor
+spellings are live in the org, see `specs/cluster/catalog/adopters.yaml` —
+`.snapdragon-provenance.json`, `.snapdragon-mesh-admitted`, and their marker
+siblings) outright.
 
 ## Rebranded in a tenant copy (the whole list)
 

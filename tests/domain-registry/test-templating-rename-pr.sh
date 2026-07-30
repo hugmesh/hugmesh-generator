@@ -138,11 +138,31 @@ renames:
   - { from: docs/BRANDING.md, to: "sub/../../escape.md" }' "$T"
 if [ $RC -ne 0 ] && [ ! -e "${WORK}/escape.md" ]; then ok "A8 '..' TO (outside-tree) refused"; else bad "A8 dotdot to"; fi
 
-# Contract denylist — the 3 PINNED names, exercised on BOTH sides.
+# Contract denylist — the PINNED names, exercised on BOTH sides.
 run_recipe A9 'edits: []
 renames:
   - { from: docs/BRANDING.md, to: "snapdragon-deploy.yaml" }' "$T"
 [ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9.err" && ok "A9 contract denylist TO=snapdragon-deploy.yaml refused" || bad "A9 deploy-descriptor rename accepted"
+
+# The post-rebrand spelling of the SAME contract. 3 org repos ship this name and
+# both catalog generators filter on it (specs/cluster/catalog/adopters.yaml), so
+# renaming it un-discovers the repo exactly as renaming the legacy name does. This
+# is the only place the denylist is exercised behaviourally — the discovery gate
+# only string-greps the JS source — so the entry needs its own case on BOTH sides.
+run_recipe A9b 'edits: []
+renames:
+  - { from: docs/BRANDING.md, to: "hugmesh-deploy.yaml" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9b.err" && ok "A9b contract denylist TO=hugmesh-deploy.yaml refused" || bad "A9b rebranded deploy-descriptor rename accepted"
+
+run_recipe A9c 'edits: []
+renames:
+  - { from: hugmesh-deploy.yaml, to: "docs/d.yaml" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9c.err" && ok "A9c contract denylist FROM=hugmesh-deploy.yaml refused" || bad "A9c rebranded deploy-descriptor rename-away accepted"
+
+run_recipe A9d 'edits: []
+renames:
+  - { from: snapdragon-deploy.yaml, to: "docs/d.yaml" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9d.err" && ok "A9d contract denylist FROM=snapdragon-deploy.yaml refused" || bad "A9d legacy deploy-descriptor rename-away accepted"
 
 run_recipe A10 'edits: []
 renames:
