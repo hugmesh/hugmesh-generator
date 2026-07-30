@@ -3112,8 +3112,51 @@ if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_URL}.DIGESTS"; then
     exit 1
 fi
 
+# ── Concurrent-build exclusion (flock) ─────────────────────────────────────────
+# Two builds of the SAME role share BUILD_ROOT (wl-<role>.<arch>) when launched
+# from one WORK_DIR, and — even from DIFFERENT WORK_DIRs — share the host portage
+# scratch (/var/tmp[/portage]/snap-portage-${BUILD_SUBDIR}, see mount_chroot),
+# because that path is keyed on BUILD_SUBDIR alone. There was NO lock anywhere:
+# on 2026-07-25, session 20260725-140638-09692d (standalone-unaffiliated) started
+# at 14:06 while 20260725-061608-978c99 (same role, its own WORK_DIR) was still
+# mid-emerge; both chroots had the SAME scratch bind-mounted at /var/tmp/portage,
+# and 09692d's build.log ends MID-COMPILE of media-gfx/inkscape-1.4.4
+# ("[788/1186] ... tile.cpp" is the last line — no compiler error, no summary:
+# the shared per-package workdir was cleaned out from under gcc by the other
+# build's portage). The fresh-start path below is worse still: it rm -rf's the
+# whole sysroot, which would delete THROUGH any still-attached bind mounts of a
+# live build (host /dev via the rbind, the shared scratch).
+# Fix: an exclusive NON-BLOCKING flock per BUILD_ROOT (taken here and re-checked
+# at mount_chroot) plus one per scratch dir (taken in mount_chroot before the
+# bind), so the second build fails FAST naming the holder instead of corrupting
+# the first. Lockfiles are SIBLINGS of the guarded dirs (never inside a dir any
+# cleanup deletes — deleting a held lockfile would let a third build acquire a
+# fresh lock on the same path mid-deletion). fd 217/218 stay open for the life
+# of the build; the kernel releases flocks on process death, so a crashed build
+# can never wedge the next one.
+acquire_build_lock() {
+    [ -n "${_BUILD_LOCK_HELD:-}" ] && return 0
+    # util-linux flock — same package as the already-hard-required losetup/mount.
+    command -v flock >/dev/null \
+        || { err "flock(1) not found (util-linux) — cannot guard against a concurrent build of this role"; exit 1; }
+    mkdir -p "$(dirname "${BUILD_ROOT}")"
+    exec 217>>"${BUILD_ROOT}.lock"
+    if ! flock -n 217; then
+        err "another build already holds ${BUILD_ROOT}"
+        err "holder: $(cat "${BUILD_ROOT}.lock" 2>/dev/null || echo '<unreadable>')"
+        err "Two concurrent builds of one role share the sysroot and the portage scratch —"
+        err "that is what killed session 20260725-140638-09692d mid-compile. Wait for the"
+        err "other build, or give this one its own --build-subdir."
+        exit 1
+    fi
+    printf 'pid=%s build_ts=%s role=%s work_dir=%s started=%s\n' \
+        "$$" "${BUILD_TS}" "${ROLE:-?}" "${WORK_DIR}" "$(date -u +%FT%TZ)" > "${BUILD_ROOT}.lock"
+    _BUILD_LOCK_HELD=1
+}
+
 # ── 3. Extract ─────────────────────────────────────────────────────
 banner "Extracting stage3"
+acquire_build_lock
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot populated and --resume — skipping extraction"
 else
@@ -3123,6 +3166,24 @@ else
     # slots surviving + libselinux[python] conflicts). Wipe first so the extract
     # is pristine. (Warm reuse is the explicit --resume path above.)
     if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
+        # NEVER rm -rf a sysroot that still has mounts under it: a live (or
+        # crashed) build leaves /proc,/sys,/dev RBINDS and the SHARED portage
+        # scratch attached, and rm -rf would delete straight through them.
+        # The flock above excludes a LIVE same-BUILD_ROOT build; this catches a
+        # crashed one (flock died with it, mounts did not).
+        # Captured into a variable, NOT `findmnt | grep -q`: under this script's
+        # pipefail, grep -q exiting at the first match can SIGPIPE findmnt on a
+        # mount-heavy host (>64K of table after the match), turning the pipeline
+        # status non-zero — i.e. the guard silently NOT firing with mounts
+        # present, the one direction this check must never fail in.
+        _stale_mounts="$(findmnt -rn -o TARGET 2>/dev/null | grep "^${SYSROOT}/" || true)"
+        if [ -n "${_stale_mounts}" ]; then
+            err "mounts are still attached under ${SYSROOT} (a crashed build?):"
+            printf '%s\n' "${_stale_mounts}" | head -5 >&2
+            err "rm -rf would delete THROUGH those binds (host /dev, the shared portage"
+            err "scratch). Unmount first:  umount -R '${SYSROOT}'  — then re-run."
+            exit 1
+        fi
         warn "Non-resume build over a populated sysroot — wiping for a clean stage3 extract"
         rm -rf "${SYSROOT}"; mkdir -p "${SYSROOT}"
     fi
@@ -4170,6 +4231,10 @@ fi
 
 cp -L /etc/resolv.conf "${SYSROOT}/etc/resolv.conf" 2>/dev/null || true
 mount_chroot() {
+    # Exclusive-build guard FIRST (idempotent — see the flock rationale at the
+    # Extract phase): a --resume run reaches here without passing the fresh-start
+    # wipe, so this is the last stop before two builds could share one chroot.
+    acquire_build_lock
     mount -t proc none "${SYSROOT}/proc"
     mount --rbind /sys  "${SYSROOT}/sys";  mount --make-rslave "${SYSROOT}/sys"
     mount --rbind /dev  "${SYSROOT}/dev";  mount --make-rslave "${SYSROOT}/dev"
@@ -4195,6 +4260,25 @@ mount_chroot() {
         local scratchbase=/var/tmp
         mountpoint -q /var/tmp/portage 2>/dev/null && scratchbase=/var/tmp/portage
         local scratch="${scratchbase}/snap-portage-${BUILD_SUBDIR}"
+        # The scratch path is keyed on BUILD_SUBDIR ALONE, so same-role builds
+        # from DIFFERENT WORK_DIRs (each holding its own BUILD_ROOT lock) still
+        # collide right here — the 20260725-140638-09692d kill (see the flock
+        # rationale at the Extract phase). Sibling lockfile, non-blocking, held
+        # on fd 218 for the life of the build.
+        if [ -z "${_SCRATCH_LOCK_HELD:-}" ]; then
+            exec 218>>"${scratch}.lock"
+            if ! flock -n 218; then
+                err "portage build scratch ${scratch} is held by another build:"
+                err "holder: $(cat "${scratch}.lock" 2>/dev/null || echo '<unreadable>')"
+                err "(same --build-subdir from another work dir — both chroots would bind THIS"
+                err "dir at /var/tmp/portage and portage's own per-package clean would delete"
+                err "the other build's in-flight compile tree). Refusing to share it."
+                exit 1
+            fi
+            printf 'pid=%s build_ts=%s role=%s work_dir=%s started=%s\n' \
+                "$$" "${BUILD_TS}" "${ROLE:-?}" "${WORK_DIR}" "$(date -u +%FT%TZ)" > "${scratch}.lock"
+            _SCRATCH_LOCK_HELD=1
+        fi
         local availg; availg=$(df -BG --output=avail "${scratchbase}" 2>/dev/null | tail -1 | tr -dc '0-9')
         [ "${availg:-99}" -lt 15 ] && warn "only ${availg}G free on ${scratchbase} (xfs) for build scratch; a large parallel build may fill it (EMERGE_JOBS is held low to bound this)."
         mkdir -p "${scratch}" "${SYSROOT}/var/tmp/portage"
@@ -4458,9 +4542,33 @@ fi
 # unescaped dollar signs, backticks and dollar-parens, so the HOST shell expands
 # nothing of it. tests/build-matrix/check.sh's emerge-group-banners probe
 # re-verifies that mechanically on every run.
-# system: sys-apps/baselayout + the gettext downgrade are profile/base-layer
-# packages (the filesystem layout and the .mo-collision pin), not payload.
+# system: sys-apps/portage + sys-apps/baselayout + the gettext downgrade are
+# profile/base-layer packages (the package manager itself, the filesystem
+# layout and the .mo-collision pin), not payload.
 echo "==> Emerge group: system"
+# ── sys-apps/portage FIRST and ALONE ──────────────────────────────────────────
+# portage must NEVER self-upgrade in the middle of a long emerge: the running
+# python keeps its old import graph while the merge replaces portage's files on
+# disk, and the very next merge of that same run dies importing a module the
+# upgrade moved. Live evidence (out/sessions/20260725-061608-978c99/build.log):
+# sys-apps/portage-3.0.81.2 merged as "(238 of 258)" mid-run, then "(239 of
+# 258)" died with
+#   ModuleNotFoundError: No module named 'portage.util.env_update'
+#   >>> Failed to install sys-apps/groff-1.23.0-r2, Log file:
+# and the resumed run dropped 17 core packages (pam, dbus, gtk+3, polkit, ...)
+# under --keep-going, with 3 more merges dying the same ">>> Failed to install"
+# death (groff, elogind, pam_wrapper) — all shipped as PROD artifacts with
+# exit 0. Session 20260724-013844-53b498 lost app-admin/perl-cleaner
+# ("(67 of 67)") the same way. So: bring portage current in its OWN
+# single-package emerge (the run ends right after the self-replace — the
+# sequence emerge itself nags for), and belt-and-suspenders EXCLUDE it from
+# the long passes below so a failed oneshot can never re-queue the
+# self-upgrade mid-run. It sits at the TOP of the 'system' group: the merges
+# after it are then served by the CURRENT portage, and the Studio lists the
+# package manager under system rather than under whatever group a later
+# banner (e.g. Steam's 'tools') happens to have opened.
+emerge --oneshot --update sys-apps/portage \
+    || echo "[build-x86] WARN: standalone sys-apps/portage update failed; continuing with the seed portage (the passes below exclude it, so the mid-run self-replace hazard stays closed)"
 emerge --oneshot --update --newuse sys-apps/baselayout || true
 # gettext-0.23.x empty-\$(DOMAIN) .mo-collision pin (see package.mask/gettext):
 # the stage3 seed ships gettext-0.23.2, so the mask (which only blocks upgrades)
@@ -4471,10 +4579,28 @@ emerge --oneshot --update --newuse sys-apps/baselayout || true
 emerge --oneshot --update "<sys-devel/gettext-0.23" \
     || echo "[build-x86] WARN: gettext downgrade to <0.23 unavailable; relying on INSTALL_MASK"
 ${STEAM_OVERLAY_SETUP}
+# Stream-mirror emerge output while extracting the three failure-notice shapes
+# portage emits under --keep-going (consumed by the EMERGE FAILURE-NOTICE GATE
+# below). awk, not tee with a process substitution: the pipeline only completes
+# after awk exits, so the sink file is fully written when the gate reads it —
+# no process-substitution flush race, no bash-5.1 wait dependency. (And per the
+# NB above: NO backticks/dollar-parens anywhere in this heredoc, comments
+# included — a backticked tee example here EXECUTED at host render and ate the
+# operator's stdin, hanging the build at this very phase.) Byte shapes taken
+# verbatim from out/sessions/20260725-061608-978c99/build.log — note the drop
+# notice WRAPS mid-phrase (" * emerge --keep-going: x11-themes/adwaita-icon-
+# theme-legacy-46.2 dropped" / " * because it requires x11-libs/gtk+:3"), so
+# matching the full phrase "dropped because it requires" would MISS lines; the
+# stable anchor is the " * emerge --keep-going: " prefix, which only the FIRST
+# line of each notice carries (continuations are " * " + text).
+_emerge_notice_sink() {
+    awk '/^>>> Failed to (emerge|install) / || /^ \* emerge --keep-going: / { print >> "/tmp/hugmesh-emerge-failures.log" } { print }'
+}
+: > /tmp/hugmesh-emerge-failures.log
 # Apply our profile/USE across @world without churning the toolchain.
 # world: the literal @world set — its own group.
 echo "==> Emerge group: world"
-emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
+emerge --update --deep --newuse --keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world 2>&1 | _emerge_notice_sink \
     || echo "[build-x86] WARN: @world had package failures (--keep-going); continuing"
 # Ensure the stage4 package set is present (deps included).
 # --autounmask-continue auto-applies any required USE-flag change and continues
@@ -4489,7 +4615,8 @@ emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
 echo "==> Emerge group: image"
 emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
-    ${EMERGE_EXCLUDE} ${PKGS} \
+    --exclude sys-apps/portage \
+    ${EMERGE_EXCLUDE} ${PKGS} 2>&1 | _emerge_notice_sink \
     || { echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
          # DIAGNOSTIC: --autounmask-continue is NOT applying needed USE changes in
          # this chroot, so resolution dies one conflict at a time. A PRETEND
@@ -4498,7 +4625,7 @@ emerge --update --deep --newuse --keep-going \
          # package.use specs at once instead of whack-a-mole.
          echo "[build-x86] ===== AUTOUNMASK-PRETEND: full USE/keyword changes the payload needs ====="
          emerge --pretend --autounmask=y --autounmask-write=n --autounmask-backtrack=y \
-             --keep-going ${EMERGE_EXCLUDE} ${PKGS} 2>&1 \
+             --keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} ${PKGS} 2>&1 \
              | grep -E 'USE changes|keyword changes|^# |^>=|^<|^=|Change USE|necessary|masked by' \
              || true
          echo "[build-x86] ===== END AUTOUNMASK-PRETEND ====="; }
@@ -4556,8 +4683,8 @@ with open("/tmp/hugmesh-requested-atoms.txt") as fh:
                 out.append(atom)
         except Exception as exc:
             out.append("%s  (unparsable atom: %s)" % (atom, exc))
-# Emit NOTHING when nothing is missing. `print("\n".join([]))` writes a bare
-# newline, which is a 1-byte file — and `[ -s file ]` is TRUE for that, so the
+# Emit NOTHING when nothing is missing. Joining an empty list still prints a
+# bare newline, which is a 1-byte file — and -s is TRUE for that, so the
 # gate failed EVERY clean build with "1 requested package(s) are NOT installed"
 # followed by a blank line. That is exactly what killed the 2026-07-29 x86 pki
 # mesh build (out/sessions/20260729-065121-ce11e0/build-pki.x86.log) after a
@@ -4585,6 +4712,84 @@ if [ "\${_missing_n}" -gt 0 ]; then
     fi
 else
     echo "[build-x86] Package completeness: all \$(sort -u /tmp/hugmesh-requested-atoms.txt | grep -c .) requested atoms installed."
+fi
+# ── EMERGE FAILURE-NOTICE GATE ────────────────────────────────────────────────
+# The requested-atom gate above only verifies atoms WE asked for. A DEPENDENCY
+# that fails ships just as silently: session 20260725-061608-978c99 lost 20 core
+# packages (sys-libs/pam, sys-apps/dbus, x11-libs/gtk+, sys-auth/polkit, ... —
+# 17 dropped + groff/elogind/pam_wrapper dead in the merge phase) to
+# an emerge --keep-going cascade — none of them requested atoms — and still
+# emitted PROD artifacts with exit 0. The only trace was in the emerge output:
+#   >>> Failed to install sys-apps/groff-1.23.0-r2, Log file:
+#    * emerge --keep-going: sys-apps/dbus-1.16.2 dropped because it requires sys-
+# ">>> Failed to install" (a MERGE-phase death, e.g. the portage self-upgrade
+# ModuleNotFoundError above) and the "dropped because it requires" cascade are
+# shapes no assertion ever looked at. The _emerge_notice_sink captured every
+# such line; here each named package is VERIFIED against portage's vardb (a
+# later pass may legitimately have healed it — e.g. autounmask on the second
+# emerge), and anything still absent fails the build. Exact-version match on
+# purpose: the failed cpv absent from vardb is the signal; an OLD version left
+# behind by the failed upgrade must NOT count as healed (groff was exactly
+# that case). Unparsable/wrapped notices count as failures — fail closed.
+if [ -s /tmp/hugmesh-emerge-failures.log ]; then
+    sort -u /tmp/hugmesh-emerge-failures.log > /tmp/hugmesh-emerge-failures.uniq
+    : > /tmp/hugmesh-emerge-still-broken.txt
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - <<'PYEOF' > /tmp/hugmesh-emerge-still-broken.txt || echo "[build-x86] WARN: failure-notice gate could not run (portage python API error) — emerge failure notices NOT verified" >&2
+import re
+import portage
+vardb = portage.db[portage.settings["EROOT"]]["vartree"].dbapi
+pat_fail = re.compile(r'>>> Failed to (?:emerge|install) (\S+)')
+pat_drop = re.compile(r'\* emerge --keep-going: (\S+)')
+seen, still = set(), []
+with open("/tmp/hugmesh-emerge-failures.uniq") as fh:
+    for line in fh:
+        line = line.rstrip("\n")
+        if not line.strip():
+            continue
+        m = pat_fail.search(line) or pat_drop.search(line)
+        if not m:
+            still.append(line.strip() + "  [unparsable notice - counted as failed]")
+            continue
+        cpv = m.group(1).rstrip(",")
+        if cpv in seen:
+            continue
+        seen.add(cpv)
+        try:
+            if not vardb.match("=" + cpv):
+                still.append(cpv + "  (" + line.strip() + ")")
+        except Exception as exc:
+            still.append(cpv + "  [unverifiable atom: " + str(exc) + " - counted as failed]")
+# Emit NOTHING when clean — print("\n".join([])) writes a 1-byte newline the
+# shell side would miscount (the exact bug the requested-atom gate shipped once;
+# see its comment). Same guard here.
+if still:
+    print("\n".join(still))
+PYEOF
+    else
+        # No python3 = no vardb verification; treat every notice as unresolved.
+        cp /tmp/hugmesh-emerge-failures.uniq /tmp/hugmesh-emerge-still-broken.txt
+    fi
+    _broken_n=\$(grep -c '[^[:space:]]' /tmp/hugmesh-emerge-still-broken.txt 2>/dev/null || true)
+    [ -n "\${_broken_n}" ] || _broken_n=0
+    if [ "\${_broken_n}" -gt 0 ]; then
+        echo "[build-x86] ERROR: emerge reported \${_broken_n} failed/dropped merge(s) still absent from the system:"
+        sed 's/^/[build-x86]          /' /tmp/hugmesh-emerge-still-broken.txt
+        echo "[build-x86]        These are dependency-level failures the requested-atom gate cannot see"
+        echo "[build-x86]        (a dep is not a requested atom). Per-package logs: /var/log/portage/build/."
+        if [ "${ALLOW_MISSING_PACKAGES}" = "true" ]; then
+            echo "[build-x86] WARN: --allow-missing-packages given — shipping a DEGRADED image anyway."
+        else
+            echo "[build-x86]        Fix them, or rebuild with --allow-missing-packages to accept a"
+            echo "[build-x86]        knowingly degraded image."
+            exit 1
+        fi
+    else
+        _notice_n=\$(grep -c '[^[:space:]]' /tmp/hugmesh-emerge-failures.uniq 2>/dev/null || true)
+        echo "[build-x86] Emerge failure notices: \${_notice_n:-0} line(s) seen, every named package verified installed by a later pass."
+    fi
+else
+    echo "[build-x86] Emerge failure notices: none."
 fi
 CHROOT
 
@@ -4902,6 +5107,39 @@ CHROOT
     info "Gentoo hardened kernel + disk-boot initramfs installed to ${SYSROOT}/boot"
 fi
 
+# ── DISK-INITRAMFS GATE (a disk-boot artifact must never seal without one) ─────
+# The dracut step inside the kernel chroot above is WARN-ONLY by design (ISO-
+# only/tar-only builds should not be hostage to it) — but build_img's grub.cfg
+# writer then just OMITS the "initrd" line when the file is missing (see the
+# `[ -n "${initrd}" ] &&` guard there), sealing an .img whose kernel boots with
+# no initramfs at all: no rd.luks for an encrypted root, no dm_crypt/usb/nvme
+# staging — an unbootable disk on most real hardware, shipped with exit 0. Same
+# posture as build_img's grub-mkimage gate ("refusing to ship a non-booting
+# .img"): when a disk-boot artifact is requested (.img, or the installer ISO —
+# the system it installs boots from this same stage4 /boot) and a kernel is
+# present, the MATCHING initramfs-<kver>.img must exist and be non-empty.
+# <kver> is pinned to the newest /lib/modules entry: a stale initramfs left by a
+# previous kernel would pass a bare existence probe and still fail to boot the
+# new kernel (module tree mismatch). Runs OUTSIDE the SKIP_KERNEL conditional on
+# purpose — a --resume/--skip-kernel run with a warm sysroot needs the same
+# guarantee. No kernel at all stays a skip (build_img already warns + skips).
+if ${BUILD_IMG} || ${INSTALLER_ISO}; then
+    _gate_kver="$(ls "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1 || true)"
+    _gate_vmlinuz="$(ls -1 "${SYSROOT}/boot/vmlinuz-"* "${SYSROOT}/boot/vmlinuz" 2>/dev/null | head -1 || true)"
+    if [ -n "${_gate_kver}" ] && [ -n "${_gate_vmlinuz}" ]; then
+        if [ ! -s "${SYSROOT}/boot/initramfs-${_gate_kver}.img" ]; then
+            err "disk initramfs missing or EMPTY: ${SYSROOT}/boot/initramfs-${_gate_kver}.img"
+            err "dracut failed (see the WARN in the kernel phase above) or sys-kernel/dracut"
+            err "is not in the payload. Sealing would ship a grub.cfg with NO initrd line —"
+            err "no rd.luks unlock, no dm_crypt/usb/nvme modules; the .img/installed system"
+            err "would not boot. Fix dracut, or drop the disk artifacts (--no-img and no"
+            err "--installer-iso) to build the other artifact types."
+            exit 1
+        fi
+        info "Disk-initramfs gate: initramfs-${_gate_kver}.img present ($(du -h "${SYSROOT}/boot/initramfs-${_gate_kver}.img" | cut -f1))"
+    fi
+fi
+
 # ── Secure Boot: org signing-key generation + UKI signing ─────────
 # Signing happens on the HOST (not in chroot) so the key stays outside the image.
 # The unsigned UKI was built by dracut --uefi above inside the chroot.
@@ -4987,6 +5225,16 @@ if ! ${SKIP_CLEAN}; then
     # CACHED ISO (--cached) KEEPS the binpkg cache (+ distfiles) so the installed
     # system can rebuild/extend packages OFFLINE and reinstall fast; UNCACHED prunes
     # them for a lean image (default). docs/man/tmp are always pruned.
+    # Guard: umount_chroot above detaches the shared portage-scratch bind with
+    # `umount -l ... || true` — a SILENT best-effort. If that bind were somehow
+    # still attached, the var/tmp wipe below would empty the HOST-side scratch
+    # every concurrent same-subdir build compiles in (see the flock rationale at
+    # the Extract phase). Verify the detach actually happened before deleting.
+    if mountpoint -q "${SYSROOT}/var/tmp/portage" 2>/dev/null; then
+        err "${SYSROOT}/var/tmp/portage is STILL a mountpoint after umount_chroot —"
+        err "refusing to rm -rf through the (shared) portage build scratch."
+        exit 1
+    fi
     rm -rf "${SYSROOT}"/usr/share/{doc,man,info}/* \
            "${SYSROOT}"/var/tmp/* "${SYSROOT}"/tmp/* 2>/dev/null || true
     if ${ISO_CACHED:-false}; then
@@ -5246,6 +5494,18 @@ build_img() {
     vmlinuz="$(ls -1 "${root_mnt}/boot/vmlinuz-"* "${root_mnt}/boot/vmlinuz" 2>/dev/null | sort -V | tail -1 || true)"
     initrd="$(ls -1 "${root_mnt}/boot/initramfs-"*.img 2>/dev/null | grep -v 'initramfs-live' | sort -V | tail -1 || true)"
     vmlinuz="${vmlinuz##*/}"; initrd="${initrd##*/}"
+
+    # The initrd is LOAD-BEARING (rd.luks unlock, dm_crypt/usb/nvme staging):
+    # never seal an .img whose grub.cfg would silently omit its "initrd" line.
+    # The host-side DISK-INITRAMFS GATE (after the kernel phase) already
+    # enforced this from the sysroot; this is the last line of defense at the
+    # sealed filesystem itself — grub-mkimage-gate posture, not a warning.
+    if [ -z "${initrd}" ] || [ ! -s "${root_mnt}/boot/${initrd}" ]; then
+        err "no non-empty disk initramfs on the image /boot (found: '${initrd:-none}') —"
+        err "refusing to seal an .img that would boot kernel-only (its grub.cfg would"
+        err "carry no initrd line; the disk would not boot on LUKS/USB/NVMe systems)."
+        exit 1
+    fi
 
     # ── GRUB-EFI via grub-mkimage (loop-device-safe) ──────────────────
     # grub-install probes the backing disk via hostdisk// which fails for loop
@@ -5560,51 +5820,177 @@ CHROOT
             warn "grub-mkrescue failed; live ISO not produced"; ISO_PATH="(not built — grub-mkrescue failed)"
         fi
         # ── Shim post-processing for Secure Boot live boot ──────────
+        # This block had NEVER succeeded before 2026-07-29: 4 of 4 live ISOs
+        # shipped WITHOUT shim while printing only a warning (sessions
+        # 20260724-013844-53b498, 20260725-061608-978c99, and both x86 roles of
+        # 20260719-103006-a775c2 all logged "WARNING: xorriso shim
+        # post-processing failed; live ISO uses bare GRUB (no shim)").
+        # Root causes, each proven against 53b498's real ISO:
+        #   1. it extracted UPPERCASE /EFI/BOOT/BOOTX64.EFI, but grub-mkrescue
+        #      writes the (case-sensitive) Rock Ridge tree LOWERCASE — the real
+        #      path is /efi/boot/bootx64.efi — so the extract always died:
+        #        xorriso : FAILURE : Cannot determine attributes of (ISO) source
+        #        file '/EFI/BOOT/BOOTX64.EFI' : No such file or directory
+        #      and `2>/dev/null || true` swallowed exactly that line. The later
+        #      -map of the never-created grubx64.efi then failed the rewrite.
+        #   2. even with the extract fixed, patching the ISO TREE is cosmetic:
+        #      UEFI firmware boots the El Torito image /efi.img (which is also
+        #      the GPT "EFI boot partition" — verified via -report_el_torito /
+        #      -report_system_area), so a tree-level shim is never read. The
+        #      REPLACEMENT El Torito FAT below is the actual fix.
+        #   3. the rewrite had no -boot_image directive, so xorriso DISCARDED
+        #      the El Torito + MBR/GPT equipment ("Detected El-Torito boot
+        #      information which currently is set to be discarded") — had it
+        #      ever produced output, that ISO would have booted NOWHERE.
+        #      '-boot_image any replay' regenerates BIOS+UEFI El Torito, the
+        #      grub2 MBR and the GPT for the new layout.
+        # '-hfsplus off': replay pins grub-mkrescue's Mac APM gap layout to the
+        # OLD file placement and libisofs dies "GPT partitions 1 and 2 overlap
+        # by 80 blocks"; dropping the Mac blessing resolves it, and shim is a
+        # Microsoft-signed PC artifact — Mac APM boot is not an SB-shim target.
+        # (grub-mkstandalone was probed by the old gate but never invoked —
+        # dropped; mkfs.vfat + mtools build the replacement FAT instead.)
+        # A FAILED attempt now FAILS THE BUILD: shim installed on the build
+        # host declares Secure Boot intent (the .img path installs it
+        # unconditionally on the same signal), every step past the tool probe
+        # is deterministic tooling — not environment — and warn-only is exactly
+        # how 4/4 ISOs shipped broken. A host WITHOUT shim keeps the
+        # informational skip; missing sbsign/org-key only degrades to a LOUD
+        # warning (environmental, and shim without a signed GRUB still boots
+        # non-SB machines unchanged).
         _shim_src="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
             \( -name 'BOOTX64.EFI' -o -name 'shimx64.efi' \) 2>/dev/null | head -1 || true)"
         if [ -f "${ISO_PATH}" ] && [ -n "${_shim_src}" ] && [ -f "${_shim_src}" ] \
-                && command -v xorriso >/dev/null && command -v grub-mkstandalone >/dev/null; then
+                && command -v xorriso >/dev/null && command -v mkfs.vfat >/dev/null \
+                && command -v mcopy >/dev/null && command -v mmd >/dev/null; then
             info "Post-processing live ISO to add shim (Secure Boot: shim→signed GRUB→kernel)"
             _iso_tmp="${ISO_PATH}.shim-work"
-            mkdir -p "${_iso_tmp}/EFI/BOOT"
-            # Extract GRUB EFI from the ISO into grubx64.efi.
-            xorriso -indev "${ISO_PATH}" -osirrox on \
-                -extract EFI/BOOT/BOOTX64.EFI "${_iso_tmp}/EFI/BOOT/grubx64.efi" 2>/dev/null || true
-            # Sign GRUB with org key if available.
-            if [ -f "${_iso_tmp}/EFI/BOOT/grubx64.efi" ] \
-                    && command -v sbsign >/dev/null && [ -f "${SBKEY:-}" ]; then
+            rm -rf "${_iso_tmp}"; mkdir -p "${_iso_tmp}/EFI/BOOT"
+            _shim_fail() {
+                err "shim post-processing FAILED: $1"
+                err "Refusing to ship the live ISO without its Secure Boot chain — 4/4 prior"
+                err "live ISOs shipped exactly that way, silently. Uninstall sys-boot/shim from"
+                err "the BUILD HOST if a shim-less live ISO is genuinely wanted."
+                rm -rf "${_iso_tmp}"
+                exit 1
+            }
+            # 1) GRUB EFI out of the ISO — probe the tree CASE-INSENSITIVELY,
+            #    fall back to unpacking the El Torito /efi.img (authoritative
+            #    for firmware anyway). Errors are LOUD from here on.
+            _grub_in_iso="$(xorriso -indev "${ISO_PATH}" -find / -type f 2>/dev/null \
+                | tr -d "'" | grep -iE '^/efi/boot/bootx64\.efi$' | head -1 || true)"
+            if [ -n "${_grub_in_iso}" ]; then
+                xorriso -indev "${ISO_PATH}" -osirrox on \
+                    -extract "${_grub_in_iso}" "${_iso_tmp}/EFI/BOOT/grubx64.efi" \
+                    || _shim_fail "could not extract ${_grub_in_iso} from ${ISO_PATH}"
+            else
+                xorriso -indev "${ISO_PATH}" -osirrox on \
+                    -extract /efi.img "${_iso_tmp}/efi-old.img" \
+                    || _shim_fail "no /efi/boot/bootx64.efi in the ISO tree and /efi.img is not extractable"
+                mcopy -n -i "${_iso_tmp}/efi-old.img" ::/efi/boot/bootx64.efi \
+                    "${_iso_tmp}/EFI/BOOT/grubx64.efi" \
+                    || _shim_fail "the El Torito /efi.img carries no efi/boot/bootx64.efi"
+            fi
+            chmod u+w "${_iso_tmp}/EFI/BOOT/grubx64.efi"   # osirrox preserves the ISO's r--r--r--
+            # 2) Sign GRUB with the org key so shim verifies it. In-place sbsign
+            #    (--output X X) is live-proven by the .img path ("GRUB EFI
+            #    signed with org key" in 3 sessions' logs). Without a key the
+            #    chain is INCOMPLETE — SB firmware will refuse the unsigned
+            #    GRUB — but non-SB boot is unchanged: warn loudly, keep going.
+            if command -v sbsign >/dev/null && [ -f "${SBKEY:-}" ] && [ -f "${SBCRT:-}" ]; then
                 sbsign --key "${SBKEY}" --cert "${SBCRT}" \
                     --output "${_iso_tmp}/EFI/BOOT/grubx64.efi" \
-                    "${_iso_tmp}/EFI/BOOT/grubx64.efi" 2>/dev/null \
-                    && info "Live GRUB EFI signed with org key"
+                    "${_iso_tmp}/EFI/BOOT/grubx64.efi" \
+                    && info "Live GRUB EFI signed with org key" \
+                    || _shim_fail "sbsign failed on the live GRUB EFI (key: ${SBKEY})"
+            else
+                warn "live ISO: shim will ship with an UNSIGNED GRUB (sbsign or the org key is"
+                warn "unavailable) — Secure Boot firmware will refuse it until GRUB is signed;"
+                warn "non-Secure-Boot boot is unaffected."
             fi
-            # Add shim + MOK manager.
-            cp "${_shim_src}" "${_iso_tmp}/EFI/BOOT/BOOTX64.EFI"
+            # 3) Shim + MOK manager.
+            cp "${_shim_src}" "${_iso_tmp}/EFI/BOOT/BOOTX64.EFI" \
+                || _shim_fail "could not stage shim from ${_shim_src}"
             _mmgr="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
                 \( -name 'mmx64.efi' -o -name 'MokManager.efi' \) | head -1 || true)"
-            [ -n "${_mmgr}" ] && cp "${_mmgr}" "${_iso_tmp}/EFI/BOOT/mmx64.efi" 2>/dev/null || true
-            # Add org cert for enrollment inside live env. SB_ETC_DIR/SB_EFI_VENDOR
-            # come from the boot-chain identity fold (same resolution as the
-            # stager), so UNAFFILIATED media carries the cert under the neutral
-            # EFI/gentoo/ dir.
+            if [ -n "${_mmgr}" ]; then
+                cp "${_mmgr}" "${_iso_tmp}/EFI/BOOT/mmx64.efi" \
+                    || _shim_fail "could not stage MokManager from ${_mmgr}"
+            else
+                warn "live ISO: no mmx64.efi/MokManager next to shim — org-cert MOK enrollment"
+                warn "from this media will not be possible (the shim chain itself still works)."
+            fi
+            # Org cert for enrollment inside the live env. SB_ETC_DIR /
+            # SB_EFI_VENDOR come from the boot-chain identity fold (same
+            # resolution as the stager), so UNAFFILIATED media carries the cert
+            # under the neutral efi/gentoo/ dir. Tolerant glob: no cert staged
+            # is a legitimate (--no-secure-boot / unsigned) build.
             if [ -d "${SYSROOT}${SB_ETC_DIR}" ]; then
                 mkdir -p "${_iso_tmp}/EFI/${SB_EFI_VENDOR}"
                 cp "${SYSROOT}${SB_ETC_DIR}"/*.{crt,cer,auth} \
                    "${_iso_tmp}/EFI/${SB_EFI_VENDOR}/" 2>/dev/null || true
             fi
-            # Patch the ISO: replace EFI directory with shim-based structure.
+            # 4) REPLACEMENT El Torito FAT — the filesystem firmware actually
+            #    reads (El Torito UEFI entry + GPT ESP both point at /efi.img).
+            #    Same efi/boot layout grub-mkrescue used; sized to content + 3
+            #    MiB slack (replay accepts a size different from the original —
+            #    proven with an 8 MiB image against 53b498's real ISO).
+            _efi_new="${_iso_tmp}/efi-new.img"
+            _need_kb="$(du -kc "${_iso_tmp}/EFI/BOOT/"* | tail -1 | cut -f1)"
+            truncate -s "$(( _need_kb / 1024 + 3 ))MiB" "${_efi_new}" \
+                || _shim_fail "could not allocate the replacement EFI FAT image"
+            mkfs.vfat "${_efi_new}" >/dev/null \
+                || _shim_fail "mkfs.vfat on the replacement EFI image failed"
+            mmd -i "${_efi_new}" ::/efi ::/efi/boot \
+                || _shim_fail "mmd (mtools) failed on the replacement EFI image"
+            mcopy -i "${_efi_new}" "${_iso_tmp}/EFI/BOOT/BOOTX64.EFI" ::/efi/boot/bootx64.efi \
+                || _shim_fail "mcopy of shim into the replacement EFI image failed"
+            mcopy -i "${_efi_new}" "${_iso_tmp}/EFI/BOOT/grubx64.efi" ::/efi/boot/grubx64.efi \
+                || _shim_fail "mcopy of grubx64.efi into the replacement EFI image failed"
+            if [ -f "${_iso_tmp}/EFI/BOOT/mmx64.efi" ]; then
+                mcopy -i "${_efi_new}" "${_iso_tmp}/EFI/BOOT/mmx64.efi" ::/efi/boot/mmx64.efi \
+                    || _shim_fail "mcopy of mmx64.efi into the replacement EFI image failed"
+            fi
+            # Org certs into the FAT too — MokManager browses the ESP it booted
+            # from, not the ISO9660 tree.
+            if [ -d "${_iso_tmp}/EFI/${SB_EFI_VENDOR}" ] \
+                    && ls "${_iso_tmp}/EFI/${SB_EFI_VENDOR}/"* >/dev/null 2>&1; then
+                mmd -i "${_efi_new}" "::/efi/${SB_EFI_VENDOR}" \
+                    || _shim_fail "mmd of the vendor cert dir failed"
+                mcopy -i "${_efi_new}" "${_iso_tmp}/EFI/${SB_EFI_VENDOR}/"* "::/efi/${SB_EFI_VENDOR}/" \
+                    || _shim_fail "mcopy of the org certs into the EFI image failed"
+            fi
+            # 5) Rewrite the ISO, REPLAYING the boot equipment, and mirror the
+            #    shim chain into the (lowercase, matching grub-mkrescue) tree so
+            #    a mounted ISO shows what the firmware will run.
             _iso_new="${ISO_PATH%.iso}-sb.iso"
-            xorriso -indev "${ISO_PATH}" -outdev "${_iso_new}" \
-                -map "${_iso_tmp}/EFI/BOOT/BOOTX64.EFI" "/EFI/BOOT/BOOTX64.EFI" \
-                -map "${_iso_tmp}/EFI/BOOT/grubx64.efi"  "/EFI/BOOT/grubx64.efi" \
-                $([ -f "${_iso_tmp}/EFI/BOOT/mmx64.efi" ] && \
-                  echo "-map ${_iso_tmp}/EFI/BOOT/mmx64.efi /EFI/BOOT/mmx64.efi") \
-                $([ -d "${_iso_tmp}/EFI/${SB_EFI_VENDOR}" ] && \
-                  echo "-map ${_iso_tmp}/EFI/${SB_EFI_VENDOR} /EFI/${SB_EFI_VENDOR}") \
-                -- 2>/dev/null \
-                && { mv "${_iso_new}" "${ISO_PATH}"; info "Shim added to live ISO (Secure Boot ready)"; } \
-                || { warn "xorriso shim post-processing failed; live ISO uses bare GRUB (no shim)"; rm -f "${_iso_new}"; }
+            _xr_args=( -boot_image any replay -hfsplus off
+                       -map "${_efi_new}" /efi.img
+                       -map "${_iso_tmp}/EFI/BOOT/BOOTX64.EFI" /efi/boot/bootx64.efi
+                       -map "${_iso_tmp}/EFI/BOOT/grubx64.efi" /efi/boot/grubx64.efi )
+            [ -f "${_iso_tmp}/EFI/BOOT/mmx64.efi" ] \
+                && _xr_args+=( -map "${_iso_tmp}/EFI/BOOT/mmx64.efi" /efi/boot/mmx64.efi )
+            [ -d "${_iso_tmp}/EFI/${SB_EFI_VENDOR}" ] \
+                && _xr_args+=( -map "${_iso_tmp}/EFI/${SB_EFI_VENDOR}" "/efi/${SB_EFI_VENDOR}" )
+            xorriso -indev "${ISO_PATH}" -outdev "${_iso_new}" "${_xr_args[@]}" \
+                || { rm -f "${_iso_new}"; _shim_fail "xorriso rewrite (-boot_image any replay) failed"; }
+            # 6) POSTCONDITION, not vibes: the NEW El Torito FAT must carry the
+            #    byte-identical shim where firmware will look for it.
+            xorriso -indev "${_iso_new}" -osirrox on \
+                -extract /efi.img "${_iso_tmp}/efi-verify.img" \
+                || { rm -f "${_iso_new}"; _shim_fail "cannot re-extract /efi.img from the rewritten ISO"; }
+            mcopy -n -i "${_iso_tmp}/efi-verify.img" ::/efi/boot/bootx64.efi \
+                "${_iso_tmp}/verify-bootx64.efi" \
+                || { rm -f "${_iso_new}"; _shim_fail "the rewritten /efi.img has no efi/boot/bootx64.efi"; }
+            cmp -s "${_shim_src}" "${_iso_tmp}/verify-bootx64.efi" \
+                || { rm -f "${_iso_new}"; _shim_fail "bootx64.efi inside the rewritten /efi.img is NOT the shim binary"; }
+            mv "${_iso_new}" "${ISO_PATH}"
             rm -rf "${_iso_tmp}"
+            info "Shim added to live ISO and VERIFIED (El Torito FAT rebuilt: shim → grubx64.efi"
+            info "→ kernel; Mac APM/HFS+ blessing dropped — see comment). Secure Boot ready."
+        elif [ -f "${ISO_PATH}" ] && [ -n "${_shim_src}" ]; then
+            warn "shim found (${_shim_src}) but xorriso/mkfs.vfat/mtools (mcopy+mmd) is missing —"
+            warn "cannot post-process; live ISO ships BARE GRUB (no Secure Boot chain)."
         elif [ -f "${ISO_PATH}" ]; then
             info "Shim not found on build host (install sys-boot/shim); live ISO uses bare GRUB (no Secure Boot chain)"
         fi
