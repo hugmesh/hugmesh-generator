@@ -312,6 +312,25 @@ if backfills and mfa_idx >= 0:
 else:
     emit("MFA_BACKFILL_BEFORE_FLIP", "n/a")
 
+# ORDERING OF THE NULL REPAIR ITSELF, over ALL statements (not just DML — SET NOT NULL
+# is DDL, so the dml-only positions above cannot see it). Postgres rejects SET NOT NULL
+# outright while any row is NULL, so backfill-then-constrain is not a style preference:
+# on the ONE cluster state this repair exists for (post-#136, column already nullable,
+# NULLs present) the reversed order aborts initdb with
+#   ERROR: column "mfa_required" of relation "gateway_route_access" contains null values
+# and every later statement in the file never runs. Verified against a real Postgres 16.
+SET_NOT_NULL_RE = re.compile(
+    r'^ALTER\s+TABLE\s+' + TBL + r'\s+ALTER\s+COLUMN\s+mfa_required\s+SET\s+NOT\s+NULL$', re.I)
+all_pos = {id(s): i for i, s in enumerate(STMTS)}
+set_nn = [s for s in STMTS if SET_NOT_NULL_RE.match(flat(s))]
+emit("MFA_SET_NOT_NULL_STMTS", len(set_nn))
+if set_nn and backfills:
+    emit("MFA_BACKFILL_BEFORE_SET_NOT_NULL",
+         "yes" if max(all_pos[id(b)] for b in backfills) < min(all_pos[id(s)] for s in set_nn)
+         else "no")
+else:
+    emit("MFA_BACKFILL_BEFORE_SET_NOT_NULL", "n/a")
+
 if len(mfa_ups) == 1:
     up = mfa_ups[0]
     # GATEWAY-BLIND: any gateway predicate in the WHERE clause is defect (c).
@@ -1056,6 +1075,13 @@ fi
   && ok "the NULL repair (if present) runs BEFORE the flip UPDATE, so it can never un-flip a row the flip has already set (backfills=$(g MFA_NULL_BACKFILLS), before_flip=$(g MFA_BACKFILL_BEFORE_FLIP))" \
   || bad "the mfa_required NULL repair is mis-placed or duplicated (backfills=$(g MFA_NULL_BACKFILLS), before_flip=$(g MFA_BACKFILL_BEFORE_FLIP)) — it must appear exactly once, before the flip"
 
+case "$(g MFA_BACKFILL_BEFORE_SET_NOT_NULL)" in
+  yes|n/a)
+    ok "the NULL backfill runs BEFORE 'ALTER COLUMN mfa_required SET NOT NULL' ($(g MFA_SET_NOT_NULL_STMTS) such statement(s)) — Postgres rejects SET NOT NULL while any row is NULL, so the reverse order aborts initdb on the ONE cluster state this repair exists for (post-#136: column already nullable, NULLs present) and nothing after it in the file runs" ;;
+  *)
+    bad "'ALTER COLUMN mfa_required SET NOT NULL' runs BEFORE the NULL backfill — on a cluster whose mfa_required is already nullable with NULLs present, Postgres aborts with 'column \"mfa_required\" … contains null values' and the whole initdb fails. Move the backfill above it" ;;
+esac
+
 [ "$(g UNCLASSIFIED)" = "0" ] \
   && ok "every statement in the file is classified (DML on gateway_route_access / DDL / GRANT-DO-COMMENT) — none was silently skipped. That was a real hole: DML matching used to demand a BARE table name, so a 'public.'-qualified, double-quoted or CTE-led UPDATE/DELETE was neither replayed nor counted and the gate stayed green while the file's net effect was broken" \
   || bad "$(g UNCLASSIFIED) statement(s) this gate does not understand: $(sed -n 's/^UNCLASSIFIED_STMT //p' "${W}/real.out" | tr '\n' ';') — a statement nobody classified is a statement nobody replayed; teach the checker, do not ignore it"
@@ -1329,8 +1355,14 @@ PY
     bad "negative control: ${name} — its OWN PRECONDITION failed, so the mutation never ran and this control proves NOTHING (fix the control, not the check): $(tr -s ' \n' ' ' < "${d}/mut.log" | tail -c 240)"
     return
   fi
-  local got
-  got="$(python3 "${W}/check.py" "${d}/s.sql" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"
+  local got rc
+  got="$(python3 "${W}/check.py" "${d}/s.sql" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"; rc=$?
+  # An EMPTY reading is not evidence the control bit: if the checker crashed or
+  # bailed early the key is simply absent, and "" != "${good}" would score a PASS.
+  if [ -z "${got}" ]; then
+    bad "negative control: ${name} — nc read NO ${key} row (rc=${rc}); an empty reading is not evidence the control bit"
+    return
+  fi
   [ "${got}" != "${good}" ] \
     && ok "negative control: ${name} -> ${key}=${got:-<absent>} (was ${good})" \
     || bad "negative control: ${name} was applied to the file and ${key} did NOT move (still ${good}) — the check is vacuous"
@@ -1484,8 +1516,14 @@ PY
     bad "negative control: ${name} — its OWN PRECONDITION failed, so the mutation never ran and this control proves NOTHING: $(tr -s ' \n' ' ' < "${d}/mut.log" | tail -c 240)"
     return
   fi
-  local got
-  got="$(python3 "${W}/check.py" "${SQL}" "${d}/doc.md" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"
+  local got rc
+  got="$(python3 "${W}/check.py" "${SQL}" "${d}/doc.md" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"; rc=$?
+  # An EMPTY reading is not evidence the control bit: if the checker crashed or
+  # bailed early the key is simply absent, and "" != "${good}" would score a PASS.
+  if [ -z "${got}" ]; then
+    bad "negative control: ${name} — nd read NO ${key} row (rc=${rc}); an empty reading is not evidence the control bit"
+    return
+  fi
   [ "${got}" != "${good}" ] \
     && ok "negative control: ${name} -> ${key}=${got:-<absent>} (was ${good})" \
     || bad "negative control: ${name} was applied to the runbook and ${key} did NOT move (still ${good}) — the runbook checks are vacuous"
@@ -1523,18 +1561,34 @@ np() {
   local name="$1" key="$2" good="$3" mut="$4"
   local d="${W}/np"; rm -rf "${d}"; mkdir -p "${d}/apps"
   cp "${APPS}/20-gateway-fe.yaml" "${d}/apps/"
-  python3 - "${d}/apps/20-gateway-fe.yaml" <<PY
+  # PRECONDITION, same as nc()/nd(). np() had none: its mutators are string
+  # replacements against a LIVE app manifest, so an unrelated rename there
+  # (extraEnv -> extraEnvVars, say) left `s` untouched, the file was rewritten
+  # byte-identical, and the control then reported the POSTURE GUARD as vacuous —
+  # three false statements about a different part of the system, which is the exact
+  # defect class this helper exists to detect.
+  if ! python3 - "${d}/apps/20-gateway-fe.yaml" >"${d}/mut.log" 2>&1 <<PY
 import re, sys
 p = sys.argv[1]
-s = open(p, encoding="utf-8").read()
+orig = open(p, encoding="utf-8").read()
+s = orig
 ${mut}
+assert s != orig, "the mutator produced no change at all"
 open(p, "w", encoding="utf-8").write(s)
 PY
-  local got
-  got="$(python3 "${W}/posture.py" "${d}/apps" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"
+  then
+    bad "negative control: ${name} — its OWN PRECONDITION failed, so the mutation never ran and this control proves NOTHING (fix the control, not the check): $(tr -s ' \n' ' ' < "${d}/mut.log" | tail -c 240)"
+    return
+  fi
+  local got rc
+  got="$(python3 "${W}/posture.py" "${d}/apps" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"; rc=$?
+  if [ -z "${got}" ]; then
+    bad "negative control: ${name} — posture.py emitted NO ${key} row (rc=${rc}); an empty reading is not evidence the control bit"
+    return
+  fi
   [ "${got}" != "${good}" ] \
-    && ok "negative control: ${name} -> ${key}=${got:-<absent>} (was ${good})" \
-    || bad "negative control: ${name} was NOT caught (${key} still ${good}) — the posture guard is vacuous for that shape"
+    && ok "negative control: ${name} -> ${key}=${got} (was ${good})" \
+    || bad "negative control: ${name} was applied to the file and ${key} did NOT move (still ${good}) — the posture guard is vacuous for that shape"
 }
 
 np "helm.values string, block style mfa.enabled: true" MFA_ENABLED_ON 0 \
@@ -1583,8 +1637,14 @@ ne() {
   local name="$1" key="$2" good="$3" fn="$4"
   local d="${W}/ne"; rm -rf "${d}"; mkdir -p "${d}/tree"
   cat > "${d}/tree/${fn}"
-  local got
-  got="$(python3 "${W}/envscan.py" "${d}" "${d}/tree" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"
+  local got rc
+  got="$(python3 "${W}/envscan.py" "${d}" "${d}/tree" 2>/dev/null | sed -n "s/^${key} //p" | head -1)"; rc=$?
+  # An EMPTY reading is not evidence the control bit: if the checker crashed or
+  # bailed early the key is simply absent, and "" != "${good}" would score a PASS.
+  if [ -z "${got}" ]; then
+    bad "negative control: ${name} — ne read NO ${key} row (rc=${rc}); an empty reading is not evidence the control bit"
+    return
+  fi
   [ "${got}" != "${good}" ] \
     && ok "negative control: ${name} -> ${key}=${got:-<absent>} (was ${good})" \
     || bad "negative control: ${name} was NOT caught (${key} still ${good}) — the env-shape sweep is vacuous for that shape"

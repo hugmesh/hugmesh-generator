@@ -179,8 +179,13 @@ lint:catalog-discovery-gate-honesty:
 # It also EXECUTES the four SQL blocks docs/MFA-ROLLOUT.md asks operators to run, so
 # the runbook cannot drift into plausible-but-false prose. Every check is re-run
 # against a deliberately-corrupted staged copy, and every one of those controls
-# asserts its own precondition, so "the check is vacuous" can never be reported for
-# a mutation that silently failed to apply.
+# asserts its own precondition (nc/nd/np alike — np was the straggler, and until it
+# was fixed an unrelated rename in a live app manifest made three controls report the
+# POSTURE GUARD as vacuous when it was the control that had failed to run), so
+# "the check is vacuous" can never be reported for a mutation that silently failed to
+# apply. Controls also refuse to score a PASS off an EMPTY reading: if the checker
+# crashed or the key is simply absent, that is reported as proving nothing rather than
+# read as "the control bit".
 # PyYAML + the stdlib sqlite3 module only: no cluster, no docker, no network.
 # ⚠ Postgres is NOT available here, so the seed has never been executed on the
 # engine that will run it; the gate prints that caveat on every run.
