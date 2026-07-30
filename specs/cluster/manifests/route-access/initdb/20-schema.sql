@@ -52,7 +52,29 @@ ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS domain text;
 -- DEFAULT false keeps every existing row inert (no MFA gate) until an operator
 -- flips it — byte-identical to today. Dual-write partner of gateway G4 +
 -- admin-bff 001-copy (see the CREATE-TABLE note above).
-ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS mfa_required boolean DEFAULT false;
+--
+-- ⚠ NOT NULL MUST MATCH THE CREATE TABLE ABOVE. It did not: this ALTER shipped
+-- NULLABLE while the CREATE TABLE declares NOT NULL, so a cluster created by a
+-- fresh initdb and a cluster upgraded in place genuinely differed. On the upgraded
+-- one the admin-bff CRUD (the table's only writer) could store mfa_required = NULL,
+-- and the merged gateway's loadFromPostgres reads that column back as a primitive
+-- boolean — a NULL is not "false by another name", it is a third state nothing in
+-- the read path is written for. The three statements below converge BOTH shapes,
+-- and each is a no-op on a cluster that is already correct:
+--   1. ADD COLUMN … NOT NULL DEFAULT false  — fresh/new tables get the right shape
+--      immediately (Postgres 11+ fills the default without a table rewrite). It is
+--      SKIPPED by IF NOT EXISTS on a cluster that already has the nullable column,
+--      which is exactly why 2–4 are needed.
+--   2. backfill the NULLs FIRST — SET NOT NULL fails outright if any row is NULL,
+--      so the order matters. This is the only other statement in this file that
+--      writes mfa_required; it can only ever turn NULL into false, never true into
+--      false, and tests/scripts/test-mfa-required-rules.sh pins its exact shape and
+--      its position before the flip UPDATE at the end of the file.
+--   3./4. then re-assert the DEFAULT and the NOT NULL the CREATE TABLE promises.
+ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS mfa_required boolean NOT NULL DEFAULT false;
+UPDATE gateway_route_access SET mfa_required = false WHERE mfa_required IS NULL;
+ALTER TABLE gateway_route_access ALTER COLUMN mfa_required SET DEFAULT false;
+ALTER TABLE gateway_route_access ALTER COLUMN mfa_required SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway, url_pattern);
 -- De-duplicate any rows a PRE-FIX re-application of this file already produced
 -- (the `id` PK is a random uuid, never supplied by the INSERT below, so
@@ -633,6 +655,131 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
 -- definition exactly, COALESCE included) so a genuine repeat seed row is
 -- skipped instead of duplicated on a re-apply.
 ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(domain, '')) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- D6/D8 MFA REQUIREMENT — the PRIVILEGED-SURFACE BLANKET.
+--
+-- Operator decision — the AUTHORISED SCOPE IS TWO PATH PREFIXES, blanket WITHIN
+-- them: every allow row at or under `/bff/admin` and `/bff/superadmin`, on EVERY
+-- gateway that governs those prefixes, requires a FRESH second factor. That is 9
+-- rows today, across hugmesh-fe-gateway, hugmesh-be-gateway and
+-- hugmesh-superadmin-gateway.
+--
+-- ⚠ NOT IN SCOPE — stated out loud, because "the whole admin surface" would be a
+-- FALSE claim. SIX other admin-ish `/bff/` allow rows are deliberately left
+-- mfa_required=false. tests/scripts/test-mfa-required-rules.sh enumerates admin-ish
+-- surfaces INDEPENDENTLY of this predicate (path segment `admin`/`superadmin`, OR a
+-- ROLE_SUPERADMIN/*_ADMIN role) and cross-checks them against exactly this list, so
+-- a SEVENTH one cannot appear unnoticed and a stale entry here fails the gate too:
+--   hugmesh-fe-gateway  /bff/forum/admin/**    ROLE_ADMIN
+--   hugmesh-fe-gateway  /bff/wiki/admin/**     ROLE_ADMIN
+--   hugmesh-fe-gateway  /bff/owncast/admin/**  ROLE_ADMIN
+--       Per-service admin CONSOLE seams that live behind their OWN service-BFF
+--       prefix, not under /bff/admin. Covering them needs a different predicate
+--       SHAPE (e.g. LIKE '/bff/%/admin/%'), which is a NEW scope decision.
+--   hugmesh-fe-gateway  /bff/mod/**            ROLE_ADMIN
+--       A MODERATION surface. ROLE_ADMIN is paired on it only as a superset of
+--       ROLE_MOD, so gating it would gate moderation, not administration.
+--   hugmesh-be-gateway  /bff/image-builds/arch/**         ROLE_SUPERADMIN
+--   hugmesh-be-gateway  /bff/games-services/instances/**  ROLE_GAMES_SERVICES_ADMIN
+--       Privileged by ROLE, not by path — a prefix predicate cannot express them at
+--       all, and a role-based arm is likewise a NEW scope decision.
+-- Widening to any of these ENLARGES the step-7 lockout blast radius in
+-- docs/MFA-ROLLOUT.md, so it is the operator's call, not a drive-by edit. The
+-- runbook carries the same list in §1.2a.
+--
+-- ⚠ WHY THIS IS AN `UPDATE` AND NOT EXTRA SEED ROWS. Three independent reasons —
+-- all three must be understood before anyone "simplifies" this back into the
+-- INSERT above:
+--   1. `mfa_required` is NOT part of `uq_route_access_row` (gateway, url_pattern,
+--      role, COALESCE(casdoor_user,''), COALESCE(domain,'')). A PARALLEL row that
+--      differs ONLY in `mfa_required` collides on that 5-tuple and the INSERT's
+--      `ON CONFLICT DO NOTHING` SILENTLY DROPS it — the seed would look right and
+--      enforce nothing. The value has to be CHANGED on the existing row.
+--   2. Even a separate 5-column `INSERT ... (…, mfa_required) VALUES (…, true)`
+--      for just these rows is WRONG on an IN-PLACE upgrade (which this file's
+--      header explicitly supports): the rows already exist, ON CONFLICT DO
+--      NOTHING skips them, and `mfa_required` stays false forever. Only an UPDATE
+--      converges for BOTH a fresh initdb and a re-apply.
+--   3. The canonical INSERT is ONE statement with a shared 4-column list, and
+--      tests/scripts/cluster_manifest_integrity.py's ROW_FULL_RE matches exactly
+--      `('gw','pattern','role',true|false)`. Widening the column list to 5 values
+--      would stop that regex matching and break the [internal-surface] check.
+--
+-- PREFIX-BASED, NOT a row list, and deliberately GATEWAY-BLIND:
+--   * Matching is LONGEST-PATTERN-WINS. Flipping only the two `/**` floor rows
+--     would leave every LONGER sub-path row (`/bff/admin/phone-fleet/**`,
+--     `/bff/admin/workloads/**`, `/bff/superadmin/games-services/**`,
+--     `/bff/superadmin/workloads/**`) as the DECIDING rule with mfa_required=false
+--     — i.e. an MFA BYPASS on exactly the highest-value surfaces. A prefix
+--     predicate covers them, and covers any sub-path row added LATER, so a future
+--     row cannot silently re-open the hole.
+--   * `/bff/superadmin/**` is served by BOTH hugmesh-superadmin-gateway (tailnet)
+--     and hugmesh-be-gateway (retained on purpose — see the note above the
+--     superadmin-gateway block). `/bff/admin/**` is served by hugmesh-fe-gateway,
+--     with hugmesh-be-gateway carrying the longer /bff/admin/workloads/** row.
+--     Scoping this UPDATE to one gateway name would leave the other gateway as an
+--     un-MFA'd second door to the same paths, so it matches on pattern alone.
+--   * `allow = true` only. A deny row denies at the longest match regardless of
+--     MFA, so marking one would be noise. If a DENY row is ever added under these
+--     prefixes, re-read GatewayRouteAccessService.isMfaRequiredSurface() before
+--     assuming this UPDATE still covers the surface.
+--   * `IS DISTINCT FROM true` makes a re-apply a genuine no-op instead of
+--     rewriting every row.
+--
+-- SAFE TO SEED — these rows are INERT on a cluster today:
+--   * The gateway consults `mfa_required` in GatewayRouteAccessService.decide()
+--     ONLY when `app.mfa.enabled` is true (APP_MFA_ENABLED), and the hugmesh-gateway
+--     IMAGE itself defaults that false (`app.mfa.enabled: ${APP_MFA_ENABLED:false}`
+--     in that repo's application.yml).
+--   * ⚠ AS OF THIS COMMIT nothing in THIS repo can even set it. The shared chart
+--     specs/cluster/charts/hugmesh-gateway has no `mfa:` values block, no template
+--     renders APP_MFA_ENABLED into a gateway pod, and tests/stack/compose.local.yaml
+--     does not set it either (it carries only APP_MFA_FACTOR_KEY, for the admin-bff
+--     step-up leg). That wiring is the COMPANION change on branch
+--     `feat/gateway-mfa-env`. So these rows are not merely default-off — they are
+--     UNREACHABLE until it lands. docs/MFA-ROLLOUT.md §0 carries the merge order.
+--   * Conversely `enabled: true` ALONE is a NO-OP without these rows: nothing else
+--     in the platform ever writes mfa_required=true, so the flag had nothing to
+--     match on. This UPDATE is the missing data half. The two changes are two halves
+--     of one feature and are only meaningful together.
+--   * ⚠ `app.mfa.enforce-privileged-floor` (APP_MFA_ENFORCE_PRIVILEGED_FLOOR) is
+--     NOT gated on `app.mfa.enabled` in GatewayRouteAccessFilter, and
+--     isMfaRequiredSurface() has no enabled-check either. That sub-flag therefore
+--     becomes live on its own once these rows exist AND something can set it — and
+--     it is NOT exempt for SUPERADMIN and fails CLOSED with 503 while route-access
+--     is still priming. The image defaults it OFF, nothing in this repo sets it, and
+--     the companion change keeps it default-off on BOTH the cluster and the compose
+--     side. It MUST stay off until operators have enrolled a second factor.
+--     tests/scripts/test-mfa-required-rules.sh fails the build on any attempt to
+--     turn either flag on from specs/cluster/apps/*.yaml or the chart defaults, and
+--     docs/MFA-ROLLOUT.md is the runbook.
+--
+-- OPERATOR CAVEAT: this converges the admin-managed table back to the canonical
+-- posture on every re-apply, exactly like the INSERT above. A per-row exemption
+-- made through the admin-bff CRUD under these prefixes will be re-flipped to true
+-- if this file is re-applied. Exempt a surface by changing this predicate, not by
+-- hand-editing a row.
+--
+-- DUAL-WRITE PARTNERS (checked 2026-07-30, no companion change needed):
+--   * hugmesh-gateway cache/CanonicalSeed.java — its `r()` helper hard-codes
+--     mfaRequired=false for EVERY baked row ON PURPOSE ("a datastore-unreachable
+--     fallback can never accidentally lock out a privileged surface on the bare
+--     floor"). These rules deliberately do NOT go there. Consequence to know: in a
+--     dual-DB outage the gateway falls back to that floor and MFA enforcement
+--     DROPS for these prefixes (role gating still applies).
+--   * hugmesh-admin-bff-api db/changelog/001-gateway-route-access.xml — table DDL
+--     ONLY (createTable + addColumn mfa_required); it contains ZERO <insert>
+--     elements, so it is NOT a row-seed partner.
+-- ─────────────────────────────────────────────────────────────────────────────
+UPDATE gateway_route_access
+   SET mfa_required = true
+ WHERE allow = true
+   AND (url_pattern = '/bff/admin'
+     OR url_pattern LIKE '/bff/admin/%'
+     OR url_pattern = '/bff/superadmin'
+     OR url_pattern LIKE '/bff/superadmin/%')
+   AND mfa_required IS DISTINCT FROM true;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Per-machine-user LEAST-PRIVILEGE grants. The login roles are created in

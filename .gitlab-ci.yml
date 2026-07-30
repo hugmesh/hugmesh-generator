@@ -97,6 +97,44 @@ lint:cluster-manifest-integrity:
     # regex cannot tell what a fused `for app in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
 
+# D6/D8 MFA route-access gate. The route-access table's `mfa_required` column has
+# shipped for a while, but until the seed actually WROTE it, turning
+# APP_MFA_ENABLED on was a pure no-op — the gateway only demands the MFA_SATISFIED
+# marker when the DECIDING longest-pattern row is mfa_required=true, and every row
+# was false. This job pins the write, and pins the FOUR ways it silently breaks:
+# a parallel row (dropped by ON CONFLICT DO NOTHING because mfa_required is NOT in
+# uq_route_access_row), flipping only the `/**` floors (longest-pattern-wins means
+# every longer sub-path row stays the false deciding rule), scoping the write
+# to one gateway (both /bff/superadmin/** and /bff/admin/… are governed on two
+# gateways each, so the other one stays an un-MFA'd door), and a LATER statement
+# that un-flips a row (the file's NET effect is what runs, so every behavioural
+# verdict is read back from a real SQL engine after replaying the file's own
+# statements in order — not inferred from the text of one statement). It also holds
+# the operator's binding enablement posture: cluster MFA stays OFF and
+# APP_MFA_ENFORCE_PRIVILEGED_FLOOR stays OFF everywhere — checked by PARSING every
+# gateway ArgoCD Application (helm.values / valuesObject / parameters, both the
+# chart `mfa.*` spelling and a raw APP_MFA_* extraEnv), with valueFiles and other
+# un-readable inputs failing LOUDLY rather than passing quietly, PLUS a shape-aware
+# sweep of everything that parse cannot reach (chart templates — which are Helm and
+# therefore not valid YAML — ConfigMaps, plain Deployments, the compose stack) that
+# understands the k8s `- name:` / `value:` env-LIST form a per-line grep cannot see.
+# It also EXECUTES the four SQL blocks docs/MFA-ROLLOUT.md asks operators to run, so
+# the runbook cannot drift into plausible-but-false prose. Every check is re-run
+# against a deliberately-corrupted staged copy, and every one of those controls
+# asserts its own precondition, so "the check is vacuous" can never be reported for
+# a mutation that silently failed to apply.
+# PyYAML + the stdlib sqlite3 module only: no cluster, no docker, no network.
+# ⚠ Postgres is NOT available here, so the seed has never been executed on the
+# engine that will run it; the gate prints that caveat on every run.
+lint:mfa-required-rules:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-mfa-required-rules.sh
+
 # Thin-desktop (Sunshine) mesh-fence composition gate. Executes BOTH halves of
 # the fence for real (only nft/sunshine/ip/pgrep/logger are PATH stubs) and
 # asserts (a) the tailnet admit is DUAL-STACK — an `ip saddr` match inside an
