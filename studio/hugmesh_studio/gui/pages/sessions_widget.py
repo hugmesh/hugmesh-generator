@@ -20,6 +20,7 @@ from datetime import datetime
 
 from ..qt import QtCore, QtGui, QtWidgets
 from ...core import build_sessions
+from ...core import secret_files
 
 # status id -> (symbol, colour) — the ProgressPage glyph/colour language, extended
 # with the session-only states (unknown/unreadable grey/amber).
@@ -358,6 +359,18 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         if s.blanked_secrets:
             msg += ("\n\nNOTE: these secrets were NOT saved with the session and "
                     "will be empty: " + ", ".join(s.blanked_secrets))
+        # Held secret FILES (core/secret_files.py): forewarn here, but the actual
+        # re-selection prompt is ProgressPage's dispatch gate — it fires for ANY
+        # restart path, not just this button, so this text is a courtesy, never
+        # the enforcement.
+        need = secret_files.missing_for_restart(getattr(s, "held_secret_files", []))
+        if need:
+            msg += ("\n\nThese secret files were held in memory only (never saved) — "
+                    "you will be prompted to re-select them before the build starts: "
+                    + ", ".join(
+                        f"{r.get('name', '?')} "
+                        f"({secret_files.FIELD_LABELS.get(r.get('field', ''), r.get('field', ''))})"
+                        for r in need))
         box.setText(msg)
         box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok
                                | QtWidgets.QMessageBox.StandardButton.Cancel)

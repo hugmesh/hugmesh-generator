@@ -24,7 +24,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
-from . import host_resources
+from . import host_resources, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
 from .platform_info import HostInfo, detect
 
@@ -360,6 +360,44 @@ class BuildDriver:
                 break
         return proc.wait()
 
+    def _consume_held_secret_files(
+            self, cfg: ImageConfig) -> tuple[ImageConfig, Callable[[], None]]:
+        """Swap vault-held secret-file fields to just-in-time private tmp copies for
+        ONE run (the 2026-07-29 operator ask: "once the file is selected its held in
+        memory until the build is completed" — see core/secret_files.py).
+
+        Consumption rules, each load-bearing:
+        * only a field the config ALREADY carries is swapped — the vault never adds a
+          flag the preview didn't show (no injection: a leftover held key from an
+          abandoned wizard walk must never silently sign an unrelated build);
+        * only while the config's path still equals the entry's ``origin`` — a held
+          copy corresponds to exactly one browsed selection, never to a different
+          path the operator loaded/typed later;
+        * only when this platform's builder actually receives the flag
+          (_path_field_emitted — the same gate preflight uses), so an ARM entry in a
+          mesh worklist provisions nothing;
+        * headless/CLI processes never populate a vault, so this returns ``cfg``
+          untouched there and every --print-*/golden channel stays byte-identical.
+
+        Returns ``(run_cfg, cleanup)``; the caller MUST run cleanup() in a finally so
+        no key material outlives the run — success, failure or cancel alike."""
+        v = secret_files.vault()
+        entries = []
+        for f in secret_files.VAULT_FIELDS:
+            path = getattr(cfg, f, "")
+            held = v.get(f)
+            if (path and held is not None and held.origin == path
+                    and _path_field_emitted(f, cfg)):
+                entries.append(held)
+        if not entries:
+            return cfg, (lambda: None)
+        mat = secret_files.materialize(entries)
+        import copy
+        run_cfg = copy.deepcopy(cfg)
+        for f, p in mat.paths.items():
+            setattr(run_cfg, f, p)
+        return run_cfg, mat.cleanup
+
     def run(self, cfg: ImageConfig, backend: str | None = None,
             on_line: Callable[[str], None] | None = None) -> int:
         """Run the build, calling on_line for each output line. Returns the exit code.
@@ -367,7 +405,21 @@ class BuildDriver:
         backend = backend or self.host.default_backend
         out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
-        code = self._stream(self.command(cfg, backend), on_line, backend)
+        # Held-in-memory secret files (KEYS USB / SB signing key) are staged to a
+        # private 0600 tmp copy for exactly this run and removed in the finally —
+        # the same rewrite class as _remap_assets_for_docker (which then mounts the
+        # tmp copy :ro under docker, since it lives outside the generator dir).
+        run_cfg, cleanup_held = self._consume_held_secret_files(cfg)
+        if run_cfg is not cfg and on_line is not None:
+            on_line("== held-in-memory Secure Boot material staged to a private 0600 "
+                    "temp copy for this run (removed when the run ends): "
+                    + ", ".join(f"--{f.replace('_', '-')}" for f in
+                                secret_files.VAULT_FIELDS
+                                if getattr(run_cfg, f, "") != getattr(cfg, f, "")))
+        try:
+            code = self._stream(self.command(run_cfg, backend), on_line, backend)
+        finally:
+            cleanup_held()
         # CAP-KILL ATTRIBUTION (the guard's failure UX): a container OOM-kill exits 137
         # with NO docker-side explanation on the stream — the compile log just ends
         # mid-line. Without this line, the one person the cap protects sees a bare
@@ -492,6 +544,16 @@ class BuildDriver:
             # config would BLOCK a build over a flag that platform never emits.
             if not path or not _path_field_emitted(field, cfg):
                 continue
+            # A vault-held selection satisfies the check even when the origin path is
+            # GONE (the KEYS USB was unplugged): run() consumes the held in-memory
+            # copy via a private 0600 tmp file, never this path — blocking here would
+            # defeat the whole "held in memory until the build is completed" ask.
+            # Origin-pinned: a held copy for a DIFFERENT path than the config carries
+            # is no cover (run() would ignore it too — the consumption rules match).
+            if field in secret_files.VAULT_FIELDS:
+                held = secret_files.vault().get(field)
+                if held is not None and held.origin == path:
+                    continue
             if not os.path.exists(path):
                 problems.append(f"{_path_label(field)} path does not exist: {path}")
         # Out-of-scope values the BUILDER ITSELF hard-errors on (today: rpi5 + --standalone

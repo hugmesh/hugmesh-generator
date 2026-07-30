@@ -54,6 +54,7 @@ from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..tray import write_build_status
 from ...core import build_sessions
 from ...core import flash_targets
+from ...core import secret_files
 from ...core.emerge_packages import (
     EmergePackageParser, PackageProgress, STEP_DONE, STEP_FAILED, STEP_QUEUED,
     find_package_log)
@@ -738,6 +739,23 @@ class ProgressPage(QtWidgets.QWizardPage):
         backend = (getattr(self.wiz, "build_backend", None)
                    or self.wiz.host.default_backend)
         generate_keys = getattr(self.wiz, "generate_node_keys", True)
+        # RESTART secret-file re-collection (2026-07-29 ask: "if the build is
+        # restarted, a prompt appears to reenter when it is needed"): when the pending
+        # id names an EXISTING record whose dispatch consumed held-in-memory secret
+        # files (core/secret_files.py), every one missing from THIS process's vault
+        # must be re-selected BEFORE dispatch — a fresh Studio process cannot have
+        # them (content is never persisted), and silently falling back to the
+        # snapshot's stale PATH would sign with material the operator never
+        # re-approved for this run (or dead-end on an unplugged USB an hour in).
+        # Declining aborts honestly: nothing is dispatched, nothing is written
+        # (new_session/start never run), the record keeps its prior truth.
+        abort = self._collect_missing_held_files(wl)
+        if abort:
+            self.log.setPlainText(abort)
+            self._all_terminal = True
+            self.completeChanged.emit()
+            self._sync_back_button()
+            return
         # per-session artifact dir + durable record: the id BuildPage minted for its
         # preview (pending_session_id) is consumed here so preview == dispatch; a
         # RESTART pins an existing id so the SAME record/workdir is reused. Nothing is
@@ -790,6 +808,87 @@ class ProgressPage(QtWidgets.QWizardPage):
         for w in warnings:
             self.log.appendPlainText(f"WARNING: {w}")
         self._start_worker()
+
+    # ---- held-in-memory secret files: the RESTART re-collection gate --------------
+    def _collect_missing_held_files(self, wl) -> str:
+        """Ensure every secret file the pending session's PRIOR dispatch consumed from
+        the vault is in THIS process's vault, prompting the operator to re-select each
+        missing one. Returns "" to proceed, or the honest abort message ("Build not
+        started: …") when the operator declines / cancels a picker — the caller MUST
+        then refuse dispatch. A fresh pending id (no record on disk yet — the normal
+        first-build path) and a record that consumed nothing both pass untouched."""
+        sid = getattr(self.wiz, "pending_session_id", None)
+        if not sid:
+            return ""
+        try:
+            prior = build_sessions.load(
+                os.path.join(build_sessions.sessions_dir(), f"{sid}.json"))
+        except (OSError, ValueError):
+            return ""            # BuildPage's freshly minted preview id — no record yet
+        missing = secret_files.missing_for_restart(
+            getattr(prior, "held_secret_files", []))
+        for rec in missing:
+            if not self._reprompt_held_file(rec, wl):
+                label = secret_files.FIELD_LABELS.get(
+                    rec.get("field", ""), rec.get("field", "secret file"))
+                return (f"Build not started: {label} ({rec.get('name', '?')}) was held "
+                        f"only in the memory of the Studio process that dispatched this "
+                        f"session — held secret files are never saved to disk, configs "
+                        f"or session records — and it was not re-selected. Nothing was "
+                        f"dispatched; the recorded path was NOT silently reused. Use "
+                        f"Restart again to re-select it.")
+        return ""
+
+    def _reprompt_held_file(self, rec: dict, wl) -> bool:
+        """One missing item: explain WHAT is needed and WHY, then re-select + re-hold
+        it. True only when the item is held again; any cancel/decline is False (the
+        caller aborts the dispatch). The re-selected path is written back onto the
+        worklist base so the dispatch's origin pin (build_driver._consume_held_
+        secret_files) matches — and new_session then snapshots that truth."""
+        field = rec.get("field", "")
+        label = secret_files.FIELD_LABELS.get(field, field)
+        name = rec.get("name", "?")
+        fp = str(rec.get("sha256", ""))[:12] or "unknown"
+        why = secret_files.FIELD_WHY.get(field, "the build consumes it")
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Restart needs a secret file re-selected")
+        box.setText(
+            f"This session's build used {label}:\n    {name} · sha256 {fp}\n\n"
+            f"It was held only in the memory of the Studio process that dispatched it "
+            f"(held secret files are never saved to disk, configs or session records), "
+            f"so this restart must re-collect it before the build can start.\n\n"
+            f"Why it is needed: {why}.\n\nRe-select it now?")
+        box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok
+                               | QtWidgets.QMessageBox.StandardButton.Cancel)
+        box.button(QtWidgets.QMessageBox.StandardButton.Ok).setText("Re-select…")
+        if box.exec() != QtWidgets.QMessageBox.StandardButton.Ok:
+            return False
+        while True:
+            if field == "keys_usb":
+                p = QtWidgets.QFileDialog.getExistingDirectory(self, label)
+            else:
+                p, _sel = QtWidgets.QFileDialog.getOpenFileName(
+                    self, label, "", "All files (*)")
+            if not p:
+                return False                       # picker cancelled -> honest abort
+            try:
+                entry = secret_files.vault().hold(field, p)
+            except (OSError, ValueError) as e:     # unreadable / empty keys dir / oversized
+                QtWidgets.QMessageBox.warning(
+                    self, "Cannot hold that selection", f"{e}\n\nPick again or Cancel.")
+                continue
+            break
+        # Same-file honesty, informational only: a rotated key is a legitimate operator
+        # choice, so a fingerprint change is REPORTED (log pane), never blocked.
+        if rec.get("sha256") and entry.sha256 != rec.get("sha256"):
+            self.log.appendPlainText(
+                f"NOTE: re-selected {label} has a different fingerprint "
+                f"(sha256 {entry.fingerprint}) than the previous run ({fp}) — "
+                f"building with the newly selected file.")
+        # keep the dispatched config in step with the fresh selection so the origin
+        # pin consumes it (and the updated record snapshot tells the truth).
+        setattr(wl.base, field, entry.origin)
+        return True
 
     def _reset(self) -> None:
         self._tick.stop()
@@ -1058,9 +1157,17 @@ class ProgressPage(QtWidgets.QWizardPage):
                  list(self._rows[i].buffer)[-build_sessions.ERROR_TAIL_LINES:]
                  for i in range(min(len(self._rows), len(results)))
                  if results[i].status == "failed"}
-        build_sessions.finish(self._session,
-                              status or build_sessions.overall_status(
-                                  [r.status for r in results]), tails)
+        final = status or build_sessions.overall_status([r.status for r in results])
+        build_sessions.finish(self._session, final, tails)
+        # Held-secret-file lifecycle (the operator's own words set it): "held in
+        # memory until the build is completed" — so a COMPLETE outcome drops exactly
+        # the entries this session consumed. failed/stopped KEEP them: a same-process
+        # Restart then redispatches without re-prompting (the retry the retention
+        # exists for). Studio exit drops everything regardless (process memory).
+        if final == build_sessions.COMPLETE:
+            secret_files.vault().drop_fields(
+                rec.get("field", "") for rec in
+                (self._session.held_secret_files or []) if isinstance(rec, dict))
         if getattr(self.wiz, "pending_session_id", None) == self._session.id:
             self.wiz.pending_session_id = None
 

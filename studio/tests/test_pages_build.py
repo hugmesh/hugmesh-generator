@@ -459,8 +459,10 @@ def test_build_secure_boot_off(wiz):
 
 
 def test_build_secure_boot_fleet_key_paths(wiz):
-    """The fleet SB-chain continuity path: key/cert PATHS thread through (the
-    Studio never reads the key material — paths only, they aren't secrets)."""
+    """The fleet SB-chain continuity path: hand-SET key/cert PATHS thread through
+    verbatim. (Since the secret-file vault, BROWSING additionally holds the key
+    CONTENT in memory — see test_secret_files*.py — but typed/programmatic paths
+    keep exactly these plain-path semantics: nothing is read by the Studio.)"""
     build = advance_to(wiz, wizard_mod.BuildPage)
     build.secure_boot.setCheckState(Qt.CheckState.Checked)
     build.keys_usb.setText("/media/KEYS")
@@ -476,8 +478,11 @@ def test_build_secure_boot_fleet_key_paths(wiz):
 
 
 def test_build_secure_boot_key_paths_persist_to_saved_configs(wiz, tmp_path):
-    """Key PATHS are not secrets (the material is never read) — unlike passwords,
-    they must survive a save/load round trip."""
+    """Key PATHS keep persisting — unlike passwords, they survive a save/load round
+    trip (the headless/CLI channel and --print-specs depend on it). The secret-file
+    vault changes only what happens to browsed CONTENT (held in memory, never
+    persisted — test_secret_files.py pins that scan); the path contract is pinned
+    HERE so the vault work can never silently regress it."""
     build = advance_to(wiz, wizard_mod.BuildPage)
     build.secureboot_key.setText("/media/KEYS/Keys/kernel_key.pem")
     build._preview()

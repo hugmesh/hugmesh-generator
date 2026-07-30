@@ -47,6 +47,7 @@ from ..qt import Qt, QtCore, QtWidgets, Signal
 from ._scroll import scrollable
 from ...core import build_sessions
 from ...core import flash_targets
+from ...core import secret_files
 from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
 from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE,
@@ -432,11 +433,24 @@ class BuildPage(QtWidgets.QWizardPage):
 
         # ── section: Secure Boot + KEYS-USB signing chain (G5; x86 only). The builder
         # default is ON with a THROWAWAY org key — threading the existing fleet
-        # key/cert PATHS here is what keeps GUI images in the fleet's SB chain. Paths
-        # only: the Studio never reads the key material itself. The platform gate in
-        # initializePage targets the SECTION (not this box), so hiding on ARM takes
-        # the header too — no orphan "Secure Boot signing" header over nothing (the
-        # NetworkPage egress-section lesson).
+        # key/cert here is what keeps GUI images in the fleet's SB chain. The
+        # platform gate in initializePage targets the SECTION (not this box), so
+        # hiding on ARM takes the header too — no orphan "Secure Boot signing"
+        # header over nothing (the NetworkPage egress-section lesson).
+        #
+        # SECRET-FILE RETENTION (2026-07-29 operator ask, verbatim: "instead of just
+        # browsing for keys usb or signing key or cert, once the file is selected its
+        # held in memory until the build is completed, if the build is restarted, a
+        # prompt appears to reenter when it is needed"): BROWSING the KEYS USB dir or
+        # the signing key now also holds its CONTENT in the process vault
+        # (core/secret_files.py), so the build consumes the in-memory copy (via a
+        # private 0600 tmp file at dispatch) and survives the USB being unplugged.
+        # The row shows filename + sha256 fingerprint + the retention promise. A
+        # hand-TYPED path keeps today's plain-path semantics (the textEdited hook
+        # drops any held copy — the selection changed). The signing CERT stays a
+        # plain path on purpose: it is the PUBLIC half, baked into the image rootfs
+        # for enrollment (build-x86-host-stage4.sh installs it to
+        # ${SB_ETC_DIR}/sb.crt), so it is not material that must not linger.
         sb = QtWidgets.QGroupBox("")
         sbl = QtWidgets.QVBoxLayout(sb)
         self.sb_box = sb
@@ -450,16 +464,28 @@ class BuildPage(QtWidgets.QWizardPage):
         sbl.addWidget(self.secure_boot)
         self.keys_usb = QtWidgets.QLineEdit()
         self.keys_usb.setPlaceholderText("KEYS USB dir providing Keys/kernel_key.{pem,der} (--keys-usb)")
-        sbl.addWidget(_row("KEYS USB dir", _picker_row(self, self.keys_usb, "KEYS USB dir",
-                                                       directory=True)))
+        sbl.addWidget(_row("KEYS USB dir", self._vault_picker_row(
+            "keys_usb", self.keys_usb, "KEYS USB dir", directory=True)))
+        self.keys_usb_held = self._held_label()
+        sbl.addWidget(self.keys_usb_held)
         self.secureboot_key = QtWidgets.QLineEdit()
         self.secureboot_key.setPlaceholderText("SB signing private key PEM path (--secureboot-key)")
-        sbl.addWidget(_row("Signing key", _picker_row(self, self.secureboot_key, "SB signing key",
-                                                      "Keys (*.pem *.key);;All files (*)")))
+        sbl.addWidget(_row("Signing key", self._vault_picker_row(
+            "secureboot_key", self.secureboot_key, "SB signing key",
+            "Keys (*.pem *.key);;All files (*)")))
+        self.secureboot_key_held = self._held_label()
+        sbl.addWidget(self.secureboot_key_held)
         self.secureboot_cert = QtWidgets.QLineEdit()
         self.secureboot_cert.setPlaceholderText("SB signing cert PEM/DER path (--secureboot-cert)")
         sbl.addWidget(_row("Signing cert", _picker_row(self, self.secureboot_cert, "SB signing cert",
                                                        "Certs (*.pem *.der *.crt);;All files (*)")))
+        cert_note = QtWidgets.QLabel(
+            "The cert is the PUBLIC half — it stays a path (the builder bakes it "
+            "into the image for Secure Boot enrollment), so it is never held in "
+            "memory like the private key.")
+        cert_note.setWordWrap(True)
+        cert_note.setStyleSheet("color: gray;")
+        sbl.addWidget(cert_note)
         self.sb_section = collapsible("Secure Boot signing (x86)", sb)
         lay.addWidget(self.sb_section)
 
@@ -536,6 +562,98 @@ class BuildPage(QtWidgets.QWizardPage):
         # never leave a probe thread running past the wizard
         self.wiz.finished.connect(self._join_preflight_worker)
         self.wiz.finished.connect(lambda *_a: self.device_table.join())
+
+        # Selection-changed honesty for the vaulted fields: a USER edit of the path
+        # text means any held copy no longer corresponds to the visible selection —
+        # drop it (Browse re-holds; typing means plain-path semantics, the
+        # pre-existing contract). textEdited fires on user input only, so the
+        # programmatic setText in initializePage/_on_device_assignment routes through
+        # _refresh_held_labels' origin check instead.
+        self.keys_usb.textEdited.connect(lambda _t: self._drop_held("keys_usb"))
+        self.secureboot_key.textEdited.connect(
+            lambda _t: self._drop_held("secureboot_key"))
+
+    # ---- held-in-memory secret files (core/secret_files.py) ---------------------
+    def _held_label(self) -> QtWidgets.QLabel:
+        lbl = QtWidgets.QLabel("")
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color: gray;")
+        return lbl
+
+    def _vault_picker_row(self, field, line_edit, caption,
+                          file_filter="All files (*)", directory=False):
+        """_picker_row's vault-aware twin: Browse… ALSO reads the selection's CONTENT
+        into the process vault (the 2026-07-29 ask — "once the file is selected its
+        held in memory until the build is completed"), so the dispatch consumes the
+        in-memory copy and the selection survives the source USB being unplugged."""
+        btn = QtWidgets.QPushButton("Browse…")
+
+        def pick():
+            if directory:
+                p = QtWidgets.QFileDialog.getExistingDirectory(self, caption)
+            else:
+                p, _sel = QtWidgets.QFileDialog.getOpenFileName(
+                    self, caption, "", file_filter)
+            if p:
+                self._browse_held(field, line_edit, p)
+        btn.clicked.connect(pick)
+        w = QtWidgets.QWidget()
+        h = QtWidgets.QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(line_edit, 1)
+        h.addWidget(btn)
+        return w
+
+    def _browse_held(self, field: str, line_edit, path: str) -> None:
+        """A browse landed: hold the content NOW, then show the path. A refused hold
+        (unreadable / oversized / a keys-USB dir carrying no kernel_key.*) falls back
+        HONESTLY to today's plain-path semantics with the reason on the row — never a
+        silent partial hold."""
+        try:
+            entry = secret_files.vault().hold(field, path)
+        except (OSError, ValueError) as e:
+            secret_files.vault().drop(field)
+            line_edit.setText(path)
+            self._refresh_held_labels(hold_errors={field: str(e)})
+            self._preview()
+            return
+        line_edit.setText(entry.origin)     # abspath — keeps origin == collected cfg path
+        self._refresh_held_labels()
+        self._preview()
+
+    def _drop_held(self, field: str) -> None:
+        if secret_files.vault().drop(field):
+            self._refresh_held_labels()
+
+    def _refresh_held_labels(self, hold_errors: dict | None = None) -> None:
+        """Sync the two held-status rows with the vault. Origin-pinned: a held copy
+        whose origin no longer equals the visible path (a loaded config, a
+        device-table Keys-USB assignment) corresponds to nothing on screen — it is
+        DROPPED here, mirroring build_driver's consumption rule, so what the row
+        says is always what the dispatch will do."""
+        v = secret_files.vault()
+        for field, edit, lbl in (
+                ("keys_usb", self.keys_usb, self.keys_usb_held),
+                ("secureboot_key", self.secureboot_key, self.secureboot_key_held)):
+            err = (hold_errors or {}).get(field, "")
+            text = edit.text().strip()
+            held = v.get(field)
+            if held is not None and held.origin != text:
+                v.drop(field)
+                held = None
+            if err:
+                lbl.setStyleSheet("color: #a65d00;")
+                lbl.setText(f"Not held in memory — {err}. The path is passed to the "
+                            f"builder as-is and must still exist at dispatch.")
+            elif held is not None:
+                lbl.setStyleSheet("color: #188038;")
+                lbl.setText(held.summary())
+            elif text:
+                lbl.setStyleSheet("color: gray;")
+                lbl.setText("Plain path (typed/loaded) — not held in memory; "
+                            "Browse… to hold the file content for this session.")
+            else:
+                lbl.setText("")
 
     def initializePage(self):
         self.wiz.collect_all()
@@ -614,6 +732,10 @@ class BuildPage(QtWidgets.QWizardPage):
         self.keys_usb.setText(c.keys_usb)
         self.secureboot_key.setText(c.secureboot_key)
         self.secureboot_cert.setText(c.secureboot_cert)
+        # held-status rows: vault state may have changed since the last visit (a
+        # completed build drops its entries; a loaded config changes the paths, which
+        # the refresh's origin check turns into a drop)
+        self._refresh_held_labels()
         self.skip_kernel.setChecked(c.skip_kernel)
         self.skip_clean.setChecked(c.skip_clean)
         self.distdir.setText(c.distdir)
@@ -943,6 +1065,11 @@ class BuildPage(QtWidgets.QWizardPage):
             self.keys_usb.setText("")
             self._preview()
         self._assigned_keys_dir = assigned
+        # setText above is programmatic (no textEdited): the refresh's origin check
+        # is what drops a held copy the assignment just displaced. A device-table
+        # assignment is deliberately NOT auto-held — the device is a live mounted
+        # USB chosen for flashing, and holding is the Browse gesture's contract.
+        self._refresh_held_labels()
 
     def _set_problems(self, problems: list[str]) -> None:
         self._problems = problems

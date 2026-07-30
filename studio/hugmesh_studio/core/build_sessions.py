@@ -39,7 +39,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from .config import SECRET_FIELDS
+from . import secret_files
+from .config import PLATFORM_FIELD_SUPPORT, SECRET_FIELDS
 from .worklist import WorklistConfig
 
 # Session terminal/lifecycle states. Per-image states reuse the worklist_driver
@@ -168,6 +169,13 @@ class BuildSession:
     # SECRET_FIELDS that were set at dispatch but NOT persisted (same blanking rule as
     # save) — RESTART/REDO warn the user to re-enter them instead of failing silently.
     blanked_secrets: list = field(default_factory=list)
+    # Secret FILES whose CONTENT was held in memory at dispatch (core/secret_files.py:
+    # the 2026-07-29 "held in memory until the build is completed" ask). Each row is
+    # HeldSecretFile.record() — {field, name, sha256}: enough for a RESTART in a fresh
+    # Studio process to PROMPT for exactly the missing items (and for the operator to
+    # verify a re-selected file matches), never the material and never even its path.
+    # from_dict filters unknown keys, so pre-existing records load with [].
+    held_secret_files: list = field(default_factory=list)
     workdir: str = ""                 # absolute per-session artifact dir
     backend: str | None = None        # exact dispatch params BuildPage stashes
     generate_keys: bool = True
@@ -201,6 +209,27 @@ class BuildSession:
 
 
 # ── construction at dispatch ──────────────────────────────────────────────────────────
+def _held_secret_file_records(wl: WorklistConfig) -> list[dict]:
+    """The content-free ``held_secret_files`` rows for a dispatch: every vault entry
+    this run will actually CONSUME — the field is set on the base, the held copy is
+    for exactly that path (build_driver's origin pin), and at least one entry's
+    platform emits the flag (PLATFORM_FIELD_SUPPORT — a pure-ARM worklist consumes
+    no x86-only signing material, so a restart of it must not demand any)."""
+    v = secret_files.vault()
+    platforms = {(e.platform or "x86") for e in wl.entries}
+    out: list[dict] = []
+    for f in secret_files.VAULT_FIELDS:
+        path = getattr(wl.base, f, "")
+        held = v.get(f)
+        if not path or held is None or held.origin != path:
+            continue
+        support = PLATFORM_FIELD_SUPPORT.get(f)
+        if support is not None and not (platforms & set(support)):
+            continue
+        out.append(held.record())
+    return out
+
+
 def new_session(wl: WorklistConfig, generator_dir: str, *,
                 backend: str | None = None, generate_keys: bool = True,
                 session_id: str | None = None) -> BuildSession:
@@ -230,6 +259,7 @@ def new_session(wl: WorklistConfig, generator_dir: str, *,
     s.label = derive_label(wl)
     s.config = wl.to_dict()                        # secrets blanked (the save rule)
     s.blanked_secrets = [k for k in SECRET_FIELDS if getattr(wl.base, k, "")]
+    s.held_secret_files = _held_secret_file_records(wl)
     s.backend = backend
     s.generate_keys = generate_keys
     s.images = [{"id": e.id, "role": e.role, "platform": e.platform,
@@ -275,6 +305,7 @@ def new_fleet_session(cfg, generator_dir: str, *, backend: str | None = None,
     s.label = derive_fleet_label(cfg)
     s.config = cfg.to_dict()                       # no SECRET fields in a fleet config
     s.blanked_secrets = []
+    s.held_secret_files = []                       # ...and no secret-FILE fields either
     s.backend = backend
     s.images = [{"id": "fleet", "role": "all-roles",
                  "platform": ", ".join(fleet_platform_families(cfg)),
