@@ -32,6 +32,19 @@ services:
       RUNNING_IN_DOCKER: "true"
       driverName: postgres
       dataSourceName: "user=casdoor password=casdoor host=casdoor-db port=5432 sslmode=disable dbname=casdoor"
+      # PIN THE TOKEN ISSUER. Casdoor ships `origin =` EMPTY in conf/app.conf, and with
+      # no origin it derives a token's `iss` from the REQUEST HOST. A browser reaching
+      # it on the published port gets iss=http://localhost:8000, but a service calling
+      # it over the compose network gets iss=http://casdoor:8000 — while EVERY service
+      # validates against CASDOOR_ISSUER_URI=http://localhost:8000. So browser logins
+      # worked and machine-to-machine tokens did not: hugmesh-remote-fragment minted a
+      # perfectly good client_credentials token ("[casdoor] minted service token for
+      # dev-fragment-sync-client") and then got 401 from
+      # GET http://hugmesh-federation-api:8080/api/federation/manifest on every 60s tick,
+      # forever. Casdoor's conf.GetConfigString falls back to the environment when the
+      # app.conf key is empty, so setting `origin` here makes EVERY token — however it
+      # was requested — carry the one issuer the services already trust.
+      origin: "http://localhost:8000"
     ports: ["8000:8000"]
 
   # ── Matrix: Synapse ────────────────────────────────────────────────
