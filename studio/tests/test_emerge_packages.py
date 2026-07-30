@@ -138,6 +138,100 @@ def test_repo_suffix_is_optional():
     assert pkg.atom == "sys-apps/hwdata-0.401"
 
 
+# ── the cross-build target-root tail ────────────────────────────────────────────────
+# Every ARM builder emerges into ${BUILD_ROOT}/sysroot, and portage then appends the
+# target root to these lines. Lines below are copied from the operator's real
+# out/sessions/20260729-065121-ce11e0/build-pki.rpi5.log (L137/L155 Emerging, the
+# Installing/Completed twins from the same run). 222 of that log's 283 Emerging lines
+# carry the tail — it marks precisely the packages that land in the IMAGE, while host
+# BDEPEND tools merged to / have no tail. A `$`-anchored counter regex dropped all of
+# them, so the Studio tree listed 61 host tools out of 266 real packages.
+@pytest.mark.parametrize("line, atom", [
+    (">>> Emerging (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo "
+     "for /out/wl-pki.rpi5/sysroot/", "dev-libs/xxhash-0.8.3-r2"),
+    (">>> Installing (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo "
+     "to /out/wl-pki.rpi5/sysroot/", "dev-libs/xxhash-0.8.3-r2"),
+    (">>> Emerging binary (436 of 805) sys-apps/groff-1.23.0-r2::gentoo "
+     "for /out/wl-pki.rpi5/sysroot/", "sys-apps/groff-1.23.0-r2"),
+    (">>> Emerging (7 of 149) sys-apps/hwdata-0.401 for /out/wl-pki.rpi5/sysroot/",
+     "sys-apps/hwdata-0.401"),
+])
+def test_cross_build_target_root_tail_still_opens_the_row(line, atom):
+    p = ep.EmergePackageParser()
+    pkg = p.feed(line)
+    assert pkg is not None, "a cross build's target packages must not be dropped"
+    assert pkg.atom == atom
+
+
+def test_cross_build_row_reaches_done_through_the_tailed_completed_line():
+    """``Completed`` carries the tail too (">>> Completed (1 of 1) …::gentoo to <root>"),
+    so without it a cross build's rows would sit forever below 100%."""
+    p = ep.EmergePackageParser()
+    p.feed(">>> Emerging (1 of 1) app-containers/cni-plugins-1.9.1::gentoo "
+           "for /out/wl-pki.rpi5/sysroot/")
+    pkg = p.feed(">>> Completed (1 of 1) app-containers/cni-plugins-1.9.1::gentoo "
+                 "to /out/wl-pki.rpi5/sysroot/")
+    assert (pkg.step, pkg.percent) == ("done", 100)
+
+
+def test_the_root_tail_is_matched_not_captured_into_the_atom():
+    """The atom is the row key — a leaked sysroot path would fork one package into two
+    rows (native vs cross) and break every dict keyed by it."""
+    p = ep.EmergePackageParser()
+    plain = p.feed(">>> Emerging (1 of 2) dev-libs/xxhash-0.8.3-r2::gentoo")
+    tailed = p.feed(">>> Emerging (2 of 2) dev-libs/xxhash-0.8.3-r2::gentoo "
+                    "for /out/wl-pki.rpi5/sysroot/")
+    assert plain.atom == tailed.atom
+    assert "/out/" not in tailed.atom and "sysroot" not in tailed.atom
+
+
+def test_the_tail_does_not_swallow_a_trailing_atom_like_word():
+    """Only portage's own ``for``/``to`` preposition may be absorbed. Anything else after
+    the atom means the line is not the shape we think it is, and inventing a row from it
+    would be a guess."""
+    p = ep.EmergePackageParser()
+    assert p.feed(">>> Emerging (1 of 2) dev-libs/xxhash-0.8.3-r2::gentoo AND MORE") is None
+
+
+def test_a_cross_build_lists_host_tools_AND_target_packages():
+    """THE REGRESSION THIS PINS. A cross build interleaves untailed host BDEPEND merges
+    with tailed target merges; the tree must show BOTH. Feeding only the untailed half is
+    what the operator saw — 61 of 266 packages on a Pi mesh build."""
+    p = ep.EmergePackageParser()
+    p.feed(_banner("Emerge group: system"))
+    for i, (atom, tail) in enumerate([
+        ("dev-lang/python-exec-conf-2.4.6", ""),                       # host tool, no tail
+        ("dev-libs/xxhash-0.8.3-r2", " for /out/wl-pki.rpi5/sysroot/"),
+        ("acct-group/messagebus-0-r3", ""),
+        ("net-libs/libnfnetlink-1.0.2", " for /out/wl-pki.rpi5/sysroot/"),
+        ("app-containers/cni-plugins-1.9.1", " for /out/wl-pki.rpi5/sysroot/"),
+    ], start=1):
+        p.feed(f">>> Emerging ({i} of 5) {atom}::gentoo{tail}")
+    seen = {x.atom for x in p.packages()}
+    assert len(seen) == 5, f"a cross build must list every package, got {sorted(seen)}"
+    assert "dev-libs/xxhash-0.8.3-r2" in seen and "acct-group/messagebus-0-r3" in seen
+
+
+_RPI5_LOG = ("/home/magus/GitHub/hugmesh-generator/out/sessions/"
+             "20260729-065121-ce11e0/build-pki.rpi5.log")
+
+
+@pytest.mark.skipif(not os.path.exists(_RPI5_LOG),
+                    reason="operator's real cross-build log not present on this box")
+def test_replay_of_the_real_cross_build_log_tracks_every_package():
+    """Ground truth, computed independently of the parser:
+    ``grep -o '>>> Emerging ([0-9]* of [0-9]*) [^ ]*' … | awk '{print $NF}' | sort -u``
+    reports 266 unique atoms across 283 Emerging lines (222 of them tailed). Before the
+    tail was matched this replay tracked 60."""
+    p = ep.EmergePackageParser()
+    with open(_RPI5_LOG, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            p.feed(line.rstrip("\n"))
+    rows = p.packages()
+    assert len(rows) == 266, f"tracked {len(rows)} of 266 real packages"
+    assert all(x.percent == 100 for x in rows), "every Completed row must reach 100%"
+
+
 def test_non_package_lines_return_none():
     p = ep.EmergePackageParser()
     for noise in ("Calculating dependencies  ... done!",

@@ -158,13 +158,29 @@ _GROUP_BANNER_RE = re.compile(r"^==>\s*Emerge group:\s*(\S+)\s*$")
 # ">>> Emerging binary (436 of 805) sys-apps/groff-1.23.0-r2::gentoo" (line 2526970), plus
 # ">>> Installing (1 of 258) ...". The ``::repo`` suffix is optional — portage omits it for
 # some sources and we never need it.
+#
+# CROSS-BUILD TAIL (``_ROOT_TAIL``). When ROOT is not ``/`` portage appends the target
+# root to these lines — ``Emerging … for /out/wl-pki.rpi5/sysroot/`` and
+# ``Installing … to /out/wl-pki.rpi5/sysroot/``. Every ARM builder emerges into
+# ``${BUILD_ROOT}/sysroot``, so the tail is present on precisely the packages that land
+# in the IMAGE, while host BDEPEND tools (merged to /) have no tail. An earlier ``\s*$``
+# anchor therefore dropped the target half of every cross build: in the operator's real
+# build-pki.rpi5.log 222 of 283 ``Emerging`` lines carried the tail, so the Studio tree
+# listed only the 61 host tools and silently omitted all 222 image packages. The tail is
+# matched but deliberately NOT captured — the row is keyed by atom, and a build already
+# knows its own sysroot.
+_ROOT_TAIL = r"(?:\s+(?:for|to)\s+\S+)?"
 _COUNTER_RE = re.compile(
-    r"^>>>\s+(Emerging|Installing)(?:\s+binary)?\s+\((\d+) of (\d+)\)\s+(\S+?)(?:::\S+)?\s*$")
+    r"^>>>\s+(Emerging|Installing)(?:\s+binary)?\s+\((\d+) of (\d+)\)\s+(\S+?)(?:::\S+)?"
+    + _ROOT_TAIL + r"\s*$")
 
 # ">>> Completed (1 of 258) dev-lang/duktape-2.7.0-r3::gentoo" — the true per-package
 # terminal marker (line 17834). The ``\(`` is what keeps this from also eating
 # ">>> Completed installing <atom> into <image>", which is merely the end of src_install.
-_COMPLETED_RE = re.compile(r"^>>>\s+Completed\s+\((\d+) of (\d+)\)\s+(\S+?)(?:::\S+)?\s*$")
+# Carries the same cross-build tail (">>> Completed (1 of 1) …::gentoo to <sysroot>"), so
+# without it a cross build's rows never reached STEP_DONE.
+_COMPLETED_RE = re.compile(
+    r"^>>>\s+Completed\s+\((\d+) of (\d+)\)\s+(\S+?)(?:::\S+)?" + _ROOT_TAIL + r"\s*$")
 
 # ">>> Failed to emerge app-office/libreoffice-25.2.7.2-r1, Log file:" (line 2794910), and
 # the log path portage prints on a LATER line, chroot-absolute and single-quoted
