@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "BLOCKED: buildah disabled in this lane" >&2
+exit 127

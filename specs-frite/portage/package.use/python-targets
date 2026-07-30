@@ -1,21 +1,39 @@
-# ── Keep the python3.12 target enabled through the tree's python transition ──
-# The image payloads are resolved around dev-lang/python:3.12 (the stage3 seed's
-# libselinux, portage/gemato, systemd-utils and the whole SELinux/python
-# toolchain are built for 3.12), but the Gentoo tree's profile-default
-# PYTHON_TARGETS has moved past it — freshly-pulled ebuilds (setuptools-83 /
-# setuptools-scm-10.2 → jaraco-text → jaraco-context, hatchling, flit-core,
-# urllib3, jinja2, cython, …) come up with python_targets_python3_12 UNSET and
-# the @world/payload emerge ABORTS behind a wall of
-#     "The following USE changes are necessary to proceed:
-#      >=dev-python/…  python_targets_python3_12"
-# (real jetson edge_ai fleet failure 2026-07-16 01:31, session 20260715-235432;
-# the x86 fleet logs queue up the identical proposals). Keyword and mask
-# decisions stay explicit in package.accept_keywords/ / package.mask/ — this
-# only widens a USE flag, enabling the 3.12 target everywhere at once instead
-# of chasing per-package autounmask lines sync after sync. Harmless where an
-# ebuild's PYTHON_COMPAT no longer lists 3.12 (a nonexistent flag is ignored);
-# effective everywhere else. PYTHON_SINGLE_TARGET is deliberately NOT set here:
-# two enabled single-targets violate REQUIRED_USE (^^ exactly-one), and the
-# resolver already derives the right single target from the installed 3.12
-# interpreter.
-*/* PYTHON_TARGETS: python3_12
+# ── python targets: DERIVED FROM THE STAGE3 SEED, not frozen here ────────────
+# This file is a placeholder. The builder OVERWRITES it in the sysroot with the
+# seed-derived, ADDITIVE delta line
+#     */* PYTHON_TARGETS: <targets the seed's own installed packages carry>
+# via scripts/_python-targets-lib.sh (pt_apply_seed_targets), at the same moment
+# it appends the matching PYTHON_TARGETS/PYTHON_SINGLE_TARGET to make.conf.
+#
+# WHY NO LITERAL LIVES HERE ANY MORE — two real fleet failures, mirror images of
+# each other, both caused by a frozen python3_NN (see docs/PYTHON-TARGETS-SEED-DRIFT.md):
+#
+#   * 2026-07-16, jetson edge_ai (session 20260715-235432). The seed was built
+#     for 3.12 while the tree's profile default had moved past it, so freshly
+#     pulled ebuilds (setuptools-83 / setuptools-scm-10.2 -> jaraco-text,
+#     hatchling, flit-core, urllib3, jinja2, cython, ...) came up with
+#     python_targets_python3_12 UNSET and the payload emerge aborted behind
+#         "The following USE changes are necessary to proceed:
+#          >=dev-python/...  python_targets_python3_12"
+#     The literal "python3_12" seeded here fixed that — for that seed.
+#
+#   * 2026-07-29, the 11-image mesh build (session 20260729-233913-719d4e). The
+#     amd64 seed had moved to 3.13+3.14 with NO 3.12, so the SAME literal now
+#     pointed at an interpreter the seed did not have: the seed's installed
+#     portage/gemato kept demanding python_targets_python3_13/14 from
+#     dev-python/{requests,certifi,charset-normalizer,idna,urllib3,pysocks}
+#     while our config forced those slots to 3_12 only ->
+#         "!!! Multiple package instances within a single package slot ...
+#          resulting in a slot conflict"
+#     -> resolution aborted -> "stage4 payload incomplete".
+#
+# The invariant that survives both, and every future stage3 python bump:
+# PYTHON_TARGETS must be a SUPERSET of what the SEED's own installed packages
+# were built with. That is a build-time fact, so it is computed at build time.
+#
+# FORMAT NOTE (man 5 portage): a package.use USE_EXPAND line is a DELTA that ADDS
+# to the profile default — "if you need to remove earlier assignments or
+# defaults, you need to explicitly specify '-*'". Never write '-*' here; that
+# turns the widening back into the replacement that caused the outage.
+# PYTHON_SINGLE_TARGET is never set in a '*/*' line: it is ^^ exactly-one in
+# REQUIRED_USE, and a wildcard delta can enable two.

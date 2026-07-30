@@ -51,8 +51,16 @@ VIDEO_CARDS="tegra"
 ACCEPT_LICENSE="*"
 ACCEPT_KEYWORDS="arm64 ~arm64"
 
-PYTHON_TARGETS="python3_12"
-PYTHON_SINGLE_TARGET="python3_12"
+# PYTHON_TARGETS / PYTHON_SINGLE_TARGET are DELIBERATELY NOT SET HERE.
+# They are DERIVED FROM THE STAGE3 SEED at build time and appended to the
+# rendered make.conf by scripts/_python-targets-lib.sh (pt_apply_seed_targets).
+# A frozen python3_NN literal in this file is a BUG: the seed's python floats per
+# arch and per snapshot (amd64 20260726 ships 3.13+3.14 and no 3.12; arm64 ships
+# 3.14 only; the 2026-07 jetson seed shipped 3.12+3.14), and a USE_EXPAND
+# assignment here REPLACES the profile default rather than widening it — which is
+# what wedged the 2026-07-29 mesh build in a dev-python slot conflict, and, in
+# mirror image, what produced the 2026-07-16 jetson "USE changes are necessary:
+# python_targets_python3_12" wall. See docs/PYTHON-TARGETS-SEED-DRIFT.md.
 
 # NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
 # package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the

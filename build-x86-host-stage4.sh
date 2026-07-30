@@ -38,6 +38,10 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # whose (CHOST + exact CFLAGS/-mcpu + profile) fingerprint != this build's.
 # shellcheck source=scripts/_binpkg-pool-lib.sh
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
+# Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
+# A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
+# shellcheck source=scripts/_python-targets-lib.sh
+source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
@@ -3268,6 +3272,23 @@ for puf in "${SPECS_DIR}/portage/package.use/"*; do
     esac
     cp "${puf}" "${SYSROOT}/etc/portage/package.use/"
 done
+# ── PYTHON_TARGETS: derived from the STAGE3 SEED, never a literal ─────────────
+# make.conf.tmpl deliberately ships no PYTHON_TARGETS/PYTHON_SINGLE_TARGET
+# assignment: a USE_EXPAND variable ASSIGNED in make.conf REPLACES the profile
+# default (portage's config.regenerate() wipes every accumulated
+# python_targets_* flag for a non-incremental USE_EXPAND that a config layer
+# sets), so a frozen python3_NN there silently narrows every image to one
+# interpreter — whichever one happened to be right for the seed of the day. The
+# seed floats: amd64 20260726 ships 3.13+3.14 with NO 3.12, arm64 ships 3.14
+# only, the 2026-07 jetson seed shipped 3.12+3.14. Getting it wrong is fatal in
+# both directions (2026-07-29 dev-python slot conflict / 2026-07-16 "USE changes
+# are necessary: python_targets_python3_12" wall). Derive it from the seed
+# instead, HERE — after the specs land and BEFORE the first emerge touches the
+# sysroot, because an emerge run under a wrong pin installs the wrong
+# interpreter and the probe would then read its own effect back in. Fails the
+# build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
+pt_apply_seed_targets "${SYSROOT}" "build-x86" \
+    || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
 # package.mask: role-independent version quarantines (e.g. the gettext-0.23.x
 # empty-$(DOMAIN) .mo-collision pin — see package.mask/gettext). Copied for every
 # role like package.accept_keywords; the mask alone only prevents an UPGRADE back
@@ -4567,7 +4588,16 @@ echo "==> Emerge group: system"
 # after it are then served by the CURRENT portage, and the Studio lists the
 # package manager under system rather than under whatever group a later
 # banner (e.g. Steam's 'tools') happens to have opened.
-emerge --oneshot --update sys-apps/portage \
+# --newuse, not just --update: without it this emerge is a NO-OP whenever the seed
+# already carries the newest sys-apps/portage, so the package manager keeps the
+# SEED's USE — including its PYTHON_TARGETS — while --exclude sys-apps/portage
+# below stops any later pass from ever reconciling it. That is exactly how session
+# 20260729-233913-719d4e wedged: the seed portage stayed on python3_13/python3_14
+# (BUILD_TIME 07-13, never rebuilt) and its app-portage/gemato kept demanding
+# those targets from the same dev-python slots the payload was resolving, giving
+# "Multiple package instances within a single package slot". The baselayout line
+# directly below already carries --newuse for the same reason.
+emerge --oneshot --update --newuse sys-apps/portage \
     || echo "[build-x86] WARN: standalone sys-apps/portage update failed; continuing with the seed portage (the passes below exclude it, so the mid-run self-replace hazard stays closed)"
 emerge --oneshot --update --newuse sys-apps/baselayout || true
 # gettext-0.23.x empty-\$(DOMAIN) .mo-collision pin (see package.mask/gettext):

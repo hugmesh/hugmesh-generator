@@ -242,7 +242,15 @@ grep -q 'command -v mkfs.vfat' "${TMPD}/shimblk" && grep -q 'command -v mcopy' "
 
 # ─────────────────────────────────────────────────────────────────────────────
 echo "-- 3) portage self-upgrade isolation + failure-notice capture --"
-oneshot_ln=$(grep -n -- 'emerge --oneshot --update sys-apps/portage' "${BUILDER}" | head -1 | cut -d: -f1)
+# Match the oneshot portage merge by its INVARIANT PARTS (emerge ... --oneshot
+# ... sys-apps/portage), not by an exact flag string. The invariant this section
+# protects is the ORDERING — portage upgrades alone, before @world — and pinning
+# the literal flag list made the check fail the moment a legitimate flag was
+# added (`--newuse`, so the seed's portage actually rebuilds when the derived
+# PYTHON_TARGETS change; see docs/PYTHON-TARGETS-SEED-DRIFT.md). A brittle match
+# that breaks on a correct change teaches people to edit the test, which is how
+# a real gate gets hollowed out.
+oneshot_ln=$(grep -nE -- '^[[:space:]]*emerge .*--oneshot .*sys-apps/portage' "${BUILDER}" | head -1 | cut -d: -f1)
 world_ln=$(grep -n -- '--keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world' "${BUILDER}" | head -1 | cut -d: -f1)
 if [ -n "${oneshot_ln}" ] && [ -n "${world_ln}" ] && [ "${oneshot_ln}" -lt "${world_ln}" ]; then
   ok "portage merges ALONE (${oneshot_ln}) before the @world pass (${world_ln})"

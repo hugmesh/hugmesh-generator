@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "BLOCKED: qemu-system-x86_64 disabled in this lane" >&2
+exit 127

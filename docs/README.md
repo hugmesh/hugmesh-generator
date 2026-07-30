@@ -13,6 +13,7 @@ The doc set for the image/infra layer. State key used throughout:
 - [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream Synapse/Mastodon for dev only).
 - [`DEVOPS.md`](DEVOPS.md) — GitLab CI, runner, binhost, build distribution.
 - [`BUILD-MATRIX.md`](BUILD-MATRIX.md) — the canonical platform×role×env build matrix, the four build channels (CLI / make / ncurses menu / Studio GUI), the **all-options-in-all-menus** rule + the `make matrix-check` harness (✅).
+- [`PYTHON-TARGETS-SEED-DRIFT.md`](PYTHON-TARGETS-SEED-DRIFT.md) — why `PYTHON_TARGETS`/`PYTHON_SINGLE_TARGET` are **derived from the stage3 seed** and never hardcoded: portage's make.conf-replaces vs package.use-adds semantics, the two mirror-image fleet failures a frozen `python3_NN` caused (2026-07-16 autounmask wall, 2026-07-29 `dev-python` slot conflict), and what the guard now asserts. **Read this before touching a `python3_NN` literal anywhere.**
 - [`STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md) — the Studio image-build wizard's **4-choice → 7-step** flow (mesh node / local Docker mesh / mesh client / standalone), per-path page map, and the ncurses/CLI/web-UI **parity TODO** (✅ GUI; 🔭 other channels).
 - [`RESERVED-PREFIXES.md`](RESERVED-PREFIXES.md) — reserved `ROLE_`/`DOMAIN_` and route first-segment prefixes.
 - [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) — superadmin go-live wizard (bring-your-own-domain / cloudflare-tunnel / DuckDNS-DDNS / tailscale-funnel / router-portforward providers), CLI + ncurses + Studio front-ends (✅ v1 consolidated).

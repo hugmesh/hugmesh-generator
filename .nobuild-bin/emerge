@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "BLOCKED: emerge disabled in this lane" >&2
+exit 127

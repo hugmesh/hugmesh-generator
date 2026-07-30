@@ -172,6 +172,10 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # CHOST but differ in -mcpu, and portage's --binpkg-respect-use ignores CFLAGS.
 # shellcheck source=scripts/_binpkg-pool-lib.sh
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
+# Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
+# A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
+# shellcheck source=scripts/_python-targets-lib.sh
+source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
 # Requested-atom completeness gate (cross-build twin of build-x86-host-stage4.sh's
 # in-chroot gate, PR #461/#465): after the --keep-going payload emerge, every
 # requested atom must be in the TARGET sysroot's vdb or the build fails listing
@@ -1273,6 +1277,23 @@ cp "${SPECS_DIR}/portage/package.use/"*             "${SYSROOT}/etc/portage/pack
 cp "${SPECS_DIR}/portage/package.env/"*             "${SYSROOT}/etc/portage/package.env/"
 cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
+# ── PYTHON_TARGETS: derived from the STAGE3 SEED, never a literal ─────────────
+# make.conf.tmpl deliberately ships no PYTHON_TARGETS/PYTHON_SINGLE_TARGET
+# assignment: a USE_EXPAND variable ASSIGNED in make.conf REPLACES the profile
+# default (portage's config.regenerate() wipes every accumulated
+# python_targets_* flag for a non-incremental USE_EXPAND that a config layer
+# sets), so a frozen python3_NN there silently narrows every image to one
+# interpreter — whichever one happened to be right for the seed of the day. The
+# seed floats: amd64 20260726 ships 3.13+3.14 with NO 3.12, arm64 ships 3.14
+# only, the 2026-07 jetson seed shipped 3.12+3.14. Getting it wrong is fatal in
+# both directions (2026-07-29 dev-python slot conflict / 2026-07-16 "USE changes
+# are necessary: python_targets_python3_12" wall). Derive it from the seed
+# instead, HERE — after the specs land and BEFORE the first emerge touches the
+# sysroot, because an emerge run under a wrong pin installs the wrong
+# interpreter and the probe would then read its own effect back in. Fails the
+# build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
+pt_apply_seed_targets "${SYSROOT}" "build-orangepi-zero3" \
+    || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
 # Shared READ-ONLY distfiles (Lane 3) — SB-RO-DISTFILES-BEGIN
 # distfiles are arch-independent SOURCE tarballs, so ONE fleet-wide cache is safe
 # across every board (NO ABI/-mcpu risk — mirrors the x86 builder's
