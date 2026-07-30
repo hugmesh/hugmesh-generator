@@ -777,6 +777,74 @@ domain-registry-reconcile-verify:
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
+# Layer-A headscale SSH-ACL gate — the ALLOW/DENY role matrix that has existed in
+# tests/device-registry/ since PR6 and had NEVER been wired into a pipeline, plus
+# (2026-07-30) the COMPILE-SIDE RECONCILIATION half.
+#
+# WHY THIS ONE IS NOT OPTIONAL. Layer-A has two would-be writers of one headscale
+# policy: the node-side renderer (specs/usr/sbin/gen-headscale-policy.sh), which is
+# LIVE on every control node, and hugmesh-admin-bff-api's HeadscaleAclCompiler +
+# reconcile loop, which ships DARK behind app.registry.headscale-acl.enabled=false.
+# Nothing made them agree and they did not: the dark compiler addressed nodes by a
+# tag no node carries, emitted an empty acls[] that would have blanked the
+# 10.244/10.96 data-plane rule fleet-wide, dropped the always-on SUPERADMIN mesh
+# rule (superadmin's ONLY reach to core nodes), omitted tagOwners, named
+# per-operator groups headscale does not know, defaulted its base-url to a
+# namespace this platform does not have, and would have PUT a DB-mode-only policy
+# at a headscale running policy mode:file. This job is what keeps them reconciled.
+#
+# THE SIBLING CLONE IS PART OF THE GATE, NOT A CONVENIENCE — same reasoning as
+# lint:reserved-prefixes: the compile-side assertions are the half that matters, so
+# the script exits 3 (INCOMPLETE, i.e. the job FAILS) when the checkout is absent
+# rather than printing a skip and going green. Same clone recipe: the org mirror
+# derived from CI_REPOSITORY_URL, which carries the read-only CI job token — no
+# secret committed. A clone failure fails the job, on purpose.
+#
+# MERGE ORDER: this job reads hugmesh-admin-bff-api's DEFAULT branch, so the BFF
+# side of a Layer-A change has to land there before the matching generator change
+# lands here. Override with LAYERA_BFF_REF while a cross-repo pair is in flight.
+#
+# WHAT IT PROVES. Beyond the ALLOW/DENY matrix: full-document parity. The job
+# renders tests/device-registry/fixtures/layer-a-parity-export.json through the REAL
+# renderer and diffs it against the checked-in golden; hugmesh-admin-bff-api holds
+# byte-identical copies of that fixture set and its HeadscaleAclParityTest asserts its
+# compiler reproduces the SAME golden. This job asserts the copies have not drifted
+# apart and that the BFF-side test still exists — so the two writers are pinned field
+# for field, and a BFF that quietly dropped its half fails HERE.
+#
+# Offline: bash + jq + openssl + git + diffutils. No headscale, no cluster, no docker,
+# no JVM (the fp->tag agreement is proven by a pinned vector both sides carry, and
+# document parity by the shared golden — neither needs the Java executed here).
+layer-a-headscale-acl:
+  stage: verify
+  image: alpine:3
+  tags: [hugmesh-x86]
+  variables:
+    LAYERA_SIBLING_ROOT: "${CI_PROJECT_DIR}/.layera-siblings"
+    LAYERA_BFF_REF: "main"
+  before_script:
+    - apk add --no-cache bash jq openssl git diffutils grep gawk sed coreutils
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${LAYERA_SIBLING_ROOT}"
+    - git clone --depth 1 --branch "${LAYERA_BFF_REF}" "${ORG_BASE}/hugmesh-admin-bff-api.git" "${LAYERA_SIBLING_ROOT}/hugmesh-admin-bff-api"
+  script:
+    - bash tests/device-registry/test-layer-a-headscale-acl.sh
+  rules:
+    # BLOCKING gate on either side of the Layer-A contract.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/usr/sbin/gen-headscale-policy.sh
+        - specs/usr/sbin/hugmesh-headscale-forcetags
+        - specs/etc/headscale/**/*
+        - specs/cluster/manifests/headscale/**/*
+        - specs/cluster/apps/07-headscale-svc.yaml
+        - specs/etc/keys-provision/provision.sh
+        - tests/device-registry/**/*
+        - .gitlab-ci.yml
+    # And on the default branch, so a merged BFF-side change is caught here even
+    # when nothing in this repo moved.
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
 # Build the three Pi role ISOs + the x86 host ISO. Needs root + crossdev + qemu
 # on the runner host (the x86_64 node). Tag-select that runner.
 build:isos:

@@ -376,7 +376,20 @@ domain-scoped, enforced at the gateway) governs every surface.
 - **Device-license + node-storage registries (✅ shipped):** see
   [`DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md) and
   [`NODE-STORAGE.md`](NODE-STORAGE.md). Layer-B per-node sshd off the signed
-  export is shipped; the Layer-A headscale ACL push is 🔭 deferred.
+  export is shipped. **Layer-A is shipped on the NODE side too** — the control-node
+  renderer (`specs/usr/sbin/gen-headscale-policy.sh`) verifies the same signed export,
+  renders `/etc/headscale/policy.hujson` from `specs/etc/headscale/policy.hujson.tmpl`,
+  applies it with `headscale policy set -f`, and force-assigns the non-forgeable dst
+  tags (`specs/usr/sbin/hugmesh-headscale-forcetags`); it is baked by all 10 builders
+  and activated by `provision_headscale_policy_sync()` (boot service + 60 s cron) on
+  every control node. What is still 🔭 **deferred is only the BFF-side push leg**
+  (hugmesh-admin-bff-api `HeadscaleAclCompiler` + reconcile loop, dark behind
+  `app.registry.headscale-acl.enabled=false`). Its compile side is now reconciled with
+  the node side and gated offline by `layer-a-headscale-acl` in CI, but ENABLING it
+  stays cluster-gated: it needs the live `docs/CANONICAL-FP.md` field confirmation, a
+  provisioned headscale API key, and — first — the single-writer decision, because
+  headscale runs `policy: mode: file` (the node renderer is the writer) while the BFF's
+  `PUT /api/v1/policy` is DB-mode only.
 - **Optional-services framework (✅ build-time, 🚧 live cut-over):** akkoma /
   tuwunel / phpBB / games add/remove via the `apps/13a` ApplicationSet; the UI
   greys when a service is absent, and games defaults to `games.<domain>`. Today
