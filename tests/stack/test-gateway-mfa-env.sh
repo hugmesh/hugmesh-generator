@@ -366,8 +366,19 @@ apps_no_opaque_gateway() { [ -z "$(apps_opaque_gateway_hits "$1")" ]; }
 # a release the model never actually resolved — which surfaced as a pile of
 # "(3) NOT emitted" / "(5) NOT quoted" failures naming env vars that are not
 # missing at all. Report the real reason instead.
+# SCOPED TO GATEWAY-CHART CONSUMERS. This gate models the gateway chart; a multi-source
+# Application for an unrelated service (chart from a Helm repo + values from a git ref — a
+# very common ArgoCD shape) is provably NOT a gateway consumer and must not redden the
+# gateway MFA gate and block someone else's MR. emit_app_audit already writes a CHART_PATH
+# row PER SOURCE, so "does any of this app's sources resolve to the gateway chart" is
+# answerable without modelling multi-source at all. A multi-source app that DOES reach the
+# gateway chart is still reported — that is the case the assertion exists for.
 apps_multisource_hits() { # <tsv>
-  awk -F'\t' '($1=="APP"||$1=="APPSET") && $4=="SOURCE_FORM" && $5=="MULTI" {print $2"/"$3"("$6" sources)"}' "$1"
+  awk -F'\t' -v c="${CHART_REL_CANON}" '
+    ($1=="APP"||$1=="APPSET") && $4=="CHART_PATH"  && $5==c    { gw[$2"/"$3] = 1 }
+    ($1=="APP"||$1=="APPSET") && $4=="SOURCE_FORM" && $5=="MULTI" { ms[$2"/"$3] = $6 }
+    END { for (k in ms) if (k in gw) print k"("ms[k]" sources)" }
+  ' "$1" | sort
 }
 apps_no_multisource() { [ -z "$(apps_multisource_hits "$1")" ]; }
 # the value-input forms a given file/release actually used (proves the reader looked
@@ -1166,7 +1177,7 @@ for spell in "${CHART_REL}" "./${CHART_REL}" "${CHART_REL}/" ".//${CHART_REL}" \
   # anything already in the tree — a collision on releaseName would leave the
   # release set unchanged and this control would fail for a reason that has
   # nothing to do with path spelling.
-  SPELL="${spell}" CANON="${CHART_REL_CANON}" REL="hugmesh-8r${spell_i}-probe-gateway" \
+  SPELL="${spell}" CANON="${CHART_REL_CANON}" EXTRACT="${EXTRACT}" PYTHONDONTWRITEBYTECODE=1 REL="hugmesh-8r${spell_i}-probe-gateway" \
   python3 - "${AD}/20-gateway-pki.yaml" "${AD}/26-gateway-8r${spell_i}-probe.yaml" <<'PY'
 import os
 import sys
@@ -1180,7 +1191,14 @@ if not apps:
 app = apps[0]
 app.setdefault("metadata", {})["name"] = os.environ["REL"]
 source = app.setdefault("spec", {}).setdefault("source", {})
-if source.get("path") != os.environ["CANON"]:
+# Canonicalise BOTH sides through the extractor's one implementation. Comparing the
+# model app's path as a RAW STRING is the exact defect this gate exists to catch, and
+# having it here meant a maintainer spelling the DECLARED path any blessed-equivalent
+# way (./specs/…, trailing slash, …) made six controls refuse to plant and reddened a
+# perfectly good tree. Fail-closed, so never an escape — but a self-inflicted false RED.
+sys.path.insert(0, os.path.dirname(os.environ["EXTRACT"]))
+from gateway_mfa_env import norm_chart_path
+if norm_chart_path(source.get("path") or "") != os.environ["CANON"]:
     raise SystemExit("mutation 8r: the model Application points at %r, not the gateway chart "
                      "%r — the staged tree is not the baseline this control assumes"
                      % (source.get("path"), os.environ["CANON"]))
@@ -1238,7 +1256,7 @@ fi
 obase_files="$(apps_gateway_chart_files "${WORK}/apps-other-base.tsv" 2>/dev/null)"
 obase_rels="$(apps_gateway_chart_releases "${WORK}/apps-other-base.tsv" 2>/dev/null)"
 obase_opaque="$(apps_opaque_gateway_hits "${WORK}/apps-other-base.tsv" 2>/dev/null | sort | tr '\n' ' ')"
-SPELL="${OTHER_CHART}" CANON="${CHART_REL_CANON}" REL="hugmesh-8s-probe-gateway" \
+SPELL="${OTHER_CHART}" CANON="${CHART_REL_CANON}" EXTRACT="${EXTRACT}" PYTHONDONTWRITEBYTECODE=1 REL="hugmesh-8s-probe-gateway" \
 python3 - "${AD}/20-gateway-pki.yaml" "${AD}/26-gateway-8s-probe.yaml" <<'PY'
 import os
 import sys
@@ -1252,7 +1270,10 @@ if not apps:
 app = apps[0]
 app.setdefault("metadata", {})["name"] = os.environ["REL"]
 source = app.setdefault("spec", {}).setdefault("source", {})
-if source.get("path") != os.environ["CANON"]:
+# Same canonicalisation as 8r — raw-string comparison here was a self-inflicted false RED.
+sys.path.insert(0, os.path.dirname(os.environ["EXTRACT"]))
+from gateway_mfa_env import norm_chart_path
+if norm_chart_path(source.get("path") or "") != os.environ["CANON"]:
     raise SystemExit("mutation 8s: the model Application points at %r, not the gateway chart"
                      % (source.get("path"),))
 source["path"] = os.environ["SPELL"]

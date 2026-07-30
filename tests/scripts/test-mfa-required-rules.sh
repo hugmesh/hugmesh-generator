@@ -844,7 +844,7 @@ import os, re, sys
 TARGETS = {"APP_MFA_ENABLED": "enabled", "APP_MFA_ENFORCE_PRIVILEGED_FLOOR": "floor"}
 TRUE = ("true", "yes", "on", "1")
 
-out, hits, deferred, candidates = [], [], [], []
+out, hits, deferred, candidates, unaudited_defer = [], [], [], [], []
 scanned = 0
 def emit(k, v): out.append("%s %s" % (k, v))
 def truthy(v): return str(v).strip().strip('"').strip("'").strip().lower() in TRUE
@@ -858,6 +858,12 @@ HELM_OPEN = re.compile(r'\{\{-?[ \t]*(?:if|with|range|define|block)\b')
 HELM_END = re.compile(r'\{\{-?[ \t]*end[ \t]*-?\}\}')
 HELM_TRUE_DEFAULT = re.compile(r'\bdefault[ \t]+"?(?:true|yes|on|1)"?', re.I)
 SHELL_DEFAULT = re.compile(r'^"?\$\{[A-Za-z_][A-Za-z0-9_]*:-(?P<d>[^}]*)\}"?$')
+# The chart-values arm reads cv.get("mfa") ONLY, i.e. exactly these two keys. A deferred
+# site pointing anywhere else is covered by nothing, and must not be reported as audited.
+VALUES_REF = re.compile(r'\.Values\.([A-Za-z0-9_.]+)')
+def norm_values_path(p):
+    return ".".join(seg.lower() for seg in p.split(".") if seg)
+AUDITED_VALUES_PATHS = {"mfa.enabled", "mfa.enforceprivilegedfloor"}
 
 def strip_comment(line, sql):
     res, q, i = [], None, 0
@@ -886,7 +892,19 @@ def record(site, raw, kind, depth):
         if HELM_TRUE_DEFAULT.search(v):
             hits.append((kind, "%s = %s  (Helm expression with a literal TRUE default)" % (site, v)))
         else:
-            deferred.append("%s = %s" % (site, v))
+            # A deferred site is only GENUINELY covered if it points at a chart key the
+            # chart-values arm actually reads, and that arm reads the TOP-LEVEL `mfa:`
+            # block ONLY (cv.get("mfa") -> .enabled / .enforcePrivilegedFloor). Any other
+            # .Values path is audited by NOTHING, while the deferred PASS message says it
+            # was — so `{{ .Values.security.mfaFloor | quote }}` plus `security: {mfaFloor:
+            # true}` in the chart brought every gateway pod up with the fail-closed
+            # privileged floor ON and left this gate green. Split that case out.
+            ref = VALUES_REF.search(v)
+            if ref and norm_values_path(ref.group(1)) not in AUDITED_VALUES_PATHS:
+                unaudited_defer.append("%s = %s  (chart key '%s' is read by NO arm of this gate)"
+                                       % (site, v, ref.group(1)))
+            else:
+                deferred.append("%s = %s" % (site, v))
         return
     m = SHELL_DEFAULT.match(v)
     if m:
@@ -999,6 +1017,9 @@ for kind, key in (("enabled", "ENABLED_TRUE"), ("floor", "FLOOR_TRUE"),
     emit(key, len(seen))
     for w in seen:
         emit(key.split("_")[0] + "_AT", w)
+emit("UNAUDITED_DEFER", len(unaudited_defer))
+for u in unaudited_defer:
+    emit("UNAUDITED_DEFER_AT", u)
 emit("DEFERRED", len(deferred))
 for d in deferred:
     emit("DEFERRED_AT", d)
@@ -1241,6 +1262,10 @@ COMPOSE_HARDCODED="$(printf '%s' "${ENABLED_COMPOSE_AT}" | grep -v 'shell defaul
 [ -z "${COMPOSE_HARDCODED}" ] \
   && ok "the compose dev stack's ${ENABLED_COMPOSE_N} APP_MFA_ENABLED default(s) are all the OVERRIDABLE \${APP_MFA_ENABLED:-true} form, so APP_MFA_ENABLED=false still turns the dev stack's enforcement off" \
   || bad "compose site(s) hardcode APP_MFA_ENABLED true with no override: $(printf '%s' "${COMPOSE_HARDCODED}" | tr '\n' ';') — the dev stack defaults ON, but an operator must still be able to set it false"
+
+[ "$(e UNAUDITED_DEFER)" = "0" ] \
+  && ok "every APP_MFA_* site that defers to a chart value defers to a key the chart-values arm actually reads (top-level mfa.enabled / mfa.enforcePrivilegedFloor) — so 'deferred' above genuinely means audited, not unexamined" \
+  || bad "$(e UNAUDITED_DEFER) APP_MFA_* site(s) defer to a chart key NOTHING audits: $(sed -n 's/^UNAUDITED_DEFER_AT //p' "${W}/env.out" | tr '\n' ';') — the chart-values arm reads the TOP-LEVEL mfa: block only, so this renders from an unexamined default. Move the key under mfa:, or teach the chart-values arm to read it"
 
 [ "$(e UNDECIDABLE)" = "0" ] \
   && ok "no APP_MFA_* env value in that sweep is undecidable (a valueFrom Secret/ConfigMap reference, or a literal true inside an open Helm {{ if }} block)" \
