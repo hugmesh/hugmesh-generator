@@ -511,7 +511,7 @@ class LocalStackNode:
         return self._make("stack-down", timeout=300)
 
     def clean(self, on_line=None, cancel=None) -> tuple[bool, str]:
-        """`make stack-clean` — stop the stack AND reclaim its disk: the ~26 images
+        """`make stack-clean` — stop the stack AND reclaim its disk: the ~28 images
         this stack BUILT, its volumes, orphaned containers, and the private-maven
         registry container + cache. Scoped to this compose project: pulled base
         images (postgres/cassandra/mastodon/…) that other projects may share are

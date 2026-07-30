@@ -137,9 +137,16 @@ def test_every_compose_build_context_is_a_repo_the_clone_step_creates():
 
 
 def _compose_services_by_context():
-    """service -> build-context dir, straight out of compose.local.yaml. The two are
-    NOT interchangeable: the gateway image is built by three services (pki/be/fe) from
-    ONE context, and hugmesh-actions' context serves the service named hugmesh-api."""
+    """service -> build-context path RELATIVE TO STACK_SRC, straight out of
+    compose.local.yaml. Service and context are NOT interchangeable: the gateway image
+    is built by three services (pki/be/fe) from ONE context, and hugmesh-actions'
+    context serves the service named hugmesh-api.
+
+    The path keeps its SUBDIRS on purpose. character-forge is one multi-surface repo:
+    the BFF builds from the checkout root (a private-maven consumer) and the UI from
+    …/frontend (an Angular image that resolves nothing from maven). Truncating at the
+    first path segment made the UI look like a consumer of its BFF's checkout and
+    demanded m2 wiring it has no use for."""
     path = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.local.yaml")
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
@@ -149,20 +156,25 @@ def _compose_services_by_context():
         if m:
             service = m.group(1)
             continue
-        c = re.search(r"context:\s*\$\{STACK_SRC[^}]*\}/([\w.-]+)", line)
+        c = re.search(r"context:\s*\$\{STACK_SRC[^}]*\}/([\w./-]+)", line)
         if c and service:
-            out[service] = c.group(1)
+            out[service] = c.group(1).rstrip("/")
     return out
 
 
 def _compose_profiled_services():
     """The services gated behind an OPT-IN compose profile (``profiles: [...]``) —
-    NOT part of the default ``make stack-up`` set. The charforge slug moved there in
-    #464 precisely BECAUSE it cannot cold-build (never-rebranded pom, dead
-    ``systems.snapdragon`` coordinates, structurally unpatchable — its main sources
-    import the pre-rename packages), so the cold-build m2-wiring guarantee the test
-    below enforces does not apply to it: docker compose never builds a profiled-out
-    service in the default flow, wired or not."""
+    NOT part of the default ``make stack-up`` set, so the cold-build m2-wiring
+    guarantee the test below enforces does not bind them: docker compose never builds
+    a profiled-out service in the default flow, wired or not.
+
+    Derived from the file rather than hard-coded, so the set tracks reality. Today
+    nothing built from a STACK_SRC checkout is profiled — the charforge slug was
+    (#464: its repo still carried the dead ``systems.snapdragon`` coordinates and an
+    unbuildable service in the default set fails the whole `docker compose build`),
+    and it rejoined the default set once that repo finished the rebrand, which is
+    exactly when it had to appear in compose.m2-local.yaml. The remaining profiles
+    (``tor``, ``social``) build from paths that are not STACK_SRC checkouts."""
     path = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.local.yaml")
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
@@ -210,10 +222,11 @@ def test_every_private_maven_consumer_is_wired_into_the_m2_override():
     assert need, "no service maps to a private-maven consumer context — parser broke"
     # Services behind an OPT-IN profile are OUTSIDE the default cold-build set the
     # m2 override exists for (compose never builds them in `make stack-up`), so the
-    # wiring guarantee does not bind them. Today that is the charforge slug (#464:
-    # unbuildable never-rebranded repo, profiled out so it cannot take the whole
-    # mesh down). If one of them ever rejoins the default set, it re-enters the
-    # assert below automatically and bites again.
+    # wiring guarantee does not bind them. Today the exemption is EMPTY: charforge —
+    # the slug it was written for (#464) — rejoined the default set once its repo
+    # finished the rebrand, and re-entered the assert below automatically, which is
+    # what caught that it also had to be added to compose.m2-local.yaml. Kept for
+    # the next slug that needs holding out.
     profiled = _compose_profiled_services()
     need -= profiled
     assert not (need - wired), (
@@ -287,7 +300,7 @@ def test_stack_clean_recipe_has_no_command_substitution():
 
 
 def test_the_gui_exposes_stop_and_clean_as_separate_verbs():
-    """Stopping is routine; deleting ~26 built images is not. Conflating them would
+    """Stopping is routine; deleting ~28 built images is not. Conflating them would
     make an ordinary restart cost an hour-long rebuild, so they stay separate — and
     the destructive one confirms first."""
     path = os.path.join(GENERATOR_DIR, "studio", "hugmesh_studio", "gui", "pages",

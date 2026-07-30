@@ -295,6 +295,60 @@ bash "${PATCH_SH}" "${SRC13}" >/dev/null
 check "idempotent (flag not doubled)" \
       "$(grep -o -- '--base-href' "${SRC13}/hugmesh-admin-ui/Dockerfile" | wc -l | tr -d ' ')" "1"
 
+echo "== 17. a NESTED UI (a UI image built from a subdir of another checkout) is reached =="
+# REGRESSION GUARD, #459 all over again: the base-href lookup was keyed on the
+# BASENAME of a top-level .stack-src dir, and the scan only walked top-level dirs.
+# character-forge is ONE repo (BFF root + godot/ + frontend/) whose UI image builds
+# from …-bff-api/frontend, so nothing ever asked the table about it and the
+# /character-forge/ page would ship <base href="/"> with relative hashed assets.
+CF="${WORK}/n/hugmesh-character-forge-bff-api"
+mkdir -p "${CF}/frontend" "${CF}/godot"
+printf 'FROM eclipse-temurin:25-jdk AS build\nRUN ./mvnw -B package\n' > "${CF}/Dockerfile"
+printf 'FROM node:24-alpine AS build\nRUN npm ci --no-audit --no-fund\nRUN npm run build:character-forge\n' \
+  > "${CF}/frontend/Dockerfile"
+printf 'FROM node:24-alpine AS build\nRUN npm run build\n' > "${CF}/godot/Dockerfile"
+cp "${CF}/Dockerfile" "${WORK}/cf-root-before"
+cp "${CF}/godot/Dockerfile" "${WORK}/cf-godot-before"
+bash "${PATCH_SH}" "${WORK}/n" >/dev/null
+check "the nested frontend build line gains the flag" \
+      "$(grep -c -- 'build:character-forge -- --base-href=/character-forge/$' "${CF}/frontend/Dockerfile" || true)" "1"
+if diff -q "${WORK}/cf-root-before" "${CF}/Dockerfile" >/dev/null; then ok "the repo ROOT (the BFF image) is untouched"
+else bad "patched the BFF root Dockerfile"; fi
+if diff -q "${WORK}/cf-godot-before" "${CF}/godot/Dockerfile" >/dev/null; then ok "a sibling subdir with no mount mapping is untouched"
+else bad "patched a nested dir that is not a path-mounted UI"; fi
+bash "${PATCH_SH}" "${WORK}/n" >/dev/null
+check "idempotent (flag not doubled)" \
+      "$(grep -o -- '--base-href' "${CF}/frontend/Dockerfile" | wc -l | tr -d ' ')" "1"
+# The nested walk is only safe because the table is keyed on the RELATIVE path:
+# a subdir matches ONLY when the table names it together with its parent, so a
+# vendored/nested copy of some other UI's directory name is not a UI mount.
+mkdir -p "${WORK}/n/hugmesh-remote-fragment/hugmesh-admin-ui"
+printf 'FROM node:24-alpine AS build\nRUN npm run build:admin\n' \
+  > "${WORK}/n/hugmesh-remote-fragment/hugmesh-admin-ui/Dockerfile"
+bash "${PATCH_SH}" "${WORK}/n" >/dev/null
+check "a subdir merely NAMED like a top-level UI is not treated as one" \
+      "$(grep -c -- '--base-href' "${WORK}/n/hugmesh-remote-fragment/hugmesh-admin-ui/Dockerfile" || true)" "0"
+
+echo "== 18. a STACK_SRC with a TRAILING SLASH patches exactly the same set =="
+# REGRESSION GUARD: STACK_SRC is operator-supplied (Makefile var, studio's
+# directory-picker field, $1). The nested-UI support briefly derived the lookup
+# key by stripping a "${STACK_SRC}/" prefix off each path — with a trailing slash
+# already on STACK_SRC that leaves a stray leading "/" on EVERY key, so every UI
+# missed the table and the pass silently patched nothing at all. The basename-keyed
+# version it replaced was immune, so this would have been a NEW way to ship
+# <base href="/"> — including for the UIs that already worked.
+SRC18="${WORK}/s"
+mkdir -p "${SRC18}/hugmesh-admin-ui" "${SRC18}/hugmesh-character-forge-bff-api/frontend"
+printf 'FROM node:24-alpine AS build\nRUN npm run build:admin\n' > "${SRC18}/hugmesh-admin-ui/Dockerfile"
+printf 'FROM node:24-alpine AS build\nRUN npm run build:character-forge\n' \
+  > "${SRC18}/hugmesh-character-forge-bff-api/frontend/Dockerfile"
+bash "${PATCH_SH}" "${SRC18}/" >/dev/null          # NOTE the trailing slash
+check "top-level UI still patched" \
+      "$(grep -c -- 'build:admin -- --base-href=/admin/$' "${SRC18}/hugmesh-admin-ui/Dockerfile" || true)" "1"
+check "nested UI still patched" \
+      "$(grep -c -- 'build:character-forge -- --base-href=/character-forge/$' \
+         "${SRC18}/hugmesh-character-forge-bff-api/frontend/Dockerfile" || true)" "1"
+
 echo
 echo "== ${pass} passed, ${fail} failed =="
 [ "${fail}" -eq 0 ]

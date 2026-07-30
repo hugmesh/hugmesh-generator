@@ -437,7 +437,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         brow.addWidget(self.boot_start_btn)
         brow.addWidget(self.boot_down_btn)
         # Disk reclamation, separated from Stop on purpose: stopping is routine,
-        # deleting ~26 built images is not, and conflating them would make a warm
+        # deleting ~28 built images is not, and conflating them would make a warm
         # restart cost an hour-long rebuild.
         self.boot_clean_btn = QtWidgets.QPushButton("Stop && clean Docker…")
         self.boot_clean_btn.setToolTip(
@@ -748,7 +748,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 self, "Stop and clean Docker?",
                 "This stops the local mesh and then REMOVES:\n"
                 "  • every container of this stack, and its data volumes\n"
-                "  • the ~26 images this stack BUILT\n"
+                "  • the ~28 images this stack BUILT\n"
                 "  • the private-maven registry container and its cache\n\n"
                 "It does NOT touch pulled base images (postgres, cassandra, "
                 "mastodon, …), images from other projects, or anything outside this "

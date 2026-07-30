@@ -90,6 +90,19 @@ services:
         CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
 
+  # Joined the default set when the `charforge` opt-in profile came off (its repo
+  # finished the Snapdragon->HugMesh rebrand, so it cold-builds like its siblings).
+  # Ordinary consumer: parents on hugmesh-parent 2.8.0, ships its own settings.xml
+  # and declares both ARGs. Only the BFF image builds from this checkout ROOT — the
+  # character-forge UI builds from its frontend/ subdir, an Angular image that
+  # resolves nothing from maven and so is deliberately NOT listed here.
+  hugmesh-character-forge-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-forge-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
   hugmesh-pki-gateway:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway

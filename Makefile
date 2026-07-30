@@ -1204,7 +1204,7 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 stack-down: ## stop the local stack and drop its volumes
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v
 
-# stack-down PLUS the disk: the ~26 images this stack BUILT (`--rmi local` — only
+# stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
 # mastodon bases other projects may share), any orphaned containers, and the
 # private-maven registry container + its cache. Scoped to THIS compose project on

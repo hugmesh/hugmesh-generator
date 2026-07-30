@@ -384,7 +384,19 @@ patch_gateway_cassandra_migrations() { # <repo-checkout-dir>
 # and the page renders COMPLETELY BLANK (live case: /admin/ and /api-docs/;
 # login was the ONLY page that worked, for exactly this reason).
 # UPSTREAM FIX: one flag per UI repo Dockerfile, copying login-ui's pattern.
-ui_base_href() { # repo -> mount path ("" = not a path-mounted UI)
+#
+# The key is the path RELATIVE TO STACK_SRC, not a bare directory basename. Most
+# UIs ARE their own checkout, so the two are the same string — but character-forge
+# is one MULTI-SURFACE repo (BFF root + godot/ + frontend/) whose UI image builds
+# from hugmesh-character-forge-bff-api/frontend. Keyed on basename, that checkout
+# asked the table about "hugmesh-character-forge-bff-api" (the BFF), got "", and
+# the nested UI was never even considered — so the /character-forge/ page would
+# have shipped <base href="/">: exactly the defect #459 fixed everywhere else,
+# and the second reason that slug was held out of the default compose set.
+# A nested key must stay ONE level deep — that is all the scan loop walks.
+# Keying on the RELATIVE path (not the basename) is also what makes that extra
+# level safe: a subdir only ever matches if the table names it with its parent.
+ui_base_href() { # <dir relative to STACK_SRC> -> mount path ("" = not a path-mounted UI)
   case "$1" in
     hugmesh-admin-ui)             printf '/admin/' ;;
     hugmesh-mod-ui)               printf '/mod/' ;;
@@ -397,25 +409,34 @@ ui_base_href() { # repo -> mount path ("" = not a path-mounted UI)
     hugmesh-forum-ui)             printf '/social/forum/' ;;
     hugmesh-matrix-ui)            printf '/social/matrix/' ;;
     hugmesh-mastodon-ui)          printf '/social/mastodon/' ;;
+    # nested UI: a UI image built from a SUBDIR of another checkout (see above).
+    hugmesh-character-forge-bff-api/frontend) printf '/character-forge/' ;;
     *)                            printf '' ;;
   esac
 }
 
-fix_ui_base_href() { # <repo-checkout-dir>
-  local d="$1" df="$1/Dockerfile" slug
-  slug="$(ui_base_href "$(basename "$1")")"
+# The caller passes the table key, rather than this deriving it by stripping a
+# "${STACK_SRC}/" prefix off the path: STACK_SRC is operator-supplied (Makefile
+# var, studio's directory picker, $1) and a single TRAILING SLASH on it makes that
+# arithmetic leave a stray leading "/" on every key, missing the table for EVERY
+# UI — silently un-patching the ones that already worked. The scan loop below
+# knows the two path components for a fact, so it just says so.
+fix_ui_base_href() { # <ui-dir: a checkout, or a UI subdir of one> <its path relative to STACK_SRC>
+  local d="${1%/}" rel="$2" df slug
+  df="${d}/Dockerfile"
+  slug="$(ui_base_href "${rel}")"
   [ -n "${slug}" ] && [ -f "${df}" ]      || return 0
   grep -q -- '--base-href' "${df}"        && return 0   # already correct (login-ui pattern)
   grep -qE '^RUN npm run build' "${df}"   || {
-    echo "  ! $(basename "${d}")/Dockerfile: no single-line 'RUN npm run build' to anchor --base-href — NOT patched" >&2
+    echo "  ! ${rel}/Dockerfile: no single-line 'RUN npm run build' to anchor --base-href — NOT patched" >&2
     return 0
   }
   sed -i -E "s#^(RUN npm run build[A-Za-z:_-]*)( --prod)?\$#\1\2 -- --base-href=${slug}#" "${df}"
   grep -q -- "--base-href=${slug}" "${df}" || {
-    echo "  ! $(basename "${d}")/Dockerfile: --base-href injection failed" >&2
+    echo "  ! ${rel}/Dockerfile: --base-href injection failed" >&2
     return 0
   }
-  echo "  ~ $(basename "${d}")/Dockerfile: --base-href=${slug} injected (login-ui pattern)"
+  echo "  ~ ${rel}/Dockerfile: --base-href=${slug} injected (login-ui pattern)"
   patched=$((patched+1))
 }
 
@@ -427,11 +448,21 @@ fi
 for dir in "${STACK_SRC}"/*/; do
   [ -d "${dir}" ] || continue
   scanned=$((scanned+1))
+  repo="$(basename "${dir}")"
   unblock_http_registry "${dir%/}"
   drop_pre_rename_commons_dep "${dir%/}"
   wire_local_maven_registry "${dir%/}"
   pin_federation_to_one_copy "${dir%/}"
-  fix_ui_base_href "${dir%/}"
+  fix_ui_base_href "${dir%/}" "${repo}"
+  # One extra level, for NESTED UIs only: character-forge's UI image builds from
+  # hugmesh-character-forge-bff-api/frontend, which this top-level walk never
+  # visits. ui_base_href's table decides — every other subdir (src/, godot/,
+  # target/ …) costs one lookup that returns "" and returns immediately. Unglobbed
+  # dotfiles keep .git/ out of it for free.
+  for sub in "${dir%/}"/*/; do
+    [ -d "${sub}" ] || continue
+    fix_ui_base_href "${sub%/}" "${repo}/$(basename "${sub}")"
+  done
   patch_gateway_cassandra_migrations "${dir%/}"
 done
 echo "==> patch-stack-src: ${scanned} checkout(s) scanned, ${patched} patched"
