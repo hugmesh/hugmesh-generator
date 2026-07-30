@@ -56,6 +56,7 @@ import time
 from collections import deque
 
 from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
+from .. import flag_badges
 from ..tray import write_build_status
 from ...core import build_sessions
 from ...core import flash_targets
@@ -115,10 +116,27 @@ _PKG_GLYPH = {
 }
 _PKG_RUNNING_GLYPH = ("●", "#1a73e8")
 
-# tree column indices — SYMBOLIC ONLY (renumbered when Flags landed; nothing may hardcode
-# these). Flags sits between Progress and Time so a package row reads
-# name -> bar+tool -> USE flags, and the Time column stays the trailing narrow one.
-_COL_NAME, _COL_PROGRESS, _COL_FLAGS, _COL_TIME = 0, 1, 2, 3
+# tree column indices — SYMBOLIC ONLY (renumbered when Flags landed, and again when the
+# four PACKAGE-FLAG columns landed; nothing may hardcode these). Reading order for a
+# package row is name -> bar+tool -> elog USE -> the four portage-flag columns, with Time
+# staying the trailing narrow one.
+#
+# _COL_FLAGS is the ORIGINAL, always-available column: the flat enabled-only USE list out
+# of the package's own elog header (docs/PACKAGE-FLAG-BADGES.md §3.1). It also hosts the
+# per-job "show packages" button on job rows. The four columns after it are the RICHER,
+# conditionally-available ones — resolver merge-list state (§2) + VDB (§3) — and each is
+# hidden until some row actually has content for it (§5 "empty column ⇒ no column").
+_COL_NAME, _COL_PROGRESS, _COL_FLAGS = 0, 1, 2
+_COL_USE_EXPAND, _COL_USE, _COL_KEYWORDS, _COL_LICENSE = 3, 4, 5, 6
+_COL_TIME = 7
+
+#: badge-column key -> tree column index, in flag_badges.FLAG_COLUMNS order.
+_FLAG_COLS = {
+    "USE_EXPAND": _COL_USE_EXPAND,
+    "USE": _COL_USE,
+    "KEYWORDS": _COL_KEYWORDS,
+    "LICENSE": _COL_LICENSE,
+}
 
 # the shared-log-pane read of a package's on-disk emerge log is TAIL-BOUNDED: a real
 # compile log can run to hundreds of MB (inkscape's is 1.2 MB, libreoffice's far larger)
@@ -274,6 +292,18 @@ class _Row:
         # them. Empty log_root (direct-slot tests) keeps the parser a pure stream parser
         # with no filesystem access, per its documented contract.
         self.pkg_parser = EmergePackageParser(log_root)
+        # per-package FLAG state (docs/PACKAGE-FLAG-BADGES.md): streamed resolver
+        # merge-list rows + the build's own VDB. Both roots come off the SAME log_root the
+        # package parser already uses — the sysroot is log_root minus its fixed
+        # var/log/portage/build tail, and the session dir is the sysroot's grandparent
+        # (<workdir>/wl-<id>/sysroot) — so nothing here hardcodes a session path and an
+        # empty log_root (direct-slot tests) degrades to a pure stream join with no
+        # filesystem access at all.
+        sysroot = flag_badges.sysroot_from_log_root(log_root)
+        self.flag_join = flag_badges.ImageFlagJoin(
+            sysroot,
+            flag_badges.descriptions_for_session(
+                os.path.dirname(os.path.dirname(sysroot)) if sysroot else ""))
         self.buffer: deque[str] = deque(maxlen=4000)   # authoritative full raw job log
         self.terminal = False
         self.job_t_start: float | None = None
@@ -358,14 +388,27 @@ class ProgressPage(QtWidgets.QWizardPage):
         # phase table. The #348 PART bar is embedded into a job's Progress column via
         # setItemWidget, so row.bar stays the SAME widget object every existing test reads.
         self.tree = QtWidgets.QTreeWidget()
-        self.tree.setColumnCount(4)
+        self.tree.setColumnCount(8)
         # Flags: per-PACKAGE USE flags from the elog header of the package's own portage
         # log (there is NO stream-side source — the whole 3.16M-line reference transcript
         # contains zero "USE:" lines; see emerge_packages.py). Job/stage rows leave it "".
-        self.tree.setHeaderLabels(["Job / Stage / Package", "Progress", "Flags", "Time"])
+        #
+        # USE_EXPAND / USE / KEYWORDS / LICENSE are the badge columns
+        # (docs/PACKAGE-FLAG-BADGES.md). USE_EXPAND is deliberately NOT called
+        # "package.env": PYTHON_TARGETS/ABI_X86/CPU_FLAGS_* are USE_EXPAND variables set in
+        # package.use / make.conf, while /etc/portage/package.env maps atoms to environment
+        # FILES and has nothing to do with these (§3.1).
+        self.tree.setHeaderLabels(["Job / Stage / Package", "Progress", "Flags",
+                                   "USE_EXPAND", "USE", "KEYWORDS", "LICENSE", "Time"])
         self.tree.setColumnWidth(_COL_NAME, 320)
         self.tree.setColumnWidth(_COL_PROGRESS, 220)
         self.tree.setColumnWidth(_COL_FLAGS, 180)
+        for _c in _FLAG_COLS.values():
+            self.tree.setColumnWidth(_c, 220)
+        # the badge columns' owner: installs ONE painting delegate across all four (no
+        # per-badge child widgets — a real build has 300+ packages) and keeps every column
+        # hidden until a row gives it content.
+        self.flag_columns = flag_badges.FlagColumns(self.tree, _FLAG_COLS)
         self.tree.setMinimumHeight(180)
         # NO setMaximumHeight: the tree is the PRIMARY surface and must grow with the
         # window. It used to be capped at 340px, which (once the stretch below was fixed)
@@ -934,6 +977,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._redock_log()
         self._dispatched = False        # nothing is running -> no log file to point at yet
         self.tree.clear()               # drops every job + stage + package item (and bars)
+        # the badge columns go back to all-hidden: a fresh run must not show last run's
+        # columns (§5 "empty column ⇒ no column" is a property of what is on screen NOW).
+        self.flag_columns.reset()
         self._rows = []
         self._selected = 0
         self._selected_stage = None
@@ -1067,7 +1113,24 @@ class ProgressPage(QtWidgets.QWizardPage):
         # cleaned line to the parser/tracker changes no phase/stage behaviour.
         # NOT the on-disk build.log: WorklistDriver writes that itself and it KEEPS its
         # colours, which is what makes the watch command's `tail -f` render correctly.
+        raw_line = line
         line = _display_safe(line)
+        # per-package FLAG columns: portage's resolver merge-list rows ("[ebuild N ] …").
+        # Gated on the SANITISED line so the test is one C-level startswith on a string
+        # this method already built — the overwhelming majority of a build's millions of
+        # lines cost exactly that. The RAW line is what gets parsed, though: under
+        # --color=y the per-token colour is the ONLY thing separating §1.3's states 10 and
+        # 11, and _display_safe has already thrown it away. §0c: this display is a
+        # slot-conflict accident, so it may never arrive — the VDB half stands alone when
+        # it does not.
+        if line.startswith(flag_badges.RESOLVER_PREFIXES):
+            rr = row.flag_join.feed_line(raw_line)
+            # a merge list normally precedes the merging, so the package row does not
+            # exist yet and _render_package will pick the flags up when it creates it.
+            # Under --keep-going portage can re-run the depgraph MID-build, though, and
+            # that second display must land on the rows that are already on screen.
+            if rr is not None and rr.cpv in row.pkg_items:
+                self._apply_flag_cells(row, rr.cpv, row.pkg_items[rr.cpv])
         row.buffer.append(line)
         state = row.parser.feed(line)
         self._apply_state(row, state)
@@ -1548,6 +1611,15 @@ class ProgressPage(QtWidgets.QWizardPage):
             for pkg in row.pkg_parser.poll(now):
                 self._render_package(row, pkg)
             self._render_scheduler(row)
+            # KEYWORDS/LICENSE come ONLY from the VDB (§2.2), and portage writes a
+            # package's VDB directory around its own Completed line — so the read that
+            # ran on the step transition can legitimately have been a moment early. A
+            # small bounded retry per tick (never a rescan) fills those rows in; atoms
+            # that never appear are dropped after a capped number of attempts.
+            for atom, cells in row.flag_join.retry_pending().items():
+                item = row.pkg_items.get(atom)
+                if item is not None:
+                    self.flag_columns.apply(item, cells)
         except Exception as exc:                      # noqa: BLE001 - see docstring
             row.pkg_poll_off = True
             self.log.appendPlainText(
@@ -1634,6 +1706,26 @@ class ProgressPage(QtWidgets.QWizardPage):
             tool.setText(_elide(pkg.tool_info, _TOOL_CELL_CHARS))
             tool.setToolTip(_elide(pkg.tool_info, _TOOL_TIP_CHARS))
         item.setToolTip(_COL_NAME, self._pkg_tooltip(pkg))
+        self._apply_flag_cells(row, atom, item)
+
+    def _apply_flag_cells(self, row: _Row, atom: str,
+                          item: QtWidgets.QTreeWidgetItem) -> None:
+        """Join this package's flag data onto its row and reveal any column it fills.
+
+        ``cells_if_changed`` returns None unless something genuinely new is available for
+        the atom (a resolver row indexed since the last look, or its VDB record finally
+        on disk), so the common case is one dict lookup and a tuple compare — this runs
+        once per moved package row, of which a real build has 300+.
+
+        DEFENSIVE for the same reason as _poll_packages: this is reached from a Qt slot,
+        and the operator runs PyQt6 where an exception escaping a slot calls qFatal and
+        ABORTS the Studio. A missing badge is a blemish; a dead Studio mid-build is not."""
+        try:
+            cells = row.flag_join.cells_if_changed(atom)
+            if cells:
+                self.flag_columns.apply(item, cells)
+        except Exception:                             # noqa: BLE001 — see docstring
+            pass
 
     def _on_tick(self) -> None:
         """Make the running job + its active stage visibly tick their elapsed time. One
@@ -1821,7 +1913,12 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _on_tree_menu(self, pos) -> None:
         """Right-click a still-running job/stage to Stop that one image (the per-image Stop
-        that the old per-row button offered, now that the row is a tree node)."""
+        that the old per-row button offered, now that the row is a tree node), and copy a
+        package row's flags verbatim.
+
+        The Stop entry keeps its exact old condition (a live row only). Copy is offered
+        for any row that HAS flag text, terminal or not — the whole point of the badge
+        columns is that a finished build stays inspectable."""
         item = self.tree.itemAt(pos)
         if item is None:
             return
@@ -1829,12 +1926,28 @@ class ProgressPage(QtWidgets.QWizardPage):
         if not data:
             return
         i, _j = data
-        if not (0 <= i < len(self._rows)) or self._rows[i].terminal:
+        if not (0 <= i < len(self._rows)):
             return
         menu = QtWidgets.QMenu(self.tree)
-        act = menu.addAction(f"Stop {self._rows[i].label}")
-        act.triggered.connect(lambda _=False, idx=i: self._stop_one(idx))
-        menu.exec(self.tree.viewport().mapToGlobal(pos))
+        if not self._rows[i].terminal:
+            act = menu.addAction(f"Stop {self._rows[i].label}")
+            act.triggered.connect(lambda _=False, idx=i: self._stop_one(idx))
+        # §5's copy-paste guarantee: what lands on the clipboard is the KEY="…" text
+        # portage itself printed, never a re-rendering of our badges.
+        flags = self.flag_columns.copy_text_for(item)
+        if flags:
+            cact = menu.addAction("Copy flags (verbatim)")
+            cact.triggered.connect(lambda _=False, t=flags: self._copy_to_clipboard(t))
+        if menu.actions():
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """Clipboard write, guarded: a headless/clipboard-less session must never take
+        the Studio down from inside a menu slot (PyQt6 aborts on a slot exception)."""
+        try:
+            QtWidgets.QApplication.clipboard().setText(text)
+        except Exception:                             # noqa: BLE001
+            pass
 
     def _select_row(self, i: int) -> None:
         if not self._rows:

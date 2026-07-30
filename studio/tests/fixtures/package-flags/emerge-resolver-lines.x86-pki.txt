@@ -1,0 +1,244 @@
+# REAL resolver emission captured from a live fleet build — do not hand-edit.
+#
+# Source:  out/sessions/20260729-233913-719d4e/build-pki.x86.log lines 105079-105307
+#          (x86 pki role, hardened stage4, portage 3.0.81.2, 2026-07-30).
+# Emitted by: the payload 'emerge --update --deep --newuse --keep-going ...' at
+#          build-x86-host-stage4.sh:4615-4619 — NOT by a --pretend. depgraph called
+#          _show_merge_list() (depgraph.py:1546) because a dev-python/requests
+#          SLOT CONFLICT was hit, which is why the display appears at all.
+# Verbosity: default (2). _DisplayConfig.all_flags is False
+#          (output_helpers.py:196), so [ebuild R] rows list ONLY the flags that
+#          CHANGED since the last merge. Colour is absent because stdout is a
+#          pipe (actions.py:2814, 'not sys.stdout.isatty()').
+# Bracket:  PkgAttrDisplay.__str__ (output_helpers.py:603-649) =
+#          [<type> <I><N|r><S|R><f|F|g><U><D><mask>]
+#
+[ebuild  N     ] acct-group/snort-0-r2 
+[ebuild  N     ] acct-group/cron-0-r2 
+[ebuild  N     ] acct-group/named-0-r3 
+[ebuild  N     ] acct-group/nullmail-0-r2 
+[ebuild  N     ] app-crypt/argon2-20190702-r1  USE="-static-libs" 
+[ebuild  N     ] dev-libs/lzo-2.10  USE="-examples (-split-usr) -static-libs" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] acct-group/utmp-0-r3 
+[ebuild  N     ] acct-group/crontab-0-r2 
+[ebuild  N     ] acct-group/messagebus-0-r3 
+[ebuild  N     ] acct-group/plugdev-0-r3 
+[ebuild  N     ] net-wireless/wireless-regdb-20251007 
+[ebuild  N     ] net-dialup/ppp-scripts-0 
+[ebuild  N     ] dev-libs/oniguruma-6.9.10  USE="-crnl-as-line-terminator -static-libs" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] sys-apps/hwdata-0.401 
+[ebuild  N     ] sys-apps/iucode_tool-2.3.1-r2 
+[ebuild  N     ] media-fonts/liberation-fonts-2.1.5  USE="-X -fontforge" 
+[ebuild  N     ] dev-lang/go-bootstrap-1.24.6  USE="(-big-endian)" 
+[ebuild  N    ~] dev-lang/go-1.26.4  CPU_FLAGS_X86="sse2" 
+[ebuild  N     ] sys-apps/keyutils-1.6.3-r1  USE="-static -static-libs -test" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] acct-user/snort-0-r2 
+[ebuild  N     ] acct-user/named-0-r3 
+[ebuild  N     ] dev-libs/gobject-introspection-common-1.86.0 
+[ebuild  N     ] acct-user/messagebus-0-r3 
+[ebuild  N     ] virtual/ttf-fonts-1-r2 
+[ebuild  N     ] acct-user/nullmail-0-r2 
+[ebuild  N     ] sys-firmware/intel-microcode-20260512_p20260513  USE="initramfs split-ucode -dist-kernel -hostonly -vanilla" 
+[ebuild  N     ] sys-fs/dosfstools-4.2  USE="iconv -compat -test" 
+[ebuild  N     ] dev-libs/libbsd-0.11.8  USE="-static-libs -verify-sig" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] media-libs/libpng-1.6.58  USE="-apng -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse" 
+[ebuild  N     ] dev-libs/libevent-2.1.12-r1  USE="clock-gettime ssl -debug -malloc-replacement -static-libs -test -verbose-debug -verify-sig" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] net-nds/rpcbind-1.2.8  USE="-debug -remotecalls (-selinux) -systemd -tcpd -warmstarts" 
+[ebuild  N     ] acct-user/cron-0-r3 
+[ebuild  N     ] net-libs/libnetfilter_conntrack-1.1.1  USE="-verify-sig" 
+[ebuild  N     ] net-libs/libnetfilter_queue-1.0.5-r1  USE="-doc -static-libs -verify-sig" 
+[ebuild  N     ] net-libs/libnetfilter_cthelper-1.0.1-r1  USE="-verify-sig" 
+[ebuild  N     ] net-libs/libnetfilter_cttimeout-1.0.1  USE="-verify-sig" 
+[ebuild  N     ] app-text/mandoc-1.14.6-r1  USE="-cgi (-selinux) -system-man -test" 
+[ebuild  N     ] net-misc/socat-1.8.1.1  USE="ipv6 readline ssl -tcpd" 
+[ebuild  N     ] sys-apps/ethtool-7.0  USE="netlink" 
+[ebuild  N     ] sys-apps/haveged-1.9.21  USE="(-selinux) -static-libs -threads" 
+[ebuild  N     ] sys-process/cronbase-0.3.7-r10 
+[ebuild  N     ] sys-libs/efivar-39-r1  USE="-test" 
+[ebuild  N     ] sys-libs/binutils-libs-2.46.0  USE="cet nls -64-bit-bfd -multitarget -static-libs -test" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-go/go-md2man-2.0.7 
+[ebuild  N    ~] app-containers/cri-tools-1.36.0 
+[ebuild  N    ~] app-containers/nerdctl-2.3.4 
+[ebuild  N     ] sys-cluster/kubelet-1.36.1  USE="(-selinux)" 
+[ebuild  N     ] sys-cluster/kubectl-1.36.1 
+[ebuild  N     ] virtual/libelf-3-r1  ABI_X86="(64) -32 (-x32)" 
+[ebuild  N    ~] app-containers/runc-1.4.3  USE="seccomp -apparmor (-selinux) -test" 
+[ebuild  N     ] app-eselect/eselect-fontconfig-20220403 
+[ebuild  N     ] sys-cluster/kubeadm-1.36.1  USE="(-selinux)" 
+[ebuild  N     ] sys-boot/gnu-efi-4.0.4  USE="(-custom-cflags)" ABI_X86="(64) -32" 
+[ebuild  N    ~] app-containers/cni-plugins-1.9.1 
+[ebuild  N    ~] sys-libs/libsepol-3.11  USE="static-libs" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] sys-apps/semodule-utils-3.10 
+[ebuild  N     ] sys-apps/checkpolicy-3.10  USE="-debug" 
+[ebuild  N     ] net-firewall/conntrack-tools-1.4.9  USE="cthelper cttimeout -doc -systemd -verify-sig" 
+[ebuild  N     ] sys-boot/grub-themes-gentoo-1.0-r2 
+[ebuild  N     ] app-arch/cpio-2.15  USE="nls" 
+[ebuild  N     ] app-alternatives/cpio-0  USE="gnu -libarchive (-split-usr)" 
+[ebuild  N     ] sys-kernel/linux-firmware-20260519  USE="bindist initramfs redistributable -compress-xz -compress-zstd -deduplicate -dist-kernel -savedconfig (-unknown-license)" 
+[ebuild  N     ] sys-devel/bc-1.08.2  USE="readline -libedit -static" 
+[ebuild  N     ] app-alternatives/bc-0  USE="gnu -gh" 
+[ebuild  N     ] media-libs/freetype-2.14.3  USE="adobe-cff bzip2 cleartype-hinting png -X -brotli -debug -doc -fontforge -harfbuzz -static-libs -svg -utils -verify-sig" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] virtual/perl-Time-Local-1.350.0-r2 
+[ebuild  N     ] dev-libs/libpcre-8.45-r4  USE="bzip2 cxx readline (unicode) zlib -jit -libedit -pcre16 -pcre32 -static-libs -valgrind" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-libs/libnl-3.12.0  USE="debug -python -test -utils -verify-sig" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] net-libs/libpcap-1.10.6  USE="netlink -bluetooth -dbus -rdma -remote -static-libs -test -usb -verify-sig -yydebug" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-perl/Encode-Locale-1.50.0-r1  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-libs/jansson-2.14.1  USE="-doc -static-libs" 
+[ebuild  N     ] dev-libs/nspr-4.39  USE="-debug" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] virtual/perl-Compress-Raw-Bzip2-2.213.0 
+[ebuild  N     ] virtual/perl-Compress-Raw-Zlib-2.222.0-r1 
+[ebuild  N     ] dev-perl/LWP-MediaTypes-6.40.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-libs/libdnet-1.18.2  USE="-debug -python -test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] net-libs/daq-2.0.7-r1  USE="afpacket dump ipv6 pcap -ipq -nfq -static-libs" 
+[ebuild  N     ] net-libs/rpcsvc-proto-1.4.4-r1 
+[ebuild  N     ] dev-libs/userspace-rcu-0.15.6  USE="-static-libs -test -verify-sig" 
+[ebuild  N     ] sys-apps/debianutils-5.23.2  USE="-static" 
+[ebuild  N     ] dev-perl/File-Slurp-9999.320.0-r1  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] net-firewall/ipset-7.24  USE="strip -dist-kernel -modules -modules-compress -modules-sign" 
+[ebuild  N     ] dev-perl/Devel-CheckLib-1.160.0-r1  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/Try-Tiny-0.320.0  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/Net-SSLeay-1.960.0-r1  USE="-examples -minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/IO-Socket-SSL-2.95.0  USE="-examples -idn -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/MIME-Base32-1.303.0-r1  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/Regexp-IPv6-0.30.0-r2  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/URI-5.340.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/WWW-RobotRules-6.20.0-r2  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/Socket6-0.290.0-r2  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/Clone-0.470.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/IO-HTML-1.4.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/TimeDate-2.330.0-r1  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/HTTP-Date-6.60.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/File-Listing-6.160.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/HTML-Tagset-3.240.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-libs/nss-3.112.5  USE="utils -cacert -test -test-full" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="-avx2 -sse3" 
+[ebuild  N     ] sys-libs/slang-2.3.3-r2  USE="pcre readline zlib -cjk -png -static-libs" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-libs/newt-0.52.25-r2  USE="nls -gpm -python -tcl" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] virtual/perl-IO-Compress-2.213.0 
+[ebuild  N     ] virtual/perl-MIME-Base64-3.160.100_rc-r3 
+[ebuild  N     ] dev-perl/HTTP-Message-7.10.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/HTML-Parser-3.830.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/HTTP-Cookies-6.110.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/HTTP-Negotiate-6.10.0-r2  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/IO-Socket-INET6-2.730.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/Net-HTTP-6.240.0  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] app-admin/metalog-20260221  USE="(unicode) zlib" 
+[ebuild  N     ] virtual/logger-0-r3  USE="-systemd" 
+[ebuild  N     ] dev-lang/nasm-3.01  USE="-doc" 
+[ebuild  N     ] dev-libs/libev-4.33  USE="-static-libs" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-libs/libverto-0.3.2  USE="libev threads -glib -libevent" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-perl/libwww-perl-6.810.0  USE="ssl -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/LWP-Protocol-https-6.140.0  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-perl/XML-Parser-2.470.0-r1  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 
+[ebuild  N     ] dev-util/intltool-0.51.0-r3 
+[ebuild  N     ] virtual/libudev-257  USE="-systemd" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] sys-fs/lvm2-2.03.39  USE="readline udev -lvm -nvme -sanlock (-selinux) -static -static-libs -systemd -test -thin -valgrind -vdo -xfs" 
+[ebuild  N     ] app-crypt/sbsigntools-0.9.5 
+[ebuild  r  UD ] dev-libs/jsoncpp-1.9.6-r2 [1.9.8]
+[ebuild  rR    ] dev-build/cmake-4.3.4 
+[ebuild  N     ] sys-libs/talloc-2.4.4  USE="python -compat -test -valgrind" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_12 -python3_13 -python3_14" 
+[ebuild   R    ] dev-python/pathspec-1.1.1  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild   R    ] dev-python/editables-0.6  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild  N     ] media-libs/libjpeg-turbo-3.1.4.1  USE="-java -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-cpp/eigen-3.4.0-r3  USE="openmp -adolc -boost -cholmod -clang (-cuda) -debug -doc -fftw (-hip) -klu (-lapack) -mathjax (-opengl) (-pastix) -sparsehash -spqr -superlu (-test) -umfpack" CPU_FLAGS_X86="sse sse2 -avx -avx2 -avx512dq -avx512f -f16c -fma3 -popcnt -sse3 -sse4_1 -sse4_2 -ssse3" 
+[ebuild  N     ] dev-python/pyproject-metadata-0.11.0  USE="-test -verify-provenance" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_14t) (-python3_15) (-python3_15t)" 
+[ebuild  N     ] dev-libs/inih-62  USE="-test" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] net-dns/bind-9.18.49  USE="caps -dnstap -doc -doh -fixed-rrset -geoip -gssapi -idn (-jemalloc) -lmdb (-selinux) -static-libs -test -xml" 
+[ebuild  N     ] app-text/xmlto-0.0.28-r11  USE="-latex -text" 
+[ebuild  N     ] media-libs/fontconfig-2.17.1  USE="nls -doc -test" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] x11-libs/pixman-0.46.4  USE="(-loongson2f) -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="mmxext sse2 -ssse3" 
+[ebuild  N     ] x11-base/xorg-proto-2025.1  USE="-test" 
+[ebuild  NS    ] app-text/docbook-xml-dtd-4.4-r3 [4.1.2-r7, 4.2-r3, 4.5-r2]
+[ebuild  N     ] sys-apps/dbus-1.16.2  USE="-X -debug -doc -elogind (-selinux) -static-libs -systemd -test -valgrind" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] net-misc/mobile-broadband-provider-info-20251101  USE="-test" 
+[ebuild  N     ] net-dialup/ppp-2.5.3  USE="pam -activefilter -atm (-selinux) -systemd" 
+[ebuild  N     ] net-wireless/wpa_supplicant-2.11-r4  USE="ap dbus fils mbo mesh readline -broadcom-sta -eap-sim -eapol-test -gui -macsec -p2p -privsep (-selinux) -smartcard -tkip -uncommon-eap-types -wep -wps" 
+[ebuild  N     ] sys-apps/pciutils-3.15.0  USE="kmod udev zlib -dns -static-libs -verify-sig" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] sys-boot/efibootmgr-18-r2 
+[ebuild  N     ] sys-boot/grub-2.14-r5  USE="branding device-mapper fonts nls themes -doc -efiemu -libzfs -mount -protect -sdl -secureboot (-test) -truetype -verify-sig" GRUB_PLATFORMS="efi-64 pc -coreboot -efi-32 -emu -ieee1275 (-loongson) -multiboot -qemu (-qemu-mips) -uboot -xen -xen-32 -xen-pvh" 
+[ebuild  N     ] mail-mta/nullmailer-2.2-r2  USE="ssl -test" 
+[ebuild  N     ] dev-python/alabaster-1.0.0  PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/roman-numerals-4.1.0  USE="-test -verify-provenance" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_14t) (-python3_15)" 
+[ebuild   R    ] dev-python/idna-3.18  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild   R    ] dev-python/mypy-extensions-1.1.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14* (-python3_14t) (-python3_15) (-python3_15t)" 
+[ebuild   R    ] dev-python/typing-extensions-4.15.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild  N     ] app-crypt/mit-krb5-1.22.2-r2  USE="keyutils nls pkinit -doc -lmdb -openldap (-selinux) -test -xinetd" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="-aes" 
+[ebuild  N     ] sys-kernel/gentoo-sources-6.18.38  USE="symlink -build -experimental -vanilla" 
+[ebuild  N     ] sys-block/parted-3.7  USE="debug nls readline -device-mapper -static-libs -verify-sig" 
+[ebuild  N     ] app-misc/jq-1.8.1  USE="oniguruma -static-libs -test" 
+[ebuild  N     ] net-dns/bind-tools-9.18.0-r1  USE="caps readline -doc -gssapi -idn -libedit -xml" 
+[ebuild  N     ] app-crypt/efitools-1.9.2-r1  USE="-static" 
+[ebuild  N     ] sys-process/cronie-1.7.2-r1  USE="anacron inotify pam -audit (-selinux)" 
+[ebuild  N     ] app-misc/screen-4.9.1-r2  USE="pam -debug -multiuser -nethack (-selinux)" 
+[ebuild  N     ] sys-fs/xfsprogs-7.0.1  USE="nls -icu -libedit (-selinux) -static-libs" 
+[ebuild  N     ] net-fs/nfs-utils-2.8.5  USE="libmount nfsv3 nfsv4 uuid -caps -junction -kerberos -ldap -nfsdctl -sasl (-selinux) -tcpd" 
+[ebuild  N     ] sys-fs/cryptsetup-2.8.6-r1  USE="argon2 nls openssl udev -fips -gcrypt -kernel -nettle -passwdqc -pwquality -ssh -static -static-libs -test -urandom -verify-sig" 
+[ebuild  N    ~] net-analyzer/snort-2.9.20-r1  USE="active-response flexresp3 gre (libtirpc) non-ether-decoders perfprofiling ppm react threads -control-socket -debug -file-inspect -high-availability -inline-init-failopen -large-pcap-64bit -linux-smp-stats -open-appid -reload-error-restart (-selinux) -shared-rep -side-channel -sourcefire" LUA_SINGLE_TARGET="luajit" 
+[ebuild  N     ] virtual/mta-1-r2 
+[ebuild  N     ] virtual/krb5-0-r1  ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] app-admin/sudo-1.9.17_p2  USE="nls pam secure-path sendmail ssl -gcrypt -ldap -offensive -sasl (-selinux) -skey -sssd -verify-sig" 
+[ebuild  N    ~] sys-libs/libselinux-3.11  USE="python -debug -ruby -static-libs" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" RUBY_TARGETS="ruby33 -ruby32" 
+[ebuild  N     ] net-firewall/nftables-1.1.6  USE="gmp json python readline xtables -debug -doc -libedit -static-libs -test -verify-sig" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-python/olefile-0.47  USE="-doc" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/networkx-3.6.1  USE="-test -verify-provenance" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/cython-3.2.5-r1  USE="-debug -test -test-full" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_14t) (-python3_15) (-python3_15t)" 
+[ebuild  N     ] app-text/asciidoc-10.2.1  USE="-test" PYTHON_SINGLE_TARGET="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/babel-2.18.0  USE="-doc -test -verify-provenance" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/imagesize-2.0.0  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/snowballstemmer-3.1.1  USE="-test -verify-provenance" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild   R    ] dev-python/certifi-3024.7.22  PYTHON_TARGETS="python3_12* -python3_13* -python3_14* (-python3_14t) (-python3_15t)" 
+[ebuild   R    ] dev-python/pysocks-1.7.1-r2  PYTHON_TARGETS="python3_12* -python3_13* -python3_14* (-python3_14t) (-python3_15t)" 
+[ebuild   R    ] dev-python/librt-0.11.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild     UD ] dev-util/maturin-1.13.3 [1.14.1] PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild  N     ] app-admin/setools-4.6.0  USE="-debug -test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] sys-libs/libsemanage-3.10  ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild   R    ] dev-python/pluggy-1.6.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild   R    ] dev-python/ast-serialize-0.3.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild  N     ] sys-kernel/dracut-111-r1  USE="-debug -dracut-cpio (-selinux) -systemd -test" 
+[ebuild   R    ] dev-python/hatchling-1.30.1  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild  N     ] sys-apps/selinux-python-3.10-r1  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild   R    ] dev-python/mypy-2.1.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild  N     ] sys-apps/policycoreutils-3.10  USE="pam -audit (-split-usr)" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-python/pygments-2.19.2  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_14t) (-python3_15) (-python3_15t)" 
+[ebuild   R    ] dev-python/hatch-vcs-0.5.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild   R    ] dev-python/charset-normalizer-3.4.7  PYTHON_TARGETS="python3_12* -python3_13* -python3_14*" 
+[ebuild  N    ~] sec-policy/selinux-base-2.20260616_p1  USE="ubac unconfined unknown-perms -doc -systemd" SELINUX_POLICY_TYPES="mcs mls strict targeted" 
+[ebuild  N     ] dev-python/scikit-build-core-0.12.2  USE="-test -verify-provenance" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild   R    ] dev-python/urllib3-2.7.0  PYTHON_TARGETS="python3_12* -python3_13* -python3_14* (-python3_14t) (-python3_15t)" 
+[ebuild  N     ] dev-python/pybind11-3.0.4  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild   R    ] dev-python/requests-2.34.2  PYTHON_TARGETS="python3_12* -python3_13* -python3_14* (-python3_14t) (-python3_15) (-python3_15t)" 
+[ebuild  N     ] dev-python/pillow-12.3.0  USE="jpeg zlib -avif -debug -examples -imagequant -jpeg2k -lcms -raqm -test -tiff -tk -truetype -webp -xcb" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/docutils-0.22.4  PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-util/glib-utils-2.88.2  PYTHON_SINGLE_TARGET="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] net-fs/cifs-utils-7.5  USE="ads caps pam python -acl -creds -systemd" PYTHON_SINGLE_TARGET="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-libs/glib-2.88.2  USE="elf introspection mime xattr -dbus -debug -doc (-selinux) -static-libs -sysprof -systemtap -test -utils" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] x11-misc/shared-mime-info-2.4-r3  USE="-test" 
+[ebuild  N     ] dev-util/desktop-file-utils-0.28-r1 
+[ebuild  N     ] x11-libs/cairo-1.18.4-r1  USE="glib -X (-aqua) (-debug) -gtk-doc -lzo -test" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-util/gdbus-codegen-2.88.2  PYTHON_SINGLE_TARGET="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-libs/libgudev-238-r2  USE="-introspection -test" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] net-libs/libmbim-1.34.0  USE="-gtk-doc -introspection" 
+[ebuild  N     ] dev-python/dbus-python-1.4.0  USE="-doc -examples -test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-libs/gobject-introspection-1.86.0  USE="-doctool -gtk-doc -test" PYTHON_SINGLE_TARGET="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-python/pycairo-1.29.0-r1  USE="-X -debug -doc -examples -test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_14t) (-python3_15) (-python3_15t)" 
+[ebuild  N     ] net-libs/libndp-1.9-r1  ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] dev-python/pygobject-3.56.3  USE="cairo -debug -test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] net-libs/libqrtr-glib-1.4.0  USE="-gtk-doc" 
+[ebuild  N     ] net-libs/libqmi-1.36.0  USE="mbim qrtr -gtk-doc -introspection" 
+[ebuild  N     ] net-misc/modemmanager-1.24.2  USE="introspection mbim qmi qrtr udev -elogind -gtk-doc -policykit (-selinux) -systemd -test -vala" 
+[ebuild  N     ] net-misc/networkmanager-1.56.0  USE="concheck introspection modemmanager nss ppp tools wext wifi -audit -bluetooth -connection-sharing -debug -dhclient -dhcpcd -elogind -gnutls -gtk-doc -iptables -iwd -libedit -nbft -nftables -ofono -ovs -policykit -psl -resolvconf (-selinux) -syslog -systemd -teamd -test -vala" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N    ~] sec-policy/selinux-base-policy-2.20260616_p1  USE="unconfined -systemd" SELINUX_POLICY_TYPES="mcs mls strict targeted" 
+[ebuild  N     ] sec-policy/selinux-unconfined-2.20260312_p1  SELINUX_POLICY_TYPES="mcs mls strict targeted" 
+[ebuild  N     ] sec-policy/selinux-container-2.20260312_p1  SELINUX_POLICY_TYPES="mcs mls strict targeted" 
+[ebuild  N     ] sec-policy/selinux-virt-2.20260312_p1  SELINUX_POLICY_TYPES="mcs mls strict targeted" 
+[ebuild  N     ] net-firewall/firewalld-2.4.0  USE="-gui (-selinux) -test" PYTHON_SINGLE_TARGET="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-python/sphinxcontrib-applehelp-2.0.0-r1  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/sphinxcontrib-devhelp-2.0.0-r1  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/sphinxcontrib-htmlhelp-2.1.0-r1  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/sphinxcontrib-jsmath-1.0.1-r5  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/sphinxcontrib-qthelp-2.0.0-r1  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/sphinxcontrib-serializinghtml-2.0.0-r1  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/sphinx-9.1.0  USE="-doc -latex -test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14" 
+[ebuild  N     ] dev-python/sphinxcontrib-jquery-4.1  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] dev-python/sphinx-rtd-theme-3.1.0  USE="-test" PYTHON_TARGETS="python3_12 -python3_13 -python3_14 (-python3_15)" 
+[ebuild  N     ] sys-fs/btrfs-progs-7.0  USE="convert man zstd -experimental -reiserfs -static -static-libs -udev -verify-sig" 
+[ebuild  N    ~] app-containers/containerd-2.3.2-r1  USE="btrfs cri device-mapper seccomp -apparmor (-selinux) -test" 

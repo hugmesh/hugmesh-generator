@@ -167,16 +167,27 @@ _PKG_STREAM = [
 
 # ── columns: symbolic renumber, Flags added ────────────────────────────────────────────
 def test_flags_column_exists_and_constants_are_symbolic(wiz):
-    """The Flags column sits between Progress and Time, and every index is a module
-    constant — the existing tests' hardcoded text(1)/foreground(0) reads stay valid."""
+    """The Flags column sits between Progress and the four badge columns, Time stays
+    last, and every index is a module constant — the existing tests' hardcoded
+    text(1)/foreground(0) reads stay valid.
+
+    Renumbering _COL_TIME (3 -> 7) is exactly what the module's own comment sanctions:
+    the indices are symbolic and nothing may hardcode them. The four badge columns
+    (docs/PACKAGE-FLAG-BADGES.md) are inserted between Flags and Time so a package row
+    still reads left-to-right as name -> progress -> flags -> Time."""
     assert (progress_mod._COL_NAME, progress_mod._COL_PROGRESS,
-            progress_mod._COL_FLAGS, progress_mod._COL_TIME) == (0, 1, 2, 3)
+            progress_mod._COL_FLAGS) == (0, 1, 2)
+    assert progress_mod._COL_TIME == 7
     page = _progress_page(wiz)
-    assert page.tree.columnCount() == 4
+    assert page.tree.columnCount() == 8
     hdr = page.tree.headerItem()
     assert hdr.text(progress_mod._COL_PROGRESS) == "Progress"
     assert hdr.text(progress_mod._COL_FLAGS) == "Flags"
     assert hdr.text(progress_mod._COL_TIME) == "Time"
+    # the operator called the first badge column "package.env"; the doc (§3.1) corrects
+    # it — these are USE_EXPAND variables, and the HEADER must say so.
+    assert [hdr.text(c) for c in progress_mod._FLAG_COLS.values()] == \
+        ["USE_EXPAND", "USE", "KEYWORDS", "LICENSE"]
 
 
 # ── the third level: packages under the emerge stage, grouped ──────────────────────────

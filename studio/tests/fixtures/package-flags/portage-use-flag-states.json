@@ -1,0 +1,221 @@
+{
+  "portage_version": "3.0.81.2",
+  "cases": [
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "new-pkg / enabled",
+      "plain": "USE=\"f\"",
+      "ansi": "USE=\"\\x1b[31;01mf\\x1b[39;49;00m\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "new-pkg / disabled",
+      "plain": "USE=\"-f\"",
+      "ansi": "USE=\"\\x1b[34;01m-f\\x1b[39;49;00m\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "new-pkg / enabled + profile-forced",
+      "plain": "USE=\"(f)\"",
+      "ansi": "USE=\"(\\x1b[31;01mf\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "new-pkg / disabled + profile-masked",
+      "plain": "USE=\"(-f)\"",
+      "ansi": "USE=\"(\\x1b[34;01m-f\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / enabled, unchanged",
+      "plain": "USE=\"f\"",
+      "ansi": "USE=\"\\x1b[31;01mf\\x1b[39;49;00m\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / disabled, unchanged",
+      "plain": "USE=\"-f\"",
+      "ansi": "USE=\"\\x1b[34;01m-f\\x1b[39;49;00m\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / turning ON (was off last merge)",
+      "plain": "USE=\"f*\"",
+      "ansi": "USE=\"\\x1b[32;01mf\\x1b[39;49;00m*\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / turning OFF (was on last merge)",
+      "plain": "USE=\"-f*\"",
+      "ansi": "USE=\"\\x1b[32;01m-f\\x1b[39;49;00m*\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / newly in IUSE, enabled",
+      "plain": "USE=\"f%*\"",
+      "ansi": "USE=\"\\x1b[33;01mf\\x1b[39;49;00m%*\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / newly in IUSE, disabled",
+      "plain": "USE=\"-f%\"",
+      "ansi": "USE=\"\\x1b[33;01m-f\\x1b[39;49;00m%\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / newly in IUSE, disabled + forced/masked",
+      "plain": "USE=\"(-f)\"",
+      "ansi": "USE=\"(\\x1b[33;01m-f\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / newly in IUSE, ENABLED + forced",
+      "plain": "USE=\"(f%*)\"",
+      "ansi": "USE=\"(\\x1b[33;01mf\\x1b[39;49;00m%*)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / turning ON + forced",
+      "plain": "USE=\"(f*)\"",
+      "ansi": "USE=\"(\\x1b[32;01mf\\x1b[39;49;00m*)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / turning OFF + masked",
+      "plain": "USE=\"(-f*)\"",
+      "ansi": "USE=\"(\\x1b[32;01m-f\\x1b[39;49;00m*)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / REMOVED from IUSE (was off)",
+      "plain": "USE=\"(-f%)\"",
+      "ansi": "USE=\"(\\x1b[33;01m-f\\x1b[39;49;00m%)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / REMOVED from IUSE (was on)",
+      "plain": "USE=\"(-f%*)\"",
+      "ansi": "USE=\"(\\x1b[33;01m-f\\x1b[39;49;00m%*)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / enabled unchanged + forced",
+      "plain": "USE=\"(f)\"",
+      "ansi": "USE=\"(\\x1b[31;01mf\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "--verbose (all_flags=True)",
+      "state": "reinstall / disabled unchanged + masked",
+      "plain": "USE=\"(-f)\"",
+      "ansi": "USE=\"(\\x1b[34;01m-f\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "new-pkg / enabled",
+      "plain": "USE=\"f\"",
+      "ansi": "USE=\"\\x1b[31;01mf\\x1b[39;49;00m\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "new-pkg / disabled",
+      "plain": "USE=\"-f\"",
+      "ansi": "USE=\"\\x1b[34;01m-f\\x1b[39;49;00m\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "new-pkg / enabled + profile-forced",
+      "plain": "USE=\"(f)\"",
+      "ansi": "USE=\"(\\x1b[31;01mf\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "new-pkg / disabled + profile-masked",
+      "plain": "USE=\"(-f)\"",
+      "ansi": "USE=\"(\\x1b[34;01m-f\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / enabled, unchanged",
+      "plain": "",
+      "ansi": ""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / disabled, unchanged",
+      "plain": "",
+      "ansi": ""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / turning ON (was off last merge)",
+      "plain": "USE=\"f*\"",
+      "ansi": "USE=\"\\x1b[32;01mf\\x1b[39;49;00m*\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / turning OFF (was on last merge)",
+      "plain": "USE=\"-f*\"",
+      "ansi": "USE=\"\\x1b[32;01m-f\\x1b[39;49;00m*\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / newly in IUSE, enabled",
+      "plain": "USE=\"f%*\"",
+      "ansi": "USE=\"\\x1b[33;01mf\\x1b[39;49;00m%*\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / newly in IUSE, disabled",
+      "plain": "USE=\"-f%\"",
+      "ansi": "USE=\"\\x1b[33;01m-f\\x1b[39;49;00m%\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / newly in IUSE, disabled + forced/masked",
+      "plain": "USE=\"(-f)\"",
+      "ansi": "USE=\"(\\x1b[33;01m-f\\x1b[39;49;00m)\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / newly in IUSE, ENABLED + forced",
+      "plain": "USE=\"(f%*)\"",
+      "ansi": "USE=\"(\\x1b[33;01mf\\x1b[39;49;00m%*)\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / turning ON + forced",
+      "plain": "USE=\"(f*)\"",
+      "ansi": "USE=\"(\\x1b[32;01mf\\x1b[39;49;00m*)\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / turning OFF + masked",
+      "plain": "USE=\"(-f*)\"",
+      "ansi": "USE=\"(\\x1b[32;01m-f\\x1b[39;49;00m*)\""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / REMOVED from IUSE (was off)",
+      "plain": "",
+      "ansi": ""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / REMOVED from IUSE (was on)",
+      "plain": "",
+      "ansi": ""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / enabled unchanged + forced",
+      "plain": "",
+      "ansi": ""
+    },
+    {
+      "verbosity": "default (all_flags=False)",
+      "state": "reinstall / disabled unchanged + masked",
+      "plain": "",
+      "ansi": ""
+    }
+  ]
+}

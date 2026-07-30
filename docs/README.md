@@ -20,6 +20,7 @@ The doc set for the image/infra layer. State key used throughout:
 - [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) — superadmin go-live wizard (bring-your-own-domain / cloudflare-tunnel / DuckDNS-DDNS / tailscale-funnel / router-portforward providers), CLI + ncurses + Studio front-ends (✅ v1 consolidated).
 - [`SUPERADMIN-MESH-CLIENT.md`](SUPERADMIN-MESH-CLIENT.md) — how a platform superadmin joins the tailnet mesh and reaches nodes over SSH.
 - [`IMAGE-GEN-PROGRESS.md`](IMAGE-GEN-PROGRESS.md) — the image-build worker's optional non-terminal `PROGRESS_URL` side channel (fills the web progress bar between the start frame and the terminal `COMPLETED`/`FAILED`/`ERROR` result).
+- [`PACKAGE-FLAG-BADGES.md`](PACKAGE-FLAG-BADGES.md) — ground truth for the Studio's per-package flag display: every USE-flag state portage can render (re-derived from portage 3.0.81.2's own formatter), which of the four columns (USE_EXPAND / USE / KEYWORDS / LICENSE) each channel can actually source, the 100%-coverage **offline** hover-doc sources, and the badge colour+emoji mapping (🔭 semantics only — no feature code).
 
 ## Architecture
 
