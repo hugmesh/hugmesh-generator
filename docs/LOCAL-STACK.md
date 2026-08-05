@@ -321,14 +321,17 @@ not verify.
 | `hugmesh-admin-bff-api` | build `hugmesh-admin-bff-api` | `manifests/admin-bff-api` |
 | `hugmesh-mod-bff-api` / `-user-bff-api` | build the respective repos | (not yet in cluster; wired by analogy) |
 | `hugmesh-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
+| `hugmesh-character-forge-bff-api` | build `hugmesh-character-forge-bff-api` (spring-bff archetype sibling) | `manifests/character-forge-bff-api` |
 | `hugmesh-api` | build `hugmesh-actions` | `manifests/hugmesh-apis` |
 | `hugmesh-remote-fragment` | build `hugmesh-remote-fragment` (sync image) | `manifests/remote-fragment` |
 | `snapdragon-systems-web` (service name kept — the fe-gateway route target) | build `hugmesh-host-shell` | `manifests/frontend` |
 | `hugmesh-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
 | `hugmesh-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
 | `hugmesh-character-studio-ui` | build `hugmesh-character-studio-ui` | `manifests/character-studio` (no dedicated BFF — talks to the existing BFFs over `/bff/**`) |
+| `hugmesh-character-forge-ui` | build `hugmesh-character-forge-bff-api/frontend` (the Angular UI ships inside the BFF repo) | `manifests/character-forge` |
 | `route-access-db` / `federation-db` / `admin-bff-db` | `postgres:16-alpine` | `manifests/route-access` / `federation-db` / `admin-bff-db` |
 | `forum-bff-db` / `wiki-bff-db` / `owncast-bff-db` / `tube-bff-db` | `postgres:16-alpine` | `manifests/forum-bff-db` / `wiki-bff-db` / (owncast/tube: no dedicated DB manifest yet — pre-existing cluster-side gap) |
+| `character-forge-bff-db` | `postgres:16-alpine` | `manifests/character-forge-bff-db` |
 | `cassandra`, `casdoor`, `casdoor-db` | upstream images | `compose.real.yaml` (included) |
 | `synapse`, `mastodon-*` | upstream images (`social` profile) | `compose.real.yaml` (included, opt-in) |
 

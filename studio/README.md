@@ -54,7 +54,7 @@ a **local mesh node** from the system tray.
   **Check readiness** probe (docker/buildx/disk/maven, read-only), the cold-build
   maven prerequisite (`make stack-m2-bootstrap`) as a button, live **streamed**
   build output with a **Cancel** that stops the whole process group, cold-aware
-  timeouts (a first build compiles ~24 images and is never killed at minute 30),
+  timeouts (a first build compiles ~28 images and is never killed at minute 30),
   and an **Open web UI** shortcut to the running stack's front door.
 
 ## Run

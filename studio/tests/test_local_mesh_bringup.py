@@ -2,7 +2,7 @@
 the m2 prerequisite verb, readiness check, open-web-UI).
 
 The bug this track fixes first: ``make stack-up`` ran under a FLAT 1800 s
-subprocess timeout — a cold build (~24 service images, four fat Spring builds)
+subprocess timeout — a cold build (~28 service images, a dozen fat Maven builds)
 routinely exceeds it, so the GUI KILLED every healthy first bring-up at minute 30
 and reported it FAILED. Cold builds now get a generous ceiling plus live streamed
 output and an operator Cancel (terminating the whole process group), and the two

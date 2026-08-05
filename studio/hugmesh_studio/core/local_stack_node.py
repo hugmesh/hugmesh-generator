@@ -52,14 +52,14 @@ PRIVATE_ARTIFACT_SERVICES = (
     "hugmesh-mod-bff-api",
     "hugmesh-federation-api",
 )
-# A full cold build (17 service images incl. four fat Spring builds) comfortably
-# exceeds 10 GiB of layers + build cache; demand sane headroom up front instead
-# of failing 40 minutes into `docker compose build`.
+# A full cold build (~28 service images, a dozen of them fat Maven builds)
+# comfortably exceeds 10 GiB of layers + build cache; demand sane headroom up
+# front instead of failing 40 minutes into `docker compose build`.
 PREFLIGHT_MIN_FREE_GIB = 20
 
 # stack-up ceilings. The old flat 1800 s KILLED every healthy cold bring-up: a
-# from-scratch `make stack-up` compiles ~24 service images (four fat Spring builds
-# among them) and routinely runs well past 30 minutes — the GUI then reported
+# from-scratch `make stack-up` compiles ~28 service images (a dozen fat Maven
+# builds among them) and routinely runs well past 30 minutes — the GUI then reported
 # FAILED (TimeoutExpired) while docker was building fine. Warm restarts (images
 # present) keep the tight ceiling; cold builds get a generous one and rely on the
 # streamed output + operator Cancel instead of a guess-the-duration timeout.
@@ -482,9 +482,9 @@ class LocalStackNode:
         cold = self.cold_build_expected()
         if cold and on_line is not None:
             on_line("[stack-up] COLD BUILD: service images are absent, so this first "
-                    "run compiles the whole stack (~24 images, four fat Spring "
-                    "builds) — well over an hour on most machines. Output streams "
-                    "below; Cancel stays available.")
+                    "run compiles the whole stack (~28 images, a dozen of them fat "
+                    "Maven builds) — well over an hour on most machines. Output "
+                    "streams below; Cancel stays available.")
         return self._make("stack-up",
                           timeout=(COLD_STACK_UP_TIMEOUT_S if cold
                                    else WARM_STACK_UP_TIMEOUT_S),
@@ -516,7 +516,7 @@ class LocalStackNode:
         registry container + cache. Scoped to this compose project: pulled base
         images (postgres/cassandra/mastodon/…) that other projects may share are
         KEPT, and no `docker system prune` is ever issued. Streams like the other
-        long actions — removing 26 images is not instant."""
+        long actions — removing ~28 images is not instant."""
         return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel)
 
     def status(self) -> StackStatus:
