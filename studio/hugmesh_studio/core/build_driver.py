@@ -168,9 +168,30 @@ def _askpass_helper_path() -> str | None:
     return None
 
 
+def shared_assets_root(out_dir: str) -> str:
+    """The fleet-wide SHARED build-asset root (stage3 seed cache / distfiles / binpkg
+    pools) for a builder whose work dir is ``out_dir``.
+
+    The builders default this to ``<work-dir>/shared`` themselves, and for a make-driven
+    build that is already right. The Studio is the caller that MUST be explicit: a GUI
+    run's work dir is the PER-SESSION ``<out>/sessions/<id>`` (build_sessions.
+    session_workdir), so the builder-side default would resolve to a per-session root and
+    share nothing across sessions — which is exactly the reuse gap this exists to close.
+    We therefore strip a trailing ``sessions/<id>`` and anchor the root at the stable
+    ``<out>`` the operator chose. That also keeps the root INSIDE the docker ``-v
+    <out>:/out`` mount whenever the driver is not session-overridden."""
+    base = os.path.abspath(out_dir)
+    parent, name = os.path.split(base)
+    grandparent, sessions = os.path.split(parent)
+    if name and sessions == "sessions" and grandparent:
+        base = grandparent
+    return os.path.join(base, "shared")
+
+
 class BuildDriver:
     def __init__(self, generator_dir: str, host: HostInfo | None = None, *,
-                 graphical: bool = False, workdir: str | None = None):
+                 graphical: bool = False, workdir: str | None = None,
+                 shared_assets: str | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.host = host or detect()
         # Runtime-only work-dir override (per-session artifact dirs, GUI dispatch).
@@ -180,6 +201,11 @@ class BuildDriver:
         # deliberately never written into cfg.output_dir, so config save/load and
         # --print-specs round-trip untouched for the same config.
         self.workdir = workdir
+        # Shared build-asset root override. None (the default) = derive it from the work
+        # dir via shared_assets_root(); "" = OPT OUT, emitting --no-shared-assets so the
+        # builder falls back to its private per-BUILD_ROOT seed/distfiles/pkgdir. Driver
+        # state, never config state — same discipline as `workdir`.
+        self.shared_assets = shared_assets
         # A GUI-launched build (True) must never route a sudo password prompt into an
         # invisible terminal: _elevation_prefix picks a GRAPHICAL auth path (sudo -A +
         # a Qt askpass, else pkexec) instead of bare `sudo`. A terminal/headless launch
@@ -266,8 +292,14 @@ class BuildDriver:
         # at the generator-repo root, so ./<script> works both natively (cwd =
         # generator_dir) and in the container (the repo is mounted at /src).
         script = f"./{cfg.builder_script}"
+        # The shared-asset leg rides between the work-dir/jobs plumbing and the CONFIG
+        # args — never after them. cfg.to_cli_args() ends with the operator's raw
+        # `extra_flags`, and an escape hatch must stay LAST so a hand-typed
+        # `--no-shared-assets` (or any other override) still wins the builder's
+        # last-flag-wins argv parse. It is also the honest reading order: -w/-j and the
+        # asset root are build-PHASE plumbing; everything after describes the image.
         inner = [script, "-w", "/out" if backend == "docker" else out,
-                 "-j", str(cfg.jobs), *cfg.to_cli_args()]
+                 "-j", str(cfg.jobs), *self._shared_assets_args(out), *cfg.to_cli_args()]
         penv = self._passthrough_env(cfg)
         if backend == "native":
             # run in the generator dir; needs root for the chroot/loop ops.
@@ -280,7 +312,9 @@ class BuildDriver:
             # Asset paths outside the generator dir (wallpaper, branding dir, egress conf)
             # are not visible in the container — mount each and rewrite its flag value.
             asset_mounts, dcfg = self._remap_assets_for_docker(cfg)
-            dinner = [script, "-w", "/out", "-j", str(cfg.jobs), *dcfg.to_cli_args()]
+            shared_mounts, shared_args = self._shared_assets_docker(out)
+            dinner = [script, "-w", "/out", "-j", str(cfg.jobs), *shared_args,
+                      *dcfg.to_cli_args()]
             env_args: list[str] = []
             for k, v in penv.items():
                 env_args += ["-e", f"{k}={v}"]
@@ -296,11 +330,55 @@ class BuildDriver:
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,
+                *shared_mounts,
                 *env_args,
                 "-w", "/src", self.host.builder_image,
                 "bash", "-c", shlex.join(dinner),
             ]
         raise RuntimeError("no usable build backend (need Gentoo native or Docker)")
+
+    # ---- shared build assets ----------------------------------------------
+    def _shared_assets_args(self, out: str) -> list[str]:
+        """The ``--shared-assets DIR`` / ``--no-shared-assets`` leg of the builder argv.
+
+        Emitted for EVERY Studio-dispatched build (and therefore visible in the command
+        PREVIEW), because the builder-side default — ``<work-dir>/shared`` — is wrong for
+        a Studio session: its work dir is ``<out>/sessions/<id>``, so the default would
+        mint a fresh, empty root per session and every GUI build would re-download the
+        stage3 seed and recompile the world from an empty pool."""
+        if self.shared_assets == "":
+            return ["--no-shared-assets"]
+        return ["--shared-assets", self.shared_assets or shared_assets_root(out)]
+
+    def _shared_assets_docker(self, out: str) -> tuple[list[str], list[str]]:
+        """(extra docker -v args, builder argv) for the shared root under docker.
+
+        The root always gets its OWN read-write bind mount at the fixed container path
+        ``/shared``, and the builder is always told ``--shared-assets /shared``.
+
+        WHY A MOUNT AT ALL, given <out>/shared is normally already inside ``-v out:/out``:
+        for a MAKE-driven build it genuinely is, and the Makefile needs no change — the
+        builder's own ``<work-dir>/shared`` default resolves to ``/out/shared``
+        in-container with zero new mounts. But a STUDIO docker build mounts the
+        PER-SESSION work dir (``<out>/sessions/<id>:/out``), and the shared root
+        deliberately sits at the stable ``<out>/shared`` ABOVE it — outside that mount.
+        So the Studio path needs a mount in the case that matters most, and making it
+        unconditional buys two things worth more than one redundant bind:
+
+          * the container-side path is ``/shared`` in EVERY Studio dispatch, so the
+            command preview and the build log read the same on both mount layouts; and
+          * the golden workdir invariant survives — a session work dir may still change
+            ONLY the ``-v <host>:/out`` value and nothing else, because the shared root
+            is derived from the STABLE out dir (shared_assets_root strips ``sessions/<id>``)
+            and is therefore byte-identical with and without the override.
+
+        The mount is read-WRITE: the builder creates and writes the seed cache, the pool
+        and the distfiles there. That is why it is not in DOCKER_ASSET_FIELDS, whose
+        entries are read-only inputs that must pre-exist."""
+        if self.shared_assets == "":
+            return [], ["--no-shared-assets"]
+        host = os.path.abspath(self.shared_assets or shared_assets_root(out))
+        return ["-v", f"{host}:/shared"], ["--shared-assets", "/shared"]
 
     def _remap_assets_for_docker(self, cfg: ImageConfig) -> tuple[list[str], ImageConfig]:
         """Mount external asset paths into the container and return (mount-args, a config

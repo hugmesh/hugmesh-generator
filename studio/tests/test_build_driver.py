@@ -42,7 +42,11 @@ def test_native_command_per_platform(platform, script, tmp_path):
     cmd = d.command(cfg, "native")
     assert cmd[:2] == ["bash", f"./{script}"]
     assert cmd[2:6] == ["-w", str(tmp_path / "out"), "-j", "4"]
-    assert cmd[6:] == cfg.to_cli_args()
+    # Build-PHASE plumbing (-w/-j, then the shared build-asset root) precedes the CONFIG
+    # args, which stay exactly cfg.to_cli_args() — the single-sourced flag-translation
+    # contract is unchanged, it just no longer starts at index 6.
+    assert cmd[6:8] == ["--shared-assets", str(tmp_path / "out" / "shared")]
+    assert cmd[8:] == cfg.to_cli_args()
 
 
 def test_native_command_plain_gentoo_roles(tmp_path):
@@ -53,7 +57,8 @@ def test_native_command_plain_gentoo_roles(tmp_path):
                      bundle_source=False, output_dir=str(tmp_path / "out"), jobs=4)
     cmd = d.command(ua, "native")
     assert cmd[:2] == ["bash", "./build-x86-host-stage4.sh"]
-    assert cmd[6:8] == ["--role", "standalone-unaffiliated"]
+    # config args start after -w/-j and the shared build-asset root (indices 6-7)
+    assert cmd[8:10] == ["--role", "standalone-unaffiliated"]
     for flag in ("--brand", "--brand-title", "--org", "--theme", "--bundle-source",
                  "--with-sso", "--with-tailscale", "--person-role", "--domains"):
         assert flag not in cmd
@@ -61,7 +66,7 @@ def test_native_command_plain_gentoo_roles(tmp_path):
                       output_dir=str(tmp_path / "out"), jobs=4)
     cmd = d.command(gen, "native")
     assert cmd[:2] == ["bash", "./build-rpi5-stage4.sh"]
-    assert cmd[6:8] == ["--role", "generic"]   # passes through the be/fe map unmapped
+    assert cmd[8:10] == ["--role", "generic"]  # passes through the be/fe map unmapped
 
 
 def test_native_non_root_prepends_sudo(tmp_path):
@@ -80,10 +85,14 @@ def test_docker_command_per_platform(platform, script, tmp_path):
     assert f"{d.generator_dir}:/src" in cmd            # generator dir mounted whole:
     assert f"{cfg.output_dir}:/out" in cmd             # every builder script reachable
     assert cmd[-4:-1] == ["hugmesh-builder", "bash", "-c"]
+    # The shared build-asset root gets its own read-write mount at a FIXED container
+    # path, so the in-container spelling is identical on every mount layout.
+    assert f"{tmp_path / 'out' / 'shared'}:/shared" in cmd
     inner = shlex.split(cmd[-1])
     assert inner[0] == f"./{script}"
     assert inner[1:5] == ["-w", "/out", "-j", "4"]
-    assert inner[5:] == cfg.to_cli_args()
+    assert inner[5:7] == ["--shared-assets", "/shared"]
+    assert inner[7:] == cfg.to_cli_args()
 
 
 def test_extra_flags_flow_through_driver(tmp_path):

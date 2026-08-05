@@ -69,6 +69,17 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # builder + CHOST but differ in -mcpu, and portage's --binpkg-respect-use ignores CFLAGS.
 # shellcheck source=scripts/_binpkg-pool-lib.sh
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
+# Shared build-asset root (stage3 seed cache + fleet distfiles + per-BOARD binpkg
+# pool) and its flock discipline — the ONE resolver every builder uses, so the path
+# logic is not duplicated across ten scripts. See scripts/_shared-assets-lib.sh and
+# docs/SHARED-BINPKG.md.
+# shellcheck source=scripts/_shared-assets-lib.sh
+source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# Signed-kernel artifact cache (G4): a cross-compiled kernel + module tree + DTBs is
+# reusable across images of the SAME board when board + kernel version + kernel config
+# + SIGNING KEY FINGERPRINT all match. See scripts/_kernel-cache-lib.sh.
+# shellcheck source=scripts/_kernel-cache-lib.sh
+source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -108,6 +119,17 @@ WORK_DIR=""
 # The finished PRODUCTS (.img/.iso/.fs.tar.xz/stage4/keys-*) still land in WORK_DIR.
 BUILD_SUBDIR="${BUILD_SUBDIR:-}"   # empty sentinel ⇒ per-board default resolved after --board (SIGILL isolation); env/--build-subdir override wins
 DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
+# --shared-assets DIR / --no-shared-assets (env: HUGMESH_SHARED_ASSETS): the fleet's
+# SHARED build-asset root — stage3 seed cache, distfiles, and the per-BOARD binpkg
+# pool. Empty ⇒ "${WORK_DIR}/shared", which the Makefile's `-v $(WORK_DIR):/out`
+# docker mount already covers (no new mount). --no-shared-assets restores the legacy
+# per-BUILD_ROOT seed/distfiles/pkgdir paths byte-for-byte.
+SHARED_ASSETS_DIR="${HUGMESH_SHARED_ASSETS:-}"
+SHARED_ASSETS_ENABLED=true
+# --no-kernel-cache (env: HUGMESH_KERNEL_CACHE=off): opt out of the signed-kernel
+# artifact cache under <shared-root>/kernel. Build-phase escape hatch, same class as
+# --no-shared-assets. See scripts/_kernel-cache-lib.sh.
+KERNEL_CACHE_ENABLED=true
 PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then exit BEFORE image assembly (kernel/img/iso/tar). Host/CI build-phase flag, NOT a Studio ImageConfig field.
 # --allow-missing-packages : accept a KNOWINGLY degraded image. The payload emerge
 # runs --keep-going so one unbuildable optional package can't throw away hours of
@@ -436,6 +458,17 @@ OPTIONS
         from next to this script.)
 
     --distdir DIR
+    --shared-assets DIR ONE fleet-wide asset root: stage3 seed cache
+                        (<DIR>/seed/<arch>), distfiles (<DIR>/distfiles) and the
+                        per-BOARD binpkg pool (<DIR>/pkgdir/<board-key>). Default
+                        <work-dir>/shared; env HUGMESH_SHARED_ASSETS. The cached seed
+                        is RE-VERIFIED (signed DIGESTS) on every reuse.
+    --no-shared-assets  opt out — private seed/distfiles/pkgdir under the build tree.
+    --no-kernel-cache   opt out of the signed-kernel artifact cache
+                        (<shared-root>/kernel): always recompile the kernel. Env:
+                        HUGMESH_KERNEL_CACHE=off. Entries are keyed on board +
+                        kernel version + config digest + the SIGNING KEY
+                        FINGERPRINT, so a re-keyed fleet misses by design.
         Reuse a shared READ-ONLY distfiles (source-tarball) cache instead
         of re-downloading sources (also settable via SNAP_DISTDIR_SRC in
         the env).  distfiles are arch-independent, so ONE fleet-wide cache
@@ -902,6 +935,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";           shift 2 ;;
         --distdir)            DISTDIR_SRC="$2";        shift 2 ;;
+        --shared-assets)      SHARED_ASSETS_DIR="$2";  shift 2 ;;
+        --no-shared-assets)   SHARED_ASSETS_ENABLED=false;      shift   ;;
+        --no-kernel-cache)    KERNEL_CACHE_ENABLED=false;       shift   ;;
         --packages-only)      PACKAGES_ONLY=true;      shift   ;;
         # Accept an image whose requested package set did not fully merge (the
         # completeness gate warns instead of failing; kernel tier stays fatal).
@@ -1146,7 +1182,7 @@ select_board
 # derived), fill the DEFAULT heavy-tree subdir from the board. rpi5/rpi4/rpi3 share
 # this ONE builder + CHOST but differ in -mcpu (a76/a72/a53); a cortex-a76 binpkg
 # run on an a53/a72 SIGILLs, and --usepkg/--binpkg-respect-use NEVER checks -mcpu.
-# Keeping each board's pkgdir (${BUILD_ROOT}/pkgdir) in its OWN directory is the
+# Keeping each board's pkgdir (${POOL_DIR}) in its OWN directory is the
 # only guard — so before this fix the single shared snap-build-pi5 default let a
 # later `--board rpi4` build --usepkg cortex-a76 binaries into an a72 image. An
 # explicit --build-subdir / env BUILD_SUBDIR (worklist wl-<id>, or a deliberately
@@ -1401,6 +1437,42 @@ fi
 # (.img/.iso/.fs.tar.xz/stage4) still go to WORK_DIR (see STAGE4_TARBALL/IMG_PATH
 # below) so build-all-roles.sh + the Makefile + make-keys-usb keep finding them.
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
+
+# ── Shared build assets (one root for seed + distfiles + binpkg pool) ─────
+# The three genuinely shareable assets move OUT of the per-entry build tree; the
+# tree itself (sysroot/staging/log under BUILD_ROOT) stays isolated exactly as before,
+# which is the invariant the Studio's wl-<entry-id> subdir encodes.
+#   seed      <root>/seed/<arch>/        re-verified on EVERY reuse (never trusted)
+#   distfiles <root>/distfiles/          arch-independent sources, safe fleet-wide
+#   pkgdir    <root>/pkgdir/<board-key>  per-BOARD — the SIGILL-safe pool key
+# The pool key is the BOARD's default subdir, NOT ${BUILD_SUBDIR}: the Studio passes
+# --build-subdir wl-<entry-id> per worklist entry, so keying the pool on the subdir is
+# precisely what made every GUI build start from an EMPTY pool and recompile the world.
+# Widening reuse is safe only because every pool access still goes through the #439
+# fingerprint guard (sa_pool_guard): a board whose ABI fingerprint differs is REFUSED.
+# The rpi5 builder serves THREE boards that differ only in -mcpu (a76/a72/a53), so
+# its pool key follows --board, exactly like the per-board BUILD_SUBDIR default above.
+case "${BOARD}" in
+    rpi5) BOARD_POOL_KEY="snap-build-pi5" ;;
+    rpi4) BOARD_POOL_KEY="snap-build-pi4" ;;
+    rpi3) BOARD_POOL_KEY="snap-build-pi3" ;;
+    *)    BOARD_POOL_KEY="snap-build-${BOARD}" ;;   # unreachable: select_board validated BOARD
+esac
+SHARED_ROOT="$(sa_root "${WORK_DIR}" "${SHARED_ASSETS_DIR}")"
+if [ -n "${SHARED_ROOT}" ]; then
+    POOL_DIR="$(sa_pool_dir "${SHARED_ROOT}" "${BOARD_POOL_KEY}")" \
+        || { echo "ERROR: cannot resolve a shared binpkg pool for '${BOARD_POOL_KEY}'" >&2; exit 1; }
+    SHARED_DISTDIR="$(sa_distfiles_dir "${SHARED_ROOT}")"
+    SHARED_SEED_DIR="$(sa_seed_dir "${SHARED_ROOT}" "arm64")" \
+        || { echo "ERROR: cannot resolve the shared stage3 seed dir" >&2; exit 1; }
+else
+    POOL_DIR="${BUILD_ROOT}/pkgdir"   # legacy private pool (--no-shared-assets)
+    SHARED_DISTDIR=""
+    SHARED_SEED_DIR="${BUILD_ROOT}"
+fi
+# Signed-kernel artifact cache root. Empty (⇒ every lookup MISSES, nothing stored) when
+# --no-kernel-cache, HUGMESH_KERNEL_CACHE=off, or the shared root itself is off.
+KERNEL_CACHE_ROOT="$(kc_root "${SHARED_ROOT}")"
 SYSROOT="${BUILD_ROOT}/sysroot"
 ISO_DIR="${BUILD_ROOT}/isoroot"
 LOG_FILE="${WORK_DIR}/build.log"
@@ -2646,7 +2718,15 @@ if ${PRINT_PLAN}; then
     # cross. Additive PLAN_ keys (grep -qx consumers unaffected); also the
     # machine-greppable seam the Lane-2 board-distinctness test probes.
     _plan BUILD_SUBDIR       "${BUILD_SUBDIR}"
-    _plan PKGDIR             "${BUILD_ROOT}/pkgdir"
+    _plan PKGDIR             "${POOL_DIR}"
+    # Shared build assets: the root, the per-arch seed cache, the fleet distfiles and
+    # the per-BOARD pool key — so EVERY channel's plan states exactly what is reused
+    # (the Studio's command preview included). Additive PLAN_ keys.
+    _plan SHARED_ASSETS      "${SHARED_ROOT:-off}"
+    _plan SHARED_SEED_DIR    "${SHARED_SEED_DIR}"
+    _plan SHARED_DISTDIR     "${SHARED_DISTDIR:-none}"
+    _plan POOL_KEY           "${BOARD_POOL_KEY}"
+    _plan KERNEL_CACHE       "${KERNEL_CACHE_ROOT:-off}"
     # Prebuild mode (shared-binpkg): 1 ⇒ populate PKGDIR then exit before image
     # assembly. Additive PLAN_ key.
     _plan PACKAGES_ONLY      "$(${PACKAGES_ONLY} && echo 1 || echo 0)"
@@ -3061,6 +3141,17 @@ banner "Preparing build directories"
 
 mkdir -p "${WORK_DIR}"
 mkdir -p "${BUILD_ROOT}"/{distfiles,pkgdir,log}
+# Shared asset root: create the pool + distfiles dirs and take the pool's LONG-LIVED
+# single-writer lock before anything can populate them. sa_pool_hold is what makes
+# docs/SHARED-BINPKG.md invalidation rule #3 enforceable now that one pool serves many
+# worklist entries: the tree has no binpkg-multi-instance, so two concurrent writers
+# into one pkgdir overwrite each other's package instances.
+if [ -n "${SHARED_ROOT}" ]; then
+    mkdir -p "${POOL_DIR}" "${SHARED_DISTDIR}" "${SHARED_SEED_DIR}" \
+        || { err "cannot create the shared asset root ${SHARED_ROOT}"; exit 1; }
+    sa_pool_hold "${POOL_DIR}" || { err "shared binpkg pool busy (see above) — aborting."; exit 1; }
+    info "$(sa_describe "${SHARED_ROOT}" "arm64" "${POOL_DIR}")"
+fi
 mkdir -p "${SYSROOT}"
 # The isoroot is per-run OUTPUT staging, never an input: a stale tree from a
 # previous run used to poison build_img with an old kernel/config.txt and
@@ -3087,29 +3178,24 @@ STAGE3_FILE=$(curl -sL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-co
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_BASE_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds"
 STAGE3_FULL_URL="${STAGE3_BASE_URL}/${STAGE3_FILE}"
-# Per-arch: the aarch64 seed must not be reused by (or clobber) the amd64 build.
-STAGE3_LOCAL="${BUILD_ROOT}/${STAGE3_BASENAME}"
-
-if [ ! -f "${STAGE3_LOCAL}" ]; then
-    info "Downloading ${STAGE3_BASENAME}..."
-    curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}"
-else
-    info "Using cached ${STAGE3_BASENAME}"
-fi
-
-# SUPPLY-CHAIN: verify the seed's integrity+authenticity before we trust a single
-# byte of it. dlv_verify_stage3 fetches the matching .DIGESTS(.asc), GPG-verifies
-# it against the pinned Gentoo release-engineering key, then checks the tarball's
-# SHA512/SHA256 against the signed DIGESTS — ABORTING on any signature/checksum
-# mismatch. A poisoned mirror or MITM can no longer slip a backdoored seed in.
+# Stage3 seed: ONE per-arch cache under the shared root instead of a fresh ~250 MB
+# download for every BUILD_SUBDIR (a Studio wl-<id> tree re-fetched it EVERY time).
+# sa_seed_acquire re-runs the FULL supply-chain verification (dlv_verify_stage3:
+# GPG-signed DIGESTS + SHA512/SHA256) on the file it hands back — cache HIT or fresh
+# download — so a poisoned cache is caught by exactly the code that catches a poisoned
+# mirror. Caching must never turn "verified once" into "trusted forever". Fail-closed:
+# an unverifiable seed is discarded, re-fetched ONCE, and a second failure aborts.
+# Per-arch keying (dir AND basename) makes an amd64 seed unusable by this arm64 build.
+STAGE3_PRIVATE="${BUILD_ROOT}/${STAGE3_BASENAME}"
 banner "Verifying stage3 seed signature + checksum"
-if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}.DIGESTS"; then
-    rm -f "${STAGE3_LOCAL}"   # drop the unverified file so a re-run re-fetches
-    err "stage3 seed failed verification (bad signature or checksum) — aborting."
+if ! STAGE3_LOCAL="$(sa_seed_acquire "${SHARED_ROOT}" "arm64" "${STAGE3_BASENAME}" \
+        "${STAGE3_FULL_URL}" "${STAGE3_PRIVATE}")"; then
+    err "stage3 seed unavailable or failed verification (bad signature or checksum) — aborting."
     err "If Gentoo rotated its signing key, set DLV_GENTOO_KEY=<fingerprint>; for an"
     err "air-gapped build set DLV_OFFLINE_KEYRING=<keyfile>. Refusing unverified seed."
     exit 1
 fi
+info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 banner "Extracting stage3 into sysroot"
 
@@ -3292,6 +3378,25 @@ render_template "${SPECS_DIR}/portage/make.conf.tmpl"     "${SYSROOT}/etc/portag
 # build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
 pt_apply_seed_targets "${SYSROOT}" "build-rpi5" \
     || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
+# ── Shared build assets in the rendered make.conf — SB-SHARED-ASSETS-BEGIN ───
+# PKGDIR/DISTDIR are rendered from @@WORK_DIR@@ (= ${BUILD_ROOT}), which is PER-ENTRY
+# under the Studio (wl-<id>) — that is the whole G2 bug. Re-assign both to the shared
+# root here: make.conf is bash-sourced by portage, so the LAST assignment wins (the
+# same idiom the PORTAGE_RO_DISTDIRS append below already uses), and no new @@MARKER@@
+# has to be threaded through nine spec trees.
+#   * PKGDIR  -> the per-BOARD pool; still gated by the #439 fingerprint preflight.
+#   * DISTDIR -> the fleet-wide distfiles dir. Distfiles are arch-independent SOURCE
+#     tarballs and portage verifies every one against the ebuild Manifest, so a single
+#     writable fleet cache is safe (portage takes its own per-file fetch lock).
+if [ -n "${SHARED_ROOT}" ]; then
+    {
+        printf '\n# --- hugmesh shared build assets (scripts/_shared-assets-lib.sh) ---\n'
+        printf 'PKGDIR="%s"\n'  "${POOL_DIR}"
+        printf 'DISTDIR="%s"\n' "${SHARED_DISTDIR}"
+    } >> "${SYSROOT}/etc/portage/make.conf"
+    info "Shared assets: PKGDIR=${POOL_DIR} DISTDIR=${SHARED_DISTDIR}"
+fi
+# SB-SHARED-ASSETS-END
 # Shared READ-ONLY distfiles (Lane 3) — SB-RO-DISTFILES-BEGIN
 # distfiles are arch-independent SOURCE tarballs, so ONE fleet-wide cache is safe
 # across every board (NO ABI/-mcpu risk — mirrors the x86 builder's
@@ -3302,6 +3407,12 @@ pt_apply_seed_targets "${SYSROOT}" "build-rpi5" \
 # this builder emerges on the HOST with PORTAGE_CONFIGROOT=${SYSROOT}, so
 # PORTAGE_RO_DISTDIRS points straight at the host path. A set-but-bad path WARNs
 # and is ignored (correct artifact, just re-downloads) — mirrors x86's shape-check.
+# A --distdir that resolves to the SHARED distfiles dir is ALREADY this build's DISTDIR
+# (see the SB-SHARED-ASSETS block above); listing it again as PORTAGE_RO_DISTDIRS would
+# name one directory twice. Drop the duplicate rather than emit it.
+if [ -n "${SHARED_DISTDIR}" ] && [ "${DISTDIR_SRC%/}" = "${SHARED_DISTDIR%/}" ]; then
+    DISTDIR_SRC=""
+fi
 if [ -n "${DISTDIR_SRC}" ] && [ ! -d "${DISTDIR_SRC}" ]; then
     warn "--distdir: not a directory: ${DISTDIR_SRC} — IGNORING it (sources re-download into ${BUILD_ROOT}/distfiles)."
 elif [ -n "${DISTDIR_SRC}" ]; then
@@ -3786,14 +3897,16 @@ else
 fi
 
 # ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
-# Before the FIRST --usepkg cross_emerge consumes ${BUILD_ROOT}/pkgdir, verify the
+# Before the FIRST --usepkg cross_emerge consumes ${POOL_DIR}, verify the
 # pool's fingerprint (CHOST + exact CFLAGS/-mcpu + CXXFLAGS + profile, read from the
 # rendered make.conf) matches THIS build. rpi5/rpi4/rpi3 differ only in -mcpu, and
 # portage's --binpkg-respect-use checks USE only, never CFLAGS — so this is the ONLY
 # check that catches a cortex-a76 pool being reused for an a72/a53 build (SIGILL).
 # Fresh pool ⇒ stamped; mismatch ⇒ abort. Belt-and-suspenders over the per-board
 # BUILD_SUBDIR isolation (Lane 2).
-pool_fingerprint_preflight "${BUILD_ROOT}/pkgdir" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-}" \
+# sa_pool_guard runs that SAME preflight under the pool lock (two builds must not
+# race the stamp file) — the guard itself is never bypassed.
+sa_pool_guard "${POOL_DIR}" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-}" \
     || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
 
 # ── EMERGE-GROUP BANNER (system) ──────────────────────────────────────────────
@@ -3907,15 +4020,15 @@ requested_atom_gate "${SYSROOT}" "${BUILD_ROOT}" "build-rpi5" \
     || { err "requested-atom completeness gate failed (see the missing-atom list above)."; exit 1; }
 
 # ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
-# The cross_emerge above populated PKGDIR (${BUILD_ROOT}/pkgdir) under
+# The cross_emerge above populated PKGDIR (${POOL_DIR}) under
 # FEATURES=buildpkg, and the payload assert just confirmed the pool built the role
 # set. In --packages-only mode we exit NOW — before boot config, mesh, the kernel,
 # and img/tar assembly — so the ONLY output is the PER-BOARD binpkg pool a later
 # per-role image build reuses via --usepkg (guarded by the fingerprint preflight).
-# The pool lives in ${BUILD_ROOT}/pkgdir (outside the sysroot, per-board via the
+# The pool lives in ${POOL_DIR} (outside the sysroot, per-board via the
 # Lane-2 subdir), so it is never stripped. We emit NOTHING image-shaped.
 if ${PACKAGES_ONLY}; then
-    info "--packages-only: per-board binpkg pool prebuilt at ${BUILD_ROOT}/pkgdir — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
+    info "--packages-only: per-board binpkg pool prebuilt at ${POOL_DIR} — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
     exit 0
 fi
 
@@ -3998,6 +4111,135 @@ else
     fi
 fi
 
+# ── SIGNED-KERNEL ARTIFACT CACHE (G4) ─────────────────────────────────────────
+# Cross-compiling this kernel is the single longest step of an ARM image build, and
+# it produces the SAME Image/DTBs/modules for every image of a board whose kernel
+# version, config and signing identity have not moved. Those four things ARE the
+# cache key (kc_cache_key) — the signing-key fingerprint included, so that a fleet
+# re-key misses instead of silently reusing artifacts tied to a retired key.
+#
+# A HIT REPLACES THE COMPILE, NEVER A CHECK. The requested-atom payload gate (the
+# #470 ARM completeness gate) runs BEFORE this phase and is untouched by it; the
+# disk-initramfs build and every downstream artifact check run identically on a hit
+# and on a miss. The in-tree KSPP/SELinux/k8s/LUKS config assertions are the only
+# thing a hit skips, and they are safe to skip because they are a pure function of
+# (kernel source tree, defconfig, fragments) — exactly what components 2 and 3 pin.
+#
+# WHAT IS CACHED: the kernel image, the DTBs/overlays this phase copies into /boot,
+# and the /lib/modules/<kver> tree. The LUKS disk-initramfs is NOT cached: it is
+# built later by build_disk_initramfs() from the assembled sysroot, so its inputs
+# are not all known here (see docs/SHARED-BINPKG.md "Honest limits").
+KCACHE_KEY=""; KCACHE_KVER=""; KCACHE_CFG=""; KCACHE_FP=""; KCACHE_HIT=false
+KCACHE_TMP="${BUILD_ROOT}/kernel-cache-work"
+KCACHE_BOOT_GLOBS=("${RPI_KERNEL_IMG}" "${RPI_DTB_PREFIX}*.dtb" overlays)
+
+# kernel_cache_inputs — the key inputs that are NOT config fragment files but still
+# decide the produced artifacts (board defconfig name, cross toolchain + -mcpu,
+# kernel image filename, DTB prefix).
+kernel_cache_inputs() {
+    local f="${BUILD_ROOT}/k.cache-inputs"
+    mkdir -p "${BUILD_ROOT}" 2>/dev/null || return 1
+    {
+        printf 'board=%s\n'        "${BOARD}"
+        printf 'defconfig=%s\n'    "${RPI_DEFCONFIG}"
+        printf 'cpu=%s\n'          "${RPI_CPU}"
+        printf 'cross-target=%s\n' "${CROSS_TARGET}"
+        printf 'kernel-img=%s\n'   "${RPI_KERNEL_IMG}"
+        printf 'dtb-prefix=%s\n'   "${RPI_DTB_PREFIX}"
+    } > "${f}" 2>/dev/null || return 1
+    [ -s "${f}" ] || return 1
+    printf '%s' "${f}"
+}
+
+# kernel_cache_derive <fragment>... — set KCACHE_KEY, or leave it EMPTY (permanent
+# MISS for this build). Every "component unavailable" path lands there on purpose.
+kernel_cache_derive() {
+    KCACHE_KEY=""; KCACHE_KVER=""; KCACHE_CFG=""; KCACHE_FP=""
+    [ -n "${KERNEL_CACHE_ROOT}" ] || return 1
+    local inputs
+    KCACHE_KVER="$(kc_kver_from_srctree "${KERNEL_SRC}" 2>/dev/null || true)"
+    [ -n "${KCACHE_KVER}" ] || { kc_info "kernel version unknown — cache MISS"; return 1; }
+    inputs="$(kernel_cache_inputs || true)"
+    [ -n "${inputs}" ] || { kc_info "cannot record the kernel cache inputs — MISS"; return 1; }
+    KCACHE_CFG="$(kc_config_digest "$@" "${inputs}" || true)"
+    [ -n "${KCACHE_CFG}" ] || { kc_info "cannot digest the kernel config fragments — MISS"; return 1; }
+    # The fleet signing identity. These builders do not themselves sign the kernel
+    # (see docs/SHARED-BINPKG.md "Honest limits"), so the identity comes from the
+    # fleet cert the x86 builder persists under WORK_DIR, or from an explicit
+    # HUGMESH_KERNEL_SIGNING_CERT. No identity ⇒ MISS, never a 3-component key.
+    KCACHE_FP="$(kc_signing_fingerprint "${WORK_DIR}/secureboot/sb.crt" || true)"
+    if [ -z "${KCACHE_FP}" ]; then
+        kc_info "no fleet signing identity available — cache MISS (set"
+        kc_info "HUGMESH_KERNEL_SIGNING_CERT to the fleet cert to enable kernel reuse)."
+        return 1
+    fi
+    KCACHE_KEY="$(kc_cache_key "${BOARD}" "${KCACHE_KVER}" "${KCACHE_CFG}" "${KCACHE_FP}" || true)"
+    [ -n "${KCACHE_KEY}" ] || return 1
+    return 0
+}
+
+# kernel_cache_try_restore — rc 0 (KCACHE_HIT=true, RPI_KVER set) only on a
+# VALIDATED hit whose payload actually unpacked. Anything else prunes and compiles.
+kernel_cache_try_restore() {
+    KCACHE_HIT=false
+    [ -n "${KCACHE_KEY}" ] || return 1
+    local entry kver
+    entry="$(kc_lookup "${KERNEL_CACHE_ROOT}" "${BOARD}" "${KCACHE_KEY}" \
+                "${KCACHE_KVER}" "${KCACHE_CFG}" "${KCACHE_FP}" || true)"
+    [ -n "${entry}" ] || return 1
+    rm -rf "${KCACHE_TMP}"; mkdir -p "${KCACHE_TMP}" || return 1
+    if ! kc_restore "${entry}" "boot.tar=${KCACHE_TMP}/boot.tar" "modules.tar=${KCACHE_TMP}/modules.tar"; then
+        kc_prune "${entry}" "payload could not be read back"; rm -rf "${KCACHE_TMP}"; return 1
+    fi
+    if ! kc_unpack "${KCACHE_TMP}/boot.tar" "${SYSROOT}/boot" \
+       || ! kc_unpack "${KCACHE_TMP}/modules.tar" "${SYSROOT}/lib/modules"; then
+        kc_prune "${entry}" "payload failed to unpack into the sysroot"
+        rm -rf "${KCACHE_TMP}"; return 1
+    fi
+    rm -rf "${KCACHE_TMP}"
+    # The restored module tree names the kernel release; build_disk_initramfs()
+    # needs it for dracut --kver, exactly as the compile path's `make kernelrelease`
+    # would have supplied it. No module tree ⇒ this is not a usable hit.
+    kver="$(ls -1 "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1 || true)"
+    if [ -z "${kver}" ] || [ ! -d "${SYSROOT}/lib/modules/${kver}" ]; then
+        kc_prune "${entry}" "restored payload carries no /lib/modules tree"
+        return 1
+    fi
+    if [ ! -s "${SYSROOT}/boot/${RPI_KERNEL_IMG}" ]; then
+        kc_prune "${entry}" "restored payload carries no ${RPI_KERNEL_IMG}"
+        return 1
+    fi
+    RPI_KVER="${kver}"
+    KCACHE_HIT=true
+    return 0
+}
+
+# kernel_cache_store — publish what the compile produced. Best-effort: a cache that
+# cannot be written must never fail a build that otherwise succeeded.
+kernel_cache_store() {
+    [ -n "${KCACHE_KEY}" ] || return 0
+    local names kver
+    mapfile -t names < <(kc_names_matching "${SYSROOT}/boot" "${KCACHE_BOOT_GLOBS[@]}")
+    if [ "${#names[@]}" -eq 0 ]; then
+        kc_warn "kernel phase produced no /boot artifacts — nothing cached"; return 0
+    fi
+    kver="${RPI_KVER:-$(ls -1 "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1 || true)}"
+    [ -n "${kver}" ] && [ -d "${SYSROOT}/lib/modules/${kver}" ] || {
+        kc_warn "no module tree under ${SYSROOT}/lib/modules — nothing cached"; return 0; }
+    rm -rf "${KCACHE_TMP}"; mkdir -p "${KCACHE_TMP}" || return 0
+    if kc_pack "${KCACHE_TMP}/boot.tar" "${SYSROOT}/boot" "${names[@]}" \
+       && kc_pack "${KCACHE_TMP}/modules.tar" "${SYSROOT}/lib/modules" "${kver}"; then
+        kc_store "${KERNEL_CACHE_ROOT}" "${BOARD}" "${KCACHE_KEY}" "${KCACHE_KVER}" \
+            "${KCACHE_CFG}" "${KCACHE_FP}" "build-rpi5-stage4.sh" \
+            "boot.tar=${KCACHE_TMP}/boot.tar" "modules.tar=${KCACHE_TMP}/modules.tar" \
+            && kc_info "cached this kernel for reuse (board=${BOARD} key=${KCACHE_KEY})" \
+            || kc_warn "could not publish the kernel cache entry (build unaffected)"
+    else
+        kc_warn "could not pack the kernel artifacts (build unaffected)"
+    fi
+    rm -rf "${KCACHE_TMP}"
+}
+
 if ${SKIP_KERNEL}; then
     banner "SKIPPED kernel (--skip-kernel)"
 else
@@ -4053,6 +4295,20 @@ else
         esac
         ${ROLE_CLIENT} && _kernel_fragments+=("${SPECS_DIR}/kernel/desktop.config")
         info "Config fragments: ${_kernel_fragments[*]}"
+
+        # Consult the signed-kernel cache now that the fragment set is decided (the
+        # fragments ARE component 3 of the key). A hit unpacks Image/DTBs/modules
+        # straight into the sysroot and skips the cross-compile below; everything
+        # after this block runs identically on a hit and on a miss.
+        kernel_cache_derive "${_kernel_fragments[@]}" || true
+        if kernel_cache_try_restore; then
+            # info, NOT banner: the kernel PHASE banner is already emitted above and a
+            # cache hit is not a new phase — a second banner would be a rung the
+            # Studio progress table has no row for.
+            info "Kernel: RESTORED from the signed-kernel artifact cache — compile skipped."
+            info "Kernel: cache key ${KCACHE_KEY} (board=${BOARD} ${KCACHE_KVER}, release ${RPI_KVER})"
+            info "Kernel: every artifact-integrity gate below still runs against the restored sysroot."
+        else
         pushd "${KERNEL_SRC}" >/dev/null
 
         # Start from board defconfig
@@ -4142,7 +4398,9 @@ else
         cp arch/arm64/boot/dts/overlays/README "${SYSROOT}/boot/overlays/" 2>/dev/null || true
 
         popd >/dev/null
+        kernel_cache_store
         info "Kernel build complete."
+        fi
     fi
 fi
 
@@ -4753,7 +5011,7 @@ echo "    Sysroot:         ${SYSROOT}"
 echo "    Stage4 tarball:  ${STAGE4_TARBALL}"
 echo "    Image (.img):    ${IMG_PATH}"
 echo "    ISO:             ${ISO_PATH}"
-echo "    Binary packages: ${BUILD_ROOT}/pkgdir"
+echo "    Binary packages: ${POOL_DIR}"
 echo "    Build log:       ${LOG_FILE}"
 echo ""
 echo "  Credentials:"

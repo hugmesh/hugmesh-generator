@@ -163,6 +163,12 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # CHOST but differ in -mcpu, and portage's --binpkg-respect-use ignores CFLAGS.
 # shellcheck source=scripts/_binpkg-pool-lib.sh
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
+# Shared build-asset root (stage3 seed cache + fleet distfiles + per-BOARD binpkg
+# pool) and its flock discipline — the ONE resolver every builder uses, so the path
+# logic is not duplicated across ten scripts. See scripts/_shared-assets-lib.sh and
+# docs/SHARED-BINPKG.md.
+# shellcheck source=scripts/_shared-assets-lib.sh
+source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -187,6 +193,13 @@ source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-orangepizero2}"   # per-arch isolation (never shares another sysroot)
 DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
+# --shared-assets DIR / --no-shared-assets (env: HUGMESH_SHARED_ASSETS): the fleet's
+# SHARED build-asset root — stage3 seed cache, distfiles, and the per-BOARD binpkg
+# pool. Empty ⇒ "${WORK_DIR}/shared", which the Makefile's `-v $(WORK_DIR):/out`
+# docker mount already covers (no new mount). --no-shared-assets restores the legacy
+# per-BUILD_ROOT seed/distfiles/pkgdir paths byte-for-byte.
+SHARED_ASSETS_DIR="${HUGMESH_SHARED_ASSETS:-}"
+SHARED_ASSETS_ENABLED=true
 PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then exit BEFORE image assembly (kernel/img/iso/tar). Host/CI build-phase flag, NOT a Studio ImageConfig field.
 # --allow-missing-packages : accept a KNOWINGLY degraded image. The payload emerge
 # runs --keep-going; the requested-atom completeness gate after it then FAILS the
@@ -419,6 +432,12 @@ OPTIONS
     --distdir DIR       reuse a shared READ-ONLY distfiles cache (or SNAP_DISTDIR_SRC
                         env); arch-independent sources, safe fleet-wide. New fetches
                         still land in the private build tree. Empty = private only.
+    --shared-assets DIR ONE fleet-wide asset root: stage3 seed cache
+                        (<DIR>/seed/<arch>), distfiles (<DIR>/distfiles) and the
+                        per-BOARD binpkg pool (<DIR>/pkgdir/<board-key>). Default
+                        <work-dir>/shared; env HUGMESH_SHARED_ASSETS. The cached seed
+                        is RE-VERIFIED (signed DIGESTS) on every reuse.
+    --no-shared-assets  opt out — private seed/distfiles/pkgdir under the build tree.
     -j, --jobs N        parallel jobs (default nproc).
     --print-plan        resolve + validate all flags, print the build plan
                         (PLAN_KEY=VALUE lines) and exit 0 — no root, no writes,
@@ -475,6 +494,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";              shift 2 ;;
         --distdir)            DISTDIR_SRC="$2";           shift 2 ;;
+        --shared-assets)      SHARED_ASSETS_DIR="$2";  shift 2 ;;
+        --no-shared-assets)   SHARED_ASSETS_ENABLED=false;      shift   ;;
         --packages-only)      PACKAGES_ONLY=true;         shift ;;
         # Accept an image whose requested package set did not fully merge (the
         # completeness gate warns instead of failing; kernel tier stays fatal).
@@ -667,6 +688,32 @@ _require_match "--target"         "${CROSS_TARGET}"   "${_RE_TRIPLET}"
 _require_match "--role"           "${ROLE}"           "${_RE_SLUG}"
 
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
+
+# ── Shared build assets (one root for seed + distfiles + binpkg pool) ─────
+# The three genuinely shareable assets move OUT of the per-entry build tree; the
+# tree itself (sysroot/staging/log under BUILD_ROOT) stays isolated exactly as before,
+# which is the invariant the Studio's wl-<entry-id> subdir encodes.
+#   seed      <root>/seed/<arch>/        re-verified on EVERY reuse (never trusted)
+#   distfiles <root>/distfiles/          arch-independent sources, safe fleet-wide
+#   pkgdir    <root>/pkgdir/<board-key>  per-BOARD — the SIGILL-safe pool key
+# The pool key is the BOARD's default subdir, NOT ${BUILD_SUBDIR}: the Studio passes
+# --build-subdir wl-<entry-id> per worklist entry, so keying the pool on the subdir is
+# precisely what made every GUI build start from an EMPTY pool and recompile the world.
+# Widening reuse is safe only because every pool access still goes through the #439
+# fingerprint guard (sa_pool_guard): a board whose ABI fingerprint differs is REFUSED.
+BOARD_POOL_KEY="snap-build-orangepizero2"
+SHARED_ROOT="$(sa_root "${WORK_DIR}" "${SHARED_ASSETS_DIR}")"
+if [ -n "${SHARED_ROOT}" ]; then
+    POOL_DIR="$(sa_pool_dir "${SHARED_ROOT}" "${BOARD_POOL_KEY}")" \
+        || { echo "ERROR: cannot resolve a shared binpkg pool for '${BOARD_POOL_KEY}'" >&2; exit 1; }
+    SHARED_DISTDIR="$(sa_distfiles_dir "${SHARED_ROOT}")"
+    SHARED_SEED_DIR="$(sa_seed_dir "${SHARED_ROOT}" "arm64")" \
+        || { echo "ERROR: cannot resolve the shared stage3 seed dir" >&2; exit 1; }
+else
+    POOL_DIR="${BUILD_ROOT}/pkgdir"   # legacy private pool (--no-shared-assets)
+    SHARED_DISTDIR=""
+    SHARED_SEED_DIR="${BUILD_ROOT}"
+fi
 SYSROOT="${BUILD_ROOT}/sysroot"
 STAGE_DIR="${BUILD_ROOT}/staging"     # boot tree + ISO/installer staging
 LOG_FILE="${WORK_DIR}/build.log"
@@ -922,7 +969,14 @@ if ${PRINT_PLAN}; then
     _plan ARTIFACT_PREFIX    "${BRAND}-orangepizero2-arm64-${ROLE}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR}"
     # Per-board binpkg pool + prebuild mode (shared-binpkg). Additive PLAN_ keys.
-    _plan PKGDIR             "${BUILD_ROOT}/pkgdir"
+    _plan PKGDIR             "${POOL_DIR}"
+    # Shared build assets: the root, the per-arch seed cache, the fleet distfiles and
+    # the per-BOARD pool key — so EVERY channel's plan states exactly what is reused
+    # (the Studio's command preview included). Additive PLAN_ keys.
+    _plan SHARED_ASSETS      "${SHARED_ROOT:-off}"
+    _plan SHARED_SEED_DIR    "${SHARED_SEED_DIR}"
+    _plan SHARED_DISTDIR     "${SHARED_DISTDIR:-none}"
+    _plan POOL_KEY           "${BOARD_POOL_KEY}"
     _plan PACKAGES_ONLY      "$(${PACKAGES_ONLY} && echo 1 || echo 0)"
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
@@ -1208,6 +1262,17 @@ info "Jobs: ${JOBS}"
 
 banner "Preparing build directories"
 mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir,log} "${SYSROOT}" "${STAGE_DIR}"
+# Shared asset root: create the pool + distfiles dirs and take the pool's LONG-LIVED
+# single-writer lock before anything can populate them. sa_pool_hold is what makes
+# docs/SHARED-BINPKG.md invalidation rule #3 enforceable now that one pool serves many
+# worklist entries: the tree has no binpkg-multi-instance, so two concurrent writers
+# into one pkgdir overwrite each other's package instances.
+if [ -n "${SHARED_ROOT}" ]; then
+    mkdir -p "${POOL_DIR}" "${SHARED_DISTDIR}" "${SHARED_SEED_DIR}" \
+        || { err "cannot create the shared asset root ${SHARED_ROOT}"; exit 1; }
+    sa_pool_hold "${POOL_DIR}" || { err "shared binpkg pool busy (see above) — aborting."; exit 1; }
+    info "$(sa_describe "${SHARED_ROOT}" "arm64" "${POOL_DIR}")"
+fi
 exec > >(tee -a "${LOG_FILE}" "${IMAGE_LOG_FILE}") 2>&1
 info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
 # Run banner: the shared log interleaves runs (append) and a RESTART appends to
@@ -1218,24 +1283,24 @@ banner "Fetching stage3 seed (arm64)"
 STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
-STAGE3_LOCAL="${BUILD_ROOT}/${STAGE3_BASENAME}"
-if [ ! -f "${STAGE3_LOCAL}" ]; then
-    info "Downloading ${STAGE3_BASENAME}..."
-    curl -L -o "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}"
-else
-    info "Using cached ${STAGE3_BASENAME}"
-fi
-
-# SUPPLY-CHAIN: verify the seed (signed DIGESTS + SHA512/SHA256) before trusting
-# it; ABORT on any signature/checksum mismatch. See scripts/_download-lib.sh.
+# Stage3 seed: ONE per-arch cache under the shared root instead of a fresh ~250 MB
+# download for every BUILD_SUBDIR (a Studio wl-<id> tree re-fetched it EVERY time).
+# sa_seed_acquire re-runs the FULL supply-chain verification (dlv_verify_stage3:
+# GPG-signed DIGESTS + SHA512/SHA256) on the file it hands back — cache HIT or fresh
+# download — so a poisoned cache is caught by exactly the code that catches a poisoned
+# mirror. Caching must never turn "verified once" into "trusted forever". Fail-closed:
+# an unverifiable seed is discarded, re-fetched ONCE, and a second failure aborts.
+# Per-arch keying (dir AND basename) makes an amd64 seed unusable by this arm64 build.
+STAGE3_PRIVATE="${BUILD_ROOT}/${STAGE3_BASENAME}"
 banner "Verifying stage3 seed signature + checksum"
-if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}.DIGESTS"; then
-    rm -f "${STAGE3_LOCAL}"
-    err "stage3 seed failed verification (bad signature or checksum) — aborting."
+if ! STAGE3_LOCAL="$(sa_seed_acquire "${SHARED_ROOT}" "arm64" "${STAGE3_BASENAME}" \
+        "${STAGE3_FULL_URL}" "${STAGE3_PRIVATE}")"; then
+    err "stage3 seed unavailable or failed verification (bad signature or checksum) — aborting."
     err "If Gentoo rotated its signing key, set DLV_GENTOO_KEY=<fingerprint>; for an"
     err "air-gapped build set DLV_OFFLINE_KEYRING=<keyfile>. Refusing unverified seed."
     exit 1
 fi
+info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 banner "Extracting stage3 into sysroot"
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
@@ -1289,6 +1354,25 @@ render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/ma
 # build rather than guessing. Analysis: docs/PYTHON-TARGETS-SEED-DRIFT.md.
 pt_apply_seed_targets "${SYSROOT}" "build-orangepi-zero2" \
     || { err "could not derive PYTHON_TARGETS from the stage3 seed (see above)"; exit 1; }
+# ── Shared build assets in the rendered make.conf — SB-SHARED-ASSETS-BEGIN ───
+# PKGDIR/DISTDIR are rendered from @@WORK_DIR@@ (= ${BUILD_ROOT}), which is PER-ENTRY
+# under the Studio (wl-<id>) — that is the whole G2 bug. Re-assign both to the shared
+# root here: make.conf is bash-sourced by portage, so the LAST assignment wins (the
+# same idiom the PORTAGE_RO_DISTDIRS append below already uses), and no new @@MARKER@@
+# has to be threaded through nine spec trees.
+#   * PKGDIR  -> the per-BOARD pool; still gated by the #439 fingerprint preflight.
+#   * DISTDIR -> the fleet-wide distfiles dir. Distfiles are arch-independent SOURCE
+#     tarballs and portage verifies every one against the ebuild Manifest, so a single
+#     writable fleet cache is safe (portage takes its own per-file fetch lock).
+if [ -n "${SHARED_ROOT}" ]; then
+    {
+        printf '\n# --- hugmesh shared build assets (scripts/_shared-assets-lib.sh) ---\n'
+        printf 'PKGDIR="%s"\n'  "${POOL_DIR}"
+        printf 'DISTDIR="%s"\n' "${SHARED_DISTDIR}"
+    } >> "${SYSROOT}/etc/portage/make.conf"
+    info "Shared assets: PKGDIR=${POOL_DIR} DISTDIR=${SHARED_DISTDIR}"
+fi
+# SB-SHARED-ASSETS-END
 # Shared READ-ONLY distfiles (Lane 3) — SB-RO-DISTFILES-BEGIN
 # distfiles are arch-independent SOURCE tarballs, so ONE fleet-wide cache is safe
 # across every board (NO ABI/-mcpu risk — mirrors the x86 builder's
@@ -1299,6 +1383,12 @@ pt_apply_seed_targets "${SYSROOT}" "build-orangepi-zero2" \
 # this builder emerges on the HOST with PORTAGE_CONFIGROOT=${SYSROOT}, so
 # PORTAGE_RO_DISTDIRS points straight at the host path. A set-but-bad path WARNs
 # and is ignored (correct artifact, just re-downloads) — mirrors x86's shape-check.
+# A --distdir that resolves to the SHARED distfiles dir is ALREADY this build's DISTDIR
+# (see the SB-SHARED-ASSETS block above); listing it again as PORTAGE_RO_DISTDIRS would
+# name one directory twice. Drop the duplicate rather than emit it.
+if [ -n "${SHARED_DISTDIR}" ] && [ "${DISTDIR_SRC%/}" = "${SHARED_DISTDIR%/}" ]; then
+    DISTDIR_SRC=""
+fi
 if [ -n "${DISTDIR_SRC}" ] && [ ! -d "${DISTDIR_SRC}" ]; then
     warn "--distdir: not a directory: ${DISTDIR_SRC} — IGNORING it (sources re-download into ${BUILD_ROOT}/distfiles)."
 elif [ -n "${DISTDIR_SRC}" ]; then
@@ -1562,7 +1652,7 @@ cross_emerge() {
         --usepkg=y --binpkg-respect-use=y "$@"
     # --usepkg=y: CONSUME the binpkgs FEATURES=buildpkg already produces, so
     # re-runs / multi-role builds don't recompile the arm64 world from source
-    # (mirrors the Pi5 builder). SAFE: PKGDIR is ${BUILD_ROOT}/pkgdir under this
+    # (mirrors the Pi5 builder). SAFE: PKGDIR is ${POOL_DIR} under this
     # board's OWN BUILD_SUBDIR (snap-build-orangepizero2) — reuse is same-board
     # only, never across boards (different -mcpu ⇒ SIGILL). --binpkg-respect-use=y
     # rejects a binpkg whose recorded USE ≠ the current config (rebuilds it).
@@ -1591,13 +1681,15 @@ else
 
 banner "Emerging @system (hardened, cross-compiled)"
 # ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
-# Before the FIRST --usepkg cross_emerge consumes ${BUILD_ROOT}/pkgdir, verify the
+# Before the FIRST --usepkg cross_emerge consumes ${POOL_DIR}, verify the
 # pool's fingerprint (CHOST + exact CFLAGS/-mcpu + CXXFLAGS + profile, read from the
 # rendered make.conf) matches THIS build. portage's --binpkg-respect-use checks USE
 # only, never CFLAGS — so this is the ONLY check that catches a cross-board (different
 # -mcpu) pool being reused, which would SIGILL at runtime. Fresh pool ⇒ stamped;
 # mismatch ⇒ abort. Belt-and-suspenders over the per-board BUILD_SUBDIR isolation.
-pool_fingerprint_preflight "${BUILD_ROOT}/pkgdir" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-}" \
+# sa_pool_guard runs that SAME preflight under the pool lock (two builds must not
+# race the stamp file) — the guard itself is never bypassed.
+sa_pool_guard "${POOL_DIR}" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-}" \
     || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
 
 # ── EMERGE-GROUP BANNER (system) ──────────────────────────────────────────────
@@ -1702,15 +1794,15 @@ requested_atom_gate "${SYSROOT}" "${BUILD_ROOT}" "build-orangepi-zero2" \
     || { err "requested-atom completeness gate failed (see the missing-atom list above)."; exit 1; }
 
 # ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
-# The cross_emerge above populated PKGDIR (${BUILD_ROOT}/pkgdir) under
+# The cross_emerge above populated PKGDIR (${POOL_DIR}) under
 # FEATURES=buildpkg, and the payload assert just confirmed the pool built the role
 # set. In --packages-only mode we exit NOW — before mesh, the kernel, the boot tree
 # and the stage4 tarball — so the ONLY output is the per-board binpkg pool a later
 # per-role image build reuses via --usepkg (guarded by the fingerprint preflight).
-# The pool lives in ${BUILD_ROOT}/pkgdir (outside the sysroot), so it is never
+# The pool lives in ${POOL_DIR} (outside the sysroot), so it is never
 # stripped. We emit NOTHING image-shaped.
 if ${PACKAGES_ONLY}; then
-    info "--packages-only: per-board binpkg pool prebuilt at ${BUILD_ROOT}/pkgdir — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
+    info "--packages-only: per-board binpkg pool prebuilt at ${POOL_DIR} — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
     exit 0
 fi
 

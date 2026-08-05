@@ -1889,6 +1889,8 @@ run_nongating_smokes() {
                 "sharedbinpkg-per-board-pkgdir:${REPO_DIR}/tests/scripts/test-rpi5-per-board-pkgdir.sh" \
                 "sharedbinpkg-ro-distdir:${REPO_DIR}/tests/scripts/test-arm-ro-distdir.sh" \
                 "sharedbinpkg-pool-fingerprint:${REPO_DIR}/tests/scripts/test-binpkg-pool-fingerprint.sh" \
+                "sharedbinpkg-shared-assets:${REPO_DIR}/tests/scripts/test-shared-build-assets.sh" \
+                "sharedbinpkg-kernel-cache:${REPO_DIR}/tests/scripts/test-kernel-artifact-cache.sh" \
                 "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh" \
                 "package-completeness:${REPO_DIR}/tests/build-package-completeness.sh" \
                 "arm-payload-gates:${REPO_DIR}/tests/build-arm-payload-gates.sh" \
@@ -1904,11 +1906,49 @@ run_nongating_smokes() {
             SMOKE_REPORT+="  ${name}: PASS"$'\n'
         else
             rc=$?
-            SMOKE_REPORT+="  ${name}: FAIL rc=${rc} (non-gating — does NOT fail the matrix)"$'\n'
-            printf 'NON-GATING smoke FAIL [%s] (informational):\n' "${name}" >&2
+            # sharedbinpkg-* is FAIL-CLOSED: score_sharedbinpkg_smokes turns a non-PASS
+            # into a real SBP failure that enters TOTAL. Everything else is advisory.
+            case "${name}" in
+                sharedbinpkg-*) SMOKE_REPORT+="  ${name}: FAIL rc=${rc} (GATED — fails the matrix via SBP)"$'\n' ;;
+                *)              SMOKE_REPORT+="  ${name}: FAIL rc=${rc} (non-gating — does NOT fail the matrix)"$'\n' ;;
+            esac
+            printf 'smoke FAIL [%s]:\n' "${name}" >&2
             sed 's/^/    | /' "${out}" | tail -n 8 >&2
         fi
     done
+}
+
+# ── shared-binpkg / shared-asset family: FAIL-CLOSED (enters TOTAL) ─────────────
+# The smokes above are informational by design. This family is NOT: it carries the
+# SIGILL pool-fingerprint guard, the per-board pool split, the read-only distfiles
+# wiring and — since the shared-asset root — the stage3 seed RE-VERIFICATION, the
+# per-arch seed keying and the single-writer pool lock. A silent regression there ships
+# an image that SIGILLs, or unpacks an unverified seed. The kernel-cache smoke is in the
+# same family for the same reason: it guards a cache whose key must include the SIGNING
+# KEY FINGERPRINT (a weakened key would silently reuse kernels tied to a retired key)
+# and whose hit path must never bypass an artifact-integrity gate. So these are gated,
+# and a MISSING file counts as a failure too: deleting a smoke must not shrink the gate.
+SBP_PASS=0; SBP_FAIL=0
+SBP_EXPECTED=6
+SBP_NAMES=(sharedbinpkg-prebuild-target sharedbinpkg-per-board-pkgdir
+           sharedbinpkg-ro-distdir sharedbinpkg-pool-fingerprint
+           sharedbinpkg-shared-assets sharedbinpkg-kernel-cache)
+score_sharedbinpkg_smokes() {
+    local n
+    for n in "${SBP_NAMES[@]}"; do
+        if printf '%s' "${SMOKE_REPORT}" | grep -qx "  ${n}: PASS"; then
+            SBP_PASS=$((SBP_PASS + 1))
+        else
+            SBP_FAIL=$((SBP_FAIL + 1))
+            printf 'FAIL [SBP] %s did not PASS (shared-binpkg family is FAIL-CLOSED)\n' "${n}" >&2
+        fi
+    done
+    # completeness: the name list and SBP_EXPECTED must not drift apart
+    if [ "${#SBP_NAMES[@]}" -ne "${SBP_EXPECTED}" ]; then
+        printf 'FAIL [SBP] completeness: %d names vs SBP_EXPECTED=%d — update both\n' \
+            "${#SBP_NAMES[@]}" "${SBP_EXPECTED}" >&2
+        SBP_FAIL=$((SBP_FAIL + 1))
+    fi
 }
 
 # ── walk the matrix ─────────────────────────────────────────────────────────────
@@ -1940,9 +1980,10 @@ run_catalog_checks
 run_selinux_policy_checks
 # ── END shared block: SELinux node-policy install (SLX) ────
 run_nongating_smokes
+score_sharedbinpkg_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + SBP_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + SBP_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -1973,9 +2014,11 @@ printf  'EGB  (emerge-group banners): %3d passed, %d failed\n' "${EGB_PASS}" "${
 printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
 printf  'CAT  (web-catalog honesty): %3d passed, %d failed\n' "${CAT_PASS}" "${CAT_FAIL}"
 printf  'SLX  (selinux policy install): %3d passed, %d failed\n' "${SLX_PASS}" "${SLX_FAIL}"
+printf  'SBP  (shared-binpkg/assets, gated): %3d passed, %d failed\n' "${SBP_PASS}" "${SBP_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
 if [ -n "${SMOKE_REPORT}" ]; then
-    echo "── non-gating smokes (informational; NOT in TOTAL) ─────────"
+    echo "── developer smokes (informational, NOT in TOTAL — EXCEPT the"
+    echo "   sharedbinpkg-* family, which is scored fail-closed into SBP) ──"
     printf '%s' "${SMOKE_REPORT}"
 fi
 [ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]

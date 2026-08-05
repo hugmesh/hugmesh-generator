@@ -38,6 +38,17 @@ source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # whose (CHOST + exact CFLAGS/-mcpu + profile) fingerprint != this build's.
 # shellcheck source=scripts/_binpkg-pool-lib.sh
 source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
+# Shared build-asset root (stage3 seed cache + fleet distfiles + per-BOARD binpkg
+# pool) and its flock discipline — the ONE resolver every builder uses. See
+# scripts/_shared-assets-lib.sh and docs/SHARED-BINPKG.md.
+# shellcheck source=scripts/_shared-assets-lib.sh
+source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# Signed-kernel artifact cache (G4): a kernel+modules+initramfs+UKI set is reusable
+# across images of the SAME board when board+kernel version+config digest+SIGNING KEY
+# FINGERPRINT all match. The key fingerprint is in the cache key so a re-keyed fleet
+# misses instead of silently reusing artifacts signed by a retired key.
+# shellcheck source=scripts/_kernel-cache-lib.sh
+source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -349,6 +360,21 @@ HOME_SEED_CODE_FROM=""
 # re-downloading sources. Empty = auto-detect (top level of /media/*, common
 # portage dirs); set explicitly to force one. Speeds rebuilds / enables offline.
 DISTDIR_SRC=""
+# --shared-assets DIR / --no-shared-assets (env: HUGMESH_SHARED_ASSETS): the fleet's
+# SHARED build-asset root. On x86 it supplies the stage3 SEED cache (one amd64
+# tarball for every build instead of one per BUILD_SUBDIR) and a read-only view of
+# the fleet distfiles the cross builders populate. The x86 binpkg POOL is NOT shared:
+# it lives INSIDE the sysroot (PKGDIR=/var/cache/binpkgs), so sharing it would need a
+# bind-mount plus a carve-out in the --uncached binpkgs cleanup — deliberately out of
+# scope here rather than faked (see docs/SHARED-BINPKG.md "Honest limits").
+# Empty ⇒ "${WORK_DIR}/shared", already covered by the Makefile's -v $(WORK_DIR):/out.
+SHARED_ASSETS_DIR="${HUGMESH_SHARED_ASSETS:-}"
+SHARED_ASSETS_ENABLED=true
+# --no-kernel-cache (env: HUGMESH_KERNEL_CACHE=off): opt out of the signed-kernel
+# artifact cache under <shared-root>/kernel. Build-phase escape hatch, same class as
+# --no-shared-assets: it never changes the ARTIFACT, only whether an identical kernel
+# is recompiled and re-signed. See scripts/_kernel-cache-lib.sh.
+KERNEL_CACHE_ENABLED=true
 # --live-toram / --no-live-toram : the live ISO gets a "Copy to RAM (removable)"
 # GRUB entry (rd.live.ram=1) so the whole live system caches into memory and the
 # USB/DVD can be pulled after boot. Default ON.
@@ -705,6 +731,17 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --with-sso | --no-sso               Force the Casdoor/OIDC login ON/OFF (any role).
       --distdir DIR         Reuse a Gentoo distfiles cache from a mounted drive
                             (default: auto-detect /media/*; speeds rebuilds / offline).
+      --shared-assets DIR   Fleet-wide asset root: the amd64 stage3 seed cache
+                            (<DIR>/seed/amd64) and the shared distfiles
+                            (<DIR>/distfiles, exposed read-only). Default
+                            <work-dir>/shared; env HUGMESH_SHARED_ASSETS. The cached
+                            seed is RE-VERIFIED (signed DIGESTS) on every reuse.
+      --no-shared-assets    Opt out — private seed/distfiles under the build tree.
+      --no-kernel-cache     Opt out of the signed-kernel artifact cache
+                            (<shared-root>/kernel): always recompile and re-sign the
+                            kernel. Env: HUGMESH_KERNEL_CACHE=off. Entries are keyed
+                            on board + kernel version + config digest + the SIGNING
+                            KEY FINGERPRINT, so a re-keyed fleet misses by design.
       --live-toram | --no-live-toram  Live ISO "Copy to RAM (removable)" boot entry
                             so the stick can be pulled after boot (default ON).
       --installer-ui UI     cli|ncurses|calamares|all — installer front-ends offered
@@ -920,6 +957,10 @@ while [[ $# -gt 0 ]]; do
         --home-seed-code-from) HOME_SEED_CODE_FROM="$2"; shift 2 ;;
         # Reuse a Gentoo distfiles cache from an attached/mounted drive (skip re-downloads).
         --distdir) DISTDIR_SRC="$2"; shift 2 ;;
+        # Shared build-asset root (seed cache + fleet distfiles); opt out entirely.
+        --shared-assets) SHARED_ASSETS_DIR="$2"; shift 2 ;;
+        --no-shared-assets) SHARED_ASSETS_ENABLED=false; shift ;;
+        --no-kernel-cache) KERNEL_CACHE_ENABLED=false; shift ;;
         # PREBUILD the binpkg pool then stop before image assembly (shared-binpkg).
         --packages-only) PACKAGES_ONLY=true; shift ;;
         # Accept an image whose requested package set did not fully merge (the
@@ -1738,6 +1779,23 @@ fi
 # already exited non-zero, which is exactly what the tests/build-matrix harness
 # relies on. SECRETS (--local-pass / --luks-pass / --user-password /
 # --root-password values) are NEVER echoed — only a REDACTED presence marker.
+# ── Shared build assets (root resolution) ─────────────────────────────────────
+# Resolved BEFORE --print-plan so every channel's plan states what is reused. The
+# WORK_DIR default is applied a few lines below, so use the SAME
+# ${WORK_DIR:-$(pwd)/out} expression _plan WORK_DIR uses — both must agree.
+BOARD_POOL_KEY="snap-build-x86"
+SHARED_ROOT="$(sa_root "${WORK_DIR:-$(pwd)/out}" "${SHARED_ASSETS_DIR}")"
+if [ -n "${SHARED_ROOT}" ]; then
+    SHARED_DISTDIR="$(sa_distfiles_dir "${SHARED_ROOT}")"
+    SHARED_SEED_DIR="$(sa_seed_dir "${SHARED_ROOT}" "amd64")" \
+        || { echo "ERROR: cannot resolve the shared stage3 seed dir" >&2; exit 1; }
+else
+    SHARED_DISTDIR=""
+    SHARED_SEED_DIR=""
+fi
+# Signed-kernel artifact cache root. Empty (⇒ every lookup MISSES, nothing is stored)
+# when --no-kernel-cache, HUGMESH_KERNEL_CACHE=off, or the shared root itself is off.
+KERNEL_CACHE_ROOT="$(kc_root "${SHARED_ROOT}")"
 if ${PRINT_PLAN}; then
     _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
     # Filename-safe role tag (mirrors the Phase-9 artifact naming): be+gpu keeps
@@ -1771,6 +1829,13 @@ if ${PRINT_PLAN}; then
     _plan ARTIFACTS          "${_ARTS}"
     _plan ARTIFACT_PREFIX    "${BRAND}-x86-amd64-${_PLAN_ROLE_TAG}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR:-$(pwd)/out}"
+    # Shared build assets. Additive PLAN_ keys (grep -qx consumers unaffected).
+    # SHARED_POOL is deliberately "no" here: x86's PKGDIR is chroot-internal.
+    _plan SHARED_ASSETS      "${SHARED_ROOT:-off}"
+    _plan SHARED_SEED_DIR    "${SHARED_SEED_DIR:-${WORK_DIR:-$(pwd)/out}/${BUILD_SUBDIR}}"
+    _plan SHARED_DISTDIR     "${SHARED_DISTDIR:-none}"
+    _plan SHARED_POOL        "no (x86 PKGDIR is chroot-internal /var/cache/binpkgs)"
+    _plan KERNEL_CACHE       "${KERNEL_CACHE_ROOT:-off}"
     # Prebuild mode (shared-binpkg): 1 ⇒ populate PKGDIR then exit before image
     # assembly. Additive PLAN_ key (grep -qx consumers unaffected).
     _plan PACKAGES_ONLY      "$(${PACKAGES_ONLY} && echo 1 || echo 0)"
@@ -3105,6 +3170,14 @@ fi
 # ── 1. Directories ─────────────────────────────────────────────────
 banner "Preparing build directories"
 mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir} "${SYSROOT}" "${ISO_DIR}"
+# Shared asset root: the seed cache + the fleet distfiles dir (no pool leg on x86).
+if [ -n "${SHARED_ROOT}" ]; then
+    mkdir -p "${SHARED_SEED_DIR}" "${SHARED_DISTDIR}" \
+        || { err "cannot create the shared asset root ${SHARED_ROOT}"; exit 1; }
+    info "$(sa_describe "${SHARED_ROOT}" "amd64" "<x86 pool is chroot-internal>")"
+else
+    SHARED_SEED_DIR="${BUILD_ROOT}"
+fi
 # Preserve the pre-log fds so secrets that must NOT be persisted can still be
 # routed to the operator's terminal (>&3) without landing in the logs — same
 # fd 3/4 idiom as the ARM builders. (Audited: LUKS_PASS is only ever written
@@ -3123,10 +3196,17 @@ info "Build root: ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 banner "Fetching stage3 seed (amd64 hardened)"
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
 STAGE3_FILE=$(curl -sL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
-# Per-arch: the amd64 seed must not be reused by (or clobber) the aarch64 build.
-STAGE3_LOCAL="${BUILD_ROOT}/$(basename "${STAGE3_FILE}")"
+STAGE3_BASENAME="$(basename "${STAGE3_FILE}")"
 STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGE3_FILE}"
-[ -f "${STAGE3_LOCAL}" ] || { info "Downloading $(basename "${STAGE3_FILE}")"; curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${STAGE3_LOCAL}" "${STAGE3_URL}"; }
+# Stage3 seed: ONE per-arch cache under the shared root instead of a fresh ~250 MB
+# download for every BUILD_SUBDIR. sa_seed_acquire re-runs the FULL supply-chain
+# verification (dlv_verify_stage3: GPG-signed DIGESTS + SHA512/SHA256) on the file it
+# hands back — cache HIT or fresh download — so a poisoned cache is caught by exactly
+# the code that catches a poisoned mirror; caching must never turn "verified once" into
+# "trusted forever". Fail-closed: an unverifiable seed is discarded, re-fetched ONCE,
+# and a second failure aborts. Per-arch keying (directory AND basename) means the
+# aarch64 seed can never be handed to this amd64 build, or vice versa.
+STAGE3_PRIVATE="${BUILD_ROOT}/${STAGE3_BASENAME}"
 
 # SUPPLY-CHAIN: verify the seed's integrity+authenticity before we trust a single
 # byte of it. dlv_verify_stage3 fetches the matching .DIGESTS(.asc), GPG-verifies
@@ -3135,13 +3215,14 @@ STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGE3_FILE
 # mismatch. A poisoned mirror or MITM can no longer slip a backdoored seed in.
 # (Mirrors the rpi5/frite/jetson builders; the amd64 seed was the last unverified one.)
 banner "Verifying stage3 seed signature + checksum"
-if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_URL}.DIGESTS"; then
-    rm -f "${STAGE3_LOCAL}"   # drop the unverified file so a re-run re-fetches
-    err "stage3 seed failed verification (bad signature or checksum) — aborting."
+if ! STAGE3_LOCAL="$(sa_seed_acquire "${SHARED_ROOT}" "amd64" "${STAGE3_BASENAME}" \
+        "${STAGE3_URL}" "${STAGE3_PRIVATE}")"; then
+    err "stage3 seed unavailable or failed verification (bad signature or checksum) — aborting."
     err "If Gentoo rotated its signing key, set DLV_GENTOO_KEY=<fingerprint>; for an"
     err "air-gapped build set DLV_OFFLINE_KEYRING=<keyfile>. Refusing unverified seed."
     exit 1
 fi
+info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 # ── Concurrent-build exclusion (flock) ─────────────────────────────────────────
 # Two builds of the SAME role share BUILD_ROOT (wl-<role>.<arch>) when launched
@@ -4341,6 +4422,12 @@ mount_chroot() {
     local dd=""
     if [ -n "${DISTDIR_SRC}" ] && [ -d "${DISTDIR_SRC}" ]; then
         dd="${DISTDIR_SRC}"
+    elif [ -n "${SHARED_DISTDIR}" ] && [ -d "${SHARED_DISTDIR}" ]; then
+        # The fleet-wide distfiles the CROSS builders write (arch-independent source
+        # tarballs — no ABI risk). Exposed READ-ONLY via the same bind + PORTAGE_RO_DISTDIRS
+        # path an explicit --distdir takes; x86's own new fetches still land in its private
+        # chroot DISTDIR, so this build never writes the shared cache.
+        dd="${SHARED_DISTDIR}"
     else
         for cand in /media/distfiles /media/*/distfiles /media/*/portage/distfiles \
                     /var/tmp/portage/distfiles; do
@@ -4930,6 +5017,142 @@ fi
 # fragment applied below. This step is SELF-SUFFICIENT + idempotent: the main
 # package emerge may have aborted, so it re-ensures the sources + /usr/src/linux
 # symlink exist before building, and fails loudly if core hardening didn't take.
+
+# ── SIGNED-KERNEL ARTIFACT CACHE (G4) ─────────────────────────────────────────
+# Compiling and signing a kernel that is byte-identical to one this fleet already
+# built is pure waste: the same keys sign every device, so a kernel is reusable
+# across images of the SAME board whenever board + kernel version + kernel config
+# + SIGNING IDENTITY all match. Those four ARE the cache key (kc_cache_key).
+#
+# WHAT IS AND IS NOT SKIPPED ON A HIT. A hit replaces the COMPILE. It never
+# replaces a CHECK: the DISK-INITRAMFS GATE, the build_img seal gate and the
+# Secure Boot signing step all sit OUTSIDE this block and run identically on a
+# hit and on a miss. The in-chroot KSPP/SELinux/k8s/LSM config assertions are the
+# one thing a hit does not re-run — and they are safe to skip precisely because
+# they are a pure function of (kernel source tree, assembled config), which is
+# what components 2 and 3 of the key pin. Change either and the key changes.
+#
+# COMPONENT 3 IS WIDER THAN "the .config". The cached payload includes the
+# initramfs and the unsigned UKI, so everything that decides THOSE has to be in
+# the digest too, or a hit would hand back an initramfs built for a different
+# world. kernel_cache_inputs() therefore also folds in --kernel-builtin and its
+# keep-as-module list, the dracut drop-ins, the kernel cmdline source
+# (/etc/default/grub), and the VERSIONS of dracut and systemd-utils in the
+# sysroot (the sd-stub owner) — a dracut upgrade must invalidate the initramfs.
+KCACHE_KEY=""; KCACHE_KVER=""; KCACHE_CFG=""; KCACHE_FP=""; KCACHE_HIT=false
+KCACHE_TMP="${BUILD_ROOT}/kernel-cache-work"
+# QUOTED on purpose: an array assignment performs pathname expansion, so a bare
+# vmlinuz-* here would silently expand against the builder's CURRENT DIRECTORY and
+# bake whatever it found into the payload list. These must reach kc_names_matching
+# as literal patterns, to be expanded against ${SYSROOT}/boot and nowhere else.
+KCACHE_BOOT_GLOBS=('vmlinuz' 'vmlinuz-*' 'initramfs-*.img' 'System.map*' 'config-*' '*-unsigned.efi')
+
+# kernel_cache_inputs — write the extra key inputs to <SYSROOT>/tmp/k.cache-inputs.
+# Everything here changes the CACHED ARTIFACTS without changing the config fragments.
+kernel_cache_inputs() {
+    local f="${SYSROOT}/tmp/k.cache-inputs" d
+    mkdir -p "${SYSROOT}/tmp" 2>/dev/null || return 1
+    {
+        printf 'kernel-builtin=%s\n' "${KERNEL_BUILTIN}"
+        printf 'uki-name=%s\n'       "${UKI_NAME}"
+        for d in "${SYSROOT}"/var/db/pkg/sys-kernel/dracut-* \
+                 "${SYSROOT}"/var/db/pkg/sys-apps/systemd-utils-*; do
+            [ -d "${d}" ] && printf 'pkg=%s\n' "$(basename -- "${d}")"
+        done
+        [ -f "${SYSROOT}/etc/default/grub" ] && \
+            printf 'grub-default=%s\n' "$(kc_sha256_file "${SYSROOT}/etc/default/grub")"
+        for d in "${SYSROOT}"/etc/dracut.conf.d/*; do
+            [ -f "${d}" ] && printf 'dracut-conf=%s %s\n' "$(basename -- "${d}")" "$(kc_sha256_file "${d}")"
+        done
+    } > "${f}" 2>/dev/null || return 1
+    [ -s "${f}" ] || return 1
+    printf '%s' "${f}"
+}
+
+# kernel_cache_derive — set KCACHE_KEY (and its components), or leave it EMPTY.
+# An empty key is a permanent MISS for this build: nothing is looked up, nothing
+# is stored. Every "cannot determine X" path lands there deliberately — a missing
+# component must never be papered over with a default, because that default would
+# be shared by every build that also could not determine it.
+kernel_cache_derive() {
+    KCACHE_KEY=""; KCACHE_KVER=""; KCACHE_CFG=""; KCACHE_FP=""
+    [ -n "${KERNEL_CACHE_ROOT}" ] || return 1
+    local src inputs
+    src="$(ls -1d "${SYSROOT}"/usr/src/linux-* 2>/dev/null | sort -V | tail -1 || true)"
+    KCACHE_KVER="$(kc_kver_from_srctree "${src}" 2>/dev/null || true)"
+    [ -n "${KCACHE_KVER}" ] || { kc_info "no kernel source tree yet — cache MISS (kernel version unknown)"; return 1; }
+    inputs="$(kernel_cache_inputs || true)"
+    [ -n "${inputs}" ] || { kc_info "cannot record the kernel cache inputs — MISS"; return 1; }
+    if [ -f "${SYSROOT}/tmp/keep-module.list" ]; then
+        KCACHE_CFG="$(kc_config_digest "${SYSROOT}/tmp/k.config" "${SYSROOT}/tmp/keep-module.list" "${inputs}" || true)"
+    else
+        KCACHE_CFG="$(kc_config_digest "${SYSROOT}/tmp/k.config" "${inputs}" || true)"
+    fi
+    [ -n "${KCACHE_CFG}" ] || { kc_info "cannot digest the kernel config — MISS"; return 1; }
+    # The signing identity. Candidates in precedence order; the persisted org cert
+    # under WORK_DIR is the fleet-wide one that signs every board's artifacts.
+    KCACHE_FP="$(kc_signing_fingerprint "${SECUREBOOT_CERT}" "${SECUREBOOT_KEY}" \
+                    "${WORK_DIR}/secureboot/sb.crt" || true)"
+    if [ -z "${KCACHE_FP}" ]; then
+        kc_info "no signing identity available yet — cache MISS (a kernel cache keyed"
+        kc_info "without the signing key would survive a fleet re-key; refusing to)."
+        return 1
+    fi
+    KCACHE_KEY="$(kc_cache_key "x86" "${KCACHE_KVER}" "${KCACHE_CFG}" "${KCACHE_FP}" || true)"
+    [ -n "${KCACHE_KEY}" ] || return 1
+    return 0
+}
+
+# kernel_cache_try_restore — rc 0 (and KCACHE_HIT=true) only on a VALIDATED hit
+# whose payload actually unpacked. A failed unpack is treated as a corrupt entry:
+# pruned, reported, and the build compiles as if the cache were empty.
+kernel_cache_try_restore() {
+    KCACHE_HIT=false
+    [ -n "${KCACHE_KEY}" ] || return 1
+    local entry
+    entry="$(kc_lookup "${KERNEL_CACHE_ROOT}" "x86" "${KCACHE_KEY}" \
+                "${KCACHE_KVER}" "${KCACHE_CFG}" "${KCACHE_FP}" || true)"
+    [ -n "${entry}" ] || return 1
+    rm -rf "${KCACHE_TMP}"; mkdir -p "${KCACHE_TMP}" || return 1
+    if ! kc_restore "${entry}" "boot.tar=${KCACHE_TMP}/boot.tar" "modules.tar=${KCACHE_TMP}/modules.tar"; then
+        kc_prune "${entry}" "payload could not be read back"; return 1
+    fi
+    if ! kc_unpack "${KCACHE_TMP}/boot.tar" "${SYSROOT}/boot" \
+       || ! kc_unpack "${KCACHE_TMP}/modules.tar" "${SYSROOT}/lib/modules"; then
+        kc_prune "${entry}" "payload failed to unpack into the sysroot"
+        rm -rf "${KCACHE_TMP}"; return 1
+    fi
+    rm -rf "${KCACHE_TMP}"
+    KCACHE_HIT=true
+    return 0
+}
+
+# kernel_cache_store — publish what the compile just produced. Best-effort: a
+# cache that cannot be written must never fail a build that otherwise succeeded.
+kernel_cache_store() {
+    [ -n "${KCACHE_KEY}" ] || return 0
+    local names kver
+    mapfile -t names < <(kc_names_matching "${SYSROOT}/boot" "${KCACHE_BOOT_GLOBS[@]}")
+    if [ "${#names[@]}" -eq 0 ]; then
+        kc_warn "kernel phase produced no /boot artifacts — nothing cached"; return 0
+    fi
+    kver="$(ls -1 "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1 || true)"
+    [ -n "${kver}" ] && [ -d "${SYSROOT}/lib/modules/${kver}" ] || {
+        kc_warn "no module tree under ${SYSROOT}/lib/modules — nothing cached"; return 0; }
+    rm -rf "${KCACHE_TMP}"; mkdir -p "${KCACHE_TMP}" || return 0
+    if kc_pack "${KCACHE_TMP}/boot.tar" "${SYSROOT}/boot" "${names[@]}" \
+       && kc_pack "${KCACHE_TMP}/modules.tar" "${SYSROOT}/lib/modules" "${kver}"; then
+        kc_store "${KERNEL_CACHE_ROOT}" "x86" "${KCACHE_KEY}" "${KCACHE_KVER}" \
+            "${KCACHE_CFG}" "${KCACHE_FP}" "build-x86-host-stage4.sh" \
+            "boot.tar=${KCACHE_TMP}/boot.tar" "modules.tar=${KCACHE_TMP}/modules.tar" \
+            && kc_info "cached this kernel for reuse (board=x86 key=${KCACHE_KEY})" \
+            || kc_warn "could not publish the kernel cache entry (build unaffected)"
+    else
+        kc_warn "could not pack the kernel artifacts (build unaffected)"
+    fi
+    rm -rf "${KCACHE_TMP}"
+}
+
 if ${SKIP_KERNEL}; then
     banner "SKIPPED kernel (--skip-kernel)"
 else
@@ -4989,6 +5212,22 @@ else
         cp "${SPECS_DIR}/kernel/keep-as-module.list" "${SYSROOT}/tmp/keep-module.list"
         info "Kernel: --kernel-builtin set — compiling in-tree config built-in (=y) except keep-as-module.list"
     fi
+    # Consult the signed-kernel cache now that every fragment is assembled (the
+    # assembled config IS component 3 of the key). A hit unpacks the kernel,
+    # modules, initramfs and unsigned UKI straight into the sysroot and skips the
+    # compile below; everything AFTER this block — Secure Boot signing, the
+    # DISK-INITRAMFS GATE, build_img's seal gate — runs either way.
+    kernel_cache_derive || true
+    if kernel_cache_try_restore; then
+        # info, NOT banner: the kernel PHASE banner is already emitted above and a
+        # cache hit is not a new phase. A second banner here would be a rung the
+        # Studio's progress table has no row for, stranding the ladder
+        # (studio/tests/test_progress_uniformity.py caught exactly that).
+        info "Kernel: RESTORED from the signed-kernel artifact cache — compile skipped."
+        info "Kernel: cache key ${KCACHE_KEY} (board=x86 ${KCACHE_KVER}); every"
+        info "artifact-integrity gate below still runs against the restored sysroot."
+    else
+    # (heredoc body must stay at column 0, so the miss branch is not re-indented)
     chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 KBUILTIN=${KERNEL_BUILTIN}
 # (Re)ensure the hardened kernel sources are installed and /usr/src/linux is set
@@ -5165,7 +5404,9 @@ else
     echo "[build-x86] INFO: dracut --uefi not available; UKI skipped (add 'uefi' USE to sys-kernel/dracut)"
 fi
 CHROOT
-    rm -f "${SYSROOT}/tmp/k.config"
+    kernel_cache_store
+    fi
+    rm -f "${SYSROOT}/tmp/k.config" "${SYSROOT}/tmp/k.cache-inputs"
     info "Gentoo hardened kernel + disk-boot initramfs installed to ${SYSROOT}/boot"
 fi
 

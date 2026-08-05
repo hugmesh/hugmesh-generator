@@ -16,8 +16,10 @@
 # which resolves+validates everything then exit 0 BEFORE any root/emerge/mutation):
 #   (1) rpi5/rpi4/rpi3 each resolve to a DISTINCT BUILD_SUBDIR and PKGDIR pool.
 #   (2) The defaults are exactly snap-build-pi5 / -pi4 / -pi3.
-#   (3) An explicit --build-subdir / env BUILD_SUBDIR override still wins (so the
-#       worklist wl-<id> pool and deliberately-shared custom pools keep working).
+#   (3) An explicit --build-subdir / env BUILD_SUBDIR override still owns the build
+#       TREE (the worklist wl-<id> isolation invariant), while the POOL is keyed on the
+#       BOARD and therefore SHARED across entries — the shared-build-assets change (G2).
+#       --no-shared-assets restores the legacy private per-BUILD_ROOT pool verbatim.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -74,18 +76,50 @@ else
     bad "pkgdir pools NOT all distinct: pi5='${PKG5}' pi4='${PKG4}' pi3='${PKG3}'"
 fi
 
-# (3a) each pkgdir lives under its own board subdir (the pool key is per-board)
-[ "${PKG5}" = "${WD}/snap-build-pi5/pkgdir" ] && ok "rpi5 pkgdir under snap-build-pi5" || bad "rpi5 pkgdir='${PKG5}'"
-[ "${PKG4}" = "${WD}/snap-build-pi4/pkgdir" ] && ok "rpi4 pkgdir under snap-build-pi4" || bad "rpi4 pkgdir='${PKG4}'"
-[ "${PKG3}" = "${WD}/snap-build-pi3/pkgdir" ] && ok "rpi3 pkgdir under snap-build-pi3" || bad "rpi3 pkgdir='${PKG3}'"
+# (3a) each pkgdir lives under its own BOARD-KEYED pool dir. CLAIM UPDATED by the
+# shared-build-assets track: the pool moved from ${WORK_DIR}/<build-subdir>/pkgdir to
+# ${WORK_DIR}/shared/pkgdir/<board-key>. The SIGILL-relevant property is unchanged and
+# is what (2) above asserts — one directory per board, never shared across boards — but
+# the pool is no longer fragmented by the per-entry build subdir (that was G2: every
+# Studio wl-<id> build started from an EMPTY pool).
+[ "${PKG5}" = "${WD}/shared/pkgdir/snap-build-pi5" ] && ok "rpi5 pool under shared/pkgdir/snap-build-pi5" || bad "rpi5 pkgdir='${PKG5}'"
+[ "${PKG4}" = "${WD}/shared/pkgdir/snap-build-pi4" ] && ok "rpi4 pool under shared/pkgdir/snap-build-pi4" || bad "rpi4 pkgdir='${PKG4}'"
+[ "${PKG3}" = "${WD}/shared/pkgdir/snap-build-pi3" ] && ok "rpi3 pool under shared/pkgdir/snap-build-pi3" || bad "rpi3 pkgdir='${PKG3}'"
 
-# (3b) an EXPLICIT --build-subdir override still wins over the per-board default
+# (3b) an EXPLICIT --build-subdir still owns the build TREE (the wl-<id> isolation
+# invariant) but must NOT fragment the POOL any more — that is the whole point of G2.
 run_plan rpi4 frontend "${OV}" --build-subdir wl-42
 SUBV="$(plan_val "${OV}" BUILD_SUBDIR)"; PKGV="$(plan_val "${OV}" PKGDIR)"
-if [ "${SUBV}" = "wl-42" ] && [ "${PKGV}" = "${WD}/wl-42/pkgdir" ]; then
-    ok "explicit --build-subdir wl-42 overrides the per-board default"
+if [ "${SUBV}" = "wl-42" ]; then
+    ok "explicit --build-subdir wl-42 still owns the build TREE"
 else
-    bad "explicit override ignored: subdir='${SUBV}' pkgdir='${PKGV}' (want wl-42)"
+    bad "explicit --build-subdir ignored: subdir='${SUBV}' (want wl-42)"
+fi
+if [ "${PKGV}" = "${PKG4}" ]; then
+    ok "wl-42 REUSES the rpi4 board pool (${PKGV}) — no per-entry empty pool"
+else
+    bad "wl-42 got its own pool '${PKGV}' (want the shared board pool '${PKG4}')"
+fi
+
+# (3b-ii) --no-shared-assets restores the LEGACY private per-BUILD_ROOT pool verbatim.
+run_plan rpi4 frontend "${OV}" --build-subdir wl-42 --no-shared-assets
+SUBN="$(plan_val "${OV}" BUILD_SUBDIR)"; PKGN="$(plan_val "${OV}" PKGDIR)"
+SHN="$(plan_val "${OV}" SHARED_ASSETS)"
+if [ "${SUBN}" = "wl-42" ] && [ "${PKGN}" = "${WD}/wl-42/pkgdir" ] && [ "${SHN}" = "off" ]; then
+    ok "--no-shared-assets restores the legacy ${WD}/wl-42/pkgdir pool (SHARED_ASSETS=off)"
+else
+    bad "--no-shared-assets did not restore the legacy pool: subdir='${SUBN}' pkgdir='${PKGN}' shared='${SHN}'"
+fi
+
+# (3b-iii) the POOL KEY must follow --board, never the build subdir — a wl-<id> tree on
+# rpi5 and one on rpi4 must still land in DIFFERENT pools (this is the SIGILL property
+# under the new sharing, and it is the one that would silently break if the key drifted).
+run_plan rpi5 frontend "${OV}" --build-subdir wl-42
+PKGV5="$(plan_val "${OV}" PKGDIR)"; KEY5="$(plan_val "${OV}" POOL_KEY)"
+if [ -n "${PKGV5}" ] && [ "${PKGV5}" != "${PKGV}" ] && [ "${KEY5}" = "snap-build-pi5" ]; then
+    ok "same --build-subdir wl-42 on rpi5 vs rpi4 → DIFFERENT pools (key follows --board)"
+else
+    bad "pool key followed the subdir, not the board: rpi5='${PKGV5}' rpi4='${PKGV}' key='${KEY5}'"
 fi
 
 # (3c) an env BUILD_SUBDIR override also wins (worklist/env path)

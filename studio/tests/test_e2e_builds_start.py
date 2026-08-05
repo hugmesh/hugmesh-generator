@@ -182,9 +182,15 @@ def _run_to_completion(qapp, page, timeout_ms=5000):
 
 
 def _expected_native_argv(cfg):
-    """The exact BuildDriver.command contract (test_build_driver.py) for a root native run."""
+    """The exact BuildDriver.command contract (test_build_driver.py) for a root native run.
+
+    Build-PHASE plumbing first (-w, -j, the shared build-asset root), then the CONFIG
+    args. The shared root is spelled out literally here rather than imported from the
+    driver so this stays an INDEPENDENT statement of the contract — a driver-side change
+    to where the root lands must fail this test, not silently follow it."""
     out = cfg.output_dir or os.path.join(GENERATOR_DIR, "out")
     return ["bash", f"./{cfg.builder_script}", "-w", out, "-j", str(cfg.jobs),
+            "--shared-assets", os.path.join(out, "shared"),
             *cfg.to_cli_args()]
 
 

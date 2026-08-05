@@ -4,6 +4,16 @@ _State key: **✅ shipped mechanism** · **⚠️ live speedup + correctness UNP
 without a real fleet build** — this track ships the machinery and the safety
 guard; the compile-once-and-reuse speedup is owed a real cross-build to prove._
 
+> **Update — the SHARED ASSET ROOT (G1/G2/G3).** #439's pools/distfiles were keyed
+> off `BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"`, and the Studio derives
+> `BUILD_SUBDIR=wl-<entry-id>` per worklist entry — so **every GUI build got a brand-new
+> EMPTY pool and re-downloaded the ~250 MB stage3 seed**. #439's reuse only ever
+> materialised for make-driven builds. There is now ONE shared root
+> (`<WORK_DIR>/shared` by default) holding the seed cache, the fleet distfiles and the
+> per-BOARD pools, resolved in ONE place — `scripts/_shared-assets-lib.sh` — with
+> `--shared-assets DIR` / `--no-shared-assets` / `HUGMESH_SHARED_ASSETS`. See
+> **[The shared asset root](#the-shared-asset-root-seed--distfiles--pools)** below.
+
 The fleet builders already compile every package once per build
 (`FEATURES="buildpkg"` in all six `make.conf` templates) — but four of the five
 cross builders never **consumed** those binpkgs, so an arm64 re-run recompiled
@@ -77,6 +87,18 @@ A pool is the `pkgdir` under a build's per-board `BUILD_SUBDIR`:
 | orangepi3-lts | `snap-build-orangepi3-lts` |
 | orangepi4-lts | `snap-build-orangepi4-lts` |
 
+> **Shared-asset update.** The table above still names each board's **default**
+> `BUILD_SUBDIR` — but that string is now the **pool KEY**, not the pool's parent
+> directory. With the shared root on (the default), the pool is
+> `<root>/pkgdir/<board-key>`, resolved from `--board` / the builder's board constant
+> and **never** from `BUILD_SUBDIR`. That is the G2 fix: a Studio `wl-<entry-id>`
+> subdir must own the build TREE (sysroot/staging/log — a deliberate, tested
+> invariant) without fragmenting the POOL. `--no-shared-assets` restores the old
+> `${BUILD_ROOT}/pkgdir` layout byte-for-byte.
+>
+> The SIGILL property is unchanged and is what matters: **one pool directory per
+> board, never shared across boards**, plus the fingerprint guard below.
+
 > **Lane 2 fix.** Before this track `build-rpi5` used the single literal
 > `snap-build-pi5` for **all three** Pi boards (set before argv parse; `--board`
 > didn't change it). Because rpi5 already consumed binpkgs (`--usepkg`),
@@ -148,12 +170,120 @@ never written. No ABI risk. Proof: `tests/scripts/test-arm-ro-distdir.sh`.
 
 ---
 
+## The shared asset root (seed + distfiles + pools)
+
+`scripts/_shared-assets-lib.sh` is the ONE resolver; all ten stage4 builders source it
+and nothing duplicates the path logic.
+
+```
+<root>/seed/<arch>/<stage3-basename>   stage3 seeds, keyed per ARCH   (G1)
+<root>/distfiles/                      fleet-wide source tarballs     (G3)
+<root>/pkgdir/<board-key>/             binpkg pools, keyed per BOARD  (G2)
+```
+
+**Where `<root>` comes from** — precedence, highest first:
+
+| # | source | typical caller |
+|---|---|---|
+| 1 | `--shared-assets DIR` | the Studio (`BuildDriver._shared_assets_args`) |
+| 2 | `HUGMESH_SHARED_ASSETS=DIR` | an operator putting the pool outside `WORK_DIR` |
+| 3 | `<WORK_DIR>/shared` (default) | `make`, `build-all-roles.sh`, a hand-run builder |
+
+`--no-shared-assets` (or `HUGMESH_SHARED_ASSETS=off`) opts out entirely: seed,
+distfiles and pool fall back to the legacy per-`BUILD_ROOT` paths.
+
+**Why the default is under `WORK_DIR`.** The Makefile's `DOCKER_RUN` already mounts
+`-v $(WORK_DIR):/out`, so a root under `WORK_DIR` is reachable in-container with **no
+new mount** — the builder just gets `/out/shared`.
+
+**Why the Studio must be explicit.** A GUI run's work dir is the PER-SESSION
+`<out>/sessions/<id>` (`build_sessions.session_workdir`), so the builder-side default
+would resolve per session and share nothing. `BuildDriver` climbs back to the stable
+`<out>` and passes `--shared-assets <out>/shared` on **every** dispatched build — so it
+also appears in the **command preview** the operator reads before dispatch.
+
+Under docker the Studio always gives the root its own **read-write** bind mount at the
+fixed container path `/shared`. This is a deliberate deviation from "a root under
+`WORK_DIR` needs no new mount", which holds for `make` (where `WORK_DIR` *is* the mount)
+but **not** for the Studio, whose mount is the per-session `<out>/sessions/<id>:/out`
+while the root sits at the stable `<out>/shared` above it — outside that mount. Rather
+than emit two different in-container spellings depending on whether a session override
+happens to be set, the path is always `/shared`, which buys:
+
+* one spelling in the command preview and the build log on every mount layout; and
+* the **golden work-dir invariant** stays true — a session work dir may still change
+  only the `-v <host>:/out` value and nothing else, because the shared root is derived
+  from the stable `<out>` and is byte-identical with and without the override
+  (`studio/tests/test_build_driver_workdir.py`).
+
+The mount is read-WRITE (the build creates and writes the seed cache, the pool and the
+distfiles), which is why it is deliberately NOT one of `DOCKER_ASSET_FIELDS`' read-only
+inputs. **Make-driven docker builds need no change at all:** `DOCKER_RUN` runs
+`make … WORK_DIR=/out`, so the builder's own `<work-dir>/shared` default resolves to
+`/out/shared` — the host's `$(WORK_DIR)/shared` — with zero new mounts.
+
+The driver emits the leg *between* `-w`/`-j` and the config args, never after them:
+`cfg.to_cli_args()` ends with the operator's raw `extra_flags`, and the builders parse
+argv last-flag-wins, so a hand-typed `--no-shared-assets` there must still win.
+
+> **`make clean` now also clears the cache.** `clean` is `rm -rf $(WORK_DIR)`, and the
+> default root lives under `WORK_DIR` — so it discards the seed cache and every pool
+> along with the build trees. That is the honest reading of "wipes WORK_DIR", but if you
+> want the cache to survive a clean, put it elsewhere with
+> `HUGMESH_SHARED_ASSETS=/srv/hugmesh-assets`.
+
+### Seed cache — cached, but never trusted
+
+`sa_seed_acquire` returns a seed path only after running the caller's verifier
+(`dlv_verify_stage3`: GPG-signed DIGESTS + SHA512/SHA256) on the exact file it is about
+to hand back — **cache hit or fresh download**. Caching must never turn "verified once"
+into "trusted forever": a poisoned cache is caught by exactly the code that catches a
+poisoned mirror. On failure the file is deleted, re-fetched **once**, re-verified, and a
+second failure **fails closed** (no path is returned, so the builder cannot unpack
+anything). Seeds are keyed per arch by directory **and** by basename, so an `amd64`
+tarball can never be handed to an `arm64` build even if it is misfiled.
+
+### Distfiles
+
+The cross builders point their **writable** `DISTDIR` at `<root>/distfiles` (appended to
+the rendered `make.conf`, where the last assignment wins — the same idiom the
+`PORTAGE_RO_DISTDIRS` append already used). Distfiles are arch-independent SOURCE
+tarballs and portage verifies each against the ebuild Manifest, so one fleet-wide cache
+is safe, and portage takes its own per-file fetch lock. x86 emerges inside a chroot, so
+it **reads** that same directory through the existing read-only bind +
+`PORTAGE_RO_DISTDIRS` path (used when no explicit `--distdir` was given) and writes its
+own private `DISTDIR`. An explicit `--distdir` naming the shared dir is dropped rather
+than listed twice.
+
+### Concurrency
+
+Mutation of the shared root is serialised with `flock` (`sa_lock_run`), re-entrant so a
+build can never deadlock against its own lock — the same sibling-lockfile discipline as
+`build-x86-host-stage4.sh`'s `acquire_build_lock`. Additionally, a shared pool takes a
+**long-lived exclusive writer lock** (`sa_pool_hold`) for the life of the build: the
+tree has no `binpkg-multi-instance`, so two concurrent writers into one pkgdir overwrite
+each other's package instances (invalidation rule #3 below — which sharing pools across
+worklist entries is what makes REACHABLE). It is non-blocking, because a silent
+multi-hour wait would be worse than a fast, actionable failure: the second build is told
+to wait or to re-run with `--no-shared-assets`. The kernel releases flocks on process
+death, so a crashed build never wedges the next one.
+
+Hermetic proof: `tests/scripts/test-shared-build-assets.sh` (EXECUTED decisions, not
+parse assertions): cache hit / cache miss / wrong-arch seed / corrupted seed / poisoned
+cache recovery / fingerprint-mismatched pool refusal / two concurrent writers serialising
+/ re-entrancy / the pool writer lock / the opt-out — plus a structural sweep asserting
+all ten builders carry the wiring. Studio side:
+`studio/tests/test_shared_build_assets.py`.
+
 ## Prebuild-once workflow
 
 ```sh
 # 1. compile a platform's role-UNION binpkg pool ONCE (per board), no image:
-make prebuild-binaries ARCH=rpi5 BOARD=rpi4        # -> snap-build-pi4/pkgdir
+make prebuild-binaries ARCH=rpi5 BOARD=rpi4        # -> out/shared/pkgdir/snap-build-pi4
 make prebuild-binaries ARCH=x86                    # -> snap-build-x86 sysroot pool
+
+# (with --no-shared-assets the ARM pool is the legacy out/snap-build-pi4/pkgdir;
+#  x86's pool is chroot-internal either way — see "Honest limits" below.)
 
 # 2. later per-role image builds reuse the pool via --usepkg (already wired):
 make rpi RPI_BOARD=rpi4                             # backend/frontend/… reuse pi4 pool
@@ -162,11 +292,13 @@ make x86 RESUME=--resume                            # x86: MUST pass --resume (s
 
 > **x86 caveat — pass `RESUME=--resume` to consume an x86 prebuild.** The x86 pool
 > lives *inside* the sysroot (`/var/cache/binpkgs`), unlike the ARM pools which sit
-> in `${BUILD_ROOT}/pkgdir` outside the sysroot. A non-`--resume` x86 build wipes
+> outside it (`<root>/pkgdir/<board-key>` with the shared root on, `${BUILD_ROOT}/pkgdir`
+> with `--no-shared-assets`). A non-`--resume` x86 build wipes
 > the sysroot (the wipe-on-non-resume guard) and therefore the prebuilt pool with
 > it — so `make prebuild-binaries ARCH=x86` then a plain `make x86` recompiles from
 > scratch. Always thread `RESUME=--resume` into the consuming x86 build. The ARM
-> boards have no such caveat (their pool survives a sysroot wipe).
+> boards have no such caveat (their pool survives a sysroot wipe, and with the shared
+> root it now also survives a whole new `BUILD_SUBDIR` — that is G2).
 
 - **Union feed:** `python3 -m hugmesh_studio.core.prebuild_union <platform>`
   prints the sorted role-union atom list — `set().union` over the EXISTING
@@ -206,8 +338,127 @@ change that alters the produced binaries' ABI or correctness:
    (`pool_fingerprint_of MAKECONF PROFILE SALT`) so the guard forces a rebuild.
 3. **Single-writer per pool.** The tree overwrites a single binpkg instance
    (no `binpkg-multi-instance`), so two concurrent builds into one pool race.
-   Keep one writer per pool (the worklist path already isolates each entry under
-   its own `BUILD_SUBDIR=wl-<id>`).
+   This used to be satisfied *by accident* — the worklist path isolated each entry
+   under its own `BUILD_SUBDIR=wl-<id>`, which is precisely the fragmentation G2
+   removed. With one pool per BOARD the rule is now **enforced**: `sa_pool_hold`
+   takes a long-lived exclusive `flock` on `<pool>.writer.lock` and a second
+   concurrent build of the same board is refused fast (wait, or `--no-shared-assets`).
+
+---
+
+## The signed-kernel artifact cache (G4)
+
+`scripts/_kernel-cache-lib.sh` caches a **built kernel** so images of the same board
+stop recompiling (and re-signing) an artifact the fleet already has. It lives inside
+the shared asset root, so it inherits that root's resolution, docker reachability and
+opt-out:
+
+```
+<root>/kernel/<board>/<cache-key>/manifest        the four key components + payload digests
+<root>/kernel/<board>/<cache-key>/payload/boot.tar     kernel image, initramfs, unsigned UKI, DTBs
+<root>/kernel/<board>/<cache-key>/payload/modules.tar  the /lib/modules/<kver> tree
+<root>/kernel/<board>/<cache-key>.lock            sibling flock (share-lane discipline)
+```
+
+### The cache key — four components, all required
+
+`kc_cache_key BOARD KVER CONFIG-DIGEST SIGNING-KEY-FP` is the **only** function that
+derives a key, and it hashes a labelled, newline-framed record of all four:
+
+| # | component | why it is in the key |
+|---|---|---|
+| 1 | **board** | different `-mcpu`, defconfig and DTBs (`--board`, never `BUILD_SUBDIR`) |
+| 2 | **kernel version** | the source tree, read *before* the build (`kc_kver_from_srctree`) |
+| 3 | **config digest** | the `.config` seed **and every fragment**, in application order — plus the non-fragment inputs that still decide the cached artifacts (see below) |
+| 4 | **signing-key fingerprint** | the identity that signs the fleet's kernels |
+
+**Why component 4 exists.** The operator's premise is that *the same keys sign every
+device*, which is exactly what makes a kernel reusable across images. The corollary is
+the dangerous part: when the fleet is **re-keyed**, every cached artifact belongs to a
+**retired** key, and a cache keyed only on board+version+config would keep serving them
+forever, silently. Re-keying is the moment you most need a miss. So the key identity is
+in the key, and `tests/scripts/test-kernel-artifact-cache.sh` case **E** proves a
+re-keyed build misses — including when an old entry is *renamed* onto the new key's
+directory (the manifest is re-checked, the entry is refused and pruned).
+
+**Component 3 is wider than "the .config"**, because the payload includes the initramfs
+and the unsigned UKI. `kernel_cache_inputs()` folds in everything else that decides
+those: `--kernel-builtin` and its keep-as-module list, the UKI name, the dracut
+drop-ins, `/etc/default/grub` (the kernel cmdline baked into the UKI), and the **vdb
+versions of `sys-kernel/dracut` and `sys-apps/systemd-utils`** — so a dracut upgrade
+invalidates the initramfs even when the kernel config has not moved. On the cross
+builders it folds in the board defconfig name, the cross target, `-mcpu`, the kernel
+image filename and the DTB prefix.
+
+**Any component unavailable ⇒ MISS.** `kc_cache_key` returns nothing unless all four are
+present and well-formed; the builders treat "no key" as a permanent miss for that build
+(nothing looked up, nothing stored). There is deliberately **no** degraded 3-component
+key: an unavailable component can only ever cost a rebuild, never widen what an entry is
+allowed to match.
+
+### Key material never touches the cache
+
+* `kc_key_fingerprint` emits **only** a SHA-256 over the **public half** — the DER of an
+  X.509 certificate (`x509:…`) or the DER SubjectPublicKeyInfo derived from a key
+  (`spki:…`). The private half is never printed, copied or stored, and the two tags keep
+  a cert and a bare key from being conflated into one identity.
+* The manifest records that fingerprint and nothing else about the key — no path, no
+  subject, no serial.
+* `kc_store` **refuses** any payload file containing a PEM private-key header, so a
+  builder mis-pointed at a key directory fails loudly instead of publishing key material
+  into a shared, fleet-visible tree.
+
+> A bug found and fixed while building this: a failed `openssl … | sha256sum` pipeline
+> still emits the SHA-256 of the *empty string*, so an unreadable key file was being
+> reported as a perfectly good `x509:e3b0c442…` identity — which would have collapsed
+> **every** keyless build onto one shared cache key. Each branch is now gated on an
+> `openssl -noout` probe and the empty digest is rejected explicitly. Regression: case
+> **A5**.
+
+### A cache is never a gate bypass
+
+Restoring a kernel replaces the **compile**, never a **check**. The x86
+disk-initramfs gate, `build_img`'s seal gate, the Secure Boot signing step and the cross
+builders' requested-atom payload gate all sit **outside** the cache branch and run
+identically on a hit and on a miss. That is asserted by **mutation**: case **J** builds a
+cache entry whose `/boot` has a kernel but *no initramfs*, restores it on the hit path,
+and requires the extracted real gate to fail the build — then deletes the gate from the
+same harness and requires the bad restore to sail through. If the gate ever stopped
+being load-bearing, J3 would fail.
+
+**Signing is NOT skipped on a hit.** On x86 the cache stores the *unsigned* UKI
+(`*-unsigned.efi`), because the store runs before the Secure Boot step and the signing
+step lives outside the kernel phase entirely. So a hit restores the compiled content and
+then `sbsign` runs as usual — **every shipped artifact is signed by the key in effect at
+build time**, never by a signature lifted out of the cache. The fingerprint is in the key
+anyway, so cached content can never cross a trust-domain boundary; re-signing simply
+means the cache can never be the thing that ships a stale signature.
+
+The one thing a hit *does* skip is the in-tree KSPP/SELinux/k8s/LSM/LUKS `.config`
+assertions. They are safe to skip because they are a pure function of (kernel source
+tree, defconfig, fragments) — precisely what components 2 and 3 pin. Change any of them
+and the key changes.
+
+### Validation, pruning and locking
+
+`kc_lookup` re-checks the manifest's four components against what *this* build derived
+and re-hashes **every** payload file, on every hit — the same "cached but never trusted"
+posture as the stage3 seed next door. A truncated, mangled, format-stale, payload-less
+or foreign entry is **pruned with an honest log line naming the reason** and reported as
+a miss; it can never be restored into a sysroot. Stores publish atomically (build into a
+`.tmp` sibling, then `mv`), so an interrupted store leaves no half-entry. Mutation of an
+entry is serialised with `sa_lock_run` on a **sibling** lockfile — the share lane's
+discipline, reused rather than re-implemented (`kc_require_sa` refuses to operate if
+that library is not sourced).
+
+### Opting out
+
+`--no-kernel-cache` (env `HUGMESH_KERNEL_CACHE=off|0|no|none|false`) — same class of
+build-phase escape hatch as `--no-shared-assets`, and deliberately not a GUI checkbox: it
+cannot change the artifact, only whether an identical kernel is rebuilt.
+`--no-shared-assets` disables the kernel cache too (sharing kernels while refusing to
+share anything else would be an incoherent promise). Every channel's `--print-plan`
+reports `PLAN_KERNEL_CACHE=<root>|off`.
 
 ---
 
@@ -218,6 +469,53 @@ change that alters the produced binaries' ABI or correctness:
   static review + `bash -n` + the build-matrix parity/flag-coverage gates +
   hermetic fixture tests. A real `make prebuild-binaries` + fleet build on the
   operator box is the true proof.
+- **Shared-asset root (G1/G2/G3) — what is NOT proven here.** The seed cache, the
+  fleet distfiles and the cross-entry pool reuse are proven *hermetically* (fixture
+  dirs, injected fetch/verify hooks, real flock races) — **not** by a real build. In
+  particular these remain owed:
+  - that a second real build of the same board actually **hits** the pool and skips the
+    compiles (the hermetic tests prove the PATHS agree and the guard permits reuse;
+    they cannot prove portage's `--usepkg` hit rate);
+  - that a real `dlv_verify_stage3` on a cached seed behaves as the fixture verifier
+    does (the flow is identical, the verifier is the same function the builders already
+    call today — but it has not run against distfiles.gentoo.org in this change);
+  - that a shared, writable `DISTDIR` across two genuinely concurrent cross builds is
+    contention-free in practice. Portage's per-file fetch lock is the mechanism; no
+    real concurrent fleet build has exercised it here.
+- **x86's binpkg pool is still NOT shared, by decision.** It lives *inside* the sysroot
+  (`PKGDIR=/var/cache/binpkgs`), so sharing it needs a bind-mount into the chroot **plus**
+  a carve-out in the `--uncached` cleanup that does
+  `rm -rf "${SYSROOT}"/var/cache/binpkgs/*` — which would otherwise delete the shared
+  pool. That was judged too dangerous to land unproven, so it is stated here rather than
+  faked. x86 DOES get the shared seed cache and read access to the fleet distfiles.
+- **Signed-kernel cache (G4) — what is NOT done and NOT proven.**
+  - **Only two builders are wired: `build-x86-host-stage4.sh` and
+    `build-rpi5-stage4.sh`** (the latter covering `--board rpi5|rpi4|rpi3`). The other
+    eight cross builders (frite, jetson, orangepi5, orangepi-zero2/zero2w/zero3,
+    orangepi3-lts, orangepi4-lts) source nothing and carry no `--no-kernel-cache`: they
+    still rebuild their kernel every image. Wiring them is mechanical (the library is
+    builder-agnostic and the two wired kernel phases are the template) but it is **not
+    done**, and no flag was added to them, because a no-op opt-out flag would advertise
+    a cache that does not exist.
+  - **The cross builders do not sign kernels at all today.** Only x86 signs (`sbsign`
+    over the UKI, `--keys-usb` / `--secureboot-key|-cert`, or the generated org key at
+    `<WORK_DIR>/secureboot/sb.crt`). So on ARM the "signing identity" in the cache key is
+    the *fleet* cert the x86 builder persists — or `HUGMESH_KERNEL_SIGNING_CERT` — and it
+    keys the cache **without** implying the ARM kernel was signed with it. Where no such
+    cert exists yet, the ARM cache correctly **never engages** (missing component ⇒
+    MISS). This is honest but it means the ARM cache is inert on a fleet that has never
+    run an x86 build and has not set the env var.
+  - **The ARM disk-initramfs is NOT cached.** It is built later by
+    `build_disk_initramfs()` from the assembled sysroot, so its inputs are not all known
+    at the kernel phase. Only the kernel image, DTBs/overlays and `/lib/modules/<kver>`
+    are cached on ARM. x86 does cache the initramfs and the unsigned UKI.
+  - **No real hit has ever happened.** Every decision is proven hermetically against
+    fixture cache dirs (65 executed assertions, including the gate-bypass mutation); the
+    sandbox cannot compile a kernel. A real second build of one board on the operator box
+    is the owed proof that the restored tree boots.
+  - **No eviction policy.** Entries accumulate under `<root>/kernel/` until something
+    invalidates them; only *bad* entries are pruned. `make clean` removes the default
+    root along with `WORK_DIR` (as it already does for pools and seeds).
 - What ships and IS verified: the produce→consume loop on all cross builders
   (`--usepkg=y --binpkg-respect-use=y`), the per-board pool split (no cross-board
   directory), the read-only distfiles wiring, the `--packages-only` early-exit +

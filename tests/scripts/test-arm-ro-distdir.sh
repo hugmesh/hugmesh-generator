@@ -36,8 +36,12 @@ slice_block() { # <builder-path>
     awk '/SB-RO-DISTFILES-BEGIN/{g=1;next} /SB-RO-DISTFILES-END/{g=0} g{print}' "$1"
 }
 
-run_block() { # <builder-path> <DISTDIR_SRC value> ; sets globals RC + MKCONF content
-    local builder="$1" distdir="$2" block; block="$(slice_block "${builder}")"
+run_block() { # <builder-path> <DISTDIR_SRC value> [SHARED_DISTDIR] ; sets RC + MKCONF
+    # SHARED_DISTDIR (shared-build-assets track) is the fleet-wide distfiles dir that IS
+    # this build's DISTDIR; the block drops a --distdir that names the same directory
+    # rather than listing it twice. Defaults to "" here so every pre-existing assertion
+    # below keeps exercising the ORIGINAL (no shared root) behaviour unchanged.
+    local builder="$1" distdir="$2" shared="${3:-}" block; block="$(slice_block "${builder}")"
     [ -n "${block}" ] || { echo "__EMPTY_SLICE__"; return 3; }
     local sysroot; sysroot="$(mktemp -d)"
     mkdir -p "${sysroot}/etc/portage"
@@ -49,6 +53,7 @@ run_block() { # <builder-path> <DISTDIR_SRC value> ; sets globals RC + MKCONF co
         info() { :; }
         warn() { echo "WARN:$*"; }
         SYSROOT="'"${sysroot}"'"; BUILD_ROOT="/br"; DISTDIR_SRC="'"${distdir}"'"
+        SHARED_ROOT=""; POOL_DIR="/br/pkgdir"; SHARED_DISTDIR="'"${shared}"'"
         '"${block}"'
     '
     RC=$?
@@ -83,6 +88,22 @@ printf '%s\n' "${MKCONF}" | grep -q 'PORTAGE_RO_DISTDIRS' \
     && bad "empty default wrongly added an RO line" \
     || ok "empty default: private-only, no RO line"
 
+# 1e — shared-build-assets: a --distdir naming the SHARED distfiles dir (which is already
+# this build's writable DISTDIR) must be DROPPED, not listed a second time as an RO dir.
+run_block "${REPO}/build-frite-stage4.sh" "${GOODDIR}" "${GOODDIR}"
+if printf '%s\n' "${MKCONF}" | grep -q 'PORTAGE_RO_DISTDIRS'; then
+    bad "shared dedup: --distdir == SHARED_DISTDIR still emitted an RO line (dir listed twice)"
+else
+    ok "shared dedup: --distdir naming the shared DISTDIR is dropped (no duplicate RO entry)"
+fi
+# …but a DIFFERENT external cache alongside a shared root must STILL be exposed RO.
+OTHERDIR="$(mktemp -d)"
+run_block "${REPO}/build-frite-stage4.sh" "${OTHERDIR}" "${GOODDIR}"
+printf '%s\n' "${MKCONF}" | grep -qx "PORTAGE_RO_DISTDIRS=\"${OTHERDIR}\"" \
+    && ok "shared dedup: an external --distdir alongside a shared root is still exposed RO" \
+    || bad "shared dedup: external --distdir was wrongly dropped when a shared root exists"
+rm -rf "${OTHERDIR}"
+
 # 1d — idempotent: block twice must not duplicate the RO line
 run_block "${REPO}/build-frite-stage4.sh" "${GOODDIR}"   # first
 # feed the resulting make.conf back through a second run
@@ -91,7 +112,7 @@ printf '%s\n' "${MKCONF}" > "${SYS2}/etc/portage/make.conf"
 BLOCK="$(slice_block "${REPO}/build-frite-stage4.sh")"
 SYSROOT="${SYS2}" BUILD_ROOT="/br" DISTDIR_SRC="${GOODDIR}" bash -c '
     info() { :; }; warn() { :; }
-    SYSROOT="'"${SYS2}"'"; BUILD_ROOT="/br"; DISTDIR_SRC="'"${GOODDIR}"'"
+    SYSROOT="'"${SYS2}"'"; BUILD_ROOT="/br"; DISTDIR_SRC="'"${GOODDIR}"'"; SHARED_DISTDIR=""
     '"${BLOCK}"'
 '
 n=$(grep -c 'PORTAGE_RO_DISTDIRS' "${SYS2}/etc/portage/make.conf")
