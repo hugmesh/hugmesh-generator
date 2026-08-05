@@ -53,6 +53,8 @@ source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# shellcheck source=scripts/_portage-config-lib.sh
+source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
@@ -3369,6 +3371,11 @@ cp "${SPECS_DIR}/portage/profile/parent"              "${SYSROOT}/etc/portage/pr
 # k8s NODE image stays stable-keyworded and never references desktop USE flags. The
 # 'nvidia' files are copied ONLY for the proprietary GPU stack; 'capable' ONLY for
 # the most-capable Plasma set (--capable / standalone-thick).
+# Role-conditional copies below stage into a temp dir, then pcs_sync_dir makes
+# the sysroot dir EXACTLY that set — pruning both files deleted from specs and
+# files excluded for THIS role (a resumed sysroot must not keep a stale 'gpu'
+# or a spec-retired file; see scripts/_portage-config-lib.sh for the incident).
+PCS_STAGE_AK="$(mktemp -d)"; PCS_STAGE_PU="$(mktemp -d)"
 for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
     [ -e "${akf}" ] || continue
     case "$(basename "${akf}")" in
@@ -3383,8 +3390,10 @@ for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
         seed-code)      ${WANT_DOCKER}    || continue ;;
         calamares)      ${WANT_CALAMARES} || continue ;;
     esac
-    cp "${akf}" "${SYSROOT}/etc/portage/package.accept_keywords/"
+    cp "${akf}" "${PCS_STAGE_AK}/"
 done
+pcs_sync_dir "${PCS_STAGE_AK}" "${SYSROOT}/etc/portage/package.accept_keywords"
+rm -rf "${PCS_STAGE_AK}"
 # package.use: copy all role-independent files; the GPU-only 'gpu' file (Mesa
 # vulkan/vaapi video_cards_*) is copied ONLY for GPU roles, 'desktop' ONLY for
 # client roles, 'nvidia' ONLY for the proprietary stack, 'capable' ONLY for the
@@ -3400,8 +3409,10 @@ for puf in "${SPECS_DIR}/portage/package.use/"*; do
         intel-pro) ${INTEL_PRO} || continue ;;
         steam)   ${STEAM_NATIVE} || continue ;;
     esac
-    cp "${puf}" "${SYSROOT}/etc/portage/package.use/"
+    cp "${puf}" "${PCS_STAGE_PU}/"
 done
+pcs_sync_dir "${PCS_STAGE_PU}" "${SYSROOT}/etc/portage/package.use"
+rm -rf "${PCS_STAGE_PU}"
 # ── PYTHON_TARGETS: derived from the STAGE3 SEED, never a literal ─────────────
 # make.conf.tmpl deliberately ships no PYTHON_TARGETS/PYTHON_SINGLE_TARGET
 # assignment: a USE_EXPAND variable ASSIGNED in make.conf REPLACES the profile
@@ -3456,11 +3467,15 @@ fi
 # package.env-referenced *.conf files are key=value only), and the old flat cp
 # silently skipped subdirectories.
 if [ -d "${SPECS_DIR}/portage/env" ]; then
-    mkdir -p "${SYSROOT}/etc/portage/env"
-    cp -r "${SPECS_DIR}/portage/env/"* "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
+    pcs_sync_dir "${SPECS_DIR}/portage/env" "${SYSROOT}/etc/portage/env"
+else
+    rm -rf "${SYSROOT}/etc/portage/env"
 fi
-[ -f "${SPECS_DIR}/portage/package.env" ] && \
+if [ -f "${SPECS_DIR}/portage/package.env" ]; then
     cp "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
+else
+    rm -f "${SYSROOT}/etc/portage/package.env"
+fi
 
 # x86 GRUB cmdline (SELinux LSM + KSPP hardening). Disable os-prober so a
 # grub-mkconfig (installer / chroot) can never enumerate the host's other disks.

@@ -182,6 +182,8 @@ source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# shellcheck source=scripts/_portage-config-lib.sh
+source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
@@ -1346,9 +1348,9 @@ cp "${SPECS_DIR}/portage/profile/use.mask"          "${SYSROOT}/etc/portage/prof
 # only copy it if a future addition needs one.
 [ -f "${SPECS_DIR}/portage/profile/package.provided" ] && \
     cp "${SPECS_DIR}/portage/profile/package.provided" "${SYSROOT}/etc/portage/profile/package.provided"
-cp "${SPECS_DIR}/portage/package.accept_keywords/"* "${SYSROOT}/etc/portage/package.accept_keywords/"
-cp "${SPECS_DIR}/portage/package.use/"*             "${SYSROOT}/etc/portage/package.use/"
-cp "${SPECS_DIR}/portage/package.env/"*             "${SYSROOT}/etc/portage/package.env/"
+pcs_sync_dir "${SPECS_DIR}/portage/package.accept_keywords" "${SYSROOT}/etc/portage/package.accept_keywords"
+pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
 cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 # ── PYTHON_TARGETS: derived from the STAGE3 SEED, never a literal ─────────────

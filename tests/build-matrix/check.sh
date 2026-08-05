@@ -1892,6 +1892,33 @@ run_selinux_policy_checks() {
 }
 # ── END shared block: SELinux node-policy install (SLX) ─────────────────────────
 
+# ── portage-config sync (PCS) ───────────────────────────────────────────────────
+# Delegates to tests/scripts/test-portage-config-sync.sh: spec-file DELETIONS
+# must reach RESUMED sysroots. The bare cp the builders used propagated
+# additions only; #513's retired package.use file survived in a resumed tree
+# and the very next build retried the broken glib rebuild (2026-08-05).
+PCS_EXPECTED=35
+PCS_PASS=0; PCS_FAIL=0
+run_portage_config_sync_checks() {
+    local out="${TMP_DIR}/portage-config-sync.out"
+    local script="${REPO_DIR}/tests/scripts/test-portage-config-sync.sh"
+    if [ ! -f "${script}" ]; then
+        _fail PCS "tests/scripts/test-portage-config-sync.sh" "gate script missing"
+        PCS_FAIL=${PCS_EXPECTED}; return 0
+    fi
+    bash "${script}" >"${out}" 2>&1 || true
+    PCS_PASS="$(grep -c '^  PASS ' "${out}" || true)"
+    PCS_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
+    grep '^  FAIL ' "${out}" >&2 || true
+    local seen=$((PCS_PASS + PCS_FAIL))
+    if [ "${seen}" -ne "${PCS_EXPECTED}" ]; then
+        _fail PCS "assertion count" "emitted ${seen} assertions, expected ${PCS_EXPECTED} (update PCS_EXPECTED deliberately)" "${out}"
+        PCS_FAIL=$((PCS_FAIL + PCS_EXPECTED - seen))
+        [ "${PCS_FAIL}" -lt 1 ] && PCS_FAIL=1
+    fi
+    return 0
+}
+
 # ── requested-atoms resolvable (RAR) ────────────────────────────────────────────
 # Delegates to tests/requested-atoms-resolvable.sh: a GLOBAL USE mask in a
 # platform spec (make.conf.tmpl) must never silently make a REQUESTED atom
@@ -2041,13 +2068,14 @@ run_parity_taxonomy_checks
 run_catalog_checks
 # ── BEGIN shared block: SELinux node-policy install (SLX) ──
 run_selinux_policy_checks
+run_portage_config_sync_checks
 # ── END shared block: SELinux node-policy install (SLX) ────
 run_requested_atoms_checks
 run_nongating_smokes
 score_sharedbinpkg_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + RAR_PASS + SBP_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + RAR_FAIL + SBP_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + RAR_PASS + SBP_PASS + PCS_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + RAR_FAIL + SBP_FAIL + PCS_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -2078,6 +2106,7 @@ printf  'EGB  (emerge-group banners): %3d passed, %d failed\n' "${EGB_PASS}" "${
 printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
 printf  'CAT  (web-catalog honesty): %3d passed, %d failed\n' "${CAT_PASS}" "${CAT_FAIL}"
 printf  'SLX  (selinux policy install): %3d passed, %d failed\n' "${SLX_PASS}" "${SLX_FAIL}"
+printf  'PCS  (portage-config sync): %3d passed, %d failed\n' "${PCS_PASS}" "${PCS_FAIL}"
 printf  'RAR  (requested-atoms resolvable): %3d passed, %d failed\n' "${RAR_PASS}" "${RAR_FAIL}"
 printf  'SBP  (shared-binpkg/assets, gated): %3d passed, %d failed\n' "${SBP_PASS}" "${SBP_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"

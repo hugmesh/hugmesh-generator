@@ -84,6 +84,8 @@ source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
 source "${SCRIPT_DIR}/scripts/_python-targets-lib.sh"
+# shellcheck source=scripts/_portage-config-lib.sh
+source "${SCRIPT_DIR}/scripts/_portage-config-lib.sh"
 # ── BEGIN shared block: SELinux node-policy lib ───────────────────────────────
 # shellcheck source=scripts/_selinux-policy-lib.sh
 source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
@@ -3329,9 +3331,9 @@ PROFILE_PATH="$(sed 's/^gentoo://' "${SPECS_DIR}/portage/profile/parent" | tr -d
 ln -sfn "${GENTOO_REPO}/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.profile"
 cp "${SPECS_DIR}/portage/profile/use.mask"                "${SYSROOT}/etc/portage/profile/use.mask"
 # Copy every file in these portage config dirs (so added spec files always land).
-cp "${SPECS_DIR}/portage/package.accept_keywords/"*       "${SYSROOT}/etc/portage/package.accept_keywords/"
-cp "${SPECS_DIR}/portage/package.use/"*                   "${SYSROOT}/etc/portage/package.use/"
-cp "${SPECS_DIR}/portage/package.env/"*                   "${SYSROOT}/etc/portage/package.env/"
+pcs_sync_dir "${SPECS_DIR}/portage/package.accept_keywords" "${SYSROOT}/etc/portage/package.accept_keywords"
+pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
 # dev-embedded/rpi-eeprom REQUIRED_USE is exactly-one-of ( pi4 pi5 ) — verified
 # against the live Gentoo ebuild (dev-embedded/rpi-eeprom's IUSE/REQUIRED_USE;
 # its DESCRIPTION is literally "Updater for Raspberry Pi 4/5 bootloader and the
