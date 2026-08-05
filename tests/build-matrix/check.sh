@@ -1860,6 +1860,37 @@ run_selinux_policy_checks() {
 }
 # ── END shared block: SELinux node-policy install (SLX) ─────────────────────────
 
+# ── requested-atoms resolvable (RAR) ────────────────────────────────────────────
+# Delegates to tests/requested-atoms-resolvable.sh: a GLOBAL USE mask in a
+# platform spec (make.conf.tmpl) must never silently make a REQUESTED atom
+# unresolvable — the 2026-07-30 21:04 failure class, where rpi5's global
+# -introspection contradicted firewalld's hard pygobject -> gobject-introspection
+# -> glib[introspection] chain and the build died at hour N instead of at gate
+# time. Static curated-chain check (see that script's header for why static, not
+# host-side resolution). Same fail-closed delegate shape as SLX: a missing
+# script is charged in full, a short assertion tally is charged as failures.
+RAR_EXPECTED=16
+RAR_PASS=0; RAR_FAIL=0
+run_requested_atoms_checks() {
+    local out="${TMP_DIR}/reqatoms.out"
+    local script="${REPO_DIR}/tests/requested-atoms-resolvable.sh"
+    if [ ! -f "${script}" ]; then
+        _fail RAR "tests/requested-atoms-resolvable.sh" "gate script missing"
+        RAR_FAIL=${RAR_EXPECTED}; return 0
+    fi
+    bash "${script}" >"${out}" 2>&1 || true
+    RAR_PASS="$(grep -c '^  PASS ' "${out}" || true)"
+    RAR_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
+    grep '^  FAIL ' "${out}" >&2 || true
+    local seen=$((RAR_PASS + RAR_FAIL))
+    if [ "${seen}" -ne "${RAR_EXPECTED}" ]; then
+        _fail RAR "assertion count" "emitted ${seen} assertions, expected ${RAR_EXPECTED} (update RAR_EXPECTED deliberately)" "${out}"
+        RAR_FAIL=$((RAR_FAIL + RAR_EXPECTED - seen))
+        [ "${RAR_FAIL}" -lt 1 ] && RAR_FAIL=1
+    fi
+    return 0
+}
+
 # ── NON-GATING developer smokes ─────────────────────────────────────────────────
 # The worklist-envelope parity smoke (WS-MODEL) and the JOB-channel image-spec
 # parity fixture (WS-JOB) exercise the redesign's end-to-end command-translation
@@ -1979,11 +2010,12 @@ run_catalog_checks
 # ── BEGIN shared block: SELinux node-policy install (SLX) ──
 run_selinux_policy_checks
 # ── END shared block: SELinux node-policy install (SLX) ────
+run_requested_atoms_checks
 run_nongating_smokes
 score_sharedbinpkg_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + SBP_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + SBP_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + RAR_PASS + SBP_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + RAR_FAIL + SBP_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -2014,6 +2046,7 @@ printf  'EGB  (emerge-group banners): %3d passed, %d failed\n' "${EGB_PASS}" "${
 printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
 printf  'CAT  (web-catalog honesty): %3d passed, %d failed\n' "${CAT_PASS}" "${CAT_FAIL}"
 printf  'SLX  (selinux policy install): %3d passed, %d failed\n' "${SLX_PASS}" "${SLX_FAIL}"
+printf  'RAR  (requested-atoms resolvable): %3d passed, %d failed\n' "${RAR_PASS}" "${RAR_FAIL}"
 printf  'SBP  (shared-binpkg/assets, gated): %3d passed, %d failed\n' "${SBP_PASS}" "${SBP_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
 if [ -n "${SMOKE_REPORT}" ]; then

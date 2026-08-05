@@ -39,6 +39,15 @@ DISTDIR="@@WORK_DIR@@/distfiles"
 # NetworkManager/nmcli (a payload-MANDATORY pkg) never builds. A headless k8s node has
 # no gir consumer, so disable introspection fleet-wide for the Pi cross-build. (The x86
 # NATIVE build is unaffected: it runs g-ir-scanner inside a chroot whose python matches.)
+# SCOPED EXCEPTION (2026-08-05): package.use/firewalld-introspection re-enables the
+# flag for dev-libs/glib ONLY. net-firewall/firewalld — a REQUESTED atom the
+# completeness gate enforces — hard-needs glib[introspection] at every tree version
+# (firewalld -> pygobject:3 -> gobject-introspection -> glib[introspection]), so the
+# bare global mask made it UNRESOLVABLE and killed the 2026-07-30 21:04 build on all
+# three rpi5 roles. See that file for the chain, the resolution proofs, and the
+# compile-side bet it knowingly takes against the ImportError recorded above (the
+# python3_12/3.14 skew that caused it is gone: both sides now pin python3_14).
+# tests/requested-atoms-resolvable.sh guards this pairing at gate time.
 USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth -introspection"
 # -vala is REQUIRED once introspection is off, and its absence here was the one
 # token separating this spec from every other platform (jetson:39, frite:50,
