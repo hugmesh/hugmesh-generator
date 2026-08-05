@@ -12,6 +12,7 @@ gate exists to catch.
 Deliberately dependency-light: PyYAML + bash only, so it runs in the
 `python:3-slim` CI image with no cluster, no kubectl and no network.
 """
+import json
 import os
 import re
 import subprocess
@@ -699,6 +700,95 @@ def check_internal_surfaces(root):
            "(%d distinct probe paths)" % (checked, len(probes)))
 
 
+# ── 11) embedded JSON inside ConfigMap/Secret values ─────────────────────────
+# A ConfigMap key becomes a FILE at the mount point, so its value is a whole
+# document in ANOTHER language that the consuming process — not Kubernetes —
+# parses. Nothing above could see inside one: [yaml-parse] only proves the block
+# scalar is a well-formed YAML *string*, which it is even when the JSON it
+# carries is garbage, and kubectl/kustomize apply a ConfigMap without ever
+# looking at its values.
+#
+# manifests/casdoor/init-data-configmap.yaml shipped that way: a botched #451
+# merge concatenated the whole pre-rebrand `owner: "snapdragon"` roles array in
+# front of the rebranded one, leaving what had been the array's last element as
+# an interior element with no trailing comma —
+#     Expecting ',' delimiter: line 42 column 5 (char 4764)
+# Casdoor imports init_data.json wholesale on boot, so the ENTIRE identity seed
+# (the organization, every role including ROLE_IMAGE_BUILDER, every svc-* user)
+# was silently skipped while the ConfigMap around it stayed perfectly valid YAML
+# and this gate stayed green.
+#
+# GENERIC BY CONSTRUCTION: any key ending `.json`, in `data` or `stringData`, on
+# any ConfigMap or Secret anywhere in the tree. There is no filename, key name
+# or path list to extend — a ConfigMap added tomorrow is covered the day it
+# lands. Values are NEVER echoed (only object, key and parse position), so a
+# Secret's stringData cannot leak into a CI log.
+EMBEDDED_JSON_SECTIONS = ("data", "stringData")
+
+
+def _json_no_dup(pairs):
+    """object_pairs_hook that REJECTS duplicate object keys.
+
+    json.loads applies silent last-wins, the same failure mode DupKeyLoader
+    exists for on the YAML side: two entries fused or pasted together parse
+    cleanly and one of them just disappears from what the consumer reads.
+    """
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("duplicate object key %r" % key)
+        seen[key] = value
+    return seen
+
+
+def check_embedded_json(root):
+    scanned = parse_bad = dup_bad = 0
+    for path in yaml_files(root):
+        rel = os.path.relpath(path, root)
+        for d in docs_of(path):
+            if d.get("kind") not in ("ConfigMap", "Secret"):
+                continue
+            name = (d.get("metadata") or {}).get("name") or "<unnamed>"
+            for section in EMBEDDED_JSON_SECTIONS:
+                values = d.get(section)
+                if not isinstance(values, dict):
+                    continue
+                for key in sorted(values):
+                    value = values[key]
+                    if not key.endswith(".json") or not isinstance(value, str):
+                        continue
+                    scanned += 1
+                    where = "%s %s/%s %s[%r]" % (rel, d.get("kind"), name, section, key)
+                    try:
+                        json.loads(value)
+                    except ValueError as exc:
+                        parse_bad += 1
+                        fail("[json-parse]",
+                             "%s is NOT valid JSON: %s. That value is a FILE at the mount "
+                             "point and the consumer parses it whole, so an unparseable "
+                             "document means the consumer reads NOTHING from it — which "
+                             "is how the Casdoor seed silently lost its entire identity "
+                             "import. The ConfigMap around it is valid YAML, which is why "
+                             "[yaml-parse] cannot see this."
+                             % (where, str(exc).replace("\n", " ")[:200]))
+                        continue
+                    try:
+                        json.loads(value, object_pairs_hook=_json_no_dup)
+                    except ValueError as exc:
+                        dup_bad += 1
+                        fail("[json-duplicate-key]",
+                             "%s parses but has a %s — JSON is silently last-wins, so the "
+                             "earlier entry is dropped from what the consumer reads and "
+                             "nothing reports it (two objects pasted together by a merge?)"
+                             % (where, str(exc).replace("\n", " ")[:200]))
+    if not parse_bad:
+        ok("[json-parse]",
+           "all %d embedded *.json values in ConfigMap/Secret data parse" % scanned)
+    if not dup_bad:
+        ok("[json-duplicate-key]",
+           "no duplicate object key in %d embedded *.json values" % scanned)
+
+
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
@@ -716,6 +806,7 @@ def main():
     check_mcs(root)
     check_db_isolation(root)
     check_internal_surfaces(root)
+    check_embedded_json(root)
     for check, msg in notes:
         print("  PASS %-24s %s" % (check, msg))
     for check, msg in failures:

@@ -43,6 +43,16 @@
 #      /bff/mesh/internal/** to `/bff/mesh/** ROLE_MESH`, and /bff/internal/**
 #      had no row at all (decide() => NO_RULE => FORWARDED on the coarse
 #      authenticated() floor, into a prefix admin-bff permitAll()s app-side).
+#   9. casdoor/init-data-configmap.yaml carried an init_data.json that DOES NOT
+#      PARSE — the same #451 merge concatenated the entire pre-rebrand
+#      `owner: "snapdragon"` roles array in front of the rebranded one, leaving
+#      what had been that array's last element as an interior element with no
+#      trailing comma ("Expecting ',' delimiter: line 42 column 5"). Casdoor
+#      imports the file wholesale on boot, so the WHOLE identity seed — the
+#      organization, every role including ROLE_IMAGE_BUILDER, every svc-* user —
+#      was silently skipped. The ConfigMap around it is flawless YAML, so check
+#      (1) passed it happily: a ConfigMap value is a FILE in another language and
+#      nothing in this gate had ever looked inside one.
 #
 # Each numbered check below fails on at least one of those, and each carries a
 # NEGATIVE CONTROL: the same assertion is re-run against a deliberately-corrupted
@@ -214,6 +224,45 @@ s=s.replace("            - { name: MESHBRIDGE_REG_POLL_SECONDS, value: \"60\" }"
             "            - { name: MESHBRIDGE_NEW_SINK_URL, value: \"https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/wiki/internal/ingest\" }\n"
             "            - { name: MESHBRIDGE_REG_POLL_SECONDS, value: \"60\" }",1)
 open(p,"w",encoding="utf-8").write(s)
+PY
+'
+
+# (9a) THE SHIPPED DEFECT, re-injected: one interior array element in the Casdoor
+#      seed loses its trailing comma. The ConfigMap stays perfectly valid YAML —
+#      only the embedded document breaks — so [yaml-parse] must NOT be what
+#      catches it.
+expect_catch "Casdoor seed: interior role entry loses its trailing comma" "[json-parse]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/casdoor/init-data-configmap.yaml"
+s=open(p,encoding="utf-8").read()
+old="\"name\": \"ROLE_IMAGE_BUILDER\", \"displayName\": \"Image Builder\",       \"users\": [], \"roles\": [], \"domains\": [], \"isEnabled\": true },"
+assert s.count(old)==1, "injection anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old, old[:-1], 1))
+PY
+'
+# (9b) A DIFFERENT break class (unquoted property name) in a DIFFERENT ConfigMap,
+#      under a DIFFERENT key name. Nothing about the check is keyed to the Casdoor
+#      seed: any `*.json` value in any ConfigMap gets the same protection free.
+expect_catch "edge-ai catalog.json: unquoted property name (different file, different key)" "[json-parse]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/edge-ai/models-configmap.yaml"
+s=open(p,encoding="utf-8").read()
+assert s.count("\"vramGiB\": 3,")==1
+open(p,"w",encoding="utf-8").write(s.replace("\"vramGiB\": 3,", "vramGiB: 3,", 1))
+PY
+'
+# (9c) A THIRD ConfigMap, and the OTHER half of the check: JSON that parses fine
+#      but silently last-wins away a duplicated object key — the embedded-document
+#      twin of the [yaml-duplicate-key] class in (2).
+expect_catch "meshbridge devices.json: duplicate object key (parses, silently last-wins)" "[json-duplicate-key]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/meshbridge/devices-configmap.yaml"
+s=open(p,encoding="utf-8").read()
+assert s.count("{ \"devices\": [] }")==1
+open(p,"w",encoding="utf-8").write(s.replace("{ \"devices\": [] }", "{ \"devices\": [], \"devices\": [] }", 1))
 PY
 '
 
