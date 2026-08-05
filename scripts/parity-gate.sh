@@ -70,7 +70,15 @@ for conf in "${BRANDS[@]}"; do
   echo ""
   echo "--- brand '${name}' (BRAND=${brand_slug}) ---"
   ./generate-brand-repos.sh "$norm" --out-dir "$sed_out" >/dev/null
-  scripts/tooling/render-handlebars.sh "$norm" --out-dir "$hbs_out" 2>/dev/null
+  # stderr is CAPTURED, not discarded: with 2>/dev/null a missing node dep (or any
+  # renderer crash) was a bare exit-1 with zero diagnostics — the gate said FAIL
+  # and nothing said why. Surface the renderer's own words on failure.
+  if ! scripts/tooling/render-handlebars.sh "$norm" --out-dir "$hbs_out" 2>"${hbs_out}/.render-stderr"; then
+    echo "  FAIL handlebars renderer exited nonzero for brand '${name}':"
+    sed 's/^/        /' "${hbs_out}/.render-stderr" | tail -20
+    exit 1
+  fi
+  rm -f "${hbs_out}/.render-stderr"
 
   sed_tree="${sed_out}/${brand_slug}-gitops"
   hbs_tree="${hbs_out}/${brand_slug}-gitops"
