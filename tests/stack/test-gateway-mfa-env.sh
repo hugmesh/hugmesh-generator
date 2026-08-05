@@ -123,8 +123,11 @@
 #       original (8e). 8r/8s measure their staged tree's gateway sets BEFORE
 #       planting and assert the delta, so neither can bite (or fail) merely because
 #       the working tree was already in some other state.
-#   (9) CROSS-CHECK against real `helm template` when helm is on PATH (it is not in
-#       the lint images); SKIPs loudly otherwise, never silently.
+#   (9) CROSS-CHECK against real `helm template` when helm is on PATH. The CI job
+#       installs a sha256-PINNED helm and sets REQUIRE_HELM=1, which turns the
+#       no-helm SKIP into a FAIL — in CI this section is LOAD-BEARING, and an image
+#       change that silently loses helm goes RED instead of green-with-less-coverage.
+#       Local runs without helm (and without REQUIRE_HELM) keep the loud SKIP.
 #
 # THE TALLY IS ITSELF GUARDED, at both ends. Up front, every external tool is
 # preflighted (and `cp -a` + `mapfile` are additionally proven to WORK, not merely
@@ -133,7 +136,8 @@
 # end, MIN_CHECKS pins how many assertions must have run: "0 failed" over half the
 # checks is indistinguishable from a real pass otherwise.
 #
-# Cheap: python3 + PyYAML + bash. No cluster, no helm, no docker, no network.
+# Cheap: python3 + PyYAML + bash (+ helm for (9): pinned in CI, optional locally).
+# No cluster, no docker, no network.
 set -uo pipefail
 
 # Builtins only (parameter expansion + cd + pwd). This line runs BEFORE the tool
@@ -1407,9 +1411,17 @@ for d in yaml.safe_load_all(open(sys.argv[1],encoding='utf-8')):
     done
   done
   [ "${hfail}" = "0" ] && ok "(9) the python model reproduces real helm output for all four releases"
+elif [ "${REQUIRE_HELM:-0}" = "1" ]; then
+  # Strict mode, set by the CI job: it installs a sha256-pinned helm precisely so
+  # this cross-check RUNS, which makes helm's absence a regression of the image or
+  # of the install step — not a skippable condition. Without this, a future image
+  # change that lost helm would re-enter SKIP-mode and stay green with less
+  # coverage; that silent degrade is the exact failure mode this flag closes.
+  bad "(9) REQUIRE_HELM=1 but helm is NOT on PATH — this run declared the helm cross-check load-bearing, so the model-only SKIP is not available. Restore the pinned-helm install (or drop REQUIRE_HELM deliberately, accepting that the model runs unchecked)."
 else
   echo "  SKIP (9) helm not on PATH — the python model above is the authority here."
   echo "        Install helm and re-run to cross-check it against a real render."
+  echo "        (CI sets REQUIRE_HELM=1, which turns this SKIP into a FAIL.)"
 fi
 
 # ── the tally itself has to be trustworthy ───────────────────────────────────
@@ -1418,9 +1430,11 @@ fi
 # COUNTED rather than failing: "0 failed" over half the checks looks exactly like
 # "0 failed" over all of them. So state the floor and enforce it. The preflight at
 # the top covers the missing-tool cause; this covers every other one.
-# MIN_CHECKS is the count with helm ABSENT (the CI lint image); assertion (9) adds
-# 13 more when helm is on PATH, hence a floor and not an equality. Adding
-# assertions? Raise it. Removing one? Lower it ON PURPOSE, in the same commit.
+# MIN_CHECKS is the count with helm ABSENT (a local model-only run); assertion (9)
+# adds 13 more when helm is on PATH (114 total in CI, which installs a pinned helm
+# and sets REQUIRE_HELM=1 so a helm-less run there FAILS outright in (9)), hence a
+# floor and not an equality. Adding assertions? Raise it. Removing one? Lower it
+# ON PURPOSE, in the same commit.
 MIN_CHECKS=101
 total=$(( P + F ))
 if [ "${total}" -lt "${MIN_CHECKS}" ]; then

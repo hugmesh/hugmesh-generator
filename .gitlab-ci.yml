@@ -233,7 +233,18 @@ lint:mfa-required-rules:
 # specs/cluster/apps at all. WHAT IT DECLINES TO MODEL: multi-source Applications
 # (spec.sources) — it says so in those words and fails, rather than guessing which
 # source is the chart (control 8t).
-# Offline: python3 + PyYAML + bash, no cluster, no helm, no docker, no network.
+# Tools: python3 + PyYAML + bash + a PINNED helm — no cluster, no docker. helm is
+# not in python:3-slim (and neither is curl), so before_script downloads
+# helm ${HELM_VERSION} linux-amd64 (runner tag hugmesh-x86) with the python stdlib
+# and verifies its sha256 against the pin BEFORE anything is extracted. That
+# install is FAIL-CLOSED: a failed download, a checksum mismatch, or a broken
+# binary exits nonzero and fails the JOB — it must never degrade into the
+# model-only path. With helm present, assertion (9) is LOAD-BEARING in CI: every
+# run cross-checks the python render model against four real `helm template`
+# renders (before this, (9) had SKIPped on every CI run — the model was never
+# checked against helm where it counts). REQUIRE_HELM=1 makes (9) mandatory: if a
+# future image change silently loses helm, the SKIP becomes a FAIL instead of a
+# green run with less coverage. Local runs without helm keep the documented SKIP.
 # The script preflights every external tool it uses and refuses to emit a pass/fail
 # count if one is missing — it runs under `set -uo pipefail` without `-e`, so a
 # `python:3-slim` short of `sort`/`find`/`cp` would otherwise distort the tally
@@ -243,8 +254,43 @@ lint:gateway-mfa-env:
   stage: lint
   image: python:3-slim
   tags: [hugmesh-x86]
+  variables:
+    HELM_VERSION: "v3.19.2"
+    # sha256 of helm-v3.19.2-linux-amd64.tar.gz — taken from the published
+    # https://get.helm.sh/helm-v3.19.2-linux-amd64.tar.gz.sha256sum AND
+    # independently recomputed from the downloaded artifact before pinning.
+    HELM_SHA256: "2114c9dea2844dce6d0ee2d792a9aae846be8cf53d5b19dc2988b5a0e8fec26e"
+    # Assertion (9) is mandatory here: helm missing => FAIL, never SKIP.
+    REQUIRE_HELM: "1"
   before_script:
     - pip install --quiet pyyaml
+    # Pinned-helm install, FAIL-CLOSED. The sha256 of the WHOLE download is
+    # verified before extraction; any mismatch (or short read, or 404) exits
+    # nonzero and fails the job rather than falling through to the model-only
+    # SKIP path. Only the single member linux-amd64/helm is ever extracted.
+    - |
+      python3 - <<'PY'
+      import hashlib, io, os, sys, tarfile, urllib.request
+      ver = os.environ["HELM_VERSION"]
+      want = os.environ["HELM_SHA256"].lower()
+      url = "https://get.helm.sh/helm-%s-linux-amd64.tar.gz" % ver
+      blob = urllib.request.urlopen(url, timeout=120).read()
+      got = hashlib.sha256(blob).hexdigest()
+      if got != want:
+          sys.exit("FAIL-CLOSED: sha256 mismatch for %s\n  pinned %s\n  got    %s\n"
+                   "Refusing to extract. This job must go RED here — it must never fall\n"
+                   "back to the model-only run (that is the SKIP this job exists to close)."
+                   % (url, want, got))
+      with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
+          f = t.extractfile("linux-amd64/helm")
+          if f is None:
+              sys.exit("FAIL-CLOSED: linux-amd64/helm missing from the verified tarball")
+          with open("/usr/local/bin/helm", "wb") as out:
+              out.write(f.read())
+      os.chmod("/usr/local/bin/helm", 0o755)
+      print("helm %s installed, sha256 %s OK" % (ver, got))
+      PY
+    - helm version --short
   script:
     - bash tests/stack/test-gateway-mfa-env.sh
 
