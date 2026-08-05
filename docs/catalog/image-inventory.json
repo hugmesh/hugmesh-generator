@@ -1,5 +1,5 @@
 {
-  "build_count": 268,
+  "build_count": 250,
   "channel_gaps": [
     {
       "channels": {
@@ -154,6 +154,17 @@
       "notes": {
         "make": "`make x86-chromebook` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
         "menu": "no desktop picker at all (cannot select desktop=full)"
+      }
+    },
+    {
+      "channels": {
+        "make": "escape-hatch",
+        "menu": "no"
+      },
+      "id": "cloud/x86/desktop/thin",
+      "notes": {
+        "make": "`make x86-desktop` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
+        "menu": "no desktop picker at all (cannot select desktop=thin)"
       }
     },
     {
@@ -702,7 +713,7 @@
     "prod"
   ],
   "generated_by": "scripts/emit-image-inventory.py",
-  "image_count": 134,
+  "image_count": 125,
   "images": [
     {
       "artifacts": [
@@ -730,7 +741,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor both --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor both --desktop light --env test",
       "id": "cloud/frite/frite/la-frite/both/light",
       "image_class": "desktop",
       "job_token": {
@@ -786,7 +797,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor both --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor both --desktop none --env test",
       "id": "cloud/frite/frite/la-frite/both/none",
       "image_class": "desktop",
       "job_token": {
@@ -839,7 +850,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor installer --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor installer --desktop light --env test",
       "id": "cloud/frite/frite/la-frite/installer/light",
       "image_class": "desktop",
       "job_token": {
@@ -895,7 +906,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor installer --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor installer --desktop none --env test",
       "id": "cloud/frite/frite/la-frite/installer/none",
       "image_class": "desktop",
       "job_token": {
@@ -951,7 +962,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor live --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor live --desktop light --env test",
       "id": "cloud/frite/frite/la-frite/live/light",
       "image_class": "desktop",
       "job_token": {
@@ -1007,7 +1018,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor live --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor live --desktop none --env test",
       "id": "cloud/frite/frite/la-frite/live/none",
       "image_class": "desktop",
       "job_token": {
@@ -1066,7 +1077,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor both --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor both --desktop light --env test",
       "id": "cloud/frite/frite/le-potato/both/light",
       "image_class": "desktop",
       "job_token": {
@@ -1122,7 +1133,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor both --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor both --desktop none --env test",
       "id": "cloud/frite/frite/le-potato/both/none",
       "image_class": "desktop",
       "job_token": {
@@ -1175,7 +1186,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor installer --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor installer --desktop light --env test",
       "id": "cloud/frite/frite/le-potato/installer/light",
       "image_class": "desktop",
       "job_token": {
@@ -1231,7 +1242,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor installer --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor installer --desktop none --env test",
       "id": "cloud/frite/frite/le-potato/installer/none",
       "image_class": "desktop",
       "job_token": {
@@ -1287,7 +1298,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor live --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor live --desktop light --env test",
       "id": "cloud/frite/frite/le-potato/live/light",
       "image_class": "desktop",
       "job_token": {
@@ -1343,7 +1354,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor live --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor live --desktop none --env test",
       "id": "cloud/frite/frite/le-potato/live/none",
       "image_class": "desktop",
       "job_token": {
@@ -1402,7 +1413,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor both --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor both --desktop light --env test",
       "id": "cloud/frite/frite/sweet-potato/both/light",
       "image_class": "desktop",
       "job_token": {
@@ -1458,7 +1469,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor both --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor both --desktop none --env test",
       "id": "cloud/frite/frite/sweet-potato/both/none",
       "image_class": "desktop",
       "job_token": {
@@ -1511,7 +1522,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor installer --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor installer --desktop light --env test",
       "id": "cloud/frite/frite/sweet-potato/installer/light",
       "image_class": "desktop",
       "job_token": {
@@ -1567,7 +1578,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor installer --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor installer --desktop none --env test",
       "id": "cloud/frite/frite/sweet-potato/installer/none",
       "image_class": "desktop",
       "job_token": {
@@ -1623,7 +1634,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor live --desktop light --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor live --desktop light --env test",
       "id": "cloud/frite/frite/sweet-potato/live/light",
       "image_class": "desktop",
       "job_token": {
@@ -1679,7 +1690,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor live --desktop none --env test",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor live --desktop none --env test",
       "id": "cloud/frite/frite/sweet-potato/live/none",
       "image_class": "desktop",
       "job_token": {
@@ -1738,7 +1749,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --flavor both --env test",
+      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test",
       "id": "cloud/orangepi3-lts/orangepi3-lts/both",
       "image_class": "node",
       "job_token": {
@@ -1789,7 +1800,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --flavor installer --env test",
+      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test",
       "id": "cloud/orangepi3-lts/orangepi3-lts/installer",
       "image_class": "node",
       "job_token": {
@@ -1843,7 +1854,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --flavor live --env test",
+      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test",
       "id": "cloud/orangepi3-lts/orangepi3-lts/live",
       "image_class": "node",
       "job_token": {
@@ -1900,7 +1911,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --flavor both --env test",
+      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test",
       "id": "cloud/orangepi4-lts/orangepi4-lts/both",
       "image_class": "desktop",
       "job_token": {
@@ -1951,7 +1962,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --flavor installer --env test",
+      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test",
       "id": "cloud/orangepi4-lts/orangepi4-lts/installer",
       "image_class": "desktop",
       "job_token": {
@@ -2005,7 +2016,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --flavor live --env test",
+      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test",
       "id": "cloud/orangepi4-lts/orangepi4-lts/live",
       "image_class": "desktop",
       "job_token": {
@@ -2062,7 +2073,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5-plus --flavor both --env test",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor both --env test",
       "id": "cloud/orangepi5/orangepi5/orange-pi-5-plus/both",
       "image_class": "desktop",
       "job_token": {
@@ -2114,7 +2125,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5-plus --flavor installer --env test",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --env test",
       "id": "cloud/orangepi5/orangepi5/orange-pi-5-plus/installer",
       "image_class": "desktop",
       "job_token": {
@@ -2169,7 +2180,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5-plus --flavor live --env test",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor live --env test",
       "id": "cloud/orangepi5/orangepi5/orange-pi-5-plus/live",
       "image_class": "desktop",
       "job_token": {
@@ -2227,7 +2238,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5 --flavor both --env test",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor both --env test",
       "id": "cloud/orangepi5/orangepi5/orange-pi-5/both",
       "image_class": "desktop",
       "job_token": {
@@ -2279,7 +2290,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5 --flavor installer --env test",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --env test",
       "id": "cloud/orangepi5/orangepi5/orange-pi-5/installer",
       "image_class": "desktop",
       "job_token": {
@@ -2334,7 +2345,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5 --flavor live --env test",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor live --env test",
       "id": "cloud/orangepi5/orangepi5/orange-pi-5/live",
       "image_class": "desktop",
       "job_token": {
@@ -2392,7 +2403,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --flavor both --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test",
       "id": "cloud/orangepizero2/orangepizero2/both",
       "image_class": "node",
       "job_token": {
@@ -2443,7 +2454,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --flavor installer --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test",
       "id": "cloud/orangepizero2/orangepizero2/installer",
       "image_class": "node",
       "job_token": {
@@ -2497,7 +2508,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --flavor live --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test",
       "id": "cloud/orangepizero2/orangepizero2/live",
       "image_class": "node",
       "job_token": {
@@ -2554,7 +2565,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --flavor both --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test",
       "id": "cloud/orangepizero2w/orangepizero2w/both",
       "image_class": "node",
       "job_token": {
@@ -2605,7 +2616,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --flavor installer --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test",
       "id": "cloud/orangepizero2w/orangepizero2w/installer",
       "image_class": "node",
       "job_token": {
@@ -2659,7 +2670,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --flavor live --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test",
       "id": "cloud/orangepizero2w/orangepizero2w/live",
       "image_class": "node",
       "job_token": {
@@ -2716,7 +2727,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --flavor both --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test",
       "id": "cloud/orangepizero3/orangepizero3/both",
       "image_class": "node",
       "job_token": {
@@ -2767,7 +2778,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --flavor installer --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test",
       "id": "cloud/orangepizero3/orangepizero3/installer",
       "image_class": "node",
       "job_token": {
@@ -2821,7 +2832,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --flavor live --env test",
+      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test",
       "id": "cloud/orangepizero3/orangepizero3/live",
       "image_class": "node",
       "job_token": {
@@ -2878,7 +2889,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role desktop --board rpi3 --env test",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board rpi3 --env test",
       "id": "cloud/rpi5/rpi5-desktop/rpi3",
       "image_class": "desktop",
       "job_token": {
@@ -2935,7 +2946,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role desktop --board rpi4 --env test",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board rpi4 --env test",
       "id": "cloud/rpi5/rpi5-desktop/rpi4",
       "image_class": "desktop",
       "job_token": {
@@ -2992,7 +3003,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role desktop --board rpi5 --env test",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board rpi5 --env test",
       "id": "cloud/rpi5/rpi5-desktop/rpi5",
       "image_class": "desktop",
       "job_token": {
@@ -3051,7 +3062,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role chromebook --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role chromebook --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "cloud/x86/chromebook/full",
       "image_class": "desktop",
       "job_token": {
@@ -3103,7 +3114,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role chromebook --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role chromebook --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "cloud/x86/chromebook/thin",
       "image_class": "desktop",
       "job_token": {
@@ -3157,7 +3168,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role desktop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "cloud/x86/desktop/full",
       "image_class": "desktop",
       "job_token": {
@@ -3196,12 +3207,11 @@
       "board": "",
       "builder_role": "desktop",
       "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=full)",
         "make": "`make x86-desktop` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
         "menu": "no desktop picker at all (cannot select desktop=thin)"
       },
       "channels": {
-        "cli": "no",
+        "cli": "yes",
         "gui": "yes",
         "job": "yes",
         "make": "escape-hatch",
@@ -3215,7 +3225,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role desktop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "cloud/x86/desktop/thin",
       "image_class": "desktop",
       "job_token": {
@@ -3229,12 +3239,13 @@
       "make_target": "x86-desktop",
       "make_vars": {},
       "mode": "cloud",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=full)",
+      "phantom": false,
+      "phantom_reason": "",
       "plan_platform": "x86",
       "plan_role": "desktop",
       "platform": "x86",
       "reachable": [
+        "cli",
         "gui",
         "job",
         "worklist"
@@ -3269,7 +3280,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role laptop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role laptop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "cloud/x86/laptop/full",
       "image_class": "desktop",
       "job_token": {
@@ -3321,7 +3332,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role laptop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role laptop --env test --local-user <host> --with-tailscale --with-sso --person-role user --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "cloud/x86/laptop/thin",
       "image_class": "desktop",
       "job_token": {
@@ -3373,7 +3384,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role edge_ai --board orin-nano --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role edge_ai --board orin-nano --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/edge_ai/orin-nano",
       "image_class": "node",
       "job_token": {
@@ -3428,7 +3439,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role edge_ai --board orin-nano-4gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role edge_ai --board orin-nano-4gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/edge_ai/orin-nano-4gb",
       "image_class": "node",
       "job_token": {
@@ -3483,7 +3494,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role edge_ai --board orin-nx-16gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role edge_ai --board orin-nx-16gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/edge_ai/orin-nx-16gb",
       "image_class": "node",
       "job_token": {
@@ -3538,7 +3549,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role edge_ai --board orin-nx-8gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role edge_ai --board orin-nx-8gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/edge_ai/orin-nx-8gb",
       "image_class": "node",
       "job_token": {
@@ -3593,7 +3604,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role full --board orin-nano --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role full --board orin-nano --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/full/orin-nano",
       "image_class": "node",
       "job_token": {
@@ -3648,7 +3659,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role full --board orin-nano-4gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role full --board orin-nano-4gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/full/orin-nano-4gb",
       "image_class": "node",
       "job_token": {
@@ -3703,7 +3714,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role full --board orin-nx-16gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role full --board orin-nx-16gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/full/orin-nx-16gb",
       "image_class": "node",
       "job_token": {
@@ -3758,7 +3769,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role full --board orin-nx-8gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role full --board orin-nx-8gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/full/orin-nx-8gb",
       "image_class": "node",
       "job_token": {
@@ -3813,7 +3824,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role gpu-host --board orin-nano --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role gpu-host --board orin-nano --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/gpu-host/orin-nano",
       "image_class": "node",
       "job_token": {
@@ -3868,7 +3879,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role gpu-host --board orin-nano-4gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role gpu-host --board orin-nano-4gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/gpu-host/orin-nano-4gb",
       "image_class": "node",
       "job_token": {
@@ -3923,7 +3934,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role gpu-host --board orin-nx-16gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role gpu-host --board orin-nx-16gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/gpu-host/orin-nx-16gb",
       "image_class": "node",
       "job_token": {
@@ -3978,7 +3989,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role gpu-host --board orin-nx-8gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role gpu-host --board orin-nx-8gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/gpu-host/orin-nx-8gb",
       "image_class": "node",
       "job_token": {
@@ -4033,7 +4044,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role desktop --board orin-nano --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board orin-nano --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/jetson-desktop/orin-nano",
       "image_class": "desktop",
       "job_token": {
@@ -4088,7 +4099,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role desktop --board orin-nano-4gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board orin-nano-4gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/jetson-desktop/orin-nano-4gb",
       "image_class": "desktop",
       "job_token": {
@@ -4143,7 +4154,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role desktop --board orin-nx-16gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board orin-nx-16gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/jetson-desktop/orin-nx-16gb",
       "image_class": "desktop",
       "job_token": {
@@ -4198,7 +4209,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --role desktop --board orin-nx-8gb --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-jetson-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board orin-nx-8gb --env test --superdomain hugmesh.internal",
       "id": "mesh/jetson/jetson-desktop/orin-nx-8gb",
       "image_class": "desktop",
       "job_token": {
@@ -4254,7 +4265,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role backend --board rpi4 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role backend --board rpi4 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/be/rpi4",
       "image_class": "node",
       "job_token": {
@@ -4310,7 +4321,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role backend --board rpi5 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role backend --board rpi5 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/be/rpi5",
       "image_class": "node",
       "job_token": {
@@ -4366,7 +4377,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role frontend --board rpi4 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role frontend --board rpi4 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/fe/rpi4",
       "image_class": "node",
       "job_token": {
@@ -4422,7 +4433,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role frontend --board rpi5 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role frontend --board rpi5 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/fe/rpi5",
       "image_class": "node",
       "job_token": {
@@ -4478,7 +4489,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role pki --board rpi4 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role pki --board rpi4 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/pki/rpi4",
       "image_class": "node",
       "job_token": {
@@ -4534,7 +4545,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role pki --board rpi5 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role pki --board rpi5 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/pki/rpi5",
       "image_class": "node",
       "job_token": {
@@ -4590,7 +4601,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role desktop --board rpi3 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board rpi3 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/rpi5-desktop/rpi3",
       "image_class": "desktop",
       "job_token": {
@@ -4646,7 +4657,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role desktop --board rpi4 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board rpi4 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/rpi5-desktop/rpi4",
       "image_class": "desktop",
       "job_token": {
@@ -4702,7 +4713,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role desktop --board rpi5 --env test --superdomain hugmesh.internal",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role desktop --board rpi5 --env test --superdomain hugmesh.internal",
       "id": "mesh/rpi5/rpi5-desktop/rpi5",
       "image_class": "desktop",
       "job_token": {
@@ -4742,141 +4753,25 @@
         "stage4.tar.xz"
       ],
       "board": "",
-      "builder_role": "be+gpu",
-      "channel_notes": {
-        "cli": "--desktop full not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-be+gpu` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=full)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "full",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role be+gpu --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop full --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/be+gpu/full",
-      "image_class": "node",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.be-gpu",
-        "IMAGE_TYPE": "primary",
-        "accepted_image_types": [
-          "primary",
-          "mesh-extension"
-        ]
-      },
-      "label": "Backend + GPU node",
-      "make_target": "x86-be+gpu",
-      "make_vars": {},
-      "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop full not honored (PLAN_DESKTOP=none)",
-      "plan_platform": "x86",
-      "plan_role": "be+gpu",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
-        "worklist"
-      ],
-      "role": "be+gpu"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
-      "builder_role": "be+gpu",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-be+gpu` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "thin",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role be+gpu --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop thin --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/be+gpu/thin",
-      "image_class": "node",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.be-gpu",
-        "IMAGE_TYPE": "primary",
-        "accepted_image_types": [
-          "primary",
-          "mesh-extension"
-        ]
-      },
-      "label": "Backend + GPU node",
-      "make_target": "x86-be+gpu",
-      "make_vars": {},
-      "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=none)",
-      "plan_platform": "x86",
-      "plan_role": "be+gpu",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
-        "worklist"
-      ],
-      "role": "be+gpu"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
       "builder_role": "be",
-      "channel_notes": {
-        "cli": "--desktop full not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-be` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=full)"
-      },
+      "channel_notes": {},
       "channels": {
-        "cli": "no",
+        "cli": "yes",
         "gui": "yes",
         "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
+        "make": "yes",
+        "menu": "yes",
         "worklist": "yes"
       },
-      "desktop": "full",
+      "desktop": "",
       "desktop_implied": false,
       "envs": [
         "test",
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role be --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop full --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/be/full",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role be --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui cli --uncached --live-toram --bundle-source",
+      "id": "mesh/x86/be",
       "image_class": "node",
       "job_token": {
         "HARDWARE_CLASS": "x86.be",
@@ -4890,14 +4785,17 @@
       "make_target": "x86-be",
       "make_vars": {},
       "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop full not honored (PLAN_DESKTOP=none)",
+      "phantom": false,
+      "phantom_reason": "",
       "plan_platform": "x86",
       "plan_role": "be",
       "platform": "x86",
       "reachable": [
+        "cli",
         "gui",
         "job",
+        "make",
+        "menu",
         "worklist"
       ],
       "role": "be"
@@ -4910,53 +4808,52 @@
         "stage4.tar.xz"
       ],
       "board": "",
-      "builder_role": "be",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-be` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
+      "builder_role": "be+gpu",
+      "channel_notes": {},
       "channels": {
-        "cli": "no",
+        "cli": "yes",
         "gui": "yes",
         "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
+        "make": "yes",
+        "menu": "yes",
         "worklist": "yes"
       },
-      "desktop": "thin",
+      "desktop": "",
       "desktop_implied": false,
       "envs": [
         "test",
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role be --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop thin --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/be/thin",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role be+gpu --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui cli --uncached --live-toram --bundle-source",
+      "id": "mesh/x86/be+gpu",
       "image_class": "node",
       "job_token": {
-        "HARDWARE_CLASS": "x86.be",
+        "HARDWARE_CLASS": "x86.be-gpu",
         "IMAGE_TYPE": "primary",
         "accepted_image_types": [
           "primary",
           "mesh-extension"
         ]
       },
-      "label": "Backend node (x86 or Raspberry Pi 4/5)",
-      "make_target": "x86-be",
+      "label": "Backend + GPU node",
+      "make_target": "x86-be+gpu",
       "make_vars": {},
       "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=none)",
+      "phantom": false,
+      "phantom_reason": "",
       "plan_platform": "x86",
-      "plan_role": "be",
+      "plan_role": "be+gpu",
       "platform": "x86",
       "reachable": [
+        "cli",
         "gui",
         "job",
+        "make",
+        "menu",
         "worklist"
       ],
-      "role": "be"
+      "role": "be+gpu"
     },
     {
       "artifacts": [
@@ -4967,28 +4864,24 @@
       ],
       "board": "",
       "builder_role": "edge_ai",
-      "channel_notes": {
-        "cli": "--desktop full not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-edge_ai` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=full)"
-      },
+      "channel_notes": {},
       "channels": {
-        "cli": "no",
+        "cli": "yes",
         "gui": "yes",
         "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
+        "make": "yes",
+        "menu": "yes",
         "worklist": "yes"
       },
-      "desktop": "full",
+      "desktop": "",
       "desktop_implied": false,
       "envs": [
         "test",
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role edge_ai --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop full --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/edge_ai/full",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role edge_ai --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui cli --uncached --live-toram --bundle-source",
+      "id": "mesh/x86/edge_ai",
       "image_class": "node",
       "job_token": {
         "HARDWARE_CLASS": "x86.edge_ai",
@@ -5002,70 +4895,17 @@
       "make_target": "x86-edge_ai",
       "make_vars": {},
       "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop full not honored (PLAN_DESKTOP=none)",
+      "phantom": false,
+      "phantom_reason": "",
       "plan_platform": "x86",
       "plan_role": "edge_ai",
       "platform": "x86",
       "reachable": [
+        "cli",
         "gui",
         "job",
-        "worklist"
-      ],
-      "role": "edge_ai"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
-      "builder_role": "edge_ai",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-edge_ai` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "thin",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role edge_ai --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop thin --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/edge_ai/thin",
-      "image_class": "node",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.edge_ai",
-        "IMAGE_TYPE": "primary",
-        "accepted_image_types": [
-          "primary",
-          "mesh-extension"
-        ]
-      },
-      "label": "Edge-AI node \u2014 GPU + OpenAI-compatible model API",
-      "make_target": "x86-edge_ai",
-      "make_vars": {},
-      "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=none)",
-      "plan_platform": "x86",
-      "plan_role": "edge_ai",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
+        "make",
+        "menu",
         "worklist"
       ],
       "role": "edge_ai"
@@ -5079,28 +4919,24 @@
       ],
       "board": "",
       "builder_role": "fe",
-      "channel_notes": {
-        "cli": "--desktop full not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-fe` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=full)"
-      },
+      "channel_notes": {},
       "channels": {
-        "cli": "no",
+        "cli": "yes",
         "gui": "yes",
         "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
+        "make": "yes",
+        "menu": "yes",
         "worklist": "yes"
       },
-      "desktop": "full",
+      "desktop": "",
       "desktop_implied": false,
       "envs": [
         "test",
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role fe --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop full --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/fe/full",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role fe --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui cli --uncached --live-toram --bundle-source",
+      "id": "mesh/x86/fe",
       "image_class": "node",
       "job_token": {
         "HARDWARE_CLASS": "x86.fe",
@@ -5114,70 +4950,17 @@
       "make_target": "x86-fe",
       "make_vars": {},
       "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop full not honored (PLAN_DESKTOP=none)",
+      "phantom": false,
+      "phantom_reason": "",
       "plan_platform": "x86",
       "plan_role": "fe",
       "platform": "x86",
       "reachable": [
+        "cli",
         "gui",
         "job",
-        "worklist"
-      ],
-      "role": "fe"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
-      "builder_role": "fe",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-fe` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "thin",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role fe --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop thin --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/fe/thin",
-      "image_class": "node",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.fe",
-        "IMAGE_TYPE": "primary",
-        "accepted_image_types": [
-          "primary",
-          "mesh-extension"
-        ]
-      },
-      "label": "Frontend node (x86 or Raspberry Pi 4/5)",
-      "make_target": "x86-fe",
-      "make_vars": {},
-      "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=none)",
-      "plan_platform": "x86",
-      "plan_role": "fe",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
+        "make",
+        "menu",
         "worklist"
       ],
       "role": "fe"
@@ -5191,28 +4974,24 @@
       ],
       "board": "",
       "builder_role": "omnibus",
-      "channel_notes": {
-        "cli": "--desktop full not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-omnibus` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=full)"
-      },
+      "channel_notes": {},
       "channels": {
-        "cli": "no",
+        "cli": "yes",
         "gui": "yes",
         "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
+        "make": "yes",
+        "menu": "yes",
         "worklist": "yes"
       },
-      "desktop": "full",
+      "desktop": "",
       "desktop_implied": false,
       "envs": [
         "test",
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role omnibus --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop full --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/omnibus/full",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role omnibus --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui cli --uncached --live-toram --bundle-source",
+      "id": "mesh/x86/omnibus",
       "image_class": "node",
       "job_token": {
         "HARDWARE_CLASS": "x86.omnibus",
@@ -5226,70 +5005,17 @@
       "make_target": "x86-omnibus",
       "make_vars": {},
       "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop full not honored (PLAN_DESKTOP=none)",
+      "phantom": false,
+      "phantom_reason": "",
       "plan_platform": "x86",
       "plan_role": "omnibus",
       "platform": "x86",
       "reachable": [
+        "cli",
         "gui",
         "job",
-        "worklist"
-      ],
-      "role": "omnibus"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
-      "builder_role": "omnibus",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-omnibus` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "thin",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role omnibus --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop thin --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/omnibus/thin",
-      "image_class": "node",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.omnibus",
-        "IMAGE_TYPE": "primary",
-        "accepted_image_types": [
-          "primary",
-          "mesh-extension"
-        ]
-      },
-      "label": "Omnibus \u2014 every cluster role on one node",
-      "make_target": "x86-omnibus",
-      "make_vars": {},
-      "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=none)",
-      "plan_platform": "x86",
-      "plan_role": "omnibus",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
+        "make",
+        "menu",
         "worklist"
       ],
       "role": "omnibus"
@@ -5303,28 +5029,24 @@
       ],
       "board": "",
       "builder_role": "pki",
-      "channel_notes": {
-        "cli": "--desktop full not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-pki` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=full)"
-      },
+      "channel_notes": {},
       "channels": {
-        "cli": "no",
+        "cli": "yes",
         "gui": "yes",
         "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
+        "make": "yes",
+        "menu": "yes",
         "worklist": "yes"
       },
-      "desktop": "full",
+      "desktop": "",
       "desktop_implied": false,
       "envs": [
         "test",
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role pki --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop full --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/pki/full",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role pki --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --snort --installer-ui cli --uncached --live-toram --bundle-source",
+      "id": "mesh/x86/pki",
       "image_class": "node",
       "job_token": {
         "HARDWARE_CLASS": "x86.pki",
@@ -5338,70 +5060,17 @@
       "make_target": "x86-pki",
       "make_vars": {},
       "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop full not honored (PLAN_DESKTOP=none)",
+      "phantom": false,
+      "phantom_reason": "",
       "plan_platform": "x86",
       "plan_role": "pki",
       "platform": "x86",
       "reachable": [
+        "cli",
         "gui",
         "job",
-        "worklist"
-      ],
-      "role": "pki"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
-      "builder_role": "pki",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=none)",
-        "make": "`make x86-pki` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "thin",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role pki --env test --local-user <host> --with-tailscale --with-sso --superdomain hugmesh.internal --desktop thin --snort --installer-ui cli --uncached --live-toram --bundle-source",
-      "id": "mesh/x86/pki/thin",
-      "image_class": "node",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.pki",
-        "IMAGE_TYPE": "primary",
-        "accepted_image_types": [
-          "primary",
-          "mesh-extension"
-        ]
-      },
-      "label": "PKI node \u2014 cluster certificate authority (x86 or Raspberry Pi 4/5)",
-      "make_target": "x86-pki",
-      "make_vars": {},
-      "mode": "mesh",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=none)",
-      "plan_platform": "x86",
-      "plan_role": "pki",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
+        "make",
+        "menu",
         "worklist"
       ],
       "role": "pki"
@@ -5434,7 +5103,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor both --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor both --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/la-frite/both/light",
       "image_class": "desktop",
       "job_token": {
@@ -5490,7 +5159,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor both --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor both --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/la-frite/both/none",
       "image_class": "desktop",
       "job_token": {
@@ -5544,7 +5213,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor installer --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor installer --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/la-frite/installer/light",
       "image_class": "desktop",
       "job_token": {
@@ -5601,7 +5270,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor installer --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor installer --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/la-frite/installer/none",
       "image_class": "desktop",
       "job_token": {
@@ -5659,7 +5328,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor live --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor live --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/la-frite/live/light",
       "image_class": "desktop",
       "job_token": {
@@ -5714,7 +5383,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board la-frite --flavor live --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board la-frite --flavor live --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/la-frite/live/none",
       "image_class": "desktop",
       "job_token": {
@@ -5770,7 +5439,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor both --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor both --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/le-potato/both/light",
       "image_class": "desktop",
       "job_token": {
@@ -5826,7 +5495,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor both --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor both --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/le-potato/both/none",
       "image_class": "desktop",
       "job_token": {
@@ -5880,7 +5549,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor installer --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor installer --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/le-potato/installer/light",
       "image_class": "desktop",
       "job_token": {
@@ -5937,7 +5606,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor installer --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor installer --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/le-potato/installer/none",
       "image_class": "desktop",
       "job_token": {
@@ -5995,7 +5664,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor live --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor live --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/le-potato/live/light",
       "image_class": "desktop",
       "job_token": {
@@ -6050,7 +5719,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board le-potato --flavor live --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board le-potato --flavor live --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/le-potato/live/none",
       "image_class": "desktop",
       "job_token": {
@@ -6106,7 +5775,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor both --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor both --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/sweet-potato/both/light",
       "image_class": "desktop",
       "job_token": {
@@ -6162,7 +5831,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor both --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor both --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/sweet-potato/both/none",
       "image_class": "desktop",
       "job_token": {
@@ -6216,7 +5885,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor installer --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor installer --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/sweet-potato/installer/light",
       "image_class": "desktop",
       "job_token": {
@@ -6273,7 +5942,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor installer --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor installer --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/sweet-potato/installer/none",
       "image_class": "desktop",
       "job_token": {
@@ -6331,7 +6000,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor live --desktop light --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor live --desktop light --env test --skip-mesh",
       "id": "standalone/frite/frite/sweet-potato/live/light",
       "image_class": "desktop",
       "job_token": {
@@ -6386,7 +6055,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --board sweet-potato --flavor live --desktop none --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-frite-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board sweet-potato --flavor live --desktop none --env test --skip-mesh",
       "id": "standalone/frite/frite/sweet-potato/live/none",
       "image_class": "desktop",
       "job_token": {
@@ -6442,7 +6111,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --flavor both --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test --skip-mesh",
       "id": "standalone/orangepi3-lts/orangepi3-lts/both",
       "image_class": "node",
       "job_token": {
@@ -6494,7 +6163,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --flavor installer --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test --skip-mesh",
       "id": "standalone/orangepi3-lts/orangepi3-lts/installer",
       "image_class": "node",
       "job_token": {
@@ -6550,7 +6219,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --flavor live --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi3-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test --skip-mesh",
       "id": "standalone/orangepi3-lts/orangepi3-lts/live",
       "image_class": "node",
       "job_token": {
@@ -6604,7 +6273,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --flavor both --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test --skip-mesh",
       "id": "standalone/orangepi4-lts/orangepi4-lts/both",
       "image_class": "desktop",
       "job_token": {
@@ -6656,7 +6325,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --flavor installer --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test --skip-mesh",
       "id": "standalone/orangepi4-lts/orangepi4-lts/installer",
       "image_class": "desktop",
       "job_token": {
@@ -6712,7 +6381,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --flavor live --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi4-lts-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test --skip-mesh",
       "id": "standalone/orangepi4-lts/orangepi4-lts/live",
       "image_class": "desktop",
       "job_token": {
@@ -6766,7 +6435,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5-plus --flavor both --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor both --env test --skip-mesh",
       "id": "standalone/orangepi5/orangepi5/orange-pi-5-plus/both",
       "image_class": "desktop",
       "job_token": {
@@ -6819,7 +6488,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5-plus --flavor installer --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor installer --env test --skip-mesh",
       "id": "standalone/orangepi5/orangepi5/orange-pi-5-plus/installer",
       "image_class": "desktop",
       "job_token": {
@@ -6876,7 +6545,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5-plus --flavor live --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5-plus --flavor live --env test --skip-mesh",
       "id": "standalone/orangepi5/orangepi5/orange-pi-5-plus/live",
       "image_class": "desktop",
       "job_token": {
@@ -6931,7 +6600,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5 --flavor both --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor both --env test --skip-mesh",
       "id": "standalone/orangepi5/orangepi5/orange-pi-5/both",
       "image_class": "desktop",
       "job_token": {
@@ -6984,7 +6653,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5 --flavor installer --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor installer --env test --skip-mesh",
       "id": "standalone/orangepi5/orangepi5/orange-pi-5/installer",
       "image_class": "desktop",
       "job_token": {
@@ -7041,7 +6710,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --board orange-pi-5 --flavor live --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --board orange-pi-5 --flavor live --env test --skip-mesh",
       "id": "standalone/orangepi5/orangepi5/orange-pi-5/live",
       "image_class": "desktop",
       "job_token": {
@@ -7096,7 +6765,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --flavor both --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test --skip-mesh",
       "id": "standalone/orangepizero2/orangepizero2/both",
       "image_class": "node",
       "job_token": {
@@ -7148,7 +6817,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --flavor installer --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test --skip-mesh",
       "id": "standalone/orangepizero2/orangepizero2/installer",
       "image_class": "node",
       "job_token": {
@@ -7204,7 +6873,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --flavor live --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero2-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test --skip-mesh",
       "id": "standalone/orangepizero2/orangepizero2/live",
       "image_class": "node",
       "job_token": {
@@ -7258,7 +6927,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --flavor both --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test --skip-mesh",
       "id": "standalone/orangepizero2w/orangepizero2w/both",
       "image_class": "node",
       "job_token": {
@@ -7310,7 +6979,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --flavor installer --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test --skip-mesh",
       "id": "standalone/orangepizero2w/orangepizero2w/installer",
       "image_class": "node",
       "job_token": {
@@ -7366,7 +7035,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --flavor live --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero2w-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test --skip-mesh",
       "id": "standalone/orangepizero2w/orangepizero2w/live",
       "image_class": "node",
       "job_token": {
@@ -7420,7 +7089,7 @@
         "prod"
       ],
       "flavor": "both",
-      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --flavor both --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor both --env test --skip-mesh",
       "id": "standalone/orangepizero3/orangepizero3/both",
       "image_class": "node",
       "job_token": {
@@ -7472,7 +7141,7 @@
         "prod"
       ],
       "flavor": "installer",
-      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --flavor installer --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor installer --env test --skip-mesh",
       "id": "standalone/orangepizero3/orangepizero3/installer",
       "image_class": "node",
       "job_token": {
@@ -7528,7 +7197,7 @@
         "prod"
       ],
       "flavor": "live",
-      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --flavor live --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-orangepi-zero3-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --flavor live --env test --skip-mesh",
       "id": "standalone/orangepizero3/orangepizero3/live",
       "image_class": "node",
       "job_token": {
@@ -7582,7 +7251,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role generic --board rpi4 --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role generic --board rpi4 --env test --skip-mesh",
       "id": "standalone/rpi5/generic/rpi4",
       "image_class": "node",
       "job_token": {
@@ -7636,7 +7305,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --role generic --board rpi5 --env test --skip-mesh",
+      "gui_command": "sudo bash ./build-rpi5-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role generic --board rpi5 --env test --skip-mesh",
       "id": "standalone/rpi5/generic/rpi5",
       "image_class": "node",
       "job_token": {
@@ -7690,7 +7359,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role chromebook --env test --local-user <host> --no-tailscale --no-sso --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role chromebook --env test --local-user <host> --no-tailscale --no-sso --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "standalone/x86/chromebook/full",
       "image_class": "desktop",
       "job_token": {
@@ -7745,7 +7414,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role chromebook --env test --local-user <host> --no-tailscale --no-sso --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role chromebook --env test --local-user <host> --no-tailscale --no-sso --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "standalone/x86/chromebook/thin",
       "image_class": "desktop",
       "job_token": {
@@ -7798,7 +7467,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role standalone-thick --env test --local-user <host> --no-tailscale --no-sso --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role standalone-thick --env test --local-user <host> --no-tailscale --no-sso --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "standalone/x86/standalone-thick/full",
       "image_class": "desktop",
       "job_token": {
@@ -7836,118 +7505,6 @@
         "stage4.tar.xz"
       ],
       "board": "",
-      "builder_role": "standalone-thick",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=full+capable)",
-        "make": "`make x86-standalone-thick` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "thin",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role standalone-thick --env test --local-user <host> --no-tailscale --no-sso --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
-      "id": "standalone/x86/standalone-thick/thin",
-      "image_class": "desktop",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.standalone-thick",
-        "IMAGE_TYPE": "client",
-        "accepted_image_types": [
-          "client"
-        ]
-      },
-      "label": "Standalone thick \u2014 hardened full desktop, no mesh/SSO",
-      "make_target": "x86-standalone-thick",
-      "make_vars": {},
-      "mode": "standalone",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=full+capable)",
-      "plan_platform": "x86",
-      "plan_role": "standalone-thick",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
-        "worklist"
-      ],
-      "role": "standalone-thick"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "installer.iso",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
-      "builder_role": "standalone-thin",
-      "channel_notes": {
-        "cli": "--desktop full not honored (PLAN_DESKTOP=thin)",
-        "make": "`make x86-standalone-thin` recipe omits --desktop full (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=full)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "full",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role standalone-thin --env test --local-user <host> --no-tailscale --no-sso --desktop full --snort --installer-ui all --uncached --live-toram --bundle-source",
-      "id": "standalone/x86/standalone-thin/full",
-      "image_class": "desktop",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.standalone-thin",
-        "IMAGE_TYPE": "client",
-        "accepted_image_types": [
-          "client"
-        ]
-      },
-      "label": "Standalone thin \u2014 hardened LXDE desktop, no mesh/SSO",
-      "make_target": "x86-standalone-thin",
-      "make_vars": {},
-      "mode": "standalone",
-      "phantom": true,
-      "phantom_reason": "--desktop full not honored (PLAN_DESKTOP=thin)",
-      "plan_platform": "x86",
-      "plan_role": "standalone-thin",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
-        "worklist"
-      ],
-      "role": "standalone-thin"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "installer.iso",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
       "builder_role": "standalone-thin",
       "channel_notes": {},
       "channels": {
@@ -7965,7 +7522,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role standalone-thin --env test --local-user <host> --no-tailscale --no-sso --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role standalone-thin --env test --local-user <host> --no-tailscale --no-sso --desktop thin --snort --installer-ui all --uncached --live-toram --bundle-source",
       "id": "standalone/x86/standalone-thin/thin",
       "image_class": "desktop",
       "job_token": {
@@ -8020,7 +7577,7 @@
         "prod"
       ],
       "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role standalone-unaffiliated --env test --local-user <host> --desktop full --snort --installer-ui all --uncached --live-toram",
+      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --shared-assets <gen>/out/shared --role standalone-unaffiliated --env test --local-user <host> --desktop full --snort --installer-ui all --uncached --live-toram",
       "id": "standalone/x86/standalone-unaffiliated/full",
       "image_class": "desktop",
       "job_token": {
@@ -8048,170 +7605,49 @@
         "worklist"
       ],
       "role": "standalone-unaffiliated"
-    },
-    {
-      "artifacts": [
-        "fs.tar.xz",
-        "img",
-        "installer.iso",
-        "live.iso",
-        "stage4.tar.xz"
-      ],
-      "board": "",
-      "builder_role": "standalone-unaffiliated",
-      "channel_notes": {
-        "cli": "--desktop thin not honored (PLAN_DESKTOP=full+capable)",
-        "make": "`make x86-standalone-unaffiliated` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS)",
-        "menu": "no desktop picker at all (cannot select desktop=thin)"
-      },
-      "channels": {
-        "cli": "no",
-        "gui": "yes",
-        "job": "yes",
-        "make": "escape-hatch",
-        "menu": "no",
-        "worklist": "yes"
-      },
-      "desktop": "thin",
-      "desktop_implied": false,
-      "envs": [
-        "test",
-        "prod"
-      ],
-      "flavor": "",
-      "gui_command": "sudo bash ./build-x86-host-stage4.sh -w <host> -j <host> --role standalone-unaffiliated --env test --local-user <host> --desktop thin --snort --installer-ui all --uncached --live-toram",
-      "id": "standalone/x86/standalone-unaffiliated/thin",
-      "image_class": "desktop",
-      "job_token": {
-        "HARDWARE_CLASS": "x86.standalone-unaffiliated",
-        "IMAGE_TYPE": "client",
-        "accepted_image_types": [
-          "client"
-        ]
-      },
-      "label": "Unaffiliated desktop \u2014 plain Gentoo, no HugMesh (zero branding/tooling baked)",
-      "make_target": "x86-standalone-unaffiliated",
-      "make_vars": {},
-      "mode": "standalone",
-      "phantom": true,
-      "phantom_reason": "--desktop thin not honored (PLAN_DESKTOP=full+capable)",
-      "plan_platform": "x86",
-      "plan_role": "standalone-unaffiliated",
-      "platform": "x86",
-      "reachable": [
-        "gui",
-        "job",
-        "worklist"
-      ],
-      "role": "standalone-unaffiliated"
     }
   ],
   "matrix_cells": 150,
   "matrix_distinct_cells": 67,
   "mode_counts": {
     "cloud": 48,
-    "mesh": 37,
-    "standalone": 49
+    "mesh": 31,
+    "standalone": 46
   },
   "per_channel_counts": {
     "cli": {
       "escape-hatch": 0,
-      "no": 16,
-      "yes": 118
+      "no": 0,
+      "yes": 125
     },
     "gui": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 134
+      "yes": 125
     },
     "job": {
       "escape-hatch": 3,
       "no": 41,
-      "yes": 90
+      "yes": 81
     },
     "make": {
-      "escape-hatch": 61,
+      "escape-hatch": 46,
       "no": 0,
-      "yes": 73
+      "yes": 79
     },
     "menu": {
       "escape-hatch": 40,
-      "no": 21,
-      "yes": 73
+      "no": 6,
+      "yes": 79
     },
     "worklist": {
       "escape-hatch": 0,
       "no": 0,
-      "yes": 134
+      "yes": 125
     }
   },
-  "phantom_count": 16,
-  "phantoms": [
-    {
-      "id": "cloud/x86/desktop/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=full)"
-    },
-    {
-      "id": "mesh/x86/be+gpu/full",
-      "why": "--desktop full not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/be+gpu/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/be/full",
-      "why": "--desktop full not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/be/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/edge_ai/full",
-      "why": "--desktop full not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/edge_ai/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/fe/full",
-      "why": "--desktop full not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/fe/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/omnibus/full",
-      "why": "--desktop full not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/omnibus/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/pki/full",
-      "why": "--desktop full not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "mesh/x86/pki/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=none)"
-    },
-    {
-      "id": "standalone/x86/standalone-thick/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=full+capable)"
-    },
-    {
-      "id": "standalone/x86/standalone-thin/full",
-      "why": "--desktop full not honored (PLAN_DESKTOP=thin)"
-    },
-    {
-      "id": "standalone/x86/standalone-unaffiliated/thin",
-      "why": "--desktop thin not honored (PLAN_DESKTOP=full+capable)"
-    }
-  ],
+  "phantom_count": 0,
+  "phantoms": [],
   "platform_counts": {
     "frite": 36,
     "jetson": 16,
@@ -8222,7 +7658,7 @@
     "orangepizero2w": 6,
     "orangepizero3": 6,
     "rpi5": 14,
-    "x86": 26
+    "x86": 17
   },
   "schema": "hugmesh-image-inventory/v1",
   "sources": {

@@ -87,6 +87,10 @@ ROLE_CLIENT=false
 PERSON_ROLE=""         # FD-08 identity role for client images: user|mod|admin|superadmin
 DOMAINS=""             # FD-08 domain tie (comma/space separated; first = primary domain)
 DESKTOP="thin"         # client desktop weight: thin (LXDE/openbox) | full (heavier DE)
+DESKTOP_SET=false      # true once --desktop is given — role arms may default the weight
+                       # ONLY when the operator said nothing (mirrors HOSTNAME_SET); an
+                       # explicit flag is never silently overridden (it either wins, or
+                       # a weight-pinning role name hard-errors on the contradiction)
 CLUSTER_DOMAIN="hugmesh.systems"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix that
 # every node joins. "" = builder default (legacy byte-identical: no marker, headscale keeps
@@ -848,7 +852,7 @@ while [[ $# -gt 0 ]]; do
         # ── Client (person-device) image flags (FD-08); see docs/CLIENT-IMAGES.md ──
         --person-role) PERSON_ROLE="$2"; shift 2 ;;   # user|mod|admin|superadmin
         --domains) DOMAINS="$2"; shift 2 ;;           # first = primary domain
-        --desktop) DESKTOP="$2"; shift 2 ;;           # thin|full
+        --desktop) DESKTOP="$2"; DESKTOP_SET=true; shift 2 ;;   # thin|full (explicit)
         -H|--hostname) HOSTNAME="$2"; HOSTNAME_SET=true; shift 2 ;;
         -T|--timezone) TIMEZONE="$2"; shift 2 ;;
         -C|--config) CONFIG_FILE="$2"; shift 2 ;;
@@ -1248,7 +1252,11 @@ case "${ROLE}" in
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-${ROLE}" ;;
     desktop)
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
-        [ "${DESKTOP}" = "thin" ] && DESKTOP="full"   # 'desktop' role defaults to the full/thick weight
+        # 'desktop' role DEFAULTS to the full/thick weight — but only when the operator
+        # did not pass --desktop at all. The old test ([ thin ] && full) could not tell
+        # "said nothing" from "explicitly said thin" and silently upgraded an explicit
+        # --desktop thin to full — the thin-weight desktop image was unbuildable.
+        ${DESKTOP_SET} || DESKTOP="full"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-desktop" ;;
     # ── STANDALONE hardened desktop roles — self-contained personal workstations.
     # Reuse the CLIENT desktop machinery (ROLE_CLIENT=true → Xorg/lightdm/desktop
@@ -1260,10 +1268,19 @@ case "${ROLE}" in
     # thick = the most-capable Plasma set.
     standalone-thin)
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        # The weight is IN THE ROLE NAME — a contradictory explicit --desktop is a
+        # hard error (naming both sides), never a silent override; an agreeing
+        # explicit flag is accepted as the no-op it is.
+        if ${DESKTOP_SET} && [ "${DESKTOP}" != "thin" ]; then
+            err "--desktop ${DESKTOP} contradicts --role standalone-thin (the role name pins the thin weight) — drop --desktop, or pick --role standalone-thick for the full weight"; exit 1
+        fi
         STANDALONE=true; DESKTOP="thin"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-standalone-thin" ;;
     standalone-thick|standalone-full)
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        if ${DESKTOP_SET} && [ "${DESKTOP}" != "full" ]; then
+            err "--desktop ${DESKTOP} contradicts --role ${ROLE} (the role name pins the full weight) — drop --desktop, or pick --role standalone-thin for the thin weight"; exit 1
+        fi
         STANDALONE=true; DESKTOP="full"; CAPABLE=true
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-standalone" ;;
     # ── UNAFFILIATED plain desktop — standalone-thick weight with ZERO HugMesh
@@ -1271,6 +1288,11 @@ case "${ROLE}" in
     # default is assigned in the fold, AFTER the brand identity is neutralized.
     standalone-unaffiliated)
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        # standalone-thick weight by definition (see the UNAFFILIATED fold below) —
+        # same contradiction rule as the named-weight standalone roles above.
+        if ${DESKTOP_SET} && [ "${DESKTOP}" != "full" ]; then
+            err "--desktop ${DESKTOP} contradicts --role standalone-unaffiliated (this role IS the standalone-thick/full weight) — drop --desktop"; exit 1
+        fi
         STANDALONE=true; DESKTOP="full"; CAPABLE=true
         UNAFFILIATED=true ;;
     *)

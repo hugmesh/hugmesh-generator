@@ -204,3 +204,55 @@ def test_hardware_revisit_does_not_clobber_hw_profile(wiz):
     advance_to(wiz, wizard_mod.HardwarePage)
     advance_to(wiz, wizard_mod.BuildPage)               # re-validates Hardware on the way
     assert wiz.cfg.hw_profile == "framework-13-intel"
+
+
+# ---- x86 desktop-weight combo per role (desktop-axis honesty) ----------------------
+# build-x86-host-stage4.sh hard-errors an explicit --desktop that contradicts a
+# weight-pinning standalone role name, so the combo must never offer such a pick
+# (same honesty rule as the rpi3 board gate). Client roles keep both weights.
+
+def _weight_items(page):
+    return [page.desktop.itemText(i) for i in range(page.desktop.count())]
+
+
+def test_desktop_weight_combo_shrinks_to_the_pinned_weight(wiz):
+    """standalone-thin offers only its own thin weight (+ the role default);
+    standalone-thick / standalone-unaffiliated only full — 'standalone-thin/full'
+    is a contradiction in terms the builder now rejects loudly."""
+    pick_mode(wiz, "standalone")
+    page = pick_role(wiz, "standalone-thin")
+    assert _weight_items(page) == ["(default)", "thin"]
+    pick_role(wiz, "standalone-thick")
+    assert _weight_items(page) == ["(default)", "full"]
+    pick_role(wiz, "standalone-unaffiliated")
+    assert _weight_items(page) == ["(default)", "full"]
+
+
+def test_desktop_weight_combo_keeps_both_weights_standalone_chromebook(wiz):
+    """A person-device client role really takes both weights — the combo must not
+    over-shrink (chromebook is the standalone-mode client role)."""
+    pick_mode(wiz, "standalone")
+    page = pick_role(wiz, "chromebook")
+    assert _weight_items(page) == ["(default)", "thin", "full"]
+
+
+def test_desktop_weight_combo_keeps_both_weights_cloud_desktop(wiz):
+    """Cloud client roles keep both weights too — cloud/x86/desktop/thin is a REAL
+    image after the cause-C fix, so thin must stay offered on the desktop role."""
+    pick_mode(wiz, "cloud")
+    page = pick_role(wiz, "desktop")
+    assert _weight_items(page) == ["(default)", "thin", "full"]
+
+
+def test_desktop_weight_explicit_thin_survives_the_desktop_role(wiz):
+    """The cause-C regression pinned at the GUI layer: cloud/desktop + an explicit
+    thin weight must emit --desktop thin (the builder no longer silently upgrades
+    it to full, so the thin-weight desktop image is REAL and reachable here)."""
+    pick_mode(wiz, "cloud")
+    page = pick_role(wiz, "desktop")
+    page.desktop.setCurrentText("thin")
+    advance_to(wiz, wizard_mod.HardwarePage)
+    args = wiz.cfg.to_cli_args()
+    joined = " ".join(args)
+    assert "--desktop thin" in joined
+    assert (wiz.cfg.role, wiz.cfg.desktop) == ("desktop", "thin")

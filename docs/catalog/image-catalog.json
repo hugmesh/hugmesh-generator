@@ -1575,12 +1575,7 @@
         "label": "PKI node \u2014 cluster certificate authority (x86 or Raspberry Pi 4/5)",
         "platforms": [
           {
-            "axes": {
-              "desktop": [
-                "thin",
-                "full"
-              ]
-            },
+            "axes": {},
             "platform": "x86"
           },
           {
@@ -1600,12 +1595,7 @@
         "label": "Backend node (x86 or Raspberry Pi 4/5)",
         "platforms": [
           {
-            "axes": {
-              "desktop": [
-                "thin",
-                "full"
-              ]
-            },
+            "axes": {},
             "platform": "x86"
           },
           {
@@ -1625,12 +1615,7 @@
         "label": "Frontend node (x86 or Raspberry Pi 4/5)",
         "platforms": [
           {
-            "axes": {
-              "desktop": [
-                "thin",
-                "full"
-              ]
-            },
+            "axes": {},
             "platform": "x86"
           },
           {
@@ -1650,12 +1635,7 @@
         "label": "Backend + GPU node",
         "platforms": [
           {
-            "axes": {
-              "desktop": [
-                "thin",
-                "full"
-              ]
-            },
+            "axes": {},
             "platform": "x86"
           }
         ],
@@ -1666,12 +1646,7 @@
         "label": "Omnibus \u2014 every cluster role on one node",
         "platforms": [
           {
-            "axes": {
-              "desktop": [
-                "thin",
-                "full"
-              ]
-            },
+            "axes": {},
             "platform": "x86"
           }
         ],
@@ -1699,12 +1674,7 @@
         "label": "Edge-AI node \u2014 GPU + OpenAI-compatible model API",
         "platforms": [
           {
-            "axes": {
-              "desktop": [
-                "thin",
-                "full"
-              ]
-            },
+            "axes": {},
             "platform": "x86"
           },
           {
@@ -1784,8 +1754,7 @@
           {
             "axes": {
               "desktop": [
-                "thin",
-                "full"
+                "thin"
               ]
             },
             "platform": "x86"
@@ -1800,7 +1769,6 @@
           {
             "axes": {
               "desktop": [
-                "thin",
                 "full"
               ]
             },
@@ -1816,7 +1784,6 @@
           {
             "axes": {
               "desktop": [
-                "thin",
                 "full"
               ]
             },

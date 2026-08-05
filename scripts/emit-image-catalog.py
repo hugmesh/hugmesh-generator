@@ -27,7 +27,7 @@ from hugmesh_studio.core.config import (  # noqa: E402
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS,
     ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS, ORANGEPI4LTS_FLAVORS,
     PLATFORM_LABELS, ROLE_CHOICES, image_class,
-    rpi_boards_for_role,
+    rpi_boards_for_role, x86_desktop_axis,
 )
 
 DEFAULT_OUT = os.path.join("docs", "catalog", "image-catalog.json")
@@ -41,10 +41,18 @@ def platform_axes(platform: str, role: str) -> dict:
     must expose only rpi5/rpi4. We defer to rpi_boards_for_role(role) — the SAME predicate
     the Studio GUI RolePage/WorklistPage use — so the machine-readable catalog the admin-ui
     worklist multi-select consumes never offers a board/role combo that dead-ends in that
-    hard-error (honesty rule; mirrors the GUI gating in the web modal)."""
+    hard-error (honesty rule; mirrors the GUI gating in the web modal).
+
+    The x86 desktop axis is ROLE-DEPENDENT for the same honesty reason (the
+    16-phantom inventory audit): client roles take thin|full, weight-pinning
+    standalone roles take only their own weight, and cluster node roles have NO
+    desktop axis at all (a headless k8s server has no desktop — the builder plans
+    DESKTOP=none). x86_desktop_axis(role) is the shared predicate."""
     axes: dict[str, list[str]] = {}
     if platform == "x86":
-        axes["desktop"] = ["thin", "full"]
+        weights = x86_desktop_axis(role)
+        if weights:
+            axes["desktop"] = list(weights)
     elif platform == "rpi5":
         axes["board"] = list(rpi_boards_for_role(role))
     elif platform == "jetson":

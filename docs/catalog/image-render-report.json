@@ -1,7 +1,7 @@
 {
   "failures": [],
   "generated_by": "scripts/render-all-images.py",
-  "image_count": 134,
+  "image_count": 125,
   "images": {
     "cloud/frite/frite/la-frite/both/light": {
       "cli": {
@@ -1041,8 +1041,11 @@
     },
     "cloud/x86/desktop/thin": {
       "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=full)",
-        "status": "skipped"
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
       },
       "gui": {
         "status": "pass"
@@ -1682,10 +1685,13 @@
         "status": "pass"
       }
     },
-    "mesh/x86/be+gpu/full": {
+    "mesh/x86/be": {
       "cli": {
-        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
       },
       "gui": {
         "status": "pass"
@@ -1696,17 +1702,19 @@
       },
       "make": {
         "status": "pass",
-        "target": "x86-be+gpu",
-        "via": "STANDALONE_FLAGS=--desktop full"
+        "target": "x86-be"
       },
       "worklist": {
         "status": "pass"
       }
     },
-    "mesh/x86/be+gpu/thin": {
+    "mesh/x86/be+gpu": {
       "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
       },
       "gui": {
         "status": "pass"
@@ -1717,17 +1725,19 @@
       },
       "make": {
         "status": "pass",
-        "target": "x86-be+gpu",
-        "via": "STANDALONE_FLAGS=--desktop thin"
+        "target": "x86-be+gpu"
       },
       "worklist": {
         "status": "pass"
       }
     },
-    "mesh/x86/be/full": {
+    "mesh/x86/edge_ai": {
       "cli": {
-        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
       },
       "gui": {
         "status": "pass"
@@ -1738,17 +1748,19 @@
       },
       "make": {
         "status": "pass",
-        "target": "x86-be",
-        "via": "STANDALONE_FLAGS=--desktop full"
+        "target": "x86-edge_ai"
       },
       "worklist": {
         "status": "pass"
       }
     },
-    "mesh/x86/be/thin": {
+    "mesh/x86/fe": {
       "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
       },
       "gui": {
         "status": "pass"
@@ -1759,17 +1771,19 @@
       },
       "make": {
         "status": "pass",
-        "target": "x86-be",
-        "via": "STANDALONE_FLAGS=--desktop thin"
+        "target": "x86-fe"
       },
       "worklist": {
         "status": "pass"
       }
     },
-    "mesh/x86/edge_ai/full": {
+    "mesh/x86/omnibus": {
       "cli": {
-        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
       },
       "gui": {
         "status": "pass"
@@ -1780,17 +1794,19 @@
       },
       "make": {
         "status": "pass",
-        "target": "x86-edge_ai",
-        "via": "STANDALONE_FLAGS=--desktop full"
+        "target": "x86-omnibus"
       },
       "worklist": {
         "status": "pass"
       }
     },
-    "mesh/x86/edge_ai/thin": {
+    "mesh/x86/pki": {
       "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
+        "envs": [
+          "test",
+          "prod"
+        ],
+        "status": "pass"
       },
       "gui": {
         "status": "pass"
@@ -1801,134 +1817,7 @@
       },
       "make": {
         "status": "pass",
-        "target": "x86-edge_ai",
-        "via": "STANDALONE_FLAGS=--desktop thin"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
-    "mesh/x86/fe/full": {
-      "cli": {
-        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "primary",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-fe",
-        "via": "STANDALONE_FLAGS=--desktop full"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
-    "mesh/x86/fe/thin": {
-      "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "primary",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-fe",
-        "via": "STANDALONE_FLAGS=--desktop thin"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
-    "mesh/x86/omnibus/full": {
-      "cli": {
-        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "primary",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-omnibus",
-        "via": "STANDALONE_FLAGS=--desktop full"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
-    "mesh/x86/omnibus/thin": {
-      "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "primary",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-omnibus",
-        "via": "STANDALONE_FLAGS=--desktop thin"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
-    "mesh/x86/pki/full": {
-      "cli": {
-        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "primary",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-pki",
-        "via": "STANDALONE_FLAGS=--desktop full"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
-    "mesh/x86/pki/thin": {
-      "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=none)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "primary",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-pki",
-        "via": "STANDALONE_FLAGS=--desktop thin"
+        "target": "x86-pki"
       },
       "worklist": {
         "status": "pass"
@@ -2989,48 +2878,6 @@
         "status": "pass"
       }
     },
-    "standalone/x86/standalone-thick/thin": {
-      "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=full+capable)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "client",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-standalone-thick",
-        "via": "STANDALONE_FLAGS=--desktop thin"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
-    "standalone/x86/standalone-thin/full": {
-      "cli": {
-        "reason": "cli=no: --desktop full not honored (PLAN_DESKTOP=thin)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "client",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-standalone-thin",
-        "via": "STANDALONE_FLAGS=--desktop full"
-      },
-      "worklist": {
-        "status": "pass"
-      }
-    },
     "standalone/x86/standalone-thin/thin": {
       "cli": {
         "envs": [
@@ -3076,33 +2923,12 @@
       "worklist": {
         "status": "pass"
       }
-    },
-    "standalone/x86/standalone-unaffiliated/thin": {
-      "cli": {
-        "reason": "cli=no: --desktop thin not honored (PLAN_DESKTOP=full+capable)",
-        "status": "skipped"
-      },
-      "gui": {
-        "status": "pass"
-      },
-      "job": {
-        "image_type": "client",
-        "status": "pass"
-      },
-      "make": {
-        "status": "pass",
-        "target": "x86-standalone-unaffiliated",
-        "via": "STANDALONE_FLAGS=--desktop thin"
-      },
-      "worklist": {
-        "status": "pass"
-      }
     }
   },
   "inventory_schema": "hugmesh-image-inventory/v1",
   "mesh_worklists": {
     "__all__": {
-      "entries": 37,
+      "entries": 31,
       "status": "pass"
     },
     "jetson": {
@@ -3114,34 +2940,34 @@
       "status": "pass"
     },
     "x86": {
-      "entries": 12,
+      "entries": 6,
       "status": "pass"
     }
   },
   "per_channel": {
     "cli": {
       "fail": 0,
-      "pass": 118,
-      "skipped": 16
+      "pass": 125,
+      "skipped": 0
     },
     "gui": {
       "fail": 0,
-      "pass": 134,
+      "pass": 125,
       "skipped": 0
     },
     "job": {
       "fail": 0,
-      "pass": 93,
+      "pass": 84,
       "skipped": 41
     },
     "make": {
       "fail": 0,
-      "pass": 134,
+      "pass": 125,
       "skipped": 0
     },
     "worklist": {
       "fail": 0,
-      "pass": 134,
+      "pass": 125,
       "skipped": 0
     }
   },

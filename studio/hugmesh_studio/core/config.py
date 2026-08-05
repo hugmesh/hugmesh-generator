@@ -899,6 +899,33 @@ def rpi_boards_for_role(role: str) -> tuple[str, ...]:
     return RPI_BOARDS if image_class("", role) == "desktop" else RPI_NODE_BOARDS
 
 
+def x86_desktop_axis(role: str) -> tuple[str, ...]:
+    """The x86 --desktop weights the CATALOG may honestly OFFER for ``role``.
+
+    build-x86-host-stage4.sh's own contract, mirrored (the honesty rule, same as
+    rpi_boards_for_role): the desktop weight is a CLIENT-image axis —
+
+    * person-device client roles (laptop/chromebook/desktop) really take both
+      weights, so both are offered;
+    * the weight-pinning standalone roles carry the weight IN THE ROLE NAME
+      (standalone-thin -> thin; standalone-thick / standalone-unaffiliated ->
+      full) and the builder HARD-ERRORS a contradictory explicit --desktop, so
+      only the agreeing weight is offered ('standalone-thin/full' is a
+      contradiction in terms, not an image);
+    * cluster NODE roles (pki/be/fe/be+gpu/omnibus/edge_ai) are headless k8s
+      servers — the builder plans DESKTOP=none and ignores the flag, so NO
+      desktop axis exists for them at all (advertising one manufactured 12 of
+      the 16 phantom inventory entries).
+    """
+    if role in X86_CLIENT_ROLES:
+        return ("thin", "full")
+    if role == "standalone-thin":
+        return ("thin",)
+    if role in ("standalone-thick", UNAFFILIATED_ROLE):
+        return ("full",)
+    return ()
+
+
 def branding_allowed(cfg: "ImageConfig") -> bool:
     """Theming is offered only on desktop-class images and never in mesh mode (spec 2)."""
     return image_class(cfg.mode, cfg.role) == "desktop" and cfg.mode != "mesh"

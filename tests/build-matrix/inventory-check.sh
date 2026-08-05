@@ -333,8 +333,26 @@ fi
 # The REVIEWED baseline. These are the numbers a human signed off on; a change in either
 # direction is a real event that must be re-reviewed (raise = a new hole, lower = a fix
 # worth recording). Update BOTH numbers in the same commit as the change that moves them.
-BASELINE_GAPS=61
-BASELINE_PHANTOMS=16
+#
+# PHANTOMS re-baselined 16 -> 0 (desktop-axis-honesty): the 16 split three ways —
+#   (A) 12 x86 cluster-node entries (be/fe/pki/omnibus/edge_ai/be+gpu x thin|full):
+#       a headless k8s server has no desktop (builder plans DESKTOP=none); the catalog
+#       grammar wrongly advertised a desktop axis for node roles — PRUNED (the six
+#       roles now carry one honest desktop-less record each);
+#   (B) 3 weight-pinning standalone entries (standalone-thin/full,
+#       standalone-thick/thin, standalone-unaffiliated/thin): the weight is IN THE
+#       ROLE NAME, so these were contradictions in terms — PRUNED, and the builder
+#       now hard-errors a contradictory explicit --desktop instead of silently
+#       overriding it;
+#   (C) 1 REAL BUG (cloud/x86/desktop/thin): the desktop role's full-weight default
+#       silently upgraded an explicit --desktop thin — FIXED via DESKTOP_SET
+#       explicitness tracking; the entry is KEPT and is now cli=yes.
+# GAPS re-baselined 61 -> 62: the newly-real cloud/x86/desktop/thin is expressible
+# from cli/gui/worklist/job but make/menu have no first-class --desktop thin
+# selection (make: STANDALONE_FLAGS escape hatch; menu: no x86 desktop picker) —
+# an honest, reviewed gap, not a regression.
+BASELINE_GAPS=62
+BASELINE_PHANTOMS=0
 GOT_GAPS="$("${PYTHON}" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['channel_gaps']))" "${INVENTORY}")"
 GOT_PHANTOMS="$("${PYTHON}" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['phantoms']))" "${INVENTORY}")"
 if [ "${GOT_GAPS}" = "${BASELINE_GAPS}" ]; then

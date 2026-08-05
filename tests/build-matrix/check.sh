@@ -960,10 +960,11 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=68   # fail-closed: keep in sync with the guithr call list below
-                     # (66 on main — incl. the 2 orangepizero2w + 2
-                     # orangepizero3 probes — plus the 2 orangepi3-lts probes
-                     # from this branch)
+GUITHR_EXPECTED=73   # fail-closed: keep in sync with the guithr call list below
+                     # (68 on main, plus the 5 gDW* desktop-weight precedence/
+                     # agreement probes from the desktop-axis-honesty branch)
+                     # (66 before that — incl. the 2 orangepizero2w + 2
+                     # orangepizero3 probes — plus the 2 orangepi3-lts probes)
                      # (51 + packages_add/packages_drop, WS-BUILDER emission flip;
                      # + superdomain mesh-x86/mesh-rpi5/standalone-absent, WS-SUPER-B;
                      # + chromebook standalone-desktop discoverability)
@@ -1041,6 +1042,27 @@ run_gui_threading_checks() {
     guithr g18-person-role-and-domains \
         '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","person_role":"admin","domains":[{"name":"d.acme.example"}]}' \
         '--person-role admin' '--domains d.acme.example' 'PLAN:^PLAN_PERSON_ROLE=admin$'
+    # ── desktop-weight PRECEDENCE (the cloud/x86/desktop/thin phantom fix): the
+    # 'desktop' role's full-weight default applies ONLY when the operator did not
+    # pass --desktop — an explicit thin must thread through unclobbered (the old
+    # [ thin ] && full arm silently upgraded it, making desktop+thin unbuildable).
+    guithr gDW1-desktop-role-default-full \
+        '{"platform":"x86","role":"desktop","mode":"cloud","env":"test"}' \
+        '!--desktop' 'PLAN:^PLAN_DESKTOP=full$'
+    guithr gDW2-desktop-role-explicit-thin-honored \
+        '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","desktop":"thin"}' \
+        '--desktop thin' 'PLAN:^PLAN_DESKTOP=thin$'
+    guithr gDW3-desktop-role-explicit-full \
+        '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","desktop":"full"}' \
+        '--desktop full' 'PLAN:^PLAN_DESKTOP=full$'
+    # ── weight-pinning standalone roles: an explicit --desktop AGREEING with the
+    # role-name pin stays accepted (the contradictory case is a NEG hard-error).
+    guithr gDW4-standalone-thin-agreeing-explicit \
+        '{"platform":"x86","role":"standalone-thin","mode":"standalone","env":"test","desktop":"thin"}' \
+        '--desktop thin' 'PLAN:^PLAN_DESKTOP=thin$'
+    guithr gDW5-standalone-thick-agreeing-explicit \
+        '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","desktop":"full"}' \
+        '--desktop full' 'PLAN:^PLAN_DESKTOP=full+capable$'
     guithr g26-identity-x86 \
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
         '--hostname myhost' '--timezone America/New_York' '--user bob' 'PLAN:^PLAN_HOSTNAME=myhost$'
@@ -1354,6 +1376,16 @@ run_negative_checks() {
     # UNAFFILIATED desktop: branding flags are a HARD conflict (no brand identity
     # at all), and --unaffiliated composes onto desktop/client roles only — a
     # cluster node is HugMesh platform machinery by definition.
+    # Weight-pinning standalone roles: the weight is IN THE ROLE NAME, so an explicit
+    # --desktop that CONTRADICTS it must hard-error naming both sides — never be
+    # silently overridden (the disease that made cloud/x86/desktop/thin a phantom).
+    # The agreeing-explicit and default cases are proven ACCEPTED by gDW4/gDW5 above.
+    expect_fail "x86: standalone-thin + contradictory --desktop full" \
+        ./build-x86-host-stage4.sh --role standalone-thin --desktop full --print-plan
+    expect_fail "x86: standalone-thick + contradictory --desktop thin" \
+        ./build-x86-host-stage4.sh --role standalone-thick --desktop thin --print-plan
+    expect_fail "x86: standalone-unaffiliated + contradictory --desktop thin" \
+        ./build-x86-host-stage4.sh --role standalone-unaffiliated --desktop thin --print-plan
     expect_fail "x86: unaffiliated role + --theme conflicts" \
         ./build-x86-host-stage4.sh --role standalone-unaffiliated --theme boogiepop --print-plan
     expect_fail "x86: --unaffiliated on a cluster role" \

@@ -32,7 +32,7 @@ from ...core.config import (
     ORANGEPI4LTS_FLAVORS,
     ROLE_CHOICES, RPI_BOARDS,
     UNAFFILIATED_ROLE,
-    rpi_boards_for_role,
+    rpi_boards_for_role, x86_desktop_axis,
 )
 from ._widgets import _row, status_badge
 from .network import _tri_state, _tri_value
@@ -777,6 +777,23 @@ class RolePage(QtWidgets.QWizardPage):
                 if keep in boards:
                     self.rpi5_board.setCurrentText(keep)
                 self.rpi5_board.blockSignals(False)
+        # x86 desktop-weight combo per role (same honesty rule / same repopulate
+        # pattern as the rpi3 board gate above): client roles take thin|full, a
+        # weight-pinning standalone role offers ONLY its own weight — the builder
+        # hard-errors a contradictory explicit --desktop, so the combo must never
+        # offer a pick that dead-ends there. "(default)" (= the role's built-in
+        # weight) always stays. Node roles reduce to just "(default)" — moot, the
+        # client box is hidden outside standalone/cloud anyway.
+        if machine == "x86":
+            weights = ["(default)"] + list(x86_desktop_axis(role))
+            if [self.desktop.itemText(i) for i in range(self.desktop.count())] != weights:
+                keep = self.desktop.currentText()
+                self.desktop.blockSignals(True)
+                self.desktop.clear()
+                self.desktop.addItems(weights)
+                if keep in weights:
+                    self.desktop.setCurrentText(keep)
+                self.desktop.blockSignals(False)
         # composable --unaffiliated is standalone-only (cloud/mesh bake person-device
         # identity — a builder hard-conflict, mirrored by config.py) and redundant on
         # the dedicated role id, which presets it in the builder's own role switch.
