@@ -8,15 +8,23 @@
 # specs/selinux/ carries 9 refpolicy modules (7 hugmesh host domains + the 2 k8s
 # exemplars) and, before this lib, NOTHING compiled or installed them:
 #   git grep 'specs/selinux' -- 'build-*.sh'   =>   no hits.
-# The first-boot half of the loader has existed the whole time —
-# provision_selinux() (specs/etc/keys-provision/provision.sh:2544) runs, as the
-# LAST provisioning step (:2791):
-#     semodule -s "${type}" -B
-#  || semodule -s "${type}" -i /usr/share/selinux/"${type}"/*.pp     (:2563)
-# then setfiles/restorecon (:2568) and `touch /.autorelabel` (:2573).
-# So a .pp that lands in ${SYSROOT}/usr/share/selinux/<type>/ at BUILD time is
-# loaded automatically at first boot with NO change to provision.sh. This lib is
-# the missing build-time half, and only that half.
+# Most of the first-boot half has existed the whole time — provision_selinux()
+# (specs/etc/keys-provision/provision.sh) runs as the LAST provisioning step,
+# builds/loads the policy store and then relabels.
+#
+# BUT ITS EXISTING LOAD DOES NOT COVER US, AND THIS LIB DOES NOT PRETEND IT DOES.
+# The pre-existing block is guarded by `if ! ls /etc/selinux/<type>/policy/policy.*`
+# and, inside it, tries `semodule -B` FIRST with `semodule -i .../*.pp` only as a
+# fallback. `-B` rebuilds the policy from the module STORE; the .pp this lib
+# installs into /usr/share/selinux/<type>/ are PACKAGE files that are not in the
+# store until `semodule -i` runs. So on any image whose policy store is already
+# built (a native x86 merge, or a cross merge whose sec-policy postinst ran the
+# host semodule with `-p ${SYSROOT} -n`), or on any image where `-B` simply
+# succeeds, the hugmesh modules would never be loaded. provision_selinux()
+# therefore carries a small explicit block — delimited by
+# `BEGIN/END hugmesh node-policy load` — that installs exactly the modules THIS
+# build recorded in /usr/share/hugmesh/selinux-modules.list, before the relabel.
+# Search for that sentinel; the two halves are a matched pair.
 #
 # WHY NEVER ON THE TARGET. checkmodule/semodule_package/m4 are x86 BUILD-host
 # binaries; an aarch64 image cannot run them, and the cross sysroot carries no
@@ -29,10 +37,14 @@
 # WHY THE HEADER TREE COMES FROM THE SYSROOT, NOT THE HOST.
 # docs/selinux-module-loading.md's step (b) says to use the build host's
 # /usr/share/selinux/devel/Makefile "installed by sec-policy/selinux-base on the
-# BUILD host" — but sec-policy/* appears NOWHERE in Dockerfile.build (which
-# emerges only checkpolicy, semodule-utils, m4, libselinux, policycoreutils), so
-# the refpolicy DEVEL HEADERS are not on the build host at all. They ARE merged
-# into the target sysroot by sec-policy/selinux-base, and they are pure
+# BUILD host" — that is wrong twice over. (1) sec-policy/* appears NOWHERE in
+# Dockerfile.build (which emerges only checkpolicy, semodule-utils, m4,
+# libselinux, policycoreutils), so no refpolicy headers exist on the build host
+# at all. (2) `/usr/share/selinux/devel` is the FEDORA layout; Gentoo's
+# selinux-base installs the module-build headers per POLICY_TYPE under
+# /usr/share/selinux/<type>/include and puts NOTHING but doc/policy.xml in
+# devel/ — see the block above slx_header_dir() for the ebuild/refpolicy cites.
+# The headers ARE merged into the target sysroot, and they are pure
 # arch-independent m4/make text. So: SYSROOT headers + HOST binaries. Using the
 # sysroot's headers is also strictly more correct — the modules are then compiled
 # against the refpolicy version the image will actually load them into.
@@ -41,7 +53,7 @@
 # The 7 hugmesh_* modules call only BASE refpolicy interfaces (auth_/corecmd_/
 # corenet_/dev_/files_/fs_/init_/kernel_/logging_/modutils_/storage_/sysnet_ plus
 # the *_pattern macros), all shipped by sec-policy/selinux-base — so wherever the
-# devel tree exists they MUST compile, and a failure is a real defect: hard fail.
+# header tree exists they MUST compile, and a failure is a real defect: hard fail.
 # localpath_provisioner and otel_collector call container_domain_template /
 # kubernetes_container / container_list_log_dirs / container_search_logs, which
 # come from the CONTAINER policy headers (sec-policy/selinux-container) that only
@@ -95,24 +107,98 @@ slx_policy_type() {
     printf 'mcs'
 }
 
-# ── slx_devel_dir <sysroot> → the refpolicy devel tree to compile against ────
-# SYSROOT first (right refpolicy version, arch-independent text), host second.
-# Prints nothing and returns 1 when neither exists — the caller decides.
-slx_devel_dir() {
-    local sysroot="${1:?slx_devel_dir: sysroot required}" d
-    for d in "${sysroot}/usr/share/selinux/devel" /usr/share/selinux/devel; do
-        [ -f "${d}/Makefile" ] && [ -d "${d}/include" ] && { printf '%s' "${d}"; return 0; }
+# ── WHERE THE REFPOLICY MODULE-BUILD HEADERS REALLY ARE ──────────────────────
+# refpolicy's `make install-headers` — which sec-policy/selinux-base runs
+# verbatim (`emake DESTDIR="${D}" install-headers`,
+# /var/db/repos/gentoo/sec-policy/selinux-base/selinux-base-2.20260616_p1.ebuild:134)
+# — installs the module-build headers to
+#     $(prefix)/share/selinux/$(NAME)/include        [refpolicy Makefile:191-193]
+# and drops support/Makefile.devel in AS the module Makefile:
+#     $(INSTALL) -m 644 $(support)/Makefile.devel $(headerdir)/Makefile   [:615]
+# next to build.conf (:601-614), support/*.spt (:592-596) and the per-layer .if
+# trees (:597-600). So on a POLICY_TYPES="mcs" image — and every one of the ten
+# specs-*/portage/make.conf.tmpl sets exactly POLICY_TYPES="mcs" — the tree is
+#     <sysroot>/usr/share/selinux/mcs/include/{Makefile,build.conf,support/…}
+#
+# IT IS **NOT** <sysroot>/usr/share/selinux/devel. That is the FEDORA
+# selinux-policy-devel convention. The only thing Gentoo ever puts there is
+# doc/policy.xml (same ebuild, :147-148 `insinto /usr/share/selinux/devel;` /
+# `doins doc/policy.xml;`) — corroborated by
+# `grep -rn 'share/selinux/devel' /var/db/repos/gentoo --include=*.ebuild
+#  --include=*.eclass`, which returns that insinto and an app-crypt/adcli comment
+# noting the Fedora path does not exist on Gentoo, and nothing else. An earlier
+# revision of this lib probed only devel/{Makefile,include}; on a real Gentoo
+# sysroot that can never match, so every builder's `|| exit 1` fired at the very
+# end of the build. That is the bug this block exists to prevent recurring.
+#
+# The Fedora layout (devel/Makefile + devel/include/) is still accepted, second,
+# so a Fedora-ish build host keeps working.
+
+# ── slx_devel_makefile <headerdir> → the refpolicy module Makefile to use ────
+# refpolicy install-headers puts it INSIDE the header dir; Fedora's
+# selinux-policy-devel puts it one level up, next to include/. Both, in order.
+slx_devel_makefile() {
+    local h="${1:?slx_devel_makefile: headerdir required}"
+    [ -f "${h}/Makefile" ] && { printf '%s' "${h}/Makefile"; return 0; }
+    if [ "${h%/include}" != "${h}" ] && [ -f "${h%/include}/Makefile" ]; then
+        printf '%s' "${h%/include}/Makefile"; return 0
+    fi
+    return 1
+}
+
+# A candidate is usable only if it can actually drive support/Makefile.devel:
+# that Makefile does `include $(HEADERDIR)/build.conf` (unconditional — a missing
+# build.conf is a hard make error) and `m4support = $(wildcard
+# $(HEADERDIR)/support/*.spt)`, and we need a Makefile to point `make -f` at.
+_slx_headerdir_ok() {
+    local h="${1:?}"
+    [ -f "${h}/build.conf" ] || return 1
+    [ -d "${h}/support" ]    || return 1
+    slx_devel_makefile "${h}" >/dev/null || return 1
+    return 0
+}
+
+# ── slx_header_dir <sysroot> [<type>] → HEADERDIR to compile against ─────────
+# SYSROOT first (right refpolicy version, and the headers are arch-independent
+# m4/make text), host second. Prints the HEADERDIR; prints nothing and returns 1
+# when no usable tree exists — the caller decides. Every path tried is left in
+# _SLX_HEADER_CANDIDATES so the failure message can be specific.
+_SLX_HEADER_CANDIDATES=()
+slx_header_dir() {
+    local sysroot="${1:?slx_header_dir: sysroot required}" type="${2:-}" root h
+    _SLX_HEADER_CANDIDATES=()
+    for root in "${sysroot}" ""; do
+        [ -n "${type}" ] && _SLX_HEADER_CANDIDATES+=("${root}/usr/share/selinux/${type}/include")
+        for h in "${root}"/usr/share/selinux/*/include; do _SLX_HEADER_CANDIDATES+=("${h}"); done
+        _SLX_HEADER_CANDIDATES+=("${root}/usr/share/selinux/devel/include" "${root}/usr/share/selinux/devel")
+    done
+    for h in "${_SLX_HEADER_CANDIDATES[@]}"; do
+        _slx_headerdir_ok "${h}" && { printf '%s' "${h}"; return 0; }
     done
     return 1
 }
 
-# ── slx_have_interface <devel> <name> → 0 iff the header tree defines it ─────
+# ── slx_name_of / slx_sharedir_of <headerdir> ────────────────────────────────
+# support/Makefile.devel computes HEADERDIR ?= $(SHAREDIR)/$(NAME)/include, so
+# NAME/SHAREDIR are the inverse of the header path. They matter because that
+# Makefile's default for NAME is
+#     NAME ?= $(strip $(shell $(AWK) -F= '/^SELINUXTYPE/{ print $$2 }' /etc/selinux/config))
+# i.e. it reads the BUILD HOST's /etc/selinux/config — a file the builder
+# container does not have. Passing NAME (and SHAREDIR, and HEADERDIR) explicitly
+# is exactly what Gentoo's own module recipe does:
+#     emake NAME=$1 SHAREDIR="${ESYSROOT}"/usr/share/selinux
+#     (/var/db/repos/gentoo/eclass/selinux-policy-2.eclass:282)
+slx_name_of()     { local h="${1:?}"; h="${h%/include}"; printf '%s' "${h##*/}"; }
+slx_sharedir_of() { local h="${1:?}"; h="${h%/include}"; printf '%s' "${h%/*}"; }
+
+# ── slx_have_interface <headerdir> <name> → 0 iff the tree defines it ────────
 # refpolicy declares interfaces/templates as `interface(`name',...)` /
-# `template(`name',...)` inside the .if files. Used to decide whether a
-# CONDITIONAL module's prerequisites are present in THIS sysroot.
+# `template(`name',...)` inside the .if files, which install-headers copies to
+# $(headerdir)/<layer>/*.if. Used to decide whether a CONDITIONAL module's
+# prerequisites are present in THIS sysroot.
 slx_have_interface() {
-    local devel="${1:?}" name="${2:?}"
-    grep -rqE "^[[:space:]]*(interface|template)\(\`${name}'" "${devel}/include" 2>/dev/null
+    local hdr="${1:?}" name="${2:?}"
+    grep -rqE "^[[:space:]]*(interface|template)\(\`${name}'" "${hdr}" 2>/dev/null
 }
 
 # ── slx_module_is_conditional <name> → 0 iff container headers are needed ────
@@ -127,15 +213,27 @@ slx_module_is_conditional() {
     return 1
 }
 
-# ── slx_compile_module <work> <name> <devel> ─────────────────────────────────
+# ── slx_compile_module <work> <name> <headerdir> ─────────────────────────────
 # One refpolicy module -> <name>.pp, in <work>, using the HOST toolchain.
-# PREFIX/BINDIR/SBINDIR are pinned to the host /usr so the refpolicy Makefile's
-# $(BINDIR)/checkmodule and $(BINDIR)/semodule_package can only ever resolve to
-# the x86 build-host binaries, even though HEADERDIR points into the sysroot.
+# Every variable support/Makefile.devel would otherwise resolve against the BUILD
+# HOST is pinned here:
+#   NAME      — else `awk … /etc/selinux/config` on the build host (absent).
+#   SHAREDIR  — else /usr/share/selinux, i.e. the host's store.
+#   HEADERDIR — the sysroot header tree we located; also what `include
+#               $(HEADERDIR)/build.conf` and $(wildcard $(HEADERDIR)/support/*.spt)
+#               resolve against.
+#   PREFIX/BINDIR/SBINDIR — pinned to the host /usr so $(BINDIR)/checkmodule and
+#               $(BINDIR)/semodule_package can only ever resolve to the x86
+#               build-host binaries, never an aarch64 target binary, even though
+#               HEADERDIR points into the sysroot.
 slx_compile_module() {
-    local work="${1:?}" name="${2:?}" devel="${3:?}"
-    make -C "${work}" -f "${devel}/Makefile" \
-        SHAREDIR="${devel%/devel}" HEADERDIR="${devel}/include" \
+    local work="${1:?}" name="${2:?}" hdr="${3:?}" mk
+    mk="$(slx_devel_makefile "${hdr}")" || {
+        _slx_fail "no refpolicy module Makefile for header tree ${hdr}"; return 1; }
+    make -C "${work}" -f "${mk}" \
+        NAME="$(slx_name_of "${hdr}")" \
+        SHAREDIR="$(slx_sharedir_of "${hdr}")" \
+        HEADERDIR="${hdr}" \
         PREFIX=/usr BINDIR=/usr/bin SBINDIR=/usr/sbin \
         "${name}.pp"
 }
@@ -184,18 +282,30 @@ slx_stage_node_policy() {
     local tes=("${src}"/*.te)
     [ -e "${tes[0]}" ] || { _slx_fail "no .te modules under ${src} — refusing to ship an empty policy set"; return 1; }
 
-    local devel type store work
-    if ! devel="$(slx_devel_dir "${sysroot}")"; then
-        _slx_fail "no refpolicy devel tree (Makefile + include/) found."
-        echo "  Looked in: ${sysroot}/usr/share/selinux/devel then /usr/share/selinux/devel" >&2
-        echo "  It is installed into the SYSROOT by sec-policy/selinux-base, which every" >&2
-        echo "  SELinux profile pulls in — its absence means the payload emerge did not" >&2
-        echo "  merge selinux-base, so this image would also have no base.pp to load." >&2
+    local hdr type store work c
+    type="$(slx_policy_type "${sysroot}")"
+    store="${sysroot}/usr/share/selinux/${type}"
+    if ! hdr="$(slx_header_dir "${sysroot}" "${type}")"; then
+        _slx_fail "no refpolicy module-build header tree found."
+        echo "  Wanted a directory holding build.conf + support/ + the refpolicy module" >&2
+        echo "  Makefile (support/Makefile.devel). sec-policy/selinux-base's" >&2
+        echo "  \`emake install-headers\` puts it at" >&2
+        echo "      ${sysroot}/usr/share/selinux/<POLICY_TYPES>/include" >&2
+        echo "  and POLICY_TYPES is \"mcs\" in every specs-*/portage/make.conf.tmpl." >&2
+        echo "  NOTE: /usr/share/selinux/devel is the FEDORA layout — on Gentoo that dir" >&2
+        echo "  holds only doc/policy.xml, so its presence or absence proves nothing." >&2
+        echo "  Looked in:" >&2
+        for c in "${_SLX_HEADER_CANDIDATES[@]}"; do echo "    ${c}" >&2; done
+        if [ -f "${store}/base.pp" ]; then
+            echo "  ${store}/base.pp EXISTS, so selinux-base IS merged — its headers were" >&2
+            echo "  stripped after the merge. Check the sysroot clean." >&2
+        else
+            echo "  ${store}/base.pp is absent too, so the payload emerge did not merge" >&2
+            echo "  sec-policy/selinux-base at all — this image would have no policy to load." >&2
+        fi
         echo "  Set HUGMESH_SELINUX_MODULES=0 to build deliberately without node policy." >&2
         return 1
     fi
-    type="$(slx_policy_type "${sysroot}")"
-    store="${sysroot}/usr/share/selinux/${type}"
 
     # HOST toolchain assertion. The builders' HOST_POLICY_TOOLS gate already
     # provisions these; re-assert at the point of use so a builder that loses the
@@ -213,9 +323,9 @@ slx_stage_node_policy() {
     cp "${src}"/*.te "${src}"/*.fc "${work}/" || { rm -rf "${work}"; _slx_fail "staging ${src} failed"; return 1; }
 
     local have_container=1
-    slx_have_interface "${devel}" "${_SLX_CONDITIONAL_IFACE}" || have_container=0
+    slx_have_interface "${hdr}" "${_SLX_CONDITIONAL_IFACE}" || have_container=0
 
-    _slx_say "devel headers: ${devel}   policy store: ${store}   container headers: $([ "${have_container}" = 1 ] && echo present || echo absent)"
+    _slx_say "refpolicy headers: ${hdr}   policy store: ${store}   container headers: $([ "${have_container}" = 1 ] && echo present || echo absent)"
 
     local te built=() skipped=() rc=0 log="${work}/compile.log"
     for te in "${work}"/*.te; do
@@ -225,7 +335,7 @@ slx_stage_node_policy() {
             _slx_say "SKIP ${name}: needs the container policy headers (${_SLX_CONDITIONAL_IFACE}); sec-policy/selinux-container is not merged into this image"
             continue
         fi
-        if slx_compile_module "${work}" "${name}" "${devel}" >"${log}" 2>&1; then
+        if slx_compile_module "${work}" "${name}" "${hdr}" >"${log}" 2>&1; then
             [ -f "${work}/${name}.pp" ] || { _slx_fail "${name}: make reported success but ${name}.pp does not exist"; rc=1; break; }
             built+=("${name}")
         else
@@ -245,6 +355,28 @@ slx_stage_node_policy() {
 
     # ALL-OR-NOTHING install: only reached once every buildable module compiled.
     install -d -m 0755 "${store}" || { rm -rf "${work}"; _slx_fail "cannot create ${store}"; return 1; }
+
+    # PRUNE WITHDRAWN MODULES. On a --resume / --skip-clean sysroot the store may
+    # still hold a .pp from a previous run whose .te has since been deleted from
+    # specs/selinux. provision_selinux() and `semodule -B` both work off what is
+    # in the store, so a withdrawn policy module would keep being loaded while the
+    # manifest (the enforce-gate's contract) no longer lists it. Prune strictly by
+    # the PREVIOUS manifest, never by a glob: the distro's own base.pp and any
+    # sec-policy/* module must not be touched.
+    local prev="${sysroot}/usr/share/hugmesh/selinux-modules.list" stale=() pm keep
+    if [ -r "${prev}" ]; then
+        while read -r pm; do
+            case "${pm}" in ''|'#'*) continue ;; esac
+            keep=0
+            for name in "${built[@]}"; do [ "${name}" = "${pm}" ] && { keep=1; break; }; done
+            [ "${keep}" = 0 ] && [ -e "${store}/${pm}.pp" ] && stale+=("${pm}")
+        done < "${prev}"
+    fi
+    if [ "${#stale[@]}" -ne 0 ]; then
+        for pm in "${stale[@]}"; do rm -f "${store}/${pm}.pp"; done
+        _slx_say "pruned ${#stale[@]} withdrawn module(s) from ${store}: ${stale[*]}"
+    fi
+
     install -m 0644 "${work}"/*.pp "${store}/" || { rm -rf "${work}"; _slx_fail "installing .pp into ${store} failed"; return 1; }
 
     # On-image manifest — the single source of truth the enforce-gate reads.
@@ -252,7 +384,8 @@ slx_stage_node_policy() {
     {
         echo "# hugmesh SELinux node-policy modules installed into /usr/share/selinux/${type}/"
         echo "# Written at build time by scripts/_selinux-policy-lib.sh."
-        echo "# Loaded at first boot by provision_selinux() (semodule -i .../*.pp). One name per line."
+        echo "# Read at first boot by provision_selinux()'s hugmesh node-policy load block,"
+        echo "# and at runtime by /etc/init.d/selinux-enforce-gate. One module name per line."
         printf '%s\n' "${built[@]}"
         for name in ${skipped[*]-}; do
             echo "# skipped: ${name} (container policy headers absent — not a k8s node image)"
@@ -262,7 +395,7 @@ slx_stage_node_policy() {
 
     _slx_say "installed ${#built[@]} module(s) into ${store}: ${built[*]}"
     [ "${#skipped[@]}" -eq 0 ] || _slx_say "not applicable to this image: ${skipped[*]-}"
-    _slx_say "first boot loads them via provision_selinux() -> semodule -s ${type} -i /usr/share/selinux/${type}/*.pp (PERMISSIVE)"
+    _slx_say "first boot loads them via provision_selinux()'s 'hugmesh node-policy load' block -> semodule -s ${type} -i <each module from the manifest> (PERMISSIVE)"
 
     rm -rf "${work}"
     slx_ship_enforce_gate "${sysroot}" "${shared_specs}"

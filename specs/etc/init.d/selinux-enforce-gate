@@ -7,12 +7,22 @@ depend() {
     before local
 }
 
-MARKER=/var/lib/keys-provision/selinux-settled
-CONFIG=/etc/selinux/config
-TYPE=mcs
+# Paths. `:=` defaults rather than bare assignments so OpenRC's
+# /etc/conf.d/selinux-enforce-gate can retarget them on an odd image — and so the
+# gate's start() can be executed for real against a fixture in
+# tests/scripts/test-selinux-policy-install.sh instead of merely grepped. The
+# DEFAULT-OFF switch below is deliberately NOT one of these overridable knobs in
+# spirit: overriding it IS the opt-in.
+: "${MARKER:=/var/lib/keys-provision/selinux-settled}"
+: "${CONFIG:=/etc/selinux/config}"
+: "${TYPE:=mcs}"
+# The relabel-boot flag /.autorelabel — a variable for the same reason.
+: "${AUTORELABEL:=/.autorelabel}"
+# How "does this image run containers?" is answered (see required_modules()).
+: "${CONTAINERD_INITD:=/etc/init.d/containerd}"
 # Build-time manifest of the node-policy modules THIS image actually installed,
 # written by scripts/_selinux-policy-lib.sh next to the .pp files it installs.
-MODULE_MANIFEST=/usr/share/hugmesh/selinux-modules.list
+: "${MODULE_MANIFEST:=/usr/share/hugmesh/selinux-modules.list}"
 
 # ── DEFAULT-OFF SWITCH ───────────────────────────────────────────────────────
 # Sourced by OpenRC from /etc/conf.d/selinux-enforce-gate, which the builders
@@ -41,7 +51,7 @@ check_enabled() {
 check_relabel_clean() {
     # /.autorelabel consumed by the relabel boot, and a dry-run reports
     # no pending changes for the host-integration paths and /.
-    [ -e /.autorelabel ] && { ewarn "flip-gate: /.autorelabel still present"; return 1; }
+    [ -e "${AUTORELABEL}" ] && { ewarn "flip-gate: ${AUTORELABEL} still present"; return 1; }
     if command -v restorecon >/dev/null 2>&1; then
         out=$(restorecon -nrv /mnt/data/local-path /mnt/usb/local-path /var/log/pods 2>/dev/null)
         [ -n "${out}" ] && { ewarn "flip-gate: mislabel detected:"; ewarn "${out}"; return 1; }
@@ -69,7 +79,7 @@ required_modules() {
     if [ -r "${MODULE_MANIFEST}" ]; then
         sed -e 's/#.*//' -e 's/[[:space:]]//g' "${MODULE_MANIFEST}" | grep -v '^$'
     fi
-    [ -x /etc/init.d/containerd ] && echo container
+    [ -x "${CONTAINERD_INITD}" ] && echo container
     return 0
 }
 

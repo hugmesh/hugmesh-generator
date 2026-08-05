@@ -81,12 +81,12 @@
 ################################################################
 # Label the per-user OIDC-token deposit directory that the SSO desktop-login
 # integration writes (the bearer-forward GEN-SSO artifact reads it). The token
-# lands at ${XDG_RUNTIME_DIR}/hugmesh/oidc-token == /run/user/%{uid}/hugmesh/
+# lands at ${XDG_RUNTIME_DIR}/hugmesh/oidc-token == /run/user/<uid>/hugmesh/
 # oidc-token, user-private 0600, wiped on logout
 # (specs/etc/hugmesh/desktop-governance/discover/bearer-forward.sh.tmpl reads
 # it and configures the PER-USER flatpak http.extra-headers Bearer).
 #
-# WHY this label: /run/user/%{uid} is the user runtime dir (refpolicy
+# WHY this label: /run/user/<uid> is the user runtime dir (refpolicy
 # user_runtime_t under systemd / user_tmp_t historically). A hugmesh subdir
 # created at session start under it would otherwise inherit the parent's
 # context, which is usually fine — but pinning it to the desktop user runtime
@@ -114,7 +114,18 @@
 # 0600 file's own restorecon at session start keeps a runtime-created path
 # correctly labelled (document in the desktop-session runbook).
 #
-# NOTE: %{uid} is the refpolicy file_contexts per-user expansion; setfiles /
-# restorecon expand it per real uid at relabel time.
+# NOTE ON THE PATTERN. This line used to read `/run/user/%{uid}/hugmesh(/.*)?`
+# with a comment claiming %{uid} was "the refpolicy file_contexts per-user
+# expansion". It is not. libselinux performs no %{uid} substitution: the only
+# per-user token refpolicy uses is %{USERID}, and only inside the genhomedircon
+# TEMPLATE (file_contexts.template -> file_contexts.homedirs), never in a plain
+# module .fc. As an ordinary file_contexts regex `%{uid}` is literal — PCRE2
+# accepts it and it can then only match a directory actually named "%{uid}",
+# while glibc's POSIX ERE rejects `{uid}` outright (REG_BADBR). Either way the
+# label never reached a real /run/user/1000/hugmesh path. The pattern below is
+# refpolicy's own spelling for a uid directory (userdomain.fc:10-11 uses
+# `/run/user/[^/]+`), so it now matches. This changes no ACCESS: the type
+# assigned is the same user_runtime_t refpolicy already gives the parent
+# /run/user/<uid>, and the image ships PERMISSIVE.
 
-/run/user/%{uid}/hugmesh(/.*)?    gen_context(system_u:object_r:user_runtime_t,s0)
+/run/user/[^/]+/hugmesh(/.*)?    gen_context(system_u:object_r:user_runtime_t,s0)

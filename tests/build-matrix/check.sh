@@ -1837,7 +1837,7 @@ PY
 # FAIL-CLOSED: the delegate emits a FIXED number of assertions (its host-dependent
 # branches emit a SKIP-pass so the count never moves), and a short tally is charged
 # as failures — a delegate that dies half-way cannot come back green.
-SLX_EXPECTED=80
+SLX_EXPECTED=117
 SLX_PASS=0; SLX_FAIL=0
 run_selinux_policy_checks() {
     local out="${TMP_DIR}/selinux-policy.out"

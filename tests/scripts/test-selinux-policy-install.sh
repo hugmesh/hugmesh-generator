@@ -10,19 +10,44 @@
 # losing the install step again would be invisible in exactly the same way.
 #
 # Unlike a pure grep gate, this EXECUTES the real shared lib against a FAKE target
-# sysroot and a FAKE refpolicy devel tree (the same technique as
+# sysroot and a FAKE refpolicy header tree, and EXECUTES the real enforce-gate
+# service's start() against stubbed system tools (the same technique as
 # tests/build-arm-payload-gates.sh), so it can prove BEHAVIOUR, not just presence:
 # all-or-nothing installs, the label-only .fc trap, the conditional k8s exemplars,
 # idempotence, and — the load-bearing one — that a default image ships the
 # enforce-gate INERT so it still boots PERMISSIVE.
 #
-# HONEST SCOPE. The fixture devel tree's Makefile runs the REAL refpolicy
-# three-command recipe (m4 -> checkmodule -> semodule_package) with the host's own
-# binaries, so section C-real proves a genuine .pp is produced by the genuine
-# toolchain. It does NOT prove the real modules compile against real refpolicy
-# headers — that needs sec-policy/selinux-base merged into a real sysroot, i.e. a
-# real protected build. The real-source passes therefore drive a stub Makefile and
-# prove enumeration/skip/install/manifest logic against the REAL specs/selinux set.
+# ── THE FIXTURE SYSROOT IS THE SHAPE sec-policy/selinux-base REALLY PRODUCES ──
+# An earlier revision of this gate built the fixture as
+# <sysroot>/usr/share/selinux/devel/{Makefile,include/} — the FEDORA
+# selinux-policy-devel convention, and a layout Gentoo never creates. It reported
+# 80/0 while the real step returned rc=1 on every image, because the lib probed
+# the same non-existent path. mk_sysroot() now reproduces what
+# `emake DESTDIR=... install-headers` actually leaves behind:
+#     usr/share/selinux/mcs/base.pp                       (emake install)
+#     usr/share/selinux/mcs/include/Makefile              (support/Makefile.devel)
+#     usr/share/selinux/mcs/include/build.conf
+#     usr/share/selinux/mcs/include/support/*.spt
+#     usr/share/selinux/devel/policy.xml                  (the ONLY devel/ file)
+# refpolicy Makefile:191-193 + :601-615; selinux-base-2.20260616_p1.ebuild:134
+# (install-headers) and :147-148 (the policy.xml insinto). C-gentoo asserts the
+# fixture keeps that shape, so it cannot silently drift back.
+#
+# The fixture Makefile is not a bare stub: it reproduces support/Makefile.devel's
+# VARIABLE CONTRACT verbatim (NAME defaulted from the build host's
+# /etc/selinux/config, SHAREDIR/NAME composing HEADERDIR, `include
+# $(HEADERDIR)/build.conf`) and $(error)s when the caller gets it wrong — which is
+# what makes the NAME/SHAREDIR/HEADERDIR pins a real assertion rather than a
+# comment.
+#
+# HONEST SCOPE — WHAT THIS GATE STILL DOES NOT PROVE. Section C-real runs the
+# genuine m4 -> checkmodule -> semodule_package recipe with the host's own
+# binaries, so a genuine .pp is produced by the genuine toolchain. It does NOT
+# compile any hugmesh module against REAL refpolicy headers: that needs
+# sec-policy/selinux-base merged into a real sysroot (a real protected build), and
+# this repo deliberately vendors no refpolicy header tree. The real-source passes
+# therefore drive the contract Makefile and prove enumeration/skip/install/
+# manifest/pin logic against the REAL specs/selinux set.
 #
 # Pure static + fake-sysroot execution. No emerge, no chroot, no network, no root.
 set -uo pipefail
@@ -32,6 +57,7 @@ GEN="$(cd "${HERE}/../.." && pwd)"
 LIB="${GEN}/scripts/_selinux-policy-lib.sh"
 SVC="${GEN}/specs/etc/init.d/selinux-enforce-gate"
 SRC="${GEN}/specs/selinux"
+PROV="${GEN}/specs/etc/keys-provision/provision.sh"
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -115,51 +141,103 @@ for gone in hugmesh_breakglass hugmesh_oidc_token; do
     [ -e "${SRC}/${gone}.fc" ] && bad "${gone}.fc still exists as a label-only file" \
                                || ok "${gone}.fc folded away (no standalone label-only file)"
 done
-grep -qF '/etc/ssh/break-glass\.keys' "${SRC}/hugmesh_authkeys.fc" \
-    && ok "break-glass context line survives the fold into hugmesh_authkeys.fc" \
-    || bad "break-glass context line LOST in the fold"
-grep -qF '/run/user/%{uid}/hugmesh' "${SRC}/hugmesh_authkeys.fc" \
-    && ok "oidc-token context line survives the fold into hugmesh_authkeys.fc" \
-    || bad "oidc-token context line LOST in the fold"
+# Both folded-in labels are asserted on the CONTEXT LINE, never on prose. The
+# earlier oidc assertion was `grep -qF '/run/user/%{uid}/hugmesh'`, and that exact
+# literal also appears in the explanatory comment above the rule — so deleting the
+# real context line left the suite green. Both patterns below now require the
+# line-leading path AND the gen_context() that makes it a label.
+grep -qE '^/etc/ssh/break-glass\\\.keys[[:space:]].*gen_context\(' "${SRC}/hugmesh_authkeys.fc" \
+    && ok "break-glass CONTEXT LINE survives the fold into hugmesh_authkeys.fc" \
+    || bad "break-glass context line LOST in the fold (a comment mentioning it is not a label)"
+grep -qE '^/run/user/[^[:space:]]+/hugmesh\(/\.\*\)\?[[:space:]].*gen_context\(' "${SRC}/hugmesh_authkeys.fc" \
+    && ok "oidc-token CONTEXT LINE survives the fold into hugmesh_authkeys.fc" \
+    || bad "oidc-token context line LOST in the fold (a comment mentioning it is not a label)"
+# ...and the oidc path must be a regex that can match a REAL /run/user/<uid> path.
+# `%{uid}` is not a libselinux substitution (refpolicy uses %{USERID}, and only in
+# the genhomedircon template); as a plain file_contexts regex it can only ever
+# match the literal directory "%{uid}", i.e. nothing. Prove liveness, not spelling.
+oidc_pat="$(grep -E '^/run/user/.*hugmesh.*gen_context\(' "${SRC}/hugmesh_authkeys.fc" | head -1 | awk '{print $1}')"
+if [ -n "${oidc_pat}" ] && printf '%s\n' '/run/user/1000/hugmesh/oidc-token' | grep -qE "^${oidc_pat}$"; then
+    ok "the oidc file-context regex actually matches /run/user/1000/hugmesh/oidc-token"
+else
+    bad "the oidc file-context regex [${oidc_pat:-<none>}] matches NO real /run/user/<uid> path"
+fi
 for m in "${EXEMPLARS[@]}"; do
     [ -f "${SRC}/${m}.te" ] && ok "k8s exemplar ${m}.te present (the enforce-gate names it)" \
                             || bad "k8s exemplar ${m}.te MISSING — the enforce-gate could never pass"
 done
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
-# A fake refpolicy devel tree. STUB flavour: the Makefile fakes the .pp, so the
-# real 9-module set can be enumerated without real refpolicy headers. REAL
-# flavour: the Makefile runs the genuine m4 -> checkmodule -> semodule_package
-# recipe with the host's own binaries.
-mk_devel() {  # mk_devel <dir> <stub|real> <with-container|no-container>
-    local d="$1" flavour="$2" container="$3"
-    mkdir -p "${d}/include/support" "${d}/include/services"
-    cat > "${d}/include/support/loadable_module.spt" <<'SPT'
+# mk_headers <headerdir> <stub|real> <with-container|no-container>
+# Writes a refpolicy HEADER tree in the layout `make install-headers` produces:
+# Makefile (= support/Makefile.devel) + build.conf + support/*.spt + <layer>/*.if,
+# all INSIDE the header dir.
+#
+# The Makefile reproduces support/Makefile.devel's variable contract verbatim, so
+# a caller that gets NAME/SHAREDIR/HEADERDIR wrong FAILS here instead of silently
+# resolving against the build host:
+#   NAME ?= $(strip $(shell $(AWK) -F= '/^SELINUXTYPE/{print $2}' /etc/selinux/config))
+#   SHAREDIR ?= /usr/share/selinux
+#   HEADERDIR ?= $(SHAREDIR)/$(NAME)/include
+#   include $(HEADERDIR)/build.conf
+mk_headers() {
+    local h="$1" flavour="$2" container="$3"
+    mkdir -p "${h}/support" "${h}/services"
+    cat > "${h}/support/loadable_module.spt" <<'SPT'
 define(`policy_module',`
 	module $1 $2;
 ')
 define(`gen_context',`$1')
 SPT
+    # What refpolicy's install-headers writes (Makefile:601-614).
+    cat > "${h}/build.conf" <<'BC'
+TYPE ?= mcs
+NAME ?= mcs
+DISTRO ?= gentoo
+MONOLITHIC ?= n
+DIRECT_INITRC ?= n
+SYSTEMD ?= y
+CUSTOM_BUILDOPT ?=
+override UBAC := n
+override MLS_SENS := 16
+override MLS_CATS := 1024
+override MCS_CATS := 1024
+BC
     if [ "${container}" = "with-container" ]; then
-        cat > "${d}/include/services/container.if" <<'IF'
+        cat > "${h}/services/container.if" <<'IF'
 ## <summary>fixture container policy header</summary>
 interface(`container_domain_template',`
 	gen_require(`type container_t;')
 ')
 IF
     fi
+    # The variable contract — identical in both flavours.
+    cat > "${h}/Makefile" <<'MK'
+# Mirrors refpolicy support/Makefile.devel's variable contract.
+AWK ?= awk
+NAME ?= $(strip $(shell $(AWK) -F= '/^SELINUXTYPE/{ print $$2 }' /etc/selinux/config 2>/dev/null))
+SHAREDIR ?= /usr/share/selinux
+HEADERDIR ?= $(SHAREDIR)/$(NAME)/include
+ifeq "$(strip $(NAME))" ""
+$(error Makefile.devel contract: NAME is empty — the caller passed no NAME and this build host has no /etc/selinux/config to derive it from)
+endif
+ifneq "$(abspath $(SHAREDIR)/$(NAME)/include)" "$(abspath $(HEADERDIR))"
+$(error Makefile.devel contract: $$(SHAREDIR)/$$(NAME)/include = "$(SHAREDIR)/$(NAME)/include" does not resolve to HEADERDIR = "$(HEADERDIR)")
+endif
+include $(HEADERDIR)/build.conf
+PREFIX := /usr
+BINDIR := $(PREFIX)/bin
+SBINDIR := $(PREFIX)/sbin
+$(shell printf 'BINDIR=%s\nSBINDIR=%s\nHEADERDIR=%s\nNAME=%s\nSHAREDIR=%s\nTYPE=%s\n' '$(BINDIR)' '$(SBINDIR)' '$(HEADERDIR)' '$(NAME)' '$(SHAREDIR)' '$(TYPE)' > $(HEADERDIR)/compile.vars)
+MK
     if [ "${flavour}" = "stub" ]; then
-        cat > "${d}/Makefile" <<'MK'
+        cat >> "${h}/Makefile" <<'MK'
 %.pp:
-	@echo "BINDIR=$(BINDIR)" > $(HEADERDIR)/../compile.vars
-	@echo "HEADERDIR=$(HEADERDIR)" >> $(HEADERDIR)/../compile.vars
 	@printf 'fake-pp %s\n' "$*" > $@
 MK
     else
-        cat > "${d}/Makefile" <<'MK'
+        cat >> "${h}/Makefile" <<'MK'
 %.pp: %.te
-	@echo "BINDIR=$(BINDIR)" > $(HEADERDIR)/../compile.vars
-	@echo "HEADERDIR=$(HEADERDIR)" >> $(HEADERDIR)/../compile.vars
 	m4 $(HEADERDIR)/support/loadable_module.spt $*.te > $*.tmp
 	$(BINDIR)/checkmodule -M -m $*.tmp -o $*.mod
 	$(BINDIR)/semodule_package -o $@ -m $*.mod -f $*.fc
@@ -167,11 +245,26 @@ MK
     fi
 }
 
-mk_sysroot() {  # mk_sysroot <dir> <stub|real> <with-container|no-container>
+# mk_sysroot <dir> <stub|real> <with-container|no-container>
+# THE GENTOO LAYOUT — what sec-policy/selinux-base really leaves in a sysroot.
+mk_sysroot() {
+    local s="$1"
+    mkdir -p "${s}/usr/share/selinux/mcs" "${s}/usr/share/selinux/devel" \
+             "${s}/etc/init.d" "${s}/etc/conf.d" "${s}/etc/runlevels/default"
+    : > "${s}/usr/share/selinux/mcs/base.pp"                 # emake install
+    printf '<policy/>\n' > "${s}/usr/share/selinux/devel/policy.xml"  # the ONLY devel/ file
+    mk_headers "${s}/usr/share/selinux/mcs/include" "$2" "$3"
+}
+
+# mk_sysroot_fedora — the second-choice layout the lib still accepts, so a
+# Fedora-ish build host (selinux-policy-devel: devel/Makefile + devel/include/)
+# keeps working. NOTE: no <type>/include here, so the Gentoo probe must miss.
+mk_sysroot_fedora() {
     local s="$1"
     mkdir -p "${s}/usr/share/selinux/mcs" "${s}/etc/init.d" "${s}/etc/conf.d" "${s}/etc/runlevels/default"
-    : > "${s}/usr/share/selinux/mcs/base.pp"        # what selinux-base leaves behind
-    mk_devel "${s}/usr/share/selinux/devel" "$2" "$3"
+    : > "${s}/usr/share/selinux/mcs/base.pp"
+    mk_headers "${s}/usr/share/selinux/devel/include" "$2" "$3"
+    mv "${s}/usr/share/selinux/devel/include/Makefile" "${s}/usr/share/selinux/devel/Makefile"
 }
 
 # A fake ${SHARED_SPECS}: real specs/selinux, plus the real enforce-gate.
@@ -192,6 +285,8 @@ run_lib() {  # run_lib <sysroot> <shared_specs> -> rc, output on stdout
       source "${LIB}"
       slx_stage_node_policy "$1" "$2" ) 2>&1
 }
+
+n_mods() { find "$1/usr/share/selinux/mcs" -maxdepth 1 -name '*.pp' ! -name base.pp | wc -l; }
 
 # ── C) execution against a fake sysroot ──────────────────────────────────────
 echo "-- C) real lib against a fake sysroot --"
@@ -221,10 +316,41 @@ else
     bad "manifest ${MAN} not written"; bad "manifest skip-reason (no manifest)"
 fi
 
+# ── C-gentoo) THE REGRESSION FOR THE FEDORA-PATH BUG ─────────────────────────
+# The fixture above must BE the Gentoo shape, and the lib must resolve to the
+# per-type include dir. If mk_sysroot ever drifts back to a hand-made
+# usr/share/selinux/devel/{Makefile,include}, these two fail.
+echo "-- C-gentoo) the sec-policy/selinux-base sysroot shape --"
+devel_files="$(cd "${S}/usr/share/selinux/devel" && ls -A | tr '\n' ' ')"
+[ "${devel_files}" = "policy.xml " ] \
+    && ok "fixture devel/ holds ONLY policy.xml, exactly like selinux-base's insinto" \
+    || bad "fixture devel/ is not the selinux-base shape: [${devel_files}]"
+printf '%s' "${out}" | grep -qF "refpolicy headers: ${S}/usr/share/selinux/mcs/include" \
+    && ok "lib compiled against <sysroot>/usr/share/selinux/mcs/include (the install-headers path)" \
+    || bad "lib did not use the per-type include dir"$'\n'"${out}"
+# And the pins the contract Makefile records — NAME/SHAREDIR must compose to it.
+cv="${S}/usr/share/selinux/mcs/include/compile.vars"
+if [ -f "${cv}" ]; then
+    grep -q '^NAME=mcs$' "${cv}" && ok "make was passed NAME=mcs (never derived from the build host's /etc/selinux/config)" \
+                                 || bad "NAME not passed: [$(tr '\n' ' ' < "${cv}")]"
+    grep -q "^SHAREDIR=${S}/usr/share/selinux$" "${cv}" \
+        && ok "make was passed SHAREDIR=<sysroot>/usr/share/selinux" \
+        || bad "SHAREDIR wrong: [$(tr '\n' ' ' < "${cv}")]"
+else
+    bad "contract Makefile never ran (no compile.vars)"; bad "(SHAREDIR check skipped)"
+fi
+
+# C-fedora: the second-choice layout still works.
+S2="${TMP}/cfed/sysroot"; SP2="${TMP}/cfed/specs"; mk_sysroot_fedora "${S2}" stub no-container; mk_specs "${SP2}"
+out2="$(run_lib "${S2}" "${SP2}")"; rc2=$?
+{ [ "${rc2}" -eq 0 ] && [ "$(n_mods "${S2}")" -eq 7 ]; } \
+    && ok "Fedora devel/ layout (devel/Makefile + devel/include) still compiles all 7" \
+    || bad "Fedora layout regressed: rc=${rc2} installed=$(n_mods "${S2}")"$'\n'"${out2}"
+
 # C3: with container headers -> all 9.
 S="${TMP}/c3/sysroot"; SP="${TMP}/c3/specs"; mk_sysroot "${S}" stub with-container; mk_specs "${SP}"
 out="$(run_lib "${S}" "${SP}")"; rc=$?
-n_pp="$(find "${S}/usr/share/selinux/mcs" -name '*.pp' ! -name base.pp | wc -l)"
+n_pp="$(n_mods "${S}")"
 { [ "${rc}" -eq 0 ] && [ "${n_pp}" -eq 9 ]; } \
     && ok "container-capable image: all 9 modules installed (incl. both k8s exemplars)" \
     || bad "container-capable image: rc=${rc} installed=${n_pp} (want rc=0, 9)"$'\n'"${out}"
@@ -259,17 +385,32 @@ grep -q '^SELINUX_ENFORCE_GATE="yes"$' "${S}/etc/conf.d/selinux-enforce-gate" \
 # C9/C10: ALL-OR-NOTHING. A module that fails to compile must fail the build and
 # leave the policy store untouched — never a half-populated store.
 S="${TMP}/c9/sysroot"; SP="${TMP}/c9/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-cat > "${S}/usr/share/selinux/devel/Makefile" <<'MK'
-%.pp:
-	@if [ "$*" = "hugmesh_vpn" ]; then echo "fixture: deliberate compile failure" >&2; exit 1; fi
-	@printf 'fake-pp %s\n' "$*" > $@
+cat >> "${S}/usr/share/selinux/mcs/include/Makefile" <<'MK'
+hugmesh_vpn.pp:
+	@echo "fixture: deliberate compile failure" >&2; exit 1
 MK
 out="$(run_lib "${S}" "${SP}")"; rc=$?
 [ "${rc}" -ne 0 ] && ok "a module that fails to compile fails the step (rc=${rc})" \
                   || bad "compile failure did NOT fail the step"
-n_pp="$(find "${S}/usr/share/selinux/mcs" -name '*.pp' ! -name base.pp | wc -l)"
+n_pp="$(n_mods "${S}")"
 [ "${n_pp}" -eq 0 ] && ok "ALL-OR-NOTHING: nothing installed after a compile failure" \
                     || bad "half-populated store: ${n_pp} .pp installed despite a failure"
+
+# C10b: a Makefile that EXITS 0 but produces no .pp must still fail. Without the
+# post-make existence check the lib would record the module as built and then
+# install nothing under that name — the manifest would name a .pp the image lacks
+# and the enforce-gate would wait forever for a module that can never load.
+S="${TMP}/c10b/sysroot"; SP="${TMP}/c10b/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
+cat >> "${S}/usr/share/selinux/mcs/include/Makefile" <<'MK'
+hugmesh_tor.pp:
+	@echo "fixture: silent no-op, exits 0, writes nothing"
+MK
+out="$(run_lib "${S}" "${SP}")"; rc=$?
+{ [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q 'make reported success but hugmesh_tor.pp does not exist'; } \
+    && ok "a make that succeeds without writing the .pp fails loudly and names the module" \
+    || bad "a silent no-op make was accepted (rc=${rc})"$'\n'"${out}"
+[ "$(n_mods "${S}")" -eq 0 ] && ok "silent no-op make: nothing installed" \
+                             || bad "silent no-op make: $(n_mods "${S}") .pp installed anyway"
 
 # C11/C12: the label-only trap.
 S="${TMP}/c11/sysroot"; SP="${TMP}/c11/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
@@ -277,27 +418,36 @@ printf '/etc/ghost -- gen_context(system_u:object_r:etc_t,s0)\n' > "${SP}/selinu
 out="$(run_lib "${S}" "${SP}")"; rc=$?
 [ "${rc}" -ne 0 ] && ok "a label-only .fc (no .te) fails the step instead of vanishing" \
                   || bad "label-only .fc was silently ignored (rc=0)"
-n_pp="$(find "${S}/usr/share/selinux/mcs" -name '*.pp' ! -name base.pp | wc -l)"
-[ "${n_pp}" -eq 0 ] && ok "label-only .fc: nothing installed" || bad "label-only .fc: ${n_pp} .pp installed anyway"
+[ "$(n_mods "${S}")" -eq 0 ] && ok "label-only .fc: nothing installed" || bad "label-only .fc: $(n_mods "${S}") .pp installed anyway"
 
 # C13: the deliberate operator opt-out.
 S="${TMP}/c13/sysroot"; SP="${TMP}/c13/specs"; mk_sysroot "${S}" stub with-container; mk_specs "${SP}"
 out="$(HUGMESH_SELINUX_MODULES=0 run_lib "${S}" "${SP}")"; rc=$?
-n_pp="$(find "${S}/usr/share/selinux/mcs" -name '*.pp' ! -name base.pp | wc -l)"
-{ [ "${rc}" -eq 0 ] && [ "${n_pp}" -eq 0 ]; } \
+{ [ "${rc}" -eq 0 ] && [ "$(n_mods "${S}")" -eq 0 ]; } \
     && ok "HUGMESH_SELINUX_MODULES=0 is a clean, loud no-op (rc=0, nothing installed)" \
-    || bad "opt-out misbehaved: rc=${rc} installed=${n_pp}"
+    || bad "opt-out misbehaved: rc=${rc} installed=$(n_mods "${S}")"
+[ -e "${S}/etc/conf.d/selinux-enforce-gate" ] \
+    && bad "opt-out still shipped the enforce-gate conf.d" \
+    || ok "opt-out ships no enforce-gate at all"
 
-# C14: no refpolicy devel tree anywhere -> loud failure, not a silent empty store.
+# C14: NO refpolicy header tree anywhere -> loud failure, not a silent empty
+# store. NOTE this is the EXCEPTIONAL branch: a real image always has the
+# per-type include dir (C-gentoo above is the always-taken case).
 S="${TMP}/c14/sysroot"; SP="${TMP}/c14/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
-rm -rf "${S}/usr/share/selinux/devel"
-if [ -f /usr/share/selinux/devel/Makefile ]; then
-    ok "SKIP devel-absent case (this host has its own /usr/share/selinux/devel)"
+rm -rf "${S}/usr/share/selinux/mcs/include"
+if [ -d /usr/share/selinux ]; then
+    ok "SKIP header-absent case (this host has its own /usr/share/selinux)"
+    ok "SKIP header-absent diagnostic (this host has its own /usr/share/selinux)"
 else
     out="$(run_lib "${S}" "${SP}")"; rc=$?
-    { [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q 'refpolicy devel tree'; } \
-        && ok "missing refpolicy devel tree fails loudly with the reason" \
-        || bad "missing devel tree did not fail loudly (rc=${rc})"
+    { [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q 'no refpolicy module-build header tree found'; } \
+        && ok "missing refpolicy header tree fails loudly with the reason" \
+        || bad "missing header tree did not fail loudly (rc=${rc})"$'\n'"${out}"
+    # The old message blamed a missing selinux-base even when base.pp was right
+    # there. It must now name the real cause.
+    printf '%s' "${out}" | grep -q 'base.pp EXISTS, so selinux-base IS merged' \
+        && ok "the diagnostic distinguishes 'headers stripped' from 'selinux-base absent'" \
+        || bad "the diagnostic still misattributes the cause"$'\n'"${out}"
 fi
 
 # C15/C16: the REAL host toolchain, driven through the lib's own make invocation.
@@ -326,17 +476,55 @@ FC
     fi
     # CROSS-SAFETY: the refpolicy Makefile must be pinned to the HOST /usr/bin, or
     # a cross build would try to run aarch64 checkmodule/semodule_package.
-    vars="$(cat "${S}/usr/share/selinux/devel/compile.vars" 2>/dev/null)"
+    vars="$(cat "${S}/usr/share/selinux/mcs/include/compile.vars" 2>/dev/null)"
     printf '%s' "${vars}" | grep -q '^BINDIR=/usr/bin$' \
         && ok "compile ran with BINDIR pinned to the HOST /usr/bin (never a target binary)" \
         || bad "BINDIR was not pinned to the host: [${vars}]"
-    printf '%s' "${vars}" | grep -q "^HEADERDIR=${S}/usr/share/selinux/devel/include$" \
+    printf '%s' "${vars}" | grep -q "^HEADERDIR=${S}/usr/share/selinux/mcs/include$" \
         && ok "compile ran against the SYSROOT's refpolicy headers" \
-        || bad "HEADERDIR did not point at the sysroot devel tree: [${vars}]"
+        || bad "HEADERDIR did not point at the sysroot header tree: [${vars}]"
 else
     ok "SKIP real-toolchain compile (m4/checkmodule/semodule_package not on this host)"
     ok "SKIP BINDIR pin check (no host toolchain)"
     ok "SKIP HEADERDIR check (no host toolchain)"
+fi
+
+# C-pin: THE CROSS-BUILD TRAP. The Makefile we run comes FROM THE TARGET SYSROOT,
+# so its PREFIX/BINDIR/SBINDIR are whatever that image's refpolicy shipped — a
+# vendored or relocated Makefile.devel can hardcode paths that on the x86 build
+# host resolve to nothing, or on a cross sysroot to unexecutable target binaries.
+# Only the command-line pin stops it. Model that by giving the sysroot Makefile
+# hardcoded target tool dirs and proving the pin wins.
+#
+# NOTE ON WHICH PINS THIS KILLS: BINDIR and SBINDIR are load-bearing and proven
+# here. PREFIX=/usr is deliberately kept as well, but it is REDUNDANT whenever
+# BINDIR/SBINDIR are pinned — it only matters for the upstream shape where
+# BINDIR := $(PREFIX)/bin. Removing PREFIX alone therefore survives this suite by
+# construction, not by oversight.
+echo "-- C-pin) the sysroot Makefile's own tool dirs must never win --"
+if command -v m4 >/dev/null && command -v checkmodule >/dev/null && command -v semodule_package >/dev/null; then
+    S="${TMP}/cpin/sysroot"; SP="${TMP}/cpin/specs"
+    mk_sysroot "${S}" real no-container; mk_specs "${SP}" "${TMP}/fixsrc"
+    HMK="${S}/usr/share/selinux/mcs/include/Makefile"
+    sed -i -e 's|^PREFIX := /usr$|PREFIX := /nonexistent-target-sysroot/usr|' \
+           -e 's|^BINDIR := \$(PREFIX)/bin$|BINDIR := /nonexistent-target-sysroot/usr/bin|' \
+           -e 's|^SBINDIR := \$(PREFIX)/sbin$|SBINDIR := /nonexistent-target-sysroot/usr/sbin|' "${HMK}"
+    n_armed="$(grep -c '^\(PREFIX\|BINDIR\|SBINDIR\) := /nonexistent-target-sysroot/' "${HMK}")"
+    [ "${n_armed}" -eq 3 ] \
+        && ok "C-pin fixture armed (sysroot Makefile hardcodes 3 target tool dirs)" \
+        || bad "C-pin fixture did not arm (${n_armed}/3) — the trap is inert"
+    out="$(run_lib "${S}" "${SP}")"; rc=$?
+    vars="$(cat "${S}/usr/share/selinux/mcs/include/compile.vars" 2>/dev/null)"
+    { [ "${rc}" -eq 0 ] && printf '%s' "${vars}" | grep -q '^BINDIR=/usr/bin$'; } \
+        && ok "the BINDIR pin overrides the sysroot Makefile — checkmodule came from the HOST" \
+        || bad "the sysroot Makefile's target BINDIR won: rc=${rc} vars=[${vars}]"$'\n'"${out}"
+    printf '%s' "${vars}" | grep -q '^SBINDIR=/usr/sbin$' \
+        && ok "the SBINDIR pin overrides the sysroot Makefile too" \
+        || bad "SBINDIR was not pinned to the host: [${vars}]"
+else
+    ok "SKIP C-pin fixture (no host toolchain)"
+    ok "SKIP C-pin BINDIR override proof (no host toolchain)"
+    ok "SKIP C-pin SBINDIR override proof (no host toolchain)"
 fi
 
 # C17/C18: permissions + idempotence.
@@ -351,8 +539,20 @@ after="$(cd "${S}" && find usr/share/selinux/mcs usr/share/hugmesh etc/conf.d et
     && ok "idempotent: a second run succeeds and changes nothing" \
     || bad "not idempotent (rc=${rc2}, digest ${before} -> ${after})"
 
-# ── D) the enforce-gate service itself ───────────────────────────────────────
-echo "-- D) specs/etc/init.d/selinux-enforce-gate --"
+# C19: a WITHDRAWN module must not survive a --resume/--skip-clean re-run. The
+# store is globbed and the manifest is the gate's contract, so a stale .pp would
+# be loaded at first boot while being absent from the manifest.
+rm -f "${SP}/selinux/hugmesh_tor.te" "${SP}/selinux/hugmesh_tor.fc"
+out="$(run_lib "${S}" "${SP}")"; rc=$?
+{ [ "${rc}" -eq 0 ] && [ ! -e "${S}/usr/share/selinux/mcs/hugmesh_tor.pp" ]; } \
+    && ok "a module withdrawn from specs/selinux is removed from an existing store" \
+    || bad "withdrawn module still in the store (rc=${rc})"
+[ -f "${S}/usr/share/selinux/mcs/base.pp" ] \
+    && ok "the prune never touches the distro's own base.pp" \
+    || bad "the prune deleted base.pp"
+
+# ── D) the enforce-gate service — static shape ───────────────────────────────
+echo "-- D) specs/etc/init.d/selinux-enforce-gate (static) --"
 bash -n "${SVC}" 2>/dev/null && ok "enforce-gate service is valid shell" || bad "enforce-gate does not parse"
 grep -q 'SELINUX_ENFORCE_GATE:=no' "${SVC}" \
     && ok "service defaults SELINUX_ENFORCE_GATE to no in-script (belt AND braces)" \
@@ -364,7 +564,7 @@ mk_ln="$(grep -n 'touch "${MARKER}"' "${SVC}" | head -1 | cut -d: -f1)"
 { [ -n "${en_ln}" ] && [ -n "${mk_ln}" ] && [ "${en_ln}" -lt "${mk_ln}" ]; } \
     && ok "opt-in is checked (line ${en_ln}) BEFORE the settle marker is written (line ${mk_ln})" \
     || bad "opt-in is not checked before the marker write (enabled=${en_ln:-none} marker=${mk_ln:-none})"
-grep -q 'MODULE_MANIFEST=/usr/share/hugmesh/selinux-modules.list' "${SVC}" \
+grep -q 'MODULE_MANIFEST:=/usr/share/hugmesh/selinux-modules.list' "${SVC}" \
     && ok "check_modules reads the build-time manifest" \
     || bad "service does not read /usr/share/hugmesh/selinux-modules.list"
 grep -qE 'for m in base container otel_collector localpath_provisioner' "${SVC}" \
@@ -376,6 +576,160 @@ grep -q 'Refusing to flip' "${SVC}" \
 grep -q 'hugmesh_authkeys_t' "${SVC}" \
     && ok "check_avc_clean covers the hugmesh domains this wiring now loads" \
     || bad "check_avc_clean does not cover the hugmesh domains"
+
+# ── D-run) the enforce-gate's start() actually EXECUTED ──────────────────────
+# The static block above is greps and line numbers; it constrains nothing about
+# behaviour. Five separate mutations to the flip path (dropping check_modules,
+# dropping the relabel/AVC checks, `if true`, removing the settle-marker guard,
+# and — worst — deleting `eend 0; return 0` from the disabled branch so
+# SELINUX_ENFORCE_GATE=no falls THROUGH into the flip path) all left the suite
+# green. So: source the real service file, override only its path variables
+# (plain assignments, so the override happens AFTER sourcing and the shipped
+# bytes are unmodified), stub the system tools, and call start() for real.
+echo "-- D-run) enforce-gate start() executed against stubbed system tools --"
+
+# gate_run <scratch> <gate-value> ; fixture knobs come from the FX_* env vars.
+# Prints the service's own output; records every privileged call in <scratch>/calls.
+gate_run() {
+    ( set +u
+      local G="$1"
+      export SELINUX_ENFORCE_GATE="$2"
+      : > "${G}/calls"
+      # OpenRC vocabulary
+      ebegin() { :; }; eend() { return 0; }
+      einfo()  { echo "einfo: $*"; }
+      ewarn()  { echo "ewarn: $*"; }
+      eerror() { echo "eerror: $*"; }
+      # System tools — ALL stubbed as shell functions so `command -v` finds them
+      # and the real /usr/bin/{setenforce,ausearch,...} on this host can never run.
+      selinuxenabled() { return "${FX_SELINUX_ENABLED_RC:-0}"; }
+      getenforce()     { printf '%s\n' "${FX_GETENFORCE:-Permissive}"; }
+      setenforce()     { echo "setenforce $*" >> "${G}/calls"; return 0; }
+      semodule()       { echo "semodule $*" >> "${G}/calls"; printf '%s' "${FX_SEMODULE_L:-}"; return "${FX_SEMODULE_RC:-0}"; }
+      restorecon()     { printf '%s' "${FX_RESTORECON_OUT:-}"; return 0; }
+      ausearch()       { printf '%s' "${FX_AUSEARCH_OUT:-}"; return 0; }
+      rc-update()      { echo "rc-update $*" >> "${G}/calls"; return 0; }
+      # shellcheck disable=SC1090
+      source "${SVC}"
+      # Redirect the service's absolute paths at the fixture. These are plain
+      # assignments in the shipped file, so overriding them here (after sourcing)
+      # exercises the file byte-for-byte as shipped.
+      MARKER="${G}/marker"; CONFIG="${G}/config"; TYPE=mcs
+      MODULE_MANIFEST="${G}/manifest"; AUTORELABEL="${G}/autorelabel"
+      CONTAINERD_INITD="${G}/containerd-initd"   # absent unless a case creates it
+      start ) 2>&1
+}
+
+# gate_fixture <scratch> — a sysroot-ish scratch where EVERY check passes.
+gate_fixture() {
+    local G="$1"; mkdir -p "${G}"
+    printf 'SELINUX=permissive\nSELINUXTYPE=mcs\n' > "${G}/config"
+    printf '# manifest\nhugmesh_authkeys\nhugmesh_vpn\n' > "${G}/manifest"
+    rm -f "${G}/marker" "${G}/autorelabel" "${G}/containerd-initd"
+    # `semodule -l` output shape: one "name<TAB>version" line per loaded module.
+    export FX_SEMODULE_L=$'base\t1.0.0\nhugmesh_authkeys\t1.0.0\nhugmesh_vpn\t1.0.0\n'
+    export FX_SEMODULE_RC=0 FX_GETENFORCE=Permissive FX_SELINUX_ENABLED_RC=0
+    export FX_RESTORECON_OUT="" FX_AUSEARCH_OUT=""
+}
+gate_flipped()  { grep -q '^setenforce 1' "$1/calls" 2>/dev/null; }
+gate_enforcing() { grep -q '^SELINUX=enforcing' "$1/config" 2>/dev/null; }
+
+# D-run1 — POSITIVE CONTROL. Without this the negative cases below prove nothing:
+# they could all be passing because the harness simply cannot flip.
+G="${TMP}/g1"; gate_fixture "${G}"; touch "${G}/marker"
+o="$(gate_run "${G}" yes)"
+{ gate_flipped "${G}" && gate_enforcing "${G}"; } \
+    && ok "POSITIVE CONTROL: opted in + settled + all checks green => setenforce 1 and SELINUX=enforcing persisted" \
+    || bad "the harness cannot flip at all, so every negative case below is vacuous"$'\n'"${o}"
+grep -q '^rc-update del selinux-enforce-gate' "${G}/calls" \
+    && ok "after a successful flip the service removes itself from the runlevel" \
+    || bad "the service did not rc-update del itself after flipping"
+
+# D-run2 — THE DEFAULT-OFF LOCK. This is the load-bearing claim of the whole
+# change: an image with the opt-in OFF behaves exactly as today.
+G="${TMP}/g2"; gate_fixture "${G}"
+o="$(gate_run "${G}" no)"; rc=$?
+o2="$(gate_run "${G}" no)"     # and again — a fall-through would flip on run 2
+[ "${rc}" -eq 0 ] && ok "disabled gate returns success (never fails the boot)" \
+                  || bad "disabled gate returned rc=${rc}"
+gate_flipped "${G}" && bad "SELINUX_ENFORCE_GATE=no still called setenforce" \
+                    || ok "SELINUX_ENFORCE_GATE=no never calls setenforce, across two boots"
+gate_enforcing "${G}" && bad "SELINUX_ENFORCE_GATE=no rewrote /etc/selinux/config to enforcing" \
+                      || ok "SELINUX_ENFORCE_GATE=no leaves SELINUX=permissive in the config"
+[ -e "${G}/marker" ] && bad "SELINUX_ENFORCE_GATE=no still wrote the settle marker (it walked into the flip path)" \
+                     || ok "SELINUX_ENFORCE_GATE=no does not even write the settle marker"
+printf '%s' "${o}${o2}" | grep -q 'node stays PERMISSIVE' \
+    && ok "the disabled gate says so out loud" || bad "the disabled gate is silent"
+
+# D-run3 — the settle-marker guard: never flip on the relabel (first) boot.
+G="${TMP}/g3"; gate_fixture "${G}"
+o="$(gate_run "${G}" yes)"
+{ [ -e "${G}/marker" ] && ! gate_flipped "${G}" && ! gate_enforcing "${G}"; } \
+    && ok "opted in, first boot: records the settle marker and does NOT flip" \
+    || bad "opted in, first boot flipped (marker=$([ -e "${G}/marker" ] && echo y || echo n))"$'\n'"${o}"
+o="$(gate_run "${G}" yes)"
+gate_flipped "${G}" && ok "opted in, second boot: flips once the marker exists" \
+                    || bad "opted in, second boot did not flip"$'\n'"${o}"
+
+# D-run4..D-run9 — every individual check must be able to BLOCK the flip.
+gate_blocks() {  # gate_blocks <label> <setup-fn>
+    local label="$1" setup="$2" g="${TMP}/gb$((++GB))"
+    gate_fixture "${g}"; touch "${g}/marker"; "${setup}" "${g}"
+    local o; o="$(gate_run "${g}" yes)"
+    if gate_flipped "${g}" || gate_enforcing "${g}"; then
+        bad "${label}: the gate flipped anyway"$'\n'"${o}"
+    else
+        ok "${label}: blocks the flip"
+    fi
+}
+GB=0
+fx_no_manifest()   { rm -f "$1/manifest"; }
+fx_module_absent() { export FX_SEMODULE_L=$'base\t1.0.0\n'; }
+fx_semodule_fail() { export FX_SEMODULE_RC=1; }
+fx_autorelabel()   { touch "$1/autorelabel"; }
+fx_mislabel()      { export FX_RESTORECON_OUT='Would relabel /mnt/data/local-path from a to b'; }
+fx_avc()           { export FX_AUSEARCH_OUT='type=AVC msg=audit(0.0:1): avc: denied { read } scontext=system_u:system_r:hugmesh_authkeys_t:s0 tcontext=system_u:object_r:etc_t:s0'; }
+fx_already_enf()   { export FX_GETENFORCE=Enforcing; }
+fx_selinux_off()   { export FX_SELINUX_ENABLED_RC=1; }
+# A container image additionally requires the `container` module — which the
+# manifest never lists, because sec-policy/selinux-container provides it.
+fx_container_node() { printf '#!/sbin/openrc-run\n' > "$1/containerd-initd"; chmod +x "$1/containerd-initd"; }
+gate_blocks "check_modules: no build manifest"            fx_no_manifest
+gate_blocks "check_modules: a manifest module not loaded" fx_module_absent
+gate_blocks "check_modules: semodule -l fails"            fx_semodule_fail
+gate_blocks "check_relabel_clean: /.autorelabel present"  fx_autorelabel
+gate_blocks "check_relabel_clean: restorecon finds drift" fx_mislabel
+gate_blocks "check_avc_clean: an AVC on a hugmesh domain" fx_avc
+gate_blocks "check_mode_sane: already Enforcing"          fx_already_enf
+gate_blocks "check_mode_sane: SELinux disabled"           fx_selinux_off
+gate_blocks "check_modules: container node without the container module" fx_container_node
+
+# ── E) the first-boot loader half in provision.sh ────────────────────────────
+# The .pp land in the directory provision_selinux() knows about, but its
+# pre-existing load is `if ! ls /etc/selinux/<type>/policy/policy.*` around a
+# `semodule -B || semodule -i .../*.pp`. `-B` rebuilds from the module STORE, and
+# a freshly installed .pp is not in the store until `-i` runs — so on an image
+# whose store is already built, or where -B succeeds, our modules would never
+# load. The explicit block must exist and must run BEFORE the relabel.
+echo "-- E) provision.sh loads the manifest modules explicitly --"
+if [ -f "${PROV}" ]; then
+    grep -q 'BEGIN hugmesh node-policy load' "${PROV}" \
+        && ok "provision.sh carries the explicit hugmesh node-policy load block" \
+        || bad "provision.sh has NO explicit load — the .pp would depend on semodule -B"
+    ld_ln="$(grep -n 'BEGIN hugmesh node-policy load' "${PROV}" | head -1 | cut -d: -f1)"
+    rl_ln="$(grep -n 'Relabelling filesystem' "${PROV}" | head -1 | cut -d: -f1)"
+    { [ -n "${ld_ln}" ] && [ -n "${rl_ln}" ] && [ "${ld_ln}" -lt "${rl_ln}" ]; } \
+        && ok "the explicit load (line ${ld_ln}) runs BEFORE the relabel (line ${rl_ln})" \
+        || bad "the explicit load does not precede the relabel (load=${ld_ln:-none} relabel=${rl_ln:-none})"
+    sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep -q 'selinux-modules.list' \
+        && ok "the explicit load is driven by the build-time manifest, not a blind glob" \
+        || bad "the explicit load does not read /usr/share/hugmesh/selinux-modules.list"
+    sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep -qE 'semodule .*-i ' \
+        && ok "the explicit load uses semodule -i (installs into the store)" \
+        || bad "the explicit load does not call semodule -i"
+else
+    bad "provision.sh missing"; bad "(order)"; bad "(manifest-driven)"; bad "(semodule -i)"
+fi
 
 echo "== selinux-policy-install: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

@@ -2563,6 +2563,46 @@ EOF
             || semodule -s "${type}" -i /usr/share/selinux/"${type}"/*.pp 2>/dev/null \
             || warn "semodule load failed; node will boot without loaded policy"
     fi
+    # ── BEGIN hugmesh node-policy load (pairs with scripts/_selinux-policy-lib.sh) ──
+    # The block ABOVE is not enough for the hugmesh modules, and pretending it was
+    # is how they nearly shipped unloaded. Two reasons:
+    #   1. it only runs when the policy store has NOT been built yet — a native
+    #      x86 merge, or a cross merge whose sec-policy postinst ran the host
+    #      semodule with `-p ${SYSROOT} -n`, leaves policy.* already present and
+    #      the whole block is skipped;
+    #   2. inside it, `semodule -B` is tried FIRST. `-B` rebuilds the policy from
+    #      the module STORE; the .pp that the build installed into
+    #      /usr/share/selinux/<type>/ are PACKAGE files that are not in the store
+    #      until `semodule -i` runs, so a successful -B loads none of them.
+    # So load exactly the modules THIS image recorded at build time, explicitly,
+    # and before the relabel (semodule -i regenerates file_contexts, which
+    # setfiles then applies). Manifest-driven, never a blind glob: a stale .pp
+    # left in the store by an older build must not be resurrected here.
+    # Idempotent — `semodule -i` re-installs an already-installed module.
+    if [ -f /usr/share/hugmesh/selinux-modules.list ]; then
+        local hm_mods="" hm_m hm_pp
+        while read -r hm_m; do
+            case "${hm_m}" in ''|'#'*) continue ;; esac
+            hm_pp="/usr/share/selinux/${type}/${hm_m}.pp"
+            [ -f "${hm_pp}" ] && hm_mods="${hm_mods} ${hm_pp}"
+        done < /usr/share/hugmesh/selinux-modules.list
+        if [ -n "${hm_mods}" ]; then
+            log "Loading hugmesh SELinux node-policy modules:${hm_mods}"
+            # shellcheck disable=SC2086
+            semodule -s "${type}" -i ${hm_mods} 2>/dev/null \
+                || warn "hugmesh node-policy modules failed to load; node keeps the base policy only"
+        else
+            warn "selinux-modules.list present but none of its .pp are in /usr/share/selinux/${type} — no hugmesh policy loaded"
+        fi
+        # The modules ship with rules still tagged '# INFERRED-WIDE' in
+        # specs/selinux/*.te; they are meant to run PERMISSIVE until a real
+        # protected build+boot has produced an AVC pass to narrow them against.
+        # An operator who set .selinux.mode=enforcing in provision.json gets them
+        # enforced from this boot on — say so loudly rather than silently.
+        [ "${mode}" = "enforcing" ] && \
+            warn "SELinux mode=enforcing AND hugmesh node policy loaded: those modules' INFERRED-WIDE rules have not been narrowed against a real AVC pass. Prefer permissive + /etc/init.d/selinux-enforce-gate."
+    fi
+    # ── END hugmesh node-policy load ──
     log "Relabelling filesystem (this can take a while)"
     if have setfiles && [ -f "/etc/selinux/${type}/contexts/files/file_contexts" ]; then
         setfiles -F "/etc/selinux/${type}/contexts/files/file_contexts" / 2>/dev/null || \
