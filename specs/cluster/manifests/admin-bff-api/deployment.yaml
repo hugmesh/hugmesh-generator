@@ -267,19 +267,22 @@ spec:
             # ── MFA TOTP-secret encryption key (app.mfa.factor-key) ────────────
             # APP_MFA_FACTOR_KEY is the 256-bit AES-GCM data key MfaSecretCipher uses
             # to encrypt each enrolled TOTP secret at rest (and seed the recovery-code
-            # keyed hash). Sourced from the ESO Secret admin-bff-mfa (key factor-key),
-            # which ESO materializes from Vault secret/<brand>/admin-bff-mfa.factor_key
-            # (gen-cluster-secrets mints `openssl rand -base64 32`). Now that
-            # app.casdoor.mfa.enabled is "true" above, this key is load-bearing: without
-            # it the cipher is INERT and TOTP enroll refuses (no plaintext fallback).
-            # optional: true so the pod still starts if the Secret is somehow absent
-            # (cipher stays inert and TOTP enroll refuses, but the pod itself boots).
+            # keyed hash). REQUIRED (no `optional:`): app.casdoor.mfa.enabled is "true"
+            # above, so this key is load-bearing — a pod without it would run with an
+            # INERT cipher and refuse every TOTP enroll. The Secret is ESO-materialized:
+            # the admin-bff-mfa ExternalSecret (external-secrets/secretstore.yaml
+            # admin-bff-mfa block) targets Secret admin-bff-mfa key `factor-key` from
+            # Vault secret/<brand>/admin-bff-mfa property factor_key, which
+            # gen-cluster-secrets.sh seeds (`openssl rand -base64 32`). With the ref
+            # required, a genuinely absent Secret surfaces at the KUBERNETES layer as
+            # CreateContainerConfigError with a clear "secret not found" reason —
+            # loud and obvious — instead of a running-but-degraded pod; auth-core
+            # >= 2.4.2 additionally WARNs at boot when MFA is on without a key.
             - name: APP_MFA_FACTOR_KEY
               valueFrom:
                 secretKeyRef:
                   name: admin-bff-mfa
                   key: factor-key
-                  optional: true
             # ── Shared internal token — the INBOUND half (app.internal.token) ──
             # Every /bff/internal/** caller (fe-gateway BffSessionAuthFilter,
             # user-bff AdminBffInternalClient, mod-bff's session-introspect leg)

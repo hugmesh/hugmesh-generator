@@ -266,6 +266,43 @@ open(p,"w",encoding="utf-8").write(s.replace("{ \"devices\": [] }", "{ \"devices
 PY
 '
 
+# (10a) the admin-bff MFA factor-key ref regressing to optional:true — the exact
+#       revert of the required posture docs/MFA-ROLLOUT.md §4.1 documents. Every
+#       gate passed green on this plant before [mfa-factor-key] existed.
+expect_catch "APP_MFA_FACTOR_KEY secretKeyRef regressed to optional:true" "[mfa-factor-key]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/admin-bff-api/deployment.yaml"
+s=open(p,encoding="utf-8").read()
+old="""                secretKeyRef:
+                  name: admin-bff-mfa
+                  key: factor-key"""
+assert old in s, "factor-key ref anchor missing"
+s=s.replace(old, old+"\n                  optional: true",1)
+open(p,"w",encoding="utf-8").write(s)
+PY
+'
+# (10b) a typo'd key on a Secret an ExternalSecret really declares — the key can
+#       never exist, so a REQUIRED ref parks the pod in CreateContainerConfigError
+#       forever. Gate 3 accepted exactly this plant (factor-keyX) before [secret-key].
+expect_catch "secretKeyRef key that the ExternalSecret never materializes" "[secret-key]" '
+  sed -i "s/^\(                  key: factor-key\)$/\1X/" \
+      "$T/manifests/admin-bff-api/deployment.yaml"
+'
+# (10c) the APP_MFA_FACTOR_KEY env deleted outright — the posture pin must notice
+#       it has NOTHING to hold, or the whole [mfa-factor-key] check is vacuous the
+#       day someone renames the env var.
+expect_catch "APP_MFA_FACTOR_KEY env var deleted (posture pin must not go vacuous)" "[mfa-factor-key]" '
+  python3 - "$T" <<PY
+import sys,re
+p=sys.argv[1]+"/manifests/admin-bff-api/deployment.yaml"
+s=open(p,encoding="utf-8").read()
+pat=re.compile(r"            - name: APP_MFA_FACTOR_KEY\n(?:              .*\n)+?                  key: factor-key\n")
+assert pat.search(s), "factor-key env block anchor missing"
+open(p,"w",encoding="utf-8").write(pat.sub("",s,count=1))
+PY
+'
+
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
 [ "${NEG_F}" -eq 0 ] || exit 1

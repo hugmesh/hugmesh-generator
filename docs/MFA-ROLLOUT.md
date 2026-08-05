@@ -436,15 +436,23 @@ A 256-bit AES-GCM data key. `MfaSecretCipher` uses it to encrypt every enrolled 
 secret at rest, and it keys the recovery-code HMAC.
 
 - Cluster: `specs/cluster/manifests/admin-bff-api/deployment.yaml` reads it from ESO
-  Secret `admin-bff-mfa`, key `factor-key`, `optional: true`. The ExternalSecret is
-  in `specs/cluster/manifests/external-secrets/secretstore.yaml`; the value is minted
+  Secret `admin-bff-mfa`, key `factor-key` — the ref is **REQUIRED** (no `optional:`).
+  The ExternalSecret is in
+  `specs/cluster/manifests/external-secrets/secretstore.yaml`; the value is minted
   by `scripts/gen-cluster-secrets.sh` (`openssl rand -base64 32`) into Vault at
   `secret/<brand>/admin-bff-mfa.factor_key`.
 - Compose: `tests/stack/compose.local.yaml` `APP_MFA_FACTOR_KEY` has a dev default.
   **It is a committed dev value — never reuse it outside compose.**
-- `optional: true` means the pod still boots without it. The cipher is then INERT and
-  TOTP enroll / recovery generation **refuse** (no plaintext fallback). That is a
-  silent enrollment failure, which is why it is step 1.
+- An absent Secret now **blocks pod start** at the Kubernetes layer
+  (`CreateContainerConfigError` naming `admin-bff-mfa`), instead of booting a pod
+  whose cipher is INERT and whose TOTP enroll / recovery generation silently
+  **refuse** (no plaintext fallback). That silent-enrollment-failure mode was why
+  the ref used to be `optional: true`; with `app.casdoor.mfa.enabled` armed
+  in-cluster the key is load-bearing, so a missing key is now a loud scheduling
+  failure with a clear reason — still step 1, but you find out from `kubectl get
+  pods`, not from a user's failed enrollment. `test-cluster-manifest-integrity.sh`
+  pins both the required posture and that the ref's `name`/`key` match what the
+  ExternalSecret actually materializes.
 - Rotating this key **orphans every enrolled TOTP secret and every recovery-code
   hash.** Treat it as unrotatable without a re-enrollment campaign.
 

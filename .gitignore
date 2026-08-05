@@ -127,6 +127,7 @@ brand.conf
 # Claude Code agent worktrees / scratch — never commit
 .claude/
 scripts/__pycache__/
+tests/scripts/__pycache__/
 specs/cluster/manifests/meshbridge/app/__pycache__/
 tests/meshbridge/__pycache__/
 tests/scripts/__pycache__/

@@ -651,6 +651,115 @@ ROW_FULL_RE = re.compile(
     r"^\s*\('([a-z0-9-]+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false)\s*\)", re.M)
 
 
+# ── 10) env secretKeyRef -> ExternalSecret KEY-level integrity + the MFA
+#        factor-key posture pin ──────────────────────────────────────────────
+# Two defect classes nothing else here sees:
+#   a) a secretKeyRef whose Secret IS produced by an ExternalSecret but whose KEY
+#      is not among the keys that ExternalSecret materializes. With the ref now
+#      REQUIRED that typo is boot-blocking: kubelet holds the pod in
+#      CreateContainerConfigError forever, and every static gate stayed green on
+#      exactly this plant (key `factor-keyX`) before this check existed.
+#      Effective keys are the target.template.data keys when a template is
+#      present (the template REPLACES the default materialization — casdoor-db
+#      declares data key `password` but templates `username`+`password`, and the
+#      username ref is legitimate), else the data[].secretKey set; ExternalSecrets
+#      using dataFrom are opaque to a static read and are skipped, counted.
+#   b) the admin-bff APP_MFA_FACTOR_KEY ref regressing to `optional: true`. The
+#      manifest arms APP_CASDOOR_MFA_ENABLED, so the factor key is load-bearing:
+#      an absent Secret must surface at the Kubernetes layer, not as a booted pod
+#      whose cipher is inert and whose TOTP enrolls silently refuse. Re-planting
+#      `optional: true` passed every gate green before this check existed, and
+#      docs/MFA-ROLLOUT.md §4.1 now documents the required posture — this pins it.
+# Refs to Secret names NO ExternalSecret declares (vault-bootstrap, operator-
+# provided oauth secrets, test-runner bootstrap) are legitimately out-of-band for
+# a static read: they are COUNTED in the pass note, never silently skipped.
+def check_secret_key_refs(root):
+    declared = {}
+    refs = []
+    for dirpath, _dn, filenames in os.walk(root):
+        defns = None
+        kz = os.path.join(dirpath, "kustomization.yaml")
+        if os.path.exists(kz):
+            try:
+                defns = (yaml.safe_load(open(kz, encoding="utf-8")) or {}).get("namespace")
+            except Exception:
+                defns = None
+        for name in filenames:
+            if not name.endswith((".yaml", ".yml")):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, root)
+            for d in docs_of(path):
+                meta = d.get("metadata") or {}
+                ns = meta.get("namespace") or defns
+                if d.get("kind") == "ExternalSecret":
+                    spec = d.get("spec") or {}
+                    tgt = ((spec.get("target") or {}).get("name")) or meta.get("name")
+                    tmpl = (((spec.get("target") or {}).get("template") or {}).get("data")) or {}
+                    keys = set(tmpl) if tmpl else \
+                        {e.get("secretKey") for e in (spec.get("data") or []) if isinstance(e, dict)} - {None}
+                    declared[(tgt, ns)] = (keys, bool(spec.get("dataFrom")))
+                def walk(o):
+                    if isinstance(o, dict):
+                        vf = o.get("valueFrom") or {}
+                        if isinstance(vf, dict) and isinstance(vf.get("secretKeyRef"), dict) and "name" in o:
+                            refs.append((rel, ns, o.get("name"), vf["secretKeyRef"]))
+                        for v in o.values():
+                            walk(v)
+                    elif isinstance(o, list):
+                        for i in o:
+                            walk(i)
+                walk(d)
+    bad = out_of_band = opaque = 0
+    factor_refs = []
+    for rel, ns, env_name, ref in refs:
+        rn, rk = ref.get("name"), ref.get("key")
+        if env_name == "APP_MFA_FACTOR_KEY":
+            factor_refs.append((rel, ns, ref))
+        entry = declared.get((rn, ns))
+        if entry is None:
+            out_of_band += 1
+            continue
+        keys, has_datafrom = entry
+        if has_datafrom:
+            opaque += 1
+            continue
+        if rk not in keys:
+            bad += 1
+            fail("[secret-key]",
+                 "%s env %s reads Secret %r key %r, but the ExternalSecret targeting it "
+                 "materializes only %s — the key can NEVER exist; a non-optional ref "
+                 "holds the pod in CreateContainerConfigError forever, an optional one "
+                 "boots the pod without the value and nothing reports it"
+                 % (rel, env_name, rn, rk, sorted(keys)))
+    if not factor_refs:
+        fail("[mfa-factor-key]",
+             "no workload under specs/cluster carries an APP_MFA_FACTOR_KEY secretKeyRef at all — "
+             "the posture pin below has nothing to hold, and admin-bff's armed MFA has no key source")
+    for rel, ns, ref in factor_refs:
+        problems = []
+        if ref.get("name") != "admin-bff-mfa" or ref.get("key") != "factor-key":
+            problems.append("must reference Secret admin-bff-mfa key factor-key, got %r/%r"
+                            % (ref.get("name"), ref.get("key")))
+        # Truthy-string tolerant: `optional: "true"` is not a bool to PyYAML, and while the
+        # API server would reject the string at apply time, this gate must red on the INTENT
+        # in the file rather than report a false 'REQUIRED (no optional:)' pass note.
+        if ref.get("optional") in (True, "true", "True", "TRUE", "yes", "on", "1"):
+            problems.append("carries `optional: true` — the manifest arms APP_CASDOOR_MFA_ENABLED, so "
+                            "the required posture (docs/MFA-ROLLOUT.md §4.1) is what makes an absent "
+                            "Secret a loud scheduling failure instead of a silently inert MFA cipher")
+        if problems:
+            fail("[mfa-factor-key]", "%s: %s" % (rel, "; ".join(problems)))
+        else:
+            ok("[mfa-factor-key]",
+               "%s APP_MFA_FACTOR_KEY -> admin-bff-mfa/factor-key, REQUIRED (no optional:)" % rel)
+    if not bad:
+        ok("[secret-key]",
+           "all %d env secretKeyRefs whose Secret an ExternalSecret declares read a key it "
+           "actually materializes (%d out-of-band Secret name(s) not statically checkable, "
+           "%d dataFrom-opaque)" % (len(refs) - out_of_band - opaque, out_of_band, opaque))
+
+
 def check_internal_surfaces(root):
     probes = set(INTERNAL_SURFACES_DECLARED)
     for path in yaml_files(root):
@@ -803,6 +912,7 @@ def main():
     check_route_access(root)
     check_pki_roles(root)
     check_mtls_secrets(root)
+    check_secret_key_refs(root)
     check_mcs(root)
     check_db_isolation(root)
     check_internal_surfaces(root)
