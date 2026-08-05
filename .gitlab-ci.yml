@@ -875,10 +875,25 @@ build:images:
   # pipeline stays green before the (kernel-blocked) cluster exists.
   #
   # GATED to the default branch + release tags (the canonical sibling `build:image` posture
-  # in snapdragon-gateway / snapdragon-forum-bff-api): never on a plain feature MR, so a build
+  # in hugmesh-gateway / hugmesh-forum-bff-api): never on a plain feature MR, so a build
   # only ever runs for a mergeable ref. Combined with the IMAGE_BUILDER_ENABLED guard, NOTHING
   # kicks off uncontrolled builds on merge — the default-branch run is still a no-op until an
   # operator opts in.
+  #
+  # allow_failure: NON-BLOCKING, ON PURPOSE — AND NOT A NO-OP. `stages:` is
+  # [lint, verify, iso, images, deliver, sca, dast, load], so sca and dast come AFTER images,
+  # and neither sca:dependency-check nor the dast/load jobs declare `needs:` — under plain
+  # stage ordering a hard-failing build:images stops the OWASP Dependency-Check SCA and the ZAP
+  # DAST stages from running on main AT ALL. Nothing has bitten yet only because the
+  # IMAGE_BUILDER_ENABLED guard makes this job `exit 0`; the moment it really dispatches (an
+  # operator setting the flag, or the guard being retired) a failed build would silently trade
+  # the repo's two security stages for one build, and none of that is visible in a diff of the
+  # image-builder surface — nothing there mentions those jobs. allow_failure contains the blast
+  # radius to THIS job: the dispatch still runs and its failure is still reported.
+  # FLIP THIS TO false once the cluster is live and a dispatch is expected to succeed — from
+  # then on a build regression should be red, and sca/dast should get their own `needs:` so
+  # they stay decoupled.
+  allow_failure: true
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -893,11 +908,16 @@ build:images:
     # build pod mounts (image-builder-registry, see the `script:` comment below) is
     # Harbor's push-scoped robot account, minted by manifests/harbor/
     # harbor-provision-job.yaml. The hostname itself is UNCHANGED on purpose.
-    IMAGE_APP: "snapdragon-gateway"
-    IMAGE_CONTEXT: "git://github.com/Snapdragon-Systems/snapdragon-gateway.git#${CI_COMMIT_SHA}"
+    IMAGE_APP: "hugmesh-gateway"
+    # IMAGE_REF is the ref INSIDE THE APP REPO, not this repo. It must NOT default to
+    # ${CI_COMMIT_SHA}: that is the GENERATOR's commit, which does not exist in the app repo,
+    # so Kaniko's git-context clone would fail on every run. A matrix/child pipeline that
+    # knows the app's resolved commit passes it here (and as IMAGE_TAG, below).
+    IMAGE_REF: "main"
+    IMAGE_CONTEXT: "git://github.com/Snapdragon-Systems/hugmesh-gateway.git#${IMAGE_REF}"
     IMAGE_DOCKERFILE: "Dockerfile"
     # Where the built image lands. <app> is IMAGE_APP; the tags are computed in `script`.
-    DEST_REPO: "registry.hugmesh.systems/hugmesh/snapdragon-gateway"
+    DEST_REPO: "registry.hugmesh.systems/hugmesh/hugmesh-gateway"
   script:
     - |
       if [ -z "${IMAGE_BUILDER_ENABLED:-}" ]; then
@@ -907,13 +927,15 @@ build:images:
         exit 0
       fi
       # TAG SCHEME — mirrors the canonical sibling `build:image` (gateway / forum-bff-api):
-      #   IMMUTABLE = a release tag if this is a tag pipeline, else the short SHA. Never moves.
-      #   MOVING    = the branch ref slug (the default branch resolves to `main`), which the app
+      #   IMMUTABLE = never moves. Prefer IMAGE_TAG (the APP repo's resolved commit/release,
+      #               supplied by the dispatching pipeline); fall back to this pipeline's own
+      #               tag/short SHA, which identifies the DISPATCH rather than the source.
+      #   MOVING    = the app ref being built (IMAGE_REF; `main` by default), which the app
       #               kustomizations track via `newTag: main` for dev. Re-pointed each build.
       # Kaniko pushes BOTH from the ONE build (two --destination flags in the template), so the
       # moving + immutable tags are always byte-identical layers.
-      IMMUTABLE_TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
-      MOVING_TAG="${CI_COMMIT_REF_SLUG}"
+      IMMUTABLE_TAG="${IMAGE_TAG:-${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}}"
+      MOVING_TAG="${IMAGE_REF}"
       DEST_IMAGE="${DEST_REPO}:${IMMUTABLE_TAG}"
       DEST_IMAGE_MOVING="${DEST_REPO}:${MOVING_TAG}"
       echo "building ${IMAGE_APP}: immutable=${DEST_IMAGE}  moving=${DEST_IMAGE_MOVING}"
@@ -968,7 +990,7 @@ deliver:isos:
 # --failOnCVSS 7 (a CVSS>=7 finding fails THAT repo's job), and persists the NVD
 # feed in a CI cache keyed on the feed month so re-runs don't re-download ~250MB.
 #
-# snapdragon.games is DELIBERATELY EXCLUDED from this matrix: it is a DISTINCT
+# hugmesh-games is DELIBERATELY EXCLUDED from this matrix: it is a DISTINCT
 # stack with its OWN .gitlab-ci.yml that runs SCA in its own pipeline (incl. its
 # Rust bridge) — see hugmesh-pentest-standard "TWO SEPARATE WORKFLOWS" + PR6.
 # Likewise the static sites (usidiamond.github.io) + the generator-meta repos that
@@ -981,30 +1003,35 @@ sca:dependency-check:
   tags: [hugmesh-x86]
   parallel:
     matrix:
+      # Every name here must be a REAL repo in the org — the before_script clones
+      # ${ORG_BASE}/${REPO}.git and a clone failure fails the job. These were all
+      # still the PRE-REBRAND repo names, which the org-wide rename retired, so
+      # every one of these clones was broken; they are the hugmesh-* names now
+      # (canonical list: scripts/clone-all-repos.sh).
       - REPO:
-          - snapdragon-gateway
-          - snapdragon-fe-gateway
-          - snapdragon-be-gateway
-          - snapdragon-pki-gateway
-          - snapdragon-admin-bff-api
-          - snapdragon-mod-bff-api
-          - snapdragon-user-bff-api
-          - snapdragon-forum-bff-api
-          - snapdragon-federation-api
-          - snapdragon-admin-ui
-          - snapdragon-mod-ui
-          - snapdragon-user-ui
-          - snapdragon-login-ui
-          - snapdragon-forum-ui
-          - snapdragon-matrix-ui
-          - snapdragon-mastodon-ui
-          - snapdragon-remote-fragment
-          - snapdragon-actions
-          - snapdragon-api-docs
+          - hugmesh-gateway
+          - hugmesh-fe-gateway
+          - hugmesh-be-gateway
+          - hugmesh-pki-gateway
+          - hugmesh-admin-bff-api
+          - hugmesh-mod-bff-api
+          - hugmesh-user-bff-api
+          - hugmesh-forum-bff-api
+          - hugmesh-federation-api
+          - hugmesh-admin-ui
+          - hugmesh-mod-ui
+          - hugmesh-user-ui
+          - hugmesh-login-ui
+          - hugmesh-forum-ui
+          - hugmesh-matrix-ui
+          - hugmesh-mastodon-ui
+          - hugmesh-remote-fragment
+          - hugmesh-actions
+          - hugmesh-api-docs
           - hugmesh-generator
-        # NOTE: snapdragon.games is intentionally NOT in this list — it owns its
-        # own pipeline + SCA stage (the games two-Casdoor stack, incl. the Rust
-        # snapdragon-bridge). Adding it here would double-scan + cross workflows.
+        # NOTE: hugmesh-games is intentionally NOT in this list — it owns its
+        # own pipeline + SCA stage (the games two-Casdoor stack, incl. its in-tree
+        # Rust bridge). Adding it here would double-scan + cross workflows.
   cache:
     # Persist the NVD feed across runs. Keyed on the feed month so the monthly
     # full-feed refresh rotates the cache without an unbounded stale entry.
