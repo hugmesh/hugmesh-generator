@@ -22,11 +22,26 @@ each dynamically skipping itself on every image-mode flow via applies_to().
 """
 from __future__ import annotations
 
+from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..qt import QtWidgets
-from ..styles import muted
+from ._scroll import scrollable
 from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, UNAFFILIATED_ROLE, enter_mesh_defaults,
 )
+
+# option id -> choice_icons registry name (PRESENTATION only — the option ids the
+# selection/emission plumbing reads stay exactly the historical mode ids).
+_MODE_ICONS = {
+    "mesh": "mesh",                 # three Pi boards under a cloud
+    "localmesh": "localmesh",       # one desktop under a cloud
+    "cloud": "mesh-desktop",        # a desktop beside peers + a board, under a cloud
+    "standalone": "gentoo",         # our swirl-and-'g' gesture + the gentoo.org link
+    "phone": "phone",               # a handset under a cloud
+    "quest": "quest",               # a VR headset under a cloud
+    "deploy": "cloud-deploy",       # three-way arrow up to AWS / AZURE / CF marks
+}
+
+_GENTOO_URL = "https://www.gentoo.org/"
 
 
 class ModePage(QtWidgets.QWizardPage):
@@ -39,8 +54,9 @@ class ModePage(QtWidgets.QWizardPage):
             "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
             "QUEST HEADSET enrolls a Meta Quest 3/3S, and CLOUD DEPLOY publishes an "
             "already-packaged image to a cloud provider.")
-        lay = QtWidgets.QVBoxLayout(self)
-        self.group = QtWidgets.QButtonGroup(self)
+        # seven cards are taller than seven radios were: scroll, never clip
+        lay = scrollable(self)
+        self.group = ChoiceCardGroup(self)
         # SEVEN clearly-distinct choices, in the spec's STEP-1 order. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
         # exactly as before; "localmesh", "phone", "quest" and "deploy" are transient
@@ -74,17 +90,19 @@ class ModePage(QtWidgets.QWizardPage):
         ]
         self._buttons = {}
         for i, (mid, label, desc) in enumerate(self.modes):
-            rb = QtWidgets.QRadioButton(label)
-            rb.setProperty("mode", mid)
-            sub = QtWidgets.QLabel(desc)
-            sub.setWordWrap(True)
-            # muted (not bare "gray", which goes near-invisible on some dark palettes)
-            sub.setStyleSheet(muted())
-            sub.setContentsMargins(24, 0, 0, 8)
-            self.group.addButton(rb, i)          # button id == index in self.modes
-            self._buttons[mid] = rb
-            lay.addWidget(rb)
-            lay.addWidget(sub)
+            # one large clickable CARD per option (title + muted description in the
+            # left column, the drawn-in-code icon right-aligned opposite them)
+            card = ChoiceCard(label, desc, icon_name=_MODE_ICONS.get(mid, ""))
+            card.setProperty("mode", mid)
+            if mid == "standalone":
+                # the Gentoo card names its upstream: EXPLICIT click hands the URL
+                # to the desktop browser (QDesktopServices.openUrl inside the
+                # card's guarded slot); the URL is also visible as selectable text
+                # so an air-gapped operator can read it without clicking.
+                card.set_link(_GENTOO_URL, "gentoo.org")
+            self.group.add_card(card, i)         # button id == index in self.modes
+            self._buttons[mid] = card
+            lay.addWidget(card)
         # DEFAULT is standalone BY ID (not index) — test_standalone_flow_skips_admin_pages
         # relies on the no-pick default resolving to standalone (ImageConfig.mode default).
         self._buttons["standalone"].setChecked(True)

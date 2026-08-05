@@ -21,7 +21,8 @@ catalog merely pivoted (device→roles instead of role→machines).
 """
 from __future__ import annotations
 
-from ..qt import Qt, QtGui, QtWidgets
+from .. import choice_icons
+from ..qt import Qt, QtCore, QtGui, QtWidgets
 from ._scroll import scrollable
 from ...core import device_catalog, hw_scan, profiles
 from ...core.config import (
@@ -135,6 +136,9 @@ class RolePage(QtWidgets.QWizardPage):
         # Keep a healthy visible height for the role list inside the scroll area
         # (a stretch factor collapses to sizeHint once the page itself scrolls).
         self.roles.setMinimumHeight(240)
+        # role-family glyph per row (server rack / bare board / desktop / mesh
+        # desktop) — drawn in code + memoised by choice_icons; presentation only.
+        self.roles.setIconSize(QtCore.QSize(24, 24))
         lay.addWidget(self.roles, 1)
 
         # ── machine-profile PRESET — folded here from the Hardware page (spec fold 2):
@@ -551,6 +555,17 @@ class RolePage(QtWidgets.QWizardPage):
             platforms = self._platforms_for_role(mode, role)
             it = QtWidgets.QListWidgetItem(f"{role} — {label}")
             it.setData(Qt.ItemDataRole.UserRole, (role, platforms))
+            try:
+                # role-family glyph (presentation only — the row TEXT and UserRole
+                # payload above are the selection/emission surface and stay
+                # byte-identical). Guarded: an icon bug must never break the
+                # role list, and under PyQt6 an escape here would qFatal.
+                it.setIcon(choice_icons.icon(
+                    choice_icons.role_icon_name(role, mode), 24,
+                    choice_icons.style_for(self.palette()),
+                    self.devicePixelRatioF()))
+            except Exception:
+                pass
             self.roles.addItem(it)
             if role == prefer:
                 target = it

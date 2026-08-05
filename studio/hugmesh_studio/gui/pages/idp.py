@@ -22,10 +22,20 @@ repos grow provider support. docs/IDENTITY-PROVIDERS.md is the full statement.
 """
 from __future__ import annotations
 
+from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..qt import QtWidgets
 from ..styles import muted
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ._scroll import scrollable
 from ._widgets import _row
+
+# idp id -> choice_icons registry name (presentation only; ids stay IDP_CHOICES)
+_IDP_ICONS = {
+    "casdoor": "idp-casdoor",   # shield + keyhole: the built-in IdP
+    "entra": "idp-entra",       # our wedge gesture, labelled ENTRA
+    "aws": "idp-aws",           # our arc gesture, labelled AWS
+    "oidc": "idp-oidc",         # globe, labelled OIDC
+}
 
 # Per-provider line-edit hints (the recon's real endpoint shapes).
 _ISSUER_HINTS = {
@@ -70,10 +80,11 @@ class IdpPage(QtWidgets.QWizardPage):
             "(built-in) is the native default and needs nothing from you. An "
             "external provider re-points token validation at your issuer — read "
             "the limits note below before choosing one.")
-        lay = QtWidgets.QVBoxLayout(self)
+        # four cards + the endpoints box + the limits note: scroll, never clip
+        lay = scrollable(self)
 
-        self.group = QtWidgets.QButtonGroup(self)
-        self._buttons: dict[str, QtWidgets.QRadioButton] = {}
+        self.group = ChoiceCardGroup(self)
+        self._buttons: dict[str, ChoiceCard] = {}
         descs = {
             "casdoor": "The built-in, fully-integrated IdP: native login, MFA "
                        "step-up, roles/permissions, signup gate. Zero configuration.",
@@ -84,16 +95,12 @@ class IdpPage(QtWidgets.QWizardPage):
             "oidc": "Any other spec-compliant OIDC provider (issuer + JWKS).",
         }
         for i, idp_id in enumerate(IDP_CHOICES):
-            rb = QtWidgets.QRadioButton(IDP_LABELS[idp_id])
-            rb.setProperty("idp", idp_id)
-            sub = QtWidgets.QLabel(descs[idp_id])
-            sub.setWordWrap(True)
-            sub.setStyleSheet(muted())
-            sub.setContentsMargins(24, 0, 0, 6)
-            self.group.addButton(rb, i)
-            self._buttons[idp_id] = rb
-            lay.addWidget(rb)
-            lay.addWidget(sub)
+            card = ChoiceCard(IDP_LABELS[idp_id], descs[idp_id],
+                              icon_name=_IDP_ICONS.get(idp_id, ""))
+            card.setProperty("idp", idp_id)
+            self.group.add_card(card, i)
+            self._buttons[idp_id] = card
+            lay.addWidget(card)
         self._buttons["casdoor"].setChecked(True)   # the native default, BY ID
 
         self.ext_box = QtWidgets.QGroupBox("External provider endpoints")

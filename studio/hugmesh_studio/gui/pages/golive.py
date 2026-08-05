@@ -25,6 +25,8 @@ import os
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ..branding_icon import brand_icon
+from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from ._scroll import scrollable
 from ..wizard import _file_picker, _row
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 from ...core.progress_parse import ProgressParser, track_phases
@@ -130,20 +132,19 @@ class GoLiveExposurePage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Pick the exposure model")
         self.setSubTitle("How should the public internet reach this brand?")
-        lay = QtWidgets.QVBoxLayout(self)
-        self.group = QtWidgets.QButtonGroup(self)
+        # six cards are taller than six radios were: scroll, never clip
+        lay = scrollable(self)
+        self.group = ChoiceCardGroup(self)
         self.models = wiz.driver.models()
         for i, model in enumerate(self.models):
             label, desc = MODEL_LABELS.get(model, (model, ""))
-            rb = QtWidgets.QRadioButton(label)
-            rb.setProperty("model", model)
-            sub = QtWidgets.QLabel(desc)
-            sub.setWordWrap(True)
-            sub.setStyleSheet("color: gray;")
-            sub.setContentsMargins(24, 0, 0, 8)
-            self.group.addButton(rb, i)
-            lay.addWidget(rb)
-            lay.addWidget(sub)
+            # icon names mirror the registry's model ids ("golive-<model>"); a
+            # registry-only model without a drawn icon renders card-without-icon
+            # (choice_icons.paint ignores unknown names — never a crash).
+            card = ChoiceCard(label, desc, icon_name=f"golive-{model}")
+            card.setProperty("model", model)
+            self.group.add_card(card, i)
+            lay.addWidget(card)
         if self.models:
             self.group.button(0).setChecked(True)
         lay.addStretch(1)
