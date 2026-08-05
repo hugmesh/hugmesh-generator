@@ -115,6 +115,7 @@ CASDOOR_DB_PASSWORD="$(openssl rand -base64 24)"
 CASDOOR_GOOGLE_CLIENT_ID="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"
 CASDOOR_GOOGLE_CLIENT_SECRET="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET"
 
+
 # ── Optional keys file reader (no jq dependency) ────────────────────
 # keyfile_get <dotted.path> -> prints the value (empty if file/key absent).
 # Uses python3 (already required) so we don't add a jq dependency.
@@ -154,6 +155,19 @@ CASDOOR_GITHUB_CLIENT_SECRET="${CASDOOR_GITHUB_CLIENT_SECRET:-REPLACE_WITH_GITHU
 CASDOOR_DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-$(keyfile_get discord.client_id)}"
 CASDOOR_DISCORD_CLIENT_SECRET="${DISCORD_CLIENT_SECRET:-$(keyfile_get discord.client_secret)}"
 CASDOOR_DISCORD_CLIENT_ID="${CASDOOR_DISCORD_CLIENT_ID:-REPLACE_WITH_DISCORD_OAUTH_CLIENT_ID}"
+# LocalTube (DEFAULT-OFF optional slug). The path is seeded UNCONDITIONALLY —
+# same contract as every other secret here: materializing only SOURCES values,
+# it does not enable the slug. media_key/token_dek are minted; the Google
+# OAuth2 client is issued by Google, so placeholders the operator replaces
+# (the tube slug's YouTube sync simply fails auth until they are real).
+# NOTHING seeded this path before, so even the DECLARED tube ExternalSecrets
+# (tube-media-key / tube-token-dek) could never materialize on slug enable.
+TUBE_MEDIA_KEY="$(openssl rand -base64 32)"
+TUBE_TOKEN_DEK="$(openssl rand -base64 32)"
+TUBE_GOOGLE_CLIENT_ID="${TUBE_GOOGLE_CLIENT_ID:-$(keyfile_get tube.google_client_id)}"
+TUBE_GOOGLE_CLIENT_ID="${TUBE_GOOGLE_CLIENT_ID:-REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID}"
+TUBE_GOOGLE_CLIENT_SECRET="${TUBE_GOOGLE_CLIENT_SECRET:-$(keyfile_get tube.google_client_secret)}"
+TUBE_GOOGLE_CLIENT_SECRET="${TUBE_GOOGLE_CLIENT_SECRET:-REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET}"
 CASDOOR_DISCORD_CLIENT_SECRET="${CASDOOR_DISCORD_CLIENT_SECRET:-REPLACE_WITH_DISCORD_OAUTH_CLIENT_SECRET}"
 
 # ── Outbound mail (OPTIONAL, ABSENT-BY-DEFAULT) ─────────────────────
@@ -477,6 +491,11 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/wiki-bff-db" \
             password="${WIKI_BFF_DB_PASSWORD}" \
             app_password="${WIKI_BFF_DB_APP_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/tube" \
+            media_key="${TUBE_MEDIA_KEY}" \
+            token_dek="${TUBE_TOKEN_DEK}" \
+            google_client_id="${TUBE_GOOGLE_CLIENT_ID}" \
+            google_client_secret="${TUBE_GOOGLE_CLIENT_SECRET}"
         # phpBB forum (backend-only, isolated hugmesh-forum ns). phpbb-secrets
         # multi-key (DB_PASSWORD owner + ADMIN_PASSWORD first-install admin) at
         # /forum; the phpbb_app runtime role password at /forum-db (app_password).
@@ -550,7 +569,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
                 secret_access_key="${MANAGED_VELERO_SECRET_ACCESS_KEY}"
             echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/velero (managed object-store creds)"
         fi
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,route-access-db,uptrace,mail,harbor-robots,harbor,headwind}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,tube,route-access-db,uptrace,mail,harbor-robots,harbor,headwind}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -612,6 +631,10 @@ MOD_BFF_DB_PASSWORD="${MOD_BFF_DB_PASSWORD}" \
 USER_BFF_DB_PASSWORD="${USER_BFF_DB_PASSWORD}" \
 FORUM_BFF_DB_PASSWORD="${FORUM_BFF_DB_PASSWORD}" \
 WIKI_BFF_DB_PASSWORD="${WIKI_BFF_DB_PASSWORD}" \
+TUBE_MEDIA_KEY="${TUBE_MEDIA_KEY}" \
+TUBE_TOKEN_DEK="${TUBE_TOKEN_DEK}" \
+TUBE_GOOGLE_CLIENT_ID="${TUBE_GOOGLE_CLIENT_ID}" \
+TUBE_GOOGLE_CLIENT_SECRET="${TUBE_GOOGLE_CLIENT_SECRET}" \
 FEDERATION_DB_APP_PASSWORD="${FEDERATION_DB_APP_PASSWORD}" \
 ADMIN_BFF_DB_APP_PASSWORD="${ADMIN_BFF_DB_APP_PASSWORD}" \
 ADMIN_BFF_MFA_FACTOR_KEY="${ADMIN_BFF_MFA_FACTOR_KEY}" \
@@ -842,6 +865,22 @@ data = {
         },
         "casdoor-app-secrets": app_secrets,
     },
+    # LocalTube (DEFAULT-OFF optional slug, ns <brand>-tube). Mirrors the three
+    # tube ExternalSecret shapes (tube-externalsecrets.yaml): mediaKey / dek /
+    # clientId+clientSecret. Emitted unconditionally like every other secret —
+    # the bundle sources values, slug enablement is a separate operator act.
+    f"{brand}-tube": {
+        "tube-media-key": {
+            "mediaKey": os.environ["TUBE_MEDIA_KEY"],
+        },
+        "tube-token-dek": {
+            "dek": os.environ["TUBE_TOKEN_DEK"],
+        },
+        "google-oauth": {
+            "clientId": os.environ["TUBE_GOOGLE_CLIENT_ID"],
+            "clientSecret": os.environ["TUBE_GOOGLE_CLIENT_SECRET"],
+        },
+    },
     "observability": {
         "clickhouse-auth": {
             "password": os.environ["CLICKHOUSE_PASSWORD"],
@@ -924,7 +963,7 @@ echo "Casdoor admin password (PLAINTEXT, shown once — seed Casdoor with this):
 echo "  ${CASDOOR_ADMIN_PLAIN}"
 echo "  (a -6 hash is what was stored under secret/${BASE}/casdoor.admin_password)"
 echo
-echo "Note: casdoor google/github/discord client_id/secret are placeholders unless"
+echo "Note: casdoor google/github/discord AND tube google client_id/secret are placeholders unless"
 echo "      supplied via env (GITHUB_CLIENT_ID/…, DISCORD_CLIENT_ID/…) or the keys"
 echo "      file (${KEYS_FILE}). The casdoor-init Job skips seeding a provider whose"
 echo "      secret is still a placeholder. Replace them with your real OAuth creds."

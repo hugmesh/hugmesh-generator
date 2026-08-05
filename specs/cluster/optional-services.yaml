@@ -225,7 +225,7 @@ spec:
       sharedApps: []
       manifestPath: manifests/tube
       esoFile: manifests/external-secrets/tube-externalsecrets.yaml
-      esoKeys: [tube-media-key, tube-token-dek]
+      esoKeys: [tube-media-key, tube-token-dek, google-oauth]
       gatewayHost: null
       gatewayRouteIds: [hugmesh-tube-bff-api, tube-content]
       routeAccessRows:
