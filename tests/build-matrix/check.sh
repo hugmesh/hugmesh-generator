@@ -1869,7 +1869,7 @@ run_selinux_policy_checks() {
 # time. Static curated-chain check (see that script's header for why static, not
 # host-side resolution). Same fail-closed delegate shape as SLX: a missing
 # script is charged in full, a short assertion tally is charged as failures.
-RAR_EXPECTED=16
+RAR_EXPECTED=17
 RAR_PASS=0; RAR_FAIL=0
 run_requested_atoms_checks() {
     local out="${TMP_DIR}/reqatoms.out"

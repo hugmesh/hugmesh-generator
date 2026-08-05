@@ -22,7 +22,23 @@ net-misc/openssh
 net-wireless/wpa_supplicant
 net-firewall/iptables
 net-firewall/nftables
-net-firewall/firewalld
+# net-firewall/firewalld — DELIBERATELY EXCLUDED on this cross-compiled platform
+# (2026-08-05, real-build evidence). firewalld is a Python daemon and
+# unconditionally needs pygobject -> gobject-introspection -> glib[introspection];
+# a scoped glib[introspection] override resolved the depgraph (see the merged
+# requested-atoms-resolvable gate history), but the REAL resume build then died in
+# glib-2.88.2 src_configure: the ebuild's in-source gobject-introspection
+# bootstrap ("work/gobject-introspection-1.86.0-build", ninja) fails under
+# cross-emerge — the same failure bc87d1e recorded against glib-2.86, still live
+# with the self-testing qemu exe_wrapper eclasses (build log:
+# build-pki.rpi5.log 2026-08-05 16:09, 45/52 chain packages built, glib itself
+# failed twice). Until the bootstrap cross-compiles, firewalld cannot exist on
+# ARM images, and pretending otherwise ships EITHER a silently degraded image
+# (the pre-completeness-gate era) or a guaranteed build failure. Host firewalling
+# remains: nftables + iptables above, plus the hugmesh-firewall-reconcile OpenRC
+# service (Layer-3 backstop, drives nftables directly, owns its own tables).
+# Re-adding this atom without a working glib[introspection] cross story will be
+# refused by tests/requested-atoms-resolvable.sh — see its rpi5 section.
 net-firewall/conntrack-tools
 net-misc/socat
 # Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +

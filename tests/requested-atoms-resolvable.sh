@@ -146,34 +146,46 @@ for plat in "${PLATFORMS[@]}"; do
   done
 done
 
-echo "-- B) the live instance is pinned (rpi5 firewalld) --"
+echo "-- B) the live instance is pinned (rpi5 firewalld: DELIBERATE EXCLUSION) --"
+# HISTORY: candidate A (scoped glib[introspection] override) resolved the graph
+# but the 2026-08-05 real resume build died in glib-2.88.2 src_configure's
+# in-source gobject-introspection bootstrap (ninja) — the bc87d1e cross failure,
+# still live. The honest state is a LOUD per-platform exclusion. This section
+# pins BOTH halves of that state plus its paper trail, so neither a silent
+# re-add (hour-N build death) nor a silent un-documenting can pass a gate run.
 RPI5="${REPO}/specs-rpi5"
 if is_requested "${RPI5}" "net-firewall/firewalld"; then
-  ok "specs-rpi5 packages.list still requests net-firewall/firewalld (dropping it silently is the exact hole that shipped firewalld-less rpi5 images — a deliberate exclusion must update this gate too)"
+  bad "specs-rpi5 requests net-firewall/firewalld again — its glib[introspection] chain does NOT cross-compile (glib-2.88.2 g-i bootstrap dies in src_configure, proven 2026-08-05); re-adding it requires a working cross story AND updating this gate, or the build dies at hour N"
 else
-  bad "net-firewall/firewalld is GONE from specs-rpi5 packages lists — if this is a deliberate per-platform exclusion it must be loud: builder comment + this gate updated; if not, the silently-shipped-firewalld-less-image hole is back"
+  ok "specs-rpi5 does not request net-firewall/firewalld (deliberate exclusion; cross g-i bootstrap is broken)"
+fi
+if grep -q 'DELIBERATELY EXCLUDED' "${RPI5}/portage/packages.list" \
+   && grep -A3 'DELIBERATELY EXCLUDED' "${RPI5}/portage/packages.list" | grep -q 'firewalld'; then
+  ok "packages.list carries the exclusion paper trail (DELIBERATELY EXCLUDED block naming firewalld)"
+else
+  bad "the firewalld exclusion lost its paper trail in packages.list — a bare deletion is indistinguishable from the silently-shipped-firewalld-less-image hole this gate exists to prevent"
 fi
 OVR="${RPI5}/portage/package.use/firewalld-introspection"
-if [ -f "${OVR}" ] && grep -qE '^dev-libs/glib[[:space:]]+introspection[[:space:]]*$' "${OVR}"; then
-  ok "package.use/firewalld-introspection carries the uncommented 'dev-libs/glib introspection' line"
+if [ -f "${OVR}" ]; then
+  bad "package.use/firewalld-introspection still exists — with firewalld excluded it only makes every --newuse build retry the BROKEN glib[introspection] cross rebuild (glib-2.88.2 bootstrap dies in src_configure)"
 else
-  bad "specs-rpi5/portage/package.use/firewalld-introspection missing or its 'dev-libs/glib introspection' line is gone/commented — firewalld resolution is walled again"
+  ok "the retired glib[introspection] override is gone (nothing re-triggers the broken glib rebuild)"
 fi
-if grep -qF 'cp "${SPECS_DIR}/portage/package.use/"*' "${REPO}/build-rpi5-stage4.sh"; then
-  ok "build-rpi5-stage4.sh still copies portage/package.use/* verbatim into the sysroot (the override actually reaches the resolver)"
+if grep -q '^net-firewall/nftables' "${RPI5}/portage/packages.list"; then
+  ok "nftables is still requested (the remaining host-firewall story: nftables + hugmesh-firewall-reconcile)"
 else
-  bad "build-rpi5-stage4.sh no longer copies portage/package.use/* into the sysroot — the scoped override never reaches the resolver (vacuous-pass hazard)"
+  bad "nftables vanished from specs-rpi5 packages.list — the exclusion rationale claims it carries the host-firewall story"
 fi
-if grep -q 'package.use/firewalld-introspection' "${RPI5}/portage/make.conf.tmpl"; then
-  ok "make.conf.tmpl's -introspection comment cross-references the scoped exception (a reader of the wall learns about the door)"
+if grep -q 'DELIBERATELY EXCLUDED' "${RPI5}/portage/make.conf.tmpl" || grep -q 'DELIBERATE EXCLUSION' "${RPI5}/portage/make.conf.tmpl"; then
+  ok "make.conf.tmpl's -introspection block records the exclusion history (a reader of the wall learns why there is no door)"
 else
-  bad "make.conf.tmpl's -introspection block lost the cross-reference to package.use/firewalld-introspection — the wall reads as absolute again"
+  bad "make.conf.tmpl's -introspection block lost the exclusion history — the retired override becomes rediscoverable folklore"
 fi
 
 echo "-- C) the runtime backstop this gate's compile-side bet relies on --"
-# The scoped override bets that glib[introspection] now COMPILES cross (see the
-# override file's header). If that bet loses, the loud failure is the
-# completeness gate — so its arming is part of THIS gate's contract.
+# The completeness gate is the runtime backstop that made the original silent
+# firewalld hole loud, and it is what refuses any FUTURE silently-degraded
+# image — so its arming stays part of THIS gate's contract.
 if grep -q 'source "${SCRIPT_DIR}/scripts/_payload-gate-lib.sh"' "${REPO}/build-rpi5-stage4.sh"; then
   ok "build-rpi5-stage4.sh sources scripts/_payload-gate-lib.sh (completeness gate armed)"
 else
