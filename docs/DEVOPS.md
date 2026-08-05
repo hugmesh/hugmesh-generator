@@ -19,7 +19,7 @@ web interface.**
 `.gitlab-ci.yml` (runs on the privileged x86 runner):
 
 1. **iso** — `scripts/build-all-roles.sh` (pki/backend/frontend, aarch64) + `build-x86-host-stage4.sh` (x86 host).
-2. **images** — The `build:images` job dispatches into the **in-cluster Kaniko image-build pipeline** (`specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml`). It is OPT-IN (guarded by `IMAGE_BUILDER_ENABLED`; no-ops until an operator enables `apps-optional/60-image-builder.yaml` and provides a cluster `KUBECONFIG`). The service-catalog Kaniko builder (PR #110) is a separate per-`AddService` template, not the general pipeline.
+2. **images** — The `build:images` job dispatches into the **in-cluster Kaniko image-build pipeline** (`specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml`). The pipeline is ALWAYS-ON: `specs/cluster/apps/60-image-builder.yaml` is in the root app-of-apps' recursed `apps/` set, so the build namespace + NetworkPolicy always sync (the Kaniko Job remains a template, so no build pod runs until one is dispatched). The job runs on the default branch + release tags only, and REQUIRES a cluster `KUBECONFIG` on the runner and the ESO-materialized `image-builder-registry` push secret — it no longer no-ops when they are absent, it fails. The service-catalog Kaniko builder (PR #110) is a separate per-`AddService` template, not the general pipeline.
 3. **deliver** — uploads each ISO to the GitLab generic package registry under a
    stable `…/packages/generic/iso/latest/<name>.iso` path.
 

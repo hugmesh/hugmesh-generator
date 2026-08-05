@@ -250,8 +250,8 @@ unchanged.
   minted, so that Job captures it immediately. `scripts/gen-cluster-secrets.sh`'s
   `GITLAB_REGISTRY_TOKEN` remains only as a manual-override escape hatch for
   local/offline testing. Any app without a source repo yet stays `:dev` until built.
-- The opt-in in-cluster Kaniko build pipeline (`manifests/image-builder`, enabled by
-  copying `apps-optional/60-image-builder.yaml` into `apps/`) PUSHES with a SEPARATE
+- The always-on in-cluster Kaniko build pipeline (`manifests/image-builder`, synced by
+  `apps/60-image-builder.yaml`) PUSHES with a SEPARATE
   credential: the SAME `harbor-provision` Job also mints a project-scoped
   **push-only** robot account and writes it to Vault `hugmesh/harbor-robots`
   (`push_name`/`push_secret`). ESO materializes it as the `image-builder-registry`

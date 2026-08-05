@@ -53,18 +53,23 @@ The Job template is parameterized so it can be instantiated by any of:
    installed (it is not present today; the proven #110 pattern is plain `batch/v1` Jobs, which
    this mirrors).
 
-## SHIPS DARK + OPT-IN (merging changes nothing live)
+## ALWAYS-ON — and what that does (and does not) start
 
-Two layers of inertness:
+- **Always synced:** the ArgoCD `Application` (`../../apps/60-image-builder.yaml`) lives in
+  `specs/cluster/apps/`, which the root app-of-apps recurses (`directory.recurse: true`), so
+  ArgoCD reconciles it continuously. This replaces the previous opt-in posture, where the file
+  was parked in a sibling `specs/cluster/apps-optional/` directory that no root recursed.
+- **What it creates:** the `hugmesh-image-builds` namespace (PSS `restricted`) and its
+  default-deny-ingress NetworkPolicy. That is the complete set.
+- **Still ships dark:** the Kaniko Job is a TEMPLATE and is deliberately **not** in
+  `kustomization.yaml`, so ArgoCD never applies it — exactly like #110. **No build pod runs
+  until a driver dispatches one**; the namespace and policy are inert on their own.
+- **Downstream effect:** the `image-builder-registry` ExternalSecret targets this namespace, so
+  it stops being inert the moment the namespace exists — Vault `secret/<brand>/harbor-robots`
+  must carry `push_name`/`push_secret` or ESO will report a sync error against it.
 
-- **Ships dark:** the Job template is **not** in `kustomization.yaml`, so ArgoCD never applies
-  it — exactly like #110. Only the namespace + NetworkPolicy are ArgoCD-managed, and those are
-  inert until a build lands.
-- **Opt-in / default-off:** the ArgoCD `Application`
-  (`../../apps-optional/60-image-builder.yaml`) lives in `specs/cluster/apps-optional/`, a
-  directory the root app-of-apps does **not** recurse (the root recurses only
-  `specs/cluster/apps/`). So the Application is never synced until an operator copies it into
-  `specs/cluster/apps/`. **Merging this PR therefore changes nothing live.**
+Covered by the `lint:image-builder-always-on` CI gate
+(`../../../../tests/scripts/test-image-builder-always-on.sh`).
 
 Registry push creds (`image-builder-registry`, a `dockerconfigjson` with **push** scope for
 `registry.hugmesh.systems`) are **ESO-materialized** into the build namespace — **never in

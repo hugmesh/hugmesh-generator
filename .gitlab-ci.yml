@@ -97,6 +97,37 @@ lint:cluster-manifest-integrity:
     # regex cannot tell what a fused `for app in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
 
+# ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
+# image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE
+# SITS IN: the root app-of-apps recurses specs/cluster/apps, so moving
+# 60-image-builder.yaml out of the parked apps-optional/ sibling is what makes ArgoCD
+# start creating the build namespace — a live cluster-behaviour flip that a bare
+# `git mv` (in either direction) performs with no code change and no signal. This job
+# pins the flip: the Application is in the always-synced set, the root really does
+# recurse it, the synced manifests are structurally valid (PSS restricted namespace +
+# default-deny ingress), the Kaniko Job stays a TEMPLATE outside the kustomization so
+# nothing runs until a build is dispatched, the ESO push secret targets the namespace
+# the app creates, the opt-in CI guard is gone, the dispatcher's sed bindings still
+# match the template's ${...} set (BOTH sides of each binding, so the two destination
+# expressions cannot be swapped), a failing dispatch cannot block the later security
+# stages, and no retired pre-rebrand identifier survives in the surface. That last check
+# is POSITIONAL: the two still-legitimate occurrences of the old brand (the frozen
+# label-KEY namespace and the live GitHub org path segment — enumerated verbatim in
+# tests/scripts/image_builder_always_on.py, which is NOT itself part of the scanned
+# surface) are exempt only in their own syntactic position, so the same text in a
+# registry host, an image reference or a repoURL is still a finding. Carries negative
+# controls for every check — including reversing the move, reinstating a stale repo name,
+# and planting the old brand in each functional field — so a green run cannot be vacuous.
+# Offline, no cluster, no kubectl, no network.
+lint:image-builder-always-on:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-image-builder-always-on.sh
+
 # Service-catalog DISCOVERY gate. The catalog ApplicationSets find a repo by
 # `pathsExist` on a FIXED deploy-descriptor filename; the HugMesh rebrand renamed
 # that file to `hugmesh-deploy.yaml` in 3 of the 9 adopting repos and left
@@ -913,32 +944,39 @@ build:images:
   stage: images
   tags: [hugmesh-x86]
   # Dispatch into the IN-CLUSTER Kaniko image-build pipeline
-  # (specs/cluster/manifests/image-builder/) instead of the former echo STUB. The pipeline
-  # is OPT-IN: its namespace ships only when an operator enables the ArgoCD Application
-  # (apps-optional/60-image-builder.yaml). This job is therefore guarded — it runs the real
-  # in-cluster build ONLY when IMAGE_BUILDER_ENABLED is set (and KUBECONFIG points at the
-  # cluster); otherwise it is a documented no-op so merging changes nothing live and the
-  # pipeline stays green before the (kernel-blocked) cluster exists.
+  # (specs/cluster/manifests/image-builder/) instead of the former echo STUB. The pipeline is
+  # ALWAYS-ON: its ArgoCD Application lives in specs/cluster/apps/60-image-builder.yaml, which
+  # the root app-of-apps recurses, so the `hugmesh-image-builds` namespace + its NetworkPolicy
+  # exist on every reconcile. The former opt-in environment-variable guard is RETIRED — this
+  # job now really dispatches a build.
   #
   # GATED to the default branch + release tags (the canonical sibling `build:image` posture
   # in hugmesh-gateway / hugmesh-forum-bff-api): never on a plain feature MR, so a build
-  # only ever runs for a mergeable ref. Combined with the IMAGE_BUILDER_ENABLED guard, NOTHING
-  # kicks off uncontrolled builds on merge — the default-branch run is still a no-op until an
-  # operator opts in.
+  # only ever runs for a mergeable ref.
   #
-  # allow_failure: NON-BLOCKING, ON PURPOSE — AND NOT A NO-OP. `stages:` is
-  # [lint, verify, iso, images, deliver, sca, dast, load], so sca and dast come AFTER images,
-  # and neither sca:dependency-check nor the dast/load jobs declare `needs:` — under plain
-  # stage ordering a hard-failing build:images stops the OWASP Dependency-Check SCA and the ZAP
-  # DAST stages from running on main AT ALL. Nothing has bitten yet only because the
-  # IMAGE_BUILDER_ENABLED guard makes this job `exit 0`; the moment it really dispatches (an
-  # operator setting the flag, or the guard being retired) a failed build would silently trade
-  # the repo's two security stages for one build, and none of that is visible in a diff of the
-  # image-builder surface — nothing there mentions those jobs. allow_failure contains the blast
-  # radius to THIS job: the dispatch still runs and its failure is still reported.
-  # FLIP THIS TO false once the cluster is live and a dispatch is expected to succeed — from
-  # then on a build regression should be red, and sca/dast should get their own `needs:` so
-  # they stay decoupled.
+  # OPERATOR PRECONDITIONS (this job FAILS, loudly, without them — it no longer no-ops):
+  #   * KUBECONFIG on the hugmesh-x86 runner, pointing at the cluster, with create/get on
+  #     Jobs in ${BUILD_NAMESPACE};
+  #   * the image-builder Application synced (namespace + netpol present);
+  #   * the `image-builder-registry` dockerconfigjson materialized in ${BUILD_NAMESPACE} by
+  #     ESO from Vault secret/<brand>/harbor-robots, i.e. Vault + ESO + the Harbor
+  #     provisioning Job have all run;
+  #   * ${IMAGE_CONTEXT} reachable from the build pod, and its ref actually existing.
+  #
+  # allow_failure: NON-BLOCKING, ON PURPOSE — AND NOT A NO-OP. The job really dispatches and
+  # its failure is reported; what allow_failure buys is that the failure stays contained to
+  # THIS job. `stages:` puts sca and dast AFTER images, and neither sca:dependency-check nor
+  # the dast jobs declare `needs:`, so under plain stage ordering a hard-failing build:images
+  # would stop the OWASP Dependency-Check SCA and the ZAP DAST stages from running on main at
+  # all. Those stages ran before the always-on flip only because the opt-in guard made this
+  # job `exit 0`. Silently trading the repo's two security stages for this one build is a far
+  # worse deal than a visible amber job, and the preconditions above are NOT met yet: the
+  # cluster does not exist (see specs/cluster/apps/60-image-builder.yaml — the x86 netfilter
+  # gap still blocks bringing one up).
+  # FLIP THIS TO false the moment the cluster is live and a dispatch is expected to succeed —
+  # from then on a build regression should be red. lint:image-builder-always-on holds the
+  # invariant either way: it FAILS if build:images can block a later-stage job, so removing
+  # allow_failure without also giving sca/dast their own `needs:` cannot pass review.
   allow_failure: true
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -966,12 +1004,6 @@ build:images:
     DEST_REPO: "registry.hugmesh.systems/hugmesh/hugmesh-gateway"
   script:
     - |
-      if [ -z "${IMAGE_BUILDER_ENABLED:-}" ]; then
-        echo "in-cluster image-builder is OPT-IN and disabled (IMAGE_BUILDER_ENABLED unset)."
-        echo "to enable: sync apps-optional/60-image-builder.yaml into specs/cluster/apps/,"
-        echo "point KUBECONFIG at the cluster, and set IMAGE_BUILDER_ENABLED=1."
-        exit 0
-      fi
       # TAG SCHEME — mirrors the canonical sibling `build:image` (gateway / forum-bff-api):
       #   IMMUTABLE = never moves. Prefer IMAGE_TAG (the APP repo's resolved commit/release,
       #               supplied by the dispatching pipeline); fall back to this pipeline's own

@@ -1,0 +1,50 @@
+# image-builder — the GENERIC in-cluster app-image Kaniko build pipeline (ALWAYS-ON).
+#
+# This Application syncs ONLY the build NAMESPACE + NetworkPolicy
+# (manifests/image-builder kustomization). The per-build Kaniko Job is a TEMPLATE a driver
+# (the .gitlab-ci.yml build:images job, an ArgoCD sync hook, or an Argo-Workflows step)
+# instantiates per build — it is NOT in the kustomization, so ArgoCD never applies it. The
+# namespace + policy are inert until a build lands there. Models the proven #110
+# service-catalog-builder Application (apps/54-service-catalog-builder.yaml) 1:1.
+#
+# ALWAYS-ON — WHY THIS FILE LIVES IN apps/ (it used to live in apps-optional/):
+#   The root app-of-apps (../app-of-apps.yaml) syncs `path: specs/cluster/apps` with
+#   `directory.recurse: true`, as does the waved alternative root
+#   (apps/00-app-of-apps-waved.yaml, whose `exclude` names only itself). ANY Application yaml
+#   under apps/ is therefore auto-synced. This file was previously parked in the sibling
+#   specs/cluster/apps-optional/ directory — which no root recurses — so that the pipeline
+#   shipped dark behind an operator opt-in. That opt-in is now retired: the image-builder is
+#   part of the standard platform surface and ArgoCD syncs it on every reconcile.
+#
+#   WHAT SYNCING THIS ACTUALLY CREATES: the `hugmesh-image-builds` namespace (PSS
+#   `restricted`) and its default-deny-ingress NetworkPolicy — and NOTHING ELSE. No build
+#   pod, no Job, no workload runs until a driver dispatches a build, because the Kaniko Job
+#   is a template that is deliberately absent from the kustomization. The namespace is also
+#   the precondition for the `image-builder-registry` push credential
+#   (manifests/external-secrets/image-builder-externalsecrets.yaml), whose target namespace
+#   did not exist while this Application was parked.
+#
+# NOTE: live validation of an actual build is PENDING a kernel-fixed x86 image (the x86
+# netfilter gap currently blocks bringing up a cluster). This manifest is authored
+# correct-by-construction against the #110 Kaniko contract and validated with
+# `kubectl kustomize` / yaml parse, and is covered by the
+# `lint:image-builder-always-on` gate (tests/scripts/test-image-builder-always-on.sh).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: image-builder
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/image-builder
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    # The kustomization creates its own namespace resource; ArgoCD must not also try.
+    syncOptions: [CreateNamespace=false]

@@ -8,8 +8,8 @@
 # runs to build a first-party app image from its repo and push it to the in-cluster Harbor
 # registry (registry.hugmesh.systems; see apps/03a-harbor.yaml).
 #
-# ArgoCD-managed (listed in kustomization.yaml) ONLY when the opt-in
-# apps-optional/60-image-builder.yaml Application is enabled. The per-build Job is a TEMPLATE
+# ArgoCD-managed (listed in kustomization.yaml) via the always-on
+# apps/60-image-builder.yaml Application. The per-build Job is a TEMPLATE
 # (not in the kustomization) — it ships dark, exactly like #110.
 ---
 apiVersion: v1

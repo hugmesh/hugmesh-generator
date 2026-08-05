@@ -61,8 +61,8 @@ resources:
   # harbor-registry pull-scoped robot secret above) that
   # manifests/harbor/harbor-provision-job.yaml mints and writes to
   # secret/hugmesh/harbor-robots (push_name/push_secret). ESO/Vault only;
-  # inert until the opt-in apps-optional/60-image-builder.yaml Application
-  # creates the namespace (ships dark).
+  # materializes once the always-on apps/60-image-builder.yaml Application
+  # has created the namespace.
   - image-builder-externalsecrets.yaml   # image-builder-registry
   # Azure Intune (Graph) phone-lock credential — DEFAULT-OFF, OPT-IN. Intune is a
   # CO-EQUAL second MDM provider alongside the sovereign self-hosted Headwind DPC;
