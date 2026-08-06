@@ -64,6 +64,24 @@ KIND_PROFILE="${KIND_PROFILE:-core}"
 case "${KIND_PROFILE}" in core|sso) ;; *) echo "KIND_PROFILE must be 'core' or 'sso' (got '${KIND_PROFILE}')" >&2; exit 1 ;; esac
 
 log() { echo "==> $*"; }
+# Recreate a completed/failed Job. `kubectl delete job` BLOCKS on the pod's
+# grace period, and a Job pod wedged in Terminating never releases it — observed
+# hanging 30+ minutes on a clean bring-up, after which the hard wait below can
+# never pass because the Job it waits for was never recreated. Force the
+# deletion, do not wait on it, and then block until the object is genuinely gone
+# so the re-apply cannot race a still-terminating predecessor.
+recreate_job() { # <namespace> <job> <kustomize-dir>
+  local ns="$1" job="$2" dir="$3" i
+  kubectl -n "${ns}" delete job "${job}" --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
+  kubectl -n "${ns}" delete pods -l "job-name=${job}" --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
+  for i in $(seq 1 60); do
+    kubectl -n "${ns}" get job "${job}" >/dev/null 2>&1 || break
+    sleep 2
+  done
+  kubectl apply -k "${dir}" >/dev/null
+}
+
+
 warn() { echo "    WARN: $*" >&2; }
 
 for bin in kind kubectl docker git jq; do
@@ -495,8 +513,7 @@ fi
 # plain re-apply of its manifests recreates+reruns it directly (bypassing the
 # need to force an ArgoCD resync) — same content ArgoCD already owns/manages.
 log "Re-running vault-pki-init (bootstraps pki_int + per-app issuing roles)"
-kubectl -n vault delete job vault-pki-init --ignore-not-found >/dev/null
-kubectl apply -k "${CLUSTER_DIR}/manifests/vault-pki" >/dev/null
+recreate_job vault vault-pki-init "${CLUSTER_DIR}/manifests/vault-pki"
 kubectl -n vault wait --for=condition=complete job/vault-pki-init --timeout=180s \
   || warn "vault-pki-init did not complete within 180s — check 'kubectl -n vault logs job/vault-pki-init'"
 
@@ -570,8 +587,7 @@ SHIM
   #     vault-pki-init.
   # ───────────────────────────────────────────────────────────────────────
   log "Re-running casdoor-init now that Vault KV + ESO secrets exist"
-  kubectl -n hugmesh-pki delete job casdoor-init --ignore-not-found >/dev/null
-  kubectl apply -k "${CLUSTER_DIR}/manifests/casdoor" >/dev/null
+  recreate_job hugmesh-pki casdoor-init "${CLUSTER_DIR}/manifests/casdoor"
   kubectl -n hugmesh-pki wait --for=condition=complete job/casdoor-init --timeout=600s \
     || { warn "casdoor-init did not complete — 'kubectl -n hugmesh-pki logs job/casdoor-init'"; exit 1; }
 
