@@ -606,7 +606,14 @@ def test_vdb_only_use_falls_back_to_the_unchanged_pair_and_says_so(
     assert expand == ["ABI_X86", "64", "-32", "-x32"]
     plain = [b.verbatim for b in use]
     assert "abi_x86_64" not in plain and "-abi_x86_32" not in plain
-    assert "-abi_mips_n32" in plain          # honest: no desc file, so no group to fold
+    # -abi_mips_n32 has no desc file, so it never folds into a group and stays in plain
+    # USE — but it is DISABLED and not '+'-defaulted by the ebuild, so the noise filter
+    # (operator rule 2026-08-05) hides it from the VIEW. The verbatim copy still carries
+    # it: that is the filter's whole contract, asserted here so a regression in either
+    # direction is caught.
+    assert "-abi_mips_n32" not in plain, "an always-off flag must not clutter the view"
+    cell = item.data(_flag_col("USE"), fb.CELL_ROLE)
+    assert "-abi_mips_n32" in cell.verbatim_text, "the verbatim copy must keep every flag"
 
 
 def test_use_expand_still_splits_on_a_machine_with_no_gentoo_tree(
@@ -706,10 +713,15 @@ def test_an_ambiguous_cat_pkg_falls_back_to_the_vdb_instead_of_the_wrong_slot(
     for ln in _emerge_stream([BOTH]):
         page._on_line(0, ln)
     item = page._rows[0].pkg_items[BOTH]
-    use = _badges(item, "USE")
-    assert use, "the VDB fallback must still fill USE"
-    assert "ncurses" not in {b.verbatim.lstrip("-") for b in use}
-    assert fb.VDB_NOTE in use[0].tooltip
+    # Read the CELL, not the visible badges: this fixture's flags are all disabled and
+    # none is '+'-defaulted, so the noise filter (operator rule 2026-08-05) legitimately
+    # shows nothing. What this test is about is WHICH SOURCE filled the cell — the VDB
+    # at the exact <pkg>-<version> path, never another slot's markers — and that is
+    # carried by the unfiltered verbatim string.
+    cell = item.data(_flag_col("USE"), fb.CELL_ROLE)
+    assert cell is not None, "the VDB fallback must still fill the USE cell"
+    assert "ncurses" not in cell.verbatim_text, "took a foreign slot's flags"
+    assert fb.VDB_NOTE in cell.badges[0].tooltip if cell.badges else True
 
 
 def test_a_resolver_display_printed_after_the_row_exists_still_lands(wiz, fake_repo):

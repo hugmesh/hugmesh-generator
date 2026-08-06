@@ -144,6 +144,17 @@ class FlagCell:
 
     badges: tuple[Badge, ...]
     copy_text: str
+    #: The UNFILTERED ``KEY="…"`` string — every flag portage would print, including
+    #: the uninteresting always-off ones the display filter hides (see
+    #: :func:`_interesting`). The row shows ``copy_text``; the context menu's
+    #: "Copy flags (verbatim)" hands over THIS, so filtering the view never costs
+    #: the operator the real portage string. Defaults to ``copy_text`` for cells
+    #: that were never filtered.
+    verbatim_text: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.verbatim_text:
+            object.__setattr__(self, "verbatim_text", self.copy_text)
 
 
 # ── tooltips ─────────────────────────────────────────────────────────────────────────
@@ -302,6 +313,29 @@ def resolver_cells(row: pf.ResolverRow,
     return cells
 
 
+# ── display filter: hide the flags nobody ever wanted ────────────────────────
+# A stage4 sysroot lists every flag in a package's IUSE, and the vast majority are
+# disabled and were never going to be anything else — pure noise in a column the
+# operator scans for decisions. The operator's rule (2026-08-05): show a flag only
+# when it is ENABLED, or when it is DISABLED **and Gentoo's own ebuild defaults it
+# ON** (``+flag`` in IUSE) — i.e. our profile / make.conf / mesh posture overrode
+# upstream, which is exactly the case worth reviewing.
+#
+# Deliberately NOT filtered:
+#   * anything enabled — always shown;
+#   * any flag carrying a state marker (changed / new-in-IUSE / removed / forced or
+#     masked by the profile). Those describe a TRANSITION or a profile decision and
+#     are interesting regardless of the default, and dropping them would silently
+#     hide the parenthesised profile-forced case the badge design exists to surface.
+# The unfiltered string stays reachable via FlagCell.verbatim_text.
+def _interesting(tok: "pf.FlagToken", default_on: frozenset[str]) -> bool:
+    if tok.enabled:
+        return True
+    if tok.changed or tok.removed or tok.forced_masked or tok.new_in_iuse:
+        return True
+    return tok.name in default_on
+
+
 def vdb_use_cells(vdb: pf.VdbPackage,
                   descriptions: pf.FlagDescriptions | None = None
                   ) -> dict[str, FlagCell]:
@@ -341,12 +375,22 @@ def vdb_use_cells(vdb: pf.VdbPackage,
         return [t for t in toks if t.enabled] + [t for t in toks if not t.enabled]
 
     use_toks = _tokens(list(plain), lambda n: n in use_set)
+    default_on = vdb.iuse_default_on
+    shown_toks = [t for t in use_toks if _interesting(t, default_on)]
     if use_toks:
+        # The cell is built whenever the package HAS flags, even when every one of them
+        # is filtered out of the view: it is what carries verbatim_text, and dropping it
+        # would cost the operator the real portage string for exactly the boring-looking
+        # packages. An all-filtered cell simply has no badges and no display text —
+        # apply_cells refuses to reveal a column for a cell with no badges, so a row
+        # like that stays invisible instead of un-hiding an empty USE column.
         cells["USE"] = FlagCell(
             badges=tuple(badge_for_token(t, cat_pkg=vdb.cat_pkg,
                                          descriptions=descriptions,
-                                         extra_note=note) for t in use_toks),
-            copy_text='USE="' + " ".join(t.verbatim for t in use_toks) + '"')
+                                         extra_note=note) for t in shown_toks),
+            copy_text=('USE="' + " ".join(t.verbatim for t in shown_toks) + '"')
+                      if shown_toks else "",
+            verbatim_text='USE="' + " ".join(t.verbatim for t in use_toks) + '"')
     expand_badges: list[Badge] = []
     expand_raw: list[str] = []
     for gname, suffixes in grouped.items():
@@ -781,19 +825,29 @@ class FlagColumns:
                 continue
             item.setData(col, CELL_ROLE, cell)
             item.setText(col, cell.copy_text)       # the copy path (verbatim tokens)
-            if not self._has_content.get(key):
+            # A cell with no badges is a package whose flags were ALL filtered out of
+            # the view (see _interesting). It still carries verbatim_text for the copy
+            # action, but it is NOT content: revealing the column for it would show the
+            # operator an empty column, which is the clutter the filter exists to remove.
+            if cell.badges and not self._has_content.get(key):
                 self._has_content[key] = True
                 self.tree.setColumnHidden(col, False)
 
     def copy_text_for(self, item: QtWidgets.QTreeWidgetItem) -> str:
-        """The row's verbatim flag text across all four columns, §5 copy guarantee —
-        '' for rows that carry no flag cells (job/stage/group rows)."""
+        """The row's VERBATIM flag text across all four columns — §5's copy guarantee.
+
+        Reads the stored :class:`FlagCell` rather than the item's display text on
+        purpose: the USE column HIDES uninteresting always-off flags (see
+        ``_interesting``), so the display text is a filtered view while this must
+        stay the full string portage itself would print. Falls back to the display
+        text for any cell that predates the stored-object path."""
         parts = []
         for key in FLAG_COLUMNS:
             col = self.columns.get(key)
             if col is None:
                 continue
-            text = item.text(col)
+            cell = item.data(col, CELL_ROLE)
+            text = getattr(cell, "verbatim_text", "") or item.text(col)
             if text:
                 parts.append(text)
         return " ".join(parts)

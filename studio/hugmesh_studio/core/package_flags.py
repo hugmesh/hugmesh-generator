@@ -543,6 +543,21 @@ class VdbPackage:
         return tuple(f.lstrip("+-") for f in (self.iuse or "").split())
 
     @property
+    def iuse_default_on(self) -> frozenset[str]:
+        """Flags the EBUILD defaults ON — the ``+flag`` entries in IUSE.
+
+        This is upstream Gentoo's own opinion about the package, and it is the only
+        thing that makes a DISABLED flag interesting: ``-foo`` where the ebuild says
+        plain ``foo`` is noise (nobody ever wanted it), while ``-foo`` where the
+        ebuild says ``+foo`` means OUR profile / make.conf / mesh posture turned off
+        something Gentoo ships on — a real, reviewable decision.
+
+        :meth:`iuse_names` deliberately strips the marker, so this is where the
+        signal survives. Note ``-flag`` in IUSE (explicit default-off) is simply not
+        default-on, which is why only the ``+`` prefix is tested."""
+        return frozenset(f[1:] for f in (self.iuse or "").split() if f.startswith("+"))
+
+    @property
     def use_list(self) -> tuple[str, ...]:
         return tuple((self.use or "").split())
 
