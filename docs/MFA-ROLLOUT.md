@@ -396,6 +396,44 @@ floor off, narrow the rows (§2.3 (b)), or move that caller to a service account
 opaque session. Raising `APP_MFA_FRESHNESS_WINDOW` does not help it at all — the claim is
 absent, not stale.
 
+**That enumeration has been done once — 2026-08-06, and it came back CLEAN.** Recorded here
+so the operator inherits the answer rather than the chore, with the commands to re-run it,
+because it is a point-in-time result and a new service could invalidate it.
+
+*Static, across all 38 repos.* Seven code sites use the `client_credentials` grant
+(admin-bff `FederationOverrideClearClient` / `FederationResolvedFindingsClient` /
+`UserBffCharacterModerationClient`, mesh-bff `UserBffMeshDeviceClient`, actions
+`FederationUsernameClientConfig`, user-bff `ServiceTokenBroker`, remote-fragment
+`CasdoorTokenClient`). **None targets `/bff/admin…` or `/bff/superadmin…`**, and every one
+dials its peer **directly** over cluster DNS (`…svc.cluster.local:8080`, or the Matrix /
+Mastodon homeserver) rather than through a gateway — so gateway route-access, and therefore
+the MFA floor, never applies to that hop at all.
+
+Exactly one server-side caller anywhere touches a gated prefix: mod-bff's
+`AdminDomainLockClient` (`POST`/`DELETE /bff/admin/domain-lock/{platform}/{user}`). It is
+**not** machine traffic — `AdminApiConfig` builds it with
+`BearerForwardingFilter.forwardCallerToken(...)`, so it carries the **human moderator's**
+token, and it also dials admin-bff directly. Both reasons independently put it outside the
+floor. The only other two hits (`auth-core GatewayRevocationClient`, forum-bff
+`PhpbbAdminClient`) are javadoc prose, not calls.
+
+*Empirical, against the live kind cluster.* Casdoor has issued **80 tokens, 100 % of them
+user-bound, zero machine tokens** — `app-built-in` 48 (`profile`) and `app-user-bff` 32
+(`openid profile email`).
+
+```console
+# static: any machine caller of the two gated prefixes?
+$ git grep -nE '"/bff/(admin|superadmin)' -- src/main/java     # per repo; exclude @*Mapping
+# empirical: has any machine (user-less) token ever been issued?
+$ kubectl exec -n hugmesh-pki <casdoor-pg-pod> -- psql -U casdoor -d casdoor -tAc \
+    "SELECT application, CASE WHEN COALESCE(\"user\",'')='' THEN 'machine' ELSE 'user-bound' END,
+            count(*) FROM token GROUP BY 1,2;"
+```
+
+**So step 6 is clear on this precondition today.** Re-run both checks if a new service is
+added, if an existing one starts calling those prefixes, or if any caller is moved behind a
+gateway instead of cluster-DNS.
+
 **One knob that moves a `bff_` carrier onto the JWT path.**
 `hugmesh.gateway.bff-exchange.enabled` (default **false**, set in no manifest) makes
 `BffJwtExchangeWebFilter` rewrite `Authorization: bff_…` into the custody Casdoor JWT
