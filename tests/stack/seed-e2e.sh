@@ -160,8 +160,14 @@ ensure_org() { # <base-url> <org>
   log "org ${org} created"
 }
 
-# Mirrors seed-accounts.sh declared_roles + ROLE_SUPERADMIN (which the base
-# matrix omits because the cluster seeds it in init-data; compose has neither).
+# seed-accounts.sh declared_roles, PLUS the two roles this script grants that the
+# base matrix does not declare:
+#   ROLE_SUPERADMIN  — the base matrix omits it because the cluster seeds it in
+#                      init-data; compose has neither.
+#   ROLE_FLEET_ADMIN — granted below to the e2e-fleet persona (see EXTRA_SPECS).
+# Both MUST be listed here: apply-systems-roles.sh reaches these role objects with
+# update-role, which needs a role that already EXISTS in Casdoor. A granted-but-
+# undeclared role is a seed failure, not a silent no-op.
 # NOTE: character-studio + character-forge deliberately have NO role here — both
 # ride the ROLE_USER floor (route-access rows /character-studio/**,
 # /character-forge/**, /bff/character-forge/** are all ROLE_USER; ownership is
@@ -170,7 +176,8 @@ ensure_org() { # <base-url> <org>
 REQUIRED_ROLES="ROLE_SUPERADMIN ROLE_ADMIN ROLE_MOD ROLE_MATRIX ROLE_MASTODON \
 ROLE_MATRIX_DOMAINLOCKED ROLE_MASTODON_DOMAINLOCKED \
 ROLE_MATRIX_EXTERNAL_CLIENT ROLE_MASTODON_EXTERNAL_CLIENT \
-ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
+ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER \
+ROLE_FLEET_ADMIN"
 
 ensure_roles() { # <base-url> <org>
   local base="$1" org="$2" r
@@ -318,9 +325,22 @@ ensure_fragment_sync_client "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # minted into secrets.json and advertised to the operator. Expected to be a simple
 # slug (no '@'/spaces) so the Casdoor legal name equals the login.
 SUPERADMIN_PERSONA="${CASDOOR_SUPERADMIN_USERNAME:-e2e-superadmin}"
+# e2e-fleet: a PURE fleet owner (ROLE_FLEET_ADMIN + ROLE_USER, deliberately NO
+# ROLE_ADMIN) — the one principal among the 9 seeded mfa_required rows that
+# decide() can MFA-gate at the compose default (enabled=true, floor off). See
+# docs/MFA-ROLLOUT.md §3.1: SUPERADMIN/ADMIN/GAME-MASTER short-circuit BEFORE
+# decide() until the privileged floor is on, a pure fleet owner does not — so
+# granting this persona ROLE_ADMIN would silently turn the gateway MFA leg of
+# tests/e2e/specs/29-mfa-privileged-floor.spec.ts into a vacuous pass. That spec
+# asserts the absence of ROLE_ADMIN before it asserts the 403, and drives the
+# persona against /bff/admin/phone-fleet/**. The password env follows the
+# per-user E2E_<UPPER>_PASSWORD convention (seed-accounts.sh role_password),
+# which falls back to E2E_PASSWORD -> 'e2e-pass' when unset — the same value the
+# spec signs in with.
 EXTRA_SPECS="\
 ${SUPERADMIN_PERSONA}:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
 e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
+e2e-fleet:ROLE_FLEET_ADMIN,ROLE_USER:E2E_FLEET_PASSWORD \
 admin@hugmesh.systems:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
 alice@gmail.com:ROLE_USER:E2E_PASSWORD \
 bob@gmail.com:ROLE_USER:E2E_PASSWORD \
@@ -372,7 +392,7 @@ PREMINT_DIR="${SEED_WORKDIR}/jwt-cache" \
 
 # VERIFY (fail-honest): every persona the UI suites assume must now resolve.
 for persona in e2e-user e2e-mod e2e-admin "${SUPERADMIN_PERSONA}" e2e-banned \
-               e2e-mastodon-domainlocked e2e-matrix-domainlocked; do
+               e2e-fleet e2e-mastodon-domainlocked e2e-matrix-domainlocked; do
   curl -s -b "${CJ}" "${CASDOOR_URL}/api/get-user?id=${CASDOOR_ORG}/${persona}" \
     | jq -e '.data.name // empty | length > 0' >/dev/null \
     || die "persona ${persona} did not land in Casdoor ${CASDOOR_URL} (apply hook incomplete)"

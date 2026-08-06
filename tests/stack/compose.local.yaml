@@ -304,15 +304,32 @@ services:
       # test-gateway-mfa-env.sh pins this asymmetry in both directions.
       # Override with APP_MFA_ENABLED=false to get the old behaviour back.
       #
-      # enforce-privileged-floor stays OFF even here: it is a SEPARATE sub-flag, it
-      # is not exempt for SUPERADMIN, and it fails CLOSED with a 503 for privileged
-      # principals during route-access cold start — not what you want as a dev
-      # default. Flip it per-run when specifically testing the floor.
+      # enforce-privileged-floor stays OFF even here — but NOT because it needs
+      # `enabled`: it is an INDEPENDENT flag, not a sub-flag. The gateway runs the
+      # floor on this flag ALONE (GatewayRouteAccessFilter consults only
+      # app.mfa.enforce-privileged-floor, and the GatewayRouteAccessService
+      # .isMfaRequiredSurface() lookup it calls has no enabled-guard either), it is
+      # not exempt for SUPERADMIN, and it fails CLOSED with a 503 + Retry-After for
+      # privileged principals during route-access cold start — not what you want as
+      # a dev default. docs/MFA-ROLLOUT.md §2 calls it the single most dangerous
+      # flag in the runbook. Flip it PER RUN when specifically testing the floor:
+      # `make stack-up MFA_FLOOR=1` (a Makefile variable — it threads
+      # APP_MFA_ENFORCE_PRIVILEGED_FLOOR=true into every gateway for that run and
+      # expands to NOTHING otherwise, so the committed default below is untouched).
+      # tests/e2e/specs/29-mfa-privileged-floor.spec.ts gates its floor legs on the
+      # same MFA_FLOOR=1 spelling and is the end-to-end proof of both modes.
       #
-      # CAVEAT: APP_MFA_ENABLED=true ALONE IS A NO-OP. The per-row gate needs a
-      # gateway_route_access row with mfa_required=true and nothing writes true
-      # today (admin-bff AddServiceEffector uses the false back-compat ctor; the
-      # gateway's CanonicalSeed bakes false) — seed such a row when testing.
+      # The mfa_required rows this bites on ARE SEEDED HERE: route-access-db mounts
+      # ../../specs/cluster/manifests/route-access/initdb/20-schema.sql (see that
+      # service above), whose closing UPDATE flips the 9 /bff/admin… +
+      # /bff/superadmin… ALLOW rows to mfa_required=true. ⚠ initdb runs ONLY on a
+      # FRESH route-access-pg volume — an existing volume keeps its old rows, so a
+      # stack carried over from before that seed enforces nothing and spec 29 fails
+      # loudly rather than passing vacuously; `make stack-clean` first. With the
+      # rows present, APP_MFA_ENABLED=true is LIVE enforcement for the one
+      # non-privileged principal on them — a pure ROLE_FLEET_ADMIN on
+      # /bff/admin/phone-fleet/** (docs/MFA-ROLLOUT.md §3.1). MFA_FLOOR=1 extends it
+      # to SUPERADMIN/ADMIN/GAME-MASTER via the privileged floor.
       APP_MFA_ENABLED: ${APP_MFA_ENABLED:-true}
       APP_MFA_FRESHNESS_WINDOW: ${APP_MFA_FRESHNESS_WINDOW:-600000}
       APP_MFA_ENFORCE_PRIVILEGED_FLOOR: ${APP_MFA_ENFORCE_PRIVILEGED_FLOOR:-false}
@@ -366,7 +383,8 @@ services:
       APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
       # MFA enforcement (gateway) — ON for the dev stack; identical stanza to the
       # pki-gateway block above, where the full rationale, the cluster-vs-compose
-      # asymmetry and the mfa_required-row caveat live.
+      # asymmetry, the seeded-mfa_required-rows note and the MFA_FLOOR=1 floor
+      # knob live.
       APP_MFA_ENABLED: ${APP_MFA_ENABLED:-true}
       APP_MFA_FRESHNESS_WINDOW: ${APP_MFA_FRESHNESS_WINDOW:-600000}
       APP_MFA_ENFORCE_PRIVILEGED_FLOOR: ${APP_MFA_ENFORCE_PRIVILEGED_FLOOR:-false}
@@ -425,7 +443,8 @@ services:
       APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
       # MFA enforcement (gateway) — ON for the dev stack; identical stanza to the
       # pki-gateway block above, where the full rationale, the cluster-vs-compose
-      # asymmetry and the mfa_required-row caveat live.
+      # asymmetry, the seeded-mfa_required-rows note and the MFA_FLOOR=1 floor
+      # knob live.
       # This is the platform FRONT DOOR, so this is the instance an operator flips
       # first when smoke-testing the route-level MFA gate.
       APP_MFA_ENABLED: ${APP_MFA_ENABLED:-true}

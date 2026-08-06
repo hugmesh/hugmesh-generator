@@ -1214,6 +1214,21 @@ MANAGED_FORUM_BFF_R2DBC_URL    ?=
 MANAGED_FORUM_BFF_LIQUIBASE_URL ?=
 MANAGED_WIKI_BFF_R2DBC_URL     ?=
 MANAGED_WIKI_BFF_LIQUIBASE_URL  ?=
+# MFA PRIVILEGED FLOOR, opt-in per run — the compose rehearsal of
+# docs/MFA-ROLLOUT.md §3 step 7 (the runbook's single most dangerous flag; §2).
+# MFA_FLOOR=1 threads APP_MFA_ENFORCE_PRIVILEGED_FLOOR=true into every compose
+# gateway, so SUPERADMIN/ADMIN/GAME-MASTER need a FRESH second factor on the
+# seeded mfa_required rows and privileged requests answer 503 + Retry-After
+# during route-access cold-start priming. tests/e2e/specs/29-mfa-privileged-floor.spec.ts
+# gates its floor legs on the SAME variable name, so one spelling drives both.
+# EMPTY (the default) expands to NOTHING — not to an empty assignment — so the
+# compose-side `${APP_MFA_ENFORCE_PRIVILEGED_FLOOR:-false}` default applies AND
+# an operator's own exported override still reaches the containers. The leading
+# space lives inside the $(if) then-part so the default STACK_ENV is
+# byte-identical, not merely equivalent.
+#   make stack-up MFA_FLOOR=1
+MFA_FLOOR ?=
+STACK_MFA_FLOOR_ENV := $(if $(strip $(MFA_FLOOR)), APP_MFA_ENFORCE_PRIVILEGED_FLOOR='true',)
 STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -1223,7 +1238,7 @@ STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              MANAGED_FORUM_BFF_R2DBC_URL='$(MANAGED_FORUM_BFF_R2DBC_URL)' \
              MANAGED_FORUM_BFF_LIQUIBASE_URL='$(MANAGED_FORUM_BFF_LIQUIBASE_URL)' \
              MANAGED_WIKI_BFF_R2DBC_URL='$(MANAGED_WIKI_BFF_R2DBC_URL)' \
-             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)' \
+             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV) \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
@@ -1304,7 +1319,7 @@ stack-build: stack-clone stack-certs $(STACK_SOCIAL_DEP) ## build every service 
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 
 stack-up: stack-clone stack-certs $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
-	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
+	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"

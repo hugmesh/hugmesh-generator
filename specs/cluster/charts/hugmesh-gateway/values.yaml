@@ -107,14 +107,29 @@ extraEnv: []
 # inert, and the privileged-floor check never runs. The deliverable is that MFA
 # becomes SETTABLE, not that it becomes on.
 #
-# OPERATIONAL CAVEAT — `enabled: true` ALONE IS A NO-OP. The per-row gate can
-# only fire on a gateway_route_access row whose mfa_required is true, and nothing
-# in the platform writes true today: admin-bff's AddServiceEffector constructs
-# rows through the false back-compat constructor, and the gateway's CanonicalSeed
-# bakes false. Flipping this flag on a cluster therefore changes nothing
-# observable until an operator also sets mfa_required=true on some row.
-# enforcePrivilegedFloor is likewise inert without BOTH `enabled: true` AND such
-# a row.
+# OPERATIONAL CAVEAT — the rows `enabled: true` bites on ARE SEEDED NOW. The
+# route-access initdb seed (specs/cluster/manifests/route-access/initdb/
+# 20-schema.sql) ends with an UPDATE that flips mfa_required=true on every
+# /bff/admin… and /bff/superadmin… ALLOW row — 9 rows across fe/be/superadmin —
+# so on a cluster whose route-access-db has applied that seed, flipping `enabled`
+# is OBSERVABLE at once for the one NON-privileged principal among those rows: a
+# pure ROLE_FLEET_ADMIN on /bff/admin/phone-fleet/** starts 403ing without a fresh
+# second factor (docs/MFA-ROLLOUT.md §3.1). SUPERADMIN/ADMIN/GAME-MASTER stay
+# UNGATED at this stage — they short-circuit before decide() — which is exactly
+# what the floor below is for, and why a quiet cluster after step 6 is NOT
+# evidence that admin MFA works. (Runtime writers still default false:
+# admin-bff's AddServiceEffector builds rules through RouteRule's 7-arg
+# back-compat ctor and the gateway's CanonicalSeed.r() bakes mfaRequired=false —
+# that seed UPDATE remains the only thing in the platform that writes true.)
+# ⚠ enforcePrivilegedFloor is NOT a sub-flag of `enabled`. GatewayRouteAccessFilter
+# reads ONLY app.mfa.enforce-privileged-floor to decide whether to run the floor
+# (both the Jwt and the bff_-session branches), and the surface lookup it calls,
+# GatewayRouteAccessService.isMfaRequiredSurface(), has no enabled-guard either —
+# so setting it true makes the floor LIVE ON ITS OWN, even with `enabled: false`.
+# docs/MFA-ROLLOUT.md §2 calls it the single most dangerous flag in the runbook:
+# read §2/§3 (enroll BEFORE you enforce) before touching it anywhere. To see what
+# it does without risking a cluster, rehearse it on the dev stack instead:
+# `make stack-up MFA_FLOOR=1`, proven by tests/e2e/specs/29-mfa-privileged-floor.spec.ts.
 mfa:
   # app.mfa.enabled — derive the NON-role MFA_SATISFIED authority from the
   # BFF-written, freshness-validated `mfa_satisfied_at` JWT-Custom claim AND
@@ -130,7 +145,13 @@ mfa:
   # so a privileged principal on an mfa_required surface must carry a FRESH
   # MFA_SATISFIED or be DENIED (SUPERADMIN is NOT exempt). Cold-start
   # (route-access not yet primed) fails closed with 503 for those principals.
-  # SEPARATE sub-flag: requires `enabled: true` to have any effect at all.
+  # ⚠ NOT a sub-flag of `enabled`: the filter checks this flag WITHOUT consulting
+  # app.mfa.enabled (see the block comment above), so true here is live
+  # enforcement on its own. Flip it only per docs/MFA-ROLLOUT.md §3 step 7, after
+  # §2's enrollment precondition — enabling it first locks operators out of the
+  # privileged plane, SUPERADMIN included. The flip commit must also move
+  # tests/stack/test-gateway-mfa-env.sh's EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR
+  # pin in the same change, or that gate goes red (by design — see the runbook).
   enforcePrivilegedFloor: false
 
 # Per-app mTLS keystore, built at startup from the Vault-PKI-issued, ESO-synced

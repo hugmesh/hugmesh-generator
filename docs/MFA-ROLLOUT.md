@@ -396,8 +396,35 @@ steps 6–7 need the companion change from §0** and say so again where they app
    exercisable once the companion change (§0) has landed** — that is what sets
    `APP_MFA_ENABLED=true` on the compose gateways. Before then compose seeds the rows
    and ignores them, exactly like a cluster. After it lands you get the real
-   enforcement leg for the non-privileged case (see §3.1). Note compose has **no**
-   superadmin gateway — only pki/be/fe.
+   enforcement leg for the non-privileged case (see §3.1) — and you can rehearse
+   step 7's privileged floor itself, per run and lockout-free, with
+   `make stack-up MFA_FLOOR=1` (a Makefile variable; it threads
+   `APP_MFA_ENFORCE_PRIVILEGED_FLOOR=true` into the compose gateways for that
+   run only, and expands to nothing otherwise, so the committed compose default
+   stays `false` and a plain `make stack-up` is byte-identical).
+
+   `tests/e2e/specs/29-mfa-privileged-floor.spec.ts` is the end-to-end proof for
+   both modes. Run it **twice**:
+
+   | stack | run as | what it proves |
+   |---|---|---|
+   | `make stack-up` | `npx playwright test 29-mfa-privileged-floor` | a pure `ROLE_FLEET_ADMIN` is 403'd on `/bff/admin/phone-fleet/**` without a stamp, and — §3.1's small print — the *same* admin on the *same* blanket is **not** gated |
+   | `make stack-up MFA_FLOOR=1` | `MFA_FLOOR=1 npx playwright test 29-mfa-privileged-floor` | the floor: admin 403 without a fresh factor, a real TOTP enroll + step-up challenge driven through the shipped login-ui pages, the same route then passing, and a non-`mfa_required` surface untouched |
+
+   The floor legs are the ONLY thing `MFA_FLOOR=1` un-gates in that spec; every
+   other precondition FAILS loudly rather than skipping. Two of those are worth
+   knowing before you blame the code:
+   * the seed rows land through **initdb**, which runs only on a *fresh*
+     `route-access-pg` volume — `make stack-clean` before `make stack-up`, or an
+     older volume will enforce nothing;
+   * the enroll leg needs the admin-bff MFA surface live
+     (`APP_CASDOOR_MFA_ENABLED=true` **and** `APP_MFA_FACTOR_KEY`, both already
+     defaulted in `compose.local.yaml`), and the `e2e-fleet` persona from
+     `tests/stack/seed-e2e.sh` — a deliberate `ROLE_FLEET_ADMIN` + `ROLE_USER`
+     account with **no** `ROLE_ADMIN`, since an admin would bypass `decide()` and
+     the fleet leg would prove nothing.
+
+   Note compose has **no** superadmin gateway — only pki/be/fe.
 6. **Turn on `APP_MFA_ENABLED` for the cluster gateways** — ⚠ **needs the companion
    change (§0)**; until it lands there is no knob, and hand-adding an
    `extraEnv: APP_MFA_ENABLED` to a gateway Application fails the posture gate on
@@ -405,12 +432,46 @@ steps 6–7 need the companion change from §0** and say so again where they app
    gateway Applications point at the one chart, so a chart-level default reaches all
    four; keep it out of the per-app manifests (the gate enforces that). Watch for
    403s from non-privileged holders of `ROLE_FLEET_ADMIN`.
+   ⚠ **The flip commit must also move the companion gate's expectation pin, in
+   the same change.** `tests/stack/test-gateway-mfa-env.sh` hard-pins the cluster
+   posture OFF in an `EXPECT_*` table near the top of the file:
+
+   ```sh
+   EXPECT_APP_MFA_ENABLED="false"                    # cluster/chart
+   EXPECT_APP_MFA_FRESHNESS_WINDOW="600000"
+   EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"
+   CEXPECT_APP_MFA_ENABLED="true"                    # compose dev stack
+   CEXPECT_APP_MFA_FRESHNESS_WINDOW="600000"
+   CEXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"
+   ```
+
+   Every rendered gateway release is asserted against the `EXPECT_*` half, so a
+   flip commit that changes the chart but not `EXPECT_APP_MFA_ENABLED` turns that
+   lint gate red. That is by design (the pin exists so the posture can never
+   drift silently); the red is telling you to move the pin **deliberately**, not
+   to delete the gate. One more thing that commit has to face in the open: the
+   script has a self-check that refuses to run at all when
+   `EXPECT_APP_MFA_ENABLED` and `CEXPECT_APP_MFA_ENABLED` agree — the two tables
+   exist precisely because that pair is asymmetric — so flipping the cluster to
+   `true` while compose is also `true` means rethinking that guard in the same
+   review. (The self-check covers `APP_MFA_ENABLED` only; the floor pins in step
+   7 are `false` on both sides and are not subject to it.)
 7. **Only then consider `APP_MFA_ENFORCE_PRIVILEGED_FLOOR`** — same companion
    dependency. This is the step that actually gates admins and superadmins. Expect
    503s during each gateway's cold-start priming window. Do it on one gateway first
    (the fe gateway, which carries `/bff/admin/**`) and keep a second authenticated
    superadmin session open on another browser as a canary before touching the
    superadmin gateway.
+   ⚠ Same pin rule as step 6, on the floor row of the table shown there:
+   `tests/stack/test-gateway-mfa-env.sh` pins
+   `EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"` (cluster) **and**
+   `CEXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"` (compose — the dev stack
+   floor stays off in the committed file; `make stack-up MFA_FLOOR=1` is the
+   supported per-run override, see step 5, and it does not touch the pin). A
+   cluster floor flip must move `EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR` in the
+   same change or the gate goes red — and rehearse it on compose with
+   `MFA_FLOOR=1` + `tests/e2e/specs/29-mfa-privileged-floor.spec.ts` first, which
+   is the only place the floor's behaviour is exercised end to end.
 
 ### 3.1 What actually changes at each step (be honest about the small print)
 
