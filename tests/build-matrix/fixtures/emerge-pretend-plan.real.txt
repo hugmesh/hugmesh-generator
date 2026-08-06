@@ -1,0 +1,39 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 7.05 s (backtrack: 3/20).
+
+[ebuild  N     ] acct-group/snort-0-r2 
+[ebuild  N     ] acct-group/cron-0-r2 
+[ebuild  N     ] acct-group/named-0-r3 
+[ebuild  N     ] acct-group/nullmail-0-r2 
+[ebuild  N     ] app-crypt/argon2-20190702-r1  USE="-static-libs" 
+[ebuild  N     ] dev-libs/lzo-2.10  USE="-examples (-split-usr) -static-libs" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] acct-group/utmp-0-r3 
+[ebuild  N     ] acct-group/crontab-0-r2 
+[ebuild  N     ] acct-group/messagebus-0-r3 
+[ebuild  N     ] acct-group/plugdev-0-r3 
+[ebuild  N     ] net-wireless/wireless-regdb-20251007 
+[ebuild  N     ] net-dialup/ppp-scripts-0 
+[ebuild  N     ] dev-libs/oniguruma-6.9.10  USE="-crnl-as-line-terminator -static-libs" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] sys-apps/hwdata-0.401 
+[ebuild  N     ] sys-apps/iucode_tool-2.3.1-r2 
+[ebuild  N     ] media-fonts/liberation-fonts-2.1.5  USE="-X -fontforge" 
+[ebuild  N     ] dev-lang/go-bootstrap-1.24.6  USE="(-big-endian)" 
+[ebuild  N    ~] dev-lang/go-1.26.4  CPU_FLAGS_X86="sse2" 
+[ebuild  N     ] sys-apps/keyutils-1.6.3-r1  USE="-static -static-libs -test" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] acct-user/snort-0-r2 
+[ebuild  N     ] acct-user/named-0-r3 
+[ebuild  N     ] dev-libs/gobject-introspection-common-1.86.0 
+[ebuild  N     ] acct-user/messagebus-0-r3 
+[ebuild  N     ] virtual/ttf-fonts-1-r2 
+[ebuild  N     ] acct-user/nullmail-0-r2 
+[ebuild  N     ] sys-firmware/intel-microcode-20260512_p20260513  USE="initramfs split-ucode -dist-kernel -hostonly -vanilla" 
+[ebuild  N     ] sys-fs/dosfstools-4.2  USE="iconv -compat -test" 
+[ebuild  N     ] dev-libs/libbsd-0.11.8  USE="-static-libs -verify-sig" ABI_X86="(64) -32 (-x32)" 
+[ebuild  N     ] media-libs/libpng-1.6.58  USE="-apng -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse" 
+[ebuild  N     ] dev-libs/libevent-2.1.12-r1  USE="clock-gettime ssl -debug -malloc-replacement -static-libs -test -verbose-debug -verify-sig" ABI_X86="(64) -32 (-x32)" 
+
+Total: 30 packages (30 new), Size of downloads: 199162 KiB
+

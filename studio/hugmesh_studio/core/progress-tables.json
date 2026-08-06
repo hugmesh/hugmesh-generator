@@ -114,6 +114,9 @@
               "image": "the role payload (x86 ${PKGS} / cross ${STAGE4_PACKAGES[@]}) — the one group that was already uniform, and the model for the rest.",
               "dependencies": "packages merged solely to satisfy another build step (x86: sys-kernel/gentoo-sources during the kernel stage). Declared not-applicable by every cross builder with a reason."
           }
+      },
+      "emerge_plan": {
+          "purpose": "The resolved-plan preview contract (scripts/_emerge-plan-lib.sh <-> core/emerge_packages.py PLAN_BANNER_PREFIX). A `planned` group gets a read-only `--pretend` pass with the SAME argument vector as the merge it precedes, emitted immediately before that group's banner, so the Studio can list what WILL be installed up front (portage prints no resolved plan during a normal merge). A group in `not_planned` deliberately gets no pass, WITH the reason — a second full dependency resolution must pay for itself, and fixed named-atom one-shots never do. Per platform, planned + not_planned must partition `emerge_groups.emitted`. tests/build-matrix/check.sh's EPL bucket re-derives `planned` from the builders' own emerge_plan_emit call sites and fails on disagreement; studio/tests/test_progress_uniformity.py asserts the same facts from the Python side. A planned group can still legitimately show no plan at runtime (--no-emerge-plan, a failed or timed-out pretend pass) — the wire then carries an honest `unavailable reason=<slug>` line instead of silence, and the GUI falls back to start-time rows."
       }
   },
   "platforms": {
@@ -132,6 +135,17 @@
                       "dependencies"
               ],
               "not_applicable": {}
+      },
+      "emerge_plan": {
+              "planned": [
+                      "world",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the --steam eselect-repository helper is a fixed named atom merged --noreplace inside a conditional; resolving the whole depgraph to preview one named atom cannot pay for itself",
+                      "system": "portage, baselayout and the gettext pin are deliberate one-shot merges of atoms named in the script itself — the list is already visible without a second resolution",
+                      "dependencies": "sys-kernel/gentoo-sources is merged only when /usr/src/linux is missing — one named, conditional atom; no resolution is needed to know the list"
+              }
       },
       "phases": [
         {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
@@ -176,6 +190,15 @@
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
               }
       },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
+              }
+      },
       "phases": [
         {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
@@ -215,6 +238,15 @@
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
               }
       },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
+              }
+      },
       "phases": [
         {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
@@ -250,6 +282,15 @@
               "not_applicable": {
                       "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
               }
       },
       "phases": [
@@ -291,6 +332,15 @@
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
               }
       },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
+              }
+      },
       "phases": [
         {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
@@ -328,6 +378,15 @@
               "not_applicable": {
                       "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
               }
       },
       "phases": [
@@ -369,6 +428,15 @@
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
               }
       },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
+              }
+      },
       "phases": [
         {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
@@ -406,6 +474,15 @@
               "not_applicable": {
                       "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
               }
       },
       "phases": [
@@ -447,6 +524,15 @@
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
               }
       },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
+              }
+      },
       "phases": [
         {"id": "verify-prereqs", "label": "Verify prerequisites", "any": ["Verifying prerequisites", "Emerge group: tools"]},
         {"id": "prepare-dirs", "label": "Prepare build dirs", "any": ["Preparing build directories"]},
@@ -484,6 +570,15 @@
               "not_applicable": {
                       "world": "the cross lane runs no separate `@world` reconciliation pass — `--update --deep --newuse @system` plus the role payload IS the whole merge set, so a `world` banner would name work that does not happen",
                       "dependencies": "kernel sources ride inside the role payload (STAGE4_PACKAGES carries sys-kernel/*-sources), so nothing is merged solely to satisfy another build step"
+              }
+      },
+      "emerge_plan": {
+              "planned": [
+                      "system",
+                      "image"
+              ],
+              "not_planned": {
+                      "tools": "the host SELinux policy toolchain (checkpolicy, semodule-utils, m4, libselinux, policycoreutils) is a fixed named list merged natively only when a tool is missing from the build host — previewing named atoms needs no second resolution"
               }
       },
       "phases": [

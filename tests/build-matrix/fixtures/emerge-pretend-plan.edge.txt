@@ -1,0 +1,14 @@
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+
+[ebuild  N     ] dev-libs/xxhash-0.8.3-r2::gentoo  to /out/wl-pki.rpi5/sysroot/ USE="-static-libs" 111 KiB
+[binary   R    ] sys-apps/gawk-5.3.1-r1::gentoo  to /out/wl-pki.rpi5/sysroot/ USE="readline -mpfr (-pma) -sandbox" 0 KiB
+[ebuild  NS   ~] sys-kernel/raspberrypi-sources-6.12.34_p20250724::gentoo  to /out/wl-pki.rpi5/sysroot/ USE="symlink -build" 0 KiB
+[ebuild   R    ] [32mnet-misc/networkmanager-1.54.1[0m  USE="introspection% -connection-sharing*"
+[ebuild  U     ] sys-apps/portage-3.0.81.2::gentoo [3.0.72::gentoo] PYTHON_TARGETS="python3_13 python3_14"
+[uninstall     ] media-libs/imlib-1.9.15-r5::gentoo
+[blocks b      ] media-libs/imlib ("media-libs/imlib" is soft blocking x11-libs/gdk-pixbuf-2.44.3)
+
+Total: 5 packages (3 new, 1 reinstall, 1 upgrade, 1 uninstall), Size of downloads: 111 KiB
+

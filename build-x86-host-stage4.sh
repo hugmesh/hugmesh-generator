@@ -415,6 +415,14 @@ PACKAGES_ONLY=false
 # downgrades that hard failure to a warning for the operator who genuinely wants
 # the image anyway. Default OFF: a silent hole is the thing being fixed.
 ALLOW_MISSING_PACKAGES=false
+# --no-emerge-plan : skip the read-only `--pretend` plan-preview pass that runs
+# before the @world and payload emerges (scripts/_emerge-plan-lib.sh). The pass
+# is a SECOND full dependency resolution per planned group — real, unmeasured
+# cost, see docs/EMERGE-PLAN-PREVIEW.md — whose only product is the Studio's
+# up-front "packages that WILL be installed" list. Build-phase opt-out in the
+# --allow-missing-packages class (never a Studio field); the emission itself is
+# failure-tolerant either way (WARN + no plan, never an aborted build).
+EMERGE_PLAN_ENABLED=true
 # --bundle-source : ship the generator source in the image (/usr/src/hugmesh-
 # generator) + a regenerate helper, so you can build a fresh customized ISO from the
 # running desktop. Default ON for standalone (self-hosting appliance).
@@ -717,6 +725,11 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             build listing every atom that did not install — this
                             downgrades that to a warning. Use only when you have
                             read the list and genuinely want a degraded image.
+      --no-emerge-plan      Skip the read-only --pretend plan preview emitted
+                            before the @world and payload emerges (the Studio's
+                            up-front resolved-package list). Saves one extra
+                            dependency resolution per planned group; the build
+                            itself is identical with or without it.
   Seed from a running system + bake a home directory:
       --seed-packages-from FILE  Append a package list (e.g. produced by
                             scripts/seed-packages-from-running-system.sh) to the
@@ -980,6 +993,8 @@ while [[ $# -gt 0 ]]; do
         # Accept an image whose requested package set did not fully merge (the
         # completeness gate warns instead of failing). See ALLOW_MISSING_PACKAGES.
         --allow-missing-packages) ALLOW_MISSING_PACKAGES=true; shift ;;
+        # Skip the read-only --pretend plan preview (see EMERGE_PLAN_ENABLED).
+        --no-emerge-plan) EMERGE_PLAN_ENABLED=false; shift ;;
         # Live ISO: add a "copy to RAM (removable)" boot path so the stick can be pulled.
         --live-toram) LIVE_TORAM=true; shift ;;
         --no-live-toram) LIVE_TORAM=false; shift ;;
@@ -4741,6 +4756,16 @@ emerge --noreplace --quiet-build app-eselect/eselect-repository 2>/dev/null || e
 eselect repository enable steam-overlay 2>/dev/null || true
 emaint sync -r steam-overlay 2>/dev/null || emerge --sync steam-overlay 2>/dev/null || echo "[build-x86] WARN: steam-overlay sync failed; native Steam may not resolve (rebuild with --steam flatpak)"'
 fi
+# ── BEGIN shared block: emerge-plan preview (lib staging) ─────────────────────
+# The plan-preview emission (scripts/_emerge-plan-lib.sh) runs INSIDE the payload
+# chroot, so the lib is staged into the sysroot's /tmp first — same pattern as the
+# kernel phase's /tmp/k.config staging. Guarded: the preview is cosmetic, so a
+# failed cp degrades to the no-op fallback defined inside the heredoc, never an
+# aborted build. (The queued badges-Emit phase will stage its OWN sidecar under
+# its OWN "emerge badges" sentinels + output file — keep the two blocks separate.)
+cp "${SCRIPT_DIR}/scripts/_emerge-plan-lib.sh" "${SYSROOT}/tmp/hugmesh-emerge-plan-lib.sh" \
+    || info "WARN: emerge-plan lib staging failed — plan preview will be skipped"
+# ── END shared block: emerge-plan preview (lib staging) ───────────────────────
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # NOTE: MAKEOPTS is NOT exported here on purpose. It comes from the chroot's
 # make.conf (rendered "-j${JOBS} -l${JOBS}"). An exported MAKEOPTS env var takes
@@ -4778,6 +4803,31 @@ ldconfig 2>/dev/null || true
 if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
     emerge-webrsync
 fi
+# ── BEGIN shared block: emerge-plan preview (in-chroot init) ──────────────────
+# Source the staged plan-preview lib and carry the host's opt-out flag in. The
+# preview is cosmetic, so a missing lib (failed staging above) degrades to a
+# defined no-op — under this shell's -e an unguarded 127 here would abort the
+# whole payload. HEREDOC SAFETY: the two EMERGE_PLAN_* lines below expand ON
+# THE HOST by design (they render a literal true/false and a literal integer,
+# exactly like the KBUILTIN line in the kernel heredoc); every other line here
+# is free of unescaped dollar signs, backticks and dollar-parens.
+#
+# BOTH knobs must be carried, not just the opt-out. The ARM cross builders source
+# this lib in the HOST shell, so an exported EMERGE_PLAN_TIMEOUT reaches it for
+# free there; x86 runs it inside this chroot, where nothing from the host
+# environment survives. Carrying only EMERGE_PLAN_ENABLED made the documented
+# timeout knob a silent no-op on x86 alone — the resolution would always use the
+# lib's built-in 1800s default no matter what the operator set. Gated by the EPL
+# bucket's chroot-env-parity check so the asymmetry cannot come back.
+EMERGE_PLAN_ENABLED=${EMERGE_PLAN_ENABLED}
+EMERGE_PLAN_TIMEOUT=${EMERGE_PLAN_TIMEOUT:-1800}
+if [ -f /tmp/hugmesh-emerge-plan-lib.sh ]; then
+    . /tmp/hugmesh-emerge-plan-lib.sh
+else
+    echo "[build-x86] WARN: emerge-plan lib not staged — plan preview skipped"
+    emerge_plan_emit() { return 0; }
+fi
+# ── END shared block: emerge-plan preview (in-chroot init) ────────────────────
 # ── EMERGE-GROUP BANNERS (Studio package sub-listing) ─────────────────────────
 # Each "==> Emerge group: GROUP" line tells the Studio which of image|tools|
 # dependencies|system|world the FOLLOWING ">>> Emerging (N of M) cat/pn-ver"
@@ -4861,6 +4911,14 @@ _emerge_notice_sink() {
 }
 : > /tmp/hugmesh-emerge-failures.log
 # Apply our profile/USE across @world without churning the toolchain.
+# ── BEGIN shared block: emerge-plan preview (world) ───────────────────────────
+# Read-only --pretend pass with the SAME argument vector as the merge directly
+# below (check.sh's EPL bucket pins the textual parity), emitted BEFORE the
+# banner so the Studio knows the resolved list up front. Never fatal: every
+# failure path prints an honest unavailable line and returns 0. This line
+# host-expands the same variables as the real merge line, by design.
+emerge_plan_emit world emerge --update --deep --newuse --keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world
+# ── END shared block: emerge-plan preview (world) ─────────────────────────────
 # world: the literal @world set — its own group.
 echo "==> Emerge group: world"
 emerge --update --deep --newuse --keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world 2>&1 | _emerge_notice_sink \
@@ -4880,6 +4938,14 @@ echo "==> Emerging role payload (stage4, native chroot)"
 # --pretend AUTOUNMASK-PRETEND diagnostic in the failure branch below gets NO
 # banner: --pretend merges nothing and emits no ">>> Emerging (N of M)" lines, so
 # announcing a group there would open an empty group in the Studio.
+# ── BEGIN shared block: emerge-plan preview (image) ───────────────────────────
+# Same-argument --pretend preview of the payload merge directly below (EPL-
+# pinned parity, one line vs the real merge's continuations). Runs AFTER the
+# @world merge so the plan is resolved against the same sysroot state the
+# payload merge will see. Never fatal — unavailable line + return 0 on any
+# failure. Host-expands the same variables as the real merge, by design.
+emerge_plan_emit image emerge --update --deep --newuse --keep-going --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y --exclude sys-apps/portage ${EMERGE_EXCLUDE} ${PKGS}
+# ── END shared block: emerge-plan preview (image) ─────────────────────────────
 echo "==> Emerge group: image"
 emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \

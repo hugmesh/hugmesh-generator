@@ -189,6 +189,39 @@ EMERGE_GROUPS: tuple[str, ...] = ("image", "tools", "dependencies", "system", "w
 GROUP_BANNER_PREFIX = "==> Emerge group: "
 GROUP_UNKNOWN = ""
 
+# CROSS-LANE CONTRACT (PLAN PREVIEW). Portage does NOT print its resolved plan during a
+# normal merge (the operator's real x86 log carries zero "These are the packages that
+# would be merged" / "[ebuild" lines), so a package row used to be creatable only when
+# ">>> Emerging (N of M)" said the package had STARTED. The builders therefore run a
+# read-only ``--pretend`` pass with the SAME argument set immediately before each
+# multi-package emerge group and emit its resolved plan in ONE pinned wire format
+# (scripts/_emerge-plan-lib.sh, builder-side pin ``EMERGE_PLAN_PREFIX`` — byte-equality
+# with this constant is gated fail-closed by tests/build-matrix/check.sh's EPL bucket,
+# the same both-sides pattern as :data:`GROUP_BANNER_PREFIX`). Four line shapes, all
+# starting with this one prefix, all ANSI-free on the wire (--color=n):
+#
+#     ==> Emerge plan: <group> total=<M>
+#     ==> Emerge plan: <group> <idx>/<M> <atom> USE="<flags>"
+#     ==> Emerge plan: <group> <idx>/<M> <atom>
+#     ==> Emerge plan: <group> unavailable reason=<slug>
+#
+# * ``<group>`` is the same taxonomy word as the group banners; the plan for a group is
+#   emitted immediately BEFORE that group's banner.
+# * ``USE="..."`` is portage's own flag column, copied verbatim when the pretend row
+#   carries one (the flags data the GUI's badge columns want, free from the same pass).
+# * ``unavailable`` slugs (:data:`PLAN_UNAVAILABLE_REASONS`) mean NO plan is coming for
+#   that group — the GUI must fall back to start-time rows, never wait. A build can also
+#   legitimately emit no plan line at all for a group progress-tables.json declares
+#   ``not_planned`` (single-known-atom groups where a full resolution cannot pay off).
+# * ``total=0`` is a real reading (an emerge with nothing to do), same as the
+#   scheduler's ``>>> Jobs: 0 of 0`` — not "plan missing".
+#
+# This module pins the contract + a line parser (:func:`parse_plan_line`); wiring the
+# parsed plan into :class:`EmergePackageParser`'s tree/GUI is the GUI lane's follow-up.
+PLAN_BANNER_PREFIX = "==> Emerge plan: "
+PLAN_UNAVAILABLE_REASONS: tuple[str, ...] = (
+    "opt-out", "pretend-failed", "pretend-timeout", "parse-mismatch")
+
 # ── the ebuild step ladder ───────────────────────────────────────────────────────────
 STEP_QUEUED = "queued"
 STEP_UNPACK = "unpack"
@@ -228,6 +261,50 @@ STEP_PERCENT: dict[str, int] = {
 
 # ── line regexes (ALL applied after strip_ansi, per the module contract) ─────────────
 _GROUP_BANNER_RE = re.compile(r"^==>\s*Emerge group:\s*(\S+)\s*$")
+
+# Plan-preview wire shapes (see the PLAN_BANNER_PREFIX contract block above). Anchored
+# and whitespace-tolerant the same way _GROUP_BANNER_RE is; the USE clause is optional
+# and captured WITHOUT its quotes (the builder copies portage's own USE="..." verbatim,
+# so flags may carry portage's %/* markers — passed through untouched, never parsed).
+_PLAN_TOTAL_RE = re.compile(r'^==>\s*Emerge plan:\s*(\S+)\s+total=(\d+)\s*$')
+_PLAN_PKG_RE = re.compile(
+    r'^==>\s*Emerge plan:\s*(\S+)\s+(\d+)/(\d+)\s+(\S+)(?:\s+USE="([^"]*)")?\s*$')
+_PLAN_UNAVAILABLE_RE = re.compile(
+    r'^==>\s*Emerge plan:\s*(\S+)\s+unavailable\s+reason=(\S+)\s*$')
+
+
+@dataclass(frozen=True)
+class PlanLine:
+    """One parsed plan-preview wire line. ``kind`` is ``"total"`` (``total``/``index``
+    on the header carry M/None), ``"pkg"`` (``index``/``total``/``atom``/``use``), or
+    ``"unavailable"`` (``reason`` set, meaning no plan is coming for ``group``).
+    ``use`` is ``None`` when the row carried no USE clause — distinct from ``""``
+    (an explicitly empty ``USE=""``)."""
+    kind: str
+    group: str
+    total: int | None = None
+    index: int | None = None
+    atom: str = ""
+    use: str | None = None
+    reason: str = ""
+
+
+def parse_plan_line(raw_line: str) -> PlanLine | None:
+    """Parse one stream line against the plan-preview wire format; ``None`` for
+    anything else (the caller feeds every line — group banners, portage counters and
+    plain build output must all fall through untouched)."""
+    line = strip_ansi(raw_line).rstrip("\n")
+    m = _PLAN_PKG_RE.match(line)
+    if m:
+        return PlanLine(kind="pkg", group=m.group(1), index=int(m.group(2)),
+                        total=int(m.group(3)), atom=m.group(4), use=m.group(5))
+    m = _PLAN_TOTAL_RE.match(line)
+    if m:
+        return PlanLine(kind="total", group=m.group(1), total=int(m.group(2)))
+    m = _PLAN_UNAVAILABLE_RE.match(line)
+    if m:
+        return PlanLine(kind="unavailable", group=m.group(1), reason=m.group(2))
+    return None
 
 # CROSS-BUILD TAIL (``_ROOT_TAIL``). When ROOT is not ``/`` portage appends the target
 # root to its counter lines — " for /out/wl-pki.rpi5/sysroot/" on Emerging, " to <same>"

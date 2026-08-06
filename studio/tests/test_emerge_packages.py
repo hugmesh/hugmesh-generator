@@ -958,3 +958,105 @@ def test_module_is_qt_free():
         env=dict(os.environ, PYTHONPATH=_STUDIO_ROOT))
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "[]", r.stdout
+
+
+# ── the cross-lane PLAN-preview contract (scripts/_emerge-plan-lib.sh) ───────────────
+_REPO_ROOT = os.path.dirname(_STUDIO_ROOT)
+_PLAN_LIB = os.path.join(_REPO_ROOT, "scripts", "_emerge-plan-lib.sh")
+
+
+def _plan_lib_src() -> str:
+    with open(_PLAN_LIB, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_plan_prefix_is_pinned_and_matches_the_builder_lib():
+    """Both-sides pin, same discipline as GROUP_BANNER_PREFIX: the builder-side variable
+    in scripts/_emerge-plan-lib.sh and this parser constant must be byte-identical, so a
+    reword on either side fails HERE (and in check.sh's EPL bucket) instead of silently
+    starving the GUI of every plan."""
+    assert ep.PLAN_BANNER_PREFIX == "==> Emerge plan: "
+    import re as _re
+    m = _re.search(r'^EMERGE_PLAN_PREFIX="(.*)"$', _plan_lib_src(), _re.M)
+    assert m, "EMERGE_PLAN_PREFIX= pin not found in scripts/_emerge-plan-lib.sh"
+    assert m.group(1) == ep.PLAN_BANNER_PREFIX
+
+
+def test_plan_unavailable_reasons_match_the_builder_lib():
+    """Every reason= slug the lib can emit must be declared here (the GUI keys honest
+    fallback copy off them), and vice versa — no undeclared slug on either side."""
+    import re as _re
+    emitted = set(_re.findall(r"reason=([a-z-]+)", _plan_lib_src()))
+    assert emitted == set(ep.PLAN_UNAVAILABLE_REASONS), (
+        f"lib emits {sorted(emitted)}, parser declares {sorted(ep.PLAN_UNAVAILABLE_REASONS)}")
+
+
+def test_parse_plan_line_all_four_shapes():
+    hdr = ep.parse_plan_line("==> Emerge plan: image total=149")
+    assert hdr == ep.PlanLine(kind="total", group="image", total=149)
+    pkg = ep.parse_plan_line(
+        '==> Emerge plan: image 3/149 dev-libs/xxhash-0.8.3-r2 USE="-static-libs test%"')
+    assert pkg.kind == "pkg" and pkg.group == "image"
+    assert (pkg.index, pkg.total) == (3, 149)
+    assert pkg.atom == "dev-libs/xxhash-0.8.3-r2"
+    assert pkg.use == "-static-libs test%"
+    bare = ep.parse_plan_line("==> Emerge plan: system 1/2 sys-apps/baselayout-2.17")
+    assert bare.kind == "pkg" and bare.use is None, "no USE clause must parse as None, not ''"
+    empty = ep.parse_plan_line('==> Emerge plan: system 2/2 sys-apps/gawk-5.3.1 USE=""')
+    assert empty.use == "", "an explicitly empty USE=\"\" is distinct from an absent one"
+    unav = ep.parse_plan_line("==> Emerge plan: world unavailable reason=opt-out")
+    assert unav == ep.PlanLine(kind="unavailable", group="world", reason="opt-out")
+
+
+def test_parse_plan_line_rejects_everything_else():
+    for line in (
+        _banner("Emerge group: world"),                       # group banner, not a plan
+        ">>> Emerging (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo",
+        "==> Emerge plan: ",                                  # prefix alone
+        "==> Emerge packages",                                # phase banner
+        "[ebuild  N     ] dev-libs/xxhash-0.8.3-r2  USE=\"-static-libs\"",  # raw pretend row
+        "",
+    ):
+        assert ep.parse_plan_line(line) is None, f"must not parse: {line!r}"
+
+
+def test_plan_lines_parse_through_ansi():
+    """The builders pass --color=n, but the parser side stays ANSI-tolerant like every
+    other regex in this module (applied after strip_ansi per the module contract)."""
+    got = ep.parse_plan_line(f"{_CYAN}{_BOLD}==> Emerge plan: image total=7{_RST}")
+    assert got == ep.PlanLine(kind="total", group="image", total=7)
+
+
+def test_plan_lines_move_no_package_and_no_group():
+    """Feeding the raw stream (which now carries plan lines) into the existing parser
+    must be a no-op: no row invented, no group switched, scheduler untouched — the plan
+    tree is the GUI lane's separate consumer via parse_plan_line()."""
+    p = ep.EmergePackageParser()
+    p.feed(_banner("Emerge group: system"))
+    for line in (
+        "==> Emerge plan: image total=2",
+        '==> Emerge plan: image 1/2 dev-libs/xxhash-0.8.3-r2 USE="-static-libs"',
+        "==> Emerge plan: image 2/2 sys-apps/gawk-5.3.1",
+        "==> Emerge plan: image unavailable reason=pretend-timeout",
+    ):
+        assert p.feed(line) is None
+    assert p.group() == "system", "a plan line must never switch the live group"
+    assert p.packages() == []
+
+
+def test_plan_lines_do_not_advance_the_phase_ladder():
+    """Plan lines start with '==> ' and thus reach ProgressParser._match_phase; none may
+    be a substring-match for any platform's phase patterns, on any platform, or the bar
+    would jump on a preview. (Same stranded-ladder class test_progress_uniformity pins
+    for banners.)"""
+    from hugmesh_studio.core.progress_parse import ProgressParser, platforms
+    lines = (
+        "==> Emerge plan: world total=258",
+        '==> Emerge plan: world 1/258 sys-apps/portage-3.0.81.2 USE="-build"',
+        "==> Emerge plan: image unavailable reason=opt-out",
+    )
+    for platform in platforms():
+        p = ProgressParser(platform)
+        for line in lines:
+            p.feed(line)
+        assert p.phase_index == -1, f"{platform}: a plan line advanced the phase ladder"

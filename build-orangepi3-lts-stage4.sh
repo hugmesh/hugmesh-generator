@@ -190,6 +190,18 @@ source "${SCRIPT_DIR}/scripts/_selinux-policy-lib.sh"
 # UNBOOTABLE kernel-less artifact.
 # shellcheck source=scripts/_payload-gate-lib.sh
 source "${SCRIPT_DIR}/scripts/_payload-gate-lib.sh"
+# ── BEGIN shared block: emerge-plan preview (lib) ─────────────────────────────
+# Read-only --pretend plan preview emitted immediately before the multi-package
+# emerge sections (system + image) so the Studio can list what WILL be
+# installed up front — portage prints no resolved plan during a normal merge,
+# so the list must come from a deliberate pretend pass. Host-side source (the
+# cross lane emerges from the host; x86 stages the same lib into its chroot).
+# Opt out with --no-emerge-plan; every failure path inside the lib WARNs and
+# returns 0 — a cosmetic preview never costs an image. See
+# docs/EMERGE-PLAN-PREVIEW.md for the honest cost discussion.
+# shellcheck source=scripts/_emerge-plan-lib.sh
+source "${SCRIPT_DIR}/scripts/_emerge-plan-lib.sh"
+# ── END shared block: emerge-plan preview (lib) ───────────────────────────────
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
@@ -217,6 +229,14 @@ PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then
 # never a Studio field. NB: it can NOT bypass the kernel tier (a kernel-less
 # image is unbootable, not degraded; --skip-kernel is the only kernel opt-out).
 ALLOW_MISSING_PACKAGES=false
+# --no-emerge-plan : skip the read-only `--pretend` plan-preview pass that runs
+# before the system and image emerges (scripts/_emerge-plan-lib.sh). The pass
+# is a SECOND full dependency resolution per planned section — real, unmeasured
+# cost, see docs/EMERGE-PLAN-PREVIEW.md — whose only product is the Studio's
+# up-front "packages that WILL be installed" list. Build-phase opt-out in the
+# --allow-missing-packages class (never a Studio field); the emission itself is
+# failure-tolerant either way (WARN + no plan, never an aborted build).
+EMERGE_PLAN_ENABLED=true
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
 
@@ -440,6 +460,13 @@ OPTIONS
                         cannot boot; use --skip-kernel to deliberately build
                         without one). Read the missing-atom list first.
 
+    --no-emerge-plan
+                        Skip the read-only --pretend plan preview emitted
+                        before the system and image emerges (the Studio's
+                        up-front resolved-package list). Saves one extra
+                        dependency resolution per planned section; the
+                        build itself is identical with or without it.
+
   General
     -w, --work-dir DIR  products land here (default ./out).
     --distdir DIR       reuse a shared READ-ONLY distfiles cache (or SNAP_DISTDIR_SRC
@@ -515,6 +542,8 @@ while [[ $# -gt 0 ]]; do
         # Accept an image whose requested package set did not fully merge (the
         # completeness gate warns instead of failing; kernel tier stays fatal).
         --allow-missing-packages) ALLOW_MISSING_PACKAGES=true; shift ;;
+        # Skip the read-only --pretend plan preview (see EMERGE_PLAN_ENABLED).
+        --no-emerge-plan) EMERGE_PLAN_ENABLED=false; shift ;;
         --build-subdir)       BUILD_SUBDIR="$2";          shift 2 ;;
         -s|--specs-dir)       SPECS_DIR="$2";             shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";          shift 2 ;;
@@ -1723,6 +1752,15 @@ sa_pool_guard "${POOL_DIR}" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-
 # stream; the parser holds it until the next transition), so baselayout and
 # @system share this one rather than emitting a meaningless second step.
 # baselayout + @system are the base layer/profile set — 'system', not payload.
+# ── BEGIN shared block: emerge-plan preview (system) ──────────────────────────
+# Read-only --pretend pass with the SAME argument vector as the @system merge
+# below (check.sh's EPL bucket pins the textual parity), emitted BEFORE the
+# banner so the Studio knows the resolved list up front. The baselayout oneshot
+# shares the banner but is ONE known atom — the @system resolution is the list
+# worth previewing. Never fatal: every failure path inside emerge_plan_emit
+# prints an honest unavailable line and returns 0.
+emerge_plan_emit system cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system
+# ── END shared block: emerge-plan preview (system) ────────────────────────────
 banner "Emerge group: system"
 cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
@@ -1741,6 +1779,15 @@ info "Package count: ${#STAGE4_PACKAGES[@]}"
 # EMERGE-GROUP BANNER (image): STAGE4_PACKAGES IS the role package set — the image
 # payload. The per-package retry loop below is the SAME group (it re-runs the very
 # atoms this batch just failed on), so it deliberately does NOT re-announce.
+# ── BEGIN shared block: emerge-plan preview (image) ───────────────────────────
+# Same-argument --pretend preview of the payload batch merge below (EPL-pinned
+# parity, one line vs the batch line's if-wrapper). Runs AFTER @system so the
+# plan is resolved against the same sysroot state the payload merge will see.
+# Never fatal — unavailable line + return 0 on any failure. The per-package
+# retry loop below re-runs atoms from this same list, so it gets no second
+# preview.
+emerge_plan_emit image cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}"
+# ── END shared block: emerge-plan preview (image) ─────────────────────────────
 banner "Emerge group: image"
 if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}"; then
     warn "Batch emerge failed (unsatisfiable atom?); retrying per-package so the rest still install"

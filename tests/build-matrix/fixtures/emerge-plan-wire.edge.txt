@@ -1,0 +1,6 @@
+==> Emerge plan: image total=5
+==> Emerge plan: image 1/5 dev-libs/xxhash-0.8.3-r2 USE="-static-libs"
+==> Emerge plan: image 2/5 sys-apps/gawk-5.3.1-r1 USE="readline -mpfr (-pma) -sandbox"
+==> Emerge plan: image 3/5 sys-kernel/raspberrypi-sources-6.12.34_p20250724 USE="symlink -build"
+==> Emerge plan: image 4/5 net-misc/networkmanager-1.54.1 USE="introspection% -connection-sharing*"
+==> Emerge plan: image 5/5 sys-apps/portage-3.0.81.2

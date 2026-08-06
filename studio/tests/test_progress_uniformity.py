@@ -161,6 +161,45 @@ def test_declared_emitted_groups_match_the_builder_source(platform):
         f"{sorted(pp.emerge_groups(platform)['emitted'])}")
 
 
+# ── plan preview (the emerge_plan declaration; the wire-format pin itself lives in
+# test_emerge_packages.py) ─────────────────────────────────────────────────────────
+_PLAN_CALLSITE = re.compile(r'^\s*emerge_plan_emit\s+([a-z]+)\s')
+
+
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_every_emitted_group_is_planned_or_declared_not_planned(platform):
+    """planned + not_planned must partition the platform's emitted groups, planned must
+    follow canonical order, and a group deliberately not previewed needs a REAL reason —
+    the same explicit-absence rule the stage ladder and the group taxonomy already obey."""
+    emitted = set(pp.emerge_groups(platform)["emitted"])
+    plan = pp.emerge_plan(platform)
+    planned, not_planned = plan["planned"], plan["not_planned"]
+    assert set(planned) | set(not_planned) == emitted, (
+        f"{platform}: emitted group(s) {sorted(emitted - set(planned) - set(not_planned))} "
+        f"are neither planned nor declared not_planned — that silence is exactly what the "
+        f"declaration forbids")
+    assert not (set(planned) & set(not_planned)), (
+        f"{platform}: a group is both planned and not_planned")
+    it = iter(pp.emerge_group_order())
+    assert all(g in it for g in planned), (
+        f"{platform}: planned {planned} is not in canonical group order")
+    for grp, reason in not_planned.items():
+        assert isinstance(reason, str) and len(reason.strip()) >= 20, (
+            f"{platform}/{grp}: not_planned needs a real reason, got {reason!r}")
+
+
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_declared_planned_groups_match_the_builder_source(platform):
+    """The table's `planned` set re-derived from the builder's own emerge_plan_emit call
+    sites (the x86 no-op fallback definition has no group word, so it never counts).
+    tests/build-matrix/check.sh's EPL bucket pins the same fact — plus the pretend pass's
+    argument parity with the real merge — from the shell side; this is the Python side."""
+    found = {m.group(1) for m in (_PLAN_CALLSITE.match(l) for l in _src(platform)) if m}
+    assert found == set(pp.emerge_plan(platform)["planned"]), (
+        f"{platform}: builder plans {sorted(found)} but the table declares "
+        f"{sorted(pp.emerge_plan(platform)['planned'])}")
+
+
 # ══ 3. EXECUTION ORDER ══════════════════════════════════════════════════════════════
 _BANNER_CS = re.compile(r'^\s*banner\s+"(.*?)"')
 _ECHO_CS = re.compile(r'^\s*echo "==> (.*?)"')

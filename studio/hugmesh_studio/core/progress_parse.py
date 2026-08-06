@@ -137,6 +137,19 @@ def emerge_groups(platform: str) -> dict:
             "not_applicable": dict(g.get("not_applicable", {}))}
 
 
+def emerge_plan(platform: str) -> dict:
+    """``{"planned": [...], "not_planned": {group: reason}}`` for one platform — which of
+    its emitted emerge groups get a read-only ``--pretend`` plan preview (the
+    ``emerge_packages.PLAN_BANNER_PREFIX`` wire) and why the rest deliberately get none.
+    ``planned`` + ``not_planned`` always partition ``emerge_groups()["emitted"]`` — a
+    group is previewed, or its absence is declared with a reason, never silent."""
+    plats = _TABLES["platforms"]
+    entry = plats.get(platform or "x86") or plats["x86"]
+    g = entry.get("emerge_plan", {})
+    return {"planned": list(g.get("planned", ())),
+            "not_planned": dict(g.get("not_planned", {}))}
+
+
 def declared_callsites(platform: str) -> int:
     """The ``banner_callsites`` count annotated in the table (kept equal to the real
     call-site count by the drift probe)."""

@@ -1,0 +1,31 @@
+==> Emerge plan: image total=30
+==> Emerge plan: image 1/30 acct-group/snort-0-r2
+==> Emerge plan: image 2/30 acct-group/cron-0-r2
+==> Emerge plan: image 3/30 acct-group/named-0-r3
+==> Emerge plan: image 4/30 acct-group/nullmail-0-r2
+==> Emerge plan: image 5/30 app-crypt/argon2-20190702-r1 USE="-static-libs"
+==> Emerge plan: image 6/30 dev-libs/lzo-2.10 USE="-examples (-split-usr) -static-libs"
+==> Emerge plan: image 7/30 acct-group/utmp-0-r3
+==> Emerge plan: image 8/30 acct-group/crontab-0-r2
+==> Emerge plan: image 9/30 acct-group/messagebus-0-r3
+==> Emerge plan: image 10/30 acct-group/plugdev-0-r3
+==> Emerge plan: image 11/30 net-wireless/wireless-regdb-20251007
+==> Emerge plan: image 12/30 net-dialup/ppp-scripts-0
+==> Emerge plan: image 13/30 dev-libs/oniguruma-6.9.10 USE="-crnl-as-line-terminator -static-libs"
+==> Emerge plan: image 14/30 sys-apps/hwdata-0.401
+==> Emerge plan: image 15/30 sys-apps/iucode_tool-2.3.1-r2
+==> Emerge plan: image 16/30 media-fonts/liberation-fonts-2.1.5 USE="-X -fontforge"
+==> Emerge plan: image 17/30 dev-lang/go-bootstrap-1.24.6 USE="(-big-endian)"
+==> Emerge plan: image 18/30 dev-lang/go-1.26.4
+==> Emerge plan: image 19/30 sys-apps/keyutils-1.6.3-r1 USE="-static -static-libs -test"
+==> Emerge plan: image 20/30 acct-user/snort-0-r2
+==> Emerge plan: image 21/30 acct-user/named-0-r3
+==> Emerge plan: image 22/30 dev-libs/gobject-introspection-common-1.86.0
+==> Emerge plan: image 23/30 acct-user/messagebus-0-r3
+==> Emerge plan: image 24/30 virtual/ttf-fonts-1-r2
+==> Emerge plan: image 25/30 acct-user/nullmail-0-r2
+==> Emerge plan: image 26/30 sys-firmware/intel-microcode-20260512_p20260513 USE="initramfs split-ucode -dist-kernel -hostonly -vanilla"
+==> Emerge plan: image 27/30 sys-fs/dosfstools-4.2 USE="iconv -compat -test"
+==> Emerge plan: image 28/30 dev-libs/libbsd-0.11.8 USE="-static-libs -verify-sig"
+==> Emerge plan: image 29/30 media-libs/libpng-1.6.58 USE="-apng -static-libs -test"
+==> Emerge plan: image 30/30 dev-libs/libevent-2.1.12-r1 USE="clock-gettime ssl -debug -malloc-replacement -static-libs -test -verbose-debug -verify-sig"

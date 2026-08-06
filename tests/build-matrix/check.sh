@@ -1692,6 +1692,276 @@ PY
     fi
 }
 
+# ── emerge-plan preview probe (EPL) ─────────────────────────────────────────────
+# The Studio's up-front "packages that WILL be installed" list exists only because
+# every builder runs a read-only --pretend pass with the SAME argument vector as the
+# multi-package merge it precedes and emits the resolved plan in ONE pinned wire
+# format ("==> Emerge plan: ", scripts/_emerge-plan-lib.sh <-> emerge_packages.py's
+# PLAN_BANNER_PREFIX — the GROUP_BANNER_PREFIX both-sides pattern). Portage prints no
+# plan during a normal merge, so a builder that silently loses its emission degrades
+# the GUI back to start-time-only rows with no failure anywhere — exactly the silent
+# drift this bucket exists to forbid. Checks, all fail-closed against EPL_EXPECTED:
+#   (a) COVERAGE (10): each builder's emitted plan-group multiset matches the
+#       expected table (x86 plans world+image; every cross builder system+image).
+#   (b) ARGUMENT PARITY (10): for every emerge_plan_emit call, a real merge
+#       invocation with the IDENTICAL argument vector must follow within the next
+#       20 lines (continuations joined; if !/redirection/pipe/|| tails stripped).
+#       Without this the plan pass could quietly describe a DIFFERENT merge than
+#       the one that runs — a fabricated preview, worse than none.
+#   (c) BOTH-SIDES PIN (1): the builder-side EMERGE_PLAN_PREFIX and the parser-side
+#       PLAN_BANNER_PREFIX are byte-identical, and every parser unavailable-reason
+#       slug is one the lib actually emits (and vice versa).
+#   (d) PLUMBING (1): every builder defaults EMERGE_PLAN_ENABLED=true, parses
+#       --no-emerge-plan, and can actually reach the lib (cross: host-side source;
+#       x86: sysroot staging + in-chroot source + the no-op fallback that keeps a
+#       failed staging from aborting the bash -e payload chroot).
+#   (e) BEHAVIOUR (1): tests/build-matrix/emerge-plan-emit.sh EXECUTES the lib
+#       against stub emerges — byte-exact wire over real captured rows, read-only
+#       (the stub refuses without --pretend), opt-out, and every failure path
+#       returning 0 under bash -eo pipefail.
+#   (f) DECLARATION (1): progress-tables.json's per-platform emerge_plan block —
+#       planned re-derived from the builders' own call sites, planned+not_planned
+#       partitions that platform's emitted groups, every not_planned has a real
+#       reason (the EGB taxonomy-declaration pattern).
+# FAIL-CLOSED: 24 expected (10 coverage + 10 parity + pin + plumbing + behaviour +
+# declaration).
+EPL_EXPECTED=24
+EPL_PASS=0; EPL_FAIL=0
+run_emerge_plan_checks() {
+    local out="${TMP_DIR}/epl.out"
+    local spec builder expect got
+    # (a) coverage: the emitted plan-group multiset per builder
+    for spec in \
+        "build-x86-host-stage4.sh:image world" \
+        "build-rpi5-stage4.sh:image system" \
+        "build-jetson-stage4.sh:image system" \
+        "build-frite-stage4.sh:image system" \
+        "build-orangepi5-stage4.sh:image system" \
+        "build-orangepi-zero2-stage4.sh:image system" \
+        "build-orangepi-zero2w-stage4.sh:image system" \
+        "build-orangepi-zero3-stage4.sh:image system" \
+        "build-orangepi3-lts-stage4.sh:image system" \
+        "build-orangepi4-lts-stage4.sh:image system"
+    do
+        builder="${spec%%:*}"; expect="${spec#*:}"
+        got="$(sed -nE 's/^[[:space:]]*emerge_plan_emit ([a-z]+) .*/\1/p' "${builder}" \
+               | sort | tr '\n' ' ' | sed 's/ $//')"
+        if [ "${got}" != "${expect}" ]; then
+            printf '%s\n  expected planned groups: %s\n  found:                   %s\n' \
+                "${builder}" "${expect}" "${got:-<none>}" >"${out}"
+            _fail EPL "${builder}" "plan-emission call-site set drifted" "${out}"
+            EPL_FAIL=$((EPL_FAIL+1))
+        else
+            EPL_PASS=$((EPL_PASS+1))
+        fi
+    done
+    # (b) argument parity: each plan call's vector must reappear verbatim as a real
+    # merge invocation just below it (the baselayout oneshot between the system plan
+    # and the @system merge is why this searches a window, not just the next line)
+    for builder in \
+        build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh \
+        build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh \
+        build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+        build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh
+    do
+        if "${PYTHON}" - "${builder}" >"${out}" 2>&1 <<'PY'
+import re, sys
+
+path = sys.argv[1]
+lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+
+def merge_vector(idx):
+    """Join continuations from lines[idx], tokenize, strip the non-argv framing."""
+    text = []
+    i = idx
+    while i < len(lines):
+        ln = lines[i]
+        if ln.rstrip().endswith("\\"):
+            text.append(ln.rstrip()[:-1])
+            i += 1
+            continue
+        text.append(ln)
+        break
+    toks = " ".join(text).split()
+    while toks and toks[0] in ("if", "!"):
+        toks = toks[1:]
+    out = []
+    for t in toks:
+        if t in ("2>&1", "||", "|", "&&"):
+            break
+        if t.endswith(";"):
+            out.append(t[:-1])
+            break
+        out.append(t)
+    return out
+
+bad = []
+plan_re = re.compile(r"^\s*emerge_plan_emit\s+([a-z]+)\s+(.*)$")
+for n, ln in enumerate(lines):
+    m = plan_re.match(ln)
+    if not m:
+        continue
+    group, rest = m.group(1), m.group(2).split()
+    window = []
+    for k in range(n + 1, min(n + 21, len(lines))):
+        s = lines[k].lstrip()
+        if s.startswith(("if ! " + rest[0], rest[0])) and not s.startswith("emerge_plan_emit"):
+            window.append(merge_vector(k))
+    if rest not in window:
+        bad.append(f"{path}:{n+1}: plan({group}) argv does not match any merge below it\n"
+                   f"  plan : {' '.join(rest)}\n" +
+                   "".join(f"  merge: {' '.join(w)}\n" for w in window))
+for b in bad:
+    print(b)
+sys.exit(1 if bad else 0)
+PY
+        then
+            EPL_PASS=$((EPL_PASS+1))
+        else
+            _fail EPL "${builder}" "plan/merge argument parity broken" "${out}"
+            EPL_FAIL=$((EPL_FAIL+1))
+        fi
+    done
+    # (c) both-sides pin: prefix byte-equality + unavailable-reason slug parity
+    if "${PYTHON}" - "${REPO_DIR}" >"${out}" 2>&1 <<'PY'
+import ast, os, re, sys
+repo = sys.argv[1]
+lib = open(os.path.join(repo, "scripts/_emerge-plan-lib.sh"), encoding="utf-8").read()
+py = open(os.path.join(repo, "studio/hugmesh_studio/core/emerge_packages.py"),
+          encoding="utf-8").read()
+bad = []
+m = re.search(r'^EMERGE_PLAN_PREFIX="([^"]*)"', lib, re.M)
+p = re.search(r'^PLAN_BANNER_PREFIX = "([^"]*)"', py, re.M)
+if not m or not p:
+    bad.append("could not locate one of the two pinned prefix constants")
+elif m.group(1) != p.group(1):
+    bad.append(f"prefix pins differ: lib={m.group(1)!r} parser={p.group(1)!r}")
+t = re.search(r"^PLAN_UNAVAILABLE_REASONS[^=]*= \(([^)]*)\)", py, re.M)
+if not t:
+    bad.append("could not locate PLAN_UNAVAILABLE_REASONS")
+else:
+    parser_slugs = set(ast.literal_eval("(" + t.group(1) + ")"))
+    lib_slugs = set(re.findall(r"reason=([a-z-]+)", lib))
+    if parser_slugs != lib_slugs:
+        bad.append(f"reason slugs differ: parser={sorted(parser_slugs)} "
+                   f"lib emits={sorted(lib_slugs)}")
+for b in bad:
+    print(b)
+sys.exit(1 if bad else 0)
+PY
+    then
+        EPL_PASS=$((EPL_PASS+1))
+    else
+        _fail EPL "both-sides-pin" "wire-format pins drifted apart" "${out}"
+        EPL_FAIL=$((EPL_FAIL+1))
+    fi
+    # (d) plumbing: default-on var, opt-out arm, and lib reachability per builder
+    : >"${out}"
+    for builder in \
+        build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh \
+        build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh \
+        build-orangepi-zero2w-stage4.sh build-orangepi-zero3-stage4.sh \
+        build-orangepi3-lts-stage4.sh build-orangepi4-lts-stage4.sh
+    do
+        grep -q '^EMERGE_PLAN_ENABLED=true$' "${builder}" \
+            || echo "${builder}: no EMERGE_PLAN_ENABLED=true default" >>"${out}"
+        grep -q -- '--no-emerge-plan) EMERGE_PLAN_ENABLED=false; shift ;;' "${builder}" \
+            || echo "${builder}: no --no-emerge-plan case arm" >>"${out}"
+        if [ "${builder}" = "build-x86-host-stage4.sh" ]; then
+            grep -q 'scripts/_emerge-plan-lib.sh" "${SYSROOT}/tmp/hugmesh-emerge-plan-lib.sh"' "${builder}" \
+                || echo "${builder}: chroot lib staging missing" >>"${out}"
+            grep -q '^[[:space:]]*\. /tmp/hugmesh-emerge-plan-lib.sh$' "${builder}" \
+                || echo "${builder}: in-chroot lib source missing" >>"${out}"
+            grep -q 'emerge_plan_emit() { return 0; }' "${builder}" \
+                || echo "${builder}: no-op fallback missing (bash -e payload would abort on a failed staging)" >>"${out}"
+            # CHROOT ENV PARITY. The ARM builders source the lib in the HOST shell, so every
+            # EMERGE_PLAN_* knob reaches it from the environment for free. x86 runs it inside
+            # the chroot, where NOTHING from the host environment survives — each knob has to
+            # be rendered into the payload explicitly. Carrying only the opt-out made the
+            # documented EMERGE_PLAN_TIMEOUT a silent no-op on x86 alone (always the built-in
+            # 1800s, whatever the operator set). Assert BOTH, so adding a third knob to the lib
+            # without carrying it in fails here instead of silently working on 9 builders of 10.
+            grep -q '^EMERGE_PLAN_ENABLED=${EMERGE_PLAN_ENABLED}$' "${builder}" \
+                || echo "${builder}: chroot payload does not carry EMERGE_PLAN_ENABLED" >>"${out}"
+            grep -q '^EMERGE_PLAN_TIMEOUT=${EMERGE_PLAN_TIMEOUT:-1800}$' "${builder}" \
+                || echo "${builder}: chroot payload does not carry EMERGE_PLAN_TIMEOUT (host env cannot cross a chroot)" >>"${out}"
+        else
+            grep -q 'source "${SCRIPT_DIR}/scripts/_emerge-plan-lib.sh"' "${builder}" \
+                || echo "${builder}: host-side lib source missing" >>"${out}"
+        fi
+    done
+    if [ -s "${out}" ]; then
+        _fail EPL "plumbing" "plan-preview plumbing incomplete" "${out}"
+        EPL_FAIL=$((EPL_FAIL+1))
+    else
+        EPL_PASS=$((EPL_PASS+1))
+    fi
+    # (e) executed behaviour: the lib really emits the wire and really never fails
+    if bash "${TEST_DIR}/emerge-plan-emit.sh" >"${out}" 2>&1; then
+        EPL_PASS=$((EPL_PASS+1))
+    else
+        _fail EPL "behaviour" "emerge-plan-emit.sh failed" "${out}"
+        EPL_FAIL=$((EPL_FAIL+1))
+    fi
+    # (f) the progress-tables.json emerge_plan declaration must agree with the source
+    if "${PYTHON}" - "${REPO_DIR}" >"${out}" 2>&1 <<'PY'
+import json, os, re, sys
+repo = sys.argv[1]
+tables = json.load(open(os.path.join(
+    repo, "studio/hugmesh_studio/core/progress-tables.json")))
+builders = {
+    "x86": "build-x86-host-stage4.sh",
+    "rpi5": "build-rpi5-stage4.sh",
+    "jetson": "build-jetson-stage4.sh",
+    "frite": "build-frite-stage4.sh",
+    "orangepi5": "build-orangepi5-stage4.sh",
+    "orangepizero2": "build-orangepi-zero2-stage4.sh",
+    "orangepizero2w": "build-orangepi-zero2w-stage4.sh",
+    "orangepizero3": "build-orangepi-zero3-stage4.sh",
+    "orangepi3-lts": "build-orangepi3-lts-stage4.sh",
+    "orangepi4-lts": "build-orangepi4-lts-stage4.sh",
+}
+call_re = re.compile(r"^\s*emerge_plan_emit\s+([a-z]+)\s")
+bad = []
+for plat, script in builders.items():
+    entry = tables["platforms"].get(plat)
+    if entry is None or "emerge_plan" not in entry:
+        bad.append(f"{plat}: no emerge_plan declaration in progress-tables.json")
+        continue
+    ep = entry["emerge_plan"]
+    planned = list(ep.get("planned", ()))
+    not_planned = dict(ep.get("not_planned", {}))
+    src = open(os.path.join(repo, script), encoding="utf-8", errors="replace")
+    found = {m.group(1) for m in (call_re.match(l) for l in src) if m}
+    if found != set(planned):
+        bad.append(f"{plat}: builder plans {sorted(found)}, table declares {sorted(planned)}")
+    emitted = set(entry.get("emerge_groups", {}).get("emitted", ()))
+    if set(planned) | set(not_planned) != emitted:
+        bad.append(f"{plat}: planned+not_planned={sorted(set(planned) | set(not_planned))} "
+                   f"does not partition emitted={sorted(emitted)}")
+    if set(planned) & set(not_planned):
+        bad.append(f"{plat}: {sorted(set(planned) & set(not_planned))} both planned and not_planned")
+    for grp, reason in not_planned.items():
+        if not isinstance(reason, str) or len(reason.strip()) < 20:
+            bad.append(f"{plat}/{grp}: not_planned has no real reason ({reason!r})")
+for b in bad:
+    print(b)
+sys.exit(1 if bad else 0)
+PY
+    then
+        EPL_PASS=$((EPL_PASS+1))
+    else
+        _fail EPL "plan-declaration" \
+            "progress-tables.json emerge_plan declaration disagrees with the builders" "${out}"
+        EPL_FAIL=$((EPL_FAIL+1))
+    fi
+    # fail-closed: a silently-skipped (or silently-added) check trips one failure
+    if [ $((EPL_PASS + EPL_FAIL)) -ne "${EPL_EXPECTED}" ]; then
+        _fail EPL "completeness" "$((EPL_PASS + EPL_FAIL))/${EPL_EXPECTED} checks ran"
+        EPL_FAIL=$((EPL_FAIL + 1))
+    fi
+}
+
 # ── four-choice taxonomy parity (TAXO) ──────────────────────────────────────────
 # The Studio GUI (gui/pages/mode.py) is the REFERENCE implementation of the flow's
 # four-choice opening screen (docs/STUDIO-WIZARD-FLOW.md). This bucket proves the SAME
@@ -2094,6 +2364,7 @@ run_negative_checks
 run_gui_gating_checks
 run_flag_coverage
 run_emerge_group_banner_checks
+run_emerge_plan_checks
 run_parity_taxonomy_checks
 run_catalog_checks
 # ── BEGIN shared block: SELinux node-policy install (SLX) ──
@@ -2104,8 +2375,8 @@ run_requested_atoms_checks
 run_nongating_smokes
 score_sharedbinpkg_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + RAR_PASS + SBP_PASS + PCS_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + RAR_FAIL + SBP_FAIL + PCS_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + EPL_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + RAR_PASS + SBP_PASS + PCS_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + EPL_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + RAR_FAIL + SBP_FAIL + PCS_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -2133,6 +2404,7 @@ printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_
 printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
 printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_FAIL}"
 printf  'EGB  (emerge-group banners): %3d passed, %d failed\n' "${EGB_PASS}" "${EGB_FAIL}"
+printf  'EPL  (emerge-plan preview): %3d passed, %d failed\n' "${EPL_PASS}" "${EPL_FAIL}"
 printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
 printf  'CAT  (web-catalog honesty): %3d passed, %d failed\n' "${CAT_PASS}" "${CAT_FAIL}"
 printf  'SLX  (selinux policy install): %3d passed, %d failed\n' "${SLX_PASS}" "${SLX_FAIL}"
