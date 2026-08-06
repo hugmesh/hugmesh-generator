@@ -2445,6 +2445,7 @@ provision_vault() {
                 KUBECONFIG="${kc}" kubectl create namespace "${gen_ns}" \
                     --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
                     || warn "could not ensure namespace ${gen_ns}"
+                # eso-provider-refs: conditional-ok this is the USB path and the token is custody material that only exists on the KEYS stick (vault/token) for an ONLINE Vault address; with no stick and no address there is nothing to seed from, so the guards above are the contract, not an oversight. The offline branch below materializes the workload Secrets directly instead.
                 if KUBECONFIG="${kc}" kubectl create secret generic vault-token \
                         -n "${gen_ns}" --from-literal=token="${token}" \
                         --dry-run=client -o yaml 2>/dev/null \
@@ -2477,6 +2478,7 @@ provision_vault() {
         KUBECONFIG="${kc}" kubectl create namespace vault \
             --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
             || warn "could not ensure namespace vault"
+        # eso-provider-refs: conditional-ok the cluster CA cert+key are USB custody material (certs/cluster-ca.{crt,key}) and are never in git; a KEYS stick that does not carry them cannot seed them, and the else branch below says so explicitly rather than pretending the anchor exists.
         if KUBECONFIG="${kc}" kubectl create secret tls cluster-ca \
                 -n vault --cert="${ca_crt}" --key="${ca_key}" \
                 --dry-run=client -o yaml 2>/dev/null \
@@ -2496,6 +2498,7 @@ provision_vault() {
             KUBECONFIG="${kc}" kubectl create namespace "${ca_ns}" \
                 --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
                 || warn "could not ensure namespace ${ca_ns}"
+            # eso-provider-refs: conditional-ok same custody argument as cluster-ca directly above — this republishes the very cert file that came off the KEYS stick, so it is guarded by the same `[ -f certs/cluster-ca.crt ]` test and cannot be made unconditional without inventing a CA.
             if KUBECONFIG="${kc}" kubectl create secret generic vault-ca \
                     -n "${ca_ns}" --from-file=ca.crt="${ca_crt}" \
                     --dry-run=client -o yaml 2>/dev/null \

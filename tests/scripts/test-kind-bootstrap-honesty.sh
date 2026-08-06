@@ -65,7 +65,7 @@ bad() { echo "  FAIL $*"; fail=$((fail+1)); }
 
 # Tooling is a HARD requirement, never a skip: a guard that skips in CI is a
 # guard that never guards (this repo has shipped several).
-for t in bash jq awk sed grep; do
+for t in bash jq awk sed grep openssl base64; do
   command -v "$t" >/dev/null 2>&1 || { echo "FATAL: ${t} required (refusing to skip — a skipping gate never guards)" >&2; exit 1; }
 done
 
@@ -580,6 +580,374 @@ if [ -f "${GEN_SECRETS}" ]; then
     ok "premise holds: gen-cluster-secrets.sh still mints DB passwords unconditionally and never reads existing KV — the caller-side guard is required"
   else
     bad "gen-cluster-secrets.sh's minting behaviour changed — re-check whether seed-vault-kv.sh's skip is still the right contract"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- [mtls] the bring-up must not claim success without an ISSUED certificate --"
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY. bootstrap-kind.sh seeds vault-ca + vault-token into the three generator
+# namespaces and then prints "Done." — for a long time with nothing in between
+# asserting that a certificate came out the other end. It did not: all 26
+# generator-backed ExternalSecrets sat in SecretSyncedError, not one *-mtls
+# Secret had ever been created, and every pod mounting one hung in Init:0/1. The
+# bring-up reported that as a success.
+#
+# So verify_mtls_issuance() is a POST-CONDITION, and a post-condition that cannot
+# fail is decoration. This section RUNS the real function out of the real script
+# against a kubectl stub and REAL openssl-minted material, and requires it to go
+# red on each way the property can actually break — including the one that looks
+# most like success: a Secret that exists.
+MTLS_FN="$(awk '/^verify_mtls_issuance\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+if [ -z "${MTLS_FN}" ]; then
+  bad "bootstrap-kind.sh has no verify_mtls_issuance() — there is no post-condition on the thing step 8b exists to produce"
+else
+  ok "bootstrap-kind.sh defines verify_mtls_issuance()"
+
+  MT="${TMP}/mtls"; mkdir -p "${MT}/bin"
+  # ── kubectl stub: only what the post-condition asks of a cluster ──
+  cat > "${MT}/bin/kubectl" <<'KSTUB'
+#!/usr/bin/env bash
+# State layout under ${STUB_STATE}:
+#   es.json                       what `get externalsecrets -A -o json` returns
+#   secrets/<ns>__<name>.exists   the Secret exists
+#   secrets/<ns>__<name>.crt/.key its tls.crt / tls.key (raw PEM)
+S="${STUB_STATE}"
+ns=""; fmt=""; pos=()
+args=("$@"); i=0
+while [ "${i}" -lt "${#args[@]}" ]; do
+  a="${args[$i]}"
+  case "${a}" in
+    -n|--namespace) i=$((i+1)); ns="${args[$i]}" ;;
+    -o|--output)    i=$((i+1)); fmt="${args[$i]}" ;;
+    -o=*|--output=*) fmt="${a#*=}" ;;
+    -*)             ;;
+    *)              pos+=("${a}") ;;
+  esac
+  i=$((i+1))
+done
+jp=""; case "${fmt}" in jsonpath=*) jp="${fmt#jsonpath=}" ;; esac
+verb="${pos[0]:-}"; res="${pos[1]:-}"; name="${pos[2]:-}"
+[ "${verb}" = "get" ] || exit 0
+case "${res}" in
+  externalsecrets*) cat "${S}/es.json" 2>/dev/null || echo '{"items":[]}'; exit 0 ;;
+esac
+f="${S}/secrets/${ns}__${name}"
+[ -f "${f}.exists" ] || exit 1
+case "${jp}" in
+  *'tls\.crt'*) [ -s "${f}.crt" ] && base64 < "${f}.crt" | tr -d '\n'; exit 0 ;;
+  *'tls\.key'*) [ -s "${f}.key" ] && base64 < "${f}.key" | tr -d '\n'; exit 0 ;;
+esac
+echo "secret/${name}"
+KSTUB
+  chmod +x "${MT}/bin/kubectl"
+
+  # ── REAL certificate material: a cluster CA, a leaf it signed, a rogue CA and
+  #    a leaf that rogue signed, plus a spare key that matches nothing. openssl
+  #    does the work, so "verified" means openssl verified it. ──
+  mk_ca() { # <dir> <cn>
+    openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=$2" \
+      -keyout "$1/ca.key" -out "$1/ca.crt" >/dev/null 2>&1
+  }
+  mk_leaf() { # <ca-dir> <out-prefix> <cn>
+    openssl req -newkey rsa:2048 -nodes -subj "/CN=$3" \
+      -keyout "$2.key" -out "$2.csr" >/dev/null 2>&1
+    openssl x509 -req -in "$2.csr" -CA "$1/ca.crt" -CAkey "$1/ca.key" \
+      -CAcreateserial -days 1 -out "$2.crt" >/dev/null 2>&1
+  }
+  mkdir -p "${MT}/ca" "${MT}/rogue"
+  mk_ca "${MT}/ca" "hugmesh kind local dev CA"
+  mk_ca "${MT}/rogue" "somebody elses CA"
+  mk_leaf "${MT}/ca" "${MT}/good" "hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local"
+  mk_leaf "${MT}/rogue" "${MT}/rogue-leaf" "hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local"
+  openssl genrsa -out "${MT}/other.key" 2048 >/dev/null 2>&1
+  if [ ! -s "${MT}/good.crt" ] || [ ! -s "${MT}/ca/ca.crt" ]; then
+    bad "could not mint test certificates with openssl — this section verified nothing"
+  fi
+
+  ES_JSON='{"items":[{"metadata":{"namespace":"hugmesh-backend","name":"hugmesh-user-bff-api-mtls"},"spec":{"target":{"name":"hugmesh-user-bff-api-mtls"},"dataFrom":[{"sourceRef":{"generatorRef":{"kind":"VaultDynamicSecret","name":"hugmesh-user-bff-api-mtls"}}}]}}]}'
+
+  # mtls_state <name> — a fresh stub cluster that always carries vault/cluster-ca
+  mtls_state() {
+    local st="${MT}/state-$1"
+    rm -rf "${st}"; mkdir -p "${st}/secrets"
+    printf '%s' "${ES_JSON}" > "${st}/es.json"
+    cp "${MT}/ca/ca.crt" "${st}/secrets/vault__cluster-ca.crt"
+    : > "${st}/secrets/vault__cluster-ca.exists"
+    # The repo half of the state: by default it declares exactly the generator
+    # es.json carries, so repo and cluster agree and the controls below isolate
+    # the certificate properties. §[mtls-denominator] makes them disagree.
+    declare_gen "${st}" hugmesh-backend hugmesh-user-bff-api-mtls
+    printf '%s' "${st}"
+  }
+  seed_secret() { # <state> <ns> <name> <crt|-> <key|->
+    local st="$1" ns="$2" nm="$3" crt="$4" key="$5"
+    : > "${st}/secrets/${ns}__${nm}.exists"
+    [ "${crt}" = "-" ] || cp "${crt}" "${st}/secrets/${ns}__${nm}.crt"
+    [ "${key}" = "-" ] || cp "${key}" "${st}/secrets/${ns}__${nm}.key"
+  }
+  # declare_gen <state> <ns> <name> [marker-reason] — add a generator to the
+  # state's FIXTURE MANIFEST TREE, i.e. to what the REPO says must be issued.
+  # This is the denominator, and it is deliberately a different input from
+  # es.json (the cluster) so the two can be made to disagree.
+  declare_gen() {
+    local st="$1" ns="$2" nm="$3" reason="${4:-}"
+    mkdir -p "${st}/spec/manifests"
+    {
+      echo '---'
+      [ -z "${reason}" ] || echo "# mtls-issuance: not-delivered ${reason}"
+      echo 'apiVersion: generators.external-secrets.io/v1alpha1'
+      echo 'kind: VaultDynamicSecret'
+      echo "metadata: { name: ${nm}, namespace: ${ns} }"
+      echo 'spec: { path: pki_int/issue/x }'
+    } >> "${st}/spec/manifests/gen.yaml"
+  }
+  run_mtls() { # <state-dir> [spec-dir-override]
+    (
+      cd "${TMP}" || exit 2
+      PATH="${MT}/bin:${PATH}" STUB_STATE="$1" MTLS_VERIFY_TIMEOUT=5 \
+      MTLS_SPEC_DIR="${2:-$1/spec}" \
+      bash -c 'set -uo pipefail
+               log() { echo "==> $*"; }
+               '"${MTLS_FN}"'
+               verify_mtls_issuance'
+    ) >/dev/null 2>&1
+  }
+
+  st="$(mtls_state good)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/good.key"
+  if run_mtls "${st}"; then
+    ok "positive control: a real CA-signed leaf with its matching key verifies"
+  else
+    bad "positive control: a genuinely issued certificate was REJECTED — the post-condition would fail every healthy bring-up"
+  fi
+
+  st="$(mtls_state noes)"; echo '{"items":[]}' > "${st}/es.json"
+  if run_mtls "${st}"; then
+    bad "a cluster with NO generator-backed ExternalSecret passed — the check verified nothing and said so was fine"
+  else
+    ok "no generator-backed ExternalSecret at all -> RED (a vacuous check is not a pass)"
+  fi
+
+  st="$(mtls_state never)"          # ExternalSecret declared, Secret never issued
+  if run_mtls "${st}"; then
+    bad "THE SHIPPED OUTAGE: no *-mtls Secret was ever created and the bring-up still reported success"
+  else
+    ok "the shipped outage (declared ExternalSecret, no Secret ever issued) -> RED"
+  fi
+
+  st="$(mtls_state empty)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls - -
+  if run_mtls "${st}"; then
+    bad "an EMPTY Secret passed — existence was mistaken for issuance, which is the weaker check this replaced"
+  else
+    ok "a Secret that exists but carries no tls.crt -> RED"
+  fi
+
+  st="$(mtls_state garbage)"
+  printf 'not a certificate\n' > "${MT}/garbage.crt"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/garbage.crt" "${MT}/good.key"
+  if run_mtls "${st}"; then
+    bad "a Secret whose tls.crt is not X.509 at all passed"
+  else
+    ok "tls.crt that is not a parseable certificate -> RED"
+  fi
+
+  st="$(mtls_state rogue)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/rogue-leaf.crt" "${MT}/rogue-leaf.key"
+  if run_mtls "${st}"; then
+    bad "a leaf signed by a DIFFERENT CA passed — every workload truststore would still reject it"
+  else
+    ok "a real certificate that does not chain to vault/cluster-ca -> RED"
+  fi
+
+  st="$(mtls_state mismatch)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/other.key"
+  if run_mtls "${st}"; then
+    bad "a certificate paired with someone else's private key passed — it mounts fine and fails every handshake"
+  else
+    ok "tls.key that does not match tls.crt -> RED"
+  fi
+
+  # ── [mtls-denominator] the expected set must come from the REPO ──────────
+  # WHY. The first cut of this post-condition enumerated the generator-backed
+  # ExternalSecrets the LIVE CLUSTER declared and verified those. That makes the
+  # one failure mode it most needs to see invisible: when the ExternalSecret
+  # itself never lands it drops out of the enumeration too, so the denominator
+  # shrinks with the failure and the check can only fail at exactly zero.
+  #
+  # Not hypothetical. On the live kind cluster the repo declared 29
+  # VaultDynamicSecret generators under specs/cluster, the cluster carried 26 —
+  # hugmesh-pki/cassandra-mtls, hugmesh-backend/coturn-tls and
+  # hugmesh-backend/meshbridge-client-mtls were absent ENTIRELY — and the block
+  # reported "mTLS verified: 26/26", returned 0 and printed Done.
+  #
+  # Every control here makes the repo and the cluster DISAGREE, which the old
+  # shape could not express at all: it had only one input.
+  echo "-- [mtls-denominator] the expected set is read from the repo, not from the cluster --"
+
+  st="$(mtls_state denom)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/good.key"
+  declare_gen "${st}" hugmesh-backend never-delivered-mtls
+  if run_mtls "${st}"; then
+    bad "THE 26/26 BUG: the repo declares a generator the cluster does not carry, and the post-condition still passed — a delivery failure that removes the ExternalSecret removes itself from the denominator"
+  else
+    ok "a repo-declared generator with NO ExternalSecret in the cluster -> RED (even though every cert that DOES exist verifies)"
+  fi
+
+  st="$(mtls_state denom_ok)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/good.key"
+  declare_gen "${st}" hugmesh-backend never-delivered-mtls \
+    "ships dark behind an empty ArgoCD overlay with no automated syncPolicy, and its pki_int issuing role does not exist"
+  if run_mtls "${st}"; then
+    ok "the same absence, DECLARED not-delivered with a stated reason -> GREEN (optional by design is expressible)"
+  else
+    bad "a generator declared not-delivered with a real reason was still counted — the post-condition cannot express optional-by-design and will be switched off"
+  fi
+
+  st="$(mtls_state denom_bare)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/good.key"
+  declare_gen "${st}" hugmesh-backend never-delivered-mtls "optional"
+  if run_mtls "${st}"; then
+    bad "a not-delivered marker with no usable reason exempted a missing generator — an exemption that states nothing is a rubber stamp"
+  else
+    ok "a not-delivered marker carrying no usable reason -> RED"
+  fi
+
+  # The analogue of "dead code may not be annotated away": a marker on a
+  # generator the cluster DOES carry is stale, and a stale marker would silently
+  # absorb the NEXT delivery regression instead of reporting it.
+  st="$(mtls_state denom_stale)"
+  rm -f "${st}/spec/manifests/gen.yaml"
+  declare_gen "${st}" hugmesh-backend hugmesh-user-bff-api-mtls \
+    "claiming the one generator this cluster demonstrably does carry is not delivered by default"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/good.key"
+  if run_mtls "${st}"; then
+    bad "a not-delivered marker on a generator the cluster DOES carry passed — the exemption would mask the next delivery failure"
+  else
+    ok "a stale not-delivered marker (its generator is live) -> RED"
+  fi
+
+  st="$(mtls_state denom_nospec)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/good.key"
+  if run_mtls "${st}" "${st}/no-such-manifest-tree"; then
+    bad "the post-condition passed without being able to read the manifest tree — it had no denominator at all"
+  else
+    ok "an unreadable manifest tree -> RED (an unverifiable post-condition is not a pass)"
+  fi
+
+  st="$(mtls_state denom_empty)"
+  seed_secret "${st}" hugmesh-backend hugmesh-user-bff-api-mtls "${MT}/good.crt" "${MT}/good.key"
+  mkdir -p "${st}/emptyspec"
+  if run_mtls "${st}" "${st}/emptyspec"; then
+    bad "a manifest tree declaring ZERO generators passed — the expected set was empty so everything passed vacuously"
+  else
+    ok "a manifest tree declaring zero generators -> RED (vacuity)"
+  fi
+
+  # And the real tree must satisfy its own post-condition's REPO half: every
+  # generator specs/cluster declares is either expected or carries a reasoned
+  # marker. This is what keeps the three real exemptions honest.
+  REAL_GENS="$(find "${REPO}/specs/cluster" -type f \( -name '*.yaml' -o -name '*.yml' \) \
+                 -exec grep -l '^kind:[[:space:]]*VaultDynamicSecret' {} + 2>/dev/null \
+               | xargs -r grep -c '^kind:[[:space:]]*VaultDynamicSecret' 2>/dev/null \
+               | awk -F: '{n+=$2} END{print n+0}')"
+  if [ "${REAL_GENS}" -ge 20 ]; then
+    ok "specs/cluster declares ${REAL_GENS} VaultDynamicSecret generators for the post-condition to key on"
+  else
+    bad "only ${REAL_GENS} generators found under specs/cluster — the denominator scan is broken or the manifests moved"
+  fi
+
+  # The post-condition must be REACHED, and its failure must stop the run.
+  if grep -q '^verify_mtls_issuance ||' "${BOOTSTRAP}"; then
+    ok "bootstrap-kind.sh runs verify_mtls_issuance and aborts on failure"
+  else
+    bad "verify_mtls_issuance is defined but not invoked fail-closed — a post-condition nothing runs is not a post-condition"
+  fi
+  if awk '/^verify_mtls_issuance \|\|/{v=NR} /^log "Done\./{d=NR} END{exit !(v && d && v<d)}' "${BOOTSTRAP}"; then
+    ok "the mTLS post-condition runs BEFORE the bring-up prints 'Done.'"
+  else
+    bad "'Done.' can be printed without the mTLS post-condition having passed"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- [gen-creds] step 8b must recover, not abort, on an already-initialized Vault --"
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY. external-secrets/vault-token is created in exactly ONE place: the
+# not-initialized `else` branch of the Vault step. A re-run against an
+# already-initialized Vault therefore does not create it. A first cut of the
+# generator-credential block read that Secret and `exit 1`-ed when it was empty,
+# which aborted the ENTIRE bring-up — vault-pki-init, casdoor-init and the whole
+# SSO slice, all of which come after — over a token the script can reconstruct:
+# vault/vault-bootstrap holds the same root token and is read 60 lines later.
+# Verified byte-identical on a live kind cluster. This runs the real block.
+GEN_BLOCK="$(awk '/^log "Seeding per-namespace generator credentials/,/^unset GEN_TOKEN/' "${BOOTSTRAP}")"
+if [ -z "${GEN_BLOCK}" ]; then
+  bad "could not find the generator-credential block in bootstrap-kind.sh (anchors moved) — this section verified nothing"
+else
+  GT="${TMP}/gencreds"; mkdir -p "${GT}/bin"
+  cat > "${GT}/bin/kubectl" <<'GSTUB'
+#!/usr/bin/env bash
+# Models a cluster by env: STUB_ES_TOKEN / STUB_BOOTSTRAP_TOKEN empty => absent.
+# Everything applied is appended to ${STUB_LOG} so the test can read back what
+# the block actually created.
+args="$*"
+case "${args}" in
+  *"-n vault get secret cluster-ca"*)
+      printf '%s' "${STUB_CA_B64}"; exit 0 ;;
+  *"-n external-secrets get secret vault-token"*)
+      [ -n "${STUB_ES_TOKEN}" ] || exit 1; printf '%s' "${STUB_ES_TOKEN}"; exit 0 ;;
+  *"-n vault get secret vault-bootstrap"*)
+      [ -n "${STUB_BOOTSTRAP_TOKEN}" ] || exit 1; printf '%s' "${STUB_BOOTSTRAP_TOKEN}"; exit 0 ;;
+  *"create namespace"*)
+      exit 0 ;;
+  *apply*)
+      cat >> "${STUB_LOG}"; printf '\n---APPLIED---\n' >> "${STUB_LOG}"; exit 0 ;;
+esac
+cat >/dev/null 2>&1
+exit 0
+GSTUB
+  chmod +x "${GT}/bin/kubectl"
+
+  run_gen() { # <es-token-b64> <bootstrap-token-b64> -> log on stdout
+    local log="${GT}/log"; : > "${log}"
+    PATH="${GT}/bin:${PATH}" STUB_LOG="${log}" \
+    STUB_CA_B64="Q0FDRVJU" STUB_ES_TOKEN="$1" STUB_BOOTSTRAP_TOKEN="$2" \
+      bash -c 'set -euo pipefail
+               log() { echo "==> $*"; }
+               '"${GEN_BLOCK}" >/dev/null 2>&1
+    local rc=$?
+    printf '%s' "${rc}"
+  }
+
+  rc="$(run_gen "" "cm9vdA==")"
+  applied="$(cat "${GT}/log" 2>/dev/null || true)"
+  if [ "${rc}" != "0" ]; then
+    bad "REGRESSION: an already-initialized Vault (no external-secrets/vault-token, vault/vault-bootstrap present) aborts the bring-up with exit ${rc} instead of falling back"
+  elif ! printf '%s' "${applied}" | grep -q 'namespace: external-secrets'; then
+    bad "the fallback ran but never restored external-secrets/vault-token — the ClusterSecretStore stays unauthenticated"
+  else
+    n="$(printf '%s' "${applied}" | grep -c 'name: vault-ca' || true)"
+    if [ "${n}" -ge 3 ]; then
+      ok "already-initialized Vault: recovers the token from vault/vault-bootstrap, restores external-secrets/vault-token and seeds all three generator namespaces"
+    else
+      bad "the fallback ran but seeded vault-ca into only ${n} namespace(s), expected 3"
+    fi
+  fi
+
+  rc="$(run_gen "cm9vdA==" "cm9vdA==")"
+  if [ "${rc}" = "0" ]; then
+    ok "fresh Vault (external-secrets/vault-token present): unchanged, still seeds the generator credentials"
+  else
+    bad "the normal path now fails (exit ${rc}) — the fallback broke the case that already worked"
+  fi
+
+  rc="$(run_gen "" "")"
+  if [ "${rc}" = "0" ]; then
+    bad "no token ANYWHERE and the block still reported success — it would seed an empty vault-token and every generator would fail to authenticate"
+  else
+    ok "no Vault token in either Secret -> hard fail (there is genuinely nothing to seed from)"
   fi
 fi
 

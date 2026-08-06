@@ -84,7 +84,10 @@ recreate_job() { # <namespace> <job> <kustomize-dir>
 
 warn() { echo "    WARN: $*" >&2; }
 
-for bin in kind kubectl docker git jq; do
+# openssl is not optional: step 3b mints the local-dev CA with it, and the mTLS
+# post-condition at the end verifies an issued certificate with it. It used to be
+# an undeclared dependency discovered halfway through a bring-up.
+for bin in kind kubectl docker git jq openssl base64; do
   command -v "${bin}" >/dev/null 2>&1 || { echo "missing required tool: ${bin}" >&2; exit 1; }
 done
 
@@ -511,6 +514,7 @@ else
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   # vault-bootstrap (ns vault): the token vault-pki-init's PostSync hook Job
   # reads (VAULT_TOKEN, optional:true).
+  # eso-provider-refs: conditional-ok a root token exists exactly once, at `vault operator init`, and cannot be re-derived afterwards. Whoever initialized this Vault wrote it here (this branch, or the KEYS custody on the real-node path), so on the already-initialized branch it is a precondition rather than something to create. If it is genuinely gone the root token is gone with it, and the read-back at the KV seed below stops the run with that exact message instead of guessing.
   kubectl -n vault create secret generic vault-bootstrap \
     --from-literal=token="${ROOT_TOKEN}" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -528,6 +532,141 @@ else
   echo "    These are throwaway, freshly-generated for THIS kind cluster only — never reuse them anywhere real."
   echo
 fi
+
+# ─────────────────────────────────────────────────────────────────────────
+# 8b) PER-NAMESPACE GENERATOR CREDENTIALS (vault-ca + vault-token).
+#
+#     The 29 VaultDynamicSecret generators in specs/cluster/manifests (23 in
+#     hugmesh-backend, 5 in hugmesh-pki, 1 in hugmesh-frontend) are what mint
+#     EVERY mTLS identity in the mesh. Each one declares
+#
+#         provider:
+#           caProvider: { type: Secret, name: vault-ca, key: ca.crt }
+#           auth: { tokenSecretRef: { name: vault-token, key: token } }
+#
+#     BOTH of those resolve in the GENERATOR'S OWN NAMESPACE and nowhere else.
+#     ESO passes resolvers.EmptyStoreKind for generators, and
+#     pkg/utils/resolvers/secret_ref.go only honours a cross-namespace
+#     ref.Namespace when storeKind == ClusterSecretStoreKind — the constant is
+#     documented upstream as "not cluster-scoped, hence resources cannot be
+#     resolved across namespaces". So the ClusterSecretStore's own
+#     external-secrets/vault-token does NOT serve them, and there is no way to
+#     point them at one central copy: the Secrets must exist per namespace.
+#
+#     Neither existed. This bootstrap minted cluster-ca (below, step 3b) and one
+#     external-secrets/vault-token (above) and stopped there, so all 26
+#     generator-backed ExternalSecrets sat in SecretSyncedError with
+#     `cannot get Kubernetes secret "vault-ca": secrets "vault-ca" not found`,
+#     no *-mtls Secret was ever created, and every pod mounting one (both
+#     gateways, every BFF, the DB TLS sidecars, harbor, coturn) hung in Init:0/1
+#     on `MountVolume.SetUp failed for volume "pki"`. Not one certificate had
+#     ever been issued in a kind cluster.
+#
+#     The offline/real-node path (specs/etc/keys-provision/provision.sh) already
+#     seeds both into exactly these namespaces from the USB KEYS stick; only the
+#     kind path was missing them. This block closes that gap so the two delivery
+#     paths agree.
+#
+#     vault-ca carries ONLY the PUBLIC CA certificate (cluster-ca's tls.crt
+#     republished under the key name `ca.crt` that caProvider asks for). Nothing
+#     here is committed to git — both values are read back from the live cluster,
+#     so this is correct whether the CA was minted by step 3b or provisioned
+#     offline. Derived, not hardcoded: a checked-in certificate would be wrong
+#     for every freshly bootstrapped cluster, which fails TLS verification
+#     instead — the same outage wearing a different error message.
+#
+#     On the PRIVATE key: this block does not move it, and does not need to —
+#     caProvider only ever wants the public cert. That is a property of THIS
+#     block and not of the cluster, and it would be false to claim more: step 3b
+#     above deliberately creates the FULL `cluster-ca` kubernetes.io/tls Secret
+#     (tls.crt AND tls.key) in six namespaces — vault, hugmesh-pki,
+#     hugmesh-backend, hugmesh-frontend, external-secrets, devops — because
+#     vault-pki-init imports the CA key into Vault's pki_int and vault-tls-init
+#     signs the listener cert with it. That is a throwaway local-dev CA whose key
+#     material is generated fresh per cluster and never leaves it, but "the CA
+#     private key stays in the vault namespace" is simply not true here, and a
+#     design rationale resting on it would be resting on nothing.
+# ─────────────────────────────────────────────────────────────────────────
+log "Seeding per-namespace generator credentials (vault-ca + vault-token)"
+
+GEN_NAMESPACES="hugmesh-pki hugmesh-backend hugmesh-frontend"
+
+# The CA that actually signs Vault's listener cert. vault-tls-init copies this
+# very file to /vault/tls/ca.crt when it signs, so trusting it is trusting the
+# real chain rather than an assumption about one.
+GEN_CA_CRT="$(kubectl -n vault get secret cluster-ca -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)"
+# The token the generators authenticate to Vault with — the same one the
+# ClusterSecretStore already uses.
+GEN_TOKEN="$(kubectl -n external-secrets get secret vault-token -o jsonpath='{.data.token}' 2>/dev/null || true)"
+
+if [ -z "${GEN_CA_CRT}" ]; then
+  echo "vault/cluster-ca has no tls.crt — the mTLS generators cannot verify Vault's TLS and no certificate would ever be issued. Refusing to continue with a half-provisioned PKI." >&2
+  exit 1
+fi
+
+# FALLBACK, not an abort. external-secrets/vault-token is created in exactly ONE
+# place — the not-initialized `else` branch of step 8 above — so a run against an
+# ALREADY-INITIALIZED Vault never creates it. The first cut of this block simply
+# `exit 1`-ed there, which killed the whole bring-up (vault-pki-init, casdoor-init
+# and the entire SSO slice, all of which follow) over a Secret the script is
+# perfectly able to reconstruct: vault/vault-bootstrap holds the SAME root token
+# and this script already reads it 60 lines below to seed Vault KV. Verified on
+# kind-hugmesh-local: vault/vault-bootstrap.token, external-secrets/vault-token
+# .token and hugmesh-backend/vault-token.token are byte-identical.
+#
+# The recovery is deliberately FLAT — read, fail hard on the spot if there is
+# genuinely no token anywhere, then create — rather than nesting the create
+# inside a second `if [ -n … ]`. Nested, the only statement that creates
+# external-secrets/vault-token would still sit two branches deep and
+# tests/scripts/eso_provider_refs.py would still, correctly, report that nothing
+# creates it on the default path.
+if [ -z "${GEN_TOKEN}" ]; then
+  GEN_TOKEN="$(kubectl -n vault get secret vault-bootstrap -o jsonpath='{.data.token}' 2>/dev/null || true)"
+  [ -n "${GEN_TOKEN}" ] || { echo "neither external-secrets/vault-token nor vault/vault-bootstrap carries a Vault token — the mTLS generators cannot authenticate to Vault and nothing below can seed KV either. This means no run has ever initialized this Vault (or its Secrets were deleted): tear the cluster down and re-bootstrap, or restore vault/vault-bootstrap from the KEYS custody." >&2; exit 1; }
+  log "  external-secrets/vault-token absent (Vault was already initialized, so the branch that creates it did not run) — recovering the same root token from vault/vault-bootstrap"
+  # Backfill it too. Without it the ClusterSecretStore "hugmesh-vault" cannot
+  # authenticate either, so every KV-backed ExternalSecret is as dead as the
+  # generators were — the same outage one layer over.
+  kubectl create namespace external-secrets --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-token
+  namespace: external-secrets
+type: Opaque
+data:
+  token: ${GEN_TOKEN}
+EOF
+  log "  external-secrets/vault-token restored for the ClusterSecretStore"
+fi
+
+for ns in ${GEN_NAMESPACES}; do
+  kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # Built as literal Secret manifests so the base64 values move across without
+  # ever being written to disk or echoed to the log.
+  kubectl apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-ca
+  namespace: ${ns}
+type: Opaque
+data:
+  ca.crt: ${GEN_CA_CRT}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-token
+  namespace: ${ns}
+type: Opaque
+data:
+  token: ${GEN_TOKEN}
+EOF
+  log "  ${ns}: vault-ca (public CA cert) + vault-token ready"
+done
+unset GEN_TOKEN
 
 # Re-run vault-pki-init now that the vault-bootstrap token exists. It's a
 # PostSync ArgoCD hook Job (hook-delete-policy: BeforeHookCreation), so a
@@ -663,6 +802,233 @@ SHIM
   echo "    e2e:  make kind-e2e   (repo root — resolver-maps hugmesh.systems -> 127.0.0.1, runs spec 27)"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────
+# 12) POSITIVE POST-CONDITION FOR mTLS ISSUANCE.
+#
+#     Step 8b seeds vault-ca and vault-token and then says "ready". That is the
+#     hook reporting on its own work. It is not evidence that a certificate was
+#     issued, and until this block existed the script printed "Done." over a
+#     cluster in which NOT ONE mTLS certificate had ever been minted — which is
+#     precisely the outage 8b was written for. A bring-up that cannot detect its
+#     own headline failure is a bring-up that will ship it again.
+#
+#     Same posture as the identity read-back above: enumerate what the REPO says
+#     should exist, wait for it, then verify the RESULT independently — a real
+#     X.509 leaf, in date, whose private key matches it, chaining to the cluster
+#     CA the truststores use. Secret existence alone would pass on an empty file.
+#
+#     THE DENOMINATOR COMES FROM THE REPO, NOT THE CLUSTER.
+#     The first cut of this block enumerated the generator-backed ExternalSecrets
+#     the LIVE CLUSTER declared and verified those. That makes the one failure
+#     mode it most needs to see invisible: if the ExternalSecret ITSELF never
+#     lands, it is absent from the enumeration too, so the denominator shrinks
+#     with the failure and the check only fails at exactly zero. Measured on the
+#     live kind cluster: the repo declares 29 VaultDynamicSecret generators under
+#     specs/cluster, the cluster carried 26, and the block cheerfully reported
+#     "mTLS verified: 26/26" and printed Done. A post-condition whose denominator
+#     is supplied by the thing under test is not a post-condition.
+#
+#     So: the expected set is read out of the manifests. A generator the repo
+#     declares and the cluster does not carry is a FAILURE — unless the manifest
+#     that declares it says, in the source and with a reason, that it is not
+#     delivered by default. That marker is itself checked: it may not sit on a
+#     generator that IS live (a stale exemption would mask the next regression),
+#     and a marker with no usable reason is not an exemption.
+# ─────────────────────────────────────────────────────────────────────────
+verify_mtls_issuance() {
+  local deadline_s="${MTLS_VERIFY_TIMEOUT:-600}"
+  local spec_dir="${MTLS_SPEC_DIR:-${CLUSTER_DIR:-}}"
+  local targets n_targets i tmp ca_file ns sec es subject issuer
+  local missing="" rc=0 verified=0 sample=""
+  local declared n_declared live_keys gen file reason key live
+  local undelivered="" stale="" badreason="" n_expected=0 n_exempt=0
+
+  # ── what the REPO declares must be issued ─────────────────────────────
+  # Both metadata spellings in use are handled (flow `metadata: { name: x,
+  # namespace: y }` — 27 of them — and the block form the two dark overlays
+  # use). The opt-out marker is scoped to the YAML DOCUMENT it appears in, so it
+  # cannot drift onto a neighbouring generator in the same file.
+  if [ -z "${spec_dir}" ] || [ ! -d "${spec_dir}" ]; then
+    echo "mTLS post-condition FAILED: cannot read the manifest tree (MTLS_SPEC_DIR/CLUSTER_DIR='${spec_dir}'), so the set of generators that OUGHT to be issued is unknown. An unverifiable post-condition is a failure, not a pass." >&2
+    return 1
+  fi
+  declared="$(find "${spec_dir}" -type f \( -name '*.yaml' -o -name '*.yml' \) -exec awk '
+      function emit() {
+        if (ingen && nm != "" && ns != "") {
+          printf "%s\t%s\t%s\t%s\n", ns, nm, FILENAME, doc_reason
+          ingen = 0; inmeta = 0; nm = ""; ns = ""
+        }
+      }
+      FNR == 1 { doc_reason = ""; ingen = 0; inmeta = 0; nm = ""; ns = "" }
+      /^---[ \t]*$/ { doc_reason = ""; ingen = 0; inmeta = 0; nm = ""; ns = ""; next }
+      /^[ \t]*#[ \t]*mtls-issuance:[ \t]*not-delivered/ {
+        i = index($0, "not-delivered") + 13
+        doc_reason = substr($0, i)
+        gsub(/^[ \t]+|[ \t]+$/, "", doc_reason)
+        next
+      }
+      /^kind:[ \t]*VaultDynamicSecret[ \t]*$/ { ingen = 1; nm = ""; ns = ""; next }
+      ingen && /^metadata:[ \t]*\{/ {
+        line = $0
+        if (match(line, /[{,][ \t]*name:[ \t]*[A-Za-z0-9._-]+/)) {
+          nm = substr(line, RSTART, RLENGTH); sub(/^[{,][ \t]*name:[ \t]*/, "", nm)
+        }
+        if (match(line, /[{,][ \t]*namespace:[ \t]*[A-Za-z0-9._-]+/)) {
+          ns = substr(line, RSTART, RLENGTH); sub(/^[{,][ \t]*namespace:[ \t]*/, "", ns)
+        }
+        emit(); next
+      }
+      ingen && /^metadata:[ \t]*$/ { inmeta = 1; next }
+      inmeta && /^[ \t]+name:[ \t]*[A-Za-z0-9._-]+[ \t]*$/ { nm = $2; emit(); next }
+      inmeta && /^[ \t]+namespace:[ \t]*[A-Za-z0-9._-]+[ \t]*$/ { ns = $2; emit(); next }
+      inmeta && /^[^ \t#]/ { inmeta = 0; ingen = 0 }
+    ' {} + 2>/dev/null | sort -u)"
+  n_declared="$(printf '%s' "${declared}" | grep -c . || true)"
+  if [ "${n_declared}" -eq 0 ]; then
+    echo "mTLS post-condition FAILED: not one VaultDynamicSecret generator was found under ${spec_dir}. Either the manifests moved or this scan is broken; either way the expected set is empty and everything would pass vacuously." >&2
+    return 1
+  fi
+
+  # ── what the CLUSTER actually carries ─────────────────────────────────
+  # Keyed by <namespace>/<generator name> so it can be matched against the repo
+  # declaration above, not merely counted against itself.
+  targets="$(kubectl get externalsecrets.external-secrets.io -A -o json 2>/dev/null \
+    | jq -r '.items[]
+             | . as $es
+             | [ $es.spec.dataFrom[]? | select(.sourceRef.generatorRef != null)
+                 | .sourceRef.generatorRef.name ] as $g
+             | select(($g | length) > 0)
+             | "\($es.metadata.namespace) \($es.spec.target.name // $es.metadata.name) \($es.metadata.name) \($g[0])"' \
+    2>/dev/null || true)"
+  n_targets="$(printf '%s' "${targets}" | grep -c . || true)"
+  if [ "${n_targets}" -eq 0 ]; then
+    echo "mTLS post-condition: NOT ONE generator-backed ExternalSecret exists in this cluster, while the repo declares ${n_declared}. Either the external-secrets CRDs never installed or 04-external-secrets-config.yaml never synced — so the vault-ca/vault-token seeding above served nothing and this check verified nothing. That is a failure, not a pass." >&2
+    return 1
+  fi
+  live_keys=" $(printf '%s\n' "${targets}" | awk 'NF {print $1 "/" $4}' | tr '\n' ' ')"
+
+  # ── repo vs cluster ───────────────────────────────────────────────────
+  while IFS="$(printf '\t')" read -r ns gen file reason; do
+    [ -n "${ns}" ] || continue
+    key="${ns}/${gen}"
+    case "${live_keys}" in
+      *" ${key} "*) live=1 ;;
+      *)            live=0 ;;
+    esac
+    if [ -n "${reason}" ]; then
+      # An exemption is a reviewed claim: it must state one, and it may not sit
+      # on a generator the cluster DOES carry — that would silently absorb the
+      # next delivery regression instead of reporting it.
+      if [ "${#reason}" -lt 24 ]; then
+        badreason="${badreason}
+      ${key} (${file}): ${reason}"
+      elif [ "${live}" -eq 1 ]; then
+        stale="${stale}
+      ${key} (${file})"
+      else
+        n_exempt=$(( n_exempt + 1 ))
+        log "  not-delivered by declaration: ${key} — ${reason}"
+      fi
+      continue
+    fi
+    n_expected=$(( n_expected + 1 ))
+    [ "${live}" -eq 1 ] || undelivered="${undelivered}
+      ${key} declared in ${file}"
+  done <<< "${declared}"
+
+  if [ -n "${badreason}" ]; then
+    echo "mTLS post-condition FAILED: an \`mtls-issuance: not-delivered\` marker with no usable reason (needs >=24 characters):${badreason}" >&2
+    return 1
+  fi
+  if [ -n "${stale}" ]; then
+    echo "mTLS post-condition FAILED: these generators carry an \`mtls-issuance: not-delivered\` marker but the cluster DOES carry them, so the marker is stale and would mask the next delivery failure:${stale}" >&2
+    return 1
+  fi
+  if [ -n "${undelivered}" ]; then
+    echo "mTLS post-condition FAILED: the repo declares generators that never reached the cluster, so no ExternalSecret and no certificate exists for them:${undelivered}" >&2
+    echo "    This is invisible to any check that counts what the CLUSTER declares — the denominator shrinks with the failure. Diagnose with:" >&2
+    echo "      kubectl -n devops get applications -o wide      # a SyncError leaves resources untracked" >&2
+    echo "      grep -n resources -A40 ${spec_dir}/manifests/external-secrets/kustomization.yaml" >&2
+    echo "    A manifest that is genuinely not delivered by default must say so where it is declared:" >&2
+    echo "      # mtls-issuance: not-delivered <why, and where the design says so>" >&2
+    return 1
+  fi
+
+  log "Verifying mTLS issuance (${n_declared} generator(s) declared in ${spec_dir##*/}: ${n_expected} expected, ${n_exempt} declared not-delivered; ${n_targets} generator-backed ExternalSecret(s) live) — independent read-back"
+
+  # Wait for the target Secrets to materialize.
+  for i in $(seq 1 $(( deadline_s / 5 ))); do
+    missing=""
+    while read -r ns sec es gen; do
+      [ -n "${ns}" ] || continue
+      kubectl -n "${ns}" get secret "${sec}" >/dev/null 2>&1 || missing="${missing} ${ns}/${sec}"
+    done <<< "${targets}"
+    [ -z "${missing}" ] && break
+    sleep 5
+  done
+  if [ -n "${missing}" ]; then
+    echo "mTLS post-condition FAILED: after ${deadline_s}s these generator-backed Secrets were never issued:${missing}" >&2
+    echo "    This is the exact shape of the outage step 8b exists to prevent. Diagnose with:" >&2
+    echo "      kubectl get externalsecrets -A | grep -v SecretSynced\$" >&2
+    echo "      kubectl -n external-secrets logs deploy/external-secrets | tail -50" >&2
+    return 1
+  fi
+
+  # The anchor the truststores use — read back from the cluster, not assumed.
+  tmp="$(mktemp -d)"; ca_file="${tmp}/ca.crt"
+  kubectl -n vault get secret cluster-ca -o jsonpath='{.data.tls\.crt}' | base64 -d > "${ca_file}"
+  [ -s "${ca_file}" ] || { echo "mTLS post-condition FAILED: vault/cluster-ca carries no tls.crt to verify against" >&2; rm -rf "${tmp}"; return 1; }
+
+  while read -r ns sec es gen; do
+    [ -n "${ns}" ] || continue
+    kubectl -n "${ns}" get secret "${sec}" -o jsonpath='{.data.tls\.crt}' | base64 -d > "${tmp}/leaf.crt" 2>/dev/null || true
+    kubectl -n "${ns}" get secret "${sec}" -o jsonpath='{.data.tls\.key}' | base64 -d > "${tmp}/leaf.key" 2>/dev/null || true
+    if [ ! -s "${tmp}/leaf.crt" ]; then
+      echo "    ${ns}/${sec}: EXISTS BUT CARRIES NO tls.crt — an empty Secret is not an issued certificate" >&2
+      rc=1; continue
+    fi
+    subject="$(openssl x509 -in "${tmp}/leaf.crt" -noout -subject 2>/dev/null || true)"
+    if [ -z "${subject}" ]; then
+      echo "    ${ns}/${sec}: tls.crt is not a parseable X.509 certificate" >&2
+      rc=1; continue
+    fi
+    if ! openssl x509 -in "${tmp}/leaf.crt" -noout -checkend 0 >/dev/null 2>&1; then
+      echo "    ${ns}/${sec}: certificate is already expired" >&2
+      rc=1; continue
+    fi
+    # The key must belong to the cert: a leaf paired with someone else's key
+    # mounts fine and then fails every handshake.
+    if [ ! -s "${tmp}/leaf.key" ] || \
+       [ "$(openssl x509 -in "${tmp}/leaf.crt" -noout -pubkey 2>/dev/null)" != \
+         "$(openssl pkey -in "${tmp}/leaf.key" -pubout 2>/dev/null)" ]; then
+      echo "    ${ns}/${sec}: tls.key does not match tls.crt" >&2
+      rc=1; continue
+    fi
+    if ! openssl verify -CAfile "${ca_file}" "${tmp}/leaf.crt" >/dev/null 2>&1; then
+      issuer="$(openssl x509 -in "${tmp}/leaf.crt" -noout -issuer 2>/dev/null || true)"
+      echo "    ${ns}/${sec}: does NOT chain to vault/cluster-ca (${issuer}) — the workloads' truststore will reject it" >&2
+      rc=1; continue
+    fi
+    verified=$(( verified + 1 ))
+    [ -n "${sample}" ] || sample="${ns}/${sec}: ${subject} / $(openssl x509 -in "${tmp}/leaf.crt" -noout -issuer 2>/dev/null)"
+  done <<< "${targets}"
+  rm -rf "${tmp}"
+
+  if [ "${rc}" -ne 0 ] || [ "${verified}" -ne "${n_targets}" ]; then
+    echo "mTLS post-condition FAILED: ${verified}/${n_targets} generator-issued certificates verified." >&2
+    return 1
+  fi
+  log "  mTLS verified: ${verified}/${n_targets} certificates issued, in date, key-matched and chaining to vault/cluster-ca"
+  echo "    e.g. ${sample}"
+}
+
+verify_mtls_issuance || {
+  echo "Refusing to report a successful bring-up: no verified mTLS certificate. Every pod that mounts a *-mtls Secret will hang in Init:0/1 on 'MountVolume.SetUp failed for volume \"pki\"'." >&2
+  exit 1
+}
+
+# Reached only after verify_mtls_issuance() proved a real, chaining certificate
+# exists — so, like the SSO line above, this is a claim with evidence behind it.
 log "Done. Cluster '${CLUSTER_NAME}' is left running for the next validation step."
 echo "    kubeconfig context: kind-${CLUSTER_NAME}"
 echo "    ArgoCD admin password: kubectl -n ${ARGOCD_NS} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"

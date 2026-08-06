@@ -369,14 +369,43 @@ lint:harbor-robots-ownership:
 # the idempotence contract. Deny controls are DERIVED from the endpoints the hook
 # really calls, so a new endpoint is covered without editing the suite; vacuity
 # controls (correct password, full 15-user catalogue, first-run seed) prove a
-# green run is not green because the hook is simply broken. Offline: bash + jq,
-# no cluster, no kind, no docker, no network.
+# green run is not green because the hook is simply broken.
+# (3) THE BRING-UP PRINTED "Done." OVER A CLUSTER WITH NO mTLS CERTIFICATE AT
+# ALL. The generator-credential step seeded vault-ca/vault-token and reported
+# "ready" — the hook reporting on its own work — with nothing asserting that an
+# ExternalSecret ever produced anything. It had not: 26 sat in SecretSyncedError
+# and every pod mounting a *-mtls Secret hung in Init:0/1. The suite now runs the
+# real verify_mtls_issuance() out of the real script against a kubectl stub and
+# REAL openssl-minted certificates, requiring it to go red on each way the
+# property breaks — no ExternalSecrets at all, Secret never issued, Secret
+# present but empty, unparseable tls.crt, a leaf signed by another CA, and a key
+# that does not match its cert — with a genuine CA-signed leaf as the positive
+# control. (4) The same step used to `exit 1` when external-secrets/vault-token
+# was absent, aborting the entire bring-up on an already-initialized Vault; the
+# real block is executed against a stub cluster of that exact shape and must
+# recover from vault/vault-bootstrap instead. (5) That post-condition's
+# DENOMINATOR must come from the REPO, not the cluster. Enumerating the
+# generator-backed ExternalSecrets the LIVE cluster declares makes the failure it
+# most needs to see invisible — when the ExternalSecret itself never lands it
+# leaves the enumeration too, so the denominator shrinks with the failure and the
+# check can only fail at zero. Measured live: repo 29 generators, cluster 26,
+# reported "mTLS verified: 26/26" and printed Done. The controls make repo and
+# cluster DISAGREE, which the old single-input shape could not express at all:
+# a repo-declared generator with no ExternalSecret is red; the same absence
+# DECLARED with `# mtls-issuance: not-delivered <why>` is green; a marker with no
+# usable reason is red; and a marker on a generator the cluster DOES carry is red,
+# because a stale exemption would absorb the next delivery failure.
+# Offline: bash + jq + openssl, no cluster, no kind, no docker, no network.
 lint:kind-bootstrap-honesty:
   stage: lint
   image: python:3-slim
   tags: [hugmesh-x86]
   before_script:
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq
+    # openssl is REQUIRED, not incidental: the mTLS post-condition controls mint
+    # and verify real certificates with it, and the suite fails hard rather than
+    # skipping when it is missing — so a job image without it would be red for an
+    # environmental reason, which is a broken image and not a finding.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq openssl
   script:
     - bash tests/scripts/test-kind-bootstrap-honesty.sh
 
@@ -2374,3 +2403,71 @@ lint:guard-integrity:
         - tests/**/*
         - .gitlab-ci.yml
         - Makefile
+
+# ESO PROVIDER REFERENCE gate (tests/scripts/test-eso-provider-refs.sh). Every
+# VaultDynamicSecret generator named a `vault-ca` Secret and a `vault-token`
+# Secret that NOTHING created on the kind path, so all 26 generator-backed
+# ExternalSecrets sat in SecretSyncedError, no *-mtls Secret was ever created,
+# and every pod mounting one hung in Init:0/1 — both gateways, every BFF, every
+# DB TLS sidecar, harbor and coturn. Not one mTLS certificate had ever been
+# issued in a kind cluster.
+#
+# lint:eso-seed-contract could not see it: that gate checks the KV remoteRefs
+# against the seeder and never looks at a provider block. This one asserts the
+# other half — that every Secret/ConfigMap a provider names (caProvider AND
+# every auth *SecretRef) is created in the generator's OWN namespace, which is
+# the only place ESO looks for it, by EACH delivery path independently. The
+# per-path part is the point: the USB path DID create both Secrets, so a check
+# that merely asked "does the repo create vault-ca anywhere" would have gone
+# green on the outage.
+#
+# Coverage is per delivery path in three senses, because a first draft of this
+# gate could be fooled in all three:
+#   * REACHABILITY — a provisioner is credited only if it can actually run.
+#     Wrapping the seeding block in `if false; then … fi` is bash -n clean and
+#     left the draft green; so did the live instance of the same class, where
+#     external-secrets/vault-token is created only inside a not-initialized
+#     `else` branch. Deliberate conditionality is declared in the source with
+#     `# eso-provider-refs: conditional-ok <reason>` and the reason is checked.
+#     Modelling only KEYWORD control flow closed that INSTANCE and not the
+#     CLASS: five bash -n-clean rewrites of the same block still read as
+#     unconditional, including the two most idiomatic spellings of the
+#     regression — `[ "${SEED:-0}" = "1" ] && { … }` and `[ … ] || continue` —
+#     plus `false && { … }`, an early `return 0` in a function that IS called,
+#     and a bare `exit 0` above the block. Short-circuit gating and early-out
+#     statements are modelled too, deliberately narrowly: an operator gates only
+#     its RIGHT-hand side, and a CONDITIONAL non-zero exit/return stays out
+#     because `cmd || die …` is error handling and not a gate. Both sides are
+#     controlled — five expect_red for the rewrites, three expect_green for the
+#     error-handling shapes.
+#   * EXEMPTION INVENTORY — the annotation's automated gate is shape only
+#     (length + word count); it cannot know whether a reason is true. So the
+#     EXACT set of annotated sites is pinned, keyed by (Secret, file), and
+#     adding one fails the suite by name. Keyed by tuple alone it did not: a
+#     second exemption for an already-exempted Secret, added to bury a
+#     regression in the kind path, passed.
+#   * YAML ATTRIBUTION — a manifest counts for a path only if that path applies
+#     it (kubectl apply -f/-k, kustomization closure, ArgoCD source paths). The
+#     draft credited every *.yaml under specs/ to every path, so a file nothing
+#     applies satisfied all 58 references on the broken tree.
+#   * PARSE FAILURES — a file PyYAML cannot read is counted and reported, and is
+#     fatal when its text declares a generator. The draft returned [] and the
+#     dangling references in it simply vanished.
+# Carries a positive control, and negative controls for every defect class above
+# plus the original six. Offline: no cluster, no kubectl, no vault, no network.
+lint:eso-provider-refs:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-eso-provider-refs.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - specs/cluster/**/*
+        - specs/etc/keys-provision/**/*
+        - tests/scripts/test-eso-provider-refs.sh
+        - tests/scripts/eso_provider_refs.py
+        - .gitlab-ci.yml
