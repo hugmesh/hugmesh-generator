@@ -308,6 +308,36 @@ open(p,"w",encoding="utf-8").write(pat.sub("",s,count=1))
 PY
 '
 
+# (11a) the kopia repo-password ExternalSecret sourcing a Vault property nothing
+#       seeds — ESO never syncs, the Secret never materializes, and Velero quietly
+#       keys every kopia repo with upstream's WELL-KNOWN static default password.
+expect_catch "velero repo-password ES sources a Vault property nothing seeds" "[velero-repo-credentials]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/external-secrets/velero-externalsecrets.yaml"
+s=open(p,encoding="utf-8").read()
+old="remoteRef: { key: hugmesh/velero, property: repo_password }"
+assert s.count(old)==1, "repo_password remoteRef anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old, old.replace("repo_password","repo_passwordX"),1))
+PY
+'
+# (11b) the recurring-schedule template wired into the ACTIVE kustomization — the
+#       exact one-line "helpful cleanup" that would make a default sync start
+#       applying a Schedule the feature contract ships dark.
+expect_catch "velero Schedule template uncommented into the active kustomization" "[velero-schedule-dark]" '
+  sed -i "s|^  # - schedule-template.yaml$|  - schedule-template.yaml|" \
+      "$T/manifests/velero/kustomization.yaml"
+  grep -q "^  - schedule-template.yaml$" "$T/manifests/velero/kustomization.yaml"
+'
+# (11c) the template regressing to paused:false — gate 2 of the double-dark
+#       contract; an operator who later uncomments the resource line would get
+#       real nightly backups instead of an inert paused Schedule.
+expect_catch "velero Schedule template regressed to paused:false" "[velero-schedule-dark]" '
+  sed -i "s/^  paused: true$/  paused: false/" \
+      "$T/manifests/velero/schedule-template.yaml"
+  grep -q "^  paused: false$" "$T/manifests/velero/schedule-template.yaml"
+'
+
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
 [ "${NEG_F}" -eq 0 ] || exit 1

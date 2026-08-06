@@ -243,12 +243,26 @@ fi
 # minted value used; documented in docs/MANAGED-SERVICES.md.
 MANAGED_VELERO_ACCESS_KEY_ID="${MANAGED_VELERO_ACCESS_KEY_ID:-$(keyfile_get managed.velero.access_key_id)}"
 MANAGED_VELERO_SECRET_ACCESS_KEY="${MANAGED_VELERO_SECRET_ACCESS_KEY:-$(keyfile_get managed.velero.secret_access_key)}"
+# Kopia repository ENCRYPTION password (Velero: Secret velero-repo-credentials,
+# key repository-password — ESO velero-externalsecrets.yaml, property
+# repo_password on the SAME Vault path). Unlike the object-store IAM pair this
+# is OUR secret, so when the operator supplies none it is MINTED — otherwise
+# every kopia repo is keyed by upstream's well-known static default. Env/keys-
+# file override exists to PIN it across re-provisions: a re-run that mints a
+# fresh password is a rotation, and rotating does NOT re-encrypt existing repos
+# (Velero can no longer connect to them — docs/CLOUD-BACKUPS.md).
+MANAGED_VELERO_REPO_PASSWORD="${MANAGED_VELERO_REPO_PASSWORD:-$(keyfile_get managed.velero.repo_password)}"
 if [ -n "${MANAGED_VELERO_ACCESS_KEY_ID}" ] && [ -n "${MANAGED_VELERO_SECRET_ACCESS_KEY}" ]; then
     MANAGED_VELERO_ENABLED=1
-    echo "==> Managed velero object-store creds: ENABLED (secret/${BASE}/velero)"
+    if [ -z "${MANAGED_VELERO_REPO_PASSWORD}" ]; then
+        MANAGED_VELERO_REPO_PASSWORD="$(openssl rand -base64 24)"
+        echo "==> Managed velero object-store creds: ENABLED (secret/${BASE}/velero); repo password MINTED"
+    else
+        echo "==> Managed velero object-store creds: ENABLED (secret/${BASE}/velero); repo password PINNED (env/keys-file)"
+    fi
 else
     MANAGED_VELERO_ENABLED=0
-    MANAGED_VELERO_ACCESS_KEY_ID=""; MANAGED_VELERO_SECRET_ACCESS_KEY=""
+    MANAGED_VELERO_ACCESS_KEY_ID=""; MANAGED_VELERO_SECRET_ACCESS_KEY=""; MANAGED_VELERO_REPO_PASSWORD=""
     echo "==> Managed velero object-store creds: disabled (no MANAGED_VELERO_ACCESS_KEY_ID/SECRET) — velero stays dark"
 fi
 
@@ -561,13 +575,17 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         # AND the harbor-provision Job (project/robot-account REST calls).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor" \
             admin_password_plain="${HARBOR_ADMIN_PASSWORD}"
-        # Managed velero object-store creds (operator-supplied) — WRITTEN ONLY when
-        # enabled so a blank never CLOBBERS a manually-seeded secret/<brand>/velero.
+        # Managed velero object-store creds (operator-supplied) + the kopia repo
+        # encryption password (minted/pinned above) — WRITTEN ONLY when enabled so
+        # a blank never CLOBBERS a manually-seeded secret/<brand>/velero. `kv put`
+        # replaces the whole doc, so repo_password rides the SAME write: a partial
+        # write here would silently drop whichever property it omitted.
         if [ "${MANAGED_VELERO_ENABLED}" = "1" ]; then
             vault kv put "${VAULT_KV_MOUNT}/${BASE}/velero" \
                 access_key_id="${MANAGED_VELERO_ACCESS_KEY_ID}" \
-                secret_access_key="${MANAGED_VELERO_SECRET_ACCESS_KEY}"
-            echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/velero (managed object-store creds)"
+                secret_access_key="${MANAGED_VELERO_SECRET_ACCESS_KEY}" \
+                repo_password="${MANAGED_VELERO_REPO_PASSWORD}"
+            echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/velero (managed object-store creds + kopia repo password)"
         fi
         echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,tube,route-access-db,uptrace,mail,harbor-robots,harbor,headwind}"
     else
@@ -606,6 +624,7 @@ MAIL_ENABLED="${MAIL_ENABLED}" \
 MANAGED_VELERO_ENABLED="${MANAGED_VELERO_ENABLED}" \
 MANAGED_VELERO_ACCESS_KEY_ID="${MANAGED_VELERO_ACCESS_KEY_ID}" \
 MANAGED_VELERO_SECRET_ACCESS_KEY="${MANAGED_VELERO_SECRET_ACCESS_KEY}" \
+MANAGED_VELERO_REPO_PASSWORD="${MANAGED_VELERO_REPO_PASSWORD}" \
 MAIL_HOST="${MAIL_HOST}" \
 MAIL_PORT="${MAIL_PORT}" \
 MAIL_TLS="${MAIL_TLS}" \
@@ -942,6 +961,13 @@ if os.environ.get("MANAGED_VELERO_ENABLED") == "1":
                 os.environ["MANAGED_VELERO_ACCESS_KEY_ID"],
                 os.environ["MANAGED_VELERO_SECRET_ACCESS_KEY"],
             ),
+        },
+        # Kopia repo encryption password — mirrors the velero-repo-credentials
+        # ExternalSecret shape (key name is Velero's fixed contract). Must exist
+        # BEFORE the first backup or the repo is keyed by upstream's well-known
+        # static default; rotating later does NOT re-encrypt existing repos.
+        "velero-repo-credentials": {
+            "repository-password": os.environ["MANAGED_VELERO_REPO_PASSWORD"],
         },
     }
 

@@ -1,0 +1,72 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# RECURRING SCHEDULE TEMPLATE (Velero `Schedule` CR) — SHIPS DARK, NOT APPLIED.
+#
+# This file is NOT in kustomization.yaml's active resources (the resource line is
+# commented, same dark idiom as akkoma's domainlock-sync-job.yaml). Field names
+# verified against upstream Velero 1.18 (docs/v1.18/api-types/schedule): the
+# server materializes a Backup CR from `spec.template` on every cron tick.
+#
+# ── WHY DARK (honest scope) ─────────────────────────────────────────────────────
+# The admin-bff cloud-backups catalog has NO cadence model yet: the effector
+# (VeleroResourceFactory) emits one-shot Backup/Restore CRs from a backup_set
+# row, and a Schedule-produced Backup has NO backup_set row — it will never
+# appear in the catalog, and the status sweep + admin-bff BackupStatusReconciler
+# deliberately ignore it (they key on the
+# app.kubernetes.io/managed-by=hugmesh-admin-bff label, which this template does
+# NOT set). Making recurring backups first-class catalog rows (a cadence field on
+# backup_set + the effector emitting Schedule CRs) is a CROSS-REPO admin-bff
+# follow-up. Until then this template is the operator-level half: a real,
+# correct-schema Schedule a superadmin can opt into, catalogued NOWHERE.
+#
+# ── TWO GATES, like everything else in this feature ─────────────────────────────
+#   1. The kustomization resource line is COMMENTED — a default sync never
+#      applies this file.
+#   2. `spec.paused: true` — even once applied, no backup fires until a
+#      superadmin unpauses (kubectl -n velero patch schedule ... below).
+# Enabling: docs/CLOUD-BACKUPS.md "Recurring schedules".
+#
+# ── ENCRYPTION PREREQUISITE ─────────────────────────────────────────────────────
+# Do NOT enable before the velero-repo-credentials Secret has materialized
+# (kopia keys every repo from it at FIRST use; see
+# manifests/external-secrets/velero-externalsecrets.yaml). A schedule that fires
+# first would create repos keyed by upstream's well-known default password.
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  # The nightly TOTAL-cloud schedule (the `default` BSL, prefix `total`).
+  name: total-cloud-nightly
+  namespace: velero
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    # hugmesh-generator, NOT hugmesh-admin-bff: the sweep CronJob + the admin-bff
+    # BackupStatusReconciler select managed-by=hugmesh-admin-bff, so backups this
+    # Schedule produces are (correctly) invisible to the catalog machinery.
+    app.kubernetes.io/managed-by: hugmesh-generator
+    snapdragon.systems/backup-scope: total
+spec:
+  # Gate 2: applied paused. Unpausing is the explicit superadmin opt-in.
+  paused: true
+  # On unpause, wait for the next cron tick — no immediate catch-up backup.
+  skipImmediately: true
+  # 03:00 cluster time, daily. Cron, server-local timezone.
+  schedule: "0 3 * * *"
+  # Backups OUTLIVE the Schedule: deleting/regenerating the Schedule must never
+  # cascade-delete restorable backups.
+  useOwnerReferencesInBackup: false
+  template:
+    # TOTAL scope: every namespace except Velero's own (backing up the backup
+    # engine's namespace into itself churns without protecting anything).
+    includedNamespaces:
+      - "*"
+    excludedNamespaces:
+      - velero
+    # The `default` BSL — the TOTAL/superadmin destination. A per-brand recurring
+    # schedule would instead name that brand's BSL (backupstoragelocation.yaml's
+    # per-brand template) here.
+    storageLocation: default
+    # Capture PV data via the node-agent kopia filesystem path — the recurring
+    # equivalent of what the effector sets per-Backup for pv_snapshot services.
+    defaultVolumesToFsBackup: true
+    # 30 days of nightlies, then Velero garbage-collects.
+    ttl: 720h0m0s

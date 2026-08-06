@@ -902,6 +902,103 @@ def check_embedded_json(root):
            "no duplicate object key in %d embedded *.json values" % scanned)
 
 
+# ── 12) Velero backup encryption + recurring-schedule darkness ───────────────
+# Two pins for the cloud-backups leg (docs/CLOUD-BACKUPS.md):
+#   a) [velero-repo-credentials] — Velero keys every kopia backup repository from
+#      the Secret velero-repo-credentials (key repository-password) in its
+#      install namespace, and when that Secret is absent at first-repo time it
+#      CREATES it itself with upstream's WELL-KNOWN static default
+#      ("static-passw0rd", pkg/repository/keys). The ExternalSecret templating it
+#      from Vault (secret/hugmesh/velero property repo_password) is what makes
+#      "encrypted backups" honest: drop it — or typo the key/property — and every
+#      repo is keyed by a password published in Velero's source while the whole
+#      tree still applies green.
+#   b) [velero-schedule-dark] — the recurring-schedule template must STAY dark:
+#      never an active resource of manifests/velero/kustomization.yaml AND
+#      paused: true inside the file (the feature's double-gate contract). An
+#      active or unpaused Schedule silently starts real backups on a cluster
+#      whose superadmin only opted into installing the engine.
+def check_velero_backups(root):
+    # a) the repo-password ExternalSecret
+    found = None
+    for path in yaml_files(root):
+        for d in docs_of(path):
+            if d.get("kind") != "ExternalSecret":
+                continue
+            meta = d.get("metadata") or {}
+            spec = d.get("spec") or {}
+            tgt = ((spec.get("target") or {}).get("name")) or meta.get("name")
+            if tgt == "velero-repo-credentials" and meta.get("namespace") == "velero":
+                found = (os.path.relpath(path, root), spec)
+    if found is None:
+        fail("[velero-repo-credentials]",
+             "no ExternalSecret targets Secret 'velero-repo-credentials' in namespace 'velero' — "
+             "Velero then creates that Secret itself with upstream's WELL-KNOWN static default "
+             "password ('static-passw0rd'), so every kopia backup repository is 'encrypted' with "
+             "a password published in Velero's source (docs/CLOUD-BACKUPS.md)")
+    else:
+        rel, spec = found
+        entries = [e for e in (spec.get("data") or [])
+                   if isinstance(e, dict) and e.get("secretKey") == "repository-password"]
+        if not entries:
+            fail("[velero-repo-credentials]",
+                 "%s: the velero-repo-credentials ExternalSecret materializes no "
+                 "'repository-password' key — Velero reads EXACTLY that key name; anything else "
+                 "leaves the repo password on upstream's static default" % rel)
+        else:
+            rr = entries[0].get("remoteRef") or {}
+            if rr.get("key") != "hugmesh/velero" or rr.get("property") != "repo_password":
+                fail("[velero-repo-credentials]",
+                     "%s: repository-password is sourced from Vault %r property %r instead of "
+                     "hugmesh/velero property repo_password — the property gen-cluster-secrets.sh "
+                     "seeds. ESO can never sync it, the Secret never materializes, and kopia "
+                     "falls back to the well-known default" % (rel, rr.get("key"), rr.get("property")))
+            else:
+                ok("[velero-repo-credentials]",
+                   "%s templates velero/velero-repo-credentials key repository-password from "
+                   "Vault hugmesh/velero property repo_password" % rel)
+
+    # b) recurring-schedule darkness
+    tmpl = os.path.join(root, "manifests", "velero", "schedule-template.yaml")
+    kz = os.path.join(root, "manifests", "velero", "kustomization.yaml")
+    bad = False
+    sched_docs = docs_of(tmpl) if os.path.exists(tmpl) else []
+    if not any(d.get("kind") == "Schedule" for d in sched_docs):
+        fail("[velero-schedule-dark]",
+             "manifests/velero/schedule-template.yaml is missing or carries no velero.io Schedule "
+             "document — the darkness pin has nothing to hold (renamed/emptied file? the "
+             "kustomization comment + docs/CLOUD-BACKUPS.md 'Recurring schedules' still point here)")
+        bad = True
+    else:
+        for d in sched_docs:
+            if d.get("kind") == "Schedule" and (d.get("spec") or {}).get("paused") is not True:
+                fail("[velero-schedule-dark]",
+                     "manifests/velero/schedule-template.yaml Schedule %r is not `paused: true` — "
+                     "gate 2 of the double-dark contract: an operator who uncomments the "
+                     "kustomization resource line must still get ZERO backups until an explicit "
+                     "unpause (docs/CLOUD-BACKUPS.md 'Recurring schedules')"
+                     % ((d.get("metadata") or {}).get("name"),))
+                bad = True
+    try:
+        resources = (yaml.safe_load(open(kz, encoding="utf-8")) or {}).get("resources") or []
+    except Exception as exc:
+        fail("[velero-schedule-dark]", "could not read %s: %s" % (kz, exc))
+        resources, bad = [], True
+    for r in resources:
+        for d in docs_of(os.path.join(root, "manifests", "velero", r)):
+            if d.get("kind") == "Schedule":
+                bad = True
+                fail("[velero-schedule-dark]",
+                     "manifests/velero/kustomization.yaml ACTIVELY applies %s carrying Velero "
+                     "Schedule %r — the recurring-schedule template ships DARK (commented "
+                     "resource line); wiring it in is a deliberate live-cluster superadmin "
+                     "opt-in, never a default (docs/CLOUD-BACKUPS.md 'Recurring schedules')"
+                     % (r, (d.get("metadata") or {}).get("name")))
+    if not bad:
+        ok("[velero-schedule-dark]",
+           "schedule-template.yaml stays dark: paused: true and not an active kustomization resource")
+
+
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
@@ -921,6 +1018,7 @@ def main():
     check_db_isolation(root)
     check_internal_surfaces(root)
     check_embedded_json(root)
+    check_velero_backups(root)
     for check, msg in notes:
         print("  PASS %-24s %s" % (check, msg))
     for check, msg in failures:

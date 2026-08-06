@@ -13,7 +13,8 @@
 #   * the refusal table (unknown id, tier-3 id with blocker text, malformed/empty
 #     endpoint);
 #   * the gen-cluster-secrets managed velero block (env -> offline json mirror;
-#     blank = omitted; chmod 600).
+#     blank = omitted; chmod 600; kopia repo password pinned via env or minted,
+#     never upstream's static default).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -238,25 +239,49 @@ refuse "postgres-user-bff=:5432" "no host"                   "bare :port endpoin
 # ── 5. gen-cluster-secrets managed velero block (offline json mirror) ──────────
 if command -v python3 >/dev/null && command -v openssl >/dev/null && [ -f "${GEN}" ]; then
   # Enabled: creds -> offline secrets.json velero-cloud-credentials (INI), chmod 600.
+  # The kopia repo password is PINNED via env here so its mirror is byte-assertable
+  # (velero-repo-credentials, key repository-password — Velero's fixed contract).
   ( cd "${REPO}" && MANAGED_VELERO_ACCESS_KEY_ID=AKIATESTKEY \
       MANAGED_VELERO_SECRET_ACCESS_KEY=s3cr3t/test+key \
+      MANAGED_VELERO_REPO_PASSWORD=pinned-repo-pass \
       KEYS_FILE=/nonexistent VAULT_ADDR="" \
       bash scripts/gen-cluster-secrets.sh --out "${WORK}/keys-on" ) >/dev/null 2>&1
   SJ="${WORK}/keys-on/secrets.json"
   if [ -f "${SJ}" ]; then
     MODE="$(stat -c '%a' "${SJ}" 2>/dev/null || stat -f '%Lp' "${SJ}" 2>/dev/null)"
     [ "${MODE}" = "600" ] && ok "gen-secrets: offline secrets.json is chmod 600" || bad "gen-secrets: secrets.json mode ${MODE} != 600"
-    ENABLED_KEY="${SJ}" python3 - <<'PY' && ok "gen-secrets: ENABLED -> velero-cloud-credentials INI mirrored" || bad "gen-secrets: velero block missing when enabled"
+    ENABLED_KEY="${SJ}" python3 - <<'PY' && ok "gen-secrets: ENABLED -> velero-cloud-credentials INI + PINNED repo password mirrored" || bad "gen-secrets: velero block missing/wrong when enabled"
 import json, os, sys
 d = json.load(open(os.environ["ENABLED_KEY"]))
 v = d.get("velero", {}).get("velero-cloud-credentials", {})
 cloud = v.get("cloud", "")
 assert "AKIATESTKEY" in cloud and "s3cr3t/test+key" in cloud, f"cloud INI wrong: {cloud!r}"
 assert "aws_access_key_id" in cloud, "not an INI"
+rp = d.get("velero", {}).get("velero-repo-credentials", {})
+assert rp.get("repository-password") == "pinned-repo-pass", f"repo password not pinned: {rp!r}"
 sys.exit(0)
 PY
   else
     bad "gen-secrets: no secrets.json produced (enabled run)"
+  fi
+  # Enabled WITHOUT a pin: the repo password must be MINTED — present, non-empty,
+  # and never upstream's well-known static default.
+  ( cd "${REPO}" && MANAGED_VELERO_ACCESS_KEY_ID=AKIATESTKEY \
+      MANAGED_VELERO_SECRET_ACCESS_KEY=s3cr3t/test+key \
+      KEYS_FILE=/nonexistent VAULT_ADDR="" \
+      bash scripts/gen-cluster-secrets.sh --out "${WORK}/keys-mint" ) >/dev/null 2>&1
+  SJ3="${WORK}/keys-mint/secrets.json"
+  if [ -f "${SJ3}" ]; then
+    MINT_KEY="${SJ3}" python3 - <<'PY' && ok "gen-secrets: ENABLED w/o pin -> repo password MINTED (non-empty, not the static default)" || bad "gen-secrets: minted repo password missing/default"
+import json, os, sys
+d = json.load(open(os.environ["MINT_KEY"]))
+pw = d.get("velero", {}).get("velero-repo-credentials", {}).get("repository-password", "")
+assert pw and len(pw) >= 16, f"repo password not minted: {pw!r}"
+assert pw != "static-passw0rd", "minted password is upstream's well-known default"
+sys.exit(0)
+PY
+  else
+    bad "gen-secrets: no secrets.json produced (mint run)"
   fi
   # Disabled: no velero env => NO velero key in the offline bundle.
   ( cd "${REPO}" && KEYS_FILE=/nonexistent VAULT_ADDR="" \

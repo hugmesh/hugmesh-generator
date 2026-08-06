@@ -117,7 +117,11 @@ spec:
 #     bucket: <brand-bucket>               # may equal hugmesh-backups with a per-brand prefix
 #     prefix: <brand-domain>
 #   credential:
-#     name: velero-cloud-credentials       # or a per-brand ESO Secret (still ESO/Vault, never inline)
+#     # Shared credential, OR a dedicated per-brand one: provision the commented
+#     # per-brand ExternalSecret template in manifests/external-secrets/
+#     # velero-externalsecrets.yaml (still ESO/Vault, never inline) and set its
+#     # target name here (velero-cloud-credentials-<BRAND-DESTINATION-REF>).
+#     name: velero-cloud-credentials
 #     key: cloud
 #   config:
 #     region: hugmesh

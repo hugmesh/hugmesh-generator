@@ -15,8 +15,8 @@
 #      need its own DB credential, and break the BFF's "BFF owns its tables" model
 #      (the SAME reason the workload-console + appstore effectors don't write
 #      foreign state directly).
-#   2. ID MAPPING IS LOSSY ON THE CR. The Velero CR carries
-#      snapdragon.systems/backup-set-id = PerServiceIdentity.slug(set.id()) — a
+#   2. ID MAPPING IS LOSSY ON THE CR. The Velero CR carries the label
+#      hugmesh.systems/backup-set-id = PerServiceIdentity.slug(set.id()) — a
 #      LOSSY transform (lowercased, '.'→'-', non-alnum→'-', collapsed). markStatus
 #      keys on the RAW id. Only the admin-bff (which holds both the raw id and the
 #      slug) can map a terminal CR back to the right row safely.
@@ -26,15 +26,19 @@
 #     this platform created (label app.kubernetes.io/managed-by=hugmesh-admin-bff)
 #     that have reached a TERMINAL .status.phase (Completed / Failed / PartiallyFailed
 #     / FailedValidation), and MIRROR that terminal state onto the CR as the
-#     annotation snapdragon.systems/catalog-status = complete|failed. This makes the
+#     annotation hugmesh.systems/catalog-status = complete|failed (the EXACT key
+#     Fabric8VeleroStatusReader.CATALOG_STATUS_ANNOTATION reads). This makes the
 #     terminal state cheaply queryable and is the side the cluster can own.
-#   * ADMIN-BFF (a documented FOLLOW-ON leg — NOT built here) — the CATALOG-WRITE
-#     half: a scheduled reactive reconciler (or a /bff/superadmin/backups/sweep
-#     endpoint this CronJob could POST to) that lists CRs carrying the mirror
-#     annotation, maps snapdragon.systems/backup-set-key + the version label back to
-#     the raw backup_set id, and calls markStatus(id, complete|failed). That is the
-#     ONLY correct writer of the catalog row. See docs/CLOUD-BACKUPS.md
-#     "Status reconciliation hand-off".
+#   * ADMIN-BFF (SHIPPED on admin-bff main — cloudbackup BackupStatusReconciler
+#     + Fabric8VeleroStatusReader + BackupSweepController) — the CATALOG-WRITE
+#     half: a scheduled, leader-gated reconciler that lists the managed-by CRs,
+#     reads .status.phase DIRECTLY (this CronJob's mirror annotation is only its
+#     FALLBACK phase source — the reconciler works with or without this sweep
+#     deployed), maps each terminal CR back to the RAW backup_set id (the
+#     hugmesh.systems/backup-set-id annotation, else the same-named slug label)
+#     and calls markStatus(id, complete|failed); plus a SUPERADMIN-only on-demand
+#     trigger at POST /bff/superadmin/cloud-backups/sweep. That is the ONLY
+#     writer of the catalog row. See docs/CLOUD-BACKUPS.md "Status sweep".
 #
 # This split is the architecture the codebase already supports (BFF-owns-its-state)
 # and is faithful to the effector's "future sweep" note WITHOUT shipping a
@@ -105,8 +109,9 @@ spec:
                   # CR-READ HALF of the split sweep. For each Velero Backup/Restore
                   # CR this platform created (managed-by=hugmesh-admin-bff) that
                   # has reached a terminal phase, mirror the catalog-status onto the
-                  # CR as an annotation the admin-bff reconciler reads. We NEVER
-                  # write the admin-bff DB here (see file header).
+                  # CR as the annotation the admin-bff reconciler reads as its
+                  # FALLBACK phase source. We NEVER write the admin-bff DB here
+                  # (see file header).
                   set -eu
                   SEL='app.kubernetes.io/managed-by=hugmesh-admin-bff'
                   for KIND in backups.velero.io restores.velero.io; do
@@ -124,17 +129,19 @@ spec:
                             # InProgress / New / empty: still running — skip.
                             continue ;;
                         esac
-                        # Idempotent mirror: stamp the terminal catalog-status the
-                        # admin-bff reconciler keys on. A re-run re-patches the same
-                        # value (no-op). We do NOT touch .status (Velero owns it).
+                        # Idempotent mirror: stamp the terminal catalog-status under
+                        # the key admin-bff's Fabric8VeleroStatusReader reads
+                        # (hugmesh.systems/…, NOT snapdragon.systems/…). A re-run
+                        # re-patches the same value (no-op). We do NOT touch
+                        # .status (Velero owns it).
                         kubectl -n velero annotate "$KIND" "$NAME" \
-                          "snapdragon.systems/catalog-status=$CATALOG" \
-                          "snapdragon.systems/catalog-status-phase=$PHASE" \
+                          "hugmesh.systems/catalog-status=$CATALOG" \
+                          "hugmesh.systems/catalog-status-phase=$PHASE" \
                           --overwrite >/dev/null
                         echo "[sweep] $KIND/$NAME phase=$PHASE -> catalog-status=$CATALOG (mirrored; admin-bff reconciler writes the row)"
                       done
                   done
-                  echo "[sweep] CR-read sweep complete. Catalog-write is the admin-bff reconciler hand-off (docs/CLOUD-BACKUPS.md)."
+                  echo "[sweep] CR-read sweep complete. Catalog-write is the admin-bff BackupStatusReconciler (docs/CLOUD-BACKUPS.md)."
               resources:
                 requests: { cpu: 25m, memory: 64Mi }
                 limits:   { cpu: 250m, memory: 128Mi }

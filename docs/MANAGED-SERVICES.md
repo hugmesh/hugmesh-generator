@@ -121,6 +121,12 @@ managed-cloud credential, and creds are NEVER on argv or committed.
   materialized `velero-cloud-credentials` Secret (ns `velero`, key `cloud` = AWS
   INI) into the offline `secrets.json` (chmod 600). **Blank = disabled**: nothing
   is written (a blank never clobbers a manually-seeded path; velero stays dark).
+  The same write also carries the kopia repo encryption password
+  (`repo_password`, ESO Secret `velero-repo-credentials` key
+  `repository-password`): minted when enabled, pinnable via
+  `MANAGED_VELERO_REPO_PASSWORD` / keys-file `managed.velero.repo_password` —
+  pin it before any re-provision, because rotating it strands existing repos
+  (docs/CLOUD-BACKUPS.md "Kopia repository encryption").
 * **SMTP (SES/ACS)**: reuse the existing `MAIL_*` creds path — set `MAIL_HOST` to
   the SES/ACS submission endpoint, port 587, `MAIL_TLS=starttls`, and the SES SMTP
   user/password. Mail stays disabled until a real user+password resolve.

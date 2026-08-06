@@ -10,11 +10,22 @@ kind: Kustomization
 #     gets Backup/Restore CRs) + backups-sweep (CronJob reads/annotates). Not
 #     cluster-admin, not the Velero server SA.
 #   - sweep-cronjob.yaml — the CR-read half of the status sweep (suspend:true until
-#     backups are enabled); the catalog-write half is an admin-bff reconciler
-#     hand-off (see the sweep file header + docs/CLOUD-BACKUPS.md).
-# Credentials (velero-cloud-credentials) are materialized by ESO from Vault in
+#     backups are enabled); the catalog-write half SHIPS in admin-bff
+#     (BackupStatusReconciler — see the sweep file header + docs/CLOUD-BACKUPS.md).
+#   - schedule-template.yaml — DARK (resource line commented below): a paused
+#     nightly total-cloud Velero Schedule template, opt-in only.
+# Credentials (velero-cloud-credentials) AND the kopia repo encryption password
+# (velero-repo-credentials) are materialized by ESO from Vault in
 # manifests/external-secrets/velero-externalsecrets.yaml — never inline here.
 resources:
   - backupstoragelocation.yaml
   - rbac.yaml
   - sweep-cronjob.yaml
+  # RECURRING SCHEDULES — SHIPS DARK, NOT wired by default (same idiom as
+  # akkoma's domainlock-sync-job.yaml). schedule-template.yaml is a paused
+  # nightly total-cloud Velero Schedule (verified 1.18 schema). Backups it
+  # produces have NO backup_set row — the catalog/sweep machinery deliberately
+  # ignores them until the admin-bff cadence follow-up lands. Uncomment ONLY
+  # after the velero-repo-credentials Secret has materialized, then unpause per
+  # docs/CLOUD-BACKUPS.md "Recurring schedules".
+  # - schedule-template.yaml

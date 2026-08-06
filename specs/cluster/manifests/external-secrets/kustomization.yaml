@@ -52,10 +52,13 @@ resources:
   # and tuwunel (mints them) so there is one source of truth and no drift.
   - coturn-externalsecrets.yaml    # coturn-shared-secret
   # Velero object-store credentials (ns velero, key `cloud`) — the Velero server +
-  # BSL credential, templated from Vault secret/<brand>/velero. ESO/Vault only,
-  # never inline. Materializes only once the velero namespace exists + the Vault
-  # path is populated (ships dark with the rest of the cloud-backups feature).
-  - velero-externalsecrets.yaml    # velero-cloud-credentials
+  # BSL credential — PLUS the kopia repository ENCRYPTION password
+  # (velero-repo-credentials, key `repository-password`; absent = upstream's
+  # well-known static default keys every repo). Both templated from Vault
+  # secret/<brand>/velero. ESO/Vault only, never inline. Materializes only once
+  # the velero namespace exists + the Vault path is populated (ships dark with
+  # the rest of the cloud-backups feature).
+  - velero-externalsecrets.yaml    # velero-cloud-credentials, velero-repo-credentials
   # image-builder PUSH credential (ns hugmesh-image-builds, dockerconfigjson) —
   # now sourced from the Harbor PUSH-scoped robot account (distinct from the
   # harbor-registry pull-scoped robot secret above) that
