@@ -582,14 +582,36 @@ spec:
       # interaction NetworkPolicy.
       deliveryManifestPath: manifests/egress-vpn
       deliveryApp: apps/13e-egress-vpn.yaml
-      # The cross-lane contract the admin-bff/ESO half must satisfy. Selection is
-      # by LABEL, never by name, so the control plane keeps minting per-(domain,
-      # config) names (`egress-vpn-<domain>-<name>`) with no generator change —
-      # but the Secret NAME must equal the export's `secretRef`, because that is
-      # the filename the reconcile agent opens.
+      # ⚠ THE THREE FIELDS BELOW ARE **COPIES**, NOT DECLARATIONS. This registry
+      # is the source of truth for WHICH optional services exist and what each
+      # one owns; it is NOT the source of truth for the egress-VPN config-Secret
+      # contract. That lives in ONE file — specs/cluster/egress-vpn-secret-
+      # contract.env — because the contract spans two repositories that never
+      # build together (this repo reads the Secrets, hugmesh-admin-bff-api writes
+      # them), and the two halves already merged green once while disagreeing.
+      # tests/egress-vpn/test-secret-contract.sh asserts these three lines against
+      # that file (and against the admin-bff writer source), so editing one here
+      # without editing the contract goes red immediately.
+      #
+      # `secretKey` said `config` from the day this entry was written and was
+      # never asserted by anything — the same wrong value the projector manifest
+      # shipped, in a fourth copy no test read. admin-bff writes
+      # `.addToStringData(secretRef, configBody)`: the data key IS the Secret's
+      # own metadata.name. `@name` is the contract's sentinel for that derivation
+      # (a Secret data key may only contain alphanumerics, '-', '_' or '.' —
+      # core/v1 Secret API reference — so `@name` can never collide with a real
+      # key). It MUST stay QUOTED here: `@` is a YAML reserved indicator and
+      # cannot start a plain scalar, so bare `@name` is a parse error, not a
+      # string.
+      #
+      # Selection is by LABEL, never by name, so the control plane keeps minting
+      # per-(domain, config) names (`egress-vpn-<domain>-<name>`) with no
+      # generator change — but the Secret NAME must equal the export's
+      # `secretRef`, because that is the filename the reconcile agent opens.
+      secretContract: specs/cluster/egress-vpn-secret-contract.env
       secretNamespace: hugmesh-egress-vpn
       secretLabel: snapdragon.systems/optional-service=egress-vpn
-      secretKey: config
+      secretKey: "@name"
       nodeDeliveryLabel: snapdragon.systems/egress-vpn
 
     # ── tor — node-level v3 Tor onion (hidden) service (DEFAULT-OFF) ──────────

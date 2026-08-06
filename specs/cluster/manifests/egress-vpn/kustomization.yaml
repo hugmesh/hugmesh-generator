@@ -23,10 +23,15 @@ kind: Kustomization
 #
 # TO ENABLE (deliberate, operator-driven):
 #   1. Confirm the control-plane half is live: a Secret in `hugmesh-egress-vpn`
-#      labelled snapdragon.systems/optional-service=egress-vpn, with the config
-#      bytes under the `config` key, NAMED exactly the `secretRef` the signed
-#      per-node export carries (see secret-projector-daemonset.yaml, THE CONTRACT).
-#   2. Un-comment the three resource lines below.
+#      labelled snapdragon.systems/optional-service=egress-vpn, NAMED exactly the
+#      `secretRef` the signed per-node export carries, with the config bytes
+#      under a data key of THAT SAME NAME. All three values come from
+#      specs/cluster/egress-vpn-secret-contract.env — do not read them off this
+#      comment, read them there.
+#      admin-bff writes into this namespace because
+#      manifests/admin-bff-api/deployment.yaml sets EGRESS_VPN_SECRET_NAMESPACE;
+#      it stays dark until EGRESS_VPN_SECRET_DELIVERY_ENABLED is flipped true.
+#   2. Un-comment the four resource lines below.
 #   3. Manually sync apps/13e-egress-vpn.yaml (it has NO `automated:` block).
 #   4. Label ONLY the nodes that hold an assignment:
 #        kubectl label node <node> snapdragon.systems/egress-vpn=true
@@ -40,5 +45,6 @@ kind: Kustomization
 # overlay is a delivery rollback, not an egress outage.
 resources: []
   # - namespace.yaml                    # hugmesh-egress-vpn — the Secret namespace that IS the RBAC boundary
-  # - secret-projector-rbac.yaml        # SA + namespaced Role (secrets get/list) + RoleBinding — no ClusterRole
+  # - secret-projector-rbac.yaml        # READER: SA + namespaced Role (secrets get/list) + RoleBinding — no ClusterRole
+  # - writer-rbac.yaml                  # WRITER: admin-bff's backups-effector SA — secrets get/create/patch/update HERE only
   # - secret-projector-daemonset.yaml   # the projector itself — nodeSelector snapdragon.systems/egress-vpn=true

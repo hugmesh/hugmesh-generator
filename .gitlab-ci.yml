@@ -1222,13 +1222,37 @@ domain-registry-reconcile-verify:
 # is not a guard.
 #
 # Rootless + cluster-free by construction: every test stubs its tools (recording
-# fake `ip` / `nft` / `kubectl`) and evaluates the REAL script bodies, so this needs
-# only bash (+ jq/openssl/base64 for the verify test, python3+PyYAML for one
-# registry assertion, which SKIPs when absent). It NEVER runs real nft/ip against
-# the runner.
+# fake `ip` / `nft` / `kubectl`) and evaluates the REAL script bodies. It NEVER
+# runs real nft/ip against the runner. Tool set PINNED via the same alpine:3 +
+# apk recipe as egress-vpn-verify below (python3+py3-yaml so the projector suite
+# cannot silently drop to its SKIP branch; git for the sibling clone).
+#
+# THE RULES BELOW WERE BROKEN AT MERGE and are corrected here. As shipped the job
+# was triggered by neither `tests/egress-vpn/**` (the guards themselves — editing
+# a guard could not run it), nor `.gitlab-ci.yml`, nor the default branch, so it
+# never ran on main despite its own commit message. It now mirrors
+# domain-registry-reconcile-verify / node-storage-verify exactly: MR + a guarded
+# path, OR the default branch.
+#
+# THE SIBLING CLONE IS PART OF THE GATE, NOT A CONVENIENCE — same reasoning as
+# lint:reserved-prefixes. tests/egress-vpn/test-secret-contract.sh compares this
+# repo's projector/deploy manifests against the admin-bff WRITER source, because
+# the two halves merged green while disagreeing about the Secret namespace AND
+# the data key. Without the checkout that test exits 3 (INCOMPLETE) and fails the
+# job rather than printing a green half-comparison. A clone failure fails the
+# job, on purpose.
 egress-vpn-node-agents:
   stage: verify
+  image: alpine:3
   tags: [hugmesh-x86]
+  variables:
+    # Where test-secret-contract.sh looks for the writer half.
+    EGRESS_VPN_ADMIN_BFF_ROOT: "${CI_PROJECT_DIR}/.egress-vpn-siblings/hugmesh-admin-bff-api"
+  before_script:
+    - apk add --no-cache bash git jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "$(dirname "${EGRESS_VPN_ADMIN_BFF_ROOT}")"
+    - git clone --depth 1 "${ORG_BASE}/hugmesh-admin-bff-api.git" "${EGRESS_VPN_ADMIN_BFF_ROOT}"
   script:
     - |
       rc=0
@@ -1244,7 +1268,20 @@ egress-vpn-node-agents:
         - specs/usr/lib/hugmesh/vpn-verify.sh
         - specs/etc/keys-provision/provision.sh
         - specs/cluster/manifests/egress-vpn/**/*
+        - specs/cluster/manifests/admin-bff-api/deployment.yaml
+        - specs/cluster/egress-vpn-secret-contract.env
         - specs/cluster/apps/13e-egress-vpn.yaml
+        # The registry carries a COPY of the contract (secretNamespace/
+        # secretLabel/secretKey under the egress-vpn slug) and shipped `config`
+        # for the data key; test-secret-contract.sh asserts it, so an MR that
+        # touches only this file must run this job. It was listed on
+        # egress-vpn-verify (the node-gate suite) but not here.
+        - specs/cluster/optional-services.yaml
+        # The doc carries the contract TABLE, which the same gate asserts.
+        - docs/EGRESS-VPN.md
+        - tests/egress-vpn/**/*
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 # Node-storage consumer suite (node-storage PR5-PR8), until now CI-orphaned: the
 # signed-export verify matrix for storage-verify.sh (genuine ACCEPT; unsigned /
 # tampered / foreign-key / rollback REJECT — same fail-closed gate class as the

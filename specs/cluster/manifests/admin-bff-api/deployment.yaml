@@ -318,6 +318,29 @@ spec:
             - { name: BACKUPS_VELERO_NAMESPACE,            value: "velero" }
             - { name: BACKUPS_BRAND_NAMESPACE_SUFFIXES,    value: "be,fe" }
             - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "hugmesh-backend" }
+            # ── egress-VPN config-Secret delivery — SHIPS DARK ─────────────────
+            # EGRESS_VPN_SECRET_DELIVERY_ENABLED gates admin-bff's REAL
+            # Fabric8VpnConfigSecretWriter (app.egress-vpn.secret-delivery.enabled).
+            # DEFAULT-OFF and set explicitly here, the BACKUPS_EFFECTOR_ENABLED
+            # pattern above: while false the NoopVpnConfigSecretWriter stays the
+            # bean, an imported config's bytes are parse-validated then DROPPED,
+            # and no cluster is dialed. Flip to "true" only AFTER the
+            # manifests/egress-vpn overlay is enabled (its writer-rbac.yaml is
+            # what grants this pod's backups-effector SA the write) and the
+            # assigned nodes are labelled.
+            #
+            # EGRESS_VPN_SECRET_NAMESPACE is LOAD-BEARING, not decoration. The
+            # app's own default is `hugmesh-backend`; the projector DaemonSet that
+            # consumes these Secrets reads `hugmesh-egress-vpn`, because a
+            # node-privileged host-writing reader must not be able to read the app
+            # tier's DB/OIDC Secrets. Drop this env and the two halves silently
+            # stop meeting — which is exactly how they shipped. The value is the
+            # single source of truth in
+            # specs/cluster/egress-vpn-secret-contract.env and is asserted against
+            # it (and against the admin-bff source) by
+            # tests/egress-vpn/test-secret-contract.sh.
+            - { name: EGRESS_VPN_SECRET_DELIVERY_ENABLED, value: "false" }
+            - { name: EGRESS_VPN_SECRET_NAMESPACE,        value: "hugmesh-egress-vpn" }
             # ── Node-storage reconciler (the push-with-ack leg) — SHIPS DARK ───
             # NODESTORAGE_RECONCILER_ENABLED gates admin-bff's node-storage push
             # reconciler: the FAST propagation path that pushes the signed

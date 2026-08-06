@@ -98,6 +98,86 @@ else
   bad "CI invokes suites that do not exist:"; printf '         %s\n' ${missing}
 fi
 
+# ── A JOB THAT NEVER RUNS IS THE SAME AS NO JOB ───────────────────────────────
+# The second way this file silently stops guarding, and it has already shipped:
+# `egress-vpn-node-agents` was added with `rules:` that named neither the tests
+# it runs nor the default branch, so editing one of its guards could not run it
+# and main never ran it at all — while its commit message said "a guard nothing
+# runs is not a guard".
+#
+# THIS CHECK MUST LIVE HERE, not in the suite it protects: a job cannot police
+# its own trigger, because a rule that stops the job from running also stops the
+# check. lint:gitlab-ci-wellformed runs on every change to this file AND on the
+# default branch, which is what breaks that circle.
+#
+# INVARIANT — for every job that runs `bash tests/<dir>/<suite>.sh`:
+#   * a job with no `changes:` rule runs unconditionally: nothing to check;
+#   * otherwise its `changes:` must COVER every suite it runs (the
+#     `tests/<dir>/**/*` glob, or each suite path listed literally) — so editing
+#     a guard runs that guard;
+#   * and it must carry a `$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` rule — so a
+#     merged change is re-validated on main.
+check_triggers() { # <path> -> prints findings, returns 1 if any
+  CI_PATH="$1" python3 - <<'PY'
+import os, re, sys, yaml
+
+doc = yaml.safe_load(open(os.environ["CI_PATH"]))
+RESERVED = {"stages", "variables", "default", "include", "workflow",
+            "image", "services", "before_script", "after_script", "cache"}
+
+def covered(path, patterns):
+    for p in patterns:
+        if p == path:
+            return True
+        if p.endswith("/**/*") or p.endswith("/**"):
+            prefix = p[:p.index("/**")] + "/"
+            if path.startswith(prefix):
+                return True
+    return False
+
+problems = []
+for name, body in (doc or {}).items():
+    if name in RESERVED or str(name).startswith(".") or not isinstance(body, dict):
+        continue
+    script = body.get("script") or []
+    if isinstance(script, str):
+        script = [script]
+    suites = sorted({m.group(1) for s in script
+                     for m in re.finditer(r'bash\s+(tests/[A-Za-z0-9._/-]+\.sh)', str(s))})
+    # A glob loop (`for t in tests/<dir>/*.sh`) runs the whole directory.
+    globs = sorted({m.group(1) for s in script
+                    for m in re.finditer(r'(tests/[A-Za-z0-9._-]+)/\*\.sh', str(s))})
+    if not suites and not globs:
+        continue
+    rules = body.get("rules")
+    if not isinstance(rules, list):
+        continue                      # no rules => the job always runs
+    changes = [c for r in rules if isinstance(r, dict) for c in (r.get("changes") or [])]
+    if not changes:
+        continue                      # no changes-filter => the job always runs
+    want = list(suites) + [g + "/x.sh" for g in globs]
+    uncovered = [w for w in want if not covered(w, changes)]
+    if uncovered:
+        problems.append(
+            f"job '{name}' runs {', '.join(suites + [g + '/*.sh' for g in globs])} but its "
+            f"rules:changes never names it — editing one of those guards cannot run it")
+    if not any(isinstance(r, dict) and "CI_DEFAULT_BRANCH" in str(r.get("if", ""))
+               for r in rules):
+        problems.append(
+            f"job '{name}' has a changes-filter but no default-branch rule — it never runs on main")
+
+for p in problems:
+    print(f"    {p}")
+sys.exit(1 if problems else 0)
+PY
+}
+
+if check_triggers "${CI_FILE}"; then
+  ok "every tests/ suite's job is triggered by its own guards and by the default branch"
+else
+  bad "job(s) above can never run when it matters — see the header comment"
+fi
+
 # ── negative controls: the gate must actually bite ────────────────────────────
 echo "-- negative controls --"
 TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
@@ -125,6 +205,32 @@ if check_file "${TMP}/clean.yml" >/dev/null 2>&1; then
   ok "vacuity control: a well-formed file passes"
 else
   bad "vacuity control: a well-formed file was rejected — the checker is over-eager"
+fi
+
+# (n4) the OTHER shipped defect: a suite-running job whose rules never name the
+# suite, so editing the guard cannot run the guard.
+{ printf 'stages: [verify]\nverify:blind:\n  stage: verify\n  script:\n    - bash tests/foo/test-foo.sh\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n      changes:\n        - src/foo.c\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n'; } > "${TMP}/untriggered.yml"
+if check_triggers "${TMP}/untriggered.yml" >/dev/null 2>&1; then
+  bad "negative control: a job whose rules never name the suite it runs was NOT caught"
+else
+  ok "negative control: suite not named in rules:changes is caught"
+fi
+
+# (n5) …and the half that kept it off main entirely.
+{ printf 'stages: [verify]\nverify:mainless:\n  stage: verify\n  script:\n    - bash tests/foo/test-foo.sh\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n      changes:\n        - tests/foo/**/*\n'; } > "${TMP}/no-main.yml"
+if check_triggers "${TMP}/no-main.yml" >/dev/null 2>&1; then
+  bad "negative control: a changes-filtered job with no default-branch rule was NOT caught"
+else
+  ok "negative control: missing default-branch rule is caught"
+fi
+
+# (n6) vacuity control for the trigger check: a correctly-wired job — and an
+# unconditional one, which legitimately needs no changes-filter — must PASS.
+{ printf 'stages: [verify]\nverify:wired:\n  stage: verify\n  script:\n    - bash tests/foo/test-foo.sh\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n      changes:\n        - tests/foo/**/*\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\nverify:always:\n  stage: verify\n  script:\n    - bash tests/bar/test-bar.sh\n'; } > "${TMP}/wired.yml"
+if check_triggers "${TMP}/wired.yml" >/dev/null 2>&1; then
+  ok "vacuity control: correctly-wired and unconditional jobs pass"
+else
+  bad "vacuity control: a correctly-wired job was rejected — the trigger check is over-eager"
 fi
 
 echo

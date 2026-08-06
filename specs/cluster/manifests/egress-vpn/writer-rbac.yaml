@@ -1,0 +1,72 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# egress-VPN config-Secret WRITER RBAC — the admin-bff half of the contract.
+#
+# Kept in its OWN file, deliberately: secret-projector-rbac.yaml is the READER's
+# grant and its defining property is "no write verb anywhere". Putting a write
+# rule in that file would make its own header untrue. This one identity, this one
+# file, this one namespace.
+#
+# WHO: `backups-effector` in `hugmesh-backend` — the ServiceAccount the admin-bff
+# pod already runs as (manifests/admin-bff-api/deployment.yaml
+# `serviceAccountName`, created in admin-bff-api/backups-effector-sa.yaml). It is
+# the identity behind EVERY fabric8 call admin-bff makes, so the Secret write is
+# a new GRANT on an existing identity, not a new identity.
+#
+# WHAT: create/patch/update on core Secrets in `hugmesh-egress-vpn` ONLY.
+#   * `create` + `patch`: `Fabric8VpnConfigSecretWriter` calls
+#     `.resource(secret).serverSideApply()`, which is a PATCH with the
+#     application/apply-patch content type, and needs `create` for the
+#     object-does-not-exist-yet path. `update` is included because fabric8 falls
+#     back to a full update on an SSA-unsupported apiserver.
+#   * `get` so a failed apply can be diagnosed, and because SSA conflict handling
+#     reads the live object.
+#   * NO `list`, NO `watch`, NO `delete`: the writer only ever addresses a Secret
+#     by name. Withholding `list` means this grant cannot be turned into an
+#     enumeration of every VPN config on the cluster.
+#   * NO other namespace and NO ClusterRole — the app tier's own Secrets in
+#     `hugmesh-backend` stay entirely outside this grant.
+#
+# WHY IT WAS MISSING AND WHY THAT WAS INVISIBLE: `Fabric8VpnConfigSecretWriter`
+# swallows every exception to `false` (best-effort by design — a cluster failure
+# must degrade an import to "pending + key-USB fallback", never fail the import).
+# An RBAC denial is therefore indistinguishable from "delivery is off": the row
+# just stays `pending` forever. So the absent grant could not surface as an
+# error anywhere; it had to be reasoned about from the manifests. It is asserted
+# by tests/egress-vpn/test-secret-contract.sh.
+#
+# SHIPS DARK, twice: this file is not in kustomization.yaml's `resources:` (which
+# is `[]`) and is reachable only through the MANUAL-sync apps/13e-egress-vpn.yaml
+# — and admin-bff's own `EGRESS_VPN_SECRET_DELIVERY_ENABLED` defaults false, so
+# even once applied the writer bean does not exist until an operator flips it.
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: egress-vpn-config-writer
+  namespace: hugmesh-egress-vpn
+  labels:
+    app.kubernetes.io/name: egress-vpn
+    app.kubernetes.io/component: config-writer-rbac
+    app.kubernetes.io/part-of: hugmesh.systems
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: egress-vpn-config-writer
+  namespace: hugmesh-egress-vpn
+  labels:
+    app.kubernetes.io/name: egress-vpn
+    app.kubernetes.io/component: config-writer-rbac
+    app.kubernetes.io/part-of: hugmesh.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: egress-vpn-config-writer
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: hugmesh-backend
