@@ -15,7 +15,9 @@
 > Driven end-to-end from the repo root:
 >
 > ```sh
-> make kind-up       # bootstrap-kind.sh KIND_PROFILE=sso (idempotent)
+> make kind-up       # bootstrap-kind.sh KIND_PROFILE=sso (idempotent — an
+>                    # already-seeded Vault KV is KEPT, not re-minted; see
+>                    # "The script is idempotent" below for why that matters)
 > make kind-images   # build from ./.stack-src + kind load  (before/after kind-up both work)
 > make kind-e2e      # spec 27 (native login) against https://hugmesh.systems:8443
 > make kind-down
@@ -182,6 +184,7 @@ Env overrides (all optional):
 | `HARBOR_BRANCH` | `feat/harbor-registry-migration` | branch the two Harbor Applications (+ `03b`'s manifests) are fetched from |
 | `VAULT_BRANCH` | `feat/kind-local-bringup` | branch `02-vault.yaml` (and, live, `manifests/vault`) is fetched from — carries the `vault-tls-init` openssl fix (bug #2 above) until it merges to `main`; drop it (or set to `main`) once merged |
 | `SKIP_VAULT_BOOTSTRAP` | `0` | set `1` to stop after applying the curated Applications, before the Vault init/unseal/PKI step |
+| `KIND_KV_RESEED` | `0` | `KIND_PROFILE=sso` only. Set `1` to re-mint **every** cluster secret even though Vault KV is already seeded. **DESTRUCTIVE**: existing Postgres/Cassandra volumes keep the old passwords and will reject the new ones — correct only against a fresh cluster or wiped PVCs. |
 | `ARGOCD_REPO_TOKEN` | *(unset)* | **required** for the git-path Applications (Vault, vault-pki, ESO config, Casdoor, harbor-provision) to actually sync — see below |
 
 ### Repo credentials (`ARGOCD_REPO_TOKEN`)
@@ -215,8 +218,40 @@ hand per the ArgoCD docs).
 
 The script is **idempotent**: re-running it against the same cluster skips
 cluster creation, re-applies everything else (`kubectl apply` is a no-op on
-unchanged content), and detects an already-initialized Vault instead of
-re-running `vault operator init`.
+unchanged content), detects an already-initialized Vault instead of re-running
+`vault operator init`, keeps an existing `cluster-ca` Secret, and — under
+`KIND_PROFILE=sso` — **keeps an already-seeded Vault KV** instead of re-minting
+it (`seed-vault-kv.sh`).
+
+> **That last clause used to be missing, and its absence made the whole claim
+> false.** The KV step ran `scripts/gen-cluster-secrets.sh` with no already-done
+> guard, and that script mints *every* password unconditionally
+> (`openssl rand`) and `vault kv put`s it. The Postgres instances behind those
+> passwords never re-read them — `initdb` only runs on an empty `PGDATA` — so a
+> second `make kind-up` rotated Vault, ESO re-materialized the k8s Secrets, and
+> the BFFs crash-looped on credentials their databases had never seen:
+> `FATAL: password authentication failed for user "userbff"`. Hit live. The
+> "idempotent" step wedged the cluster it claimed to converge.
+>
+> `seed-vault-kv.sh` now probes six sentinel KV paths (`casdoor`,
+> `casdoor-apps`, `admin-bff-db`, `user-bff-db`, `route-access-db`,
+> `cassandra-admin`) first: all populated ⇒ skip; none populated ⇒ seed; a
+> *partial* set ⇒ hard failure with both remedies spelled out, because that is
+> an interrupted first run where either choice is silently wrong. Set
+> `KIND_KV_RESEED=1` to re-mint deliberately — **destructive**, correct only
+> against a fresh cluster or wiped PVCs.
+
+The identity seed is likewise **verified, not assumed**: after
+`apply-systems-roles.sh` runs, `verify-seeded-identities.sh` re-authenticates
+from scratch and reads the catalogue back out of Casdoor, so the script cannot
+print `SSO slice seeded.` over an empty Casdoor. Both the apply hook and the
+verifier check the Casdoor response **envelope** (`.status == "ok"`), because
+Casdoor answers a *denied* call with **HTTP 200** and
+`{"status":"error","msg":…}` (upstream `controllers/util.go`: `ResponseError()`
+sets `Status: "error"` and never touches the HTTP status; `RequireSignedIn()`
+and `RequireAdmin()` both report denials through it). The previous `curl -sf`
+hook could therefore run the entire seed anonymously — empty cookie jar, every
+`get-*` empty, every user "re-added", every role "skipped" — and exit 0.
 
 ### What it does, in order
 

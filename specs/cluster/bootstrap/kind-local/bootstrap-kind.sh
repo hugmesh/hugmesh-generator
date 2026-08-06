@@ -12,9 +12,19 @@
 # registry stack. This script applies ONLY the curated subset directly with
 # kubectl (skipping the root app-of-apps step entirely).
 #
-# Idempotent: safe to re-run against the same cluster (skips cluster creation,
-# reuses an already-initialized Vault, re-applies everything else via
-# `kubectl apply`).
+# Idempotent: safe to re-run against the same cluster — skips cluster creation,
+# keeps an existing cluster-ca Secret, reuses an already-initialized Vault, keeps
+# an already-seeded Vault KV (seed-vault-kv.sh; see below), and re-applies
+# everything else via `kubectl apply`.
+#
+# That KV clause is load-bearing, not decorative. Until it existed the "safe to
+# re-run" claim was FALSE and destructive under KIND_PROFILE=sso: the KV step
+# re-ran scripts/gen-cluster-secrets.sh, which mints every password
+# unconditionally with `openssl rand` and overwrites Vault, while the Postgres
+# instances kept the FIRST run's passwords (initdb only runs on an empty PGDATA).
+# A second `make kind-up` therefore wedged the cluster it claimed to converge —
+# `password authentication failed for user "userbff"`. KIND_KV_RESEED=1 is the
+# deliberate, destructive re-mint (fresh cluster / wiped PVCs only).
 #
 # Targets the CORE reference "hugmesh.systems" apps/ tree (specs/cluster/
 # apps/*.yaml as committed on the GitOps repo), NOT a brand-templated tenant
@@ -511,7 +521,7 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   kubectl -n vault wait --for=condition=complete job/vault-pki-init --timeout=600s \
     || { echo "vault-pki-init never completed — cannot seed KV (kubectl -n vault logs job/vault-pki-init)" >&2; exit 1; }
 
-  log "Seeding Vault KV for the SSO slice (gen-cluster-secrets.sh ONLINE via vault-0 exec shim)"
+  log "Seeding Vault KV for the SSO slice (seed-vault-kv.sh -> gen-cluster-secrets.sh ONLINE via vault-0 exec shim)"
   ROOT_TOKEN="$(kubectl -n vault get secret vault-bootstrap -o jsonpath='{.data.token}' | base64 -d)"
   [ -n "${ROOT_TOKEN}" ] || { echo "vault-bootstrap Secret missing/empty — cannot seed KV" >&2; exit 1; }
   # KV v2 at mount "secret" is a FIXED contract (keys-template/vault/README.md:
@@ -536,8 +546,17 @@ SHIM
   chmod +x "${SHIM_DIR}/vault"
   # VAULT_ADDR only gates the script's online mode — the shim always talks to
   # the in-pod loopback listener regardless of its value.
+  #
+  # NOT gen-cluster-secrets.sh directly: it mints EVERY password unconditionally
+  # (`openssl rand` + `vault kv put`), so a second run rotates credentials that
+  # the already-initialized Postgres volumes will never re-read (initdb only runs
+  # on an empty PGDATA) and the BFFs come back with
+  # `password authentication failed for user "userbff"`. seed-vault-kv.sh adds
+  # the already-done guard its neighbours here (cluster-CA, Vault init, KV mount)
+  # all have; KIND_KV_RESEED=1 is the deliberate, destructive override.
   PATH="${SHIM_DIR}:${PATH}" VAULT_ADDR="https://in-cluster-via-exec-shim" VAULT_TOKEN="${ROOT_TOKEN}" \
-    bash "${REPO_ROOT}/scripts/gen-cluster-secrets.sh" --out "${SHIM_DIR}/bundle"
+    REPO_ROOT="${REPO_ROOT}" BRAND="${BRAND:-hugmesh}" \
+    bash "${SCRIPT_DIR}/seed-vault-kv.sh" --out "${SHIM_DIR}/bundle"
   rm -rf "${SHIM_DIR}"
 
   # ───────────────────────────────────────────────────────────────────────
@@ -576,8 +595,20 @@ SHIM
       VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN="${ROOT_TOKEN}" \
       vault kv get -field=admin_password_plain "secret/${BRAND:-hugmesh}/casdoor" 2>/dev/null)"
   [ -n "${CASDOOR_ADMIN_PASS}" ] || { echo "could not read the Casdoor admin password from Vault — cannot seed identities" >&2; exit 1; }
+  # apply-systems-roles.sh checks every Casdoor response ENVELOPE (.status), not
+  # just the HTTP code — Casdoor answers a DENIED call with HTTP 200 +
+  # {"status":"error"}, so the previous `curl -sf` hook could (and did) run the
+  # entire seed unauthenticated and still exit 0. A WRONG admin password is the
+  # documented fresh-cluster state, so this must fail loudly rather than
+  # "succeed" against nothing.
   CASDOOR_URL="http://127.0.0.1:18000" CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS}" \
     bash "${SEED_DIR}/roles/apply-systems-roles.sh"
+  # POSITIVE POST-CONDITION: re-authenticate from scratch and read the catalogue
+  # back. The hook reporting on its own work is not evidence; this is. Without
+  # it the bootstrap can print "SSO slice seeded." over an empty Casdoor.
+  log "Verifying the identity seed actually landed (independent read-back)"
+  CASDOOR_URL="http://127.0.0.1:18000" CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS}" \
+    bash "${SCRIPT_DIR}/verify-seeded-identities.sh" "${SEED_DIR}/roles"
   kill "${PF_PID}" 2>/dev/null || true
   trap - EXIT
   # test-seed-passwords: the same deterministic-password Secret the in-cluster
@@ -589,7 +620,9 @@ SHIM
   rm -rf "${SEED_DIR}"
 
   echo
-  log "SSO slice seeded. Host entry: https://hugmesh.systems via 127.0.0.1:8443 (kind-local.yaml port map)"
+  # Reached only after apply-systems-roles.sh AND verify-seeded-identities.sh
+  # both succeeded, so this line is a claim the script has evidence for.
+  log "SSO slice seeded (identity catalogue read back and verified). Host entry: https://hugmesh.systems via 127.0.0.1:8443 (kind-local.yaml port map)"
   echo "    e2e:  make kind-e2e   (repo root — resolver-maps hugmesh.systems -> 127.0.0.1, runs spec 27)"
 fi
 

@@ -47,7 +47,11 @@
 #       not seeded here.
 #   * apply-systems-roles.sh       — idempotent Casdoor add-user/update-role hook
 #       (login -> add-user with the deterministic e2e password -> update-role) so
-#       a REAL seeded Casdoor carries the right `roles` JWT claim.
+#       a REAL seeded Casdoor carries the right `roles` JWT claim. It checks the
+#       Casdoor response ENVELOPE (.status == "ok"), not merely the HTTP code:
+#       Casdoor reports a DENIED call as HTTP 200 + {"status":"error"}, so a
+#       `curl -sf` hook cannot tell "applied" from "rejected" and an entirely
+#       unauthenticated run exits 0 having seeded nothing.
 # The catalogue is kept in lock-step with tests/e2e/specs/rbac-roles.ts.
 set -euo pipefail
 
@@ -464,6 +468,10 @@ REMOTE
 #   apply-systems-roles.sh       idempotent Casdoor admin-API hook (add-user with
 #                                the e2e password, then update-role) so a REAL
 #                                Casdoor carries the right JWT `roles` claim.
+#                                Envelope-checked + read-back-verified: it fails
+#                                loudly rather than reporting a seed it did not
+#                                perform (see its own header for the HTTP-200
+#                                denial shape that made that possible).
 
 # Casdoor's add-user rejects any name that isn't alphanumeric/hyphen/underline
 # (no leading/trailing/consecutive -_ ), so an email-shaped SYSTEMS_ROLE_USERS
@@ -583,13 +591,41 @@ ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
 #!/usr/bin/env bash
 # apply-systems-roles.sh — push the systems RBAC role matrix into a REAL Casdoor
 # (org "hugmesh") so the rbac-*.spec.ts JWT-role assertions work. Reads the
-# sibling casdoor-systems-roles.json. Idempotent: add-user is skipped if present,
-# update-role overwrites the member set. Requires curl + jq + Casdoor admin creds.
+# sibling casdoor-systems-roles.json. Idempotent: add-user is skipped when the
+# user already exists, update-role overwrites the member set. Requires curl + jq
+# + Casdoor admin creds.
 #
 #   CASDOOR_URL          (default http://127.0.0.1:8000)
 #   CASDOOR_ADMIN_USER   (default admin)
 #   CASDOOR_ADMIN_PASS   (required)
 #   CASDOOR_ORG          (default hugmesh)
+#
+# ── WHY EVERY CALL GOES THROUGH casdoor_call() AND NOT `curl -sf` ─────────────
+# Casdoor answers a DENIED call with HTTP **200** carrying {"status":"error",…}.
+# Upstream controllers/util.go:
+#     func (c *ApiController) ResponseError(error string, data ...interface{}) {
+#         resp := &Response{Status: "error", Msg: error}
+#         c.ResponseJsonData(resp, data...)
+#     }
+# — it never sets an HTTP status, so the response stays 200; and BOTH
+# RequireSignedIn() and RequireAdmin() report their denials through exactly that
+# function. `curl -sf` fails only on HTTP >= 400, so it cannot see a denial AT
+# ALL.
+#
+# The failure that caused: on a fresh cluster Casdoor still carries its BUILT-IN
+# default admin password (nothing applies the Vault-minted one), so /api/login
+# with the Vault password is DENIED -> HTTP 200 -> `curl -sf` is happy -> the
+# cookie jar stays empty -> every get-user reads "" (indistinguishable from "not
+# created yet") -> every add-user is an anonymous, denied call whose own "error"
+# status is printed as informational text -> every get-role reads empty ->
+# "role missing — skip" -> exit 0, and the bootstrap prints "SSO slice seeded."
+# having seeded NOTHING. Envelope checking is the only thing that separates
+# "applied" from "rejected".
+#
+# Casdoor does distinguish ABSENT from DENIED, and so do we: GetUser()/GetRole()
+# on a non-existent id return ResponseOk(nil) = {"status":"ok","data":null},
+# whereas a denial returns {"status":"error"}. A missing ROLE is now a hard
+# FAILURE (the matrix cannot be applied without it), never a "skip".
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLES_JSON="${HERE}/casdoor-systems-roles.json"
@@ -597,35 +633,110 @@ BASE="${CASDOOR_URL:-http://127.0.0.1:8000}"
 ORG="${CASDOOR_ORG:-hugmesh}"
 AU="${CASDOOR_ADMIN_USER:-admin}"
 AP="${CASDOOR_ADMIN_PASS:?CASDOOR_ADMIN_PASS required}"
-CJ="$(mktemp)"; trap 'rm -f "${CJ}"' EXIT
+WORK="$(mktemp -d)"; CJ="${WORK}/cookies"; : > "${CJ}"
+trap 'rm -rf "${WORK}"' EXIT
 log() { echo "[apply-roles] $*"; }
+die() { echo "[apply-roles] FATAL: $*" >&2; exit 1; }
 
-# Admin session cookie (same transport casdoor-init / games-admin-sync use).
-curl -sf -c "${CJ}" "${BASE}/api/login" -H 'content-type: application/json' \
-  -d "{\"application\":\"app-built-in\",\"organization\":\"built-in\",\"username\":\"${AU}\",\"password\":\"${AP}\",\"type\":\"login\",\"autoSignin\":true}" >/dev/null \
-  || { log "admin login failed at ${BASE}"; exit 1; }
-
-# Ensure every seed user exists with its deterministic e2e password.
-jq -c '.users[]' "${ROLES_JSON}" | while read -r u; do
-  name="$(echo "$u" | jq -r '.name')"
-  exists="$(curl -s -b "${CJ}" "${BASE}/api/get-user?id=${ORG}/${name}" | jq -r '.data.name // empty')"
-  if [ -n "${exists}" ]; then log "user ${name} exists"; continue; fi
-  curl -s -b "${CJ}" "${BASE}/api/add-user" -H 'content-type: application/json' \
-    -d "$(echo "$u" | jq -c '{owner, name, displayName, email, password, type, isAdmin, isForbidden, isDeleted, signupApplication:"app-built-in"}')" \
-    | jq -r '.status // "?"' | sed "s/^/[apply-roles] add-user ${name} -> /"
+for _t in curl jq; do
+  command -v "${_t}" >/dev/null 2>&1 || die "missing required tool: ${_t}"
 done
+[ -f "${ROLES_JSON}" ] || die "role matrix not found: ${ROLES_JSON}"
 
-# Set each role's member set to EXACTLY the seeded list (round-trip the existing
-# role object so other fields survive). ROLE_GAMES_ADMIN is sent EMPTY on purpose.
-jq -c '.roles[]' "${ROLES_JSON}" | while read -r r; do
-  rname="$(echo "$r" | jq -r '.name')"
-  cur="$(curl -s -b "${CJ}" "${BASE}/api/get-role?id=${ORG}/${rname}" | jq -c '.data // empty')"
-  [ -n "${cur}" ] || { log "role ${rname} missing — seed it in init_data.json; skip"; continue; }
-  upd="$(echo "${cur}" | jq -c --argjson members "$(echo "$r" | jq -c '.users')" '.users = $members')"
-  curl -s -b "${CJ}" "${BASE}/api/update-role?id=${ORG}/${rname}" \
-    -H 'content-type: application/json' -d "${upd}" \
-    | jq -r '.status // "?"' | sed "s/^/[apply-roles] update-role ${rname} -> /"
-done
+# casdoor_call <GET|POST> <path> [json-body]  -> response body on stdout.
+# Fails on a transport error, on HTTP >= 400, on a non-JSON body, and on an
+# {"status":"error"} envelope delivered with HTTP 200 (the denial shape above).
+casdoor_call() {
+  local method="$1" path="$2" body="${3:-}" code status msg
+  local -a args=(-s -o "${WORK}/body" -w '%{http_code}' -b "${CJ}" -c "${CJ}"
+                 -X "${method}" -H 'content-type: application/json')
+  [ -n "${body}" ] && args+=(-d "${body}")
+  : > "${WORK}/body"
+  code="$(curl "${args[@]}" "${BASE}${path}" 2>/dev/null)" \
+    || die "${method} ${path}: curl transport failure (is ${BASE} reachable?)"
+  case "${code}" in
+    2*) : ;;
+    *)  die "${method} ${path}: HTTP ${code} — $(head -c 200 "${WORK}/body" 2>/dev/null)" ;;
+  esac
+  jq -e 'type == "object"' "${WORK}/body" >/dev/null 2>&1 \
+    || die "${method} ${path}: HTTP ${code} but the body is not a JSON object — $(head -c 200 "${WORK}/body")"
+  status="$(jq -r '.status // empty' "${WORK}/body")"
+  if [ "${status}" != "ok" ]; then
+    msg="$(jq -r '.msg // "(no msg)"' "${WORK}/body")"
+    die "${method} ${path}: Casdoor answered HTTP ${code} with status='${status:-<absent>}' msg='${msg}'. The call was REJECTED, not applied — a wrong CASDOOR_ADMIN_PASS (or an expired session) looks EXACTLY like this."
+  fi
+  cat "${WORK}/body"
+}
+
+# ── 1. Admin session ────────────────────────────────────────────────────────
+log "admin login as '${AU}' at ${BASE}"
+casdoor_call POST /api/login \
+  "{\"application\":\"app-built-in\",\"organization\":\"built-in\",\"username\":\"${AU}\",\"password\":\"${AP}\",\"type\":\"login\",\"autoSignin\":true}" \
+  >/dev/null
+# status=ok is necessary but not sufficient: everything after this is authorized
+# by the SESSION COOKIE, so if the jar is empty we are about to run the whole
+# seed anonymously. Count real cookie records (curl writes HttpOnly cookies with
+# a leading "#HttpOnly_", so a plain "skip comment lines" test would miss them).
+cookies="$(awk -F'\t' 'NF>=7 {n++} END {print n+0}' "${CJ}" 2>/dev/null || echo 0)"
+[ "${cookies}" -gt 0 ] \
+  || die "/api/login returned status=ok but set NO session cookie — every call after this would be anonymous (and denied with HTTP 200)."
+
+# ── 2. Ensure every seed user exists with its deterministic e2e password ────
+users_total="$(jq '.users | length' "${ROLES_JSON}")"
+[ "${users_total}" -gt 0 ] || die "role matrix declares zero users — nothing to seed"
+added=0; already=0
+while IFS= read -r u; do
+  [ -n "${u}" ] || continue
+  name="$(printf '%s' "$u" | jq -r '.name')"
+  resp="$(casdoor_call GET "/api/get-user?id=${ORG}/${name}")"
+  exists="$(printf '%s' "${resp}" | jq -r '.data.name // empty')"
+  if [ -n "${exists}" ]; then
+    log "user ${name} exists"; already=$((already+1)); continue
+  fi
+  payload="$(printf '%s' "$u" | jq -c '{owner, name, displayName, email, password, type, isAdmin, isForbidden, isDeleted, signupApplication:"app-built-in"}')"
+  add="$(casdoor_call POST /api/add-user "${payload}")"
+  # Casdoor wraps writes with wrapActionResponse(): status=ok carries
+  # data="Affected" when a row really changed and data="Unaffected" when the
+  # write was a no-op. We only get here when get-user said the user is ABSENT,
+  # so "Unaffected" means the insert silently did nothing.
+  affected="$(printf '%s' "${add}" | jq -r '.data // empty')"
+  [ "${affected}" != "Unaffected" ] \
+    || die "add-user ${name}: Casdoor returned status=ok data=Unaffected — the user was NOT created"
+  log "add-user ${name} -> ok (${affected:-ok})"
+  added=$((added+1))
+done < <(jq -c '.users[]' "${ROLES_JSON}")
+log "users: ${added} added, ${already} already present (${users_total} declared)"
+
+# ── 3. Set each role's member set to EXACTLY the seeded list ────────────────
+# Round-trip the existing role object so other fields survive. ROLE_GAMES_ADMIN
+# is sent EMPTY on purpose (the games-admin-sync Job derives it).
+roles_done=0
+while IFS= read -r r; do
+  [ -n "${r}" ] || continue
+  rname="$(printf '%s' "$r" | jq -r '.name')"
+  want="$(printf '%s' "$r" | jq -c '.users')"
+  cur_resp="$(casdoor_call GET "/api/get-role?id=${ORG}/${rname}")"
+  cur="$(printf '%s' "${cur_resp}" | jq -c '.data // empty')"
+  # status=ok + data:null is Casdoor for "this role does not exist". The matrix
+  # cannot be applied without it, and pretending otherwise is precisely how a
+  # fully-unseeded run used to report success.
+  [ -n "${cur}" ] && [ "${cur}" != "null" ] \
+    || die "role ${ORG}/${rname} does not exist in Casdoor — declare it in manifests/casdoor init_data.json (roles[]) and re-run casdoor-init. Refusing to report success with an unapplied role matrix."
+  upd="$(printf '%s' "${cur}" | jq -c --argjson members "${want}" '.users = $members')"
+  casdoor_call POST "/api/update-role?id=${ORG}/${rname}" "${upd}" >/dev/null
+  # READ BACK rather than trust the write's own status. Casdoor has a
+  # LIVE-VERIFIED history of answering {"status":"ok","data":"Affected"} to a
+  # membership write it did not persist (see manifests/casdoor/init-job.yaml's
+  # update-group note), so the write's status alone is not evidence.
+  back_resp="$(casdoor_call GET "/api/get-role?id=${ORG}/${rname}")"
+  got="$(printf '%s' "${back_resp}" | jq -c '.data.users // []')"
+  missing="$(jq -nr --argjson want "${want}" --argjson got "${got}" '($want - $got) | join(", ")')"
+  [ -z "${missing}" ] \
+    || die "update-role ${rname} reported success but the role still does not contain: ${missing} (read back ${got})"
+  log "update-role ${rname} -> ok ($(printf '%s' "${want}" | jq -r 'length') member(s), verified)"
+  roles_done=$((roles_done+1))
+done < <(jq -c '.roles[]' "${ROLES_JSON}")
+log "roles: ${roles_done} applied and read-back-verified"
 log "done — REMEMBER to run the games-admin-sync Job so ROLE_GAMES_ADMIN materializes."
 
 # ── Pre-mint + cache a JWT per seed user (CRITICAL for the swarm) ───────────
@@ -635,29 +746,41 @@ log "done — REMEMBER to run the games-admin-sync Job so ROLE_GAMES_ADMIN mater
 # harness loads cached tokens instead of racing the login endpoint. The harness
 # then asserts a real concurrency invariant (max in-flight >= N) so a silently
 # serialized run still FAILS rather than passing slowly.
+#
+# DELIBERATELY BEST-EFFORT (the one call in this file that is): the OAuth2
+# password grant is a Casdoor CONFIG option, so its absence is a legitimate
+# deployment state, not a seeding failure — and spec 24 carries its own
+# max-in-flight concurrency invariant, which FAILS a silently-serialized run. So
+# a zero-token outcome degrades to interactive login instead of aborting the
+# seed. It still must not LIE about it: the count below is the real one (the old
+# loop incremented `minted` inside a pipeline subshell, so the parent always saw
+# 0 and printed the same cheerful line whether it minted 126 tokens or none).
 PREMINT_DIR="${PREMINT_DIR:-${HERE}/jwt-cache}"
 APP="${PREMINT_APP:-app-built-in}"
 mkdir -p "${PREMINT_DIR}"
-minted=0
-jq -c '.users[]' "${ROLES_JSON}" | while read -r u; do
-  name="$(echo "$u" | jq -r '.name')"
-  pass="$(echo "$u" | jq -r '.password')"
-  # Resource-Owner password grant against the seeded app (best-effort; some
-  # Casdoor configs disable the password grant — then the harness falls back to
-  # interactive login and the concurrency invariant catches serialization).
+minted=0; premint_total=0
+while IFS= read -r u; do
+  [ -n "${u}" ] || continue
+  premint_total=$((premint_total+1))
+  name="$(printf '%s' "$u" | jq -r '.name')"
+  pass="$(printf '%s' "$u" | jq -r '.password')"
   tok="$(curl -s "${BASE}/api/login/oauth/access_token" \
           -H 'content-type: application/x-www-form-urlencoded' \
           --data-urlencode "grant_type=password" \
           --data-urlencode "username=${ORG}/${name}" \
           --data-urlencode "password=${pass}" \
           --data-urlencode "client_id=${APP}" 2>/dev/null \
-        | jq -r '.access_token // empty')"
+        | jq -r '.access_token // empty' 2>/dev/null || true)"
   if [ -n "${tok}" ]; then
     printf '%s' "${tok}" > "${PREMINT_DIR}/${name}.jwt"
     minted=$((minted+1))
   fi
-done
-log "pre-minted JWTs into ${PREMINT_DIR} (load them in the swarm harness to avoid serializing Casdoor logins)"
+done < <(jq -c '.users[]' "${ROLES_JSON}")
+if [ "${minted}" -eq 0 ]; then
+  log "pre-mint: 0 of ${premint_total} JWTs (password grant unavailable) — the swarm harness will fall back to interactive login; spec 24's concurrency invariant still gates serialization"
+else
+  log "pre-mint: ${minted} of ${premint_total} JWTs cached in ${PREMINT_DIR} (load them in the swarm harness to avoid serializing Casdoor logins)"
+fi
 APPLY
     chmod +x "${dir}/apply-systems-roles.sh"
 

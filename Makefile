@@ -384,7 +384,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-down stack-logs stack-ps \
-        kind-images kind-up kind-e2e kind-down
+        kind-images kind-up kind-e2e kind-down kind-honesty
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -1124,6 +1124,14 @@ kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind
 
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
+
+# Offline honesty gate for the two ways kind-up used to report work it had not
+# done: an identity seed that exits 0 through Casdoor's HTTP-200 denials, and a
+# "idempotent" KV seed that re-minted every password onto Postgres volumes that
+# keep the first run's. Runs the REAL seed hook + helpers against stubs — no
+# cluster, no kind, no docker, no network. Also runs in CI (lint:kind-bootstrap-honesty).
+kind-honesty: ## offline: prove the kind SSO harness cannot report an unperformed seed
+	bash tests/scripts/test-kind-bootstrap-honesty.sh
 
 playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \

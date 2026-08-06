@@ -236,6 +236,34 @@ lint:eso-seed-contract:
     # read of the script could tell what its arrays and conditionals expand to.
     - bash tests/scripts/test-eso-seed-contract.sh
 
+# KIND SSO HARNESS HONESTY gate. Two ways specs/cluster/bootstrap/kind-local
+# reported work it had not done. (1) The identity seed: Casdoor answers a DENIED
+# call with HTTP 200 + {"status":"error"} (upstream controllers/util.go
+# ResponseError() never sets an HTTP status, and RequireSignedIn/RequireAdmin
+# both report through it), so the `curl -sf` seed hook could not see a denial —
+# and a WRONG admin password is the documented fresh-cluster state. Result: empty
+# cookie jar, every get-* empty, users "re-added" anonymously, every role
+# "skipped", exit 0, "SSO slice seeded." (2) The KV seed had no already-done
+# guard, so a re-run re-minted every password while the Postgres volumes kept the
+# first run's — `password authentication failed for user "userbff"`, i.e. the
+# step documented as idempotent wedged the cluster it claimed to converge.
+# This job RENDERS the real seed hook with the real tests/qemu/seed-accounts.sh
+# and RUNS it (plus the real verify/KV helpers) against a curl stub that
+# reproduces Casdoor's actual contract, and a vault stub + recording seeder for
+# the idempotence contract. Deny controls are DERIVED from the endpoints the hook
+# really calls, so a new endpoint is covered without editing the suite; vacuity
+# controls (correct password, full 15-user catalogue, first-run seed) prove a
+# green run is not green because the hook is simply broken. Offline: bash + jq,
+# no cluster, no kind, no docker, no network.
+lint:kind-bootstrap-honesty:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq
+  script:
+    - bash tests/scripts/test-kind-bootstrap-honesty.sh
+
 # ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
 # image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE
 # SITS IN: the root app-of-apps recurses specs/cluster/apps, so moving
