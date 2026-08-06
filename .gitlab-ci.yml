@@ -797,6 +797,27 @@ lint:outbound-mtls-client:
   script:
     - bash tests/scripts/test-outbound-mtls-client.sh
 
+# For a raw-JWT carrier the mfa_satisfied_at claim is a Casdoor USER Property, so it
+# enters a token only at MINT time. Whether that matters depends on WHO HOLDS the
+# token: a human client that can re-mint (refresh_token / device_code / password)
+# completes MFA and refreshes — hugmesh-desktop is seeded for exactly that and says
+# so — whereas a pure client_credentials machine token has no user subject, so there
+# is nothing to stamp and no factor to enrol. That machine population is what an
+# operator must enumerate before the step-6 flip.
+# This gate pins docs/MFA-ROLLOUT.md §2.4 to that TAXONOMY (not to arithmetic): it
+# classifies each seeded app's grantTypes, requires §2.4 + step 6 to document the
+# machine population while client_credentials is seeded, keeps the debunked
+# "GEN2 bounds the gap" claim quarantined inside §2.4's refutation blockquote, and
+# blocks re-assertion of the RETRACTED absolute that no raw-JWT caller can ever be
+# fresh — an earlier draft of this very gate made that error by conflating token
+# lifetime with time-to-next-mint, and three reviewers refuted it.
+lint:mfa-raw-jwt-posture:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-mfa-raw-jwt-posture.sh
+
 # The compose lane and the kind lane must seed the SAME e2e personas, and every
 # role the authorization rows grant must be a role Casdoor actually creates.
 # seed-accounts.sh's SYSTEMS_ROLE_USERS is an OVERRIDE, so a caller wanting one

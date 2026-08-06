@@ -438,7 +438,10 @@ data:
         # + a redirect_uri that is purely an INTERNAL PKCE-match string (must
         # byte-match APP_BFF_OIDC_REDIRECT_URI on the user-bff side; no browser ever
         # dereferences it) + a shorter access-token lifetime (refresh_token covers
-        # longevity, keeping the held-JWT/MFA-freshness window short). Single-domain
+        # longevity). ⚠ 4h does NOT bring a raw JWT inside the gateway's
+        # app.mfa.freshness-window (600000 ms = 10 min) — it is 24x that window, and
+        # 168h below is 1008x. No seeded expiry makes the raw-JWT MFA leg satisfiable;
+        # see docs/MFA-ROLLOUT.md §2.4 before assuming otherwise. Single-domain
         # seed (…hugmesh.systems) matching the confidential apps' convention;
         # per-brand hosts layer via the rebrand/handlebars path, not here.
         if name == "user-bff":

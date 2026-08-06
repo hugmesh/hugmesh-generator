@@ -350,6 +350,64 @@ supported adjustments are (a) raise `APP_MFA_FRESHNESS_WINDOW` **and**
 opaque-session legs will disagree about who is fresh — or (b) narrow the `WHERE`
 predicate in `20-schema.sql`. Do **not** hand-edit individual rows: see §5.
 
+### 2.4 Which callers can satisfy MFA, and the one population that cannot
+
+§2.3 describes the freshness window without saying how each carrier actually obtains a
+stamp. The three carriers behave differently, and only one of them is genuinely stuck:
+
+| carrier | how it obtains `MFA_SATISFIED` | can it satisfy an `mfa_required` route? |
+|---|---|---|
+| opaque `bff_` session (native web login) | `BffSessionAuthFilter` mirrors admin-bff's introspect `mfaSatisfied`; the session row is stamped **synchronously** by `MfaChallengeService`. | **Yes, immediately.** |
+| raw Casdoor JWT for a **human** (desktop/PKCE `hugmesh-desktop`, or any password-grant client) | `CasdoorAuthorities` -> `Roles.isMfaSatisfied(jwt, now, 600000)` against the `mfa_satisfied_at` claim. The claim is a Casdoor **user Property**, so it enters a token only at MINT time — but these clients can **re-mint on demand** (`refresh_token`, `device_code`, `password`). | **Yes** — complete MFA through the BFF (which writes the Property), then re-mint/refresh **within the 10-minute window**. |
+| raw Casdoor JWT from `client_credentials` (pure machine, no human behind it) | same path — but `mfa_satisfied_at` is a **user** Property and a client-credentials token has **no user subject**, so there is nothing to stamp. `POST /bff/mfa/challenge` also fails closed without an opaque session row and an enrolled factor. | **No. Not under any configuration — there is no second factor for a machine.** |
+
+**⚠ Do not mistake "mint-time only" for "rarely".** An earlier draft of this section claimed
+no raw-JWT caller could ever be fresh, reasoning that the claim lands only at mint and the
+seeded `expireInHours` is 168 (4 for `user-bff`) against a 10-minute window. That reasoning
+was **wrong**: `expireInHours` bounds how long a *stale* token stays valid, not how soon a
+client may request a new one. `hugmesh-desktop` is seeded as a **public** PKCE client with
+`refresh_token`, and its own seed comment states the intent — *"refresh_token so the device
+can refresh after the BFF stamps the MFA Property"*. That flow works.
+
+**What IS broken.** The seam that was supposed to make the stamp appear without the client
+doing anything never runs: `MfaChallengeService` calls
+`RawJwtRefreshService.forceRefresh(subject, null)` with a **literal `null`** refresh-token at
+the only call site, so it always takes its no-op fallback branch. (`app.bff.oidc.enabled` is
+`true` on the live pods, so the bean's presence is *not* the blocker — the argument is.) The
+practical consequence is a usability trap, not a lockout: after completing MFA a raw-JWT
+holder must **actively** re-mint inside the 10-minute window; nothing does it for them, and
+a client that simply keeps using its existing token will keep being denied until it happens
+to refresh. Note also a second re-mint path that bypasses `RawJwtRefreshService` entirely —
+admin-bff `InternalAccountController.exchangeSessionRow()` calls `oidcExchange.refresh(...)`
+directly when custody is near expiry.
+
+> `RawJwtRefreshService`'s javadoc justified the no-op by claiming "GEN2 lowers the
+> privileged-app `expireInHours` precisely so this natural-lifetime gap stays SHORTER than
+> the MFA freshness window". **There is no such GEN2 change** (`git grep GEN2` finds an
+> unrelated CI comment and a disk-partitioning note), and no seeded expiry is anywhere near
+> 10 minutes. Corrected in hugmesh-auth-core #43 — do not restore that reasoning.
+
+**What this means at the §3 step-6 / step-7 flip.** Human operators are fine on both
+carriers. The population to enumerate first is **machine `client_credentials` traffic** on
+`/bff/admin…` and `/bff/superadmin…`: it has no supported path to a second factor, so once
+`APP_MFA_ENABLED=true` it is denied there permanently, and the step-7 privileged floor denies
+it outright (**`ROLE_SUPERADMIN` is not exempt**). If any exists, the options are to leave the
+floor off, narrow the rows (§2.3 (b)), or move that caller to a service account driving an
+opaque session. Raising `APP_MFA_FRESHNESS_WINDOW` does not help it at all — the claim is
+absent, not stale.
+
+**One knob that moves a `bff_` carrier onto the JWT path.**
+`hugmesh.gateway.bff-exchange.enabled` (default **false**, set in no manifest) makes
+`BffJwtExchangeWebFilter` rewrite `Authorization: bff_…` into the custody Casdoor JWT
+*before* Spring Security. With it on, an opaque carrier reaches the gateway as a `Jwt`
+principal and takes the mint-time path in row 2 instead of the synchronous row 1. Turn it on
+only together with a re-read of this section.
+
+`tests/scripts/test-mfa-raw-jwt-posture.sh` pins this taxonomy to the seed: it derives each
+seeded app's grant types, classifies which can re-mint, and fails if a caller that cannot
+re-mint appears without this section naming that population — or if the debunked
+bounded-gap reasoning is reintroduced anywhere.
+
 ---
 
 ## 3. Order of operations
@@ -462,6 +520,12 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    gateway Applications point at the one chart, so a chart-level default reaches all
    four; keep it out of the per-app manifests (the gate enforces that). Watch for
    403s from non-privileged holders of `ROLE_FLEET_ADMIN`.
+   ⚠ **This is the step that permanently denies machine `client_credentials` traffic.**
+   A client-credentials token has no user subject, and `mfa_satisfied_at` is a Casdoor
+   *user* Property — so there is nothing to stamp and no second factor to enrol.
+   Enumerate any such caller on `/bff/admin…` / `/bff/superadmin…` **before** this flip.
+   Human callers are fine on both carriers, but a raw-JWT human must **re-mint** after
+   completing MFA (nothing does it for them). Read §2.4 before flipping.
    ⚠ **The flip commit must also move the companion gate's expectation pin, in
    the same change.** `tests/stack/test-gateway-mfa-env.sh` hard-pins the cluster
    posture OFF in an `EXPECT_*` table near the top of the file:
