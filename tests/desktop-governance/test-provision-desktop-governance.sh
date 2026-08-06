@@ -10,8 +10,17 @@
 #   * Flathub-off list drives removal of preset flathub*.flatpakrepo files.
 #   * polkit desktop-sudo gate is installed verbatim (no static sudoers entry;
 #     a stock %wheel line is commented out).
-#   * SSSD-OIDC conf is rendered with the per-domain id.<domain> issuer + the
-#     desktop-sudo claim->group mapping, mode 0600.
+#   * the desktop-sudo MAPPER is rendered (mode 0700) with the per-domain
+#     id.<domain> issuer + the desktop-sudo claim gate, its 60s cron drop-in is
+#     installed, the local desktop-sudo group is ensured, and a stale pre-mapper
+#     /etc/sssd/conf.d/hugmesh-oidc.conf (fake syntax) is retired.
+#   * SYNTAX PIN: the template trees + provision.sh carry NONE of the fake SSSD
+#     options the old conf invented (id_provider/oidc_*/[domain/../local-groups]
+#     — they exist in no released SSSD) and nothing renders into /etc/sssd.
+#   * PACKAGE/WIRING PIN: the mapper's interpreter (dev-lang/python) is declared
+#     in the x86 CLIENT desktop list, sys-auth/sssd is NOT shipped (it cannot
+#     consume Casdoor tokens), cronie (the 60s floor) is in the base list AND
+#     the client runlevel, and both template copies carry the sudo/ templates.
 #   * bearer-forward.sh is rendered (mode 0755) pointed at api.<domain>.
 #   * DOMAIN PRECEDENCE: /etc/hugmesh/domains first line beats
 #     .hugmesh.cluster_domain; .client.primary_domain beats both.
@@ -124,6 +133,9 @@ run_gov() {
         log()  { :; }
         warn() { :; }
         have() { return 1; }   # pretend flatpak is NOT installed (preset path)
+        # Group mutators -> recording stubs (group "absent" => groupadd path).
+        getent() { return 1; }
+        groupadd() { printf "%s\n" "$*" >> "${ETCROOT}/groupadd.calls"; }
         jqm() {
             case "$1" in
                 *client.primary_domain*)     printf "%s\n" "${PDOM:-null}" ;;
@@ -137,6 +149,7 @@ run_gov() {
                   -e "s#/etc/hugmesh/domains#${ETCROOT}/etc/hugmesh/domains#g" \
                   -e "s#/etc/flatpak#${ETCROOT}/etc/flatpak#g" \
                   -e "s#/etc/polkit-1#${ETCROOT}/etc/polkit-1#g" \
+                  -e "s#/etc/cron.d#${ETCROOT}/etc/cron.d#g" \
                   -e "s#/etc/sssd#${ETCROOT}/etc/sssd#g" \
                   -e "s#/etc/sudoers#${ETCROOT}/etc/sudoers#g")"
         eval "${body}"
@@ -148,6 +161,9 @@ echo "== provision_desktop_governance() unit test =="
 
 # ── Case 1: full render, domain from /etc/hugmesh/domains ───────────────────
 new_sandbox with-templates
+# Pre-seed a stale pre-mapper SSSD conf (fake syntax) — provisioning must retire it.
+mkdir -p "${ETCROOT}/etc/sssd/conf.d"
+printf '[domain/x]\nid_provider = oidc\n' > "${ETCROOT}/etc/sssd/conf.d/hugmesh-oidc.conf"
 run_gov "" "" "acme.example" >/dev/null 2>&1
 E="${ETCROOT}/etc"
 REPO_F="${E}/flatpak/remotes.d/hugmesh-discover.flatpakrepo"
@@ -164,18 +180,35 @@ fi
 POLKIT="${E}/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules"
 [ -f "${POLKIT}" ] && grep -q 'unix-group:desktop-sudo' "${POLKIT}" \
     && ok "polkit desktop-sudo gate installed" || bad "polkit gate missing/wrong"
-SSSD="${E}/sssd/conf.d/hugmesh-oidc.conf"
-if [ -f "${SSSD}" ]; then
-    grep -q 'oidc_issuer = https://id.acme.example/' "${SSSD}" \
-        && ok "SSSD-OIDC issuer -> id.<domain> (domain substituted)" \
-        || bad "SSSD issuer wrong: $(grep -m1 'oidc_issuer' "${SSSD}")"
-    grep -q 'desktop-sudo' "${SSSD}" \
-        && ok "SSSD maps the desktop-sudo claim->group" || bad "SSSD desktop-sudo mapping missing"
-    mode="$(stat -c '%a' "${SSSD}" 2>/dev/null)"
-    [ "${mode}" = "600" ] && ok "SSSD conf mode 0600" || bad "SSSD conf mode ${mode} != 600"
+MAPPER="${E}/hugmesh/desktop-governance/desktop-sudo-mapper"
+if [ -f "${MAPPER}" ]; then
+    grep -q 'ISSUER = "https://id.acme.example"' "${MAPPER}" \
+        && ok "mapper issuer -> id.<domain> (domain substituted)" \
+        || bad "mapper issuer wrong: $(grep -m1 'ISSUER = ' "${MAPPER}")"
+    ! grep -q '@@CLUSTER_DOMAIN@@' "${MAPPER}" \
+        && ok "no @@CLUSTER_DOMAIN@@ placeholder left in the rendered mapper" \
+        || bad "placeholder NOT substituted in the mapper"
+    grep -q 'GROUP = "desktop-sudo"' "${MAPPER}" \
+        && ok "mapper gates on the desktop-sudo claim->group" || bad "mapper desktop-sudo gate missing"
+    mode="$(stat -c '%a' "${MAPPER}" 2>/dev/null)"
+    [ "${mode}" = "700" ] && ok "mapper mode 0700 (root-run)" || bad "mapper mode ${mode} != 700"
 else
-    bad "SSSD-OIDC conf not rendered"
+    bad "desktop-sudo mapper not rendered"
 fi
+CRON="${E}/cron.d/hugmesh-desktop-sudo-mapper"
+if [ -f "${CRON}" ]; then
+    grep -q '^\* \* \* \* \* root .*/etc/hugmesh/desktop-governance/desktop-sudo-mapper' "${CRON}" \
+        && ok "mapper 60s cron installed (root, targets the rendered mapper)" \
+        || bad "mapper cron wrong: $(grep -m1 '^\*' "${CRON}")"
+else
+    bad "mapper cron drop-in not installed"
+fi
+grep -q '^desktop-sudo$' "${ETCROOT}/groupadd.calls" 2>/dev/null \
+    && ok "local desktop-sudo group ensured (groupadd when absent)" \
+    || bad "desktop-sudo group NOT ensured"
+[ ! -e "${ETCROOT}/etc/sssd/conf.d/hugmesh-oidc.conf" ] \
+    && ok "stale pre-mapper SSSD conf (fake syntax) retired" \
+    || bad "stale /etc/sssd/conf.d/hugmesh-oidc.conf left behind"
 BF="${E}/hugmesh/desktop-governance/bearer-forward.sh"
 if [ -f "${BF}" ]; then
     grep -q 'api.acme.example' "${BF}" && ok "bearer-forward points at api.<domain>" || bad "bearer-forward host wrong"
@@ -240,6 +273,10 @@ run_gov "" "" "" >/dev/null 2>&1
     && ok "no domain => Discover remote NOT rendered (empty store)" || bad "remote rendered with no domain"
 [ ! -e "${ETCROOT}/etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules" ] \
     && ok "no domain => no polkit gate written (no sudo granted)" || bad "polkit gate written with no domain"
+[ ! -e "${ETCROOT}/etc/hugmesh/desktop-governance/desktop-sudo-mapper" ] \
+    && [ ! -e "${ETCROOT}/etc/cron.d/hugmesh-desktop-sudo-mapper" ] \
+    && ok "no domain => no mapper + no cron rendered (sudo leg stays dark)" \
+    || bad "mapper/cron rendered with no domain"
 
 # ── Case 9: KEYS-USB fallback — templates only on KEYS, not baked ──────────────
 # Proves the feature works WITHOUT touching the protected image builder: an admin
@@ -381,6 +418,80 @@ if [ -d "${KEYS_TPL}" ]; then
         || bad "config templates DIFFER between the two template copies"
 else
     bad "keys-template/desktop-governance not found"
+fi
+
+# ── Case 16: SYNTAX PIN — the fake SSSD options must never come back ───────────
+# The pre-fix conf used `id_provider = oidc` + `oidc_groups_allowlist` + a
+# `[domain/../local-groups]` section: syntax that exists in NO released SSSD
+# (2.11's real OAuth2 provider is `id_provider = idp`, Keycloak/Entra-only, no
+# claim->group mapping). Pin: no ACTIVE (non-comment) option assignment of that
+# family anywhere in either template tree or provision.sh, no such section
+# header, and provision.sh renders NOTHING into /etc/sssd. Prose mentions in
+# comments (lines starting with #) stay allowed.
+KEYS_TPL="${REPO}/keys-template/desktop-governance"
+if grep -rEn '^[[:space:]]*(id_provider|auth_provider|oidc_[a-z_]+)[[:space:]]*=' \
+        "${TPL_SRC}" "${KEYS_TPL}" "${SRC}" 2>/dev/null; then
+    bad "fake SSSD option syntax reintroduced (id_provider/oidc_* assignment above)"
+else
+    ok "syntax pin: no id_provider/auth_provider/oidc_* option assignment anywhere"
+fi
+if grep -rEn '^\[domain/.*/local-groups\]' "${TPL_SRC}" "${KEYS_TPL}" "${SRC}" 2>/dev/null; then
+    bad "fake [domain/../local-groups] section reintroduced"
+else
+    ok "syntax pin: no [domain/../local-groups] section anywhere"
+fi
+if grep -En 'render_gov[^#]*/etc/sssd' "${SRC}" 2>/dev/null; then
+    bad "provision.sh renders into /etc/sssd again (sssd cannot consume Casdoor tokens)"
+else
+    ok "syntax pin: provision.sh renders nothing into /etc/sssd"
+fi
+
+# ── Case 17: PACKAGE/WIRING PIN — the mapper's runtime is actually shipped ─────
+# The sudo leg is real only if EVERY runtime it depends on is a DECLARED x86
+# CLIENT package (not an accident of portage's transitive graph): the polkit
+# authority that reads the gate rule, the mapper's interpreter, and the cron
+# engine behind the 60s floor (base list + enabled in the client runlevel). The
+# templates must exist in BOTH delivery copies, and sys-auth/sssd — which cannot
+# consume the Casdoor token — must stay off the image. The client lists are the
+# ONLY place these may appear: the sudo leg is desktop-only, so a leak into the
+# base (headless node) list is also a failure.
+PKG_DESKTOP="${REPO}/specs-x86/portage/packages-desktop.list"
+PKG_BASE="${REPO}/specs-x86/portage/packages.list"
+BUILDER="${REPO}/build-x86-host-stage4.sh"
+[ -f "${TPL_SRC}/sudo/desktop-sudo-mapper.py.tmpl" ] && [ -f "${KEYS_TPL}/sudo/desktop-sudo-mapper.py.tmpl" ] \
+    && [ -f "${TPL_SRC}/sudo/cron-desktop-sudo-mapper" ] && [ -f "${KEYS_TPL}/sudo/cron-desktop-sudo-mapper" ] \
+    && ok "sudo/ mapper + cron templates present in both delivery copies" \
+    || bad "sudo/ templates missing from a delivery copy"
+# polkit is THE sole escalation route on a governed image (sudoers is stripped):
+# without sys-auth/polkit the rendered rules.d gate is an inert text file and no
+# user can escalate at all. It arrives today only via lxde-base/lxsession — a
+# transitive dep is not a contract, so it must be declared.
+grep -qx 'sys-auth/polkit' "${PKG_DESKTOP}" \
+    && ok "polkit gate engine (sys-auth/polkit) declared in the x86 CLIENT desktop list" \
+    || bad "sys-auth/polkit not declared in packages-desktop.list (sole sudo path is transitive-only)"
+! grep -qx 'sys-auth/polkit' "${PKG_BASE}" \
+    && ok "polkit stays CLIENT-scoped (not pulled onto headless nodes)" \
+    || bad "sys-auth/polkit leaked into the base (headless) package list"
+grep -qx 'dev-lang/python' "${PKG_DESKTOP}" \
+    && ok "mapper interpreter (dev-lang/python) declared in the x86 CLIENT desktop list" \
+    || bad "dev-lang/python not declared in packages-desktop.list"
+! grep -Eq '^sys-auth/sssd' "${PKG_DESKTOP}" "${PKG_BASE}" \
+    && ok "sys-auth/sssd NOT shipped (it cannot consume Casdoor tokens — mapper instead)" \
+    || bad "sys-auth/sssd shipped despite having no working config"
+grep -qx 'sys-process/cronie' "${PKG_BASE}" \
+    && ok "cron floor engine (sys-process/cronie) in the base package list" \
+    || bad "sys-process/cronie missing from the base list"
+grep -Eq 'SVCS=\([^)]*cronie[^)]*display-manager' "${BUILDER}" \
+    && ok "client runlevel enables cronie (the mapper's 60s floor actually runs)" \
+    || bad "client SVCS set does not enable cronie"
+# No PAM/NSS wiring is part of this design: `desktop-sudo` is a LOCAL group, so
+# polkit resolves it through the stock nsswitch `files` source. Pin that the
+# provisioning path never starts editing nsswitch.conf or /etc/pam.d — an edit
+# there would mean someone reached for an identity-provider integration again.
+if grep -En 'nsswitch\.conf|/etc/pam\.d' "${SRC}" 2>/dev/null; then
+    bad "provisioning touches nsswitch/PAM (the mapper needs neither — local group)"
+else
+    ok "wiring pin: no nsswitch/PAM edits (membership is a local group via nss files)"
 fi
 
 echo "== RESULT: ${P} passed, ${F} failed =="

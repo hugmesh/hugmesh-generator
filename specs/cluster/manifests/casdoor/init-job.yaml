@@ -210,16 +210,17 @@ data:
     def reconcile_desktop_client():
         """D6+D8 / GEN-SSO #135 — seed the hugmesh-desktop PKCE PUBLIC client.
 
-        The OIDC client the GOVERNED desktop images log into. sssd-oidc.conf.tmpl
-        references oidc_client_id=hugmesh-desktop with oidc_use_pkce=True, but the
+        The OIDC client the GOVERNED desktop images log into. The desktop-governance
+        templates reference client id hugmesh-desktop (PKCE public client), but the
         client was NEVER seeded in Casdoor. Without this client the desktop SSO login
         can obtain NO token, so the `desktop-sudo` sudo claim is never issuable AND the
         bearer forwarded to the BFF app-store registry never exists — i.e. the whole
         desktop-governance feature is inert (RESIDUAL #9a; see
         specs/etc/hugmesh/desktop-governance/README.md). The `desktop-sudo`
         claim/role is what the admin-bff sudo-grant places on the user at the IdP; the
-        on-device SSSD maps that claim into the local `desktop-sudo` group (oidc_group_
-        claim=roles) and polkit gates sudo on it (default-deny). The `desktop-sudo`
+        on-device desktop-sudo mapper verifies the deposited token against this
+        issuer's JWKS and maps that `roles` claim into the local `desktop-sudo` group,
+        and polkit gates sudo on it (default-deny). The `desktop-sudo`
         Casdoor role itself is seeded declaratively in init_data.json
         (init-data-configmap.yaml).
 
@@ -227,8 +228,8 @@ data:
         hugmesh/oidc-token); under casdoor's DEFAULT tokenFormat=JWT that file would
         contain totpSecret/recoveryCodes/password/passwordSalt. We seed it here with the
         SAME JWT-Custom allow-list as the systems apps so the on-device token is clean
-        and carries the MFA claim AND the `roles` claim (incl. desktop-sudo) SSSD-OIDC
-        reads.
+        and carries the MFA claim AND the `roles` claim (incl. desktop-sudo) the
+        desktop-sudo mapper reads.
 
         PUBLIC client: clientSecret is EMPTY (PKCE, no secret baked into the image),
         isPublic=True marks it as a public client; redirectUris are the native loopback
@@ -266,7 +267,7 @@ data:
             "expireInHours": 168, "enablePassword": False, "enableSignUp": False,
             # D6+D8: SAME JWT-Custom allow-list as the systems apps — leak-fix + MFA claim.
             # JWT-Custom still carries the `roles` claim (incl. desktop-sudo) via
-            # tokenAttributes, which SSSD-OIDC maps to the local desktop-sudo group.
+            # tokenAttributes, which the desktop-sudo mapper maps to the local desktop-sudo group.
             "tokenFormat": "JWT-Custom",
             "tokenSigningMethod": "RS256",
             "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,

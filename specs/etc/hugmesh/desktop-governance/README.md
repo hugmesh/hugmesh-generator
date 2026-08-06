@@ -9,12 +9,13 @@ tree and NOT inline in `build-x86-host-stage4.sh`).
 At **first boot**, `keys-provision`'s `provision_desktop_governance()`
 (`specs/etc/keys-provision/provision.sh`) reads the node's own domain from
 `.client.primary_domain` → `/etc/hugmesh/domains` (first/primary line) →
-`.hugmesh.cluster_domain` and **renders** the FOUR NAMED config templates
-(flatpakrepo, polkit, sssd, bearer-forward) into their live system locations,
-substituting the `@@CLUSTER_DOMAIN@@` placeholder with the node's domain.
+`.hugmesh.cluster_domain` and **renders** the NAMED config templates
+(flatpakrepo, polkit, desktop-sudo mapper + its cron drop-in, bearer-forward)
+into their live system locations, substituting the `@@CLUSTER_DOMAIN@@`
+placeholder with the node's domain.
 
 > **Delivery note (corrected).** The `provision_desktop_governance()` function
-> render_gov's only its four *named* templates — it has **no generic loop** and
+> render_gov's only its *named* templates — it has **no generic loop** and
 > does **not** touch `/etc/xdg/autostart`. Neither the function nor the x86
 > builder (`build-x86-host-stage4.sh`) currently *bakes* this directory into the
 > sysroot, so the only working delivery today is the **KEYS-USB fallback**: drop
@@ -46,10 +47,25 @@ image's `/etc/hugmesh/domains` already carries the brand domain).
    `provision_desktop_governance` additionally **strips any pre-existing standing
    `sudoers.d`/`%wheel` grant**. A polkit JS rule then grants the admin/`exec`
    actions ONLY when the active session's user is in the `desktop-sudo` group,
-   which SSSD-OIDC populates from the `desktop-sudo` claim/role carried in the
-   user's OIDC token for this domain. The admin-bff sudo-grant drives that claim
-   at the IdP; **revoking it at the IdP removes sudo at the next login / token
-   refresh** — nothing on the device needs editing.
+   which the **desktop-sudo mapper** (root, 60s cron convergence floor) populates
+   from the `desktop-sudo` claim/role carried in the session's deposited OIDC
+   token for this domain — after **verifying** the token against the issuer JWKS
+   (RS256 signature, `iss`/`aud`/`exp`, and the token's `name` identity claim
+   must equal the local username). **Not SSSD:** released SSSD's OAuth2 support
+   (`id_provider = idp`, 2.11.0+) speaks only the Keycloak/Entra ID REST APIs
+   via the device-auth grant and has no token-claim→local-group mapping, so it
+   cannot consume the per-domain Casdoor's deposited tokens. The admin-bff
+   sudo-grant drives the claim at the IdP; **revoking it at the IdP removes sudo
+   at the deposited token's expiry at the latest, and logout removes it within
+   the 60s cron floor** — nothing on the device needs editing.
+   Runtime: `sys-auth/polkit` (the gate's authority) and `dev-lang/python` (the
+   mapper) are declared in `specs-x86/portage/packages-desktop.list`, x86-client
+   only; the 60s floor rides the base `sys-process/cronie`. **No PAM module and
+   no nsswitch change** — `desktop-sudo` is a LOCAL group, resolved by the stock
+   `files` source. Because `/run/user/<uid>/**` is user-writable while the mapper
+   is root, every component of the token path is opened `O_NOFOLLOW` and the leaf
+   must be a regular file opened `O_NONBLOCK` (a symlink cannot redirect root's
+   read; a FIFO cannot wedge the run and with it every pending revocation).
 
 3. **SSO desktop-login bearer forwarded to the registry endpoint.** Discover's
    Flatpak backend reads the logged-in user's bearer token (deposited by the
@@ -64,7 +80,8 @@ image's `/etc/hugmesh/domains` already carries the brand domain).
 | `flatpak/hugmesh-discover.flatpakrepo.tmpl` | `/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo` | the BFF-registry Flatpak remote (domain-parameterized) |
 | `flatpak/flathub-disable.conf` | consumed by provisioning (removes/masks Flathub) | turn Flathub + default backends OFF |
 | `polkit/49-hugmesh-desktop-sudo.rules` | `/etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules` | sudo ONLY for the `desktop-sudo` group; else deny |
-| `sssd/hugmesh-oidc.conf.tmpl` | `/etc/sssd/conf.d/hugmesh-oidc.conf` | OIDC claim→group mapping (`desktop-sudo`), domain-parameterized issuer |
+| `sudo/desktop-sudo-mapper.py.tmpl` | `/etc/hugmesh/desktop-governance/desktop-sudo-mapper` (0700) | JWKS-verified OIDC claim→group mapping (`desktop-sudo`), domain-parameterized issuer |
+| `sudo/cron-desktop-sudo-mapper` | `/etc/cron.d/hugmesh-desktop-sudo-mapper` | the mapper's 60s convergence timer (grant within a minute; logout/expiry revocation floor) |
 | `discover/bearer-forward.sh.tmpl` | `/etc/hugmesh/desktop-governance/bearer-forward.sh` (+ Flatpak `http.extra-headers`) | forward the SSO bearer to the registry host |
 
 ### GEN-SSO session-start (Seams #1 + #2)
@@ -83,7 +100,7 @@ image / with no resolvable domain).
 
 ### Session-start delivery (run[] hook)
 
-`provision_desktop_governance()` is **protected** and renders only its four named
+`provision_desktop_governance()` is **protected** and renders only its named
 templates with no `/etc/xdg/autostart` handling, so the three GEN-SSO templates are
 deployed by a **KEYS `run[]` hook** that `keys-provision`'s `provision_run_hooks()`
 runs **as root at end of first boot** (with `KEYS_BASE` exported), **after**
@@ -100,10 +117,10 @@ JSON has no comments.)
 
 ### RESIDUAL #9a — `hugmesh-desktop` PKCE public client
 
-The SSSD-OIDC conf points the desktop login at `oidc_client_id = hugmesh-desktop`
-(a PKCE public client) but `casdoor-init` did **not** seed it — so the login could
-obtain no token, the `desktop-sudo` claim was never issuable, and SSO-sudo was
-inert. This PR adds `reconcile_desktop_client()` to
+The desktop-governance config points the desktop login at the `hugmesh-desktop`
+client id (a PKCE public client) but `casdoor-init` did **not** seed it — so the
+login could obtain no token, the `desktop-sudo` claim was never issuable, and
+SSO-sudo was inert. This PR adds `reconcile_desktop_client()` to
 `specs/cluster/manifests/casdoor/init-job.yaml` (PUBLIC client, empty secret, PKCE,
 JWT tokens, native/loopback+OOB redirects, `authorization_code`+`device_code`) and
 seeds the `desktop-sudo` role in `init-data-configmap.yaml`. The exact Casdoor

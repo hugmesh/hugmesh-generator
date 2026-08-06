@@ -2667,7 +2667,7 @@ generator repo):
     POST /api/login; an external provider needs a browser front-channel).
   * MFA step-up stamping (mfa_satisfied is written via the Casdoor API).
   * The roles/permissions/groups token model — headscale allowed_groups, Harbor
-    oidc_group_claim, sssd allowlists all read Casdoor-shaped claims.
+    oidc_group_claim, the desktop-sudo mapper all read Casdoor-shaped claims.
   * signup-gate and the role-membership sync jobs (Casdoor REST API callers).
   * JWKS egress: the pki-namespace NetworkPolicy only allows in-cluster JWKS —
     HTTPS egress to your provider needs an egress-policy change on the cluster.

@@ -164,13 +164,53 @@ the native amd64 chroot build with grub-EFI.
   SSH terminal over the device-SSH-license). Rides the existing device-SSH-license
   transport. The client-side provisioning lives here
   ([`specs/etc/hugmesh/desktop-governance/`](../specs/etc/hugmesh/desktop-governance/):
-  polkit sudo rule, SSSD/OIDC config, Discover/Flatpak wiring, autostart SSO
-  deposit scripts) and the server-side data/API is a full set of controllers in
-  `hugmesh-admin-bff-api` (catalog, install-requests, remote-install, sudo
-  entitlement/step-up, SSH terminal). It **ships dark**: the registry + SSH
-  transport default to `Noop` client implementations gated by
-  `app.desktop.registry.enabled=false` / `app.desktop.remote-install.enabled=false`
-  (both default off), so a default deployment exposes none of this.
+  polkit sudo rule, the desktop-sudo claim→group mapper + its 60s cron,
+  Discover/Flatpak wiring, autostart SSO deposit scripts) and the server-side
+  data/API is a full set of controllers in `hugmesh-admin-bff-api` (catalog,
+  install-requests, remote-install, sudo entitlement/step-up, SSH terminal). It
+  **ships dark**: the registry + SSH transport default to `Noop` client
+  implementations gated by `app.desktop.registry.enabled=false` /
+  `app.desktop.remote-install.enabled=false` (both default off), so a default
+  deployment exposes none of this.
+- **Sudo path (corrected 2026-08): a root claim→group MAPPER, not SSSD.** The
+  original increment shipped an `/etc/sssd/conf.d` conf using `id_provider =
+  oidc` + `oidc_groups_allowlist` + a `[domain/../local-groups]` section —
+  syntax that exists in **no released SSSD** — and never installed sssd at all.
+  Released SSSD's real OAuth2 support (`id_provider = idp`, added in 2.11.0 /
+  2025-06-05) speaks only the **Keycloak / Entra ID REST APIs** (`idp_type`
+  accepts exactly those two products), looks users and groups up *through those
+  REST APIs* with its own service client, authenticates via the RFC-8628
+  device-auth grant, and has **no token-claim→local-group mapping** — the whole
+  documented option set is `idp_type` / `idp_client_id` / `idp_client_secret` /
+  `idp_token_endpoint` / `idp_device_auth_endpoint` / `idp_userinfo_endpoint` /
+  `idp_id_scope` / `idp_auth_scope` / `idp_request_timeout` / `idp_auto_refresh`
+  / `idmap_range_*`, and none of it consumes a token the system did not itself
+  obtain. 2.12.0 and 2.13.x (2.13.1 is current) added token caching/auto-refresh
+  and an Entra endpoint knob, not claim mapping. The per-domain Casdoor issuer is
+  unsupported, so no sssd.conf can deliver this leg. The working runtime is
+  `sudo/desktop-sudo-mapper.py.tmpl` → `/etc/hugmesh/desktop-governance/
+  desktop-sudo-mapper` (root, 0700) + `/etc/cron.d/hugmesh-desktop-sudo-mapper`
+  (60s convergence floor, the `hugmesh-domain-reconcile` idiom): it verifies
+  each session's deposited OIDC token against the issuer JWKS (RS256 signature
+  via OIDC discovery with a last-good cache, `iss`/`aud`/`exp`, and the token's
+  `name` claim must equal the local username) and converges local `desktop-sudo`
+  membership to the verified claim set. polkit resolves groups through NSS at
+  action time, so grant AND revocation bite the live session; classic sudoers
+  is stripped on governed images, so polkit is the only escalation route.
+  The runtime behind that is now DECLARED in the x86 CLIENT list
+  (`specs-x86/portage/packages-desktop.list`, client-scoped exactly like
+  `flatpak`/`discover`): **`sys-auth/polkit`** — the authority that reads the
+  rules.d gate; it previously arrived only as an `lxde-base/lxsession`
+  dependency, i.e. the sole sudo path hung off a transitive edge — and
+  **`dev-lang/python`**, the mapper's stdlib-only interpreter. The 60s floor
+  runs on the base `sys-process/cronie`, already enabled in the client runlevel.
+  **No `sys-auth/sssd`, and no PAM or nsswitch changes**: `desktop-sudo` is a
+  LOCAL group, so polkit resolves it through the stock `files` NSS source and
+  nothing in the identity stack is touched (default-deny by construction).
+  Everything renders only on a governed image with a valid domain (ships-dark).
+  The SSO greeter/PAM **token producer** stays 🔭 DEFERRED with FD-07
+  (Increment 2); until it lands the deposit path has no producer and the whole
+  leg stays inert-by-default.
 
 ## Provisioning manifest additions (keys-provision)
 

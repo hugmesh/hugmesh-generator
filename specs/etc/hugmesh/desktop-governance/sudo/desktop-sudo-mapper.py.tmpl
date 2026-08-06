@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+# desktop-sudo-mapper (TEMPLATE) -> /etc/hugmesh/desktop-governance/desktop-sudo-mapper
+#
+# SSO claim -> local `desktop-sudo` group mapper for governed client desktops.
+# This is the bridge that turns the `desktop-sudo` OIDC claim into local
+# `desktop-sudo` group membership, which the polkit rule
+# (../polkit/49-hugmesh-desktop-sudo.rules) uses as the SOLE sudo gate.
+#
+# WHY A MAPPER AND NOT SSSD: released SSSD cannot do this. Its OAuth2 support
+# (`id_provider = idp`, added in SSSD 2.11.0 / 2025-06-05) speaks only the
+# Keycloak and Entra ID REST APIs — `idp_type` accepts exactly those two
+# products ("since there is no standard for the REST APIs, SSSD has to support
+# them individually") — looks users/groups up through those REST APIs with a
+# dedicated service client, authenticates via the RFC-8628 Device Authorization
+# Grant (browser on a second device), and has NO token-claim->local-group
+# mapping at all. The whole documented option set is idp_type, idp_client_id,
+# idp_client_secret, idp_token_endpoint, idp_device_auth_endpoint,
+# idp_userinfo_endpoint, idp_id_scope, idp_auth_scope, idp_request_timeout,
+# idp_auto_refresh and idmap_range_{min,max,size} — nothing consumes a token the
+# system did not itself obtain. 2.12.0 and 2.13.x (2.13.1, 2026-06-09, is the
+# newest release) added token caching/auto-refresh and an Entra endpoint knob,
+# not claim mapping. The per-domain Casdoor issuer is neither Keycloak nor
+# Entra, and this design's input is a DEPOSITED access token, not a device-auth
+# flow — so no sssd.conf can ever deliver this leg. (The conf this file replaced
+# used `id_provider = oidc` + `oidc_groups_allowlist` + a
+# `[domain/../local-groups]` section: syntax that exists in NO released SSSD.)
+#
+# WHAT IT DOES (root, every 60s via /etc/cron.d/hugmesh-desktop-sudo-mapper —
+# same convergence-floor idiom as hugmesh-domain-reconcile):
+#   1. Scans /run/user/<uid>/hugmesh/oidc-token — the per-session access token
+#      deposited by oidc-token-deposit.sh (GEN-SSO Seam #1) — for login users
+#      (uid >= 1000).
+#   2. VERIFIES each token before trusting anything in it. The token file is
+#      user-writable, so every claim is validated against the ISSUER's JWKS:
+#      RS256 signature (fetched via OIDC discovery, last-good cached), iss ==
+#      the per-domain Casdoor, aud contains the hugmesh-desktop client, exp/nbf,
+#      and the token's `name` identity claim must equal the LOCAL username the
+#      session belongs to (a user cannot replay someone else's token into their
+#      own runtime dir). The token shape (JWT-Custom RS256, `roles` = array of
+#      role-name strings, identity in `name`) is the live-verified platform
+#      contract (tests/casdoor/test-jwt-custom-token.sh).
+#   3. Converges local `desktop-sudo` membership to the verified claim set:
+#      verified `desktop-sudo` role => gpasswd -a; member without it (logged
+#      out, expired, revoked at the IdP) => gpasswd -d. polkit resolves group
+#      membership through NSS at action time, so grant AND revocation apply to
+#      the LIVE session without re-login (classic sudo(8) would need a fresh
+#      login, but governed images strip sudoers — escalation is polkit-only).
+#
+# DEFAULT-DENY / FAIL-CLOSED:
+#   * No token, invalid token, no `desktop-sudo` role, identity mismatch => the
+#     user is NOT in the group (and is removed if they were).
+#   * JWKS unreachable AND no last-good cache => NO new grant is ever made;
+#     existing members holding a token are kept as-is until keys are reachable
+#     (fail-closed-keep-last-good, the reconcile-agent idiom), while members
+#     with NO token are still removed (logout revocation works offline).
+#   * Revocation at the IdP propagates at the deposited token's expiry at the
+#     latest (the admin-bff sudo-grant drives the claim; revoke there => the
+#     next refreshed token lacks the role => membership drops within 60s).
+#
+# @@CLUSTER_DOMAIN@@ is substituted at FIRST BOOT by provision_desktop_governance()
+# with the node's own domain (from /etc/hugmesh/domains). The OIDC issuer is the
+# per-domain Casdoor at id.<domain>.
+#
+# DSM_* environment overrides mirror the DR_* seams of hugmesh-domain-reconcile:
+# they exist so tests/desktop-governance/test-desktop-sudo-mapper.sh can exercise
+# the REAL verification path (real RSA keys, real signatures) without root or
+# network. Absent in production.
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import pwd
+import stat
+import subprocess
+import sys
+import time
+import urllib.request
+
+ISSUER = "https://id.@@CLUSTER_DOMAIN@@"
+CLIENT_ID = "hugmesh-desktop"
+GROUP = "desktop-sudo"
+ROLES_CLAIM = "roles"
+RUN_USER_ROOT = os.environ.get("DSM_RUN_USER_ROOT", "/run/user")
+CACHE_DIR = os.environ.get("DSM_CACHE_DIR", "/var/lib/hugmesh/desktop-governance")
+JWKS_FILE = os.environ.get("DSM_JWKS_FILE", "")
+UID_MIN = 1000
+SKEW = 60          # seconds of clock leeway on exp/nbf
+TIMEOUT = 10       # seconds per JWKS/discovery request
+MAX_TOKEN_BYTES = 128 * 1024
+
+# ASN.1 DigestInfo prefix for SHA-256 (RFC 8017, EMSA-PKCS1-v1_5).
+SHA256_DIGESTINFO = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def log(msg):
+    print("desktop-sudo-mapper: %s" % msg, flush=True)
+
+
+def b64url_decode(s):
+    if isinstance(s, str):
+        s = s.encode("ascii")
+    return base64.urlsafe_b64decode(s + b"=" * (-len(s) % 4))
+
+
+def fetch_json(url):
+    with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+        return json.load(resp)
+
+
+def load_jwks():
+    """Return the issuer JWKS dict, or None when no key material is available.
+
+    Order: explicit DSM_JWKS_FILE override (test seam / offline pin), else OIDC
+    discovery at the issuer (TLS verified against the system trust store) with
+    the result cached last-good under CACHE_DIR, else the last-good cache.
+    """
+    if JWKS_FILE:
+        try:
+            with open(JWKS_FILE) as f:
+                return json.load(f)
+        except (OSError, ValueError) as e:
+            log("JWKS override %s unreadable (%s) — fail closed" % (JWKS_FILE, e))
+            return None
+    cache = os.path.join(CACHE_DIR, "jwks.json")
+    try:
+        disc = fetch_json(ISSUER + "/.well-known/openid-configuration")
+        uri = disc.get("jwks_uri", "")
+        if not isinstance(uri, str) or not uri.startswith("https://"):
+            raise ValueError("discovery returned no https jwks_uri")
+        jwks = fetch_json(uri)
+        if not isinstance(jwks.get("keys"), list) or not jwks["keys"]:
+            raise ValueError("jwks has no keys")
+        os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+        tmp = cache + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(jwks, f)
+        os.replace(tmp, cache)
+        return jwks
+    except Exception as e:  # network/TLS/parse — any failure falls to last-good
+        log("JWKS fetch from %s failed (%s); trying last-good cache" % (ISSUER, e))
+    try:
+        with open(cache) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def rsa_verify(jwk, signing_input, sig):
+    """RSASSA-PKCS1-v1_5 / SHA-256 verify against a JWK's (n, e). Stdlib-only:
+    em = sig^e mod n must equal 0x00 0x01 FF..FF 0x00 || DigestInfo || H."""
+    try:
+        n = int.from_bytes(b64url_decode(jwk["n"]), "big")
+        e = int.from_bytes(b64url_decode(jwk["e"]), "big")
+    except (KeyError, ValueError):
+        return False
+    k = (n.bit_length() + 7) // 8
+    if len(sig) != k:
+        return False
+    em = pow(int.from_bytes(sig, "big"), e, n).to_bytes(k, "big")
+    t = SHA256_DIGESTINFO + hashlib.sha256(signing_input).digest()
+    if k < len(t) + 11:
+        return False
+    expected = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
+    return hmac.compare_digest(em, expected)
+
+
+def has_group_role(roles):
+    """True iff the roles claim carries desktop-sudo. Accepts the live-verified
+    JWT-Custom shape (role-NAME strings, bare or <owner>/<name>-qualified) and
+    the plain-JWT shape (role objects with a name field)."""
+    if not isinstance(roles, list):
+        return False
+    for r in roles:
+        if isinstance(r, str) and (r == GROUP or r.endswith("/" + GROUP)):
+            return True
+        if isinstance(r, dict) and r.get("name") == GROUP:
+            return True
+    return False
+
+
+def eligible(token, username, jwks):
+    """(True, "ok") iff the token is a genuine, current, this-issuer,
+    this-client token FOR this local user carrying the desktop-sudo role."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False, "not a JWS"
+    try:
+        header = json.loads(b64url_decode(parts[0]))
+        payload = json.loads(b64url_decode(parts[1]))
+        sig = b64url_decode(parts[2])
+    except (ValueError, UnicodeDecodeError):
+        return False, "undecodable"
+    if not isinstance(header, dict) or not isinstance(payload, dict):
+        return False, "malformed"
+    # Signature FIRST — nothing in the payload is trusted before this passes.
+    if header.get("alg") != "RS256":
+        return False, "alg %r != RS256" % header.get("alg")
+    keys = [k for k in jwks.get("keys", [])
+            if isinstance(k, dict) and k.get("kty") == "RSA"
+            and k.get("use", "sig") == "sig"]
+    kid = header.get("kid")
+    if kid is not None:
+        # kid is a hint, not an authority — fall back to all keys if unmatched.
+        keys = [k for k in keys if k.get("kid") == kid] or keys
+    if not keys:
+        return False, "no RSA keys in JWKS"
+    signing_input = (parts[0] + "." + parts[1]).encode("ascii")
+    if not any(rsa_verify(k, signing_input, sig) for k in keys):
+        return False, "signature invalid"
+    iss = payload.get("iss")
+    if not isinstance(iss, str) or iss.rstrip("/") != ISSUER.rstrip("/"):
+        return False, "iss %r != %s" % (iss, ISSUER)
+    aud = payload.get("aud")
+    auds = [aud] if isinstance(aud, str) else (aud if isinstance(aud, list) else [])
+    if CLIENT_ID not in auds:
+        return False, "aud %r lacks %s" % (aud, CLIENT_ID)
+    now = time.time()
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)) or now > exp + SKEW:
+        return False, "expired (exp %r)" % exp
+    nbf = payload.get("nbf")
+    if isinstance(nbf, (int, float)) and now < nbf - SKEW:
+        return False, "not yet valid (nbf %r)" % nbf
+    # Identity binding: the token must be the LOCAL user's own. JWT-Custom
+    # carries identity in `name` (never preferred_username) — require an exact
+    # match so a copied/planted third-party token grants nothing.
+    name = payload.get("name")
+    if not isinstance(name, str) or name != username:
+        return False, "token name %r != local user" % name
+    if not has_group_role(payload.get(ROLES_CLAIM)):
+        return False, "no %s role" % GROUP
+    return True, "ok"
+
+
+def uid_to_name(uid):
+    umap = os.environ.get("DSM_UID_MAP", "")
+    if umap:  # test seam: "1001=alice,1002=bob"
+        for pair in umap.split(","):
+            if pair and int(pair.split("=", 1)[0]) == uid:
+                return pair.split("=", 1)[1]
+        return None
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return None
+
+
+def read_token(uid_dir):
+    """Read <uid_dir>/hugmesh/oidc-token, or "" when there is nothing usable.
+
+    Every component below /run/user is USER-WRITABLE, so root must not be led
+    anywhere by it: each is opened O_NOFOLLOW (a symlinked `hugmesh/` or
+    `oidc-token` cannot make root read /etc/shadow), the leaf is opened
+    O_NONBLOCK and must be a REGULAR file (a FIFO would otherwise block this run
+    forever — and a wedged mapper stops every revocation, not just this user's),
+    and the read is size-capped.
+    """
+    fds = []
+    try:
+        try:
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+            fds.append(os.open(uid_dir, flags | os.O_DIRECTORY))
+            fds.append(os.open("hugmesh", flags | os.O_DIRECTORY, dir_fd=fds[0]))
+            fds.append(os.open("oidc-token", flags | os.O_NONBLOCK, dir_fd=fds[1]))
+        except OSError:
+            return ""
+        if not stat.S_ISREG(os.fstat(fds[-1]).st_mode):
+            return ""
+        try:
+            raw = os.read(fds[-1], MAX_TOKEN_BYTES)
+        except OSError:
+            return ""
+        return raw.decode("ascii", "replace").strip()
+    finally:
+        for fd in fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def scan_tokens():
+    """{local username: deposited token} for login-uid sessions with a token."""
+    out = {}
+    try:
+        entries = os.listdir(RUN_USER_ROOT)
+    except OSError:
+        return out
+    for ent in entries:
+        if not ent.isdigit():
+            continue
+        uid = int(ent)
+        if uid < UID_MIN:
+            continue
+        token = read_token(os.path.join(RUN_USER_ROOT, ent))
+        if not token:
+            continue
+        name = uid_to_name(uid)
+        if name:
+            out[name] = token
+    return out
+
+
+def run(*argv):
+    return subprocess.run(argv, capture_output=True, text=True)
+
+
+def current_members():
+    """Members of the local desktop-sudo group, creating it if absent.
+    Returns None only when the group cannot be read nor created."""
+    r = run("getent", "group", GROUP)
+    if r.returncode != 0:
+        c = run("groupadd", GROUP)
+        if c.returncode != 0:
+            log("cannot create group %s: %s" % (GROUP, c.stderr.strip()))
+            return None
+        log("created local group %s" % GROUP)
+        return set()
+    fields = r.stdout.strip().split(":")
+    members = fields[3] if len(fields) >= 4 else ""
+    return {m for m in members.split(",") if m}
+
+
+def main():
+    tokens = scan_tokens()
+    current = current_members()
+    if current is None:
+        return 0  # converge next run
+    jwks = load_jwks() if tokens else None
+    grants = set()
+    keeps = set()
+    for user in sorted(tokens):
+        if jwks is None:  # tokens exist but no key material at all
+            if user in current:
+                keeps.add(user)
+                log("keep %s: JWKS unavailable (last-good membership)" % user)
+            else:
+                log("deny %s: JWKS unavailable (fail-closed, no grant)" % user)
+            continue
+        ok, why = eligible(tokens[user], user, jwks)
+        if ok:
+            grants.add(user)
+        else:
+            log("deny %s: %s" % (user, why))
+    for user in sorted(grants - current):
+        r = run("gpasswd", "-a", user, GROUP)
+        if r.returncode == 0:
+            log("grant %s: verified %s claim -> added to %s" % (user, GROUP, GROUP))
+        else:
+            log("grant %s FAILED: %s" % (user, r.stderr.strip()))
+    for user in sorted(current - grants - keeps):
+        r = run("gpasswd", "-d", user, GROUP)
+        if r.returncode == 0:
+            log("revoke %s: no verified %s claim -> removed from %s" % (user, GROUP, GROUP))
+        else:
+            log("revoke %s FAILED: %s" % (user, r.stderr.strip()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

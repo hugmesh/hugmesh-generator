@@ -70,7 +70,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 ├── desktop-governance/               OPTIONAL desktop app-governance config (client desktops)
 │   ├── flatpak/                      Discover -> BFF registry remote + Flathub-off list
 │   ├── polkit/                       SSO-claim sudo gate (desktop-sudo)
-│   ├── sssd/                         OIDC claim->group mapping (id.<domain> issuer)
+│   ├── sudo/                         desktop-sudo mapper: JWKS-verified OIDC claim->group (id.<domain> issuer)
 │   └── discover/                     bearer-forward helper
 └── secrets/
     ├── post-provision.sh             optional run[] hook
@@ -93,7 +93,8 @@ KEYS/                                 (FAT32, volume label "KEYS")
 > desktop app-governance config TEMPLATES for client desktops (laptop /
 > chromebook / desktop). `provision_desktop_governance()` uses these only if the
 > image did not bake them at `/etc/hugmesh/desktop-governance/`, then renders
-> them (substituting the node's domain) into Discover/Flatpak, polkit, and SSSD.
+> them (substituting the node's domain) into Discover/Flatpak, polkit, and the
+> desktop-sudo mapper (+ its 60s cron).
 > Default-deny / empty-store / ships-dark: no config ⇒ empty Discover store, no
 > user has sudo. These files are **not secrets** (they carry hosts + the
 > `desktop-sudo` claim name, never tokens). See

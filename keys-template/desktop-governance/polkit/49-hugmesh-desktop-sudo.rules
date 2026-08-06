@@ -12,18 +12,21 @@
 // A user is granted the privileged polkit actions (pkexec / "run as admin",
 // which is how a governed desktop performs sudo-equivalent operations) ONLY
 // when their active local session belongs to the `desktop-sudo` UNIX group.
-// That group is NOT populated statically: SSSD-OIDC adds the logged-in user to
-// `desktop-sudo` IFF the user's OIDC token for THIS domain carries the
-// `desktop-sudo` claim/role (see ../sssd/hugmesh-oidc.conf.tmpl). The
+// That group is NOT populated statically: the desktop-sudo mapper (60s root
+// cron) adds the logged-in user to `desktop-sudo` IFF the session's deposited
+// OIDC token for THIS domain VERIFIES against the issuer JWKS and carries the
+// `desktop-sudo` claim/role (see ../sudo/desktop-sudo-mapper.py.tmpl). The
 // admin-bff sudo-grant drives that claim at the IdP.
 //
-// REVOCATION: revoke the claim at the IdP and, at the user's next login / token
-// refresh, SSSD no longer maps them into `desktop-sudo`, so this rule denies
-// them again. Nothing on the device is edited to revoke.
+// REVOCATION: revoke the claim at the IdP and, at the deposited token's expiry
+// (or the user's logout, within the 60s cron floor) the mapper removes them
+// from `desktop-sudo`, so this rule denies them again. polkit resolves group
+// membership through NSS at action time, so the removal bites the LIVE
+// session. Nothing on the device is edited to revoke.
 //
 // This file installs to /etc/polkit-1/rules.d/ verbatim (no domain
 // substitution needed — the domain binding is enforced by the OIDC issuer +
-// claim, handled in SSSD).
+// claim, verified by the mapper).
 
 polkit.addAdminRule(function(action, subject) {
     // Replace the default admin identities (wheel/sudo) with a single source of

@@ -11,8 +11,8 @@
 # @@CLUSTER_DOMAIN@@ appears only in this header; the wrapper is domain-agnostic
 # (the deposited token + the rendered bearer-forward.sh carry the domain).
 #
-# GOVERNED-GATED / SHIPS-DARK: on an ungoverned image (no rendered SSSD-OIDC conf
-# and no rendered bearer-forward.sh) this exits immediately having done nothing —
+# GOVERNED-GATED / SHIPS-DARK: on an ungoverned image (no rendered desktop-sudo
+# mapper and no rendered bearer-forward.sh) this exits immediately having done nothing —
 # no token deposit, no header, no sudo. The deposit + forward scripts are ALSO
 # independently governed-gated, so this is defense-in-depth.
 #
@@ -29,9 +29,11 @@ DEPOSIT="${GOV_DIR}/oidc-token-deposit.sh"
 FORWARD="${GOV_DIR}/bearer-forward.sh"
 
 # is_governed(): identical signal to oidc-token-deposit.sh / provision.sh.
+# EXISTENCE, not permission — the wrapper runs as the session user and the mapper
+# is 0700 root:root (see oidc-token-deposit.sh for the full reasoning).
 is_governed() {
-    [ -r /etc/sssd/conf.d/hugmesh-oidc.conf ] && return 0
-    [ -x "${FORWARD}" ] && return 0
+    [ -e "${GOV_DIR}/desktop-sudo-mapper" ] && return 0
+    [ -e "${FORWARD}" ] && return 0
     return 1
 }
 

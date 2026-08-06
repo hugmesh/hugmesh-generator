@@ -342,7 +342,7 @@ provision_users() {
             if desktop_governance_governed; then
                 # GOVERNED image: do NOT write a static /etc/sudoers.d grant. A
                 # static grant would confer STANDING root independent of the OIDC
-                # claim/SSSD/polkit and could never be revoked at the IdP. On these
+                # claim/mapper/polkit and could never be revoked at the IdP. On these
                 # images sudo flows SOLELY through the `desktop-sudo` group/polkit
                 # claim (provision_desktop_governance installs the gate). The
                 # KEYS `sudo:true` is honored as IdP-claim eligibility, not as a
@@ -1968,9 +1968,10 @@ provision_domain_registry() {
 #      https://api.<domain>/bff/desktop/registry/ ; Flathub + every other default
 #      backend removed; EMPTY until a domain admin curates apps (discover role).
 #   2. polkit sudo gate: NO static sudoers; sudo (admin polkit actions) ONLY for
-#      the `desktop-sudo` group, which SSSD-OIDC populates from the `desktop-sudo`
-#      OIDC claim/role for this domain (admin-bff sudo-grant drives the claim;
-#      IdP revocation drops sudo at next login/refresh).
+#      the `desktop-sudo` group, which the desktop-sudo mapper populates from the
+#      JWKS-VERIFIED `desktop-sudo` OIDC claim/role for this domain (admin-bff
+#      sudo-grant drives the claim; IdP revocation drops sudo at the deposited
+#      token's expiry, logout drops it within the 60s cron floor).
 #   3. SSO bearer forwarded to the registry host so Discover authenticates as the
 #      logged-in user (BFF enforces discover-role + domain-lock + enabled-only).
 # No admin config => empty store, no user has sudo. This is a no-op on non-client
@@ -2031,7 +2032,7 @@ provision_desktop_governance() {
     local dom_esc; dom_esc="$(printf '%s' "${dom}" | sed 's/[&/\]/\\&/g')"
 
     # Render a @@CLUSTER_DOMAIN@@ template into a destination, dropping the
-    # template's leading comment block is NOT needed (Flatpak/SSSD/ini tolerate #).
+    # template's leading comment block is NOT needed (Flatpak/cron/python tolerate #).
     render_gov() {  # $1=src-tmpl  $2=dst  $3=mode
         local src="$1" dst="$2" mode="$3"
         [ -f "${src}" ] || { warn "desktop-governance: template missing: ${src}"; return 1; }
@@ -2119,13 +2120,33 @@ provision_desktop_governance() {
         done
     fi
 
-    # ── 3. SSSD-OIDC claim->group mapping + bearer forwarder ──────────────────
-    render_gov "${tpl}/sssd/hugmesh-oidc.conf.tmpl" \
-               /etc/sssd/conf.d/hugmesh-oidc.conf 0600
+    # ── 3. SSO claim -> desktop-sudo group mapper + bearer forwarder ──────────
+    # NOT SSSD: released SSSD's OAuth2 support (`id_provider = idp`, 2.11.0+)
+    # speaks only the Keycloak/Entra ID REST APIs via the RFC-8628 device-auth
+    # grant and has no token-claim->local-group mapping — it cannot consume the
+    # per-domain Casdoor's deposited tokens. The mapper is the honest equivalent:
+    # a root cron (60s convergence floor, the hugmesh-domain-reconcile idiom)
+    # that VERIFIES each session's deposited token against the issuer JWKS
+    # (signature/iss/aud/exp + local-identity binding) and converges local
+    # `desktop-sudo` membership to the verified claim set. Default-deny both
+    # ways: no valid claim => not in the group (removed if present).
+    render_gov "${tpl}/sudo/desktop-sudo-mapper.py.tmpl" \
+               /etc/hugmesh/desktop-governance/desktop-sudo-mapper 0700
+    render_gov "${tpl}/sudo/cron-desktop-sudo-mapper" \
+               /etc/cron.d/hugmesh-desktop-sudo-mapper 0644
+    # The local group the mapper converges and polkit gates on. Created empty —
+    # membership only ever comes from the mapper's verified claims.
+    getent group desktop-sudo >/dev/null 2>&1 || groupadd desktop-sudo 2>/dev/null \
+        || warn "desktop-governance: could not create the desktop-sudo group (mapper will retry)"
+    # Retire the pre-mapper SSSD conf an earlier provision run may have rendered:
+    # its option syntax (`id_provider = oidc`, `oidc_groups_allowlist`) does not
+    # exist in any released SSSD, and a leftover conf.d drop-in would break sssd
+    # startup if sssd ever landed on the image.
+    rm -f /etc/sssd/conf.d/hugmesh-oidc.conf 2>/dev/null || true
     render_gov "${tpl}/discover/bearer-forward.sh.tmpl" \
                "${tpl}/bearer-forward.sh" 0755
 
-    log "desktop-governance: done (domain ${dom}; store empty until admin curates; sudo only for the desktop-sudo SSO claim)"
+    log "desktop-governance: done (domain ${dom}; store empty until admin curates; sudo only for the verified desktop-sudo SSO claim)"
 }
 
 # ── Backups (etcd + PostgreSQL) to attached storage and/or network share ──

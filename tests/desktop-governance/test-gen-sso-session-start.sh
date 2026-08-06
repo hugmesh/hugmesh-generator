@@ -3,7 +3,7 @@
 # desktop-app-governance: the OIDC-token DEPOSIT (Seam #1), the XDG autostart +
 # session-start wrapper (Seam #2), and the self-contained session-install.sh that
 # renders + publishes them. Headless, NO root (no real provisioning, mounts,
-# flatpak, sssd, or display manager).
+# flatpak, mapper cron, or display manager).
 #
 # Proves:
 #   DEPOSIT (oidc-token-deposit.sh):
@@ -50,16 +50,19 @@ trap cleanup EXIT
 #   RUN   -> XDG_RUNTIME_DIR
 #   HOME  -> the user's home
 #   KEYS  -> the mounted KEYS USB (carries desktop-governance/ templates)
-# A GOVERNED sandbox has a rendered SSSD-OIDC conf + a baked desktop-governance
-# dir; an UNGOVERNED one has neither.
+# A GOVERNED sandbox has a rendered desktop-sudo mapper + bearer-forward.sh (the
+# two is_governed markers) + a baked desktop-governance dir; an UNGOVERNED one
+# has none of them.
 new_sandbox() {
     WORK="$(mktemp -d)"; SANDBOXES+=("${WORK}")
     ROOT="${WORK}/root"; RUN="${WORK}/run"; HOMED="${WORK}/home"; KEYS="${WORK}/keys"
     mkdir -p "${ROOT}/etc" "${RUN}" "${HOMED}" "${KEYS}"
     if [ "${1:-governed}" = "governed" ]; then
-        mkdir -p "${ROOT}/etc/sssd/conf.d" "${ROOT}/etc/hugmesh/desktop-governance"
-        printf 'oidc_client_id = hugmesh-desktop\n' > "${ROOT}/etc/sssd/conf.d/hugmesh-oidc.conf"
-        # a (governed) rendered bearer-forward.sh present, executable
+        mkdir -p "${ROOT}/etc/hugmesh/desktop-governance"
+        # (governed) rendered desktop-sudo mapper + bearer-forward.sh. The mapper
+        # gets its PRODUCTION mode 0700 (provision.sh renders it root-only).
+        printf '#!/bin/sh\nexit 0\n' > "${ROOT}/etc/hugmesh/desktop-governance/desktop-sudo-mapper"
+        chmod 0700 "${ROOT}/etc/hugmesh/desktop-governance/desktop-sudo-mapper"
         printf '#!/bin/sh\nexit 0\n' > "${ROOT}/etc/hugmesh/desktop-governance/bearer-forward.sh"
         chmod 0755 "${ROOT}/etc/hugmesh/desktop-governance/bearer-forward.sh"
         # KEYS carries the templates (the is_governed KEYS branch + render source)
@@ -74,7 +77,6 @@ new_sandbox() {
 run_script() {
     local src="$1"; shift
     local rendered; rendered="$(sed \
-        -e "s#/etc/sssd#${ROOT}/etc/sssd#g" \
         -e "s#/etc/hugmesh/desktop-governance#${ROOT}/etc/hugmesh/desktop-governance#g" \
         -e "s#/etc/hugmesh/domains#${ROOT}/etc/hugmesh/domains#g" \
         -e "s#/etc/flatpak#${ROOT}/etc/flatpak#g" \
@@ -99,8 +101,7 @@ seed_baked_templates() {
 # and token paths resolve inside the sandbox (not the test host's real /etc).
 seed_rendered_deposit() {
     local dst="${ROOT}/etc/hugmesh/desktop-governance/oidc-token-deposit.sh"
-    sed -e "s#/etc/sssd#${ROOT}/etc/sssd#g" \
-        -e "s#/etc/hugmesh/desktop-governance#${ROOT}/etc/hugmesh/desktop-governance#g" \
+    sed -e "s#/etc/hugmesh/desktop-governance#${ROOT}/etc/hugmesh/desktop-governance#g" \
         "${DEP_TPL}" > "${dst}"
     chmod 0755 "${dst}"
 }
@@ -121,12 +122,12 @@ fi
 new_sandbox governed
 envdump="$(TOKEN_ENV="leaky-tok-xyz" run_script "${DEP_TPL}" 2>/dev/null; echo "---"; \
     XDG_RUNTIME_DIR="${RUN}" HOME="${HOMED}" HUGMESH_OIDC_ACCESS_TOKEN="leaky-tok-xyz" \
-    bash -c "$(sed -e "s#/etc/sssd#${ROOT}/etc/sssd#g" -e "s#/etc/hugmesh/desktop-governance#${ROOT}/etc/hugmesh/desktop-governance#g" "${DEP_TPL}"); env" 2>/dev/null | grep -c 'leaky-tok-xyz' || true)"
+    bash -c "$(sed -e "s#/etc/hugmesh/desktop-governance#${ROOT}/etc/hugmesh/desktop-governance#g" "${DEP_TPL}"); env" 2>/dev/null | grep -c 'leaky-tok-xyz' || true)"
 # Only the HUGMESH_OIDC_ACCESS_TOKEN input itself appears in env (count 1); the
 # script must not create a SECOND exported var carrying it. We assert no NEW export
 # named *TOKEN*/*BEARER* beyond the input.
 extra="$(XDG_RUNTIME_DIR="${RUN}" HOME="${HOMED}" HUGMESH_OIDC_ACCESS_TOKEN="leaky-tok-xyz" \
-    bash -c "$(sed -e "s#/etc/sssd#${ROOT}/etc/sssd#g" -e "s#/etc/hugmesh/desktop-governance#${ROOT}/etc/hugmesh/desktop-governance#g" "${DEP_TPL}"); env | grep -E 'leaky-tok-xyz' | grep -vE '^HUGMESH_OIDC_ACCESS_TOKEN='" 2>/dev/null || true)"
+    bash -c "$(sed -e "s#/etc/hugmesh/desktop-governance#${ROOT}/etc/hugmesh/desktop-governance#g" "${DEP_TPL}"); env | grep -E 'leaky-tok-xyz' | grep -vE '^HUGMESH_OIDC_ACCESS_TOKEN='" 2>/dev/null || true)"
 [ -z "${extra}" ] && ok "deposit: token never re-exported into the environment" || bad "deposit: token leaked to env: ${extra}"
 
 # ── DEPOSIT 2: governed + user-private drop (no env) => deposited ──────────────
@@ -153,6 +154,32 @@ new_sandbox governed
 mkdir -p "${RUN}/hugmesh"; printf 'stale\n' > "${RUN}/hugmesh/oidc-token"
 TOKEN_ENV="" run_script "${DEP_TPL}" --clear >/dev/null 2>&1
 [ ! -e "${RUN}/hugmesh/oidc-token" ] && ok "deposit: --clear removes the deposited token" || bad "deposit: --clear left the token"
+
+# ── DEPOSIT 6: KEYS-USB delivery reality — mapper-only, and root-only ──────────
+# On the KEYS-USB path provision.sh renders bearer-forward.sh next to the KEYS
+# templates, NOT into /etc, so the 0700 root:root mapper is the ONLY marker under
+# /etc/hugmesh/desktop-governance. This script runs as the SESSION USER, for whom
+# a root-only file is neither readable nor executable — mode 0000 reproduces that
+# exactly (even the owner loses r/x). is_governed() must therefore test EXISTENCE:
+# a `-x`/`-r` marker check reads the governed image as ungoverned and silently
+# kills the deposit (and with it the whole sudo leg) on its only delivery path.
+new_sandbox governed
+rm -f "${ROOT}/etc/hugmesh/desktop-governance/bearer-forward.sh"
+chmod 0000 "${ROOT}/etc/hugmesh/desktop-governance/desktop-sudo-mapper"
+TOKEN_ENV="keys-path-token" run_script "${DEP_TPL}" >/dev/null 2>&1
+[ -f "${RUN}/hugmesh/oidc-token" ] && [ "$(cat "${RUN}/hugmesh/oidc-token")" = "keys-path-token" ] \
+    && ok "deposit: root-only mapper alone marks the image governed (KEYS-USB path)" \
+    || bad "deposit: root-only mapper not recognized => KEYS-USB path deposits nothing"
+
+# Same invariant for the session-start wrapper, which shares the marker check.
+new_sandbox governed
+rm -f "${ROOT}/etc/hugmesh/desktop-governance/bearer-forward.sh"
+seed_rendered_deposit
+chmod 0000 "${ROOT}/etc/hugmesh/desktop-governance/desktop-sudo-mapper"
+TOKEN_ENV="keys-path-token" run_script "${WRAP_TPL}" >/dev/null 2>&1
+[ -f "${RUN}/hugmesh/oidc-token" ] \
+    && ok "wrapper: root-only mapper alone marks the image governed (KEYS-USB path)" \
+    || bad "wrapper: root-only mapper not recognized => wrapper stays inert on a governed image"
 
 # ── INSTALL 1: governed + valid domain => renders + publishes ──────────────────
 new_sandbox governed

@@ -1,0 +1,13 @@
+# hugmesh-desktop-sudo-mapper — SSO claim -> local desktop-sudo group convergence timer (60s).
+#
+# The TIMER half of the desktop-governance sudo leg: re-runs the mapper every 60s so a fresh
+# SSO login gains sudo ELIGIBILITY (polkit auth as self, never passwordless) within a minute,
+# and a logout / expired token / IdP revocation loses it as fast (revocation floor = the
+# deposited token's expiry). cronie reads /etc/cron.d — the same mechanism as
+# hugmesh-domain-reconcile — and cronie is enabled in the client runlevel by the builders.
+# Installed to /etc/cron.d/hugmesh-desktop-sudo-mapper by provision_desktop_governance()
+# ONLY on a governed client image with a valid node domain; a default image never carries
+# this file (ships-dark). The -x guard keeps a de-governed image silent.
+#
+# Field order: min hour dom month dow user command
+* * * * * root [ -x /etc/hugmesh/desktop-governance/desktop-sudo-mapper ] && /etc/hugmesh/desktop-governance/desktop-sudo-mapper >> /var/log/hugmesh-desktop-sudo-mapper.log 2>&1

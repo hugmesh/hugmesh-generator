@@ -13,8 +13,8 @@
 #
 # SECURITY / SHIPS-DARK:
 #   * GOVERNED-GATED: if this image is not desktop-governance-governed (no rendered
-#     /etc/sssd/conf.d/hugmesh-oidc.conf and no /etc/hugmesh/desktop-governance
-#     bearer-forward.sh), deposit NOTHING and exit clean. Inert by default.
+#     desktop-sudo-mapper and no bearer-forward.sh under
+#     /etc/hugmesh/desktop-governance), deposit NOTHING and exit clean. Inert by default.
 #   * USER-SCOPED + 0600: the token is written ONLY under the calling user's
 #     ${XDG_RUNTIME_DIR} (tmpfs, mode 0700, per-user, wiped on logout by the
 #     session manager). The file itself is pre-created 0600 with umask 077 BEFORE
@@ -39,12 +39,17 @@ TOKEN_FILE="${TOKEN_DIR}/oidc-token"
 TOKEN_SRC_FILE="${TOKEN_DIR}/oidc-token.src"
 
 # is_governed(): true iff this image carries rendered desktop-governance config.
-# Mirrors provision.sh desktop_governance_governed() (the rendered SSSD-OIDC conf
-# or the rendered bearer-forward.sh — both are produced only on a governed image
-# with a resolvable domain). Ungoverned => no deposit.
+# Mirrors provision.sh desktop_governance_governed() (the rendered desktop-sudo
+# mapper or the rendered bearer-forward.sh — both are produced only on a governed
+# image with a resolvable domain). Ungoverned => no deposit.
+# EXISTENCE, not permission: this script runs as the SESSION USER, and the mapper
+# is rendered 0700 root:root, so `-x`/`-r` on it is false for every human — the
+# marker must be tested with -e or the governed image reads as ungoverned. That
+# matters because on the KEYS-USB delivery path bearer-forward.sh is rendered
+# next to the KEYS templates, not into /etc, so the mapper is the ONLY marker.
 is_governed() {
-    [ -r /etc/sssd/conf.d/hugmesh-oidc.conf ] && return 0
-    [ -x /etc/hugmesh/desktop-governance/bearer-forward.sh ] && return 0
+    [ -e /etc/hugmesh/desktop-governance/desktop-sudo-mapper ] && return 0
+    [ -e /etc/hugmesh/desktop-governance/bearer-forward.sh ] && return 0
     return 1
 }
 

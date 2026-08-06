@@ -172,8 +172,8 @@ grep -q '/discovery/v2.0/keys' "${AZOUT}/entra/env/gateway.env" && ok "entra env
 grep -q 'PAIRWISE' "${AZOUT}/entra/claims-mapping.md" && grep -q '`oid`' "${AZOUT}/entra/claims-mapping.md" \
     && ok "claims-mapping blocker 1: pairwise sub -> fold on oid" || bad "claims-mapping missing blocker 1"
 grep -q 'allowed_groups' "${AZOUT}/entra/claims-mapping.md" && grep -q 'Harbor' "${AZOUT}/entra/claims-mapping.md" \
-    && grep -q 'sssd' "${AZOUT}/entra/claims-mapping.md" && grep -q 'On-Behalf-Of' "${AZOUT}/entra/claims-mapping.md" \
-    && ok "claims-mapping blocker 2: roles/groups model incl. headscale/Harbor/sssd + OBO" || bad "claims-mapping missing blocker 2"
+    && grep -q 'desktop-sudo' "${AZOUT}/entra/claims-mapping.md" && grep -q 'On-Behalf-Of' "${AZOUT}/entra/claims-mapping.md" \
+    && ok "claims-mapping blocker 2: roles/groups model incl. headscale/Harbor/desktop-sudo mapper + OBO" || bad "claims-mapping missing blocker 2"
 grep -q 'mfa_satisfied' "${AZOUT}/entra/claims-mapping.md" && grep -qi 'redirect model' "${AZOUT}/entra/claims-mapping.md" \
     && ok "claims-mapping blocker 3: mfa stamping + native login are Casdoor-coupled" || bad "claims-mapping missing blocker 3"
 grep -q 'CanonicalIdentityResolver' "${AZOUT}/entra/claims-mapping.md" && ok "claims-mapping names the required service-repo change" || bad "claims-mapping doesn't name CanonicalIdentityResolver"

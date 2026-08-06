@@ -21,9 +21,14 @@ node's own domain (resolved from `.client.primary_domain` →
   suppresses the per-user static `/etc/sudoers.d` grant + standing `wheel`-group
   sudo (a KEYS `sudo:true` becomes IdP-claim eligibility, not a device sudoers
   entry) and strips any pre-existing standing grant, so sudo flows only through
-  the `desktop-sudo` group, which SSSD-OIDC populates from the `desktop-sudo`
-  OIDC claim for this domain. The admin-bff sudo-grant drives the claim; revoke
-  at the IdP → sudo gone at next login.
+  the `desktop-sudo` group, which the **desktop-sudo mapper** (root, 60s cron)
+  populates from the JWKS-VERIFIED `desktop-sudo` OIDC claim in the session's
+  deposited token for this domain. (Not SSSD: released SSSD's `id_provider=idp`
+  speaks only Keycloak/Entra REST APIs and has no claim→group mapping.) The
+  admin-bff sudo-grant drives the claim; revoke at the IdP → sudo gone at the
+  deposited token's expiry; logout → gone within the 60s cron floor. Needs no
+  PAM/nsswitch change (`desktop-sudo` is a local group); the image's polkit +
+  python3 + cronie are all it runs on.
 - **SSO bearer forwarded** to the registry host so Discover authenticates as the
   logged-in user.
 
@@ -31,11 +36,12 @@ node's own domain (resolved from `.client.primary_domain` →
 
 These files carry hosts and the `desktop-sudo` claim NAME only — never tokens or
 keys. They may be copied as-is. The bearer token is deposited per-session by the
-SSO desktop-login at runtime, never staged here.
+SSO desktop-login at runtime, never staged here; the mapper verifies it against
+the issuer's PUBLIC JWKS (fetched at runtime, last-good cached).
 
 ## GEN-SSO session-start (Seams #1 + #2)
 
-`provision_desktop_governance()` renders only the four config templates above; it
+`provision_desktop_governance()` renders only the config templates above; it
 does **not** deposit the OIDC token bearer-forward needs (Seam #1) nor invoke
 bearer-forward at login (Seam #2). Those are delivered by these NEW files +
 a KEYS `run[]` hook (all governed-gated + ships-dark):
@@ -65,7 +71,7 @@ Add to your KEYS `provision.json` so it runs as root at end of first boot, after
 
 ### RESIDUAL #9a
 
-The desktop SSO login uses `oidc_client_id = hugmesh-desktop` (PKCE public
+The desktop SSO login uses the `hugmesh-desktop` client id (PKCE public
 client). This PR seeds that client + the `desktop-sudo` role in `casdoor-init`
 (`specs/cluster/manifests/casdoor/`); without it SSO-sudo is inert.
 

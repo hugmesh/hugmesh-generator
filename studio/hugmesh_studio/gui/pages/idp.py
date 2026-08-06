@@ -60,7 +60,7 @@ _LIMITS_NOTE = (
     "Casdoor apps out of the image — services then VALIDATE tokens minted by your "
     "IdP.\n"
     "What it does NOT do (yet): the native first-party /bff/login page, MFA step-up "
-    "stamping, the roles/permissions/groups token model (headscale/Harbor/sssd "
+    "stamping, the roles/permissions/groups token model (headscale/Harbor/desktop-sudo "
     "group gates), signup-gate and the role-sync jobs remain Casdoor-only — they "
     "need service-repo work per provider. Azure Entra additionally mints PAIRWISE "
     "per-app `sub` values and per-resource audiences. See docs/IDENTITY-PROVIDERS.md "

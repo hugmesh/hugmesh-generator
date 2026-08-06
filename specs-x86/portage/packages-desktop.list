@@ -70,3 +70,41 @@ app-editors/nano
 # Plasma desktop/meta package is added.
 sys-apps/flatpak
 kde-plasma/discover
+
+# SSO-claim sudo runtime (increment 7's sudo leg — see docs/CLIENT-IMAGES.md).
+# On a GOVERNED client image keys-provision strips sudoers/%wheel, so polkit is
+# the ONLY escalation route and these two atoms are the whole runtime behind it:
+#   sys-auth/polkit  — the authority that reads
+#                      /etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules (the
+#                      default-deny addAdminRule gate) and resolves
+#                      subject.isInGroup("desktop-sudo") through NSS at action
+#                      time. Its duktape JS engine is unconditional and the
+#                      image's global USE=elogind selects elogind session
+#                      tracking (ConsoleKit is the no-elogind/no-systemd
+#                      fallback and is NOT installed here). Today it arrives
+#                      only as an lxde-base/lxsession dependency — declare it,
+#                      because a session-manager swap must not silently take the
+#                      governed image's sole sudo path with it.
+#   dev-lang/python  — the interpreter for the desktop-sudo mapper:
+#                      provision_desktop_governance() renders
+#                      desktop-governance/sudo/desktop-sudo-mapper.py.tmpl to
+#                      /etc/hugmesh/desktop-governance/desktop-sudo-mapper, a
+#                      STDLIB-ONLY root cron (60s, base sys-process/cronie) that
+#                      verifies each session's deposited OIDC token against the
+#                      issuer JWKS and converges local `desktop-sudo` membership
+#                      — the polkit gate's sole input. Stated contract, not an
+#                      accident of portage's own python dependency.
+# Nothing else is needed: membership is a LOCAL group, so nsswitch stays `files`
+# and no PAM module is added.
+#   Deliberately NOT sys-auth/sssd. Released SSSD has no generic-OIDC provider:
+#   `id_provider = idp` (2.11.0, 2025-06-05) supports `idp_type` keycloak and
+#   entra_id ONLY, reads users/groups over those products' REST APIs with its own
+#   service client, authenticates via the RFC-8628 device-auth grant, and has no
+#   token-claim->local-group mapping in any release through 2.13.1 — so it cannot
+#   consume the per-domain Casdoor's deposited tokens. (The conf this mapper
+#   replaced used `id_provider = oidc` + `oidc_groups_allowlist`: option names
+#   that exist in NO release.) Gentoo's sssd is also ~amd64-only across every
+#   version in tree, so shipping it would additionally need a keyword unmask for
+#   a package that could not work here.
+sys-auth/polkit
+dev-lang/python
