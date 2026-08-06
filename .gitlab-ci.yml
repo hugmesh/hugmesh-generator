@@ -106,11 +106,19 @@ lint:cluster-manifest-integrity:
 # proven by sourcing the REAL builder helper functions against a sandbox tree, no
 # cross-build. Same offline python3+PyYAML recipe as lint:cluster-manifest-integrity
 # above; the suite was CI-orphaned until now.
+#
+# procps is a HARD requirement, not a convenience: the exec-allowlist property check
+# probes each allowlisted command's real option surface and live behaviour, and it
+# treats an entry whose binary is absent as a FAILURE rather than a skip. python:3-slim
+# ships coreutils but not ps/free/uptime, so without procps this job would go red on
+# three entries it cannot prove — which is the correct fail-closed direction, and is
+# also why the package is installed instead of the check being softened.
 lint:workload-console:
   stage: lint
   image: python:3-slim
   tags: [hugmesh-x86]
   before_script:
+    - apt-get update -qq && apt-get install -qq -y --no-install-recommends procps >/dev/null
     - pip install --quiet pyyaml
   script:
     - bash tests/workload-console/test-workload-console.sh

@@ -431,7 +431,13 @@ Secrets in `token-secrets.yaml`), the **admin-bff deployment overlay**
 `- path:` line — the `WORKLOAD_CONSOLE_*` env + both token mounts), and the two
 route-access rows. Deselected (the DEFAULT), the admin-bff renders **byte-identical**
 to a tree that never had the feature; `tests/workload-console/test-workload-console.sh`
-enforces this.
+enforces this by **executing each real builder's `workloadConsole)` case body verbatim**
+against a sandbox tree (never by re-implementing the prune and grepping that the builder
+still mentions it — a grep for the overlay filename or for the
+`_opt_drop_kustomize_line "<file>"` call stays green through any change to the prune
+*pattern*, which is the only argument that decides whether the kustomization line goes).
+The assertion is the effect: the pruned kustomization must still resolve every path it
+references, or `kustomize build` fails and the **dark** admin-bff stops rendering at all.
 
 **Token mount contract** (cross-repo, consumed by hugmesh-admin-bff-api's dual
 read/mutate clients — `WorkloadConsoleClientConfig`):
@@ -448,6 +454,97 @@ Optional keeps the **always-present** admin-bff pod starting regardless: the hal
 whose token is missing simply 503s (the contracted degradation) instead of the pod
 hanging in `ContainerCreating`. If the console 503s after step 1, re-check step 2
 before assuming a bug — you are most likely just ahead of the RBAC app's sync.
+
+**Curation rules the overlay's two allowlists must obey** (enforced by
+`tests/workload-console/test-workload-console.sh`, not by convention):
+
+* **`WORKLOAD_CONSOLE_EXEC_READONLY` is judged by a property, not by a list of banned
+  names.** The shipped consumer (`WorkloadConsoleProperties.execReadOnlyAllowed`)
+  matches `command.get(0)` against this list, so **a bare command name licenses that
+  command with *arbitrary arguments***. The bug class is therefore not "a forbidden
+  command got onto the list" but "an allowlisted command has an **argument** that turns
+  it into one", and on the images the app tier actually runs
+  (`eclipse-temurin:25-jre` = Ubuntu + procps + coreutils) three of the names this list
+  has carried were exactly that — three instances of one class, not three special cases:
+
+  | entry  | the argument that breaks the list's own rule | upstream wording |
+  |--------|----------------------------------------------|------------------|
+  | `ps`   | `ps eww` prints every process's full environment | procps `ps(1)`, OUTPUT MODIFIERS: BSD `e` = *"show the environment after command"* |
+  | `date` | `date -f <file>` echoes an unparseable secret back as `date: invalid date '<line>'`; `date -r <file>` is a second path argument | coreutils `date(1)`: *"-f, --file=DATEFILE  like --date; once for each line of DATEFILE"* |
+  | `du`   | `du --files0-from=<file>` echoes every name in `<file>` that does not exist back as `du: cannot access '<line>'`; `-X/--exclude-from=FILE` opens a second arbitrary file | GNU coreutils manual, *du invocation*: *"Disallow processing files named on the command line, and instead process those named in file file"* |
+
+  **And the flag is not the argument either.** All three rows above are *option*-driven
+  escapes, so an audit that asks only *what can its flags be made to do?* is the same
+  one-command-behind list in a different costume. `base64 /var/run/secrets/workload-console-read/token`
+  takes **no flag at all** — and neither do `od`, `cksum`, `xxd`, `sum`, `basenc`,
+  `b2sum`, `nl` or `rev`. The **operand** half of the argv surface is audited too.
+  A reader also does not have to be *legible*: `base64`, `od`, `xxd` and `cksum` hand the
+  operator the bytes without ever printing them as themselves, so "does the output contain
+  the canary string?" sees none of them. What is forbidden is that the output be a
+  **function of the file's bytes, in any encoding**.
+
+  Every remaining entry has been audited against **both** questions — *can any flag of
+  this make it read a file, dump an environment, execute something, or write?* and
+  *handed a plain file path as an* ***operand***, *does anything it prints change with
+  that file's bytes?* `ls` (60 options), `df` (18), `free` (22), `uptime` (6), `id` (10),
+  `uname` (11) and `stat` (8) take only enum/size/width/pattern/format values and no
+  path-valued or program-running option; `ls`, `df` and `stat` do take a `FILE` operand,
+  but their own help never calls it a standard stream and no probe output tracked the
+  bytes — they print the **name and the metadata**, never the content. So they ship as
+  **bare names**. (`stat` is the pointed case: the rule is not "refuse anything that
+  takes a path", which would delete `ls`, `df` and `stat` and leave the console with
+  nothing.) `ps` and `date` ship as **exact pinned argv** (`ps -e`, `date -u`) — a pinned
+  whole-argv form admits no extra operand at all. `du` is **removed** rather than pinned:
+  every useful `du` names a path, and pinning a path is exactly the shape
+  `--files0-from=/var/run/secrets/...` arrives in — `df` already covers filesystem usage.
+  A pinned form is fail-closed against a first-token matcher: the head `ps` is not an
+  element of the list, so `ps` — and `ps eww` with it — is refused outright.
+
+  **That audit is not what guards the list.** A written audit ages the moment a
+  coreutils release adds an option, and a hand-list of banned names is always exactly one
+  command behind — it is what passed `du` in the same round that removed `ps` and `date`.
+  `tests/workload-console/exec_argv_property.py` re-derives the verdict on every run from
+  two independent oracles, neither of which contains a command name:
+
+  * the command's **own `--help`** — a bare name is rejected when any documented option
+    takes a path-valued argument, is described as dumping an environment, or as running a
+    program; when its **synopsis** takes a program positionally; **or when its synopsis
+    takes a path-shaped *operand* that the same help documents as a standard stream of
+    bytes** (*"With no FILE, or when FILE is -, read standard input"*, *"Print selected
+    parts of lines from each FILE to standard output"*). `ls`, `df` and `stat` say no
+    such thing about theirs, which is what separates them from `base64` and `cut`;
+  * its **live behaviour** — every harvested option *and* the plain positional forms
+    (`<cmd> <file>`, `<cmd> -- <file>`, `<cmd> <file> <out>`) are fired on a pty at a
+    freshly generated canary file, canary environment and executable marker, and the
+    entry fails if any argv prints the file's contents, prints an environment, runs the
+    marker, or writes. Because an encoding is still the file, the same argvs are also run
+    **differentially**: against four sibling files identical in name-shape, length, mode
+    and mtime whose contents run `X, Y, X, Y`. A token present in both `X` runs, absent
+    from both `Y` runs, *and* vice versa, is a token the **bytes** decided — that is a
+    leak in any alphabet. Identity is deliberately not content: the four files differ in
+    path and inode, so anything derived from them falls out of the intersection and
+    `ls -l`, `stat` and `df` stay green on their own merits rather than by exemption.
+    The `X/Y` interleaving is what makes the leg noise-proof — a drifting value (a clock,
+    a pid, `df`'s used blocks) is never equal across two non-adjacent runs *and* absent
+    from both of the others.
+
+  An entry whose binary is absent from the runner is a **failure**, not a skip: an
+  unprobed entry is an unproven one.
+
+  **Cross-repo TODO (admin-bff wave):** match the whole argv
+  (`String.join(" ", command)`) instead of `command.get(0)`; until then only the bare
+  names are reachable. No entry may contain a comma (the env binds as a comma-delimited
+  `List<String>`).
+* **The port-forward triples are an ALLOWLIST, not a substring denylist.** "App-tier
+  BFFs only" means a triple ships only if its namespace is in
+  `WORKLOAD_CONSOLE_NAMESPACE_ALLOWLIST`, its workload matches the first-party BFF
+  contract `^hugmesh-(<seg>-)*bff-api$`, that workload really exists as a
+  Deployment/StatefulSet in the shipped cluster tree in that namespace, and the port is
+  one it declares. Screening names for `db`/`postgres`/`cassandra`/`clickhouse`/`kafka`/
+  `redis`/`vault`/`casdoor`/`pki` is **not** that rule: `tuwunel` (the Matrix homeserver
+  — access tokens + registration token), `akkoma`, `hugmesh-coturn`, `egress-proxy` and
+  `hugmesh-media-poisoner` all sit in an allowlisted namespace and contain none of those
+  substrings.
 
 **Flip order (light it):**
 

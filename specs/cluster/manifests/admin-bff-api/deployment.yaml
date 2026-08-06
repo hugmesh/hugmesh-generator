@@ -262,6 +262,10 @@ spec:
             # CASSANDRA_CONTACT_POINTS env matched NO placeholder (dead/no-op)").
             - name: ROUTE_MIRROR_CASSANDRA
               value: "cassandra.hugmesh-pki.svc.cluster.local:9042"
+            # The KEYSPACE is deliberately left on its `snapdragon_gateway` default —
+            # that is the LIVE keyspace name (charts/hugmesh-gateway/values.yaml and
+            # cassandra-hardening/bootstrap-roles-configmap.yaml grant it by that name);
+            # renaming it is the separate infra-migration wave, not a manifest edit.
             - name: ROUTE_MIRROR_KEYSPACE
               value: "snapdragon_gateway"
             # datacenter1, not dc1: apps/00-cassandra.yaml runs the chart-default
@@ -377,14 +381,12 @@ spec:
             # runs in hugmesh-pki (manifests/headscale), which is why a gate that looked
             # for the string `snapdragon` could not see this one.
             - { name: APPSTORE_SCAFFOLD_HEADSCALE_URL, value: "http://headscale.hugmesh-pki.svc.cluster.local:8080" }
-            # app.mirror.cassandra.contact-point — the route-access → Cassandra URL
-            # registry mirror. Its own contact point defaulted to the snapdragon-pki
-            # namespace while CASSANDRA_CONTACT_POINTS above (a different property, same
-            # cluster) was already correct: one right, one wrong, in one manifest.
-            # The KEYSPACE is deliberately left on its `snapdragon_gateway` default —
-            # that is the LIVE keyspace name (charts/hugmesh-gateway/values.yaml,
-            # cassandra-hardening/bootstrap-roles-configmap.yaml grant it by that name);
-            # renaming it is the separate infra-migration wave, not a manifest edit.
+            # (ROUTE_MIRROR_CASSANDRA — app.mirror.cassandra.contact-point — is set ONCE,
+            # in the Cassandra block above. #543 added a second, identical entry here;
+            # two entries of the same name in one container are not a redundancy, they
+            # break the workloadConsole overlay: a strategic-merge patch merges env by
+            # `name`, so the merged container keeps ONE of them and the lit render stops
+            # being purely additive over the dark one.)
             # Namespaces this service LAUNCHES workloads into or reconciles. Not DNS —
             # a Job created in a namespace that does not exist is rejected by the API
             # server, which is the same defect one layer up.

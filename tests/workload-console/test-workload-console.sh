@@ -2,13 +2,19 @@
 # test-workload-console.sh — unit test for the WORKLOAD CONSOLE generator wiring:
 #   * the two-SA RBAC manifests least-privilege invariants (the security acceptance bar);
 #   * the optional-services.yaml registration (default off);
-#   * the gate (build-rpi5-stage4.sh): NOT selected => prune the RBAC app + manifests +
-#     route-access rows; selected => keep them;
+#   * the gate, in EVERY builder that has one: NOT selected => prune the RBAC app +
+#     manifests + deployment overlay + route-access rows; selected => keep them;
 #   * the deploy-provenance Kyverno policy requires digest-pinned (@sha256:) images;
-#   * the route-access rows + the ArgoCD Application exist with the right shape.
+#   * the route-access rows + the ArgoCD Application exist with the right shape;
+#   * the lit overlay's two allowlists — the read-only exec forms (judged by a PROPERTY
+#     re-derived per run from each command's own --help and its live behaviour against
+#     canaries, NOT by a hand-list of banned names: see exec_argv_property.py) and the
+#     curated port-forward triples (judged against the documented app-tier-BFF
+#     ALLOWLIST, not a denylist of datastore-ish substrings).
 #
-# Proves the security invariants WITHOUT a full cross-build, by sourcing the REAL helper
-# functions from the builder + reproducing the workloadConsole gate branch against a sandbox.
+# Proves the security invariants WITHOUT a full cross-build: the workloadConsole gate
+# branch is not re-implemented here, it is EXTRACTED FROM EACH REAL BUILDER AND EXECUTED
+# against a sandbox tree, and what is asserted is its EFFECT on that tree.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -175,35 +181,127 @@ seed_tree() {
   cp -a "${REPO}/specs/cluster/manifests/admin-bff-api/." "${tree}/manifests/admin-bff-api/"
 }
 
-# Reproduce the builder's workloadConsole gate branch.
-gate_wc() {  # $1 = OPTIONAL_SERVICES ; uses ${tree}
-  OPTIONAL_SERVICES="$1"
-  local apps="${tree}/apps"
-  if ! _opt_selected workloadConsole; then
-    rm -f "${apps}/14-workload-console-rbac.yaml"
-    rm -rf "${tree}/manifests/workload-console-rbac"
-    rm -f "${tree}/manifests/admin-bff-api/workload-console-patch.yaml"
-    _opt_drop_kustomize_line "${tree}/manifests/admin-bff-api/kustomization.yaml" 'path: workload-console-patch.yaml'
-    _opt_drop_rows "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-      '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
-  fi
+# The gate branch is not REPRODUCED here — it is EXECUTED, verbatim, out of each real
+# builder. A reproduction can only ever be as good as whatever cross-checks it, and a
+# grep that the builder still mentions the overlay filename is not one: it stays green
+# through any change to the prune PATTERN (or to the shape of the line being pruned),
+# which is exactly the drift it claims to prevent. So: extract the `workloadConsole)`
+# case body + the helper functions it calls FROM THE BUILDER, run them against a sandbox
+# tree seeded from the checked-in manifests, and assert the EFFECT.
+extract_fn_of() {  # $1 = builder, $2 = function name
+  awk "/^$2\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "$1"
+}
+extract_case_of() {  # $1 = builder, $2 = case label — body between `<label>)` and `;;`
+  awk -v lbl="$2" '
+    $0 ~ ("^[[:space:]]*" lbl "\\)[[:space:]]*$") { p=1; next }
+    p && $0 ~ /^[[:space:]]*;;[[:space:]]*$/ { exit }
+    p { print }
+  ' "$1"
+}
+
+# Run the REAL builder's gate for one slug against ${tree}. Nothing about the prune is
+# restated here: OPTIONAL_SERVICES, _opt_selected and the case body are all the builder's.
+run_real_gate() {  # $1 = builder ; $2 = tree ; $3 = OPTIONAL_SERVICES
+  local body; body="$(extract_case_of "$1" workloadConsole)"
+  [ -n "${body}" ] || { echo "  FAIL could not extract the workloadConsole case body from $(basename "$1")"; return 2; }
+  (
+    set -uo pipefail
+    OPTIONAL_SERVICES="$3"
+    tree="$2"; apps="$2/apps"
+    info() { :; }; warn() { :; }
+    eval "$(extract_fn_of "$1" _opt_selected)"
+    eval "$(extract_fn_of "$1" _opt_drop_kustomize_line)"
+    eval "$(extract_fn_of "$1" _opt_drop_rows)"
+    eval "$(extract_fn_of "$1" _opt_drop_route)"
+    # The builder's own loop guard: `_opt_selected "${slug}" && continue`.
+    _opt_selected workloadConsole && exit 0
+    eval "${body}"
+  )
 }
 
 # Count only the INSERT data rows (not the descriptive comment lines).
 count_rows() { grep -cE "^\s*\('hugmesh-be-gateway',\s*'/bff/(super)?admin/workloads/\*\*'" "$1"; }
 
-# DESELECTED (default): prune everything.
-tree="${WORK}/off"; seed_tree "${tree}"
-gate_wc "akkoma tuwunel phpbb games"
-[ ! -f "${tree}/apps/14-workload-console-rbac.yaml" ] && ok "gate prunes the RBAC Application when deselected" || bad "RBAC app NOT pruned"
-[ ! -d "${tree}/manifests/workload-console-rbac" ] && ok "gate prunes the RBAC manifests when deselected" || bad "RBAC manifests NOT pruned"
-[ "$(count_rows "${tree}/manifests/route-access/initdb/20-schema.sql")" -eq 0 ] \
-  && ok "gate drops both route-access INSERT rows when deselected" \
-  || bad "route-access rows NOT dropped when deselected"
+# The EFFECT of a deselected build, asserted on the pruned tree: nothing the slug owns
+# survives, and — the assertion the grep could never make — the kustomization that is
+# left still resolves. `kustomize build` reads every `resources:` entry and every
+# `patches[].path`; a prune that deletes the overlay FILE but leaves its line (a typo'd
+# pattern, a re-ordered `- target:`/`path:` mapping, any change the line-oriented sed
+# stops matching) yields a dangling reference and the dark admin-bff stops rendering at
+# all. That is checked structurally, so it fails whether or not kubectl is installed.
+assert_pruned() {  # $1 = label ; $2 = tree
+  local lbl="$1" t="$2"
+  [ ! -f "${t}/apps/14-workload-console-rbac.yaml" ] && ok "${lbl}: prunes the RBAC Application" || bad "${lbl}: RBAC app NOT pruned"
+  [ ! -d "${t}/manifests/workload-console-rbac" ] && ok "${lbl}: prunes the RBAC manifests" || bad "${lbl}: RBAC manifests NOT pruned"
+  [ ! -f "${t}/manifests/admin-bff-api/workload-console-patch.yaml" ] && ok "${lbl}: prunes the deployment overlay file" || bad "${lbl}: deployment overlay NOT pruned"
+  [ "$(count_rows "${t}/manifests/route-access/initdb/20-schema.sql")" -eq 0 ] \
+    && ok "${lbl}: drops both route-access INSERT rows" || bad "${lbl}: route-access rows NOT dropped"
+  if grep -rqi "workload.console" "${t}/manifests/admin-bff-api" 2>/dev/null; then
+    bad "${lbl}: the pruned admin-bff kustomize dir STILL references workload-console"
+  else
+    ok "${lbl}: no workload-console reference survives in the admin-bff kustomize dir"
+  fi
+  if command -v python3 >/dev/null; then
+    python3 - "${lbl}" "${t}/manifests/admin-bff-api" <<'PY'
+import os, sys, yaml
+lbl, d = sys.argv[1], sys.argv[2]
+k = yaml.safe_load(open(os.path.join(d, "kustomization.yaml")))
+missing = []
+# EVERY manifest path the file still names, in whatever field names it — resources:,
+# patches[].path:, the older patchesStrategicMerge:, components:, bases:, crds: … The
+# walk is by VALUE shape, not by field name, so a kustomization that is later rewritten
+# into another (equally valid) form cannot slip a dangling reference past this.
+def walk(node, where):
+    if isinstance(node, dict):
+        for kk, vv in node.items(): walk(vv, f"{where}.{kk}")
+    elif isinstance(node, list):
+        for i, vv in enumerate(node): walk(vv, f"{where}[{i}]")
+    elif isinstance(node, str) and node.endswith((".yaml", ".yml")):
+        if not os.path.exists(os.path.join(d, node)):
+            missing.append(f"{where}: {node}")
+walk(k, "kustomization")
+if missing:
+    print(f"  FAIL {lbl}: pruned kustomization references file(s) that no longer exist "
+          f"-> `kustomize build` fails, the dark admin-bff does not render: {missing}")
+    sys.exit(1)
+print(f"  PASS {lbl}: every path the pruned kustomization still references exists "
+      f"(it renders)")
+PY
+    if [ $? -eq 0 ]; then P=$((P+1)); else F=$((F+1)); fi
+  fi
+}
 
-# SELECTED: keep everything.
+# DESELECTED (default) — run the real branch of EVERY builder that has the gate
+# (discovered, not listed: a new platform builder cannot quietly opt out).
+gate_builders=()
+for b in "${REPO}"/build-*-stage4.sh; do
+  grep -q '^gate_optional_services() {' "${b}" && gate_builders+=("${b}")
+done
+for b in "${gate_builders[@]}"; do
+  bn="$(basename "${b}")"
+  tree="${WORK}/off-${bn}"; seed_tree "${tree}"
+  if run_real_gate "${b}" "${tree}" "akkoma tuwunel phpbb games"; then
+    assert_pruned "${bn} (real gate branch, deselected)" "${tree}"
+  else
+    bad "${bn}: the real workloadConsole gate branch could not be executed"
+  fi
+done
+# Every builder must prune IDENTICALLY — a divergence means one platform ships a tree
+# the other never renders.
+ref_bn="$(basename "${gate_builders[0]}")"
+for b in "${gate_builders[@]:1}"; do
+  bn="$(basename "${b}")"
+  diff -r "${WORK}/off-${ref_bn}" "${WORK}/off-${bn}" >/dev/null 2>&1 \
+    && ok "${bn}: real gate branch produces a tree identical to ${ref_bn}'s" \
+    || bad "${bn}: gate branch produces a DIFFERENT pruned tree than ${ref_bn}"
+done
+# The canonical dark tree for the sections below.
+tree="${WORK}/off"; seed_tree "${tree}"
+run_real_gate "${BUILDER}" "${tree}" "akkoma tuwunel phpbb games"
+
+# SELECTED: the real gate keeps everything.
 tree="${WORK}/on"; seed_tree "${tree}"
-gate_wc "akkoma tuwunel phpbb games workloadConsole"
+run_real_gate "${BUILDER}" "${tree}" "akkoma tuwunel phpbb games workloadConsole"
 [ -f "${tree}/apps/14-workload-console-rbac.yaml" ] && ok "gate KEEPS the RBAC Application when selected" || bad "RBAC app wrongly pruned when selected"
 [ "$(count_rows "${tree}/manifests/route-access/initdb/20-schema.sql")" -eq 2 ] \
   && ok "gate KEEPS both route-access INSERT rows when selected" \
@@ -240,7 +338,7 @@ grep -q "workload-console-patch.yaml" "${ON_BFF}/kustomization.yaml" \
 
 # Contract + least-privilege invariants of the LIT wiring (parsed YAML, not grep).
 if command -v python3 >/dev/null; then
-  python3 - "${PATCH}" "${RBAC}" <<'PY'
+  python3 - "${PATCH}" "${RBAC}" "${REPO}/specs/cluster/manifests" <<'PY'
 import sys, yaml
 patch_f, rbac = sys.argv[1], sys.argv[2]
 P=F=0
@@ -287,17 +385,61 @@ allow = set(filter(None, (env.get("WORKLOAD_CONSOLE_NAMESPACE_ALLOWLIST") or "")
 hit = allow & INFRA
 (bad if hit else ok)(f"allowlist contains INFRA ns {sorted(hit)}" if hit else "allowlist contains no infra-tier namespace")
 
-# 3. exec read-only allowlist: no shells / file-content readers / env dumpers.
-FORBIDDEN_EXEC = {"sh","bash","dash","ash","zsh","env","printenv","cat","head","tail",
-                  "kubectl","curl","wget","nc","ncat","socat","python","python3","perl"}
-execs = set(filter(None, (env.get("WORKLOAD_CONSOLE_EXEC_READONLY") or "").split(",")))
-hit = execs & FORBIDDEN_EXEC
-(bad if hit else ok)(f"exec allowlist contains forbidden {sorted(hit)}" if hit
-                     else "exec allowlist has no shell/file-reader/env-dumper")
-(ok if execs else bad)("exec allowlist non-empty" if execs else "exec allowlist empty")
+# 3. exec read-only allowlist — see §3b below. The allowlist is judged by a PROPERTY
+#    (exec_argv_property.py), not here, because the previous shape of this check was a
+#    hand-written list of banned command names and a hand-written list of "safe" ones.
+#    That shape cannot work: it passed `du` — whose `--files0-from=F` echoes the
+#    contents of F back as `du: cannot access '<line>'` — while the very same round
+#    was removing `ps` for `ps eww` and `date` for `date -f`, three instances of one
+#    class. A name list is always exactly one command behind. Only the ARGV-INDEPENDENT
+#    structure is asserted here; everything about what a command can be MADE to do is
+#    re-derived per run from that command's own documentation and its live behaviour.
+raw = env.get("WORKLOAD_CONSOLE_EXEC_READONLY") or ""
+entries = [e.strip() for e in raw.split(",") if e.strip()]
+(ok if entries else bad)("exec allowlist non-empty" if entries else "exec allowlist empty")
 
-# 4. port-forward triples: complete per index, app-tier-only, never a datastore/
-#    Vault/PKI/Casdoor workload.
+# 4. port-forward triples: the documented curation rule is "app-tier BFFs ONLY", so it
+#    is checked as an ALLOWLIST. A denylist of datastore-ish substrings ("db","postgres",
+#    "cassandra","clickhouse","kafka","redis","vault","casdoor","pki") is NOT that rule
+#    and never was: every app-tier workload whose name happens to miss all nine sails
+#    through it — tuwunel (the Matrix homeserver: access tokens + registration token),
+#    akkoma, hugmesh-coturn (TURN shared secret), egress-proxy, hugmesh-media-poisoner…
+#    all live in an ALLOWLISTED namespace and match none of the nine. So a triple is
+#    accepted only if:
+#      (a) its namespace is in the emitted namespace allowlist (and not infra-tier),
+#      (b) the workload matches the first-party BFF naming contract,
+#      (c) that exact workload REALLY EXISTS in this shipped cluster tree, in that
+#          namespace (no ghost/typo/foreign target), and
+#      (d) the port is one that workload actually declares (no reaching a debug/JMX
+#          port that merely happens to be open in the pod).
+#    The nine substrings are kept below only as a subordinate second opinion.
+import re, glob, os
+BFF_NAME = re.compile(r"^hugmesh-(?:[a-z0-9]+-)*bff-api$")
+manifests = sys.argv[3]
+declared = {}   # (ns, name) -> set(ports)
+for f in sorted(glob.glob(os.path.join(manifests, "**", "*.yaml"), recursive=True)):
+    try:
+        mdocs = list(yaml.safe_load_all(open(f)))
+    except Exception:
+        continue
+    for d in mdocs:
+        if not isinstance(d, dict):
+            continue
+        meta = d.get("metadata") or {}
+        key = (meta.get("namespace"), meta.get("name"))
+        if d.get("kind") in ("Deployment", "StatefulSet"):
+            pods = ((d.get("spec") or {}).get("template") or {}).get("spec") or {}
+            ports = declared.setdefault(key, set())
+            for c in (pods.get("containers") or []):
+                for p in (c.get("ports") or []):
+                    if isinstance(p, dict) and p.get("containerPort") is not None:
+                        ports.add(int(p["containerPort"]))
+        elif d.get("kind") == "Service":
+            ports = declared.setdefault(key, set())
+            for p in ((d.get("spec") or {}).get("ports") or []):
+                if isinstance(p, dict) and p.get("port") is not None:
+                    ports.add(int(p["port"]))
+
 PF = "APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_"
 idx = sorted({n[len(PF):].split("_")[0] for n in env if n.startswith(PF)})
 (ok if idx else bad)("port-forward allowlist emitted (indexed envs)" if idx else "no port-forward triples emitted")
@@ -307,11 +449,23 @@ for i in idx:
     ns  = env.get(f"{PF}{i}_NAMESPACE"); wl = env.get(f"{PF}{i}_WORKLOAD"); pt = env.get(f"{PF}{i}_PORT")
     if not (ns and wl and pt and pt.isdigit()):
         bad(f"port-forward triple [{i}] incomplete (ns={ns} wl={wl} port={pt})"); pf_ok = False; continue
-    if ns not in allow:
-        bad(f"port-forward triple [{i}] namespace {ns} outside the allowlist"); pf_ok = False
+    if ns not in allow or ns in INFRA:
+        bad(f"port-forward triple [{i}] namespace {ns} outside the allowlist"); pf_ok = False; continue
+    if not BFF_NAME.match(wl):
+        bad(f"port-forward triple [{i}] workload {wl!r} is NOT an app-tier BFF "
+            f"(the curated rule is app-tier BFFs only: ^hugmesh-(<seg>-)*bff-api$)")
+        pf_ok = False; continue
+    if (ns, wl) not in declared:
+        bad(f"port-forward triple [{i}] targets {ns}/{wl}, which is not a "
+            f"Deployment/StatefulSet in the shipped cluster tree"); pf_ok = False; continue
+    if int(pt) not in declared[(ns, wl)]:
+        bad(f"port-forward triple [{i}] port {pt} is not declared by {ns}/{wl} "
+            f"(declared: {sorted(declared[(ns, wl)])})"); pf_ok = False; continue
     if any(t in wl for t in FORBIDDEN_WL):
         bad(f"port-forward triple [{i}] targets a forbidden workload {wl}"); pf_ok = False
-if pf_ok and idx: ok(f"all {len(idx)} port-forward triples complete, app-tier-only, no datastore/Vault/PKI/Casdoor")
+if pf_ok and idx:
+    ok(f"all {len(idx)} port-forward triples are app-tier BFFs that exist in the "
+       f"shipped tree, on a port they declare")
 
 # 5. BOTH tokens mounted read-only at the CONTRACT paths, wired to Secret volumes
 #    whose secretNames are MINTED in token-secrets.yaml for the RIGHT SAs.
@@ -346,6 +500,35 @@ for mp, sa in ((READ_MOUNT, "workload-console-read"), (MUTATE_MOUNT, "workload-c
             f"unsynced Secret would wedge the always-present admin-bff pod"); continue
     ok(f"token mounted read-only at {mp} <- optional Secret {sname} (SA {sa})")
 
+# 6. No container in the BASE deployment may declare the same env name twice.
+#    This is a structural restatement of the render-level "lit is purely ADDITIVE"
+#    check below, and it exists because that check SKIPs when kubectl is absent —
+#    which is exactly the case in CI (python:3-slim). A guard that only runs on a
+#    developer's laptop is not the guard, it is the rehearsal.
+#    A strategic-merge patch merges a container's env list BY `name`, so a base that
+#    declares one name twice collapses to a single entry the moment the overlay is
+#    applied: the lit render then REMOVES a line the dark render had, the overlay is
+#    no longer additive, and which of the two values survives is decided by the merge
+#    rather than by either manifest. (Kubernetes itself takes the last one, so a
+#    duplicate is already a silent, order-dependent config even before kustomize.)
+import collections
+dep_f = f"{sys.argv[3]}/admin-bff-api/deployment.yaml"
+dep = yaml.safe_load(open(dep_f))
+dspec = dep["spec"]["template"]["spec"]
+dup_hit = False
+for cl in ("initContainers", "containers"):
+    for c in (dspec.get(cl) or []):
+        names = [e["name"] for e in (c.get("env") or [])]
+        dups = sorted(n for n, k in collections.Counter(names).items() if k > 1)
+        if dups:
+            dup_hit = True
+            bad(f"deployment.yaml {cl}/{c['name']} declares {dups} more than once — a "
+                f"strategic-merge overlay merges env by name, so the lit render would "
+                f"DROP one of them and stop being additive over the dark render")
+if not dup_hit:
+    ok("no container in the base deployment declares an env name twice "
+       "(strategic-merge would collapse it and break overlay additivity)")
+
 print(f"__SUB {P} {F}")
 sys.exit(1 if F else 0)
 PY
@@ -353,6 +536,103 @@ PY
   if [ "${rc}" -eq 0 ]; then ok "deployment overlay contract invariants (parsed YAML)"; else bad "deployment overlay contract invariants — see FAILs above"; fi
 else
   echo "  SKIP overlay parsed-YAML checks (no python3)"
+fi
+
+# ── 7c. The read-only exec allowlist, judged as a PROPERTY ──────────────────────
+# NOT a list of banned command names. The property is: no entry can be induced to
+# print the contents of an arbitrary file — or ANY transform of them, since base64,
+# hex and a checksum hand the bytes over just as completely as cat does — to print an
+# environment, to execute another program, or to write, under EVERY argv the shipped
+# first-token matcher licenses for it. "Every argv" includes the OPERAND half: a bare
+# name licenses `<cmd> /var/run/secrets/workload-console-read/token` with no flag in
+# sight. Decided by two independent oracles that both re-derive their answer from the
+# command itself: its own --help (option surface AND synopsis operands), and its live
+# behaviour against freshly generated file/environment/exec canaries on a pty, plus a
+# differential canary that catches a leak in any encoding. See the module header.
+#
+# There is no `command -v python3` guard here on purpose: the two checks above may
+# degrade to a SKIP because they only read YAML, but this one is the security
+# acceptance bar for the exec seam. If it cannot run, the suite must go red rather
+# than print a reassuring line about a property nobody checked.
+PROP="${REPO}/tests/workload-console/exec_argv_property.py"
+if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
+  python3 "${PROP}" "${PATCH}"
+  if [ $? -eq 0 ]; then
+    ok "exec allowlist holds property P (no entry can be argued into reading a file, dumping an environment, executing, or writing)"
+  else
+    bad "exec allowlist VIOLATES property P — see the FAILs above"
+  fi
+else
+  bad "exec_argv_property.py or python3 missing — the exec allowlist property is UNPROVEN"
+fi
+
+# ── 7d. Controls: the property check above must be able to FAIL, and to PASS ────
+# The shipped allowlist holding property P is only good news if the check that says
+# so could have said otherwise. Both controls name the MECHANISM they expect in the
+# output, not merely a non-zero exit: an entry whose binary is missing also exits
+# non-zero, and a control satisfied by that would be green while proving nothing.
+# Both commands are coreutils, so they are present wherever this suite can run at all.
+if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
+  ctl() {  # $1 = label ; $2 = entries ; $3 = expected mechanism (grep -F) ; $4 = expect fail|pass
+    local out rc
+    out="$(python3 "${PROP}" --entries "$2" 2>&1)"; rc=$?
+    if [ "$4" = "fail" ]; then
+      if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -qF "$3"; then
+        ok "control: $1 — the property check catches it, via ${3}"
+      else
+        bad "control: $1 — the property check did NOT catch it (rc=${rc}); a check that cannot fail is not a check"
+      fi
+    else
+      if [ "${rc}" -eq 0 ]; then
+        ok "control: $1 — the property check accepts it (not failing everything)"
+      else
+        bad "control: $1 — the property check rejects a command that holds P: ${out}"
+      fi
+    fi
+  }
+  # The two oracles are controlled SEPARATELY, on purpose. A control that only says
+  # "du is rejected" stays green when one of the legs is deleted, because the other
+  # still rejects it — the guard would quietly become half a guard while every line it
+  # prints stayed reassuring. So each negative names the LEG and the MECHANISM, across
+  # two different sub-classes of the defect.
+  #
+  # NEGATIVE 1a/1b — a path-valued flag. `du` is off the allowlist precisely because of
+  # this, and it is kept here as the standing control for that whole class.
+  ctl "path-valued flag, DOCUMENTATION leg (du)" "du" \
+      '[docs] `du --files0-from` takes a PATH-valued argument' fail
+  ctl "path-valued flag, BEHAVIOUR leg (du)" "du" \
+      'printed the CONTENTS of the file it was pointed at' fail
+  # NEGATIVE 2a/2b — a different sub-class: a head whose own synopsis takes a program,
+  # so one positional argument turns it into arbitrary execution.
+  ctl "executes its argument, DOCUMENTATION leg (nice)" "nice" \
+      'executes that command — its own synopsis takes a program positionally' fail
+  ctl "executes its argument, BEHAVIOUR leg (nice)" "nice" \
+      'EXECUTED another program' fail
+  # NEGATIVE 3 — fail-closed on an entry that cannot be probed at all.
+  ctl "an entry whose binary is absent" "hugmesh-no-such-command" "unprobed entry is an unproven entry" fail
+  # NEGATIVE 4a/4b — the OPERAND sub-class: a reader that needs NO FLAG AT ALL.
+  # `base64 /var/run/secrets/workload-console-read/token` is the whole exploit, and
+  # both legs used to wave it through — the doc leg because it only ever read the
+  # OPTION surface, the behaviour leg because it only ever searched for the canary
+  # STRING and base64 hands the bytes over in another alphabet.
+  #
+  # The two commands are chosen so that each control can only be satisfied by the
+  # leg it names. `cut` trips the DOCUMENTATION leg alone: its behaviour leg stays
+  # silent because `cut <file>` without -c/-f/-b is an error, so if the operand rule
+  # is deleted `cut` passes outright and this control goes red. `base64` names the
+  # DIFFERENTIAL mechanism, which exists nowhere else: delete that leg and the
+  # string disappears even though the doc leg still exits non-zero.
+  ctl "a positional file reader, DOCUMENTATION leg (cut)" "cut" \
+      'takes FILE as a PLAIN POSITIONAL operand' fail
+  ctl "a positional file reader, DIFFERENTIAL BEHAVIOUR leg (base64)" "base64" \
+      'printed a TRANSFORM of the CONTENTS of the file it was pointed at' fail
+  # VACUITY — the check is not simply rejecting everything. `stat` is the pointed
+  # one: it takes a FILE operand positionally, exactly like base64 does, and must
+  # still pass — the corrected property forbids reading a file's BYTES, not naming
+  # a file. A guard that failed `stat` would be rejecting the operand rather than
+  # the leak, and every metadata tool on the list would have to be exempted by name.
+  ctl "a command that really does hold P (uname)" "uname" "" pass
+  ctl "a FILE-operand command that leaks no bytes (stat)" "stat" "" pass
 fi
 
 # RENDER-level proof when kubectl is available: the dark render carries ZERO
@@ -383,16 +663,26 @@ else
 fi
 
 # ── 8. The builder actually wires the gate + render loop ────────────────────────
-grep -q "workloadConsole)" "${BUILDER}" && ok "builder has the workloadConsole gate case" || bad "builder missing workloadConsole gate case"
-grep -q "14-workload-console-rbac.yaml" "${BUILDER}" && ok "builder prunes the RBAC app on deselect" || bad "builder app prune missing"
+# Every builder that HAS gate_optional_services must also carry the workloadConsole
+# case — discovered, not listed, so a new builder cannot quietly ship without it. The
+# prune itself is not grepped for: §7 executed each of these builders' real branches and
+# asserted what it did to a tree. (A grep for the overlay FILENAME survives any change
+# to the prune PATTERN — it matches the `rm -f` line — and a grep for the
+# `_opt_drop_kustomize_line "<file>"` call ignores the pattern argument entirely, which
+# is the only argument that decides whether the kustomization line goes.)
 grep -qE "for slug in .*workloadConsole" "${BUILDER}" && ok "builder render loop includes workloadConsole" || bad "render loop missing workloadConsole"
-# BOTH builders must prune the deployment overlay (file + kustomization line) too —
-# the gate_wc reproduction above can otherwise drift from the real builders.
-for b in "${BUILDER}" "${REPO}/build-x86-host-stage4.sh"; do
-  grep -q 'admin-bff-api/workload-console-patch.yaml' "${b}" \
-    && grep -q '_opt_drop_kustomize_line "${tree}/manifests/admin-bff-api/kustomization.yaml"' "${b}" \
-    && ok "$(basename "${b}") prunes the deployment overlay + kustomization line" \
-    || bad "$(basename "${b}") missing the deployment-overlay prune"
+[ "${#gate_builders[@]}" -ge 2 ] && ok "found ${#gate_builders[@]} builders with gate_optional_services" \
+  || bad "expected >=2 builders with gate_optional_services, found ${#gate_builders[@]}"
+for b in "${gate_builders[@]}"; do
+  grep -qE "^[[:space:]]*workloadConsole\)[[:space:]]*$" "${b}" \
+    && ok "$(basename "${b}") carries the workloadConsole gate case" \
+    || bad "$(basename "${b}") has gate_optional_services but NO workloadConsole case"
+done
+# §7 must have EXECUTED every one of them, not just the two it names.
+for b in "${gate_builders[@]}"; do
+  bn="$(basename "${b}")"
+  [ -d "${WORK}/off-${bn}" ] && ok "${bn}: its real gate branch was executed + effect-asserted in §7" \
+    || bad "${bn}: has a workloadConsole case that §7 never executed"
 done
 
 echo "== RESULT: ${P} passed, ${F} failed =="

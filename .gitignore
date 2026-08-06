@@ -130,6 +130,7 @@ scripts/__pycache__/
 tests/scripts/__pycache__/
 specs/cluster/manifests/meshbridge/app/__pycache__/
 tests/meshbridge/__pycache__/
+tests/workload-console/__pycache__/
 tests/scripts/__pycache__/
 
 # Session sandbox: PATH-shadowing no-build stubs (sudo/docker/emerge/qemu -> exit 127).

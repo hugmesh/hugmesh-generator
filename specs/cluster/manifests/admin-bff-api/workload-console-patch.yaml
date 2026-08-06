@@ -48,13 +48,124 @@ spec:
             # observability). tests/workload-console cross-checks the two lists.
             - name: WORKLOAD_CONSOLE_NAMESPACE_ALLOWLIST
               value: "hugmesh-backend,hugmesh-frontend,hugmesh-forum,hugmesh-games,hugmesh-games-instances,hugmesh-tube,hugmesh-owncast"
-            # Read-only exec first-token allowlist — process/resource introspection
-            # ONLY. Deliberately NO file-content readers (cat/head/tail: an exec runs
-            # INSIDE the target pod and could read ITS mounted secrets — pod logs are
-            # already served via pods/log on the read Role) and NO env/printenv
-            # (env vars carry credentials).
+            # Read-only exec allowlist — process/resource introspection ONLY.
+            # Deliberately NO file-content readers (cat/head/tail: an exec runs INSIDE
+            # the target pod and could read ITS mounted secrets — pod logs are already
+            # served via pods/log on the read Role) and NO env/printenv (env vars carry
+            # credentials).
+            #
+            # ⚠ THE COMMAND NAME IS NOT THE COMMAND. The shipped consumer
+            # (WorkloadConsoleProperties.execReadOnlyAllowed) matches the FIRST TOKEN
+            # only — `execReadOnlyCommands.contains(command.get(0))` — so an entry that
+            # is a BARE NAME allows that command with ARBITRARY arguments. The bug class
+            # is therefore not "a banned command got on the list", it is "an allowlisted
+            # command has an ARGUMENT that turns it into one". On the images the app tier
+            # runs (eclipse-temurin:25-jre = Ubuntu + procps + coreutils) three names
+            # this list has carried were exactly that, and they are three instances of
+            # ONE class, not three special cases:
+            #   ps    BSD personality `e` = "show the environment after command"
+            #         (procps-ng ps(1)) — `ps eww` prints EVERY process's full
+            #         environment, i.e. every credential the pod was started with.
+            #   date  `-f, --file=DATEFILE  like --date; once for each line of DATEFILE`
+            #         (coreutils date(1)) — every unparseable line comes back as
+            #         `date: invalid date '<line>'`. It also carries a SECOND path
+            #         argument, `-r, --reference=FILE`.
+            #   du    `--files0-from=F` — "Disallow processing files named on the command
+            #         line, and instead process those named in file file" (GNU coreutils
+            #         manual, du invocation). Every name in F that does not exist is
+            #         echoed back as `du: cannot access '<line>'`, so
+            #         `du --files0-from=/var/run/secrets/.../token` prints the token.
+            #         `-X, --exclude-from=FILE` opens a second arbitrary file.
+            #
+            # ⚠ AND THE FLAG IS NOT THE ARGUMENT EITHER. The three names above are all
+            # OPTION-driven escapes, and an audit that asks only "what can its flags be
+            # made to do?" is the same one-command-behind list in a different costume:
+            # `base64 /var/run/secrets/workload-console-read/token` needs no flag at all,
+            # and neither do `od`, `cksum`, `xxd`, `nl`, `rev` or `sum`. The OPERAND half
+            # of the argv surface is now audited too — see the two questions below.
+            #
+            # A reader also does not have to be LEGIBLE to be a reader. base64, od, xxd
+            # and cksum all hand the operator the file's bytes without ever printing them
+            # as themselves, so "does the probe output contain the canary string?" cannot
+            # see any of them. What is forbidden is that the output be a FUNCTION OF THE
+            # FILE'S BYTES, in any encoding.
+            #
+            # EVERY entry has now been audited against BOTH questions — "can any flag of
+            # this make it read a file, dump an environment, execute something, or
+            # write?" AND "handed a plain file path as an OPERAND, does anything it
+            # prints change with that file's bytes?" — from each command's own documented
+            # option surface, its own documented SYNOPSIS OPERANDS, and its live
+            # behaviour. Every entry below takes (or ignores) a FILE operand and prints
+            # only metadata about it:
+            #   ls     60 options; every value is an enum/size/width/pattern (SIZE, WHEN,
+            #          WORD, PATTERN, TIME_STYLE, COLS). Nothing opens a file for its
+            #          CONTENT, nothing runs a program. Its `[FILE]...` operand is a
+            #          NAME to list, not a stream: `ls FILE` prints the name back, and
+            #          145 differential probes moved no token when the file's bytes
+            #          changed.                                              -> bare
+            #   df     18 options; values are SIZE / FIELD_LIST / TYPE. `[FILE]...` is
+            #          "the filesystem this path is ON".                     -> bare
+            #   free   22 options; unit switches plus -s N / -c N; no operand at all.
+            #                                                                -> bare
+            #   uptime  6 options, none takes a value; no operand.           -> bare
+            #   id     10 options; the only operand is a USER, not a path.   -> bare
+            #   uname  11 options, none takes a value; no operand.           -> bare
+            #   stat    8 options; values are FORMAT / MODE, and the % directives are
+            #          metadata — none of them prints file CONTENT. `FILE...` is the
+            #          object to describe: its own help never calls that operand a
+            #          standard stream, and no probe output tracked the bytes. This is
+            #          the entry that shows the operand rule is not "refuse anything
+            #          that takes a path" — that rule would delete ls, df and stat and
+            #          leave the console with nothing.                       -> bare
+            #   ps     env dumper through `e`.                    -> PINNED  `ps -e`
+            #   date   two path-valued flags (-f, -r).            -> PINNED  `date -u`
+            #   du     path-valued flags (--files0-from, -X) and NO useful flags-only
+            #          form (every real du names a path), so it is REMOVED rather than
+            #          pinned. df already covers filesystem usage.
+            # A future path-scoped form (`du -sh /var/log`) would have to pin the path
+            # too, and pinning a path is deliberately refused by the guard — that is the
+            # shape `--files0-from=/var/run/secrets/...` arrives in.
+            #
+            # So the list is written in TWO deliberate forms:
+            #   BARE NAME   ONLY for a command that holds the property under ARBITRARY
+            #               argv.
+            #   PINNED ARGV an exact, whole-argv safe form (space-joined, flags only,
+            #               no path). `ps -e` is POSIX select-all whose default format
+            #               is pid,tty,time,ucmd — the executable NAME only, never argv,
+            #               never the environment; `date -u` is "print UTC now".
+            # (The alpine-based app-tier pods — nginx/node images — run busybox, whose
+            # ps implements only `-o COL,…` and `-T`: it has no environment option at
+            # all, and `ps -e` there is simply unsupported. Unsupported is an error, not
+            # a leak; the dangerous form only exists on the procps images.)
+            # A pinned form is FAIL-CLOSED against the shipped first-token matcher: the
+            # head `ps` is not an element of this list, so a first-token matcher refuses
+            # `ps` outright (and `ps eww` with it) — the console loses the two pinned
+            # forms until the matcher lands, and loses nothing else.
+            #
+            # ⚠ The audit above is NOT what guards this list. A written audit ages the
+            # moment a coreutils release adds an option. tests/workload-console re-derives
+            # it on every run from each command's OWN --help plus a live canary probe
+            # (exec_argv_property.py): a bare name is rejected when any documented option
+            # takes a path, dumps an environment or runs a program, when its SYNOPSIS
+            # takes a program or a path-shaped OPERAND its own help calls a standard
+            # stream, AND when any probe argv — flag-valued OR plain positional
+            # (`<cmd> <file>`, `<cmd> -- <file>`, `<cmd> <file> <out>`) — prints a canary
+            # file's contents, prints a canary environment, executes a marker, writes, or
+            # emits ANY output token that changes with the probed file's bytes. That last
+            # leg is what makes an encoding count as a read: the same argv is fired at
+            # four sibling files whose contents run X,Y,X,Y and are otherwise identical in
+            # name-shape, length, mode and mtime, so a token present in both X runs and
+            # neither Y run (and vice versa) is a token the BYTES decided — while inode,
+            # path and timestamps, which differ between all four, cannot be mistaken for
+            # one. An entry whose binary is absent is a FAILURE, not a skip.
+            #
+            # ⚠ CROSS-REPO TODO (admin-bff wave): WorkloadConsoleProperties must match
+            # the WHOLE argv — `String.join(" ", command)` against this set — not
+            # command.get(0). Until it does, only the bare (argument-safe) names are
+            # reachable. Entries must never contain a comma: this env binds as a
+            # comma-delimited List<String>.
             - name: WORKLOAD_CONSOLE_EXEC_READONLY
-              value: "ls,ps,df,du,free,uptime,date,id,uname,stat"
+              value: "ls,df,free,uptime,id,uname,stat,ps -e,date -u"
             # Grant lease TTL + expiry-sweep cadence — the application.yml defaults,
             # emitted explicitly so the operator knobs are visible in the pod spec.
             - { name: WORKLOAD_CONSOLE_GRANT_TTL_HOURS,        value: "24" }
@@ -65,7 +176,17 @@ spec:
             - { name: WORKLOAD_CONSOLE_K8S_READ_TOKEN_FILE,   value: "/var/run/secrets/workload-console-read/token" }
             - { name: WORKLOAD_CONSOLE_K8S_MUTATE_TOKEN_FILE, value: "/var/run/secrets/workload-console-mutate/token" }
             # Curated port-forward (namespace, workload, port) triples — app-tier BFFs
-            # ONLY, EXCLUDING every datastore/Vault/PKI/Casdoor. application.yml's
+            # ONLY, EXCLUDING every datastore/Vault/PKI/Casdoor. The curation rule is an
+            # ALLOWLIST, and tests/workload-console enforces it as one: a triple may ship
+            # only if (a) its namespace is in WORKLOAD_CONSOLE_NAMESPACE_ALLOWLIST above,
+            # (b) the workload name matches the first-party BFF contract
+            # ^hugmesh-(<seg>-)*bff-api$, (c) a Deployment/StatefulSet with that exact
+            # name really exists in THIS shipped cluster tree in THAT namespace, and
+            # (d) the port is one that workload actually declares. Naming a
+            # non-BFF app-tier workload here (tuwunel, akkoma, coturn, egress-proxy,
+            # kafka…) is refused by (b)+(c) even though none of them contains a
+            # datastore/Vault/PKI/Casdoor substring — a denylist of substrings is NOT
+            # the rule and never was. application.yml's
             # port-forward-allowlist is a literal [] (no env placeholder), so these use
             # Spring Boot's canonical relaxed indexed binding for
             # app.workload-console.port-forward-allowlist[N].{namespace,workload,port}
