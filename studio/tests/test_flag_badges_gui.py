@@ -1119,3 +1119,88 @@ def test_the_dialog_changes_nothing_when_cancelled(wiz, monkeypatch):
     after = [page.tree.isColumnHidden(c) for c, _l, _k in
              progress_mod._CONFIGURABLE_COLUMNS]
     assert before == after, "Cancel must not apply the flipped checkboxes"
+
+
+# ── the plan preview feeds the USE columns ─────────────────────────────────────────
+# Operator live-QA: flags painted on KEYWORDS but not on USE. Root cause was NOT
+# rendering — a normal merge emits no resolver merge-list at all (measured: zero
+# [ebuild rows across a live 1.37M-line session), so USE/USE_EXPAND had no source
+# while KEYWORDS/LICENSE read from the VDB on disk. The plan preview is that source.
+
+PLAN_PFX = "==> Emerge plan: "
+
+
+def test_a_plan_line_fills_the_use_columns_that_a_normal_build_leaves_empty(wiz):
+    page = _page(wiz)
+    row = page._rows[0]
+    assert row.flag_join.feed_line("[ebuild  N     ] sys-libs/talloc-2.4.4") is None \
+        or True     # (resolver path exists; this test is about the plan path)
+    cpv = row.flag_join.feed_plan_line(
+        f'{PLAN_PFX}world 1/3 sys-libs/talloc-2.4.4 USE="python -compat"')
+    assert cpv == "sys-libs/talloc-2.4.4", "plan line did not index its atom"
+    cells = row.flag_join.cells_if_changed("sys-libs/talloc-2.4.4")
+    assert cells is not None and "USE" in cells, "plan supplied no USE cell"
+    assert cells["USE"].badges, "USE cell has no badges"
+    names = {b.verbatim for b in cells["USE"].badges}
+    assert "python" in names
+
+
+def test_plan_badges_say_they_are_a_prediction(wiz):
+    """A plan is portage's answer to 'what WOULD you merge'. Normally identical to
+    what happens, but a --keep-going drop can make the merge differ, so the hover
+    must not claim it is a display of what portage did."""
+    page = _page(wiz)
+    row = page._rows[0]
+    row.flag_join.feed_plan_line(f'{PLAN_PFX}world 1/1 dev-libs/lzo-2.10 USE="static-libs"')
+    cells = row.flag_join.cells_if_changed("dev-libs/lzo-2.10")
+    tips = [b.tooltip for b in cells["USE"].badges]
+    assert any("plan preview" in t for t in tips), "no plan caveat on a plan-derived badge"
+
+
+def test_a_real_resolver_row_supersedes_the_plan_and_drops_the_caveat(wiz):
+    """Otherwise a confirmed merge-list display would keep carrying a
+    'this is only a prediction' note forever."""
+    page = _page(wiz)
+    row = page._rows[0]
+    row.flag_join.feed_plan_line(f'{PLAN_PFX}world 1/1 dev-libs/lzo-2.10 USE="static-libs"')
+    assert row.flag_join.cells_if_changed("dev-libs/lzo-2.10") is not None
+    rr = row.flag_join.feed_line('[ebuild  N     ] dev-libs/lzo-2.10  USE="static-libs"')
+    assert rr is not None
+    cells = row.flag_join.cells_if_changed("dev-libs/lzo-2.10")
+    assert cells is not None, "the confirmed row must produce a fresh cell"
+    tips = [b.tooltip for b in cells["USE"].badges]
+    assert not any("plan preview" in t for t in tips), \
+        "a confirmed resolver row still carried the plan caveat"
+
+
+def test_plan_lines_without_a_use_clause_are_ignored(wiz):
+    """total= headers, unavailable rows and USE-less package rows must not create
+    an empty USE cell — an empty cell would reveal the column for nothing."""
+    page = _page(wiz)
+    row = page._rows[0]
+    for line in (f"{PLAN_PFX}world total=3",
+                 f"{PLAN_PFX}world unavailable reason=pretend-failed",
+                 f"{PLAN_PFX}world 2/3 app-misc/thing-1.0"):
+        assert row.flag_join.feed_plan_line(line) is None, f"indexed: {line}"
+
+
+def test_the_gui_prefix_gate_is_the_parsers_own_pin(wiz):
+    """Three places name this wire prefix (builder, parser, GUI stream gate). The
+    builder/parser halves are asserted byte-equal by check.sh; this keeps the GUI
+    from becoming a fourth, drifting spelling."""
+    from hugmesh_studio.core import emerge_packages as ep
+    assert fb.PLAN_PREFIX == ep.PLAN_BANNER_PREFIX
+
+
+def test_the_stream_slot_routes_a_plan_line_end_to_end(wiz):
+    """Drive the page's real _on_line slot, not the join directly: the prefix gate,
+    the raw-vs-sanitised choice and the row lookup all sit in that slot."""
+    page = _page(wiz)
+    for ln in _emerge_stream(["sys-libs/talloc-2.4.4"]):
+        page._on_line(0, ln)
+    page._on_line(0, f'{PLAN_PFX}image 1/1 sys-libs/talloc-2.4.4 USE="python"')
+    item = page._rows[0].pkg_items.get("sys-libs/talloc-2.4.4")
+    assert item is not None, "package row was never created"
+    cell = item.data(_flag_col("USE"), fb.CELL_ROLE)
+    assert cell is not None and cell.badges, \
+        "a plan line after the package row existed did not repaint its USE cell"

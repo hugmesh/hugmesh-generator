@@ -95,12 +95,62 @@ GROUPS_FALLBACK_NOTE = (
 #: Every URL block leads with this — the no-fetch guarantee, visible to the operator.
 URL_NOTE = "links (constructed offline — the Studio never fetches them):"
 
+#: Said on USE/USE_EXPAND badges whose flags came from the PLAN PREVIEW rather than a
+#: merge-list display portage printed during the merge. The distinction is real and
+#: worth one line of hover text: a plan is portage's answer to "what WOULD you merge",
+#: computed from the same argv immediately before the merge runs — normally identical
+#: to what happens, but it is a prediction, and a --keep-going drop or an autounmask
+#: change can make the merge differ from it. A confirmed resolver row for the same
+#: package supersedes the plan and this note disappears.
+PLAN_NOTE = (
+    "flags from the plan preview — portage's own --pretend column for this package, "
+    "captured with the SAME emerge arguments immediately before the merge (a normal "
+    "merge prints no merge-list display at all, docs/EMERGE-PLAN-PREVIEW.md). It is "
+    "what portage INTENDED to merge; a later real merge-list display supersedes it")
+
+
+def _append_note(tip_source: object, note: str) -> object:
+    """Add ``note`` to a badge tooltip, preserving laziness.
+
+    ``tip_source`` may be a zero-arg factory (the whole point of the lazy tooltip:
+    a build with 300 packages × ~20 flags would otherwise build 6 000 multi-paragraph
+    strings nobody reads). Wrapping it in another factory keeps it unevaluated."""
+    if callable(tip_source):
+        def _lazy(_src=tip_source, _note=note):     # bind now, not at call time
+            try:
+                return f"{_src()}\n{_note}"
+            except Exception:            # noqa: BLE001 — a hover must never raise
+                return _note
+        return _lazy
+    return f"{tip_source}\n{note}" if tip_source else note
+
+
+def _annotate_cells(cells: dict[str, "FlagCell"], note: str) -> dict[str, "FlagCell"]:
+    """Copy ``cells`` with ``note`` appended to every badge tooltip."""
+    out: dict[str, FlagCell] = {}
+    for key, cell in cells.items():
+        out[key] = dataclasses.replace(cell, badges=tuple(
+            dataclasses.replace(b, tip_source=_append_note(b.tip_source, note))
+            for b in cell.badges))
+    return out
+
 #: Cheap exact prefix gate for the stream: a resolver row's type word sits immediately
 #: after the '[' (package_flags._LINE_RE anchors on exactly these), so this tuple is
 #: equivalent to the full parse and costs one C-level startswith. It matters — a bare
 #: "starts with [" would also let through the ~75 000 "[123/456]" ninja counter lines a
 #: single real build emits.
 RESOLVER_PREFIXES = ("[ebuild", "[binary", "[nomerge", "[blocks", "[uninstall")
+
+#: The same cheap prefix gate for plan-preview lines. Re-exported from the parser's own
+#: pin rather than re-spelled here, so the builder side, the parser side and this stream
+#: gate cannot drift apart — check.sh asserts the builder/parser halves byte-equal, and
+#: this makes the GUI a third consumer of the same constant instead of a fourth spelling.
+def _plan_prefix() -> str:
+    from ..core import emerge_packages as ep     # local: avoids an import cycle
+    return ep.PLAN_BANNER_PREFIX
+
+
+PLAN_PREFIX = _plan_prefix()
 
 
 # ── badge + cell model ───────────────────────────────────────────────────────────────
@@ -534,6 +584,51 @@ class ImageFlagJoin:
         self._vdb_attempts: dict[str, int] = {}
         self._want_vdb: dict[str, tuple[str, str, str]] = {}   # atom -> (cat,pkg,ver)
         self._applied: dict[str, tuple[int | None, bool]] = {}
+        #: atoms whose USE came from the PLAN PREVIEW rather than a merge-list
+        #: display portage printed. Their badges carry PLAN_NOTE.
+        self._plan_atoms: set[str] = set()
+
+    # -- plan-preview stream ---------------------------------------------------------
+    def feed_plan_line(self, raw_line: str) -> str | None:
+        """Index one ``==> Emerge plan:`` wire line, returning the atom it described.
+
+        WHY THIS EXISTS. A normal merge prints NO resolver merge-list at all —
+        portage's display is conflict-triggered, which is why USE/USE_EXPAND stayed
+        empty on real builds while KEYWORDS/LICENSE (read from the VDB on disk)
+        painted fine. Measured on a live 1.37M-line session: zero ``[ebuild …]``
+        rows in every emerge group. The plan preview
+        (``docs/EMERGE-PLAN-PREVIEW.md``) is the deliberate emission that fixes
+        that, and its ``USE="…"`` clause is portage's OWN flag column copied
+        verbatim from a ``--pretend`` run of the SAME argv as the merge that
+        follows.
+
+        Because it is byte-identical in shape to what a resolver row carries, it is
+        re-parsed through ``pf.parse_resolver_line`` and indexed in the SAME
+        ResolverIndex — the whole badge pipeline (per-token state, USE_EXPAND
+        grouping, multi-slot keying) then applies unchanged rather than growing a
+        parallel implementation that could drift from it.
+
+        The atom is remembered as plan-sourced so its badges can say so: a plan is
+        portage's PREDICTION for the merge about to run, not a display of what it
+        did. A real resolver row for the same atom always wins and clears the mark
+        (see ``feed_line``)."""
+        from ..core import emerge_packages as ep    # local: avoids an import cycle
+        pl = ep.parse_plan_line(raw_line)
+        if pl is None or pl.kind != "pkg" or not pl.atom or not pl.use:
+            return None
+        # Rebuild the exact shape portage prints so ONE parser owns the grammar.
+        # NOTE `pl.use` is the flag CONTENTS ("python -compat"), not the whole
+        # `USE="…"` clause — parse_plan_line strips the wrapper. Re-adding it is
+        # required: without it the resolver parser finds no flag GROUP, returns a row
+        # with groups=() and the USE cell comes out empty, which looks exactly like
+        # "this package has no flags" rather than a bug.
+        row = pf.parse_resolver_line(f'[ebuild  N     ] {pl.atom} USE="{pl.use}"')
+        if row is None or not (row.cat and row.pkg):
+            return None
+        self._resolver.add(row)
+        self._plan_atoms.add(row.cpv)
+        self.revision += 1
+        return row.cpv
 
     # -- resolver stream ------------------------------------------------------------
     def feed_line(self, raw_line: str) -> pf.ResolverRow | None:
@@ -551,6 +646,10 @@ class ImageFlagJoin:
         if not (row.cat and row.pkg):
             return None
         self._resolver.add(row)                      # later display wins (§0c)
+        # A row portage actually printed supersedes our prediction, so the atom
+        # must stop being labelled plan-sourced — otherwise a confirmed display
+        # would keep carrying the 'this is a prediction' caveat forever.
+        self._plan_atoms.discard(row.cpv)
         self.revision += 1
         return row
 
@@ -597,7 +696,10 @@ class ImageFlagJoin:
         self._applied[atom] = key
         cells: dict[str, FlagCell] = {}
         if rr is not None:
-            cells.update(resolver_cells(rr, self.descriptions))
+            rc = resolver_cells(rr, self.descriptions)
+            if atom in self._plan_atoms or rr.cpv in self._plan_atoms:
+                rc = _annotate_cells(rc, PLAN_NOTE)
+            cells.update(rc)
         elif vdb is not None:
             cells.update(vdb_use_cells(vdb, self.descriptions))
         if vdb is not None:

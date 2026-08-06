@@ -1204,6 +1204,17 @@ class ProgressPage(QtWidgets.QWizardPage):
             # that second display must land on the rows that are already on screen.
             if rr is not None and rr.cpv in row.pkg_items:
                 self._apply_flag_cells(row, rr.cpv, row.pkg_items[rr.cpv])
+        # PLAN PREVIEW — the only USE source a NORMAL build has. Portage's merge-list
+        # display above is conflict-triggered and normally never appears (measured: zero
+        # [ebuild rows across a live 1.37M-line session), which is why the USE columns
+        # stayed empty while KEYWORDS/LICENSE painted from the VDB. The plan carries
+        # portage's own USE="…" column verbatim, one line per package, emitted before the
+        # merge — so like a merge list it usually lands BEFORE the row exists and
+        # _render_package collects it then. Same cheap prefix gate on the sanitised line.
+        elif line.startswith(flag_badges.PLAN_PREFIX):
+            cpv = row.flag_join.feed_plan_line(raw_line)
+            if cpv is not None and cpv in row.pkg_items:
+                self._apply_flag_cells(row, cpv, row.pkg_items[cpv])
         row.buffer.append(line)
         state = row.parser.feed(line)
         self._apply_state(row, state)
