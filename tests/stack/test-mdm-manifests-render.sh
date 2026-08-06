@@ -193,10 +193,48 @@ grep -q 'image: registry.hugmesh.systems/hugmesh/hugmesh-attestation-server:main
 grep -q 'image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main' "${HW_DEP}" \
   && ok "(7) headwind image follows registry.hugmesh.systems/hugmesh/... (built-from-source convention)" \
   || bad "(7) headwind image ref off-convention"
-# the harbor pull-secret patches in both kustomizations actually landed
-grep -q 'harbor-registry' "${HW_DEP}" && grep -q 'harbor-registry' "${ATT_DEP}" \
-  && ok "(7) imagePullSecrets harbor-registry patch applied to BOTH Deployments" \
-  || bad "(7) an imagePullSecrets patch did not land"
+# The registry pull-secret patches in both kustomizations actually landed AND
+# name a Secret that really exists in hugmesh-pki. This is deliberately NOT a
+# grep for a literal name: it USED to be `grep -q harbor-registry`, and that
+# passed for months while the name it was asserting was owned by the Harbor Helm
+# chart (a type: Opaque Secret holding REGISTRY_HTTP_SECRET), so the pull secret
+# these Deployments referenced could never be materialized by ESO at all. The
+# name is now DERIVED from the ExternalSecret set for this namespace, so the
+# assertion tracks the manifests instead of a string.
+PKI_ES_TARGETS="$(awk '
+  /^kind: ExternalSecret$/            { inobj=1; ns=""; tgt=""; next }
+  /^---$/                             { if (inobj && ns=="hugmesh-pki" && tgt!="") print tgt; inobj=0; ns=""; tgt=""; next }
+  inobj && /^  namespace: /           { ns=$2 }
+  inobj && /^    name: /              { if (tgt=="") tgt=$2 }
+  END                                 { if (inobj && ns=="hugmesh-pki" && tgt!="") print tgt }
+' "${REPO}/specs/cluster/manifests/external-secrets/secretstore.yaml")"
+[ -n "${PKI_ES_TARGETS}" ] \
+  && ok "(7) parsed $(printf '%s\n' "${PKI_ES_TARGETS}" | wc -l) hugmesh-pki ExternalSecret targets (parser is not vacuous)" \
+  || bad "(7) parsed ZERO hugmesh-pki ExternalSecret targets — the cross-check below would be vacuous"
+for _dep_label in "headwind:${HW_DEP}" "attestation-server:${ATT_DEP}"; do
+  _lbl="${_dep_label%%:*}"; _f="${_dep_label#*:}"
+  # the name(s) under the rendered pod spec's imagePullSecrets:
+  # kustomize emits the sequence at the SAME indent as its mapping key, so match
+  # "<indent>imagePullSecrets:" and then consume the consecutive "- name: X" /
+  # "name: X" entries that follow, stopping at the first line that is neither.
+  _names="$(awk '
+    /^[[:space:]]*imagePullSecrets:[[:space:]]*$/ { g=1; next }
+    g && /^[[:space:]]*-?[[:space:]]*name:[[:space:]]*[^[:space:]]/ {
+      n=$0; sub(/^.*name:[[:space:]]*/, "", n); gsub(/["'"'"']/, "", n); print n; next }
+    g { g=0 }
+  ' "${_f}")"
+  if [ -z "${_names}" ]; then
+    bad "(7) ${_lbl}: imagePullSecrets patch did not land at all"
+    continue
+  fi
+  for _n in ${_names}; do
+    if printf '%s\n' "${PKI_ES_TARGETS}" | grep -qxF "${_n}"; then
+      ok "(7) ${_lbl}: imagePullSecrets '${_n}' is materialized by an ExternalSecret in hugmesh-pki"
+    else
+      bad "(7) ${_lbl}: imagePullSecrets '${_n}' is NOT an ExternalSecret target in hugmesh-pki — nothing materializes it (this is the harbor-registry collision class; see tests/scripts/test-eso-target-collisions.sh)"
+    fi
+  done
+done
 # known flagged gap stays version-pinned while it exists (no :latest drift)
 grep -q 'image: alpine:3\.20' "${ATT_DEP}" \
   && ok "(7) seeder sidecar image stays the pinned alpine:3.20 (documented TODO, not :latest)" \

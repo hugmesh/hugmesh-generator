@@ -33,6 +33,19 @@
 # the header comment there has been updated to point at this Job as the primary
 # path — see scripts/gen-cluster-secrets.sh.
 #
+# THIS JOB OWNS secret/<brand>/harbor-robots. Nothing else may REPLACE that
+# document. The rule follows from the once-only reveal above: this Job is the
+# only process that can ever hold the value, and its idempotency is keyed on
+# HARBOR (see ensure_robot's already-exists skip), not on Vault — so it cannot
+# repair a document somebody else overwrote, and a bad write is permanent. Until
+# 2026-08-06 gen-cluster-secrets.sh did an unconditional `vault kv put` of two
+# literal placeholders here on EVERY run, which is exactly that permanent,
+# silent breakage (every imagePullSecret rendered a well-formed dockerconfigjson
+# holding a dead token). It now leaves the path alone and only `kv patch`es the
+# half a manual override supplies. Both halves of that contract — this Job's
+# read-merge-write and the seeder's hands-off default — are executed and
+# asserted by tests/scripts/test-harbor-robots-ownership.sh.
+#
 # IDEMPOTENCY: project creation and OIDC config are naturally idempotent
 # (GET-then-skip / PUT-is-a-full-overwrite). Robot-account creation is NOT
 # idempotent in the usual sense — Harbor cannot re-reveal an old robot's

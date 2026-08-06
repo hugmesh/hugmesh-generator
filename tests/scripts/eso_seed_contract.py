@@ -99,9 +99,24 @@ VAR = re.compile(r"\{\{-?\s*\.([A-Za-z0-9_]+)")
 # reference — so an exemption cannot outlive the thing it excuses.
 
 # Vault KV paths gen-cluster-secrets.sh deliberately does not mint, because the
-# value is not the generator's to mint. Each reason is quoted from the manifest
-# that declares it, so the two cannot drift apart silently.
+# value is not the generator's to mint — either an operator supplies it out of
+# band, or a running service ISSUES it and nothing can know it earlier. Each
+# reason is quoted from the manifest that declares it, so the two cannot drift
+# apart silently.
 OPERATOR_SEEDED_PATHS = {
+    "hugmesh/harbor-robots":
+        "manifests/harbor/harbor-provision-job.yaml: 'a Harbor robot account's "
+        "secret is returned EXACTLY ONCE at creation time and can never be "
+        "re-read from Harbor afterwards ... this Job must capture the secret the "
+        "moment Harbor mints it and WRITE it INTO Vault itself'. The generator "
+        "is not merely unable to mint it — it must not WRITE the path at all: "
+        "`vault kv put` replaces the whole KV-v2 doc, and the Job skips on "
+        "HARBOR state ('if a robot with the expected name already exists, SKIP "
+        "creating it'), so anything this seeder wrote over the real robot "
+        "credentials would be permanent. gen-cluster-secrets.sh therefore leaves "
+        "the path alone by default and only `kv patch`es the half a manual "
+        "GITLAB_REGISTRY_TOKEN / IMAGE_BUILDER_REGISTRY_TOKEN override supplies. "
+        "Guarded end to end by tests/scripts/test-harbor-robots-ownership.sh.",
     "hugmesh/akkoma-admin":
         "akkoma-externalsecrets.yaml: a PRIVILEGED Akkoma admin bearer token, "
         "issued BY the running homeserver — 'GATED STUB-SEAM: not presented "
@@ -134,16 +149,25 @@ OPERATOR_SEEDED_PATHS = {
 OFFLINE_UNDELIVERABLE = {
     ns_secret: reason
     for ns_secret, reason in {
+        # The SAME pull-scoped robot credential in every namespace that runs a
+        # first-party image. The k8s Secret NAME differs in hugmesh-pki only:
+        # the Harbor Helm chart is released into that namespace and already owns
+        # `harbor-registry` (its own registry credentials — see
+        # manifests/external-secrets/secretstore.yaml's hugmesh-registry-pull
+        # block), so the pull secret there is `hugmesh-registry-pull`.
         **{
-            f"{ns}/harbor-registry":
+            ns_name:
                 "imagePullSecret rendered from the PULL-scoped Harbor robot "
                 "account that manifests/harbor/harbor-provision-job.yaml mints "
                 "IN-CLUSTER at PostSync; the robot does not exist at bundle-write "
                 "time. It is also a kubernetes.io/dockerconfigjson Secret, and the "
                 "USB fallback in specs/etc/keys-provision/provision.sh creates "
                 "`kubectl create secret generic` only."
-            for ns in ("hugmesh-backend", "hugmesh-frontend",
-                       "hugmesh-games", "hugmesh-pki")
+            for ns_name in ("hugmesh-backend/harbor-registry",
+                            "hugmesh-frontend/harbor-registry",
+                            "hugmesh-games/harbor-registry",
+                            "hugmesh-forum/harbor-registry",
+                            "hugmesh-pki/hugmesh-registry-pull")
         },
         "hugmesh-image-builds/image-builder-registry":
             "same as harbor-registry: dockerconfigjson rendered from the "

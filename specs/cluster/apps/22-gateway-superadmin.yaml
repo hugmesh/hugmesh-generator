@@ -41,6 +41,15 @@ spec:
       values: |
         instance:
           name: hugmesh-superadmin-gateway
+        # PULL SECRET OVERRIDE — hugmesh-pki only. Same reason as
+        # apps/20-gateway-pki.yaml: this release lands in hugmesh-pki, the
+        # namespace the Harbor chart is released into, and that chart already
+        # owns the Secret name `harbor-registry` (registry/registry-secret.yaml
+        # via the harbor.registry helper — it holds REGISTRY_HTTP_SECRET, not a
+        # docker config). The pull cred here is `hugmesh-registry-pull`; see
+        # manifests/external-secrets/secretstore.yaml.
+        imagePullSecrets:
+          - name: hugmesh-registry-pull
         # This instance's OWN Cassandra role, scoped to snapdragon_gateway only —
         # identical privilege to the other three gateways, NOT elevated: being the
         # superadmin front door buys no extra CQL rights. Created by

@@ -226,6 +226,7 @@ ClusterSecretStore **`hugmesh-vault`** (provider `vault`, token auth from the
 | `clickhouse` (`password`) | `clickhouse-auth` (`password`) | `hugmesh-backend`, `observability` |
 | `uptrace` (`pg_password`/`project_token`) | `uptrace-auth` (`pg-password`/`project-token`) | `observability` |
 | `harbor-robots` (`pull_name`/`pull_secret`) | `harbor-registry` (`.dockerconfigjson`) | `hugmesh-backend`, `hugmesh-frontend`, `hugmesh-games` |
+| `harbor-robots` (`pull_name`/`pull_secret`) | `hugmesh-registry-pull` (`.dockerconfigjson`) — same cred, **different Secret name**: the Harbor chart is released into this namespace and already owns `harbor-registry` (its own `REGISTRY_HTTP_SECRET`, template `registry/registry-secret.yaml`) | `hugmesh-pki` |
 | `harbor-robots` (`push_name`/`push_secret`) | `image-builder-registry` (`.dockerconfigjson`, **push**) | `hugmesh-image-builds` (opt-in) |
 | `casdoor-apps` (`fragment-sync`) | `fragment-sync-casdoor` (`clientId`=`app-fragment-sync`/`clientSecret`) | `hugmesh-frontend` |
 
@@ -247,9 +248,15 @@ unchanged.
   project-scoped **pull-only** robot account via Harbor's REST API and writes its
   one-time-revealed secret to Vault `hugmesh/harbor-robots`
   (`pull_name`/`pull_secret`) — Harbor never lets you re-read a robot secret once
-  minted, so that Job captures it immediately. `scripts/gen-cluster-secrets.sh`'s
-  `GITLAB_REGISTRY_TOKEN` remains only as a manual-override escape hatch for
-  local/offline testing. Any app without a source repo yet stays `:dev` until built.
+  minted, so that Job captures it immediately. That Job **owns**
+  `hugmesh/harbor-robots`: `scripts/gen-cluster-secrets.sh` does not write the
+  path at all by default (a `vault kv put` REPLACES the KV-v2 document, and the
+  Job skips on Harbor state, so a clobber there is permanent and silent — it
+  shipped, and every imagePullSecret carried a dead token). `GITLAB_REGISTRY_TOKEN`
+  remains only as a manual-override escape hatch for local/offline testing, and
+  it now `kv patch`es in just the half it was given. Guarded by
+  `tests/scripts/test-harbor-robots-ownership.sh`. Any app without a source repo
+  yet stays `:dev` until built.
 - The always-on in-cluster Kaniko build pipeline (`manifests/image-builder`, synced by
   `apps/60-image-builder.yaml`) PUSHES with a SEPARATE
   credential: the SAME `harbor-provision` Job also mints a project-scoped

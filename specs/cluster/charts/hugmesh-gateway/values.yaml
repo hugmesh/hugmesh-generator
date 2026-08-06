@@ -29,6 +29,15 @@ image:
 # renamed from gitlab-registry) — was empty here, which was consistent with the
 # Docker-Hub-resolving bug above (a public-image pull needs no secret) but wrong
 # once the repository actually points at Harbor.
+#
+# NAMESPACE-DEPENDENT: this default is only correct for releases whose
+# destination namespace has no third-party Helm release in it. The two
+# hugmesh-pki releases (apps/20-gateway-pki.yaml, apps/22-gateway-superadmin.yaml)
+# MUST override it to `hugmesh-registry-pull`, because the Harbor chart is
+# released into hugmesh-pki and already owns the Secret name `harbor-registry`
+# (its own registry credentials, not a docker config) — both of those files carry
+# the override and the reasoning. tests/scripts/test-eso-target-collisions.sh
+# enforces the underlying invariant on the ExternalSecret side.
 imagePullSecrets:
   - name: harbor-registry
 serviceAccount:

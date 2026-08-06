@@ -472,7 +472,19 @@ spec:
         manifests: [manifests/harbor]
         esoLines: []
       endpointFields: []
-      esoSecret: harbor-registry
+      # The PULL secret's NAME IS NOT UNIFORM across namespaces, and assuming it
+      # was is the bug this line used to carry: hugmesh-{backend,frontend,games,
+      # forum} get `harbor-registry`, but hugmesh-pki gets `hugmesh-registry-pull`
+      # because the Harbor chart is released into that namespace and already owns
+      # the name `harbor-registry` (its own REGISTRY_HTTP_SECRET —
+      # templates/registry/registry-secret.yaml).
+      esoSecret: harbor-registry               # + hugmesh-registry-pull (hugmesh-pki) + image-builder-registry (push)
+      # NOT written by gen-cluster-secrets.sh: manifests/harbor/
+      # harbor-provision-job.yaml owns this path (Harbor reveals a robot secret
+      # exactly once, so only the Job can ever hold it). The seeder leaves it
+      # alone and only `kv patch`es a manual GITLAB_REGISTRY_TOKEN /
+      # IMAGE_BUILDER_REGISTRY_TOKEN override into it — see
+      # tests/scripts/test-harbor-robots-ownership.sh.
       vaultPath: harbor-robots
       awsTarget: "ECR"
       azureTarget: "ACR"

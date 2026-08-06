@@ -22,6 +22,20 @@ spec:
       values: |
         instance:
           name: hugmesh-pki-gateway
+        # PULL SECRET OVERRIDE — hugmesh-pki only. The chart default is
+        # `harbor-registry` (correct for the be/fe gateways, whose namespaces no
+        # chart is released into), but THIS release lands in hugmesh-pki, which
+        # is where the Harbor chart itself is released — and that chart already
+        # owns a Secret named `harbor-registry` (its registry's
+        # REGISTRY_HTTP_SECRET/REGISTRY_REDIS_PASSWORD, template
+        # registry/registry-secret.yaml via the harbor.registry helper). The
+        # gateway's ESO-materialized pull cred is therefore called
+        # `hugmesh-registry-pull` here (manifests/external-secrets/
+        # secretstore.yaml). Inheriting the chart default would point this
+        # Deployment at Harbor's Opaque Secret, which the kubelet cannot parse
+        # as a docker config — an anonymous pull against the private project.
+        imagePullSecrets:
+          - name: hugmesh-registry-pull
         # This instance's OWN Cassandra role, scoped to snapdragon_gateway only,
         # created by manifests/cassandra-init (see that overlay for why a gateway
         # role needs CREATE/ALTER and not just SELECT). The password comes from

@@ -97,6 +97,65 @@ lint:cluster-manifest-integrity:
     # regex cannot tell what a fused `for entry in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
 
+# ExternalSecret TARGET-OWNERSHIP gate. The job above reads this repo's own
+# manifests; it cannot know what an UPSTREAM chart creates, and that is exactly
+# where this bug lived. specs/cluster declared an ExternalSecret targeting Secret
+# `harbor-registry` in hugmesh-pki with creationPolicy: Owner — a name the Harbor
+# Helm chart itself already creates in that namespace
+# (harbor/templates/registry/registry-secret.yaml, type Opaque, holding
+# REGISTRY_HTTP_SECRET). It had been erroring since bootstrap ("field is
+# immutable"), so the imagePullSecret it existed to create never existed and the
+# pods it existed to unblock would still ImagePullBackOff — and the only thing
+# stopping ESO from CLOBBERING Harbor's own registry credentials was that
+# unrelated type-immutability rule. This job renders every third-party chart this
+# repo releases into a namespace it also puts ExternalSecrets in (real `helm
+# template`, the Application's own committed values) and fails if any target
+# lands on a chart-owned Secret name, if any ExternalSecret target doubles as a
+# literal Secret manifest, or if any workload names a pull secret nothing
+# materializes. Scope is DERIVED from the manifests, so adding an ExternalSecret
+# to a new namespace pulls that namespace's chart into the check automatically.
+# Five negative controls (including the exact pre-fix manifest, a DIFFERENT
+# chart-owned name, and an empty-tree vacuity control) run against staged copies.
+lint:eso-target-collisions:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  variables:
+    # Same pinned helm as lint:gateway-mfa-env / lint:probe-auth-surface below —
+    # one version for the whole pipeline, so no two chart renders can disagree
+    # about what Helm does.
+    HELM_VERSION: "v3.19.2"
+    HELM_SHA256: "2114c9dea2844dce6d0ee2d792a9aae846be8cf53d5b19dc2988b5a0e8fec26e"
+  before_script:
+    - pip install --quiet pyyaml
+    # Pinned-helm install, FAIL-CLOSED: the sha256 of the WHOLE download is
+    # verified before extraction, and only linux-amd64/helm is ever extracted.
+    # helm is NOT optional — the guard hard-fails without it rather than skipping,
+    # because "no chart rendered" would read as "no collisions found".
+    - |
+      python3 - <<'PY'
+      import hashlib, io, os, sys, tarfile, urllib.request
+      ver = os.environ["HELM_VERSION"]
+      want = os.environ["HELM_SHA256"].lower()
+      url = "https://get.helm.sh/helm-%s-linux-amd64.tar.gz" % ver
+      blob = urllib.request.urlopen(url, timeout=120).read()
+      got = hashlib.sha256(blob).hexdigest()
+      if got != want:
+          sys.exit("FAIL-CLOSED: sha256 mismatch for %s\n  pinned %s\n  got    %s"
+                   % (url, want, got))
+      with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
+          f = t.extractfile("linux-amd64/helm")
+          if f is None:
+              sys.exit("FAIL-CLOSED: linux-amd64/helm missing from the verified tarball")
+          with open("/usr/local/bin/helm", "wb") as out:
+              out.write(f.read())
+      os.chmod("/usr/local/bin/helm", 0o755)
+      print("helm %s installed, sha256 %s OK" % (ver, got))
+      PY
+    - helm version --short
+  script:
+    - bash tests/scripts/test-eso-target-collisions.sh
+
 # Workload-console generator gate (tests/workload-console/test-workload-console.sh):
 # the two-SA RBAC least-privilege invariants (the security acceptance bar), the
 # optional-services registration (default off, hidden module), the
@@ -258,6 +317,40 @@ lint:eso-seed-contract:
     # the real seeder, which mints every value with `openssl rand`, and no static
     # read of the script could tell what its arrays and conditionals expand to.
     - bash tests/scripts/test-eso-seed-contract.sh
+
+# HARBOR-ROBOTS OWNERSHIP gate. The job above proves every ExternalSecret
+# reference is SEEDED; it says nothing about who may OVERWRITE a seeded value,
+# and that is where this bug lived. secret/<brand>/harbor-robots had two writers:
+# manifests/harbor/harbor-provision-job.yaml, which mints Harbor's pull/push
+# robot accounts and is the ONLY thing that can ever hold their secrets (Harbor
+# reveals a robot secret exactly once), and gen-cluster-secrets.sh, which did an
+# UNCONDITIONAL `vault kv put` of two literal REPLACE_WITH_* placeholders. KV v2
+# `put` replaces the whole document and the Job skips on HARBOR state, not on
+# Vault state — so every re-run of the seeder killed four real credentials
+# permanently, and ESO went on rendering a perfectly-shaped dockerconfigjson for
+# all five namespaces and reporting Synced. The only symptom is a 401 at pull
+# time, which the kind lane never reaches because it side-loads its images
+# (docs/KIND-SSO-E2E-FINDINGS.md #17).
+#
+# This gate asserts BEHAVIOUR, not text: it EXECUTES the real seeder against a
+# faithful fake KV v2 (put replaces, patch merges, patch on a virgin path fails)
+# pre-loaded with the document the Job leaves behind, and EXECUTES the Job's own
+# reconcile.py — extracted from its ConfigMap — against an in-process fake Harbor
+# + Vault API. Eight negative controls run against staged copies, including the
+# EXACT pre-fix seeder, an escape hatch that puts instead of patching, an escape
+# hatch that silently does nothing, a run that never reaches the online branch, a
+# provision Job that stops merging, and a sabotaged fake Vault (the control on
+# the controls). Offline: no cluster, no vault binary, no Harbor, no network.
+lint:harbor-robots-ownership:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    # bash + openssl are both present in python:3-slim (Debian): the guard runs
+    # the real gen-cluster-secrets.sh, which mints every value with `openssl rand`.
+    - bash tests/scripts/test-harbor-robots-ownership.sh
 
 # KIND SSO HARNESS HONESTY gate. Two ways specs/cluster/bootstrap/kind-local
 # reported work it had not done. (1) The identity seed: Casdoor answers a DENIED

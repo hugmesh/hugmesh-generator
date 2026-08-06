@@ -78,9 +78,14 @@ git** — by the `image-builder-registry` ExternalSecret
 It sources Vault `secret/<brand>/harbor-robots` (`push_name`/`push_secret`) — Harbor's
 project-scoped PUSH robot account, minted automatically by the `harbor-provision` PostSync Job
 (`../harbor/harbor-provision-job.yaml`; Harbor reveals a robot's secret exactly once, so that
-Job captures and writes it to Vault the moment it's created). `scripts/gen-cluster-secrets.sh`'s
+Job captures and writes it to Vault the moment it's created — and **owns** that path in
+consequence: `scripts/gen-cluster-secrets.sh` does not write `harbor-robots` at all by default,
+because a `vault kv put` REPLACES the whole KV-v2 document and the Job's skip is keyed on
+Harbor state, so a clobber can never be repaired). `scripts/gen-cluster-secrets.sh`'s
 `IMAGE_BUILDER_REGISTRY_TOKEN` remains only as a manual-override escape hatch for local/offline
-testing. It is DELIBERATELY distinct from the runtime `harbor-registry` **pull**-scoped robot
+testing, and now `kv patch`es in only `push_name`/`push_secret`, leaving the pull robot's keys
+alone (`../../../../tests/scripts/test-harbor-robots-ownership.sh` executes both writers and
+asserts exactly that). It is DELIBERATELY distinct from the runtime `harbor-registry` **pull**-scoped robot
 imagePullSecret (formerly `gitlab-registry`) so the runtime pull credential can never push.
 Mirrors the #110 `service-catalog-builder-registry` contract.
 

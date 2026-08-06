@@ -24,10 +24,18 @@ generatorOptions:
 # resources whose image `name:` field matches exactly) and silently no-op on
 # any future `newTag:` edit, so it is intentionally omitted. Bump the tag by
 # editing headwind.yaml's `image:` field directly.
+#
+# PULL SECRET NAME: `hugmesh-registry-pull`, NOT `harbor-registry`. In every
+# other namespace the ESO-materialized pull secret IS called `harbor-registry`,
+# but hugmesh-pki is where the Harbor chart itself is released and that chart
+# already owns a Secret of that name (its registry's REGISTRY_HTTP_SECRET /
+# REGISTRY_REDIS_PASSWORD) — see manifests/external-secrets/secretstore.yaml's
+# hugmesh-registry-pull block for the full citation and why the collision could
+# never converge. Do not "align" this back to harbor-registry.
 patches:
   - target: { kind: Deployment, name: headwind }
     patch: |
       - op: add
         path: /spec/template/spec/imagePullSecrets
         value:
-          - name: harbor-registry
+          - name: hugmesh-registry-pull

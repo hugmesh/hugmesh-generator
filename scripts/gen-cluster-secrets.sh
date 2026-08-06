@@ -268,27 +268,47 @@ fi
 
 # Registry pull/push credentials.
 #
-# HARBOR MIGRATION: these two are now automated. Project + robot-account
-# provisioning for the in-cluster Harbor registry happens live, in-cluster, via
-# the harbor-provision PostSync Job (specs/cluster/manifests/harbor/
-# harbor-provision-job.yaml): it creates the Harbor project and the two robot
-# accounts (pull-only, push-only) through Harbor's own REST API and writes
-# their one-time-revealed secrets straight to Vault (secret/<brand>/harbor-robots,
-# keys pull_name/pull_secret/push_name/push_secret) — NOT through this script.
-# manifests/external-secrets/secretstore.yaml's harbor-registry ExternalSecrets
-# (imagePullSecret, renamed from gitlab-registry) and
-# image-builder-externalsecrets.yaml's image-builder-registry both read that
-# SAME Vault path now. The GITLAB_REGISTRY_TOKEN / IMAGE_BUILDER_REGISTRY_TOKEN
-# vars below are KEPT as a manual-override escape hatch (useful for local/offline
-# testing without a live Harbor to call) — when set, this script writes them to
-# the identical secret/<brand>/harbor-robots path/keys so the override actually
-# feeds the same ExternalSecrets the live Job would; they are no longer the
-# primary path an operator is expected to fill in.
+# THIS SCRIPT DOES NOT OWN secret/<brand>/harbor-robots. The in-cluster
+# harbor-provision PostSync Job does (specs/cluster/manifests/harbor/
+# harbor-provision-job.yaml): it creates the Harbor project and the two scoped
+# robot accounts (pull-only, push-only) through Harbor's own REST API and
+# read-merge-writes their secrets to that path (project + pull_name/pull_secret
+# + push_name/push_secret). It has to: Harbor reveals a robot's secret EXACTLY
+# ONCE, at creation, and can never re-reveal it (that Job's header, "UNLIKE every
+# other secret in this platform"), so the only process that can ever hold the
+# real value is the one standing there when Harbor mints it. This generator
+# cannot mint that value and must therefore never destroy it.
+#
+# THE BUG THAT MADE THIS RULE EXPLICIT. Until 2026-08-06 this script did an
+# UNCONDITIONAL `vault kv put .../harbor-robots` of the two placeholder defaults
+# below. KV v2 `put` REPLACES the whole document, and the Job's idempotency is
+# keyed on HARBOR ("if a robot with the expected name already exists, SKIP
+# creating it" — harbor-provision-job.yaml's ensure_robot()), NOT on what is in
+# Vault. So the second and every later run of this seeder overwrote four real
+# robot credentials with literal placeholder strings, deleted the `project` key
+# it does not even know about, and the Job could never repair any of it: the
+# robots still existed in Harbor, so it skipped. Every imagePullSecret in all
+# five namespaces then rendered a dockerconfigjson holding
+# `REPLACE_WITH_GITLAB_DEPLOY_TOKEN` — ESO reports SYNCED, the Secret exists, and
+# every pull 401s with no error anywhere upstream of the kubelet.
+#
+# THE RULE, and it is the same one the velero block below already follows
+# ("WRITTEN ONLY when enabled so a blank never CLOBBERS a manually-seeded
+# secret/<brand>/velero"): a path this generator does not own is either left
+# alone or MERGED into — never replaced.
+#
+# THE ESCAPE HATCH SURVIVES, DECLAWED. GITLAB_REGISTRY_TOKEN /
+# IMAGE_BUILDER_REGISTRY_TOKEN still exist for local/offline testing without a
+# live Harbor to call. They now default to EMPTY — empty means "write nothing",
+# so the placeholder literal can no longer reach Vault by construction — and when
+# an operator does set one, the write below is a `vault kv patch` (merge) carrying
+# ONLY the half that was supplied, so overriding the pull credential cannot
+# destroy the push robot, or `project`, or vice versa.
 GITLAB_REGISTRY_USER="${GITLAB_REGISTRY_USER:-hugmesh-deploy}"
-GITLAB_REGISTRY_TOKEN="${GITLAB_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_DEPLOY_TOKEN}"
+GITLAB_REGISTRY_TOKEN="${GITLAB_REGISTRY_TOKEN:-}"
 
 IMAGE_BUILDER_REGISTRY_USER="${IMAGE_BUILDER_REGISTRY_USER:-hugmesh-image-builder}"
-IMAGE_BUILDER_REGISTRY_TOKEN="${IMAGE_BUILDER_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_WRITE_REGISTRY_DEPLOY_TOKEN}"
+IMAGE_BUILDER_REGISTRY_TOKEN="${IMAGE_BUILDER_REGISTRY_TOKEN:-}"
 
 # Harbor's own built-in superuser ("admin") password. Consumed by BOTH the
 # Harbor Helm chart itself (existingSecretAdminPassword, so the chart never
@@ -625,25 +645,81 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             password="${MAIL_PASSWORD}" \
             from="${MAIL_FROM}" \
             dkim_key="${MAIL_DKIM}"
-        # Harbor registry pull+push robot credentials (imagePullSecret +
-        # image-builder push source) — MANUAL-OVERRIDE ESCAPE HATCH ONLY.
-        # secret/<brand>/harbor-robots is normally OWNED by the live
-        # harbor-provision Job (manifests/harbor/harbor-provision-job.yaml),
-        # which mints Harbor's real pull-only/push-only robot accounts and
-        # read-merge-writes their one-time-revealed secrets to this exact path
-        # (pull_name/pull_secret/push_name/push_secret). This `vault kv put`
-        # writes the SAME path/keys so a manual override (GITLAB_REGISTRY_TOKEN /
-        # IMAGE_BUILDER_REGISTRY_TOKEN, kept for local/offline testing without a
-        # live Harbor to call) actually feeds the harbor-registry /
-        # image-builder-registry ExternalSecrets that read from here — but a
-        # subsequent live harbor-provision run will overwrite whichever of
-        # these keys correspond to a robot it just created (it skips only if
-        # that robot already exists in HARBOR, not based on what's in Vault).
-        vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor-robots" \
-            pull_name="${GITLAB_REGISTRY_USER}" \
-            pull_secret="${GITLAB_REGISTRY_TOKEN}" \
-            push_name="${IMAGE_BUILDER_REGISTRY_USER}" \
-            push_secret="${IMAGE_BUILDER_REGISTRY_TOKEN}"
+        # ── secret/<brand>/harbor-robots — OWNED BY harbor-provision, NOT HERE ──
+        # See the GITLAB_REGISTRY_* header above for the full argument. Short
+        # form: only the in-cluster Job can ever hold a Harbor robot secret
+        # (revealed once, never re-readable), and that Job skips on HARBOR state,
+        # so it can never repair a Vault doc somebody else overwrote. A writer
+        # that cannot repair must be the only writer; everyone else merges or
+        # stays out. `vault kv put` REPLACES the whole KV-v2 document — it is the
+        # wrong verb for a path this script does not own, at any time, with any
+        # value.
+        #
+        # DEFAULT: write NOTHING. Until harbor-provision has run, the six
+        # ExternalSecrets that read this path (four harbor-registry, one
+        # hugmesh-registry-pull, one image-builder-registry) report
+        # SecretSyncedError and no pull Secret exists — which is loud, correct
+        # and self-resolving. The alternative this replaces (a placeholder that
+        # renders a syntactically perfect dockerconfigjson holding a dead token)
+        # is silent, and there is nothing to pull from Harbor before Harbor is up
+        # anyway.
+        HARBOR_ROBOT_OVERRIDE=()
+        if [ -n "${GITLAB_REGISTRY_TOKEN}" ]; then
+            HARBOR_ROBOT_OVERRIDE+=(pull_name="${GITLAB_REGISTRY_USER}"
+                                    pull_secret="${GITLAB_REGISTRY_TOKEN}")
+        fi
+        if [ -n "${IMAGE_BUILDER_REGISTRY_TOKEN}" ]; then
+            HARBOR_ROBOT_OVERRIDE+=(push_name="${IMAGE_BUILDER_REGISTRY_USER}"
+                                    push_secret="${IMAGE_BUILDER_REGISTRY_TOKEN}")
+        fi
+        if [ "${#HARBOR_ROBOT_OVERRIDE[@]}" -gt 0 ]; then
+            # The verb is chosen by whether a document EXISTS, never by whether a
+            # write failed. `kv patch || kv put` looks equivalent and is not: a
+            # patch can be refused for reasons that have nothing to do with the
+            # document being absent — most obviously a token without the `patch`
+            # capability on this path — and the fallback would then REPLACE the
+            # very document this block exists to protect, silently, which is the
+            # original bug wearing a fallback.
+            #
+            # And the probe itself is only allowed to authorize a `put` when it
+            # positively reports ABSENCE. "The read failed" is not "there is
+            # nothing there" — a token with update but no read on this path is an
+            # ordinary Vault policy — so anything other than a clean read or an
+            # explicit not-found ABORTS. Fail-closed: the worst case is a
+            # provisioning run that stops and says why, instead of one that
+            # destroys a credential nothing can re-mint.
+            #
+            # Only stderr is captured (`2>&1 >/dev/null` — stderr to the capture,
+            # stdout to /dev/null): a successful read prints the document, and
+            # the robot secrets have no business in a shell variable.
+            if _hr_probe="$(vault kv get -format=json \
+                    "${VAULT_KV_MOUNT}/${BASE}/harbor-robots" 2>&1 >/dev/null)"; then
+                vault kv patch "${VAULT_KV_MOUNT}/${BASE}/harbor-robots" \
+                    "${HARBOR_ROBOT_OVERRIDE[@]}"
+            elif printf '%s' "${_hr_probe}" | grep -qi 'no value found'; then
+                # Virgin path: `kv patch` cannot create a document, and there is
+                # nothing to clobber. Only the supplied keys are written — never
+                # a fabricated value for the robot we were not given.
+                vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor-robots" \
+                    "${HARBOR_ROBOT_OVERRIDE[@]}"
+            else
+                echo "ERROR: could not determine whether ${VAULT_KV_MOUNT}/${BASE}/harbor-robots" >&2
+                echo "       exists; the read failed for a reason other than 'no value found':" >&2
+                printf '%s\n' "${_hr_probe}" | sed 's/^/         /' >&2
+                echo "       REFUSING to write it. That path holds Harbor robot secrets the" >&2
+                echo "       harbor-provision Job captured at mint time and can NEVER re-reveal;" >&2
+                echo "       writing blind would replace them permanently. Grant this token read" >&2
+                echo "       on the path, or unset GITLAB_REGISTRY_TOKEN /" >&2
+                echo "       IMAGE_BUILDER_REGISTRY_TOKEN to skip the manual override entirely." >&2
+                exit 1
+            fi
+            echo "    MERGED manual override into ${VAULT_KV_MOUNT}/${BASE}/harbor-robots" \
+                 "(keys: ${HARBOR_ROBOT_OVERRIDE[*]%%=*}) — harbor-provision still owns the rest"
+        else
+            echo "    skipped ${VAULT_KV_MOUNT}/${BASE}/harbor-robots — owned by the in-cluster" \
+                 "harbor-provision Job (set GITLAB_REGISTRY_TOKEN / IMAGE_BUILDER_REGISTRY_TOKEN" \
+                 "to merge a manual override for offline testing)"
+        fi
         # Harbor admin password — consumed by the Helm chart (existingSecretAdminPassword)
         # AND the harbor-provision Job (project/robot-account REST calls).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor" \
@@ -660,7 +736,9 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
                 repo_password="${MANAGED_VELERO_REPO_PASSWORD}"
             echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/velero (managed object-store creds + kopia repo password)"
         fi
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,mesh-bff-db,character-forge-bff-db,forum,forum-db,akkoma,tube,route-access-db,cassandra-admin,cassandra-app-creds,uptrace,mail,harbor-robots,harbor,headwind}"
+        # NB: harbor-robots is deliberately NOT in this list — see the block
+        # above; it belongs to the harbor-provision Job.
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,mesh-bff-db,character-forge-bff-db,forum,forum-db,akkoma,tube,route-access-db,cassandra-admin,cassandra-app-creds,uptrace,mail,harbor,headwind}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2

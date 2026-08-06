@@ -47,6 +47,142 @@ branches (see the bottom).
 | 14 | Pre-rebrand namespace defaults across the BFFs | user-bff resolves `casdoor.snapdragon-pki…` and `snapdragon-admin-bff-api.snapdragon-backend…` (NXDOMAIN). Counted on `origin/main`: **user-bff 16, admin-bff 22, mod-bff 9, federation 3, forum 3, wiki 2** stale refs; the generator overrides none of them. |
 | 15 | `SVC_PASSWORD` hard-required, never provided | admin-bff fails bean creation (`Could not resolve placeholder 'SVC_PASSWORD'`). Compose sets it; the cluster manifest does not. |
 | 16 | admin-bff Liquibase grants to a role nothing creates | `008-access-suspension` does `GRANT … TO admin_bff`; no cluster-side initdb creates that login role (contrast `route-access/initdb/10-roles.sh`, which does it properly). |
+| 17 | **The kind lane never pulls from Harbor at all** | Not a bring-up blocker — a **coverage** one, and the reason several of the defects above survived. `kind load` side-loads every first-party image, so the private-registry pull path (robot credential → Vault → ESO → `dockerconfigjson` → containerd → Harbor) has never once executed. Detail below. |
+
+## Finding 17 in detail — the private-registry pull path is unexercised
+
+### What is missing
+
+Four things, and each of them independently prevents the kind node from pulling
+an image out of the in-cluster Harbor:
+
+1. **Nothing ever asks it to.** [`scripts/kind-load-images.sh`](../scripts/kind-load-images.sh)
+   builds the eight first-party images from `./.stack-src` and `kind load`s them
+   into the node's containerd store under the exact refs the manifests render
+   (`registry.hugmesh.systems/hugmesh/<repo>:main`, gateway `:dev`). Its own
+   header says what that costs: *"`kind load` places each image directly into the
+   node's containerd store where IfNotPresent finds it and no pull (or
+   harbor-registry pull Secret) happens."* The kind-local README says the same
+   from the other end: *"the in-cluster Harbor is empty on a fresh cluster and is
+   not used."* Both statements are accurate and both were deliberate — the
+   shortcut is what makes `make kind-up && make kind-images` fast. It also
+   removes the only consumer of everything in item 4 below.
+2. **The node cannot resolve `registry.hugmesh.systems`.** The manifests hardcode
+   the reference hostnames, and the harness deliberately avoids `/etc/hosts`
+   (*"you do need a way to resolve those names to the kind node without editing
+   `/etc/hosts` (no passwordless sudo assumed)"*). The two mechanisms it uses
+   instead — `curl --resolve` and the e2e's Chromium `--host-resolver-rules` —
+   are per-client, on the **dev machine**. Neither is visible to containerd
+   inside the node.
+3. **The node does not trust the ingress cert.** Harbor is exposed at
+   `https://registry.hugmesh.systems` through `ingress-nginx-internal` with
+   `expose.tls.secretName: harbor-mtls`, a **Vault-PKI-issued** cert
+   (`apps/03a-harbor.yaml`). The kind node's CA bundle contains no cluster CA —
+   the README's own registry example is `curl -k`, and finding #1 records that
+   `cluster-ca` is USB-provisioned and `optional: true` everywhere. containerd
+   would reject the chain.
+4. **containerd has no registry configuration at all.**
+   [`kind-local.yaml`](../specs/cluster/bootstrap/kind-local/kind-local.yaml)
+   declares one node with `extraPortMappings` and nothing else: no
+   `containerdConfigPatches`, so no
+   `[plugins."io.containerd.grpc.v1.cri".registry] config_path`, so no
+   `/etc/containerd/certs.d/registry.hugmesh.systems/hosts.toml`, so no host
+   override, no `ca`, no `skip_verify`. There is no configuration in which this
+   node could be told where that registry is.
+
+### Why it hides this whole bug class
+
+Everything between Vault and a running container is proven by exactly one thing —
+an actual pull:
+
+* that the Harbor robot account exists and its secret in Vault is the **live**
+  one;
+* that ESO rendered it into a `kubernetes.io/dockerconfigjson` whose `auths` key
+  is the hostname the image ref actually uses;
+* that the Secret exists **in the workload's namespace, under the name the
+  workload asks for**;
+* that the robot's Harbor permissions cover the project being pulled;
+* that the node can resolve and trust the registry endpoint.
+
+None of those has a second witness. ESO reports `SecretSynced` for a
+syntactically perfect dockerconfigjson holding a dead token; a Deployment names
+an `imagePullSecrets` entry that does not exist without complaint; a robot with
+no permissions looks identical to one with them until a manifest is fetched. So
+the lane can be **entirely green while every item on that list is broken**, and
+it was:
+
+* the `hugmesh-pki` ExternalSecret aimed at `harbor-registry` — a name the Harbor
+  chart itself owns — had been failing since bootstrap, so the pull secret it
+  existed to create never existed;
+* `manifests/forum/kustomization.yaml` patched `imagePullSecrets:
+  [harbor-registry]` onto phpbb and rewrote its image to a private Harbor repo,
+  while **no ExternalSecret ever materialized that Secret in `hugmesh-forum`** —
+  the pull was anonymous;
+* `secret/<brand>/harbor-robots` held the literal string
+  `REPLACE_WITH_GITLAB_DEPLOY_TOKEN`, because the seeder's unconditional
+  `vault kv put` overwrote the credentials the `harbor-provision` Job had minted
+  (fixed, and guarded, by `tests/scripts/test-harbor-robots-ownership.sh`).
+
+Three distinct defects, one shared reason for surviving: **nothing pulls.** This
+is the same shape as the document's other theme — the workaround (`kind load`)
+is real and load-bearing, and it silently converted an unproven property into an
+untested one.
+
+### What it would take to close
+
+Four options, cheapest first. None is implemented; this section is the finding,
+not a plan of record.
+
+**(A) Point containerd at the in-cluster Service, plaintext.** Add
+`containerdConfigPatches` to `kind-local.yaml` setting `config_path` and a
+`hosts.toml` for `registry.hugmesh.systems` whose `server` is
+`http://harbor-core.hugmesh-pki.svc.cluster.local`.
+*Buys:* DNS and CA trust both stop mattering, and the pull still authenticates
+with the real robot credential out of the real ESO-rendered dockerconfigjson —
+which is the bug class above.
+*Costs:* it diverges from production in exactly the dimension that has already
+bitten twice. A dockerconfigjson whose `auths` key is the wrong hostname still
+authenticates here, so that defect stays invisible; and a `skip_verify`/plaintext
+line in a harness config has a way of being copied into a real one.
+
+**(B) One deliberate pull probe, everything else side-loaded.** Keep
+`kind-load-images.sh` as is; after `harbor-provision` completes, push one small
+image through the existing kaniko path and run a Job with
+`imagePullPolicy: Always` in a namespace that carries the pull secret.
+*Buys:* a single, loud, specific assertion that the credential is live and the
+dockerconfigjson is usable, at a fraction of the runtime of converting the whole
+image set. It fails with a message that names the problem.
+*Costs:* it still needs the node-side plumbing of (A) or (C) — a pull is a pull —
+so it is a scoping decision layered on one of them, not an alternative to them.
+It also proves nothing about the platform's own eight images.
+
+**(C) Make the node resolve and trust the real endpoint.** `hosts.toml` pointing
+at the ingress with the cluster CA in its `ca` field (or installed into the
+node's trust store), plus a host alias so `registry.hugmesh.systems` resolves on
+the node.
+*Buys:* the only option that exercises the production path end to end — real
+hostname, real ingress, real Vault-PKI chain, real credential.
+*Costs:* the CA does not exist when the node is created — Vault-PKI issues it
+during bootstrap — so closing the loop requires a step that mutates the node
+*after* it is up (a privileged `docker exec` into the node, or a DaemonSet
+writing a hostPath and bouncing containerd). That is a real operational hazard:
+restarting containerd disrupts every pod on the node, and a harness that reaches
+into the node is a harness that can wedge the cluster it is validating. It also
+makes `make kind-images` a build → push → pull cycle rather than build →
+side-load, which is materially slower.
+
+**(D) Leave the lane alone; prove what can be proved off-cluster.** What this
+branch did: assert the invariant in CI instead, by executing the real
+`gen-cluster-secrets.sh` and the real `harbor-provision` `reconcile.py` against a
+faithful fake Vault and fake Harbor
+(`tests/scripts/test-harbor-robots-ownership.sh`, plus
+`tests/scripts/test-eso-target-collisions.sh` for the ownership/consumer half).
+*Buys:* runs in seconds on every merge request, needs no cluster, and covers the
+whole ownership class rather than one instance.
+*Costs:* it is structurally incapable of catching anything only a real pull can
+see — a wrong `auths` hostname, an under-scoped robot, an ingress cert the node
+does not trust. Those remain **unproven, not proven-absent**, and this finding is
+the record of that.
 
 ## Two systemic observations
 
@@ -72,5 +208,18 @@ Compose green has been treated as proof the platform works; it proves the
 - `fix/pki-role-san-namespace` — fixes the role loop plus a matching-rules
   contract test.
 - `feat/kind-sso-e2e` — this harness, plus items 1, 2 and the node role label.
+- `fix/harbor-registry-name-collision` — the `hugmesh-pki` ExternalSecret that
+  had been targeting a Secret name the Harbor chart owns (renamed
+  `hugmesh-registry-pull`), the `hugmesh-forum` pull secret nothing materialized,
+  and the `harbor-robots` ownership conflict behind item 17's third bullet — the
+  seeder's unconditional `vault kv put` overwriting the credentials
+  `harbor-provision` had minted. Three guards:
+  `tests/scripts/test-eso-target-collisions.sh` (renders the real upstream charts
+  and fails on a target collision or an unmaterialized pull secret) and
+  `tests/scripts/test-harbor-robots-ownership.sh` (executes the real seeder and
+  the real Job script against a faithful fake Vault). Both proven red on the
+  pre-fix tree.
 
 Items 5–16 are **not** fixed in-repo yet and are the honest remaining work.
+Item 17 is **deliberately not fixed** — see its options above; the write-up is
+the deliverable, and closing it would mean mutating the kind node.
