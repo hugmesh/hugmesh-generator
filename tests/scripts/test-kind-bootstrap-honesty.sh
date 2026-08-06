@@ -462,6 +462,28 @@ chmod +x "${BIN}/vault"
 # Mirrors the real seeder's two relevant behaviours: it mints fresh values on
 # EVERY invocation, and it resolves BRAND from brand.conf (which WINS over the
 # environment), so the KV base path it writes can differ from the caller's env.
+#
+# THE PATH LIST IS DERIVED FROM seed-vault-kv.sh, NOT HARDCODED. It used to be a
+# literal copy of the six sentinels, and it drifted the moment a seventh
+# (cassandra-app-creds) was added on another branch: each branch was green alone,
+# and the merge produced a stub that seeds six paths against a contract that
+# demands seven, so the real hook's own post-seed check fired —
+#     [kv-seed] FATAL: seeding reported success but these KV paths are still
+#     empty: cassandra-app-creds
+# — and cascaded into five failures on a `main` where nothing was actually wrong.
+# That is this repo's recurring failure shape in its purest form: a FIXTURE
+# SIMPLER THAN PRODUCTION. A stub that seeds fewer paths than the contract
+# requires is not a weaker test, it is a broken one, and hardcoding invited it.
+# Deriving the list means adding a sentinel updates the stub for free — and if
+# the parse ever yields nothing, the run FAILS rather than quietly seeding zero
+# paths and blaming the hook.
+SENTINELS="$(sed -n 's/^SENTINEL_PATHS=(\(.*\))$/\1/p' \
+  "${REPO}/specs/cluster/bootstrap/kind-local/seed-vault-kv.sh" | head -1)"
+if [ -z "${SENTINELS}" ]; then
+  bad "could not read SENTINEL_PATHS out of seed-vault-kv.sh — the fake seeder would seed nothing and every kv-seed assertion below would be meaningless"
+  SENTINELS="__PARSE_FAILED__"
+fi
+export FAKE_SEED_PATHS="${SENTINELS}"
 cat > "${TMP}/fake-seeder.sh" <<'SEEDER'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -469,7 +491,7 @@ printf 'SEEDER RAN %s\n' "$*" >> "${VSTUB_STATE}/log"
 mkdir -p "${VSTUB_STATE}/kv"
 BRAND="${BRAND:-hugmesh}"
 [ -f "${REPO_ROOT:-}/brand.conf" ] && . "${REPO_ROOT}/brand.conf"
-for p in casdoor casdoor-apps admin-bff-db user-bff-db route-access-db cassandra-admin; do
+for p in ${FAKE_SEED_PATHS}; do
   printf '{"minted":"%s"}' "$RANDOM" > "${VSTUB_STATE}/kv/secret_${BRAND}_${p}"
 done
 SEEDER
@@ -573,12 +595,30 @@ fi
 # The premise the guard above defends: gen-cluster-secrets.sh mints
 # unconditionally and never reads what is already in Vault. If that ever changes,
 # this check fires so the caller-side guard is re-examined rather than trusted.
+#
+# SCOPE NOTE. This used to assert `! grep -q 'vault kv get'` over the WHOLE file,
+# which is broader than the premise it defends and fired on a change that did not
+# threaten it. A sibling branch gave harbor-robots a read-before-write, so the
+# seeder would stop clobbering a path the harbor-provision Job owns and can never
+# repair. That read is deliberate, scoped to one path, and leaves the DB-password
+# behaviour — the thing the caller-side skip actually guards — untouched. Each
+# branch was green alone; the merge turned a correct fix into a red gate.
+#
+# So the check is now scoped to what it means: DB passwords must still mint
+# unconditionally, and no read may target a DB path. A read of any OTHER path is
+# still surfaced, because an unreviewed read creeping in is exactly what this
+# check exists to notice — it just no longer conflates "read something" with
+# "changed the minting contract".
 if [ -f "${GEN_SECRETS}" ]; then
+  _db_read="$(grep -nE 'vault kv get' "${GEN_SECRETS}" \
+              | grep -E '(admin-bff-db|user-bff-db|route-access-db|mod-bff-db|forum-bff-db|wiki-bff-db|mesh-bff-db|character-forge-bff-db|federation-db)' || true)"
+  _other_reads="$(grep -cE 'vault kv get' "${GEN_SECRETS}" || true)"
   if grep -qE '^USER_BFF_DB_PASSWORD="\$\(openssl rand' "${GEN_SECRETS}" \
      && grep -qE '^ADMIN_BFF_DB_PASSWORD="\$\(openssl rand' "${GEN_SECRETS}" \
-     && ! grep -q 'vault kv get' "${GEN_SECRETS}"; then
-    ok "premise holds: gen-cluster-secrets.sh still mints DB passwords unconditionally and never reads existing KV — the caller-side guard is required"
+     && [ -z "${_db_read}" ]; then
+    ok "premise holds: gen-cluster-secrets.sh still mints DB passwords unconditionally and never reads an existing DB path — the caller-side guard is required (${_other_reads} non-DB KV read(s) present, e.g. the harbor-robots no-clobber probe)"
   else
+    [ -n "${_db_read}" ] && echo "     reads a DB path: ${_db_read}"
     bad "gen-cluster-secrets.sh's minting behaviour changed — re-check whether seed-vault-kv.sh's skip is still the right contract"
   fi
 fi
