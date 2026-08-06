@@ -203,6 +203,22 @@ lint:no-duplicate-env:
   script:
     - bash tests/scripts/test-no-duplicate-env.sh
 
+# GitHub credential preflight for first-party clones. Deliberately NO `rules:` —
+# it must run on every pipeline. This gate exists because the two properties it
+# checks fail SILENTLY: a leaked token looks like a working build, and a missing
+# credential used to surface as git's own "could not read Username" (or, on a
+# terminal, a Username/Password prompt GitHub stopped honouring in 2021, which
+# blocks the build until someone gives up). Both are proven by executing the lib
+# against a stub gh, not by reading it.
+lint:github-auth-lib:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash git
+  script:
+    - bash tests/scripts/test-github-auth-lib.sh
+
 lint:gitlab-ci-wellformed:
   stage: lint
   image: python:3-slim

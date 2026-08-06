@@ -670,23 +670,77 @@ class FlagBadgeDelegate(QtWidgets.QStyledItemDelegate):
     _CHIP_PAD = 5    # horizontal padding inside a chip
     _RADIUS = 4
 
+    _LINE_GAP = 2    # vertical gap between wrapped badge rows
+
     # -- geometry (shared by paint / helpEvent / sizeHint) ---------------------------
     def layout_badges(self, rect: QtCore.QRect, font: QtGui.QFont,
-                      cell: FlagCell) -> list[tuple[QtCore.QRect, Badge]]:
+                      cell: FlagCell,
+                      wrap_width: int = 0) -> list[tuple[QtCore.QRect, Badge]]:
+        """Badge rects for one cell.
+
+        With ``wrap_width > 0`` badges FLOW onto as many lines as they need and the
+        block is top-aligned; the caller (``sizeHint``) grows the row to fit, so a
+        package with thirty flags shows all thirty instead of silently clipping the
+        tail at the column edge. The operator asked for exactly that, and the
+        previous single-line layout was the reason a wide flag set looked truncated.
+
+        With ``wrap_width == 0`` the old single-line, vertically-centred behaviour is
+        kept — that is what a caller wants when it has no column width to wrap to.
+
+        This is the ONE geometry function behind paint, hover hit-testing and
+        sizeHint, so wrapping cannot desynchronise the three: a badge is painted
+        where the size was reserved and where the tooltip probe looks for it."""
         fm = QtGui.QFontMetrics(font)
         ch = fm.height() + 2
-        y = rect.y() + max(0, (rect.height() - ch) // 2)
-        x = rect.x() + self._PAD_X
+        widths = [fm.horizontalAdvance(b.text) + 2 * self._CHIP_PAD
+                  for b in cell.badges]
+        # Usable width inside the cell; never let a pathologically narrow column
+        # produce a zero/negative budget (that would put every badge on its own line
+        # AND still overflow) — fall back to single-line rather than lay out garbage.
+        avail = wrap_width - 2 * self._PAD_X if wrap_width > 0 else 0
+        if avail <= 0 or not widths:
+            y = rect.y() + max(0, (rect.height() - ch) // 2)
+            x = rect.x() + self._PAD_X
+            out = []
+            for badge, w in zip(cell.badges, widths):
+                out.append((QtCore.QRect(x, y, w, ch), badge))
+                x += w + self._GAP
+            return out
+
         out = []
-        for badge in cell.badges:
-            w = fm.horizontalAdvance(badge.text) + 2 * self._CHIP_PAD
+        x = rect.x() + self._PAD_X
+        y = rect.y() + self._PAD_X
+        line_x = 0
+        for badge, w in zip(cell.badges, widths):
+            # Wrap BEFORE placing when this badge would overflow — but never wrap a
+            # line that is still empty, or a badge wider than the whole column would
+            # loop forever placing nothing.
+            if line_x > 0 and line_x + w > avail:
+                y += ch + self._LINE_GAP
+                x = rect.x() + self._PAD_X
+                line_x = 0
             out.append((QtCore.QRect(x, y, w, ch), badge))
             x += w + self._GAP
+            line_x += w + self._GAP
         return out
+
+    def _wrap_width_for(self, index) -> int:
+        """The column's real on-screen width, which is what badges must wrap to.
+        ``option.rect`` is not usable for this inside sizeHint (Qt asks for a size
+        before it has a final rect), so ask the view's header directly."""
+        try:
+            view = self.parent()
+            width = int(view.columnWidth(index.column()))
+            return width if width > 0 else 0
+        except Exception:        # noqa: BLE001 — no view, or not a column-ed view
+            return 0
 
     def badge_at(self, cell: FlagCell, rect: QtCore.QRect, font: QtGui.QFont,
                  pos: QtCore.QPoint) -> Badge | None:
-        for r, badge in self.layout_badges(rect, font, cell):
+        # Same wrap width the painter used (the cell rect), so the hover probe finds
+        # a badge exactly where it was drawn — including on wrapped lines.
+        for r, badge in self.layout_badges(rect, font, cell,
+                                           wrap_width=rect.width()):
             if r.contains(pos):
                 return badge
         return None
@@ -713,7 +767,8 @@ class FlagBadgeDelegate(QtWidgets.QStyledItemDelegate):
             painter.save()
             painter.setClipRect(option.rect)
             painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-            for rect, badge in self.layout_badges(option.rect, option.font, cell):
+            for rect, badge in self.layout_badges(option.rect, option.font, cell,
+                                                  wrap_width=option.rect.width()):
                 self._paint_badge(painter, rect, option.font, badge)
             painter.restore()
         except Exception:        # noqa: BLE001 — PyQt6: an escape here aborts the app
@@ -745,10 +800,24 @@ class FlagBadgeDelegate(QtWidgets.QStyledItemDelegate):
             if cell is None:
                 return super().sizeHint(option, index)
             fm = QtGui.QFontMetrics(option.font)
-            w = self._PAD_X + sum(
-                fm.horizontalAdvance(b.text) + 2 * self._CHIP_PAD + self._GAP
-                for b in cell.badges)
-            return QtCore.QSize(w, fm.height() + 8)
+            wrap = self._wrap_width_for(index)
+            if wrap <= 0:
+                # No column width to wrap to: the pre-wrap behaviour (one line, as
+                # wide as the badges need).
+                w = self._PAD_X + sum(
+                    fm.horizontalAdvance(b.text) + 2 * self._CHIP_PAD + self._GAP
+                    for b in cell.badges)
+                return QtCore.QSize(w, fm.height() + 8)
+            # Lay the badges out for real and reserve the height they actually
+            # occupy, so the row GROWS to fit every badge instead of clipping the
+            # tail. Measured from the same layout_badges the painter uses, not from
+            # a parallel estimate that could drift away from it.
+            rects = self.layout_badges(QtCore.QRect(0, 0, wrap, 0),
+                                       option.font, cell, wrap_width=wrap)
+            if not rects:
+                return QtCore.QSize(wrap, fm.height() + 8)
+            bottom = max(r.bottom() for r, _ in rects)
+            return QtCore.QSize(wrap, bottom + self._PAD_X + 1)
         except Exception:        # noqa: BLE001
             return super().sizeHint(option, index)
 
@@ -804,14 +873,69 @@ class FlagColumns:
             tree.setItemDelegateForColumn(col, self.delegate)
         tree.viewport().installEventFilter(self.delegate)   # hover-tip housekeeping
         self._has_content: dict[str, bool] = {}
+        #: Operator overrides from the Configure-view dialog: True = always show,
+        #: False = always hide, key absent = AUTO (reveal on first content). The
+        #: dialog has to be able to beat the auto-hide in BOTH directions, or an
+        #: operator who ticks a column watches nothing happen because no row has
+        #: supplied that flag yet.
+        self._override: dict[str, bool] = {}
+        # Badge rows are wrapped to the column width, so a resize changes how many
+        # lines a cell needs. Without this the row heights keep the width they were
+        # first laid out at and wrapped badges get clipped after a drag.
+        try:
+            tree.header().sectionResized.connect(self._on_section_resized)
+        except Exception:        # noqa: BLE001 — headerless view
+            pass
         self.reset()
 
+    def _on_section_resized(self, *_args) -> None:
+        try:
+            self.tree.scheduleDelayedItemsLayout()
+        except Exception:        # noqa: BLE001 — PyQt6: never let a slot raise
+            pass
+
+    # -- operator column overrides (Configure view) ----------------------------------
+    def set_override(self, key: str, visible: bool | None) -> None:
+        """Pin a flag column visible/hidden, or hand it back to AUTO with None."""
+        if key not in self.columns:
+            return
+        if visible is None:
+            self._override.pop(key, None)
+        else:
+            self._override[key] = bool(visible)
+        self._sync(key)
+
+    def override(self, key: str) -> bool | None:
+        return self._override.get(key)
+
+    def is_visible(self, key: str) -> bool:
+        col = self.columns.get(key)
+        if col is None:
+            return False
+        return not self.tree.isColumnHidden(col)
+
+    def _sync(self, key: str) -> None:
+        """Apply override-then-auto for one column."""
+        col = self.columns.get(key)
+        if col is None:
+            return
+        pinned = self._override.get(key)
+        shown = pinned if pinned is not None else self._has_content.get(key, False)
+        try:
+            self.tree.setColumnHidden(col, not shown)
+        except Exception:        # noqa: BLE001
+            pass
+
     def reset(self) -> None:
-        """Back to the empty state: every flag column hidden (a fresh run must not
-        show last run's columns)."""
+        """Back to the empty state: every AUTO column hidden again (a fresh run must
+        not show last run's columns).
+
+        Operator overrides deliberately SURVIVE a reset — an explicit "show LICENSE"
+        is a view preference, not run state, and silently revoking it on the next
+        build would look like the dialog forgot the setting."""
         self._has_content = {key: False for key in self.columns}
-        for col in self.columns.values():
-            self.tree.setColumnHidden(col, True)
+        for key in self.columns:
+            self._sync(key)
         hide_tip()
 
     def apply(self, item: QtWidgets.QTreeWidgetItem,
@@ -831,7 +955,11 @@ class FlagColumns:
             # operator an empty column, which is the clutter the filter exists to remove.
             if cell.badges and not self._has_content.get(key):
                 self._has_content[key] = True
-                self.tree.setColumnHidden(col, False)
+                # _sync, not setColumnHidden(False): a column the operator has
+                # explicitly hidden must STAY hidden when content finally arrives,
+                # otherwise the first package with that flag silently undoes their
+                # choice mid-build.
+                self._sync(key)
 
     def copy_text_for(self, item: QtWidgets.QTreeWidgetItem) -> str:
         """The row's VERBATIM flag text across all four columns — §5's copy guarantee.

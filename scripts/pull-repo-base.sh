@@ -132,6 +132,17 @@ _prb_enforce_source_caps() {
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 
+# shellcheck source=scripts/_github-auth-lib.sh
+. "${HERE}/_github-auth-lib.sh"
+
+# TODO(org-move): hugmesh.net GitHub org.
+#   This default still names the LEGACY org. The content rebrand is done (all 38
+#   repos renamed hugmesh-*), but the GitHub ORG itself is still
+#   Snapdragon-Systems — renaming it is a browser-only operation nobody has run.
+#   When it happens, this default and every sibling listed in
+#   docs/ORG-MOVE-TODO.md flip together, and GitHub's org-rename redirects keep
+#   old remotes working only until the old name is re-registered by someone else.
+#   Draft commits for the flip are prepared; see docs/ORG-MOVE-TODO.md.
 GIT_BASE="${GIT_BASE:-https://github.com/Snapdragon-Systems}"
 GIT_REF="${GIT_REF:-main}"
 REPO_BASE_CACHE="${REPO_BASE_CACHE:-${REPO_ROOT}/.repo-base}"
@@ -398,7 +409,31 @@ fi
 # above, which requires the full Phase-7 ingestion gate
 # (scripts/ingest-foreign-base.sh). See docs/MESH-TEMPLATING.md, Phase 7.
 log "cloning read-only base ${GIT_BASE}/${REPO}.git @ ${GIT_REF} -> ${CLONE_DIR} (TLS only; integrity UNVERIFIED — Phase 8)"
-git clone --depth 1 --branch "$GIT_REF" "${GIT_BASE}/${REPO}.git" "$CLONE_DIR" >&2 2>&1 \
-  || die "clone failed for ${GIT_BASE}/${REPO}.git (base absent — caller may fall back to skeleton)"
+# ASK FOR CREDENTIALS FIRST. Snapdragon-Systems is private, so an unauthenticated
+# clone here used to die with git's own "could not read Username for
+# 'https://github.com'" (no TTY) or block on a Username/Password prompt GitHub
+# stopped honouring in 2021 (TTY). gh_auth_ensure resolves a token, offers
+# `gh auth login` when a human is actually present, and otherwise fails fast with
+# one actionable line. Only github.com needs this — a GIT_BASE pointing at the
+# in-cluster GitLab mirror or a local path must not be made to ask for a PAT.
+_gh_armed=0
+case "${GIT_BASE}" in
+  *github.com*)
+    if gh_auth_ensure "${GIT_BASE}/${REPO}.git"; then
+      _gh_armed=1
+    else
+      die "GitHub credentials required for ${GIT_BASE}/${REPO}.git — see the [github-auth] lines above"
+    fi
+    ;;
+esac
+# NOTE the `if` forms below rather than `[ x = 1 ] && cleanup`: this script runs
+# under `set -euo pipefail`, where a bare `test && cmd` statement whose TEST fails
+# is itself a failing command and would abort the script on the ordinary
+# no-auth-needed path (e.g. a local or GitLab GIT_BASE).
+if ! git clone --depth 1 --branch "$GIT_REF" "${GIT_BASE}/${REPO}.git" "$CLONE_DIR" >&2 2>&1; then
+  if [ "${_gh_armed}" = 1 ]; then gh_auth_askpass_end; fi
+  die "clone failed for ${GIT_BASE}/${REPO}.git (base absent — caller may fall back to skeleton)"
+fi
+if [ "${_gh_armed}" = 1 ]; then gh_auth_askpass_end; fi
 printf '%s\n' "$CLONE_DIR"
 exit 0

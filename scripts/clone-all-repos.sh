@@ -23,6 +23,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 STACK_SRC="${STACK_SRC:-${REPO_ROOT}/.stack-src}"
+# TODO(org-move): still the LEGACY GitHub org. The content rebrand is done;
+# the ORG rename is not. See docs/ORG-MOVE-TODO.md for the full inventory (268
+# occurrences / 154 files), the ordering that avoids breaking a live cluster, and
+# the undecided target name ("hugmesh.net" is not a legal GitHub org login).
 GIT_BASE="${GIT_BASE:-https://github.com/Snapdragon-Systems}"
 GIT_REF="${GIT_REF:-main}"
 USE_GH="${USE_GH:-auto}"

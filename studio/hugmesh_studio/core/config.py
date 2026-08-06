@@ -1891,6 +1891,9 @@ class ImageConfig:
     env: str = "test"
     brand: str = "hugmesh"
     brand_title: str = "HugMesh Systems"
+    # TODO(org-move): the default GitHub org is still the legacy one. This field
+    # is ALSO compared against the literal in two validators below, so the flip is
+    # three coordinated edits in this file, not one. See docs/ORG-MOVE-TODO.md.
     org: str = "Snapdragon-Systems"
     brand_profile: str = ""            # -C/--config brands/*.conf (carries HEADSCALE_URL/RELEASE_STATE/… presets)
     cluster_domain: str = "hugmesh.systems"

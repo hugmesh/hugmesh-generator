@@ -944,3 +944,178 @@ def test_the_first_column_is_named_use_expand_not_package_env(wiz, fake_repo):
     hdr = page.tree.headerItem()
     assert hdr.text(_flag_col("USE_EXPAND")) == "USE_EXPAND"
     assert "package.env" not in [hdr.text(c) for c in range(page.tree.columnCount())]
+
+
+# ── row-height wrapping + the Configure-view column dialog ──────────────────────────
+# Operator live-QA, 2026-08-06: "they should be allowed to expand the row height to fit
+# all of them" and "give an option at the top to configure view and add/remove columns
+# in a dropdown dialog". Before this, layout_badges laid every badge on ONE line, so a
+# package with a wide flag set had its tail clipped at the column edge with no way to
+# see it; and the only way a column ever appeared was the automatic reveal-on-content.
+
+def _badge_cell(n, text="flagname"):
+    return fb.FlagCell(badges=tuple(
+        fb.Badge(text=f"{text}{i}", colour="#4c8bf5", outlined=False, strike=False,
+                 tip_source="t", verbatim=f"{text}{i}")
+        for i in range(n)), copy_text="")
+
+
+def test_badges_wrap_onto_multiple_lines_and_the_row_grows_to_fit(qapp):
+    """A flag set too wide for the column occupies several lines, and the reserved
+    height grows with them — the clipping the operator reported."""
+    tree = QtWidgets.QTreeWidget()
+    tree.setColumnCount(1)
+    delegate = fb.FlagBadgeDelegate(tree)
+    font = tree.font()
+    cell = _badge_cell(24)
+
+    narrow = delegate.layout_badges(QtCore.QRect(0, 0, 200, 0), font, cell,
+                                    wrap_width=200)
+    assert len(narrow) == 24, "every badge must still be laid out, not dropped"
+    lines = sorted({r.y() for r, _ in narrow})
+    assert len(lines) > 1, "24 badges cannot fit one 200px line — they must wrap"
+    # nothing may spill past the right edge of the usable area
+    assert max(r.right() for r, _ in narrow) <= 200, "a badge overflowed the column"
+
+    # …and a wider column needs fewer lines, i.e. the layout really tracks the width
+    wide = delegate.layout_badges(QtCore.QRect(0, 0, 900, 0), font, cell,
+                                  wrap_width=900)
+    assert len({r.y() for r, _ in wide}) < len(lines)
+
+
+def test_wrapped_badges_are_hoverable_where_they_are_painted(qapp):
+    """paint(), sizeHint() and the hover probe share one geometry function, so a
+    badge on a wrapped line must hit-test at the position it was drawn. If these ever
+    diverge the tooltips silently address the wrong badge."""
+    tree = QtWidgets.QTreeWidget()
+    tree.setColumnCount(1)
+    delegate = fb.FlagBadgeDelegate(tree)
+    font = tree.font()
+    cell = _badge_cell(24)
+    rect = QtCore.QRect(0, 0, 200, 400)
+    placed = delegate.layout_badges(rect, font, cell, wrap_width=200)
+    last_rect, last_badge = placed[-1]
+    assert last_rect.y() > placed[0][0].y(), "fixture must actually wrap"
+    found = delegate.badge_at(cell, rect, font, last_rect.center())
+    assert found is last_badge
+
+
+def test_a_narrow_column_never_loops_or_drops_badges(qapp):
+    """A column narrower than a single badge must still lay every badge out. The wrap
+    rule 'break before placing' would otherwise never place anything."""
+    tree = QtWidgets.QTreeWidget()
+    tree.setColumnCount(1)
+    delegate = fb.FlagBadgeDelegate(tree)
+    cell = _badge_cell(5, text="averyverylongflagname")
+    placed = delegate.layout_badges(QtCore.QRect(0, 0, 12, 0), tree.font(), cell,
+                                    wrap_width=12)
+    assert len(placed) == 5
+
+
+def test_configure_view_dialog_lists_every_hideable_column_but_not_the_name(wiz):
+    page = wiz.page(wiz._page_ids["progress"])
+    assert hasattr(page, "configure_view_btn"), "no Configure view entry point"
+    cols = [c for c, _label, _k in progress_mod._CONFIGURABLE_COLUMNS]
+    assert progress_mod._COL_NAME not in cols, \
+        "the identity column must not be hideable — rows would be unidentifiable"
+    for col in (progress_mod._COL_PROGRESS, progress_mod._COL_FLAGS,
+                progress_mod._COL_TIME, *progress_mod._FLAG_COLS.values()):
+        assert col in cols
+
+
+def test_an_operator_hidden_badge_column_stays_hidden_when_content_arrives(wiz):
+    """The auto-reveal must not undo an explicit choice mid-build — the failure the
+    override exists to prevent."""
+    page = wiz.page(wiz._page_ids["progress"])
+    fc = page.flag_columns
+    fc.set_override("USE", False)
+    item = QtWidgets.QTreeWidgetItem(page.tree)
+    fc.apply(item, {"USE": _badge_cell(3)})
+    assert page.tree.isColumnHidden(progress_mod._COL_USE), \
+        "content revealed a column the operator had explicitly hidden"
+
+
+def test_an_operator_shown_badge_column_appears_before_any_content(wiz):
+    """Ticking a column has to do something immediately, even though no package has
+    supplied that flag yet — otherwise the dialog looks broken."""
+    page = wiz.page(wiz._page_ids["progress"])
+    fc = page.flag_columns
+    assert page.tree.isColumnHidden(progress_mod._COL_LICENSE), "precondition"
+    fc.set_override("LICENSE", True)
+    assert not page.tree.isColumnHidden(progress_mod._COL_LICENSE)
+
+
+def test_overrides_survive_a_reset_but_auto_columns_go_back_to_hidden(wiz):
+    """A view preference is not run state: starting another build must not silently
+    revoke it. Auto columns DO reset, so a fresh run cannot show stale columns."""
+    page = wiz.page(wiz._page_ids["progress"])
+    fc = page.flag_columns
+    item = QtWidgets.QTreeWidgetItem(page.tree)
+    fc.apply(item, {"KEYWORDS": _badge_cell(2)})          # auto-revealed
+    fc.set_override("LICENSE", True)                       # operator-pinned
+    assert not page.tree.isColumnHidden(progress_mod._COL_KEYWORDS)
+    fc.reset()
+    assert page.tree.isColumnHidden(progress_mod._COL_KEYWORDS), "auto must reset"
+    assert not page.tree.isColumnHidden(progress_mod._COL_LICENSE), \
+        "an explicit operator choice must survive a new run"
+
+
+def test_reset_to_automatic_hands_a_pinned_column_back(wiz):
+    page = wiz.page(wiz._page_ids["progress"])
+    fc = page.flag_columns
+    fc.set_override("LICENSE", True)
+    assert fc.override("LICENSE") is True
+    fc.set_override("LICENSE", None)
+    assert fc.override("LICENSE") is None
+    assert page.tree.isColumnHidden(progress_mod._COL_LICENSE), \
+        "back to AUTO with no content means hidden again"
+
+
+def test_the_dialog_really_applies_choices_when_accepted(wiz, monkeypatch):
+    """Drive _open_view_config end to end. It is exception-guarded (PyQt6 aborts on a
+    slot exception), so a broken dialog would fail SILENTLY — only an executed test
+    can tell "applied the choice" from "swallowed an error and returned"."""
+    page = wiz.page(wiz._page_ids["progress"])
+    page.tree.setColumnHidden(progress_mod._COL_TIME, False)
+    assert page.tree.isColumnHidden(progress_mod._COL_LICENSE), "precondition"
+
+    captured = {}
+
+    def fake_exec(self):
+        # Tick LICENSE (a badge column) and untick Time (a plain one) — one of each
+        # routing path, since they are applied through different code.
+        for box in self.findChildren(QtWidgets.QCheckBox):
+            if box.text() == "LICENSE":
+                box.setChecked(True)
+            if box.text() == "Time":
+                box.setChecked(False)
+        captured["labels"] = [b.text() for b in self.findChildren(QtWidgets.QCheckBox)]
+        return QtWidgets.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(QtWidgets.QDialog, "exec", fake_exec, raising=False)
+    page._open_view_config()
+
+    assert "LICENSE" in captured.get("labels", []), "dialog never built its checkboxes"
+    assert not page.tree.isColumnHidden(progress_mod._COL_LICENSE), \
+        "ticking a badge column did not show it"
+    assert page.tree.isColumnHidden(progress_mod._COL_TIME), \
+        "unticking a plain column did not hide it"
+    assert page.flag_columns.override("LICENSE") is True, \
+        "a badge column must be applied as an OVERRIDE, or auto-reveal will undo it"
+
+
+def test_the_dialog_changes_nothing_when_cancelled(wiz, monkeypatch):
+    page = wiz.page(wiz._page_ids["progress"])
+    before = [page.tree.isColumnHidden(c) for c, _l, _k in
+              progress_mod._CONFIGURABLE_COLUMNS]
+
+    def fake_exec(self):
+        for box in self.findChildren(QtWidgets.QCheckBox):
+            box.setChecked(not box.isChecked())          # flip everything…
+        return QtWidgets.QDialog.DialogCode.Rejected      # …then cancel
+
+    monkeypatch.setattr(QtWidgets.QDialog, "exec", fake_exec, raising=False)
+    page._open_view_config()
+    after = [page.tree.isColumnHidden(c) for c, _l, _k in
+             progress_mod._CONFIGURABLE_COLUMNS]
+    assert before == after, "Cancel must not apply the flipped checkboxes"

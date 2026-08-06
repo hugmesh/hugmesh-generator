@@ -139,6 +139,21 @@ _FLAG_COLS = {
     "LICENSE": _COL_LICENSE,
 }
 
+#: What the Configure-view dialog offers, in tree order: (column index, label, key).
+#: ``key`` is the flag_badges key for the four badge columns and None for the plain
+#: ones. _COL_NAME is deliberately ABSENT — hiding the identity column would leave
+#: rows the operator cannot tell apart, which is not a view preference but a broken
+#: view. Everything else is fair game.
+_CONFIGURABLE_COLUMNS: tuple[tuple[int, str, str | None], ...] = (
+    (_COL_PROGRESS,    "Progress",   None),
+    (_COL_FLAGS,       "Flags",      None),
+    (_COL_USE_EXPAND,  "USE_EXPAND", "USE_EXPAND"),
+    (_COL_USE,         "USE",        "USE"),
+    (_COL_KEYWORDS,    "KEYWORDS",   "KEYWORDS"),
+    (_COL_LICENSE,     "LICENSE",    "LICENSE"),
+    (_COL_TIME,        "Time",       None),
+)
+
 # the shared-log-pane read of a package's on-disk emerge log is TAIL-BOUNDED: a real
 # compile log can run to hundreds of MB (inkscape's is 1.2 MB, libreoffice's far larger)
 # and QPlainTextEdit must never be handed one wholesale. 2 MiB comfortably covers every
@@ -361,6 +376,24 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.setSubTitle("One progress bar per image. Finish is enabled once every build "
                          "has finished, failed, or stopped.")
         lay = QtWidgets.QVBoxLayout(self)
+
+        # ── view controls: a single "Configure view" entry point above everything
+        # else, so the operator can add/remove columns without hunting for a header
+        # context menu. Right-aligned on its own row: it is a view preference, not a
+        # build action, and must not sit in the same visual rank as Finish/Stop.
+        view_row = QtWidgets.QHBoxLayout()
+        view_row.addStretch(1)
+        self.configure_view_btn = QtWidgets.QToolButton()
+        self.configure_view_btn.setText("Configure view ▾")
+        self.configure_view_btn.setToolTip(
+            "Choose which columns this table shows.\n"
+            "Badge columns normally appear on their own once a package supplies that "
+            "flag; ticking or unticking one here overrides that for the rest of the "
+            "session.")
+        self.configure_view_btn.setAutoRaise(True)
+        self.configure_view_btn.clicked.connect(self._open_view_config)
+        view_row.addWidget(self.configure_view_btn)
+        lay.addLayout(view_row)
 
         # ── OVERALL / TOTAL progress (across the WHOLE worklist) — a prominent block
         # ABOVE the per-image rows. It is a pure READER of the existing
@@ -1950,6 +1983,68 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._fail_ptr = (self._fail_ptr + 1) % len(self._failures)
         i, stage_j = self._failures[self._fail_ptr]
         self._focus_node(i, stage_j)
+
+    def _open_view_config(self) -> None:
+        """The Configure-view dialog: one checkbox per hideable column.
+
+        Every slot reachable from a widget signal is exception-guarded — the operator
+        runs PyQt6, where an exception escaping a slot into Qt aborts the Studio
+        outright rather than printing a traceback."""
+        try:
+            dlg = QtWidgets.QDialog(self)
+            dlg.setWindowTitle("Configure view")
+            dl = QtWidgets.QVBoxLayout(dlg)
+            dl.addWidget(QtWidgets.QLabel(
+                "Columns shown in the build table. The four flag columns normally\n"
+                "reveal themselves once a package supplies that flag; a choice made\n"
+                "here overrides that for the rest of the session."))
+
+            boxes: list[tuple[QtWidgets.QCheckBox, int, str | None]] = []
+            for col, label, key in _CONFIGURABLE_COLUMNS:
+                box = QtWidgets.QCheckBox(label)
+                box.setChecked(not self.tree.isColumnHidden(col))
+                if key is not None:
+                    box.setToolTip(
+                        f"{label} — a portage flag column. Hidden by default until a "
+                        f"package supplies {label} data; tick to keep it visible even "
+                        f"when empty.")
+                dl.addWidget(box)
+                boxes.append((box, col, key))
+
+            btns = QtWidgets.QDialogButtonBox(
+                QtWidgets.QDialogButtonBox.StandardButton.Ok
+                | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+            # "Reset" hands the badge columns back to AUTO. Without it an operator who
+            # has ticked something can never get the reveal-on-content behaviour back
+            # except by restarting the Studio.
+            reset_btn = btns.addButton("Reset to automatic",
+                                       QtWidgets.QDialogButtonBox.ButtonRole.ResetRole)
+            btns.accepted.connect(dlg.accept)
+            btns.rejected.connect(dlg.reject)
+
+            def _reset() -> None:
+                try:
+                    for key in _FLAG_COLS:
+                        self.flag_columns.set_override(key, None)
+                    for box, col, _k in boxes:
+                        box.setChecked(not self.tree.isColumnHidden(col))
+                except Exception:        # noqa: BLE001
+                    pass
+            reset_btn.clicked.connect(_reset)
+            dl.addWidget(btns)
+
+            if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return
+            for box, col, key in boxes:
+                want = box.isChecked()
+                if key is not None:
+                    # Route badge columns through their controller so the choice
+                    # survives the next reset() and beats the auto-reveal.
+                    self.flag_columns.set_override(key, want)
+                else:
+                    self.tree.setColumnHidden(col, not want)
+        except Exception:        # noqa: BLE001 — PyQt6: never let a slot raise
+            return
 
     def _on_tree_menu(self, pos) -> None:
         """Right-click a still-running job/stage to Stop that one image (the per-image Stop

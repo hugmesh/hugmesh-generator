@@ -635,3 +635,70 @@ all. That is a decision for the progress lane, not this one.
    host; flags from an overlay resolve against that overlay's own
    `profiles/use.local.desc` and `metadata.xml`, which the coverage measurement
    did not exercise (the fleet builds pull only from `gentoo`).
+
+## 8. Rendering: wrapping and the Configure-view dialog
+
+Both from operator live-QA on 2026-08-06, watching a real x86 build.
+
+### 8.1 Badges wrap; the row grows to fit them
+
+`FlagBadgeDelegate.layout_badges()` used to place every badge on ONE line, so a
+package with a wide flag set had its tail clipped at the column edge with no way
+to reach it. Badges now flow onto as many lines as they need and `sizeHint()`
+reserves the height they actually occupy — *"they should be allowed to expand the
+row height to fit all of them"*.
+
+The wrap is deliberately implemented **inside `layout_badges` alone**, because
+that one function is the shared geometry behind `paint()`, the `helpEvent` hover
+probe and `sizeHint()`. Wrapping in the painter only would have left tooltips
+hit-testing the pre-wrap positions — badges would be painted on line 3 and probed
+on line 1. All three now pass the same `wrap_width` (the column width), so a badge
+is painted where its size was reserved and where the probe looks for it.
+
+Two edge cases are gated by executed tests: a column narrower than a single badge
+must still lay every badge out (the "wrap before placing" rule would otherwise
+never place anything and loop), and a resize must re-lay the rows (heights are
+width-dependent, so `sectionResized` schedules a relayout).
+
+### 8.2 Configure view
+
+A `Configure view` button above the tree opens a dialog with one checkbox per
+hideable column. `_COL_NAME` is deliberately not offered: hiding the identity
+column leaves rows that cannot be told apart, which is a broken view rather than a
+view preference.
+
+The four badge columns are *auto-revealing* (§5, "empty column ⇒ no column"), so
+the dialog has to beat that in **both** directions or it looks broken:
+
+* an operator-hidden column must STAY hidden when a package finally supplies that
+  flag — otherwise the first such package silently undoes their choice mid-build;
+* an operator-shown column must appear IMMEDIATELY, before any content exists —
+  otherwise ticking it appears to do nothing.
+
+So overrides are stored per column (`True`/`False`/absent = auto) and consulted by
+`_sync()`, which both `reset()` and `apply()` route through. Overrides survive
+`reset()` on purpose — a view preference is not run state, and revoking it at the
+start of the next build would read as the dialog forgetting the setting.
+"Reset to automatic" hands columns back to reveal-on-content.
+
+### 8.3 Confirmed: a normal build emits NO resolver rows (Open unknown #3)
+
+Measured on the operator's live session `20260806-123849-95898e`
+(`build-pki.x86.log`, 32 675 lines and still growing at the time):
+**zero `[ebuild …]` / `[binary …]` rows in BOTH the `system` and `world` emerge
+groups.** This is the empirical confirmation of §7 unknown #3 — the committed
+229-row fixture is a *slot-conflict by-product*, not what a clean build prints.
+
+The operator's report was that flags showed "on keywords pretty" but not on the
+flags column. That is exactly this: KEYWORDS/LICENSE come from the **VDB** (§3),
+which is on disk for every merged package and therefore always paints, while
+USE/USE_EXPAND need a resolver row (§2) that a normal merge never emits.
+`EMERGE_DEFAULT_OPTS` (x86 builder) carries `--jobs/--usepkg/--binpkg-respect-use`
+and no verbosity.
+
+**So the USE columns cannot be fixed in the GUI — the data is not in the log.**
+The fix is the deferred badges-Emit phase, or reusing the plan-preview
+`--pretend` emission which already carries portage's `USE="…"` column verbatim
+per package (`docs/EMERGE-PLAN-PREVIEW.md`). Note that on x86 the plan currently
+covers `world` + `image` but declares `system` *not planned*, so covering the
+operator's "make sure they're in both" requires promoting that group too.
