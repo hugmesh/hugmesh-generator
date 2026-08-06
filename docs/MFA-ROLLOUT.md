@@ -9,36 +9,55 @@ that.** Seeding the `mfa_required` rules (below) is inert until *you* flip a fla
 
 ---
 
-## 0. Read this first: this change and its companion
+## 0. Read this first: BOTH halves have landed
 
-The feature has **two halves in two commits**, and this runbook ships with the first
-one. Read the table before you follow any step below, because §3 step 6 is a **no-op
-until the second half lands**.
+> **STATUS, verified against `main` on 2026-08-06.** This runbook was written on
+> branch `feat/mfa-required-rules` while its companion `feat/gateway-mfa-env` was
+> still open, and much of the text below was phrased for that moment. **Both halves
+> are now merged.** The knob EXISTS: the shared chart carries an `mfa:` values block
+> (`specs/cluster/charts/hugmesh-gateway/values.yaml`), its template renders
+> `APP_MFA_ENABLED` / `APP_MFA_FRESHNESS_WINDOW` /
+> `APP_MFA_ENFORCE_PRIVILEGED_FLOOR` into every gateway pod, compose defaults
+> `APP_MFA_ENABLED=true`, and `tests/stack/test-gateway-mfa-env.sh` pins both
+> postures (101 passed / 0 failed, alongside `test-mfa-required-rules.sh` at 99/0).
+> Confirmed on a live kind cluster: a running fe-gateway pod carries all three env
+> vars, `APP_MFA_ENABLED=false`.
+>
+> So **§3 step 6 is actionable, not a no-op**, and every "needs the companion / until
+> it lands there is no knob" caveat below is HISTORICAL. What has NOT changed is the
+> hard precondition: enrolling every privileged operator (§2) still gates the flip,
+> and the cluster still ships `false` deliberately.
+
+The feature shipped as **two halves in two commits**, and this runbook was written
+with the first one. The table records which half contributed what.
 
 | half | what it contains | where it is |
 |---|---|---|
 | **rows** (this change) | the `mfa_required` `UPDATE` in `20-schema.sql`, this runbook, `tests/scripts/test-mfa-required-rules.sh` | branch `feat/mfa-required-rules` |
 | **flag wiring** (companion) | the shared chart's `mfa:` values block, the chart template that renders `APP_MFA_ENABLED` / `APP_MFA_FRESHNESS_WINDOW` / `APP_MFA_ENFORCE_PRIVILEGED_FLOOR` into every gateway pod, the compose-stack defaults, `tests/stack/test-gateway-mfa-env.sh` | branch `feat/gateway-mfa-env` |
 
-**What that means concretely, on this branch alone:**
+**What that meant on the authoring branch, kept for provenance:**
 
-- Nothing in the chart, the gateway Applications or the compose stack mentions the
-  gateway MFA env at all — no `mfa:` values block, no rendered env, no compose
-  default:
+- **HISTORICAL (true only before the companion merged):** nothing in the chart, the
+  gateway Applications or the compose stack mentioned the gateway MFA env, so the
+  rows were not merely default-off but **unreachable** — no supported knob could make
+  the gateway consult them. The verification command below was documented as printing
+  exit `1`.
+
+  On `main` today it prints **`0`**, and that is the correct, expected result:
 
   ```console
   $ grep -rn 'APP_MFA_ENABLED\|APP_MFA_ENFORCE_PRIVILEGED_FLOOR' \
       specs/cluster/charts specs/cluster/apps tests/stack/
+  specs/cluster/charts/hugmesh-gateway/values.yaml:...   # the mfa: values block
+  specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml:207: - name: APP_MFA_ENABLED
+  tests/stack/test-gateway-mfa-env.sh:...                # the posture pins
   $ echo $?
-  1
+  0
   ```
 
-  (`20-schema.sql` and this runbook *name* those env vars in prose; nothing **sets**
-  them.) `tests/stack/compose.local.yaml` carries only `APP_MFA_FACTOR_KEY` and
-  `APP_CASDOOR_MFA_ENABLED` — those are the admin-bff step-up leg (§1.1), different
-  flags.
-- So the rows here are not merely *default-off*, they are **unreachable**: there is no
-  supported knob in this repo that can make the gateway consult them.
+  If you are reading this on a checkout where that command still exits `1`, you are
+  before the companion merge — treat the caveats below as live rather than historical.
 - Do **not** work around that by hand-adding an `extraEnv: APP_MFA_ENABLED` to a
   gateway Application. That is exactly what the posture gate in
   `tests/scripts/test-mfa-required-rules.sh` fails the build on, structurally, in
@@ -55,7 +74,7 @@ only the companion leaves a live flag with no row to match on (a no-op); merging
 this one leaves rows with no flag that can reach them (also a no-op). Merging neither
 is today's posture.
 
-Wherever a claim below is only true **after** the companion lands, it says so
+Wherever a claim below was only true **after** the companion landed, it says so
 explicitly. Nothing in this document is written as though the wiring were already here.
 
 ---
@@ -173,21 +192,32 @@ the operator-facing contract, and it is true today:
 | `app.mfa.freshness-window` | `APP_MFA_FRESHNESS_WINDOW` | `600000` (10 min) |
 | `app.mfa.enforce-privileged-floor` | `APP_MFA_ENFORCE_PRIVILEGED_FLOOR` | **`false`** |
 
-**⚠ On this branch nothing in this repo sets any of those three.** The shared chart
+**✅ The knob now EXISTS (companion merged — see §0).** The shared chart
 `specs/cluster/charts/hugmesh-gateway` (used by **all four** gateway Applications:
 `specs/cluster/apps/20-gateway-{pki,be,fe}.yaml` and
-`specs/cluster/apps/22-gateway-superadmin.yaml`) has **no `mfa:` values block yet**,
-and no template renders the env into a pod. Verify that yourself rather than trusting
-this sentence:
+`specs/cluster/apps/22-gateway-superadmin.yaml`) carries an `mfa:` values block, and
+its `templates/deployment.yaml` renders all three into every gateway pod. Verify that
+yourself rather than trusting this sentence — the grep now EXITS 0, and a live pod
+carries the env:
 
 ```console
 $ grep -rn 'APP_MFA_ENABLED\|APP_MFA_ENFORCE_PRIVILEGED_FLOOR' \
     specs/cluster/charts specs/cluster/apps tests/stack/
 $ echo $?
-1
+0
+
+$ kubectl exec -n hugmesh-frontend deploy/hugmesh-fe-gateway -c gateway -- env | grep MFA
+APP_MFA_ENABLED=false
+APP_MFA_ENFORCE_PRIVILEGED_FLOOR=false
+APP_MFA_FRESHNESS_WINDOW=600000
 ```
 
-**After the companion change (§0) lands**, the three become chart values —
+An earlier revision of this section asserted the opposite and told you to expect exit
+`1`. That was true on the authoring branch and is now wrong; it is corrected rather
+than deleted because an operator who hit the contradiction would reasonably have gone
+looking for an unmerged companion that is in fact already in.
+
+**Since the companion change (§0) landed**, the three are chart values —
 `mfa.enabled` / `mfa.freshnessWindow` / `mfa.enforcePrivilegedFloor` in
 `specs/cluster/charts/hugmesh-gateway/values.yaml`, rendered into every gateway pod —
 with a deliberate asymmetry: the **cluster** chart default stays `false` while the
@@ -324,8 +354,8 @@ predicate in `20-schema.sql`. Do **not** hand-edit individual rows: see §5.
 
 ## 3. Order of operations
 
-Do these in order. Do not batch them. **Steps 1–5 are actionable on this branch;
-steps 6–7 need the companion change from §0** and say so again where they appear.
+Do these in order. Do not batch them. **All seven steps are actionable on `main`
+today** — steps 6–7 were gated on the companion change from §0, which has merged.
 
 1. **Verify the factor key exists** (§4). Without it TOTP enroll refuses, so nobody
    can enroll and step 3 would be a lockout.
@@ -425,10 +455,10 @@ steps 6–7 need the companion change from §0** and say so again where they app
      the fleet leg would prove nothing.
 
    Note compose has **no** superadmin gateway — only pki/be/fe.
-6. **Turn on `APP_MFA_ENABLED` for the cluster gateways** — ⚠ **needs the companion
-   change (§0)**; until it lands there is no knob, and hand-adding an
-   `extraEnv: APP_MFA_ENABLED` to a gateway Application fails the posture gate on
-   purpose. Once it is in, set the shared chart's `mfa.enabled` value: all four
+6. **Turn on `APP_MFA_ENABLED` for the cluster gateways** — the companion (§0) has
+   landed, so this step is **actionable today**. Hand-adding an
+   `extraEnv: APP_MFA_ENABLED` to a gateway Application still fails the posture gate
+   on purpose. Set the shared chart's `mfa.enabled` value: all four
    gateway Applications point at the one chart, so a chart-level default reaches all
    four; keep it out of the per-app manifests (the gate enforces that). Watch for
    403s from non-privileged holders of `ROLE_FLEET_ADMIN`.
@@ -456,8 +486,8 @@ steps 6–7 need the companion change from §0** and say so again where they app
    `true` while compose is also `true` means rethinking that guard in the same
    review. (The self-check covers `APP_MFA_ENABLED` only; the floor pins in step
    7 are `false` on both sides and are not subject to it.)
-7. **Only then consider `APP_MFA_ENFORCE_PRIVILEGED_FLOOR`** — same companion
-   dependency. This is the step that actually gates admins and superadmins. Expect
+7. **Only then consider `APP_MFA_ENFORCE_PRIVILEGED_FLOOR`** — same chart value, also
+   available today. This is the step that actually gates admins and superadmins. Expect
    503s during each gateway's cold-start priming window. Do it on one gateway first
    (the fe gateway, which carries `/bff/admin/**`) and keep a second authenticated
    superadmin session open on another browser as a canary before touching the
@@ -639,7 +669,7 @@ data.
 
 ## 7. Files this runbook refers to
 
-| path | on this branch? | what |
+| path | present on `main`? | what |
 |---|---|---|
 | `specs/cluster/manifests/route-access/initdb/20-schema.sql` | **yes** | the `gateway_route_access` table + canonical seed + the `mfa_required` `UPDATE` |
 | `tests/scripts/test-mfa-required-rules.sh` | **yes** | the gate over the rules (net-effect replay) + the enablement posture (structured ArgoCD parse **and** the shape-aware `APP_MFA_*` sweep over all of `specs/` + the compose stack) + the four SQL blocks in **this** runbook, which it executes against the replayed seed |
@@ -648,8 +678,9 @@ data.
 | `specs/cluster/manifests/admin-bff-api/deployment.yaml` | **yes** | `APP_CASDOOR_MFA_ENABLED`, `APP_MFA_FACTOR_KEY`, `APP_MFA_WEBAUTHN_RP_ID`, `APP_MFA_WEBAUTHN_ORIGINS` |
 | `specs/cluster/manifests/external-secrets/secretstore.yaml` | **yes** | the `admin-bff-mfa` ExternalSecret |
 | `scripts/gen-cluster-secrets.sh` | **yes** | mints the factor key into Vault |
-| `tests/stack/compose.local.yaml` | **partly** | dev stack: gateway `SPRING_APPLICATION_NAME`s, `APP_CASDOOR_MFA_ENABLED`, `APP_MFA_FACTOR_KEY`, and the initdb mount of the seed. The gateway `APP_MFA_*` trio arrives with the companion (§0) |
-| `specs/cluster/charts/hugmesh-gateway/values.yaml` | **no — companion (§0)** | shared gateway chart; gains the `mfa:` block reaching all four gateways |
+| `tests/stack/compose.local.yaml` | **yes** | dev stack: gateway `SPRING_APPLICATION_NAME`s, `APP_CASDOOR_MFA_ENABLED`, `APP_MFA_FACTOR_KEY`, the initdb mount of the seed, AND the gateway `APP_MFA_*` trio (`APP_MFA_ENABLED=true` — the deliberate dev-vs-cluster asymmetry) |
+| `specs/cluster/charts/hugmesh-gateway/values.yaml` | **yes** | shared gateway chart; carries the `mfa:` block (`enabled: false`) reaching all four gateways, rendered by `templates/deployment.yaml` |
+| `tests/stack/test-gateway-mfa-env.sh` | **yes** | pins BOTH postures (cluster `false` / compose `true`) and refuses to run if that asymmetry disappears |
 | `specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml` | file exists; the MFA env is **no — companion (§0)** | will render `APP_MFA_ENABLED` / `APP_MFA_FRESHNESS_WINDOW` / `APP_MFA_ENFORCE_PRIVILEGED_FLOOR` into every gateway pod. Today it renders none of them, and the sweep in §1.3 watches this file specifically — it is the one place a single edit reaches all four gateways |
 | `tests/stack/test-gateway-mfa-env.sh`, `tests/stack/gateway_mfa_env.py` | **no — companion (§0)** | the companion's own gate over that wiring. Its posture parser overlaps this branch's; **collapse the two into one shared helper once both have landed** (deliberately not shared now — importing across an unmerged branch would break CI) |
 
