@@ -27,11 +27,56 @@ import webbrowser
 from .qt import Qt, QtCore, QtGui, QtWidgets
 from .branding_icon import (
     ICON_PX as _ICON_PX, brand_icon as _brand_icon, brand_pixmap as _brand_pixmap)
+from ..core import build_sessions
 from ..core.mesh_node import MeshNode
 from ..core.local_stack_node import LocalStackNode
 
 # the four build states a badge can show; anything else renders as the plain brand icon.
 _BUILD_STATES = ("idle", "building", "error", "complete")
+
+# ASK 16 — the "Running builds" submenu label and its honest empty row.
+RUNNING_BUILDS_LABEL = "Running builds"
+NO_RUNNING_BUILDS = "(no builds running)"
+
+
+def _log_swallowed(where: str) -> None:
+    import sys
+    import traceback
+    print(f"tray: swallowed exception in {where}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+
+
+def unlistable_builds_text(n: int) -> str:
+    """The honest stand-in for running builds this menu could not render.
+
+    Dropping them silently would be a lie by omission — the roster would say fewer
+    builds are running than really are. A disabled row says so instead.
+    """
+    return f"({n} running build{'' if n == 1 else 's'} could not be listed)"
+
+
+def menu_label(session) -> str:
+    """A menu-safe label for one session record: its label, else its id, else "build".
+
+    ``QMenu.addAction`` accepts only ``str``. Records are JSON on disk, so this coerces
+    rather than trusts — belt to :meth:`..core.build_sessions.BuildSession.from_dict`'s
+    braces, because this roster can also be fed by an injected ``builds_provider`` that
+    never went through that boundary at all.
+    """
+    for name in ("label", "id"):
+        try:
+            # the read itself is guarded, not just the conversion: `getattr` only
+            # swallows AttributeError, and a property that raises anything else would
+            # otherwise escape from here into a Qt slot.
+            value = getattr(session, name, None)
+            text = value if isinstance(value, str) else (
+                "" if value is None else str(value))
+        except Exception:                        # an attribute or __str__ that raises
+            continue
+        text = text.strip()
+        if text:
+            return text
+    return "build"
 
 
 # ── build-state badge overlay (dependency-free QPainter) ──────────────────────────────
@@ -129,6 +174,28 @@ def read_build_status() -> dict | None:
         return None
 
 
+# ── ASK 16: the per-build roster behind the "Running builds" submenu ──────────────────
+def running_builds() -> list:
+    """Every build running RIGHT NOW, as :class:`~..core.build_sessions.BuildSession`
+    records, newest first.
+
+    Driven off the session records rather than a second status file, deliberately: the
+    aggregate ``build-status.json`` carries one ``{state, percent}`` for the whole
+    process and cannot name individual builds, while ``build_sessions`` already models
+    exactly one record per dispatch — the same records the Welcome list reads, so the
+    tray and the list can never tell different stories.
+
+    ``is_active`` is the honesty gate: a record left at "running" by a SIGKILL'd Studio
+    is stale, not running, and never appears here as a phantom the operator can click.
+    Records from ANOTHER host stay listed (we cannot probe them, so we do not claim
+    they died) — selecting one still opens a window that says what it truthfully can.
+    """
+    try:
+        return [s for s in build_sessions.load_all() if build_sessions.is_active(s)]
+    except Exception:            # a broken state dir must never break the tray menu
+        return []
+
+
 # ── one controllable node per menu section ────────────────────────────────────────────
 class _Section:
     """One controllable node (a mesh node or the local stack) inside a tray menu: owns its
@@ -195,7 +262,8 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
     shared Open Studio / Go Live / Quit actions, plus the build-status badge poller."""
 
     def __init__(self, sections, *, tooltip: str, on_open_studio=None,
-                 on_open_golive=None, parent=None):
+                 on_open_golive=None, on_open_build=None, builds_provider=None,
+                 parent=None):
         super().__init__(_brand_icon(), parent)
         self.sections = list(sections)
         for s in self.sections:
@@ -203,12 +271,24 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
         self._tooltip = tooltip
         self._build_state = "idle"
         self._build_percent: int | None = None
+        # ASK 16 — "running builds" with a SUBMENU listing each running build; selecting
+        # one opens a window for that build. The provider is injectable so a headless
+        # test can drive an exact roster instead of racing real records on disk.
+        self._on_open_build = on_open_build
+        self._builds_provider = builds_provider or running_builds
         self.setToolTip(tooltip)
         menu = QtWidgets.QMenu()
         for i, s in enumerate(self.sections):
             if i:
                 menu.addSeparator()
             s.add_to_menu(menu)
+        menu.addSeparator()
+        self.builds_menu = menu.addMenu(RUNNING_BUILDS_LABEL)
+        # repopulate on OPEN, never on a timer: the roster is only interesting at the
+        # moment the operator looks at it, and re-reading records every second to paint
+        # a menu nobody has opened is pure waste.
+        self.builds_menu.aboutToShow.connect(self.refresh_running_builds)
+        self.refresh_running_builds()
         menu.addSeparator()
         if on_open_studio:
             menu.addAction("Open Image Studio…").triggered.connect(lambda: on_open_studio())
@@ -227,6 +307,66 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
 
     def _notify(self, title, msg) -> None:
         self.showMessage(title, msg, _brand_icon(), 4000)
+
+    # ---- ASK 16: running-builds submenu -------------------------------------------
+    def refresh_running_builds(self) -> None:
+        """Rebuild the submenu to list EXACTLY the builds running right now.
+
+        Guarded end to end — and "end to end" has to mean it. This runs from
+        ``aboutToShow``, a Qt slot, and it is ALSO called eagerly by ``__init__``, so
+        anything that escapes here does not merely break a menu: it propagates out of
+        ``build_tray`` -> ``install_tray`` -> ``app.main()`` and the Studio never starts.
+        Only the PROVIDER call used to be inside the try; rendering a row was not, so
+        one record whose ``label`` deserialised to a number raised ``TypeError`` out of
+        ``QMenu.addAction`` and cost the operator the whole application.
+
+        A row that cannot be rendered now costs THAT ROW — counted and declared, never
+        dropped in silence, because a roster that quietly under-reports running builds
+        is its own lie. An empty roster shows one DISABLED "(no builds running)" row
+        rather than an empty menu, so the operator can tell "nothing is running" apart
+        from "the menu is broken"."""
+        try:
+            self._populate_running_builds()
+        except Exception:                        # pragma: no cover - defence in depth
+            _log_swallowed("_ControlTray.refresh_running_builds")
+            try:
+                self.builds_menu.clear()
+                self.builds_menu.addAction(NO_RUNNING_BUILDS).setEnabled(False)
+            except Exception:
+                pass
+
+    def _populate_running_builds(self) -> None:
+        self.builds_menu.clear()
+        try:
+            builds = list(self._builds_provider() or [])
+        except Exception:                # a broken state dir costs an empty roster only
+            _log_swallowed("_ControlTray builds provider")
+            builds = []
+        listed = unlistable = 0
+        for s in builds:
+            try:
+                act = self.builds_menu.addAction(menu_label(s))
+                act.triggered.connect(
+                    lambda _checked=False, sess=s: self._open_build(sess))
+                listed += 1
+            except Exception:
+                _log_swallowed("_ControlTray running-builds row")
+                unlistable += 1
+        if unlistable:
+            self.builds_menu.addAction(
+                unlistable_builds_text(unlistable)).setEnabled(False)
+        elif not listed:
+            self.builds_menu.addAction(NO_RUNNING_BUILDS).setEnabled(False)
+
+    def _open_build(self, session) -> None:
+        try:
+            if self._on_open_build is not None:
+                self._on_open_build(session)
+        except Exception:
+            import sys
+            import traceback
+            print("tray: swallowed exception in _open_build", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
     def _refresh(self) -> None:
         for s in self.sections:
@@ -265,33 +405,41 @@ def _stack_section(generator_dir: str) -> _Section:
 class MeshTray(_ControlTray):
     """`--tray`: one icon, the mesh-node section only."""
 
-    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None, parent=None):
+    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None,
+                 on_open_build=None, builds_provider=None, parent=None):
         super().__init__([_mesh_section(generator_dir)], tooltip="HugMesh mesh node",
                          on_open_studio=on_open_studio, on_open_golive=on_open_golive,
+                         on_open_build=on_open_build, builds_provider=builds_provider,
                          parent=parent)
 
 
 class StackTray(_ControlTray):
     """`--stack-tray`: one icon, the local-stack section only."""
 
-    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None, parent=None):
+    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None,
+                 on_open_build=None, builds_provider=None, parent=None):
         super().__init__([_stack_section(generator_dir)], tooltip="HugMesh local dev stack",
                          on_open_studio=on_open_studio, on_open_golive=on_open_golive,
+                         on_open_build=on_open_build, builds_provider=builds_provider,
                          parent=parent)
 
 
 class CombinedTray(_ControlTray):
     """The DEFAULT launch tray: ONE icon whose menu carries BOTH the mesh-node and the
-    local-stack sections (clearly labelled), plus Open Studio / Go Live / Quit."""
+    local-stack sections (clearly labelled), plus Running builds / Open Studio / Go
+    Live / Quit."""
 
-    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None, parent=None):
+    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None,
+                 on_open_build=None, builds_provider=None, parent=None):
         super().__init__([_mesh_section(generator_dir), _stack_section(generator_dir)],
                          tooltip="HugMesh Image Studio", on_open_studio=on_open_studio,
-                         on_open_golive=on_open_golive, parent=parent)
+                         on_open_golive=on_open_golive, on_open_build=on_open_build,
+                         builds_provider=builds_provider, parent=parent)
 
 
 def build_tray(generator_dir: str, *, show_mesh: bool = True, show_stack: bool = True,
-               on_open_studio=None, on_open_golive=None, parent=None) -> _ControlTray:
+               on_open_studio=None, on_open_golive=None, on_open_build=None,
+               builds_provider=None, parent=None) -> _ControlTray:
     """Return exactly ONE QSystemTrayIcon for the requested sections:
 
     * default (both)  -> :class:`CombinedTray` (mesh + stack in one labelled menu)
@@ -302,7 +450,9 @@ def build_tray(generator_dir: str, *, show_mesh: bool = True, show_stack: bool =
     directly (that guard is False on the offscreen platform) to assert the default path
     instantiates exactly one QSystemTrayIcon.
     """
-    kw = dict(on_open_studio=on_open_studio, on_open_golive=on_open_golive, parent=parent)
+    kw = dict(on_open_studio=on_open_studio, on_open_golive=on_open_golive,
+              on_open_build=on_open_build, builds_provider=builds_provider,
+              parent=parent)
     if show_mesh and show_stack:
         return CombinedTray(generator_dir, **kw)
     if show_stack:

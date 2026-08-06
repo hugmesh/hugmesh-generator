@@ -19,6 +19,7 @@ import os
 from datetime import datetime
 
 from ..qt import QtCore, QtGui, QtWidgets
+from . import build_window
 from ...core import build_sessions
 from ...core import secret_files
 
@@ -34,6 +35,38 @@ _STATUS_GLYPH = {
 }
 
 _STATUS_FILTERS = ("all", "complete", "failed", "running", "stopped", "unknown")
+
+
+def row_identity(row) -> tuple[str, str] | None:
+    """The STABLE identity of a build-list row, or ``None`` when it has none.
+
+    :meth:`PreviousBuildsWidget.refresh` rebuilds every :class:`_RowData` from disk, so
+    an open per-build window's row object is orphaned by any reload even though its
+    build is still listed. Identity — never object identity — is what tells "this build
+    is GONE" apart from "the list was reloaded", and EVERY row kind needs one, not just
+    sessions: a session is its record id, while an unmanaged tree and an unreadable
+    record are each identified by their path on disk. Keying only on ``session.id``
+    made every action in an unmanaged/unreadable build's window refuse — with a message
+    stating the build had been removed — while the row sat plainly listed above it.
+
+    Duck-typed on purpose (``getattr`` throughout): rows also arrive from
+    :meth:`..shell.StudioShell.open_build_window`, which mints its own ``_RowData``.
+    """
+    kind = getattr(row, "kind", "")
+    if kind == "session":
+        ident = getattr(getattr(row, "session", None), "id", "") or ""
+    elif kind == "unmanaged":
+        ident = (getattr(row, "location", "")
+                 or getattr(getattr(row, "unmanaged", None), "path", "") or "")
+    elif kind == "unreadable":
+        ident = getattr(row, "path", "") or getattr(row, "location", "") or ""
+    else:
+        return None
+    if not ident:
+        return None
+    # paths are normalised (never abspath'd — that would drag the cwd in) so the two
+    # sides of a comparison cannot differ by a trailing slash or a "./".
+    return (kind, ident if kind == "session" else os.path.normpath(ident))
 
 
 class _RowData:
@@ -178,6 +211,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         super().__init__("Previous builds", parent)
         self.wiz = wiz
         self._row_data: list[_RowData] = []
+        self._pinned_row = None             # see _selected() / act_on_row()
         lay = QtWidgets.QVBoxLayout(self)
 
         filt = QtWidgets.QHBoxLayout()
@@ -191,9 +225,13 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         filt.addWidget(self.status_filter)
         lay.addLayout(filt)
 
-        self.table = QtWidgets.QTableWidget(0, 5)
+        self.table = QtWidgets.QTableWidget(0, 6)
+        # ASK 15 — "options to resume builds should show next": the NEXT column states
+        # what can actually be done with each entry, derived from its real state by
+        # build_window.next_action (the same source the per-build window's buttons use,
+        # so the list and the window can never disagree).
         self.table.setHorizontalHeaderLabels(
-            ["Build", "When", "Status", "Images", "Location"])
+            ["Build", "When", "Status", "Next", "Images", "Location"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -204,6 +242,13 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.table.setMaximumHeight(200)          # bloat cap — the page stays a page
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemSelectionChanged.connect(self._update_buttons)
+        # ASK 15 — clicking a build opens a WINDOW for that build. Both the
+        # single-click and the double-click/Enter activation route here; the button row
+        # below stays exactly as it was so nothing an operator (or a test) already
+        # reaches for is taken away.
+        self.table.cellClicked.connect(self._row_clicked)
+        self.table.itemActivated.connect(lambda _it: self._open_build_window())
+        self._build_windows: list = []      # keep the non-modal windows alive
         lay.addWidget(self.table)
 
         btns = QtWidgets.QHBoxLayout()
@@ -253,13 +298,45 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             _sym, colour = _STATUS_GLYPH.get(r.status, ("?", "#888888"))
             item.setForeground(QtGui.QBrush(QtGui.QColor(colour)))
             self.table.setItem(i, 2, item)
-            self.table.setItem(i, 3, QtWidgets.QTableWidgetItem(r.images_text()))
+            nxt = QtWidgets.QTableWidgetItem(build_window.next_action(r))
+            nxt.setToolTip("Click the row to open this build in its own window.")
+            self.table.setItem(i, 3, nxt)
+            self.table.setItem(i, 4, QtWidgets.QTableWidgetItem(r.images_text()))
             loc = QtWidgets.QTableWidgetItem(self._elide(r.location))
             loc.setToolTip(r.location)
-            self.table.setItem(i, 4, loc)
+            self.table.setItem(i, 5, loc)
         self.table.resizeColumnsToContents()
         self._apply_filter()
         self._update_buttons()
+        self._rebind_build_windows()
+
+    def _rebind_build_windows(self) -> None:
+        """Point every open per-build window at the FRESH row for its build.
+
+        The reload above replaced every ``_RowData`` object, which is what orphaned an
+        open window in the first place. Rebinding here fixes it at the source rather
+        than leaving each action to rescue itself, and it also re-derives the window's
+        buttons from the state just read off disk (a build that finished, or that
+        another Studio took, while the window sat open).
+
+        Best-effort and fully guarded: ``refresh()`` runs from ``initializePage`` — a Qt
+        slot, where an escaping exception calls ``qFatal`` under the operator's PyQt6
+        binding. A window whose C++ side is already gone raises on attribute access; it
+        is simply skipped (``destroyed`` unlists it).
+        """
+        for win in list(self._build_windows):
+            try:
+                ident = row_identity(getattr(win, "row", None))
+                fresh = self.row_for_identity(ident) if ident is not None else None
+                if fresh is not None and fresh is not win.row:
+                    win.row = fresh
+                win.refresh()
+            except Exception:                  # pragma: no cover - defence in depth
+                import sys
+                import traceback
+                print("sessions_widget: swallowed exception in _rebind_build_windows",
+                      file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
     @staticmethod
     def _elide(path: str, keep: int = 46) -> str:
@@ -273,6 +350,15 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
 
     # ---- selection / gating --------------------------------------------------------
     def _selected(self) -> _RowData | None:
+        # A PINNED row wins over the table's selection. Every action below reads
+        # _selected(), which is right for the button row under the table but WRONG for
+        # a per-build window (ask 15): that window is about ONE build, and the table's
+        # selection moves under it — clicking another row selects it, and refresh()
+        # clears the selection outright. Unpinned, "Delete" in build A's window would
+        # delete whatever happened to be selected, or silently do nothing. act_on_row()
+        # pins for the duration of one action and restores afterwards.
+        if self._pinned_row is not None:
+            return self._pinned_row
         rows = {ix.row() for ix in self.table.selectedIndexes()}
         if len(rows) != 1:
             return None
@@ -312,6 +398,130 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         else:
             self.delete_btn.setToolTip("")
         self.delete_all_btn.setEnabled(bool(self._row_data))
+
+    # ---- ASK 15: click a build -> its own window -------------------------------------
+    def _row_clicked(self, row: int, _col: int) -> None:
+        """A click selects the row AND opens its window (clicking a build IS the ask).
+        Guarded: a click handler is a Qt slot, and under PyQt6 an escaping exception
+        calls qFatal and kills the Studio mid-list."""
+        try:
+            if 0 <= row < len(self._row_data):
+                self.table.selectRow(row)
+                self.open_build_window(self._row_data[row])
+        except Exception:                      # pragma: no cover - defence in depth
+            import sys
+            import traceback
+            print("sessions_widget: swallowed exception in _row_clicked",
+                  file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+    def _open_build_window(self) -> None:
+        r = self._selected()
+        if r is not None:
+            self.open_build_window(r)
+
+    #: per-build action name -> the widget handler that already implements it, with all
+    #: its guards (can_restart, the missing-secrets refusal, the fleet routing, the
+    #: delete confirmation). One implementation, two faces.
+    ROW_ACTIONS = {"resume": "_restart", "artifacts": "_open_artifacts",
+                   "edit": "_redo", "delete": "_delete", "log": "_view_log"}
+
+    def row_for_identity(self, ident):
+        """The listed row with this :func:`row_identity`, or None when none matches.
+
+        Works for all three row kinds — a session record, an unmanaged build tree and an
+        unreadable record file — because all three outlive a list reload on disk.
+        """
+        if ident is None:
+            return None
+        for r in self._row_data:
+            if row_identity(r) == ident:
+                return r
+        return None
+
+    def row_for_session(self, session_id: str):
+        """The listed row for a session id, or None when nothing on disk matches it."""
+        if not session_id:
+            return None
+        return self.row_for_identity(("session", session_id))
+
+    def act_on_row(self, row, name: str) -> bool:
+        """Run one per-build action against **this** row, whatever the table has
+        selected. Returns False (with an honest message) when the row is no longer
+        listed — a record another Studio deleted while the window sat open.
+
+        The pin is what makes a per-build window correct: the handlers all read
+        ``_selected()``, and the table's selection is not the window's build. It is
+        restored in a ``finally`` so a handler that raises cannot leave the button row
+        under the table permanently pointed at a row nobody selected.
+        """
+        if row not in self._row_data:
+            # refresh() rebuilds _row_data from disk, so an open window's row object is
+            # stale after any reload even though the BUILD is still perfectly listed.
+            # Re-resolve by IDENTITY — which every row kind has (row_identity), not just
+            # sessions: keying on session.id alone made an unmanaged tree's or an
+            # unreadable record's window refuse every action, claiming the build had been
+            # removed, with the row still listed. Only a build that is genuinely gone
+            # from the list refuses.
+            fresh = self.row_for_identity(row_identity(row))
+            if fresh is None:
+                QtWidgets.QMessageBox.warning(
+                    self, "Build no longer listed",
+                    "This build is no longer in the list — its record was removed or "
+                    "the list was reloaded. Refresh and try again.")
+                return False
+            row = fresh
+        handler = getattr(self, self.ROW_ACTIONS[name], None)
+        if handler is None:                        # pragma: no cover - table is fixed
+            return False
+        prev, self._pinned_row = self._pinned_row, row
+        try:
+            handler()
+        finally:
+            self._pinned_row = prev
+        return True
+
+    def open_build_window(self, row) -> "build_window.BuildActionsWindow":
+        """Open (or re-raise) the per-build window for ``row``.
+
+        The five actions are wired to the widget's EXISTING, already-tested handlers
+        via :meth:`act_on_row`, so the window is a new face on proven behaviour
+        (including every confirmation and refusal) rather than a second implementation
+        that could drift from it — and ``act_on_row`` pins the row, so the window acts
+        on ITS build rather than on whatever the table happens to have selected. Which
+        actions are OFFERED is decided by build_window.actions_for(), from real state.
+        """
+        ident = row_identity(row)
+        for win in list(self._build_windows):
+            try:
+                open_row = getattr(win, "row", None)
+                same = (open_row is row
+                        or (ident is not None and row_identity(open_row) == ident))
+            except Exception:                  # pragma: no cover - a deleted C++ window
+                continue
+            if same:
+                # the same BUILD, so re-raise its window rather than open a second one —
+                # after a reload the row object differs while the build does not.
+                win.row = row
+                win.refresh()
+                win.show()
+                win.raise_()
+                return win
+        win = build_window.BuildActionsWindow(
+            row,
+            on_resume=lambda r: self.act_on_row(r, "resume"),
+            on_artifacts=lambda r: self.act_on_row(r, "artifacts"),
+            on_edit=lambda r: self.act_on_row(r, "edit"),
+            on_delete=lambda r: self.act_on_row(r, "delete"),
+            on_log=lambda r: self.act_on_row(r, "log"),
+            parent=self.window())
+        self._build_windows.append(win)
+        win.destroyed.connect(
+            lambda *_a, w=win: self._build_windows.remove(w)
+            if w in self._build_windows else None)
+        win.show()
+        win.raise_()
+        return win
 
     # ---- guards (pure-ish, offscreen-testable) --------------------------------------
     @staticmethod

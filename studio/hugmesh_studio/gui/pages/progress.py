@@ -56,6 +56,7 @@ import time
 from collections import deque
 
 from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
+from .. import build_supervisor
 from .. import flag_badges
 from ..tray import write_build_status
 from ...core import build_sessions
@@ -588,9 +589,23 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._flash_timer = QtCore.QTimer(self)
         self._flash_timer.setInterval(2500)        # live device come/go refresh
         self._flash_timer.timeout.connect(self._refresh_flash_targets)
-        # never orphan a running build when the wizard closes — cancel and join the
-        # worker on the wizard's finished signal (QWizard is a QDialog).
-        self.wiz.finished.connect(self._abort_run)
+        # ASK 16 — a window CLOSE must not stop a build.
+        #
+        # This used to be `self.wiz.finished.connect(self._abort_run)`: QWizard is a
+        # QDialog, so `finished` fires on an ordinary close, and closing the Studio
+        # cancelled the builder and joined the worker. "Builds continue in the
+        # background" was not merely missing — the opposite was wired up.
+        #
+        # Now the close DETACHES the window's furniture (re-dock the log, stop the
+        # cosmetic timers) and leaves the run alone. The run itself is owned by
+        # gui/build_supervisor.py, which is parented to the QApplication and holds the
+        # window alive until the build finishes, so this page's slots always have a
+        # live C++ object to land on (the deleted-object-in-a-slot crash the
+        # _DetachedLogWindow docstring documents). A REAL exit still cancels — that is
+        # supervisor().cancel_all() on QApplication.aboutToQuit, wired in gui/shell.py.
+        self.wiz.finished.connect(self._detach_from_window)
+        # the supervisor's record for the run this page dispatched (set in _start_worker)
+        self._supervised = None
 
     # ---- log panel: split / collapse / detach / watch-help ----------------------
     def showEvent(self, ev) -> None:
@@ -1068,6 +1083,25 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._write_status()                  # building 0% -> the tray shows a badge
         if self._session is not None:         # START record: status "running" + pid
             build_sessions.start(self._session)
+        # ASK 16 — hand the run to the process-wide supervisor BEFORE starting it. From
+        # here the worker's Qt parent is the supervisor (not this page, not the window)
+        # and the supervisor pins the window alive until the run ends, so closing the
+        # window cannot destroy the C++ objects this page's slots stream into.
+        self._supervised = build_supervisor.supervisor().adopt(
+            session_id=(self._session.id if self._session is not None else ""),
+            label=(self._session.label if self._session is not None
+                   else self._supervisor_label()),
+            worker=self.worker, driver=self.driver, window=self.wiz.window(),
+            workdir=(self._session.workdir if self._session is not None
+                     else self._work_dir()),
+            kind=(getattr(self._session, "kind", "wizard")
+                  if self._session is not None else "wizard"),
+            # A REAL exit (aboutToQuit -> cancel_all) genuinely stops this run, so the
+            # record must say "stopped". Without this hook the old close-abort's
+            # _finalize_session was simply lost when the abort moved off the window
+            # close, and a quit-interrupted build stayed "running" with a dead pid —
+            # rendered as "running (stale?)" in the build list forever.
+            on_cancelled=lambda: self._finalize_session(status="stopped"))
         # a builder is really launching now, so the per-image log files are real (or are
         # about to be — `tail -F` handles the not-yet-created case): show the paths.
         self._dispatched = True
@@ -1075,6 +1109,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.completeChanged.emit()
         self._sync_back_button()
         self.worker.start()
+
+    def _supervisor_label(self) -> str:
+        """A roster label when no session record exists (direct-slot tests / a record
+        that could not be written): the config's own role·platform, never a fake id."""
+        c = self.wiz.cfg
+        return " · ".join(p for p in (c.role or "build", c.platform or "x86") if p)
 
     # ---- slots (GUI thread) -----------------------------------------------------
     def _work_dir(self) -> str:
@@ -1970,27 +2010,47 @@ class ProgressPage(QtWidgets.QWizardPage):
         if self.driver is not None:
             self.driver.cancel_all()
 
-    def _abort_run(self, *_a) -> None:
-        """Cancel and join a still-running build so the wizard closing never orphans a
-        builder process or a live QThread."""
-        # re-dock BEFORE the wizard destroys its children: the detached window is one of
-        # them, and it owns the log panel. Reparenting the panel back into this page first
-        # means the window can be destroyed without taking self.log's C++ object with it —
-        # which would make the next streamed line raise inside the _on_line slot.
+    def _detach_from_window(self, *_a) -> None:
+        """ASK 16: the wizard window CLOSED — put the window's furniture away and leave
+        the build running.
+
+        What is stopped here is cosmetic and window-scoped only: the flash-device
+        rescan timer and the elapsed-time ticker exist to paint a visible page, and a
+        closed window paints nothing. The BUILD is untouched — no cancel, no join —
+        because gui/build_supervisor.py owns it now and the tray badge keeps reporting
+        it from the status file.
+
+        Two things are load-bearing and must stay:
+
+        * ``_redock_log()`` FIRST, exactly as the old abort did. The detached log
+          window is a child of the wizard; reparenting the log panel back into this
+          page before anything else means a later teardown cannot take ``self.log``'s
+          C++ object with it and make the next streamed line raise inside ``_on_line``
+          — a Qt slot, where an unhandled exception ABORTS the Studio under PyQt6.
+        * ``_flash_queue = []``. A queued destructive flash must NOT fire after the
+          operator closed the window: dd is not a thing to start at a window nobody is
+          watching. Cancelling the queue is not cancelling the build.
+
+        A still-running FLASH is joined, because it writes to a physical device and
+        must not be left racing a closing window.
+        """
         self._redock_log()
         self._flash_timer.stop()
         self._tick.stop()
-        # drop any still-queued plan assignments FIRST: a running dd outlives the 3s
-        # join below, and when its done signal finally fires, _flash_done would chain
-        # _flash_next — starting the NEXT destructive flash after the user aborted.
         self._flash_queue = []
+        if self.flash_worker is not None and self.flash_worker.isRunning():
+            self.flash_worker.wait(3000)
+
+    def _abort_run(self, *_a) -> None:
+        """Cancel and join a still-running build. Reserved for a REAL teardown (the
+        supervisor's ``cancel_all`` on ``QApplication.aboutToQuit``, and the tests that
+        drive an explicit abort) — never a window close; see _detach_from_window."""
+        self._detach_from_window()
         if self.worker is not None and self.worker.isRunning():
             if self.driver is not None:
                 self.driver.cancel_all()
             self.worker.wait(3000)
-            self._finalize_session(status="stopped")   # honest: the close cancelled it
-        if self.flash_worker is not None and self.flash_worker.isRunning():
-            self.flash_worker.wait(3000)
+            self._finalize_session(status="stopped")   # honest: the abort cancelled it
 
     # ---- flash to a device (post-build) -----------------------------------------
     # flash-disk.sh accepts only these --role tokens; a client/desktop role maps to the

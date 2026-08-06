@@ -331,3 +331,64 @@ def test_new_session_stamps_per_image_log_and_keeps_shared_log_path(tmp_path):
     # each image row carries its own on-disk log basename
     for row, entry in zip(s.images, wl.entries):
         assert row["log"] == f"build-{entry.id}.log"
+
+
+# ── the load boundary honours the types it declares ─────────────────────────────────
+# A record is JSON on a disk anyone can write to. from_dict filtered unknown KEYS but
+# accepted any VALUE, so a `label` that deserialised to a number reached consumers that
+# all assume the declared str: session_haystack joins it (TypeError), and the tray's
+# "Running builds" submenu handed it to QMenu.addAction (TypeError, out of a Qt slot,
+# from the tray CONSTRUCTOR — i.e. the Studio would not start at all).
+def test_from_dict_coerces_every_field_it_declares_str():
+    s = bs.BuildSession.from_dict({
+        "id": 42, "label": 12345, "status": ["running"], "created": None,
+        "workdir": 7, "hostname": 1.5,
+    })
+    assert s.label == "12345"
+    assert s.id == "42"
+    assert s.status == "['running']"
+    assert s.workdir == "7"
+    assert s.hostname == "1.5"
+    assert s.created == ""            # null becomes the field's own default
+    for value in (s.label, s.id, s.status, s.created, s.workdir, s.hostname):
+        assert isinstance(value, str)
+
+
+def test_from_dict_leaves_a_well_formed_record_exactly_as_it_was(tmp_path):
+    s = bs.BuildSession(id="20260101-000000-aaaaaa", label="be · x86",
+                        workdir=str(tmp_path), status=bs.RUNNING, pid=1234,
+                        images=[{"id": "e1", "status": "ok"}], config={"a": 1})
+    assert bs.BuildSession.from_dict(s.to_dict()) == s
+
+
+def test_from_dict_does_not_stringify_the_fields_that_are_not_str():
+    """Coercion is scoped to the DECLARED str fields — a blanket str() would turn the
+    config snapshot and the pid into text and break restart outright."""
+    s = bs.BuildSession.from_dict({"pid": 1234, "config": {"a": 1}, "images": [{}],
+                                   "generate_keys": False, "backend": None})
+    assert s.pid == 1234 and isinstance(s.pid, int)
+    assert s.config == {"a": 1}
+    assert s.images == [{}]
+    assert s.generate_keys is False
+    assert s.backend is None           # a str|None union keeps its None
+
+
+def test_a_malformed_label_no_longer_breaks_the_welcome_lists_haystack():
+    """The second surface the same record reaches: the searchable list."""
+    s = bs.BuildSession.from_dict({"id": "x1", "label": 12345, "status": "running"})
+    hay = bs.session_haystack(s)       # used to raise TypeError on the join
+    assert "12345" in hay
+    assert bs.matches(hay, "12345") is True
+
+
+def test_a_malformed_record_on_disk_loads_and_is_listed(tmp_path):
+    """End to end through the real scan(): honoured as a build, not quarantined as
+    unreadable (it parses fine — it is only out of contract)."""
+    os.makedirs(bs.sessions_dir(), exist_ok=True)
+    with open(os.path.join(bs.sessions_dir(), "x1.json"), "w", encoding="utf-8") as fh:
+        json.dump({"id": "x1", "label": 12345, "status": bs.RUNNING,
+                   "pid": os.getpid(), "hostname": socket.gethostname()}, fh)
+    sessions, unreadable = bs.scan()
+    assert unreadable == []
+    assert [s.label for s in sessions] == ["12345"]
+    assert bs.is_active(sessions[0]) is True

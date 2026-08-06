@@ -51,6 +51,7 @@ import threading
 import types
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
+from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
@@ -235,18 +236,28 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
-        # ENV test/prod.
-        self.env_group = QtWidgets.QButtonGroup(self)
-        self.env_test = QtWidgets.QRadioButton("test — LAN-only / offline (safe default)")
-        self.env_prod = QtWidgets.QRadioButton("prod — real public domain")
+        # ENV test/prod — ASK 14: two big clickable cards, not two radios. The
+        # ChoiceCardGroup keeps the exact QButtonGroup surface (setChecked / isChecked /
+        # checkedButton), so every existing caller and test reads it unchanged.
+        # Deliberately NOT wired to advance_on_choice: this is one field on a long
+        # configuration form, not a pick-one screen — "choosing is proceeding" would
+        # mean picking an environment skipped the rest of the form.
+        self.env_group = ChoiceCardGroup(self)
+        self.env_test = ChoiceCard(
+            "test",
+            "LAN-only / offline. Self-signed material, no public domain, nothing "
+            "published. The safe default.")
+        self.env_prod = ChoiceCard(
+            "prod",
+            "A real public domain, with the tailscale overlay attached. Needs a "
+            "domain and a key below.")
+        self.env_group.add_card(self.env_test, 0)
+        self.env_group.add_card(self.env_prod, 1)
         self.env_test.setChecked(True)
-        self.env_group.addButton(self.env_test)
-        self.env_group.addButton(self.env_prod)
-        envrow = QtWidgets.QHBoxLayout()
-        envrow.addWidget(self.env_test)
-        envrow.addWidget(self.env_prod)
-        envrow.addStretch(1)
-        lay.addWidget(_row("Environment", self._wrap(envrow)))
+        envcol = QtWidgets.QVBoxLayout()
+        envcol.addWidget(self.env_test)
+        envcol.addWidget(self.env_prod)
+        lay.addWidget(_row("Environment", self._wrap(envcol)))
 
         # BRAND — the real catalog + an editable slug. Fixes the GUI-narrower-than-
         # CLI bug: collect_bootstrap() used to omit brand=, pinning every GUI run to
@@ -269,18 +280,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # hardcoded "all repos" claim.
         src_box = QtWidgets.QGroupBox("Repo source (what the stack builds from)")
         sl = QtWidgets.QVBoxLayout(src_box)
+        # ASK 14 — three cards, not three radios. The group keeps the QButtonGroup
+        # surface, so src_clone/src_existing/src_render read exactly as before.
         n = len(self.boot.expected_contexts())
-        self.src_clone = QtWidgets.QRadioButton(
-            f"Download the source for all {n} repos into ./.stack-src and build from "
-            f"there  [default]")
-        self.src_clone.setToolTip(
-            "What runs today: `make stack-clone` clones/updates each hugmesh-* repo "
-            "from GIT_BASE, then compose builds every service from those files. Needs "
-            "network on the first run.")
+        self.src_group = ChoiceCardGroup(self)
+        self.src_clone = ChoiceCard(
+            f"Download the source for all {n} repos",
+            "`make stack-clone` clones/updates each hugmesh-* repo from GIT_BASE into "
+            "./.stack-src, then compose builds every service from those files. Needs "
+            "network on the first run. [default]")
+        self.src_group.add_card(self.src_clone, 0)
         self.src_clone.setChecked(True)
         sl.addWidget(self.src_clone)
 
-        self.src_existing = QtWidgets.QRadioButton("Build from a source tree I already have:")
+        self.src_existing = ChoiceCard(
+            "Build from a source tree I already have",
+            "Point at a directory holding hugmesh-<name> checkouts; they are never "
+            "fetched, updated or git-reset.")
+        self.src_group.add_card(self.src_existing, 1)
         sl.addWidget(self.src_existing)
         row = QtWidgets.QHBoxLayout()
         self.src_dir = QtWidgets.QLineEdit()
@@ -301,9 +318,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         guard.setStyleSheet("color: gray;")
         sl.addWidget(guard)
 
-        # The honest deferral: a DISABLED radio can never lie.
-        self.src_render = QtWidgets.QRadioButton(
-            "Render repo source from templates — not available")
+        # The honest deferral: a DISABLED card can never lie. ChoiceCard renders a
+        # disabled option with a DASHED border — a shape cue, not just grey text — so
+        # "not available" reads without relying on colour.
+        self.src_render = ChoiceCard(
+            "Render repo source from templates",
+            "Not available — see below.")
+        self.src_group.add_card(self.src_render, 2)
         self.src_render.setEnabled(False)
         sl.addWidget(self.src_render)
         why = QtWidgets.QLabel(

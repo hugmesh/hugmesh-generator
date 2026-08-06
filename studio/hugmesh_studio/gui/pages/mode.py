@@ -23,6 +23,7 @@ each dynamically skipping itself on every image-mode flow via applies_to().
 from __future__ import annotations
 
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from .. import choice_nav
 from ..qt import QtWidgets
 from ._scroll import scrollable
 from ...core.config import (
@@ -111,6 +112,12 @@ class ModePage(QtWidgets.QWizardPage):
         # only live wiring left is keeping Next's enabled state fresh on change —
         # connected AFTER the default check so it fires only on change.
         self.group.buttonToggled.connect(self._on_mode_toggled)
+        # ASK 14 — "options should be buttons not checkmarks to proceed": a CLICK on a
+        # card commits this page and moves on, so picking what to build is one action
+        # rather than pick-then-hunt-for-Next. Wired to buttonClicked (a real
+        # activation) rather than buttonToggled, so initializePage's setChecked — which
+        # reflects a loaded config or a Back-navigation — never navigates on its own.
+        choice_nav.advance_on_choice(self, self.group)
         lay.addStretch(1)
 
     def _selected_mode(self):

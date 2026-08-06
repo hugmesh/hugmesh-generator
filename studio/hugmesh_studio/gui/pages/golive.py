@@ -26,6 +26,7 @@ import os
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ..branding_icon import brand_icon
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from .. import choice_nav
 from ._scroll import scrollable
 from ..wizard import _file_picker, _row
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
@@ -147,6 +148,9 @@ class GoLiveExposurePage(QtWidgets.QWizardPage):
             lay.addWidget(card)
         if self.models:
             self.group.button(0).setChecked(True)
+        # ASK 14 — picking an exposure model IS proceeding. buttonClicked only, so
+        # initializePage's reflect-an-earlier-choice setChecked never navigates.
+        choice_nav.advance_on_choice(self, self.group)
         lay.addStretch(1)
 
     def initializePage(self):

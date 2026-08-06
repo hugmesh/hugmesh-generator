@@ -264,21 +264,46 @@ def main(argv=None) -> int:
         # dev console line — expert-only now; it used to print on every launch.
         print(f"[studio] Qt binding: {BINDING}", file=sys.stderr)
 
-    wizard = None
     golive = None
     fleet = None
 
+    # ── ASK 16: is a Studio already open? ────────────────────────────────────────
+    # Detection is a socket handshake with the running process (core/instance.py), not
+    # a pid-file guess — and every failure mode reads as "no instance", so a crashed
+    # Studio can never lock the operator out of their own tool. Only the DEFAULT studio
+    # launch coordinates: --tray/--stack-tray/--go-live/--fleet each name a specific
+    # window the operator asked for by hand, and second-guessing that would be rude.
+    from .core import instance
+    from .gui import shell as shell_mod
+    coordinates = not (args.tray or args.stack_tray or args.go_live or args.fleet)
+    # Claim the endpoint ONLY on the coordinating launch. A --tray/--go-live/--fleet
+    # process that grabbed it without draining commands would be a black hole: a later
+    # default launch would detect "an instance is running" and send it a NEW-WINDOW
+    # nobody reads.
+    server = instance.InstanceServer() if coordinates else None
+    primary = server.start() if server is not None else True
+    if coordinates and not primary:
+        # A live Studio answered. Ask, then have IT do the work — one process keeps
+        # owning every build, which is what makes the tray's roster complete and what
+        # "builds continue in the background" actually means.
+        choice = shell_mod.ask_already_running()
+        if choice == shell_mod.CHOICE_NEW_WINDOW:
+            instance.send(instance.CMD_NEW_WINDOW)
+        elif choice == shell_mod.CHOICE_RESET:
+            instance.send(instance.CMD_RESET)
+        return 0
+
+    shell = shell_mod.StudioShell(
+        args.generator_dir,
+        remember_roles_for_passwordless_login=args.remember_roles_for_passwordless_login,
+        login_manifest_path=args.login_manifest,
+        server=server)
+    shell.install_quit_guard(app)
+
     def open_studio():
-        nonlocal wizard
-        from .gui.wizard import StudioWizard
-        if wizard is None:
-            wizard = StudioWizard(
-                args.generator_dir,
-                remember_roles_for_passwordless_login=args.remember_roles_for_passwordless_login,
-                login_manifest_path=args.login_manifest,
-            )
-        wizard.show()
-        wizard.raise_()
+        # the launch window. The old code capped the Studio at ONE forever-window via a
+        # `nonlocal wizard`; the shell can now mint as many as ask 16 needs.
+        return shell.open_or_raise()
 
     def open_golive():
         nonlocal golive
@@ -315,9 +340,11 @@ def main(argv=None) -> int:
     show_stack = args.stack_tray or not tray_only
     tray = None
     if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
-        from .gui.tray import build_tray
-        tray = build_tray(args.generator_dir, show_mesh=show_mesh, show_stack=show_stack,
-                          on_open_studio=open_studio, on_open_golive=open_golive)
+        # ONE icon, now carrying the ask-16 "Running builds" submenu (each entry opens
+        # a window for that build). The shell owns the wiring so the roster, the
+        # windows and the build supervisor are the same three objects everywhere.
+        tray = shell.install_tray(show_mesh=show_mesh, show_stack=show_stack,
+                                  on_open_golive=open_golive)
         tray.show()
         app.setQuitOnLastWindowClosed(False)  # keep running in the tray
 
@@ -327,6 +354,19 @@ def main(argv=None) -> int:
         print("[studio] no system tray available; opening the wizard instead", file=sys.stderr)
         open_main()
 
+    # With no tray there is no other way back into the Studio, so closing the last
+    # window should end the process — but ONLY once nothing is still building
+    # (shell._sync_lifetime). Enabling it also turns Qt's quitOnLastWindowClosed off,
+    # which is what stops a window close from quitting the app and cancelling the build.
+    #
+    # Scoped deliberately:
+    #   * with a tray, the tray branch above already turned the flag off and the tray
+    #     itself is the reason to stay, so autoquit would be inert anyway;
+    #   * --go-live/--fleet open a single-purpose window the shell does not track, so
+    #     turning the flag off for them would leave an invisible process with nothing
+    #     on screen and no way back. Their pre-existing quit-on-close is correct.
+    if tray is None and open_main is open_studio:
+        shell.enable_autoquit(True)
     return app.exec()
 
 

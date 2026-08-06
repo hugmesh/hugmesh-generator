@@ -212,14 +212,42 @@ class BuildSession:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "BuildSession":
+        """Load a record, filtering unknown keys and HONOURING the declared types.
+
+        A record is JSON on a disk anyone can write to, so a field declared ``str``
+        here can arrive as a number, a list, or null. Nothing downstream re-checks:
+        ``session_haystack`` joins ``label`` into a string (``TypeError`` on an int) and
+        the tray's "Running builds" submenu passes it straight to ``QMenu.addAction``,
+        which only accepts ``str`` — from inside a Qt slot, where an escaping exception
+        calls ``qFatal`` under PyQt6 and takes the whole Studio with it.
+
+        So every field DECLARED ``str`` is coerced to one at this boundary, once, rather
+        than at each of the places that consume it. ``str(value)`` renders what the
+        record actually says (never a substitute or a guess); ``null`` becomes ``""``,
+        the field's own default. A well-formed record is untouched.
+        """
         if not isinstance(d, dict):
             raise ValueError("session record must be a JSON object")
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in d.items() if k in known})
+        vals = {k: v for k, v in d.items() if k in known}
+        for k in _STR_FIELDS.intersection(vals):
+            v = vals[k]
+            if not isinstance(v, str):
+                vals[k] = "" if v is None else str(v)
+        return cls(**vals)
 
     def worklist(self) -> WorklistConfig:
         """The config snapshot as a live WorklistConfig (RESTART/REDO's round-trip)."""
         return WorklistConfig.from_dict(self.config)
+
+
+#: The fields DECLARED ``str`` above — derived from the dataclass rather than listed,
+#: so a field added later is covered without anyone remembering to. Consumed by
+#: :meth:`BuildSession.from_dict`; unions (``backend: str | None``) are deliberately not
+#: included, since ``None`` is a legitimate value for them.
+_STR_FIELDS = frozenset(
+    name for name, f in BuildSession.__dataclass_fields__.items()   # type: ignore[attr-defined]
+    if f.type is str or f.type == "str")
 
 
 # ── construction at dispatch ──────────────────────────────────────────────────────────

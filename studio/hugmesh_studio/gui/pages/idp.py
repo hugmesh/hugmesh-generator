@@ -26,6 +26,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..qt import QtWidgets
 from ..styles import muted
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from . import idp_provider
 from ._scroll import scrollable
 from ._widgets import _row
 
@@ -103,6 +104,10 @@ class IdpPage(QtWidgets.QWizardPage):
             lay.addWidget(card)
         self._buttons["casdoor"].setChecked(True)   # the native default, BY ID
 
+        # ASK 17 — the endpoint fields moved OUT of this page and into the per-provider
+        # configuration window (pages/idp_provider.py). They live on as hidden line
+        # edits so this page keeps one place to hold the values between the window and
+        # validatePage — and so cfg round-tripping stays exactly what it was.
         self.ext_box = QtWidgets.QGroupBox("External provider endpoints")
         eb = QtWidgets.QVBoxLayout(self.ext_box)
         self.issuer = QtWidgets.QLineEdit()
@@ -125,7 +130,22 @@ class IdpPage(QtWidgets.QWizardPage):
         self.jwks_preview.setWordWrap(True)
         self.jwks_preview.setStyleSheet(muted())
         eb.addWidget(self.jwks_preview)
+        self.ext_box.setVisible(False)          # the WINDOW is where these are edited
         lay.addWidget(self.ext_box)
+
+        # What the chosen external provider is currently configured to trust — a
+        # read-only echo of what the window produced, plus the way back into it.
+        self.summary = QtWidgets.QLabel("")
+        self.summary.setWordWrap(True)
+        self.summary.setStyleSheet(muted())
+        self.summary.setVisible(False)
+        lay.addWidget(self.summary)
+        self.configure_btn = QtWidgets.QPushButton("Configure provider…")
+        self.configure_btn.setToolTip(
+            "Reopen the provider configuration window for the selected provider.")
+        self.configure_btn.clicked.connect(lambda: self.open_provider_window())
+        self.configure_btn.setVisible(False)
+        lay.addWidget(self.configure_btn)
 
         note = QtWidgets.QLabel(_LIMITS_NOTE)
         note.setWordWrap(True)
@@ -134,9 +154,16 @@ class IdpPage(QtWidgets.QWizardPage):
         lay.addStretch(1)
 
         self.group.buttonToggled.connect(self._sync)
+        # ASK 14 + 17 — a CLICK on a card is the decision: casdoor (the default) simply
+        # proceeds; anything else opens the per-provider configuration window and then
+        # proceeds if it was completed. buttonToggled above still only re-syncs, so a
+        # programmatic setChecked() (initializePage, config reload, every existing test)
+        # never navigates on its own.
+        self.group.buttonClicked.connect(self._card_clicked)
         self.issuer.textChanged.connect(self._sync)
         self.client_id.textChanged.connect(self._sync)
         self.jwks.textChanged.connect(self._sync)
+        self._provider_window = None
         self._sync()
 
     # ── selection helpers ────────────────────────────────────────────────────────
@@ -172,7 +199,74 @@ class IdpPage(QtWidgets.QWizardPage):
                 else "JWKS derives from the issuer once one is entered.")
         else:
             self.jwks_preview.setText("")
+        # the read-only echo of what the provider window produced (ask 17)
+        self.configure_btn.setVisible(ext)
+        self.summary.setVisible(ext)
+        if ext:
+            issuer = self.issuer.text().strip()
+            client = self.client_id.text().strip()
+            if issuer or client:
+                self.summary.setText(
+                    f"Configured: issuer {issuer or '(not set)'} · client "
+                    f"{client or '(not set)'}")
+            else:
+                self.summary.setText(
+                    "Not configured yet — open the configuration window to enter this "
+                    "provider's issuer and client id.")
         self.completeChanged.emit()
+
+    # ── ASK 17: the card opens a per-provider configuration WINDOW ───────────────
+    def _card_clicked(self, _btn=None) -> None:
+        """A card CLICK is the decision. Guarded end to end: this is a Qt slot, and an
+        escaping exception under PyQt6 calls qFatal and kills the Studio."""
+        try:
+            idp = self.selected_idp()
+            if idp == "casdoor":
+                self._proceed()                 # the default: nothing to configure
+                return
+            if self.open_provider_window():
+                self._proceed()
+        except Exception:                       # pragma: no cover - defence in depth
+            import sys
+            import traceback
+            print("idp: swallowed exception in _card_clicked", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+    def open_provider_window(self) -> bool:
+        """Open the per-provider configuration wizard; True when it was completed.
+
+        ``has_wizard`` is checked rather than assumed: a provider added to
+        IDP_CHOICES without a configuration wizard must say so plainly instead of
+        opening an empty window — the one failure mode ask 17 calls out by name.
+        """
+        idp = self.selected_idp()
+        if not idp_provider.has_wizard(idp):
+            QtWidgets.QMessageBox.information(
+                self, "No configuration wizard",
+                f"There is no configuration wizard for “{IDP_LABELS.get(idp, idp)}” "
+                "yet. Enter its issuer and client id in a saved config, or pick "
+                "another provider.")
+            return False
+        win = idp_provider.ProviderConfigWindow(
+            idp, issuer=self.issuer.text().strip(),
+            client_id=self.client_id.text().strip(),
+            jwks=self.jwks.text().strip(), parent=self.window())
+        self._provider_window = win
+        accepted = win.exec() == QtWidgets.QDialog.DialogCode.Accepted
+        if accepted:
+            issuer, client_id, jwks = win.result_values()
+            self.issuer.setText(issuer)
+            self.client_id.setText(client_id)
+            self.jwks.setText(jwks)
+        self._sync()
+        return accepted
+
+    def _proceed(self) -> None:
+        """Choosing IS proceeding (ask 14): advance the flow, but only when the page
+        would let Next through anyway — never bypass the fail-closed identity gate."""
+        wiz = self.wizard()
+        if wiz is not None and self.isComplete():
+            wiz.next()
 
     def isComplete(self) -> bool:
         # Casdoor is always complete; external gates Next on the SAME fail-closed
