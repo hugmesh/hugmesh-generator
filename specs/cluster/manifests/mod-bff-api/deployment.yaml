@@ -68,10 +68,21 @@ spec:
               # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
               # keystore. Plain application.properties loads UNCONDITIONALLY from the
               # additional location, with no profile needed.
+              #
+              # BOTH DIRECTIONS NEED A PASSWORD. `server.ssl.*` configures the INBOUND
+              # listener only; this app's outbound calls bind `hugmesh.mtls.client.*`,
+              # whose application.yml defaults are ${SSL_KEY_STORE_PASSWORD:} /
+              # ${SSL_TRUST_STORE_PASSWORD:} — env NOTHING sets here, so they resolved to
+              # "" and no outbound https leg could open its own stores. Written
+              # unconditionally so the client gate is CORRECT whenever it is switched on
+              # (this deployment leaves HUGMESH_MTLS_CLIENT_ENABLED at its default OFF).
+              # See user-bff-api/deployment.yaml for the full root-cause note.
               umask 077
               cat > /stores/application.properties <<EOF
               server.ssl.key-store-password=${P}
               server.ssl.trust-store-password=${P}
+              hugmesh.mtls.client.key-store-password=${P}
+              hugmesh.mtls.client.trust-store-password=${P}
               EOF
               echo "keystore + truststore + application.properties built"
           volumeMounts:

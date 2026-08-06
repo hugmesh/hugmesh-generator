@@ -77,10 +77,28 @@ spec:
               # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
               # keystore. Plain application.properties loads UNCONDITIONALLY from the
               # additional location, with no profile needed.
+              #
+              # BOTH DIRECTIONS NEED A PASSWORD. The `server.ssl.*` keys configure the
+              # INBOUND listener only. This app's OUTBOUND calls bind a separate prefix,
+              # `hugmesh.mtls.client.*` (FederationHttpClientSsl, @ConfigurationProperties),
+              # whose application.yml defaults are ${SSL_KEY_STORE_PASSWORD:} /
+              # ${SSL_TRUST_STORE_PASSWORD:} — env that NOTHING sets in this pod, so they
+              # resolved to "" and every outbound https leg fell back to the JDK default
+              # truststore, which has no cluster CA. Live symptom on kind 2026-08-06:
+              #   POST /bff/login -> 500
+              #   SSLHandshakeException (certificate_unknown): PKIX path building failed
+              #   R:hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+              # This is NOT a CA mismatch — both sides carried the identical CA. The
+              # client simply could not OPEN the truststore that holds it.
+              # Writing the client keys here (rather than exporting SSL_*_PASSWORD into the
+              # pod spec) keeps the generated password out of the manifest, and is the same
+              # override path already proven load-bearing by the server keys above.
               umask 077
               cat > /stores/application.properties <<EOF
               server.ssl.key-store-password=${P}
               server.ssl.trust-store-password=${P}
+              hugmesh.mtls.client.key-store-password=${P}
+              hugmesh.mtls.client.trust-store-password=${P}
               EOF
               echo "keystore + truststore + application.properties built"
           volumeMounts:
@@ -107,6 +125,25 @@ spec:
             - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # ── API-to-API mTLS (CLIENT side) ─────────────────────────────────
+            # The other half of the pair above. Several peers this BFF calls are
+            # https AND serve client-auth=need / ssl_verify_client on:
+            #   • hugmesh-admin-bff-api:8080      (session + account provisioning)
+            #   • hugmesh-federation-api:8080     (module/profile reads)
+            #   • tuwunel-proxy / akkoma-proxy:4443 (homeserver + media legs)
+            # With this gate OFF, FederationHttpClientSsl.customize() returns the
+            # HttpClient UNCHANGED, so those calls used the JDK default truststore —
+            # which contains public roots only, never the cluster CA. Every one of
+            # those legs was therefore unreachable; the login path surfaced it first
+            # (see the init-container note for the exact live error).
+            # SAFE FOR THE http:// PEERS: an SslContext on a reactor-netty client
+            # engages only for https URLs, so PKI_GATEWAY_BASE / APP_BFF_OIDC_LOGIN_BASE
+            # / CASDOOR_ACCOUNT_BASE_URL (all http://) are untouched by this flip.
+            # PAIRED REQUIREMENT: the client store passwords must reach
+            # hugmesh.mtls.client.* — the init container writes them into
+            # /stores/application.properties. tests/scripts/test-outbound-mtls-client.sh
+            # fails the build if this gate is ever on without them.
+            - { name: HUGMESH_MTLS_CLIENT_ENABLED, value: "true" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
             # client secret needed (pure resource server, like federation-api).

@@ -764,6 +764,23 @@ lint:kind-profile-app-closure:
   script:
     - bash tests/scripts/test-kind-profile-app-closure.sh
 
+# Outbound (client-side) mTLS must be given the password to the stores it uses.
+# The init containers minted a PKCS12 pair under a generated password and wrote
+# only `server.ssl.*` — the INBOUND listener's keys. Outbound calls bind a
+# separate prefix, `hugmesh.mtls.client.*`, defaulting to ${SSL_*_PASSWORD:} env
+# that nothing sets, so both resolved to "". With the gate off that silently fell
+# back to the JDK default truststore (no cluster CA) and POST /bff/login died on
+# "PKIX path building failed" against admin-bff while BOTH SIDES HELD THE SAME CA
+# — the client just could not open the store containing it. With the gate on
+# (forum-bff-api) it is worse: KeyStore.load(new char[0]) throws and the client
+# never constructs. This gate ran RED on the commit before the fix.
+lint:outbound-mtls-client:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-outbound-mtls-client.sh
+
 # Optional-services BUILD-TIME EXCLUSION gate. Sources the REAL gate + helper
 # functions from build-rpi5-stage4.sh and runs gate_optional_services against a
 # sandbox tree seeded from specs/cluster, proving EVERY user-level service
