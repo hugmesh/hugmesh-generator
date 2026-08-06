@@ -756,7 +756,7 @@ def test_branding_form_greyed_for_mesh_node(qapp):
 
     from hugmesh_studio.core.config import ImageConfig
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86",
-                      theme="boogiepop", wallpaper="/tmp/w.png", brand_locked=True)
+                      theme="dark", wallpaper="/tmp/w.png", brand_locked=True)
     page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
     assert not page.form.isEnabled()          # x86 mesh NODE: greyed by role-class

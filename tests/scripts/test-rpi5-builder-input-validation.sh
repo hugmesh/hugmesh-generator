@@ -88,7 +88,7 @@ if _runval; then ok "ACCEPT all legitimate defaults"; else bad "legitimate defau
 accepts "user snap"      DEFAULT_USER  "snap"
 accepts "host generic"   HOSTNAME      "gentoo-rpi5"
 accepts "cpu native"     RPI_CPU       "native"
-accepts "domain prod"    CLUSTER_DOMAIN "boogiepop.example.org"
+accepts "domain prod"    CLUSTER_DOMAIN "hugmesh.example.org"
 
 # Injection payloads from the findings must all be rejected, fail-closed.
 rejects "#11 RPI_CPU shell-breakout"  RPI_CPU       'cortex-a76" ; echo $(id -un) ; CFLAGS="x'

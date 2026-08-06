@@ -191,7 +191,7 @@ OPT_SA_MEDIA="yes"            # yes => media-data auto-detect (/media Vaults+Ste
 OPT_SA_USER="snap"            # local login user name
 OPT_SA_KEYFILE="none"         # none | boot | login  (extra unlock factor: keyfile)
 OPT_SA_YUBIKEY="none"         # none | boot | login  (extra unlock factor: FIDO2)
-OPT_SA_THEME="boogiepop"      # branding theme preset (none | boogiepop | …)
+OPT_SA_THEME="dark"           # branding theme preset (none | light | dark | purple | grey)
 OPT_SA_PROXY="yes"            # Squid+Privoxy+Firefox proxy stack (desktops; default on)
 OPT_SA_SNORT="yes"            # Snort IDS (default on)
 OPT_SA_AIDE="no"              # AIDE file-integrity IDS (opt-in)
@@ -777,7 +777,7 @@ build_make_cmd() {
             [ "${OPT_SA_YUBIKEY}" != none ] && bf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
             # branding theme + security stack + monolithic kernel + egress VPN.
             # unaffiliated: NEVER --theme (a hard conflict), even though
-            # OPT_SA_THEME's persisted default is 'boogiepop'.
+            # OPT_SA_THEME's persisted default is 'dark'.
             { [ "${unaff}" = no ] && [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme ${OPT_SA_THEME}"
             [ "${OPT_SA_PROXY}" = no ]    && bf+=" --no-proxy-stack"
             [ "${OPT_SA_SNORT}" = no ]    && bf+=" --no-snort"

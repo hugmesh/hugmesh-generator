@@ -51,6 +51,10 @@ __all__ = ["ChoiceCard", "ChoiceCardGroup"]
 _RADIUS = 8.0
 _ICON_SIZE = 56
 _MIN_HEIGHT = 76
+#: ring of card fill the badge paints around itself so it seats cleanly on ANY
+#: backdrop (see :class:`_BadgeOverlay`). Matches the halo the icon pane used to
+#: punch out of its own clip, so the established seat geometry is unchanged.
+_BADGE_HALO = 2.5
 
 
 def _log_swallowed(where: str) -> None:
@@ -88,25 +92,86 @@ class _IconPane(QtWidgets.QWidget):
             p = QtGui.QPainter(self)
             try:
                 p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-                if self._card.isChecked():
-                    # On a min-height card the check badge shares this corner —
-                    # and children paint AFTER their parent, so without a clip
-                    # the icon's strokes would draw straight across the badge
-                    # circle. Punch a small halo seat out of the icon instead:
-                    # the badge overlays it cleanly, ringed by card fill.
-                    seat = self._card._badge_rect().adjusted(-2.5, -2.5, 2.5, 2.5)
-                    seat.translate(-self.x(), -self.y())
-                    if seat.intersects(QtCore.QRectF(self.rect())):
-                        area = QtGui.QPainterPath()
-                        area.addRect(QtCore.QRectF(self.rect()))
-                        hole = QtGui.QPainterPath()
-                        hole.addEllipse(seat)
-                        p.setClipPath(area.subtracted(hole))
+                # NOTE: this pane no longer makes room for the check badge. It used
+                # to punch a halo seat out of its own clip, but that co-operation was
+                # per-pane and could not be inherited by a swapped-in icon widget
+                # (set_icon_widget) — see _BadgeOverlay, which now seats the badge
+                # itself, above every sibling, for every pane there will ever be.
                 p.drawPixmap(0, 0, pm)
             finally:
                 p.end()
         except Exception:
             _log_swallowed("_IconPane.paintEvent")
+
+
+class _BadgeOverlay(QtWidgets.QWidget):
+    """The selected-state check badge — painted as the card's TOPMOST child.
+
+    Child widgets paint AFTER their parent, so a badge drawn in
+    :meth:`ChoiceCard._paint_card` is at the mercy of whatever occupies the icon
+    slot. :class:`_IconPane` used to co-operate by punching a badge-shaped hole out
+    of its own clip, but that co-operation lived in the pane, not in the card — so
+    :meth:`ChoiceCard.set_icon_widget`, which replaces the pane wholesale, could not
+    pass it on. The branding lane's theme swatches are wider than ``_ICON_SIZE`` and
+    fill their rect opaquely, and they overpainted roughly half of every checked
+    card's badge: the surviving crescent read as a HALF-drawn (indeterminate) tick —
+    on a wizard whose headline complaint was "half checked instead of unchecked".
+
+    So the badge stops depending on its neighbours entirely:
+
+    * it is a child widget kept on top of every sibling (see
+      :meth:`ChoiceCard.childEvent`), so it is the last thing painted no matter what
+      is in the icon slot now or later;
+    * it paints its OWN halo ring of card fill (``_BADGE_HALO``), so it seats itself
+      cleanly over a vector glyph, an opaque wallpaper swatch, or a pane nobody has
+      written yet — the seat is a property of the badge, not a favour from the pane.
+
+    Mouse-transparent and never a focus stop: the CARD takes the click, exactly like
+    the icon pane. Paints nothing at all while the card is unchecked.
+
+    Qt duality: guarded like every other override here — under PyQt6 an exception
+    escaping a paintEvent calls qFatal and kills the Studio.
+    """
+
+    def __init__(self, card: "ChoiceCard"):
+        super().__init__(card)
+        self._card = card
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def paintEvent(self, _ev) -> None:  # noqa: N802 (Qt override)
+        try:
+            card = self._card
+            if not card.isChecked():
+                return                      # unchecked: draw nothing, show nothing
+            pal = card.palette()
+            role = QtGui.QPalette.ColorRole
+            grp = (QtGui.QPalette.ColorGroup.Active if card.isEnabled()
+                   else QtGui.QPalette.ColorGroup.Disabled)
+            br = card._badge_rect().translated(-self.x(), -self.y())
+            p = QtGui.QPainter(self)
+            try:
+                p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+                p.setPen(Qt.PenStyle.NoPen)
+                # the seat: the card's own fill, so the badge reads on any backdrop
+                p.setBrush(QtGui.QBrush(card._card_fill()))
+                p.drawEllipse(br.adjusted(-_BADGE_HALO, -_BADGE_HALO,
+                                          _BADGE_HALO, _BADGE_HALO))
+                # non-colour selected cue: a check badge (shape, not just the border
+                # colour) — a filled disc plus the tick, both in the palette pair.
+                p.setBrush(QtGui.QBrush(pal.color(grp, role.Highlight)))
+                p.drawEllipse(br)
+                tick = QtGui.QPen(pal.color(grp, role.HighlightedText), 2.0)
+                tick.setCapStyle(Qt.PenCapStyle.RoundCap)
+                p.setPen(tick)
+                p.drawLine(QtCore.QPointF(br.left() + 3.5, br.center().y() + 0.5),
+                           QtCore.QPointF(br.center().x() - 0.5, br.bottom() - 4))
+                p.drawLine(QtCore.QPointF(br.center().x() - 0.5, br.bottom() - 4),
+                           QtCore.QPointF(br.right() - 3, br.top() + 4.5))
+            finally:
+                p.end()
+        except Exception:
+            _log_swallowed("_BadgeOverlay.paintEvent")
 
 
 class ChoiceCard(QtWidgets.QAbstractButton):
@@ -170,6 +235,11 @@ class ChoiceCard(QtWidgets.QAbstractButton):
         self._link_label: QtWidgets.QLabel | None = None
         self._link_url = ""
         self._link_text = ""
+        # created LAST and kept on top (childEvent) — the badge must outrank every
+        # sibling, including any pane a later set_icon_widget() installs.
+        self._badge = _BadgeOverlay(self)
+        self._sync_badge_geometry()
+        self._badge.raise_()
         self.toggled.connect(self._on_toggled)
 
     # ── optional external link (the Gentoo card) ────────────────────────────────
@@ -252,18 +322,75 @@ class ChoiceCard(QtWidgets.QAbstractButton):
     def _on_toggled(self, _checked: bool = False) -> None:
         try:
             self.update()
-            # the icon's badge-seat clip depends on checked state (see
-            # _IconPane.paintEvent) — repaint the child too, not just the card
+            # the badge only paints while checked, and the icon pane may key off
+            # the selection too — repaint the children, not just the card
+            self._update_badge()
             self._icon_pane.update()
         except Exception:
             _log_swallowed("ChoiceCard._on_toggled")
 
+    def _update_badge(self) -> None:
+        """Repaint the check badge. ``getattr`` guard: Qt delivers PaletteChange (and
+        can deliver EnabledChange) DURING ``super().__init__``, before this instance
+        owns ``_badge`` — the same hazard ``_refresh_link_html`` documents."""
+        badge = getattr(self, "_badge", None)
+        if badge is not None:
+            badge.update()
+
     def _badge_rect(self) -> QtCore.QRectF:
-        """The selected-state check badge, in CARD coordinates — the single
-        source both for :meth:`_paint_card` (which draws it) and for
-        :class:`_IconPane` (which punches a seat for it out of its clip)."""
+        """The selected-state check badge, in CARD coordinates — the single source
+        for :class:`_BadgeOverlay` (which draws it, plus its halo seat) and for the
+        tests that measure it."""
         r = QtCore.QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
         return QtCore.QRectF(r.right() - 22, r.top() + 6, 16, 16)
+
+    def _sync_badge_geometry(self) -> None:
+        """Park the overlay over :meth:`_badge_rect` plus its halo (and one pixel of
+        antialiasing slack). Cheap and idempotent — it is called from
+        :meth:`resizeEvent` AND from :meth:`_paint_card`, because Qt defers the
+        resize event of a widget that has never been shown (``WA_PendingResizeEvent``)
+        and the tests — like ``grab()`` on an offscreen card — paint without showing.
+
+        ``getattr`` guard: building the layout in ``__init__`` already resizes the
+        card, so Qt calls :meth:`resizeEvent` before this instance owns ``_badge``."""
+        badge = getattr(self, "_badge", None)
+        if badge is None:
+            return
+        pad = _BADGE_HALO + 1.0
+        want = self._badge_rect().adjusted(-pad, -pad, pad, pad).toAlignedRect()
+        if badge.geometry() != want:
+            badge.setGeometry(want)
+
+    def childEvent(self, ev) -> None:  # noqa: N802 (Qt override)
+        """Keep the check badge above every sibling.
+
+        A widget added later sits ON TOP of the stacking order, so without this any
+        future ``set_icon_widget`` (or any child added by a subclass) would paint over
+        the badge — the exact defect the branding lane's opaque theme swatches caused.
+        Restacking here makes "the badge is the last thing painted" a property of the
+        CARD rather than a rule each pane has to remember."""
+        try:
+            badge = getattr(self, "_badge", None)
+            if (badge is not None
+                    and ev.type() == QtCore.QEvent.Type.ChildAdded
+                    and ev.child() is not badge):
+                badge.raise_()
+        except Exception:
+            _log_swallowed("ChoiceCard.childEvent")
+        try:
+            super().childEvent(ev)
+        except Exception:
+            _log_swallowed("ChoiceCard.childEvent(super)")
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802 (Qt override)
+        try:
+            self._sync_badge_geometry()
+        except Exception:
+            _log_swallowed("ChoiceCard.resizeEvent")
+        try:
+            super().resizeEvent(ev)
+        except Exception:
+            _log_swallowed("ChoiceCard.resizeEvent(super)")
 
     # ── keyboard ────────────────────────────────────────────────────────────────
     def _move_selection(self, delta: int) -> bool:
@@ -309,14 +436,65 @@ class ChoiceCard(QtWidgets.QAbstractButton):
                              QtCore.QEvent.Type.FocusOut,
                              QtCore.QEvent.Type.EnabledChange):
                 self.update()
+                self._update_badge()      # its halo tracks the card's fill
             elif ev.type() == QtCore.QEvent.Type.PaletteChange:
                 # theme flipped under us: the baked anchor colour must re-derive
                 self._refresh_link_html()
                 self.update()
+                self._update_badge()
             return super().event(ev)
         except Exception:
             _log_swallowed("ChoiceCard.event")
             return True
+
+    # ── BRANDING-LANE HOOK (ask 6) — additive, nothing above changes ────────────
+    def set_icon_widget(self, widget: QtWidgets.QWidget) -> QtWidgets.QWidget:
+        """Swap the card's right-hand icon pane for ``widget``.
+
+        A theme card previews a WALLPAPER, not a concept, so its right-hand pane is a
+        live-painted colour swatch rather than one of :mod:`choice_icons`' vector
+        glyphs. ``widget`` is given the icon pane's contract explicitly here —
+        mouse-transparent (the CARD takes the click), never a focus stop, repainted
+        whenever the card's checked state changes (``_on_toggled`` updates
+        ``self._icon_pane``) — so selection, keyboard and accessibility behaviour are
+        untouched.
+
+        ``widget`` may be any size and may fill its rect opaquely: it is added AFTER
+        the check badge, and :meth:`childEvent` restacks the badge above it, so the
+        selected-state tick still paints last and still gets its halo seat. (It did
+        not always: an earlier revision of this hook let the theme swatches overpaint
+        half of every checked card's badge, and the crescent that survived read as a
+        half-drawn tick. The seat now belongs to :class:`_BadgeOverlay`, not to the
+        pane, precisely so a swapped pane cannot take it away.)
+        """
+        row = self.layout()
+        row.removeWidget(self._icon_pane)
+        self._icon_pane.setParent(None)
+        self._icon_pane.deleteLater()
+        widget.setParent(self)
+        widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        row.addWidget(widget, 0,
+                      Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._icon_pane = widget
+        self._badge.raise_()          # belt & braces alongside childEvent
+        return widget
+
+    def _card_fill(self) -> QtGui.QColor:
+        """The rounded rect's fill for the card's CURRENT state — the one place the
+        four fills are decided, shared with :class:`_BadgeOverlay`, which rings the
+        badge with it so the seat can never drift from the card underneath it."""
+        pal = self.palette()
+        role = QtGui.QPalette.ColorRole
+        grp = (QtGui.QPalette.ColorGroup.Active if self.isEnabled()
+               else QtGui.QPalette.ColorGroup.Disabled)
+        base = pal.color(grp, role.Window)
+        if not self.isEnabled():
+            return base
+        if self.isChecked():
+            return self._mix(base, pal.color(grp, role.Highlight), 0.16)
+        text = pal.color(grp, role.WindowText)
+        return self._mix(base, text, 0.08 if self.underMouse() else 0.04)
 
     @staticmethod
     def _mix(a: QtGui.QColor, b: QtGui.QColor, t: float) -> QtGui.QColor:
@@ -331,6 +509,10 @@ class ChoiceCard(QtWidgets.QAbstractButton):
             _log_swallowed("ChoiceCard.paintEvent")
 
     def _paint_card(self) -> None:
+        # the overlay's geometry must be right before it paints (children paint
+        # after us, and a never-shown card gets no resize event) — see
+        # _sync_badge_geometry. Cheap: one QRect compare on the common path.
+        self._sync_badge_geometry()
         p = QtGui.QPainter(self)
         try:
             p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
@@ -344,7 +526,7 @@ class ChoiceCard(QtWidgets.QAbstractButton):
             checked = self.isChecked()
             hover = self.isEnabled() and self.underMouse()
 
-            fill = self._mix(base, text, 0.04)
+            fill = self._card_fill()
             border = self._mix(base, text, 0.35)
             width = 1.2
             style = Qt.PenStyle.SolidLine
@@ -352,14 +534,11 @@ class ChoiceCard(QtWidgets.QAbstractButton):
                 # non-colour disabled cue: dashed outline (plus the platform's
                 # greyed child text)
                 style = Qt.PenStyle.DashLine
-                fill = base
                 border = self._mix(base, text, 0.25)
             elif checked:
-                fill = self._mix(base, hi, 0.16)
                 border = hi
                 width = 2.6
             elif hover:
-                fill = self._mix(base, text, 0.08)
                 border = self._mix(base, text, 0.55)
                 width = 1.8
             pen = QtGui.QPen(border, width, style)
@@ -368,20 +547,9 @@ class ChoiceCard(QtWidgets.QAbstractButton):
             r = QtCore.QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
             p.drawRoundedRect(r, _RADIUS, _RADIUS)
 
-            if checked:
-                # non-colour selected cue: a check badge in the top-right corner
-                # (shape, not just the border colour)
-                br = self._badge_rect()
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QtGui.QBrush(hi))
-                p.drawEllipse(br)
-                tick = QtGui.QPen(pal.color(grp, role.HighlightedText), 2.0)
-                tick.setCapStyle(Qt.PenCapStyle.RoundCap)
-                p.setPen(tick)
-                p.drawLine(QtCore.QPointF(br.left() + 3.5, br.center().y() + 0.5),
-                           QtCore.QPointF(br.center().x() - 0.5, br.bottom() - 4))
-                p.drawLine(QtCore.QPointF(br.center().x() - 0.5, br.bottom() - 4),
-                           QtCore.QPointF(br.right() - 3, br.top() + 4.5))
+            # the selected-state check badge is NOT drawn here: it is drawn by
+            # _BadgeOverlay, the card's topmost child, because children paint after
+            # their parent and an icon pane would otherwise overpaint it.
 
             if self.hasFocus():
                 # focus ring: dotted INNER outline in the text colour — visibly

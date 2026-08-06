@@ -64,7 +64,7 @@ reset_opts() {
     OPT_FRITE_BOARD=la-frite OPT_FRITE_FLAVOR=both OPT_FRITE_DESKTOP=light
     OPT_RPI_BOARD=rpi5
     OPT_SA_GPU=all-free OPT_SA_STEAM=native OPT_SA_MEDIA=yes OPT_SA_USER=snap
-    OPT_SA_KEYFILE=none OPT_SA_YUBIKEY=none OPT_SA_THEME=boogiepop OPT_SA_PROXY=yes
+    OPT_SA_KEYFILE=none OPT_SA_YUBIKEY=none OPT_SA_THEME=dark OPT_SA_PROXY=yes
     OPT_SA_SNORT=yes OPT_SA_AIDE=no OPT_SA_KBUILTIN=no OPT_SA_EGRESS=""
     OPT_SA_MEDIA_LABEL="" OPT_ROOT_LOGIN=no SA_LOCAL_PASS="" SA_LUKS_PASS=""
     ARM_LOCAL_PASS="" ARM_LUKS_PASS=""
@@ -228,17 +228,17 @@ assert_not "cluster: no home flags"     "--home-mode"
 # The role PRESETS the neutral identity builder-side and HARD-ERRORS on any
 # brand/branding/bundle-source/seed-code flag, so the menu channel must emit the
 # x86-standalone-unaffiliated target + the generic desktop options ONLY. The trap:
-# OPT_SA_THEME's persisted default is 'boogiepop' (reset_opts leaves it there) and
+# OPT_SA_THEME's persisted default is 'dark' (reset_opts leaves it there) and
 # a branded run can leave OPT_BRAND/OPT_BR_*/OPT_HOME_SEED behind in menu.conf —
 # none of them may leak into this target's argv.
-reset_opts   # note: OPT_SA_THEME stays at its boogiepop default on purpose
+reset_opts   # note: OPT_SA_THEME stays at its dark default on purpose
 OPT_SA_USER=alice OPT_SA_GPU=nvidia OPT_SA_KEYFILE=boot OPT_SA_YUBIKEY=login
 OPT_HOME_MODE=create OPT_HOME_SEED=stack        # seed left over from a branded run
 OPT_BRAND=acme OPT_BR_WALLPAPER=/tmp/wall.png   # brand/branding leftovers too
 OPT_EXTRA_FLAGS="--compress"
 build_make_cmd x86-standalone-unaffiliated "unaff" 1
 assert_eq  "unaff: make target"         "${RUN_MAKE[0]}" "x86-standalone-unaffiliated"
-assert_not "unaff: no --theme (boogiepop default suppressed)" "--theme"
+assert_not "unaff: no --theme (dark default suppressed)" "--theme"
 assert_not "unaff: no BRAND= profile"   "BRAND="
 assert_not "unaff: no --brand"          "--brand"
 assert_not "unaff: no --bundle-source"  "--bundle-source"
@@ -254,7 +254,7 @@ assert_one_flags "unaff"
 # the branded thick sibling is UNCHANGED by the gating: the very same options
 # still emit --theme/--home-seed-code/BRAND= there
 build_make_cmd x86-standalone-thick "thick sibling" 1
-assert_has "thick sibling: theme intact" "--theme boogiepop"
+assert_has "thick sibling: theme intact" "--theme dark"
 assert_has "thick sibling: seed intact" "--home-seed-code stack"
 assert_has "thick sibling: brand intact" "BRAND=acme"
 assert_has "thick sibling: wallpaper intact" "--wallpaper /tmp/wall.png"

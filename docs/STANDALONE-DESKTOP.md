@@ -126,7 +126,7 @@ backgrounds / logo / accent / color scheme), home provisioning
 without dropping to the shell.
 
 One menu default to know about: **branded** standalone builds from the ncurses
-menu start with `--theme boogiepop` preselected (the persisted `OPT_SA_THEME`
+menu start with `--theme dark` preselected (the persisted `OPT_SA_THEME`
 default in `scripts/build-menu.sh`; pick **None** under "Branding theme" for
 the stock look), while the `standalone-unaffiliated` entry suppresses all
 theming (`--theme` is a hard conflict there, so the menu hides the option and
@@ -413,7 +413,7 @@ and the boot → login → desktop chain stays visually consistent.
 
 | Flag | Effect |
 |------|--------|
-| `--theme NAME` | Apply a bundled preset from `specs-x86/branding/themes/NAME/` (ships **`boogiepop`**). |
+| `--theme NAME` | Apply a premade preset from `specs-x86/branding/themes/NAME/`. Exactly four ship: **`light`**, **`dark`**, **`purple`**, **`grey`** — see [Premade themes](#premade-themes). |
 | `--branding-dir DIR` | Apply a whole brand directory (overlays the preset). |
 | `--wallpaper FILE` | Desktop wallpaper (also the fallback for the GRUB + login backgrounds). |
 | `--grub-background FILE` | GRUB boot-menu background. |
@@ -429,19 +429,55 @@ Precedence (later wins): `--theme` → `--branding-dir` → individual file flag
 optional; `wallpaper.png` is the fallback for the two backgrounds).
 
 No build channel applies a theme by itself **except the ncurses menu**: `make
-menu` defaults branded standalone builds to `--theme boogiepop` — the dark
-Boogiepop example theme (`specs-x86/branding/themes/boogiepop/`) — via the
+menu` defaults branded standalone builds to `--theme dark`
+(`specs-x86/branding/themes/dark/`) — via the
 persisted `OPT_SA_THEME` default in `scripts/build-menu.sh` (pick **None**
 under "Branding theme" for the stock look). The direct channels bake no theme
 unless you pass one explicitly: `make x86-standalone` / `make
-x86-standalone-thick STANDALONE_FLAGS='--theme boogiepop'`, or a fleet run
+x86-standalone-thick STANDALONE_FLAGS='--theme dark'`, or a fleet run
 (`scripts/build-all-roles.sh`; `X86_STANDALONE=1` appends the three standalone
 variants to the role set, `X86_STANDALONE_ONLY=1` builds only them) with
-`--theme boogiepop` in its pass-through builder args. The
+`--theme purple` in its pass-through builder args. The
 `standalone-unaffiliated` role suppresses theming entirely: any `--theme` is a
 hard conflict, the menu never emits its persisted theme default for it, and a
 branded fleet run skips the unaffiliated role loudly (build it separately with
 `make x86-standalone-unaffiliated`).
+
+### Premade themes
+
+`--theme NAME` accepts **exactly four** names, and no others:
+
+| Theme | Look | Accent |
+|---|---|---|
+| `light` | Bright pale blue-grey gradient | `#3f5b8c` |
+| `dark`   | Near-black to slate gradient | `#4d7fd6` |
+| `purple` | Dark violet gradient | `#a678f0` |
+| `grey`   | Neutral graphite gradient | `#8f98a3` |
+
+Each lives in `specs-x86/branding/themes/<name>/` and carries `brand.conf`
+(`ACCENT_COLOR` + `COLOR_SCHEME_NAME`), `wallpaper.png` (1920x1080 — also the
+fallback source for the GRUB and greeter backgrounds), `logo.png` (256x256 RGBA,
+picked up by the Calamares branding component and the greeter) and
+`colors.colors` (the KDE colour scheme). Anything else you want is the
+`--branding-dir` / individual-file path — the premade set is deliberately closed.
+
+**The assets are generated, never pasted.** `scripts/gen-branding-themes.py`
+renders every file from the colour table in
+`studio/hugmesh_studio/core/branding_themes.py` using only the Python standard
+library — no network, no downloaded art, no third-party artwork, no binary blob
+checked in by hand. Re-running it reproduces the committed files byte for byte;
+`scripts/gen-branding-themes.py --check` verifies that, and the studio suite runs
+that check as a gate.
+
+That single table is also what the Studio wizard's theme cards paint their preview
+swatch from, and `assert_theme_set_agrees()` in the same module pins
+
+> offered by the GUI == the directories on disk == what the builder accepts
+
+so a theme can never be offered that `build-x86-host-stage4.sh` would reject with
+`unknown --theme '<name>'`, nor shipped on disk without being offered. Adding or
+removing a theme therefore means editing that table **and** re-running the
+generator — the studio gate fails on either half alone.
 
 ### Re-theming on the running desktop
 

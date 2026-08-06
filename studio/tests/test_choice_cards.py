@@ -395,6 +395,114 @@ def test_selected_badge_sits_in_a_clean_seat_over_the_icon(qapp):
     card.deleteLater()
 
 
+class _OpaquePane(QtWidgets.QWidget):
+    """The worst case a ``set_icon_widget`` caller can hand the card: WIDER than
+    ``_ICON_SIZE`` and filling its whole rect with a flat opaque colour. This is what
+    the branding lane's theme swatches are, and it is what overpainted the badge."""
+
+    def __init__(self, colour="#7a3fb0"):
+        super().__init__()
+        self._colour = QtGui.QColor(colour)
+        self.setFixedSize(96, 58)
+
+    def paintEvent(self, _ev):                       # noqa: N802 (Qt override)
+        p = QtGui.QPainter(self)
+        try:
+            p.fillRect(self.rect(), self._colour)
+        finally:
+            p.end()
+
+
+def _badge_ink(card) -> tuple[int, int]:
+    """(badge-coloured pixels, sampled pixels) inside the check badge's circle.
+
+    "Badge-coloured" = near palette Highlight (the disc) or HighlightedText (the
+    tick) — i.e. the badge itself, as opposed to whatever painted over it."""
+    img = card.grab().toImage()
+    pal = card.palette()
+    role = QtGui.QPalette.ColorRole
+    refs = (pal.color(role.Highlight), pal.color(role.HighlightedText))
+    br = card._badge_rect()
+    cx, cy, rad = br.center().x(), br.center().y(), br.width() / 2.0 - 1.0
+    ink = seen = 0
+    for y in range(int(br.top()), int(br.bottom()) + 1):
+        for x in range(int(br.left()), int(br.right()) + 1):
+            if (x - cx) ** 2 + (y - cy) ** 2 > rad * rad:
+                continue
+            seen += 1
+            c = img.pixelColor(x, y)
+            if any(abs(c.red() - r.red()) + abs(c.green() - r.green())
+                   + abs(c.blue() - r.blue()) <= 60 for r in refs):
+                ink += 1
+    return ink, seen
+
+
+def test_badge_survives_an_opaque_swapped_icon_pane(qapp):
+    """Regression (branding lane): children paint AFTER their parent, so a badge
+    drawn by the card was at the mercy of the icon slot. ``set_icon_widget`` replaced
+    the pane that co-operated (it punched a badge-shaped hole in its own clip) with
+    opaque theme swatches that did not, and ~half of every checked card's tick was
+    overpainted: 57/156 badge pixels vs the stock pane's 114/156, a crescent that
+    reads as a HALF-drawn check. The badge now owns its seat, so a swapped pane —
+    wider than the icon box and fully opaque — must leave it byte-for-byte intact."""
+    stock = cc.ChoiceCard("Stock", "keeps the built-in icon pane", "desktop")
+    stock.resize(360, 76)                            # min height: the geometry that collides
+    stock.setChecked(True)
+    swapped = cc.ChoiceCard("Swapped", "opaque pane installed over the icon slot", "desktop")
+    swapped.set_icon_widget(_OpaquePane())
+    swapped.resize(360, 76)
+    swapped.setChecked(True)
+    qapp.processEvents()
+
+    stock_ink, seen = _badge_ink(stock)
+    swapped_ink, seen2 = _badge_ink(swapped)
+    assert seen == seen2 and seen >= 120             # the probe really sampled the badge
+    # the badge is drawn identically over its own opaque halo, so the two must MATCH,
+    # not merely "be present" — a partially occluded badge scored 57 where this is 114.
+    assert swapped_ink == stock_ink, (
+        f"swapped pane ate the badge: {swapped_ink}/{seen} vs stock {stock_ink}/{seen}")
+    assert swapped_ink > seen * 0.6                  # and the badge really is drawn
+    # the opaque pane is genuinely over the badge: it is wider than the icon box and
+    # its rect covers the badge centre (so the assertion above is not vacuous).
+    pane = swapped._icon_pane
+    assert pane.width() > cc._ICON_SIZE
+    assert pane.geometry().contains(int(stock._badge_rect().center().x()),
+                                    int(stock._badge_rect().center().y()))
+    for c in (stock, swapped):
+        c.hide()
+        c.deleteLater()
+
+
+def test_badge_is_the_topmost_child_whatever_is_added_later(qapp):
+    """Structural half of the same defect: stacking order, not pixels. Any child added
+    after the badge (a swapped icon pane, a subclass's own widget) would paint on top
+    of it — so the card restacks the badge in ``childEvent``, making "the badge paints
+    last" a property of the CARD rather than a favour each pane must remember."""
+    card = cc.ChoiceCard("Restack", "desc", "desktop")
+    kids = [w for w in card.children() if isinstance(w, QtWidgets.QWidget)]
+    assert kids[-1] is card._badge                   # last child == topmost
+    card.set_icon_widget(_OpaquePane())
+    kids = [w for w in card.children() if isinstance(w, QtWidgets.QWidget)]
+    assert kids[-1] is card._badge, "a later child outranked the badge"
+    # and a widget parented directly (not via set_icon_widget) is restacked too
+    stray = QtWidgets.QLabel("late", card)
+    kids = [w for w in card.children() if isinstance(w, QtWidgets.QWidget)]
+    assert kids[-1] is card._badge, "a stray late child outranked the badge"
+    assert stray in kids
+    card.deleteLater()
+
+
+def test_unchecked_card_paints_no_badge(qapp):
+    """The overlay is always present; it must paint NOTHING while unchecked, or every
+    card would read as selected — the inverse of the bug it fixes."""
+    card = cc.ChoiceCard("Quiet", "desc", "desktop")
+    card.resize(360, 76)
+    ink, seen = _badge_ink(card)
+    assert seen >= 120
+    assert ink == 0, f"unchecked card painted {ink}/{seen} badge pixels"
+    card.deleteLater()
+
+
 def _theme_palette(dark: bool) -> QtGui.QPalette:
     """A full theme palette that deliberately does NOT set the Link role — like
     real platform dark themes, which leave it at Qt's pure-#0000ff default."""

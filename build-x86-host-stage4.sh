@@ -422,7 +422,8 @@ BUNDLE_SOURCE=""
 # ── Desktop branding (boot screen / login / wallpaper / colours) ─────────────
 # Composable across ALL desktop generations (standalone or tailnet client; cli,
 # ncurses or graphical install). A --theme NAME pulls a bundled preset from
-# specs-x86/branding/themes/NAME/ (e.g. boogiepop); --branding-dir DIR supplies a
+# specs-x86/branding/themes/NAME/ (light | dark | purple | grey — the four premade
+# themes scripts/gen-branding-themes.py renders); --branding-dir DIR supplies a
 # whole brand dir; the individual --wallpaper/--grub-background/--login-background/
 # --brand-logo/--accent-color/--color-scheme flags override single pieces on top.
 # Everything is baked by hugmesh-branding at build time and stays user-changeable
@@ -1799,6 +1800,37 @@ if [ -n "${PACKAGES_DROP}" ]; then
             [ "${_d}" = "${_m}" ] && { err "refusing to --packages-drop mandatory-payload atom '${_d}' — tier-1 essential (the image would fail its payload assert)"; exit 1; }
         done
     done
+fi
+
+# ── BRANDING LANE (ask 6): validate --theme HERE, not 2100 lines down ──────────
+# The preset is resolved to ${SPECS_DIR}/branding/themes/<name> and `cp -r`'d at the
+# branding step far below, and that was the ONLY place the name was ever checked.
+# Two consequences this closes, in the same spirit as the package-atom floor above
+# (validate at the boundary, before --print-plan and before any mutation):
+#
+#  1) --print-plan — the resolver EVERY channel preflights with (Studio
+#     --print-command, tests/build-matrix, the ncurses menu's dry run) — exited 0 on
+#     a theme the build would later hard-error on. The validator and the build
+#     disagreed about which themes exist, which is exactly the "offered set != the
+#     accepted set" defect the Studio's assert_theme_set_agrees() exists to prevent
+#     one layer up. Now both ends resolve the same directory, so the accepted set IS
+#     the directory listing at BOTH points and the equality holds end to end.
+#  2) The name is concatenated straight into a path, so `--theme ../..` names a
+#     directory that really exists, passes `[ -d ]`, and `cp -r`s that whole tree
+#     into the image's branding dir. A bare-name allowlist makes that unreachable.
+#
+# Deliberately NOT a hardcoded list of the four: the builder's accepted set must stay
+# "whatever directories are shipped", or adding a theme would mean editing the
+# builder and the equality would gain a term that can silently drift.
+if [ -n "${BRANDING_THEME}" ]; then
+    case "${BRANDING_THEME}" in
+        *[!A-Za-z0-9._-]*|.*|*..*)
+            err "invalid --theme '${BRANDING_THEME}' — want a bare preset name (e.g. dark), not a path"
+            exit 1 ;;
+    esac
+    [ -d "${SPECS_DIR}/branding/themes/${BRANDING_THEME}" ] || {
+        err "unknown --theme '${BRANDING_THEME}' (looked in ${SPECS_DIR}/branding/themes/${BRANDING_THEME})"
+        exit 1; }
 fi
 
 # ── --print-plan: emit the resolved plan and exit BEFORE ANY mutation ──────────

@@ -208,7 +208,7 @@ def test_materialize_clears_desktop_fields_for_node():
     """A cluster node (omnibus) must never carry stale theming/home-provisioning values
     that a desktop base config picked up (belt & braces I4)."""
     base = ImageConfig(mode="mesh", role="omnibus", platform="x86",
-                       theme="boogiepop", wallpaper="/x.png", home_mode="adopt")
+                       theme="dark", wallpaper="/x.png", home_mode="adopt")
     wl = WorklistConfig(base=base, entries=[WorklistEntry(role="omnibus", platform="x86")])
     _e, cfg = wl.materialize()[0]
     assert cfg.theme == "" and cfg.wallpaper == ""

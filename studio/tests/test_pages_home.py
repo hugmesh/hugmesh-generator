@@ -93,19 +93,21 @@ def test_branding_dir_scheme_grub_theme_collect_on_x86(wiz):
     page = advance_to(wiz, wizard_mod.BrandingPage)
     assert page.form.isEnabled()
     page.rb_custom.setChecked(True)          # custom-branding channel (spec 2)
-    assert page.custom_group.isEnabled() and not page.theme.isEnabled()
+    # ask 6: the premade picker is a card group in a greyable container now,
+    # not a combo — `theme_box` is what the either/or enables/disables.
+    assert page.custom_group.isEnabled() and not page.theme_box.isEnabled()
     page.fields["branding_dir"].setText("/tmp/brand-tree")
     page.fields["grub_theme"].setText("/tmp/grub-theme")
-    page.fields["color_scheme"].setText("/tmp/Boogiepop.colors")
+    page.fields["color_scheme"].setText("/tmp/Acme.colors")
     advance_to(wiz, wizard_mod.NetworkPage)
     c = wiz.cfg
     assert c.branding_dir == "/tmp/brand-tree"
     assert c.grub_theme == "/tmp/grub-theme"
-    assert c.color_scheme == "/tmp/Boogiepop.colors"
+    assert c.color_scheme == "/tmp/Acme.colors"
     pairs = flag_pairs(c.to_cli_args())
     assert ("--branding-dir", "/tmp/brand-tree") in pairs
     assert ("--grub-theme", "/tmp/grub-theme") in pairs
-    assert ("--color-scheme", "/tmp/Boogiepop.colors") in pairs
+    assert ("--color-scheme", "/tmp/Acme.colors") in pairs
 
 
 def test_branding_dir_scheme_grub_theme_grey_and_clear_on_arm(wiz):
@@ -116,7 +118,7 @@ def test_branding_dir_scheme_grub_theme_grey_and_clear_on_arm(wiz):
     c = wiz.cfg
     c.mode = "cloud"; c.role = "rpi5-desktop"; c.platform = "rpi5"
     c.branding_dir = "/tmp/brand-tree"; c.grub_theme = "/tmp/grub-theme"
-    c.color_scheme = "/tmp/Boogiepop.colors"
+    c.color_scheme = "/tmp/Acme.colors"
     wiz.restart()
     page = advance_to(wiz, wizard_mod.BrandingPage)
     assert not page.form.isEnabled()
@@ -140,7 +142,7 @@ def test_branding_dir_scheme_grub_theme_clear_for_unaffiliated(wiz):
     the flow satisfies them moved."""
     c = wiz.cfg
     c.branding_dir = "/tmp/brand-tree"; c.grub_theme = "/tmp/grub-theme"
-    c.color_scheme = "/tmp/Boogiepop.colors"
+    c.color_scheme = "/tmp/Acme.colors"
     pick_role(wiz, UNAFFILIATED_ROLE)
     page = advance_to(wiz, wizard_mod.NetworkPage)
     assert not isinstance(page, wizard_mod.BrandingPage)
@@ -161,20 +163,20 @@ def test_branding_dir_scheme_grub_theme_clear_for_unaffiliated(wiz):
 def test_branding_preset_channel_blanks_custom_fields(qapp):
     """spec 2: the premade-theme channel commits the theme and BLANKS the eight custom
     fields — a stray value on the disabled custom side can never ride along."""
-    cfg = ImageConfig(theme="boogiepop")
+    cfg = ImageConfig(theme="dark")
     page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
     assert page.rb_preset.isChecked()          # theme-only load selects the preset channel
-    assert page.theme.isEnabled() and not page.custom_group.isEnabled()
+    assert page.theme_box.isEnabled() and not page.custom_group.isEnabled()
     page.fields["branding_dir"].setText("/tmp/leak")   # stray value on the disabled side
     assert page.validatePage()
-    assert cfg.theme == "boogiepop" and cfg.branding_dir == ""
+    assert cfg.theme == "dark" and cfg.branding_dir == ""
 
 
 def test_branding_both_set_resolves_custom_wins(qapp):
     """spec 2: a saved config with BOTH a premade theme AND custom assets → custom
     wins, the theme is cleared, and the reconciliation warning is shown."""
-    cfg = ImageConfig(theme="boogiepop", wallpaper="/tmp/w.png")
+    cfg = ImageConfig(theme="dark", wallpaper="/tmp/w.png")
     page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
     assert page.rb_custom.isChecked()          # custom wins the either/or

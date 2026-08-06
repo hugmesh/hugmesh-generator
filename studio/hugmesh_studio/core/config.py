@@ -35,6 +35,7 @@ from typing import Any
 
 import sys
 
+from .branding_themes import PREMADE_THEMES, is_valid_theme
 from .host_resources import default_jobs
 from .validate import (
     IdentityValidationError,
@@ -1985,6 +1986,40 @@ class ImageConfig:
         validate_org(self.org)
         validate_brand_title(self.brand_title)
         validate_accent_color(self.accent_color)
+        # ── BRANDING LANE (ask 6): the premade theme NAME is a closed set ──────
+        # `theme` is not free text: the builder concatenates it into
+        # ${SPECS_DIR}/branding/themes/<name> and `cp -r`s that directory's contents
+        # into the image's branding dir. Two things follow, and neither was enforced
+        # anywhere outside the wizard:
+        #   * a name with no directory behind it (a typo, a theme deleted since the
+        #     config was saved, the BRAND name the old combo used to append) emits a
+        #     --theme the build hard-errors on — but only ~2100 lines into the run,
+        #     long after --print-plan said the plan was fine;
+        #   * a name containing a path (`..`, `/`) resolves to a directory that DOES
+        #     exist, passes the builder's `[ -d ]`, and `cp -r`s an arbitrary tree
+        #     into the image.
+        # The wizard closed its own half (the picker has no free-text path), but the
+        # HEADLESS channel — a hand-written or hand-edited config JSON straight into
+        # --print-command — had no check at all. Fail closed HERE, at the same
+        # boundary every other enumerated field (idp, login_font) is checked, so the
+        # offered set and the emitted set are the same four on every channel.
+        #
+        # SCOPED TO THE PLATFORMS THAT ACTUALLY EMIT IT. `theme` is x86-only
+        # (PLATFORM_FIELD_SUPPORT); _rpi5_args/_jetson_args/_orangepi*_args never
+        # write --theme, and strip_platform_unsupported clears the value outright, so
+        # on those platforms there is no builder to fail closed against and nothing to
+        # traverse a path into. Checking there anyway refused to emit ANY command for
+        # a config every ARM builder had handled fine — and it would have hit EVERY
+        # config saved before this branch, since the one theme that used to ship
+        # (see branding_themes.REMOVED_THEMES) is not in the new set. An x86-only
+        # field is dropped silently off-x86; that is the rule every other x86-only
+        # field follows, and the guard now follows it too.
+        if (self.platform or "x86") in PLATFORM_FIELD_SUPPORT.get("theme", ()) \
+                and not is_valid_theme(self.theme):
+            raise IdentityValidationError(
+                f"unknown theme: {self.theme!r} — the premade set is exactly "
+                f"{', '.join(PREMADE_THEMES)} (or \"\" for the stock look). "
+                "Use branding_dir / wallpaper / ... for your own assets.")
         # web login theme: colours keep the strict #RRGGBB-or-empty shape (they flow
         # into SNAP_THEME_CSS / brands yaml); a font preset must be a known name (a
         # typo here would silently fall back at render time — fail closed instead);

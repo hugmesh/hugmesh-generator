@@ -475,11 +475,11 @@ fi
 
 # ── UNAFFILIATED MENU→MAKE threading probe ───────────────────────────────────
 # The unaffiliated desktop must thread --role standalone-unaffiliated into the
-# recipe and must NOT emit --theme even with the menu's persisted 'boogiepop'
+# recipe and must NOT emit --theme even with the menu's persisted 'dark'
 # theme default in place (any branding flag is a builder HARD conflict there —
 # the role presets the neutral identity itself).
 reset_opts
-OPT_SA_THEME=boogiepop   # the default a branded standalone run leaves persisted
+OPT_SA_THEME=dark   # the default a branded standalone run leaves persisted
 build_make_cmd x86-standalone-unaffiliated "unaff-thread-probe" 1
 if recipe="$(make -n "${RUN_MAKE[@]}" NATIVE=1 2>&1)"; then
     miss=""
@@ -1387,7 +1387,16 @@ run_negative_checks() {
     expect_fail "x86: standalone-unaffiliated + contradictory --desktop thin" \
         ./build-x86-host-stage4.sh --role standalone-unaffiliated --desktop thin --print-plan
     expect_fail "x86: unaffiliated role + --theme conflicts" \
-        ./build-x86-host-stage4.sh --role standalone-unaffiliated --theme boogiepop --print-plan
+        ./build-x86-host-stage4.sh --role standalone-unaffiliated --theme dark --print-plan
+    # BRANDING LANE (ask 6): --print-plan is the validator every channel preflights
+    # with, so it must accept EXACTLY the themes the build accepts. It used to exit 0
+    # on any string — the theme was only resolved ~2100 lines later, at the branding
+    # step. And `[ -d ]` alone cannot stop a traversal: the name is concatenated into
+    # ${SPECS_DIR}/branding/themes/<name>, so '../..' names a real directory.
+    expect_fail "x86: unknown --theme rejected at --print-plan (not 2100 lines later)" \
+        ./build-x86-host-stage4.sh --role standalone-thick --theme not-a-theme --print-plan
+    expect_fail "x86: --theme path traversal rejected" \
+        ./build-x86-host-stage4.sh --role standalone-thick --theme ../.. --print-plan
     expect_fail "x86: --unaffiliated on a cluster role" \
         ./build-x86-host-stage4.sh --role pki --unaffiliated --print-plan
     # package deltas (WS-BUILDER): a malformed atom must be rejected at the builder
@@ -1463,17 +1472,30 @@ run_gui_gating_checks() {
     gui_gate "orangepi5: cluster plane is x86+rpi5-only" \
         '{"platform":"orangepi5","role":"orangepi5","mode":"cloud","env":"test","release_state":"public","games_domain":"games.acme.example"}' \
         '--release-state' '--games-domain'
+    # BRANDING LANE (ask 6), the OTHER direction: `theme` is x86-only, so an ARM
+    # config still carrying a name the premade set no longer has must be DROPPED, not
+    # rejected. A first cut of the closed-set guard validated the name before
+    # to_cli_args() had even picked a platform arg-builder, so --print-command exited
+    # non-zero here — for a config every ARM builder had handled fine, and for every
+    # config saved before the four themes landed. That is the crash this whole helper
+    # exists to forbid ("gating must DROP, not crash").
+    gui_gate "rpi5: a theme name the set no longer has is DROPPED, not a hard error" \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","theme":"a-theme-that-no-longer-ships"}' \
+        '--theme'
+    gui_gate "orangepi5: a path-shaped theme is DROPPED off-x86 (no --theme to traverse)" \
+        '{"platform":"orangepi5","role":"orangepi5","mode":"cloud","env":"test","theme":"../.."}' \
+        '--theme'
     gui_gate "orangepizero2: branding assets are x86-only" \
-        '{"platform":"orangepizero2","role":"orangepizero2","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
+        '{"platform":"orangepizero2","role":"orangepizero2","mode":"cloud","env":"test","theme":"dark","wallpaper":"/tmp/w.png","brand_locked":true}' \
         '--theme' '--wallpaper' '--brand-locked'
     gui_gate "orangepizero2w: branding assets are x86-only" \
-        '{"platform":"orangepizero2w","role":"orangepizero2w","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
+        '{"platform":"orangepizero2w","role":"orangepizero2w","mode":"cloud","env":"test","theme":"dark","wallpaper":"/tmp/w.png","brand_locked":true}' \
         '--theme' '--wallpaper' '--brand-locked'
     gui_gate "orangepizero3: branding assets are x86-only" \
-        '{"platform":"orangepizero3","role":"orangepizero3","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
+        '{"platform":"orangepizero3","role":"orangepizero3","mode":"cloud","env":"test","theme":"dark","wallpaper":"/tmp/w.png","brand_locked":true}' \
         '--theme' '--wallpaper' '--brand-locked'
     gui_gate "orangepi3-lts: branding assets are x86-only" \
-        '{"platform":"orangepi3-lts","role":"orangepi3-lts","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
+        '{"platform":"orangepi3-lts","role":"orangepi3-lts","mode":"cloud","env":"test","theme":"dark","wallpaper":"/tmp/w.png","brand_locked":true}' \
         '--theme' '--wallpaper' '--brand-locked'
     # jetson encrypt-root/standalone: HARD-FAIL, not silent drop — the Orin's
     # single boot+root partition cannot boot LUKS2-encrypted (by design).

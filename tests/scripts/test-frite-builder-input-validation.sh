@@ -89,7 +89,7 @@ if _runval; then ok "ACCEPT all legitimate defaults"; else bad "legitimate defau
 accepts "user snap"     DEFAULT_USER  "snap"
 accepts "host generic"  HOSTNAME      "gentoo-frite"
 accepts "cpu native"    RPI_CPU       "native"
-accepts "domain prod"   CLUSTER_DOMAIN "boogiepop.example.org"
+accepts "domain prod"   CLUSTER_DOMAIN "hugmesh.example.org"
 accepts "title custom"  BRAND_TITLE   "Acme Edge OS"
 
 # Injection payloads from the findings must all be rejected, fail-closed.

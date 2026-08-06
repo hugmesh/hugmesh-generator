@@ -135,7 +135,7 @@ def test_committing_the_unaffiliated_role_blanks_every_branding_field(wiz):
     set a theme and then switched to unaffiliated would carry it into a ValueError."""
     from hugmesh_studio.gui.pages.role import RolePage
     page = _page(wiz, RolePage)
-    wiz.cfg = _unaff_cfg(theme="boogiepop", wallpaper="/tmp/w.png",
+    wiz.cfg = _unaff_cfg(theme="dark", wallpaper="/tmp/w.png",
                          grub_theme="/tmp/g", accent_color="#ff0000",
                          brand_logo="/tmp/l.png", brand_locked=True)
     page.initializePage()
@@ -155,10 +155,10 @@ def test_a_branded_role_keeps_its_branding(wiz):
     silently wipe every branded desktop's theme."""
     from hugmesh_studio.gui.pages.role import RolePage
     page = _page(wiz, RolePage)
-    wiz.cfg = _branded_cfg(theme="boogiepop")
+    wiz.cfg = _branded_cfg(theme="dark")
     page.initializePage()
     page.validatePage()
-    assert wiz.cfg.theme == "boogiepop"
+    assert wiz.cfg.theme == "dark"
 
 
 # ── the NetworkPage's cluster-services picker ────────────────────────────────────────

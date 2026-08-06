@@ -3,24 +3,49 @@
 * DESKTOP assets (premade theme XOR custom boot/login/wallpaper/GRUB/accent, plus
   the brand lock): x86-only emission, greys+clears on node images and in mesh mode
   (``branding_allowed``) and on the unaffiliated role (a builder hard-conflict).
-  The premade combo and the eight custom fields are an exclusive either/or so the
+  The premade picker and the eight custom fields are an exclusive either/or so the
   two branding channels can never fight.
 * The WEB LOGIN THEME (colours/fonts for the login page the MESH serves to
   browsers): NON-argv mesh-plane fields (config NON_ARGV_FIELDS), deliberately
   OUTSIDE the desktop gating — mesh mode visits this page exactly FOR this half,
   and greying it there would gate the knob off on the only plane that renders it.
+
+ASK 6 — "redo entire branding section as well and remove existing themes and leave a
+light and a dark, a purple, and a grey theme selectable". What changed and why:
+
+1. **The premade/custom choice is now two CHOICE CARDS**, not two bare radio buttons.
+   It is the page's top-level fork — which of two mutually exclusive branding channels
+   you are using — and it was rendered smaller and quieter than the eight file pickers
+   underneath it. The #507 card idiom gives the fork the weight it carries.
+2. **The theme is picked from CARDS WITH A PREVIEW SWATCH** (``_themecards``), not a
+   ``QComboBox``. A theme is a look; a combo could only show the word.
+3. **The offered set is closed and asserted** — exactly ``core.branding_themes``'
+   four. The old page listed the theme directories AND THEN APPENDED THE BRAND NAME
+   plus any loaded value, so it offered names with no directory behind them: on a
+   stock checkout the combo carried ``hugmesh``, the BRAND, as if it were a theme.
+   Choosing it emitted
+   ``--theme hugmesh`` into a builder whose resolver hard-errors
+   ``unknown --theme 'hugmesh'``: the wizard could hand you a build that cannot start.
+   Nothing is appended now. A saved config naming an unknown theme is CLEARED with a
+   visible note, and a GUI/disk set mismatch is reported in the page rather than
+   raised (under PyQt6 an exception escaping a slot calls ``qFatal``).
+4. The custom-branding channel is byte-for-byte the same eight fields, the same
+   either/or blanking, the same both-set reconciliation and the same gating as before.
 """
 from __future__ import annotations
 
-import os
-
 from ..qt import QtWidgets
+from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from ...core.branding_themes import theme_set_problem
 from ...core.config import UNAFFILIATED_ROLE, branding_allowed
 from ._gating import (
     clear_unsupported, gate_widgets_role_class, platform_supports, unsupported_note,
 )
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
+from ._themecards import (
+    NO_THEME, CustomAssetsSwatch, ThemeCardGroup, ThemeStripSwatch,
+)
 from ._widgets import _file_picker, _row, collapsible
 
 # every widget-backed field on this page — all x86-only emission, so the whole
@@ -29,7 +54,7 @@ _BRANDING_FIELDS = ("theme", "branding_dir", "wallpaper", "grub_background",
                     "grub_theme", "login_background", "brand_logo", "accent_color",
                     "color_scheme", "brand_locked")
 # The eight custom-value fields (spec 2): everything in THEME_FIELDS except the
-# premade ``theme`` (the preset radio's combo) and ``brand_locked`` (which stays
+# premade ``theme`` (the preset card's picker) and ``brand_locked`` (which stays
 # OUTSIDE the either/or — a lock applies to whichever branding channel is chosen).
 # Selecting "Premade theme" blanks these; selecting "Custom branding" blanks theme.
 _CUSTOM_FIELDS = ("branding_dir", "wallpaper", "grub_background", "grub_theme",
@@ -39,51 +64,83 @@ _ROLE_CLASS_REASON = (
     "Theming applies to desktop images only — node / mesh images take the brand "
     "defaults, no per-image theme. Cleared when you leave the page.")
 
+_NOTE_STYLE = "color: #a65d00;"
+
+
+def _note(text: str = "") -> QtWidgets.QLabel:
+    """A wrapped orange advisory label, hidden until it has something to say."""
+    lab = QtWidgets.QLabel(text)
+    lab.setWordWrap(True)
+    lab.setStyleSheet(_NOTE_STYLE)
+    lab.setVisible(bool(text))
+    return lab
+
 
 class BrandingPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Branding")
-        self.setSubTitle("Desktop branding (theme or custom assets) plus the web "
-                         "login theme the mesh serves.")
+        self.setSubTitle("Desktop branding (a premade theme or your own assets) plus "
+                         "the web login theme the mesh serves.")
         # scrollable: the login-theme group grew this page past the #400 jitter
         # budget — tall content scrolls inside the page instead of resizing the window.
         lay = scrollable(self)
         # shown INSTEAD of the (disabled) form when the unaffiliated role is selected
-        self.unaffiliated_note = QtWidgets.QLabel(
+        self.unaffiliated_note = _note(
             "Branding does not apply — unaffiliated build (plain Gentoo, zero brand identity).")
-        self.unaffiliated_note.setWordWrap(True)
-        self.unaffiliated_note.setStyleSheet("color: #a65d00;")
-        self.unaffiliated_note.setVisible(False)
         lay.addWidget(self.unaffiliated_note)
         # every branding widget lives in one container so the role-class / platform /
         # unaffiliated grey can disable the whole surface at once.
         self.form = QtWidgets.QWidget()
         form_lay = QtWidgets.QVBoxLayout(self.form)
         form_lay.setContentsMargins(0, 0, 0, 0)
+        form_lay.setSpacing(8)
 
-        # premade-theme (preset) XOR custom-branding — an exclusive either/or (spec 2).
-        # Both stay visible/scannable; selecting one enables it and disables+clears the
-        # other (enable-gating, not a QStackedWidget).
-        self.mode_group = QtWidgets.QButtonGroup(self)
-        self.rb_preset = QtWidgets.QRadioButton("Premade theme")
-        self.rb_custom = QtWidgets.QRadioButton("Custom branding")
-        self.mode_group.addButton(self.rb_preset, 0)
-        self.mode_group.addButton(self.rb_custom, 1)
+        # ── the fork: premade theme XOR custom branding ──────────────────────────
+        # An exclusive either/or (spec 2). Both stay visible/scannable; selecting one
+        # enables it and disables+clears the other (enable-gating, not a
+        # QStackedWidget — the operator can still SEE what the other channel offers).
+        # ChoiceCard, not QRadioButton: this is the page's top-level pick-one, and it
+        # was previously rendered smaller than the fields it governs.
+        # `rb_preset` / `rb_custom` keep their historical names — a ChoiceCard is a
+        # checkable QAbstractButton, so isChecked()/setChecked()/toggled are unchanged.
+        self.mode_group = ChoiceCardGroup(self)
+        self.rb_preset = ChoiceCard(
+            "Premade theme",
+            "Pick one of the four themes that ship with the generator. Bakes a "
+            "wallpaper, boot screen, greeter background, logo and colour scheme.")
+        self.rb_preset.set_icon_widget(ThemeStripSwatch())
+        self.rb_custom = ChoiceCard(
+            "Custom branding",
+            "Supply your own assets instead — a whole branding directory and/or "
+            "individual wallpaper / GRUB / greeter / logo / colour-scheme files.")
+        self.rb_custom.set_icon_widget(CustomAssetsSwatch())
+        self.mode_group.add_card(self.rb_preset, 0)
+        self.mode_group.add_card(self.rb_custom, 1)
         form_lay.addWidget(self.rb_preset)
-        # theme preset combo — NON-editable now: a fixed enumeration of the shipped
-        # themes plus the brand-derived entry, so free text can't smuggle a custom
-        # value past the either/or. Items are (re)built per-brand in initializePage.
-        self.theme = QtWidgets.QComboBox()
-        self.theme.setEditable(False)
-        self.theme.addItem("")
-        for t in self._themes():
-            self.theme.addItem(t)
-        form_lay.addWidget(_row("Theme preset", self.theme))
+
+        # ── premade themes: a pick-one over the CLOSED four-name set ─────────────
+        # `theme_box` is the greyable container the either/or toggles (the old code
+        # toggled a combo; the surface is a card group now, so the container is what
+        # gets enabled/disabled). `theme_group` speaks THEME NAMES, never indices.
+        self.theme_box = QtWidgets.QWidget()
+        tb = QtWidgets.QVBoxLayout(self.theme_box)
+        tb.setContentsMargins(18, 2, 0, 2)      # indented under its parent card
+        tb.setSpacing(6)
+        self.theme_group = ThemeCardGroup(self)
+        self.theme_group.build(self.theme_box)
+        form_lay.addWidget(self.theme_box)
+
+        # a saved config naming a theme this build does not offer: cleared, not kept.
+        self.stale_theme_note = _note()
+        form_lay.addWidget(self.stale_theme_note)
+        # the set-equality assertion, surfaced (never raised — PyQt6 qFatal).
+        self.theme_sync_note = _note()
+        form_lay.addWidget(self.theme_sync_note)
 
         form_lay.addWidget(self.rb_custom)
-        # the eight custom-value fields + accent, wrapped so the custom radio can grey
+        # the eight custom-value fields + accent, wrapped so the custom card can grey
         # them all at once (line edits AND their Browse… buttons).
         self.custom_group = QtWidgets.QGroupBox("Custom branding assets")
         cg = QtWidgets.QVBoxLayout(self.custom_group)
@@ -114,11 +171,9 @@ class BrandingPage(QtWidgets.QWizardPage):
 
         # an old save with BOTH a premade theme AND custom assets → custom wins, the
         # theme is cleared, and this orange note explains the reconciliation.
-        self.both_set_note = QtWidgets.QLabel(
+        self.both_set_note = _note(
             "Both a premade theme and custom assets were set — keeping the custom "
             "assets and clearing the theme.")
-        self.both_set_note.setWordWrap(True)
-        self.both_set_note.setStyleSheet("color: #a65d00;")
         self.both_set_note.setVisible(False)
         form_lay.addWidget(self.both_set_note)
 
@@ -141,25 +196,27 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.rb_preset.toggled.connect(self._mode_toggled)
         self.rb_preset.setChecked(True)   # default channel: premade theme
 
-    def _themes(self):
-        d = os.path.join(self.wiz.generator_dir, "specs-x86", "branding", "themes")
-        try:
-            return sorted(x for x in os.listdir(d) if os.path.isdir(os.path.join(d, x)))
-        except OSError:
-            return ["boogiepop"]
-
+    # ── either/or plumbing ──────────────────────────────────────────────────────
     def _mode_toggled(self, *_):
-        """Keep the preset combo and the custom group mutually exclusive: the selected
+        """Keep the theme picker and the custom group mutually exclusive: the selected
         channel is enabled, the other disabled AND cleared so a stale value can't leak
-        past the either/or (belt & braces for validatePage's field commit)."""
-        preset = self.rb_preset.isChecked()
-        self.theme.setEnabled(preset)
-        self.custom_group.setEnabled(not preset)
-        if preset:
-            for le in list(self.fields.values()) + [self.accent]:
-                le.clear()
-        elif self.theme.count():
-            self.theme.setCurrentIndex(0)
+        past the either/or (belt & braces for validatePage's field commit).
+
+        Guarded: this is a Qt slot, and under PyQt6 an exception escaping one calls
+        qFatal and kills the Studio."""
+        try:
+            preset = self.rb_preset.isChecked()
+            self.theme_box.setEnabled(preset)
+            self.custom_group.setEnabled(not preset)
+            if preset:
+                for le in list(self.fields.values()) + [self.accent]:
+                    le.clear()
+            else:
+                self.theme_group.select(NO_THEME)
+        except Exception:       # pragma: no cover - defensive, PyQt6 qFatal guard
+            import sys, traceback
+            print("branding: swallowed exception in _mode_toggled", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
     def applies_to(self, cfg) -> bool:
         """SKIP this page entirely on an unaffiliated image (operator report: "the
@@ -197,22 +254,28 @@ class BrandingPage(QtWidgets.QWizardPage):
         platform_ok = platform_supports("theme", c.platform)
         enabled = not unaffiliated and role_class_ok and platform_ok
 
-        # rebuild the preset enumeration for this brand (non-editable → the current
-        # value must be a present item or the combo can't display it).
-        self.theme.blockSignals(True)
-        self.theme.clear()
-        self.theme.addItem("")
-        for t in self._themes():
-            self.theme.addItem(t)
-        brand_theme = (c.brand or "").strip()
-        if brand_theme and self.theme.findText(brand_theme) < 0:
-            self.theme.addItem(brand_theme)
-        if c.theme and self.theme.findText(c.theme) < 0:
-            self.theme.addItem(c.theme)
-        self.theme.blockSignals(False)
+        # SET EQUALITY, surfaced. theme_set_problem() compares the offered four
+        # against the on-disk theme directories — which ARE the set the builder
+        # accepts, since it resolves ${SPECS_DIR}/branding/themes/<name> and errors
+        # when the directory is absent. Reported as a note, never raised: a mismatch
+        # is an operator-fixable checkout problem (re-run the generator), not a
+        # reason to qFatal the Studio out from under them.
+        problem = theme_set_problem(getattr(self.wiz, "generator_dir", "") or "")
+        self.theme_sync_note.setText(problem)
+        self.theme_sync_note.setVisible(bool(problem))
 
-        # populate both channels from the config
-        self.theme.setCurrentText(c.theme)
+        # populate the premade channel. NOTHING is appended to the offered set — the
+        # old page appended the brand name and any loaded value, which is how it came
+        # to offer themes the builder hard-errors on.
+        known = self.theme_group.select(c.theme or NO_THEME)
+        stale = "" if known else (
+            f"The saved configuration names the theme '{c.theme}', which this "
+            "generator does not ship — the builder would fail with "
+            f"\"unknown --theme '{c.theme}'\". Cleared; pick one of the themes above "
+            "or switch to custom branding.")
+        self.stale_theme_note.setText(stale)
+        self.stale_theme_note.setVisible(bool(stale))
+
         self.fields["branding_dir"].setText(c.branding_dir)
         self.fields["wallpaper"].setText(c.wallpaper)
         self.fields["grub_background"].setText(c.grub_background)
@@ -242,6 +305,11 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.login_theme.load(c)
         self.login_collapsible.set_default_expanded(c.mode == "mesh")
 
+    def selected_theme(self) -> str:
+        """The premade theme this page would commit ("" = stock look / custom channel).
+        The ONE place the widget state is turned into a config value."""
+        return self.theme_group.selected() if self.rb_preset.isChecked() else NO_THEME
+
     def _blank_all(self, c):
         """Clear every branding field — the shared clear for the unaffiliated role and
         for any greyed (node/mesh/off-x86) image, so a stale value can never poison a
@@ -269,8 +337,10 @@ class BrandingPage(QtWidgets.QWizardPage):
             self._blank_all(c)
             return True
         if self.rb_preset.isChecked():
-            # premade-theme channel: commit the preset, blank the custom fields.
-            c.theme = self.theme.currentText().strip()
+            # premade-theme channel: commit the picked theme, blank the custom fields.
+            # selected_theme() can only ever return "" or one of the declared four —
+            # the picker has no free-text path, so an invalid --theme is unreachable.
+            c.theme = self.selected_theme()
             for f in _CUSTOM_FIELDS:
                 setattr(c, f, "")
         else:

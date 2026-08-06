@@ -136,7 +136,7 @@ def test_print_command_unaffiliated_conflict_fails_loudly(tmp_path):
     make --print-command exit non-zero with the conflict named — mirroring the
     builder's own hard error, never a silently wrong argv."""
     cfg = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
-                      bundle_source=False, theme="boogiepop")
+                      bundle_source=False, theme="dark")
     p = tmp_path / "poisoned.json"
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)

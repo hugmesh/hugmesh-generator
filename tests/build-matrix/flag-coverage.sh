@@ -188,7 +188,7 @@ SAMPLES = {
     "gpu_driver": [{"gpu_driver": "nvidia"}], "nvidia_cuda": [{"nvidia_cuda": True}],
     "kernel_builtin": [{"kernel_builtin": True}],
     "enable_wifi": [{"enable_wifi": True}], "enable_bluetooth": [{"enable_bluetooth": True}],
-    "theme": [{"theme": "boogiepop"}], "branding_dir": [{"branding_dir": "/tmp/b"}],
+    "theme": [{"theme": "dark"}], "branding_dir": [{"branding_dir": "/tmp/b"}],
     "wallpaper": [{"wallpaper": "/tmp/w.png"}],
     "grub_background": [{"grub_background": "/tmp/g.png"}],
     "grub_theme": [{"grub_theme": "/tmp/gt"}],

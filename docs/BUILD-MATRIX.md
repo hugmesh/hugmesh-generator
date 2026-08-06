@@ -231,7 +231,13 @@ orangepi5 and orangepizero2** (that flag is an undocumented marker-only escape
 hatch on both builders — neither has a real `--role` axis — that used to flow
 unescaped into the artifact-path strings with no allow-list check at all), the
 two unaffiliated conflict probes (the unaffiliated role with a `--theme`, and
-`--unaffiliated` on a cluster role, must both hard-error), an unknown platform
+`--unaffiliated` on a cluster role, must both hard-error), **the two
+premade-theme probes** (an unknown `--theme`, and a path-shaped one like
+`../..`, must both be rejected *by `--print-plan` itself* — the name used to be
+resolved only at the branding step ~2100 lines later, so the validator every
+channel preflights with green-lit themes the build then hard-errored on, and
+`[ -d ]` alone never stopped a traversal because the name is concatenated
+straight into `${SPECS_DIR}/branding/themes/<name>`), an unknown platform
 refused by the GUI, and the five bogus-`HARDWARE_CLASS` Job-channel
 rejections (the three original whitelist negatives plus the two
 standalone-shaped ones above) — all must exit non-zero, so a typo can never

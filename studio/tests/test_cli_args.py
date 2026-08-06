@@ -177,7 +177,7 @@ def test_x86_unaffiliated_never_emits_affiliation_flags():
     {"brand_title": "Acme"},
     {"org": "Acme-Org"},
     {"brand": "gentoo"},              # even the neutral id: the builder forces it ITSELF
-    {"theme": "boogiepop"},
+    {"theme": "dark"},
     {"branding_dir": "/tmp/brand"},
     {"wallpaper": "wp.png"},
     {"grub_background": "g.png"},
@@ -1458,7 +1458,7 @@ _FIELD_PROBE = {
     "gpu_driver": {"gpu_driver": "nvidia"}, "nvidia_cuda": {"nvidia_cuda": True},
     "kernel_builtin": {"kernel_builtin": True},
     "enable_wifi": {"enable_wifi": True}, "enable_bluetooth": {"enable_bluetooth": True},
-    "theme": {"theme": "boogiepop"}, "branding_dir": {"branding_dir": "/tmp/b"},
+    "theme": {"theme": "dark"}, "branding_dir": {"branding_dir": "/tmp/b"},
     "wallpaper": {"wallpaper": "/tmp/w.png"}, "grub_background": {"grub_background": "/tmp/g.png"},
     "grub_theme": {"grub_theme": "/tmp/gt"}, "login_background": {"login_background": "/tmp/l.png"},
     "brand_logo": {"brand_logo": "/tmp/logo.png"}, "accent_color": {"accent_color": "#123456"},
@@ -1905,15 +1905,15 @@ def test_home_options_allowed_predicate():
 
 def test_clear_role_class_fields_desktop_keeps_everything():
     # a standalone desktop keeps theming + home; tailscale/sso already False (cleared, no-op)
-    cfg = ImageConfig(mode="standalone", role="standalone-thick", theme="boogiepop",
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", theme="dark",
                       home_mode="adopt", home_encrypted=True)
     cleared = clear_role_class_fields(cfg)
-    assert cfg.theme == "boogiepop" and cfg.home_mode == "adopt" and cfg.home_encrypted
+    assert cfg.theme == "dark" and cfg.home_mode == "adopt" and cfg.home_encrypted
     assert "theme" not in cleared and "home_mode" not in cleared
 
 
 def test_clear_role_class_fields_node_zeroes_theme_and_home():
-    cfg = ImageConfig(mode="mesh", role="omnibus", theme="boogiepop", accent_color="#123456",
+    cfg = ImageConfig(mode="mesh", role="omnibus", theme="dark", accent_color="#123456",
                       brand_locked=True, home_mode="adopt", home_encrypted=True,
                       seed_packages_from="/x", tailscale=True, sso=True)
     cleared = clear_role_class_fields(cfg)
@@ -1928,7 +1928,7 @@ def test_clear_role_class_fields_node_zeroes_theme_and_home():
 
 
 def test_enter_mesh_defaults_clears_then_forces_tailnet():
-    cfg = ImageConfig(mode="mesh", role="omnibus", theme="boogiepop", home_mode="adopt")
+    cfg = ImageConfig(mode="mesh", role="omnibus", theme="dark", home_mode="adopt")
     enter_mesh_defaults(cfg)
     assert cfg.theme == "" and cfg.home_mode == "create"
     # today's mesh x86 argv (--with-tailscale/--with-sso) is preserved byte-identically
@@ -1949,7 +1949,7 @@ def test_enter_mesh_defaults_preserves_mesh_x86_golden():
 def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():
     # theme/home/secure_boot are x86-only -> stripped on an rpi5 node cfg
     cfg = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
-                      theme="boogiepop", secure_boot="off", home_mode="adopt",
+                      theme="dark", secure_boot="off", home_mode="adopt",
                       brand="acme")
     cleared = strip_platform_unsupported(cfg)
     assert cfg.theme == "" and cfg.secure_boot == "" and cfg.home_mode == "create"
@@ -1960,7 +1960,7 @@ def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():
 
 def test_strip_platform_unsupported_noop_on_x86_baseline():
     # a plain x86 config touches no x86-supported field -> nothing spurious cleared
-    cfg = ImageConfig(mode="cloud", role="desktop", platform="x86", theme="boogiepop")
+    cfg = ImageConfig(mode="cloud", role="desktop", platform="x86", theme="dark")
     cleared = strip_platform_unsupported(cfg)
-    assert cfg.theme == "boogiepop"        # theme IS x86-supported
+    assert cfg.theme == "dark"        # theme IS x86-supported
     assert "theme" not in cleared
