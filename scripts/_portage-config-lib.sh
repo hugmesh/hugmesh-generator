@@ -31,13 +31,23 @@ pcs_sync_dir() {
         base="${f##*/}"
         if [ ! -e "${src}/${base}" ]; then
             echo "[portage-config] pruning stale ${dest##*sysroot}/${base} (removed from specs)"
-            rm -f -- "${f}" || return 1
+            # -rf, not -f: portage/env legitimately contains SUBDIRECTORIES
+            # (specs-x86/portage/env/{app-office,dev-qt}), so a stale entry can be a
+            # directory and `rm -f` would leave it behind forever.
+            rm -rf -- "${f}" || return 1
         fi
     done
-    # copy everything present (tolerate an empty spec dir: some platforms have
-    # no package.env entries)
+    # Copy everything present (tolerate an empty spec dir: some platforms have no
+    # package.env entries). -R because portage/env nests one level: the pre-sync
+    # code this replaced was `cp -r .../env/* ...` and dropping the recursion made
+    # `cp` refuse every directory ("omitting directory"), fail the helper, and abort
+    # EVERY x86 build at the spec-install step. -R (not -a) matches that original
+    # behaviour: content + mode, no ownership games on a sysroot the builder owns.
     for f in "${src}"/*; do
         [ -e "${f}" ] || return 0
-        cp -- "${f}" "${dest}/" || return 1
+        # replace rather than nest: without this, cp -R of a directory INTO an
+        # existing same-named directory would create dest/<name>/<name>.
+        [ -d "${f}" ] && rm -rf -- "${dest}/${f##*/}"
+        cp -R -- "${f}" "${dest}/" || return 1
     done
 }

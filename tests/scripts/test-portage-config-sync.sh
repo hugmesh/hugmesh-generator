@@ -34,6 +34,31 @@ pcs_sync_dir "${REPO}/no-such-dir-$$" "${D}" >/dev/null 2>&1 && bad "missing spe
                                                              || ok "missing spec dir fails loudly"
 rm -rf "${S}" "${D}" "${E}"
 
+echo "-- A2) NESTED directories (the 2026-08-05 x86 regression) --"
+# specs-x86/portage/env contains SUBDIRECTORIES (app-office/, dev-qt/). The first
+# version of pcs_sync_dir copied entries with a bare `cp`, so every directory made
+# cp print "omitting directory", return non-zero, fail the helper and ABORT THE BUILD
+# at the spec-install step — every x86 build died at line 24. The code this replaced
+# was `cp -r`, and dropping the recursion was the whole defect.
+NS="$(mktemp -d)"; ND="$(mktemp -d)"
+mkdir -p "${NS}/app-office"; echo conf > "${NS}/app-office/libreoffice.conf"
+echo top > "${NS}/llvm-lowmem.conf"
+if pcs_sync_dir "${NS}" "${ND}" >/dev/null 2>&1; then
+  ok "a spec dir containing a SUBDIRECTORY syncs without error"
+else
+  bad "pcs_sync_dir FAILED on a nested spec dir — this is the x86 build abort"
+fi
+[ -f "${ND}/app-office/libreoffice.conf" ] && ok "nested file landed in the sysroot" \
+                                           || bad "nested directory was not copied"
+pcs_sync_dir "${NS}" "${ND}" >/dev/null 2>&1
+[ ! -d "${ND}/app-office/app-office" ] && ok "re-sync does not nest dir-inside-itself" \
+                                       || bad "re-sync produced dest/<dir>/<dir>"
+mkdir -p "${ND}/retired-dir"; echo x > "${ND}/retired-dir/f"
+pcs_sync_dir "${NS}" "${ND}" >/dev/null 2>&1
+[ ! -e "${ND}/retired-dir" ] && ok "a stale DIRECTORY is pruned (rm -rf, not rm -f)" \
+                             || bad "stale directory survived the sync"
+rm -rf "${NS}" "${ND}"
+
 echo "-- B) every builder routes the three config dirs through the lib --"
 for b in "${REPO}"/build-*-stage4.sh; do
   base="$(basename "${b}")"

@@ -1897,7 +1897,7 @@ run_selinux_policy_checks() {
 # must reach RESUMED sysroots. The bare cp the builders used propagated
 # additions only; #513's retired package.use file survived in a resumed tree
 # and the very next build retried the broken glib rebuild (2026-08-05).
-PCS_EXPECTED=35
+PCS_EXPECTED=39
 PCS_PASS=0; PCS_FAIL=0
 run_portage_config_sync_checks() {
     local out="${TMP_DIR}/portage-config-sync.out"
