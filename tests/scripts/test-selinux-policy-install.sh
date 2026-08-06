@@ -502,8 +502,21 @@ fi
 #   $HUGMESH_SELINUX_HEADERS            explicit override (CI can point at anything)
 #   out/sessions/*/wl-*/sysroot/usr/share/selinux/*/include   a real build's sysroot
 #   /usr/share/selinux/*/include        the host, when sec-policy is installed
-# With none of them this leg SKIPS — loudly, with the reason and the remedy. A skip
-# is NOT a pass: it prints what went unchecked, so nobody reads green as proven.
+#   tests/fixtures/selinux/*.tar.gz     the PINNED fixture — last resort, see below
+#
+# THE FIXTURE IS LAST ON PURPOSE. A real sysroot is the production article; the
+# fixture is a photograph of one. Whenever the real thing is present it must win,
+# or this leg would quietly stop tracking what builds actually compile against.
+#
+# Why a committed fixture at all: until now CI reached none of the first three and
+# SKIPped, so the permission-class bug that #545 fixed could have walked straight
+# back in. Debian's `selinux-policy-dev` is NOT a substitute — this tree carries
+# gentoo_tunables.xml and Gentoo-only interfaces, so compiling against Debian's
+# refpolicy would fail on interfaces that are perfectly valid for our builds.
+# ${SLX_FIXTURE_VERSION} below records what it is a photograph OF; the drift leg
+# (D-drift) fails when a real sysroot has moved past it.
+SLX_FIXTURE_VERSION="2.20260616_p1"
+SLX_FIXTURE="${GEN}/tests/fixtures/selinux/refpolicy-headers-mcs-${SLX_FIXTURE_VERSION}.tar.gz"
 echo "-- D-real) every module compiles against a real refpolicy header tree --"
 _slx_find_headers() {
     local h
@@ -514,6 +527,20 @@ _slx_find_headers() {
              /usr/share/selinux/*/include; do
         [ -f "${h}/Makefile" ] && { printf '%s' "${h}"; return 0; }
     done
+    # Last resort: unpack the pinned fixture. Verify the digest first — a fixture
+    # that unpacks to something other than what was recorded is not a header tree
+    # we know anything about, and compiling against it would prove nothing.
+    if [ -f "${SLX_FIXTURE}" ] && command -v sha256sum >/dev/null; then
+        if (cd "$(dirname "${SLX_FIXTURE}")" && sha256sum -c --status refpolicy-headers.sha256) 2>/dev/null; then
+            mkdir -p "${TMP}/fixture-hdr"
+            if tar -xzf "${SLX_FIXTURE}" -C "${TMP}/fixture-hdr" 2>/dev/null \
+               && [ -f "${TMP}/fixture-hdr/include/Makefile" ]; then
+                printf '%s' "${TMP}/fixture-hdr/include"; return 0
+            fi
+        else
+            echo "  WARNING: ${SLX_FIXTURE##*/} does not match refpolicy-headers.sha256 — refusing to use it" >&2
+        fi
+    fi
     return 1
 }
 if ! command -v checkmodule >/dev/null || ! command -v semodule_package >/dev/null || ! command -v m4 >/dev/null; then
@@ -525,7 +552,10 @@ elif ! HDR="$(_slx_find_headers)"; then
     echo "               or run this after any real build (its sysroot carries one)."
 else
     _SLX_SHARE="$(dirname "${HDR}")"; _SLX_NAME="$(basename "${_SLX_SHARE}")"
-    echo "  using headers: ${HDR}"
+    case "${HDR}" in
+        "${TMP}"/fixture-hdr/*) echo "  using headers: the PINNED FIXTURE (sec-policy ${SLX_FIXTURE_VERSION})" ;;
+        *)                      echo "  using headers: ${HDR}" ;;
+    esac
     for _te in "${SRC}"/*.te; do
         _m="$(basename "${_te}" .te)"
         _w="${TMP}/dreal/${_m}"; mkdir -p "${_w}"
@@ -539,6 +569,55 @@ else
             bad "${_m}: FAILS to compile against real refpolicy headers — $(grep -oE "(ERROR|error)[^\n]*" "${_w}/build.log" | head -1)"
         fi
     done
+fi
+
+# D-drift) the fixture is a photograph — this leg notices when reality moves past it.
+#
+# CI compiles against the pinned fixture, so if Gentoo bumps sec-policy and our
+# builds start using a newer refpolicy, CI would keep compiling against the OLD
+# one and stay green while real builds broke. That is precisely the failure mode
+# a pinned mirror invites, so it gets its own guard rather than a comment.
+#
+# The comparison is deliberately one-directional: it fails only when a real
+# sysroot is NEWER than the fixture. A developer with a months-old build tree is
+# not a defect and must not be punished for it — but a build tree ahead of the
+# fixture means the fixture has rotted and CI is now testing the wrong policy.
+echo "-- D-drift) the pinned fixture still matches what real builds install --"
+_slx_sysroot_secpolicy_version() {
+    local d v
+    for d in "${GEN}"/out/sessions/*/wl-*/sysroot/var/db/pkg/sec-policy/selinux-base-policy-* \
+             "${GEN}"/out/*/sysroot/var/db/pkg/sec-policy/selinux-base-policy-*; do
+        [ -d "${d}" ] || continue
+        v="$(basename "${d}")"; v="${v#selinux-base-policy-}"
+        printf '%s' "${v}"; return 0
+    done
+    return 1
+}
+if [ ! -f "${SLX_FIXTURE}" ]; then
+    bad "the pinned header fixture is missing: ${SLX_FIXTURE#"${GEN}"/}"
+elif ! command -v sha256sum >/dev/null; then
+    echo "  SKIP D-drift digest check: sha256sum absent — NOT a pass"
+elif ! (cd "$(dirname "${SLX_FIXTURE}")" && sha256sum -c --status refpolicy-headers.sha256) 2>/dev/null; then
+    bad "the fixture does not match refpolicy-headers.sha256 — it was edited or corrupted"
+else
+    ok "fixture digest matches refpolicy-headers.sha256"
+    if ! _SLX_SYS_VER="$(_slx_sysroot_secpolicy_version)"; then
+        echo "  SKIP D-drift version compare: no built sysroot on this host to compare against — NOT a pass;"
+        echo "               the fixture is pinned at sec-policy ${SLX_FIXTURE_VERSION} and nothing here can"
+        echo "               confirm that is still what builds install. Any real build re-checks it."
+    elif [ "${_SLX_SYS_VER}" = "${SLX_FIXTURE_VERSION}" ]; then
+        ok "a real build sysroot carries sec-policy ${_SLX_SYS_VER} — the fixture is current"
+    else
+        # Sort the two versions; if the sysroot sorts LAST it is the newer one.
+        _SLX_NEWEST="$(printf '%s\n%s\n' "${SLX_FIXTURE_VERSION}" "${_SLX_SYS_VER}" | sort -V | tail -1)"
+        if [ "${_SLX_NEWEST}" = "${_SLX_SYS_VER}" ]; then
+            bad "FIXTURE HAS ROTTED: builds now install sec-policy ${_SLX_SYS_VER}, the fixture is pinned at ${SLX_FIXTURE_VERSION}."$'\n'\
+"       CI is compiling every module against a refpolicy that real builds no longer use."$'\n'\
+"       Regenerate — see tests/fixtures/selinux/README.md."
+        else
+            ok "the sysroot here (${_SLX_SYS_VER}) is older than the fixture (${SLX_FIXTURE_VERSION}) — stale tree, not stale fixture"
+        fi
+    fi
 fi
 
 # C15/C16: the REAL host toolchain, driven through the lib's own make invocation.

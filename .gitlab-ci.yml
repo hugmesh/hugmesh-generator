@@ -2078,7 +2078,11 @@ selinux-policy-verify:
   before_script:
     - apt-get update -qq
     - apt-get install -y -qq --no-install-recommends make m4 gawk checkpolicy semodule-utils
-    - for t in bash make m4 gawk checkmodule semodule_package; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run the SELinux policy gate"; exit 1; }; done
+    # tar/gzip/sha256sum belong here for the same reason as the rest: D-real reaches
+    # its header tree by digest-checking and unpacking the pinned fixture, and if any
+    # of the three vanished from the base image the leg would go back to SKIPping —
+    # green, and compiling nothing. Assert them by name rather than discover it later.
+    - for t in bash make m4 gawk checkmodule semodule_package tar gzip sha256sum; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run the SELinux policy gate"; exit 1; }; done
   script:
     - bash tests/scripts/test-selinux-policy-install.sh
   rules:
