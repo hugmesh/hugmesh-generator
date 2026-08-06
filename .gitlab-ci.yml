@@ -1721,3 +1721,35 @@ lint:cassandra-cluster-wiring:
     - pip install --quiet pyyaml
   script:
     - bash tests/scripts/test-cassandra-cluster-wiring.sh
+
+# Casdoor bootstrap honesty gate. The first real cluster run had casdoor-init
+# printing all thirteen "added app-<name>" lines while its admin login had FAILED
+# — every call went out anonymous, Casdoor logged "result = deny", and nothing
+# persisted. Casdoor answers denials with HTTP 200 + {"status":"error"}, so a
+# script that only watches for exceptions cannot tell a denied run from a good
+# one; underneath that, the mounted init_data.json was never imported (app.conf
+# omitted `initDataFile`) and the IdP kept casdoor's default admin password.
+# This job holds EVERY embedded Casdoor reconcile script (discovered, not listed)
+# to the contract that makes those three un-reshippable, and RUNS the real
+# scripts against a stub Casdoor that reproduces each live failure shape —
+# denied session, denied writes, writes that answer "ok" while storing nothing,
+# and a write whose verification READ is denied — asserting each exits non-zero
+# and announces nothing, that a happy path still succeeds and is idempotent, and
+# that no password ever reaches stdout/stderr. That behavioural sweep covers the
+# three derived-role sync Jobs too, whose update-role IS an authorization
+# decision; the envelope check is a control-flow analysis of each call() rather
+# than a search for the word "status", because a helper that logs a denial and
+# carries on contains every such word. Every static check is re-run against a
+# corrupted staged copy, and the write-honesty scenario against a copy regressed
+# to the exact bug it exists for, so a check that stopped biting is reported
+# rather than passed over.
+# python:3-slim + PyYAML, same as lint:mfa-required-rules; the stub binds
+# 127.0.0.1 on an ephemeral port — no cluster, no docker, no network egress.
+lint:casdoor-init-honesty:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-casdoor-init-honesty.sh

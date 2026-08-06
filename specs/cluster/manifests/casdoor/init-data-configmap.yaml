@@ -1,7 +1,20 @@
 # Casdoor declarative seed (init_data.json) — the per-app SERVICE-IDENTITY
 # structure: one organization, the platform roles, and a machine user per
-# app/UI/API. Mounted read-only into Casdoor at /init_data.json; Casdoor imports
-# it on boot (idempotent — only missing objects are created).
+# app/UI/API. Mounted read-only into Casdoor at /init_data.json.
+#
+# HOW THIS ACTUALLY GETS IMPORTED (it did not, for a long time). Casdoor reads
+# this file at boot ONLY because app-conf-configmap.yaml sets `initDataFile` to
+# that path: object/init_data.go's InitFromFile() returns immediately when the
+# key is empty, and our app.conf — which REPLACES the image's — did not carry it.
+# Result on the first real cluster: a completely fresh database with none of the
+# objects below, and not one line anywhere saying so. `initDataNewOnly = true` is
+# what makes the import "only missing objects are created"; with the upstream
+# default it DELETES and re-adds every object here on every restart.
+# Because a boot-time import is silent either way, casdoor-init mounts this SAME
+# ConfigMap and reconciles it through the API as well, verifying each object —
+# the same probe-then-create-then-verify discipline the compose stack has always
+# used (tests/stack/seed-e2e.sh, which seeds the org/roles imperatively because
+# the compose Casdoor mounts no init_data.json at all).
 #
 # IMPORTANT: this file declares ONLY non-secret structure (orgs, roles, users).
 # NO client-secrets / passwords are committed here — the OAuth2 applications and

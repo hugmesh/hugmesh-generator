@@ -40,6 +40,29 @@ data:
     logPostOnly = true
     origin = "https://id.hugmesh.systems"
     enableGzip = true
+    # ── Declarative seed (init_data.json) ───────────────────────────────────
+    # WITHOUT initDataFile CASDOOR NEVER READS THE MOUNTED SEED. This file
+    # REPLACES the image's own conf/app.conf, which ships
+    # `initDataFile = "./init_data.json"`; ours omitted it, and
+    # object/init_data.go opens with
+    #     initDataFile := conf.GetConfigString("initDataFile")
+    #     if initDataFile == "" { return }
+    # so InitFromFile() returned before ever looking at the file. That is why the
+    # first real cluster came up with only the built-in org on a COMPLETELY fresh
+    # database, with /init_data.json present and valid. Absolute path, not the
+    # upstream "./" spelling, so the import does not silently depend on the image's
+    # workdir staying "/" (deployment.yaml mounts it at exactly this path — the two
+    # are cross-checked by tests/scripts/test-casdoor-init-honesty.sh).
+    initDataFile = "/init_data.json"
+    # CREATE-ONLY. With the upstream default (false), initDefinedOrganization /
+    # initDefinedRole / initDefinedUser DELETE and re-add every declared object on
+    # EVERY Casdoor restart — which would drop the hugmesh organization and reset
+    # every role's membership to the seed's `"users": []` (wiping ROLE_SUPERADMIN
+    # holders, the materialized ROLE_GAMES_ADMIN / ROLE_*_SERVICES_* sets and every
+    # granted ROLE_MATRIX/ROLE_MASTODON). true makes the import skip objects that
+    # already exist, which is the "only missing objects are created" behaviour
+    # init-data-configmap.yaml has always claimed.
+    initDataNewOnly = true
     # ── SMTP (optional, absent-by-default) ──────────────────────────────────
     # Outbound mail for email-verification / password-reset. Sourced from env
     # (CASDOOR_SMTP_*), which the Deployment loads from the OPTIONAL secret

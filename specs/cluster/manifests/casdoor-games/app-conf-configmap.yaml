@@ -48,3 +48,16 @@ data:
     # subdomain default — see docs/OPTIONAL-SERVICES.md "Games subdomain".
     origin = "https://id.hugmesh.games"
     enableGzip = true
+    # ── Declarative seed (init_data.json) ───────────────────────────────────
+    # Same fix as manifests/casdoor/app-conf-configmap.yaml, same reason: this file
+    # REPLACES the image's conf/app.conf (which carries
+    # `initDataFile = "./init_data.json"`), and object/init_data.go's InitFromFile()
+    # returns immediately when conf.GetConfigString("initDataFile") is empty — so
+    # the seed deployment.yaml mounts at /init_data.json was never read. Absolute
+    # path so the import does not depend on the image workdir; kept byte-equal to
+    # the mountPath (cross-checked by tests/scripts/test-casdoor-init-honesty.sh).
+    initDataFile = "/init_data.json"
+    # CREATE-ONLY — with the upstream default (false) every restart DELETEs and
+    # re-adds each declared object, resetting the games realm's role membership to
+    # the seed's empty lists. See the systems ConfigMap for the full note.
+    initDataNewOnly = true

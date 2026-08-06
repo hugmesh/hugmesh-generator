@@ -54,6 +54,15 @@
 #   CASDOOR_ADMIN_USER    default admin
 #   CASDOOR_ADMIN_PASS    default 123      (the casbin/casdoor FRESH-BOOT dev
 #                                           default — override for anything else)
+#                         DELIBERATE DIVERGENCE FROM THE CLUSTER: this stack keeps
+#                         casdoor's default because it is a throwaway local
+#                         Casdoor bound to localhost with a throwaway volume. The
+#                         cluster must NOT: manifests/casdoor/init-job.yaml applies
+#                         the Vault/ESO password via /api/set-password and then
+#                         proves "123" no longer logs in. So this leg is one the
+#                         compose stack will never exercise — see
+#                         tests/scripts/test-casdoor-init-honesty.sh, which runs
+#                         the real cluster script offline instead.
 #   CASDOOR_ORG           default hugmesh
 #   CASDOOR_BRAND_B_URL   unset            (second-tenant Casdoor; enables leg 1b)
 #   SYNAPSE_URL           default http://localhost:8008

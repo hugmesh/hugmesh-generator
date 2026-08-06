@@ -49,70 +49,143 @@ data:
     BASE_ROLE    = os.environ.get("BASE_ROLE", "ROLE_GAMES_SERVICES")
     PRIV_ROLES   = [r for r in os.environ.get("PRIV_ROLES", "ROLE_ADMIN,ROLE_MOD").split(",") if r]
 
-    ADMIN_USER = open("/secrets/admin/username").read().strip()
-    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+    # Where the Job mounts the ESO admin Secret. Env-overridable ONLY so the offline
+    # guard (tests/scripts/test-casdoor-init-honesty.sh) can point it at a fixture
+    # tree — the Job never sets it, so the cluster always uses /secrets.
+    SECRETS = os.environ.get("CASDOOR_SECRETS_DIR", "/secrets")
+    ADMIN_USER = open(f"{SECRETS}/admin/username").read().strip()
+    ADMIN_PASS = open(f"{SECRETS}/admin/password").read().strip()
 
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
+    class CasdoorError(RuntimeError):
+        """A Casdoor call that did not report success."""
+
     def call(path, payload=None, method="GET"):
-        url = BASE + path
+        """The ONE way this script talks to Casdoor. Nothing may bypass it.
+
+        Casdoor answers an authorization denial with HTTP 200 and
+        {"status":"error","msg":...} in the body (routers/authz_filter.go
+        denyRequest -> responseError), so urllib raises nothing and an unchecked
+        caller reads a fully denied run as a successful one — the shape that had
+        casdoor-init printing thirteen "added" lines against a database it never
+        wrote to. The envelope is checked here, once."""
         data = json.dumps(payload).encode() if payload is not None else None
-        req = urllib.request.Request(url, data=data, method=method,
-                                     headers={"Content-Type": "application/json"})
-        with opener.open(req, timeout=15) as r:
-            return json.loads(r.read() or "{}")
+        headers = {"Content-Type": "application/json"} if data is not None else {}
+        req = urllib.request.Request(BASE + path, data=data, method=method,
+                                     headers=headers)
+        try:
+            with opener.open(req, timeout=15) as r:
+                body = r.read()
+        except urllib.error.HTTPError as e:
+            raise CasdoorError(f"{method} {path}: HTTP {e.code}") from None
+        except urllib.error.URLError as e:
+            raise CasdoorError(f"{method} {path}: {e.reason}") from None
+        try:
+            resp = json.loads(body or "{}")
+        except ValueError:
+            raise CasdoorError(f"{method} {path}: response was not JSON") from None
+        if not isinstance(resp, dict) or resp.get("status") != "ok":
+            msg = resp.get("msg") if isinstance(resp, dict) else None
+            raise CasdoorError(f"{method} {path}: {msg or resp}") from None
+        return resp
 
     def wait_ready():
         for _ in range(60):
             try:
-                opener.open(BASE + "/api/health", timeout=5); return
-            except Exception:
+                call("/api/health"); return
+            except CasdoorError:
                 time.sleep(3)
         raise SystemExit("casdoor not reachable")
 
     def login():
+        """Log in AND prove the session, fatally. A 200/ok from /api/login is not
+        proof of one: casdoor-init once ran its entire reconcile anonymously behind
+        an unchecked login. /api/get-account resolves the cookie we actually hold.
+        This must be fatal — with a denied session every role below reads as empty,
+        so this Job would report a confident "not seeded" diagnosis for what is an
+        authentication failure. The password is never logged."""
         body = {"application": "app-built-in", "organization": "built-in",
                 "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
                 "autoSignin": True}
-        return call("/api/login", body, "POST")
+        try:
+            call("/api/login", body, "POST")
+            me = call("/api/get-account")
+        except CasdoorError as e:
+            raise SystemExit(f"casdoor admin login failed: {e}")
+        name = (me.get("data") or {}).get("name") or me.get("name")
+        if name != ADMIN_USER:
+            raise SystemExit("casdoor admin login did not yield an admin session "
+                             f"(the session resolves to {name!r})")
 
     def role_obj(role):
-        """Full role object (so update-role can round-trip every field)."""
-        data = call(f"/api/get-role?id={ORG}/{role}")
-        return (data or {}).get("data") or {}
+        """Full role object (so update-role can round-trip every field), or {} when
+        the role does not exist.
+
+        It does NOT catch CasdoorError, and that is the point. casdoor's GetRole
+        answers ResponseOk(role) — status "ok", data null — for a role that is not
+        there (controllers/role.go), so ABSENCE is an ok envelope with no data. A
+        status "error" from this endpoint is therefore a DENIAL, never an absence.
+        Flattening one into "the role has no members" is how the post-write check
+        below gets fooled: when the reconcile is a PRUNE the expected set is empty
+        too, so an invented empty role compares EQUAL, and the Job announces a
+        removal it never made. Let the denial raise."""
+        return call(f"/api/get-role?id={ORG}/{role}").get("data") or {}
 
     def members(role_object):
         """Normalized member ids ("hugmesh/<name>") from a role object."""
         return set((role_object or {}).get("users") or [])
 
-    wait_ready()
-    login()
+    def main():
+        wait_ready()
+        login()
 
-    base = members(role_obj(BASE_ROLE))
-    priv = set()
-    for r in PRIV_ROLES:
-        priv |= members(role_obj(r))
-    # The AND: base members who ALSO hold one of the priv roles.
-    qualified = sorted(base & priv)
+        base = members(role_obj(BASE_ROLE))
+        priv = set()
+        for r in PRIV_ROLES:
+            priv |= members(role_obj(r))
+        # The AND: base members who ALSO hold one of the priv roles.
+        qualified = sorted(base & priv)
 
-    target = role_obj(DERIVED_ROLE)
-    if not target:
-        raise SystemExit(f"{DERIVED_ROLE} not found — seed it in init_data.json")
-    current = members(target)
+        target = role_obj(DERIVED_ROLE)
+        if not target:
+            raise SystemExit(f"{DERIVED_ROLE} not found — seed it in init_data.json")
+        current = members(target)
 
-    if set(qualified) == current:
-        print(f"games-services-admin-sync: {DERIVED_ROLE} already == {len(qualified)} member(s); no change")
-    else:
-        # Overwrite users[] with EXACTLY the verified intersection (ADD new, PRUNE lapsed).
-        target["users"] = qualified
-        call(f"/api/update-role?id={ORG}/{DERIVED_ROLE}", target, "POST")
-        added   = sorted(set(qualified) - current)
-        removed = sorted(current - set(qualified))
-        print(f"games-services-admin-sync: {DERIVED_ROLE} -> {len(qualified)} member(s) "
-              f"(+{len(added)} added, -{len(removed)} removed)")
-        if added:   print("  + " + ", ".join(added))
-        if removed: print("  - " + ", ".join(removed))
+        if set(qualified) == current:
+            print(f"games-services-admin-sync: {DERIVED_ROLE} already == {len(qualified)} member(s); no change")
+        else:
+            # Overwrite users[] with EXACTLY the verified intersection (ADD new, PRUNE lapsed).
+            target["users"] = qualified
+            call(f"/api/update-role?id={ORG}/{DERIVED_ROLE}", target, "POST")
+            # Read it back, THROUGH THE RAISING PATH. A "status":"ok" is not proof a
+            # casdoor write persisted — wrapActionResponse() answers ok/"Affected" or
+            # ok/"Unaffected" for every write that reached the handler regardless, and
+            # update-group is LIVE-VERIFIED to answer "Affected" while storing none of
+            # it (see manifests/casdoor/init-job.yaml). This role is an authorization
+            # source, so nothing here may be announced on anything weaker than a read
+            # that came back and said so.
+            verified = role_obj(DERIVED_ROLE)
+            if not verified:
+                raise SystemExit(f"update-role reported success but {DERIVED_ROLE} is no "
+                                 f"longer readable — refusing to report a membership change")
+            if members(verified) != set(qualified):
+                raise SystemExit(f"update-role reported success but {DERIVED_ROLE} membership "
+                                 f"did not change")
+            added   = sorted(set(qualified) - current)
+            removed = sorted(current - set(qualified))
+            print(f"games-services-admin-sync: {DERIVED_ROLE} -> {len(qualified)} member(s) "
+                  f"(+{len(added)} added, -{len(removed)} removed)")
+            if added:   print("  + " + ", ".join(added))
+            if removed: print("  - " + ", ".join(removed))
+
+    # A Casdoor call that did not report success ends the run non-zero with the
+    # endpoint that failed — never a partial reconcile reported as a whole one.
+    try:
+        main()
+    except CasdoorError as e:
+        raise SystemExit(f"games-services-admin-sync: FAILED — {e}")
 ---
 apiVersion: batch/v1
 kind: Job

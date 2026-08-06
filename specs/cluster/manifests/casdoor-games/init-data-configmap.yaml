@@ -11,8 +11,14 @@
 # grants ROLE_USER to any valid principal automatically). A GitHub OAuth provider (seeded
 # by casdoor-games-init) lets people sign up as a native games "player".
 #
-# Casdoor imports init_data.json on boot (idempotent — only missing objects are created).
-# Mounted read-only into casdoor-games at /init_data.json.
+# Mounted read-only into casdoor-games at /init_data.json. Casdoor reads it at boot
+# ONLY because app-conf-configmap.yaml sets `initDataFile` to that path — the import
+# is opt-in (object/init_data.go's InitFromFile() returns immediately on an empty key)
+# and our app.conf, which REPLACES the image's, did not carry it, so this file was
+# inert and silent about it. `initDataNewOnly = true` is what makes the import "only
+# missing objects are created"; the upstream default DELETEs and re-adds every object
+# below on every restart. casdoor-games-init mounts this SAME ConfigMap and reconciles
+# it through the API too, verifying each object — see manifests/casdoor/.
 #
 # IMPORTANT: this file declares ONLY non-secret structure (org, application shell, roles,
 # seed users WITHOUT passwords). NO client-secret / seed-user passwords are committed here

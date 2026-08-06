@@ -1,12 +1,26 @@
 # casdoor-init — reconciles the per-app OAuth2 APPLICATIONS in Casdoor and
 # injects their client-secrets from Vault (via the ESO Secret casdoor-app-secrets),
-# so no secret is ever committed. The org/roles/service-users themselves are
-# seeded declaratively by init_data.json (init-data-configmap.yaml). Idempotent;
-# ArgoCD re-runs it on each sync (PostSync hook).
+# so no secret is ever committed. It ALSO owns two things it used to assume:
+#   * the built-in admin's PASSWORD (set to the Vault/ESO value, idempotently —
+#     until this landed the IdP kept casdoor's well-known default wherever it was
+#     reachable, and the provisioned password was never applied anywhere);
+#   * the org/roles/service-users the declarative init_data.json seed declares —
+#     Casdoor imports those at boot (see app-conf-configmap.yaml's initDataFile
+#     note), and this Job re-reads the SAME ConfigMap and creates whatever the
+#     boot import did not, so an inert import cannot pass unnoticed again.
+# Idempotent; ArgoCD re-runs it on each sync (PostSync hook).
 #
-# !!! The Casdoor REST API shape (login + application CRUD) is version-specific.
-# !!! This Job is a working scaffold; validate the endpoints/payloads against the
-# !!! deployed casbin/casdoor-all-in-one before relying on it in production.
+# THIS JOB'S "done" MEANS DONE. Every Casdoor API answer is checked, because
+# Casdoor reports errors as HTTP 200 with {"status":"error"} in the body
+# (routers/authz_filter.go denyRequest -> responseError): the version of this
+# script that only looked at the HTTP status printed all 13 "added app-<name>"
+# lines during a run whose admin login had FAILED, so every call went out
+# anonymous, Casdoor logged "result = deny" and NOTHING persisted. A failed run
+# was indistinguishable from a successful one — which is exactly why the missing
+# seed and the default admin password went unnoticed for so long. So: the login
+# is verified by reading the session back, every write is verified by re-reading
+# the object, nothing prints "added" it did not confirm, and any failed step
+# makes the Job exit non-zero.
 # Reads admin creds from Secret casdoor-admin (username/password) and per-app
 # client-secrets from Secret casdoor-app-secrets — both materialized by ESO from
 # Vault (manifests/external-secrets). Keys never touch git or any web interface.
@@ -25,8 +39,28 @@ data:
 
     BASE = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
     ORG  = os.environ.get("CASDOOR_ORG", "hugmesh")
-    ADMIN_USER = open("/secrets/admin/username").read().strip()
-    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+    # Where the Job mounts the ESO Secrets, and the declarative seed it cross-checks
+    # (the SAME ConfigMap the casdoor Deployment mounts at /init_data.json). Both are
+    # env-overridable ONLY so the offline guard can point them at a fixture tree —
+    # the Job never sets either, so the cluster always uses the paths below.
+    SECRETS   = os.environ.get("CASDOOR_SECRETS_DIR", "/secrets")
+    SEED_FILE = os.environ.get("CASDOOR_INIT_DATA", "/init-data/init_data.json")
+    ADMIN_USER = open(f"{SECRETS}/admin/username").read().strip()
+    ADMIN_PASS = open(f"{SECRETS}/admin/password").read().strip()
+    # The password casbin/casdoor gives the built-in admin when it bootstraps an
+    # empty database. Public knowledge, so a bootstrap value and not a secret:
+    # reconcile_admin_password() uses it to take the account over exactly once on a
+    # fresh cluster, and then PROVES it no longer logs in.
+    CASDOOR_BOOTSTRAP_PASSWORD = "123"
+
+    # Steps that failed, collected instead of raised so one broken leg does not hide
+    # the state of the others. A non-empty list makes the Job exit non-zero at the
+    # end — "casdoor-init: done" is only ever printed when this is empty.
+    FAILURES = []
+
+    def fail(msg):
+        print(f"  FAIL {msg}")
+        FAILURES.append(msg)
 
     # app name -> (redirectUris, role). Mirrors init_data.json + SECURITY.md.
     APPS = {
@@ -83,28 +117,201 @@ data:
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
-    def call(path, payload=None, method="GET"):
-        url = BASE + path
-        data = json.dumps(payload).encode() if payload is not None else None
-        req = urllib.request.Request(url, data=data, method=method,
-                                     headers={"Content-Type": "application/json"})
-        with opener.open(req, timeout=15) as r:
-            return json.loads(r.read() or "{}")
+    class CasdoorError(RuntimeError):
+        """A Casdoor call that did not report success."""
+
+    def call(path, payload=None, method="GET", form=None):
+        """The ONE way this script talks to Casdoor. Nothing may bypass it.
+
+        Casdoor answers an authorization denial, a validation error and a bad login
+        alike with HTTP 200 and {"status":"error","msg":...} — urllib raises nothing,
+        so a caller that only sees exceptions sees success. Every response envelope
+        is therefore checked here, once, and a non-"ok" status raises.
+        `form` sends application/x-www-form-urlencoded (the shape /api/set-password
+        reads its parameters from); `payload` sends JSON (everything else)."""
+        headers = {}
+        if form is not None:
+            data = urllib.parse.urlencode(form).encode()
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        elif payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        else:
+            data = None
+        req = urllib.request.Request(BASE + path, data=data, method=method,
+                                     headers=headers)
+        try:
+            with opener.open(req, timeout=15) as r:
+                body = r.read()
+        except urllib.error.HTTPError as e:
+            raise CasdoorError(f"{method} {path}: HTTP {e.code}") from None
+        except urllib.error.URLError as e:
+            raise CasdoorError(f"{method} {path}: {e.reason}") from None
+        try:
+            resp = json.loads(body or "{}")
+        except ValueError:
+            raise CasdoorError(f"{method} {path}: response was not JSON") from None
+        if not isinstance(resp, dict):
+            raise CasdoorError(f"{method} {path}: unexpected response shape") from None
+        if resp.get("status") != "ok":
+            raise CasdoorError(f"{method} {path}: {resp.get('msg') or resp}") from None
+        return resp
+
+    def probe(path):
+        """GET an object, or None when it does not exist.
+
+        Casdoor is inconsistent about a missing object (some endpoints answer
+        {"status":"ok","data":null}, others {"status":"error","msg":"... does not
+        exist"}), so an error here reads as absent. That is only safe because
+        require_admin_session() has already proved the session is a real admin — a
+        DENIED read can therefore not masquerade as an absent object for long: the
+        add that follows goes through call(), which raises, and every write is
+        re-read before anything is reported as done."""
+        try:
+            return call(path).get("data")
+        except CasdoorError:
+            return None
 
     def wait_ready():
         for _ in range(60):
             try:
-                opener.open(BASE + "/api/health", timeout=5); return
-            except Exception:
+                call("/api/health"); return
+            except CasdoorError:
                 time.sleep(3)
         raise SystemExit("casdoor not reachable")
 
-    def login():
-        # Casdoor admin login (session cookie). Built-in app/org host the admin.
+    def require_admin_session():
+        """Read the session back. A 200/ok from /api/login is NOT proof of an admin
+        session: the run that printed 13 "added" lines had a login it never checked,
+        and every later call went out anonymous. /api/get-account resolves the cookie
+        we actually hold, so this is the one check that catches that."""
+        try:
+            me = call("/api/get-account")
+        except CasdoorError:
+            return False
+        name = (me.get("data") or {}).get("name") or me.get("name")
+        return name == ADMIN_USER
+
+    def try_login(password):
+        """Attempt an admin login with `password`; True only with a usable session.
+        Built-in app/org host the admin. Never logs or returns the password."""
+        cj.clear()
         body = {"application": "app-built-in", "organization": "built-in",
-                "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
+                "username": ADMIN_USER, "password": password, "type": "login",
                 "autoSignin": True}
-        return call("/api/login", body, "POST")
+        try:
+            call("/api/login", body, "POST")
+        except CasdoorError:
+            return False
+        return require_admin_session()
+
+    def reconcile_admin_password():
+        """Put the Vault/ESO password on the built-in admin, and PROVE the casdoor
+        default no longer works. Returns False when no admin session could be had.
+
+        Nothing else does this. init_data.json declares no built-in/admin user, and
+        even if it did, initDefinedUser() skips an account that already exists — so
+        Casdoor's own bootstrap password survives every restart. /api/update-user
+        does NOT change a password (confirmed live); /api/set-password does, and
+        takes form parameters, not JSON.
+
+        The desired password is tried FIRST so a converged cluster performs exactly
+        one login and never touches set-password. At most two wrong-password attempts
+        are ever made, well under casdoor's 5-attempt sign-in lockout, and a success
+        resets that counter. No password value is printed on any path."""
+        if ADMIN_PASS == CASDOOR_BOOTSTRAP_PASSWORD:
+            fail("the provisioned admin password IS the casdoor bootstrap default — "
+                 "rotate secret/hugmesh/casdoor in Vault; refusing to leave the IdP "
+                 "on a publicly known credential")
+            return False
+        if try_login(ADMIN_PASS):
+            print("  admin password: already the provisioned value (no change)")
+        elif try_login(CASDOOR_BOOTSTRAP_PASSWORD):
+            print("  admin password: still the casdoor bootstrap default — applying "
+                  "the provisioned value")
+            try:
+                call("/api/set-password", method="POST",
+                     form={"userOwner": "built-in", "userName": ADMIN_USER,
+                           "oldPassword": CASDOOR_BOOTSTRAP_PASSWORD,
+                           "newPassword": ADMIN_PASS})
+            except CasdoorError as e:
+                fail(f"set-password failed: {e}")
+                return False
+            if not try_login(ADMIN_PASS):
+                fail("set-password reported success but the provisioned password "
+                     "does not log in — the admin credential is NOT what Vault holds")
+                return False
+            print("  admin password: applied and verified by re-login")
+        else:
+            fail("admin login failed with BOTH the provisioned password and the "
+                 "casdoor bootstrap default — reconcile secret/hugmesh/casdoor with "
+                 "the account's real password (nothing below can run)")
+            return False
+        # The exposure is the DEFAULT still working, so assert it does not. This is
+        # the check that would have caught POST /api/login admin/123 -> {"status":"ok"}
+        # on a cluster whose Vault password had been "provisioned" for months.
+        if try_login(CASDOOR_BOOTSTRAP_PASSWORD):
+            fail("the casdoor bootstrap default password STILL logs in as the admin")
+            return False
+        if not try_login(ADMIN_PASS):
+            fail("lost the admin session after the default-password check")
+            return False
+        return True
+
+    def ensure_seed():
+        """Create anything init_data.json declares that Casdoor's boot import did not.
+
+        The boot import is opt-in on app.conf's initDataFile key (see
+        app-conf-configmap.yaml) and reports nothing when it does not run, so the
+        first real cluster came up with no hugmesh organization, no roles and no
+        service users while every manifest claimed otherwise. This reads the SAME
+        ConfigMap the Deployment mounts and reconciles it through the API, verifying
+        each object by re-reading it. Create-only, exactly like the boot import with
+        initDataNewOnly: an object that already exists is left alone (its runtime
+        role membership must survive)."""
+        try:
+            with open(SEED_FILE) as fh:
+                seed = json.load(fh)
+        except (OSError, ValueError) as e:
+            fail(f"seed: cannot read {SEED_FILE}: {e}")
+            return
+        # init_data.json key -> the Casdoor API noun that reads/creates it, in the
+        # order object/init_data.go's InitFromFile() applies them (organizations
+        # before the things that reference them). A key this list does not cover is
+        # a FAILURE, not a skip — an unverified seed kind is how the whole file came
+        # to be inert in the first place.
+        kinds = [("organizations", "organization"), ("providers", "provider"),
+                 ("applications", "application"),   ("users", "user"),
+                 ("roles", "role"),                 ("webhooks", "webhook"),
+                 ("groups", "group"),               ("permissions", "permission")]
+        unknown = sorted(set(seed) - {k for k, _ in kinds})
+        if unknown:
+            fail(f"seed: {SEED_FILE} declares object kinds this Job cannot verify: "
+                 f"{', '.join(unknown)}")
+        for key, noun in kinds:
+            created = present = 0
+            declared = seed.get(key) or []
+            if not declared:
+                continue
+            for obj in declared:
+                # Every casdoor object is addressed "<owner>/<name>", including
+                # organizations (owner "admin") and applications.
+                oid = f"{obj['owner']}/{obj['name']}"
+                if probe(f"/api/get-{noun}?id={oid}"):
+                    present += 1
+                    continue
+                try:
+                    call(f"/api/add-{noun}", obj, "POST")
+                except CasdoorError as e:
+                    fail(f"seed: could not create {noun} {oid}: {e}")
+                    continue
+                if not probe(f"/api/get-{noun}?id={oid}"):
+                    fail(f"seed: add-{noun} {oid} reported success but the object "
+                         f"is not readable")
+                    continue
+                created += 1
+            print(f"  seed: {len(declared)} {key} declared, {present} already "
+                  f"present, {created} created by this Job")
 
     # --- D6+D8 JWT-Custom token shape (LYNCHPIN-VALIDATED against casbin/casdoor:3.80.0) ---
     # The DEFAULT tokenFormat=JWT serializes the FULL user object as flat claims, leaking
@@ -150,7 +357,7 @@ data:
     # ONLY the two named Properties.* keys, never the whole map).
 
     def reconcile_app(name, role):
-        secret = open(f"/secrets/apps/{name}").read().strip()
+        secret = open(f"{SECRETS}/apps/{name}").read().strip()
         appname = f"app-{name}"
         app = {
             "owner": "admin", "name": appname, "displayName": f"hugmesh {name}",
@@ -196,16 +403,25 @@ data:
         # !!! follow-up, not yet automated.
         if name == "headscale":
             app["redirectUris"] = ["https://scale.hugmesh.systems/oidc/callback"]
-        try:
-            existing = call(f"/api/get-application?id=admin/{appname}")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
+        verb = write_application(appname, app)
+        print(f"  {verb} {appname} (role {role})")
+
+    def write_application(appname, app):
+        """add-or-update an OAuth2 application, verified by re-reading it. Returns
+        the verb to report. Raises rather than let a caller announce a write that
+        did not land — a {"status":"ok"} that persists nothing is a shape this
+        platform has already been bitten by (see the update-group note below)."""
+        path = f"/api/get-application?id=admin/{appname}"
+        if probe(path):
             call(f"/api/update-application?id=admin/{appname}", app, "POST")
-            print(f"  updated {appname} (role {role})")
+            verb = "updated"
         else:
             call("/api/add-application", app, "POST")
-            print(f"  added   {appname} (role {role})")
+            verb = "added  "
+        if not probe(path):
+            raise CasdoorError(f"{appname}: {verb.strip()} reported success but the "
+                               f"application is not readable")
+        return verb
 
     def reconcile_desktop_client():
         """D6+D8 / GEN-SSO #135 — seed the hugmesh-desktop PKCE PUBLIC client.
@@ -273,16 +489,8 @@ data:
             "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,
             "tokenAttributes": JWT_CUSTOM_TOKEN_ATTRIBUTES,
         }
-        try:
-            existing = call(f"/api/get-application?id=admin/{appname}")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
-            call(f"/api/update-application?id=admin/{appname}", app, "POST")
-            print(f"  updated {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
-        else:
-            call("/api/add-application", app, "POST")
-            print(f"  added   {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
+        verb = write_application(appname, app)
+        print(f"  {verb} {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
 
     def reconcile_org_mfa():
         """D8 — enable the org MFA CAPABILITY (WebAuthn + TOTP available) and set the
@@ -291,15 +499,11 @@ data:
         never clobber org fields seeded by init_data.json (passwordType, languages, ...).
         """
         org_id = f"admin/{ORG}"
-        try:
-            resp = call(f"/api/get-organization?id={org_id}")
-            org = (resp.get("data") or {}) if resp else {}
-        except Exception as e:
-            print(f"  WARN org-mfa: failed to fetch organization {ORG}: {e}")
-            return
+        org = probe(f"/api/get-organization?id={org_id}") or {}
         if not org:
-            print(f"  org-mfa: organization {ORG} not found yet — skipping (init_data import pending)")
-            return
+            # ensure_seed() runs first and fails loudly when the organization cannot
+            # be created, so reaching here means it vanished between the two calls.
+            raise CasdoorError(f"organization {ORG} does not exist")
         # Capability ON, NOT required (dark): mfaItems list MFA types that are AVAILABLE.
         # `rule: "Optional"` => offered but not forced (enforcement flipped later).
         org["enableMfa"] = True
@@ -310,18 +514,33 @@ data:
         # WebAuthn relying-party + TOTP issuer scope the platform brand.
         org["mfaRememberInHours"] = 0
         org["websiteUrl"] = org.get("websiteUrl") or "https://hugmesh.systems"
-        try:
-            call(f"/api/update-organization?id={org_id}", org, "POST")
-            print(f"  org-mfa: enabled MFA capability (WebAuthn+TOTP available, NOT required) on {ORG}")
-        except Exception as e:
-            print(f"  WARN org-mfa: update-organization failed: {e}")
+        call(f"/api/update-organization?id={org_id}", org, "POST")
+        # Read the flag back: this is the one field the whole step exists to set.
+        if not (probe(f"/api/get-organization?id={org_id}") or {}).get("enableMfa"):
+            raise CasdoorError(f"update-organization reported success but enableMfa "
+                               f"is not set on {ORG}")
+        print(f"  org-mfa: enabled MFA capability (WebAuthn+TOTP available, NOT required) on {ORG}")
+
+    def write_provider(name, provider):
+        """add-or-update a federation provider, verified by re-reading it."""
+        path = f"/api/get-provider?id=admin/{name}"
+        if probe(path):
+            call(f"/api/update-provider?id=admin/{name}", provider, "POST")
+            verb = "updated"
+        else:
+            call("/api/add-provider", provider, "POST")
+            verb = "added  "
+        if not probe(path):
+            raise CasdoorError(f"{name} provider: {verb.strip()} reported success but "
+                               f"the provider is not readable")
+        return verb
 
     def reconcile_google_provider():
         """Seed the Google OAuth federation provider (clientId/secret from Vault).
         Skipped when the casdoor-google secret is absent (provider is optional)."""
         try:
-            cid  = open("/secrets/google/clientId").read().strip()
-            csec = open("/secrets/google/clientSecret").read().strip()
+            cid  = open(f"{SECRETS}/google/clientId").read().strip()
+            csec = open(f"{SECRETS}/google/clientSecret").read().strip()
         except FileNotFoundError:
             print("  google provider: casdoor-google secret absent — skipping")
             return
@@ -337,24 +556,15 @@ data:
             "clientId": cid, "clientSecret": csec,
             "scopes": "profile email", "enableSignUp": True,
         }
-        try:
-            existing = call("/api/get-provider?id=admin/google")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
-            call("/api/update-provider?id=admin/google", provider, "POST")
-            print("  updated google provider")
-        else:
-            call("/api/add-provider", provider, "POST")
-            print("  added   google provider")
+        print(f"  {write_provider('google', provider)} google provider")
 
     def reconcile_github_provider():
         """Seed the GitHub OAuth federation provider (clientId/secret from Vault).
         Skipped when the casdoor-github secret is absent (provider is optional).
         Available to ALL roles; registration -> admin-approval assigns the role."""
         try:
-            cid  = open("/secrets/github/clientId").read().strip()
-            csec = open("/secrets/github/clientSecret").read().strip()
+            cid  = open(f"{SECRETS}/github/clientId").read().strip()
+            csec = open(f"{SECRETS}/github/clientSecret").read().strip()
         except FileNotFoundError:
             print("  github provider: casdoor-github secret absent — skipping")
             return
@@ -370,16 +580,7 @@ data:
             "clientId": cid, "clientSecret": csec,
             "scopes": "user:email read:user", "enableSignUp": True,
         }
-        try:
-            existing = call("/api/get-provider?id=admin/github")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
-            call("/api/update-provider?id=admin/github", provider, "POST")
-            print("  updated github provider")
-        else:
-            call("/api/add-provider", provider, "POST")
-            print("  added   github provider")
+        print(f"  {write_provider('github', provider)} github provider")
 
     def reconcile_discord_provider():
         """Seed the Discord OAuth federation provider (clientId/secret from Vault).
@@ -389,8 +590,8 @@ data:
         admin-approval assigns the role. (The Discord registration UI +
         admin-bff allowlist already exist — this just seeds the casdoor side.)"""
         try:
-            cid  = open("/secrets/discord/clientId").read().strip()
-            csec = open("/secrets/discord/clientSecret").read().strip()
+            cid  = open(f"{SECRETS}/discord/clientId").read().strip()
+            csec = open(f"{SECRETS}/discord/clientSecret").read().strip()
         except FileNotFoundError:
             print("  discord provider: casdoor-discord secret absent — skipping")
             return
@@ -409,16 +610,7 @@ data:
             "customUserInfoUrl": "https://discord.com/api/users/@me",
             "scopes": "identify email", "enableSignUp": True,
         }
-        try:
-            existing = call("/api/get-provider?id=admin/discord")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
-            call("/api/update-provider?id=admin/discord", provider, "POST")
-            print("  updated discord provider")
-        else:
-            call("/api/add-provider", provider, "POST")
-            print("  added   discord provider")
+        print(f"  {write_provider('discord', provider)} discord provider")
 
     def reconcile_signup_webhook():
         """Register the POST-signup reconcile webhook so Casdoor notifies the
@@ -435,7 +627,7 @@ data:
         !!! version-specific — validate against the deployed casbin/casdoor before
         !!! relying on auto-import; the pre-signup proxy gate works regardless."""
         try:
-            secret = open("/secrets/webhook/secret").read().strip()
+            secret = open(f"{SECRETS}/webhook/secret").read().strip()
         except FileNotFoundError:
             secret = ""
         url = ("http://signup-gate.hugmesh-pki.svc.cluster.local:8000"
@@ -450,16 +642,17 @@ data:
             "headers": ([{"name": "X-Signup-Gate-Secret", "value": secret}]
                         if secret else []),
         }
-        try:
-            existing = call("/api/get-webhook?id=admin/signup-gate-reconcile")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
+        path = "/api/get-webhook?id=admin/signup-gate-reconcile"
+        if probe(path):
             call("/api/update-webhook?id=admin/signup-gate-reconcile", webhook, "POST")
-            print("  updated signup-gate-reconcile webhook")
+            verb = "updated"
         else:
             call("/api/add-webhook", webhook, "POST")
-            print("  added   signup-gate-reconcile webhook")
+            verb = "added  "
+        if not probe(path):
+            raise CasdoorError(f"signup-gate-reconcile webhook: {verb.strip()} reported "
+                               f"success but the webhook is not readable")
+        print(f"  {verb} signup-gate-reconcile webhook")
 
     def reconcile_superadmin():
         """Create the platform SUPERADMIN bootstrap user and assign ROLE_SUPERADMIN.
@@ -468,10 +661,10 @@ data:
         gracefully when the Secret is absent so deployments without a pre-provisioned
         superadmin still work — the operator adds the user manually in that case."""
         try:
-            username = open("/secrets/superadmin/username").read().strip()
-            password = open("/secrets/superadmin/password").read().strip()
+            username = open(f"{SECRETS}/superadmin/username").read().strip()
+            password = open(f"{SECRETS}/superadmin/password").read().strip()
         except FileNotFoundError:
-            print("  superadmin: /secrets/superadmin absent (optional Secret not synced) — skipping bootstrap user")
+            print(f"  superadmin: {SECRETS}/superadmin absent (optional Secret not synced) — skipping bootstrap user")
             return
         if not username or not password:
             print("  superadmin: username/password empty — skipping")
@@ -484,25 +677,24 @@ data:
             "type": "normal-user", "password": password,
             "isAdmin": False, "isForbidden": False, "isDeleted": False,
         }
-        try:
-            existing = call(f"/api/get-user?id={user_id}")
-        except Exception:
-            existing = None
-        if existing and existing.get("data"):
+        user_path = f"/api/get-user?id={user_id}"
+        if probe(user_path):
             call(f"/api/update-user?id={user_id}", user, "POST")
-            print(f"  superadmin: updated user {username} in org {ORG}")
+            verb = "updated"
         else:
             call("/api/add-user", user, "POST")
-            print(f"  superadmin: created user {username} in org {ORG}")
+            verb = "created"
+        if not probe(user_path):
+            raise CasdoorError(f"superadmin: {verb} user {username} but it is not readable")
+        print(f"  superadmin: {verb} user {username} in org {ORG}")
 
-        # Assign ROLE_SUPERADMIN: GET current role, add the user, PUT back.
+        # Assign ROLE_SUPERADMIN: GET current role, add the user, PUT back, then
+        # re-read — the role is the authorization source, so an unpersisted write
+        # here means the bootstrap superadmin holds nothing.
         role_id = f"{ORG}/ROLE_SUPERADMIN"
-        try:
-            role_resp = call(f"/api/get-role?id={role_id}")
-            role = role_resp.get("data") or {}
-        except Exception as e:
-            print(f"  WARN superadmin: failed to fetch ROLE_SUPERADMIN: {e}")
-            return
+        role = probe(f"/api/get-role?id={role_id}") or {}
+        if not role:
+            raise CasdoorError(f"ROLE_SUPERADMIN does not exist in org {ORG}")
         users = role.get("users") or []
         full_name = f"{ORG}/{username}"
         if full_name not in users:
@@ -510,11 +702,11 @@ data:
         role["owner"] = ORG
         role["name"] = "ROLE_SUPERADMIN"
         role["users"] = users
-        try:
-            call(f"/api/update-role?id={role_id}", role, "POST")
-            print(f"  superadmin: assigned ROLE_SUPERADMIN to {username}")
-        except Exception as e:
-            print(f"  WARN superadmin: role assignment failed: {e}")
+        call(f"/api/update-role?id={role_id}", role, "POST")
+        if full_name not in ((probe(f"/api/get-role?id={role_id}") or {}).get("users") or []):
+            raise CasdoorError(f"update-role reported success but {username} is not a "
+                               f"member of ROLE_SUPERADMIN")
+        print(f"  superadmin: assigned ROLE_SUPERADMIN to {username}")
 
         # --- Mesh-join: grant /headscale Casdoor group membership -----------------
         # headscale OIDC node-join GATES enrolment on allowed_groups:
@@ -553,11 +745,7 @@ data:
         group_name = "headscale"
         group_id = f"{ORG}/{group_name}"
         member = f"{ORG}/{username}"
-        try:
-            grp_resp = call(f"/api/get-group?id={group_id}")
-            group = (grp_resp.get("data") or {}) if grp_resp else {}
-        except Exception:
-            group = {}
+        group = probe(f"/api/get-group?id={group_id}") or {}
         if not group:
             # Seed the group — nothing else creates it. Virtual so it never collides
             # with a user's single physical group; top-level org group. The token
@@ -569,19 +757,18 @@ data:
                 "type": "Virtual", "parentId": ORG,
                 "isTopGroup": True, "isEnabled": True, "users": [],
             }
-            try:
-                call("/api/add-group", new_group, "POST")
-                print(f"  superadmin: created Casdoor group /{group_name}")
-                # RE-FETCH rather than reusing new_group for the update below —
-                # Casdoor may populate server-side fields (createdTime, an
-                # internal id, ...) that a blind local-dict POST won't round-trip,
-                # which is exactly what silently dropped the membership before
-                # this fix (update-group reported "Affected" but users stayed []).
-                grp_resp = call(f"/api/get-group?id={group_id}")
-                group = (grp_resp.get("data") or {}) if grp_resp else new_group
-            except Exception as e:
-                print(f"  WARN superadmin: add-group /{group_name} failed: {e}")
-                group = new_group
+            call("/api/add-group", new_group, "POST")
+            # RE-FETCH rather than reusing new_group for the update below —
+            # Casdoor may populate server-side fields (createdTime, an
+            # internal id, ...) that a blind local-dict POST won't round-trip,
+            # which is exactly what silently dropped the membership before
+            # this fix (update-group reported "Affected" but users stayed []).
+            # The re-fetch doubles as the did-it-persist check.
+            group = probe(f"/api/get-group?id={group_id}") or {}
+            if not group:
+                raise CasdoorError(f"add-group /{group_name} reported success but the "
+                                   f"group is not readable")
+            print(f"  superadmin: created Casdoor group /{group_name}")
         members = group.get("users") or []
         if member not in members:
             members.append(member)
@@ -599,74 +786,83 @@ data:
         # status is misleading here. This does NOT affect the actual OIDC gate —
         # the `groups` token claim is sourced from user.groups (verified working
         # below), not group.users; this is Casdoor-admin-console visibility only.
-        try:
-            call(f"/api/update-group?id={group_id}", group, "POST")
-            verify_resp = call(f"/api/get-group?id={group_id}")
-            verify_members = ((verify_resp.get("data") or {}).get("users") or []) if verify_resp else []
-            if member in verify_members:
-                print(f"  superadmin: added {username} to Casdoor group /{group_name}")
-            else:
-                print(f"  NOTE superadmin: update-group reported success but did not persist "
-                      f"group.users on /{group_name} (known casdoor:3.80.0 limitation — the "
-                      f"OIDC gate is unaffected, it reads user.groups, set below)")
-        except Exception as e:
-            print(f"  WARN superadmin: group membership (update-group) failed: {e}")
+        call(f"/api/update-group?id={group_id}", group, "POST")
+        if member in ((probe(f"/api/get-group?id={group_id}") or {}).get("users") or []):
+            print(f"  superadmin: added {username} to Casdoor group /{group_name}")
+        else:
+            print(f"  NOTE superadmin: update-group reported success but did not persist "
+                  f"group.users on /{group_name} (known casdoor:3.80.0 limitation — the "
+                  f"OIDC gate is unaffected, it reads user.groups, set below)")
         # Reflect membership on the user record too — this is what Casdoor emits as
         # the OIDC `groups` claim headscale gates on. GET the user, merge the group
-        # id, PUT it back (never clobber any groups already present).
+        # id, PUT it back (never clobber any groups already present). This one IS the
+        # gate, so unlike group.users above it is verified and must persist.
+        u = probe(user_path) or {}
+        if not u:
+            raise CasdoorError(f"superadmin: user {username} disappeared before the "
+                               f"user.groups update")
+        u_groups = u.get("groups") or []
+        if group_id not in u_groups:
+            u_groups.append(group_id)
+            u["groups"] = u_groups
+            call(f"/api/update-user?id={user_id}", u, "POST")
+            if group_id not in ((probe(user_path) or {}).get("groups") or []):
+                raise CasdoorError(f"update-user reported success but user.groups does "
+                                   f"not carry {group_id} — the headscale OIDC mesh-join "
+                                   f"gate would deny this superadmin")
+            print(f"  superadmin: set user.groups={u_groups} on {username}")
+
+    # ── run ──────────────────────────────────────────────────────────────────
+    # Every leg is a named step. A step that raises is RECORDED, not swallowed:
+    # the remaining steps still run (so one broken leg does not hide the state of
+    # the others) and the Job exits non-zero at the end. `optional` marks the legs
+    # whose ABSENCE is a legitimate deployment choice — but only a missing Secret
+    # skips them; an API failure inside one is a failure like any other.
+    def step(label, fn, optional=False):
         try:
-            u_resp = call(f"/api/get-user?id={user_id}")
-            u = (u_resp.get("data") or {}) if u_resp else {}
-            if u:
-                u_groups = u.get("groups") or []
-                if group_id not in u_groups:
-                    u_groups.append(group_id)
-                    u["groups"] = u_groups
-                    call(f"/api/update-user?id={user_id}", u, "POST")
-                    print(f"  superadmin: set user.groups={u_groups} on {username}")
-        except Exception as e:
-            print(f"  WARN superadmin: user.groups update failed: {e}")
+            fn()
+        except CasdoorError as e:
+            fail(f"{label}: {e}")
+        except FileNotFoundError as e:
+            if optional:
+                print(f"  {label}: optional input absent ({e.filename}) — skipping")
+            else:
+                fail(f"{label}: required input missing: {e.filename}")
+        except Exception as e:  # noqa: BLE001 — an unexpected fault is still a failure
+            fail(f"{label}: unexpected error: {type(e).__name__}: {e}")
 
     wait_ready()
-    login()
+    # Nothing below can work without a real admin session, and the login is also
+    # where the provisioned password gets applied — so this one is fatal on the spot
+    # rather than recorded and pressed on with (that is precisely how a whole run
+    # went out anonymous while printing success).
+    if not reconcile_admin_password():
+        for f in FAILURES:
+            print(f"  - {f}")
+        raise SystemExit("casdoor-init: FAILED — no usable Casdoor admin session")
+    # The org/roles/service-users the declarative seed declares must exist before
+    # anything references them (org-mfa, the app organization field, ROLE_SUPERADMIN).
+    step("seed", ensure_seed)
     # D8: enable the org MFA capability (dark — available, not required) BEFORE the
     # apps so the WebAuthn RP / TOTP issuer scope exists when clients are reconciled.
-    try:
-        reconcile_org_mfa()
-    except Exception as e:
-        print(f"  WARN org-mfa: {e}")
+    step("org-mfa", reconcile_org_mfa)
     for name, role in APPS.items():
-        try:
-            reconcile_app(name, role)
-        except Exception as e:
-            print(f"  WARN {name}: {e}")
+        step(name, lambda n=name, r=role: reconcile_app(n, r))
     # D6+D8 / GEN-SSO #135 / RESIDUAL #9a: seed the hugmesh-desktop PKCE public
-    # client (JWT-Custom). A failure here leaves the desktop feature ships-dark (no
-    # token => empty store, no sudo claim), never broken — so we warn and continue.
-    try:
-        reconcile_desktop_client()
-    except Exception as e:
-        print(f"  WARN hugmesh-desktop client: {e}")
-    try:
-        reconcile_google_provider()
-    except Exception as e:
-        print(f"  WARN google provider: {e}")
-    try:
-        reconcile_github_provider()
-    except Exception as e:
-        print(f"  WARN github provider: {e}")
-    try:
-        reconcile_discord_provider()
-    except Exception as e:
-        print(f"  WARN discord provider: {e}")
-    try:
-        reconcile_signup_webhook()
-    except Exception as e:
-        print(f"  WARN signup-gate webhook: {e}")
-    try:
-        reconcile_superadmin()
-    except Exception as e:
-        print(f"  WARN superadmin bootstrap: {e}")
+    # client (JWT-Custom). Its absence leaves the desktop feature ships-dark (no
+    # token => empty store, no sudo claim) — which is still a failure to report.
+    step("hugmesh-desktop client", reconcile_desktop_client)
+    step("google provider",  reconcile_google_provider,  optional=True)
+    step("github provider",  reconcile_github_provider,  optional=True)
+    step("discord provider", reconcile_discord_provider, optional=True)
+    step("signup-gate webhook", reconcile_signup_webhook, optional=True)
+    step("superadmin bootstrap", reconcile_superadmin, optional=True)
+
+    if FAILURES:
+        print(f"casdoor-init: FAILED — {len(FAILURES)} step(s) did not complete:")
+        for f in FAILURES:
+            print(f"  - {f}")
+        raise SystemExit(1)
     print("casdoor-init: done")
 ---
 apiVersion: batch/v1
@@ -707,6 +903,10 @@ spec:
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: script, mountPath: /script, readOnly: true }
+            # The SAME declarative seed the casdoor Deployment mounts. ensure_seed()
+            # reconciles it through the API so a boot-time import that did not run
+            # (the shape that shipped an empty IdP) cannot go unnoticed.
+            - { name: init-data, mountPath: /init-data, readOnly: true }
             - { name: admin, mountPath: /secrets/admin, readOnly: true }
             - { name: apps, mountPath: /secrets/apps, readOnly: true }
             - { name: google, mountPath: /secrets/google, readOnly: true }
@@ -717,6 +917,10 @@ spec:
       volumes:
         - name: script
           configMap: { name: casdoor-init-script, defaultMode: 0555 }
+        # Declarative org/roles/service-users seed (init-data-configmap.yaml) — the
+        # same ConfigMap casdoor itself mounts at /init_data.json.
+        - name: init-data
+          configMap: { name: casdoor-init-data }
         # ESO-materialized from Vault — never committed.
         - name: admin
           secret: { secretName: casdoor-admin }

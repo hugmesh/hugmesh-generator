@@ -3,13 +3,16 @@
 # the ESO Secret casdoor-games-app), and seeds the GitHub OAuth federation provider
 # (so people can sign up as a native games "player"). Mirrors the systems
 # manifests/casdoor/init-job.yaml pattern, but targets the SEPARATE games Casdoor +
-# org "threewizards". The org / role catalog / seed users themselves are seeded
-# declaratively by init_data.json (init-data-configmap.yaml). Idempotent; ArgoCD
-# re-runs it on each sync (PostSync hook).
+# org "threewizards". It also owns the games admin's PASSWORD and verifies the
+# declarative init_data.json seed — see that file's header for both, and for the
+# live evidence behind them. Idempotent; ArgoCD re-runs it on each sync (PostSync).
 #
-# !!! The Casdoor REST API shape (login + application/provider CRUD) is
-# !!! version-specific. This Job is a working scaffold; validate the endpoints /
-# !!! payloads against the deployed casbin/casdoor before relying on it in production.
+# THIS JOB'S "done" MEANS DONE, for the same reason the systems one's does:
+# Casdoor reports errors as HTTP 200 with {"status":"error"} in the body, so a
+# script that only watches for exceptions prints success through a run in which
+# every call was denied and nothing persisted. Login is verified by reading the
+# session back, every write is verified by re-reading the object, and any failed
+# step exits non-zero.
 # Reads admin creds from Secret casdoor-games-admin (username/password) and the
 # threewizards-app client-secret from Secret casdoor-games-app — both materialized by
 # ESO from Vault (manifests/external-secrets). Keys never touch git.
@@ -31,38 +34,204 @@ data:
     ORG  = os.environ.get("CASDOOR_ORG", "threewizards")
     APP_NAME   = os.environ.get("CASDOOR_APP_NAME", "threewizards-app")
     CLIENT_ID  = os.environ.get("CASDOOR_CLIENT_ID", "twclient001")
-    ADMIN_USER = open("/secrets/admin/username").read().strip()
-    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+    # Where the Job mounts the ESO Secrets, and the declarative seed it cross-checks
+    # (the SAME ConfigMap the casdoor-games Deployment mounts at /init_data.json).
+    # Env-overridable ONLY so the offline guard can point them at a fixture tree —
+    # the Job sets neither, so the cluster always uses the paths below.
+    SECRETS   = os.environ.get("CASDOOR_SECRETS_DIR", "/secrets")
+    SEED_FILE = os.environ.get("CASDOOR_INIT_DATA", "/init-data/init_data.json")
+    ADMIN_USER = open(f"{SECRETS}/admin/username").read().strip()
+    ADMIN_PASS = open(f"{SECRETS}/admin/password").read().strip()
+    # The password casbin/casdoor gives the built-in admin when it bootstraps an
+    # empty database — public knowledge, hence a bootstrap value and not a secret.
+    CASDOOR_BOOTSTRAP_PASSWORD = "123"
+
+    # Steps that failed. A non-empty list makes the Job exit non-zero; the "done"
+    # line is only ever printed when it is empty.
+    FAILURES = []
+
+    def fail(msg):
+        print(f"  FAIL {msg}")
+        FAILURES.append(msg)
 
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
-    def call(path, payload=None, method="GET"):
-        url = BASE + path
-        data = json.dumps(payload).encode() if payload is not None else None
-        req = urllib.request.Request(url, data=data, method=method,
-                                     headers={"Content-Type": "application/json"})
-        with opener.open(req, timeout=15) as r:
-            return json.loads(r.read() or "{}")
+    class CasdoorError(RuntimeError):
+        """A Casdoor call that did not report success."""
+
+    def call(path, payload=None, method="GET", form=None):
+        """The ONE way this script talks to Casdoor. Nothing may bypass it: a
+        denial, a bad login and a validation error all arrive as HTTP 200 with
+        {"status":"error"} in the body, so the envelope is checked here, once.
+        `form` sends application/x-www-form-urlencoded (what /api/set-password
+        reads its parameters from); `payload` sends JSON."""
+        headers = {}
+        if form is not None:
+            data = urllib.parse.urlencode(form).encode()
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        elif payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        else:
+            data = None
+        req = urllib.request.Request(BASE + path, data=data, method=method,
+                                     headers=headers)
+        try:
+            with opener.open(req, timeout=15) as r:
+                body = r.read()
+        except urllib.error.HTTPError as e:
+            raise CasdoorError(f"{method} {path}: HTTP {e.code}") from None
+        except urllib.error.URLError as e:
+            raise CasdoorError(f"{method} {path}: {e.reason}") from None
+        try:
+            resp = json.loads(body or "{}")
+        except ValueError:
+            raise CasdoorError(f"{method} {path}: response was not JSON") from None
+        if not isinstance(resp, dict):
+            raise CasdoorError(f"{method} {path}: unexpected response shape") from None
+        if resp.get("status") != "ok":
+            raise CasdoorError(f"{method} {path}: {resp.get('msg') or resp}") from None
+        return resp
+
+    def probe(path):
+        """GET an object, or None when it does not exist. Casdoor is inconsistent
+        about a missing object (ok+null on some endpoints, an error envelope on
+        others), so an error reads as absent — safe only because
+        require_admin_session() has already proved the session, and because every
+        write is re-read before anything is reported as done."""
+        try:
+            return call(path).get("data")
+        except CasdoorError:
+            return None
 
     def wait_ready():
         for _ in range(60):
             try:
-                opener.open(BASE + "/api/health", timeout=5); return
-            except Exception:
+                call("/api/health"); return
+            except CasdoorError:
                 time.sleep(3)
         raise SystemExit("casdoor-games not reachable")
 
-    def login():
-        # Casdoor admin login (session cookie). Built-in app/org host the admin.
+    def require_admin_session():
+        """Read the session back — a 200/ok from /api/login is not proof of one."""
+        try:
+            me = call("/api/get-account")
+        except CasdoorError:
+            return False
+        name = (me.get("data") or {}).get("name") or me.get("name")
+        return name == ADMIN_USER
+
+    def try_login(password):
+        """Attempt an admin login with `password`; True only with a usable session.
+        Built-in app/org host the admin. Never logs or returns the password."""
+        cj.clear()
         body = {"application": "app-built-in", "organization": "built-in",
-                "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
+                "username": ADMIN_USER, "password": password, "type": "login",
                 "autoSignin": True}
-        return call("/api/login", body, "POST")
+        try:
+            call("/api/login", body, "POST")
+        except CasdoorError:
+            return False
+        return require_admin_session()
+
+    def reconcile_admin_password():
+        """Put the Vault/ESO password on the games realm's built-in admin and PROVE
+        the casdoor default no longer works. Same mechanism and same reasoning as
+        the systems realm (manifests/casdoor/init-job.yaml): update-user cannot
+        change a password, /api/set-password can, and it takes form parameters.
+        Tries the desired password first, so a converged cluster performs one login
+        and touches nothing. No password value is printed on any path."""
+        if ADMIN_PASS == CASDOOR_BOOTSTRAP_PASSWORD:
+            fail("the provisioned games admin password IS the casdoor bootstrap "
+                 "default — rotate it in Vault; refusing to leave the games IdP on a "
+                 "publicly known credential")
+            return False
+        if try_login(ADMIN_PASS):
+            print("  admin password: already the provisioned value (no change)")
+        elif try_login(CASDOOR_BOOTSTRAP_PASSWORD):
+            print("  admin password: still the casdoor bootstrap default — applying "
+                  "the provisioned value")
+            try:
+                call("/api/set-password", method="POST",
+                     form={"userOwner": "built-in", "userName": ADMIN_USER,
+                           "oldPassword": CASDOOR_BOOTSTRAP_PASSWORD,
+                           "newPassword": ADMIN_PASS})
+            except CasdoorError as e:
+                fail(f"set-password failed: {e}")
+                return False
+            if not try_login(ADMIN_PASS):
+                fail("set-password reported success but the provisioned password "
+                     "does not log in — the admin credential is NOT what Vault holds")
+                return False
+            print("  admin password: applied and verified by re-login")
+        else:
+            fail("admin login failed with BOTH the provisioned password and the "
+                 "casdoor bootstrap default — reconcile the Vault value with the "
+                 "account's real password (nothing below can run)")
+            return False
+        if try_login(CASDOOR_BOOTSTRAP_PASSWORD):
+            fail("the casdoor bootstrap default password STILL logs in as the "
+                 "games admin")
+            return False
+        if not try_login(ADMIN_PASS):
+            fail("lost the admin session after the default-password check")
+            return False
+        return True
+
+    def ensure_seed():
+        """Create anything init_data.json declares that the boot import did not.
+
+        The boot import is opt-in on app.conf's initDataFile key (see
+        app-conf-configmap.yaml) and says nothing when it does not run. This reads
+        the SAME ConfigMap the Deployment mounts and reconciles it through the API,
+        verifying each object by re-reading it. Create-only, exactly like the boot
+        import with initDataNewOnly: an object that exists is left alone."""
+        try:
+            with open(SEED_FILE) as fh:
+                seed = json.load(fh)
+        except (OSError, ValueError) as e:
+            fail(f"seed: cannot read {SEED_FILE}: {e}")
+            return
+        # init_data.json key -> the Casdoor API noun that reads/creates it, in the
+        # order object/init_data.go's InitFromFile() applies them. A key this list
+        # does not cover is a FAILURE, not a skip.
+        kinds = [("organizations", "organization"), ("providers", "provider"),
+                 ("applications", "application"),   ("users", "user"),
+                 ("roles", "role"),                 ("webhooks", "webhook"),
+                 ("groups", "group"),               ("permissions", "permission")]
+        unknown = sorted(set(seed) - {k for k, _ in kinds})
+        if unknown:
+            fail(f"seed: {SEED_FILE} declares object kinds this Job cannot verify: "
+                 f"{', '.join(unknown)}")
+        for key, noun in kinds:
+            created = present = 0
+            declared = seed.get(key) or []
+            if not declared:
+                continue
+            for obj in declared:
+                # Every casdoor object is addressed "<owner>/<name>", including
+                # organizations (owner "admin") and applications.
+                oid = f"{obj['owner']}/{obj['name']}"
+                if probe(f"/api/get-{noun}?id={oid}"):
+                    present += 1
+                    continue
+                try:
+                    call(f"/api/add-{noun}", obj, "POST")
+                except CasdoorError as e:
+                    fail(f"seed: could not create {noun} {oid}: {e}")
+                    continue
+                if not probe(f"/api/get-{noun}?id={oid}"):
+                    fail(f"seed: add-{noun} {oid} reported success but the object "
+                         f"is not readable")
+                    continue
+                created += 1
+            print(f"  seed: {len(declared)} {key} declared, {present} already "
+                  f"present, {created} created by this Job")
 
     def reconcile_app():
         # The threewizards-app client-secret (the games BFF's CASDOOR_CLIENT_SECRET).
-        secret = open("/secrets/app/clientSecret").read().strip()
+        secret = open(f"{SECRETS}/app/clientSecret").read().strip()
         app = {
             "owner": "admin", "name": APP_NAME, "displayName": "HugMesh Games",
             "organization": ORG, "clientId": CLIENT_ID, "clientSecret": secret,
@@ -81,24 +250,27 @@ data:
             "tokenFormat": "JWT", "expireInHours": 168, "refreshExpireInHours": 336,
             "enablePassword": True, "enableSignUp": False,
         }
-        try:
-            existing = call(f"/api/get-application?id=admin/{APP_NAME}")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
+        path = f"/api/get-application?id=admin/{APP_NAME}"
+        if probe(path):
             call(f"/api/update-application?id=admin/{APP_NAME}", app, "POST")
-            print(f"  updated {APP_NAME}")
+            verb = "updated"
         else:
             call("/api/add-application", app, "POST")
-            print(f"  added   {APP_NAME}")
+            verb = "added  "
+        # "added" must mean the object is READABLE afterwards — a {"status":"ok"}
+        # that persisted nothing is a shape this platform has already been bitten by.
+        if not probe(path):
+            raise CasdoorError(f"{APP_NAME}: {verb.strip()} reported success but the "
+                               f"application is not readable")
+        print(f"  {verb} {APP_NAME}")
 
     def reconcile_github_provider():
         """Seed the GitHub OAuth federation provider (clientId/secret from Vault).
         Skipped when the casdoor-games-github secret is absent (provider is optional);
         lets people sign up as a native games 'player'."""
         try:
-            cid  = open("/secrets/github/clientId").read().strip()
-            csec = open("/secrets/github/clientSecret").read().strip()
+            cid  = open(f"{SECRETS}/github/clientId").read().strip()
+            csec = open(f"{SECRETS}/github/clientSecret").read().strip()
         except FileNotFoundError:
             print("  github provider: casdoor-games-github secret absent — skipping")
             return
@@ -114,27 +286,53 @@ data:
             "clientId": cid, "clientSecret": csec,
             "scopes": "user:email read:user", "enableSignUp": True,
         }
-        try:
-            existing = call("/api/get-provider?id=admin/github")
-        except urllib.error.HTTPError:
-            existing = None
-        if existing and existing.get("data"):
+        path = "/api/get-provider?id=admin/github"
+        if probe(path):
             call("/api/update-provider?id=admin/github", provider, "POST")
-            print("  updated github provider")
+            verb = "updated"
         else:
             call("/api/add-provider", provider, "POST")
-            print("  added   github provider")
+            verb = "added  "
+        if not probe(path):
+            raise CasdoorError("github provider: {} reported success but the provider "
+                               "is not readable".format(verb.strip()))
+        print(f"  {verb} github provider")
+
+    # ── run ──────────────────────────────────────────────────────────────────
+    # Every leg is a named step. A step that raises is RECORDED, not swallowed, and
+    # the Job exits non-zero at the end. `optional` marks a leg whose ABSENCE is a
+    # legitimate deployment choice — but only a missing Secret skips it; an API
+    # failure inside one is a failure like any other.
+    def step(label, fn, optional=False):
+        try:
+            fn()
+        except CasdoorError as e:
+            fail(f"{label}: {e}")
+        except FileNotFoundError as e:
+            if optional:
+                print(f"  {label}: optional input absent ({e.filename}) — skipping")
+            else:
+                fail(f"{label}: required input missing: {e.filename}")
+        except Exception as e:  # noqa: BLE001 — an unexpected fault is still a failure
+            fail(f"{label}: unexpected error: {type(e).__name__}: {e}")
 
     wait_ready()
-    login()
-    try:
-        reconcile_app()
-    except Exception as e:
-        print(f"  WARN {APP_NAME}: {e}")
-    try:
-        reconcile_github_provider()
-    except Exception as e:
-        print(f"  WARN github provider: {e}")
+    # Nothing below can work without a real admin session, and this is also where
+    # the provisioned password gets applied — fatal on the spot rather than pressed
+    # on with anonymously.
+    if not reconcile_admin_password():
+        for f in FAILURES:
+            print(f"  - {f}")
+        raise SystemExit("casdoor-games-init: FAILED — no usable Casdoor admin session")
+    step("seed", ensure_seed)
+    step(APP_NAME, reconcile_app)
+    step("github provider", reconcile_github_provider, optional=True)
+
+    if FAILURES:
+        print(f"casdoor-games-init: FAILED — {len(FAILURES)} step(s) did not complete:")
+        for f in FAILURES:
+            print(f"  - {f}")
+        raise SystemExit(1)
     print("casdoor-games-init: done")
 ---
 apiVersion: batch/v1
@@ -179,12 +377,20 @@ spec:
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: script, mountPath: /script, readOnly: true }
+            # The SAME declarative seed the casdoor-games Deployment mounts.
+            # ensure_seed() reconciles it through the API so a boot-time import that
+            # did not run cannot go unnoticed.
+            - { name: init-data, mountPath: /init-data, readOnly: true }
             - { name: admin, mountPath: /secrets/admin, readOnly: true }
             - { name: app, mountPath: /secrets/app, readOnly: true }
             - { name: github, mountPath: /secrets/github, readOnly: true }
       volumes:
         - name: script
           configMap: { name: casdoor-games-init-script, defaultMode: 0555 }
+        # Declarative org/roles/permissions seed (init-data-configmap.yaml) — the
+        # same ConfigMap casdoor-games itself mounts at /init_data.json.
+        - name: init-data
+          configMap: { name: casdoor-games-init-data }
         # ESO-materialized from Vault — never committed.
         - name: admin
           secret: { secretName: casdoor-games-admin }

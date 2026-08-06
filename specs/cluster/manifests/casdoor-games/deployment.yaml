@@ -62,11 +62,10 @@ spec:
             # against the deployed image.
             - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
             # Declarative seed (threewizards org / role catalog / seed users), mirrored
-            # from the hugmesh.games init_data.json.tpl. Casdoor imports
-            # init_data.json from its working dir on boot. NOTE: the exact mount path
-            # depends on the casbin/casdoor workdir — validate/adjust if auto-import
-            # doesn't fire; the casdoor-games-init Job seeds the OAuth2 application +
-            # client-secret + GitHub provider regardless.
+            # from the hugmesh.games init_data.json.tpl. Casdoor reads this on boot
+            # ONLY because app-conf-configmap.yaml sets `initDataFile` to this exact
+            # path — the import is opt-in, not workdir-relative magic (omitting the
+            # key made it a no-op on the first real cluster; see that ConfigMap).
             - { name: init-data, mountPath: /init_data.json, subPath: init_data.json, readOnly: true }
           resources:
             requests: { cpu: 100m, memory: 256Mi }

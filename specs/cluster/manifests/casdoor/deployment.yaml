@@ -104,11 +104,12 @@ spec:
             # NOTE: the conf path is image-version-specific (casbin/casdoor reads
             # conf/app.conf from its workdir) — validate against the deployed image.
             - { name: rendered-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
-            # Declarative seed (org / roles / service users). Casdoor imports
-            # init_data.json from its working dir on boot. NOTE: the exact mount
-            # path depends on the casbin/casdoor workdir — validate/adjust if
-            # auto-import doesn't fire; the casdoor-init Job seeds the OAuth2
-            # applications + secrets regardless.
+            # Declarative seed (org / roles / service users). Casdoor reads this on
+            # boot ONLY because app-conf-configmap.yaml sets `initDataFile` to this
+            # exact path — the import is opt-in, not workdir-relative magic, and
+            # omitting the key made it a no-op on the first real cluster. The
+            # casdoor-init Job re-reads the SAME ConfigMap and creates anything the
+            # boot import did not, so a silent import failure can no longer pass.
             - { name: init-data, mountPath: /init_data.json, subPath: init_data.json, readOnly: true }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
