@@ -103,10 +103,24 @@ MODE_DEFAULT_ROLE = {
 # between are terminal or dynamically skipped anyway. Non-node modes statically
 # skip "idp" via MODE_SKIPPED_PAGES below, so client/standalone flows keep today's
 # behaviour byte-identically.
+#
+# ASK 19/20 put a CHOICE screen in front of each superadmin table: "domains_choice"
+# ("proceed with the single initial internal domain" | "add domains") and
+# "users_choice" ("generate the minimal default accounts" | "configure superusers &
+# domain users"). Each sits IMMEDIATELY before the table it gates, so nextId()'s
+# positional skip walk steps choice -> (table | past it) -> next choice. Both are
+# MESH-only (MODE_SKIPPED_PAGES): a cloud client's single domain is the FD-08 tie the
+# image is built around, not an "additional" domain, so that flow keeps its tables
+# unconditionally and its page order is unchanged.
+#
+# ASK 22 splits the terminal pair in three: "build" is the REVIEW screen (what will be
+# built + the knobs), "launch" is the separate BUILD screen (continue the build / back
+# to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
 WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "quest", "deploy",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
-                     "domains", "users", "system", "home", "build", "progress")
+                     "domains_choice", "domains", "users_choice", "users",
+                     "system", "home", "build", "launch", "progress")
 MODE_SKIPPED_PAGES = {
     # standalone/cloud build ONE image the old way (role/hardware/branding per image);
     # the mesh worklist is skipped there. mesh builds N images from a role x platform
@@ -117,8 +131,13 @@ MODE_SKIPPED_PAGES = {
     # desktop-client and standalone flows never see it (their SSO posture is the
     # with/no-sso axis, unchanged), so both skip it statically and their flows +
     # argv stay byte-identical to before the page existed.
-    "standalone": ("idp", "worklist", "keyzip", "domains", "users"),  # single image, no admin/mesh plane
-    "cloud": ("idp", "worklist"),                               # single image, admin plane via key-zip
+    # the two ask-19/20 CHOICE screens are mesh-only: standalone has no admin plane at
+    # all, and a cloud client's Domains/Users tables are unconditional (its --domains
+    # tie is the point of the image), so offering it a "just the internal domain"
+    # choice would be a knob with one legal answer.
+    "standalone": ("idp", "worklist", "keyzip",
+                   "domains_choice", "domains", "users_choice", "users"),  # single image, no admin/mesh plane
+    "cloud": ("idp", "worklist", "domains_choice", "users_choice"),  # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
     # the WEB login theme (login_* — NON_ARGV_FIELDS), which themes the login-ui the
     # MESH serves to browsers. The desktop-asset half still greys+clears in mesh via
@@ -676,9 +695,21 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
 # image builder's argv — the login-ui is a k8s Deployment the mesh SERVES, not a byte
 # of any desktop image. Scoping them _X86 would gate them OFF on the only plane that
 # renders them (the --flavor-both/installer_ui="all" dead-knob class, inverted).
+# additional_domains is the newest member and the only one that is pure WIZARD FLOW
+# state: it records whether the operator asked to define domains BEYOND the mesh's own
+# cluster domain (ask 8). It gates the Domains/Users steps (superadmin_plane_applies)
+# and nothing else — no builder parses it, and the domains/users it gates reach the
+# cluster through the mesh MANIFEST, not the argv. It is saved with the config on
+# purpose: reloading a worklist must not silently re-hide the tables the saved config
+# still carries rows for.
+# configure_users (ask 20) is its twin on the users half of the same flow: it records
+# whether the operator chose to NAME superusers/domain users instead of accepting the
+# accounts gen-provision-keys.sh mints by itself. Same channel (the mesh manifest, never
+# argv), same reason for being saved with the config.
 NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_primary_color", "login_secondary_color", "login_font",
-                   "login_font_file", "login_font_licence", "login_font_source")
+                   "login_font_file", "login_font_licence", "login_font_source",
+                   "additional_domains", "configure_users")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -1154,12 +1185,195 @@ def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
 
     Because a cloud node build emits none of these flags and produces no manifest,
     skipping the pages leaves the argv byte-identical — the emission guard the wizard's
-    collect_all (visited-pages-only) requires."""
+    collect_all (visited-pages-only) requires.
+
+    ASK 8 narrowed the mesh arm. A mesh flow used to visit both tables unconditionally,
+    so every operator building three node images walked two superadmin tables they had
+    nothing to put in. Now the mesh arm asks whether the operator opted into
+    ``additional_domains`` on the Network step ("this mesh also hosts domains beyond its
+    own cluster domain"). Emission-neutrality is preserved by NetworkPage.validatePage,
+    which CLEARS cfg.domains/cfg.users whenever the opt-in is off — so a skipped table
+    can never leave rows behind for mesh_manifest() to publish. See the ask-8 note in
+    gui/pages/network.py.
+
+    The CLOUD arm is deliberately untouched: a cloud desktop client's Domains/Users step
+    carries the FD-08 --domains + --person-role tie the image is literally built around
+    (build-x86-host-stage4.sh:4057-4058), which is not an "additional" domain at all."""
     if cfg.mode == "mesh":
-        return True
+        return bool(cfg.additional_domains)
     if cfg.mode == "cloud":
         return cfg.role not in X86_NODE_ROLES
     return False
+
+
+def effective_domain_note(cfg: "ImageConfig") -> str:
+    """Plain-language description of the domains a mesh serves WITHOUT adding any (ask
+    19's default card). Names both real values rather than saying "the internal domain":
+    the cluster domain the Network step set, and the orchestration superdomain every node
+    joins (derived ``<brand>.internal`` when left blank — ``effective_superdomain``)."""
+    return (f"Serve only {cfg.cluster_domain or 'the cluster domain'} and the internal "
+            f"orchestration domain {cfg.effective_superdomain()} that every node joins. "
+            "No domains table, no per-domain services to pick — this is the default and "
+            "what almost every mesh wants.")
+
+
+def users_table_applies(cfg: "ImageConfig") -> bool:
+    """Whether the superadmin USERS TABLE step is reachable (ask 20's gate).
+
+    Splits off ``superadmin_plane_applies`` because the two tables no longer share one
+    switch. In MESH the domains table follows the domains CHOICE screen
+    (``additional_domains``) and the users table follows the users CHOICE screen
+    (``configure_users``) — an operator can perfectly well add a second domain and still
+    want the generated accounts, or keep one internal domain and still name a superuser.
+    Cloud is unchanged (the FD-08 --domains/--person-role tie a NODE role does not emit),
+    standalone is statically skipped."""
+    if cfg.mode == "mesh":
+        return bool(cfg.configure_users)
+    if cfg.mode == "cloud":
+        return cfg.role not in X86_NODE_ROLES
+    return False
+
+
+def encrypt_root_always(cfg: "ImageConfig") -> bool:
+    """ASK 21 — "root disk encryption should always be enabled". The single authority
+    for what ``encrypt_root`` must be, for EVERY image the wizard produces.
+
+    It is not a default any more, it is the posture: True wherever the platform's
+    builder has a full-disk-encryption path, False on the ONE platform that does not
+    (jetson — its single boot+root partition has no LUKS path, the builder hard-blocks
+    ``--encrypt-root`` and ``to_cli_args`` raises on it, see ``_check_jetson_conflicts``).
+    Keyed on PLATFORM_FIELD_SUPPORT so the exemption list cannot drift from the emission
+    table.
+
+    Deliberately NOT the dataclass default: a flat ``encrypt_root: bool = True`` would
+    make a bare ``ImageConfig(platform="jetson")`` raise at ``to_cli_args()`` — the
+    posture belongs where the platform is known, which is every place this is called
+    (HomePage's collect, mesh entry, and the worklist's per-row resolution)."""
+    return (cfg.platform or "x86") in PLATFORM_FIELD_SUPPORT["encrypt_root"]
+
+
+def person_role_applies(cfg: "ImageConfig") -> bool:
+    """Whether ``--person-role`` is REACHABLE for this image (ask 7's gate).
+
+    Mirrors to_cli_args' own emission condition exactly (see the ``mode in
+    ("cloud","mesh")`` / ``role not in X86_NODE_ROLES`` block): the builder writes
+    /etc/hugmesh/identity-role from inside its ``elif ${ROLE_CLIENT}`` branch
+    (build-x86-host-stage4.sh:4052-4057) and warns "--person-role/--domains are ignored
+    for non-client role" otherwise (:1587-1588). A standalone build emits it never, and
+    ``--unaffiliated`` hard-CONFLICTS with it (:1333).
+
+    Used by SystemPage to hide the control rather than offer a knob whose value the
+    builder would discard — the same class of leak asks 3 and 11 are about."""
+    if cfg.mode not in ("cloud", "mesh"):
+        return False
+    if cfg.role == UNAFFILIATED_ROLE or cfg.unaffiliated:
+        return False
+    return cfg.role not in X86_NODE_ROLES
+
+
+# ── ask 9: what the builders ACTUALLY default -H / -u to ─────────────────────────────
+# The System step used to show three empty boxes whose only guidance was "leave blank
+# for the builder default". The operator asked for the fields to be PRESELECTED — which
+# is only honest if the preselected value is byte-for-byte what the builder would have
+# derived. These two tables are transcribed from the builders' own role switches; the
+# test test_derived_identity_matches_the_builder_tables re-reads the shell sources and
+# fails if either side drifts.
+#
+# Per-platform hostname default, keyed platform -> {role -> suffix}. The value is the
+# part after "{brand}-"; a role absent from a platform's map falls through to
+# "{brand}-{role}" (every builder's `*)` arm).
+_HOSTNAME_SUFFIX = {
+    # build-x86-host-stage4.sh:1218-1287
+    "x86": {"pki": "pki", "be": "be", "fe": "fe", "be+gpu": "host", "host": "host",
+            "omnibus": "omnibus", "edge_ai": "edge-ai", "edge-ai": "edge-ai",
+            "desktop": "desktop",
+            "standalone-thin": "standalone-thin",
+            "standalone-thick": "standalone", "standalone-full": "standalone"},
+    # build-rpi5-stage4.sh:1238-1244 — `generic` is the ONE role whose default drops
+    # the brand entirely ("gentoo-${BOARD}"); handled in derive_hostname.
+    "rpi5": {},
+    "frite": {"desktop": "frite", "generic": "frite"},            # :533-534
+    "jetson": {"edge_ai": "jetson-edge-ai", "edge-ai": "jetson-edge-ai",
+               "gpu-host": "jetson-gpu", "gpu_host": "jetson-gpu",
+               "full": "jetson-full", "desktop": "jetson"},       # :487-503
+    "orangepi5": {"desktop": "orangepi5", "generic": "orangepi5"},          # :564-565
+    "orangepizero2": {"appliance": "orangepizero2", "generic": "orangepizero2"},    # :596
+    "orangepizero2w": {"appliance": "orangepizero2w", "generic": "orangepizero2w"},  # :607
+    "orangepizero3": {"appliance": "orangepizero3", "generic": "orangepizero3"},    # :610
+    "orangepi3-lts": {"appliance": "orangepi3-lts", "generic": "orangepi3-lts"},    # :602
+    "orangepi4-lts": {"desktop": "orangepi4-lts", "generic": "orangepi4-lts"},      # :645
+}
+
+# Each builder's DEFAULT_USER initialiser — the account created when -u is omitted.
+_BUILDER_DEFAULT_USER = {
+    "x86": "snap",                       # build-x86-host-stage4.sh:184
+    "rpi5": "pi",                        # :261
+    "frite": "frite",                    # :192
+    "jetson": "jetson",                  # :176
+    "orangepi5": "orangepi5",            # :219
+    "orangepizero2": "orangepizero2",    # :266
+    "orangepizero2w": "orangepizero2w",  # :273
+    "orangepizero3": "orangepizero3",    # :276
+    "orangepi3-lts": "orangepi3lts",     # :269
+    "orangepi4-lts": "orangepi4-lts",    # :287
+}
+
+
+def derive_hostname(cfg: "ImageConfig") -> str:
+    """The hostname this image would get with NO ``-H`` — i.e. what the builder's own
+    role switch assigns. Pure; never raises.
+
+    Notes that make this honest rather than decorative:
+    * the UNAFFILIATED x86 desktop is special-cased to ``gentoo-desktop``
+      (build-x86-host-stage4.sh:1343, applied AFTER the brand is neutralised);
+    * rpi5's ``generic`` role drops the brand entirely (``gentoo-${BOARD}``, :1241);
+    * an unknown role on any platform falls through to ``{brand}-{role}``, and an
+      unset role on x86 to ``{brand}-host`` (:1889).
+    """
+    brand = (cfg.brand or "hugmesh").strip() or "hugmesh"
+    role = (cfg.role or "").strip()
+    plat = (cfg.platform or "x86").strip() or "x86"
+    if plat == "x86" and (role == UNAFFILIATED_ROLE or cfg.unaffiliated):
+        return "gentoo-desktop"           # build-x86-host-stage4.sh:1343
+    if plat == "rpi5" and role == "generic":
+        return f"gentoo-{cfg.board or 'rpi5'}"   # build-rpi5-stage4.sh:1241
+    suffix = _HOSTNAME_SUFFIX.get(plat, {}).get(role)
+    if suffix:
+        return f"{brand}-{suffix}"
+    if not role:
+        return f"{brand}-host" if plat == "x86" else brand
+    return f"{brand}-{role}"
+
+
+def derive_default_user(cfg: "ImageConfig") -> str:
+    """The default account name this image would get with NO ``-u``.
+
+    Two layers, both real:
+    1. every builder ships a platform DEFAULT_USER (``_BUILDER_DEFAULT_USER``);
+    2. **``--local-user`` overrides it** — ``[ -n "${LOCAL_USER}" ] && DEFAULT_USER=
+       "${LOCAL_USER}"`` (build-x86-host-stage4.sh:1598 and the ARM twins). x86 emits
+       ``--local-user`` on EVERY image (``_x86_args``, an unconditional argv element),
+       so on x86 the effective default is ``cfg.local_user``, not ``snap``. The ARM
+       builders only receive it when standalone / a non-default name / a local password
+       is set (``_arm_common_args``), so they keep the platform account otherwise.
+
+    Layer 2 is exactly the emission predicate in ``_arm_common_args``/``_x86_args``; the
+    drift guard test re-derives it from a real ``to_cli_args()``.
+
+    PER IMAGE, ALWAYS. "The ARM builders keep the platform account otherwise" is true
+    only while nothing bakes ``-u``. A caller holding a MULTI-PLATFORM worklist must
+    call this once per row with that row's platform and compare — seeding one answer
+    from the base config (which the worklist pins to x86) and applying it to every row
+    overrides each ARM builder's own DEFAULT_USER. ``SystemPage._seed_user`` is the
+    caller that has to do this; it leaves the field blank when the rows disagree.
+    """
+    plat = (cfg.platform or "x86").strip() or "x86"
+    local = (cfg.local_user or "").strip()
+    if plat == "x86":
+        return local or _BUILDER_DEFAULT_USER["x86"]
+    if local and (cfg.standalone or local != "magus" or cfg.local_pass):
+        return local
+    return _BUILDER_DEFAULT_USER.get(plat, local or "")
 
 
 # ── platform-aware default resolution (materialize/spec channel; NEVER to_cli_args) ──
@@ -1567,16 +1781,61 @@ def clear_role_class_fields(cfg: "ImageConfig") -> list[str]:
         cleared += [f for f in HOME_DESKTOP_FIELDS if _reset_field(cfg, f)]
     if not tailnet_sso_visible(cfg):
         cleared += [f for f in ("tailscale", "sso") if _reset_field(cfg, f)]
+    # ASK 21 moved the --standalone checkbox OFF the Home step (see gui/pages/home.py:
+    # "there is no reason for it there") onto the RolePage, beside the other composable
+    # posture flags. That collect used to be the only thing stopping a tick made on a
+    # desktop image from riding a mode/role switch into a cluster node's argv — the
+    # finding-1 leak. RolePage is SKIPPED in mesh, so it cannot play that role; the
+    # guarantee moves here instead, where it is Qt-free and runs inside materialize()
+    # step 5 for every worklist row as well as at mesh entry. Same predicate the widget
+    # gate uses (FieldScope "standalone": classes=("desktop",) with the
+    # class_platforms carve-out for the appliance boards), so nothing legitimate is lost.
+    if not field_in_scope("standalone", cfg):
+        cleared += [f for f in ("standalone",) if _reset_field(cfg, f)]
     return cleared
 
 
-def enter_mesh_defaults(cfg: "ImageConfig") -> None:
+def enter_mesh_defaults(cfg: "ImageConfig", *, fresh: bool = False) -> None:
     """Mesh entry: clear every role-class desktop surface, then force tailscale=sso=True
     so mesh x86 nodes keep emitting today's --with-tailscale/--with-sso byte-identically
-    (ARM joins mesh unless --skip-mesh; sso is x86-only in emission)."""
+    (ARM joins mesh unless --skip-mesh; sso is x86-only in emission).
+
+    ``fresh=True`` marks a real TRANSITION into mesh (the previous mode was not mesh, or
+    a config was just loaded into a fresh flow) as opposed to re-walking the Mode step of
+    a flow that is already mesh. Only a transition seeds the opinionated defaults below;
+    re-walking must never undo a choice the operator has since made, which is why they
+    are not in the unconditional block above.
+
+    ASK 12 — "rot encryption should be a mesh device default". A mesh node is
+    unattended infrastructure sitting on someone's desk or in a rack; its disk holds the
+    cluster's PKI material, so the encrypted-root posture is the right default and the
+    plain one is the exception. It lands HERE rather than on
+    ``ImageConfig.encrypt_root`` (still ``False``) for three reasons:
+
+    * a flat default-true would make ``to_cli_args()`` RAISE for a jetson single-image
+      flow (``_check_jetson_conflicts`` — the jetson builder hard-blocks --encrypt-root);
+    * it would silently flip standalone and cloud-client flows, which no ask asked for;
+    * here it is a real, untickable DEFAULT: it seeds ``cfg.encrypt_root`` so the Home
+      step's checkbox arrives CHECKED (the GUI is honest about what will happen), the
+      worklist's per-row "default" inherits it (``WorklistConfig._resolve_encrypt_root``),
+      any row can still be forced "off", and a jetson row is still auto-exempted.
+
+    THIS CHANGES WHAT A MESH BUILD PRODUCES — see the mesh note on HomePage: on x86
+    ``--encrypt-root`` also sets ``INSTALLER_ISO=true`` (build-x86-host-stage4.sh:1465),
+    so an encrypted node additionally yields an installer ISO, and without ``--luks-pass``
+    the installer PROMPTS for a passphrase at install time.
+
+    ASK 21 then SUPERSEDED ask 12's wording — "root disk encryption should always be
+    enabled", not merely defaulted on. So the seed is no longer conditional on ``fresh``:
+    there is no un-tick to preserve any more (the Home step shows a checked, disabled
+    statement, not a choice), and the value is ``encrypt_root_always`` — True on every
+    FDE-capable platform, False on jetson so a jetson-based mesh base cannot raise. The
+    ``fresh`` parameter is KEPT because it still marks a real transition for callers
+    (ModePage clears the worklist on it) and is part of this function's signature."""
     clear_role_class_fields(cfg)
     cfg.tailscale = True
     cfg.sso = True
+    cfg.encrypt_root = encrypt_root_always(cfg)
 
 
 def strip_platform_unsupported(cfg: "ImageConfig") -> list[str]:
@@ -1635,7 +1894,21 @@ class ImageConfig:
     org: str = "Snapdragon-Systems"
     brand_profile: str = ""            # -C/--config brands/*.conf (carries HEADSCALE_URL/RELEASE_STATE/… presets)
     cluster_domain: str = "hugmesh.systems"
-    superdomain: str = ""              # orchestration superdomain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
+    # Ask 8 — "only show steps for users and domains if its selected to start with
+    # aditional domains". WIZARD-FLOW state, never argv (NON_ARGV_FIELDS): False means
+    # this mesh serves only its own cluster domain, so the Domains and Users tables have
+    # nothing to say and their steps are skipped entirely (superadmin_plane_applies).
+    # MESH ONLY — a cloud desktop client's Domains/Users step carries the FD-08 --domains
+    # tie the image is built around, which is not "additional" anything.
+    additional_domains: bool = False
+    # Ask 20 — the users CHOICE screen's answer. WIZARD-FLOW state, never argv
+    # (NON_ARGV_FIELDS). False (the default) = "generate the minimal default accounts"
+    # — the accounts scripts/gen-provision-keys.sh mints into each node's KEYS folder,
+    # which needs no table at all; True = the operator asked to name superusers/domain
+    # users themselves, so the Users TABLE step becomes reachable (users_table_applies).
+    # MESH ONLY, exactly like additional_domains.
+    configure_users: bool = False
+    superdomain: str = ""            # orchestration superdomain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
     games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
     release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
     release_tag: str = ""              # --release-tag image stamp (x86)

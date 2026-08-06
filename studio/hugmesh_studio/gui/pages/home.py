@@ -10,10 +10,12 @@ from dataclasses import MISSING
 
 from ..qt import QtWidgets
 from ._scroll import scrollable
+from ...core import cross_dracut
 from ...core.config import (
-    HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, external_media_applies,
-    home_options_allowed, image_class, local_login_applies,
+    HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, encrypt_root_always,
+    external_media_applies, home_options_allowed, image_class, local_login_applies,
 )
+from ...core.worklist import resolve_encrypt_root
 from ._gating import (
     capability_allows_flow,
     clear_unsupported,
@@ -162,10 +164,19 @@ class HomePage(QtWidgets.QWizardPage):
         lay.addWidget(media)
         # local login account (--local-user / --local-pass). The password is hashed by
         # the builder at build time and is NEVER written to a saved config. NOT tied
-        # to the standalone checkbox (G28): the ARM builders accept --local-user/
+        # to the standalone posture (G28): the ARM builders accept --local-user/
         # --local-pass independently (rename/hash the image's default account), and
         # x86 always bakes the local user.
-        self.login = QtWidgets.QGroupBox("Your login & standalone account")
+        #
+        # ASK 21 — "REMOVE the standalone user option from the Home-folder / encryption /
+        # login step — there is no reason for it there". The --standalone CHECKBOX that
+        # used to head this group is gone; it now sits on the RolePage beside the other
+        # composable posture flags (--capable / --unaffiliated), which is where an
+        # operator chooses what KIND of image this is. Nothing about the flag changed —
+        # same field, same scope gate, same emission — and the Qt-free clear that used to
+        # ride this page's collect moved into config.clear_role_class_fields, so a stale
+        # tick still cannot survive a mode/role switch into a node's argv.
+        self.login = QtWidgets.QGroupBox("Your login")
         login = self.login
         ll = QtWidgets.QVBoxLayout(login)
         # standalone framing (spec 4): on the standalone path the local user + root-disk
@@ -176,12 +187,6 @@ class HomePage(QtWidgets.QWizardPage):
         self.standalone_helper.setWordWrap(True)
         self.standalone_helper.setStyleSheet("color: gray;")
         ll.addWidget(self.standalone_helper)
-        self.standalone = QtWidgets.QCheckBox(
-            "Standalone: no mesh/SSO, local user below logs in with a build-time password "
-            "(--standalone; client roles only — laptop/chromebook/desktop, rpi5-desktop/"
-            "frite/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts. NOT jetson — --encrypt-root is hard-blocked "
-            "on that platform, see docs/STANDALONE-DESKTOP.md)")
-        ll.addWidget(self.standalone)
         self.local_note = QtWidgets.QLabel(
             "User/password below also compose WITHOUT Standalone: on ARM a "
             "customized name or password renames/hashes the image's default account; "
@@ -200,9 +205,36 @@ class HomePage(QtWidgets.QWizardPage):
         # encrypt_root default; jetson entries are auto-exempted in materialize()).
         enc = QtWidgets.QGroupBox("Root-disk encryption (LUKS2 full-disk)")
         el = QtWidgets.QVBoxLayout(enc)
+        # ASK 21 — "root disk encryption should always be enabled". This is no longer a
+        # choice, so it is no longer offered as one: the box is CHECKED and DISABLED, a
+        # statement of what the image will do rather than a knob that happens to default
+        # on. It stays a checkbox (not a bare label) because that is the shape operators
+        # scan for the answer to "is this disk encrypted?", and because every established
+        # test + the platform gate below address it by that name. The one platform that
+        # genuinely cannot is jetson, and it is handled the same way it always was: the
+        # box is HIDDEN and no_enc_note says why (see initializePage).
         self.encrypt_root = QtWidgets.QCheckBox(
             "Encrypt the target root (--encrypt-root; installer prompts for a passphrase)")
+        self.encrypt_root.setChecked(True)
+        self.encrypt_root.setEnabled(False)
+        self.encrypt_root.setToolTip(
+            "Always on: every image the Studio builds encrypts its installed root with "
+            "LUKS2. The only exception is a platform whose builder has no FDE path "
+            "(jetson), where this row is replaced by a plain explanation.")
         el.addWidget(self.encrypt_root)
+        # The consequence, stated in EVERY mode — not only mesh. On x86 the builder
+        # turns --encrypt-root into INSTALLER_ISO=true unconditionally
+        # (build-x86-host-stage4.sh:1472), so a cloud desktop client that never asked
+        # for an installer ISO now gets one; and with no passphrase the installer
+        # prompts at install time, which stalls an unattended install. The mesh-specific
+        # note below adds only the fleet-scale framing.
+        self.enc_always_note = QtWidgets.QLabel(
+            "Always on. Two consequences on x86: the build ALSO produces an installer "
+            "ISO (the encrypted root is created by the installer), and unless you set a "
+            "passphrase below the installer asks for one at install time.")
+        self.enc_always_note.setWordWrap(True)
+        self.enc_always_note.setStyleSheet("color: gray;")
+        el.addWidget(self.enc_always_note)
         # device-cannot-encrypt note (spec 4): shown INSTEAD of the checkbox when the
         # target platform has no full-disk-encryption path (jetson's single boot+root
         # partition — see docs/STANDALONE-DESKTOP.md). Dormant in standalone (jetson is
@@ -212,6 +244,34 @@ class HomePage(QtWidgets.QWizardPage):
         self.no_enc_note.setWordWrap(True)
         self.no_enc_note.setStyleSheet("color: #a65d00;")
         el.addWidget(self.no_enc_note)
+        # ASK 12 — encrypted root is now the MESH DEFAULT (config.enter_mesh_defaults,
+        # applied on arrival in mesh). That changes what the build PRODUCES, so say so
+        # here rather than let an operator discover it from the artifact list: on x86
+        # --encrypt-root also forces INSTALLER_ISO=true (build-x86-host-stage4.sh:1465),
+        # and with no passphrase supplied the installer asks for one interactively.
+        self.enc_mesh_note = QtWidgets.QLabel(
+            "Mesh: node disks hold the cluster's PKI material, so root encryption is on "
+            "for every node in the worklist (jetson rows are exempt — that builder has "
+            "no FDE path; a single row can still be exempted in the worklist step's "
+            "Encryption column). Two consequences: each x86 node ALSO produces an "
+            "installer ISO, and unless you set a passphrase below the installer prompts "
+            "for one at install time — which stalls an unattended fleet install.")
+        self.enc_mesh_note.setWordWrap(True)
+        self.enc_mesh_note.setStyleSheet("color: gray;")
+        self.enc_mesh_note.setVisible(False)
+        el.addWidget(self.enc_mesh_note)
+        # ASK 21, the half the x86 note cannot state: on the eight ARM platforms
+        # --encrypt-root is not just "an extra artifact". It forces the installer
+        # artifact on AND drags in the arm64 disk-boot initramfs, whose absence makes
+        # the builder exit 1 at its cross-dracut preflight before any work happens
+        # (core/cross_dracut.py names the exact call sites). Filled + shown per visit
+        # from the rows this flow actually builds; empty (and hidden) on an all-x86
+        # flow, so it never degrades into boilerplate.
+        self.enc_cross_note = QtWidgets.QLabel("")
+        self.enc_cross_note.setWordWrap(True)
+        self.enc_cross_note.setStyleSheet("color: #a65d00;")
+        self.enc_cross_note.setVisible(False)
+        el.addWidget(self.enc_cross_note)
         self.luks_pass = QtWidgets.QLineEdit()
         self.luks_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.luks_pass.setPlaceholderText("optional unattended passphrase; NOT saved to configs")
@@ -266,6 +326,21 @@ class HomePage(QtWidgets.QWizardPage):
         self.mode.setCurrentText("archive")
         self._mode_changed()
 
+    def _cross_fde_ids(self, c) -> list[str]:
+        """The ids of the images THIS flow builds that will hit the ARM cross-dracut
+        preflight. Reads the worklist in mesh (each row carries its own platform and its
+        own encrypt_root override) and the single image otherwise. Pure: no widget
+        writes, no disk."""
+        # what validatePage is about to commit — the posture, not the widget
+        base_enc = encrypt_root_always(c)
+        wl = getattr(self.wiz, "worklist", None)
+        if c.mode == "mesh" and wl is not None and wl.entries:
+            rows = [(e.id, e.platform, resolve_encrypt_root(e, base_enc))
+                    for e in wl.entries]
+        else:
+            rows = [(f"{c.role or 'image'}.{c.platform or 'x86'}", c.platform, base_enc)]
+        return cross_dracut.cross_fde_rows(rows)
+
     def initializePage(self):
         c = self.wiz.cfg
         self.mode.setCurrentText(c.home_mode)
@@ -281,10 +356,13 @@ class HomePage(QtWidgets.QWizardPage):
         self.media_data.setCurrentText(md if md in ("on", "off") else _MEDIA_DEFAULT)
         self.media_label.setText(c.media_label)
         self.no_vaults.setChecked(c.no_vaults)
-        self.standalone.setChecked(c.standalone)
         self.local_user.setText(c.local_user)
         self.local_pass.setText(c.local_pass)
-        self.encrypt_root.setChecked(c.encrypt_root)
+        # ask 21: a STATEMENT, re-asserted every visit. Reading the box back off cfg
+        # would let a loaded config that predates this posture (encrypt_root=false)
+        # render an unchecked, disabled box that the collect below then overrides — the
+        # GUI would be lying about the image it is going to build.
+        self.encrypt_root.setChecked(True)
         self.luks_pass.setText(c.luks_pass)
         # Finding 8: the "login" unlock factor is a DESKTOP-only choice, and unlike every
         # other finding here the scope is per-ITEM, not per-field — "boot" stays perfectly
@@ -343,18 +421,13 @@ class HomePage(QtWidgets.QWizardPage):
         # the standalone path (a personal desktop), where the local user + root-disk
         # password ARE the primary action.
         self.standalone_helper.setVisible(c.mode == "standalone")
-        # --standalone is a DESKTOP posture and a contradiction in mesh, where every image
-        # exists to join the cluster (finding 1). HomePage is visited in mesh — mode-skip
-        # only drops role/hardware/branding — and this checkbox sat inside the login group
-        # ungated by anything, so a single tick rode the deepcopied worklist base onto
-        # EVERY node entry. The x86 builder then takes --standalone on a pki role without
-        # complaint: ROLE_K8S=none, so no kubelet/kubeadm/containerd and no cluster GitOps
-        # tree, yet the full desktop stack IS built — an image that can never join the mesh
-        # it was built for, found out hours later at deploy. HIDE (not grey) it out of
-        # scope, matching the home-group idiom above, so it cannot be set at all.
-        standalone_ok = scope_allows_flow("standalone", c, self.wiz)
-        gate_widgets_role_class(self.standalone, standalone_ok,
-                                out_of_scope_note_flow("standalone", c, self.wiz), hide=True)
+        # ASK 21 moved the --standalone CHECKBOX to RolePage, beside the other composable
+        # posture flags, so HomePage no longer owns that widget and the gate that used to
+        # sit here went with it (RolePage._sync_standalone_gate scopes it; RolePage's
+        # collect writes c.standalone). The ASK 11 and ASK 3 gates below are NOT part of
+        # that move and stay exactly as they are: without them local_user/local_pass and
+        # the Steam media device return to every mesh node's screen.
+
         # ── ASK 11: the whole "Your login & standalone account" group ────────────────
         # The standalone CHECKBOX above was already scoped. The GROUP around it never was:
         # it is a bare QGroupBox added to the layout, nothing ever called setVisible on it,
@@ -386,7 +459,18 @@ class HomePage(QtWidgets.QWizardPage):
         # _ALL_PLATFORMS and emits regardless, so it is NOT hidden/cleared here.
         can_encrypt = platform_supports("encrypt_root", c.platform)
         self.encrypt_root.setVisible(can_encrypt)
+        self.enc_always_note.setVisible(can_encrypt)
         self.no_enc_note.setVisible(not can_encrypt)
+        # ask 12/21: the mesh consequence note rides WITH the checkbox — shown wherever
+        # the box is on a mesh flow. No longer conditioned on cfg.encrypt_root: the
+        # posture is unconditional now, so hiding the note when the value happened to be
+        # false would hide it exactly when a loaded config most needs to be corrected.
+        self.enc_mesh_note.setVisible(can_encrypt and c.mode == "mesh")
+        # ask 21's ARM cost, computed from the rows this flow will actually build.
+        cross = cross_dracut.cross_fde_note(self._cross_fde_ids(c),
+                                            cross_dracut.preflight_ok())
+        self.enc_cross_note.setText(cross)
+        self.enc_cross_note.setVisible(bool(cross))
         if not can_encrypt:
             label = PLATFORM_LABELS.get(c.platform, c.platform or "x86")
             self.no_enc_note.setText(
@@ -416,33 +500,33 @@ class HomePage(QtWidgets.QWizardPage):
         # state, so the gate is what decides the argv, not what happens to be on screen.
         media_ok = capability_allows_flow(external_media_applies, c, self.wiz)
         md = self.media_data.currentText()
+        # MEDIA (ask 3): main's gated collect, kept verbatim. The fields lane predates
+        # it and collected these ungated, which would put the Steam library + Vaults back
+        # into every mesh node's config even with the widget hidden.
         c.media_data = ("" if md == _MEDIA_DEFAULT else md) if media_ok else ""
         c.media_label = self.media_label.text().strip() if media_ok else ""
         c.no_vaults = self.no_vaults.isChecked() and media_ok
-        # Mirrors the encrypt_root line below: the collect itself carries the scope gate,
-        # so a stale tick made on a standalone/cloud desktop can never survive a switch to
-        # a mesh/node image (the hidden widget keeps its checked state; cfg is the source
-        # of truth that initializePage re-reads). This is the emission-preserving half of
-        # the hide above — on an in-scope image the value collects exactly as before.
-        c.standalone = self.standalone.isChecked() and scope_allows_flow("standalone", c, self.wiz)
-        # ASK 11's emission half. `local_user` is collected UNCONDITIONALLY on purpose: the
-        # x86 builder honours --local-user on every role, the field defaults to "magus" and
-        # is emitted on every x86 build, so blanking it here would change the argv of every
-        # existing mesh flow — a gating fix must not do that. `local_pass` is the one that
-        # matters and the one that is gated: it is a SECRET_FIELD that would otherwise ride
-        # the shared mesh base onto every node image (_materialize_one deepcopies the base
-        # and clear_role_class_fields does not cover it), which is precisely the leak. On a
-        # flow where the group IS offered it collects exactly as before.
+        # (ask 21) c.standalone is NOT collected here any more — the checkbox moved to
+        # the RolePage. The out-of-scope clear this line used to provide now lives in
+        # config.clear_role_class_fields, which runs Qt-free at mesh entry AND inside
+        # materialize() for every worklist row, so it covers the mesh flow this page
+        # could only ever patch up after the fact.
+        # ASK 11's emission half, also kept from main. `local_user` is collected
+        # UNCONDITIONALLY on purpose: the x86 builder honours --local-user on every role,
+        # the field defaults to "magus" and is emitted on every x86 build, so blanking it
+        # would change the argv of every existing mesh flow. `local_pass` is the one that
+        # matters and the one that is gated: it is a SECRET_FIELD that would otherwise
+        # ride the shared mesh base onto every node image.
         login_ok = capability_allows_flow(local_login_applies, c, self.wiz)
         c.local_user = self.local_user.text().strip() or c.local_user
         c.local_pass = self.local_pass.text() if login_ok else ""
-        # encrypt_root only where the platform can do FDE (the checkbox is hidden on
-        # jetson). Byte-identical: _ENC_PLATFORMS platforms are unchanged; jetson is
-        # already excluded from encrypt_root emission (and to_cli_args RAISES on a
-        # jetson image with encrypt_root set), so forcing False there is both safe and
-        # required if the branch is ever reached.
-        c.encrypt_root = self.encrypt_root.isChecked() and platform_supports(
-            "encrypt_root", c.platform)
+        # ASK 21/22 — root encryption is ALWAYS enabled, so this is not a read of the
+        # widget: it is the posture, asserted. This SUPERSEDES main's checkbox-driven
+        # line. encrypt_root_always is False on exactly one platform (jetson, whose
+        # builder hard-blocks --encrypt-root and whose to_cli_args RAISES if the flag is
+        # set), which is also the platform whose checkbox is hidden above — so the
+        # platform_supports guard main applied is subsumed, not dropped.
+        c.encrypt_root = encrypt_root_always(c)
         c.luks_pass = self.luks_pass.text()
         # "login" is desktop-only (see _sync_unlock_choices): drop a stale one rather than
         # emit a factor the builder's ROLE_CLIENT branch will never write a marker for.

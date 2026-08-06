@@ -1,4 +1,14 @@
-"""UsersPage — the superadmin users table + the explicit person-role picker.
+"""UsersPage — the superadmin users table.
+
+ASK 7 moved the ``--person-role`` picker OFF this page. It was a per-IMAGE build-time
+control ("This device's person role") sitting at the bottom of a table of CLUSTER
+ACCOUNTS, under an "Add user / Remove selected" button row — so it read as "which of
+the accounts above owns this device", which is not what it means. It now lives on the
+System-identity step beside the other things baked into the image (see
+``gui/pages/system.py``); this page is once again only the superadmin users table.
+The FIELD, the flag and the derivation are unchanged — ``config.to_cli_args`` still
+derives ``--person-role`` from ``users[0].role`` when the tier is left on "derive", so
+this table still feeds it.
 
 The per-row Domain cell is a DROPDOWN of the previously-defined domains (spec 6): the
 orchestration superdomain plus every name from the shared Domains table (and any rows
@@ -10,9 +20,7 @@ tenant domain. A loaded user whose domain is not (yet) defined is shown suffixed
 from __future__ import annotations
 
 from ..qt import QtWidgets
-from ...core.config import PERSON_ROLE_CHOICES, User, superadmin_plane_applies
-from ._gating import clear_unsupported, gate_widgets
-from ._widgets import _row
+from ...core.config import User, users_table_applies
 
 # Role slugs offerable per user row (G20): the four platform roles PLUS the
 # GRANTABLE games roles from the systems Casdoor seed (specs/cluster/manifests/
@@ -76,21 +84,8 @@ class UsersPage(QtWidgets.QWizardPage):
         rem.clicked.connect(self._remove)
         btns.addWidget(add); btns.addWidget(rem); btns.addStretch(1)
         lay.addLayout(btns)
-        # The EXPLICIT --person-role picker (G18). 'derive' keeps the historical
-        # defaults (cloud: users[0].role, mesh: superadmin — config.py's fallback);
-        # an explicit pick overrides them. x86-only (gated below): the ARM builders
-        # have no --person-role flag, and on an x86 cluster NODE role the builder
-        # warns + ignores it, so config.py suppresses emission there (G18's
-        # emission half) — the games roles above are per-USER Casdoor roles and
-        # intentionally not person-role choices (the builder rejects them).
-        self.person_role = QtWidgets.QComboBox()
-        self.person_role.addItems(("derive", *PERSON_ROLE_CHOICES))
-        self.person_role.setToolTip(
-            "The person-role this CLIENT image is tied to at build time "
-            "(--person-role). 'derive' = users[0]'s role in cloud mode, "
-            "superadmin in mesh mode. Ignored by the builder on cluster NODE roles.")
-        self.person_role_row = _row("This device's person role", self.person_role)
-        lay.addWidget(self.person_role_row)
+        # (ask 7) The --person-role picker used to sit here. It moved to SystemPage —
+        # see the module docstring. Nothing else about this page changed.
 
     # ---- domain-dropdown helpers -------------------------------------------------
     def _domain_choices(self) -> list[str]:
@@ -176,8 +171,19 @@ class UsersPage(QtWidgets.QWizardPage):
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
         --person-role/--domains and writes no manifest, so the users table contributes
-        nothing and is skipped (emission-neutral). Mesh and cloud client images apply."""
-        return superadmin_plane_applies(cfg)
+        nothing and is skipped (emission-neutral).
+
+        ASK 8 made the mesh arm conditional; ASK 20 gave it its OWN condition. The gate
+        is no longer the domains opt-in (``superadmin_plane_applies``) but
+        ``users_table_applies`` -> ``cfg.configure_users``, the answer to the users
+        CHOICE screen that now precedes this one — because the two questions are
+        genuinely independent: a mesh can host a second domain and still want the
+        accounts gen-provision-keys.sh mints, and a single-domain mesh can still want a
+        named superuser. The page is genuinely UNREACHABLE when the operator kept the
+        generated accounts (the wizard skips the id; it is not a disabled table), and
+        UsersChoicePage.validatePage clears cfg.users so nothing entered before the
+        choice changed can reach the mesh manifest. Cloud client images are unchanged."""
+        return users_table_applies(cfg)
 
     def initializePage(self):
         c = self.wiz.cfg
@@ -195,9 +201,6 @@ class UsersPage(QtWidgets.QWizardPage):
                     self._fill_domain_combo(dom, self._raw_domain(dom.currentText()))
                     if role_combo is not None:
                         self._apply_role_lock(dom, role_combo)
-        self.person_role.setCurrentText(c.person_role if c.person_role in PERSON_ROLE_CHOICES
-                                        else "derive")
-        gate_widgets(c.platform, {"person_role": self.person_role_row})
         self._update_warning()
 
     def validatePage(self):
@@ -218,9 +221,4 @@ class UsersPage(QtWidgets.QWizardPage):
                             registration=registration))
         c = self.wiz.cfg
         c.users = out
-        pr = self.person_role.currentText()
-        c.person_role = "" if pr == "derive" else pr
-        # a value picked while an x86 platform was selected must not linger once the
-        # platform has no --person-role flag (same rule as NetworkPage's gated fields)
-        clear_unsupported(c, ("person_role",))
         return True

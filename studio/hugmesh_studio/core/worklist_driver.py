@@ -70,6 +70,21 @@ MANIFEST_NAME = "hugmesh-mesh-manifest.json"
 QUEUED, RUNNING, OK, FAILED, STOPPED = "queued", "running", "ok", "failed", "stopped"
 
 
+def keys_dir(out_dir: str, entry_id: str) -> str:
+    """``<out>/keys-<entry id>`` — the folder ``gen-provision-keys.sh`` is pointed at
+    for one node, and therefore the folder an operator actually opens to find that
+    node's credentials.
+
+    Module-level and pure because it has TWO callers that must never disagree:
+    :meth:`WorklistDriver._generate_keys`, which creates it, and the ask-20 users
+    card, whose whole job is to tell the operator where it will be. ``out_dir`` is
+    whatever ``_output_dir()`` resolves to for the run — on the GUI path that is ALWAYS
+    the per-session dir (``progress.py`` passes ``workdir=session.workdir``), never the
+    bare output dir.
+    """
+    return os.path.join(out_dir, f"keys-{entry_id}")
+
+
 def key_profile(role: str, platform: str = "") -> str:
     """The gen-provision-keys.sh ``--role`` profile for a Studio/builder role id."""
     return KEY_PROFILE.get(role, "host")
@@ -277,13 +292,12 @@ class WorklistDriver:
         recorded (keys_ok=False) and the partial folder removed — mirroring
         build-all-roles.sh, where a half-written keys-<role> must never look like a
         deliverable — but does NOT abort the remaining images."""
-        out = self._output_dir()
-        keys_dir = os.path.join(out, f"keys-{entry.id}")
+        keys_dir_ = keys_dir(self._output_dir(), entry.id)
         res = self.results[i]
-        res.keys_path = keys_dir
+        res.keys_path = keys_dir_
         script = os.path.join(self.generator_dir, GENKEYS_SCRIPT)
         cmd = [script, "--role", key_profile(entry.role, entry.platform),
-               "--out", keys_dir, "--random"]
+               "--out", keys_dir_, "--random"]
         try:
             proc = subprocess.Popen(cmd, cwd=self.generator_dir, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -298,12 +312,12 @@ class WorklistDriver:
             code = 1
         res.keys_ok = (code == 0)
         if not res.keys_ok:
-            shutil.rmtree(keys_dir, ignore_errors=True)   # never leave a partial folder
+            shutil.rmtree(keys_dir_, ignore_errors=True)  # never leave a partial folder
             if on_line:
                 on_line(i, f"!! keys generation FAILED for {entry.id} — removed partial "
-                           f"{keys_dir}")
+                           f"{keys_dir_}")
         if on_keys:
-            on_keys(i, keys_dir, bool(res.keys_ok))
+            on_keys(i, keys_dir_, bool(res.keys_ok))
 
     def summary_exit_code(self) -> int:
         """0 iff every image finished OK and every attempted keys generation succeeded —

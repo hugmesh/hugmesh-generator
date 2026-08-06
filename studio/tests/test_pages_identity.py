@@ -43,7 +43,8 @@ from hugmesh_studio.gui.qt import Qt, QtWidgets
 # consolidated in _helpers so a flow change is edited in ONE place (design 6). mesh now
 # skips RolePage, so the mesh identity tests drive their image off the WorklistPage.
 from _helpers import (   # noqa: E402
-    advance_to, back_to, check_worklist_rows, pairs, pick_mode, pick_role,
+    advance_to, back_to, check_worklist_rows, enable_additional_domains,
+    enable_configure_users, pairs, pick_mode, pick_role,
 )
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -465,13 +466,17 @@ def test_no_part_checked_state_survives_anywhere_on_the_page(wiz):
     assert net.aide.checkState() == Qt.CheckState.Unchecked
 
 
-# ---- UsersPage: explicit person-role picker (G18) + games roles (G20) ---------------
+# ---- SystemPage: explicit person-role picker (G18) + UsersPage games roles (G20) ----
+# ASK 7 moved the picker off the Users TABLE onto the System-identity step (it is a
+# per-IMAGE build-time control, not a cluster account). The FIELD and its derivation are
+# unchanged, so these tests are the originals with the page they drive swapped.
 
 def test_person_role_derive_keeps_the_users_table_derivation(wiz):
     pick_mode(wiz, "cloud")                   # default cloud role: desktop (a client)
     users = advance_to(wiz, wizard_mod.UsersPage)
     users._add("alice", "acme.example", "superadmin")
-    assert users.person_role.currentText() == "derive"
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert sysp.person_role.currentText() == "derive"
     advance_to(wiz, wizard_mod.HomePage)
     assert wiz.cfg.person_role == ""
     assert ("--person-role", "superadmin") in pairs(wiz.cfg.to_cli_args())
@@ -481,18 +486,19 @@ def test_person_role_explicit_pick_overrides_the_derivation(wiz):
     pick_mode(wiz, "cloud")
     users = advance_to(wiz, wizard_mod.UsersPage)
     users._add("alice", "acme.example", "superadmin")
-    users.person_role.setCurrentText("mod")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    sysp.person_role.setCurrentText("mod")
     advance_to(wiz, wizard_mod.HomePage)
     assert wiz.cfg.person_role == "mod"
     assert ("--person-role", "mod") in pairs(wiz.cfg.to_cli_args())
-    back_to(wiz, wizard_mod.UsersPage)        # round-trips into the combo
-    assert users.person_role.currentText() == "mod"
+    back_to(wiz, wizard_mod.SystemPage)       # round-trips into the combo
+    assert sysp.person_role.currentText() == "mod"
 
 
 def test_person_role_offers_exactly_the_builder_accepted_roles(wiz):
     pick_mode(wiz, "cloud")
-    users = advance_to(wiz, wizard_mod.UsersPage)
-    items = [users.person_role.itemText(i) for i in range(users.person_role.count())]
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    items = [sysp.person_role.itemText(i) for i in range(sysp.person_role.count())]
     assert items == ["derive", *PERSON_ROLE_CHOICES]
 
 
@@ -503,8 +509,8 @@ def test_person_role_greys_and_clears_on_arm(wiz):
     c.mode = "cloud"; c.role = "rpi5-desktop"; c.platform = "rpi5"
     c.person_role = "admin"
     wiz.restart()
-    users = advance_to(wiz, wizard_mod.UsersPage)
-    assert not users.person_role_row.isEnabled()
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert not sysp.person_role_row.isEnabled()
     advance_to(wiz, wizard_mod.HomePage)
     assert c.person_role == ""
     assert "--person-role" not in c.to_cli_args()
@@ -514,6 +520,9 @@ def test_user_role_combo_offers_the_grantable_games_roles(wiz):
     """G20: the per-user role combo carries the grantable games roles (games /
     games-services) — the derived Casdoor intersection roles stay excluded."""
     pick_mode(wiz, "mesh")
+    # ask 20: the users TABLE has its own gate now (the users CHOICE screen), separate
+    # from the domains one — this test needs only the table.
+    enable_configure_users(wiz)
     users = advance_to(wiz, wizard_mod.UsersPage)
     users._add("bob", "acme.example", "games")
     combo = users.table.cellWidget(0, 2)
@@ -532,8 +541,10 @@ def test_users_domain_cell_is_a_dropdown_of_defined_domains(wiz):
     """Spec 6: the per-user Domain cell is a dropdown of the superdomain + every domain
     defined on the Domains page (+ session-added rows), not free text."""
     mesh_worklist(wiz)
+    enable_additional_domains(wiz)            # ask 8/19: the mesh gate for the Domains table
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     dom._add("acme.example", "Acme")
+    enable_configure_users(wiz)               # ask 20: ...and the gate for the Users table
     users = advance_to(wiz, wizard_mod.UsersPage)   # Next past Domains defines acme
     users._add("bob", role="user")
     combo = users.table.cellWidget(0, 1)            # the Domain cell is a combo now
@@ -583,11 +594,14 @@ def test_domains_table_round_trips_per_domain_services(wiz):
     # optional_services += ["games"]); the Domain dataclass no longer has a games field.
     c.domains = [Domain(name="acme.example", title="Acme",
                         optional_services=["akkoma", "tube"])]
-    wiz.restart()
+    c.additional_domains = True               # ask 8/19: a loaded mesh config with domain
+    wiz.restart()                             # rows keeps the domains table reachable
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     assert dom.table.item(0, 2).text() == "akkoma tube"   # services now column 2
     dom._add("beta.example", "Beta", "phpbb, owncast")
-    advance_to(wiz, wizard_mod.UsersPage)     # Next past Domains collects the table
+    # ask 20: the users TABLE is behind its own choice screen, which is the page that
+    # now follows Domains — one Next past Domains still collects the table.
+    advance_to(wiz, wizard_mod.UsersChoicePage)
     assert [d.optional_services for d in c.domains] == [["akkoma", "tube"],
                                                         ["phpbb", "owncast"]]
     manifest = c.mesh_manifest()
@@ -617,13 +631,14 @@ def test_domains_applies_to_writes_domain_images(wiz):
     a domain attaches to (empty = all eligible); node-role images are offered but
     flagged '(manifest only)' since a node build takes no --domains."""
     mesh_worklist(wiz, "omnibus.x86", "be.rpi5")
+    enable_additional_domains(wiz)            # ask 8/19: the mesh gate for the Domains table
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     dom._add("acme.example", "Acme", "", ["omnibus.x86"])
     r = dom.table.rowCount() - 1
     btn = dom.table.cellWidget(r, 3)                # the 'Applies to' cell widget
     assert btn.selected_ids() == ["omnibus.x86"]
     assert "manifest only" in btn._actions["be.rpi5"].text()   # node row flagged
-    advance_to(wiz, wizard_mod.UsersPage)           # Next past Domains collects the table
+    advance_to(wiz, wizard_mod.UsersChoicePage)     # Next past Domains collects the table
     acme = [d for d in wiz.cfg.domains if d.name == "acme.example"][0]
     assert acme.images == ["omnibus.x86"]
 

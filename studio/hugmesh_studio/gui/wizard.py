@@ -18,9 +18,10 @@ from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
 from ..core import worklist as worklist_mod
 from .pages import (
-    BrandingPage, BuildPage, DeployPage, DomainsPage, HardwarePage, HomePage, IdpPage,
-    KeyZipPage, LocalMeshPage, ModePage, NetworkPage, PhonePage, ProgressPage,
-    QuestPage, RolePage, SystemPage, UsersPage, WelcomePage, WorklistPage,
+    BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
+    HomePage, IdpPage, KeyZipPage, LaunchPage, LocalMeshPage, ModePage, NetworkPage,
+    PhonePage, ProgressPage, QuestPage, RolePage, SystemPage, UsersChoicePage,
+    UsersPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -32,8 +33,9 @@ __all__ = [
     "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
     "DeployPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
-    "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
-    "SystemPage", "HomePage", "BuildPage", "ProgressPage",
+    "BrandingPage", "NetworkPage", "KeyZipPage",
+    "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
+    "SystemPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
 ]
 
 # The wizard's ONE size, for every page (the "medium" — pages used to jump between
@@ -151,7 +153,8 @@ class StudioWizard(QtWidgets.QWizard):
             WelcomePage, ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
-            DomainsPage, UsersPage, SystemPage, HomePage, BuildPage, ProgressPage,
+            DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,
+            SystemPage, HomePage, BuildPage, LaunchPage, ProgressPage,
         ]
         assert len(page_ctors) == len(WIZARD_PAGE_SLUGS), (
             f"page constructors ({len(page_ctors)}) drifted from "
@@ -219,7 +222,12 @@ class StudioWizard(QtWidgets.QWizard):
         build/progress pages are never dynamically skipped."""
         nid = super().nextId()
         skipped = {self._page_ids[s] for s in MODE_SKIPPED_PAGES[self.cfg.mode]}
-        terminal = {self._page_ids[s] for s in ("build", "progress") if s in self._page_ids}
+        # "launch" (ask 22's separate BUILD screen) joins the terminal set: like the
+        # review and progress pages it must never be dynamically skipped — it is the
+        # explicit "continue the build / back to the main menu" gate, and a flow that
+        # skipped it would dispatch on arrival again, which is the thing it exists to stop.
+        terminal = {self._page_ids[s] for s in ("build", "launch", "progress")
+                    if s in self._page_ids}
         ids = self.pageIds()
         while nid in skipped or self._dynamically_skipped(nid, terminal):
             i = ids.index(nid)

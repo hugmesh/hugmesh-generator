@@ -51,6 +51,7 @@ from dataclasses import MISSING
 from ..qt import Qt, QtCore, QtWidgets, Signal
 from ._scroll import scrollable
 from ...core import build_sessions
+from ...core import cross_dracut
 from ...core import flash_targets
 from ...core import secret_files
 from ...core import worklist as worklist_mod
@@ -236,17 +237,31 @@ class BuildPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Review & Build")
-        self.setSubTitle("Review the command and preflight, then Build — the build runs on "
-                         "the next screen.")
-        # commit page: leaving it commits the worklist and lands on ProgressPage; Back is
-        # then disabled for the duration of the run (design 3.12/3.13).
+        # ASK 22 — "Simplify the review screen and make the build screen separate". The
+        # page is REVIEW now, nothing else: it no longer promises "Build" in its title or
+        # on its button, because leaving it no longer starts anything — it lands on the
+        # separate LaunchPage, whose Continue is what dispatches. What it gained is a
+        # plain-language SUMMARY at the top (see _refresh_summary): the answer to "what
+        # will this produce" used to be available only by reading a 500-character argv in
+        # the Command pane, which is exactly the thing an operator should not have to
+        # parse to sanity-check a build.
+        self.setTitle("Review")
+        self.setSubTitle("Check what will be built. Nothing starts here — the next "
+                         "screen has the Continue button.")
+        # commit page: leaving it commits the worklist (design 3.12/3.13). Back is
+        # disabled from here on, which is WHY the launch screen offers an explicit
+        # "back to the main menu" instead.
         self.setCommitPage(True)
         try:
-            self.wiz.setButtonText(QtWidgets.QWizard.WizardButton.CommitButton, "Build")
+            self.wiz.setButtonText(QtWidgets.QWizard.WizardButton.CommitButton, "Continue")
         except Exception:
             pass
         self._problems: list[str] = []
+        # ask 21: whether THIS host can satisfy the ARM cross-dracut preflight an
+        # encrypted root drags in. Sampled once per page visit (initializePage) and
+        # cached, so review_summary() stays the pure, probe-free function its docstring
+        # promises — the summary is recomputed on every widget change.
+        self._cross_dracut_ready = False
         # mesh run state (populated in initializePage when mode == mesh)
         self._wl_driver: WorklistDriver | None = None
         self._materialized: list = []
@@ -255,6 +270,15 @@ class BuildPage(QtWidgets.QWizardPage):
         self._assigned_keys_dir = ""
 
         lay = scrollable(self)
+
+        # ── ASK 22: the summary — the review, in one block, above the knobs ────────
+        # Plain text (it interpolates an output PATH and entry ids, which must render as
+        # themselves) and refreshed by _preview(), so it always describes the config the
+        # command pane below it was just rendered from.
+        self.summary = QtWidgets.QLabel("")
+        self.summary.setWordWrap(True)
+        self.summary.setTextFormat(Qt.TextFormat.PlainText)
+        lay.addWidget(self.summary)
 
         # ── section: Build execution — HOW and WHERE the build runs (backend engine,
         # stack env, output dir, parallelism). Each Collapsible carries the section
@@ -602,12 +626,26 @@ class BuildPage(QtWidgets.QWizardPage):
                                             expanded=False)
         lay.addWidget(self.plumbing_section)
 
-        # The command / preflight / log panes and their action buttons stay UNsectioned
-        # at the bottom: they are the Review page's OUTPUT — the thing the page exists
-        # to show — not an option group anyone should be able to fold away and then
-        # commit blind.
+        # The exact builder invocation. It used to sit UNsectioned at the bottom on the
+        # reasoning that it is "the Review page's OUTPUT — the thing the page exists to
+        # show". Ask 22 retires that reasoning rather than the pane: the summary at the
+        # top is now the thing the page exists to show, in words, and a 500-character
+        # argv is developer output — kept verbatim, one click away, folded by default so
+        # the review reads as a review. Folding is presentation only (_widgets.
+        # Collapsible), so _preview()/validatePage and every test that reads cmd's text
+        # are untouched, and the PROBLEMS pane below stays outside it: a preflight
+        # failure must never be foldable.
         self.cmd = QtWidgets.QPlainTextEdit(); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(120)
-        lay.addWidget(QtWidgets.QLabel("Command:")); lay.addWidget(self.cmd)
+        cmd_box = QtWidgets.QGroupBox("")
+        cb = QtWidgets.QVBoxLayout(cmd_box)
+        cb.addWidget(self.cmd)
+        self.cmd_section = collapsible("Exact builder command (advanced)", cmd_box,
+                                       expanded=False)
+        lay.addWidget(self.cmd_section)
+        # The two ACTIONS stay outside the fold. "Build builder image now" is shown by
+        # _on_preflight_done exactly when the docker builder image is missing — i.e. the
+        # moment it is the fix for a blocking problem — so burying it inside a
+        # collapsed section would hide the remedy along with the argv.
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
         self.build_image_btn = QtWidgets.QPushButton("Build builder image now")
         self.build_image_btn.setVisible(False)
@@ -733,6 +771,8 @@ class BuildPage(QtWidgets.QWizardPage):
         self.wiz.collect_all()
         c = self.wiz.cfg
         mesh = c.mode == "mesh"
+        # two stats on /proc — no subprocess, never blocks (unlike the docker probe)
+        self._cross_dracut_ready = cross_dracut.preflight_ok()
         if not self.outdir.text():
             self.outdir.setText(c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
         self.env.setCurrentText(c.env or "test")
@@ -1019,14 +1059,82 @@ class BuildPage(QtWidgets.QWizardPage):
                                   ).command_string(pc, self._backend())
         except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
             self.cmd.setPlainText("")
+            self.summary.setText(f"Cannot assemble this build: {e}")
             self.log.setPlainText(f"Command error: {e}")
             self._set_problems([str(e)])
             return
         self.cmd.setPlainText(cmdline)
+        self._refresh_summary()
         # The command pane above updated INSTANTLY (pure argv assembly, no daemon).
         # The AGGREGATE preflight + builder-image probe are the two docker subprocess
         # calls that used to freeze the wizard + tray here — kick them off-thread.
         self._schedule_recompute()
+
+    # ---- ask 22: the plain-language review ------------------------------------
+    def review_summary(self) -> str:
+        """What this build will produce, in words — the review the page is named for.
+
+        Every line is read off the SAME committed state the command pane renders from
+        (``_current_worklist`` / ``cfg``), so it can never describe a different build
+        than the one Continue dispatches. Pure: no widget writes, no disk, no probes."""
+        c = self.wiz.cfg
+        try:
+            wl = self._current_worklist()
+            entries = list(wl.entries)
+        except Exception:                      # a config that cannot even synthesize
+            entries = []
+        images = ", ".join(e.id for e in entries) or f"{c.role or 'image'}.{c.platform}"
+        out = c.output_dir.strip() or os.path.join(self.wiz.generator_dir, "out")
+        backend = self._backend() or self.wiz.host.default_backend
+        lines = [
+            f"Building {len(entries) or 1} image(s): {images}",
+            f"Into: {out}",
+            f"With: {backend} backend, --env {self.env.currentText()}, "
+            f"{self.jobs.value()} parallel jobs",
+        ]
+        # The artifact set, named rather than implied by the boxes. Reads _flag_value,
+        # not the tri-state accessor this summary was first written against: ask 13 made
+        # these boxes two-state, so '' is no longer reachable and every box now
+        # contributes a definite phrase.
+        arts = []
+        for box, name in ((self.build_img, "disk image"), (self.live_iso, "live ISO"),
+                          (self.build_tar, "rootfs tarball")):
+            state = _flag_value(box)
+            if state == "on":
+                arts.append(name)
+            elif state == "off":
+                arts.append(f"no {name}")
+        if self.installer_iso.isChecked():
+            arts.append("installer ISO")
+        if c.encrypt_root:
+            # ask 21's consequence, stated where the operator is deciding to proceed
+            arts.append("LUKS2-encrypted root (always on; x86 also yields an installer ISO)")
+        if arts:
+            lines.append("Artifacts: " + ", ".join(arts))
+        else:
+            lines.append("Artifacts: the builder's own defaults for each image")
+        # ask 21's OTHER consequence: on a cross-built ARM row --encrypt-root forces the
+        # installer artifact AND gates the whole build behind the arm64 cross-dracut
+        # preflight, which exits 1 before any work happens. Named per affected row, and
+        # only when a row is actually affected — see core/cross_dracut.py. Reads the
+        # SAME per-entry resolution the driver will apply (worklist.resolve_encrypt_root
+        # against this page's committed cfg, which _current_worklist just pinned as
+        # wl.base), so the warning can never describe a different set than the argv.
+        cross = cross_dracut.cross_fde_note(
+            cross_dracut.cross_fde_rows(
+                [(e.id, e.platform,
+                  worklist_mod.resolve_encrypt_root(e, c.encrypt_root)) for e in entries]),
+            self._cross_dracut_ready)
+        if cross:
+            lines.append(cross)
+        if c.mode == "mesh":
+            lines.append("Node key folders: "
+                         + ("generated beside each node image"
+                            if self.gen_keys.isChecked() else "NOT generated"))
+        return "\n".join(lines)
+
+    def _refresh_summary(self) -> None:
+        self.summary.setText(self.review_summary())
 
     # ---- off-thread preflight (freeze fix) -------------------------------------
     def _schedule_recompute(self) -> None:

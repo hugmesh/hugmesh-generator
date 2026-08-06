@@ -175,7 +175,13 @@ class ModePage(QtWidgets.QWizardPage):
             # entering mesh: clear the desktop-class surfaces (theming/home/tailnet-SSO)
             # and force tailscale=sso on off-UI (materialize re-forces them per image),
             # so a mesh node can never carry a theme or a stale desktop option (I4).
-            enter_mesh_defaults(self.wiz.cfg)
+            #
+            # fresh= distinguishes ARRIVING in mesh from re-walking the Mode step of a
+            # flow that is already mesh. Only the arrival seeds the ask-12 encrypted-root
+            # default: re-walking must never re-tick a box the operator has since
+            # un-ticked on the Home step (which stepping Back through here would
+            # otherwise do on every pass).
+            enter_mesh_defaults(self.wiz.cfg, fresh=(prev != "mesh"))
             if prev != "mesh":
                 self.wiz.worklist = None      # fresh worklist on transition into mesh
         else:
@@ -193,6 +199,11 @@ class ModePage(QtWidgets.QWizardPage):
                 self.wiz.cfg.keyzip = ""
                 self.wiz.cfg.domains = []
                 self.wiz.cfg.users = []
+                # ...and the two ask-19/20 FLOW flags that gate their tables. They are
+                # mesh-only state; a standalone flow sees neither choice screen, so a
+                # True left over from a mesh detour would be unreachable-but-saved.
+                self.wiz.cfg.additional_domains = False
+                self.wiz.cfg.configure_users = False
                 self.wiz.cfg.tailscale = False
                 self.wiz.cfg.sso = False
         return True

@@ -17,11 +17,14 @@ from .hardware import HardwarePage
 from .branding import BrandingPage
 from .network import NetworkPage
 from .keyzip import KeyZipPage
+from .domains_choice import DomainsChoicePage
 from .domains import DomainsPage
+from .users_choice import UsersChoicePage
 from .users import UsersPage
 from .system import SystemPage
 from .home import HomePage
 from .build import BuildPage
+from .launch import LaunchPage
 
 # ProgressPage lands in a later workstream (WS-REVIEWUI: gui/pages/progress.py). It is
 # registered here defensively so the wizard's page registry slots it in the moment it
@@ -37,6 +40,7 @@ __all__ = [
     "PhonePage", "PhoneDialog", "QuestPage", "QuestDialog",
     "DeployPage", "DeployDialog", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
-    "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
-    "SystemPage", "HomePage", "BuildPage", "ProgressPage",
+    "BrandingPage", "NetworkPage", "KeyZipPage",
+    "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
+    "SystemPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
 ]

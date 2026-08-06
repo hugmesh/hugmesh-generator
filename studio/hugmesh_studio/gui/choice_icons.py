@@ -579,6 +579,118 @@ def _role_server(p: QtGui.QPainter, st: IconStyle) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# the ask-19/20/22 path icons — domains-at-launch, users-at-launch, launch
+# ──────────────────────────────────────────────────────────────────────────────
+def _person(p: QtGui.QPainter, st: IconStyle, x: float, y: float, w: float,
+            h: float, colour: str | None = None) -> None:
+    """One person glyph (head + shoulders) inside the given box."""
+    p.setPen(_pen(colour or st.fg, 2.2))
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    head = w * 0.42
+    p.drawEllipse(_rect(x + (w - head) / 2, y, head, head))
+    body = QtGui.QPainterPath()
+    body.moveTo(x, y + h)
+    body.arcTo(_rect(x, y + head * 1.15, w, (h - head * 1.15) * 2), 180, -180)
+    p.drawPath(body)
+
+
+def _globe(p: QtGui.QPainter, st: IconStyle, x: float, y: float, d: float,
+           width: float = 2.2) -> None:
+    """A meridian globe — the repo's established "a domain" gesture (see the
+    go-live DNS icons), reused so one thing keeps one shape."""
+    p.setPen(_pen(st.fg, width))
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    p.drawEllipse(_rect(x, y, d, d))
+    p.setPen(_pen(st.muted, max(1.0, width * 0.62)))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawEllipse(_rect(x + d * 0.28, y, d * 0.44, d))
+    p.drawLine(QtCore.QPointF(x, y + d / 2), QtCore.QPointF(x + d, y + d / 2))
+
+
+def _domain_internal(p: QtGui.QPainter, st: IconStyle) -> None:
+    """ONE domain, kept inside: a globe behind a closed padlock."""
+    _globe(p, st, 6, 10, 40, 2.4)
+    p.setPen(_pen(st.accent, 2.6))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawArc(_rect(38, 26, 16, 18), 0, int(180 * 16))
+    p.setPen(_pen(st.fg, 2.2))
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    p.drawRoundedRect(_rect(35, 36, 22, 20), 3.0, 3.0)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.accent)))
+    p.drawEllipse(_rect(43.5, 43, 5, 5))
+
+
+def _domain_add(p: QtGui.QPainter, st: IconStyle) -> None:
+    """MORE domains: two globes and a plus — the table that adds them."""
+    _globe(p, st, 2, 8, 30, 2.2)
+    _globe(p, st, 20, 30, 26, 2.0)
+    p.setPen(_pen(st.accent, 3.2))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawLine(QtCore.QPointF(52, 8), QtCore.QPointF(52, 26))
+    p.drawLine(QtCore.QPointF(43, 17), QtCore.QPointF(61, 17))
+
+
+def _users_generated(p: QtGui.QPainter, st: IconStyle) -> None:
+    """The accounts the key-USB mints for you: one person beside a key."""
+    _person(p, st, 4, 12, 30, 40)
+    p.setPen(_pen(st.accent, 2.8))
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    p.drawEllipse(_rect(40, 14, 18, 18))
+    p.setPen(_pen(st.accent, 3.0))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawLine(QtCore.QPointF(49, 32), QtCore.QPointF(49, 56))
+    p.drawLine(QtCore.QPointF(49, 44), QtCore.QPointF(58, 44))
+    p.drawLine(QtCore.QPointF(49, 51), QtCore.QPointF(56, 51))
+
+
+def _users_table(p: QtGui.QPainter, st: IconStyle) -> None:
+    """Naming them yourself: three people over a ruled table."""
+    for i in range(3):
+        _person(p, st, 4.0 + i * 20.0, 6, 16, 22)
+    p.setPen(_pen(st.fg, 2.2))
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    p.drawRoundedRect(_rect(4, 34, 56, 24), 2.5, 2.5)
+    p.setPen(_pen(st.muted, 1.6))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawLine(QtCore.QPointF(4, 42), QtCore.QPointF(60, 42))
+    p.drawLine(QtCore.QPointF(4, 50), QtCore.QPointF(60, 50))
+    p.drawLine(QtCore.QPointF(24, 34), QtCore.QPointF(24, 58))
+    p.drawLine(QtCore.QPointF(42, 34), QtCore.QPointF(42, 58))
+
+
+def _build_run(p: QtGui.QPainter, st: IconStyle) -> None:
+    """Start the build: a play triangle on the image-artifact slab."""
+    p.setPen(_pen(st.fg, 2.4))
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    p.drawRoundedRect(_rect(4, 12, 56, 40), 4.0, 4.0)
+    p.setPen(_pen(st.muted, 2.0))
+    p.drawLine(QtCore.QPointF(4, 22), QtCore.QPointF(60, 22))
+    tri = QtGui.QPainterPath()
+    tri.moveTo(26, 28)
+    tri.lineTo(46, 37)
+    tri.lineTo(26, 46)
+    tri.closeSubpath()
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.accent)))
+    p.drawPath(tri)
+
+
+def _main_menu(p: QtGui.QPainter, st: IconStyle) -> None:
+    """Back to the first screen: a house with a return arrow."""
+    roof = QtGui.QPainterPath()
+    roof.moveTo(4, 30)
+    roof.lineTo(30, 8)
+    roof.lineTo(56, 30)
+    p.setPen(_pen(st.fg, 2.6))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawPath(roof)
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    p.drawRect(_rect(12, 30, 36, 26))
+    _arrow(p, st, 44, 44, 22, 44, width=2.8, head=6.0)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # registry
 # ──────────────────────────────────────────────────────────────────────────────
 ICON_PAINTERS: Dict[str, Callable[[QtGui.QPainter, IconStyle], None]] = {
@@ -607,6 +719,14 @@ ICON_PAINTERS: Dict[str, Callable[[QtGui.QPainter, IconStyle], None]] = {
     "role-mesh-desktop": _role_mesh_desktop,
     "role-board": _role_board,
     "role-server": _role_server,
+    # DomainsChoicePage / UsersChoicePage (asks 19+20)
+    "domain-internal": _domain_internal,
+    "domain-add": _domain_add,
+    "users-generated": _users_generated,
+    "users-table": _users_table,
+    # LaunchPage (ask 22)
+    "build-run": _build_run,
+    "main-menu": _main_menu,
 }
 
 ICON_NAMES = tuple(ICON_PAINTERS)

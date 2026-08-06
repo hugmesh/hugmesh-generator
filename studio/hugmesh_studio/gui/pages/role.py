@@ -34,6 +34,7 @@ from ...core.config import (
     UNAFFILIATED_ROLE,
     rpi_boards_for_role, x86_desktop_axis,
 )
+from ._gating import gate_widgets_role_class, out_of_scope_note, scope_allows
 from ._widgets import _row, status_badge
 from ._widgets import _tri_state, _tri_value
 
@@ -45,6 +46,14 @@ _MACHINE_ORDER = ("x86", "rpi5", "frite", "orangepi5", "orangepizero2", "orangep
 
 def _machine_sort_key(plat: str) -> int:
     return _MACHINE_ORDER.index(plat) if plat in _MACHINE_ORDER else len(_MACHINE_ORDER)
+
+
+# ASK 21 — the in-scope tooltip for the --standalone posture (see
+# RolePage._sync_standalone_gate for why it is applied there and not at construction).
+_STANDALONE_TIP = (
+    "The x86 standalone-* roles set this themselves inside the builder; tick it to "
+    "compose the same posture onto another client role (the documented rpi5-desktop + "
+    "--standalone FDE desktop, for example).")
 
 
 class RolePage(QtWidgets.QWizardPage):
@@ -354,6 +363,35 @@ class RolePage(QtWidgets.QWizardPage):
             "branding/tooling (composable)")
         cl.addWidget(self.unaffiliated)
         lay.addWidget(self.client_box)
+
+        # ── ASK 21: the --standalone POSTURE, moved here from the Home step ────────
+        # "REMOVE the standalone user option from the Home-folder / encryption / login
+        # step — there is no reason for it there." Right: it is not a home-folder or a
+        # login setting, it is what KIND of image this is — no mesh, no SSO, no k8s, a
+        # local user with a build-time password, FDE on install. That belongs beside
+        # --capable / --unaffiliated, on the screen where the image type is chosen.
+        #
+        # Its own group rather than inside client_box, because client_box is x86-only
+        # (see _sync_machine_boxes) while --standalone is the DEFINING posture of the
+        # ARM appliance images too (build-orangepi-zero2-stage4.sh:218-226) — folding it
+        # in there would hide it on the flows whose whole point it is. The scope gate is
+        # unchanged (FieldScope "standalone"), and it is HIDDEN rather than greyed
+        # out-of-scope, exactly as the Home step used to do it.
+        self.posture_box = QtWidgets.QGroupBox("Image posture")
+        pl = QtWidgets.QVBoxLayout(self.posture_box)
+        self.standalone = QtWidgets.QCheckBox(
+            "Standalone: no mesh/SSO, the local user logs in with a build-time password "
+            "(--standalone; client roles only — laptop/chromebook/desktop, rpi5-desktop/"
+            "frite/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts. NOT jetson — "
+            "--encrypt-root is hard-blocked on that platform, see "
+            "docs/STANDALONE-DESKTOP.md)")
+        # Set through _sync_standalone_gate, NOT here: gate_widgets_role_class blanks a
+        # widget's tooltip whenever the surface is allowed ("" if allowed else reason),
+        # so a tooltip written in __init__ is wiped by the first gate pass and never
+        # seen. The gate restores this one instead — the in-scope tooltip is the "why
+        # would I tick this" text, the out-of-scope one is the refusal reason.
+        pl.addWidget(self.standalone)
+        lay.addWidget(self.posture_box)
 
         self.note = QtWidgets.QLabel("")
         self.note.setWordWrap(True)
@@ -755,9 +793,38 @@ class RolePage(QtWidgets.QWizardPage):
         # only restore where the compose is legal (_role_changed may have just
         # disabled + cleared the checkbox for this mode/role)
         self.unaffiliated.setChecked(c.unaffiliated and self.unaffiliated.isEnabled())
+        # (ask 21) the standalone posture, restored + scope-gated for the selection
+        self.standalone.setChecked(c.standalone)
+        self._sync_standalone_gate()
         # the device pins the board combo LAST (after the c.board restore above — the
         # restore and the pin agree by construction, device_for_axes ate c.board).
         self._apply_device_pin(dev)
+
+    def _sync_standalone_gate(self) -> None:
+        """ASK 21: offer the --standalone posture only where the field is in SCOPE for
+        the currently selected (role, platform).
+
+        The same FieldScope predicate the Home step used to apply, but evaluated live as
+        the selection changes rather than once per page visit — on this page the role IS
+        what the operator is moving through, so a gate that only ran on entry would show
+        the box for the previous role. Probes a shallow COPY of the config so the live
+        one is never mutated by a mere hover through the role list.
+
+        The in-scope tooltip is (re)applied HERE rather than in ``__init__`` because
+        ``gate_widgets_role_class`` writes ``"" if allowed else reason`` on every pass —
+        a tooltip set at construction is blanked by the first gate and never seen again.
+        """
+        import copy
+        c = self.wiz.cfg
+        probe = copy.copy(c)
+        probe.role = self._current_role()[0] or c.role
+        probe.platform = self._selected_machine() or c.platform
+        ok = scope_allows("standalone", probe)
+        gate_widgets_role_class(self.standalone, ok,
+                                out_of_scope_note("standalone", probe), hide=True)
+        self.posture_box.setVisible(ok)
+        if ok:
+            self.standalone.setToolTip(_STANDALONE_TIP)
 
     def _role_changed(self, _row):
         role, _platforms = self._current_role()
@@ -806,6 +873,8 @@ class RolePage(QtWidgets.QWizardPage):
             "Composable --unaffiliated applies to a STANDALONE build on a role other "
             "than standalone-unaffiliated (that role already presets it); cloud/mesh "
             "person-device identity is a builder hard-conflict.")
+        # (ask 21) the standalone posture box follows the role selection too
+        self._sync_standalone_gate()
 
     # ---- machine-profile preset (folded from the Hardware page) ------------------
     def _seed_gpu(self, c, value: str) -> None:
@@ -865,6 +934,11 @@ class RolePage(QtWidgets.QWizardPage):
         c.capable = self.capable.isChecked() if x86_client else False
         c.unaffiliated = (self.unaffiliated.isChecked()
                           if x86_client and self.unaffiliated.isEnabled() else False)
+        # (ask 21) --standalone, collected with its own scope gate — NOT x86_client:
+        # the ARM appliance/desktop platforms take the posture too, and their boxes are
+        # deliberately not part of the x86 client group (see _sync_standalone_gate).
+        # c.role/c.platform were just committed above, so the gate reads the NEW image.
+        c.standalone = self.standalone.isChecked() and scope_allows("standalone", c)
         # Unaffiliated build (the dedicated role OR the composable flag): ModePage
         # defaults bundle_source ON for standalone mode, but bundling the HugMesh
         # generator source is a builder HARD CONFLICT on an unaffiliated image —

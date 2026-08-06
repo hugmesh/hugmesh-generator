@@ -709,7 +709,10 @@ def test_all_except_one_is_expressible_from_the_table(wiz):
 # about what can be SET on a node image, and the field is what reaches the argv.
 _STANDALONE_ONLY_FIELDS = (
     ("local_pass", "home", "local_pass"),        # ask 11: the desktop login password
-    ("standalone", "home", "standalone"),        # ask 3: the standalone posture itself
+    # ("standalone", "home", "standalone") — ask 21 MOVED this checkbox to RolePage, and
+    # RolePage is not visited in ANY mesh flow (WorklistPage owns roles there), so the
+    # posture is now unreachable on mesh by construction rather than by gating. Asserted
+    # directly below instead of through this table, which probes HomePage.
     ("media_data", "home", "media_box"),         # ask 3: a Steam library on a PKI node
     ("home_mode", "home", "mode"),               # ask 3: home provisioning
     ("egress_vpn", "network", "egress_row"),     # ask 3: desktop-class egress VPN
@@ -749,7 +752,8 @@ def test_the_same_fields_stay_reachable_on_the_desktop_mesh_track(wiz):
     home = pages["home"]
     assert home.login.isVisibleTo(home), "the desktop mesh track lost its login group"
     assert home.local_pass.isVisibleTo(home)
-    assert home.standalone.isVisibleTo(home)
+    # NOT home.standalone: ask 21 moved that checkbox to RolePage. See
+    # test_standalone_posture_is_unreachable_in_every_mesh_flow for what that costs.
     assert home.media_box.isVisibleTo(home)
     assert home.mode.isVisibleTo(home)
 
@@ -772,7 +776,8 @@ def test_one_desktop_row_does_not_unlock_the_surfaces_for_a_whole_node_worklist(
         "about anything")
     assert wiz.cfg.role == "rpi5-desktop", "the base is not the desktop-class one"
     home = pages["home"]
-    for attr in ("login", "local_pass", "standalone", "media_box", "mode"):
+    # "standalone" dropped: ask 21 moved it to RolePage, which a mesh flow never visits.
+    for attr in ("login", "local_pass", "media_box", "mode"):
         w = getattr(home, attr)
         assert not w.isVisibleTo(home), (
             f"{attr} leaked onto a worklist containing a NODE, because one desktop row "
@@ -805,7 +810,8 @@ def test_a_typed_secret_cannot_ride_a_switch_from_desktop_to_node(wiz):
     mesh(wiz, "rpi5-desktop.rpi5")
     pages = _pages(wiz)
     pages["home"].local_pass.setText("hunter2")
-    pages["home"].standalone.setChecked(True)
+    # (ask 21) no standalone tick to make here — the checkbox moved to RolePage, which a
+    # mesh flow never reaches. local_pass IS the secret this test is about.
     advance_to(wiz, wizard_mod.BuildPage)
     assert wiz.cfg.local_pass == "hunter2"          # in scope: collected as before
     # …now walk the SAME wizard back and switch it to a node worklist
@@ -932,3 +938,29 @@ def test_the_retired_service_widgets_are_gone_for_good(wiz):
     # exactly ONE scrolling list-of-services widget is permitted: the table
     lists = net.services_section.findChildren(QtWidgets.QListWidget)
     assert lists == [], "a QListWidget of slugs came back beside the table"
+
+
+@pytest.mark.parametrize("entry", ["pki.x86", "rpi5-desktop.rpi5"])
+def test_standalone_posture_is_unreachable_in_every_mesh_flow(wiz, entry):
+    """Ask 21 moved the --standalone checkbox off HomePage onto RolePage. RolePage is
+    NOT VISITED in a mesh flow at all — WorklistPage owns roles there — so the posture is
+    now unreachable on mesh by construction, not by gating.
+
+    For the NODE flow that is strictly stronger than asks 3/11 wanted: the field cannot
+    be set even in principle.
+
+    For the DESKTOP MESH TRACK it is a real reduction, asserted here rather than left
+    implicit: ask 11 said "keep that to the desktop mesh track", and that track can no
+    longer offer it. Whether --standalone should return there (on WorklistPage, the only
+    mesh role surface) is an OPERATOR DECISION, deliberately not made here.
+    """
+    import hugmesh_studio.gui.wizard as _wm
+    mesh(wiz, entry)
+    try:
+        advance_to(wiz, _wm.RolePage)
+        reached = True
+    except AssertionError:
+        reached = False
+    assert not reached, (
+        f"RolePage became reachable on mesh({entry}) — the standalone posture is "
+        "settable on a mesh image again; re-check asks 3/11/21 together")

@@ -448,6 +448,15 @@ class NetworkPage(QtWidgets.QWizardPage):
             "manifest + the KEYS channel — never the go-live apex.")
         self.superdomain_row = _row("Orchestration superdomain", self.superdomain)
         cp.addWidget(self.superdomain_row)
+        # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
+        # the superdomain row. ASK 19 promoted that decision to its own choice-card
+        # screen (gui/pages/domains_choice.py) in the ModePage idiom — "proceed with the
+        # single initial INTERNAL domain, or a button to the table screen for adding
+        # domains" — so it is gone from this page entirely. One decision, one place: a
+        # checkbox here AND a card there would be two controls for one flag, which is
+        # the class of muddle these asks exist to remove. The gate itself is unchanged
+        # (cfg.additional_domains -> DomainsPage.applies_to), and the emission guard
+        # that makes the skip safe moved with it to that page's validatePage.
         # Carries the superdomain, which on a MESH build is a field the operator may
         # genuinely need to set — expanded rather than folded away.
         self.mesh_section = collapsible("Mesh control plane", self.mesh_box)
@@ -1334,6 +1343,16 @@ class NetworkPage(QtWidgets.QWizardPage):
         # it broke exactly where it matters: on a platform whose builder has no
         # --enable-games, the loop correctly leaves the field alone and the second write
         # put the widget's state back.
+        # ASK 8's gate + its emission clear used to live here, beside the checkbox. Both
+        # moved WITH the decision to the ask-19/20 choice screens (domains_choice.py /
+        # users_choice.py), which is also where that state is now entered. All that stays
+        # here is the non-mesh reset: the two flow flags are MESH concepts, and a
+        # cloud/standalone flow never sees either screen, so a value left over from an
+        # earlier mesh flow must not linger into its config.
+        if c.mode != "mesh":
+            c.additional_domains = False
+            c.configure_users = False
+
         # Managed backing services (I8/M2): a row contributes id -> endpoint ONLY when its
         # hosting dropdown says Managed AND an endpoint is entered — a Managed row with an
         # empty endpoint is an incomplete selection, dropped so the default (every row

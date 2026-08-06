@@ -49,6 +49,30 @@ def pick_mode(wiz, mode):
     return page
 
 
+def enable_additional_domains(wiz):
+    """Asks 8+19: pick "Add more domains" on the DOMAINS CHOICE screen.
+
+    In MESH mode that card is what makes the Domains table reachable at all
+    (DomainsPage.applies_to -> config.superadmin_plane_applies). Ask 19 moved the
+    decision off the Network step's checkbox onto its own choice-card screen, so this
+    helper now advances to that screen instead. Call it BEFORE advancing to the Domains
+    page in a mesh flow; cloud flows do not need it (their Domains/Users steps carry the
+    FD-08 --domains tie and are always visited)."""
+    page = advance_to(wiz, wizard_mod.DomainsChoicePage)
+    page._buttons["more"].setChecked(True)
+    return page
+
+
+def enable_configure_users(wiz):
+    """Ask 20: pick "Name superusers and domain users myself" on the USERS CHOICE
+    screen — the only thing that makes the mesh Users TABLE reachable
+    (UsersPage.applies_to -> config.users_table_applies). The default card keeps the
+    accounts gen-provision-keys.sh mints and skips the table."""
+    page = advance_to(wiz, wizard_mod.UsersChoicePage)
+    page._buttons["table"].setChecked(True)
+    return page
+
+
 def pick_role(wiz, role):
     """Advance to RolePage and select the image-type row whose role id == `role`
     (machine-first: this picks the machine card that supports the role first)."""

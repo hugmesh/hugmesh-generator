@@ -672,9 +672,14 @@ def test_build_pentest_env_toggle_never_argv(wiz):
 def test_review_page_replaces_build_now_with_packages(wiz):
     """The in-form 'Build now' button is gone (the build runs on the terminal
     ProgressPage); a single image shows the per-image Packages… button, hides the mesh
-    summary, and the page is a commit page (Back disabled once committed)."""
+    summary, and the page is a commit page (Back disabled once committed).
+
+    ASK 22 renamed it: the page is REVIEW now, and it no longer promises a build in its
+    title or on its button, because leaving it starts nothing — the separate LaunchPage
+    owns "Continue the build"."""
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert build.title() == "Review & Build"
+    assert build.title() == "Review"
+    assert "Build" not in build.title()
     assert not hasattr(build, "build_btn")     # 'Build now' removed
     assert build.isCommitPage()
     assert build.packages_btn.isVisible()

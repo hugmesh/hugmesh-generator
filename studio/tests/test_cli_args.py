@@ -103,10 +103,31 @@ def test_mode_skipped_pages_match_the_page_catalog():
         assert set(slugs) <= set(WIZARD_PAGE_SLUGS)
     # "idp" (the mesh-node IdP picker, I6) is a NODE-plane page: both non-node
     # modes skip it statically so their flows stay byte-identical.
+    #
+    # ASKS 19/20 put a CHOICE screen in front of each superadmin table. Both are MESH
+    # ONLY: standalone has no admin plane at all (so it skips choice AND table), and a
+    # cloud client's Domains/Users tables are unconditional — its --domains tie is the
+    # point of the image — so it skips only the choices, never the tables.
     assert MODE_SKIPPED_PAGES["standalone"] == ("idp", "worklist", "keyzip",
-                                                "domains", "users")
+                                                "domains_choice", "domains",
+                                                "users_choice", "users")
+    assert MODE_SKIPPED_PAGES["cloud"] == ("idp", "worklist",
+                                           "domains_choice", "users_choice")
+    for slug in ("domains", "users"):
+        assert slug not in MODE_SKIPPED_PAGES["cloud"], (
+            f"cloud must keep its {slug} table — the FD-08 --domains/--person-role tie "
+            "is what the client image is built around")
+    # ...and mesh sees BOTH choice screens (its tables are gated behind them at RUNTIME,
+    # by DomainsPage/UsersPage.applies_to, not by this static map).
+    for slug in ("domains_choice", "users_choice", "domains", "users"):
+        assert slug not in MODE_SKIPPED_PAGES["mesh"]
     assert "idp" in MODE_SKIPPED_PAGES["cloud"]
     assert "idp" not in MODE_SKIPPED_PAGES["mesh"]
+    # ASK 22 split the terminal pair in three (review -> launch -> progress). "launch"
+    # is the explicit continue-the-build gate: no mode may statically skip it, or the
+    # flow would dispatch on arrival again — the thing the page exists to stop.
+    assert "launch" in WIZARD_PAGE_SLUGS
+    assert all("launch" not in slugs for slugs in MODE_SKIPPED_PAGES.values())
     # 'role' is no longer universally structural — mesh skips it (the WorklistPage owns
     # role x platform there); welcome/mode/build stay structural in every mode.
     for structural in ("welcome", "mode", "build"):
@@ -1395,10 +1416,26 @@ def test_non_argv_fields_set():
     # login_* (web login theme) follow the headscale_url precedent: cluster-plane data
     # carried as SNAP_THEME_CSS env / brands yaml, emitted by NO builder argv — the
     # login-ui is a Deployment the mesh SERVES, not desktop-image bytes.
+    # additional_domains (ask 8/19) and configure_users (ask 20) are the newest members:
+    # pure WIZARD-FLOW state recording the answers to the two mesh CHOICE screens —
+    # whether the operator wants domains beyond the mesh's own cluster domain, and
+    # whether they want to NAME superusers/domain users instead of accepting the
+    # accounts gen-provision-keys.sh mints. Each gates its table STEP and nothing else:
+    # no builder parses either, and the rows they gate reach the cluster through the mesh
+    # manifest, not the argv.
     assert set(NON_ARGV_FIELDS) == {
         "headscale_url", "pentest", "hw_profile",
         "login_primary_color", "login_secondary_color", "login_font",
-        "login_font_file", "login_font_licence", "login_font_source"}
+        "login_font_file", "login_font_licence", "login_font_source",
+        "additional_domains", "configure_users"}
+    # neither flow flag may reach ANY builder argv, on any platform, in any mode
+    for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
+        cfg = ImageConfig(mode=mode, role=role, platform="x86",
+                          additional_domains=True, configure_users=True)
+        args = cfg.to_cli_args()
+        for token in ("--additional-domains", "--configure-users",
+                      "additional_domains", "configure_users"):
+            assert token not in args
     # and none of them appear in the capability table (they are not "silently dropped")
     for f in NON_ARGV_FIELDS:
         assert f not in PLATFORM_FIELD_SUPPORT
@@ -1937,13 +1974,57 @@ def test_enter_mesh_defaults_clears_then_forces_tailnet():
     assert "--with-tailscale" in args and "--with-sso" in args
 
 
-def test_enter_mesh_defaults_preserves_mesh_x86_golden():
-    # the enter-mesh path must land on the exact existing mesh x86 golden argv
+def test_enter_mesh_defaults_adds_exactly_encrypt_root_to_the_mesh_x86_golden():
+    """ASK 12 -> 21: the enter-mesh path lands on the previous mesh x86 golden argv
+    PLUS ``--encrypt-root``, and nothing else.
+
+    This is the one place the encrypted-root posture is allowed to be visible as an
+    ARGV CHANGE, so it is asserted as an exact delta rather than an updated blob: the
+    old golden is spelled out, the new one is derived from it by inserting the single
+    flag, and the two are compared element for element. A second flag sneaking in on
+    the back of "always encrypt" fails here.
+
+    What the change MEANS downstream (build-x86-host-stage4.sh): --encrypt-root also
+    forces INSTALLER_ISO=true, so an encrypted node additionally yields an installer
+    ISO, and with no --luks-pass the installer PROMPTS for a passphrase at install
+    time. That is a real change to what a mesh build produces, made deliberately.
+    """
+    # *ALL_TAIL as well as *X86_TAIL: ask 13 added --compress/--resume to every image's
+    # argv after this baseline was first written, so pinning only X86_TAIL made the
+    # "baseline itself drifted" guard fire on a correct tree.
+    old_golden = ["--role", "omnibus", "--env", "test", "--local-user", "magus",
+                  "--with-tailscale", "--with-sso",
+                  "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
+    plain = ImageConfig(mode="mesh", role="omnibus", platform="x86")
+    assert plain.to_cli_args() == old_golden, "the pre-ask-12 baseline itself drifted"
+
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86")
     enter_mesh_defaults(cfg)
-    assert cfg.to_cli_args() == ["--role", "omnibus", "--env", "test", "--local-user", "magus",
-                                 "--with-tailscale", "--with-sso",
-                                 "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
+    assert cfg.encrypt_root is True
+    got = cfg.to_cli_args()
+    assert [a for a in got if a != "--encrypt-root"] == old_golden, (
+        "enter_mesh_defaults changed the mesh argv by more than --encrypt-root")
+    assert got.count("--encrypt-root") == 1
+    # ...and the flag lands where to_cli_args puts it, not appended ad hoc.
+    # Built from X86_TAIL/ALL_TAIL rather than a literal: ask 13 moved that tail
+    # (--uncached -> --cached, and --compress/--resume arrived), which is exactly the
+    # kind of drift a hand-written golden absorbs silently.
+    expected = ["--role", "omnibus", "--env", "test", "--local-user", "magus",
+                "--with-tailscale", "--with-sso",
+                "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
+    expected.insert(expected.index("--snort") + 1, "--encrypt-root")
+    assert got == expected
+
+
+def test_enter_mesh_defaults_never_raises_on_the_one_platform_without_fde():
+    """ASK 21's exemption, proved rather than asserted: the jetson builder hard-blocks
+    --encrypt-root and ``to_cli_args`` RAISES on a jetson config carrying it, so a flat
+    always-True would turn a jetson mesh base into an un-buildable config. It must come
+    back False there — and the argv must still assemble."""
+    cfg = ImageConfig(mode="mesh", role="full", platform="jetson")
+    enter_mesh_defaults(cfg)
+    assert cfg.encrypt_root is False
+    assert "--encrypt-root" not in cfg.to_cli_args()
 
 
 def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():

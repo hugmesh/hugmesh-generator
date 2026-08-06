@@ -147,7 +147,14 @@ class DomainsPage(QtWidgets.QWizardPage):
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
         --domains and writes no manifest, so this table contributes nothing and is
-        skipped (emission-neutral). Mesh and cloud client images still apply."""
+        skipped (emission-neutral). Mesh and cloud client images still apply.
+
+        ASK 8: in MESH mode this now also requires ``cfg.additional_domains`` — the
+        "this mesh also hosts other domains" opt-in on the Network step. Unticked, this
+        step and the Users step that follows it are skipped outright rather than shown
+        empty, and NetworkPage.validatePage clears cfg.domains so a table filled in
+        before the opt-in was turned off cannot reach the mesh manifest. The CLOUD arm
+        is untouched: a client image's --domains tie is what it is built around."""
         return superadmin_plane_applies(cfg)
 
     def initializePage(self):

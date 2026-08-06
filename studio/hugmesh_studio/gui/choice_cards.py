@@ -242,6 +242,18 @@ class ChoiceCard(QtWidgets.QAbstractButton):
         self._badge.raise_()
         self.toggled.connect(self._on_toggled)
 
+    def set_description(self, description: str) -> None:
+        """Replace the card's muted description AFTER construction.
+
+        Ask 19/20's cards describe the CURRENT config (the domains this mesh already
+        serves; the accounts these worklist rows will mint and where their credentials
+        land), which is only known in ``initializePage`` — and must be re-read on every
+        visit, because a Back to the Network/Worklist step can change it. Keeps the
+        accessible description in step with the painted text: a screen reader must never
+        read the stale one."""
+        self._desc_label.setText(description)
+        self.setAccessibleDescription(description)
+
     # ── optional external link (the Gentoo card) ────────────────────────────────
     def set_link(self, url: str, label: str | None = None) -> QtWidgets.QLabel:
         """Show ``url`` on the card as an explicit-click link AND as visible,

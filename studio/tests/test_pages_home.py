@@ -21,8 +21,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import timezones  # noqa: E402
 from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     SECRET_FIELDS, UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, ImageConfig,
+    derive_default_user, derive_hostname,
 )
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
@@ -255,12 +257,18 @@ def test_home_extras_and_media_grey_and_clear_on_arm(wiz):
 def test_local_login_composes_without_standalone_on_arm(wiz):
     """G28: the local user/pass stay live with Standalone unchecked, and a
     customized account reaches an ARM argv WITHOUT --standalone (the builder
-    renames/hashes the image's default account)."""
+    renames/hashes the image's default account).
+
+    ASK 21 removed the --standalone checkbox from this page ("there is no reason for it
+    there"), so the "unchecked" half is now read off the CONFIG, which is what the argv
+    is built from anyway — and the pin below proves the widget is really gone rather
+    than merely unused."""
     c = wiz.cfg
     c.mode = "mesh"; c.role = "rpi5-desktop"; c.platform = "rpi5"
     wiz.restart()
     home = advance_to(wiz, wizard_mod.HomePage)
-    assert not home.standalone.isChecked()
+    assert not hasattr(home, "standalone"), "ask 21: the checkbox is still on HomePage"
+    assert c.standalone is False
     assert home.local_user.isEnabled() and home.local_pass.isEnabled()
     home.local_user.setText("gamer")
     home.local_pass.setText("hunter2")
@@ -327,13 +335,23 @@ def _system_page(cfg=None):
     return SystemPage(SimpleNamespace(cfg=cfg or ImageConfig()))
 
 
+def _pick_zone(page, zone):
+    """Select a zone in the ask-9 timezone DROPDOWN (adding it first when this host's
+    tz database does not carry it, exactly as the page's own seeding does)."""
+    i = page.timezone.findText(zone)
+    if i < 0:
+        page.timezone.addItem(zone)
+        i = page.timezone.count() - 1
+    page.timezone.setCurrentIndex(i)
+
+
 def test_system_identity_collects_and_emits(qapp):
     """G26: -H/--hostname, -T/--timezone, -u/--user collect and reach the argv."""
     page = _system_page()
     page.initializePage()
     assert page.hostname.isEnabled() and page.timezone.isEnabled() and page.user.isEnabled()
     page.hostname.setText("node-1")
-    page.timezone.setText("Europe/Berlin")
+    _pick_zone(page, "Europe/Berlin")
     page.user.setText("operator")
     assert page.validatePage()
     c = page.wiz.cfg
@@ -344,15 +362,27 @@ def test_system_identity_collects_and_emits(qapp):
     assert ("--user", "operator") in pairs
 
 
-def test_system_identity_blank_leaves_builder_defaults(qapp):
-    """'' = the builder's own role-derived hostname / UTC / default account —
-    nothing is emitted for untouched fields."""
+def test_system_identity_preselects_the_builder_derived_values(qapp):
+    """ASK 9 — the three identity fields are no longer blank.
+
+    REPLACES test_system_identity_blank_leaves_builder_defaults, which pinned the OLD
+    behaviour (nothing emitted for untouched fields). The operator asked for hostname,
+    timezone and default user to be PRESELECTED, so all three now emit — and the
+    hostname/user values are exactly what the builder would have derived itself
+    (config.derive_hostname / derive_default_user transcribe its role switch), so the
+    image is unchanged; only the argv is now explicit. The timezone comes from this
+    build HOST, which IS a real change from the builders' UTC default."""
     page = _system_page()
     page.initializePage()
+    c = page.wiz.cfg
+    assert page.hostname.text() == derive_hostname(c) != ""
+    assert page.user.text() == derive_default_user(c) != ""
+    assert page.timezone.currentText() == timezones.default_timezone()
     assert page.validatePage()
-    args = page.wiz.cfg.to_cli_args()
-    for flag in ("--hostname", "--timezone", "--user"):
-        assert flag not in args
+    pairs = flag_pairs(c.to_cli_args())
+    assert ("--hostname", derive_hostname(c)) in pairs
+    assert ("--user", derive_default_user(c)) in pairs
+    assert ("--timezone", timezones.default_timezone()) in pairs
 
 
 def test_system_credentials_masked_secret_and_never_saved(qapp):
@@ -367,6 +397,8 @@ def test_system_credentials_masked_secret_and_never_saved(qapp):
     # node-class x86: the group is shown (checked via the shown wizard in the flow
     # tests below; a directly-instantiated page is never shown so isVisible() is False).
     assert page.user_password.isEnabled() and page.root_password.isEnabled()
+    # ASK 10: the credentials are an OPT-IN — nothing is collected until it is ticked.
+    page.creds_optin.setChecked(True)
     page.user_password.setText("fallback-user-pw")
     page.root_password.setText("fallback-root-pw")
     assert page.validatePage()
@@ -444,6 +476,7 @@ def test_system_credentials_survive_desktop_first_mesh_worklist(wiz):
     # premise of the regression: the FIRST entry really is desktop-class
     assert wiz.worklist.entries[0].role == "rpi5-desktop"
     assert sysp.creds.isVisible()      # shown: an x86 node row is checked
+    sysp.creds_optin.setChecked(True)  # ask 10: opt in before typing
     sysp.user_password.setText("fleet-user-pw")
     sysp.root_password.setText("fleet-root-pw")
     build = advance_to(wiz, wizard_mod.BuildPage)
@@ -492,6 +525,7 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     check_worklist_rows(wl, "edge_ai.x86")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.creds.isVisible()
+    sysp.creds_optin.setChecked(True)              # ask 10: opt in before typing
     sysp.user_password.setText("fleet-user-pw")
     sysp.root_password.setText("fleet-root-pw")
     advance_to(wiz, wizard_mod.HomePage)           # validates System -> cfg stores creds
@@ -506,82 +540,35 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     assert c.user_password == "fleet-user-pw" and c.root_password == "fleet-root-pw"
 
 
-# ── finding 1: the Standalone checkbox on a mesh/node image ─────────────────────────
+# ── finding 1 / ASK 21: the Standalone checkbox left this page ──────────────────────
+# The finding-1 guards themselves did not go away — they MOVED with the control, to
+# tests/test_pages_fields_asks.py (the ask-21 section): the RolePage visibility gate,
+# the orangepizero2/2w/zero3/3-lts appliance pins, the standalone-desktop pin, and the
+# mesh-node clear are all re-asserted there against their new owner. What stays here is
+# the pin that HomePage no longer offers OR WRITES the flag, because a half-move — the
+# widget gone but the collect still running, or vice versa — is the failure mode.
 
-def test_home_standalone_hidden_and_dropped_on_a_mesh_node(qapp):
-    """THE defect. HomePage IS visited in mesh (mode-skip only drops role/hardware/
-    branding), and this checkbox sat in the login group gated by nothing — so one tick rode
-    the deepcopied worklist base onto EVERY node entry, and the x86 builder took
-    --standalone on a pki role without a word: ROLE_K8S=none (no kubelet/kubeadm/
-    containerd, no cluster GitOps tree) yet the full desktop stack still built. A mesh whose
-    nodes can never join it, found out hours per image later at deploy.
+def test_home_no_longer_carries_the_standalone_posture(qapp):
+    """ASK 21 — "REMOVE the standalone user option from the Home-folder / encryption /
+    login step — there is no reason for it there."
 
-    HIDE (not grey), and drop the value on collect even if the widget stayed checked from an
-    earlier desktop visit."""
-    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
+    Both halves, because either one alone is a bug: the widget is gone, AND HomePage's
+    collect no longer writes ``cfg.standalone`` (it used to be the ONLY writer, so a
+    collect left behind would silently zero a loaded appliance config on every visit —
+    exactly the finding-1 regression, inverted)."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      standalone=True)
     page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
     page.initializePage()
-    assert not page.standalone.isVisibleTo(page), "--standalone still offered on a mesh node"
-    assert "cluster" in page.standalone.toolTip()
-    page.standalone.setChecked(True)              # stale tick from a previous desktop visit
+    assert not hasattr(page, "standalone"), "the --standalone checkbox is still on HomePage"
     assert page.validatePage()
-    assert cfg.standalone is False, "a hidden --standalone still reached the config"
-    assert "--standalone" not in cfg.to_cli_args()
-
-
-@pytest.mark.parametrize("appliance", ["orangepizero2", "orangepizero2w", "orangepizero3",
-                                       "orangepi3-lts"])
-def test_home_standalone_live_on_the_orangepizero2_node_class_appliance(qapp, appliance):
-    """REGRESSION PIN (review finding 1) — the GUI half.
-
-    The first cut declared --standalone classes=("desktop",) flat, which hid this checkbox
-    on the orangepizero2 flow and, worse, made validatePage() force-clear the value:
-    home.py's collect is the ONLY writer of cfg.standalone, so an operator loading a saved
-    orangepizero2 standalone config silently got a NON-standalone, non-FDE image — the exact
-    silent-wrong-image class this PR exists to kill, newly introduced by its own fix.
-
-    orangepizero2 is node-class AND standalone: build-orangepi-zero2-stage4.sh has zero
-    ROLE_CLIENT/ROLE_K8S and composes ${STANDALONE} unconditionally (:218-226), and
-    ROLE_CHOICES calls the role a "standalone HEADLESS APPLIANCE". There is no builder rule
-    to honour here, so the wizard must not invent one. The Zero 2W (H618) sibling is the
-    same node-class-but-standalone appliance — _APPLIANCE_ROLES carries both — so the pin
-    covers both roles."""
-    cfg = ImageConfig(mode="standalone", role=appliance, platform=appliance)
-    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
-    page.initializePage()
-    assert page.standalone.isVisibleTo(page), (
-        f"--standalone hidden on the {appliance} appliance — the flow's whole point is "
-        "unreachable in the wizard")
-    page.standalone.setChecked(True)
-    assert page.validatePage()
-    assert cfg.standalone is True, "the wizard force-cleared an explicitly-ticked --standalone"
+    assert cfg.standalone is True, (
+        "HomePage still writes cfg.standalone — a loaded standalone config is silently "
+        "downgraded to a non-standalone, non-FDE image")
     assert "--standalone" in cfg.to_cli_args()
-
-
-def test_home_standalone_live_on_a_standalone_desktop(qapp):
-    """The other direction — the gate must not eat the flow --standalone exists for.
-    Emission stays byte-identical on an in-scope image."""
-    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
-    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
-    page.initializePage()
-    assert page.standalone.isVisibleTo(page)
-    assert page.standalone.toolTip() == ""
-    page.standalone.setChecked(True)
-    assert page.validatePage()
-    assert cfg.standalone is True
-    assert "--standalone" in cfg.to_cli_args()
-
-
-def test_home_standalone_re_gates_per_visit(qapp):
-    """The hide is re-evaluated on every initializePage, so a node visit cannot permanently
-    strand the checkbox — the same every-visit contract gate_widgets_role_class documents."""
-    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
-    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
-    page.initializePage()
-    assert not page.standalone.isVisibleTo(page)
-    cfg.mode, cfg.role = "standalone", "standalone-thick"
-    page.initializePage()
-    assert page.standalone.isVisibleTo(page), "checkbox stranded after a mesh visit"
+    # ...and the group it used to head is renamed: it is a LOGIN group now, not an
+    # "account posture" group.
+    assert page.login.title() == "Your login"
 
 
 # ── finding 8: the "login" unlock factor on a node image ────────────────────────────

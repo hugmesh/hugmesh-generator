@@ -75,6 +75,25 @@ WORKLIST_INFRA_SERVICES = ("tor", "egress-vpn")
 _TOR_WITH_FLAG_PLATFORMS = ("x86",)
 
 
+def resolve_encrypt_root(entry: "WorklistEntry", base_encrypt_root: bool) -> bool:
+    """Resolve one entry's tri-state ``encrypt_root`` override against the worklist-wide
+    default. Jetson is forced OFF (its builder hard-blocks ``--encrypt-root`` and
+    ``to_cli_args`` raises); "on"/"off" force; "default" inherits.
+
+    Module-level and pure so the GUI can ask what a row WILL resolve to before anything
+    is materialized (the ask-21 ARM cross-dracut note) without re-implementing — and
+    therefore drifting from — ``WorklistConfig._resolve_encrypt_root``, which is now a
+    one-line delegate to this.
+    """
+    if entry.platform == "jetson":
+        return False
+    if entry.encrypt_root == "on":
+        return True
+    if entry.encrypt_root == "off":
+        return False
+    return bool(base_encrypt_root)
+
+
 def entry_id(role: str, platform: str) -> str:
     """The STABLE worklist entry id — ``f"{role}.{platform}"``. One id per role x
     platform combo; board/flavor are row ATTRIBUTES, so an id never dangles when a
@@ -303,16 +322,9 @@ class WorklistConfig:
             # else: this platform's builder expresses neither -> drop (no dead flag).
 
     def _resolve_encrypt_root(self, entry: WorklistEntry) -> bool:
-        """Resolve the entry's tri-state override to a concrete bool. Jetson is forced
-        OFF (the jetson builder hard-blocks --encrypt-root); "default" inherits the
-        worklist-wide default captured on the Home page (base.encrypt_root)."""
-        if entry.platform == "jetson":
-            return False
-        if entry.encrypt_root == "on":
-            return True
-        if entry.encrypt_root == "off":
-            return False
-        return bool(self.base.encrypt_root)
+        """Resolve the entry's tri-state override to a concrete bool, against the
+        worklist-wide default captured on the Home page (``base.encrypt_root``)."""
+        return resolve_encrypt_root(entry, self.base.encrypt_root)
 
 
 def load_any(path: str) -> tuple[ImageConfig, "WorklistConfig | None"]:

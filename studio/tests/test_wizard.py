@@ -29,7 +29,8 @@ from hugmesh_studio.gui import wizard as wizard_mod
 from hugmesh_studio.gui.pages.network import _AI_GROUP
 from hugmesh_studio.gui.qt import Qt, QtWidgets
 
-from _helpers import check_worklist_rows  # noqa: E402
+from _helpers import (check_worklist_rows, enable_additional_domains,  # noqa: E402
+                      enable_configure_users)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -116,9 +117,13 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
               "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,
               "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,
-              "domains": wizard_mod.DomainsPage, "users": wizard_mod.UsersPage,
+              "domains_choice": wizard_mod.DomainsChoicePage,
+              "domains": wizard_mod.DomainsPage,
+              "users_choice": wizard_mod.UsersChoicePage,
+              "users": wizard_mod.UsersPage,
               "system": wizard_mod.SystemPage, "home": wizard_mod.HomePage,
-              "build": wizard_mod.BuildPage, "progress": wizard_mod.ProgressPage}
+              "build": wizard_mod.BuildPage, "launch": wizard_mod.LaunchPage,
+              "progress": wizard_mod.ProgressPage}
     assert set(expect) == set(WIZARD_PAGE_SLUGS)
     for slug, cls in expect.items():
         if cls is None:      # ProgressPage not landed yet (WS-REVIEWUI creates it)
@@ -371,6 +376,13 @@ def test_deploy_side_flow_reaches_terminal_page_and_skips_images(wiz):
 @pytest.mark.parametrize("mode", ["cloud", "mesh"])
 def test_cloud_and_mesh_flows_keep_their_admin_pages(wiz, mode):
     pick_mode(wiz, mode)
+    if mode == "mesh":
+        # ASKS 8/19/20: in mesh the Domains/Users TABLES are opt-in, each behind its own
+        # choice-card screen (domains_choice / users_choice). Cloud keeps them
+        # unconditionally — its --domains tie is what the client image is built around.
+        # See test_mesh_domains_and_users_are_skipped_without_the_opt_in for the OFF arm.
+        enable_additional_domains(wiz)
+        enable_configure_users(wiz)
     advance_to(wiz, wizard_mod.BuildPage)
     for slug in ("keyzip", "domains", "users"):
         assert wiz.hasVisitedPage(wiz._page_ids[slug])
@@ -464,8 +476,10 @@ def test_switching_back_to_standalone_clears_stranded_admin_state(wiz):
     standalone (whose flow SKIPS those pages) must clear them so state the user can
     no longer reach never leaks into save() or the argv."""
     pick_mode(wiz, "mesh")
+    enable_additional_domains(wiz)            # ask 8/19: the mesh gate for the Domains table
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     dom._add("acme.example", "Acme")
+    enable_configure_users(wiz)               # ask 20: ...and the gate for the Users table
     usr = advance_to(wiz, wizard_mod.UsersPage)   # Next past Domains collects the table
     usr._add("bob", "acme.example", "admin")
     advance_to(wiz, wizard_mod.HomePage)          # Next past Users collects the table
@@ -821,8 +835,12 @@ def test_home_provisioning_greys_and_clears_on_arm(wiz):
     for w in (home.mode, home.device, home.backup_row, home.encrypted, home.seed,
               home.unlock_keyfile, home.unlock_yubikey):
         assert not w.isEnabled(), w
-    assert home.standalone.isEnabled() and home.local_user.isEnabled()
-    assert home.encrypt_root.isEnabled() and home.luks_pass.isEnabled()
+    # ask 21: encryption is a STATEMENT now (checked + deliberately disabled), so the
+    # live-surface assertion moves to what is still editable here — the local login and
+    # the LUKS passphrase. --standalone left this page entirely (it lives on RolePage).
+    assert home.local_user.isEnabled() and home.luks_pass.isEnabled()
+    assert home.encrypt_root.isChecked() and not home.encrypt_root.isEnabled()
+    assert not hasattr(home, "standalone")
     advance_to(wiz, wizard_mod.BuildPage)
     assert c.home_mode == "create" and c.home_device == ""
     assert c.home_encrypted is False and c.home_seed_code == "none"
@@ -843,8 +861,11 @@ def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
     for w in (home.mode, home.device, home.backup_row, home.encrypted, home.seed,
               home.include_archive_row, home.seed_code_from_row, home.seed_packages_row):
         assert not w.isVisible(), w          # role-class HIDE, NOT platform (x86 supports these)
-    assert home.encrypt_root.isEnabled() and home.luks_pass.isEnabled()
-    assert home.standalone.isEnabled() and home.local_user.isEnabled()
+    # ask 21: same posture on a node — encryption stated, not offered; the login group
+    # stays live; the --standalone checkbox is gone from this page (see RolePage).
+    assert home.local_user.isEnabled() and home.luks_pass.isEnabled()
+    assert home.encrypt_root.isChecked() and not home.encrypt_root.isEnabled()
+    assert not hasattr(home, "standalone")
     advance_to(wiz, wizard_mod.BuildPage)
     assert c.home_mode == "create" and c.home_device == ""
     assert c.home_encrypted is False and c.home_seed_code == "none"
@@ -854,11 +875,17 @@ def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
 # ---- dynamic page-skip (nextId applies_to) — emission-neutral -----------------------
 
 def test_superadmin_plane_predicate():
-    """The dynamic-skip predicate: mesh always applies; a cloud CLIENT role applies
-    (emits --domains/--person-role); a cloud NODE role does not (nothing emitted, no
-    manifest); standalone is statically skipped anyway."""
-    assert superadmin_plane_applies(ImageConfig(mode="mesh", role="omnibus"))
+    """The dynamic-skip predicate: mesh applies only when the operator opted into
+    ADDITIONAL DOMAINS (ask 8); a cloud CLIENT role applies unconditionally (it emits
+    --domains/--person-role); a cloud NODE role does not (nothing emitted, no manifest);
+    standalone is statically skipped anyway."""
+    assert not superadmin_plane_applies(ImageConfig(mode="mesh", role="omnibus"))
+    assert superadmin_plane_applies(
+        ImageConfig(mode="mesh", role="omnibus", additional_domains=True))
+    # the opt-in is MESH-only — it can never turn a cloud flow's tables off or on
     assert superadmin_plane_applies(ImageConfig(mode="cloud", role="laptop"))
+    assert not superadmin_plane_applies(
+        ImageConfig(mode="cloud", role="be", additional_domains=True))
     assert not superadmin_plane_applies(ImageConfig(mode="cloud", role="be"))
     assert not superadmin_plane_applies(ImageConfig(mode="standalone", role="standalone-thick"))
 
