@@ -11,11 +11,13 @@
 # /var/lib/headscale/oidc_client_secret, matching
 # keys-template/headscale/config.yaml's client_secret_path exactly.
 #
-# Needs: openssl, python3, jq (all required by the scripts themselves).
-# SKIPs (exit 0) if any are absent, or if ${REPO}/keys-out already exists (a
+# Needs: openssl, python3, jq, ssh-keygen, keytool (all required by the scripts
+# themselves).
+# FAILS (exit 1) if any are absent, or if ${REPO}/keys-out already exists (a
 # developer's real local secrets bundle — never touched/moved/deleted by a
 # test; this test is offline-repo-mutating by nature, so it refuses to run
-# unless the working tree is clean of that gitignored directory).
+# unless the working tree is clean of that gitignored directory). Neither
+# condition is a pass: see tests/lib/guard-preflight.sh.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,10 +27,30 @@ PROV="${REPO}/specs/etc/keys-provision/provision.sh"
 [ -f "${GCS}" ]  || { echo "  FAIL gen-cluster-secrets.sh missing: ${GCS}"; exit 1; }
 [ -f "${GPK}" ]  || { echo "  FAIL gen-provision-keys.sh missing: ${GPK}"; exit 1; }
 [ -f "${PROV}" ] || { echo "  FAIL provision.sh missing: ${PROV}"; exit 1; }
-for t in openssl python3 jq; do command -v "${t}" >/dev/null || { echo "SKIP: need ${t}"; exit 0; }; done
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+# The list is the TRANSITIVE tool set, not this file's own: the suite runs the
+# real scripts, so their preflights are this suite's preflights.
+#   ssh-keygen — gen-provision-keys.sh:256 (`for t in openssl ssh-keygen python3`)
+#                aborts with "ERROR: missing tool: ssh-keygen" before it ever
+#                reaches the staging step. It is NOT part of Alpine's `openssl`
+#                package (upstream: openssh-keygen provides /usr/bin/ssh-keygen),
+#                so an image that installs openssl and stops looks provisioned
+#                and is not — that is what kept this suite hard RED in
+#                orphan-guards-verify after keytool was supplied.
+#   keytool    — gen-provision-keys.sh:1017 shells out to gen-keystores.sh, whose
+#                own preflight dies with "ERROR: need keytool" (needs a JDK).
+# Declaring both here turns a confusing mid-run abort into a named preflight
+# failure that says which binary the job image is missing.
+guard_require_tools openssl python3 jq ssh-keygen keytool
 if [ -e "${REPO}/keys-out" ]; then
-    echo "SKIP: ${REPO}/keys-out already exists (a real local secrets bundle?) — refusing to touch it"
-    exit 0
+    # Refusing to touch a developer's real bundle is right; reporting that
+    # refusal as a PASS is not. A CI checkout never has keys-out, so this can
+    # only fire locally, where the fix is to move the directory aside.
+    guard_require_capability "${REPO}/keys-out exists (a real local secrets bundle?) — this test rewrites that tree, so it refuses to run; move it aside"
 fi
 
 P=0; F=0

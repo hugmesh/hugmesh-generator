@@ -29,7 +29,7 @@
 #
 # BUILD-HOST RUNNABLE: normal user, NO root, NO network, scratch containment dir.
 # DR_SKIP_CA=1 scopes out the openssl/keytool CA loop (deferred to real-root — see
-# the DEFERRED banner at the end). SKIPs (exit 0) only if a required tool is absent.
+# the DEFERRED banner at the end). FAILS (exit 1) if a required tool is absent.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,7 +39,12 @@ SECRET_SCAN_SH="${REPO}/scripts/secret-scan.sh"
 TOKEN_CLASSIFIER="${REPO}/scripts/tooling/token-classifier.js"
 
 [ -r "${AGENT}" ] || { echo "FAIL agent missing: ${AGENT}"; exit 1; }
-for t in jq sed realpath find; do command -v "$t" >/dev/null || { echo "SKIP: need $t"; exit 0; }; done
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+guard_require_tools jq sed realpath find
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }

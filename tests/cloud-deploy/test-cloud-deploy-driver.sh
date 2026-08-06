@@ -37,7 +37,12 @@ LIB="${REPO}/specs/usr/lib/hugmesh/cloud-deploy-providers.sh"
 
 [ -r "${DRIVER}" ] || { echo "  FAIL driver missing: ${DRIVER}"; exit 1; }
 [ -r "${LIB}" ]    || { echo "  FAIL registry lib missing: ${LIB}"; exit 1; }
-command -v bash >/dev/null || { echo "SKIP: need bash"; exit 0; }
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+guard_require_tools bash
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }

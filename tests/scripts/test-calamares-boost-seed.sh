@@ -63,8 +63,18 @@ if printf '%s' "${LOOP}" | grep -qE '^\s*boost\)'; then
 else
     ok "x86 copy loop has no 'boost)' case entry (file reaches every role)"
 fi
+# The fall-through target was refactored from the sysroot directly to a STAGING
+# dir that pcs_sync_dir then mirrors into the sysroot, so accept both shapes.
+# What must hold either way is that the copy sits AFTER the case with no further
+# filtering — a file that survived the case reaches the sysroot. Pinning only the
+# retired literal made this leg permanently red; the suite was CI-orphaned so
+# nothing noticed, and an always-red guard gets ignored exactly like an
+# always-green one.
 if printf '%s' "${LOOP}" | grep -qE '^\s*cp "\$\{puf\}" "\$\{SYSROOT\}/etc/portage/package\.use/"$'; then
     ok "x86 copy loop still cps package.use files unconditionally after the case"
+elif printf '%s' "${LOOP}" | grep -qE '^\s*cp "\$\{puf\}" "\$\{PCS_STAGE_PU\}/"$' \
+     && grep -qE '^\s*pcs_sync_dir "\$\{PCS_STAGE_PU\}" "\$\{SYSROOT\}/etc/portage/package\.use"' "${X86}"; then
+    ok "x86 copy loop stages package.use files unconditionally after the case, then pcs_sync_dir mirrors the stage into the sysroot"
 else
     bad "x86 copy loop lost its unconditional cp fall-through"
 fi

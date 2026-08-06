@@ -732,9 +732,21 @@ lint:tls-front:
 # broke it — a comment inside a backslash continuation, which truncates the
 # command silently and is NOT caught by `bash -n` (it is valid bash meaning
 # something else).
+#
+# THE PIN-DRIFT LEG NOW HAS A CORPUS. It cross-checks m2-bootstrap.sh's PINS
+# array against what the sibling poms actually request, and it had never run in
+# a pipeline: it needed a populated .stack-src, which no CI checkout has, so it
+# printed SKIP and the job exited 0 — three separate times, including through the
+# 2.4.1 -> 2.4.2 auth-core bump that broke every cold `make stack-up`. The suite
+# now fetches ONLY the consumers' root files itself
+#   (git clone --depth 1 --filter=blob:none --sparse => pom.xml and nothing else)
+# from the org mirror behind CI_REPOSITORY_URL's read-only job token — the same
+# recipe lint:reserved-prefixes uses — and FAILS rather than skips when no corpus
+# can be obtained on an unattended run. git is why this is python:3 and not
+# python:3-slim, exactly as lint:reserved-prefixes documents.
 lint:m2-bootstrap:
   stage: lint
-  image: python:3-slim
+  image: python:3
   tags: [hugmesh-x86]
   script:
     - bash tests/stack/test-m2-bootstrap.sh
@@ -1386,10 +1398,20 @@ desktop-governance-verify:
   image: alpine:3
   tags: [hugmesh-x86]
   before_script:
-    - apk add --no-cache bash jq coreutils grep sed gawk findutils diffutils
+    # python3 + openssl are for the sudo-mapper leg below: it generates a real
+    # RSA keypair, signs real RS256 JWTs and runs the RENDERED python mapper
+    # against a real JWKS. That suite hard-FAILs (not skips) without them, which
+    # is the correct shape — a missing tool must never read as "crypto verified".
+    - apk add --no-cache bash jq coreutils grep sed gawk findutils diffutils python3 openssl
   script:
     - bash tests/desktop-governance/test-provision-desktop-governance.sh
     - bash tests/desktop-governance/test-gen-sso-session-start.sh
+    # PR #530 shipped the desktop-sudo mapper's ONLY test wired into nothing —
+    # no CI job, no make target. It is the sole coverage of that mapper's JWKS
+    # signature verification, iss/aud/exp checks, subject->identity binding,
+    # alg=none rejection and rogue-key rejection, i.e. the entire reason a token
+    # cannot mint sudo. Same tool set as the two legs above; 21 assertions.
+    - bash tests/desktop-governance/test-desktop-sudo-mapper.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -1876,3 +1898,252 @@ lint:casdoor-init-honesty:
     - pip install --quiet pyyaml
   script:
     - bash tests/scripts/test-casdoor-init-honesty.sh
+# ── Guards that nothing ran, now run ─────────────────────────────────────────
+# THE ORPHAN SWEEP. Forty-one tests/**/test-*.sh suites existed on main that no
+# pipeline job and no make target invoked. They were not drafts: they carry the
+# signed-export ACCEPT/REJECT matrices for the device registry, the domain and
+# foreign-ingest reconcile FUZZ suites, the keystore/external-CA import gates,
+# the managed-services default-off gate, the go-live and cloud-deploy wizard
+# refusal matrices, the auto-update opt-in gates, and ~20 builder-invariant
+# guards. Two of them (test-calamares-boost-seed, test-python-targets-seed) were
+# also permanently RED against main because a pcs_sync_dir refactor moved the
+# copy they grep for, which is precisely the drift they exist to catch — nobody
+# saw it because nobody ran them.
+#
+# The list is EXPLICIT, not a glob: a glob would silently absorb a future suite
+# that needs a live stack and turn this job red for the wrong reason.
+# tests/scripts/test-guard-integrity.sh (lint:guard-integrity below) is what
+# stops the list from rotting — a new suite that appears in neither this list
+# nor a make target fails there.
+#
+# The loop ACCUMULATES rc. `for t in …; do bash "$t"; done` would exit with the
+# LAST suite's status and forgive every earlier failure — the same "structurally
+# incapable of failing" defect this whole job exists to undo.
+#
+# Rootless, offline, no cluster, no docker: every suite is static analysis or a
+# stub harness over the real script bodies. Tool set is the proven alpine recipe
+# from node-storage-verify plus git (a few suites shell out to `git ls-files`),
+# tar and util-linux (setsid/flock probes).
+#
+# ── THE IMAGE NEEDS A JDK, AND THAT IS NOT OPTIONAL ─────────────────────────
+# Wired on `alpine:3` this job reproduced BOTH halves of the disease it exists
+# to cure. Four suites need `keytool`, which no plain alpine carries:
+#   * tests/keystores/test-keystores.sh, -external-ca.sh and -multidomain.sh
+#     printed "SKIP: need keytool" and exited 0 — three guards wired in and
+#     checking nothing, in every pipeline;
+#   * tests/scripts/test-headscale-oidc-secret-staging.sh went hard RED, because
+#     gen-provision-keys.sh reaches its JKS step and dies "ERROR: need keytool" —
+#     a red job for an environmental reason, not a defect.
+# eclipse-temurin:21-jdk-alpine is `FROM alpine:3.22` with
+# `ENV PATH=$JAVA_HOME/bin:$PATH` (JAVA_HOME=/opt/java/openjdk) — verified
+# against the upstream Dockerfile at adoptium/containers 21/jdk/alpine/3.22 — so
+# keytool is on PATH and the `apk add` recipe below is unchanged and still valid.
+# The preflight line makes a broken image an immediate, named failure instead of
+# something discovered forty suites later.
+#
+# ── ssh-keygen AND make ARE PART OF THAT TOOLCHAIN TOO ──────────────────────
+# Supplying keytool was necessary and not sufficient: the headscale suite stayed
+# hard RED because it runs the REAL gen-provision-keys.sh, whose own preflight
+# (scripts/gen-provision-keys.sh:256) is `for t in openssl ssh-keygen python3`
+# and aborts "ERROR: missing tool: ssh-keygen" long before the JKS step. Alpine
+# does NOT ship ssh-keygen with `openssl` — upstream, /usr/bin/ssh-keygen comes
+# from the separate `openssh-keygen` package (pkgs.alpinelinux.org contents
+# search, v3.22/main/x86_64) — so an image that installs openssl looks
+# provisioned and is not.
+# `make` (alpine main, GNU Make 4.4.1) is here for the same reason on the skip
+# side rather than the red side: without it tests/cloud-deploy/test-cloud-deploy-
+# driver.sh prints "make absent — OIDC_ISSUER seam proof skipped" and hands back
+# four unverified assertions as passes. With it they run.
+# Every added binary is also added to the preflight line: a package that is
+# renamed or dropped upstream must fail HERE, by name, not forty suites later.
+#
+# ── WHY test-selinux-policy-install.sh IS NOT IN THIS LIST ──────────────────
+# It was, and it was hard RED here: it drives a real GNU-make refpolicy contract
+# Makefile AND the m4 -> checkmodule -> semodule_package recipe, and it needs
+# BOTH — measured on this job's exact toolchain, one at a time:
+#     neither make nor the SELinux tools ......... 109 passed, 17 FAILED
+#     + make only ................................ 109 passed, 17 FAILED
+#     + m4/checkmodule/semodule_package only ..... 105 passed, 21 FAILED
+#     + both ..................................... 126 passed,  0 failed
+# So adding `make` here would NOT have rescued it (the lib's own host-toolchain
+# assertion returns 1 first), and checkmodule/semodule_package have no Alpine
+# package at all — there is no `checkpolicy` aport in v3.22. It moved to
+# selinux-policy-verify below, on Debian, which carries the whole set.
+orphan-guards-verify:
+  stage: verify
+  image: eclipse-temurin:21-jdk-alpine
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar util-linux openssh-keygen make
+    - for t in bash jq openssl python3 git tar keytool ssh-keygen make; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
+  script:
+    - |
+      set -u
+      SUITES="
+        tests/auto-update/test-builder-opt-in.sh
+        tests/auto-update/test-provision-update.sh
+        tests/auto-update/test-update-poller.sh
+        tests/cloud-deploy/test-cloud-deploy-driver.sh
+        tests/device-registry/test-registry-allow-deny.sh
+        tests/device-registry/test-self-report.sh
+        tests/domain-registry/test-domain-reconcile-fuzz.sh
+        tests/domain-registry/test-foreign-ingest-fuzz.sh
+        tests/go-live/test-go-live-driver.sh
+        tests/go-live/test-go-live-reconcile-verify.sh
+        tests/keystores/test-keystores.sh
+        tests/keystores/test-keystores-external-ca.sh
+        tests/keystores/test-keystores-multidomain.sh
+        tests/managed-services/test-managed-services-gate.sh
+        tests/node-storage/test-bake-coverage.sh
+        tests/scripts/test-anubis-env-gate.sh
+        tests/scripts/test-arm-ro-distdir.sh
+        tests/scripts/test-binpkg-pool-fingerprint.sh
+        tests/scripts/test-builder-log-paths.sh
+        tests/scripts/test-calamares-boost-seed.sh
+        tests/scripts/test-casdoor-jwt-no-preferred-username.sh
+        tests/scripts/test-edge-ai-cuda-host-compiler.sh
+        tests/scripts/test-headscale-oidc-secret-staging.sh
+        tests/scripts/test-host-accept-keywords.sh
+        tests/scripts/test-host-mutation-guard.sh
+        tests/scripts/test-host-selinux-tools.sh
+        tests/scripts/test-idp-builder-functions.sh
+        tests/scripts/test-installer-ui-node-default.sh
+        tests/scripts/test-kernel-artifact-cache.sh
+        tests/scripts/test-passhash-lib.sh
+        tests/scripts/test-platform-key-spelling.sh
+        tests/scripts/test-portage-config-sync.sh
+        tests/scripts/test-python-targets-seed.sh
+        tests/scripts/test-rpi5-per-board-pkgdir.sh
+        tests/scripts/test-shared-build-assets.sh
+        tests/scripts/test-spec-use-parity.sh
+        tests/scripts/test-x86-artifact-integrity.sh
+      "
+      rc=0
+      failed=""
+      for t in ${SUITES}; do
+        echo "── ${t}"
+        if [ ! -f "${t}" ]; then
+          echo "   MISSING — the suite list names a file that does not exist"
+          rc=1; failed="${failed} ${t}(missing)"; continue
+        fi
+        bash "${t}" || { rc=1; failed="${failed} ${t}"; }
+      done
+      if [ "${rc}" -ne 0 ]; then echo; echo "FAILED SUITES:${failed}"; fi
+      exit "${rc}"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# SELinux node-policy compile+install gate (tests/scripts/test-selinux-policy-
+# install.sh) — the wiring that makes specs/selinux/*.te reach an image, the
+# all-or-nothing install, the .fc label-only trap, the conditional k8s exemplars,
+# idempotence, and the enforce-gate shipping INERT so a default image still boots
+# permissive.
+#
+# WHY IT IS ITS OWN JOB, ON DEBIAN. It was wired into orphan-guards-verify and
+# went hard RED there — an environmental red, which trains everyone to ignore the
+# signal exactly as a silent skip does. It is the ONE orphan that executes a real
+# GNU-make build: mk_headers() writes refpolicy's support/Makefile.devel variable
+# contract (NAME/SHAREDIR/HEADERDIR, `include $(HEADERDIR)/build.conf`, $(error)
+# guards, a `%.pp: %.te` pattern rule) and the lib under test invokes `make`
+# against it. Alpine ships no `make` in the base image, so 17 assertions failed.
+#
+# `make` alone is not enough — and, measured, does not help at all on its own:
+# the lib re-asserts its host toolchain (`for t in m4 checkmodule
+# semodule_package`) at the point of use and returns 1 before make matters, so
+# alpine+make scores the SAME 109/17. Section C-real runs the genuine
+#     m4 -> $(BINDIR)/checkmodule -> $(BINDIR)/semodule_package
+# recipe and produces a real .pp, and C-pin proves the BINDIR/SBINDIR pins beat a
+# cross sysroot's own hardcoded tool dirs. Alpine has no `checkpolicy` aport at
+# all (pkgs.alpinelinux.org, v3.22 — no matching package), so on any alpine image
+# those two sections can only take their `else` branch and score SIX SKIPS AS
+# PASSES on top of the 17 reds. Debian carries the lot, verified against upstream
+# file lists:
+#   checkpolicy    3.8.1-1 -> /usr/bin/checkmodule
+#   semodule-utils 3.8.1-1 -> /usr/bin/semodule_package
+# and /usr/bin is exactly where the suite asserts BINDIR resolves.
+#
+# python:3-slim is this file's standard Debian base (25 jobs already use it), so
+# no new image enters the pipeline; the suite itself needs no Python.
+# gawk is explicit because Debian's default awk is mawk.
+#
+# THE PREFLIGHT IS THE POINT. The suite's real-toolchain sections degrade to
+# `ok "SKIP …"` when the binaries are absent — honest on a workstation, a lie in
+# CI, where the image decides. Asserting all four here means the CI path can
+# never reach that branch: a dropped or renamed package fails this job by name.
+selinux-policy-verify:
+  stage: verify
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends make m4 gawk checkpolicy semodule-utils
+    - for t in bash make m4 gawk checkmodule semodule_package; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run the SELinux policy gate"; exit 1; }; done
+  script:
+    - bash tests/scripts/test-selinux-policy-install.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Mesh repo-templating rename/PR path (tests/domain-registry/test-templating-
+# rename-pr.sh) — the render -> pull-repo-base -> publish-tenant-set chain, its
+# provenance stamping, and the create-or-update PR flow's fail-closed cases
+# (409-with-no-open-PR, --pr without a base version, render/publish ref drift).
+# Split out of the sweep above because it is the ONE orphan needing node: it
+# renders real Handlebars. It SKIPs (exit 0) when handlebars is absent, so
+# putting it in an alpine job would have wired a permanent silent skip —
+# a guard that runs and checks nothing. `npm ci` here makes it actually run.
+templating-rename-verify:
+  stage: verify
+  image: node:20-alpine
+  tags: [hugmesh-x86]
+  before_script:
+    # openssl is NOT optional here: scripts/provenance.sh (which the templating
+    # rename PR flow calls) hard-exits "FATAL: openssl not found (build-host
+    # tool)". node:20-alpine does not ship it, so without this the job is red on
+    # every default-branch pipeline — the same environmental-red this whole
+    # change set exists to eliminate.
+    - apk add --no-cache bash jq git tar coreutils grep sed gawk findutils openssl
+    - (cd scripts/tooling && npm ci --no-audit --no-fund)
+  script:
+    # Fail-closed on the skip: this job's whole reason to exist is that
+    # handlebars IS installed, so a SKIP here means npm ci silently did nothing.
+    - test -d scripts/tooling/node_modules/handlebars
+    - bash tests/domain-registry/test-templating-rename-pr.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - scripts/tooling/**/*
+        - scripts/render-repo-tree.sh
+        - scripts/pull-repo-base.sh
+        - scripts/publish-tenant-set.sh
+        - tests/domain-registry/**/*
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# THE GUARD OVER THE GUARDS (tests/scripts/test-guard-integrity.sh). Three
+# distinct "this guard cannot fail" defects shipped on main and each was found by
+# hand, after the fact:
+#   * tests/node-storage/test-appset.sh ended on `echo "---EXIT $?---"` with no
+#     `set -e`, so it printed its failure and exited 0 — node-storage-verify's
+#     fourth leg could not fail;
+#   * ~41 suites, including the ONLY test of the desktop-sudo mapper's JWKS
+#     signature verification, were wired into nothing at all;
+#   * a `for t in …; do bash "$t"; done` CI loop exits with the LAST suite's
+#     status and forgives every earlier failure.
+# This job makes all three mechanical and fail-closed. It carries its own
+# negative controls (it re-runs its analyser against a synthesised repo with each
+# defect planted and requires a RED, plus a positive control on a clean tree), so
+# a green run here cannot be vacuous. Static, offline, python3 stdlib only.
+lint:guard-integrity:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-guard-integrity.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - tests/**/*
+        - .gitlab-ci.yml
+        - Makefile

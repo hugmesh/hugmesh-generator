@@ -20,7 +20,12 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 POLLER="${REPO}/specs/usr/local/sbin/hugmesh-update"
 [ -f "${POLLER}" ] || { echo "  FAIL poller missing: ${POLLER}"; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "  SKIP jq not installed"; exit 0; }
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+guard_require_tools jq
 
 P=0; F=0
 ok(){ echo "  PASS $*"; P=$((P+1)); }

@@ -32,7 +32,12 @@ BRAND="${BRAND:-hugmesh}"
 SERVICES=("${BRAND}-pki-gateway" "${BRAND}-be-gateway" "${BRAND}-fe-gateway"
           "${BRAND}-api" "${BRAND}-admin-bff-api" "${BRAND}-mod-bff-api" "${BRAND}-user-bff-api")
 
-for t in openssl keytool python3; do command -v "$t" >/dev/null || { echo "SKIP: need $t"; exit 0; }; done
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+guard_require_tools openssl keytool python3
 
 W="$(mktemp -d)"; trap 'rm -rf "${W}"' EXIT
 P=0; F=0

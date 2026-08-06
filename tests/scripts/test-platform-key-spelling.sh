@@ -54,7 +54,12 @@ bad() { echo "  FAIL $*"; F=$((F+1)); }
 echo "== platform-key spelling / cross-channel agreement =="
 
 PY=python3
-command -v "${PY}" >/dev/null 2>&1 || { echo "  SKIP no python3"; exit 0; }
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+guard_require_tools "${PY}"
 
 # The spelling scan runs over GIT-TRACKED files only. Two reasons: build output
 # (out/), pytest caches (studio/.pytest_cache) and __pycache__ are not source and
@@ -64,8 +69,11 @@ command -v "${PY}" >/dev/null 2>&1 || { echo "  SKIP no python3"; exit 0; }
 SELF_REL="tests/scripts/test-platform-key-spelling.sh"
 mapfile -t TRACKED < <(cd "${GEN}" && git ls-files 2>/dev/null | grep -v "^${SELF_REL}$")
 if [ "${#TRACKED[@]}" -eq 0 ]; then
-    echo "  SKIP not a git checkout (or no tracked files) — spelling scan needs git ls-files"
-    exit 0
+    # Not a skip. The whole scan is `grep over git ls-files`, so an empty list
+    # means the scan covered nothing — and "no banned spellings found in zero
+    # files" is indistinguishable from a clean repo. CI always has a checkout, so
+    # this firing in CI means the checkout mechanism changed underneath us.
+    guard_require_capability "git ls-files returned nothing in ${GEN} — not a git checkout, so the spelling scan would cover ZERO files (a vacuous green)"
 fi
 # grep over the tracked list; -I skips binaries. Prints "file:line:text".
 scan() { (cd "${GEN}" && grep -In -E -- "$1" "${TRACKED[@]}" 2>/dev/null) || true; }

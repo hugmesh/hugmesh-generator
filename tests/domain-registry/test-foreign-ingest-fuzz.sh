@@ -30,7 +30,7 @@
 # proving the gate is not a blanket lockout.
 #
 # BUILD-HOST RUNNABLE: normal user, NO root, NO network, scratch containment dir.
-# SKIPs (exit 0) only if a required tool is genuinely absent.
+# FAILS (exit 1) if a required tool is genuinely absent.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,9 +39,12 @@ RRT="${REPO}/scripts/render-repo-tree.sh"
 ADVISORY="${REPO}/templates/mesh-trust/advisory-floor.txt"
 
 [ -r "${GATE}" ] || { echo "FAIL gate missing: ${GATE}"; exit 1; }
-for t in openssl jq base64 find realpath sha256sum du; do
-  command -v "$t" >/dev/null || { echo "SKIP: need $t"; exit 0; }
-done
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+guard_require_tools openssl jq base64 find realpath sha256sum du
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -60,7 +63,7 @@ echo "== Phase 7 hostile-foreign-mesh INGEST FUZZ SUITE (build-host: no root, no
 # ── Trust store: the RIGHT key for acme-mesh + a WRONG (foreign) key ────────────
 MESH="acme-mesh"
 TRUST="${WORK}/trust"; mkdir -p "${TRUST}/${MESH}"
-PRIV="${WORK}/priv.pem";   openssl genpkey -algorithm ed25519 -out "${PRIV}"  2>/dev/null || { echo "SKIP: no ed25519"; exit 0; }
+PRIV="${WORK}/priv.pem";   openssl genpkey -algorithm ed25519 -out "${PRIV}"  2>/dev/null || guard_require_capability "openssl cannot mint ed25519 keys"
 WPRIV="${WORK}/wrong.pem"; openssl genpkey -algorithm ed25519 -out "${WPRIV}" 2>/dev/null
 openssl pkey -in "${PRIV}" -pubout -outform DER 2>/dev/null | base64 -w0 > "${TRUST}/${MESH}/foreign-provenance-pub.ed25519"
 

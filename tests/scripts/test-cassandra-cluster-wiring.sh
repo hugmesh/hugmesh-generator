@@ -469,3 +469,7 @@ if [ "${NEG_F}" -ne 0 ]; then
   exit 1
 fi
 echo "== cassandra cluster wiring: PASS =="
+# The verdict, as an exit status and not just a printed word. Reachable only
+# when the NEG_F guard above did not fire, so it is behaviour-neutral today —
+# it exists so the status stays carried if a later check lands after this line.
+[ "${NEG_F}" -eq 0 ]

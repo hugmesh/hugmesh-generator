@@ -7,7 +7,7 @@
 # GL_ETC_HUGMESH).
 #
 # Runs ANYWHERE with bash + jq + openssl + base64 — NO live mesh, NO BFF, NO
-# network, NO root. SKIPs (exit 0) only if a required tool is genuinely absent.
+# network, NO root. FAILS (exit 1) if a required tool is genuinely absent.
 # Mirrors tests/domain-registry/test-domain-reconcile-verify.sh step for step
 # for the verify half; the apply half is new (go-live-specific: drive the real
 # commit/rollback subcommands and assert on the REAL marker file the driver
@@ -64,7 +64,12 @@ PROVIDERS_LIB="${REPO}/specs/usr/lib/hugmesh/go-live-providers.sh"
 [ -r "${LIB}" ]    || { echo "  FAIL verify lib missing: ${LIB}"; exit 1; }
 [ -r "${AGENT}" ]  || { echo "  FAIL agent missing: ${AGENT}"; exit 1; }
 [ -r "${DRIVER}" ] || { echo "  FAIL driver missing: ${DRIVER}"; exit 1; }
-for t in openssl jq base64; do command -v "$t" >/dev/null || { echo "SKIP: need $t"; exit 0; }; done
+# Tool preflight is FAIL-CLOSED (tests/lib/guard-preflight.sh): a missing tool
+# makes this guard exit 1, never 0. The old `SKIP … exit 0` shape turned an
+# under-provisioned CI image into a green check. Deliberate local opt-out:
+# GUARD_TOOLING_ALLOW_SKIP=1 — a name .gitlab-ci.yml is forbidden to contain.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
+guard_require_tools openssl jq base64
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -75,7 +80,7 @@ echo "== go-live wizard web-UI effector: verify + apply offline test =="
 
 # ── Ephemeral signing key + the baked public half (base64 X.509 SPKI DER) ───────────
 PRIV="${WORK}/priv.pem"; PUB_B64="${WORK}/registry-pub.ed25519"
-openssl genpkey -algorithm ed25519 -out "${PRIV}" 2>/dev/null || { echo "SKIP: no ed25519"; exit 0; }
+openssl genpkey -algorithm ed25519 -out "${PRIV}" 2>/dev/null || guard_require_capability "openssl cannot mint ed25519 keys"
 openssl pkey -in "${PRIV}" -pubout -outform DER 2>/dev/null | base64 -w0 > "${PUB_B64}"
 FPRIV="${WORK}/foreign.pem"
 openssl genpkey -algorithm ed25519 -out "${FPRIV}" 2>/dev/null

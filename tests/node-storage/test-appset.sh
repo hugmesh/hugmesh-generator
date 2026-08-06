@@ -114,4 +114,10 @@ print()
 print("node-storage PR7 appset: %d passed, %d failed" % (P[0], F[0]))
 sys.exit(1 if F[0] else 0)
 PY
-echo "---EXIT $?---"
+# The python leg's exit status IS this suite's verdict. It used to be echoed and
+# then thrown away — `echo "---EXIT $?---"` is the LAST command, so the script
+# exited with echo's status (always 0) and node-storage-verify's fourth leg could
+# not fail no matter how badly 13b drifted. Capture, print, and RE-RAISE it.
+rc=$?
+echo "---EXIT ${rc}---"
+exit "${rc}"

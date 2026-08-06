@@ -264,10 +264,20 @@ fi
 # ── 5. STRUCTURE THAT IS STILL LOAD-BEARING (version-free) ───────────────────
 # Every ARM builder must copy the spec's package.use/* into the sysroot with no
 # filtering; the seed's package.use twin rides that copy.
+#
+# TWO ACCEPTED SHAPES, because the copy was refactored and this check was not:
+#   (old) cp "${SPECS_DIR}/portage/package.use/"*  "${SYSROOT}/…"
+#   (new) pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+# scripts/_portage-config-lib.sh's pcs_sync_dir takes a whole SOURCE DIRECTORY,
+# so it is unfiltered by construction — the property this check exists to hold.
+# Matching only the retired literal made this suite unable to PASS on any ARM
+# builder; it was CI-orphaned, so nothing noticed. A guard that cannot pass stops
+# being run, and then it cannot fail either.
 for s in "${ARM_BUILDERS[@]}"; do
     f="${GEN}/${s}"
     if [ ! -f "${f}" ]; then bad "${s}: script missing"; continue; fi
-    if grep -qE 'cp "\$\{SPECS_DIR\}/portage/package\.use/"\*' "${f}"; then
+    if grep -qE 'cp "\$\{SPECS_DIR\}/portage/package\.use/"\*' "${f}" \
+       || grep -qE '^[[:space:]]*pcs_sync_dir "\$\{SPECS_DIR\}/portage/package\.use" "\$\{SYSROOT\}/etc/portage/package\.use"' "${f}"; then
         ok "${s}: copies package.use/* into the sysroot unconditionally"
     else
         bad "${s}: unconditional package.use/* sysroot copy not found"
