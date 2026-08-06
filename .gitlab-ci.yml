@@ -121,6 +121,21 @@ lint:workload-console:
 # pipeline stops running and every gate above silently stops guarding. Runs on
 # every change to this file, and always on the default branch, because the
 # failure mode is created by MERGING two individually-fine branches.
+# No container may declare the same env name twice. #543 re-declared
+# ROUTE_MIRROR_CASSANDRA in a container that already set it 125 lines earlier
+# under a comment explaining why that value matters; kubernetes silently keeps
+# the LAST, so the documented entry was dead and the next person to correct it
+# would have changed nothing. Values happened to agree, so nothing broke — this
+# closes the trap before it is sprung.
+lint:no-duplicate-env:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-no-duplicate-env.sh
+
 lint:gitlab-ci-wellformed:
   stage: lint
   image: python:3-slim

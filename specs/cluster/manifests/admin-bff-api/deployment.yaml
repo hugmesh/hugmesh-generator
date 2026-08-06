@@ -385,7 +385,6 @@ spec:
             # that is the LIVE keyspace name (charts/hugmesh-gateway/values.yaml,
             # cassandra-hardening/bootstrap-roles-configmap.yaml grant it by that name);
             # renaming it is the separate infra-migration wave, not a manifest edit.
-            - { name: ROUTE_MIRROR_CASSANDRA, value: "cassandra.hugmesh-pki.svc.cluster.local:9042" }
             # Namespaces this service LAUNCHES workloads into or reconciles. Not DNS —
             # a Job created in a namespace that does not exist is rejected by the API
             # server, which is the same defect one layer up.
