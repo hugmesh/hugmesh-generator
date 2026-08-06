@@ -514,6 +514,59 @@ lint:gateway-mfa-env:
   script:
     - bash tests/stack/test-gateway-mfa-env.sh
 
+# Probe AUTH-SURFACE gate: no kubelet probe may target a path the service itself
+# role-gates unless the probe tolerates the 401 that gating produces. The first
+# real kind run found NO gateway could ever become Ready on Kubernetes — the
+# chart gave the container httpGet probes on /actuator/health/{liveness,readiness}
+# while the gateway image role-gates /actuator/** (INFRA_PATHS), so a token-less
+# kubelet got 401 forever and liveness then killed a pod that had just logged
+# "Started HugMeshGatewayApplication". compose.local.yaml had accepted 401 for
+# exactly this reason all along; the workaround was never propagated to
+# specs/cluster. This job renders the shared chart for real and holds the two
+# halves of the repo together, for the gateway AND for any future service whose
+# compose healthcheck has to learn the same lesson. Carries a negative control
+# per check — including one that neuters the compose oracle and reverts the chart
+# TOGETHER, so the pin cannot go vacuous with the thing it compares against.
+# Offline apart from the pinned helm fetch; no cluster, no kubectl, no compose.
+lint:probe-auth-surface:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  variables:
+    # Same pinned helm as lint:gateway-mfa-env above — one version for the whole
+    # pipeline, so the two chart renders can never disagree about what Helm does.
+    HELM_VERSION: "v3.19.2"
+    HELM_SHA256: "2114c9dea2844dce6d0ee2d792a9aae846be8cf53d5b19dc2988b5a0e8fec26e"
+  before_script:
+    - pip install --quiet pyyaml
+    # Pinned-helm install, FAIL-CLOSED: the sha256 of the WHOLE download is
+    # verified before extraction, and only linux-amd64/helm is ever extracted.
+    # helm is not optional here — the script has no model-only fallback, because
+    # a silent SKIP is the hole this class of bug hides in.
+    - |
+      python3 - <<'PY'
+      import hashlib, io, os, sys, tarfile, urllib.request
+      ver = os.environ["HELM_VERSION"]
+      want = os.environ["HELM_SHA256"].lower()
+      url = "https://get.helm.sh/helm-%s-linux-amd64.tar.gz" % ver
+      blob = urllib.request.urlopen(url, timeout=120).read()
+      got = hashlib.sha256(blob).hexdigest()
+      if got != want:
+          sys.exit("FAIL-CLOSED: sha256 mismatch for %s\n  pinned %s\n  got    %s"
+                   % (url, want, got))
+      with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
+          f = t.extractfile("linux-amd64/helm")
+          if f is None:
+              sys.exit("FAIL-CLOSED: linux-amd64/helm missing from the verified tarball")
+          with open("/usr/local/bin/helm", "wb") as out:
+              out.write(f.read())
+      os.chmod("/usr/local/bin/helm", 0o755)
+      print("helm %s installed, sha256 %s OK" % (ver, got))
+      PY
+    - helm version --short
+  script:
+    - bash tests/stack/test-probe-auth-surface.sh
+
 # Thin-desktop (Sunshine) mesh-fence composition gate. Executes BOTH halves of
 # the fence for real (only nft/sunshine/ip/pgrep/logger are PATH stubs) and
 # asserts (a) the tailnet admit is DUAL-STACK — an `ip saddr` match inside an

@@ -167,8 +167,12 @@ keystore:
   secretName: ""
   # Trust-anchor alias in the truststore.
   caAlias: hugmesh-cluster-ca
-  # Also enable server.ssl (serve HTTPS). Leave false unless probes/Service are
-  # switched to HTTPS too — otherwise the http readiness probe will fail.
+  # Also enable server.ssl (serve HTTPS). The probes follow this flag on their
+  # own (templates/deployment.yaml switches the exec curl to https + -k, which is
+  # the same no-server-cert-verification posture a kubelet httpGet with
+  # scheme: HTTPS uses for a loopback check), so turning this on no longer breaks
+  # readiness. The Service/ingress in front of it are still plaintext-shaped —
+  # switch those too before enabling.
   serverTls: false
   # TLS protocol floor for the assembled keystore (crypto agility — see
   # docs/CRYPTO-AUDIT.md). TLSv1.3 only by default: forward-secret, AEAD-only,
@@ -254,6 +258,11 @@ autoscaling:
   targetMemoryUtilizationPercentage: 80
 
 # Spring Boot Actuator readiness/liveness (gateway exposes /actuator/health).
+# Rendered as 401-TOLERANT exec probes, NOT httpGet — the gateway image gates
+# /actuator/** on ROLE_GAME-MASTER/ADMIN/SUPERADMIN, so a token-less kubelet
+# always gets 401 and an httpGet probe can never pass. See the block comment in
+# templates/deployment.yaml; the shape is pinned by
+# tests/stack/test-probe-auth-surface.sh.
 probes:
   enabled: true
 

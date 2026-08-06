@@ -181,14 +181,54 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if .Values.probes.enabled }}
+          # 200 OR 401 — /actuator/** is role-gated by the gateway IMAGE's own
+          # SecurityConfig (INFRA_PATHS -> ROLE_GAME-MASTER/ADMIN/SUPERADMIN), so
+          # the kubelet, which carries no token, gets 401 on EVERY probe. An
+          # httpGet probe scores only 200-399 as success, so readiness could
+          # never pass and liveness then killed the healthy pod: the first real
+          # cluster run logged "Readiness probe failed: HTTP probe failed with
+          # statuscode: 401" x17 against a pod that had already logged "Started
+          # HugMeshGatewayApplication" + "Netty started on port 8080", for all
+          # four instances that share this chart: NO gateway could ever become
+          # Ready on Kubernetes (first real kind run, KIND_PROFILE=sso, 2026-08-05).
+          # tests/stack/compose.local.yaml's gateway healthcheck has accepted 401
+          # for exactly this reason and says why; this is that same fix carried
+          # into the cluster payload, and tests/stack/test-probe-auth-surface.sh
+          # holds the two sides together.
+          # 401 proves the process is up, Netty is listening AND the security
+          # chain is wired. 000 (connection refused) and 5xx do not, so the
+          # accepted set is these two codes and nothing else.
+          # ExecAction is NOT run through a shell, hence the explicit /bin/sh;
+          # curl is installed in the runtime image (hugmesh-gateway Dockerfile
+          # installs it into the JRE stage for the compose healthcheck above).
+          # timeoutSeconds is explicit because forking sh+curl does not reliably
+          # finish inside the kubelet's 1s default on an SBC node.
+          {{- $curl := ternary "curl -sk" "curl -s" .Values.keystore.serverTls }}
+          {{- $scheme := ternary "https" "http" .Values.keystore.serverTls }}
           readinessProbe:
-            httpGet: { path: /actuator/health/readiness, port: http }
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  code=$({{ $curl }} -o /dev/null -w '%{http_code}'
+                  {{ $scheme }}://127.0.0.1:{{ .Values.service.port }}/actuator/health/readiness);
+                  [ "$code" = 200 ] || [ "$code" = 401 ]
             initialDelaySeconds: 20
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
-            httpGet: { path: /actuator/health/liveness, port: http }
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  code=$({{ $curl }} -o /dev/null -w '%{http_code}'
+                  {{ $scheme }}://127.0.0.1:{{ .Values.service.port }}/actuator/health/liveness);
+                  [ "$code" = 200 ] || [ "$code" = 401 ]
             initialDelaySeconds: 45
             periodSeconds: 15
+            timeoutSeconds: 5
           {{- end }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
