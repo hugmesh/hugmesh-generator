@@ -77,6 +77,49 @@ apps run are **never modified** (so the H2 test slices are unaffected).
 (the gateways do not migrate), so the grants are explicit (and guarded on role
 existence so the same file is reusable in the local dev stack).
 
+#### admin-bff is the one service whose changelogs also GRANT explicitly
+
+Every other BFF relies purely on the `ALTER DEFAULT PRIVILEGES` mechanism above and
+carries **no SQL `GRANT` at all**. hugmesh-admin-bff-api additionally issues ~49
+per-table `GRANT`s from its own changelogs. Those are belt-and-braces — the default
+privileges already cover every table Liquibase creates — but they are **not free**,
+because a `GRANT` to a role that does not exist is a hard error that aborts the
+migration and the pod never starts.
+
+That is exactly what happened on 2026-08-06: all 97 statements named `admin_bff`,
+which is **route-access-db's** role (first data row of the matrix above), not a role
+of admin-bff's own database. The matrix was right; the changelogs had copied a name
+across a datasource boundary. They now target `adminbff_app`.
+
+Two rules follow, and `lint:liquibase-grant-roles` enforces both across **all**
+services:
+
+1. **`[created]`** — a changelog may only `GRANT` to a role that *that service's own*
+   `initdb` creates. Names are not portable between databases.
+2. **`[connects]`** — the grantee must be a role something actually **logs in as** on
+   that datasource (`SPRING_LIQUIBASE_USER` / `SPRING_R2DBC_USERNAME`). Merely making
+   the name resolve — by adding a `CREATE ROLE` for whatever the changelog happens to
+   say — un-wedges startup while the privileges land on a role with no sessions. That
+   is the trap this bug set: compose and both Testcontainers harnesses each created
+   `admin_bff` from the *changelog's* name so the statement would resolve, which is
+   why every environment except the cluster was green.
+3. **`[compose]`** — `tests/stack/compose.local.yaml` is read too, and held to the same
+   matrix: a role its one-shot `*-db-init` shims `CREATE` must be one the *cluster*
+   bootstrap for that Postgres creates, and every role the changelogs grant to must
+   exist in compose as well. Without this leg rules 1 and 2 could be satisfied while
+   the local stack quietly re-invented a third name, which is precisely the shape of
+   the original failure.
+
+   What `[compose]` deliberately does **not** require is that compose connect as the
+   same role the cluster does. The local stack connects each app as the database
+   **owner** (`adminbff`, `gateway`, …) rather than the least-privilege `*_app` role,
+   because the per-user passwords come from ESO and do not exist locally. So compose
+   proves the role *names* agree and that the migration runs; it cannot prove a
+   privilege is sufficient for the restricted role. Only the cluster — or a
+   Testcontainers run that logs in as `adminbff_app` — can.
+
+If you add a `GRANT` to a changelog, take the role name from this matrix.
+
 ### initdb layout (mounted as a ConfigMap into `/docker-entrypoint-initdb.d`)
 
 Postgres runs the files in **alphabetical order** on first start (empty data dir):

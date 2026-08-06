@@ -77,14 +77,40 @@ services:
           CREATE KEYSPACE IF NOT EXISTS snapdragon_federation
             WITH replication = {'class':'SimpleStrategy','replication_factor':1};"
 
-  # admin-bff's Liquibase changelog GRANTs table privileges to the cluster's
-  # per-machine-user role `admin_bff` (ESO provisions it in-cluster). The compose
-  # DB only has the owner `adminbff`, so the migration aborted on
-  #   ERROR: role "admin_bff" does not exist [Failed SQL: GRANT ... TO admin_bff]
-  # and admin-bff-api exited. Created as a NOLOGIN role: it exists purely so the
-  # GRANT resolves — nothing connects as it locally. Idempotent, and a one-shot
-  # service rather than an initdb.d script on purpose: initdb.d only ever runs on a
-  # FRESH volume, so it would silently skip every existing local stack.
+  # admin-bff's Liquibase changelog GRANTs table privileges to `adminbff_app`, the
+  # non-owner least-privilege role that the CLUSTER's admin-bff-db bootstrap creates
+  # (specs/cluster/manifests/admin-bff-db/initdb/10-roles.sh) and that the deployed
+  # app connects as (admin-bff-api deployment.yaml, SPRING_R2DBC_USERNAME). The
+  # compose DB mounts no initdb role script, so it has only the owner `adminbff` and
+  # the migration would abort on
+  #   ERROR: role "adminbff_app" does not exist [Failed SQL: GRANT ... TO adminbff_app]
+  # Created as a NOLOGIN role: it exists purely so the GRANT resolves — the local
+  # stack connects admin-bff-api as the OWNER `adminbff` (dev convenience, see its
+  # SPRING_R2DBC_USERNAME below), so nothing connects as it here. Idempotent, and a
+  # one-shot service rather than an initdb.d script on purpose: initdb.d only ever
+  # runs on a FRESH volume, so it would silently skip every existing local stack.
+  #
+  # THIS SHIM IS WHY THE `admin_bff` BUG SHIPPED. It used to create `admin_bff` and
+  # its comment asserted "ESO provisions it in-cluster". Nothing ever did: the
+  # cluster bootstrap creates `adminbff_app`, and `admin_bff` is a role of the
+  # SEPARATE route-access/gateway database. Compose stayed green on a role the
+  # cluster did not have, so admin-bff-api CrashLoopBackOff'd in kind for want of a
+  # role no local run could miss. Keep the name here DERIVED from the cluster
+  # bootstrap, never invented.
+  #
+  # WHAT IS AND IS NOT GUARDED. tests/scripts/liquibase_grant_roles.py PARSES THIS
+  # FILE (its [compose] leg) and fails CI on two things:
+  #   • a role a shim here CREATEs that specs/cluster's bootstrap for that same
+  #     Postgres does not create — i.e. renaming this back to `admin_bff`;
+  #   • a role the changelogs GRANT to that this file never creates, which would
+  #     abort `make stack-up`.
+  # It does NOT check that compose connects as the same role the cluster does, and
+  # here it deliberately does not: in-cluster admin-bff-api connects as the
+  # least-privilege `adminbff_app`, whereas the SPRING_R2DBC_USERNAME below connects
+  # as the OWNER `adminbff` (the per-user passwords come from ESO and do not exist
+  # locally). So a green local stack proves the role NAMES agree and the migration
+  # runs; it CANNOT prove a privilege is sufficient for the restricted role. Only the
+  # cluster, or a Testcontainers run that logs in as `adminbff_app`, can.
   admin-bff-db-init:
     <<: *amd64
     image: postgres:16-alpine
@@ -99,8 +125,8 @@ services:
       - |
         psql -h admin-bff-db -U adminbff -d adminbff -v ON_ERROR_STOP=1 -c "
           DO \$\$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'admin_bff') THEN
-              CREATE ROLE admin_bff NOLOGIN;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adminbff_app') THEN
+              CREATE ROLE adminbff_app NOLOGIN;
             END IF;
           END \$\$;"
 

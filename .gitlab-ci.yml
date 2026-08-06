@@ -811,6 +811,84 @@ lint:service-env-contract:
     # the service sources, then re-run the checker against them.
     - bash tests/scripts/test-service-env-contract.sh
 
+# Liquibase GRANT-role gate. Every Postgres role a service's changelogs GRANT to must
+# be created by THAT service's own DB bootstrap, and must be a role something actually
+# connects as.
+#
+# WHY. admin-bff-api CrashLoopBackOff'd in kind and could never start: all 97
+# GRANT/REVOKE statements in its changelogs named `admin_bff`, a role of the SEPARATE
+# route-access/gateway Postgres. Its own bootstrap creates `adminbff_app`
+# (manifests/admin-bff-db/initdb/10-roles.sh), which is also the role it connects as.
+#   ERROR: role "admin_bff" does not exist
+#     [Failed SQL: GRANT SELECT, INSERT, UPDATE ON access_suspension TO admin_bff]
+# It shipped because compose and the Testcontainers harnesses each created the missing
+# role from the CHANGELOG's name so the GRANT would merely resolve — green everywhere
+# except the one place with a real bootstrap. Hence the second leg: the grantee must be
+# a role something LOGS IN as, so "just CREATE ROLE admin_bff" (startup passes, 97
+# grants land on a role with no sessions) stays red. And hence the third: the checker
+# PARSES tests/stack/compose.local.yaml, so a shim role the cluster bootstrap does not
+# create is caught in the file that invents it. Reading only the cluster would have left
+# that trap armed for the next divergence.
+#
+# THE SIBLING CLONES ARE THE GATE, NOT A CONVENIENCE — same recipe and same lesson as
+# lint:service-env-contract above: the bootstraps are in THIS repo and the changelogs
+# are in the SERVICE repos, so with no checkouts there is nothing to compare and the
+# checker exits 3 INCOMPLETE, which the suite turns into a FAIL rather than a skip. The
+# repo list comes from --list-repos, i.e. from the manifests, so a new BFF Deployment
+# gets its source cloned without anyone editing this file.
+#   NB image: `python:3` (not `-slim`) — git for the clones, as the siblings document.
+# Sixteen negative controls, all pivoting on values DERIVED from the corpus rather than
+# hard-coded, so a green run cannot be vacuous: the verbatim regression, the same bug
+# planted in a different service, the placebo fix, an initdb the ConfigMap never
+# publishes, an initdb scan matching nothing, a corpus with zero GRANTs, no changelog
+# files, absent and partial checkouts, an unparseable changelog, a cluster tree with no
+# Liquibase datasource at all, the compose shim renamed back to `admin_bff`, a granted
+# role the local stack cannot create, and an unreadable compose file.
+#   The pivot is taken from --list-repos, NEVER by scanning the source root: a stray
+#   sibling sorting before `hugmesh-*` and carrying a GRANT would otherwise become the
+#   thing the destructive controls rewrite.
+# CONTROL 13 IS THE ONE TO KEEP. The controls delete and rewrite files in a staged copy
+# of the corpus, and service checkouts here are routinely SYMLINKS (worktrees). An
+# earlier revision staged with `cp -a`, kept the links, and `find -delete` walked
+# through one into a real checkout — 64 files. Staging now dereferences, staged trees
+# containing any symlink are refused, and every destructive command asserts its target
+# resolves inside mktemp -d. Control 13 fires those rails at a canary tree on purpose
+# and requires the canary to be byte-identical afterwards.
+# Offline apart from the clones: no cluster, no kubectl.
+lint:liquibase-grant-roles:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    SERVICE_SRC_ROOT: "${CI_PROJECT_DIR}/.grant-role-src"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${SERVICE_SRC_ROOT}"
+    # Blobless + sparse: only src/main/resources/db is ever materialised, which is all
+    # the checker reads. --depth 1 keeps it to the tip of the default branch.
+    - |
+      set -e
+      for r in $(python3 tests/scripts/liquibase_grant_roles.py specs/cluster --list-repos); do
+        git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/${r}.git" "${SERVICE_SRC_ROOT}/${r}"
+        git -C "${SERVICE_SRC_ROOT}/${r}" sparse-checkout set src/main/resources/db
+      done
+    # A repo that --list-repos demands but the loop did not materialise must stop the
+    # job here, loudly. Silently checking nine of ten is the failure this gate exists
+    # to prevent, one layer down.
+    - |
+      set -e
+      for r in $(python3 tests/scripts/liquibase_grant_roles.py specs/cluster --list-repos); do
+        test -d "${SERVICE_SRC_ROOT}/${r}/src/main/resources/db" || {
+          echo "FATAL: ${r} has no src/main/resources/db after cloning — the gate would be blind to it"
+          exit 1
+        }
+      done
+  script:
+    # bash is required: the negative controls stage copies of specs/cluster AND of the
+    # service sources, then re-run the checker against them.
+    - bash tests/scripts/test-liquibase-grant-roles.sh
+
 # Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
 # post-clone pass that rewrites files in ./.stack-src which `docker compose build`
 # then consumes) against synthetic checkouts: the pre-rename private dependency is
