@@ -152,7 +152,7 @@ spec:
         - name: orchestrator
           # kubectl + bash + jq + envsubst; pin a real digest before prod (n/a in
           # prod — this whole bundle is pruned for ENV=prod).
-          image: docker.io/bitnami/kubectl:1.31
+          image: docker.io/bitnamilegacy/kubectl:1.31
           command: ["bash", "/orchestrator/orchestrator.sh"]
           env:
             - { name: POLL_SECONDS, value: "15" }

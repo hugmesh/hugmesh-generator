@@ -699,6 +699,26 @@ lint:sunshine-fence:
   script:
     - bash tests/scripts/test-sunshine-fence.sh
 
+# Every third-party container image specs/cluster pins must still EXIST in its
+# registry. Bitnami's move to Broadcom retired the free `bitnami/*` Docker Hub
+# images in favour of `bitnamilegacy/*`; most of this repo was migrated and three
+# manifests were missed, still pinning docker.io/bitnami/kubectl:1.31, which is
+# now a 404. A running cluster hides that completely — the image is already on
+# the node, so the pod starts and keeps starting — and it surfaces only on a
+# bring-up from nothing, as an ImagePullBackOff with no visible connection to a
+# vendor's registry reorganisation months earlier. No offline check can see a
+# retired tag, which is why this gate is one of the few allowed out to the
+# network. Unconditional: registries rot on the vendor's schedule, not on ours,
+# so this cannot be gated on file changes.
+lint:container-image-tags:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y --no-install-recommends curl >/dev/null
+  script:
+    - bash tests/scripts/test-container-image-tags.sh
+
 # A curated kind profile must apply the companion Applications its own
 # Applications name. KIND_PROFILE=sso listed apps/00-cassandra.yaml (the Bitnami
 # Helm chart) but not apps/00b-cassandra-init.yaml, which creates the keyspaces

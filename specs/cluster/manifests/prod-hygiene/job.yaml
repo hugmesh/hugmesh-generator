@@ -60,7 +60,7 @@ spec:
           # kubectl + bash to read live signals. Multi-arch; pruned for nothing —
           # this bundle is the prod gate itself, so it stays. (In ENV=test the
           # whole prod-hygiene app is not synced; see apps/00-prod-hygiene.yaml.)
-          image: docker.io/bitnami/kubectl:1.31
+          image: docker.io/bitnamilegacy/kubectl:1.31
           command: ["bash", "/gate/validate-prod-hygiene.sh", "--runtime"]
           resources:
             requests: { cpu: 25m, memory: 64Mi }
