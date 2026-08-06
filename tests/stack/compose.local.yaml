@@ -618,7 +618,26 @@ services:
       SPRING_LIQUIBASE_URL: "${MANAGED_ADMIN_BFF_LIQUIBASE_URL:-jdbc:postgresql://admin-bff-db:5432/adminbff}"
       SPRING_LIQUIBASE_USER: adminbff
       SPRING_LIQUIBASE_PASSWORD: adminbff
-      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      # admin-bff's route mirror / url_registry / hs_tokens writes. THE ENV NAME
+      # MATTERS: admin-bff excludes Spring's Cassandra auto-config and builds its
+      # own session from app.mirror.cassandra.contact-point, whose placeholder is
+      # ${ROUTE_MIRROR_CASSANDRA}. The CASSANDRA_CONTACT_POINTS that used to be
+      # here matched NO placeholder, so the mirror silently dialled its baked
+      # default (the pre-rebrand cassandra.snapdragon-pki… in-cluster DNS), failed,
+      # and swallowed it — the gateways' gateway_route_access + url_registry rows
+      # were never written locally either. Same dead env was in the cluster
+      # manifest; both fixed together.
+      ROUTE_MIRROR_CASSANDRA: "cassandra:9042"
+      ROUTE_MIRROR_KEYSPACE: snapdragon_gateway
+      # datacenter1 = what the stock cassandra:5 image's SimpleSnitch advertises
+      # (the app default is dc1 → NoNodeAvailableException). The cluster's bitnami
+      # Cassandra reports the same name, for the same snitch reason.
+      ROUTE_MIRROR_LOCAL_DC: datacenter1
+      # No CASSANDRA_AUTH_ENABLED here, deliberately: the stock cassandra:5 image
+      # this stack runs defaults to AllowAllAuthenticator, unlike the cluster's
+      # bitnami image which defaults to PasswordAuthenticator. That difference is
+      # exactly why compose stayed green while every cluster gateway
+      # CrashLoopBackOff'd — compose green is not evidence for the cluster.
       # OIDC/custody for the gateway's cookie->JWT step (POST /bff/internal/session/exchange):
       # admin-bff decrypts the custody-stamped Casdoor token and refreshes it, so per-role
       # gateway RBAC gets the real roles claim. APP_BFF_CUSTODY_KEY MUST be IDENTICAL to

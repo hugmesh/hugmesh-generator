@@ -64,7 +64,85 @@ cassandra:
   # `cassandra:5` container with this same env (see compose.local.yaml's
   # identical fix, generator#261). A mismatched local-dc means the driver's
   # NoNodeAvailableException on every boot.
+  #
+  # THE SAME VALUE IS CORRECT IN-CLUSTER, but for a reason worth writing down:
+  # apps/00-cassandra.yaml runs the bitnami chart, whose `cluster.endpointSnitch`
+  # default is SimpleSnitch — and SimpleSnitch does NOT read
+  # cassandra-rackdc.properties; it always advertises datacenter1/rack1. So the
+  # chart's `cluster.datacenter` value is INERT and the driver still has to say
+  # "datacenter1". (apps/00-cassandra.yaml now sets datacenter: datacenter1 so the
+  # payload has one datacenter name, not two.)
   localDc: datacenter1
+
+  # ── Per-instance least-privilege CQL role (REQUIRED) ────────────────────────
+  # The bitnami cassandra image defaults CASSANDRA_AUTHENTICATOR to
+  # PasswordAuthenticator and CASSANDRA_AUTHORIZER to CassandraAuthorizer, so the
+  # cluster Cassandra has ALWAYS demanded credentials. This chart passed none, and
+  # every gateway therefore died in bean creation with
+  #   AuthenticationException: Node cassandra…:9042 requires authentication
+  #   (org.apache.cassandra.auth.PasswordAuthenticator), but no authenticator configured
+  # -> CrashLoopBackOff. Found by the first real kind run
+  # (docs/KIND-SSO-E2E-FINDINGS.md #5); the local compose stack never saw it
+  # because the stock `cassandra:5` image it uses defaults to AllowAllAuthenticator.
+  #
+  # Each gateway instance authenticates as ITS OWN role — pki_gw_cass /
+  # be_gw_cass / fe_gw_cass / sa_gw_cass, created by
+  # manifests/cassandra-init/bootstrap-configmap.yaml — never a shared role and
+  # NEVER the superuser. Set per instance in apps/20-gateway-*.yaml /
+  # 22-gateway-superadmin.yaml; the password never appears here, only the Secret
+  # coordinate.
+  #
+  # Empty username = no credentials rendered at all (the pre-fix behaviour), kept
+  # so a non-Cassandra chart consumer is not forced to invent a role. Nothing that
+  # talks to THIS platform's Cassandra may leave it empty — tests/scripts/
+  # test-cassandra-cluster-wiring.sh fails the build if any gateway Application
+  # does. Setting username WITHOUT the Secret coordinate is a hard template error
+  # (`required`), so a half-wired instance cannot render.
+  username: ""
+  # ESO-synced Secret (manifests/external-secrets/cassandra-externalsecrets.yaml)
+  # holding one password per role; must exist in THIS release's namespace.
+  passwordSecret: cassandra-app-creds
+  # Key within passwordSecret: pki-gateway / be-gateway / fe-gateway /
+  # superadmin-gateway.
+  passwordSecretKey: ""
+
+  # ── WHAT THIS ROLE IS ALLOWED TO DO (the permission matrix, declared) ────────
+  # CassandraAuthorizer is DENY-by-default, so the GRANTs in
+  # manifests/cassandra-init/bootstrap-configmap.yaml ARE this workload's
+  # capability set. Getting them backwards does not fail loudly at deploy time —
+  # it fails at 03:00 in one code path — and the dark overlay this branch deleted
+  # had them EXACTLY backwards (the four gateways declared SELECT-only readers,
+  # admin-bff the writer), which is the wrong way round for the DDL:
+  #
+  #   * the GATEWAY image carries the schema migration runner
+  #     (CassandraSchemaMigrations: CREATE TABLE schema_migrations/revocations/
+  #     url_registry/resource_access/gateway_route_access/hs_tokens, then
+  #     ALTER TABLE ... ADD for the later change-ids, then INSERT of its applied
+  #     rows). A SELECT-only gateway role dies at startup on the first CREATE
+  #     TABLE — an authorization failure swapped in for the authentication one.
+  #   * admin-bff and federation-api issue NO DDL at all; they depend on the
+  #     gateway having created the tables.
+  #
+  # So this value is not decoration: it is the CLASS the bootstrap's GRANTs are
+  # checked against, statically, by tests/scripts/test-cassandra-cluster-wiring.sh.
+  # The gate asserts set EQUALITY per role per keyspace — too few permissions
+  # (breaks at runtime) and too many (privilege the workload never asked for) both
+  # fail the build, as does any grant on a keyspace this instance does not use.
+  #
+  #   schema-owner  SELECT + MODIFY + CREATE + ALTER   carries a migration runner
+  #   dml           SELECT + MODIFY                    reads/writes, no DDL
+  #   read-only     SELECT                             reads only
+  #
+  # No class grants DROP or AUTHORIZE to any application role, ever, and no class
+  # is expressible as ALL PERMISSIONS or ON ALL KEYSPACES — the gate rejects those
+  # grant forms outright rather than trying to score them.
+  #
+  # Rendered onto the pod as the snapdragon.systems/cassandra-access annotation,
+  # so the declared class is readable on the LIVE object (`kubectl get pod -o
+  # yaml`) next to the role it is claimed for, not only in git. Required whenever
+  # `username` is set — an unclassified role cannot be checked, so the template
+  # refuses to render it.
+  access: ""
 
 # Downstream routes rendered into an application-routes.yml ConfigMap and
 # loaded via SPRING_CONFIG_ADDITIONAL_LOCATION. id/uri/path per route.

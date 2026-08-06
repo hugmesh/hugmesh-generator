@@ -1,0 +1,39 @@
+# cassandra-init — the keyspace + least-privilege-role bootstrap for the cluster
+# Cassandra. The cluster-side equivalent of compose's `cassandra-init` service.
+#
+# NOT OPTIONAL AND NOT DARK. Cassandra ships with PasswordAuthenticator on
+# (bitnami image default) and with no application keyspaces, so until this Job
+# runs there is no combination of settings under which a gateway can start:
+# either `requires authentication ... but no authenticator configured` or
+# `InvalidKeyspaceException: Invalid keyspace snapdragon_gateway`. Both were
+# observed on the first real cluster run — docs/KIND-SSO-E2E-FINDINGS.md #5/#6.
+#
+# Split from apps/00-cassandra.yaml because that Application's source is a Helm
+# CHART (bitnami/cassandra), which leaves no `path:` for extra git-managed
+# manifests — the same split as apps/03a-harbor.yaml (Helm) vs
+# apps/03b-harbor-provision.yaml (git path), and apps/03-external-secrets.yaml vs
+# apps/04-external-secrets-config.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cassandra-init
+  namespace: devops
+  annotations:
+    # After Cassandra itself (apps/00-cassandra.yaml, default wave 0) and before
+    # the gateways, which carry wave "2" for exactly this reason. The bootstrap
+    # script also waits for CQL on its own (bounded, then fails loudly), because
+    # the default recurse root reconciles children continuously and wave order is
+    # best-effort there; the Job is idempotent, so both paths converge.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/cassandra-init
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

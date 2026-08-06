@@ -20,7 +20,20 @@ spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-admin-bff-api } }
   template:
-    metadata: { labels: { app: hugmesh-admin-bff-api } }
+    metadata:
+      labels: { app: hugmesh-admin-bff-api }
+      annotations:
+        # The CQL permission class claimed for CASSANDRA_USERNAME below, checked
+        # for set EQUALITY against manifests/cassandra-init's GRANTs by
+        # tests/scripts/test-cassandra-cluster-wiring.sh. `dml` = SELECT+MODIFY
+        # and nothing else: CassandraRouteMirror / UrlRegistryRepository /
+        # HsTokenRegistry are INSERT+DELETE+SELECT only — this service issues no
+        # DDL and depends on the gateway's migration runner having created the
+        # tables. The overlay this branch deleted had it the other way round
+        # (admin-bff the writer, the gateways SELECT-only readers), which is why
+        # the class is declared here and the grants are checked against it rather
+        # than merely counted.
+        snapdragon.systems/cassandra-access: dml
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       # ── Cloud-backups effector identity (least-privilege Velero CR apply) ────
@@ -211,8 +224,41 @@ spec:
                 secretKeyRef:
                   name: admin-bff-db-auth
                   key: password
-            - name: CASSANDRA_CONTACT_POINTS
+            # ── Cassandra (route mirror + url_registry + hs_tokens) ─────────────
+            # CASSANDRA_CONTACT_POINTS USED TO BE SET HERE AND BOUND TO NOTHING.
+            # admin-bff excludes Spring's Cassandra auto-configuration and builds
+            # its own CqlSession from app.mirror.cassandra.*, whose contact-point
+            # placeholder is ${ROUTE_MIRROR_CASSANDRA} — so the env this manifest
+            # emitted matched no placeholder and the mirror fell back to its baked
+            # default, the PRE-REBRAND cassandra.snapdragon-pki… (NXDOMAIN). The
+            # route mirror defaults ENABLED and swallows every failure, so the
+            # gateways' gateway_route_access + url_registry rows were simply never
+            # written and nothing said so. The upstream repo's own deploy manifest
+            # already carries this correction (its comment: "the old
+            # CASSANDRA_CONTACT_POINTS env matched NO placeholder (dead/no-op)").
+            - name: ROUTE_MIRROR_CASSANDRA
               value: "cassandra.hugmesh-pki.svc.cluster.local:9042"
+            - name: ROUTE_MIRROR_KEYSPACE
+              value: "snapdragon_gateway"
+            # datacenter1, not dc1: apps/00-cassandra.yaml runs the chart-default
+            # SimpleSnitch, which always advertises datacenter1 regardless of the
+            # chart's `datacenter` value. The app default is dc1 → every dial would
+            # end in NoNodeAvailableException.
+            - name: ROUTE_MIRROR_LOCAL_DC
+              value: "datacenter1"
+            # Cassandra runs PasswordAuthenticator (bitnami image default), so
+            # these are REQUIRED, not hardening: admin-bff dials as its own
+            # DML-only role admin_bff_cass (SELECT+MODIFY on snapdragon_gateway,
+            # no DDL — the gateway owns the schema). Role + password come from
+            # apps/00b-cassandra-init.yaml and the cassandra-app-creds ESO Secret.
+            - { name: CASSANDRA_AUTH_ENABLED, value: "true" }
+            - name: CASSANDRA_USERNAME
+              value: "admin_bff_cass"
+            - name: CASSANDRA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cassandra-app-creds
+                  key: admin-bff
             # ── Anubis PoW anti-scraper sidecar proxy (SUPERADMIN BFF surface) ──
             # The anubis package (GET /bff/admin/anubis/{status,metrics}) proxies
             # the Anubis management port. ANUBIS_ENABLED=true wires the BFF surface;

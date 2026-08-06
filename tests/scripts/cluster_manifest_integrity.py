@@ -92,7 +92,11 @@ DB_ISOLATION_KNOWN_GAPS = {
 # are Cassandra maintenance Jobs that must reach Cassandra's own category-labelled
 # volumes, documented in SECURITY.md's "`cassandra` MCS note".
 MCS_SHARED_OK = {
-    "s0:c63": {"cassandra-bootstrap-roles", "cassandra-tls-keystore-builder"},
+    # cassandra-bootstrap was `cassandra-bootstrap-roles` while it lived in the
+    # dark cassandra-hardening overlay; it is now the LIVE keyspace+role bootstrap
+    # (manifests/cassandra-init). Same workload, same reason for the shared
+    # category — only the name changed.
+    "s0:c63": {"cassandra-bootstrap", "cassandra-tls-keystore-builder"},
 }
 
 WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob")

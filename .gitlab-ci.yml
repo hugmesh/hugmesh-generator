@@ -1675,3 +1675,49 @@ load:main:
     - if: '$PENTEST_LOAD == "1"'
       when: manual
       allow_failure: true
+
+# Cassandra cluster-wiring gate. The first real kind run found that NO GATEWAY
+# COULD EVER START against the cluster's own Cassandra: the bitnami image
+# defaults to PasswordAuthenticator and the payload passed no credentials to
+# anything (AuthenticationException at bean creation -> CrashLoopBackOff), and
+# nothing cluster-side created the keyspaces either (InvalidKeyspaceException:
+# Invalid keyspace snapdragon_gateway) — compose has had a cassandra-init service
+# doing that for years, with a comment describing the bug, and the workaround was
+# never propagated. Both failure modes are silent in CI and loud only on a live
+# cluster, which is why they survived to a first bring-up.
+# This job asserts the whole contract statically: every workload that dials
+# Cassandra (detected by the VALUE being a cassandra host, not by an env NAME —
+# admin-bff's manifest set a CASSANDRA_CONTACT_POINTS that bound to nothing) is
+# emitted with a username and a secretKeyRef password; that Secret is really
+# materialized in that workload's OWN namespace; every Vault property behind it
+# is minted on BOTH delivery paths (online `vault kv put` and the offline USB
+# bundle — ESO fails a whole Secret on one missing property); the keyspace and
+# the role each consumer names are created by a bootstrap the cluster actually
+# auto-syncs, with every CREATE KEYSPACE ordered before the GRANTs that name it
+# and the bootstrap pod admitted by the default-deny Cassandra NetworkPolicy; and
+# every consumer's local-datacenter matches what the configured snitch really
+# advertises (SimpleSnitch always says datacenter1, so `cluster.datacenter` is
+# cosmetic — the payload used to name it two different ways). The shared gateway
+# chart must also refuse to render a half-wired instance.
+# The role half asserts a PERMISSION MATRIX, not the presence of a grant: each
+# consumer declares its CQL permission class and the bootstrap's GRANTs are
+# checked against it for set equality, per role, per keyspace, with the grant
+# GRAMMAR an allowlist so ALL PERMISSIONS / ON ALL KEYSPACES / role-to-role
+# inheritance cannot slip past unparsed. The dark overlay this branch deleted had
+# a COMPLETE grant matrix that was backwards (the four gateways, which carry the
+# CQL migration runner, as SELECT-only readers); a presence check scores that
+# green, so a control re-lands it verbatim and requires a failure.
+# 43 mutation controls plant each of those regressions on a staged copy every
+# run, each asserting its own injection applied, so a green run cannot be
+# vacuous — including one that fails when the consumer scan itself comes back
+# empty.
+# PyYAML + bash only (bash ships in python:3-slim, Debian): no cluster, no
+# kubectl, no docker, no network.
+lint:cassandra-cluster-wiring:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-cassandra-cluster-wiring.sh

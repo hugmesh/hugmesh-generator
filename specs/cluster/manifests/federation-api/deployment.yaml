@@ -33,7 +33,17 @@ spec:
   strategy: { type: Recreate }   # single writer over the RWO bundles PVC
   selector: { matchLabels: { app: hugmesh-federation-api } }
   template:
-    metadata: { labels: { app: hugmesh-federation-api } }
+    metadata:
+      labels: { app: hugmesh-federation-api }
+      annotations:
+        # The CQL permission class claimed for MANIFEST_CACHE_CASSANDRA_USERNAME
+        # below, checked for set EQUALITY against manifests/cassandra-init's
+        # GRANTs by tests/scripts/test-cassandra-cluster-wiring.sh. `dml` =
+        # SELECT+MODIFY and nothing else: CassandraManifestCache only reads and
+        # writes rows. Its federation_manifest TABLE is created by the
+        # cassandra-init bootstrap precisely because this service has no schema
+        # runner of its own and therefore must not hold CREATE/ALTER.
+        snapdragon.systems/cassandra-access: dml
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
@@ -160,8 +170,29 @@ spec:
               value: "cassandra.hugmesh-pki.svc.cluster.local:9042"
             - name: MANIFEST_CACHE_KEYSPACE
               value: "snapdragon_federation"
+            # datacenter1, not dc1. apps/00-cassandra.yaml runs the chart-default
+            # SimpleSnitch, which ignores cassandra-rackdc.properties and always
+            # advertises datacenter1 — so the chart's `datacenter` value never
+            # reached the driver and this "dc1" would have produced
+            # NoNodeAvailableException on the very first dial the moment the cache
+            # was enabled. Silent today only because the cache is off.
             - name: MANIFEST_CACHE_LOCAL_DC
-              value: "dc1"
+              value: "datacenter1"
+            # Credentials are REQUIRED whenever the cache is on — Cassandra runs
+            # PasswordAuthenticator by image default. Wired now (inert while
+            # MANIFEST_CACHE_ENABLED is false, since no session is ever built) so
+            # enabling the cache is ONE flag rather than a rediscovery of this
+            # whole class. federation_cass is DML-only on snapdragon_federation;
+            # its federation_manifest table is created by the cassandra-init
+            # bootstrap, because federation-api has no schema runner of its own.
+            - { name: MANIFEST_CACHE_CASSANDRA_AUTH_ENABLED, value: "true" }
+            - name: MANIFEST_CACHE_CASSANDRA_USERNAME
+              value: "federation_cass"
+            - name: MANIFEST_CACHE_CASSANDRA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cassandra-app-creds
+                  key: federation
             # No SPRING_PROFILES_ACTIVE: the prod SecurityConfig chain
             # (@Profile("!dev & !test")) is the default and gates the OpenAPI spec
             # /swagger-ui to ROLE_ADMIN. Setting dev/test would make the spec

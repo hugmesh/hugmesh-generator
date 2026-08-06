@@ -27,6 +27,43 @@ spec:
           registry: docker.io
           repository: bitnamilegacy/cassandra
         replicaCount: 1
+        # ── SUPERUSER: ESO-sourced, never chart-generated ────────────────────
+        # Leaving dbUser.password empty makes the chart MINT a random password
+        # into its own Secret. Under ArgoCD that is not stable: the chart renders
+        # with `helm template` (no cluster lookup), so the generated value differs
+        # on every re-render while the password Cassandra actually stored is the
+        # first one — the cluster would lock itself out of its own datastore.
+        # Point it at the ESO Secret instead (external-secrets/cassandra-
+        # externalsecrets.yaml, Vault secret/<brand>/cassandra-admin). The chart
+        # reads the password from that Secret's `cassandra-password` key, which
+        # the ExternalSecret aliases from the same `password` the bootstrap Job
+        # reads — one superuser credential, two consumers, no drift.
+        #
+        # AUTHENTICATION IS NOT OPTIONAL HERE AND NEVER WAS. The bitnami image
+        # defaults CASSANDRA_AUTHENTICATOR=PasswordAuthenticator and
+        # CASSANDRA_AUTHORIZER=CassandraAuthorizer, so this cluster has always
+        # demanded credentials — the clients simply never sent any, and every
+        # gateway CrashLoopBackOff'd (docs/KIND-SSO-E2E-FINDINGS.md #5). The
+        # nearby manifests/cassandra-hardening overlay still describes the server
+        # as "no authenticator"; that premise was wrong and is corrected there.
+        # Applications authenticate as the per-app least-privilege roles created
+        # by apps/00b-cassandra-init.yaml — NEVER as this superuser.
+        dbUser:
+          user: cassandra
+          existingSecret: cassandra-admin
+        cluster:
+          name: HugMeshGatewayCluster
+          # endpointSnitch is the chart default SimpleSnitch, pinned here because
+          # it is load-bearing for every client: SimpleSnitch does NOT read
+          # cassandra-rackdc.properties and always advertises datacenter1/rack1,
+          # which makes `datacenter` below cosmetic. It used to read `dc1`, so the
+          # payload named the datacenter two different ways and any client that
+          # believed the manifest (federation-api did) got NoNodeAvailableException.
+          # Both now say datacenter1. Switching to GossipingPropertyFileSnitch is
+          # what would make `datacenter` real — and it must be done together with
+          # every consumer's local-dc, not on its own.
+          endpointSnitch: SimpleSnitch
+          datacenter: datacenter1
         # SELinux MCS identity (SECURITY.md §3): pin Cassandra to the free
         # category s0:c63 so its category-isolated data volume cannot be read
         # by another workload. The bitnami cassandra 12.3.11 chart renders
@@ -44,9 +81,6 @@ spec:
           enabled: true
           seLinuxOptions:
             level: "s0:c63"
-        cluster:
-          name: HugMeshGatewayCluster
-          datacenter: dc1
         persistence:
           size: 8Gi
         nodeSelector:

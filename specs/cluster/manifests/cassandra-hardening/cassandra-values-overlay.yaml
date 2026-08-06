@@ -1,7 +1,14 @@
-# Cassandra auth + TLS Helm-values OVERLAY (DB-hardening, ADR-32 — DARK reference).
+# Cassandra TLS Helm-values OVERLAY (DB-hardening, ADR-32 — DARK reference).
 # =============================================================================
 # THIS FILE IS A REFERENCE / FLIP-TIME PATCH, NOT A LIVE ArgoCD OBJECT.
 # =============================================================================
+# ⚠ STAGE 1 (AUTHENTICATION) BELOW HAS SHIPPED — it is documented here only as
+# the historical record of what was wrong. Cassandra never ran
+# AllowAllAuthenticator: the bitnami image defaults to PasswordAuthenticator, so
+# the "breaking cutover" this file staged had already happened before anything
+# was written, and the ONLY missing piece was the client side. The live wiring is
+# apps/00-cassandra.yaml (dbUser.existingSecret) + apps/00b-cassandra-init.yaml.
+# Do NOT re-apply stage 1 from here. STAGE 2 (TLS) is still real work.
 # It is NOT an Application and is NOT rendered by kustomize. It documents the
 # EXACT `helm.values` diff an operator merges into specs/cluster/apps/00-cassandra.yaml
 # to enable Cassandra authentication (Stage 1) and TLS (Stage 2). We keep it OUT of
@@ -47,8 +54,15 @@
 #   4. Run the cassandra-bootstrap-roles Job (creates the 6 least-privilege roles
 #      + GRANTs). Authorizer is deny-by-default, so until GRANTs land an app role
 #      can log in but read/write nothing — fail CLOSED.
-#   5. Add CASSANDRA_USER / CASSANDRA_PASSWORD env to each consumer (the client
-#      wiring patch — see client-credentials-patch.md) and roll the consumers.
+#   5. Add credentials to each consumer. THE ENV NAMES THIS FILE USED TO GIVE
+#      (CASSANDRA_USER / CASSANDRA_PASSWORD) WERE WRONG for every consumer and
+#      would have bound to nothing: the gateway needs the Spring relaxed-binding
+#      spelling SPRING_CASSANDRA_USERNAME / SPRING_CASSANDRA_PASSWORD, admin-bff
+#      reads CASSANDRA_AUTH_ENABLED/CASSANDRA_USERNAME/CASSANDRA_PASSWORD via its
+#      own app.mirror.cassandra.auth.* placeholders, and federation-api reads
+#      MANIFEST_CACHE_CASSANDRA_{AUTH_ENABLED,USERNAME,PASSWORD}. All three are
+#      wired in the live manifests now; the deleted client-credentials-patch.md
+#      is where the wrong names lived.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGE 2 — TLS (node + client encryption)  [follows Stage 1; same live-gate]

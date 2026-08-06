@@ -23,6 +23,13 @@ kind: Application
 metadata:
   name: hugmesh-gateway-superadmin
   namespace: devops
+  annotations:
+    # Wave 2 = after apps/00b-cassandra-init.yaml (wave 1), which creates the
+    # snapdragon_gateway keyspace and this instance's CQL role. Starting before
+    # that Job has run is not a slow start, it is a CrashLoopBackOff:
+    # InvalidKeyspaceException / AuthenticationException at bean creation
+    # (docs/KIND-SSO-E2E-FINDINGS.md #5 + #6).
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
@@ -34,6 +41,19 @@ spec:
       values: |
         instance:
           name: hugmesh-superadmin-gateway
+        # This instance's OWN Cassandra role, scoped to snapdragon_gateway only —
+        # identical privilege to the other three gateways, NOT elevated: being the
+        # superadmin front door buys no extra CQL rights. Created by
+        # manifests/cassandra-init; the password comes from the cassandra-app-creds
+        # ESO Secret in THIS namespace (hugmesh-pki).
+        cassandra:
+          username: sa_gw_cass
+          passwordSecretKey: superadmin-gateway
+          # schema-owner, not dml: the gateway image runs the CQL migration
+          # runner, so its role needs CREATE+ALTER on top of SELECT+MODIFY.
+          # This is the class manifests/cassandra-init's GRANTs are checked
+          # against for set equality — see the chart values.yaml.
+          access: schema-owner
         # NOTE: MFA enforcement is deliberately NOT enabled here. Every cluster
         # instance inherits the chart's default-off `mfa:` block (mfa.enabled /
         # mfa.freshnessWindow / mfa.enforcePrivilegedFloor in

@@ -447,18 +447,48 @@ open(p, "w", encoding="utf-8").write(s)
 PY
 '
 
-# (n10) SCOPE: an ExternalSecret that lives OUTSIDE manifests/external-secrets —
-# the cassandra-hardening overlay, which the first version of this gate never
-# walked at all. Also proves a DARK overlay is checked, not excused.
+# (n10) SCOPE: an ExternalSecret that lives OUTSIDE manifests/external-secrets.
+# This used to inject into manifests/cassandra-hardening/cassandra-externalsecrets.yaml.
+# That file moved INTO manifests/external-secrets when the Cassandra auth stage
+# stopped being dark (KIND-SSO-E2E-FINDINGS #5 — the server had demanded
+# credentials all along), and no OTHER rendered-and-seeded ExternalSecret lives
+# outside that directory today: the three that do (cloudflared, coturn-public,
+# cassandra TLS) all land in [not-rendered]/[conditional], where a mutated
+# property is legitimately not an [online-seed] finding. Depending on which files
+# happen to sit where is what made this control fragile, so it now CREATES the
+# condition it tests: a rendered ExternalSecret in a non-external-secrets overlay
+# (manifests/cassandra-init), added to that overlay's own kustomization, reading a
+# property nothing seeds. The walk must still find it.
 expect_catch "an unseeded property in an ExternalSecret outside manifests/external-secrets" \
-    "[online-seed]" "never_seeded_cassandra_role" '
+    "[online-seed]" "never_seeded_outside_property" '
 python3 - "$T" <<PY
-import sys
-p = sys.argv[1] + "/manifests/cassandra-hardening/cassandra-externalsecrets.yaml"
-s = open(p, encoding="utf-8").read()
-s = s.replace("remoteRef: { key: hugmesh/cassandra-app-creds, property: federation }",
-              "remoteRef: { key: hugmesh/cassandra-app-creds, property: never_seeded_cassandra_role }", 1)
-open(p, "w", encoding="utf-8").write(s)
+import sys, os
+d = sys.argv[1] + "/manifests/cassandra-init"
+if not os.path.isdir(d):
+    sys.exit("manifests/cassandra-init is gone — this control needs a rendered overlay outside manifests/external-secrets")
+open(d + "/probe-externalsecret.yaml", "w", encoding="utf-8").write("""apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: seed-contract-probe
+  namespace: hugmesh-pki
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: hugmesh-vault
+    kind: ClusterSecretStore
+  target:
+    name: seed-contract-probe
+    creationPolicy: Owner
+  data:
+    - secretKey: probe
+      remoteRef: { key: hugmesh/cassandra-app-creds, property: never_seeded_outside_property }
+""")
+k = d + "/kustomization.yaml"
+s = open(k, encoding="utf-8").read()
+if "resources:" not in s:
+    sys.exit("kustomization has no resources: list")
+s = s.replace("resources:", "resources:\n  - probe-externalsecret.yaml", 1)
+open(k, "w", encoding="utf-8").write(s)
 PY
 '
 

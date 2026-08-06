@@ -1,10 +1,19 @@
-# Explicit Cassandra authenticator/authorizer settings (DB-hardening, ADR-32 — DARK).
+# Cassandra authenticator/authorizer + system_auth replication record (ADR-32).
 #
-# The prompt requires `authenticator: PasswordAuthenticator` +
-# `authorizer: CassandraAuthorizer` to be configured EXPLICITLY (not left to the
-# bitnami image's implicit "password present -> auth on" behaviour). There are two
-# supported, chart-version-robust ways to set them on bitnami/cassandra 12.3.11;
-# pick ONE in the values overlay (cassandra-values-overlay.yaml):
+# ⚠ CORRECTION. This file was written believing the bitnami image only turns auth
+# on "implicitly" when a password is present. It does not: CASSANDRA_AUTHENTICATOR
+# defaults to PasswordAuthenticator and CASSANDRA_AUTHORIZER to CassandraAuthorizer
+# in the image itself, which is why a credential-less cluster rejected every
+# gateway (docs/KIND-SSO-E2E-FINDINGS.md #5). apps/00-cassandra.yaml therefore
+# does not need to switch anything on — it pins the superuser to the ESO Secret and
+# relies on those image defaults, which the wiring guard asserts.
+#
+# THE PART OF THIS FILE THAT IS STILL LIVE WORK is the system_auth replication
+# note at the bottom: on a multi-node cluster system_auth MUST be RF>1 or losing a
+# node takes authentication — and therefore the whole platform — down.
+#
+# The two settings, for the audit record, and the two supported ways to state them
+# explicitly on bitnami/cassandra 12.3.11 should that ever be wanted:
 #
 # PREFERRED — extraEnvVars (the bitnami image renders these into cassandra.yaml at
 # start; survives chart bumps, no full-file override):

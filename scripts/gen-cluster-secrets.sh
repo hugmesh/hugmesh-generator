@@ -456,16 +456,16 @@ ROUTE_ACCESS_BE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 ROUTE_ACCESS_FE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 
-# Cassandra auth (DB-hardening, ADR-32). The cassandra-hardening overlay's two
-# ExternalSecrets read secret/<brand>/{cassandra-admin,cassandra-app-creds}, and
-# cassandra-values-overlay.yaml's flip order literally begins "1. Populate Vault:
-# secret/hugmesh/cassandra-admin + .../cassandra-app-creds" — but NOTHING wrote
-# either path, so both ExternalSecrets were unresolvable and the whole auth flip
-# would have stalled at step 2. Seeded here like every other dark-shipping secret
-# (tube / admin-bff-mfa / headwind): writing the KV doc only SOURCES values, it
-# enables nothing — the overlay is applied deliberately by an operator.
-# The superuser NAME stays the chart default `cassandra` (dbUser.user in
-# cassandra-values-overlay.yaml); only its password is rotated off cassandra/cassandra.
+# Cassandra auth. These were seeded believing they fed a DARK, operator-staged
+# flip; they do not. The bitnami image runs PasswordAuthenticator by DEFAULT, so
+# the cluster has always demanded credentials and no gateway could start without
+# them (docs/KIND-SSO-E2E-FINDINGS.md #5). Both documents are now consumed by the
+# LIVE payload: cassandra-admin by apps/00-cassandra.yaml (dbUser.existingSecret)
+# and the cassandra-init bootstrap Job, cassandra-app-creds by every gateway and
+# BFF. Leaving either unseeded is not a stalled flip — it is a cluster whose
+# front doors cannot boot.
+# The superuser NAME stays the chart default `cassandra` (dbUser.user); only its
+# password is rotated off cassandra/cassandra, and NO application uses it.
 CASSANDRA_ADMIN_USER="cassandra"
 CASSANDRA_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 # One password per least-privilege app role created by bootstrap-roles-configmap.yaml.
@@ -597,10 +597,10 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             be_gateway_password="${ROUTE_ACCESS_BE_GATEWAY_PASSWORD}" \
             fe_gateway_password="${ROUTE_ACCESS_FE_GATEWAY_PASSWORD}" \
             superadmin_gateway_password="${ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD}"
-        # Cassandra auth (ADR-32, cassandra-hardening overlay). Two docs, exactly
-        # the properties cassandra-externalsecrets.yaml lists — `user` is the
-        # chart's dbUser.user, `password` the rotated superuser password, and one
-        # property per least-privilege app role.
+        # Cassandra auth. Two docs, exactly the properties
+        # manifests/external-secrets/cassandra-externalsecrets.yaml lists — `user`
+        # is the chart's dbUser.user, `password` the rotated superuser password,
+        # and one property per least-privilege app role.
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/cassandra-admin" \
             user="${CASSANDRA_ADMIN_USER}" \
             password="${CASSANDRA_ADMIN_PASSWORD}"
@@ -891,10 +891,13 @@ data = {
             # value stops tracking it.
             "email": "admin@" + os.environ["CLUSTER_DOMAIN"],
         },
-        # Cassandra auth (ADR-32 dark overlay). cassandra-admin's third key
-        # `cassandra-password` is the bitnami chart's dbUser.existingSecret alias
-        # for the SAME superuser password the bootstrap Job reads as `password`
-        # (cassandra-externalsecrets.yaml aliases both to the one Vault property).
+        # Cassandra auth. cassandra-admin's third key `cassandra-password` is the
+        # bitnami chart's dbUser.existingSecret alias for the SAME superuser
+        # password the bootstrap Job reads as `password` (the ExternalSecret
+        # aliases both to the one Vault property). THIS pki copy carries all six
+        # role passwords because the bootstrap Job here creates all six roles; the
+        # backend/frontend copies below carry only their own namespace's keys,
+        # which is the least-privilege boundary the per-role GRANTs exist to draw.
         "cassandra-admin": {
             "user": os.environ["CASSANDRA_ADMIN_USER"],
             "password": os.environ["CASSANDRA_ADMIN_PASSWORD"],
@@ -1007,6 +1010,14 @@ data = {
         "route-access-admin-bff": {
             "password": os.environ["ROUTE_ACCESS_ADMIN_BFF_PASSWORD"],
         },
+        # Cassandra roles reachable from the backend ns: be-gateway (schema owner
+        # for snapdragon_gateway), admin-bff (DML writer) and federation (its own
+        # keyspace). No other key is delivered here.
+        "cassandra-app-creds": {
+            "be-gateway": os.environ["CASSANDRA_APP_BE_GATEWAY_PASSWORD"],
+            "admin-bff":  os.environ["CASSANDRA_APP_ADMIN_BFF_PASSWORD"],
+            "federation": os.environ["CASSANDRA_APP_FEDERATION_PASSWORD"],
+        },
         # hugmesh-actions two-Casdoor sync: admin client per side. SYSTEMS side
         # reuses the systems Casdoor OIDC client; GAMES side reuses threewizards-app.
         "casdoor-sync-systems": {
@@ -1052,6 +1063,10 @@ data = {
     f"{brand}-frontend": {
         "route-access-fe-gateway": {
             "password": os.environ["ROUTE_ACCESS_FE_GATEWAY_PASSWORD"],
+        },
+        # fe-gateway's OWN Cassandra role password — and ONLY that one.
+        "cassandra-app-creds": {
+            "fe-gateway": os.environ["CASSANDRA_APP_FE_GATEWAY_PASSWORD"],
         },
         "bff-internal-token": {
             "token": os.environ["BFF_INTERNAL_TOKEN"],

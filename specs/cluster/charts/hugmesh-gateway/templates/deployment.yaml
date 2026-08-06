@@ -13,6 +13,16 @@ spec:
     metadata:
       annotations:
         checksum/routes: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.cassandra.username }}
+        # The CQL permission class claimed for .Values.cassandra.username, on the
+        # live object next to the role it is claimed for. See values.yaml —
+        # manifests/cassandra-init's GRANTs are checked for set EQUALITY against
+        # this class, so an unclassified role is unauditable and must not render.
+        {{- if not (has .Values.cassandra.access (list "schema-owner" "dml" "read-only")) }}
+        {{- fail (printf "cassandra.access must be one of schema-owner|dml|read-only when cassandra.username is set (got %q) — it is the permission class manifests/cassandra-init GRANTs are checked against" .Values.cassandra.access) }}
+        {{- end }}
+        snapdragon.systems/cassandra-access: {{ .Values.cassandra.access | quote }}
+        {{- end }}
       labels:
         {{- include "hugmesh-gateway.selectorLabels" . | nindent 8 }}
     spec:
@@ -161,6 +171,29 @@ spec:
               value: {{ .Values.cassandra.keyspace | quote }}
             - name: CASSANDRA_LOCAL_DC
               value: {{ .Values.cassandra.localDc | quote }}
+            {{- if .Values.cassandra.username }}
+            # ── Cassandra credentials — see values.yaml's `cassandra.username` ──
+            # The gateway image's application.yml declares NO username/password
+            # under spring.cassandra (only contact-points / keyspace-name /
+            # local-datacenter / schema-action), so there is no ${CASSANDRA_USER}
+            # style placeholder to hit. These two env vars are the RELAXED-BINDING
+            # spelling of the real Boot properties spring.cassandra.username /
+            # spring.cassandra.password, which exist on CassandraProperties in
+            # spring-boot-cassandra 4.0.7 (the gateway's exact Boot version) and
+            # bind from the environment whether or not the yaml mentions them.
+            # NOT CASSANDRA_USER/CASSANDRA_PASSWORD: those bind to nothing here —
+            # the DataStax driver does not read them and no placeholder references
+            # them. The deleted client-credentials-patch.md prescribed exactly
+            # that pair; manifests/cassandra-hardening/cassandra-values-overlay.yaml
+            # records the correction for all three consumers.
+            - name: SPRING_CASSANDRA_USERNAME
+              value: {{ .Values.cassandra.username | quote }}
+            - name: SPRING_CASSANDRA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "cassandra.passwordSecret is required whenever cassandra.username is set (a username without a password fails auth at bean creation)" .Values.cassandra.passwordSecret | quote }}
+                  key: {{ required "cassandra.passwordSecretKey is required whenever cassandra.username is set (a username without a password fails auth at bean creation)" .Values.cassandra.passwordSecretKey | quote }}
+            {{- end }}
             # ── MFA enforcement (gateway) — see values.yaml's `mfa:` block for the
             # full rationale and the operational caveat. Rendered UNCONDITIONALLY so
             # the deployed contract is explicit in the manifest (and drift is

@@ -83,3 +83,11 @@ resources:
   # BffSessionAuthFilter). Vault paths: secret/hugmesh/user-bff-oidc,
   # secret/hugmesh/user-bff-custody-key, secret/hugmesh/bff-internal-token.
   - sso-externalsecrets.yaml
+  # Cassandra superuser (cassandra-admin, ns hugmesh-pki — also consumed by the
+  # chart's dbUser.existingSecret) + the per-app least-privilege role passwords
+  # (cassandra-app-creds, materialized separately into hugmesh-pki /
+  # hugmesh-backend / hugmesh-frontend with only that namespace's keys). Vault
+  # paths: secret/hugmesh/cassandra-admin, secret/hugmesh/cassandra-app-creds.
+  # NOT optional: the cluster Cassandra runs PasswordAuthenticator by image
+  # default, so without these nothing can open a CqlSession at all.
+  - cassandra-externalsecrets.yaml

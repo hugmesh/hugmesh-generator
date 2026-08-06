@@ -1,0 +1,187 @@
+# Cassandra cluster bootstrap — KEYSPACES, then per-app least-privilege ROLES,
+# then GRANTs. One script, in that order, because the order is a hard dependency:
+# a GRANT names a keyspace and fails if the keyspace does not exist yet.
+#
+# WHY THIS EXISTS AT ALL (docs/KIND-SSO-E2E-FINDINGS.md #5 + #6). The cluster
+# payload had no equivalent of compose's `cassandra-init` service, and
+# `grep -r 'CREATE KEYSPACE' specs/cluster` returned nothing. Spring Data's
+# schema-action: CREATE_IF_NOT_EXISTS creates TABLES, never keyspaces, so every
+# gateway died with `InvalidKeyspaceException: Invalid keyspace
+# snapdragon_gateway`. Separately the bitnami image runs PasswordAuthenticator by
+# default, so nothing could connect at all without credentials. Both halves are
+# fixed here; the per-app roles this creates are the ones the gateway chart and
+# the two BFFs now authenticate as.
+#
+# Keyspaces (the two Cassandra stores in this platform — the names are FROZEN
+# protocol identifiers, deliberately NOT rebranded):
+#   snapdragon_gateway     — gateway revocation list + gateway_route_access mirror
+#                            + url_registry + resource_access + hs_tokens.
+#   snapdragon_federation  — federation-api manifest write-through cache.
+#
+# ── THE GRANT MATRIX WAS WRONG BEFORE THIS FILE, AND IT MATTERS ──────────────
+# manifests/cassandra-hardening (dark) declared the four gateways SELECT-only
+# readers and admin-bff the writer. That is the wrong way round for the DDL, and
+# applying it would have replaced the auth failure with an authorization one:
+#   * Every gateway runs its OWN versioned migration runner on boot —
+#     hugmesh-gateway CassandraSchemaMigrations replays CREATE TABLE
+#     (schema_migrations, revocations, url_registry, resource_access,
+#     gateway_route_access, hs_tokens), ALTER TABLE ... ADD for the later
+#     change-ids, and INSERTs its applied-change rows. It also INSERTs/DELETEs
+#     revocations, INSERTs the url_registry seed route (LWT) and resource_access
+#     grants. A SELECT-only gateway role fails at startup on the first
+#     CREATE TABLE, not at some later write.
+#   * admin-bff-api by contrast issues NO DDL: CassandraRouteMirror,
+#     UrlRegistryRepository and HsTokenRegistry are INSERT/DELETE/SELECT only.
+#     It depends on the gateway having created the tables.
+#   * federation-api's CassandraManifestCache is likewise DML-only — and NOTHING
+#     creates its federation_manifest table, so the cache silently no-ops even
+#     when enabled. This Job creates it (the shape is the one documented on
+#     CassandraManifestCache), so MANIFEST_CACHE_ENABLED=true is a real flip.
+#
+# Effective matrix (CassandraAuthorizer is DENY-by-default, so a role with no
+# GRANT authenticates but reads/writes NOTHING — this fails CLOSED):
+#   pki_gw_cass / be_gw_cass / fe_gw_cass / sa_gw_cass
+#                    -> SELECT+MODIFY+CREATE+ALTER on snapdragon_gateway
+#                       (schema owner: the migration runner is in the gateway)
+#   admin_bff_cass   -> SELECT+MODIFY            on snapdragon_gateway  (DML only)
+#   federation_cass  -> SELECT+MODIFY            on snapdragon_federation (DML only)
+# No role gets DROP or AUTHORIZE, none can reach the other keyspace, none can
+# touch system_auth, and none is a SUPERUSER. The `cassandra` superuser is used
+# ONLY by this Job and is never handed to an application.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-bootstrap
+  namespace: hugmesh-pki
+  labels:
+    app.kubernetes.io/name: cassandra
+    app.kubernetes.io/part-of: hugmesh.systems
+    snapdragon.systems/tier: db-bootstrap
+data:
+  bootstrap.sh: |
+    #!/usr/bin/env bash
+    # Idempotent. Safe to re-run on every ArgoCD sync (it is a PostSync hook).
+    set -euo pipefail
+
+    : "${CASSANDRA_HOST:?CASSANDRA_HOST required (e.g. cassandra.hugmesh-pki.svc.cluster.local)}"
+    : "${CASSANDRA_PORT:=9042}"
+    : "${CASSANDRA_ADMIN_USER:?bootstrap superuser required}"
+    : "${CASSANDRA_ADMIN_PASSWORD:?bootstrap superuser password required}"
+    # Replication for the two app keyspaces. SimpleStrategy/1 matches the single
+    # Cassandra node apps/00-cassandra.yaml deploys (replicaCount: 1) and the
+    # compose stack's cassandra-init verbatim. THE FLEET DIFFERENCE IS REAL: on a
+    # multi-node cluster this MUST become NetworkTopologyStrategy with RF>=3, and
+    # system_auth with it, or losing a node takes AUTHENTICATION down (see
+    # manifests/cassandra-hardening/cassandra-auth-config.yaml). Changing this
+    # value does NOT re-replicate an existing keyspace — CREATE KEYSPACE IF NOT
+    # EXISTS is a no-op once it exists — so scaling out is a deliberate
+    # ALTER KEYSPACE + `nodetool repair`, not a redeploy. This Job does not
+    # pretend otherwise.
+    : "${KEYSPACE_REPLICATION:={'class':'SimpleStrategy','replication_factor':1\}}"
+
+    require() { # require VAR human-name
+      local v="${!1:-}"
+      if [ -z "$v" ]; then
+        echo "FATAL: $2 password ($1) empty — refusing to create a passwordless or shared role" >&2
+        exit 1
+      fi
+    }
+    require ADMIN_BFF_CASS_PASSWORD   "admin-bff"
+    require PKI_GW_CASS_PASSWORD      "pki-gateway"
+    require BE_GW_CASS_PASSWORD       "be-gateway"
+    require FE_GW_CASS_PASSWORD       "fe-gateway"
+    require SA_GW_CASS_PASSWORD       "superadmin-gateway"
+    require FEDERATION_CASS_PASSWORD  "federation-api"
+
+    # TLS to the node once client_encryption is on (still dark — see
+    # manifests/cassandra-hardening). The flags are a no-op over a plaintext
+    # listener, so this script works in both stages.
+    SSL_ARGS=()
+    if [ "${CASSANDRA_TLS_ENABLED:-false}" = "true" ]; then
+      export SSL_CERTFILE="${SSL_CERTFILE:-/etc/cassandra-tls/ca.crt}"
+      SSL_ARGS=(--ssl)
+    fi
+
+    cql() {
+      cqlsh "$CASSANDRA_HOST" "$CASSANDRA_PORT" \
+        -u "$CASSANDRA_ADMIN_USER" -p "$CASSANDRA_ADMIN_PASSWORD" \
+        "${SSL_ARGS[@]}" -e "$1"
+    }
+
+    # ── wait for the node, with a BOUNDED, LOUD timeout ───────────────────────
+    # This Job is a PostSync hook on its own Application, so it can start while
+    # the Cassandra StatefulSet is still forming. Waiting is correct; waiting
+    # FOREVER is the failure mode this repo keeps getting bitten by (a hung init
+    # reads as "still working" for hours — KIND-SSO-E2E-FINDINGS #1), so the wait
+    # is capped and a timeout exits non-zero carrying the last cqlsh error.
+    deadline=$(( SECONDS + ${CASSANDRA_WAIT_SECONDS:-600} ))
+    until err="$(cql 'SELECT release_version FROM system.local;' 2>&1)"; do
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        echo "FATAL: ${CASSANDRA_HOST}:${CASSANDRA_PORT} not answering CQL after ${CASSANDRA_WAIT_SECONDS:-600}s" >&2
+        echo "last error: ${err}" >&2
+        exit 1
+      fi
+      echo "waiting for cassandra at ${CASSANDRA_HOST}:${CASSANDRA_PORT} ..."
+      sleep 5
+    done
+    echo "==> cassandra reachable and authenticated as ${CASSANDRA_ADMIN_USER}"
+
+    # ── 1. KEYSPACES (must precede every GRANT below) ─────────────────────────
+    echo "==> creating keyspaces (replication ${KEYSPACE_REPLICATION})"
+    cql "CREATE KEYSPACE IF NOT EXISTS snapdragon_gateway WITH replication = ${KEYSPACE_REPLICATION};"
+    cql "CREATE KEYSPACE IF NOT EXISTS snapdragon_federation WITH replication = ${KEYSPACE_REPLICATION};"
+
+    # federation-api has no schema runner of its own and no Liquibase for
+    # Cassandra, so this one table has never been created anywhere. Its column
+    # shape is the one CassandraManifestCache documents and binds.
+    # snapdragon_gateway's tables are deliberately NOT created here: the gateway
+    # owns them through its versioned change-id runner, and creating them at
+    # their final shape would leave that runner's later ALTER TABLE ... ADD
+    # change-ids failing on an already-present column.
+    cql "CREATE TABLE IF NOT EXISTS snapdragon_federation.federation_manifest (
+           id text PRIMARY KEY,
+           body text,
+           updated_at timestamp
+         );"
+
+    # ── 2. ROLES ──────────────────────────────────────────────────────────────
+    echo "==> creating per-app least-privilege roles"
+    # CREATE ROLE IF NOT EXISTS is a NO-OP on an existing role — it does NOT
+    # update the password. Rotating a password in Vault would therefore silently
+    # never reach Cassandra and the app would start failing auth with no clue
+    # why. The ALTER converges an existing role onto the current Secret value,
+    # which is what makes rotation work at all.
+    create_role() { # create_role <role> <password-var>
+      local role="$1" pw="${!2}"
+      local esc="${pw//\'/\'\'}"
+      cql "CREATE ROLE IF NOT EXISTS ${role} WITH LOGIN = true AND SUPERUSER = false AND PASSWORD = '${esc}';"
+      cql "ALTER ROLE ${role} WITH LOGIN = true AND SUPERUSER = false AND PASSWORD = '${esc}';"
+    }
+    create_role admin_bff_cass  ADMIN_BFF_CASS_PASSWORD
+    create_role pki_gw_cass     PKI_GW_CASS_PASSWORD
+    create_role be_gw_cass      BE_GW_CASS_PASSWORD
+    create_role fe_gw_cass      FE_GW_CASS_PASSWORD
+    create_role sa_gw_cass      SA_GW_CASS_PASSWORD
+    create_role federation_cass FEDERATION_CASS_PASSWORD
+
+    # ── 3. GRANTS (deny-by-default authorizer) ────────────────────────────────
+    echo "==> granting least-privilege keyspace permissions"
+    # The four gateways own the snapdragon_gateway SCHEMA (CassandraSchemaMigrations
+    # runs in the gateway image), so they need CREATE (CREATE TABLE in keyspace)
+    # and ALTER (ALTER TABLE in keyspace) on top of the read/write pair. Not DROP,
+    # not AUTHORIZE.
+    for r in pki_gw_cass be_gw_cass fe_gw_cass sa_gw_cass; do
+      cql "GRANT SELECT ON KEYSPACE snapdragon_gateway TO ${r};"
+      cql "GRANT MODIFY ON KEYSPACE snapdragon_gateway TO ${r};"
+      cql "GRANT CREATE ON KEYSPACE snapdragon_gateway TO ${r};"
+      cql "GRANT ALTER  ON KEYSPACE snapdragon_gateway TO ${r};"
+    done
+    # admin-bff writes the route mirror / url_registry / hs_tokens rows but issues
+    # no DDL — DML only.
+    cql "GRANT SELECT ON KEYSPACE snapdragon_gateway TO admin_bff_cass;"
+    cql "GRANT MODIFY ON KEYSPACE snapdragon_gateway TO admin_bff_cass;"
+    # federation-api owns its manifest cache rows; its table is created above.
+    cql "GRANT SELECT ON KEYSPACE snapdragon_federation TO federation_cass;"
+    cql "GRANT MODIFY ON KEYSPACE snapdragon_federation TO federation_cass;"
+
+    echo "==> cassandra bootstrap complete (2 keyspaces + 6 roles + grants; superuser untouched-by-apps)"

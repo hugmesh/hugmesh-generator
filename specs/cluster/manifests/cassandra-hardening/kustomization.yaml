@@ -2,32 +2,42 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: hugmesh-pki
 
-# Cassandra DB-hardening overlay (auth + TLS) — SHIPS DARK (ADR-32).
+# Cassandra TLS overlay — SHIPS DARK (ADR-32).
 # ============================================================================
-# This overlay is INERT: it is NOT referenced by the auto-synced ArgoCD tree
-# (apps/00-cassandra.yaml uses the bitnami chart values directly; nothing under
-# apps/ points here). It renders the real k8s objects so they can be validated
-# with `kustomize build` + dry-run, and is applied DELIBERATELY by the operator
-# at the auth/TLS flip (see ../../../docs/CLUSTER-HARDENING-PLAN.md §H and
-# cassandra-values-overlay.yaml for the enable order). The matching MANUAL-sync
-# ArgoCD Application (apps/00a-cassandra-hardening.yaml) points at the EMPTY
-# sibling overlay (../cassandra-hardening-empty), so even that app renders nothing
-# until an operator switches its source — belt-and-braces (mirrors held PR #132).
+# ⚠ THIS OVERLAY USED TO CARRY THE AUTH STAGE TOO, ON A FALSE PREMISE.
+# Its header said Cassandra "currently runs with no authenticator (effectively
+# AllowAllAuthenticator)" and staged auth as a future breaking cutover. That was
+# never true: the bitnami image defaults CASSANDRA_AUTHENTICATOR to
+# PasswordAuthenticator and CASSANDRA_AUTHORIZER to CassandraAuthorizer, so the
+# cluster demanded credentials from day one and no gateway could ever start
+# (docs/KIND-SSO-E2E-FINDINGS.md #5). Holding the credential wiring back as
+# "hardening" was holding back the only configuration under which the platform
+# works at all.
+#
+# The auth stage is consequently LIVE, and lives where live things live:
+#   keyspaces + roles + grants   -> manifests/cassandra-init (apps/00b-cassandra-init.yaml)
+#   the credential Secrets       -> manifests/external-secrets/cassandra-externalsecrets.yaml
+#   the superuser + auth posture -> apps/00-cassandra.yaml (dbUser.existingSecret)
+#   the consumer env             -> the gateway chart + admin-bff/federation manifests
+# The role/grant matrix moved with it AND was corrected on the way: the gateways
+# are the snapdragon_gateway SCHEMA OWNERS (their image runs the CQL migration
+# runner), not read-only consumers — see manifests/cassandra-init/bootstrap-
+# configmap.yaml. Applying the old SELECT-only matrix would have swapped an
+# authentication failure for an authorization one.
+#
+# WHAT REMAINS HERE IS TLS ONLY, and it genuinely has not shipped: it needs a
+# Vault-PKI `cassandra` issuing role, a JKS keystore/truststore pair, and a
+# coordinated flip of every client. This overlay stays INERT — nothing under
+# apps/ points at it (apps/00a-cassandra-hardening.yaml deliberately sources the
+# EMPTY sibling overlay ../cassandra-hardening-empty), so it renders only for
+# `kustomize build` validation and is applied deliberately at the TLS flip.
 #
 # Reference-only files NOT included here (documentation / flip-time patches):
-#   cassandra-values-overlay.yaml      — the helm.values diff for apps/00-cassandra
-#   cassandra-auth-config.yaml comment — extraEnvVars vs existingConfiguration
-#   cassandra-pki-role.patch.txt       — the vault-pki-init for-app loop edit
-#   client-credentials-patch.md        — consumer env additions
-# (cassandra-auth-config.yaml ITSELF is a real ConfigMap and IS included — it is
-#  the authoritative authenticator/authorizer record.)
+#   cassandra-values-overlay.yaml  — the helm.values diff for apps/00-cassandra
+#   cassandra-pki-role.patch.txt   — the vault-pki-init for-app loop edit
+# (cassandra-auth-config.yaml IS a real ConfigMap and IS included.)
 
 resources:
-  # Stage 1 — authentication.
-  - cassandra-externalsecrets.yaml        # cassandra-admin + cassandra-app-creds (ESO)
-  - cassandra-auth-config.yaml            # explicit authenticator/authorizer record
-  - bootstrap-roles-configmap.yaml        # per-app least-privilege CQL bootstrap
-  - bootstrap-roles-job.yaml              # runs the bootstrap at flip time
-  # Stage 2 — TLS.
+  - cassandra-auth-config.yaml            # authenticator/authorizer + system_auth RF record
   - cassandra-tls-externalsecret.yaml     # cassandra-mtls (Vault-PKI server cert)
   - cassandra-tls-keystore-builder.yaml   # PEM -> JKS stores + passwords + RBAC

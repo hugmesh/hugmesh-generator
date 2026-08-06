@@ -235,7 +235,7 @@ spec:
         - { protocol: TCP, port: 5432 }
 ---
 # ── cassandra (hugmesh-pki, port 9042) ──────────────────────────────────────
-# Consumers: admin-bff-api (CASSANDRA_CONTACT_POINTS) + federation-api
+# Consumers: admin-bff-api (ROUTE_MIRROR_CASSANDRA) + federation-api
 # (MANIFEST_CACHE_CASSANDRA), both in hugmesh-backend, plus the gateways. Pod
 # matched by the standard app.kubernetes.io/name: cassandra label. Same default-
 # deny-except shape as the DB policies above; cross-namespace consumers pinned by
@@ -252,7 +252,13 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        # admin-bff-api (hugmesh-backend) — CASSANDRA_CONTACT_POINTS.
+        # cassandra-init bootstrap Job (hugmesh-pki, self) — creates the keyspaces
+        # and the per-app roles every consumer below authenticates with. THIS
+        # POLICY IS DEFAULT-DENY-EXCEPT, so omitting the bootstrap client makes
+        # the bootstrap silently unable to reach the very database it provisions.
+        - podSelector:
+            matchLabels: { app: cassandra-bootstrap }
+        # admin-bff-api (hugmesh-backend) — ROUTE_MIRROR_CASSANDRA.
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
           podSelector:
             matchLabels: { app: hugmesh-admin-bff-api }
