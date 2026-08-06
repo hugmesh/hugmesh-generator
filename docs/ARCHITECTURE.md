@@ -9,9 +9,9 @@ those gateways (configured later, out of scope here).
 
 | Image | Build | Arch | Role in the cluster |
 |---|---|---|---|
-| `pki` | `build-rpi5-stage4.sh --role pki` | aarch64 (RPi 5) | **Kubernetes control plane** + identity: headscale (mesh control), Casdoor, Cassandra, `snapdragon-pki-gateway` |
-| `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `snapdragon-be-gateway` |
-| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `hugmesh.systems` Angular host federating `snapdragon-matrix-ui` + `snapdragon-mastodon-ui` + `snapdragon-wiki-ui` + login/admin/mod/user/forum remotes, `snapdragon-fe-gateway` |
+| `pki` | `build-rpi5-stage4.sh --role pki` | aarch64 (RPi 5) | **Kubernetes control plane** + identity: headscale (mesh control), Casdoor, Cassandra, `hugmesh-pki-gateway` |
+| `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `hugmesh-be-gateway` |
+| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `hugmesh.systems` Angular host federating `hugmesh-matrix-ui` + `hugmesh-mastodon-ui` + `hugmesh-wiki-ui` + login/admin/mod/user/forum remotes, `hugmesh-fe-gateway` |
 | `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `hugmesh.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
 | `edge_ai` | `build-x86-host-stage4.sh --role edge_ai` (x86_64) **/** `build-jetson-stage4.sh --role edge_ai` (Jetson Orin Nano, arm64 crossdev — the x86 builder is amd64-only and cannot produce a Jetson image) | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
 
@@ -25,15 +25,15 @@ the right hardware.
 ```mermaid
 flowchart TD
     CF["Cloudflare edge<br/>hugmesh.systems / hugmesh.games"]
-    CF --> FEGW["snapdragon-fe-gateway<br/>(hugmesh.systems)"]
-    CF --> BEGW["snapdragon-be-gateway<br/>(api / matrix / mastodon .*)"]
+    CF --> FEGW["hugmesh-fe-gateway<br/>(hugmesh.systems)"]
+    CF --> BEGW["hugmesh-be-gateway<br/>(api / matrix / mastodon .*)"]
 
     subgraph FE["hugmesh-frontend (frontend Pis)"]
         HOST["hugmesh.systems Angular host shell"]
-        HOST --> MUI["snapdragon-matrix-ui"]
-        HOST --> MASTUI["snapdragon-mastodon-ui"]
-        HOST --> LOGINUI["snapdragon-login-ui"]
-        HOST --> ADMINUI["snapdragon-admin-ui / mod-ui / user-ui / forum-ui / wiki-ui"]
+        HOST --> MUI["hugmesh-matrix-ui"]
+        HOST --> MASTUI["hugmesh-mastodon-ui"]
+        HOST --> LOGINUI["hugmesh-login-ui"]
+        HOST --> ADMINUI["hugmesh-admin-ui / mod-ui / user-ui / forum-ui / wiki-ui"]
     end
 
     subgraph BE["hugmesh-backend (backend Pis)"]
@@ -41,7 +41,7 @@ flowchart TD
         AKK["Akkoma (Mastodon-API fediverse)"]
         APIS["Spring APIs + DBs"]
         FEDAPI["federation-api"]
-        BFFS["admin / mod / user / forum / wiki BFFs"]
+        BFFS["admin / mod / user / forum / wiki / mesh BFFs"]
         PHPBB["phpBB (optional)"]
     end
 
@@ -69,26 +69,38 @@ flowchart TD
     BEGW --> BE
     BE -. "games ns + argocd ns scheduled here" .-> X86
     BEGW -. "ai.hugmesh.systems (tailnet-only, not on the public CF fan-out)" .-> INFER
-    BEGW -. "headscale-forward ONLY (scale.hugmesh.systems) — pki is NOT internet-facing" .-> PKIGW["snapdragon-pki-gateway<br/>(internal ingress on the pki node only)"]
+    BEGW -. "headscale-forward ONLY (scale.hugmesh.systems) — pki is NOT internet-facing" .-> PKIGW["hugmesh-pki-gateway<br/>(internal ingress on the pki node only)"]
     PKIGW --> PKI
 
     subgraph SSO["SSO / native login — shipped, lit by default"]
-        AUTHCORE["auth-core: account/session/MFA + custody seams (2.3.0)"]
+        AUTHCORE["auth-core: account/session/MFA + custody seams (2.4.2)"]
         GWEXCH["gateway bff_-exchange filter"]
         LOGINOIDC["login-ui native login form -> POST /bff/login"]
         UBRELOC["user-bff native login + server-side Casdoor exchange"]
         CUSTKEY["SSO custody-key + internal-token bootstrap"]
     end
 
-    subgraph ROADMAP["Roadmap / in-flight — NOT all shipped"]
-        WC["Workload Console (admin-bff module, ships dark)"]
-        MFA["MFA privileged-floor enforcement (enroll/challenge shipped; step-up gate ships dark)"]
-        DESKGOV["Desktop app governance (queued)"]
-        NOTIFY["Notifications: external channels (in-flight)"]
+    subgraph DARK["Shipped, SHIPS DARK — on main, inert behind a default-off flag"]
+        WC["Workload Console: admin-bff module + hidden-tier admin-ui remote + 2-SA RBAC"]
+        MFAFLOOR["MFA privileged floor: mfa_required seeds + gateway env + CI gates"]
+        DESKGOV["Desktop app governance: polkit sudo mapper + curated Discover"]
+        BACKUPS["Encrypted versioned backups: Velero + Kopia (apps 55/56)"]
+        TURN["coturn TURN/STUN relay (public reachability = opt-in overlay)"]
+        EGRESS["Egress-VPN drop-in + per-node attached storage"]
     end
 
+    subgraph ROADMAP["Roadmap — genuinely NOT done"]
+        KINDE2E["kind SSO e2e: harness shipped, NOT green (16 cluster blockers)"]
+        MFAFLIP["MFA: the live-cluster operator flip (MFA-ROLLOUT.md)"]
+        ENFORCE["SELinux enforcing (nodes boot permissive)"]
+        SFU["Group-call SFU — does not exist"]
+        NOTIFY["Notifications: external channels"]
+    end
+
+    classDef dark stroke-dasharray:2,stroke:#4a7,color:#3a6;
     classDef planned stroke-dasharray:4,stroke:#888,color:#555;
-    class ROADMAP,WC,MFA,DESKGOV,NOTIFY planned;
+    class DARK,WC,MFAFLOOR,DESKGOV,BACKUPS,TURN,EGRESS dark;
+    class ROADMAP,KINDE2E,MFAFLIP,ENFORCE,SFU,NOTIFY planned;
 ```
 
 > The **superadmin Service Catalog** surface (tailnet-only `hugmesh-superadmin-gateway`
@@ -99,10 +111,10 @@ flowchart TD
 
 ## The gateway pattern
 
-`snapdragon-gateway` (Spring Cloud Gateway) is deployed once per namespace from
+`hugmesh-gateway` (Spring Cloud Gateway) is deployed once per namespace from
 [one Helm chart](../specs/cluster/charts/hugmesh-gateway), differentiated by
-`SPRING_APPLICATION_NAME`. Modelled on the org's `snapdragon-gateway` /
-`snapdragon-id-gateway`:
+`SPRING_APPLICATION_NAME`. Modelled on the org's `hugmesh-gateway` /
+`hugmesh-pki-gateway`:
 
 - **OAuth2 resource server** against Casdoor's JWKS — the same JWT validates at
   every gateway and API.
@@ -129,8 +141,8 @@ the cluster** (there is no public ingress to Casdoor; the browser never sees it)
   fediverse, OIDC) both SSO against Casdoor, so the `hugmesh.systems` front
   page can show **Matrix / Mastodon links to logged-in users** and hand each
   module a service access token — the
-  [`snapdragon-matrix-ui`](https://github.com/Snapdragon-Systems/snapdragon-matrix-ui)
-  and [`snapdragon-mastodon-ui`](https://github.com/Snapdragon-Systems/snapdragon-mastodon-ui)
+  [`hugmesh-matrix-ui`](https://github.com/Snapdragon-Systems/hugmesh-matrix-ui)
+  and [`hugmesh-mastodon-ui`](https://github.com/Snapdragon-Systems/hugmesh-mastodon-ui)
   Angular micro-frontends never render their own login forms. The public
   hostnames stay `matrix.<domain>` / `mastodon.<domain>` for API compatibility,
   but the backing servers are tuwunel / Akkoma (never Synapse / Mastodon).
@@ -164,20 +176,20 @@ stays dark to the internet).
   encrypt-at-rest for the held JWT), `SessionCookieService` (the opaque `bff_`
   cookie), `InternalTokenWebFilter` (mTLS + `X-Internal-Token` guard for
   `/bff/internal/**`). Consumed by **admin-bff + user-bff only** — never the gateway.
-- **`snapdragon-admin-bff-api`** — owns account/session **data** (admin-bff-db) +
+- **`hugmesh-admin-bff-api`** — owns account/session **data** (admin-bff-db) +
   the in-cluster `/bff/internal` account/session API + the custody/stamp + the
   session/exchange endpoints.
-- **`snapdragon-user-bff-api`** — owns the native login **endpoint** `POST /bff/login`
+- **`hugmesh-user-bff-api`** — owns the native login **endpoint** `POST /bff/login`
   (permitAll at the BFF): server-side PKCE + state, the internal Casdoor `/api/login`
   POST, the MFA challenge handshake, and the `OidcExchangeClient` code exchange; plus
   the rest of the login surface (`/bff/register`, `/bff/session`, …). Reads/writes
   account + session data over admin-bff `/bff/internal` (never touches admin-bff-db —
   the two BFF databases are mutually denied at the NetworkPolicy layer).
-- **`snapdragon-gateway`** — the `BffJwtExchangeWebFilter` that swaps `bff_` →
+- **`hugmesh-gateway`** — the `BffJwtExchangeWebFilter` that swaps `bff_` →
   custody JWT (pre-security, fail-closed, dark) + the permitAll `/bff/login`
   route-access seed. **No front-door route exposes Casdoor** (`/login/oauth/authorize`
   / the Casdoor UI are never proxied to the browser).
-- **`snapdragon-login-ui`** — the first-party **native username/password form** that
+- **`hugmesh-login-ui`** — the first-party **native username/password form** that
   POSTs to `/bff/login` and renders the MFA step-up when challenged; it never
   redirects the browser to Casdoor and holds no Casdoor URL.
 - **`hugmesh-generator`** (this repo) — the `app-user-bff` Casdoor confidential
@@ -189,7 +201,7 @@ sequenceDiagram
     autonumber
     participant B as Browser (login-ui native form)
     participant C as Casdoor (IdP, internal-only)
-    participant GW as snapdragon-gateway
+    participant GW as hugmesh-gateway
     participant UB as user-bff
     participant AB as admin-bff (+ admin-bff-db)
     Note over B: native form - user types username/password (+ MFA passcode if challenged)
@@ -245,12 +257,16 @@ ciphers inert until those Secrets land.
 
 **✅ shipped (merged to `main`):**
 
-- **auth-core extracted + published (now `2.3.0`)** — shared account/session/MFA/Casdoor
-  stack + the custody seams (`OidcExchangeClient`, `BffCustodyCipher`,
-  `SessionCookieService`, `InternalTokenWebFilter`). The `2.1.0` BFF-JWT-custody
-  columns, the `2.2.0` per-account session-listing seam and the `2.3.0`
-  `gen_random_uuid()` mint change have all since shipped; admin-bff + user-bff
-  both consume `2.3.0`.
+- **auth-core extracted + published (current pin `2.4.2`)** — shared
+  account/session/MFA/Casdoor stack + the custody seams (`OidcExchangeClient`,
+  `BffCustodyCipher`, `SessionCookieService`, `InternalTokenWebFilter`). The
+  `2.1.0` BFF-JWT-custody columns, the `2.2.0` per-account session-listing seam
+  and the `2.3.0` `gen_random_uuid()` mint change all shipped in that order; the
+  line has since moved to **`2.4.2`** (the authoritative pin is
+  `tests/stack/m2-bootstrap.sh`), which admin-bff + user-bff both consume.
+  ⚠️ `2.4.x` drifted twice (2.4.0 → 2.4.1 → 2.4.2) because a released coordinate
+  was re-cut — the pin-drift guard exists for exactly that and must run after
+  every auth-core release.
 - **admin-bff adopted auth-core** (PR #111) — behavior-preserving, 1517 tests green.
 - **admin-bff `/bff/internal` account/session API** (PR #113) —
   ensure / get / complete / allowlist / sessions / namespaces, guarded by
@@ -273,7 +289,7 @@ ciphers inert until those Secrets land.
 > The `auth-core` `2.1.0` BFF-JWT-custody columns
 > (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
 > `custody_updated_at`) + `stampCustody` / `clearCustody` / `sessionRow` that this
-> snapshot tracked as in-flight have since **shipped** (current published `2.3.0`).
+> snapshot tracked as in-flight have since **shipped** (current pin `2.4.2`).
 
 **🚧 in-flight:** none currently open — login-ui PR-4 (native form, above) has
 since shipped.
@@ -291,6 +307,11 @@ since shipped.
 - a cross-repo **NetworkPolicy egress peer** user-bff → admin-bff internal `:8080`
   (manifests/generator).
 - **SSO end-to-end live e2e** — kind + Playwright, proving the browser holds only `bff_`.
+  **Update (2026-08-05):** the harness now exists (`KIND_PROFILE=sso`, `make
+  kind-images|kind-up|kind-e2e|kind-down`) and reached a real Casdoor login, but
+  the run is **not green** — it fails on 16 enumerated fresh-cluster payload
+  blockers, of which 5–16 are still unfixed. See
+  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
 
 ## GitOps
 
@@ -404,60 +425,177 @@ domain-scoped, enforced at the gateway) governs every surface.
   nuclei + k6) as a GitLab CI-pipeline stage, not a deployed CronJob. See
   [`PENTEST-SCHEDULES.md`](PENTEST-SCHEDULES.md).
 
+### Shipped, ships dark (✅ on `main`, inert behind a default-off flag)
+
+A default-off flag is a **deployment posture**, not an unfinished feature. These
+are complete on `main`; each entry names what lights it and what caveat survives.
+
+- **✅ Workload Console** — podman/OpenShift-like pod-management + live-log +
+  exec + port-forward. The **entire** console ships: the
+  `/bff/{admin,superadmin}/workloads/**` module in the always-present admin-bff,
+  the **hidden-tier federated admin-ui remote** the host mounts only when the
+  grant guard passes, and this repo's `workloadConsole` slug (two-SA
+  least-privilege RBAC in `apps/14-workload-console-rbac.yaml`, the superadmin
+  cluster-read SA/ClusterRole, the deploy-provenance Kyverno policy, the admin-bff
+  overlay `manifests/admin-bff-api/workload-console-patch.yaml`, and the two
+  route-access rows). **Three independent OFFs**: the generator slug (default-off;
+  deselected, the admin-bff renders byte-identical), the k8s seam (no SA token →
+  the fail-closed `NoopWorkloadClient`, 503 everywhere), and the runtime
+  `workload_console_config` master flag + a per-admin TTL'd grant. Superadmin gets
+  cross-cluster manage+exec; admins stay default-blind until superadmin-granted
+  read-only on their own domain. See [`OPTIONAL-SERVICES.md`](OPTIONAL-SERVICES.md) §7.2.
+- **✅ Casdoor MFA + the gateway privileged floor** — WebAuthn + TOTP + recovery
+  codes enroll/challenge in admin-bff via `auth-core`, `mfa_satisfied` stamped
+  into the opaque `bff_` session, and the floor itself: the `mfa_required` column
+  plus the `UPDATE` seeding every allow row under `/bff/admin/**` +
+  `/bff/superadmin/**` (`manifests/route-access/initdb/20-schema.sql`), the shared
+  gateway chart's `mfa:` block rendering `APP_MFA_ENABLED` /
+  `APP_MFA_FRESHNESS_WINDOW` / `APP_MFA_ENFORCE_PRIVILEGED_FLOOR`, both CI gates
+  (`lint:mfa-required-rules`, `lint:gateway-mfa-env` with pinned fail-closed helm)
+  and compose-stack e2e coverage. Cluster default is `mfa.enabled: false` /
+  `enforcePrivilegedFloor: false`, so the seeded rows are inert. What remains is
+  the **live operator flip** — see the Roadmap below,
+  [`MFA-ROLLOUT.md`](MFA-ROLLOUT.md) and [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md).
+- **✅ Desktop app governance** — per-license SSO-enforced sudo (a root
+  claim→group `desktop-sudo-mapper` + polkit rule + 60 s cron, **not** SSSD),
+  admin-curated Plasma Discover store, user install-requests and admin
+  remote-install over the device-SSH-license transport; client side in
+  `specs/etc/hugmesh/desktop-governance/`, server side a controller set in
+  `hugmesh-admin-bff-api`. Dark behind `app.desktop.registry.enabled=false` /
+  `app.desktop.remote-install.enabled=false`. ⚠️ The SSO greeter/PAM **token
+  producer** is still deferred, so the deposit path has no producer even once the
+  flags flip. See [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
+- **✅ Encrypted versioned backups** — Velero server + node-agent (Kopia) as
+  `apps/55-velero.yaml` and the BSL + ESO credentials + least-privilege RBAC +
+  status-sweep CronJob as `apps/56-velero-config.yaml`; per-domain + superadmin,
+  step-up gated in the admin-bff `cloudbackup` package. Two OFFs: both
+  Applications are manual-sync, and the effector stays `Noop` until
+  `app.backups.effector.enabled=true`. See [`CLOUD-BACKUPS.md`](CLOUD-BACKUPS.md).
+- **✅ A/V relay via coturn (TURN/STUN)** — DEFAULT-OFF optional service in
+  RFC-5766 REST credential mode sharing one ESO/Vault secret with tuwunel. A
+  default build deploys no coturn and clients keep `iceServers: []`. ⚠️ **Public
+  reachability is a separate, operator-deferred opt-in overlay**
+  (`manifests/coturn-public`: hostNetwork relay, public-IP/URI ConfigMap, an
+  `/etc/hugmesh/coturn-public` firewall marker, an unproxied A/AAAA record, a
+  public cert for non-fleet clients). See [`COTURN.md`](COTURN.md).
+- **✅ Egress-VPN drop-in and ✅ per-node attached storage** — admin-supplied
+  WireGuard/OpenVPN `.conf` with split-tunnel keeping the tailnet direct
+  (`specs/usr/sbin/hugmesh-egress-vpn`, slug `egress-vpn`, delivery app `13e`),
+  and node-pinned local PV / local-path (FDE) with capacity-aware scheduling and
+  graceful degrade (`apps/13b-node-storage.yaml` + the node-storage reconcile
+  agent, now baked and enabled by every builder). See
+  [`EGRESS-VPN.md`](EGRESS-VPN.md), [`NODE-STORAGE.md`](NODE-STORAGE.md).
+- **✅ Binhost auto-update** — poller cron baked as plumbing on every target;
+  absence of a policy means OFF (fail-safe to off, never to a pull). Superadmin
+  opts a fleet in via the live `devops/hugmesh-update-policy` ConfigMap. See
+  [`DEVOPS.md`](DEVOPS.md).
+
 ### Roadmap (🔭 planned / 🚧 in-flight)
 
-These are **not shipped as user-facing features** on `main`; the in-cluster
-backstops noted below may already be present but inert.
+What is genuinely **not done**. Nothing here has a working default-off
+implementation on `main`.
 
-- **🚧 Workload Console** — podman/OpenShift-like pod-management + live-log + exec
-  federated admin-ui module (admin-bff 110-band). The least-privilege RBAC
-  backstop is on `main` (`apps/14-workload-console-rbac.yaml`) but **ships dark**
-  (`app.workload-console.k8s.enabled=false`); superadmin gets cross-cluster
-  manage+exec, admins are default-blind until superadmin-granted read-only on
-  their own domain.
-- **🔭 Casdoor MFA** — WebAuthn + TOTP + recovery; per-role defaults
-  (superadmin/admin required, mod relaxable, user optional); enforced via
-  `amr/acr → MFA_SATISFIED` + `gateway_route_access.mfa_required` (fail-closed) +
-  step-up for sudo / SSH-via-UI / remote-install. Design done (admin-bff
-  Liquibase 150-band); see [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md).
-- **🔭 Desktop app governance** — per-license SSO-enforced sudo + admin-curated
-  Plasma Discover store + user install-requests + admin remote-install; extends
-  [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md).
-- **🚧 MDM phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the orchestration superdomain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v2` device-registry record; see [`MDM.md`](MDM.md).
+- **🚧 kind-cluster SSO e2e — harness shipped, proof NOT achieved.**
+  `KIND_PROFILE=sso` + `make kind-images|kind-up|kind-e2e|kind-down` stand up a
+  real cluster, and the chain now reaches Casdoor and mints a session against a
+  real IdP — but the e2e is **not green**. It fails on 16 enumerated fresh-cluster
+  blockers, because the GitOps payload had never been run end to end and every
+  workaround lived in `tests/stack/compose.local.yaml` instead of `specs/cluster`.
+  Fixed in-repo: the `cluster-ca` / Vault KV mount / node-label items plus
+  `fix/cluster-secret-contract-drift` and `fix/pki-role-san-namespace`. **Not
+  fixed (5–16):** Cassandra credentials + keyspace bootstrap, gateway probes
+  hitting a role-gated actuator path (no gateway can become Ready in k8s), Casdoor
+  never importing `init_data.json` (the IdP keeps the well-known default admin
+  password), `casdoor-init` never checking API responses, `CASDOOR_ORG` /
+  client-id / redirect-uri / namespace pre-rebrand defaults across the BFFs, a
+  hard-required `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase
+  `GRANT` to a role no initdb creates. See
+  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
+- **🔭 The live MFA operator flip** — verify every privileged principal can
+  produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` → `true`, then
+  (separately: `enforce-privileged-floor` is **not** a sub-flag of `enabled`)
+  `enforcePrivilegedFloor` → `true`, moving the posture-gate expectations in
+  lockstep. See [`MFA-ROLLOUT.md`](MFA-ROLLOUT.md).
+- **🔭 SELinux enforcing** — node-policy modules compile, install and load on
+  every image, but the fleet boots **permissive** and the enforce-gate ships inert
+  (no runlevel, `SELINUX_ENFORCE_GATE="no"`). The `.te` rules are still tagged
+  `INFERRED-WIDE` and can only be narrowed against AVC logs from a real protected
+  build + boot. See [`selinux-module-loading.md`](selinux-module-loading.md).
+- **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only; MatrixRTC / Element
+  Call / LiveKit-class group calling does not exist in any form.
+- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2).
+- **🚧 MDM phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the orchestration superdomain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v2` device-registry record; Azure Intune is a co-equal provider alongside Headwind. Real pre-deploy gaps remain — see [`MDM.md`](MDM.md) "Deferred".
 - **🚧 Notifications external channels** — Matrix DM + Akkoma feed + phpBB + email
   adapters on top of the shipped in-app MVP; mod-bff `notify_channels` directive.
+- **🔭 Live in-cluster image build** — the always-on Kaniko pipeline
+  (`apps/60-image-builder.yaml`) is correct-by-construction and lint-gated but has
+  never run a real build; blocked on bringing a cluster up on a kernel-fixed x86
+  image.
 - **✅ Generator supply-chain hardening** — stage3 GPG/sha + headscale /
-  tailscale binary checksum verification, fail-closed in all four builders via
+  tailscale binary checksum verification, fail-closed in all builders via
   `scripts/_download-lib.sh`, + de-defaulted baked creds (random one-time
   first-boot fallback). See [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md).
 
 ## Related repositories
 
+> **All org repos are `hugmesh-*` since the 2026-07-22 rebrand** — verified
+> against the org listing on 2026-08-05: **38** `hugmesh-*` repos, zero
+> `snapdragon-*` ones. The **GitHub organization itself** is still named
+> `Snapdragon-Systems` (that rename is browser-only and outstanding), which is why
+> the paths below keep that prefix. Two repos changed shape as well as name:
+> `snapdragon.systems` → `hugmesh-host-shell`, `snapdragon.games` →
+> `hugmesh-games`. The old `Snapdragon-Systems/sdn` repo **no longer exists**.
+
+### Shared Maven libraries
+
+| Repo | Role |
+|---|---|
+| `Snapdragon-Systems/hugmesh-parent` | Metapom every Java service inherits (**2.8.0** — Spring Boot 4.0.7 / Spring Cloud 2025.1.2 / Java 25) |
+| `Snapdragon-Systems/hugmesh-commons` | Shared security/tenancy library, `systems.hugmesh.commons.*` (**2.1.0**) |
+| `Snapdragon-Systems/hugmesh-auth-core` | Shared account/session/bff-session store, Casdoor-admin client, MFA subsystem, session-cookie + internal-token filters (**2.4.2**; consumed by user-bff + admin-bff only) |
+| `Snapdragon-Systems/hugmesh-build-config` | Shared PMD/Checkstyle/SpotBugs rulesets referenced by the parent (**0.5.0**) |
+
+### Platform services
+
 | Repo | Role |
 |---|---|
 | `Snapdragon-Systems/hugmesh-generator` | This repo — image builders, provisioning, GitOps payload |
-| `Snapdragon-Systems/snapdragon-gateway` | Shared Spring Cloud Gateway code/image |
-| `Snapdragon-Systems/snapdragon-pki-gateway` | PKI/identity gateway (Casdoor OAuth2, Postgres routes) — renamed from `snapdragon-id-gateway` |
-| `Snapdragon-Systems/snapdragon-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |
-| `Snapdragon-Systems/snapdragon-fe-gateway` | Frontend gateway (per-node, reuses the shared gateway image) |
-| `Snapdragon-Systems/snapdragon-actions` | Spring APIs |
-| `Snapdragon-Systems/snapdragon-admin-bff-api` | Spring admin BFF (allowlist, namespace access, usage, token broker) |
-| `Snapdragon-Systems/snapdragon-mod-bff-api` | Spring moderator BFF |
-| `Snapdragon-Systems/snapdragon-user-bff-api` | Spring user BFF |
-| `Snapdragon-Systems/snapdragon-forum-bff-api` | Spring forum BFF (phpBB-facing) |
-| `Snapdragon-Systems/snapdragon-federation-api` | Public-profile / vanity-subdomain + federation resolver |
-| `Snapdragon-Systems/snapdragon.systems` | Angular host front page (federates the remotes) |
-| `Snapdragon-Systems/snapdragon-matrix-ui` | Matrix chat + WebRTC video micro-frontend (renamed from `snapdragon-social-ui`) |
-| `Snapdragon-Systems/snapdragon-mastodon-ui` | Mastodon micro-frontend |
-| `Snapdragon-Systems/snapdragon-login-ui` | Login/registration micro-frontend |
-| `Snapdragon-Systems/snapdragon-admin-ui` | Admin console micro-frontend (role-gated) |
-| `Snapdragon-Systems/snapdragon-mod-ui` | Moderator console micro-frontend |
-| `Snapdragon-Systems/snapdragon-user-ui` | User console micro-frontend |
-| `Snapdragon-Systems/snapdragon-forum-ui` | Forum micro-frontend |
-| `Snapdragon-Systems/snapdragon-wiki-bff-api` | Spring wiki BFF (wiki pages, attachments, audit log; /bff/wiki/**) |
-| `Snapdragon-Systems/snapdragon-wiki-ui` | Wiki Angular micro-frontend (federated into snapdragon.systems host) |
-| `Snapdragon-Systems/snapdragon-remote-fragment` | Shared federated-remote fragment scaffolding |
-| `Snapdragon-Systems/snapdragon-superadmin-service-catalog-ui` | Superadmin Service Catalog console (genesis / 🚧 in-flight) |
-| `owncast` / LocalTube (`tube`) | GPU-dependent video services (per-domain enable, federated per-user remotes) |
-| `Snapdragon-Systems/snapdragon.games` | Game studio and portal (runs on the x86_64 GPU worker) |
-| `Snapdragon-Systems/sdn` | headscale / SDN config |
+| `Snapdragon-Systems/hugmesh-gateway` | Shared Spring Cloud Gateway code/image |
+| `Snapdragon-Systems/hugmesh-pki-gateway` | PKI/identity gateway (Casdoor OAuth2, Postgres routes) |
+| `Snapdragon-Systems/hugmesh-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |
+| `Snapdragon-Systems/hugmesh-fe-gateway` | Frontend gateway (per-node, reuses the shared gateway image) |
+| `Snapdragon-Systems/hugmesh-actions` | Spring APIs |
+| `Snapdragon-Systems/hugmesh-admin-bff-api` | Spring admin BFF (allowlist, namespace access, usage, token broker; also the Workload Console, cloud-backups and desktop-governance modules) |
+| `Snapdragon-Systems/hugmesh-mod-bff-api` | Spring moderator BFF |
+| `Snapdragon-Systems/hugmesh-user-bff-api` | Spring user BFF (owns native login / session / Casdoor exchange) |
+| `Snapdragon-Systems/hugmesh-forum-bff-api` | Spring forum BFF (phpBB-facing) |
+| `Snapdragon-Systems/hugmesh-forum-api` | phpBB 3.3 headless JSON API extension — the forum-bff backend |
+| `Snapdragon-Systems/hugmesh-wiki-bff-api` | Spring wiki BFF (wiki pages, attachments, audit log; `/bff/wiki/**`) |
+| `Snapdragon-Systems/hugmesh-mesh-bff-api` | Mesh BFF: Meshtastic node directory, bridge-sync ingest, mesh functions (`/bff/mesh/**`) |
+| `Snapdragon-Systems/hugmesh-character-forge-bff-api` | 3D character forge: BFF + Godot character-maker + federated UI (SVG VN characters → 3D avatars for the XR chat room) |
+| `Snapdragon-Systems/hugmesh-owncast-bff-api` | Owncast BFF — broadcast grant/timeout/ban overlay + per-streamer provisioning (x86+GPU optional service) |
+| `Snapdragon-Systems/hugmesh-tube-bff-api` | Tube (LocalTube) BFF — use grants, download, owner-private viewing (x86+GPU optional service) |
+| `Snapdragon-Systems/hugmesh-federation-api` | Public-profile / vanity-subdomain + federation resolver (owns the `federation_modules` registrations) |
+
+### Front ends (native-federation remotes)
+
+| Repo | Role |
+|---|---|
+| `Snapdragon-Systems/hugmesh-host-shell` | Angular host shell / front page — federates every remote below (was `snapdragon.systems`) |
+| `Snapdragon-Systems/hugmesh-matrix-ui` | Matrix chat + WebRTC video micro-frontend |
+| `Snapdragon-Systems/hugmesh-mastodon-ui` | Mastodon micro-frontend |
+| `Snapdragon-Systems/hugmesh-login-ui` | Login/registration micro-frontend (the native login form) |
+| `Snapdragon-Systems/hugmesh-admin-ui` | Admin console micro-frontend (role-gated; hosts the hidden-tier Workload Console face) |
+| `Snapdragon-Systems/hugmesh-mod-ui` | Moderator console micro-frontend |
+| `Snapdragon-Systems/hugmesh-user-ui` | User console micro-frontend |
+| `Snapdragon-Systems/hugmesh-forum-ui` | Forum micro-frontend |
+| `Snapdragon-Systems/hugmesh-wiki-ui` | Wiki micro-frontend |
+| `Snapdragon-Systems/hugmesh-user-mesh-ui` | User-facing mesh dashboard: LoRa node directory, my mesh devices, mesh-enabled channels |
+| `Snapdragon-Systems/hugmesh-character-studio-ui` | VN character studio — layered-SVG avatar creator (optional service, default-off) |
+| `Snapdragon-Systems/hugmesh-owncast-ui` | Owncast console remote (My Stream + admin broadcast grants + mod view) |
+| `Snapdragon-Systems/hugmesh-tube-ui` | Tube console remote (My Tube + admin access grants + storage budgets) |
+| `Snapdragon-Systems/hugmesh-api-docs` | Admin-gated remote: browse the platform OpenAPI specs |
+| `Snapdragon-Systems/hugmesh-superadmin-service-catalog-ui` | Superadmin App-Store / Service Catalog console (tailnet-only, mounted at `/appstore`) |
+| `Snapdragon-Systems/hugmesh-remote-fragment` | Sync-and-serve-static nginx fleet serving DB-hosted federated fragment bundles |
+| `Snapdragon-Systems/hugmesh-games` | Godot 4 WASM game studio and portal (runs on the x86_64 GPU worker) |
+| `owncast` / LocalTube (`tube`) | Upstream GPU-dependent video services (per-domain enable, federated per-user remotes) |

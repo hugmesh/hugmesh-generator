@@ -110,8 +110,13 @@ What it does (`tests/stack/m2-bootstrap.sh` — everything from SOURCE, nothing
 vendored):
 
 1. Clones the four library repos at **pinned commits** (the repos carry no git
-   tags; each SHA's `pom.xml` is exactly the version the services require —
-   including BOTH `hugmesh-auth-core` 2.3.3 (user-bff) and 2.3.4 (admin-bff))
+   tags; each SHA's `pom.xml` is exactly the version the services require — today
+   `hugmesh-build-config` **0.5.0**, `hugmesh-parent` **2.8.0**,
+   `hugmesh-commons` **2.1.0** and a single `hugmesh-auth-core` **2.4.2** for both
+   user-bff and admin-bff; ⚠️ auth-core has been re-cut twice under a released
+   coordinate — 2.4.0 → 2.4.1 → 2.4.2 — so re-check
+   [`tests/stack/m2-bootstrap.sh`](../tests/stack/m2-bootstrap.sh), which is the
+   authoritative pin, rather than this sentence)
    into `~/.cache/hugmesh-stack-maven/src` and `mvn install`s them into
    `~/.cache/hugmesh-stack-maven/m2` using the official `maven` Docker image
    (no host JDK/maven needed). Cached artifacts are skipped — no re-clone/re-build.

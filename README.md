@@ -37,28 +37,63 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+
+> **"Ships dark" counts as shipped.** Several capabilities below are complete on
+> `main` and deliberately inert behind a documented default-off flag — that is a
+> deployment posture, not an unfinished feature. Every such entry names the flag
+> or runbook that lights it, and the honest caveats that survive the flip.
 
 - **✅ Hardened image fleet** — three RPi 5 role images (pki / backend / frontend)
-  + the x86_64 GPU host, all SELinux **ENFORCING** with per-app MCS identities,
-  built compact and grown on first boot; the opt-in Frite light desktop client
-  rides the same arm64 cross path + mesh/KEYS provisioning.
+  + the x86_64 GPU host, built compact and grown on first boot, plus the client /
+  appliance families that ride the same arm64 cross path + mesh/KEYS provisioning:
+  the opt-in **Frite** light desktop, the **Jetson Orin** edge-AI family, and the
+  **Orange Pi** platform family (see below). All images build the **MCS** SELinux
+  policy with per-pod/per-app category isolation — but ⚠️ **nodes boot
+  PERMISSIVE**, not enforcing: `provision.json`'s `.selinux.mode` defaults to
+  `permissive`, and the enforce-gate (`specs/etc/init.d/selinux-enforce-gate`)
+  ships **inert** (in no runlevel, `SELINUX_ENFORCE_GATE="no"`) unless an
+  operator sets `HUGMESH_SELINUX_ENFORCE_GATE=1` at build time. That is
+  deliberate — the node-policy `.te` rules are still tagged `INFERRED-WIDE` and
+  can only be narrowed against a real AVC pass. See
+  [`docs/selinux-module-loading.md`](docs/selinux-module-loading.md).
+- **✅ SELinux node policy compiled + loaded (all ten builders)** — the hugmesh
+  node-policy modules are compiled against the *sysroot's* refpolicy headers,
+  installed into every image and loaded at first boot from
+  `/usr/share/hugmesh/selinux-modules.list`; seven modules are mandatory (a
+  compile failure fails the build) and the two k8s exemplars are conditional on
+  `selinux-container` headers. Gated by `tests/scripts/test-selinux-policy-install.sh`
+  (the `SLX` bucket of the build matrix). Flipping the fleet to **enforcing** is
+  the honest remaining step — see [Roadmap](#roadmap).
 - **✅ Boot + kernel hardening (both arches)** — kernel lockdown (`lsm=lockdown,
   yama,selinux,bpf` + `lockdown=integrity`), Secure Boot **UKI** signing on x86
-  (dracut `--uefi` → org-key `sbsign`), `firewalld` (test/prod zone profiles) and
-  sysctl/SSH hardening, plus the x86 build fixes that supersede the earlier
-  kernel-config changes. The **x86 k8s netfilter/NAT/eBPF kernel surface** the
-  Service/kube-proxy/CNI path needs is now carried in the amd64 fragment with a
-  **fail-closed build guard** + a CI lint (`lint:x86-kernel-net-symbols`) that
-  keeps it from re-truncating (the standalone fix PR is superseded; the symbols +
-  guard + test landed on `main` with the hardening pass).
+  (dracut `--uefi` → org-key `sbsign`), and sysctl/SSH hardening, plus the x86
+  build fixes that supersede the earlier kernel-config changes. The **x86 k8s
+  netfilter/NAT/eBPF kernel surface** the Service/kube-proxy/CNI path needs is now
+  carried in the amd64 fragment with a **fail-closed build guard** + a CI lint
+  (`lint:x86-kernel-net-symbols`) that keeps it from re-truncating (the standalone
+  fix PR is superseded; the symbols + guard + test landed on `main` with the
+  hardening pass). **Host firewall differs by arch:** x86 ships `firewalld`
+  (test/prod zone profiles); on the cross-compiled **rpi5** arm64 platform
+  firewalld is a **deliberate, gate-pinned exclusion** — the 2026-08-05 real build
+  proved `glib[introspection]`'s in-source gobject-introspection bootstrap does
+  not cross-compile — so `nftables` + `iptables` +
+  `specs/usr/sbin/hugmesh-firewall-reconcile` carry the host firewall there, and
+  `requested-atoms-resolvable.sh` fails the build if either half of that decision
+  is quietly reverted.
 - **✅ Unified Spring baseline** — the baked GitOps payload now targets **Spring
   Boot 4.0.7 / Spring Cloud 2025.1.2** on Java 25, with the shared Maven artifacts
-  **`hugmesh-parent`** (metapom, 2.7.0), **`hugmesh-commons`** (shared
-  security/tenancy, `systems.hugmesh.commons.*`, 2.0.0) and the new
-  **`hugmesh-auth-core`** (2.3.0 — shared account/session/MFA/Casdoor-admin
-  infra; depends on commons; consumed by **user-bff + admin-bff only**).
-  `federation-api` was migrated onto this baseline.
+  **`hugmesh-parent`** (metapom, **2.8.0**), **`hugmesh-commons`** (shared
+  security/tenancy, `systems.hugmesh.commons.*`, **2.1.0**),
+  **`hugmesh-auth-core`** (**2.4.2** — shared account/session/MFA/Casdoor-admin
+  infra; depends on commons; consumed by **user-bff + admin-bff only**) and
+  **`hugmesh-build-config`** (**0.5.0** — the shared PMD/Checkstyle/SpotBugs
+  rulesets the parent references). The groupId is `systems.hugmesh:*` after the
+  rebrand. `federation-api` was migrated onto this baseline. The authoritative
+  pins live in [`tests/stack/m2-bootstrap.sh`](tests/stack/m2-bootstrap.sh)
+  (SHA-pinned — the org repos carry no git tags); ⚠️ auth-core has drifted three
+  times (2.4.0 → 2.4.1 → 2.4.2) because a released coordinate was re-cut, which is
+  why the pin-drift guard exists and must run after every auth-core release.
 - **✅ SSO auth model wired into the cluster payload (data plane)** — Casdoor is
   the SSO IdP, reached **only from inside the cluster**. Login is a **native,
   first-party form**: `login-ui` POSTs username/password (and any MFA passcode) to
@@ -95,11 +130,21 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   rest, and `APP_MFA_WEBAUTHN_RP_ID`/`_ORIGINS` are branded per-tenant (not left
   on the dev-only `localhost` default); `login-ui`/`admin-ui` ship the
   enroll/challenge/security pages. `mfa_satisfied` is stamped into the opaque
-  `bff_` session. **🔭 Remaining (ships dark):** the gateway's D8
-  privileged-MFA step-up floor (`GatewayRouteAccessFilter` +
-  `gateway_route_access.mfa_required`) is implemented but stays off behind
-  `app.mfa.enforce-privileged-floor` (default `false`) until an operator flips
-  it — see [`docs/ROUTE-ACCESS.md`](docs/ROUTE-ACCESS.md).
+  `bff_` session. **The privileged-MFA floor is also shipped and ships dark** —
+  the `mfa_required` column + the `UPDATE` that seeds it on every allow row under
+  `/bff/admin/**` + `/bff/superadmin/**`
+  ([`specs/cluster/manifests/route-access/initdb/20-schema.sql`](specs/cluster/manifests/route-access/initdb/20-schema.sql)),
+  the shared gateway chart's `mfa:` values block rendering `APP_MFA_ENABLED` /
+  `APP_MFA_FRESHNESS_WINDOW` / `APP_MFA_ENFORCE_PRIVILEGED_FLOOR` into every
+  gateway pod, both CI gates (`lint:mfa-required-rules`, `lint:gateway-mfa-env`
+  with pinned fail-closed `helm` + `REQUIRE_HELM=1`), the compose-stack defaults
+  (dev stack `APP_MFA_ENABLED=true`, floor still off) and e2e coverage
+  ([`tests/e2e/specs/29-mfa-privileged-floor.spec.ts`](tests/e2e/specs/29-mfa-privileged-floor.spec.ts))
+  are all on `main`. On a **cluster** the chart default is `mfa.enabled: false` /
+  `enforcePrivilegedFloor: false`, so the seeded rows are inert. What remains is
+  the **live-cluster operator flip**, in the order and with the lockout
+  preconditions in [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md) — see also
+  [`docs/ROUTE-ACCESS.md`](docs/ROUTE-ACCESS.md).
 - **✅ SCG-5 route config** — Spring Cloud Gateway 5.0 moved route config from
   `spring.cloud.gateway.routes` to `spring.cloud.gateway.server.webflux.routes`
   (the legacy prefix silently binds nothing). The `hugmesh-gateway` chart
@@ -119,22 +164,97 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   `specs/etc/init.d|cron.d/hugmesh-domain-reconcile`, the
   `hugmesh_domain_reconcile` SELinux module, and `provision_domain_registry()`
   in the KEYS engine.
-- **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
-  owncast / LocalTube / **character-studio** (VN character-creator + chat remote,
-  default-off; the federation-module DB registration is a documented cross-repo
-  TODO — see
+- **✅ Optional services (add/remove)** — **19 slugs** in
+  [`specs/cluster/optional-services.yaml`](specs/cluster/optional-services.yaml):
+  akkoma / tuwunel / phpBB / games / owncast / LocalTube (`tube`) /
+  **character-studio** (VN character-creator + chat remote, default-off; the
+  federation-module DB registration is a documented cross-repo TODO — see
   [`specs/cluster/manifests/character-studio/FEDERATION-REGISTRATION-TODO.md`](specs/cluster/manifests/character-studio/FEDERATION-REGISTRATION-TODO.md))
-  / **edge-AI** (GPU inference, OpenAI model API to the mesh —
-  [docs/EDGE-AI.md](docs/EDGE-AI.md)) / **meshbridge** (Meshtastic LoRa mesh ↔
-  Matrix bridge, DEFAULT-OFF runtime-only, `dependsOn: tuwunel` —
-  [docs/MESHTASTIC-BRIDGE.md](docs/MESHTASTIC-BRIDGE.md)); the UI greys out when a service is absent, games defaults
-  to `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
-  cut-over is pending**. A/V is currently **LAN-only** (no TURN/SFU yet).
-- **✅ Egress-VPN**, **✅ Node storage**, **✅ Games App-Store control plane**,
-  **✅ Device-license registry** (per-node sshd obeys the signed export),
-  **✅ Superadmin Service Catalog** (data layer + tailnet superadmin-gateway +
-  Kaniko builder, ships dark), **✅ Pen-test CI** (OWASP ZAP + Dependency-Check +
-  nuclei + k6 as a **GitLab** pipeline stage, not a deployed CronJob).
+  / **character-forge** (3D character forge — BFF + DB + federated UI, apps
+  `38b`/`39b`/`49c`; same cross-repo federation-registration TODO) / **edge-AI**
+  (+ `edge-ai-analysis`, `edge-ai-tts`; GPU inference, OpenAI model API to the
+  mesh — [docs/EDGE-AI.md](docs/EDGE-AI.md)) / **coturn** / **meshbridge**
+  (Meshtastic LoRa mesh ↔ Matrix bridge, DEFAULT-OFF runtime-only,
+  `dependsOn: tuwunel` — [docs/MESHTASTIC-BRIDGE.md](docs/MESHTASTIC-BRIDGE.md)) /
+  and the non-user-level node slugs **egress-vpn** / **tor** /
+  **workloadConsole** / **anubis** / **headwind** / **attestation-server**. The UI
+  greys out when a service is absent, games defaults to `games.<domain>`.
+  Build-time prune ships; the **🚧 live ApplicationSet cut-over is pending**.
+- **✅ A/V relay via coturn (TURN/STUN) — ships dark** — the `coturn` slug is a
+  DEFAULT-OFF optional service running RFC-5766 REST long-term-credential mode
+  against a single ESO/Vault-sourced secret shared with tuwunel (which mints the
+  time-limited credential on `GET /_matrix/client/v3/voip/turnServer`). A default
+  build deploys no coturn pod and clients keep `iceServers: []`. Enabling the slug
+  gives an in-cluster `ClusterIP` relay; **public reachability is a separate,
+  operator-deferred opt-in overlay** (`manifests/coturn-public`: `hostNetwork`
+  relay pod, the `coturn-public-config` public-IP/URI knobs, a
+  `/etc/hugmesh/coturn-public` firewall marker, an unproxied A/AAAA record, and a
+  public cert for non-fleet clients). ⚠️ **No SFU exists** — coturn is a 1:1/mesh
+  relay only; scalable group calls (MatrixRTC / Element Call / LiveKit) are
+  genuinely not built. See [`docs/COTURN.md`](docs/COTURN.md).
+- **✅ Encrypted versioned backups — ships dark** — Velero server + node-agent
+  (Kopia filesystem/PV backups) as `apps/55-velero.yaml`, and the
+  BackupStorageLocation + ESO-sourced object-store credentials + least-privilege
+  RBAC + status-sweep CronJob as `apps/56-velero-config.yaml`. Per-domain +
+  superadmin, step-up gated in the admin-bff `cloudbackup` package
+  (`BackupStepUpGate` / `BackupAdminController` / `BackupService`);
+  **two independent OFFs** keep it dark — both Applications are
+  NON-automated (manual superadmin sync) and the admin-bff effector stays on the
+  `NoopBackupEffector` until `app.backups.effector.enabled=true`, so a created
+  `backup_set` sits at `pending` and emits no Velero CR. Kopia repository
+  passwords are provisioned, not upstream defaults. See
+  [`docs/CLOUD-BACKUPS.md`](docs/CLOUD-BACKUPS.md).
+- **✅ Egress-VPN drop-in** — admin-supplied WireGuard/OpenVPN `.conf` for node
+  public egress with split-tunnel keeping the tailnet direct
+  (`specs/usr/sbin/hugmesh-egress-vpn`, the `egress-vpn` node slug, its
+  secret-projector delivery app `13e`). Default-off per node. See
+  [`docs/EGRESS-VPN.md`](docs/EGRESS-VPN.md).
+- **✅ Per-node attached storage** — attach + register extra storage to a node,
+  node-pinned local PV / local-path (FDE), capacity-aware scheduling and graceful
+  degrade (`apps/13b-node-storage.yaml` + the
+  `specs/usr/sbin/hugmesh-node-storage-reconcile` agent, now baked and enabled by
+  every builder). See [`docs/NODE-STORAGE.md`](docs/NODE-STORAGE.md).
+- **✅ Desktop app governance — ships dark** — per-license SSO-enforced sudo, an
+  admin-curated Plasma Discover store (default-NONE, domain-locked Flatpak/OCI),
+  user install-requests and admin remote-install over the device-SSH-license
+  transport. The client side is `specs/etc/hugmesh/desktop-governance/` (polkit
+  rule, the root claim→group `desktop-sudo-mapper` + its 60 s cron,
+  Discover/Flatpak wiring, autostart SSO deposit scripts); the server side is a
+  full controller set in `hugmesh-admin-bff-api`. Dark behind
+  `app.desktop.registry.enabled=false` / `app.desktop.remote-install.enabled=false`.
+  ⚠️ **Honest gap:** the SSO greeter/PAM **token producer** is still 🔭 deferred
+  (FD-07 increment 2), so the deposit path has no producer and the sudo leg is
+  inert even once the flags flip. (The original SSSD `id_provider = oidc` design
+  was retracted — that syntax exists in no released SSSD.) See
+  [`docs/CLIENT-IMAGES.md`](docs/CLIENT-IMAGES.md) §7.
+- **✅ Workload Console — ships dark (the WHOLE console, not just an RBAC
+  backstop)** — the pod-management + live-log + exec + port-forward surface exists
+  end to end: the `/bff/{admin,superadmin}/workloads/**` module in the
+  always-present admin-bff, the **hidden-tier federated admin-ui remote** the host
+  loads only when the grant guard passes, and this repo's `workloadConsole` slug
+  (the two-SA least-privilege RBAC app `apps/14-workload-console-rbac.yaml`, the
+  superadmin cluster-read SA/ClusterRole, the deploy-provenance Kyverno policy,
+  the admin-bff deployment overlay that lights `WORKLOAD_CONSOLE_ENABLED` +
+  `WORKLOAD_CONSOLE_K8S_ENABLED` and mounts both SA tokens, and the two
+  route-access rows). **Three independent OFFs:** the generator slug (default-off,
+  and deselected the admin-bff renders byte-identical), the k8s seam (absent token
+  → the fail-closed `NoopWorkloadClient`, 503 on every call), and the runtime
+  `workload_console_config` DB master flag plus a per-admin TTL'd grant. Exec is
+  restricted to a read-only first-token allowlist, port-forward to a curated
+  app-tier triple list, and namespaces to an allowlist that mirrors the RBAC
+  bindings. See [`docs/OPTIONAL-SERVICES.md`](docs/OPTIONAL-SERVICES.md) §7.2.
+- **✅ Games App-Store control plane**, **✅ Device-license registry** (per-node
+  sshd obeys the signed export), **✅ Superadmin Service Catalog** (data layer +
+  tailnet superadmin-gateway + Kaniko builder, ships dark), **✅ Pen-test CI**
+  (OWASP ZAP + Dependency-Check + nuclei + k6 as a **GitLab** pipeline stage, not
+  a deployed CronJob).
+- **✅ Binhost auto-update — ships dark (default-off, superadmin opt-in)** —
+  `provision_update()` bakes the poller cron on every target as plumbing; the
+  **absence** of a policy means auto-update is OFF (fail-safe to off, never to a
+  pull). A superadmin opts a fleet in via the live `devops/hugmesh-update-policy`
+  ConfigMap (`enabled` / `cadence` / `window` / `reboot` / `staging`); changed
+  packages pull from the node's `PORTAGE_BINHOST` subtree and kured drains +
+  reboots one node at a time. See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 - **✅ Data-access standard** — the Spring services use **Spring Data R2DBC
   reactive repositories** (no raw SQL strings / inline `@Query`).
 - **✅ Wiki service (hugmesh-wiki-bff-api + hugmesh-wiki-ui)** — fully deployed; manifests in `specs/cluster/manifests/wiki-bff-api/` + `manifests/wiki-ui/`, ArgoCD apps `34a-wiki-bff-db`, `34b-wiki-bff-api`, `49a-wiki-ui`; fe-gateway routes `/bff/wiki/**` (#173, #176).
@@ -148,6 +268,63 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   automated attestation-verdict API, `make phone-mdm-enroll`/`phone-attest`
   targets) — see [`docs/MDM.md`](docs/MDM.md)
   "Deferred".
+- **✅ Orange Pi platform family (EXPERIMENTAL)** — six boards across three SoC
+  vendors, each with its own `specs-<platform>/` tree, builder and `make` target:
+  **Orange Pi 5 / 5 Plus** (Rockchip RK3588/RK3588S, light desktop, `--board`
+  axis), **Orange Pi 4 LTS** (Rockchip RK3399, light desktop, single-board,
+  blob-free boot chain), and the headless appliance line **Orange Pi Zero 2**
+  (Allwinner H616), **Zero 2W** + **Zero 3** (H618 — no mainline display-engine
+  driver, so headless is a hard constraint, not a choice) and **Orange Pi 3 LTS**
+  (H6, headless by scope). Each is `live | installer | both` and carries the
+  standard mesh/KEYS provisioning. ⚠️ **Hardware validation pending on every one
+  of them** — no physical Orange Pi has booted an image from this repo; the
+  board facts are researched against upstream Linux/U-Boot/ATF source, and the
+  ports are `--print-plan`-clean and matrix-gated, not hardware-proven. See
+  [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md) and each `specs-orangepi*/README.md`.
+- **✅ Shared per-arch build assets (binpkg pools, distfiles, stage3 seed)** —
+  one shared asset root (`<WORK_DIR>/shared` by default, overridable with
+  `--shared-assets DIR` / `HUGMESH_SHARED_ASSETS`, opt-out with
+  `--no-shared-assets`) holding the stage3 seed cache, fleet-wide read-only
+  distfiles and **per-BOARD** binpkg pools, resolved in one place
+  (`scripts/_shared-assets-lib.sh`). Closes the produce→consume loop the cross
+  builders never had (`FEATURES=buildpkg` always produced; four of five never
+  consumed), adds a compile-once `--packages-only` prebuild phase (make:
+  `prebuild-binaries`; also on the ncurses menu), and — load-bearing — a **pool
+  fingerprint guard**, because `--binpkg-respect-use=y` compares USE only and
+  every aarch64 board shares a CHOST while differing in `-mcpu` (the SIGILL
+  class portage cannot catch). ⚠️ The mechanism + guard are shipped; the
+  **compile-once speedup itself is still owed a real cross-build to prove**. See
+  [`docs/SHARED-BINPKG.md`](docs/SHARED-BINPKG.md).
+- **✅ mesh-bff platform wiring** — the LoRa/Meshtastic BFF is a first-class
+  cluster service: `apps/34c-mesh-bff-db.yaml` + `apps/34d-mesh-bff-api.yaml`,
+  manifests, the fe-gateway `/bff/mesh/**` route behind a `ROLE_MESH` floor (with
+  an explicit DENY row on `/bff/mesh/internal/**`, which is SERVICE-only
+  bridge-sync ingest), the Casdoor role, ESO secrets and PKI wiring. Owns the
+  `mesh_node_directory` / `mesh_room` tables; `meshbridge` and matrix-ui are its
+  producers, the `hugmesh-user-mesh-ui` remote its future consumer.
+- **✅ In-cluster Kaniko image-builder (ALWAYS-ON)** — `apps/60-image-builder.yaml`
+  moved out of `apps-optional/` into the app-of-apps' recursed `apps/` tree, so
+  ArgoCD now always syncs the `hugmesh-image-builds` namespace (PSS `restricted`)
+  + its default-deny-ingress NetworkPolicy — **and nothing else**: the per-build
+  Kaniko Job stays a template that is deliberately absent from the kustomization,
+  so no workload runs until the GitLab `build:images` job (or another driver)
+  dispatches one. Gated by `lint:image-builder-always-on`. ⚠️ **Live validation of
+  an actual in-cluster build is still pending** a kernel-fixed x86 image. The
+  service-catalog Kaniko builder (`apps/54`) remains the separate per-catalog path.
+- **✅ Repo-templating archetypes + runnable federation examples** — six
+  archetypes under [`templates/archetypes/`](templates/archetypes/)
+  (`spring-bff`, `angular-mfe`, `angular-host`, `remote-fragment`, `gateway`,
+  `generator`), four of them with a runnable `_skeleton/` example codebase that
+  renders when the Tier-2 base repo is unpullable (two-tier fallback), so a whole
+  host-shell + remote + API trio can be instantiated for a brand with no base
+  clone. See [`docs/MESH-TEMPLATING.md`](docs/MESH-TEMPLATING.md) (render engine +
+  guardrails) and [`docs/FEDERATION-EXAMPLES.md`](docs/FEDERATION-EXAMPLES.md)
+  (the runtime host↔remote walkthrough).
+- **🚧 Kind SSO e2e harness** — `KIND_PROFILE=sso` plus `make kind-images` /
+  `kind-up` / `kind-e2e` / `kind-down` stand up a real kind cluster and drive the
+  native-login path against it. **The e2e is NOT green** — see
+  [Roadmap](#roadmap) and
+  [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
 - **🚧 Cloud deploy (Studio/ncurses/`make deploy-*` side-flow)** — publish an
   already-built, cloud-packaged x86 image to AWS/Azure/OpenShift/any-qcow2 host
   via offline-rendered plans (x86-only, no real-cloud CI verification) — see
@@ -165,27 +342,60 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 
 ## Roadmap
 
-_Designed / in-flight — see the Roadmap section of
+_What is genuinely NOT done. Everything that ships dark by design has moved up
+into [Current State](#current-state) — a default-off flag is a posture, not an
+unfinished feature. See also the Roadmap section of
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)._
 
-- **🔭 SSO kind-cluster e2e** — the admin-bff → user-bff native-login relocation
-  itself has shipped and is lit by default (see [Current State](#current-state));
-  `tests/e2e/specs/27-native-login.spec.ts` already proves the `bff_` swap on the
-  **compose** stack. Still open: the same proof against a **kind** cluster.
-- **🔭 MFA privileged-floor enforcement** — TOTP/WebAuthn enrollment + the
-  `mfa_satisfied` session stamp are shipped (see [Current State](#current-state));
-  remaining is flipping the gateway's `app.mfa.enforce-privileged-floor` on with
-  real per-role defaults (superadmin/admin required, mod relaxable, user
-  optional) for sudo / SSH-via-UI / superadmin ops step-up.
-- **🔭 Encrypted versioned backups** — Velero + kopia/restic to attached node
-  storage or total-cloud; per-domain + superadmin, step-up gated.
-- **🔭 Egress VPN drop-in** — admin-supplied WireGuard/OpenVPN `.conf` for node
-  public egress; split-tunnel keeps the tailnet direct.
-- **🔭 Per-node attached storage**, **🔭 desktop app governance** (SSO sudo +
-  curated Plasma Discover), **🔭 Workload Console** (pod mgmt + live logs; RBAC
-  backstop on `main`, ships dark).
-- **🔭 A/V via coturn/TURN**.
-- **✅ Binhost auto-update** — opt-in (default-off), superadmin-enabled; see DEVOPS.md. Shipped via PR #117.
+- **🚧 SSO kind-cluster e2e — harness shipped, proof NOT achieved.** The
+  `KIND_PROFILE=sso` harness + `make kind-images|kind-up|kind-e2e|kind-down` are
+  on `main`, and the first real run reached Casdoor and minted a session against
+  a real IdP. **The e2e is not green.** It fails downstream on **16 enumerated
+  fresh-cluster blockers** — the GitOps cluster payload had never been run end to
+  end, and every workaround lived in `tests/stack/compose.local.yaml` instead of
+  `specs/cluster`. Fixed in-repo so far: the `cluster-ca`/KV-mount/node-label
+  items (this harness) plus `fix/cluster-secret-contract-drift` and
+  `fix/pki-role-san-namespace`. **Blockers 5–16 are not fixed** — Cassandra
+  credentials + keyspace bootstrap, gateway probes hitting a role-gated actuator
+  path (no gateway can become Ready in k8s), Casdoor never importing
+  `init_data.json` (so the IdP keeps the default `123` admin password),
+  `casdoor-init` never checking API responses, `CASDOOR_ORG` / client-id /
+  redirect-uri / namespace pre-rebrand defaults across the BFFs, a hard-required
+  `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase `GRANT` to a role
+  no initdb creates. Compose green is **not** evidence for the cluster. See
+  [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
+- **🔭 MFA privileged-floor — the live operator flip.** Seeds, gateway env
+  wiring, CI gates, e2e and runbook all shipped (see
+  [Current State](#current-state)); what is left is not code. On a real cluster an
+  operator must verify every privileged principal can produce a fresh
+  `mfa_satisfied` stamp, then flip `mfa.enabled` → `true`, then (separately —
+  `enforce-privileged-floor` is **not** a sub-flag of `enabled`)
+  `enforcePrivilegedFloor` → `true`, moving the posture-gate expectations in
+  lockstep. Order and lockout preconditions:
+  [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md).
+- **🔭 SELinux enforcing.** Node-policy modules compile, install and load on
+  every image, but the fleet boots **permissive** and the enforce-gate ships
+  inert. Narrowing the `INFERRED-WIDE` rules needs AVC logs from a real protected
+  build + boot; going enforcing before that risks images that boot broken.
+- **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. Scalable group
+  calls (MatrixRTC / Element Call / LiveKit) do not exist in any form.
+- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2)
+  — without it the deposited-token path has no producer, so the SSO-sudo leg
+  stays inert even after the governance flags flip.
+- **🔭 Notifications external channels** — Matrix DM + Akkoma feed + phpBB +
+  email adapters on top of the shipped in-app MVP + SSE push.
+- **🚧 Live ApplicationSet cut-over for optional services** — the build-time
+  prune ships; the hardcoded `30-*/50-*` Applications still own the workloads.
+- **🔭 Headscale ACL BFF push leg** — the node-side Layer-A renderer is shipped
+  and baked by all builders; the admin-bff `HeadscaleAclCompiler` + reconcile loop
+  stay dark behind `app.registry.headscale-acl.enabled=false`, blocked on a
+  single-writer decision (headscale runs `policy: mode: file`, the node renderer
+  is the writer, while the BFF's `PUT /api/v1/policy` is DB-mode only).
+- **🔭 Live in-cluster image build** — the always-on Kaniko pipeline is
+  correct-by-construction and lint-gated but has never run a real build; it is
+  blocked behind bringing a cluster up on a kernel-fixed x86 image.
+- **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
+  the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 
 ## Platform capabilities
 
@@ -197,8 +407,9 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   (`brands/domains.conf`), per-domain namespace + mTLS isolation, and a real
   code-enforced **superadmin → admin → mod → user** role cascade enforced at the
   gateway. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SECURITY.md`](docs/SECURITY.md).
-- **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
-  owncast / tube / character-studio (+ egress-vpn / tor / workloadConsole /
+- **✅ Optional services (add/remove)** — 19 slugs: akkoma / tuwunel / phpBB /
+  games / owncast / tube / character-studio / character-forge / edge-ai (+
+  edge-ai-analysis / edge-ai-tts) (+ egress-vpn / tor / workloadConsole /
   anubis / coturn / meshbridge / headwind / attestation-server); the UI greys
   out when a service is absent, games defaults to
   `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
@@ -220,10 +431,16 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   operate-licenses; per-node sshd obeys the signed export. [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](docs/DEVICE-REGISTRY-KEY-ROTATION.md).
 - **✅ Pen-test CI** — continuous OWASP (ZAP + Dependency-Check + nuclei + k6) as a
   GitLab pipeline stage, not a deployed CronJob. [`docs/PENTEST-SCHEDULES.md`](docs/PENTEST-SCHEDULES.md).
-- **🚧 / 🔭 Roadmap** — Workload Console (RBAC backstop on `main`, ships dark), the
-  MFA privileged-floor step-up gate (enrollment/challenge itself is shipped — see
-  [Current State](#current-state)), desktop app governance, notifications external
-  channels, generator supply-chain hardening. See the Roadmap section of
+- **✅ Ships-dark platform surfaces** — encrypted versioned backups (Velero +
+  Kopia), the **whole** Workload Console (admin-bff module + hidden-tier admin-ui
+  remote + two-SA RBAC), desktop app governance, coturn TURN relay, and the
+  gateway MFA privileged floor are all on `main` behind documented default-off
+  flags. See [Current State](#current-state) for each flag and its caveats.
+- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, **not green**),
+  the live MFA operator flip, SELinux enforcing, a group-call SFU, the
+  desktop-governance SSO greeter/PAM token producer, notifications external
+  channels, and the live optional-services ApplicationSet cut-over. See
+  [Roadmap](#roadmap) and the Roadmap section of
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Images
@@ -237,6 +454,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 | **edge_ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge_ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors, `--desktop light\|none` |
 | **Jetson Orin edge-AI** (NVIDIA Tegra234, arm64) — **EXPERIMENTAL** | `make jetson` (or `./build-jetson-stage4.sh --role edge_ai\|gpu-host\|full\|desktop`) | arm64 edge-AI node family on the Jetson Orin Nano/NX: same mesh + KEYS provisioning + shared cluster tree; mainline kernel (NO CUDA yet — the L4T/CUDA flavor is a documented stub). **Hardware validation pending** — see [`specs-jetson/README.md`](specs-jetson/README.md) |
+| **Orange Pi family** (6 boards, arm64) — **EXPERIMENTAL** | `make orangepi5` / `orangepi4-lts` / `orangepizero2` / `orangepizero2w` / `orangepizero3` / `orangepi3-lts` (each `-live` / `-installer` too) | Light desktops on Rockchip (**Orange Pi 5 / 5 Plus** RK3588/RK3588S, `--board` axis; **Orange Pi 4 LTS** RK3399, single-board, blob-free boot chain) and headless appliances on Allwinner (**Zero 2** H616; **Zero 2W** + **Zero 3** H618 — headless is forced, no mainline display-engine driver; **3 LTS** H6, headless by scope). Same mesh + KEYS provisioning. **Hardware validation pending on all six** — see [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md) and each `specs-orangepi*/README.md` |
 
 > The friendlier path is the **Makefile** (`make local` / `make prod` /
 > `make build-all`), which dispatches the same builders inside a self-contained
@@ -949,13 +1167,19 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 - The KEYS stick holds the cluster CA, preauth and backup credentials — keep it
   offline once provisioning is done. Generated secrets and build output are
   git-ignored.
-- Nodes boot SELinux **ENFORCING** (hardened/selinux) with per-app MCS
-  identities; API-to-API traffic is mTLS; per-app SCRAM Postgres roles; secrets
-  via Vault/ESO. See [`docs/SECURITY.md`](docs/SECURITY.md).
+- Nodes run the hardened/selinux **MCS** policy with per-app/per-pod MCS
+  identities and the hugmesh node-policy modules loaded — but they boot
+  **PERMISSIVE** by default (`.selinux.mode`), and the enforce-gate ships inert
+  until an operator opts in; API-to-API traffic is mTLS; per-app SCRAM Postgres
+  roles; secrets via Vault/ESO. See [`docs/SECURITY.md`](docs/SECURITY.md) and
+  [`docs/selinux-module-loading.md`](docs/selinux-module-loading.md).
 - The kernel boots with **lockdown** (`lsm=lockdown,yama,selinux,bpf`,
   `lockdown=integrity`); x86 ships a **Secure Boot UKI** signed with the org key
-  (`sbsign`), and both arches run **firewalld** (test/prod zone profiles) plus
-  sysctl/SSH hardening.
+  (`sbsign`) and runs **firewalld** (test/prod zone profiles), while the
+  cross-compiled rpi5 arm64 platform excludes firewalld deliberately (the
+  `glib[introspection]` cross bootstrap does not compile) and uses `nftables` +
+  `iptables` + `hugmesh-firewall-reconcile`. Both arches get sysctl/SSH
+  hardening.
 
 ## License
 
