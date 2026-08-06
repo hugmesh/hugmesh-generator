@@ -41,19 +41,29 @@ node-local PersistentVolume there.
 The agent is baked + enabled **exactly like its twin `hugmesh-device-registry-sync`**:
 
 - **Baked by ALL device builders** (`build-*-stage4.sh` — x86 host, rpi5, frite, jetson and
-  the six Orange Pi boards): `/usr/sbin/hugmesh-node-storage-reconcile`,
-  `/usr/lib/hugmesh/storage-verify.sh` (sources Layer-B's `registry-verify.sh` — same
+  the six Orange Pi boards) through ONE helper, `bake_node_storage` in
+  `scripts/_node-storage-bake-lib.sh`: `/usr/sbin/hugmesh-node-storage-reconcile` (0755),
+  `/usr/lib/hugmesh/storage-verify.sh` (0644; sources Layer-B's `registry-verify.sh` — same
   Ed25519 verify + rollback guard, same baked `registry-pub.ed25519`), the OpenRC oneshot
-  `/etc/init.d/hugmesh-node-storage-reconcile`, and the 60s cron drop-in **staged** at
-  `/etc/hugmesh/registry/cron-node-storage-reconcile`. The x86 UNAFFILIATED (plain-desktop)
-  image skips the whole mesh block, agent included.
+  `/etc/init.d/hugmesh-node-storage-reconcile` (0755), and the 60s cron drop-in **staged** at
+  `/etc/hugmesh/registry/cron-node-storage-reconcile` (0644). The x86 UNAFFILIATED
+  (plain-desktop) image skips the whole mesh block, agent included — the only role gate on
+  this bake.
 - **Enabled by keys-provision** (`provision_node_storage`, first boot): `rc-update add`s the
   boot oneshot into the default runlevel and places the staged cron into
   `/etc/cron.d/hugmesh-node-storage-reconcile` on every mesh node (STANDALONE desktops
   skip it). A stale image without the baked files gets a `warn` and never bricks.
-- **Guarded by a test:** `tests/node-storage/test-bake-coverage.sh` fails if ANY
-  `build-*-stage4.sh` (present or future) stops referencing the four agent files, or if the
-  staged-cron name drifts between the builders and `provision_node_storage`.
+- **Guarded by a test that RUNS both halves:** `tests/node-storage/test-bake-coverage.sh`
+  executes `bake_node_storage` against a sandbox sysroot (the four files must exist at those
+  exact paths, byte-identical, with those modes), proves every builder reaches the call on a
+  path a mesh node takes — the enclosing branch chain comes from bash's own parser and is
+  evaluated, and an unrecognised gate fails closed — then runs the REAL `provision.sh`
+  first-boot flow against that same sandbox and requires `rc-update` to have been called and
+  the cron to have LANDED in `/etc/cron.d`. That last step is what pins the staged-cron name
+  across both files: the bake writes it and `provision_node_storage` reads it back in one run.
+  It carries negative controls for each class (disabled / unreachable / mis-targeted /
+  dead-enable / name drift), because the previous grep-based version stayed green on all of
+  them.
 - **admin-bff push lever ships DARK:** `NODESTORAGE_RECONCILER_ENABLED` is a *commented*
   entry in `specs/cluster/manifests/admin-bff-api/deployment.yaml` until the admin-bff lane
   proves the exact relaxed-binding name. The pull (boot oneshot + 60s cron) is the
@@ -100,8 +110,15 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
    Ed25519 over the canonical bytes against the baked key + strict-monotonic rollback guard —
    the SAME verifier as the device-license registry), then:
    - resolves the disk by serial via `lsblk`,
-   - writes a `.storage.devices[]` `pool:{}` manifest and runs `provision_storage --pool`
-     (LUKS2 FDE reused; the pool's crypttab/fstab get `,nofail`),
+   - writes a `.storage.devices[]` `pool:{}` manifest and runs `keys-provision --pool`
+     (LUKS2 FDE reused; the pool's crypttab/fstab get `,nofail`). `--pool` is its OWN entry
+     point in `provision.sh` (`provision_storage_pool`), dispatched at the top of `main()`
+     before the DONE-marker / KEYS-media gates: the agent runs on an already-provisioned
+     node with no USB inserted, and those gates used to return 0 before any pool work. It
+     reads the agent's manifest from `HUGMESH_PROVISION_MANIFEST` (default
+     `/var/lib/hugmesh/node-storage/pool-manifest.json`) and never the KEYS media's
+     `provision.json`, and `provision_storage --pool` skips every device without a `pool:{}`
+     marker, so a system disk is never reachable from this path,
    - labels the node `snapdragon.systems/local-path=true`,
    - CAS-patches the local-path `nodePathMap` so THIS node serves PVs from the pool path.
 4. **Place** (ArgoCD): the `13b-node-storage` ApplicationSet renders one Application per active
@@ -157,9 +174,19 @@ per local-path node is correct.
   CAS-patch (PV-binds-to-correct-node) + the pool-manifest build, and the 13b ApplicationSet
   structure/selector lever. The storage canonical-bytes reconstruction round-trips against the
   Java `NodeStorageExportService.canonicalBytes` shape. The bake/enable coverage
-  (`test-bake-coverage.sh`): every builder bakes the four agent files, `provision_node_storage`
-  enables the oneshot + cron, and the staged-cron name matches across both.
-- **NEEDS A BOOTED NODE:** the real first-boot `rc-update add` + cron placement on a
-  provisioned node; end-to-end byte-equality with a live BFF `/export` payload; the real
-  `provision_storage --pool` against a physical disk; the live PV bind + pod scheduling on the
+  (`test-bake-coverage.sh`) now RUNS both halves against a sandbox sysroot rather than
+  grepping for them, and `test-pool-entrypoint.sh` runs the real `provision.sh --pool` from
+  the agent's own call site against a sandbox fake root: the pool device ends up mounted at
+  its pool path with a `,nofail` fstab entry, the system disk in the same manifest is
+  untouched, and no first-boot step or runlevel change happens.
+- **NEEDS A BOOTED NODE:** end-to-end byte-equality with a live BFF `/export` payload; the
+  real `provision_storage --pool` against a PHYSICAL disk (the sandbox stubs
+  cryptsetup/mkfs/mount and relaxes the two `[ -b ]` block-device guards, so LUKS format,
+  mkfs and the real mount are still unproven); the live PV bind + pod scheduling on the
   pool's node; the precise degraded/migration behaviour.
+- **KNOWN GAP, not yet fixed:** on a `--pool` reconcile there is no KEYS media, so
+  `luks_keyfile()` (which only looks under `${BASE}`, the mounted USB) returns empty and a
+  pool disk takes the documented PLAINTEXT fallback with a WARNING. Relatedly, a pool device
+  inherits the default `luks_name` `cryptdata${i}`, which can collide with a system disk's
+  mapper name. Both need a key-custody decision (a persisted node-local pool key, and a
+  pool-id-derived mapper name) before pools are encrypted at rest in practice.

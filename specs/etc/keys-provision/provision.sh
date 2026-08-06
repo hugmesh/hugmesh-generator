@@ -1777,6 +1777,53 @@ provision_node_storage() {
     fi
 }
 
+# ── NODE-STORAGE pool reconcile — the `--pool` ENTRY POINT ────────────────────
+# main() dispatches here on `keys-provision --pool`, which is what the reconcile
+# agent (/usr/sbin/hugmesh-node-storage-reconcile, step 5b) actually runs on every
+# 60s convergence tick.
+#
+# IT USED TO REACH NOTHING. The agent ran `bash provision.sh --pool`, main() ignored
+# its argv entirely, and on a running node — where the DONE marker exists and the
+# KEYS USB is long gone — main() logged "Already provisioned. Skipping.", failed
+# find_and_mount and `return 0`ed before a single line of storage work. Every string
+# a grep could look for (--pool, provision_storage, the pool marker) was present and
+# correct; a registered pool was simply never provisioned on any node, ever. The one
+# case where it did NOT return early was worse: with a KEYS stick still inserted it
+# would have run the WHOLE first-boot flow (users, network, kubeadm, …) and then
+# called provision_storage with NO argument, i.e. against the USB's manifest and
+# across the SYSTEM disks — the opposite of a pool-only reconcile.
+#
+# So the pool path is its own entry point, and it does exactly and only pool work:
+#   * NO KEYS media, NO DONE marker, NO first-boot steps, NO cleanup/umount;
+#   * the manifest is the agent's pool-manifest (HUGMESH_PROVISION_MANIFEST, the
+#     variable the agent already exports), never the USB's provision.json;
+#   * provision_storage --pool then skips every device without a `pool:{}` marker,
+#     so a system disk can never be touched from here.
+# Absent/unreadable manifest = clean no-op 0 (the agent runs this every 60s on nodes
+# that have no pool at all).
+NODE_STORAGE_POOL_MANIFEST_DEFAULT="/var/lib/hugmesh/node-storage/pool-manifest.json"
+provision_storage_pool() {
+    local pm="${HUGMESH_PROVISION_MANIFEST:-${NODE_STORAGE_POOL_MANIFEST_DEFAULT}}"
+    log "=== keys-provision --pool (node-storage reconcile) ==="
+    if [ ! -r "${pm}" ]; then
+        log "node-storage: no pool manifest at ${pm} — nothing to reconcile"
+        return 0
+    fi
+    # The manifest path is the only thing the caller controls; it must be an absolute
+    # path to a regular file (the agent writes one under its own cache dir). A
+    # relative/exotic value is a bug in the caller, not something to guess at.
+    case "${pm}" in
+        /*) : ;;
+        *)  warn "node-storage: pool manifest '${pm}' is not an absolute path — refusing"; return 1 ;;
+    esac
+    [ -f "${pm}" ] || { warn "node-storage: pool manifest '${pm}' is not a regular file — refusing"; return 1; }
+    MANIFEST="${pm}"
+    log "node-storage: reconciling pools from ${MANIFEST}"
+    provision_storage --pool
+    log "=== keys-provision --pool complete ==="
+    return 0
+}
+
 # ── Egress VPN — provider configs (per-domain, own-domain-only, 0600) ──
 # Installs the provider-downloaded VPN configs (ProtonVPN WireGuard `.conf`
 # FIRST-CLASS; OpenVPN `.ovpn` fallback) the egress-VPN OpenRC service
@@ -2832,6 +2879,15 @@ provision_secureboot() {
 
 # ── Main ───────────────────────────────────────────────────────────
 main() {
+    # NODE-STORAGE pool reconcile: a SEPARATE entry point, dispatched before anything
+    # else. It must run on an already-provisioned node with no KEYS media, so it has
+    # to be reached before the DONE-marker/find_and_mount gates below — which is
+    # precisely where `--pool` used to die. See provision_storage_pool().
+    if [ "${1:-}" = "--pool" ]; then
+        provision_storage_pool
+        return $?
+    fi
+
     log "=== keys-provision starting ==="
     ensure_host_keys
 

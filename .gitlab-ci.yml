@@ -1130,15 +1130,27 @@ node-storage-verify:
     - bash tests/node-storage/test-degrade.sh
     - bash tests/node-storage/test-provision-pool.sh
     - bash tests/node-storage/test-appset.sh
+    # test-bake-coverage.sh shipped with #525 and was wired into NOTHING — not this
+    # job, not the Makefile, not any runner. The one regression it was written to make
+    # impossible was unguarded for its whole life. It now RUNS the bake helper and the
+    # real provision.sh against a sandbox sysroot, so it needs the builders + scripts/
+    # in `changes:` below as well. test-pool-entrypoint.sh does the same for
+    # `keys-provision --pool` — the command the reconcile agent issues every 60s.
+    - bash tests/node-storage/test-bake-coverage.sh
+    - bash tests/node-storage/test-pool-entrypoint.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - specs/usr/sbin/hugmesh-node-storage-reconcile
         - specs/usr/lib/hugmesh/storage-verify.sh
         - specs/etc/keys-provision/provision.sh
+        - specs/etc/init.d/hugmesh-node-storage-reconcile
+        - specs/etc/cron.d/hugmesh-node-storage-reconcile
         - specs/cluster/apps/13b-node-storage.yaml
         - specs/cluster/apps/13a-optional-services.yaml
         - specs/cluster/manifests/node-storage-placement/**/*
+        - scripts/_node-storage-bake-lib.sh
+        - build-*-stage4.sh
         - tests/node-storage/**/*
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

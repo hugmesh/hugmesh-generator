@@ -193,6 +193,13 @@ source "${SCRIPT_DIR}/scripts/_payload-gate-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
+# NODE-STORAGE bake: bake_node_storage() — ONE definition of the four-file bake for
+# every builder, so tests/node-storage/test-bake-coverage.sh can EXECUTE it against a
+# sandbox sysroot instead of grepping this file for strings that a comment, a wrong
+# destination or a dead branch all leave untouched.
+# shellcheck source=scripts/_node-storage-bake-lib.sh
+source "${SCRIPT_DIR}/scripts/_node-storage-bake-lib.sh"
+
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-orangepi3-lts}"   # per-arch isolation (never shares another sysroot)
 DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
@@ -1476,13 +1483,10 @@ cp "${SHARED_SPECS}/etc/cron.d/hugmesh-policy-sync"         "${SYSROOT}/etc/hugm
 # signed per-node export is the EMPTY body, so the agent provisions NOTHING. The
 # cron drop-in is STAGED at /etc/hugmesh/registry (keys-provision rc-update adds
 # the boot oneshot + places the cron into /etc/cron.d on every mesh node).
-mkdir -p "${SYSROOT}/var/lib/hugmesh/node-storage"
-cp "${SHARED_SPECS}/usr/sbin/hugmesh-node-storage-reconcile" "${SYSROOT}/usr/sbin/hugmesh-node-storage-reconcile"
-chmod +x "${SYSROOT}/usr/sbin/hugmesh-node-storage-reconcile"
-cp "${SHARED_SPECS}/usr/lib/hugmesh/storage-verify.sh" "${SYSROOT}/usr/lib/hugmesh/storage-verify.sh"
-cp "${SHARED_SPECS}/etc/init.d/hugmesh-node-storage-reconcile" "${SYSROOT}/etc/init.d/hugmesh-node-storage-reconcile"
-chmod +x "${SYSROOT}/etc/init.d/hugmesh-node-storage-reconcile"
-cp "${SHARED_SPECS}/etc/cron.d/hugmesh-node-storage-reconcile" "${SYSROOT}/etc/hugmesh/registry/cron-node-storage-reconcile"
+# The bake itself lives in scripts/_node-storage-bake-lib.sh — see its header for
+# why it is a function and not seven pasted lines.
+bake_node_storage "${SYSROOT}" "${SHARED_SPECS}" \
+    || { err "node-storage bake failed (see above)"; exit 1; }
 
 # ── Egress VPN (split-tunnel, fail-closed) — node-level, DEFAULT-OFF ────────────
 # Bake the OpenRC service + the split-tunnel runner into every node image; INERT
