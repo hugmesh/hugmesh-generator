@@ -85,7 +85,17 @@ command -v vault >/dev/null 2>&1 || die "no 'vault' on PATH (bootstrap-kind.sh s
 # casdoor-apps is included too: the OIDC client secrets are written into the
 # Casdoor DB by casdoor-init on first run, so rotating them in Vault alone leaves
 # the BFFs holding a secret Casdoor no longer accepts.
-SENTINEL_PATHS=(casdoor casdoor-apps admin-bff-db user-bff-db route-access-db cassandra-admin)
+#   cassandra-app-creds  the per-app Cassandra role passwords. Added when the sso
+#                    profile started applying apps/00b-cassandra-init.yaml: that
+#                    Job reads every key of the derived Secret (admin-bff,
+#                    pki-gateway, be-gateway, fe-gateway, superadmin-gateway,
+#                    federation) to CREATE the roles, and the roles then persist
+#                    in Cassandra's system tables exactly like cassandra-admin
+#                    does. Without it here, a partial first run that happened to
+#                    populate the other six paths would be judged "converged",
+#                    the seeder would SKIP, and ESO could never resolve the one
+#                    path the role bootstrap depends on.
+SENTINEL_PATHS=(casdoor casdoor-apps admin-bff-db user-bff-db route-access-db cassandra-admin cassandra-app-creds)
 
 kv_populated() { # <relative-path> -> 0 when the doc exists AND carries data
   local p="$1" out

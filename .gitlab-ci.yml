@@ -606,6 +606,22 @@ lint:sunshine-fence:
   script:
     - bash tests/scripts/test-sunshine-fence.sh
 
+# A curated kind profile must apply the companion Applications its own
+# Applications name. KIND_PROFILE=sso listed apps/00-cassandra.yaml (the Bitnami
+# Helm chart) but not apps/00b-cassandra-init.yaml, which creates the keyspaces
+# and the per-app roles — so the profile stood up a Cassandra with one role and
+# no application keyspace, and fe-gateway crash-looped on "Provided username
+# fe_gw_cass and/or password are incorrect". That reads like a rotated password
+# and is really a role that never existed. apps/00b-cassandra-init.yaml says of
+# itself "until this Job runs there is no combination of settings under which a
+# gateway can start"; the fact was written down and nothing read it.
+lint:kind-profile-app-closure:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-kind-profile-app-closure.sh
+
 # Optional-services BUILD-TIME EXCLUSION gate. Sources the REAL gate + helper
 # functions from build-rpi5-stage4.sh and runs gate_optional_services against a
 # sandbox tree seeded from specs/cluster, proving EVERY user-level service

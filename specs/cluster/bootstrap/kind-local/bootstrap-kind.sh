@@ -368,7 +368,21 @@ git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml
 #     here can pull them from the in-cluster Harbor.
 # ─────────────────────────────────────────────────────────────────────────
 SSO_APPS=(
-  00-cassandra.yaml       # gateway backing store (keyspace snapdragon_gateway)
+  00-cassandra.yaml       # gateway backing store (the Bitnami Helm CHART only)
+  # 00b-cassandra-init.yaml is NOT optional and NOT a nicety. apps/00-cassandra.yaml
+  # installs the Bitnami chart, which ships PasswordAuthenticator ON and with no
+  # application keyspaces and no roles but the `cassandra` superuser. The keyspace
+  # + least-privilege-role bootstrap lives in a SEPARATE Application because a Helm
+  # -sourced Application has no `path:` for extra git-managed manifests.
+  #
+  # Omitting it here deployed a Cassandra that no gateway could ever authenticate
+  # against. Observed live: `DESC KEYSPACES` returned system keyspaces only and
+  # `LIST ROLES` returned exactly one row (`cassandra`), so fe-gateway crash-looped
+  # on `Provided username fe_gw_cass and/or password are incorrect` — which reads
+  # like a rotated-password problem and is really a role that was never created.
+  # apps/00b-cassandra-init.yaml says so itself: "until this Job runs there is no
+  # combination of settings under which a gateway can start".
+  00b-cassandra-init.yaml # keyspaces + per-app roles + grants (sync-wave 1)
   06-route-access-db.yaml # gateway_route_access seed incl. permitAll /bff/login
   20-gateway-fe.yaml      # fe-gateway chart (front door + Ingress)
   30-admin-bff-db.yaml
@@ -401,7 +415,14 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 APP_NAMES=(vault vault-pki external-secrets external-secrets-config ingress-nginx-internal casdoor harbor harbor-provision)
 if [ "${KIND_PROFILE}" = "sso" ]; then
-  APP_NAMES+=(cassandra route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api snapdragon-systems-web hugmesh-social-ui)
+  # cassandra-init belongs here, not just in SSO_APPS. It is what actually makes
+  # Cassandra usable (keyspaces + per-app roles + grants); the `cassandra` entry
+  # above only covers the Bitnami chart. Omitting it from the wait list meant the
+  # bring-up neither waited for the bootstrap Job nor listed it in the closing
+  # status table — so a Cassandra with no roles looked, from the bootstrap's own
+  # output, exactly like a healthy one, and the failure surfaced much later as an
+  # unrelated-looking gateway auth error.
+  APP_NAMES+=(cassandra cassandra-init route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api snapdragon-systems-web hugmesh-social-ui)
 fi
 log "Waiting up to 5m for curated Applications to reach Synced/Healthy (best-effort)"
 deadline=$((SECONDS + 300))
