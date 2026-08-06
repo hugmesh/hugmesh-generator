@@ -130,6 +130,30 @@ spec:
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.hugmesh.systems"
+            # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
+            # The Casdoor ORGANIZATION every login / admin write resolves against.
+            # casdoor-init + init_data.json create org `hugmesh`; this app's
+            # application.yml still defaults to the pre-rebrand `snapdragon`, so an
+            # unset value makes every native login fail with
+            # "The user: snapdragon/<name> doesn't exist" against an IdP that has the
+            # persona (kind 2026-08-05, docs/KIND-SSO-E2E-FINDINGS.md #11).
+            # compose.local.yaml has carried this override, with this exact
+            # explanation, for all three BFFs. tests/scripts/test-service-env-contract.sh
+            # fails the build if this stops matching what casdoor-init registers.
+            - { name: CASDOOR_ORG, value: "hugmesh" }
+            # casdoor.gateway-base — the pki-tier gateway this BFF reaches Casdoor
+            # through for ordinary JWT traffic, and broker.gateway-url — the base
+            # GatewayRevocationClient POSTs coarse ban keys to. BOTH default to the
+            # pre-rebrand snapdragon-pki-gateway.snapdragon-pki host (NXDOMAIN); the
+            # deployed Service is hugmesh-pki-gateway in hugmesh-pki, plain HTTP 8080.
+            - { name: PKI_GATEWAY_BASE,   value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
+            - { name: BROKER_GATEWAY_URL, value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
+            # casdoor.admin.base-url — the Casdoor ADMIN write API (add-user /
+            # update-role). Ships dark (casdoor.admin.enabled=false) but its default is
+            # the same pre-rebrand casdoor.snapdragon-pki host, and it is ALSO the
+            # fallback for app.local-login.casdoor-base-url — so pin it rather than
+            # leave a dud that only surfaces the day either flag flips.
+            - { name: CASDOOR_ADMIN_BASE_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             # Default-admin Gmail/allowlist seed (local-part 'admin' stays literal).
             - name: ADMIN_EMAILS
               value: "admin@hugmesh.systems"
@@ -311,6 +335,69 @@ spec:
             # PhpbbAdminClient call is audited/stubbed, never hard-fails), so this is
             # safe on the always-deployed admin-bff for non-forum brands too.
             - { name: EXTERNAL_FORUM_ENABLED, value: "true" }
+            # …and the address that leg calls. external.forum.base-url defaults to the
+            # pre-rebrand snapdragon-forum-bff-api.snapdragon-backend host, so with the
+            # gate ON above and this unset the console's every forum call resolved to
+            # NXDOMAIN (it degrades instead of hard-failing, which is exactly why it
+            # went unnoticed). https:// — forum-bff serves TLS with client-auth=need,
+            # the scheme the fe-gateway routes already use for this peer.
+            - name: EXTERNAL_FORUM_BASE_URL
+              value: "https://hugmesh-forum-bff-api.hugmesh-backend.svc.cluster.local:8080"
+            # ── The rest of finding #14's family in this service ──────────────────
+            # Everything below defaulted to a host or namespace this cluster does not
+            # have. They were not found by reading the manifest; they are what
+            # tests/scripts/service_env_contract.py DERIVES from this service's own
+            # application.yml (every ${ENV:default} whose default names a namespace
+            # specs/cluster never creates), which is the only way the long tail of
+            # this class gets closed rather than the handful someone happened to hit.
+            #
+            # homeserver.admin.* — the account-state admin seam (akkoma suspend /
+            # tuwunel deactivate) the access_suspension reconcile loop calls. Same two
+            # Services as the broker's SYNAPSE_URL/MASTODON_URL below.
+            - { name: HOMESERVER_AKKOMA_URL,  value: "http://akkoma.hugmesh-backend.svc.cluster.local:4000" }
+            - { name: HOMESERVER_TUWUNEL_URL, value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
+            # external.mastodon.base-url — the console's Mastodon-API read leg. Same
+            # akkoma Service, a DIFFERENT property from the broker's MASTODON_URL, so
+            # setting one never covered the other.
+            - { name: EXTERNAL_MASTODON_BASE_URL, value: "http://akkoma.hugmesh-backend.svc.cluster.local:4000" }
+            # inference.edge-ai.base-url — the Ollama-protocol edge-AI endpoint. The
+            # default named `edge-ai` in snapdragon-backend; the deployed Service is
+            # hugmesh-edge-ai on :11434 in hugmesh-inference (manifests/edge-ai).
+            - { name: INFERENCE_EDGE_AI_BASE_URL, value: "http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434" }
+            # federation-api, reached under TWO unrelated properties — the username
+            # availability gate and the app-store's federation registration. Same peer
+            # and same https:// client-auth=need scheme as user-bff/mod-bff use.
+            - name: FEDERATION_USERNAME_GATE_BASE_URL
+              value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
+            - name: APPSTORE_FEDERATION_BASE_URL
+              value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
+            # app.appstore.scaffold.headscale-url — the mesh-join endpoint a scaffolded
+            # service is handed. Its default `headscale.headscale` is NOT a pre-rebrand
+            # name at all: there has never been a `headscale` namespace here. headscale
+            # runs in hugmesh-pki (manifests/headscale), which is why a gate that looked
+            # for the string `snapdragon` could not see this one.
+            - { name: APPSTORE_SCAFFOLD_HEADSCALE_URL, value: "http://headscale.hugmesh-pki.svc.cluster.local:8080" }
+            # app.mirror.cassandra.contact-point — the route-access → Cassandra URL
+            # registry mirror. Its own contact point defaulted to the snapdragon-pki
+            # namespace while CASSANDRA_CONTACT_POINTS above (a different property, same
+            # cluster) was already correct: one right, one wrong, in one manifest.
+            # The KEYSPACE is deliberately left on its `snapdragon_gateway` default —
+            # that is the LIVE keyspace name (charts/hugmesh-gateway/values.yaml,
+            # cassandra-hardening/bootstrap-roles-configmap.yaml grant it by that name);
+            # renaming it is the separate infra-migration wave, not a manifest edit.
+            - { name: ROUTE_MIRROR_CASSANDRA, value: "cassandra.hugmesh-pki.svc.cluster.local:9042" }
+            # Namespaces this service LAUNCHES workloads into or reconciles. Not DNS —
+            # a Job created in a namespace that does not exist is rejected by the API
+            # server, which is the same defect one layer up.
+            - { name: TESTREPORTS_LAUNCH_NAMESPACE, value: "hugmesh-backend" }
+            - { name: IMAGEGEN_LAUNCH_NAMESPACE,    value: "hugmesh-backend" }
+            # The Kaniko app-store build namespace — manifests/service-catalog-builder
+            # creates hugmesh-service-catalog-builds (with its own default-deny netpol);
+            # APPSTORE_BUILDER_REGISTRY above was already pinned, its namespace was not.
+            - { name: APPSTORE_BUILDER_NAMESPACE, value: "hugmesh-service-catalog-builds" }
+            # Where the optional-services reconciler writes its policy objects: the
+            # deployed namespace is hugmesh-policy (namespaces/namespaces.yaml).
+            - { name: APP_OPTIONAL_SERVICES_RECONCILE_POLICY_NAMESPACE, value: "hugmesh-policy" }
             # ── A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled) — GO-LIVE ──
             # Platform-wide rollout: a FRESH bff_session MFA stamp becomes a co-equal,
             # license-independent step-up satisfier alongside the existing token-based
@@ -373,6 +460,18 @@ spec:
             # degrades to forwarding no Authorization header, so every
             # federation-backed surface 401s for native-login users in-cluster.
             - { name: APP_BFF_OIDC_ENABLED, value: "true" }
+            # The client-id that refresh leg presents. The comment above USED to say
+            # "issuer + client-id come from auth-core's in-cluster defaults" — half
+            # true: auth-core's issuer default is already the in-cluster Casdoor, but
+            # OidcExchangeConfig defaults app.bff.oidc.client-id to `user-bff`, while
+            # casdoor-init registers the application as `app-user-bff`. Casdoor answers
+            # a wrong client-id with "Invalid client_id" (docs/KIND-SSO-E2E-FINDINGS.md
+            # #12), so every refresh through this exchange 400s and each caller
+            # silently degrades to forwarding no Authorization header. One OIDC client,
+            # two consumers: this MUST stay byte-identical to user-bff-api's
+            # APP_BFF_OIDC_CLIENT_ID and to what casdoor-init registers — both are
+            # asserted by tests/scripts/test-service-env-contract.sh.
+            - { name: APP_BFF_OIDC_CLIENT_ID, value: "app-user-bff" }
             # Casdoor OIDC client secret for the exchange's refresh leg — the SAME
             # user-bff-oidc ESO Secret user-bff-api mounts (one OIDC client, two
             # consumers). optional: the pod boots without it; exchange refuses.
@@ -400,6 +499,50 @@ spec:
             # and forwards the real JWT to federation-api. Fail-open like mod-bff's
             # leg: exchange failure degrades to the pre-fix no-header behaviour.
             - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
+            # ── Homeserver account broker (POST /bff/provision/{matrix,mastodon}) ──
+            # broker.svc-password is the ONE placeholder in this app's
+            # application.yml with NO default — deliberately, so a deployment that
+            # forgets it cannot silently mint real homeserver tokens against a
+            # publicly-known credential. The consequence is that an unset value is not
+            # a degraded feature, it is a DEAD POD: ServiceTokenBroker fails bean
+            # creation with
+            #   Could not resolve placeholder 'SVC_PASSWORD' in value "${SVC_PASSWORD}"
+            # and admin-bff never starts at all. That is what a fresh kind cluster hit
+            # on 2026-08-05 (docs/KIND-SSO-E2E-FINDINGS.md #15); compose.local.yaml has
+            # always set SVC_PASSWORD, so no compose run could ever surface it.
+            #
+            # SOURCE: the EXISTING user-bff-hs-token ExternalSecret's `svc-password`
+            # property (manifests/external-secrets/secretstore.yaml) — deliberately NOT
+            # a new Secret. It is the one shared homeserver service-account password:
+            # user-bff's hs-token broker mints with it (APP_HS_TOKEN_SVC_PASSWORD,
+            # same Secret, same key) and this broker mints with it too, so the two
+            # brokers must hold the SAME credential or they register/authenticate as
+            # different principals. NOT `optional:` — a missing Secret must surface at
+            # the kubernetes layer as CreateContainerConfigError ("secret not found")
+            # rather than as an unresolved-placeholder crash-loop deep in Spring, and
+            # this pod genuinely cannot run without it. Same posture as
+            # APP_MFA_FACTOR_KEY above.
+            # DEPLOY-ORDER: ESO resolves an ExternalSecret ALL-OR-NOTHING, and
+            # `svc-password` is one of the properties gen-cluster-secrets.sh had never
+            # seeded (the ESO seed-contract fix). Land that seeding with — or before —
+            # this reference, or the whole user-bff-hs-token Secret stays unresolved
+            # and this pod reports CreateContainerConfigError.
+            - name: SVC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-hs-token
+                  key: svc-password
+            # …and the homeservers that broker actually provisions against. The app
+            # defaults are matrix-synapse / mastodon-web in snapdragon-backend — the
+            # wrong SERVICE NAMES *and* the wrong namespace (finding #14). This
+            # platform ships tuwunel (Matrix CS-API, :8008) and akkoma (Mastodon API,
+            # :4000) in hugmesh-backend; compose repoints the same two vars at its own
+            # social tier for the same reason.
+            # Direct Services, not the :4443 mTLS proxy fronts: the broker's own
+            # comment defers that repoint to when it presents a client cert, which is
+            # the separate client-cert wave, not this change.
+            - { name: SYNAPSE_URL,  value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
+            - { name: MASTODON_URL, value: "http://akkoma.hugmesh-backend.svc.cluster.local:4000" }
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an

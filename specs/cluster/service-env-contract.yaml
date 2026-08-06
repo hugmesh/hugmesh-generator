@@ -1,0 +1,207 @@
+# =============================================================================
+# SERVICE ENVIRONMENT CONTRACT — the part that CANNOT be derived.
+# =============================================================================
+# READ THIS FIRST, because the shape of this file is the point.
+#
+# THE DEFECT. Every service here ships an application.yml full of
+# `${SOME_ENV:<default>}`. A Deployment that omits an override does not fail: it
+# silently adopts the packaged default, and those defaults name hosts, namespaces
+# and domains this cluster does not have. Standing up KIND_PROFILE=sso for the
+# first time on 2026-08-05 walked straight through five of them, each only visible
+# after fixing the one before (docs/KIND-SSO-E2E-FINDINGS.md #11-#15):
+#
+#   #11  CASDOOR_ORG unset            -> "The user: snapdragon/e2e-user doesn't exist"
+#   #12  OIDC client-id defaulted     -> "Invalid client_id"   (the app is `app-user-bff`)
+#   #13  redirect-uri defaulted       -> "Redirect URI … doesn't exist in the
+#                                         allowed Redirect URI list"
+#   #14  namespace defaults           -> NXDOMAIN on casdoor.snapdragon-pki and
+#                                         snapdragon-admin-bff-api.snapdragon-backend
+#   #15  SVC_PASSWORD never provided  -> "Could not resolve placeholder
+#                                         'SVC_PASSWORD'" — admin-bff cannot START
+#
+# WHY THIS FILE DOES NOT LIST THE KEYS. The first version of this gate did: a
+# per-service `requires:` list, hand-typed from the five blockers someone had
+# actually hit. That gate was green on the SAME tree that still had 23 more
+# instances of the identical defect — including four in services the list had
+# waved through as "resource server only", and two Deployments EMITTING
+# `casdoor.hugmesh-casdoor.svc.cluster.local`, a namespace that has never
+# existed. A list can only catch what someone remembered to type into it, and the
+# defect is precisely the thing nobody remembered.
+#
+# So the completeness half of the gate is DERIVED, by
+# tests/scripts/service_env_defaults.py, from two authorities and no list:
+#
+#   the SERVICE's own application.yml  -> which env keys exist and what they fall
+#                                         back to (read out of the service repo)
+#   THIS specs/cluster tree            -> which namespaces are actually created or
+#                                         deployed into, and which domains are
+#                                         actually served (Ingress/route hosts +
+#                                         the app.kubernetes.io/part-of label)
+#
+# and the rule is: if a placeholder's default names a namespace or domain that is
+# not in this tree, the Deployment must override it. New stale default in any
+# service repo, or a namespace removed from this tree, and the build goes red with
+# nobody editing anything. It is also why admin-bff's app-store headscale URL is
+# caught — its default puts headscale in a namespace of the same name, which has
+# never existed here (headscale runs in hugmesh-pki). That default contains no
+# pre-rebrand string at all, so every `snapdragon`-pattern rule was blind to it.
+# (Deliberately not spelled out as a literal in-cluster FQDN here:
+# tests/scripts/cluster_manifest_integrity.py reads every FQDN in this tree,
+# comments included, and would report the example itself as a dangling namespace.)
+#
+# WHAT IS LEFT HERE is only what no amount of reading application.yml could tell
+# you, because the authority lives in the IdP or in Vault:
+#
+#   mustEqual / mustBeRegisteredRedirectUriOf
+#       the value has to agree with what casdoor-init ACTUALLY registers. Not
+#       restated as a literal — these are expressions the checker evaluates by
+#       parsing manifests/casdoor/init-job.yaml (its reconcile.py read as Python,
+#       by AST) plus the init_data.json in the ConfigMap. Either side moving alone
+#       turns the build red.
+#   fromSecret / optional
+#       WHICH Secret+key a credential must come from, and whether an absent Secret
+#       must fail at the Kubernetes layer (CreateContainerConfigError) instead of
+#       inside Spring. A default cannot express that; neither can a placeholder.
+#   a plain `why`
+#       only where the requirement is semantic — a value that is syntactically
+#       fine and still wrong for this deployment.
+#
+# ENFORCED BY: tests/scripts/test-service-env-contract.sh (wired into
+# .gitlab-ci.yml as lint:service-env-contract). The checker exits 3 INCOMPLETE,
+# never 0, if the service checkouts it derives from are absent — the
+# reserved-prefixes gate spent months green while its central stage printed
+# "[SKIP] … (not checked out)", and this one will not repeat that.
+# Offline: no cluster, no kubectl, no network.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceEnvContract          # informational kind (not a CRD) — a plain data doc
+metadata:
+  name: hugmesh-service-env-contract
+
+# Where the checker reads the AUTHORITATIVE Casdoor values from. It parses the
+# reconcile.py embedded in the init Job (Python AST, not regex) and the
+# init_data.json embedded in the ConfigMap, and requires all three statements of
+# the organization name — the Job env, the script default, and init_data.json —
+# to be identical before any service is checked.
+casdoorSource:
+  initJob: manifests/casdoor/init-job.yaml
+  initData: manifests/casdoor/init-data-configmap.yaml
+
+# Where ESO secret references are resolved. A `fromSecret` below must name a
+# Secret+key that one of these ExternalSecrets actually materializes — otherwise
+# the manifest is mounting something nothing provisions.
+externalSecretsDir: manifests/external-secrets
+
+services:
+  # ── user-bff — the SSO token-handler. Owns POST /bff/login. ────────────────
+  - name: hugmesh-user-bff-api
+    manifest: manifests/user-bff-api/deployment.yaml
+    requires:
+      - key: CASDOOR_ORG
+        mustEqual: casdoor.org
+        why: >-
+          finding #11. The app default is the pre-rebrand `snapdragon` and casdoor-init
+          creates `hugmesh` — but that is not why this rule exists. `snapdragon` is a
+          perfectly well-formed org name; nothing in the manifests could tell you it is
+          the wrong one. Only the IdP can.
+      - key: APP_BFF_OIDC_CLIENT_ID
+        mustEqual: casdoor.clientId(user-bff)
+        why: "finding #12. The registered client is `app-user-bff`; the app default is `user-bff`."
+      - key: APP_BFF_OIDC_APPLICATION
+        mustEqual: casdoor.appName(user-bff)
+        why: >-
+          The application name the native /api/login body carries. Casdoor resolves a
+          login by org + application, so this must name the same registered object the
+          client-id does.
+      - key: APP_BFF_OIDC_ORGANIZATION
+        mustEqual: casdoor.org
+        why: >-
+          The org in that same /api/login body. It defaults THROUGH casdoor.organization;
+          pinned so a login never depends on a fallback chain resolving as assumed.
+      - key: APP_BFF_OIDC_REDIRECT_URI
+        mustBeRegisteredRedirectUriOf: user-bff
+        why: >-
+          finding #13. A PKCE-match string only — no browser dereferences it — so no
+          reachability check would ever flag it. Casdoor rejects the exchange unless it
+          BYTE-matches a registered redirectUri.
+      - key: APP_BFF_OIDC_ISSUER
+        why: >-
+          SEMANTIC, not syntactic: this leg must dial the IN-CLUSTER Casdoor, never the
+          browser-facing issuer. Its packaged default chains through casdoor.gateway-base,
+          so pinning PKI_GATEWAY_BASE alone silently decides this value too.
+      - key: APP_HS_TOKEN_SVC_PASSWORD
+        fromSecret: user-bff-hs-token/svc-password
+        optional: true
+        why: >-
+          The homeserver service-account password this BFF's broker mints with. Empty
+          default + fail-closed (mint -> 503), so optional is correct HERE; the SAME
+          Secret+key backs admin-bff's SVC_PASSWORD, which is NOT optional because an
+          unset value there is an unresolved placeholder and a dead pod.
+
+  # ── mod-bff — moderation surfaces. Pure resource server + two back-channels. ─
+  - name: hugmesh-mod-bff-api
+    manifest: manifests/mod-bff-api/deployment.yaml
+    requires:
+      - key: CASDOOR_ORG
+        mustEqual: casdoor.org
+        why: "finding #11 again — same IdP authority, different consumer."
+
+  # ── admin-bff — route-access CRUD, the session→JWT exchange SERVER, broker. ─
+  - name: hugmesh-admin-bff-api
+    manifest: manifests/admin-bff-api/deployment.yaml
+    requires:
+      - key: SVC_PASSWORD
+        fromSecret: user-bff-hs-token/svc-password
+        optional: false
+        why: >-
+          finding #15. THAT it must be set is derived (it is the one placeholder in this
+          app with no default at all). WHICH Secret, and that an absent Secret must fail
+          as CreateContainerConfigError rather than as a Spring startup exception, is
+          not derivable from anything. Sourced from the EXISTING user-bff-hs-token
+          rather than a new Secret: it is the one shared homeserver service-account
+          credential and the two brokers must hold the same one.
+      - key: CASDOOR_ORG
+        mustEqual: casdoor.org
+        why: "finding #11 again — same IdP authority, third consumer."
+      - key: APP_BFF_OIDC_CLIENT_ID
+        mustEqual: casdoor.clientId(user-bff)
+        why: >-
+          finding #12 on the exchange's refresh leg. auth-core's OidcExchangeConfig
+          carries the same stale `user-bff` default, and this manifest's own comment
+          once asserted the in-cluster default was fine. ONE OIDC client, TWO consumers:
+          this rule pins admin-bff and user-bff to the SAME derived value.
+
+# First-party BFF Deployments that hold no value requiring agreement with the IdP
+# or with Vault. THIS IS NOT AN EXEMPTION FROM THE GATE: the derived checks above
+# run against every first-party *-bff-api container in the tree regardless of what
+# is written here, which is how four stale defaults in these very services (and the
+# two `hugmesh-casdoor` issuer URIs) were found. Listing them keeps the coverage
+# check a complete statement — a new BFF Deployment must be classified before it
+# can merge — and records who owns no IdP contract.
+noAgreementRules:
+  - name: hugmesh-forum-bff-api
+    manifest: manifests/forum-bff-api/deployment.yaml
+    reason: >-
+      Pure OAuth2 resource server — validates the Casdoor JWT (CASDOOR_ISSUER_URI) and
+      forwards it. No CASDOOR_ORG, no app.bff.oidc.* client, no admin-bff back-channel.
+  - name: hugmesh-wiki-bff-api
+    manifest: manifests/wiki-bff-api/deployment.yaml
+    reason: "Resource server only — same shape as forum-bff-api (verified against its application.yml)."
+  - name: hugmesh-mesh-bff-api
+    manifest: manifests/mesh-bff-api/deployment.yaml
+    reason: >-
+      No OIDC login client of its own; it mints a ROLE_SERVICE bearer by
+      client-credentials against a manually-provisioned Casdoor client, so there is no
+      value here casdoor-init registers. It DOES carry back-channels — the derived check
+      caught both of them pointed at namespaces that do not exist.
+  - name: hugmesh-character-forge-bff-api
+    manifest: manifests/character-forge-bff-api/deployment.yaml
+    reason: "Resource server only (verified against its application.yml)."
+  - name: hugmesh-owncast
+    manifest: manifests/owncast/deployment.yaml
+    reason: >-
+      Optional-service BFF in front of Owncast, run as one container of a
+      multi-container pod. Resource server only.
+  - name: hugmesh-tube
+    manifest: manifests/tube/deployment.yaml
+    reason: "Optional-service BFF in front of the tube stack, same multi-container shape as owncast."

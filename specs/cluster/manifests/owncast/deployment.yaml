@@ -50,10 +50,21 @@ spec:
           env:
             # Systems-realm Casdoor (NOT casdoor-games): JWKS auto-discovered via
             # CASDOOR_ISSUER_URI + /.well-known/openid-configuration.
-            - { name: CASDOOR_ISSUER_URI,
-                value: "http://casdoor.hugmesh-casdoor.svc.cluster.local:8000" }
+            # WAS http://casdoor.hugmesh-casdoor.svc.cluster.local:8000, which is
+            # wrong twice over: there has never been a `hugmesh-casdoor` namespace
+            # (casdoor runs in hugmesh-pki), and issuer-uri is not just a discovery
+            # address — Spring Security "configure[s] the validation strategy to
+            # validate each JWTs iss claim against" it, and casdoor's app.conf sets
+            # `origin = "https://id.hugmesh.systems"`, so that IS the iss every token
+            # carries. Same value every other first-party BFF uses.
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
             - { name: SPRING_R2DBC_URL,
                 value: "r2dbc:postgresql://hugmesh-owncast-db.hugmesh-owncast.svc.cluster.local:5432/owncast_bff" }
+            # Liquibase's JDBC handle, used once at startup. Its packaged default is
+            # owncast-bff-db in the DELETED snapdragon-backend namespace; only the
+            # R2DBC half had ever been overridden here.
+            - { name: SPRING_LIQUIBASE_URL,
+                value: "jdbc:postgresql://hugmesh-owncast-db.hugmesh-owncast.svc.cluster.local:5432/owncast_bff" }
           resources:
             requests: { cpu: 200m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 512Mi }

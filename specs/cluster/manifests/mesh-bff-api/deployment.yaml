@@ -112,6 +112,19 @@ spec:
             # The WebClient presents this pod's mTLS client cert (the same /pki
             # material the server side uses) + the ROLE_SERVICE bearer below.
             - { name: APP_MESH_USER_BFF_ENABLED, value: "true" }
+            # …and WHERE that WebClient dials. The flag above is ON, so this leg is
+            # LIVE — and app.mesh.user-bff.base-url defaulted to
+            # snapdragon-user-bff-api.snapdragon-backend, i.e. every registered-device
+            # attribution call was already resolving to NXDOMAIN. The deployed peer is
+            # hugmesh-user-bff-api in hugmesh-backend, https:// because it serves TLS
+            # with client-auth=need (this pod presents the /pki client cert above).
+            - name: APP_MESH_USER_BFF_BASE_URL
+              value: "https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/user/internal/mesh-devices"
+            # app.mirror.cassandra.contact-point — the shared Cassandra the gateway
+            # revocation/URL registry lives in. Defaulted to the snapdragon-pki
+            # namespace; the deployed StatefulSet is cassandra in hugmesh-pki (the same
+            # contact point admin-bff's CASSANDRA_CONTACT_POINTS already names).
+            - { name: CASSANDRA_CONTACT_POINT, value: "cassandra.hugmesh-pki.svc.cluster.local:9042" }
             # ── Casdoor client-credentials mint for that ROLE_SERVICE bearer.
             # Client id/secret are ESO-synced (Secret mesh-bff-casdoor-client —
             # provisioned manually in Casdoor alongside the role grant; see

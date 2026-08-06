@@ -112,11 +112,47 @@ spec:
             # client secret needed (pure resource server, like federation-api).
             - name: CASDOOR_ISSUER_URI
               value: "https://id.hugmesh.systems"
+            # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
+            # The Casdoor ORGANIZATION every login resolves against. casdoor-init
+            # (manifests/casdoor/init-job.yaml) and init_data.json create org
+            # `hugmesh`; this app's application.yml still defaults to the
+            # pre-rebrand `snapdragon`, so with this unset a fresh cluster answers
+            # every native login with
+            #   "The user: snapdragon/e2e-user doesn't exist"
+            # — the seed verified the persona, the login still failed. Hit LIVE on
+            # kind 2026-08-05 (docs/KIND-SSO-E2E-FINDINGS.md #11). compose.local.yaml
+            # has carried this override, with this same explanation, for months.
+            # ONE VALUE, BOTH SIDES: tests/scripts/test-service-env-contract.sh fails
+            # the build if this ever stops matching what casdoor-init registers.
+            - { name: CASDOOR_ORG, value: "hugmesh" }
+            # casdoor.gateway-base — the pki-tier gateway this BFF reaches Casdoor
+            # through for ordinary (JWT) traffic. The app default is the pre-rebrand
+            # `snapdragon-pki-gateway.snapdragon-pki` (NXDOMAIN on a real cluster);
+            # the deployed Service is hugmesh-pki-gateway in hugmesh-pki, plain HTTP
+            # on 8080 (the gateway chart's keystore.serverTls is false here).
+            - { name: PKI_GATEWAY_BASE, value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
+            # casdoor.account.base-url — the self-service password/email surface.
+            # Ships dark (casdoor.account.enabled=false) but its default is the same
+            # pre-rebrand casdoor.snapdragon-pki host, so pin it too rather than leave
+            # a dud that only surfaces the day the flag flips.
+            - { name: CASDOOR_ACCOUNT_BASE_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             # WebClient to the federation-api module-federation registry (the
             # user BFF reads the user's federated module/profile data there,
             # forwarding the caller JWT).
-            - name: FEDERATION_API_URL
-              value: "http://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
+            # NAME IS LOAD-BEARING: the client reads federation.api.base-url, i.e.
+            # env FEDERATION_API_BASE_URL. The old FEDERATION_API_URL here bound
+            # NOTHING (it maps to federation.api.url, which no property declares), so
+            # this BFF silently used its packaged snapdragon-backend default and every
+            # federation-backed /bff/user/** call resolved to NXDOMAIN. Same
+            # env-name-misnomer class compose fixed in #314 (see its comment on
+            # FEDERATION_BASE_URL) and never propagated here.
+            # https:// because federation-api serves TLS with client-auth=need — the
+            # scheme every gateway route (apps/20-gateway-*.yaml) and signup-gate
+            # already use for this peer. Completing this leg still needs the outbound
+            # client-cert wave (HUGMESH_MTLS_CLIENT_ENABLED + in-pod store passwords),
+            # which is NOT part of this change.
+            - name: FEDERATION_API_BASE_URL
+              value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
             # ── AI-cloak / media-poisoning (poison-before-ingest) ────────────────
             # The media-proxy (/bff/user/media/upload) routes image uploads through
             # the OPTIONAL hugmesh-media-poisoner worker BEFORE the real homeserver
@@ -236,6 +272,17 @@ spec:
             # (APP_HS_TOKEN_KEY) is provisioned and the mint path stops failing closed.
             - { name: MATRIX_URL,   value: "https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443" }
             - { name: MASTODON_URL, value: "https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443" }
+            # …and the SAME two URLs under the names the hs-token broker actually
+            # reads. MATRIX_URL/MASTODON_URL above bind block.*/external.*.base-url
+            # (the self-block + directory-hide seams, both default-OFF); the mint +
+            # inject path reads app.hs-token.matrix-url / .mastodon-url, i.e.
+            # APP_HS_TOKEN_MATRIX_URL / APP_HS_TOKEN_MASTODON_URL. Those defaults are
+            # the pre-rebrand *-proxy.snapdragon-backend hosts, so the LIVE proxy leg
+            # (APP_HS_TOKEN_ENABLED=true above) was pointed at NXDOMAIN while the two
+            # vars set here only configured dark features. compose sets the
+            # APP_HS_TOKEN_* pair explicitly for exactly this reason.
+            - { name: APP_HS_TOKEN_MATRIX_URL,   value: "https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443" }
+            - { name: APP_HS_TOKEN_MASTODON_URL, value: "https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443" }
             # Outbound mTLS client identity for the homeserver-proxy calls — mirrors
             # the MEDIA_PROXY_* / federation outbound-mTLS pattern: present the in-pod
             # keystore.p12 (this service's cluster-CA cert) + validate the proxy's
@@ -246,6 +293,34 @@ spec:
             - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE_TYPE,   value: "PKCS12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
+            # app.hs-token.registry.base-url — where the broker publishes/reads the
+            # homeserver URL registry. Its packaged default is a NESTED placeholder,
+            # ${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://snapdragon-gateway
+            # .snapdragon-backend…}}, so BOTH names have to be absent for the stale
+            # host to win — which is exactly what was happening. The deployed backend
+            # front door is the be-gateway Service (apps/20-gateway-be.yaml:
+            # instance.name hugmesh-be-gateway, destination namespace hugmesh-backend,
+            # chart service.port 8080).
+            - name: APP_HS_TOKEN_REGISTRY_BASE_URL
+              value: "http://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8080"
+            # ── media-proxy egress (app.media.proxy.*) ───────────────────────────
+            # The REAL homeserver upload / served-byte re-fetch leg. Ships dark
+            # (MEDIA_PROXY_*_ENABLED default false) but its defaults are the
+            # pre-rebrand *-proxy.snapdragon-backend hosts, i.e. the flag flip alone
+            # would land on NXDOMAIN. Same two proxies the hs-token leg above dials.
+            - { name: MEDIA_PROXY_MASTODON_BASE_URL, value: "https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443" }
+            - { name: MEDIA_PROXY_MATRIX_BASE_URL,   value: "https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443" }
+            # ── on-prem vision moderation (edge-ai-analysis) ─────────────────────
+            # TWO independent properties read the same scanner —
+            # moderation.image.base-url (avatar publish gate) and
+            # app.vision.moderation.base-url (pre-publish profile-image gate) — and
+            # BOTH defaulted to snapdragon-edge-ai-analysis.snapdragon-inference, a
+            # host whose SERVICE and NAMESPACE were both renamed. The deployed pair is
+            # hugmesh-edge-ai-analysis in hugmesh-inference (manifests/edge-ai-analysis).
+            # Both features ship dark; both are FAIL-CLOSED when enabled, so a wrong
+            # address here is an upload outage the day either flag flips.
+            - { name: MODERATION_IMAGE_BASE_URL, value: "http://hugmesh-edge-ai-analysis.hugmesh-inference.svc.cluster.local:8080" }
+            - { name: VISION_MODERATION_BASE_URL, value: "http://hugmesh-edge-ai-analysis.hugmesh-inference.svc.cluster.local:8080" }
             # ── SSO OIDC login (user-bff owns native login: POST /bff/login) ──────
             # Enabling OIDC (app.bff.oidc.enabled) also gates AdminBffInternalClient:
             # when false the client is a fail-closed stub and EVERY account/session op
@@ -253,6 +328,44 @@ spec:
             # tokens BEFORE handing ciphertext to admin-bff — NEVER plaintext at rest.
             # OidcCustodyBootGuard refuses to start if enabled=true + custody-key blank.
             - { name: APP_BFF_OIDC_ENABLED,      value: "true" }
+            # ── The OIDC client identity, byte-matched to casdoor-init ──────────
+            # EVERY value below is a CROSS-FILE CONTRACT with
+            # manifests/casdoor/init-job.yaml's reconcile_app(): it registers each
+            # application as `app-<name>` and gives user-bff the redirect-uri
+            # override https://hugmesh.systems/login/callback. This app's own
+            # defaults are `user-bff` and the PRE-REBRAND
+            # https://snapdragon.systems/login/callback, and nothing here overrode
+            # them — so a fresh cluster got, in order,
+            #   "Invalid client_id"                                    (finding #12)
+            #   "Redirect URI … doesn't exist in the allowed Redirect URI list" (#13)
+            # after the org fix above. Both were hit LIVE on kind 2026-08-05.
+            # tests/scripts/test-service-env-contract.sh re-derives all three from
+            # init-job.yaml and FAILS the build the moment either side moves.
+            - { name: APP_BFF_OIDC_CLIENT_ID,    value: "app-user-bff" }
+            # The application NAME the native /api/login body carries (Casdoor
+            # resolves the login against org + application, not clientId alone).
+            # Same registered object, so the same `app-user-bff` string.
+            - { name: APP_BFF_OIDC_APPLICATION,  value: "app-user-bff" }
+            # The org in that same /api/login body. Defaults to casdoor.organization
+            # (set via CASDOOR_ORG above) but pinned explicitly: this is the value the
+            # cross-file gate checks, and a login must never depend on a fallback
+            # chain resolving the way we assumed.
+            - { name: APP_BFF_OIDC_ORGANIZATION, value: "hugmesh" }
+            # PKCE-match string ONLY — no browser ever dereferences it; Casdoor just
+            # requires it to byte-match a registered redirectUri of app-user-bff.
+            - { name: APP_BFF_OIDC_REDIRECT_URI, value: "https://hugmesh.systems/login/callback" }
+            # TWO internal-Casdoor legs, TWO distinct properties — both must target
+            # the in-cluster Casdoor Service, NEVER the browser-facing issuer:
+            #   • APP_BFF_OIDC_LOGIN_BASE — the /api/login credential POST. Its app
+            #     default is casdoor.snapdragon-pki… (NXDOMAIN, finding #14).
+            #   • APP_BFF_OIDC_ISSUER    — the authorization_code→token exchange.
+            # Deliberately NOT the pki-gateway: that gateway routes /api/auth/**,
+            # /login/** and /.well-known/** only, and the exchange path
+            # /api/login/oauth/access_token matches none of them (its /api/login
+            # route is an EXACT match, not a prefix), so a gateway-fronted exchange
+            # 404s. compose points both legs straight at Casdoor for the same reason.
+            - { name: APP_BFF_OIDC_LOGIN_BASE,   value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: APP_BFF_OIDC_ISSUER,       value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             # Cookie mode: the opaque bff_ session is ALSO set as an httpOnly cookie
             # (secure=true, SameSite=Lax) in addition to the body — the gateway's
             # BffSessionAuthFilter and BffJwtExchangeWebFilter can then resolve it.
@@ -276,6 +389,19 @@ spec:
                   name: user-bff-custody-key
                   key: key
                   optional: true
+            # admin-bff's INTERNAL surface — where the OIDC callback provisions the
+            # account + session + custody stamp. The app default is the pre-rebrand
+            # snapdragon-admin-bff-api.snapdragon-backend host, which is NXDOMAIN on a
+            # real cluster (finding #14): the login reached Casdoor, minted a real
+            # token, and then had nowhere to persist the session. compose sets
+            # ADMIN_BFF_INTERNAL_BASE_URL for exactly this reason; the cluster never did.
+            # https:// because admin-bff serves TLS with client-auth=need (see its
+            # deployment) — the scheme the fe/superadmin gateway routes already use for
+            # this peer. Completing this leg still needs the outbound client-cert wave
+            # (HUGMESH_MTLS_CLIENT_ENABLED + in-pod store passwords); that is NOT part
+            # of this change, but the ADDRESS must be right regardless.
+            - name: ADMIN_BFF_INTERNAL_BASE_URL
+              value: "https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080"
             # Shared internal token: user-bff OUTBOUND to admin-bff (X-Internal-Token).
             # Matches admin-bff's INBOUND InternalTokenWebFilter — both BLANK in dev (no-op);
             # both set to the SAME value in-cluster (fail-closed 401 on mismatch).

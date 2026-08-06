@@ -616,6 +616,69 @@ lint:conflict-markers:
       fi
       echo "no conflict markers"
 
+# SERVICE ENV-CONTRACT gate. Every service ships an application.yml full of
+# `${SOME_ENV:<default>}`, and those defaults still name the PRE-REBRAND org,
+# namespaces and hosts. A Deployment that omits an override does not fail — it
+# silently adopts a value that is wrong on every real cluster. The first real
+# KIND_PROFILE=sso bring-up (2026-08-05) walked through five of these in a row,
+# each visible only after fixing the one before it: CASDOOR_ORG unset, so Casdoor
+# answered "doesn't exist" about a persona the seed had just verified; the OIDC
+# client-id defaulting to `user-bff` against a registered `app-user-bff` ("Invalid
+# client_id"); a pre-rebrand redirect-uri; NXDOMAIN namespace defaults; and
+# admin-bff unable to START on an unresolved `${SVC_PASSWORD}`. compose.local.yaml
+# had overridden every one of them, several with a comment naming the exact error;
+# none reached specs/cluster. (The exact error strings live in
+# specs/cluster/service-env-contract.yaml, which is not part of the pre-rebrand
+# scanner's surface — quoting them here turns lint:image-builder-always-on red.)
+#
+# THE KEY LIST IS DERIVED, NOT WRITTEN. The first cut of this job checked a
+# hand-typed list and was green on a tree that still carried 23 more instances of
+# the same defect. It now reads each SERVICE's own application.yml for every
+# `${ENV:default}` whose default names a namespace this specs/cluster tree never
+# creates or a domain it never serves, and requires the Deployment to override it —
+# so a new stale default anywhere fails here with nobody editing a list, and
+# `headscale.headscale.svc.cluster.local` (no pre-rebrand string in it at all) is
+# caught like any other. It also still checks the things no config file can state:
+# agreement with what casdoor-init ACTUALLY registers (derived from init-job.yaml by
+# parsing its reconcile.py as Python, so either side moving alone turns it red) and
+# which Secret a credential comes from.
+#
+# THE SIBLING CLONES ARE THE GATE, NOT A CONVENIENCE — same lesson, and the same
+# recipe, as lint:reserved-prefixes above: the org mirror derived from
+# CI_REPOSITORY_URL (read-only CI job token, no secret committed), and a clone
+# failure fails the job on purpose. The checker exits 3 INCOMPLETE, never 0, if a
+# checkout is missing. The repo list comes from `--list-repos`, i.e. from the
+# manifests themselves, so a new BFF Deployment gets its source cloned without
+# anyone editing this file.
+#   NB image: `python:3` (not `-slim`) — we need git, exactly as lint:reserved-prefixes
+#   already does for the same reason.
+# Nineteen negative controls — including a brand-new stale default invented in a
+# service repo, a namespace removed from the cluster tree, an unparseable
+# casdoor-init (which must ABORT, not pass) and absent checkouts (which must be
+# INCOMPLETE, not green) — so a green run cannot be vacuous.
+# Offline apart from the clones: no cluster, no kubectl.
+lint:service-env-contract:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    SERVICE_SRC_ROOT: "${CI_PROJECT_DIR}/.service-src"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${SERVICE_SRC_ROOT}"
+    # Blobless + sparse: only src/main/resources is ever materialised, which is all
+    # the checker reads. --depth 1 keeps it to the tip of the default branch.
+    - |
+      for r in $(python3 tests/scripts/service_env_contract.py specs/cluster --list-repos); do
+        git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/${r}.git" "${SERVICE_SRC_ROOT}/${r}"
+        git -C "${SERVICE_SRC_ROOT}/${r}" sparse-checkout set src/main/resources
+      done
+  script:
+    # bash is required: the negative controls stage a copy of specs/cluster AND of
+    # the service sources, then re-run the checker against them.
+    - bash tests/scripts/test-service-env-contract.sh
+
 # Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
 # post-clone pass that rewrites files in ./.stack-src which `docker compose build`
 # then consumes) against synthetic checkouts: the pre-rename private dependency is
