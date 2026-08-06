@@ -164,6 +164,78 @@ lint:pki-role-san-coverage:
     # parameters are read by EXECUTING init-pki.sh under a vault stub.
     - bash tests/scripts/test-pki-role-san-coverage.sh
 
+# ESO SEED-CONTRACT gate. scripts/gen-cluster-secrets.sh is the ONLY thing that
+# provisions cluster secrets — ONLINE (`vault kv put`) and OFFLINE (the USB
+# secrets.json bundle) — and NOTHING in CI ever compared what it writes against
+# what the ExternalSecrets read. They drifted: route-access-db-roles required a
+# SIXTH route-access password (superadmin_gateway_password) that the script never
+# minted. ESO resolves an ExternalSecret ALL-OR-NOTHING, so that one missing
+# property cost the WHOLE Secret: route-access-db never started, the
+# gateway_route_access table (source of truth for ALL route authorization) never
+# existed, and every gateway fell back to its baked CanonicalSeed. Reproduced live
+# on kind 2026-08-05 and shipped via BOTH delivery paths.
+#
+# This job runs the REAL gen-cluster-secrets.sh FIVE times under a `vault` stub
+# that records argv — default (every optional feature off), all-optional-on, one
+# ISOLATED run per declared optional feature, and one under a NON-default
+# CLUSTER_DOMAIN — then asserts EVERY {key, property} and EVERY materialized
+# Secret key is covered by both products.
+#
+# SCOPE, stated to match the behaviour exactly: EVERY ExternalSecret under
+# specs/cluster is walked, not only manifests/external-secrets (three live
+# outside it — the cassandra-hardening overlay's two and manifests/cloudflared —
+# and were unguarded). A file is checked when its own directory's
+# kustomization.yaml lists it; anything else is reported under [not-rendered]. A
+# DARK overlay no ArgoCD Application points at is still CHECKED, because an
+# operator applies it by hand at flip time.
+#
+# Classification is PER REFERENCE, never per object: a generator-backed
+# `dataFrom` entry excuses only the keys IT produces, so an unseeded KV remoteRef
+# sharing the same ExternalSecret is still caught. References that are
+# legitimately not the seeder's job (Vault-PKI generator certs,
+# operator-provisioned homeserver tokens, in-cluster-minted Harbor robots, files
+# absent from the kustomization) are CLASSIFIED and printed with their reason,
+# and a classification that no longer matches a live reference is itself a
+# failure. "Conditional" is never an auto-pass either: an entry a default run
+# cannot satisfy must be attributable to a NAMED feature flag whose isolated run
+# produces it, with that feature's seeder guard line and its manifest's own
+# "may not materialize" statement both still present.
+#
+# NINETEEN negative controls plus three tooling-preflight controls, so a green
+# run cannot be vacuous: they cover the original defect, a brand-new unseeded
+# property, an unwritten Vault path, an offline-only gap, a doubled KV mount, a
+# stale classification, an extract-Secret key mismatch, an unseeded KV property
+# hidden inside a generator-backed object (both online and offline halves), an
+# unseeded property outside manifests/external-secrets, an unexplained
+# conditional, a conditional the manifests no longer support, a literal the
+# bundle disagrees with, a domain-bearing literal that stops tracking
+# CLUSTER_DOMAIN (and the symmetric case, and a probe that does not rebrand), a
+# blank-but-present value, an unresolvable template variable, and a missing run
+# artifact.
+#
+# A MISSING TOOL IS A HARD FAILURE HERE, never a silent skip. The gate exits
+# non-zero when python3 / PyYAML / openssl is absent; the ONLY way to turn that
+# into an exit-0 skip is the deliberate local opt-out env var named in
+# tests/scripts/test-eso-seed-contract.sh's header. That name is deliberately NOT
+# written anywhere in this file, and the gate's own control (t3) greps this file
+# for it and FAILS the build if it ever appears — in a job, in a global
+# `variables:` block, or anywhere else. So the CI path cannot go green without
+# having actually run.
+#
+# Offline: no cluster, no vault binary, no docker, no network; writes only into
+# its own mktemp dir (never keys-out).
+lint:eso-seed-contract:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    # bash + openssl are both present in python:3-slim (Debian): the gate EXECUTES
+    # the real seeder, which mints every value with `openssl rand`, and no static
+    # read of the script could tell what its arrays and conditionals expand to.
+    - bash tests/scripts/test-eso-seed-contract.sh
+
 # ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
 # image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE
 # SITS IN: the root app-of-apps recurses specs/cluster/apps, so moving

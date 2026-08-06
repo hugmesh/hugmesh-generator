@@ -338,7 +338,15 @@ done
 # seed it here so the ExternalSecret property resolves.
 SIGNUP_GATE_WEBHOOK_SECRET="$(openssl rand -hex 32)"
 CASDOOR_APP_KV_ARGS+=("signup-gate-webhook=${SIGNUP_GATE_WEBHOOK_SECRET}")
-CASDOOR_APP_JSON_ENV+=("SIGNUP_GATE_WEBHOOK_SECRET")
+# Must go into CASDOOR_APP_JSON_ENV under the SAME APPSEC_<APP> naming the loop
+# above uses: the offline-bundle builder derives the JSON property name with
+# `${_var#APPSEC_} | tr 'A-Z_' 'a-z-'`. A bare SIGNUP_GATE_WEBHOOK_SECRET has no
+# APPSEC_ prefix to strip, so it used to land in the bundle as the property
+# `signup-gate-webhook-secret` while Vault got `signup-gate-webhook` — the
+# signup-gate-webhook ExternalSecret's property then resolved online and NOT
+# offline.
+printf -v APPSEC_SIGNUP_GATE_WEBHOOK '%s' "${SIGNUP_GATE_WEBHOOK_SECRET}"
+CASDOOR_APP_JSON_ENV+=("APPSEC_SIGNUP_GATE_WEBHOOK")
 
 CLICKHOUSE_PASSWORD="$(openssl rand -base64 24)"
 
@@ -353,6 +361,13 @@ MOD_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 FORUM_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 WIKI_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
+# mesh-bff-db / character-forge-bff-db — same owner+app shape as the six above
+# (mesh-bff-db-auth / mesh-bff-db-app-auth / character-forge-bff-db-auth /
+# character-forge-bff-db-app-auth ExternalSecrets). Their slugs ship dark, but the
+# ExternalSecrets are UNCONDITIONALLY rendered by the external-secrets
+# kustomization, so an unseeded path leaves those Secrets permanently unresolved.
+MESH_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
+CHARACTER_FORGE_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 # Non-owner least-privilege RUNTIME role passwords (one per single-consumer DB).
 FEDERATION_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 ADMIN_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
@@ -360,6 +375,8 @@ MOD_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 FORUM_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 WIKI_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+MESH_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+CHARACTER_FORGE_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 
 # admin-bff MFA TOTP-secret encryption key (app.mfa.factor-key / env
 # APP_MFA_FACTOR_KEY). The admin-bff's MfaSecretCipher AES-256-GCM-encrypts each
@@ -383,6 +400,12 @@ USER_BFF_CUSTODY_KEY="$(openssl rand -base64 32)"
 # custody encryption key. The ESO ExternalSecret + deployment wiring already
 # existed (user-bff-hs-token); this closes the bootstrap gap by seeding Vault.
 USER_BFF_HS_TOKEN_KEY="$(openssl rand -base64 32)"
+# ...and the homeserver SERVICE-ACCOUNT password the ServiceTokenBroker mints
+# with (APP_HS_TOKEN_SVC_PASSWORD). SAME Vault doc, property `svc-password` —
+# the user-bff-hs-token ExternalSecret lists BOTH properties, and ESO fails an
+# ExternalSecret ALL-OR-NOTHING, so leaving this one unseeded also cost the
+# `key` above (the whole Secret never materialized).
+USER_BFF_HS_TOKEN_SVC_PASSWORD="$(openssl rand -base64 24)"
 
 # Shared back-channel token between user-bff and the fe-gateway / admin-bff
 # (INTERNAL_TOKEN / X-Internal-Token header). Authenticates the gateway→admin-bff
@@ -421,13 +444,38 @@ AKKOMA_DB_PASSWORD="$(openssl rand -base64 24)"
 
 # route-access-db per-machine-user least-privilege passwords. The owner (DDL) plus
 # one password per consuming machine-user: admin-bff (the ONLY writer) and the
-# three gateways (read-only). Each gateway/admin-bff Deployment mounts ONLY its own
-# password; the route-access-db pod seeds all four roles from route-access-db-roles.
+# FOUR gateways (read-only) — pki / be / fe plus the TAILNET superadmin gateway
+# (specs/cluster/apps/22-gateway-superadmin.yaml, role superadmin_gateway). Each
+# gateway/admin-bff Deployment mounts ONLY its own password; the route-access-db pod
+# seeds all five roles from route-access-db-roles, and its initdb/10-roles.sh
+# `require`s every one of them.
 ROUTE_ACCESS_OWNER_PASSWORD="$(openssl rand -base64 24)"
 ROUTE_ACCESS_ADMIN_BFF_PASSWORD="$(openssl rand -base64 24)"
 ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 ROUTE_ACCESS_BE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 ROUTE_ACCESS_FE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+
+# Cassandra auth (DB-hardening, ADR-32). The cassandra-hardening overlay's two
+# ExternalSecrets read secret/<brand>/{cassandra-admin,cassandra-app-creds}, and
+# cassandra-values-overlay.yaml's flip order literally begins "1. Populate Vault:
+# secret/hugmesh/cassandra-admin + .../cassandra-app-creds" — but NOTHING wrote
+# either path, so both ExternalSecrets were unresolvable and the whole auth flip
+# would have stalled at step 2. Seeded here like every other dark-shipping secret
+# (tube / admin-bff-mfa / headwind): writing the KV doc only SOURCES values, it
+# enables nothing — the overlay is applied deliberately by an operator.
+# The superuser NAME stays the chart default `cassandra` (dbUser.user in
+# cassandra-values-overlay.yaml); only its password is rotated off cassandra/cassandra.
+CASSANDRA_ADMIN_USER="cassandra"
+CASSANDRA_ADMIN_PASSWORD="$(openssl rand -base64 24)"
+# One password per least-privilege app role created by bootstrap-roles-configmap.yaml.
+# Property names are the k8s keys the bootstrap Job + consumers read verbatim.
+CASSANDRA_APP_ADMIN_BFF_PASSWORD="$(openssl rand -base64 24)"
+CASSANDRA_APP_PKI_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+CASSANDRA_APP_BE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+CASSANDRA_APP_FE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+CASSANDRA_APP_SUPERADMIN_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+CASSANDRA_APP_FEDERATION_PASSWORD="$(openssl rand -base64 24)"
 
 UPTRACE_PG_PASSWORD="$(openssl rand -base64 24)"
 UPTRACE_PROJECT_TOKEN="$(openssl rand -hex 32)"
@@ -490,7 +538,8 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/user-bff-custody-key" \
             key="${USER_BFF_CUSTODY_KEY}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/user-bff-hs-token" \
-            key="${USER_BFF_HS_TOKEN_KEY}"
+            key="${USER_BFF_HS_TOKEN_KEY}" \
+            svc-password="${USER_BFF_HS_TOKEN_SVC_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/bff-internal-token" \
             token="${BFF_INTERNAL_TOKEN}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/mod-bff-db" \
@@ -505,6 +554,12 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/wiki-bff-db" \
             password="${WIKI_BFF_DB_PASSWORD}" \
             app_password="${WIKI_BFF_DB_APP_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/mesh-bff-db" \
+            password="${MESH_BFF_DB_PASSWORD}" \
+            app_password="${MESH_BFF_DB_APP_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/character-forge-bff-db" \
+            password="${CHARACTER_FORGE_BFF_DB_PASSWORD}" \
+            app_password="${CHARACTER_FORGE_BFF_DB_APP_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/tube" \
             media_key="${TUBE_MEDIA_KEY}" \
             token_dek="${TUBE_TOKEN_DEK}" \
@@ -531,13 +586,31 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             SIGNING_SALT="${AKKOMA_SIGNING_SALT}" \
             DB_PASSWORD="${AKKOMA_DB_PASSWORD}"
         # route-access-db per-machine-user least-privilege passwords (owner + the
-        # four consumers). admin-bff = writer; pki/be/fe-gateway = read-only.
+        # five consumers). admin-bff = writer; pki/be/fe/superadmin-gateway = read-only.
+        # EVERY property here is listed by the route-access-db-roles ExternalSecret,
+        # and ESO fails an ExternalSecret ALL-OR-NOTHING — one missing property means
+        # the Secret is never created and route-access-db never boots.
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/route-access-db" \
             owner_password="${ROUTE_ACCESS_OWNER_PASSWORD}" \
             admin_bff_password="${ROUTE_ACCESS_ADMIN_BFF_PASSWORD}" \
             pki_gateway_password="${ROUTE_ACCESS_PKI_GATEWAY_PASSWORD}" \
             be_gateway_password="${ROUTE_ACCESS_BE_GATEWAY_PASSWORD}" \
-            fe_gateway_password="${ROUTE_ACCESS_FE_GATEWAY_PASSWORD}"
+            fe_gateway_password="${ROUTE_ACCESS_FE_GATEWAY_PASSWORD}" \
+            superadmin_gateway_password="${ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD}"
+        # Cassandra auth (ADR-32, cassandra-hardening overlay). Two docs, exactly
+        # the properties cassandra-externalsecrets.yaml lists — `user` is the
+        # chart's dbUser.user, `password` the rotated superuser password, and one
+        # property per least-privilege app role.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/cassandra-admin" \
+            user="${CASSANDRA_ADMIN_USER}" \
+            password="${CASSANDRA_ADMIN_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/cassandra-app-creds" \
+            admin-bff="${CASSANDRA_APP_ADMIN_BFF_PASSWORD}" \
+            pki-gateway="${CASSANDRA_APP_PKI_GATEWAY_PASSWORD}" \
+            be-gateway="${CASSANDRA_APP_BE_GATEWAY_PASSWORD}" \
+            fe-gateway="${CASSANDRA_APP_FE_GATEWAY_PASSWORD}" \
+            superadmin-gateway="${CASSANDRA_APP_SUPERADMIN_GATEWAY_PASSWORD}" \
+            federation="${CASSANDRA_APP_FEDERATION_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/uptrace" \
             pg_password="${UPTRACE_PG_PASSWORD}" \
             project_token="${UPTRACE_PROJECT_TOKEN}"
@@ -587,7 +660,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
                 repo_password="${MANAGED_VELERO_REPO_PASSWORD}"
             echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/velero (managed object-store creds + kopia repo password)"
         fi
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,tube,route-access-db,uptrace,mail,harbor-robots,harbor,headwind}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,mesh-bff-db,character-forge-bff-db,forum,forum-db,akkoma,tube,route-access-db,cassandra-admin,cassandra-app-creds,uptrace,mail,harbor-robots,harbor,headwind}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -650,6 +723,10 @@ MOD_BFF_DB_PASSWORD="${MOD_BFF_DB_PASSWORD}" \
 USER_BFF_DB_PASSWORD="${USER_BFF_DB_PASSWORD}" \
 FORUM_BFF_DB_PASSWORD="${FORUM_BFF_DB_PASSWORD}" \
 WIKI_BFF_DB_PASSWORD="${WIKI_BFF_DB_PASSWORD}" \
+MESH_BFF_DB_PASSWORD="${MESH_BFF_DB_PASSWORD}" \
+MESH_BFF_DB_APP_PASSWORD="${MESH_BFF_DB_APP_PASSWORD}" \
+CHARACTER_FORGE_BFF_DB_PASSWORD="${CHARACTER_FORGE_BFF_DB_PASSWORD}" \
+CHARACTER_FORGE_BFF_DB_APP_PASSWORD="${CHARACTER_FORGE_BFF_DB_APP_PASSWORD}" \
 TUBE_MEDIA_KEY="${TUBE_MEDIA_KEY}" \
 TUBE_TOKEN_DEK="${TUBE_TOKEN_DEK}" \
 TUBE_GOOGLE_CLIENT_ID="${TUBE_GOOGLE_CLIENT_ID}" \
@@ -659,6 +736,7 @@ ADMIN_BFF_DB_APP_PASSWORD="${ADMIN_BFF_DB_APP_PASSWORD}" \
 ADMIN_BFF_MFA_FACTOR_KEY="${ADMIN_BFF_MFA_FACTOR_KEY}" \
 USER_BFF_CUSTODY_KEY="${USER_BFF_CUSTODY_KEY}" \
 USER_BFF_HS_TOKEN_KEY="${USER_BFF_HS_TOKEN_KEY}" \
+USER_BFF_HS_TOKEN_SVC_PASSWORD="${USER_BFF_HS_TOKEN_SVC_PASSWORD}" \
 BFF_INTERNAL_TOKEN="${BFF_INTERNAL_TOKEN}" \
 MOD_BFF_DB_APP_PASSWORD="${MOD_BFF_DB_APP_PASSWORD}" \
 USER_BFF_DB_APP_PASSWORD="${USER_BFF_DB_APP_PASSWORD}" \
@@ -677,6 +755,17 @@ ROUTE_ACCESS_ADMIN_BFF_PASSWORD="${ROUTE_ACCESS_ADMIN_BFF_PASSWORD}" \
 ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="${ROUTE_ACCESS_PKI_GATEWAY_PASSWORD}" \
 ROUTE_ACCESS_BE_GATEWAY_PASSWORD="${ROUTE_ACCESS_BE_GATEWAY_PASSWORD}" \
 ROUTE_ACCESS_FE_GATEWAY_PASSWORD="${ROUTE_ACCESS_FE_GATEWAY_PASSWORD}" \
+ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD="${ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD}" \
+HARBOR_ADMIN_PASSWORD="${HARBOR_ADMIN_PASSWORD}" \
+CLUSTER_DOMAIN="${CLUSTER_DOMAIN}" \
+CASSANDRA_ADMIN_USER="${CASSANDRA_ADMIN_USER}" \
+CASSANDRA_ADMIN_PASSWORD="${CASSANDRA_ADMIN_PASSWORD}" \
+CASSANDRA_APP_ADMIN_BFF_PASSWORD="${CASSANDRA_APP_ADMIN_BFF_PASSWORD}" \
+CASSANDRA_APP_PKI_GATEWAY_PASSWORD="${CASSANDRA_APP_PKI_GATEWAY_PASSWORD}" \
+CASSANDRA_APP_BE_GATEWAY_PASSWORD="${CASSANDRA_APP_BE_GATEWAY_PASSWORD}" \
+CASSANDRA_APP_FE_GATEWAY_PASSWORD="${CASSANDRA_APP_FE_GATEWAY_PASSWORD}" \
+CASSANDRA_APP_SUPERADMIN_GATEWAY_PASSWORD="${CASSANDRA_APP_SUPERADMIN_GATEWAY_PASSWORD}" \
+CASSANDRA_APP_FEDERATION_PASSWORD="${CASSANDRA_APP_FEDERATION_PASSWORD}" \
 UPTRACE_PG_PASSWORD="${UPTRACE_PG_PASSWORD}" \
 UPTRACE_PROJECT_TOKEN="${UPTRACE_PROJECT_TOKEN}" \
 python3 - "${SECRETS_JSON}" <<'PY'
@@ -719,19 +808,55 @@ data = {
         },
         # one key per app: the OAuth2 application client-secret.
         "casdoor-app-secrets": app_secrets,
-        # route-access-db pod role passwords (owner + the four machine-users). The
+        # route-access-db pod role passwords (owner + the five machine-users). The
         # DB pod seeds every login role from this Secret; the consumers each mount
-        # only their own matching per-namespace Secret with the SAME value.
+        # only their own matching per-namespace Secret with the SAME value. EVERY
+        # key here is `require`d by manifests/route-access/initdb/10-roles.sh and
+        # listed by the route-access-db-roles ExternalSecret.
         "route-access-db-roles": {
             "owner_password":        os.environ["ROUTE_ACCESS_OWNER_PASSWORD"],
             "admin_bff_password":    os.environ["ROUTE_ACCESS_ADMIN_BFF_PASSWORD"],
             "pki_gateway_password":  os.environ["ROUTE_ACCESS_PKI_GATEWAY_PASSWORD"],
             "be_gateway_password":   os.environ["ROUTE_ACCESS_BE_GATEWAY_PASSWORD"],
             "fe_gateway_password":   os.environ["ROUTE_ACCESS_FE_GATEWAY_PASSWORD"],
+            "superadmin_gateway_password": os.environ["ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD"],
         },
         # pki-gateway's OWN read-only route-access password (user pki_gateway).
         "route-access-pki-gateway": {
             "password": os.environ["ROUTE_ACCESS_PKI_GATEWAY_PASSWORD"],
+        },
+        # The TAILNET superadmin-gateway's OWN read-only route-access password
+        # (user superadmin_gateway). Same ns as pki-gateway's; apps/22-gateway-
+        # superadmin.yaml mounts secret route-access-superadmin-gateway key
+        # `password` into ROUTE_ACCESS_DB_PASSWORD.
+        "route-access-superadmin-gateway": {
+            "password": os.environ["ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD"],
+        },
+        # Harbor built-in superuser login. THREE keys, mirroring the harbor-admin
+        # ExternalSecret template exactly: the Helm chart reads
+        # HARBOR_ADMIN_PASSWORD (existingSecretAdminPasswordKey) and the
+        # harbor-provision Job reads password; username is the fixed "admin".
+        "harbor-admin": {
+            "username": "admin",
+            "password": os.environ["HARBOR_ADMIN_PASSWORD"],
+            "HARBOR_ADMIN_PASSWORD": os.environ["HARBOR_ADMIN_PASSWORD"],
+        },
+        # SCOPED per-app Casdoor machine-client Secrets carved out of the
+        # casdoor-apps doc (the ESO side templates a FIXED clientId + the one
+        # per-app secret). Mirrors harbor-casdoor / signup-gate-casdoor in
+        # secretstore.yaml; the consumers mount these, NOT the whole bag.
+        "harbor-casdoor": {
+            "clientId": "app-harbor",
+            "clientSecret": app_secrets["harbor"],
+        },
+        "signup-gate-casdoor": {
+            "clientId": "app-signup-gate",
+            "clientSecret": app_secrets["signup-gate"],
+        },
+        # signup-gate POST-signup reconcile webhook shared secret (header
+        # X-Signup-Gate-Secret). Same casdoor-apps property, own Secret.
+        "signup-gate-webhook": {
+            "secret": app_secrets["signup-gate-webhook"],
         },
         # Headwind MDM (DEFAULT-OFF optional-service). OWNER role only — VERIFIED
         # not separable from runtime (see gen-cluster-secrets.sh's HEADWIND_DB_PASSWORD
@@ -744,6 +869,44 @@ data = {
         "headwind-admin": {
             "username": "admin",
             "password": os.environ["HEADWIND_ADMIN_PASSWORD"],
+            # Non-secret, and DOMAIN-COUPLED — not a fixed string.
+            # headwind-externalsecrets.yaml's template.data.email reads
+            # "admin@hugmesh.systems" IN THE REPO, and ESO writes that value
+            # verbatim online — but the manifest the cluster actually runs is the
+            # BAKED copy: build-*-stage4.sh does
+            #   cp -r specs/cluster -> ${SYSROOT}/var/lib/hugmesh/cluster
+            # and then rebrand_sysroot() seds `hugmesh.systems` ->
+            # `${CLUSTER_DOMAIN}` across that whole tree. So on every non-default
+            # brand the ONLINE value is admin@${CLUSTER_DOMAIN}, and this offline
+            # value has to track it. Hardcoding "admin@hugmesh.systems" here
+            # would match only the default brand and hand a rebranded cluster's
+            # SAME pod two different ADMIN_EMAILs depending on which delivery
+            # path provisioned it.
+            # headwind.yaml mounts this as a NON-optional secretKeyRef
+            # (ADMIN_EMAIL), so an offline bundle without it leaves the pod in
+            # CreateContainerConfigError. Both directions are gated:
+            # [literal-value] in tests/scripts/eso_seed_contract.py pins the
+            # default-brand string byte-for-byte, and [domain-coupled] re-runs
+            # this script under a NON-default CLUSTER_DOMAIN and fails if the
+            # value stops tracking it.
+            "email": "admin@" + os.environ["CLUSTER_DOMAIN"],
+        },
+        # Cassandra auth (ADR-32 dark overlay). cassandra-admin's third key
+        # `cassandra-password` is the bitnami chart's dbUser.existingSecret alias
+        # for the SAME superuser password the bootstrap Job reads as `password`
+        # (cassandra-externalsecrets.yaml aliases both to the one Vault property).
+        "cassandra-admin": {
+            "user": os.environ["CASSANDRA_ADMIN_USER"],
+            "password": os.environ["CASSANDRA_ADMIN_PASSWORD"],
+            "cassandra-password": os.environ["CASSANDRA_ADMIN_PASSWORD"],
+        },
+        "cassandra-app-creds": {
+            "admin-bff": os.environ["CASSANDRA_APP_ADMIN_BFF_PASSWORD"],
+            "pki-gateway": os.environ["CASSANDRA_APP_PKI_GATEWAY_PASSWORD"],
+            "be-gateway": os.environ["CASSANDRA_APP_BE_GATEWAY_PASSWORD"],
+            "fe-gateway": os.environ["CASSANDRA_APP_FE_GATEWAY_PASSWORD"],
+            "superadmin-gateway": os.environ["CASSANDRA_APP_SUPERADMIN_GATEWAY_PASSWORD"],
+            "federation": os.environ["CASSANDRA_APP_FEDERATION_PASSWORD"],
         },
     },
     f"{brand}-backend": {
@@ -789,10 +952,18 @@ data = {
         "user-bff-custody-key": {
             "key": os.environ["USER_BFF_CUSTODY_KEY"],
         },
-        # user-bff-hs-token: homeserver-native token custody key (APP_HS_TOKEN_KEY).
-        # Pre-existing ESO + deployment wiring; this closes the bootstrap gap.
+        # user-bff-hs-token: homeserver-native token custody key (APP_HS_TOKEN_KEY)
+        # + the ServiceTokenBroker's homeserver service-account password
+        # (APP_HS_TOKEN_SVC_PASSWORD). BOTH keys are listed by the ExternalSecret.
         "user-bff-hs-token": {
             "key": os.environ["USER_BFF_HS_TOKEN_KEY"],
+            "svc-password": os.environ["USER_BFF_HS_TOKEN_SVC_PASSWORD"],
+        },
+        # user-bff's OWN Casdoor OIDC client secret, carved out of the casdoor-apps
+        # doc (APP_BFF_OIDC_CLIENT_SECRET). Mirrors the user-bff-oidc ExternalSecret
+        # in sso-externalsecrets.yaml — k8s key `client-secret`.
+        "user-bff-oidc": {
+            "client-secret": app_secrets["user-bff"],
         },
         # bff-internal-token: shared back-channel auth token (INTERNAL_TOKEN).
         # Mounted in BOTH hugmesh-backend (user-bff) and hugmesh-frontend
@@ -811,6 +982,21 @@ data = {
         },
         "wiki-bff-db-app-auth": {
             "password": os.environ["WIKI_BFF_DB_APP_PASSWORD"],
+        },
+        # mesh-bff / character-forge-bff owner + runtime DB roles. Same owner/app
+        # split as the six above; their ExternalSecrets are rendered
+        # unconditionally by the external-secrets kustomization.
+        "mesh-bff-db-auth": {
+            "password": os.environ["MESH_BFF_DB_PASSWORD"],
+        },
+        "mesh-bff-db-app-auth": {
+            "password": os.environ["MESH_BFF_DB_APP_PASSWORD"],
+        },
+        "character-forge-bff-db-auth": {
+            "password": os.environ["CHARACTER_FORGE_BFF_DB_PASSWORD"],
+        },
+        "character-forge-bff-db-app-auth": {
+            "password": os.environ["CHARACTER_FORGE_BFF_DB_APP_PASSWORD"],
         },
         # route-access machine-user passwords reachable from the backend ns:
         # be-gateway (read-only) + admin-bff (writer). Each Deployment mounts ONLY
@@ -869,6 +1055,12 @@ data = {
         },
         "bff-internal-token": {
             "token": os.environ["BFF_INTERNAL_TOKEN"],
+        },
+        # remote-fragment sync sidecar's Casdoor client-credentials machine account.
+        # Carved out of casdoor-apps exactly like harbor-casdoor above.
+        "fragment-sync-casdoor": {
+            "clientId": "app-fragment-sync",
+            "clientSecret": app_secrets["fragment-sync"],
         },
     },
     # phpBB forum — the ISOLATED backend-only namespace (phpBB + phpbb-db). phpbb-db
