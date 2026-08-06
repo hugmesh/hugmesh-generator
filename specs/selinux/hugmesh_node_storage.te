@@ -95,7 +95,7 @@ corenet_tcp_connect_all_ports(hugmesh_node_storage_t)                           
 ########################################
 files_read_etc_files(hugmesh_node_storage_t)
 files_read_usr_files(hugmesh_node_storage_t)
-auth_read_all_files_except_shadow(hugmesh_node_storage_t)                         # INFERRED-WIDE: reads /etc/kubernetes/admin.conf + mTLS certs; narrow to those types post-AVC
+files_read_non_auth_files(hugmesh_node_storage_t)                                 # INFERRED-WIDE: reads /etc/kubernetes/admin.conf + mTLS certs; narrow to those types post-AVC
 corecmd_exec_bin(hugmesh_node_storage_t)                                          # INFERRED-WIDE: lsblk/jq/openssl/curl/kubectl
 corecmd_exec_shell(hugmesh_node_storage_t)                                        # provision.sh is bash — INFERRED-WIDE (prefer a provision.sh domain transition)
 logging_send_syslog_msg(hugmesh_node_storage_t)

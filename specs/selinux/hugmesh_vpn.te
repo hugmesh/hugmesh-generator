@@ -67,7 +67,7 @@ allow hugmesh_vpn_runner_t self:tun_socket { create_socket_perms relabelfrom rel
 corenet_rw_tun_tap_dev(hugmesh_vpn_runner_t)                                                   # INFERRED-WIDE: /dev/net/tun
 sysnet_manage_config(hugmesh_vpn_runner_t)                                                     # INFERRED-WIDE: ip route/rule + resolv writes
 kernel_rw_net_sysctls(hugmesh_vpn_runner_t)                                                    # INFERRED-WIDE: net.ipv4/ipv6 toggles
-modutils_domtrans_insmod(hugmesh_vpn_runner_t)                                                 # INFERRED-WIDE: start_pre modprobe wireguard/tun
+modutils_domtrans(hugmesh_vpn_runner_t)                                                        # INFERRED-WIDE: start_pre modprobe wireguard/tun
 # Egress for the leak-check probe (curl --interface wg0 to api.ipify.org).
 sysnet_dns_name_resolve(hugmesh_vpn_runner_t)
 corenet_tcp_sendrecv_generic_node(hugmesh_vpn_runner_t)
@@ -82,7 +82,7 @@ read_files_pattern(hugmesh_vpn_runner_t, hugmesh_vpn_etc_t, hugmesh_vpn_etc_t)
 read_lnk_files_pattern(hugmesh_vpn_runner_t, hugmesh_vpn_etc_t, hugmesh_vpn_etc_t)
 list_dirs_pattern(hugmesh_vpn_runner_t, hugmesh_vpn_etc_t, hugmesh_vpn_etc_t)
 manage_files_pattern(hugmesh_vpn_runner_t, hugmesh_vpn_runtime_t, hugmesh_vpn_runtime_t)
-files_pid_filetrans(hugmesh_vpn_runner_t, hugmesh_vpn_runtime_t, file)                      # /run pid + staged conf
+files_runtime_filetrans(hugmesh_vpn_runner_t, hugmesh_vpn_runtime_t, file)                  # /run pid + staged conf
 files_read_etc_files(hugmesh_vpn_runner_t)
 files_read_usr_files(hugmesh_vpn_runner_t)
 corecmd_exec_bin(hugmesh_vpn_runner_t)                                                         # wg-quick/openvpn/ip/curl helpers — INFERRED-WIDE

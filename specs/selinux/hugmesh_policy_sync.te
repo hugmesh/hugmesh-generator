@@ -71,7 +71,7 @@ corenet_tcp_connect_all_ports(hugmesh_policy_sync_t)                            
 #    (the headscale daemon may run unconfined/initrc_t today). Connect to the
 #    local socket + exec the CLI.
 ########################################
-allow hugmesh_policy_sync_t self:unix_stream_socket connect_socket_perms;            # INFERRED-WIDE: headscale local socket
+allow hugmesh_policy_sync_t self:unix_stream_socket connected_stream_socket_perms;    # INFERRED-WIDE: headscale local socket
 corecmd_exec_bin(hugmesh_policy_sync_t)                                              # INFERRED-WIDE: headscale CLI / jq / openssl / curl
 corecmd_exec_shell(hugmesh_policy_sync_t)                                            # the agent is a shell script
 files_read_usr_files(hugmesh_policy_sync_t)

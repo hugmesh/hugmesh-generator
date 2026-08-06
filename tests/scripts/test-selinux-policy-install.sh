@@ -450,6 +450,45 @@ else
         || bad "the diagnostic still misattributes the cause"$'\n'"${out}"
 fi
 
+# D-if) every interface/macro a module calls must EXIST in real refpolicy.
+# The 2026-08-05 real ARM build proved the fixture legs cannot catch an
+# INVENTED interface name (four shipped: auth_read_all_files_except_shadow x2,
+# modutils_domtrans_insmod, files_pid_filetrans, plus a connect_socket_perms
+# perm-set typo) — checkmodule only sees them with real headers. This leg is
+# the hermetic version of that proof: scripts/selinux-interface-index.txt is
+# the interface/template/perm-set census of a REAL sysroot refpolicy tree
+# (generated from wl-pki.rpi5 @ sec-policy/selinux-base-2.20260616_p1; the
+# regeneration recipe is in the index header comment). Every identifier a .te
+# calls as a statement must be in the index or be a local definition.
+echo "-- D-if) called interfaces exist in real refpolicy (index) --"
+IDX="${GEN}/scripts/selinux-interface-index.txt"
+if [ ! -f "${IDX}" ]; then
+    bad "scripts/selinux-interface-index.txt missing — the invented-interface class is unguarded"
+else
+    for te in "${SRC}"/*.te; do
+        mod="$(basename "${te}" .te)"
+        bad_names=""
+        while IFS= read -r name; do
+            case "${name}" in
+                policy_module|gen_require|gen_tunable|tunable_policy|optional_policy|require|type|attribute|class|role|bool|ifdef|ifndef|refpolicywarn|interface|template) continue ;;
+            esac
+            grep -qx "${name}" "${IDX}" && continue
+            # locally-defined interface/template in the module's own .if? none shipped; treat as invented
+            bad_names="${bad_names} ${name}"
+        done < <(grep -oE '^[a-z][a-z0-9_]*\(' "${te}" | sed 's/($//;s/(//' | sort -u)
+        # perm-set macros used inside allow rules (the *_perms class)
+        while IFS= read -r pname; do
+            grep -qx "${pname}" "${IDX}" && continue
+            bad_names="${bad_names} ${pname}"
+        done < <(grep -oE '[a-z][a-z0-9_]*_perms' "${te}" | sort -u)
+        if [ -n "${bad_names}" ]; then
+            bad "${mod}: calls interface/macro name(s) NOT in real refpolicy:${bad_names} — checkmodule will fail at build time (the 2026-08-05 class)"
+        else
+            ok "${mod}: every called interface/perm-set exists in the real refpolicy index"
+        fi
+    done
+fi
+
 # C15/C16: the REAL host toolchain, driven through the lib's own make invocation.
 echo "-- C-real) the genuine m4 -> checkmodule -> semodule_package recipe --"
 if command -v m4 >/dev/null && command -v checkmodule >/dev/null && command -v semodule_package >/dev/null; then

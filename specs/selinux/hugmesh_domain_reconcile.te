@@ -83,7 +83,7 @@ corenet_tcp_connect_all_ports(hugmesh_domain_reconcile_t)                       
 ########################################
 files_read_etc_files(hugmesh_domain_reconcile_t)
 files_read_usr_files(hugmesh_domain_reconcile_t)
-auth_read_all_files_except_shadow(hugmesh_domain_reconcile_t)                     # INFERRED-WIDE: reads the mTLS client cert/key; narrow to those types post-AVC
+files_read_non_auth_files(hugmesh_domain_reconcile_t)                             # INFERRED-WIDE: reads the mTLS client cert/key; narrow to those types post-AVC
 corecmd_exec_bin(hugmesh_domain_reconcile_t)                                      # INFERRED-WIDE: jq/openssl/curl/base64/keytool
 corecmd_exec_shell(hugmesh_domain_reconcile_t)                                    # the generator scripts are bash — INFERRED-WIDE
 logging_send_syslog_msg(hugmesh_domain_reconcile_t)
