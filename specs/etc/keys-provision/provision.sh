@@ -1739,6 +1739,44 @@ provision_storage() {
     done
 }
 
+# ── NODE-STORAGE reconcile — enable the pull agent (boot oneshot + 60s cron) ──
+# The pull-half twin of the device-registry sync (hugmesh-device-registry-sync):
+# ANY mesh node may host an attached + registered storage pool (SUPERADMIN- and
+# ADMIN-owned alike — see docs/NODE-STORAGE.md's ownership matrix), so the agent
+# is enabled on EVERY mesh node and is INERT by CONTENT, not by absence: without
+# node.env it exits 0 keeping cache, and an unknown node fp gets the EMPTY signed
+# body and provisions NOTHING. Mirrors provision_device_registry's enable idiom
+# (rc-update boot oneshot + the builder-staged cron placed into /etc/cron.d) and
+# its missing-binary warn pattern (additive: a stale image without the baked
+# agent just never reconciles pools — it never bricks the boot).
+provision_node_storage() {
+    local reg_dir=/etc/hugmesh/registry
+    local cache_dir=/var/lib/hugmesh/node-storage
+    mkdir -p "${cache_dir}"
+
+    # The agent + its verify lib are BAKED into the image rootfs by the builders.
+    [ -x /usr/sbin/hugmesh-node-storage-reconcile ] \
+        || warn "node-storage: /usr/sbin/hugmesh-node-storage-reconcile missing from image (pools never reconcile until baked)"
+    [ -r /usr/lib/hugmesh/storage-verify.sh ] \
+        || warn "node-storage: /usr/lib/hugmesh/storage-verify.sh missing from image (verify unavailable — agent keeps last-good cache)"
+
+    # ── Enable the reconcile service (boot oneshot) + 60s cron (convergence floor) ──
+    if [ -f /etc/init.d/hugmesh-node-storage-reconcile ]; then
+        rc-update add hugmesh-node-storage-reconcile default 2>/dev/null \
+            && log "node-storage: enabled hugmesh-node-storage-reconcile (boot reconcile)" \
+            || warn "node-storage: rc-update add hugmesh-node-storage-reconcile failed"
+    else
+        warn "node-storage: init.d/hugmesh-node-storage-reconcile not baked — no boot reconcile"
+    fi
+    if [ -f "${reg_dir}/cron-node-storage-reconcile" ]; then
+        cp -f "${reg_dir}/cron-node-storage-reconcile" /etc/cron.d/hugmesh-node-storage-reconcile
+        chmod 0644 /etc/cron.d/hugmesh-node-storage-reconcile
+        log "node-storage: installed 60s reconcile cron (convergence floor)"
+    else
+        warn "node-storage: cron drop-in not baked at ${reg_dir} — no 60s convergence poll"
+    fi
+}
+
 # ── Egress VPN — provider configs (per-domain, own-domain-only, 0600) ──
 # Installs the provider-downloaded VPN configs (ProtonVPN WireGuard `.conf`
 # FIRST-CLASS; OpenVPN `.ovpn` fallback) the egress-VPN OpenRC service
@@ -2819,6 +2857,7 @@ main() {
         provision_tailscale
         provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s
         provision_domain_registry   # #4 domain-registry -> brand-repo bridge (default-off; reuses Layer-B key) — after device-registry stages the pubkey
+        provision_node_storage      # NODE-STORAGE reconcile enable (pull twin of the registry sync; inert with no registered pool)
         provision_kubernetes
         provision_backup
         provision_update     # OPT-IN binpkg auto-update plumbing (default-off; superadmin enables via ConfigMap; absence => off)

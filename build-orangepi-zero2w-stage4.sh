@@ -1486,6 +1486,22 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-policy-sync"         "${SYSROOT}/etc/hugmesh/registry/cron-policy-sync"
 
+# ── NODE-STORAGE reconcile (signed per-node export consumer) — enabled by keys-provision ──
+# The pull-half twin of hugmesh-device-registry-sync (boot oneshot + 60s cron
+# convergence floor). storage-verify.sh SOURCES Layer-B's registry-verify.sh (the
+# IDENTICAL detached-Ed25519 verify + strict-monotonic rollback guard; REUSES the
+# baked registry-pub.ed25519 — never re-bake). INERT with no registered pool: the
+# signed per-node export is the EMPTY body, so the agent provisions NOTHING. The
+# cron drop-in is STAGED at /etc/hugmesh/registry (keys-provision rc-update adds
+# the boot oneshot + places the cron into /etc/cron.d on every mesh node).
+mkdir -p "${SYSROOT}/var/lib/hugmesh/node-storage"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-node-storage-reconcile" "${SYSROOT}/usr/sbin/hugmesh-node-storage-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-node-storage-reconcile"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/storage-verify.sh" "${SYSROOT}/usr/lib/hugmesh/storage-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-node-storage-reconcile" "${SYSROOT}/etc/init.d/hugmesh-node-storage-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-node-storage-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-node-storage-reconcile" "${SYSROOT}/etc/hugmesh/registry/cron-node-storage-reconcile"
+
 # ── Egress VPN (split-tunnel, fail-closed) — node-level, DEFAULT-OFF ────────────
 # Bake the OpenRC service + the split-tunnel runner into every node image; INERT
 # until enabled (not linked into a runlevel here; no active.conf => runner no-op).

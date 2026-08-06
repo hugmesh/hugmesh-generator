@@ -244,6 +244,18 @@ spec:
             - { name: BACKUPS_VELERO_NAMESPACE,            value: "velero" }
             - { name: BACKUPS_BRAND_NAMESPACE_SUFFIXES,    value: "be,fe" }
             - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "hugmesh-backend" }
+            # ── Node-storage reconciler (the push-with-ack leg) — SHIPS DARK ───
+            # NODESTORAGE_RECONCILER_ENABLED gates admin-bff's node-storage push
+            # reconciler: the FAST propagation path that pushes the signed
+            # per-node storage-pool export at the node agent and tracks /ack
+            # (pending->applied chip). The node agent's boot oneshot + 60s cron
+            # PULL is the convergence floor and works without it, so the lever
+            # staying dark only slows propagation — it never blocks it.
+            # COMMENTED, not merely "false": the exact Spring relaxed-binding
+            # name is being proven in the admin-bff lane — cross-check the
+            # proven contract there before uncommenting. Absent env => the
+            # reconciler stays dark (pull-only convergence).
+            # - { name: NODESTORAGE_RECONCILER_ENABLED, value: "false" }
             # ── Forum admin/moderation console (the phpBB leg, via forum-bff) ──
             # GO-LIVE: the hugmesh/forumapi extension is live + proven end-to-end
             # (live smoke 2026-06-23), so turn on the admin forum-moderation proxy

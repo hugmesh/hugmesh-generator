@@ -7,7 +7,10 @@ is attached to, and its volume binds there.
 This is an **OPTIONAL, opt-in, add-by-command** feature. It ships **INERT**: with no pool
 registered anywhere, the platform behaves exactly as before (the local-path provisioner keeps
 its `DEFAULT_PATH` on the x86 host; the placement ApplicationSet has zero elements; the
-control-plane tables are empty).
+control-plane tables are empty). The node agent is **baked into every device image and
+enabled on every mesh node** (see *Bake & enable* below) — inert by *content*, not by
+absence: with no registered pool the signed export is the empty body and it provisions
+nothing.
 
 ---
 
@@ -30,6 +33,31 @@ node-local PersistentVolume there.
 | **the export** | `GET /bff/admin/device-storage-pools/export?node=<fp>` | the signed, per-node truth the node-agent reconciles; carries ONLY that node's pools + assignments. |
 | **provisioning** | `provision_storage` (keys-provision) | a pool is just a `.storage.devices[]` element with a `pool:{}` marker; FDE is reused verbatim. |
 | **placement** | `apps/13b-node-storage.yaml` ApplicationSet | each ACTIVE assignment → one Application that injects `nodeAffinity` + a PVC. |
+
+---
+
+## Bake & enable (how the agent gets onto a node)
+
+The agent is baked + enabled **exactly like its twin `hugmesh-device-registry-sync`**:
+
+- **Baked by ALL device builders** (`build-*-stage4.sh` — x86 host, rpi5, frite, jetson and
+  the six Orange Pi boards): `/usr/sbin/hugmesh-node-storage-reconcile`,
+  `/usr/lib/hugmesh/storage-verify.sh` (sources Layer-B's `registry-verify.sh` — same
+  Ed25519 verify + rollback guard, same baked `registry-pub.ed25519`), the OpenRC oneshot
+  `/etc/init.d/hugmesh-node-storage-reconcile`, and the 60s cron drop-in **staged** at
+  `/etc/hugmesh/registry/cron-node-storage-reconcile`. The x86 UNAFFILIATED (plain-desktop)
+  image skips the whole mesh block, agent included.
+- **Enabled by keys-provision** (`provision_node_storage`, first boot): `rc-update add`s the
+  boot oneshot into the default runlevel and places the staged cron into
+  `/etc/cron.d/hugmesh-node-storage-reconcile` on every mesh node (STANDALONE desktops
+  skip it). A stale image without the baked files gets a `warn` and never bricks.
+- **Guarded by a test:** `tests/node-storage/test-bake-coverage.sh` fails if ANY
+  `build-*-stage4.sh` (present or future) stops referencing the four agent files, or if the
+  staged-cron name drifts between the builders and `provision_node_storage`.
+- **admin-bff push lever ships DARK:** `NODESTORAGE_RECONCILER_ENABLED` is a *commented*
+  entry in `specs/cluster/manifests/admin-bff-api/deployment.yaml` until the admin-bff lane
+  proves the exact relaxed-binding name. The pull (boot oneshot + 60s cron) is the
+  convergence floor either way — the dark lever only defers the fast push path.
 
 ---
 
@@ -128,7 +156,10 @@ per local-path node is correct.
   verify (genuine accept; unsigned/tampered/foreign/rollback reject) + the `nodePathMap`
   CAS-patch (PV-binds-to-correct-node) + the pool-manifest build, and the 13b ApplicationSet
   structure/selector lever. The storage canonical-bytes reconstruction round-trips against the
-  Java `NodeStorageExportService.canonicalBytes` shape.
-- **NEEDS A BOOTED NODE:** end-to-end byte-equality with a live BFF `/export` payload; the real
+  Java `NodeStorageExportService.canonicalBytes` shape. The bake/enable coverage
+  (`test-bake-coverage.sh`): every builder bakes the four agent files, `provision_node_storage`
+  enables the oneshot + cron, and the staged-cron name matches across both.
+- **NEEDS A BOOTED NODE:** the real first-boot `rc-update add` + cron placement on a
+  provisioned node; end-to-end byte-equality with a live BFF `/export` payload; the real
   `provision_storage --pool` against a physical disk; the live PV bind + pod scheduling on the
   pool's node; the precise degraded/migration behaviour.
