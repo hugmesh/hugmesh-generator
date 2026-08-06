@@ -84,71 +84,122 @@ data:
       issuing_certificates="${VAULT_ADDR}/v1/${PKI}/ca" \
       crl_distribution_points="${VAULT_ADDR}/v1/${PKI}/crl"
 
-    # 3) One issuing role per Java machine-user (matches gen-keystores.sh
-    #    SERVICES + docs/SECURITY.md identity matrix). serverAuth+clientAuth for
-    #    cross-namespace mTLS. Names mirror <svc>.<ns>.svc.cluster.local.
-    #    akkoma-proxy / tuwunel-proxy = the homeserver mTLS PROXY sidecars
-    #    (manifests/akkoma|tuwunel) — SERVER certs only (the be-gateway/mod-bff/
-    #    admin-bff present THEIR existing client certs to these). They are NOT
-    #    hugmesh-* prefixed (they front the non-JVM homeservers), so the
-    #    allowed_domains below covers the bare + .svc.cluster.local SANs.
+    # 3) One issuing role per machine-user (matches gen-keystores.sh SERVICES +
+    #    docs/SECURITY.md identity matrix). serverAuth+clientAuth for
+    #    cross-namespace mTLS.
     #
+    #    ── WHAT A ROLE MUST ALLOW, AND WHY IT IS SPELLED OUT PER ENTRY ──────
+    #    Vault validates the common_name AND every DNS SAN against
+    #    allowed_domains (builtin/logical/pki/issuing.ValidateNames):
+    #      allow_bare_domains  -> EqualFold(name, entry)          exact match
+    #      allow_subdomains    -> HasSuffix(name, "."+entry)      ANY prefix depth
+    #      allow_glob_domains  -> only when the entry CONTAINS '*'
+    #    Every ESO generator in manifests/external-secrets asks for the SAME
+    #    three-name shape as the workload's Kubernetes Service DNS:
+    #      <service>            <service>.<namespace>            <service>.<namespace>.svc.cluster.local
+    #    The middle, TWO-LABEL form matched NOTHING under the old flat
+    #    "${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" list —
+    #    `svc.cluster.local` + allow_subdomains covers *.svc.cluster.local only —
+    #    so EVERY generic-loop app 400'd on issuance:
+    #      "subject alternate name hugmesh-user-bff-api.hugmesh-backend not
+    #       allowed by this role"
+    #    and no keystore initContainer ever received material. Each entry below
+    #    therefore carries the workload's real <service>.<namespace> identity and
+    #    the role allows exactly those three names — nothing else.
+    #
+    #    TIGHTNESS TRADEOFF. The obvious repair (leave the blanket entries and
+    #    bolt on a wildcard) is what created the bug's blast radius in the first
+    #    place: `svc.cluster.local` + allow_subdomains let ANY app role mint a
+    #    cert for ANY Service in the cluster — hugmesh-user-bff-api's role could
+    #    issue `hugmesh-be-gateway.hugmesh-backend.svc.cluster.local` or
+    #    `vault.vault.svc.cluster.local` and walk straight through the mesh's
+    #    peer verification; `${DOMAIN}` + allow_subdomains did the same for every
+    #    public *.hugmesh.systems host including registry.hugmesh.systems. Both
+    #    blankets are gone. Named entries + allow_bare_domains give exact-match
+    #    semantics, so subdomains/globs/wildcards/IP-SANs are all switched OFF
+    #    explicitly (they are Vault's defaults for the first three, but a PKI role
+    #    should not depend on a default staying put). Cost: adding a new SAN
+    #    means adding it here — which is the point, and
+    #    tests/scripts/test-pki-role-san-coverage.sh fails the pipeline naming
+    #    the exact (role, SAN) pair the day the two sides drift apart.
+    #
+    #    Entry format is "<role>:<service>.<namespace>". The role name is the
+    #    path the ExternalSecret calls (pki_int/issue/<role>); the service+
+    #    namespace pair is the workload's real cluster identity. They are NOT
+    #    always the same word — media-poisoner's role is `media-poisoner` while
+    #    its Service is `hugmesh-media-poisoner` — and assuming they were is why
+    #    that role used to need a hand-patched copy of this block outside the
+    #    loop. Carrying both explicitly folds it back in.
+    #
+    #    akkoma-proxy / tuwunel-proxy = the homeserver mTLS PROXY sidecars
+    #    (manifests/akkoma|tuwunel) — SERVER certs (the be-gateway/mod-bff/
+    #    admin-bff present THEIR existing client certs to these). They are NOT
+    #    hugmesh-* prefixed: they front the non-JVM homeservers.
     #    *-db = the per-DB Postgres SERVER certs (DB-hardening PR-C1, SHIPS DARK).
     #    Same server_flag+client_flag role shape so the issued cert supports EITHER
     #    server-only TLS or full mutual TLS when enablement (PR-C2) lands; the cert
     #    is only mounted on disk today (Deployment volume) — Postgres is NOT started
-    #    with ssl=on yet. Names mirror <db>.<ns>.svc.cluster.local; allowed_domains
-    #    (svc.cluster.local) covers them. See docs/POSTGRES-HARDENING.md:138-145.
-    #    media-poisoner = the media-poisoner worker's OWN in-process mTLS identity
+    #    with ssl=on yet. See docs/POSTGRES-HARDENING.md:138-145.
+    #    media-poisoner = the worker's OWN in-process mTLS identity
     #    (manifests/media-poisoner; app/serve.py terminates TLS itself, no sidecar).
     #    server_flag+client_flag so the same cert can serve AND (future) present a
     #    client identity; the worker enforces ssl.CERT_REQUIRED against ca.crt.
-    #    Handled separately below (not in the generic loop): the real Service is
-    #    named hugmesh-media-poisoner, not media-poisoner, so
-    #    media-poisoner-externalsecrets.yaml requests hugmesh-media-poisoner
-    #    SANs the generic "${app},${app}.svc.cluster.local" pattern doesn't cover.
-    #    harbor = the Harbor registry's expose.tls server cert (manifests/harbor
-    #    via apps/03a-harbor.yaml) — the chart's bundled nginx front-end
-    #    terminates TLS with it. Same server_flag+client_flag shape as the rest.
-    #    Handled separately below (not in the generic loop): the Helm chart's
-    #    real Service name is harbor-core, not harbor, so harbor-externalsecrets.yaml
-    #    requests harbor-core SANs the generic "${app},${app}.svc.cluster.local"
-    #    pattern doesn't cover.
-    for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
-               hugmesh-superadmin-gateway \
-               hugmesh-api hugmesh-admin-bff-api \
-               hugmesh-mod-bff-api hugmesh-user-bff-api \
-               hugmesh-forum-bff-api \
-               hugmesh-wiki-bff-api \
-               hugmesh-mesh-bff-api \
-               hugmesh-character-forge-bff-api \
-               hugmesh-federation-api \
-               route-access-db admin-bff-db mod-bff-db user-bff-db \
-               federation-db forum-bff-db wiki-bff-db mesh-bff-db \
-               character-forge-bff-db \
-               akkoma-proxy tuwunel-proxy; do
-      echo "==> role ${PKI}/roles/${app}"
-      vault write "${PKI}/roles/${app}" \
-        allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
-        allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
-        allow_localhost=false server_flag=true client_flag=true \
+    for entry in hugmesh-pki-gateway:hugmesh-pki-gateway.hugmesh-pki \
+                 hugmesh-superadmin-gateway:hugmesh-superadmin-gateway.hugmesh-pki \
+                 hugmesh-be-gateway:hugmesh-be-gateway.hugmesh-backend \
+                 hugmesh-fe-gateway:hugmesh-fe-gateway.hugmesh-frontend \
+                 hugmesh-api:hugmesh-api.hugmesh-backend \
+                 hugmesh-admin-bff-api:hugmesh-admin-bff-api.hugmesh-backend \
+                 hugmesh-mod-bff-api:hugmesh-mod-bff-api.hugmesh-backend \
+                 hugmesh-user-bff-api:hugmesh-user-bff-api.hugmesh-backend \
+                 hugmesh-forum-bff-api:hugmesh-forum-bff-api.hugmesh-backend \
+                 hugmesh-wiki-bff-api:hugmesh-wiki-bff-api.hugmesh-backend \
+                 hugmesh-mesh-bff-api:hugmesh-mesh-bff-api.hugmesh-backend \
+                 hugmesh-character-forge-bff-api:hugmesh-character-forge-bff-api.hugmesh-backend \
+                 hugmesh-federation-api:hugmesh-federation-api.hugmesh-backend \
+                 route-access-db:route-access-db.hugmesh-pki \
+                 admin-bff-db:admin-bff-db.hugmesh-backend \
+                 mod-bff-db:mod-bff-db.hugmesh-backend \
+                 user-bff-db:user-bff-db.hugmesh-backend \
+                 federation-db:federation-db.hugmesh-backend \
+                 forum-bff-db:forum-bff-db.hugmesh-backend \
+                 wiki-bff-db:wiki-bff-db.hugmesh-backend \
+                 mesh-bff-db:mesh-bff-db.hugmesh-backend \
+                 character-forge-bff-db:character-forge-bff-db.hugmesh-backend \
+                 akkoma-proxy:akkoma-proxy.hugmesh-backend \
+                 tuwunel-proxy:tuwunel-proxy.hugmesh-backend \
+                 media-poisoner:hugmesh-media-poisoner.hugmesh-backend; do
+      role="${entry%%:*}"          # Vault role name  (pki_int/issue/<role>)
+      svc_ns="${entry#*:}"         # <service>.<namespace>
+      svc="${svc_ns%%.*}"          # bare Service name
+      echo "==> role ${PKI}/roles/${role}"
+      vault write "${PKI}/roles/${role}" \
+        allowed_domains="${svc},${svc_ns},${svc_ns}.svc.cluster.local" \
+        allow_bare_domains=true allow_subdomains=false allow_glob_domains=false \
+        allow_any_name=false allow_localhost=false allow_ip_sans=false \
+        allow_wildcard_certificates=false enforce_hostnames=true \
+        server_flag=true client_flag=true \
         key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
         max_ttl=2160h ttl=720h
     done
 
-    echo "==> role ${PKI}/roles/media-poisoner"
-    vault write "${PKI}/roles/media-poisoner" \
-      allowed_domains="media-poisoner,hugmesh-media-poisoner,hugmesh-media-poisoner.hugmesh-backend,media-poisoner.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
-      allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
-      allow_localhost=false server_flag=true client_flag=true \
-      key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
-      max_ttl=2160h ttl=720h
-
+    # harbor = the Harbor registry's expose.tls server cert (manifests/harbor via
+    # apps/03a-harbor.yaml) — the chart's bundled nginx front-end terminates TLS
+    # with it. This is the ONE role that genuinely cannot fold into the loop
+    # above: it is not one <service>.<namespace> identity but THREE names of
+    # different kinds — the placeholder Service `harbor`, the Helm chart's real
+    # Service `harbor-core`, and the PUBLIC ingress host registry.${DOMAIN}
+    # (apps/03a-harbor.yaml expose.ingress.hosts.core + externalURL). Squeezing
+    # that into the entry format would mean re-introducing a wildcard, which is
+    # exactly the widening this change removes — so it stays explicit here, and
+    # the SAN-coverage gate checks it identically to every looped role.
     echo "==> role ${PKI}/roles/harbor"
     vault write "${PKI}/roles/harbor" \
-      allowed_domains="harbor,harbor-core,harbor-core.hugmesh-pki,harbor.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
-      allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
-      allow_localhost=false server_flag=true client_flag=true \
+      allowed_domains="harbor,harbor.hugmesh-pki,harbor.hugmesh-pki.svc.cluster.local,harbor-core,harbor-core.hugmesh-pki,harbor-core.hugmesh-pki.svc.cluster.local,registry.${DOMAIN}" \
+      allow_bare_domains=true allow_subdomains=false allow_glob_domains=false \
+      allow_any_name=false allow_localhost=false allow_ip_sans=false \
+      allow_wildcard_certificates=false enforce_hostnames=true \
+      server_flag=true client_flag=true \
       key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
       max_ttl=2160h ttl=720h
 

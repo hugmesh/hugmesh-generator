@@ -94,8 +94,37 @@ lint:cluster-manifest-integrity:
   script:
     # NB: the [pki-roles] check EXECUTES the ConfigMap's init-pki.sh under a vault
     # stub, so bash (present in python:3-slim, Debian) is a hard requirement — a
-    # regex cannot tell what a fused `for app in ...` word list expands to.
+    # regex cannot tell what a fused `for entry in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
+
+# Vault-PKI ISSUANCE SIMULATOR. The job above proves each `pki_int/issue/<role>`
+# an ExternalSecret calls EXISTS; it never asked whether the role would accept
+# the names asked of it, and the answer was no. The issuing roles allowed
+# `svc.cluster.local` + allow_subdomains (i.e. *.svc.cluster.local ONLY) while
+# every ESO generator also requests the TWO-LABEL `<service>.<namespace>` SAN, so
+# on a live cluster EVERY generic-loop app got
+#   Code: 400 * subject alternate name hugmesh-user-bff-api.hugmesh-backend
+#   not allowed by this role
+# — no app could be issued its mTLS cert, no keystore initContainer got material,
+# and the fleet mTLS wave had never once run. Two roles (media-poisoner, harbor)
+# had already been hand-patched around that exact error instead of fixing it.
+# This job ports Vault's own ValidateNames and simulates every requested
+# CN/SAN against the params its role is really created with, in BOTH directions:
+# every requested name must be issuable, and no role may issue another workload's
+# identity — so "fix it by widening the role" fails here instead of shipping.
+# Carries a matcher self-test plus negative controls for every defect class
+# (including two vacuity controls), so a green run cannot be vacuous. Offline,
+# no cluster, no vault, no privileged runner.
+lint:pki-role-san-coverage:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    # Same bash requirement as the job above, and for the same reason: the role
+    # parameters are read by EXECUTING init-pki.sh under a vault stub.
+    - bash tests/scripts/test-pki-role-san-coverage.sh
 
 # ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
 # image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE

@@ -156,16 +156,21 @@ s=s.replace("(\x27hugmesh-fe-gateway\x27,  \x27/bff/mesh/**\x27",
 open(p,"w",encoding="utf-8").write(s)
 PY
 '
-# (4) the exact bash bug: two `for app in` headers line-continued into one list.
-expect_catch "pki-init role loop fused into one for-list (junk roles for/app/in)" "[pki-roles]" '
-  python3 - "$T" <<PY
+# (4) the exact bash bug: two `for entry in` headers line-continued into one list.
+#     The anchor is ASSERTED, because this control silently no-op'd (and stayed
+#     "green") the day the loop was reshaped from `for app in <name>` to
+#     `for entry in <role>:<service>.<namespace>` — an injection that matches
+#     nothing proves nothing.
+expect_catch "pki-init role loop fused into one for-list (junk roles for/entry/in)" "[pki-roles]" '
+  python3 - "$T" <<"PY"
 import sys
 p=sys.argv[1]+"/manifests/vault-pki/pki-init-configmap.yaml"
 s=open(p,encoding="utf-8").read()
-s=s.replace("    for app in hugmesh-pki-gateway",
-            "    for app in snapdragon-pki-gateway snapdragon-be-gateway \\\\\n"
-            "    for app in hugmesh-pki-gateway",1)
-open(p,"w",encoding="utf-8").write(s)
+anchor="    for entry in hugmesh-pki-gateway:"
+assert s.count(anchor)==1, "for-entry loop anchor matched %d times, not 1" % s.count(anchor)
+fused=("    for entry in snapdragon-pki-gateway:snapdragon-pki-gateway.hugmesh-pki \\\n"
+       "    for entry in hugmesh-pki-gateway:")
+open(p,"w",encoding="utf-8").write(s.replace(anchor,fused,1))
 PY
 '
 # (5) a pod mounting an *-mtls Secret that no ExternalSecret produces.

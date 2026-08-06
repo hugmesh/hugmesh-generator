@@ -408,14 +408,18 @@ def check_pki_roles(root):
     bad = 0
     # (a) no shell keyword / non-identifier ever becomes an issuing role. A role
     #     named `for` mints cluster-CA-chained server+client certs for CN `for`.
-    shellish = {"for", "in", "do", "done", "app", "then", "fi", "else", "while", "case", "esac"}
+    # `app` and `entry` are the loop VARIABLE names this file has used over time;
+    # a fused header puts the variable name itself into the word list, so both
+    # stay listed even after a rename.
+    shellish = {"for", "in", "do", "done", "app", "entry", "then", "fi", "else",
+                "while", "case", "esac"}
     for role in created:
         if role in shellish or not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", role):
             bad += 1
             fail("[pki-roles]",
                  "vault-pki-init would create issuing role %r — a shell keyword/garbage token, "
                  "not a workload. It mints server+client certs off the cluster CA for an "
-                 "identity nobody audits (two `for app in ...` headers line-continued into one?)"
+                 "identity nobody audits (two `for <var> in ...` headers line-continued into one?)"
                  % role)
     # (b) no duplicates (a duplicate means two loops both claim the same role).
     dupes = {r for r in created if created.count(r) > 1}

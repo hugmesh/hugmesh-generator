@@ -1,30 +1,55 @@
 Cassandra Vault-PKI issuing role (DB-hardening, ADR-32 — DARK, Stage 2 / TLS).
 ================================================================================
 This is a DOCUMENTED patch, applied at TLS-flip time, NOT a live object — it adds
-a `cassandra` issuing role to the vault-pki-init for-app loop so Vault can mint the
-Cassandra node/client server cert (the same way each *-db Postgres role was added
-in PR-C1). It ships as a .txt (not a kustomize patch) for the SAME reason the rest
-of this overlay is inert: the vault-pki-init ConfigMap lives in the auto-synced
-tree, and editing it there would issue the cert into circulation before TLS is
-ready. Apply this diff to manifests/vault-pki/pki-init-configmap.yaml at Stage 2.
+a `cassandra` issuing role to vault-pki-init so Vault can mint the Cassandra
+node/client server cert (the same way each *-db Postgres role was added in PR-C1).
+It ships as a .txt (not a kustomize patch) for the SAME reason the rest of this
+overlay is inert: the vault-pki-init ConfigMap lives in the auto-synced tree, and
+editing it there would issue the cert into circulation before TLS is ready. Apply
+this diff to manifests/vault-pki/pki-init-configmap.yaml at Stage 2.
 
-In the `for app in … ; do` list (currently ending `… akkoma-proxy tuwunel-proxy`),
-add `cassandra` so the role is created:
+Cassandra is NOT a `for entry in …` loop candidate. Every looped role covers ONE
+<service>.<namespace> identity, and cassandra-tls-externalsecret.yaml asks for
+TWO Service names — `cassandra` (the client Service) and `cassandra-headless`
+(the StatefulSet peer Service) — so it takes its own `vault write`, alongside
+harbor, which is an exception for the same reason. Add this block after the
+harbor role:
 
-    for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
-               hugmesh-superadmin-gateway \
-               hugmesh-api hugmesh-admin-bff-api \
-               hugmesh-mod-bff-api hugmesh-user-bff-api \
-               hugmesh-forum-bff-api \
-               hugmesh-federation-api \
-               route-access-db admin-bff-db mod-bff-db user-bff-db \
-               federation-db forum-bff-db \
-               cassandra \
-               akkoma-proxy tuwunel-proxy; do
+    echo "==> role ${PKI}/roles/cassandra"
+    vault write "${PKI}/roles/cassandra" \
+      allowed_domains="cassandra,cassandra.hugmesh-pki,cassandra.hugmesh-pki.svc.cluster.local,cassandra-headless,cassandra-headless.hugmesh-pki,cassandra-headless.hugmesh-pki.svc.cluster.local" \
+      allow_bare_domains=true allow_subdomains=false allow_glob_domains=false \
+      allow_any_name=false allow_localhost=false allow_ip_sans=false \
+      allow_wildcard_certificates=false enforce_hostnames=true \
+      server_flag=true client_flag=true \
+      key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
+      max_ttl=2160h ttl=720h
 
-The existing role body already sets server_flag=true AND client_flag=true, so the
-issued `cassandra` cert supports BOTH the node server endpoint and the internode
-client handshake. CN/SANs are minted by the ExternalSecret
-(cassandra-tls-externalsecret.yaml) as cassandra.hugmesh-pki.svc.cluster.local
-(matches the Service DNS the clients verify), covered by the role's allowed_domains
-(svc.cluster.local). After editing, re-run the vault-pki-init Job (idempotent).
+server_flag=true AND client_flag=true so the issued `cassandra` cert supports BOTH
+the node server endpoint and the internode client handshake.
+
+WHAT CHANGED, AND WHY THIS FILE WAS WRONG BEFORE
+------------------------------------------------
+This patch previously said the SANs were "covered by the role's allowed_domains
+(svc.cluster.local)". They were not, and neither was any other app's: a blanket
+`svc.cluster.local` + allow_subdomains matches *.svc.cluster.local ONLY, so the
+TWO-LABEL <service>.<namespace> SANs every ESO generator in this tree requests
+were rejected at issuance —
+
+    Code: 400. Errors: * subject alternate name cassandra.hugmesh-pki not
+    allowed by this role
+
+— which is what kept the whole fleet mTLS wave from ever running live. Roles now
+name every requested form explicitly and switch subdomains/globs/wildcards/IP-SANs
+off, so a role cannot mint another workload's identity either. The four names
+above are exactly what cassandra-tls-externalsecret.yaml requests, plus the
+cassandra-headless FQDN for symmetry.
+
+BEFORE APPLYING, confirm one open item: if the bitnami chart's internode
+verification uses PER-POD peer DNS (cassandra-0.cassandra-headless.hugmesh-pki
+.svc.cluster.local), those names are NOT in the list above and issuance will 400
+on them. Add them to cassandra-tls-externalsecret.yaml's alt_names AND to
+allowed_domains together — never widen one side alone. Running
+`bash tests/scripts/test-pki-role-san-coverage.sh` after the edit reports the
+exact (role, SAN) pairs that would fail, so this is a mechanical check, not a
+judgement call. After editing, re-run the vault-pki-init Job (idempotent).
