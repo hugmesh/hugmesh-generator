@@ -123,7 +123,7 @@ Adding a remote to a live mesh touches eight places. The example trio exercises
    (the example host's `capabilities.stub.ts` is the shape of that service).
 
 5. **`federation_modules` changeset + descriptor + `optional-services.yaml`.**
-   The registry row is a **Liquibase changeset in `snapdragon-federation-api`**
+   The registry row is a **Liquibase changeset in `hugmesh-federation-api`**
    (`src/main/resources/db/changelog/NNN-register-<slug>-module.xml`, appended to
    `db.changelog-master.xml`) — the generator does **not** own the federation DB
    schema. The generator records the metadata in two places instead:
@@ -172,7 +172,7 @@ Adding a remote to a live mesh touches eight places. The example trio exercises
 
 The manual 8-place walk above is what the **superadmin Service Catalog** console
 automates. That console is itself a federated remote —
-`snapdragon-superadmin-service-catalog-ui` exposing `./ServiceCatalog`,
+`hugmesh-superadmin-service-catalog-ui` exposing `./ServiceCatalog`,
 registered `kind: remote-shell, visibility: internal, requiresRole: SUPERADMIN`
 (withheld from the public manifest, reachable only over the tailnet
 superadmin-gateway — `apps/22-gateway-superadmin.yaml`).
@@ -204,9 +204,9 @@ The federation share surface is `singleton: true, strictVersion: true,
 requiredVersion: 'auto'` (`federation-base.js`, one source of truth for host +
 remotes). **Every remote's Angular major MUST match the host's**, or the shared
 singleton fails to wire at runtime (`"shared is not a function"` / a hard mount
-failure — exactly the skew the `snapdragon.systems` host notes against its
+failure — exactly the skew the `hugmesh-host-shell` host notes against its
 older-major remotes). The example codebases all pin the **same Angular majors as
-`snapdragon-user-ui`** (`^22`) for this reason.
+`hugmesh-user-ui`** (`^22`) for this reason.
 
 When bumping Angular majors, bump **host-first, remotes in the same wave**; a
 remote built a major ahead of (or behind) the host will not mount. This is why

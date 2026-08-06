@@ -60,7 +60,7 @@ Federation is **outbound**, so egress is the authoritative non-federation contro
      reads (clone of `admin-sync-job.yaml`).
 
 3. **Gateway/proxy request-interception filter** — UX + raw-API catch. Lives in
-   `snapdragon-be-gateway` (not this repo).
+   `hugmesh-be-gateway` (not this repo).
 
 Leg 1 (egress) is the foundation/braces; leg 2 (the akkoma MRF) is the
 Mastodon-specific belt on top.
