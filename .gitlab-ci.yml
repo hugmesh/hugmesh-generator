@@ -107,6 +107,34 @@ lint:cluster-manifest-integrity:
 # cross-build. Same offline python3+PyYAML recipe as lint:cluster-manifest-integrity
 # above; the suite was CI-orphaned until now.
 lint:workload-console:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/workload-console/test-workload-console.sh
+
+# This file's own well-formedness. Three branches appended a lint job here and
+# every pair merged WITHOUT a git conflict into a file where one job had lost
+# its body — GitLab rejects a null job at pipeline creation, so the whole
+# pipeline stops running and every gate above silently stops guarding. Runs on
+# every change to this file, and always on the default branch, because the
+# failure mode is created by MERGING two individually-fine branches.
+lint:gitlab-ci-wellformed:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-gitlab-ci-wellformed.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - .gitlab-ci.yml
+        - tests/scripts/test-gitlab-ci-wellformed.sh
+
 # Vault-PKI ISSUANCE SIMULATOR. The job above proves each `pki_int/issue/<role>`
 # an ExternalSecret calls EXISTS; it never asked whether the role would accept
 # the names asked of it, and the answer was no. The issuing roles allowed
@@ -132,7 +160,6 @@ lint:pki-role-san-coverage:
   before_script:
     - pip install --quiet pyyaml
   script:
-    - bash tests/workload-console/test-workload-console.sh
     # Same bash requirement as the job above, and for the same reason: the role
     # parameters are read by EXECUTING init-pki.sh under a vault stub.
     - bash tests/scripts/test-pki-role-san-coverage.sh
