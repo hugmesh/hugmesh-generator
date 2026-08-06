@@ -48,6 +48,9 @@ branches (see the bottom).
 | 15 | `SVC_PASSWORD` hard-required, never provided | admin-bff fails bean creation (`Could not resolve placeholder 'SVC_PASSWORD'`). Compose sets it; the cluster manifest does not. |
 | 16 | admin-bff Liquibase grants to a role nothing creates | `008-access-suspension` does `GRANT … TO admin_bff`; no cluster-side initdb creates that login role (contrast `route-access/initdb/10-roles.sh`, which does it properly). **FIXED 2026-08-06** — the changelogs were wrong, not the bootstrap. `admin_bff` is route-access-db's role (see the matrix in `docs/POSTGRES-HARDENING.md`, which had it right all along); admin-bff's own DB creates `adminbff_app`, which is also what `SPRING_R2DBC_USERNAME` connects as. All 97 GRANT/REVOKE statements retargeted in hugmesh-admin-bff-api; **no generator manifest changed**, so a from-scratch cluster was always one `initdb` run away from correct. Guarded by `lint:liquibase-grant-roles`. **The live `1/1 Running` is NOT durable — do not read it as "shipped"**: the pods run `registry.hugmesh.systems/hugmesh/hugmesh-admin-bff-api:main` (`imagePullPolicy: IfNotPresent`), and that image was built from `fix/liquibase-grant-role-name`, which at the time of writing is 1 commit ahead of `origin/main` with **no remote branch at all**. `:main` is a mutable tag: the next CI build of admin-bff-api's `main` republishes it from the *unfixed* changelogs, and any fresh node, evicted pod or new cluster that pulls it goes straight back to `role "admin_bff" does not exist`. Nothing in this repo can prevent that. It becomes durable only when the service-repo change is pushed, merged, and `:main` rebuilt from it. |
 | 17 | **The kind lane never pulls from Harbor at all** | Not a bring-up blocker — a **coverage** one, and the reason several of the defects above survived. `kind load` side-loads every first-party image, so the private-registry pull path (robot credential → Vault → ESO → `dockerconfigjson` → containerd → Harbor) has never once executed. Detail below. |
+| 18 | **Outbound mTLS client stores were never given a password** | **FIXED 2026-08-06 (#564).** The init containers mint one PKCS12 pair under `${P}` and wrote only `server.ssl.*` — the **inbound** listener's keys. Outbound calls bind a separate prefix, `hugmesh.mtls.client.*`, defaulting to `${SSL_KEY_STORE_PASSWORD:}` / `${SSL_TRUST_STORE_PASSWORD:}`: env **nothing in any pod spec sets**, so both resolved to `""`. With the gate off (user-bff) `customize()` returned the HttpClient unchanged and every outbound https leg used the JDK default truststore — public roots, never the cluster CA: `POST /bff/login` → 500, `PKIX path building failed` on `/bff/internal/accounts/ensure`. **Not a CA mismatch** — both sides held the byte-identical CA and the wire cert matched the Secret; the client could not *open* the store that held it. With the gate on (forum-bff) it is worse: `KeyStore.load(in, new char[0])` throws and the client never constructs — shipped on `main` and unnoticed because forum-bff is not in this profile. Guarded by `lint:outbound-mtls-client`, proven red on the pre-fix tree; live A/B/A on kind (branch PASS → `main` FAIL → branch PASS). |
+| 19 | Spec 01 asserted an `h1` the app has never rendered | **FIXED 2026-08-06.** The assertion named a two-word brand; the shell's `h1` is one word, `HugMesh`. It was a straggler from the marketing splash page #273 deleted — that commit retired the other splash assertions and left this one pointing at a heading that no longer exists. The rebrand then mapped it faithfully, preserving a string the app never emitted. It survived only because **spec 01 had never been run against a live cluster** until this track — the same root reason the rest of this document exists. |
+| 20 | **Node-side API requests cannot resolve the cluster hostname on kind** | **OPEN — harness gap, not a platform defect.** `playwright.config.ts` reaches the cluster by its real hostname via Chromium `--host-resolver-rules` (`SNAP_HOST_RESOLVER`), deliberately avoiding an `/etc/hosts` edit or sudo. That flag is **browser-only**: Playwright's `apiRequestContext` runs in Node and ignores it, so every spec that drives the API directly dies on `getaddrinfo ENOTFOUND hugmesh.systems`. Affects **5 specs** (19, 20, 23, 29 and their helpers). Spec 29's stack-free TOTP cases pass; only its API cases fail, so the failure is unambiguously the harness. Fix options, none free: `docker run --add-host` in `run.sh` (fixes the documented docker path only, not the host-`npx` fallback); per-request `Host:` header against `https://127.0.0.1:8443` with `ignoreHTTPSErrors` (works on both paths, but touches all 5 specs); or accept an `/etc/hosts` entry as a documented prerequisite. **Not chosen here** — a cross-spec refactor that can only be partially verified on this cluster is exactly the kind of change that ships green and broken. |
 
 ## Finding 17 in detail — the private-registry pull path is unexercised
 
@@ -220,6 +223,28 @@ Compose green has been treated as proof the platform works; it proves the
   the real Job script against a faithful fake Vault). Both proven red on the
   pre-fix tree.
 
-Items 5–16 are **not** fixed in-repo yet and are the honest remaining work.
+Items 5–15 are **not** fixed in-repo yet and are the honest remaining work.
+Items 16, 18 and 19 are fixed, each marked in the table with what proved it.
 Item 17 is **deliberately not fixed** — see its options above; the write-up is
-the deliverable, and closing it would mean mutating the kind node.
+the deliverable, and closing it would mean mutating the kind node. Item 20 is a
+harness gap, deliberately written up rather than half-built.
+
+## Where the SSO profile stands, 2026-08-06
+
+The two specs this profile can actually drive end to end both pass against a
+live kind cluster on merged `main`:
+
+| spec | result |
+|---|---|
+| `01-frontpage` — anonymous visitor is gated to the native sign-in | **PASS** |
+| `27-native-login` — `POST /bff/login` mints an httpOnly `bff_session`, no Casdoor origin is ever exposed to the browser | **PASS** |
+| `29-mfa-privileged-floor` — stack-free RFC 6238 vectors | **PASS** |
+| `29-mfa-privileged-floor` — API cases | blocked by item 20 (harness), not by the platform |
+
+That is the roadmap's "SSO kind-cluster e2e" reaching green. It is worth being
+precise about what it does and does not mean: the login path — Casdoor seed,
+Cassandra roles, Vault PKI issuance, ESO materialisation, gateway routing,
+session minting over cluster mTLS — now works from a cold cluster. The rest of
+the suite (matrix, mastodon, forum, discord, RBAC realms) drives services this
+profile does not deploy, so those specs are out of scope here and say nothing
+about their health either way.
