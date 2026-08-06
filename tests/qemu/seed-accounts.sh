@@ -90,6 +90,13 @@ e2e-mastodon-external-client:ROLE_MASTODON,ROLE_MASTODON_EXTERNAL_CLIENT,ROLE_US
 e2e-forum:ROLE_FORUM,ROLE_USER:E2E_FORUM_PASSWORD \
 e2e-denied:ROLE_USER:E2E_DENIED_PASSWORD \
 e2e-pending::E2E_PENDING_PASSWORD}"
+# APPENDED, not replaced. Setting SYSTEMS_ROLE_USERS overrides the catalogue
+# WHOLESALE, which is why a caller that only wanted to add e2e-fleet had to
+# reconstruct the entire base list first — and why the kind lane, which did not,
+# silently seeded no extras at all. EXTRA_ROLE_USERS is the additive door: callers
+# hand it tests/e2e-extra-personas.sh's E2E_EXTRA_PERSONAS and keep the default
+# base. Empty by default, so every existing caller is unaffected.
+SYSTEMS_ROLE_USERS="${SYSTEMS_ROLE_USERS} ${EXTRA_ROLE_USERS:-}"
 # ── SWARM (the scaled-concurrent final sweep, tests/e2e/specs/24-final-e2e-sweep) ──
 # A PROCEDURAL population acting simultaneously: SWARM_USERS plain users +
 # SWARM_MODS mods (moderating the users below them) + SWARM_ADMINS admins. All

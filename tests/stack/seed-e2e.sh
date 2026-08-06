@@ -327,41 +327,14 @@ ensure_fragment_sync_client "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # with rbac-pending/rbac-approved, the handle must be pre-seeded as a bare
 # ROLE_USER here or the login 401s at setup and the denial/role assertions never
 # run. Bare ROLE_USER (no elevated role) is exactly what both specs presuppose.
-# ROLE_SUPERADMIN persona login. Defaults to e2e-superadmin so ordinary e2e runs
-# (and every UI spec that logs in as e2e-superadmin) are UNCHANGED. The from-scratch
-# local-mesh bootstrapper (studio core/local_mesh_bootstrap) bridges the minted
-# CASDOOR_SUPERADMIN_USERNAME in via env so the seeded login matches the username it
-# minted into secrets.json and advertised to the operator. Expected to be a simple
-# slug (no '@'/spaces) so the Casdoor legal name equals the login.
-SUPERADMIN_PERSONA="${CASDOOR_SUPERADMIN_USERNAME:-e2e-superadmin}"
-# e2e-fleet: a PURE fleet owner (ROLE_FLEET_ADMIN + ROLE_USER, deliberately NO
-# ROLE_ADMIN) — the one principal among the 9 seeded mfa_required rows that
-# decide() can MFA-gate at the compose default (enabled=true, floor off). See
-# docs/MFA-ROLLOUT.md §3.1: SUPERADMIN/ADMIN/GAME-MASTER short-circuit BEFORE
-# decide() until the privileged floor is on, a pure fleet owner does not — so
-# granting this persona ROLE_ADMIN would silently turn the gateway MFA leg of
-# tests/e2e/specs/29-mfa-privileged-floor.spec.ts into a vacuous pass. That spec
-# asserts the absence of ROLE_ADMIN before it asserts the 403, and drives the
-# persona against /bff/admin/phone-fleet/**. The password env follows the
-# per-user E2E_<UPPER>_PASSWORD convention (seed-accounts.sh role_password),
-# which falls back to E2E_PASSWORD -> 'e2e-pass' when unset — the same value the
-# spec signs in with.
-EXTRA_SPECS="\
-${SUPERADMIN_PERSONA}:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
-e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
-e2e-fleet:ROLE_FLEET_ADMIN,ROLE_USER:E2E_FLEET_PASSWORD \
-admin@hugmesh.systems:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
-alice@gmail.com:ROLE_USER:E2E_PASSWORD \
-bob@gmail.com:ROLE_USER:E2E_PASSWORD \
-carol@gmail.com:ROLE_USER:E2E_PASSWORD \
-dave@gmail.com:ROLE_USER:E2E_PASSWORD \
-eve@gmail.com:ROLE_USER:E2E_PASSWORD \
-frank@gmail.com:ROLE_USER:E2E_PASSWORD \
-dragoneer:ROLE_USER:E2E_PASSWORD \
-rbac-plain@gmail.com:ROLE_USER:E2E_PASSWORD \
-rbac-login-user@gmail.com:ROLE_USER:E2E_PASSWORD \
-rbac-pending@gmail.com:ROLE_USER:E2E_PASSWORD \
-rbac-approved@gmail.com:ROLE_USER:E2E_PASSWORD"
+# The persona list lives in ONE place, sourced by BOTH lanes. It used to be
+# inlined here, and the kind lane's bootstrap never had it at all — so a cluster
+# that was otherwise fully working answered spec 29 with
+# "native login e2e-fleet -> 401", a persona that had simply never been created.
+# See tests/e2e-extra-personas.sh for the per-persona reasoning.
+# shellcheck source=../e2e-extra-personas.sh
+. "${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}/tests/e2e-extra-personas.sh"
+EXTRA_SPECS="${E2E_EXTRA_PERSONAS}"
 
 ROLES_DIR="${SEED_WORKDIR}/roles-render"
 BASE_RENDER="${SEED_WORKDIR}/roles-render-base"

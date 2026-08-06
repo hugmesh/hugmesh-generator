@@ -753,7 +753,17 @@ SHIM
 
   log "Seeding e2e identities (seed-accounts.sh --roles) against the kind Casdoor"
   SEED_DIR="$(mktemp -d)"
-  bash "${REPO_ROOT}/tests/qemu/seed-accounts.sh" --roles "${SEED_DIR}"
+  # THE EXTRAS ARE NOT OPTIONAL. seed-accounts.sh's built-in catalogue covers the
+  # base role matrix only; the personas specs 13/15/17/29 and the ad-hoc UI suite
+  # sign in as (e2e-fleet, e2e-superadmin, e2e-banned, the @gmail.com handles,
+  # dragoneer, rbac-*) live in tests/e2e-extra-personas.sh. The compose lane had
+  # always applied them and this lane never had, so a fully working cluster still
+  # answered spec 29 with "native login e2e-fleet -> 401" — a persona that had
+  # simply never been created, reading exactly like a broken login.
+  # shellcheck source=../../../../tests/e2e-extra-personas.sh
+  . "${REPO_ROOT}/tests/e2e-extra-personas.sh"
+  EXTRA_ROLE_USERS="${E2E_EXTRA_PERSONAS}" \
+    bash "${REPO_ROOT}/tests/qemu/seed-accounts.sh" --roles "${SEED_DIR}"
   kubectl -n hugmesh-pki port-forward svc/casdoor 18000:8000 >/dev/null 2>&1 &
   PF_PID=$!
   trap 'kill "${PF_PID}" 2>/dev/null || true' EXIT

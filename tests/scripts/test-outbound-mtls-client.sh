@@ -91,6 +91,8 @@ rhs() { # <file> <property-key>
     | head -1 | sed 's/[[:space:]]*$//'
 }
 
+ROOT_SPECS="${DIR}/.."
+
 CLIENT_KEY_PW='hugmesh.mtls.client.key-store-password'
 CLIENT_TRUST_PW='hugmesh.mtls.client.trust-store-password'
 SERVER_KEY_PW='server.ssl.key-store-password'
@@ -171,6 +173,109 @@ if [ "${#violations[@]}" -eq 0 ]; then
 else
   for v in "${violations[@]}"; do bad "${v}"; done
 fi
+
+# ── RULE 4 — nothing may address a TLS-serving peer over http://.
+#
+# The stores being right is useless if the URL never reaches them. Both gateways
+# carried `BFF_BASE_URL: http://hugmesh-admin-bff-api...:8080` while admin-bff
+# serves TLS with client-auth=need, so the session bridge spoke plain HTTP into a
+# TLS port and got:
+#     [bff-session] BFF introspection call failed:
+#     Connection prematurely closed BEFORE response — returning 503
+# The browser saw 503 {"error":"session_backend_unavailable"} for a freshly minted,
+# perfectly valid session. Every OTHER reference to that peer was already https —
+# these two were missed when admin-bff's server TLS went on, and no gate compared
+# the two sides.
+#
+# DERIVED, not a list: the TLS-serving set comes from whichever manifests actually
+# set SSL_ENABLED=true, so a service turning TLS on automatically brings its callers
+# under the rule with nobody editing anything.
+# >>> RULE4
+tls_hosts=""
+for d in "${DIR}"/*/; do
+  [ -d "${d}" ] || continue
+  grep -rhqE 'SSL_ENABLED[",}[:space:]]+value:[[:space:]]*"?true"?' "${d}" 2>/dev/null || continue
+  svc="$(grep -rhE '^[[:space:]]*name:[[:space:]]*[a-z0-9-]+[[:space:]]*$' "${d}" 2>/dev/null \
+         | sed 's/.*name:[[:space:]]*//; s/[[:space:]]*$//' | sort -u | grep -E '^hugmesh-' | head -1)"
+  [ -n "${svc}" ] && tls_hosts="${tls_hosts} ${svc}"
+done
+
+# KNOWN-BROKEN, deliberately NOT flipped here — each with the reason it cannot be a
+# one-word change, and each anti-rot checked below so a stale exemption fails the
+# build rather than quietly widening. These are recorded as OPEN in
+# docs/KIND-SSO-E2E-FINDINGS.md; they are real defects, not false positives.
+#
+#   remote-fragment/deployment.yaml -> federation-api
+#     remote-fragment mounts NO PKCS12 stores and has no client-mTLS leg at all
+#     (zero matches for openssl pkcs12 -export / SSL_KEY_STORE / MTLS_CLIENT_ENABLED),
+#     so https:// would fail the handshake instead of the read. The fix is the whole
+#     store-building treatment, and this service is not in any profile I can run, so
+#     flipping the scheme blind would trade a visible failure for a subtler one.
+#
+#   test-runner/test-job-{lean,heavy}.yaml -> admin-bff /bff/admin/test-reports/ingest
+#     Same story: no stores, no client identity. These are the report-ingest POSTs,
+#     so the failure mode is "results silently never ingested" rather than a broken
+#     user path — which is exactly why nobody noticed.
+#
+#   charts/hugmesh-gateway/values.yaml -> hugmesh-api
+#     A chart DEFAULT route, overridden per-Application by the gateway apps' own
+#     route tables. Changing a default that every real deployment replaces is
+#     untestable from here and risks moving a value nothing reads.
+#
+# THE COMMON SHAPE, worth naming: every one of these is a NON-SPRING caller — a Job
+# or a sync sidecar — and the mTLS wave only ever reached the Spring services, which
+# get their stores from an init container and their client config from a
+# @ConfigurationProperties prefix. Nothing gave the Jobs an equivalent, so their
+# calls to TLS-serving peers cannot succeed by any scheme. Tracked as OPEN in
+# docs/KIND-SSO-E2E-FINDINGS.md rather than papered over with a scheme flip that
+# would swap a connection error for a handshake error.
+EXEMPT_HTTP_TLS="specs/cluster/manifests/remote-fragment/deployment.yaml specs/cluster/charts/hugmesh-gateway/values.yaml specs/cluster/manifests/test-runner/test-job-lean.yaml specs/cluster/manifests/test-runner/test-job-heavy.yaml"
+
+if [ -z "${tls_hosts// /}" ]; then
+  # Child probes stage a couple of synthetic manifests and no TLS-serving service;
+  # that is not a finding, it just means this rule has nothing to say about them.
+  [ "${CHILD}" = yes ] || bad "derived NO TLS-serving services — the SSL_ENABLED shape moved, so rule 4 proves NOTHING"
+else
+  http_viol=""
+  for h in ${tls_hosts}; do
+    hits="$(grep -rn "http://${h}\." "${DIR}/.." --include=*.yaml 2>/dev/null \
+            | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' || true)"
+    [ -n "${hits}" ] && http_viol="${http_viol}
+${hits}"
+  done
+  n_bad=0; n_exempt=0
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    rel="${line#"${DIR}/../"}"; rel="specs/cluster/${rel}"
+    path="${rel%%:*}"
+    skip=no
+    for e in ${EXEMPT_HTTP_TLS}; do [ "${path}" = "${e}" ] && skip=yes; done
+    if [ "${skip}" = yes ]; then
+      n_exempt=$((n_exempt+1))
+      [ "${CHILD}" = yes ] || echo "     known-broken (exempt, see header + findings doc): ${rel}"
+    else
+      bad "http:// URL addressing a TLS-serving peer (it dies as 'Connection prematurely closed BEFORE response'): ${rel}"
+      n_bad=$((n_bad+1))
+    fi
+  done <<< "${http_viol}"
+  [ "${n_bad}" -eq 0 ] && ok "no unexempted http:// URL addresses any of the $(echo ${tls_hosts} | wc -w) TLS-serving services (${n_exempt} known-broken, listed)"
+
+  # ANTI-ROT on the exemptions: an exemption for a file that no longer has the
+  # defect is a licence nobody revoked. Parent-only — probe trees have neither file.
+  if [ "${CHILD}" = no ]; then
+    for e in ${EXEMPT_HTTP_TLS}; do
+      f="${ROOT_SPECS}/${e#specs/cluster/}"
+      if [ ! -r "${f}" ]; then
+        bad "exemption names a file that no longer exists: ${e} — remove it"
+      elif ! grep -qE 'http://hugmesh-[a-z-]+\.' "${f}"; then
+        bad "exemption for ${e} is STALE (it no longer contains an http:// peer URL) — remove it so the rule bites again"
+      else
+        ok "exemption still describes a real, still-present defect: ${e}"
+      fi
+    done
+  fi
+fi
+# <<< RULE4
 
 # ── Vacuity floor + anti-rot. Properties of the REAL repo, never of a synthetic
 #    probe: leaving them on in a child run would make every probe fail for the

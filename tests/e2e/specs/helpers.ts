@@ -1,9 +1,109 @@
-import { Page, expect } from '@playwright/test';
+import { Page, expect, request } from '@playwright/test';
+import type { APIRequestContext } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 export const SHOTS = path.resolve(process.env.SNAP_SHOTS || 'screenshots');
 fs.mkdirSync(SHOTS, { recursive: true });
+
+/**
+ * `--host-resolver-rules` is BROWSER-ONLY. Kind runs address the cluster by its
+ * real hostname (the fe-gateway Ingress matches on Host) and hand Chromium
+ * `SNAP_HOST_RESOLVER` so no /etc/hosts edit or sudo is needed. Node never sees
+ * that flag, so anything Playwright sends from Node — `request.newContext()`,
+ * `page.request` — dies on `getaddrinfo ENOTFOUND hugmesh.systems`.
+ *
+ * Verified, not assumed: BOTH Node-side context kinds fail this way, including
+ * `page.request`, which is easy to mistake for browser-side because it shares the
+ * browser's cookie jar.
+ *
+ * The fix is to dial the mapped IP and carry the hostname in the `Host` header,
+ * which is what ingress-nginx routes on. Proven live on kind with its own control:
+ *
+ *     Host: hugmesh.systems  -> 401 from the BFF   (routed to the gateway)
+ *     (no Host header)       -> 404 from nginx     (default backend; did not route)
+ *
+ * NO-OP WITHOUT THE FLAG. When SNAP_HOST_RESOLVER is unset — every compose run —
+ * these return their input untouched, so the compose lane cannot be affected by
+ * this at all. That is deliberate: it is the property that makes adopting the
+ * helper safe in specs that only ever run against compose.
+ */
+/**
+ * Parse Chromium's `--host-resolver-rules` syntax:
+ * `"MAP hugmesh.systems 127.0.0.1, MAP *.hugmesh.systems 127.0.0.1"`.
+ * Malformed entries are dropped rather than half-applied. Wildcards are kept
+ * verbatim and matched by suffix in {@link mappedIp}.
+ *
+ * Exported so the rules can be INJECTED in tests. An earlier draft read the env at
+ * module load and tests tried to bust the module cache to vary it, which does not
+ * resolve under this runner — and a pure function taking its input is the better
+ * design regardless.
+ */
+export function parseResolverRules(spec: string | undefined): ReadonlyMap<string, string> {
+  const m = new Map<string, string>();
+  for (const rule of (spec ?? '').split(',')) {
+    const parts = rule.trim().split(/\s+/);
+    if (parts.length === 3 && parts[0].toUpperCase() === 'MAP') m.set(parts[1], parts[2]);
+  }
+  return m;
+}
+
+const HOST_MAP: ReadonlyMap<string, string> = parseResolverRules(process.env.SNAP_HOST_RESOLVER);
+
+function mappedIp(hostname: string, map: ReadonlyMap<string, string>): string | undefined {
+  const exact = map.get(hostname);
+  if (exact) return exact;
+  for (const [pattern, ip] of map) {
+    if (pattern.startsWith('*.') && hostname.endsWith(pattern.slice(1))) return ip;
+  }
+  return undefined;
+}
+
+/**
+ * Rewrite a URL a Node-side request context can't resolve into one it can,
+ * plus the `Host` header that preserves the routing decision. Returns the input
+ * unchanged when there is no mapping (compose, or an unmapped host).
+ *
+ * The Host header carries the hostname WITHOUT the port — that is the exact shape
+ * proven to route on kind above. Do not "improve" it to host:port without re-running
+ * that control.
+ */
+export function resolveForNode(
+  rawUrl: string,
+  map: ReadonlyMap<string, string> = HOST_MAP,
+): { url: string; headers: Record<string, string> } {
+  if (map.size === 0) return { url: rawUrl, headers: {} };
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return { url: rawUrl, headers: {} }; // relative path: nothing to rewrite
+  }
+  const ip = mappedIp(u.hostname, map);
+  if (!ip) return { url: rawUrl, headers: {} };
+  const host = u.hostname;
+  u.hostname = ip;
+  return { url: u.toString(), headers: { Host: host } };
+}
+
+/**
+ * A Node-side API context pointed at `baseUrl`, resolvable on kind and identical
+ * to the plain `request.newContext({ baseURL, ignoreHTTPSErrors: true })` it
+ * replaces everywhere else.
+ *
+ * NOT a substitute for `page.request`: that shares the browser context's cookie
+ * jar, and a standalone context does not. A spec that reads a session cookie the
+ * browser minted must keep using `page.request` — and on kind that call still
+ * cannot resolve. See docs/KIND-SSO-E2E-FINDINGS.md item 20.
+ */
+export async function apiContext(baseUrl: string | undefined): Promise<APIRequestContext> {
+  const t = resolveForNode(baseUrl ?? '');
+  return request.newContext({
+    baseURL: t.url || baseUrl,
+    ignoreHTTPSErrors: true,
+    ...(Object.keys(t.headers).length ? { extraHTTPHeaders: t.headers } : {}),
+  });
+}
 
 /**
  * Default native sign-in password for the ad-hoc e2e personas these specs drive

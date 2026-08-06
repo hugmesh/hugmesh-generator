@@ -797,6 +797,24 @@ lint:outbound-mtls-client:
   script:
     - bash tests/scripts/test-outbound-mtls-client.sh
 
+# The compose lane and the kind lane must seed the SAME e2e personas, and every
+# role the authorization rows grant must be a role Casdoor actually creates.
+# seed-accounts.sh's SYSTEMS_ROLE_USERS is an OVERRIDE, so a caller wanting one
+# extra persona had to restate the whole base list; compose did, the kind
+# bootstrap did not, and therefore seeded no extras at all. On a cluster where
+# everything else worked, spec 29 answered "native login e2e-fleet -> 401" — a
+# persona that had never been created, reading exactly like a broken login.
+# Seeding it then exposed the layer beneath: route-access seeds a live authz row
+# granting ROLE_FLEET_ADMIN on /bff/admin/phone-fleet/**, while the Casdoor seed
+# never declared that role — so no account on any cluster could hold it and the
+# fleet-owner phone console was unreachable. Both halves ran RED before the fix.
+lint:e2e-persona-catalogue:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-e2e-persona-catalogue.sh
+
 # Optional-services BUILD-TIME EXCLUSION gate. Sources the REAL gate + helper
 # functions from build-rpi5-stage4.sh and runs gate_optional_services against a
 # sandbox tree seeded from specs/cluster, proving EVERY user-level service

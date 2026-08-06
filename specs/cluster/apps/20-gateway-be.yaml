@@ -99,8 +99,13 @@ spec:
           # INTERNAL_TOKEN authenticates the back-channel (matches admin-bff's
           # InternalTokenWebFilter — BLANK in dev → no-op on both sides).
           - { name: APP_BFF_SESSION_ENABLED, value: "true" }
+          # https:// for the same reason as 20-gateway-fe.yaml: admin-bff serves TLS
+          # with client-auth=need, so plain HTTP into :8080 dies as "Connection
+          # prematurely closed BEFORE response" and the session bridge 503s. Both
+          # gateways carried the same stale scheme; fixing only the one the e2e
+          # happens to drive would leave the identical defect on the other.
           - name: BFF_BASE_URL
-            value: http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+            value: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
           - name: INTERNAL_TOKEN
             valueFrom:
               secretKeyRef:

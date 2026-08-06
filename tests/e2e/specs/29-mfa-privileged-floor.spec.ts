@@ -1,6 +1,6 @@
-import { test, expect, request } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
-import { shot } from './helpers';
+import { shot, apiContext } from './helpers';
 import { totpCode, totpCodeForStep } from './totp';
 
 // 29 — GATEWAY MFA ENFORCEMENT on the seeded mfa_required rows, end-to-end against
@@ -163,7 +163,7 @@ test.describe('TOTP generator: RFC 6238 Appendix B (stack-free)', () => {
 
 test.describe('MFA per-row gate: the seeded mfa_required rows bite at the compose default', () => {
   test('a pure ROLE_FLEET_ADMIN without a fresh stamp is DENIED /bff/admin/phone-fleet/**', async ({ baseURL }) => {
-    const fleet = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    const fleet = await apiContext(baseURL);
     await loginAs(fleet, 'e2e-fleet');
 
     // PRECONDITIONS (anti-fake-green). The deny below must be the MFA leg of the
@@ -205,7 +205,7 @@ test.describe('MFA per-row gate: the seeded mfa_required rows bite at the compos
     // docs/MFA-ROLLOUT.md §3.1 — "do not read a quiet cluster after step 6 as
     // evidence that admin MFA works". This is that sentence as an executable claim,
     // and it is the reason the fleet leg above cannot stand in for admin coverage.
-    const admin = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    const admin = await apiContext(baseURL);
     await loginAs(admin, 'e2e-admin');
     const { roles } = await sessionOf(admin, 'e2e-admin');
     expect(
@@ -241,7 +241,7 @@ test.describe('MFA privileged floor: an admin needs a FRESH factor on mfa_requir
   );
 
   test('a) an admin WITHOUT a fresh factor is denied /bff/admin/** by the gateway', async ({ baseURL }) => {
-    const admin = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    const admin = await apiContext(baseURL);
     await loginAs(admin, 'e2e-admin');
     const { roles } = await sessionOf(admin, 'e2e-admin');
     expect(
@@ -352,7 +352,7 @@ test.describe('MFA privileged floor: an admin needs a FRESH factor on mfa_requir
     // shared: same 403, same X-Route-Denied value, same empty body) — asserted here
     // so that if a floor-specific marker is ever added, this test and
     // docs/MFA-ROLLOUT.md §3.1 have to be updated together rather than drifting.
-    const user = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    const user = await apiContext(baseURL);
     await loginAs(user, 'e2e-user');
     const { roles: userRoles } = await sessionOf(user, 'e2e-user');
     expect(
@@ -373,7 +373,7 @@ test.describe('MFA privileged floor: an admin needs a FRESH factor on mfa_requir
   test('c) unaffected: non-privileged principals and non-mfa_required surfaces see no floor', async ({ baseURL }) => {
     // The floor gates PRIVILEGED principals only — a plain user is untouched by it
     // (it is decide() that adjudicates them, and /bff/session is ungoverned).
-    const user = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    const user = await apiContext(baseURL);
     await loginAs(user, 'e2e-user');
     const session = await primedGet(user, '/bff/session');
     expect(verdict(session), `user /bff/session -> ${why(session)}`).toBe('PASSED');
@@ -386,7 +386,7 @@ test.describe('MFA privileged floor: an admin needs a FRESH factor on mfa_requir
     // did not reject" rather than 200: /bff/mod/findings 500s on the stock compose
     // stack (federation findings backend dark, see spec 28), which is not an auth
     // verdict — the same idiom spec 28 uses for this surface.
-    const admin = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    const admin = await apiContext(baseURL);
     await loginAs(admin, 'e2e-admin');
     const nonMfa = await primedGet(admin, NON_MFA_ADMIN_ROUTE);
     expect(

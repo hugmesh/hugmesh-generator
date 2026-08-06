@@ -281,6 +281,7 @@ data:
         { "owner": "hugmesh", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "hugmesh", "name": "ROLE_WIKI",      "displayName": "Wiki Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "hugmesh", "name": "ROLE_MESH",      "displayName": "Mesh Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_FLEET_ADMIN", "displayName": "Fleet Owner (phone console)", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "hugmesh", "name": "ROLE_FORUM",     "displayName": "Forum Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "hugmesh", "name": "ROLE_FORUM_MOD", "displayName": "Forum Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "hugmesh", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },

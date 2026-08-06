@@ -185,6 +185,25 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             # Load the in-pod-generated store passwords (application.properties).
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # SessionExchangeConfig's self-loopback target. Left unset it falls back to
+            # SessionExchangeConfig.DEFAULT_SELF_HOST, a PRE-REBRAND constant naming the
+            # old brand's service AND namespace (not quoted verbatim here: the namespace
+            # scanner reads comments too, and spelling it out turns
+            # lint:cluster-manifest-integrity red for a string that is only being
+            # described). It is NXDOMAIN on a real cluster. Every /bff/session read walks
+            # user-bff -> admin-bff sessions -> this self-call, so with it wrong the
+            # BFF answered a freshly-minted, perfectly valid session with
+            #   503 {"error":"session_backend_unavailable"}
+            # — a login that succeeds and then has nowhere to resolve. Hit LIVE on kind
+            # 2026-08-06 while chasing spec 29; the pod logged the wrong host at boot
+            # ("[bff-exchange] self-loopback WebClient -> https://snapdragon-...") and
+            # nothing treated that as an error. Same finding-#14 class as CASDOOR_ORG
+            # and ADMIN_BFF_INTERNAL_BASE_URL: the app's packaged default is
+            # pre-rebrand and the generator overrode every sibling but this one.
+            # https:// because SSL_ENABLED=true above — the scheme
+            # SessionExchangeConfig.computeBaseUrl derives from server.ssl.enabled.
+            - name: APP_BFF_EXCHANGE_SELF_BASE_URL
+              value: "https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080"
             # R2DBC handle to the gateway_route_access Postgres (hugmesh-pki).
             # Least-privilege: admin-bff is the ONLY writer, so it logs in as its
             # OWN role `admin_bff` (SELECT/INSERT/UPDATE/DELETE on
