@@ -1258,6 +1258,29 @@ M2_REGISTRY_NAME ?= hugmesh-m2-registry
 STACK_M2_ENV     := tests/stack/.m2-registry.env
 STACK_M2_COMPOSE := tests/stack/compose.m2-local.yaml
 STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) -f $(STACK_M2_COMPOSE),)
+
+# stack-m2-check — the env file records the registry container's BRIDGE IP, which
+# docker reassigns whenever the daemon restarts or the container is recreated. The
+# file has always SAID so in a comment ("Re-run 'make stack-m2-bootstrap' if docker
+# restarted"), but nothing enforced it: stack-up/stack-build happily fed a stale IP
+# to every Maven build, which then failed deep inside a Dockerfile with
+#   Could not transfer artifact ... Connect to <old-ip>:8080 failed: Connection refused
+# — a message that names Maven, not the registry, and sends you hunting the wrong
+# thing. (2026-08-05: the daemon restart SIGKILLed the registry (exit 137); the file
+# still pointed at .3 while the restarted container came back on .4.)
+# This target re-derives the truth and SELF-HEALS by re-running the bootstrap, which
+# is idempotent and skips every already-cached artifact (seconds, not a rebuild).
+.PHONY: stack-m2-check
+stack-m2-check:
+	@[ -f $(STACK_M2_ENV) ] || exit 0
+	@live=$$(docker inspect -f '{{.State.Running}}' $(M2_REGISTRY_NAME) 2>/dev/null || echo false); \
+	 ip=$$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $(M2_REGISTRY_NAME) 2>/dev/null || true); \
+	 want=$$(sed -n 's|^CI_API_V4_URL=http://\([^:]*\):.*|\1|p' $(STACK_M2_ENV)); \
+	 if [ "$$live" != "true" ] || [ -z "$$ip" ] || [ "$$ip" != "$$want" ]; then \
+	   echo "==> m2 registry stale (running=$$live ip=$${ip:-none} env=$${want:-none}) — re-running stack-m2-bootstrap"; \
+	   $(MAKE) --no-print-directory stack-m2-bootstrap; \
+	 fi
+
 # When SOCIAL=1, the included compose.real.yaml mastodon services need an
 # env_file (tests/stack/.mastodon.env). Ensure it exists before any social
 # compose call so the profile renders/runs (NOT needed for the core stack).
@@ -1315,10 +1338,10 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	  echo "==> stack-certs: $(STACK_TLS_DIR)/server.crt present - keeping it (rm -rf $(STACK_TLS_DIR) to re-mint)"; \
 	fi
 
-stack-build: stack-clone stack-certs $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
+stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 
-stack-up: stack-clone stack-certs $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) up -d
