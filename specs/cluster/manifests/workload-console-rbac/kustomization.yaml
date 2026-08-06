@@ -2,12 +2,16 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 # The WORKLOAD CONSOLE RBAC: two least-privilege app-tier SAs (read app-tier-only /
 # mutate) bound ONLY in the app-tier namespaces (never pki/policy/vault/devops/
-# observability), the SUPERADMIN cluster-read SA + ClusterRole (read-only), and the
-# deploy-provenance Kyverno ClusterPolicy (digest-pinned own-registry only). SHIPS DARK:
-# the admin-bff leaves app.workload-console.k8s.enabled=false (NoopWorkloadClient) until
-# deliberately enabled, so these tokens are unused until then.
+# observability), their two token Secrets (token-secrets.yaml — mounted by the
+# admin-bff deployment overlay manifests/admin-bff-api/workload-console-patch.yaml),
+# the SUPERADMIN cluster-read SA + ClusterRole (read-only), and the deploy-provenance
+# Kyverno ClusterPolicy (digest-pinned own-registry only). SHIPS DARK: the DEFAULT
+# build deselects workloadConsole, which prunes this whole dir + the overlay, so the
+# tokens are never minted; even a slug-selected (lit-wired) console stays dark behind
+# the DB master flag + TTL'd grants (docs/OPTIONAL-SERVICES.md §7.2).
 resources:
   - serviceaccounts.yaml
+  - token-secrets.yaml
   - read-role.yaml
   - mutate-role.yaml
   - bindings.yaml

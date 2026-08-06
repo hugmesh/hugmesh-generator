@@ -411,6 +411,75 @@ cut-over first** — otherwise flipping `akkoma`/etc. to `installed:"true"` make
 ApplicationSet create `optional-akkoma` that double-manages the same manifests as the
 still-present hardcoded `apps/30-akkoma.yaml` (Application `akkoma`).
 
+## 7.2. Workload Console (`workloadConsole`): the three OFFs & the flip order
+
+The Workload Console (the `/bff/{admin,superadmin}/workloads/**` pod console inside
+the always-present admin-bff) **ships dark behind three INDEPENDENT OFFs**. Each one
+alone keeps the console unusable; lighting it is a deliberate, ordered act:
+
+| # | OFF | Owner | Dark behaviour |
+|---|-----|-------|----------------|
+| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two route-access rows pruned | build-time (`workloadConsole` slug) | the gateway **404s** the whole prefix (no route rows), and even a direct in-cluster call 404s (the BFF's `WorkloadAuthorizationFilter` denies a disabled prefix) |
+| 2 | **k8s seam** — `WORKLOAD_CONSOLE_K8S_ENABLED=false`, no SA tokens mounted | build-time (same slug) | the fail-closed `NoopWorkloadClient` **503s every call**; no k8s API is ever dialed |
+| 3 | **DB master flag + TTL'd grants** — `workload_console_config.admin_enabled` / `dangerous_tier_enabled` default false; every admin needs an active grant lease (~24 h TTL, expiry-swept) | runtime (SUPERADMIN + step-up) | a fully lit-wired cluster still shows **nobody anything** |
+
+**What the slug owns (all pruned together on deselect, `gate_optional_services`):**
+the two-SA RBAC Application (`apps/14-workload-console-rbac.yaml` +
+`manifests/workload-console-rbac/`, incl. the two `kubernetes.io/service-account-token`
+Secrets in `token-secrets.yaml`), the **admin-bff deployment overlay**
+(`manifests/admin-bff-api/workload-console-patch.yaml` + its one kustomization
+`- path:` line — the `WORKLOAD_CONSOLE_*` env + both token mounts), and the two
+route-access rows. Deselected (the DEFAULT), the admin-bff renders **byte-identical**
+to a tree that never had the feature; `tests/workload-console/test-workload-console.sh`
+enforces this.
+
+**Token mount contract** (cross-repo, consumed by hugmesh-admin-bff-api's dual
+read/mutate clients — `WorkloadConsoleClientConfig`):
+
+```
+read SA    workload-console-read    -> /var/run/secrets/workload-console-read/token
+mutate SA  workload-console-mutate  -> /var/run/secrets/workload-console-mutate/token
+```
+
+Both volumes are `optional: true`. The Secrets come from a *different* ArgoCD
+Application (`apps/14`) than the admin-bff (`apps/31`) and neither carries a
+sync-wave, so on a freshly-lit cluster the tokens may lag the rollout by a sync.
+Optional keeps the **always-present** admin-bff pod starting regardless: the half
+whose token is missing simply 503s (the contracted degradation) instead of the pod
+hanging in `ContainerCreating`. If the console 503s after step 1, re-check step 2
+before assuming a bug — you are most likely just ahead of the RBAC app's sync.
+
+**Flip order (light it):**
+
+1. **Select the slug at build** (`OPTIONAL_SERVICES="… workloadConsole"` — it is NOT
+   in `all`) and flash/sync. This lands RBAC + token Secrets + route rows + the
+   deployment overlay, flipping OFF 1 and OFF 2 together: the admin-bff rolls with
+   the env + both tokens and builds the real `Fabric8WorkloadClient`. (The two
+   ArgoCD apps sync independently — see the `optional: true` note above.)
+2. **Verify the wiring** before granting anyone anything:
+   ```sh
+   kubectl -n hugmesh-backend get secret workload-console-read-token \
+     -o jsonpath='{.data.token}' | head -c 8      # non-empty => token minted
+   kubectl -n hugmesh-backend get deploy hugmesh-admin-bff-api \
+     -o yaml | grep -c workload-console            # mounts + volumes present
+   ```
+   The console is STILL dark here (OFF 3): every request 403s/404s at the DB flag.
+3. **Flip the DB master flag** (SUPERADMIN + step-up, per domain or the GLOBAL row):
+   `PUT /bff/superadmin/workloads/config/{domain}` body
+   `{"adminEnabled": true, "dangerousTierEnabled": false}`. Leave
+   `dangerousTierEnabled` false until exec/log-stream/mutations are actually needed —
+   it is the GLOBAL kill for the dangerous tier and applies even to superadmins.
+4. **Issue a TTL'd grant** per admin: `POST /bff/superadmin/workloads/grants` body
+   `{"grantee": "...", "targetDomain": "...", "logAccess": false}` (READ_ONLY by
+   schema; ~24 h lease; the expiry sweep returns the admin to dark automatically).
+
+**Darken in reverse order:** let grants lapse (or revoke), flip the DB flags back
+false, then deselect the slug and rebuild — the gate prunes tokens, overlay, RBAC and
+route rows in one stroke. Any single step alone is already sufficient to go dark.
+
+> **Note:** `workloadConsole` is deliberately **excluded** from the §7.1 CRD
+> live-flip enum — it stays build-determined (see §7.1's closed slug set).
+
 ## 8. Graceful-degradation expectations
 
 When a service is **absent**, a user sees:

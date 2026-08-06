@@ -634,15 +634,21 @@ spec:
       torHiddenServiceUpstream: 127.0.0.1:8443
 
     # ── workloadConsole — podman/OpenShift-equivalent pod console (DEFAULT-OFF) ──
-    # UNLIKE the deployed services, the Workload Console is RBAC + route-access ONLY:
-    # the BFF endpoints (/bff/{admin,superadmin}/workloads/**) live in the always-present
-    # admin-bff, and the federated admin-ui remote is a HIDDEN-tier module the host loads
-    # only when the grant guard passes. This slug owns the two-SA RBAC Application
-    # (apps/14-workload-console-rbac.yaml + manifests/workload-console-rbac: read app-tier-
-    # only + mutate SAs + the superadmin cluster-read SA/ClusterRole + the deploy-provenance
-    # Kyverno policy) and the two route-access rows. SHIPS DARK: default off; even when
-    # selected the admin-bff is independently dark until app.workload-console.enabled + the
-    # DB master flag + an active grant. The DANGEROUS surfaces are tailnet-only by deployment.
+    # UNLIKE the deployed services, the Workload Console is RBAC + route-access + an
+    # admin-bff deployment overlay: the BFF endpoints (/bff/{admin,superadmin}/
+    # workloads/**) live in the always-present admin-bff, and the federated admin-ui
+    # remote is a HIDDEN-tier module the host loads only when the grant guard passes.
+    # This slug owns the two-SA RBAC Application (apps/14-workload-console-rbac.yaml +
+    # manifests/workload-console-rbac: read app-tier-only + mutate SAs + their two token
+    # Secrets + the superadmin cluster-read SA/ClusterRole + the deploy-provenance
+    # Kyverno policy), the admin-bff deployment overlay (manifests/admin-bff-api/
+    # workload-console-patch.yaml + its kustomization `- path:` line — WORKLOAD_CONSOLE_*
+    # env + both SA token mounts), and the two route-access rows. SHIPS DARK: default
+    # off (deselected => everything above is pruned and the admin-bff renders
+    # byte-identical dark); even when selected — which lights the generator gate + the
+    # k8s seam via the overlay — the console stays dark until the DB master flag + an
+    # active TTL'd grant (docs/OPTIONAL-SERVICES.md §7.2). The DANGEROUS surfaces are
+    # tailnet-only by deployment.
     - slug: workloadConsole
       displayName: "Workload Console"
       namespace: hugmesh-backend

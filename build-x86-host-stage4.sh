@@ -2340,14 +2340,22 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/egress-vpn"
                 ;;
             workloadConsole)
-                # The WORKLOAD CONSOLE is RBAC + route-access ONLY (the BFF endpoints live in
-                # the always-present admin-bff). Deselecting it prunes the two-SA RBAC
-                # Application + its manifests (so the SA tokens are never minted) AND the two
-                # route-access rows, so the gateway 404s the whole /bff/{admin,superadmin}/
-                # workloads/** prefix. The admin-bff ALSO ships dark independently
-                # (app.workload-console.enabled=false), so even an un-pruned tree is inert.
+                # The WORKLOAD CONSOLE is RBAC + route-access + an admin-bff deployment
+                # overlay (the BFF endpoints live in the always-present admin-bff).
+                # Deselecting it prunes the two-SA RBAC Application + its manifests (so
+                # the SA token Secrets are never minted), the two route-access rows (the
+                # gateway 404s the whole /bff/{admin,superadmin}/workloads/** prefix),
+                # AND the deployment overlay workload-console-patch.yaml + its single
+                # kustomization `- path:` line — so the dark admin-bff renders
+                # byte-identical to a tree that never had the feature (no
+                # WORKLOAD_CONSOLE_* env, no token mounts, Noop k8s seam). Selected, the
+                # overlay survives and lights the gate + k8s seam; the DB master flag +
+                # TTL'd grants still keep the console dark (docs/OPTIONAL-SERVICES.md
+                # §7.2).
                 rm -f "${apps}/14-workload-console-rbac.yaml"
                 rm -rf "${tree}/manifests/workload-console-rbac"
+                rm -f "${tree}/manifests/admin-bff-api/workload-console-patch.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/admin-bff-api/kustomization.yaml" 'path: workload-console-patch.yaml'
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
                 ;;

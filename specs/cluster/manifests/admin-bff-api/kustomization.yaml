@@ -43,3 +43,4 @@ patches:
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: harbor-registry
+  - path: workload-console-patch.yaml # workloadConsole-slug-owned (gate_optional_services prunes file + this line; keep it ONE line with no comment lines of its own)

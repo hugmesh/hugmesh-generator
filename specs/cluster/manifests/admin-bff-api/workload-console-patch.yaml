@@ -1,0 +1,111 @@
+# WORKLOAD CONSOLE deployment overlay (strategic-merge patch) — the LIGHTABLE path.
+#
+# Referenced from kustomization.yaml `patches:` and OWNED by the workloadConsole slug:
+# gate_optional_services removes this file + its kustomization line when the slug is
+# deselected (the DEFAULT), so the dark build renders the admin-bff byte-identical to
+# a tree that never had it. Selecting workloadConsole keeps it, which flips the first
+# TWO of the console's three independent OFFs together (docs/OPTIONAL-SERVICES.md §7.2):
+#
+#   OFF 1 (generator gate)  WORKLOAD_CONSOLE_ENABLED=true — the /bff/{admin,superadmin}/
+#                           workloads/** prefix exists (paired with the route-access rows
+#                           this same slug owns; deselected, the gateway 404s it first).
+#   OFF 2 (k8s seam)        WORKLOAD_CONSOLE_K8S_ENABLED=true + BOTH least-privilege SA
+#                           tokens mounted — Fabric8WorkloadClient instead of the
+#                           fail-closed NoopWorkloadClient (503 on every call).
+#   OFF 3 (runtime)         stays OFF: the workload_console_config DB master flag
+#                           defaults dark and every admin needs a TTL'd grant — a
+#                           slug-selected cluster still shows nobody anything.
+#
+# CROSS-REPO CONTRACT (hugmesh-admin-bff-api WorkloadConsoleClientConfig + its
+# application.yml `app.workload-console` block): the env NAMES here are the documented
+# ${WORKLOAD_CONSOLE_*} placeholders, and the token paths are the mount contract the
+# dual read/mutate clients consume — change NOTHING here without the matching
+# admin-bff change:
+#   read SA token    /var/run/secrets/workload-console-read/token    (+ ca.crt, namespace)
+#   mutate SA token  /var/run/secrets/workload-console-mutate/token  (+ ca.crt, namespace)
+# The Secrets (kubernetes.io/service-account-token, control-plane-populated) are minted
+# by manifests/workload-console-rbac/token-secrets.yaml — the SAME slug prunes both
+# sides, so a DARK build never references them at all. Within a LIT build the two sides
+# are still separate ArgoCD Applications with no sync-wave between them, which is why
+# both volumes below are optional:true (see the note there).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-admin-bff-api
+  namespace: hugmesh-backend
+spec:
+  template:
+    spec:
+      containers:
+        - name: hugmesh-admin-bff-api
+          env:
+            # ── the generator gate + the k8s seam (OFFs 1+2) ──────────────────
+            - { name: WORKLOAD_CONSOLE_ENABLED,     value: "true" }
+            - { name: WORKLOAD_CONSOLE_K8S_ENABLED, value: "true" }
+            # STEP-0b APP-TIER namespace allowlist — MUST mirror exactly the set of
+            # namespaces the read/mutate Roles are bound in (workload-console-rbac/
+            # bindings.yaml); never an infra tier (pki/policy/vault/devops/
+            # observability). tests/workload-console cross-checks the two lists.
+            - name: WORKLOAD_CONSOLE_NAMESPACE_ALLOWLIST
+              value: "hugmesh-backend,hugmesh-frontend,hugmesh-forum,hugmesh-games,hugmesh-games-instances,hugmesh-tube,hugmesh-owncast"
+            # Read-only exec first-token allowlist — process/resource introspection
+            # ONLY. Deliberately NO file-content readers (cat/head/tail: an exec runs
+            # INSIDE the target pod and could read ITS mounted secrets — pod logs are
+            # already served via pods/log on the read Role) and NO env/printenv
+            # (env vars carry credentials).
+            - name: WORKLOAD_CONSOLE_EXEC_READONLY
+              value: "ls,ps,df,du,free,uptime,date,id,uname,stat"
+            # Grant lease TTL + expiry-sweep cadence — the application.yml defaults,
+            # emitted explicitly so the operator knobs are visible in the pod spec.
+            - { name: WORKLOAD_CONSOLE_GRANT_TTL_HOURS,        value: "24" }
+            - { name: WORKLOAD_CONSOLE_EXPIRY_INTERVAL_MS,     value: "30000" }
+            - { name: WORKLOAD_CONSOLE_EXPIRY_INITIAL_DELAY_MS, value: "20000" }
+            # Token-file CONTRACT paths for the dual clients (must sit inside the
+            # volumeMounts below).
+            - { name: WORKLOAD_CONSOLE_K8S_READ_TOKEN_FILE,   value: "/var/run/secrets/workload-console-read/token" }
+            - { name: WORKLOAD_CONSOLE_K8S_MUTATE_TOKEN_FILE, value: "/var/run/secrets/workload-console-mutate/token" }
+            # Curated port-forward (namespace, workload, port) triples — app-tier BFFs
+            # ONLY, EXCLUDING every datastore/Vault/PKI/Casdoor. application.yml's
+            # port-forward-allowlist is a literal [] (no env placeholder), so these use
+            # Spring Boot's canonical relaxed indexed binding for
+            # app.workload-console.port-forward-allowlist[N].{namespace,workload,port}
+            # (env property sources outrank the packaged yml, so the whole list binds
+            # from here).
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_0_NAMESPACE, value: "hugmesh-backend" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_0_WORKLOAD,  value: "hugmesh-admin-bff-api" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_0_PORT,      value: "8080" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_1_NAMESPACE, value: "hugmesh-backend" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_1_WORKLOAD,  value: "hugmesh-user-bff-api" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_1_PORT,      value: "8080" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_2_NAMESPACE, value: "hugmesh-backend" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_2_WORKLOAD,  value: "hugmesh-mod-bff-api" }
+            - { name: APP_WORKLOADCONSOLE_PORTFORWARDALLOWLIST_2_PORT,      value: "8080" }
+          volumeMounts:
+            # Read-only like the pki mount; secret-volume files default 0644 (same as
+            # pki) so the runAsUser:1000 app can read them without an fsGroup.
+            - { name: workload-console-read-token,   mountPath: /var/run/secrets/workload-console-read,   readOnly: true }
+            - { name: workload-console-mutate-token, mountPath: /var/run/secrets/workload-console-mutate, readOnly: true }
+      volumes:
+        # optional:true is LOAD-BEARING, not defensive tidiness (same reason as
+        # admin-bff-db's pg-tls volume). These Secrets are created by a SEPARATE
+        # ArgoCD Application (apps/14-workload-console-rbac.yaml) that carries no
+        # sync-wave annotation — neither does apps/31-admin-bff-api.yaml — so on a
+        # slug-selected cluster there is NO ordering guarantee that they exist when
+        # the admin-bff rolls, and the control plane's token controller populates
+        # `token` asynchronously after the Secret object appears. A NON-optional
+        # secret volume blocks kubelet (pod stuck ContainerCreating,
+        # "secret ... not found"), which would let an OPTIONAL feature wedge the
+        # ALWAYS-PRESENT admin plane — and would also break the darkening path
+        # (deselect prunes the Secrets while a running pod still mounts them).
+        # Optional, a missing Secret mounts empty, so the token file is simply
+        # absent — exactly the degradation the cross-repo contract specifies:
+        # "an ABSENT/unreadable token file degrades THAT HALF to the 503 posture;
+        # the pod SA is NEVER a fallback" (WorkloadConsoleClientConfig).
+        - name: workload-console-read-token
+          secret:
+            secretName: workload-console-read-token
+            optional: true
+        - name: workload-console-mutate-token
+          secret:
+            secretName: workload-console-mutate-token
+            optional: true
