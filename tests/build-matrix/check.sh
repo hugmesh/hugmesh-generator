@@ -1891,7 +1891,15 @@ PY
 # FAIL-CLOSED: the delegate emits a FIXED number of assertions (its host-dependent
 # branches emit a SKIP-pass so the count never moves), and a short tally is charged
 # as failures — a delegate that dies half-way cannot come back green.
-SLX_EXPECTED=126
+# 136 = 126 (#518) + the 10 assertions #550 added when it fixed the D-real leg that had
+# skipped on every CI pipeline: 1 fixture-digest check + 9 "<module>: compiles against real
+# refpolicy headers" legs, one per node-policy module. #550 added the coverage and did NOT
+# bump this counter, so main's build-matrix gate has been RED since it merged. The counter is
+# fail-closed on purpose and was working exactly as designed — what failed is that nothing
+# surfaced it: this repo gates on GitLab CI and merges on GitHub, so a red result never blocks
+# a merge. Verified by diffing the emitted assertion NAMES across #550 (10 added, 0 removed),
+# not by trusting the delta.
+SLX_EXPECTED=136
 SLX_PASS=0; SLX_FAIL=0
 run_selinux_policy_checks() {
     local out="${TMP_DIR}/selinux-policy.out"
