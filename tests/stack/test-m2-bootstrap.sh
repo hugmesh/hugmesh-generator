@@ -97,7 +97,12 @@ echo "-- 2b) PIN drift: every private version a sibling pom requests must be ser
 # ${hugmesh-commons.version} resolve to a literal elsewhere in the same pom, and
 # python walks the real XML so comment blocks between artifactId and version
 # (admin-bff's style) cannot hide a consumer the way they hide from grep.
-SRC="${REPO}/.stack-src"
+# STACK_SRC honored like every other stack tool (Makefile, m2-bootstrap.sh,
+# kind-load-images.sh) — a checkout that builds from a shared/external
+# .stack-src would otherwise SKIP this leg forever. That silent SKIP is how the
+# 2.4.1 -> 2.4.2 auth-core drift shipped: CI has no .stack-src, so the guard
+# stayed green while every cold build was broken.
+SRC="${STACK_SRC:-${REPO}/.stack-src}"
 if [ ! -d "${SRC}" ]; then
   echo "  SKIP .stack-src not populated (run 'make stack-clone') — pin-drift not checked"
 else

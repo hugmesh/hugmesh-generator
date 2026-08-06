@@ -74,23 +74,24 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 #                                 hugmesh-build-config, so build-config MUST precede it.
 #   hugmesh-commons   2.1.0  — incl. the -tests classifier jar (admin-bff's test scope
 #                                 compiles against it even with -DskipTests).
-#   hugmesh-auth-core 2.4.1  — user-bff + admin-bff main. 2.4.1 = auth-core #38
-#                                 (ReservedNames sync: hmdm/attest/character-forge +
-#                                 2 games wasm slugs). The 2.4.0 pin outlived its
-#                                 consumers: both BFFs bumped to 2.4.1 upstream and
-#                                 the operator's cold `make stack-up` then died at
+#   hugmesh-auth-core 2.4.2  — user-bff + admin-bff main. 2.4.2 = auth-core #42
+#                                 (release re-pin after the MFA fixes #39-#41; the
+#                                 2.4.2 coordinate exists BECAUSE 2.4.x-old was
+#                                 published mutable — see that PR). This pin has now
+#                                 drifted twice the same way (2.4.0 -> 2.4.1 ->
+#                                 2.4.2): the consumers bump, the cold build dies at
 #                                 user-bff with "Could not find artifact
-#                                 systems.hugmesh:hugmesh-auth-core:jar:2.4.1 in
-#                                 gitlab-maven" — the registry served only 2.4.0.
-#                                 tests/stack/test-m2-bootstrap.sh's pin-drift guard
-#                                 now fails BEFORE a 25-minute build does.
+#                                 systems.hugmesh:hugmesh-auth-core:jar:<new> in
+#                                 gitlab-maven". tests/stack/test-m2-bootstrap.sh's
+#                                 pin-drift guard exists for exactly this — keep it
+#                                 in CI and run it after every auth-core release.
 # The org repos have NO git tags, hence SHA pins. Order matters: build-config FIRST
 # (parent's plugin dep), then parent (everything else's <parent>), then commons/auth-core.
 PINS=(
   "hugmesh-build-config|7f5f643d8f08ced145569d3a9db6b4be8849516f|hugmesh-build-config|0.5.0|jar"
   "hugmesh-parent|389f34e98c6da846b21bda9e1553cf1418dc92eb|hugmesh-parent|2.8.0|pom"
   "hugmesh-commons|4eaeb58876fb389f8929caff99aae3a06de22586|hugmesh-commons|2.1.0|jar+tests"
-  "hugmesh-auth-core|bd6a0b91842ecfc74e845d6cbc927daca4d1c5b4|hugmesh-auth-core|2.4.1|jar"
+  "hugmesh-auth-core|b50696be9ad769515c2bda7f5b29420f110a65dc|hugmesh-auth-core|2.4.2|jar"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"

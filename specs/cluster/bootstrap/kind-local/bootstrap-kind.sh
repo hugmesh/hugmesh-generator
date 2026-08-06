@@ -32,21 +32,26 @@ ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
 REPO="${HUGMESH_GITOPS_REPO:-https://github.com/Snapdragon-Systems/hugmesh-generator.git}"
 REV="${HUGMESH_GITOPS_REV:-main}"
-# The Harbor migration (registry.hugmesh.systems cutover) is not yet merged
-# to main (open draft PR, branch below). Its Application objects + the
-# manifests they point at only exist on this branch today. Once that PR
-# merges, set HARBOR_BRANCH=main (or just drop the override block below
-# entirely — git-show against main will then return the same content the
-# other Applications already read straight from $CLUSTER_DIR).
-HARBOR_BRANCH="${HARBOR_BRANCH:-feat/harbor-registry-migration}"
-# manifests/vault/deployment.yaml's vault-tls-init init container fix (the
-# hashicorp/vault image has no openssl binary at all — see the comment on that
-# container) lands on this same branch, alongside this bootstrap tooling, not
-# yet on `main`. Same pattern as HARBOR_BRANCH above: once this branch merges,
-# drop VAULT_BRANCH (or set it to `main`) and Vault is read straight from
-# $REV like every other non-Harbor Application again.
-VAULT_BRANCH="${VAULT_BRANCH:-feat/kind-local-bringup}"
+# Both former branch overrides (the Harbor migration and the vault-tls-init
+# openssl fix) have since MERGED to main — apps/03a+03b and the fixed
+# manifests/vault/deployment.yaml are read straight from $REV like everything
+# else. The override machinery below is kept so a future not-yet-merged
+# Application can be validated the same way, but the defaults are now main.
+HARBOR_BRANCH="${HARBOR_BRANCH:-main}"
+VAULT_BRANCH="${VAULT_BRANCH:-main}"
 SKIP_VAULT_BOOTSTRAP="${SKIP_VAULT_BOOTSTRAP:-0}"
+# KIND_PROFILE=core (default) brings up the original curated identity/registry
+# slice. KIND_PROFILE=sso ADDITIONALLY brings up the native-login path — the
+# fe-gateway + admin/user BFFs (+ their Postgres), route-access seed, Cassandra,
+# the Angular host shell and the login/social UI remotes — then seeds Vault KV
+# (gen-cluster-secrets.sh ONLINE mode through an exec shim into vault-0) and the
+# deterministic e2e identity catalogue (tests/qemu/seed-accounts.sh --roles), so
+# tests/e2e/specs/27-native-login.spec.ts can run against this cluster from the
+# host (`make kind-e2e` at the repo root drives the whole flow). First-party
+# images are NOT pulled from Harbor here — `make kind-images` builds them from
+# the sibling repos and `kind load`s them under the exact rendered refs.
+KIND_PROFILE="${KIND_PROFILE:-core}"
+case "${KIND_PROFILE}" in core|sso) ;; *) echo "KIND_PROFILE must be 'core' or 'sso' (got '${KIND_PROFILE}')" >&2; exit 1 ;; esac
 
 log() { echo "==> $*"; }
 warn() { echo "    WARN: $*" >&2; }
@@ -86,12 +91,56 @@ kubectl label node "${NODE}" \
   snapdragon.systems/pki=true \
   snapdragon.systems/local-path=true \
   --overwrite >/dev/null
+if [ "${KIND_PROFILE}" = "sso" ]; then
+  # The SSO slice adds workloads pinned to the backend tier (BFFs, their
+  # Postgres) and the frontend tier (host shell, login/social UI remotes) —
+  # same single-node collapse as pki/local-path above. Cassandra is the one
+  # workload in the slice that pins the ROLE-shaped label
+  # (snapdragon.systems/role: pki), not a capability=true label — the core
+  # profile's "nothing needs role=pki" note holds only for the core subset.
+  log "Labeling node '${NODE}' (backend=true, frontend=true, role=pki — KIND_PROFILE=sso)"
+  kubectl label node "${NODE}" \
+    snapdragon.systems/backend=true \
+    snapdragon.systems/frontend=true \
+    snapdragon.systems/role=pki \
+    --overwrite >/dev/null
+fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # 3) Namespaces (plain kubectl apply, not an Application)
 # ─────────────────────────────────────────────────────────────────────────
 log "Namespaces"
 kubectl apply -f "${CLUSTER_DIR}/namespaces/namespaces.yaml"
+
+# ─────────────────────────────────────────────────────────────────────────
+# 3b) LOCAL-DEV cluster CA. On a real node the `cluster-ca` Secret is
+#     provisioned OFFLINE by keys-provision from the KEYS USB
+#     (certs/cluster-ca.*); every consumer mounts it optional:true so pods
+#     START without it — and then vault-pki-init spins forever ("Error
+#     loading CA File: /ca/tls.crt") because its VAULT_CACERT never appears,
+#     while vault-tls-init has already fallen back to a self-signed listener
+#     cert the missing CA could never verify anyway. There is no USB here:
+#     mint a throwaway CA (fresh key material per cluster, like the Vault
+#     init below) and create the Secret in every consuming namespace BEFORE
+#     the apps sync, so vault-tls-init signs its listener cert from it and
+#     the pki-init chain is self-consistent.
+# ─────────────────────────────────────────────────────────────────────────
+if ! kubectl -n vault get secret cluster-ca >/dev/null 2>&1; then
+  log "Minting LOCAL-DEV cluster CA (throwaway, this cluster only) + cluster-ca Secrets"
+  CA_DIR="$(mktemp -d)"
+  openssl req -x509 -newkey rsa:4096 -nodes -days 825 -sha384 \
+    -subj "/CN=hugmesh kind local dev CA" \
+    -keyout "${CA_DIR}/tls.key" -out "${CA_DIR}/tls.crt" >/dev/null 2>&1
+  for ns in vault hugmesh-pki hugmesh-backend hugmesh-frontend external-secrets devops; do
+    kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    kubectl -n "${ns}" create secret tls cluster-ca \
+      --cert="${CA_DIR}/tls.crt" --key="${CA_DIR}/tls.key" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  done
+  rm -rf "${CA_DIR}"
+else
+  log "cluster-ca Secret already present — keeping it (idempotent re-run)"
+fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # 4) Local storage. On kind this works AS-IS once the node carries
@@ -272,11 +321,48 @@ git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml
         -e "s#repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git#repoURL: ${REPO}#" \
   | kubectl apply -f -
 
-# Explicitly NOT applied (deliberately out of scope for this validation pass —
-# see README.md): apps/00-cassandra.yaml, apps/03-gitlab.yaml, both gateway
-# apps (20-gateway-*, 22-gateway-superadmin), Matrix (30-tuwunel), Mastodon
-# (30-akkoma), games (50-games, 06-casdoor-games), media-poisoner, and every
-# other Application under specs/cluster/apps not listed above.
+# Explicitly NOT applied under KIND_PROFILE=core (deliberately out of scope
+# for the identity/registry validation pass — see README.md): apps/
+# 00-cassandra.yaml, apps/03-gitlab.yaml, the gateway apps, Matrix
+# (30-tuwunel), Mastodon (30-akkoma), games (50-games, 06-casdoor-games),
+# media-poisoner, and every other Application under specs/cluster/apps not
+# listed above.
+
+# ─────────────────────────────────────────────────────────────────────────
+# 6b) KIND_PROFILE=sso — the native-login slice on top of the core. Everything
+#     tests/e2e/specs/27-native-login.spec.ts touches: the fe-gateway front
+#     door (chart Ingress), the route-access seed DB (permitAll /bff/login
+#     row), admin-bff (bff_ session custody + /bff/internal back-channel) +
+#     user-bff (the /bff/login relocation) with their Postgres, Cassandra
+#     (gateway revocation list / URL registry), the Angular host shell and the
+#     login/social UI remotes. First-party images must ALREADY be loaded into
+#     the kind node under their rendered refs (`make kind-images`) — nothing
+#     here can pull them from the in-cluster Harbor.
+# ─────────────────────────────────────────────────────────────────────────
+SSO_APPS=(
+  00-cassandra.yaml       # gateway backing store (keyspace snapdragon_gateway)
+  06-route-access-db.yaml # gateway_route_access seed incl. permitAll /bff/login
+  20-gateway-fe.yaml      # fe-gateway chart (front door + Ingress)
+  30-admin-bff-db.yaml
+  31-admin-bff-api.yaml   # session custody + internal-token back-channel
+  34-user-bff-db.yaml
+  37-user-bff-api.yaml    # POST /bff/login (native-login relocation)
+  40-frontend.yaml        # Angular host shell (snapdragon-systems-web)
+  45-social-ui.yaml       # login-ui remote (+ matrix/mastodon/admin remotes)
+)
+if [ "${KIND_PROFILE}" = "sso" ]; then
+  for f in "${SSO_APPS[@]}"; do
+    apply_core_app "${f}"
+  done
+  # The fe-gateway chart's Ingress ships className "nginx" (the real cluster's
+  # public controller). kind runs ONLY ingress-nginx-internal, which registers
+  # class "nginx-internal" — without this override the Ingress is admitted by
+  # nothing and the host ports mapped by kind-local.yaml never route. A helm
+  # parameter (not a values edit) so the committed chart stays untouched.
+  log "Overriding fe-gateway ingress.className -> nginx-internal (kind has no public controller)"
+  kubectl -n "${ARGOCD_NS}" patch application hugmesh-gateway-fe --type merge -p \
+    '{"spec":{"source":{"helm":{"parameters":[{"name":"ingress.className","value":"nginx-internal"}]}}}}' >/dev/null
+fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # 7) Wait (best-effort) for the curated Applications to reach Synced/Healthy.
@@ -286,6 +372,9 @@ git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml
 #    visibility into how far things got.
 # ─────────────────────────────────────────────────────────────────────────
 APP_NAMES=(vault vault-pki external-secrets external-secrets-config ingress-nginx-internal casdoor harbor harbor-provision)
+if [ "${KIND_PROFILE}" = "sso" ]; then
+  APP_NAMES+=(cassandra route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api snapdragon-systems-web hugmesh-social-ui)
+fi
 log "Waiting up to 5m for curated Applications to reach Synced/Healthy (best-effort)"
 deadline=$((SECONDS + 300))
 while [ "${SECONDS}" -lt "${deadline}" ]; do
@@ -303,6 +392,10 @@ kubectl -n "${ARGOCD_NS}" get applications.argoproj.io "${APP_NAMES[@]}" \
   -o custom-columns='NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status' 2>/dev/null || true
 
 if [ "${SKIP_VAULT_BOOTSTRAP}" = "1" ]; then
+  if [ "${KIND_PROFILE}" = "sso" ]; then
+    echo "KIND_PROFILE=sso needs the Vault bootstrap (KV seeding feeds every ESO Secret the login path reads) — unset SKIP_VAULT_BOOTSTRAP" >&2
+    exit 1
+  fi
   log "SKIP_VAULT_BOOTSTRAP=1 — skipping the Vault init/unseal/PKI sequence. Done."
   exit 0
 fi
@@ -396,6 +489,109 @@ kubectl -n vault delete job vault-pki-init --ignore-not-found >/dev/null
 kubectl apply -k "${CLUSTER_DIR}/manifests/vault-pki" >/dev/null
 kubectl -n vault wait --for=condition=complete job/vault-pki-init --timeout=180s \
   || warn "vault-pki-init did not complete within 180s — check 'kubectl -n vault logs job/vault-pki-init'"
+
+if [ "${KIND_PROFILE}" = "sso" ]; then
+  # ───────────────────────────────────────────────────────────────────────
+  # 9) Vault KV seeding (SSO profile). Every Secret the login path consumes
+  #    (casdoor admin/db creds, the per-app client secrets — casdoor-init and
+  #    user-bff read the SAME hugmesh/casdoor-apps path, so one write aligns
+  #    both sides — the BFF DB creds, the AES custody key, the internal
+  #    back-channel token) is ESO-materialized from Vault KV. scripts/
+  #    gen-cluster-secrets.sh already writes exactly these paths in its ONLINE
+  #    mode; the only kind-specific part is reaching Vault: no host `vault`
+  #    CLI or cert plumbing needed — a PATH shim execs the CLI already inside
+  #    vault-0 (VAULT_SKIP_VERIFY because the in-pod loopback hostname is not
+  #    a SAN on the vault-tls-init cert; the token never leaves kubectl exec).
+  # ───────────────────────────────────────────────────────────────────────
+  # HARD gate on vault-pki-init: the KV seed below is useless until Vault is
+  # reachable over the cluster-ca chain, and 403s taught us the soft 180s
+  # warn above is not enough — a still-running pki-init means the engine
+  # setup (and any policy work) hasn't happened yet.
+  log "Waiting (hard) for vault-pki-init before seeding KV"
+  kubectl -n vault wait --for=condition=complete job/vault-pki-init --timeout=600s \
+    || { echo "vault-pki-init never completed — cannot seed KV (kubectl -n vault logs job/vault-pki-init)" >&2; exit 1; }
+
+  log "Seeding Vault KV for the SSO slice (gen-cluster-secrets.sh ONLINE via vault-0 exec shim)"
+  ROOT_TOKEN="$(kubectl -n vault get secret vault-bootstrap -o jsonpath='{.data.token}' | base64 -d)"
+  [ -n "${ROOT_TOKEN}" ] || { echo "vault-bootstrap Secret missing/empty — cannot seed KV" >&2; exit 1; }
+  # KV v2 at mount "secret" is a FIXED contract (keys-template/vault/README.md:
+  # the ESO ClusterSecretStore reads provider vault, KV v2, mount `secret`) —
+  # but NOTHING in-tree mounts it; on a real cluster that is part of the
+  # by-hand `vault operator init` sequence. Mount it here, idempotently.
+  if ! kubectl -n vault exec vault-0 -c vault -- env \
+        VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN="${ROOT_TOKEN}" \
+        vault secrets list -format=json 2>/dev/null | jq -e '."secret/"' >/dev/null; then
+    log "Mounting KV v2 at secret/ (the ESO ClusterSecretStore's fixed contract)"
+    kubectl -n vault exec vault-0 -c vault -- env \
+      VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN="${ROOT_TOKEN}" \
+      vault secrets enable -path=secret -version=2 kv
+  fi
+  SHIM_DIR="$(mktemp -d)"
+  cat > "${SHIM_DIR}/vault" <<'SHIM'
+#!/bin/bash
+exec kubectl -n vault exec -i vault-0 -c vault -- env \
+  VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true \
+  VAULT_TOKEN="${VAULT_TOKEN}" vault "$@"
+SHIM
+  chmod +x "${SHIM_DIR}/vault"
+  # VAULT_ADDR only gates the script's online mode — the shim always talks to
+  # the in-pod loopback listener regardless of its value.
+  PATH="${SHIM_DIR}:${PATH}" VAULT_ADDR="https://in-cluster-via-exec-shim" VAULT_TOKEN="${ROOT_TOKEN}" \
+    bash "${REPO_ROOT}/scripts/gen-cluster-secrets.sh" --out "${SHIM_DIR}/bundle"
+  rm -rf "${SHIM_DIR}"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # 10) Wait for the casdoor-init seed Job (same gate the in-cluster
+  #     test-runner orchestrator enforces), then seed the deterministic e2e
+  #     identity catalogue against the live Casdoor: seed-accounts.sh --roles
+  #     renders apply-systems-roles.sh (idempotent add-user/update-role over
+  #     the Casdoor API) — run it through a short-lived port-forward.
+  #     casdoor-init may have already run and failed before the KV seed above
+  #     landed its Secrets — retrigger it once, same recreate idiom as
+  #     vault-pki-init.
+  # ───────────────────────────────────────────────────────────────────────
+  log "Re-running casdoor-init now that Vault KV + ESO secrets exist"
+  kubectl -n hugmesh-pki delete job casdoor-init --ignore-not-found >/dev/null
+  kubectl apply -k "${CLUSTER_DIR}/manifests/casdoor" >/dev/null
+  kubectl -n hugmesh-pki wait --for=condition=complete job/casdoor-init --timeout=600s \
+    || { warn "casdoor-init did not complete — 'kubectl -n hugmesh-pki logs job/casdoor-init'"; exit 1; }
+
+  log "Seeding e2e identities (seed-accounts.sh --roles) against the kind Casdoor"
+  SEED_DIR="$(mktemp -d)"
+  bash "${REPO_ROOT}/tests/qemu/seed-accounts.sh" --roles "${SEED_DIR}"
+  kubectl -n hugmesh-pki port-forward svc/casdoor 18000:8000 >/dev/null 2>&1 &
+  PF_PID=$!
+  trap 'kill "${PF_PID}" 2>/dev/null || true' EXIT
+  for i in $(seq 1 20); do
+    curl -sf http://127.0.0.1:18000/api/health >/dev/null 2>&1 && break
+    sleep 2
+  done
+  # apply-systems-roles.sh logs in as the Casdoor built-in admin. That password
+  # is NOT a fixed dev constant — gen-cluster-secrets.sh generated it into
+  # secret/<brand>/casdoor during the KV seed above (property
+  # admin_password_plain; the sibling admin_password is the hashed form Casdoor
+  # stores). Read it back from Vault rather than re-deriving it, so the seed
+  # always uses the password this cluster actually has.
+  CASDOOR_ADMIN_PASS="$(kubectl -n vault exec vault-0 -c vault -- env \
+      VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN="${ROOT_TOKEN}" \
+      vault kv get -field=admin_password_plain "secret/${BRAND:-hugmesh}/casdoor" 2>/dev/null)"
+  [ -n "${CASDOOR_ADMIN_PASS}" ] || { echo "could not read the Casdoor admin password from Vault — cannot seed identities" >&2; exit 1; }
+  CASDOOR_URL="http://127.0.0.1:18000" CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS}" \
+    bash "${SEED_DIR}/roles/apply-systems-roles.sh"
+  kill "${PF_PID}" 2>/dev/null || true
+  trap - EXIT
+  # test-seed-passwords: the same deterministic-password Secret the in-cluster
+  # test Jobs envFrom (optional). Host-side playwright reads the E2E_* env
+  # directly, but create it anyway so a later in-cluster runner finds it.
+  kubectl -n hugmesh-frontend create secret generic test-seed-passwords \
+    --from-literal=E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  rm -rf "${SEED_DIR}"
+
+  echo
+  log "SSO slice seeded. Host entry: https://hugmesh.systems via 127.0.0.1:8443 (kind-local.yaml port map)"
+  echo "    e2e:  make kind-e2e   (repo root — resolver-maps hugmesh.systems -> 127.0.0.1, runs spec 27)"
+fi
 
 log "Done. Cluster '${CLUSTER_NAME}' is left running for the next validation step."
 echo "    kubeconfig context: kind-${CLUSTER_NAME}"

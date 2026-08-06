@@ -37,6 +37,14 @@ export default defineConfig({
         '--no-sandbox', '--disable-dev-shm-usage',
         // WebRTC fake media so getUserMedia works headless (Matrix video call).
         '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+        // Kind runs address the cluster by its REAL hostname (the fe-gateway
+        // Ingress matches on Host), reached via kind-local.yaml's 8443 port
+        // map — SNAP_HOST_RESOLVER carries Chromium host-resolver-rules
+        // (e.g. 'MAP hugmesh.systems 127.0.0.1') so no /etc/hosts edit or
+        // sudo is needed. Unset (compose runs) adds nothing.
+        ...(process.env.SNAP_HOST_RESOLVER
+          ? [`--host-resolver-rules=${process.env.SNAP_HOST_RESOLVER}`]
+          : []),
       ],
     },
   },

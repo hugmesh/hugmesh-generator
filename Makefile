@@ -383,7 +383,8 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-down stack-logs stack-ps
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-down stack-logs stack-ps \
+        kind-images kind-up kind-e2e kind-down
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -1099,6 +1100,30 @@ qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=
 
 qemu-matrix-enumerate: ## dry-run enumerate every matrix row + its launcher/size/RAM (no boot, no build)
 	tests/qemu/run-matrix-e2e.sh --dry-run $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
+
+# ── kind SSO e2e — the same native-login proof the compose stack runs
+# (tests/e2e/specs/27-native-login.spec.ts), against a REAL kind cluster
+# running the GitOps payload (ArgoCD + Vault/ESO/Casdoor + fe-gateway + BFFs).
+# Flow: kind-images builds the first-party images from ./.stack-src and
+# `kind load`s them under the exact rendered refs; kind-up brings up
+# bootstrap-kind.sh KIND_PROFILE=sso (apps + Vault KV + e2e identity seed);
+# kind-e2e resolver-maps hugmesh.systems -> 127.0.0.1 (kind-local.yaml maps
+# the internal ingress out on :8443) and runs spec 27. No /etc/hosts edits,
+# no sudo. See specs/cluster/bootstrap/kind-local/README.md.
+kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice first-party images (needs the kind cluster to exist)
+	bash scripts/kind-load-images.sh
+
+kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds)
+	KIND_PROFILE=sso bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
+
+kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
+	cd tests/e2e && \
+	  SNAP_BASE_URL='https://hugmesh.systems:8443' \
+	  SNAP_HOST_RESOLVER='MAP hugmesh.systems 127.0.0.1, MAP *.hugmesh.systems 127.0.0.1' \
+	  npx playwright test specs/27-native-login.spec.ts
+
+kind-down: ## delete the kind cluster
+	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
 
 playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \

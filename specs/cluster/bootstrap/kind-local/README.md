@@ -1,4 +1,31 @@
-# kind-local — local kind bring-up (Vault + PKI + Casdoor + Harbor)
+# kind-local — local kind bring-up (Vault + PKI + Casdoor + Harbor, + SSO slice)
+
+> **`KIND_PROFILE=sso`** extends the core slice below with the **native-login
+> path** — Cassandra, the route-access seed DB, the fe-gateway chart (Ingress
+> re-classed to `nginx-internal`), admin-bff + user-bff (+ their Postgres), the
+> Angular host shell and the login/social UI remotes — then seeds Vault KV
+> (`scripts/gen-cluster-secrets.sh` ONLINE mode through a `kubectl exec` shim
+> into `vault-0`, so no host `vault` CLI is needed) and the deterministic e2e
+> identity catalogue (`tests/qemu/seed-accounts.sh --roles` applied over a
+> Casdoor port-forward). First-party images are **built locally and
+> `kind load`ed** under the exact refs the manifests render
+> (`registry.hugmesh.systems/hugmesh/<repo>:main`, gateway `:dev`) — the
+> in-cluster Harbor is empty on a fresh cluster and is not used.
+>
+> Driven end-to-end from the repo root:
+>
+> ```sh
+> make kind-up       # bootstrap-kind.sh KIND_PROFILE=sso (idempotent)
+> make kind-images   # build from ./.stack-src + kind load  (before/after kind-up both work)
+> make kind-e2e      # spec 27 (native login) against https://hugmesh.systems:8443
+> make kind-down
+> ```
+>
+> `make kind-e2e` maps `hugmesh.systems -> 127.0.0.1` with a Chromium
+> host-resolver rule (no `/etc/hosts`, no sudo) and rides the
+> `kind-local.yaml` 443→8443 host port map into the internal ingress. This is
+> the kind-cluster leg of the SSO e2e roadmap item — the same proof
+> `tests/e2e/specs/27-native-login.spec.ts` runs against the compose stack.
 
 A reusable, local, single-node [kind](https://kind.sigs.k8s.io/) cluster that
 brings up a **curated slice** of the HugMesh GitOps tree so you can
