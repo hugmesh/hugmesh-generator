@@ -33,6 +33,8 @@ import shlex
 from dataclasses import dataclass, field, asdict, MISSING
 from typing import Any
 
+import sys
+
 from .host_resources import default_jobs
 from .validate import (
     IdentityValidationError,
@@ -1098,6 +1100,43 @@ def resolve_installer_ui_default(cfg: "ImageConfig") -> str | None:
             f"{cfg.role!r}: build-x86-host-stage4.sh gates the calamares USE closure "
             f"(package.use/desktop) on ROLE_CLIENT:2496, so a node cannot resolve "
             f"app-admin/calamares — and has no display to run it.")
+
+
+# ── one-shot note emission ───────────────────────────────────────────────────
+# resolve_installer_ui_default() returns a NOTE describing a rewrite it performed.
+# Callers print it to stderr. That is right for a one-shot CLI, but the Studio is a
+# LONG-LIVED process that re-materializes a worklist on every preview refresh, so the
+# identical note printed once per entry per refresh — 76 copies of the same four lines
+# in one operator session (2026-08-05). The note is advice about a CONFIGURATION, not
+# an event: saying it once is the whole of its value, and repeating it buries anything
+# else on stderr.
+#
+# Dedupe on the note TEXT (which already embeds the role), per process. A genuinely
+# different rewrite — another role, another trigger value — has different text and is
+# still reported. reset_emitted_notes() exists for tests, which must not inherit a
+# sibling test's suppression.
+_EMITTED_NOTES: set[str] = set()
+
+
+def emit_note_once(note: str | None, *, stream=None) -> bool:
+    """Print ``note`` to stderr the FIRST time this process sees that exact text.
+
+    Returns True if it was printed. ``None``/empty is a no-op returning False, so
+    callers can write ``emit_note_once(resolve_installer_ui_default(cfg))`` with no
+    guard of their own.
+    """
+    if not note:
+        return False
+    if note in _EMITTED_NOTES:
+        return False
+    _EMITTED_NOTES.add(note)
+    print(f"warning: {note}", file=stream if stream is not None else sys.stderr)
+    return True
+
+
+def reset_emitted_notes() -> None:
+    """Forget every emitted note (tests only — never call from product code)."""
+    _EMITTED_NOTES.clear()
 
 
 def effective_installer_ui(cfg: "ImageConfig") -> str:

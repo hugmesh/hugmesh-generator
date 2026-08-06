@@ -14,7 +14,11 @@ _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 # raw (non-deduped) per-platform atom totals — pinned to the tree (design 2.8 counts).
 # x86 = 149 since main added sys-apps/systemd-utils to packages.list (boot-chain #307).
-_RAW_TOTALS = {"x86": 149, "rpi5": 74, "jetson": 66, "frite": 52,
+# rpi5 = 73 since #513 excluded net-firewall/firewalld from specs-rpi5: its
+# glib[introspection] chain does not cross-compile (the real build died in glib's
+# in-source gobject-introspection bootstrap), so the atom was removed behind a
+# paper-trail comment and tests/requested-atoms-resolvable.sh pins the exclusion.
+_RAW_TOTALS = {"x86": 149, "rpi5": 73, "jetson": 66, "frite": 52,
                "orangepi5": 53, "orangepizero2": 32, "orangepizero2w": 32}
 
 _CONFIGS = [

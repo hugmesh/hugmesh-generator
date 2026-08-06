@@ -118,6 +118,7 @@ def main(argv=None) -> int:
         from .core.build_driver import BuildDriver
         from .core.config import (
             ImageConfig,
+            emit_note_once,
             resolve_installer_ui_default,
             resolve_platform_defaults,
         )
@@ -145,9 +146,7 @@ def main(argv=None) -> int:
             # `--installer-ui all` and pull an UNSATISFIABLE app-admin/calamares (the
             # desktop USE closure is ROLE_CLIENT-gated). The note goes to STDERR — stdout
             # here IS the argv channel and any extra byte corrupts every consumer.
-            note = resolve_installer_ui_default(cfg)
-            if note:
-                print(f"warning: {note}", file=sys.stderr)
+            emit_note_once(resolve_installer_ui_default(cfg))
             print(driver.command_string(cfg, backend))
         except (ValueError, OSError) as exc:
             # ValueError: bad JSON / non-dict config / envelope-vs-flat mismatch /

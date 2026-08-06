@@ -37,6 +37,7 @@ from .config import (
     ImageConfig,
     SECRET_FIELDS,
     clear_role_class_fields,
+    emit_note_once,
     resolve_installer_ui_default,
     resolve_platform_defaults,
     strip_platform_unsupported,
@@ -271,9 +272,11 @@ class WorklistConfig:
         #    misleading value into the materialized spec. Node-class x86 only — a client/
         #    standalone entry returns early, so desktop argv stays byte-identical.
         #    The note is a WARNING for stderr, never stdout (app.py's argv channel).
-        note = resolve_installer_ui_default(cfg)
-        if note:
-            print(f"warning: {note}", file=sys.stderr)
+        #    emit_note_once, not a bare print: the Studio re-materializes on every
+        #    preview refresh, so the identical note printed once per entry per refresh
+        #    (76 copies in one operator session). Advice about a configuration is worth
+        #    saying once.
+        emit_note_once(resolve_installer_ui_default(cfg))
         if cfg.mode == "mesh":
             cfg.tailscale = True
             cfg.sso = True
