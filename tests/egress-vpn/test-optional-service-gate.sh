@@ -8,10 +8,16 @@
 # filter against a sandbox tree:
 #   * egress-vpn registered in optional-services.yaml as default: off;
 #   * NOT selected => the NetworkPolicy interaction file + its kustomization line
-#     are PRUNED, and net-vpn/{wireguard-tools,openvpn} are dropped from the node
-#     package set;
-#   * selected => the NetworkPolicy interaction is KEPT, the packages survive, and
-#     the reconcile service is linked into the default runlevel.
+#     are PRUNED, the runtime config-byte DELIVERY half (manifests/egress-vpn +
+#     apps/13e-egress-vpn.yaml) is PRUNED, and net-vpn/{wireguard-tools,openvpn}
+#     are dropped from the node package set;
+#   * selected => the NetworkPolicy interaction is KEPT, the delivery half is
+#     KEPT, the packages survive, and the reconcile service is linked into the
+#     default runlevel.
+# Plus the DELIVERY manifests' own invariants: the projector ships DARK (empty
+# kustomization + a nodeSelector no node carries + a MANUAL-sync app), its RBAC
+# is a namespaced Role over secrets only, and its hostPath is EXACTLY the
+# reconcile agent's VPN_SECRET_DIR default (the contract that makes the hop work).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -59,6 +65,8 @@ gate_egress_vpn() {  # $1 = OPTIONAL_SERVICES string ; uses ${tree}
     if ! _opt_selected egress-vpn; then
         rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
         _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
+        rm -f "${tree}/apps/13e-egress-vpn.yaml"
+        rm -rf "${tree}/manifests/egress-vpn"
     fi
 }
 filter_pkgs() {  # $1 = OPTIONAL_SERVICES ; reads STAGE4_PACKAGES[], prints kept
@@ -76,7 +84,11 @@ filter_pkgs() {  # $1 = OPTIONAL_SERVICES ; reads STAGE4_PACKAGES[], prints kept
 
 seed_tree() {
     tree="${WORK}/tree-$1"; rm -rf "${tree}"
-    mkdir -p "${tree}/manifests/networkpolicy"
+    mkdir -p "${tree}/manifests/networkpolicy" "${tree}/manifests/egress-vpn" "${tree}/apps"
+    printf 'placeholder\n' > "${tree}/manifests/egress-vpn/kustomization.yaml"
+    printf 'placeholder\n' > "${tree}/manifests/egress-vpn/secret-projector-daemonset.yaml"
+    printf 'placeholder\n' > "${tree}/apps/13e-egress-vpn.yaml"
+    printf 'placeholder\n' > "${tree}/apps/13b-node-storage.yaml"
     printf 'placeholder\n' > "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
     cat > "${tree}/manifests/networkpolicy/kustomization.yaml" <<'K'
 resources:
@@ -99,6 +111,13 @@ grep -q 'egress-vpn-interaction.yaml' "${tree}/manifests/networkpolicy/kustomiza
 grep -q 'homeserver-egress.yaml' "${tree}/manifests/networkpolicy/kustomization.yaml" \
     && ok "NOT selected: unrelated kustomization resources kept" || bad "dropped an unrelated resource"
 
+[ ! -d "${tree}/manifests/egress-vpn" ] \
+    && ok "NOT selected: the secret-projector delivery overlay pruned (dir and all)" || bad "delivery overlay survived"
+[ ! -f "${tree}/apps/13e-egress-vpn.yaml" ] \
+    && ok "NOT selected: the MANUAL-sync delivery Application pruned" || bad "13e app survived"
+[ -f "${tree}/apps/13b-node-storage.yaml" ] \
+    && ok "NOT selected: an unrelated node-service Application kept" || bad "pruned an unrelated app"
+
 kept="$(filter_pkgs 'akkoma tuwunel')"
 echo "${kept}" | grep -q 'net-vpn/wireguard-tools' && bad "wireguard-tools survived the prune" || ok "NOT selected: net-vpn/wireguard-tools pruned"
 echo "${kept}" | grep -q 'net-vpn/openvpn' && bad "openvpn survived the prune" || ok "NOT selected: net-vpn/openvpn pruned"
@@ -112,6 +131,9 @@ gate_egress_vpn "akkoma egress-vpn"
 grep -q 'egress-vpn-interaction.yaml' "${tree}/manifests/networkpolicy/kustomization.yaml" \
     && ok "selected: kustomization line kept" || bad "kustomization line dropped despite selection"
 
+[ -d "${tree}/manifests/egress-vpn" ] && [ -f "${tree}/apps/13e-egress-vpn.yaml" ] \
+    && ok "selected: the delivery overlay + its Application kept" || bad "delivery half pruned despite selection"
+
 kept="$(filter_pkgs 'akkoma egress-vpn')"
 echo "${kept}" | grep -q 'net-vpn/wireguard-tools' && ok "selected: net-vpn/wireguard-tools kept" || bad "wireguard-tools pruned despite selection"
 echo "${kept}" | grep -q 'net-vpn/openvpn' && ok "selected: net-vpn/openvpn kept" || bad "openvpn pruned despite selection"
@@ -120,6 +142,68 @@ echo "${kept}" | grep -q 'net-vpn/openvpn' && ok "selected: net-vpn/openvpn kept
 # (assert the conditional + the runlevel link exist in the builder source).
 grep -q '_opt_selected egress-vpn' "${BUILDER}" && ok "builder gates the reconcile link on _opt_selected egress-vpn" || bad "builder missing the egress-vpn service-link gate"
 grep -q 'DEFAULT_SVCS+=(hugmesh-vpn-reconcile)' "${BUILDER}" && ok "builder links hugmesh-vpn-reconcile when selected" || bad "builder missing the reconcile runlevel link"
+
+# ── BOTH cluster-tree builders must carry the delivery prune (parity) ─────────
+# The reproduction above only proves the SHAPE; these greps prove the real
+# builders actually do it (rpi5 + x86 both bake the GitOps tree).
+missing=""
+for b in "${REPO}/build-rpi5-stage4.sh" "${REPO}/build-x86-host-stage4.sh"; do
+    grep -Fq 'rm -rf "${tree}/manifests/egress-vpn"' "${b}" \
+        && grep -Fq 'rm -f "${apps}/13e-egress-vpn.yaml"' "${b}" \
+        || missing="${missing} $(basename "${b}")"
+done
+[ -z "${missing}" ] && ok "both builders prune the delivery overlay + app with the slug" \
+    || bad "builders missing the delivery prune:${missing}"
+
+# ── DELIVERY manifests: the invariants that make the hop work + keep it dark ──
+DEL="${REPO}/specs/cluster/manifests/egress-vpn"
+DS="${DEL}/secret-projector-daemonset.yaml"
+RECON="${REPO}/specs/usr/sbin/hugmesh-vpn-reconcile"
+if [ -f "${DS}" ]; then
+    # THE CONTRACT: the hostPath must be exactly the agent's VPN_SECRET_DIR default.
+    SECRET_DIR="$(sed -n 's|^SECRET_DIR="${VPN_SECRET_DIR:-\(/[^}]*\)}".*|\1|p' "${RECON}" | head -1)"
+    [ -n "${SECRET_DIR}" ] && ok "read VPN_SECRET_DIR default from the agent: ${SECRET_DIR}" \
+        || bad "could not read SECRET_DIR from ${RECON}"
+    grep -Fq "path: ${SECRET_DIR}" "${DS}" \
+        && ok "projector hostPath == the reconcile agent's VPN_SECRET_DIR (${SECRET_DIR})" \
+        || bad "projector hostPath does not match ${SECRET_DIR} — the bytes would land where nothing reads them"
+    grep -Fq 'snapdragon.systems/egress-vpn: "true"' "${DS}" \
+        && ok "DARK gate 2: nodeSelector on a label no node carries by default" \
+        || bad "projector has no node-label gate — an enabled sync would hit every node"
+    grep -Fq 'type: spc_t' "${DS}" \
+        && ok "SELinux: spc_t requested (writing under /etc on an enforcing node)" \
+        || bad "no spc_t — the hostPath write would be denied on an enforcing node"
+    # Match the real `image:` key, never the prose that explains the choice.
+    grep -Eq '^[[:space:]]*image:[[:space:]]*registry\.k8s\.io/kubectl' "${DS}" \
+        && bad "shell-less distroless kubectl image with a /bin/bash entrypoint" \
+        || ok "projector does not use the shell-less distroless kubectl image"
+else
+    bad "delivery DaemonSet missing: ${DS}"
+fi
+grep -Eq '^resources: \[\]' "${DEL}/kustomization.yaml" 2>/dev/null \
+    && ok "DARK gate 1: delivery kustomization renders ZERO objects (resources: [])" \
+    || bad "delivery kustomization is not empty — it would apply on sync"
+if [ -f "${REPO}/specs/cluster/apps/13e-egress-vpn.yaml" ]; then
+    grep -Eq '^[[:space:]]*automated:' "${REPO}/specs/cluster/apps/13e-egress-vpn.yaml" \
+        && bad "13e app has an automated: block — the projector could auto-apply" \
+        || ok "13e app is MANUAL-sync (no automated: block)"
+else
+    bad "delivery Application missing: apps/13e-egress-vpn.yaml"
+fi
+# RBAC: namespaced Role, secrets only, read-only verbs, never a ClusterRole.
+RBAC="${DEL}/secret-projector-rbac.yaml"
+if [ -f "${RBAC}" ]; then
+    grep -q 'kind: ClusterRole' "${RBAC}" \
+        && bad "delivery RBAC uses a ClusterRole (must be namespaced)" \
+        || ok "delivery RBAC is a namespaced Role (never a ClusterRole)"
+    grep -Fq 'verbs: ["get", "list"]' "${RBAC}" \
+        && ok "delivery RBAC is read-only (get/list) — no create/patch/delete" \
+        || bad "delivery RBAC verb set widened beyond get/list"
+    grep -Eq 'resources: \["secrets"\]' "${RBAC}" \
+        && ok "delivery RBAC covers secrets ONLY" || bad "delivery RBAC resource set widened beyond secrets"
+else
+    bad "delivery RBAC missing: ${RBAC}"
+fi
 
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

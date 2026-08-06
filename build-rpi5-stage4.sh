@@ -1809,6 +1809,12 @@ gate_optional_services() {
                 # rootfs, not the GitOps tree.
                 rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
+                # AND the runtime config-byte DELIVERY half: the (dark) secret-projector
+                # overlay + its MANUAL-sync Application. A tree that never selected the VPN
+                # must not carry a DaemonSet that writes VPN key bytes onto node hostPaths,
+                # even inert — so the whole dir + app go, not just a kustomize line.
+                rm -f "${apps}/13e-egress-vpn.yaml"
+                rm -rf "${tree}/manifests/egress-vpn"
                 ;;
             tor)
                 # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
@@ -3598,15 +3604,19 @@ chmod +x "${SYSROOT}/etc/init.d/hugmesh-node-storage-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-node-storage-reconcile" "${SYSROOT}/etc/hugmesh/registry/cron-node-storage-reconcile"
 
 # ── Egress VPN (split-tunnel, fail-closed) — node-level, DEFAULT-OFF ────────────
-# Bake the OpenRC service + the split-tunnel runner into every node image. They
-# are INERT until enabled: the service is NOT linked into a runlevel here (the
-# optional-services gate / signed reconcile enables it), and with no
-# /etc/hugmesh/vpn/active.conf the runner is a no-op. Baking unconditionally
-# does NOT alter egress on a node that never selects the VPN.
+# Bake the OpenRC service + the split-tunnel runner + the packet marker
+# (hugmesh-vpn-mark: marked-services -> fwmark 0x76 nft rules + vpn-egress pod
+# labels) into every node image. They are INERT until enabled: the service is
+# NOT linked into a runlevel here (the optional-services gate / signed
+# reconcile enables it), with no /etc/hugmesh/vpn/active.conf the runner is a
+# no-op, and the marker only ever runs from the reconcile/runner flows. Baking
+# unconditionally does NOT alter egress on a node that never selects the VPN.
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-egress-vpn" "${SYSROOT}/etc/init.d/hugmesh-egress-vpn"
 chmod +x "${SYSROOT}/etc/init.d/hugmesh-egress-vpn"
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-runner"   "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
 chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-mark"     "${SYSROOT}/usr/sbin/hugmesh-vpn-mark"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-mark"
 mkdir -p "${SYSROOT}/etc/hugmesh/vpn"; chmod 0700 "${SYSROOT}/etc/hugmesh/vpn"
 
 # ── Egress-VPN reconcile bridge (signed per-node export consumer) — DEFAULT-OFF ─

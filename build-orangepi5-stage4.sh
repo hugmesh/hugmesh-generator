@@ -1437,6 +1437,8 @@ cp "${SHARED_SPECS}/etc/init.d/hugmesh-egress-vpn" "${SYSROOT}/etc/init.d/hugmes
 chmod +x "${SYSROOT}/etc/init.d/hugmesh-egress-vpn"
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-runner"   "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
 chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-mark"     "${SYSROOT}/usr/sbin/hugmesh-vpn-mark"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-mark"
 mkdir -p "${SYSROOT}/etc/hugmesh/vpn"; chmod 0700 "${SYSROOT}/etc/hugmesh/vpn"
 
 # ── Egress-VPN reconcile bridge (signed per-node export consumer) — DEFAULT-OFF ─

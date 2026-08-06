@@ -1,0 +1,46 @@
+# Egress-VPN runtime config-byte DELIVERY (secret-projector) — MANUAL-sync, SHIPS DARK.
+#
+# The "13e" sibling of 13b-node-storage / 13d-optional-services-operator: the
+# cluster-side half of a NODE service. It points at manifests/egress-vpn, whose
+# kustomization has `resources: []`, so this Application renders to ZERO objects
+# and is inert. It ships the wiring without applying anything.
+#
+# WHY NO `automated:` BLOCK (unlike 13b/13d): the object behind it is a DaemonSet
+# that writes VPN PRIVATE-KEY bytes onto node filesystems (hostPath
+# /etc/hugmesh/vpn-secret, the reconcile agent's VPN_SECRET_DIR) with spc_t and
+# root. That must never land on a cluster as a side effect of an auto-sync — an
+# operator enables it deliberately, once the admin-bff/ESO half is materialising
+# the Secrets and the target nodes are labelled.
+#
+# TO ENABLE: follow manifests/egress-vpn/kustomization.yaml's header
+# (un-comment the resources, sync THIS app manually, then label the assigned
+# nodes `snapdragon.systems/egress-vpn=true`).
+#
+# ROLLBACK: re-comment the overlay resources and manual-sync. Nodes fall back to
+# their key-USB-provisioned config; this is a delivery rollback, not an outage.
+#
+# PRUNED WITH THE SLUG: gate_optional_services() deletes this file and
+# manifests/egress-vpn wholesale when egress-vpn is not selected, so an image
+# that never chose the VPN carries no delivery wiring at all.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: egress-vpn
+  namespace: devops
+  annotations:
+    # Node-service wave, alongside 13b-node-storage.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/egress-vpn
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-egress-vpn
+  # NO `syncPolicy.automated:` — MANUAL sync only. The namespace is created by
+  # the overlay's own namespace.yaml (not CreateNamespace=true) so that enabling
+  # the app without enabling the resources creates nothing at all.
+  syncPolicy:
+    syncOptions: [CreateNamespace=false]

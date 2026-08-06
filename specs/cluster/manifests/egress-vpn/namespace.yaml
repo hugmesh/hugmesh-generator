@@ -1,0 +1,25 @@
+# The egress-VPN CONFIG-SECRET namespace.
+#
+# WHY ITS OWN NAMESPACE (this is the privilege boundary, not decoration): the
+# secret-projector is a NODE-privileged DaemonSet — it writes root-owned 0600
+# bytes onto the host at /etc/hugmesh/vpn-secret. Whatever Secrets its
+# ServiceAccount can read are effectively readable by that host-writing identity.
+# RBAC has no label selector and `resourceNames` cannot match the DYNAMIC
+# per-config Secret names (`egress-vpn-<domain>-<name>` — the same reason
+# manifests/velero/rbac.yaml omits resourceNames for the per-brand ConfigMap), so
+# the ONLY way k8s can express "this identity may read the VPN configs and
+# NOTHING else" is to put the VPN configs in a namespace of their own. Parking
+# them in `hugmesh-backend` would hand a host-writing DaemonSet read access to
+# every DB/OIDC/federation Secret in the app tier.
+#
+# The egress-vpn slug's own namespace field in optional-services.yaml stays
+# `hugmesh-backend` — that is where its PODS (akkoma/tuwunel/coturn) and its
+# interaction NetworkPolicy live. This namespace holds ONLY the config Secrets.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hugmesh-egress-vpn
+  labels:
+    app.kubernetes.io/part-of: hugmesh.systems
+    snapdragon.systems/optional: "true"
+    snapdragon.systems/slug: egress-vpn

@@ -572,6 +572,24 @@ spec:
       nodeServices: [hugmesh-egress-vpn, hugmesh-vpn-reconcile]
       # The per-service opt-in label the NetworkPolicy interaction keys off.
       vpnEgressLabel: snapdragon.systems/vpn-egress
+      # ── Runtime config-byte DELIVERY (the ESO Secret -> node hostPath hop) ────
+      # The reconcile agent reads the config BYTES from ${VPN_SECRET_DIR}/<secretRef>
+      # on the node HOST (hugmesh-vpn-reconcile:52, default /etc/hugmesh/vpn-secret).
+      # This second manifest tree + its MANUAL-sync Application are the projector
+      # that puts them there. Both SHIP DARK (kustomization resources: [] AND a
+      # nodeSelector no node carries) and are pruned WITH the slug alongside the
+      # interaction NetworkPolicy.
+      deliveryManifestPath: manifests/egress-vpn
+      deliveryApp: apps/13e-egress-vpn.yaml
+      # The cross-lane contract the admin-bff/ESO half must satisfy. Selection is
+      # by LABEL, never by name, so the control plane keeps minting per-(domain,
+      # config) names (`egress-vpn-<domain>-<name>`) with no generator change —
+      # but the Secret NAME must equal the export's `secretRef`, because that is
+      # the filename the reconcile agent opens.
+      secretNamespace: hugmesh-egress-vpn
+      secretLabel: snapdragon.systems/optional-service=egress-vpn
+      secretKey: config
+      nodeDeliveryLabel: snapdragon.systems/egress-vpn
 
     # ── tor — node-level v3 Tor onion (hidden) service (DEFAULT-OFF) ──────────
     # LIKE egress-vpn, tor is a NODE service (the DISTRO Tor daemon — net-vpn/tor,

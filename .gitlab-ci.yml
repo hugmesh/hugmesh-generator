@@ -947,6 +947,38 @@ domain-registry-reconcile-verify:
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
+# Egress-VPN node agents — the whole tests/egress-vpn/ suite, which was one of the
+# "otherwise CI-unwired today" families named above. Wiring it is not cosmetic: the
+# suite now carries the PACKET-MARKING guards (nothing set fwmark 0x76, so the
+# tunnel came up carrying zero traffic), the fail-closed abort/rollback cases, the
+# --egress-vpn ROLE gate, and the config-byte DELIVERY contract (the projector's
+# hostPath must equal the reconcile agent's VPN_SECRET_DIR). A guard nothing runs
+# is not a guard.
+#
+# Rootless + cluster-free by construction: every test stubs its tools (recording
+# fake `ip` / `nft` / `kubectl`) and evaluates the REAL script bodies, so this needs
+# only bash (+ jq/openssl/base64 for the verify test, python3+PyYAML for one
+# registry assertion, which SKIPs when absent). It NEVER runs real nft/ip against
+# the runner.
+egress-vpn-node-agents:
+  stage: verify
+  tags: [hugmesh-x86]
+  script:
+    - |
+      rc=0
+      for t in tests/egress-vpn/*.sh; do
+        echo "── ${t}"
+        bash "${t}" || rc=1
+      done
+      exit "${rc}"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/usr/sbin/hugmesh-vpn-*
+        - specs/usr/lib/hugmesh/vpn-verify.sh
+        - specs/etc/keys-provision/provision.sh
+        - specs/cluster/manifests/egress-vpn/**/*
+        - specs/cluster/apps/13e-egress-vpn.yaml
 # Node-storage consumer suite (node-storage PR5-PR8), until now CI-orphaned: the
 # signed-export verify matrix for storage-verify.sh (genuine ACCEPT; unsigned /
 # tampered / foreign-key / rollback REJECT — same fail-closed gate class as the

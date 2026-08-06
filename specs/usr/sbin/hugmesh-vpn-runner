@@ -58,6 +58,10 @@ PRIO_VPN=100
 
 # IP binary indirection so the netns test harness can inject a fake `ip`.
 IP="${IP_CMD:-ip}"
+# The packet-marking leg (fwmark 0x76 nft rules + vpn-egress pod labels) —
+# cleared on `down` BEFORE the routing teardown, so no still-marked/loosened
+# pod is left routing via table main (WAN) once the prio-100 rule is gone.
+MARKER="${MARKER_CMD:-/usr/sbin/hugmesh-vpn-mark}"
 
 log()  { echo "[vpn-runner] $*"; }
 warn() { echo "[vpn-runner] WARNING: $*" >&2; }
@@ -195,6 +199,13 @@ cmd_up() {
 }
 
 cmd_down() {
+    # Unmark/unlabel FIRST: after remove_split_tunnel the fwmark rule is gone
+    # and a still-marked packet would route via table main (the WAN). A failed
+    # clear is warned, not fatal — service stop must not wedge; the reconcile
+    # cron re-clears within 60s.
+    if [ -x "${MARKER}" ]; then
+        "${MARKER}" clear || warn "vpn-mark clear failed — stale vpn-egress marks/labels until the next reconcile"
+    fi
     remove_split_tunnel
     down_wg
     down_ovpn

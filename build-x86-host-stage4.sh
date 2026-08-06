@@ -2332,6 +2332,12 @@ gate_optional_services() {
                 # NetworkPolicy is moot on x86; the node-package/service handling is its own path.
                 rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
+                # AND the runtime config-byte DELIVERY half: the (dark) secret-projector
+                # overlay + its MANUAL-sync Application. A tree that never selected the VPN
+                # must not carry a DaemonSet that writes VPN key bytes onto node hostPaths,
+                # even inert — so the whole dir + app go, not just a kustomize line.
+                rm -f "${apps}/13e-egress-vpn.yaml"
+                rm -rf "${tree}/manifests/egress-vpn"
                 ;;
             workloadConsole)
                 # The WORKLOAD CONSOLE is RBAC + route-access ONLY (the BFF endpoints live in
@@ -4569,7 +4575,12 @@ ${WANT_DOCKER} && PKGS="${PKGS} app-containers/docker app-containers/docker-comp
 ${WANT_CALAMARES} && PKGS="${PKGS} app-admin/calamares"
 # Egress VPN userspace: WireGuard (.conf) is native to NetworkManager + the kernel
 # (wireguard-tools for `wg`); OpenVPN (.ovpn) needs the NM OpenVPN plugin + openvpn.
-if [ -n "${EGRESS_VPN_FILE}" ]; then
+# ROLE_CLIENT-gated to MATCH the staging leg (which warns '--egress-vpn given for a
+# non-desktop role ... ignoring' and stages nothing): a node role must not emerge
+# the VPN userspace it was just told it will not use. Same condition as the
+# CONFIG_WIREGUARD kernel fragment (inside the ROLE_CLIENT kernel arm below) and
+# Studio's egress_vpn FieldScope classes=("desktop",).
+if ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
     case "${EGRESS_VPN_FILE}" in
         *.ovpn) PKGS="${PKGS} net-vpn/networkmanager-openvpn net-vpn/openvpn" ;;
         *)      PKGS="${PKGS} net-vpn/wireguard-tools" ;;

@@ -52,6 +52,7 @@ ACTIVE="${VPN_ETC}/active.conf"
 SECRET_DIR="${VPN_SECRET_DIR:-/etc/hugmesh/vpn-secret}"   # ESO-mounted Secret (optional)
 VERIFY_LIB="/usr/lib/hugmesh/vpn-verify.sh"
 RUNNER="/usr/sbin/hugmesh-vpn-runner"
+MARKER="/usr/sbin/hugmesh-vpn-mark"
 LOG_TAG="hugmesh-vpn-reconcile"
 
 log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
@@ -139,6 +140,16 @@ GEN="$(vpn_gen "${TMP}")"
 ENTRY_COUNT="$(jq -r '.body.entries | length' "${TMP}" 2>/dev/null || echo 0)"
 if [ "${ENTRY_COUNT}" = "0" ]; then
     log "export carries NO entries (node un-assigned) — tearing egress VPN down (back to direct)"
+    # Unmark/unlabel FIRST. If the marker cannot cleanly clear (labels stuck),
+    # do NOT tear the tunnel down and do NOT accept the export: a loosened-but-
+    # untunnelled pod would egress via the node WAN. Keeping last-good un-bumped
+    # makes the 60s cron retry this teardown until it succeeds.
+    if [ -x "${MARKER}" ] && ! "${MARKER}" clear; then
+        warn "vpn-mark clear failed — KEEPING tunnel + marks (fail-closed); teardown retries next cycle"
+        report_state "failed"
+        exit 0
+    fi
+    : > "${CACHE_DIR}/marked-services" 2>/dev/null || true
     [ -x "${RUNNER}" ] && "${RUNNER}" down 2>/dev/null || true
     rm -f "${ACTIVE}" 2>/dev/null || true
     rc-service hugmesh-egress-vpn stop 2>/dev/null || true
@@ -197,11 +208,22 @@ else
     exit 0
 fi
 
-# ── 6. record the desired marked-service set for the split-tunnel runner ───────
-# (which pods get fwmark 0x76). The runner / a CNI hook reads this; recording it
-# here keeps the marking decision driven by the verified export.
+# ── 6. mark the assigned service pods 0x76 (tunnel is up from step 5) ──────────
+# Record the desired marked-service set from the VERIFIED export, then hand it
+# to hugmesh-vpn-mark, which resolves the slugs to running pod IPs, installs
+# the fwmark nft rules, and sets the snapdragon.systems/vpn-egress labels in
+# the SAME pass (marks BEFORE labels — no loosened-but-uncaptured pod). On a
+# marker failure NOTHING is half-applied (the marker rolls back to the cleared
+# state), so report 'failed' and keep the tunnel as-is for the next cycle.
 jq -r '[.body.entries[].serviceSlugs[]?] | unique | join(",")' "${TMP}" 2>/dev/null \
     > "${CACHE_DIR}/marked-services" || true
+if [ -x "${MARKER}" ]; then
+    if ! "${MARKER}" apply; then
+        warn "vpn-mark apply failed — no pods marked/labelled (fail-closed: public egress stays locked/proxied)"
+        report_state "failed"
+        exit 0
+    fi
+fi
 
 # ── 7. leak-check: egress IP must differ from the node WAN IP ──────────────────
 if [ -x "${RUNNER}" ]; then

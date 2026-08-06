@@ -59,6 +59,7 @@ files_type(hugmesh_vpn_runtime_t)
 ########################################
 allow hugmesh_vpn_runner_t self:capability { net_admin net_raw dac_override setuid setgid };  # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
 allow hugmesh_vpn_runner_t self:netlink_route_socket create_netlink_socket_perms;             # ip rule / ip route (rtnetlink)
+allow hugmesh_vpn_runner_t self:netlink_netfilter_socket create_netlink_socket_perms;         # nft (hugmesh-vpn-mark clear on down)
 allow hugmesh_vpn_runner_t self:rawip_socket create_socket_perms;                              # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
 allow hugmesh_vpn_runner_t self:udp_socket create_socket_perms;                                # wireguard UDP
 allow hugmesh_vpn_runner_t self:tcp_socket create_stream_socket_perms;                         # openvpn / leak-check curl
@@ -120,6 +121,7 @@ auth_use_nsswitch(hugmesh_vpn_reconcile_t)
 allow hugmesh_vpn_reconcile_t self:tcp_socket create_stream_socket_perms;
 corenet_tcp_sendrecv_generic_node(hugmesh_vpn_reconcile_t)
 corenet_tcp_connect_all_ports(hugmesh_vpn_reconcile_t)                                          # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+allow hugmesh_vpn_reconcile_t self:netlink_netfilter_socket create_netlink_socket_perms;        # nft (hugmesh-vpn-mark apply/clear); kubectl rides the tcp perms above
 
 # Restart the runner after a verified flip (CERTAIN: `rc-service
 # hugmesh-egress-vpn restart` + `rc-update add`). Signal + run the init script.
@@ -139,6 +141,22 @@ logging_send_syslog_msg(hugmesh_vpn_reconcile_t)
 # reconcile agent and runs IN-DOMAIN (hugmesh_vpn_reconcile_t); like
 # registry-verify.sh it needs no separate entrypoint label, so no .te domain
 # is added for it here — confine it only if the AVC pass shows a transition.
+#
+# hugmesh-vpn-mark (/usr/sbin) is likewise NOT an init entrypoint: it is
+# exec'd by the reconcile agent (apply/clear) and the runner (clear on down)
+# and runs IN the caller's domain via corecmd_exec_bin — the
+# netlink_netfilter_socket allows above are for its nft transactions. The .fc
+# labels it bin_t explicitly so that decision is visible next to the two
+# entrypoints, not inferred from an absent line. No separate domain until the
+# AVC pass argues for one.
+#
+# The egress-vpn secret-projector (manifests/egress-vpn) is a CONTAINER, not a
+# host domain: it writes /etc/hugmesh/vpn-secret (labelled hugmesh_vpn_etc_t by
+# the .fc) from inside the cluster, so it is confined by the container policy
+# (it requests spc_t, like the nvidia device plugin) and adds NO type or rule
+# here. The reconcile agent reads that dir under its EXISTING
+# read/manage_files_pattern on hugmesh_vpn_etc_t — no new allow is needed for
+# the delivery leg.
 #
 # NO privileged_container, NO mount of arbitrary FS, NO setenforce, NO write
 # outside /etc/hugmesh/vpn + the agent's own cache. The runner's net_admin

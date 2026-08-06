@@ -1,0 +1,283 @@
+#!/bin/bash
+# hugmesh-vpn-mark — the PACKET-MARKING leg of the egress VPN: turn the verified
+# marked-services set into (a) fwmark 0x76 nftables rules and (b) the
+# snapdragon.systems/vpn-egress=true pod labels, in the SAME pass — exactly the
+# "the agent labels the pod and the node marks it 0x76 in the SAME reconcile
+# pass" contract the egress-vpn-interaction NetworkPolicy documents. Without
+# this leg the tunnel comes up but carries ZERO traffic: nothing sets the mark
+# the runner's prio-100 `fwmark 0x76 -> table 176` catch-all matches.
+#
+# INPUT — /var/lib/hugmesh/egress-vpn/marked-services: ONE line of comma-joined
+# service SLUGS (e.g. "akkoma,coturn"), written by hugmesh-vpn-reconcile from
+# the VERIFIED signed export (`.body.entries[].serviceSlugs`). Slugs are not a
+# kernel-visible identity, so the marker resolves them to what IS knowable at
+# node level: the slug's RUNNING pod IPs, via the node's own admin kubeconfig
+# (the same /etc/kubernetes/admin.conf hugmesh-node-storage-reconcile uses) and
+# the platform pod-label convention `app.kubernetes.io/name: <slug>`
+# (coturn/akkoma/tuwunel all carry it). Pod IPs churn on restart; the 60s
+# reconcile cron re-runs this marker, so marking converges within a minute.
+#
+# WHAT GETS MARKED: IPv4 packets SOURCED from a resolved pod IP whose
+# destination is OUTSIDE the cluster/tailnet ranges (pod/service/CGNAT CIDRs
+# `return` early — mirroring both the runner's DIRECT ip-rule carve-outs and
+# the interaction NetworkPolicy's `except` list). The mark is set on the
+# PREROUTING hook at mangle priority so it exists BEFORE the routing decision
+# the runner's `ip rule` reads. Pod IPs outside POD_CIDR (e.g. a hostNetwork
+# pod reporting the node IP) are REFUSED — marking the node's own address
+# would drag unrelated host egress into the VPN.
+#
+# OWN TABLE, END-TO-END: like hugmesh-firewall-reconcile's
+# `hugmesh_release_gate`, this script only ever creates/flushes/redefines
+# `table inet hugmesh_vpn` (create-if-missing + flush + redefine in ONE
+# `nft -f` transaction => idempotent AND atomic — a bad ruleset is rejected
+# whole, never half-applied). It NEVER touches any other table (firewalld and
+# Calico run their own alongside; no `flush ruleset` here).
+#
+# FAIL-CLOSED (the runner's kill-switch discipline, applied to marking):
+#   * apply resolves EVERYTHING first (pure reads), then mutates: nft FIRST,
+#     labels SECOND — so no pod is ever loosened (labelled) before its packets
+#     are captured (marked). A marked pod whose tunnel drops hits the runner's
+#     table-176 blackhole (EPERM), never the WAN.
+#   * a malformed marked-services row, an unresolvable kubectl, or a rejected
+#     ruleset ABORTS with NO mutation (the previous mark/label state stays).
+#   * a labelling failure ROLLS BACK to the fully-cleared state (labels off ->
+#     the NetworkPolicy re-locks the pods; then the table goes) and exits 1 so
+#     the reconcile agent reports 'failed'.
+#   * clear unlabels FIRST and deletes the table ONLY if unlabelling worked:
+#     if labels cannot be removed, the marks stay so the loosened pods keep
+#     routing into table 176 (blackhole when the tunnel is down) instead of
+#     leaking the node WAN IP.
+#
+# Usage: hugmesh-vpn-mark {apply|clear|status}
+set -uo pipefail
+
+CACHE_DIR="${CACHE_DIR:-/var/lib/hugmesh/egress-vpn}"
+MARKED="${MARKED_SERVICES:-${CACHE_DIR}/marked-services}"
+FWMARK="${FWMARK:-0x76}"                 # 0x76 == 118 (assigned public pods)
+POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
+SVC_CIDR="${SVC_CIDR:-10.96.0.0/12}"
+TAILNET_CIDR="${TAILNET_CIDR:-100.64.0.0/10}"
+NS="${VPN_MARK_NS:-hugmesh-backend}"
+VPN_EGRESS_LABEL="${VPN_EGRESS_LABEL:-snapdragon.systems/vpn-egress}"
+TABLE="hugmesh_vpn"
+KUBECTL_KUBECONFIG="/etc/kubernetes/admin.conf"
+LOG_TAG="hugmesh-vpn-mark"
+
+# Test seams (mirror the runner's IP_CMD + node-storage's NS_KUBECTL).
+: "${VM_NFT:=nft}"
+: "${VM_KUBECTL:=kubectl}"
+
+_syslog() { command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; _syslog "$*"; }
+# warn goes to STDERR (runner idiom) — read_slugs/resolve_slug return DATA on
+# stdout, so a warning must never be capturable as a pod row.
+warn() { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] WARNING: $*" >&2; _syslog "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+kc() { "${VM_KUBECTL}" --kubeconfig "${KUBECONFIG_OVERRIDE:-${KUBECTL_KUBECONFIG}}" -n "${NS}" "$@"; }
+
+# ── slug + IP validation (the injection surface: slugs reach kubectl label
+# selectors, IPs reach the nft ruleset — both must be shape-checked) ───────────
+valid_slug() {  # a k8s label VALUE: alnum start/end, [-._] inside, <=63 chars
+    [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$ ]]
+}
+_ip4_to_int() { local IFS=.; set -- $1; echo "$(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 ))"; }
+ip4_in_cidr() {  # $1=ip $2=cidr — bash-only (no external deps on the node hot path)
+    local ip="$1" net="${2%/*}" bits="${2#*/}" mask
+    [[ "${ip}" =~ ^(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})(\.(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}$ ]] || return 1
+    mask=$(( bits == 0 ? 0 : (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+    [ $(( $(_ip4_to_int "${ip}") & mask )) -eq $(( $(_ip4_to_int "${net}") & mask )) ]
+}
+
+# Read + validate marked-services. Prints one slug per line. Returns 1 on a
+# malformed file (more than one non-empty line, or a token that is not a valid
+# label value) — the caller must then make NO mutation.
+read_slugs() {
+    [ -r "${MARKED}" ] || return 0                       # never reconciled => empty set
+    local lines token
+    lines="$(grep -c -v '^[[:space:]]*$' "${MARKED}" 2>/dev/null || true)"
+    [ -n "${lines}" ] || lines=0
+    if [ "${lines}" -gt 1 ]; then
+        warn "malformed ${MARKED}: expected ONE comma-joined line, found ${lines} — refusing to (re)mark"
+        return 1
+    fi
+    local row; row="$(head -1 "${MARKED}" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "${row}" ] || return 0
+    local IFS=','
+    for token in ${row}; do
+        if ! valid_slug "${token}"; then
+            warn "malformed ${MARKED}: bad slug token '${token}' — refusing to (re)mark"
+            return 1
+        fi
+        printf '%s\n' "${token}"
+    done
+}
+
+# Resolve one slug to its RUNNING pod IPs (one per line) via the platform pod
+# label convention. kubectl failure => return 1 (caller aborts, no mutation).
+# A slug with no running pods resolves EMPTY (warn) — the service may simply
+# not be scheduled on/near this node yet; the 60s cron converges later.
+resolve_slug() {
+    local slug="$1" rows
+    rows="$(kc get pods -l "app.kubernetes.io/name=${slug}" \
+                -o jsonpath='{range .items[*]}{.metadata.name} {.status.podIP} {.status.phase}{"\n"}{end}' 2>/dev/null)" \
+        || { warn "kubectl get pods failed for slug '${slug}'"; return 1; }
+    local name ip phase n=0
+    while read -r name ip phase; do
+        [ -n "${name}" ] || continue
+        [ "${phase}" = "Running" ] || continue
+        if ! ip4_in_cidr "${ip}" "${POD_CIDR}"; then
+            warn "pod ${name} (${slug}) IP '${ip}' outside pod CIDR ${POD_CIDR} (hostNetwork?) — NOT marking it"
+            continue
+        fi
+        printf '%s %s\n' "${name}" "${ip}"
+        n=$((n + 1))
+    done <<< "${rows}"
+    [ "${n}" -gt 0 ] || warn "slug '${slug}': no running in-CIDR pods right now (marked on a later pass)"
+    return 0
+}
+
+# Render + load `table inet hugmesh_vpn` for the given IPs (space-separated in
+# $1; may be empty => a table that marks nothing but keeps the early-return
+# carve-outs, so a re-apply is always a full redefine). One transaction:
+# rejected whole on any error, old table state intact.
+apply_nft() {
+    local ips="$1" mark_rule="" set_body
+    if [ -n "${ips}" ]; then
+        set_body="$(printf '%s' "${ips}" | tr ' ' ',' | sed 's/,/, /g')"
+        mark_rule="        ip saddr { ${set_body} } meta mark set ${FWMARK} counter"
+    fi
+    local tmp; tmp="$(mktemp)" || { warn "mktemp failed — keeping the existing marks"; return 1; }
+    cat > "${tmp}" <<RULES
+#!/usr/sbin/nft -f
+# Managed by ${LOG_TAG} — DO NOT hand-edit (rewritten by every reconcile pass
+# from the verified marked-services set). Only marks; routing/kill-switch live
+# in hugmesh-vpn-runner (fwmark ${FWMARK} -> table 176 -> wg0/blackhole).
+
+# Idempotent per-table reload: create-if-missing, flush, then redefine — never
+# touches any OTHER table (firewalld/Calico run their own alongside; this
+# script owns ONLY table inet ${TABLE}).
+table inet ${TABLE} {}
+flush table inet ${TABLE}
+
+table inet ${TABLE} {
+    chain prerouting {
+        type filter hook prerouting priority mangle; policy accept;
+        # Cluster-internal + tailnet destinations stay DIRECT (mirrors the
+        # runner's ip-rule carve-outs + the NetworkPolicy 'except' list).
+        ip daddr ${POD_CIDR} return
+        ip daddr ${SVC_CIDR} return
+        ip daddr ${TAILNET_CIDR} return
+${mark_rule}
+    }
+}
+RULES
+    local nft_err
+    if ! nft_err="$("${VM_NFT}" -f "${tmp}" 2>&1)"; then
+        rm -f "${tmp}"
+        warn "nft -f failed (${nft_err}) — keeping the existing marks (fail-closed)"
+        return 1
+    fi
+    rm -f "${tmp}"
+    return 0
+}
+
+delete_table() {
+    if "${VM_NFT}" list table inet "${TABLE}" >/dev/null 2>&1; then
+        "${VM_NFT}" delete table inet "${TABLE}" 2>/dev/null \
+            || { warn "could not delete table inet ${TABLE}"; return 1; }
+    fi
+    return 0
+}
+
+# Remove the vpn-egress label from every pod carrying it (optionally excluding
+# the desired slugs via a notin() selector in $1). get-then-label so a
+# no-matches pass is an unambiguous no-op.
+unlabel_pods() {
+    local selector="${VPN_EGRESS_LABEL}=true${1:+,app.kubernetes.io/name notin (${1})}"
+    local names
+    names="$(kc get pods -l "${selector}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)" \
+        || { warn "kubectl get (stale vpn-egress pods) failed"; return 1; }
+    [ -n "${names}" ] || return 0
+    local name
+    while read -r name; do
+        [ -n "${name}" ] || continue
+        kc label pod "${name}" "${VPN_EGRESS_LABEL}-" >/dev/null 2>&1 \
+            || { warn "could not remove ${VPN_EGRESS_LABEL} from pod ${name}"; return 1; }
+    done <<< "${names}"
+    return 0
+}
+
+# clear: unlabel FIRST (the NetworkPolicy re-locks the pods), THEN drop the
+# table. If unlabelling fails the table STAYS so loosened pods keep hitting
+# fwmark->176 (blackhole when the tunnel is down) instead of the WAN.
+cmd_clear() {
+    if ! unlabel_pods ""; then
+        warn "labels not fully removed — KEEPING table inet ${TABLE} (fail-closed: no unmarked-but-loosened pod)"
+        return 1
+    fi
+    delete_table || return 1
+    log "cleared: no ${VPN_EGRESS_LABEL} labels, no ${TABLE} marks (public egress back to locked/proxied)"
+    return 0
+}
+
+cmd_apply() {
+    have "${VM_KUBECTL}" || { warn "kubectl unavailable — cannot resolve/label marked services"; return 1; }
+    have "${VM_NFT}"     || { warn "nft unavailable — cannot install marks"; return 1; }
+    local slugs
+    slugs="$(read_slugs)" || return 1                    # malformed => NO mutation
+    if [ -z "${slugs}" ]; then
+        log "marked-services empty — clearing marks + labels"
+        cmd_clear
+        return $?
+    fi
+
+    # 1. RESOLVE first (pure reads; any kubectl failure aborts with no mutation).
+    local slug pods="" resolved
+    while read -r slug; do
+        resolved="$(resolve_slug "${slug}")" || return 1
+        [ -n "${resolved}" ] && pods="${pods}${resolved}"$'\n'
+    done <<< "${slugs}"
+    local ips; ips="$(printf '%s' "${pods}" | awk '{print $2}' | sort -u | xargs)"
+
+    # 2. MARK (atomic nft transaction; rejected whole on error).
+    apply_nft "${ips}" || return 1
+
+    # 3. LABEL (loosen) — only now that the packets are captured. Any failure
+    #    rolls the whole pass back to the cleared state.
+    local csv; csv="$(printf '%s\n' "${slugs}" | paste -sd, -)"
+    local name ip
+    while read -r name ip; do
+        [ -n "${name}" ] || continue
+        if ! kc label pod "${name}" "${VPN_EGRESS_LABEL}=true" --overwrite >/dev/null 2>&1; then
+            warn "labelling pod ${name} failed — rolling back to the cleared state"
+            cmd_clear || true
+            return 1
+        fi
+    done <<< "${pods}"
+    # Un-loosen pods whose slug left the assignment (label on, slug not desired).
+    if ! unlabel_pods "${csv}"; then
+        warn "stale-label removal failed — rolling back to the cleared state"
+        cmd_clear || true
+        return 1
+    fi
+
+    log "applied: slugs=[${csv}] marked_ips=[${ips:-none}] (fwmark ${FWMARK} on ${TABLE}/prerouting; labels ${VPN_EGRESS_LABEL}=true)"
+    return 0
+}
+
+cmd_status() {
+    if "${VM_NFT}" list table inet "${TABLE}" >/dev/null 2>&1; then
+        echo "vpn-mark: table inet ${TABLE} PRESENT"
+    else
+        echo "vpn-mark: no marks installed"
+        return 3
+    fi
+}
+
+case "${1:-}" in
+    apply)  cmd_apply ;;
+    clear)  cmd_clear ;;
+    status) cmd_status ;;
+    *) echo "Usage: $0 {apply|clear|status}" >&2; exit 64 ;;
+esac

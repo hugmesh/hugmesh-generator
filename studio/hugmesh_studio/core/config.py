@@ -844,16 +844,21 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     "standalone": FieldScope(platforms=_FIELD_PLATFORMS["standalone"], classes=("desktop",),
                              class_platforms=_STANDALONE_CLASS_GATED_PLATFORMS),
     # Egress VPN is a DESKTOP/tailnet-client feature and the builder says so itself:
-    #   build-x86-host-stage4.sh:3061  if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
-    #                          :3062      warn "--egress-vpn given for a non-desktop role
+    #   build-x86-host-stage4.sh:3962  if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
+    #                          :3963      warn "--egress-vpn given for a non-desktop role
     #                                      (${ROLE}); ... — ignoring."
-    # Note "ignoring" is only HALF true, which is what makes this worth gating rather than
-    # leaving to the builder: the STAGING leg :3064 is role-gated, but the PACKAGE leg :3572
-    # (`if [ -n "${EGRESS_VPN_FILE}" ]` — net-vpn/wireguard-tools, or networkmanager-openvpn
-    # + openvpn for a .ovpn) and the CONFIG_WIREGUARD kernel fragment :3849 are NOT. So a
-    # node still emerged the VPN userspace it was just told it would not use. Mode is
-    # deliberately unrestricted: the builder gates on ROLE_CLIENT alone, and a cloud or
-    # standalone DESKTOP legitimately takes an egress conf.
+    # HISTORY — why this scope entry exists, and what is no longer true. When it was written
+    # (#387) "ignoring" was only HALF true: the STAGING leg was role-gated but the PACKAGE leg
+    # (`if [ -n "${EGRESS_VPN_FILE}" ]` — net-vpn/wireguard-tools, or networkmanager-openvpn +
+    # openvpn for a .ovpn) was NOT, so a node still emerged the VPN userspace it was just told
+    # it would not use. That leg is now gated on the SAME ROLE_CLIENT condition (:4569), so the
+    # builder no longer contradicts itself. The old note ALSO named the CONFIG_WIREGUARD kernel
+    # fragment as ungated — that was wrong when written: the fragment has always sat INSIDE the
+    # `if ${ROLE_CLIENT}` kernel arm (:5237, verified back to #189, the commit that added it).
+    # The scope entry STAYS regardless: with every leg role-gated, offering the field on a node
+    # class would only produce a flag the builder warns about and ignores. Mode is deliberately
+    # unrestricted: the builder gates on ROLE_CLIENT alone, and a cloud or standalone DESKTOP
+    # legitimately takes an egress conf.
     "egress_vpn": FieldScope(platforms=_FIELD_PLATFORMS["egress_vpn"], classes=("desktop",)),
     "egress_vpn_locked": FieldScope(platforms=_FIELD_PLATFORMS["egress_vpn_locked"],
                                     classes=("desktop",)),

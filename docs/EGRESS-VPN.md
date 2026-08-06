@@ -37,8 +37,35 @@ SINGLE forward route, `default dev wg0`:
 
 The DIRECT rules (prio 10–40, table `main`) ALWAYS beat the VPN catch-all (prio
 100) regardless of `fwmark` — so tailnet + cluster traffic NEVER enters the VPN.
-Only packets MARKED `0x76` (set by the reconcile agent / nft for the assigned
-public pods) match the prio-100 rule and egress via `wg0`.
+Only packets MARKED `0x76` (set by `hugmesh-vpn-mark`, below) match the prio-100
+rule and egress via `wg0`.
+
+## Packet marking — `hugmesh-vpn-mark`
+
+`/usr/sbin/hugmesh-vpn-mark` is the leg that actually puts traffic ON the
+tunnel. The reconcile agent records the verified export's service slugs in
+`/var/lib/hugmesh/egress-vpn/marked-services`, then runs `hugmesh-vpn-mark
+apply`, which — in the SAME pass, marks before labels —
+
+1. resolves each slug to its RUNNING pod IPs over the node's own admin
+   kubeconfig (`app.kubernetes.io/name: <slug>`, namespace `hugmesh-backend`;
+   IPs outside the pod CIDR — hostNetwork/node IPs — are refused);
+2. loads ONE atomic `nft -f` transaction owning `table inet hugmesh_vpn`
+   (create-if-missing + flush + redefine ⇒ idempotent; never touches another
+   table): a `prerouting`/mangle chain that `return`s early for pod/service/
+   tailnet destinations and sets `meta mark set 0x76` on packets sourced from
+   the resolved pod IPs;
+3. labels those pods `snapdragon.systems/vpn-egress=true` so the
+   `egress-vpn-interaction` NetworkPolicy loosens their direct egress — which
+   the mark then routes into table 176.
+
+FAIL-CLOSED: a malformed `marked-services` row / kubectl failure / rejected
+ruleset aborts with ZERO mutation; a labelling failure rolls back to the fully
+cleared state; `clear` unlabels FIRST and drops the table only when unlabelling
+succeeded (a loosened pod is never left unmarked). The runner's `down` runs
+`hugmesh-vpn-mark clear` BEFORE the routing teardown; the reconcile agent's
+empty-export teardown refuses to accept the export (and retries next cycle) if
+the clear fails. Pod-IP churn converges via the 60s reconcile cron.
 
 ## Kill-switch / FAIL-CLOSED
 
@@ -65,6 +92,40 @@ ONLY the node's OWN domain and installs them `0600` root-owned into
 `/etc/hugmesh/vpn/`, pointing `active.conf` at the first config (WireGuard wins
 over OpenVPN). The runtime UI path instead delivers a config as a K8s Secret via
 ESO; Postgres holds only `secret_ref` + metadata. See `keys-template/vpn/README.md`.
+
+## Runtime config-byte delivery — the secret-projector
+
+`hugmesh-vpn-reconcile` reads the config BYTES from `${VPN_SECRET_DIR}/<secretRef>`
+on the **node host** (default `/etc/hugmesh/vpn-secret`) — the signed export
+carries only `secretRef` + metadata. `manifests/egress-vpn/` is the hop that puts
+them there: a `secret-projector` DaemonSet that syncs the labelled config Secrets
+onto that hostPath as `0600` root-owned files named after the Secret.
+
+**The contract** (the admin-bff/ESO half must match):
+
+| what | value | why |
+|---|---|---|
+| namespace | `hugmesh-egress-vpn` | the RBAC boundary — a node-privileged projector must not be able to read `hugmesh-backend`'s DB/OIDC Secrets |
+| label | `snapdragon.systems/optional-service: egress-vpn` | selection is by LABEL, so the control plane keeps minting `egress-vpn-<domain>-<name>` with no generator change |
+| data key | `config` | the raw `.conf`/`.ovpn` bytes; the extension comes from the export's `kind` |
+| Secret name | == the export's `secretRef` | it becomes the filename the agent opens |
+
+**SHIPS DARK, twice over.** `manifests/egress-vpn/kustomization.yaml` has
+`resources: []` and is reachable only through the MANUAL-sync
+`apps/13e-egress-vpn.yaml` (no `automated:` block) — the
+`apps/08a-networkpolicy-egress.yaml` pattern. Even once synced, the DaemonSet's
+`nodeSelector: snapdragon.systems/egress-vpn=true` matches no node until an
+operator labels the ones holding an assignment. Both halves are pruned wholesale
+with the slug by `gate_optional_services()`.
+
+**FAIL-CLOSED.** A failed list prunes NOTHING (an API-server blip must not strip a
+node of its VPN config), and a Secret with an empty/absent `config` key is skipped
+rather than truncating a good file. RBAC is a namespaced `Role` with `get`+`list`
+on `secrets` only — never a `ClusterRole`, no write verb anywhere. SELinux: the
+pod requests `spc_t` (writing under `/etc` on an enforcing node, like the NVIDIA
+device plugin) and `/etc/hugmesh/vpn-secret` is labelled `hugmesh_vpn_etc_t` by
+`specs/selinux/hugmesh_vpn.fc`, so the reconcile agent reads it under its
+EXISTING pattern — the delivery leg adds no host domain.
 
 ## Default-off optional service
 
@@ -94,3 +155,20 @@ first-class.
   fwmark catch-all, the v4+v6 `default dev wg0` + blackhole kill-switch, `down`
   teardown, and type-sniff (rootless via a recording fake `ip`; an optional real
   netns smoke runs under root).
+- `tests/egress-vpn/test-vpn-mark.sh` — the packet-marking leg: marked-services
+  → expected `hugmesh_vpn` nft ruleset, marks-before-labels ordering, idempotent
+  re-runs, out-of-CIDR refusal, fail-closed aborts/rollbacks, full teardown, and
+  the runner/reconcile/builder wiring (rootless via recording fake `nft` +
+  `kubectl`).
+- `tests/egress-vpn/test-vpn-secret-projector.sh` — the delivery leg: the REAL
+  projector loop (extracted from the DaemonSet) against a recording fake
+  `kubectl` — filename == secretRef, 0600, idempotence, prune-on-unassign, and
+  the two fail-closed cases (failed list / empty key never destroy last-good).
+- `tests/egress-vpn/test-x86-role-gate.sh` — `--egress-vpn` is desktop-only on
+  every leg: the extracted PKGS block and kernel `ROLE_CLIENT` arm are eval'd for
+  both extensions × both roles, so a node role can never emerge (or compile in)
+  the VPN userspace the builder just told it it would ignore.
+
+All of the above run in CI as the `egress-vpn-node-agents` verify job
+(`.gitlab-ci.yml`); they need only bash + stubbed tools — never a cluster, never
+real `nft`/`ip`.
