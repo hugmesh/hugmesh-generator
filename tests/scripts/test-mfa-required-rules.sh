@@ -96,18 +96,31 @@
 # control only used the compose `KEY: value` map shape, so the control passed while
 # the check was vacuous for the shape that mattered.
 #
-# ENGINE CAVEAT, stated up front: the net-effect simulation runs on **sqlite3**.
-# Postgres is not installed in CI or on the dev box, so the rules have never been
-# executed on the engine that will actually run them. sqlite is used only for the
-# constructs this file needs (`LIKE` prefix matching, `IS DISTINCT FROM`,
-# `true/false` literals, `ON CONFLICT (…expression index…) DO NOTHING`) — all four
-# verified present. sqlite's `LIKE` is ASCII-case-INSENSITIVE while Postgres's is
-# case-SENSITIVE; every pattern in this seed is lowercase, so the two agree here,
-# but a mixed-case pattern added later could diverge. The Postgres-only de-dup
-# DELETE (ctid + DELETE…USING) is skipped and REPORTED, and any OTHER statement the
+# ENGINE CAVEAT, stated up front: the net-effect SIMULATION runs on **sqlite3**
+# (it replays the file dozens of times, once per mutation control — cheap and
+# always available). sqlite is used only for the constructs this file needs
+# (`LIKE` prefix matching, `IS DISTINCT FROM`, `true/false` literals,
+# `ON CONFLICT (…expression index…) DO NOTHING`) — all four verified present.
+# sqlite's `LIKE` is ASCII-case-INSENSITIVE while Postgres's is case-SENSITIVE;
+# every pattern in this seed is lowercase, so the two agree here, but a
+# mixed-case pattern added later could diverge. The Postgres-only de-dup DELETE
+# (ctid + DELETE…USING) is skipped and REPORTED, and any OTHER statement the
 # engine cannot run is a hard failure, never a silent skip.
 #
-# No cluster, no Postgres, no docker, no network. Checks are re-run against
+# THE REAL ENGINE (leg 1c): those caveats are why, when POSTGRES_HOST is set,
+# the file is ALSO replayed VERBATIM — twice, via psql, under ON_ERROR_STOP,
+# nothing translated and nothing skipped — against a real Postgres, and the
+# resulting mfa_required set must agree ROW FOR ROW with the sqlite replay. CI
+# always runs that leg (lint:mfa-required-rules attaches a postgres:16-alpine
+# service container — the exact image the route-access initdb runs in
+# production), so the dialect-sensitive semantics are proven on the engine that
+# executes them, on every pipeline. A plain local run without POSTGRES_HOST
+# keeps the sqlite-only posture and SAYS SO. The leg is FAIL-CLOSED: with
+# POSTGRES_HOST set, an unreachable server, a missing psql or any erroring
+# statement is a FAILURE, never a skip.
+#
+# No cluster, no docker, no network beyond the one Postgres host the CALLER
+# names (unset => none at all). Checks are re-run against
 # deliberately-corrupted staged copies, so a green run cannot be vacuous.
 set -uo pipefail
 
@@ -342,6 +355,9 @@ if len(mfa_ups) == 1:
     # Deny rows excluded (a deny row denies at the longest match regardless of MFA).
     emit("UPDATE_ALLOW_ONLY",
          "yes" if re.search(r"\ballow\s*=\s*true", up, re.I) else "no")
+    # The statement itself, flattened to one line: the real-engine leg (1c)
+    # re-runs it after the second full replay and reads the UPDATE tag (must be 0).
+    emit("RAW_FLIP", flat(up))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NET-EFFECT SIMULATION (defect (d)). Replay the file's OWN statements, in file
@@ -1107,8 +1123,11 @@ fi
 # ── the net-effect simulation ──────────────────────────────────────────────────
 echo ""
 echo "── 1b) NET EFFECT, replayed on a real SQL engine ($(g SIM_ENGINE)) ──"
-echo "     (Postgres is NOT installed here, so the rules have never run on the"
-echo "      engine that will execute them — see the header's ENGINE CAVEAT.)"
+if [ -z "${POSTGRES_HOST:-}" ]; then
+  echo "     (POSTGRES_HOST unset: THIS run does not execute the seed on Postgres."
+  echo "      Leg 1c below is the real-engine proof; CI always runs it against a"
+  echo "      postgres:16-alpine service — see the header's ENGINE CAVEAT.)"
+fi
 
 [ "$(g SIM_ERRORS)" = "0" ] \
   && ok "every gateway_route_access statement in the file replayed successfully ($(g DML_STATEMENTS) DML statements, $(g SIM_NORMALIZED) of them rewritten for sqlite by stripping a schema qualifier / ONLY, $(g SIM_SKIPPED) postgres-only skip: $(sed -n 's/^SIM_SKIP //p' "${W}/real.out" | tr '\n' ';'))" \
@@ -1154,6 +1173,115 @@ if [ "${HAVE_UPDATE}" = "1" ]; then
 [ "$(g UPDATE_IDEMPOTENT)" = "yes" ] \
   && ok "the UPDATE says so in its own text too (mfa_required IS DISTINCT FROM true)" \
   || bad "the UPDATE lacks 'mfa_required IS DISTINCT FROM true' — every in-place re-apply rewrites all matched rows"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1c) the REAL engine. Everything above replayed the file on a TRANSLATED sqlite
+# schema; `IS DISTINCT FROM`, `ALTER COLUMN … SET NOT NULL`, the expression-index
+# `ON CONFLICT … DO NOTHING` and the ctid de-dup DELETE are Postgres-dialect, and
+# the engine that runs this file in production is postgres:16-alpine (the
+# route-access initdb). With POSTGRES_HOST set (CI: a postgres:16-alpine service
+# container; locally: any scratch server whose POSTGRES_USER may CREATE DATABASE)
+# the file runs VERBATIM via psql — ON_ERROR_STOP, no translation, no skip —
+# twice, and the flip set must agree ROW FOR ROW with the sqlite replay above.
+# FAIL-CLOSED: an unreachable host, a missing psql or any erroring statement is a
+# FAILURE, never a skip. Sort order is pinned with LC_ALL=C on BOTH sides so the
+# comparison never depends on the server's collation.
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+if [ -z "${POSTGRES_HOST:-}" ]; then
+  echo "── 1c) REAL-ENGINE replay: NOT RUN (POSTGRES_HOST unset; CI runs this leg on postgres:16-alpine) ──"
+else
+  echo "── 1c) REAL-ENGINE replay (Postgres at ${POSTGRES_HOST}) ──"
+  PGDB_ADMIN="${POSTGRES_DB:-postgres}"
+  [ -n "${POSTGRES_PASSWORD:-}" ] && export PGPASSWORD="${POSTGRES_PASSWORD}"
+  export PGCONNECT_TIMEOUT=5
+  pgq() {   # pgq <db> [psql-args…] — quiet, fail-on-first-error psql
+    local db="$1"; shift
+    psql -X -q -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT:-5432}" \
+         -U "${POSTGRES_USER:-postgres}" -d "${db}" "$@"
+  }
+  pg_fresh_replay() {   # pg_fresh_replay <db> <sql-file> — drop/create, then the file VERBATIM
+    pgq "${PGDB_ADMIN}" -c "DROP DATABASE IF EXISTS $1" \
+      && pgq "${PGDB_ADMIN}" -c "CREATE DATABASE $1" \
+      && pgq "$1" -f "$2"
+  }
+  PG_FLIP_SEL="SELECT gateway || ' ' || url_pattern || ' ' || role FROM gateway_route_access WHERE mfa_required"
+  PG_ALL_SEL="SELECT gateway || '|' || url_pattern || '|' || role || '|' || allow || '|' || mfa_required FROM gateway_route_access"
+
+  if ! command -v psql >/dev/null 2>&1; then
+    bad "POSTGRES_HOST=${POSTGRES_HOST} is set but psql is not installed — an engine this gate cannot reach must NOT read as a pass (install postgresql-client, or unset POSTGRES_HOST for the sqlite-only posture)"
+  else
+    pg_up=""
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+      pgq "${PGDB_ADMIN}" -c 'SELECT 1' >/dev/null 2>&1 && { pg_up=1; break; }
+      sleep 2
+    done
+    if [ -z "${pg_up}" ]; then
+      bad "POSTGRES_HOST=${POSTGRES_HOST}:${POSTGRES_PORT:-5432} not reachable as ${POSTGRES_USER:-postgres} within 30s — fail-closed, never a skip"
+    else
+      ok "postgres reachable: server $(pgq "${PGDB_ADMIN}" -tA -c 'SHOW server_version' 2>/dev/null)"
+      if ! pg_fresh_replay mfa_required_gate "${SQL}" >"${W}/pg1.log" 2>&1; then
+        bad "the seed FAILED to replay verbatim on Postgres (first apply): $(tail -n 3 "${W}/pg1.log" | tr '\n' ';')"
+      else
+        ok "first apply: the WHOLE file ran VERBATIM under ON_ERROR_STOP — including every construct the sqlite leg translates or skips (IS DISTINCT FROM, ALTER COLUMN … SET NOT NULL, the expression-index ON CONFLICT, the ctid de-dup DELETE)"
+
+        PG_ROWS="$(pgq mfa_required_gate -tA -c 'SELECT count(*) FROM gateway_route_access')"
+        [ "${PG_ROWS}" = "$(g ROWS)" ] \
+          && ok "row count on the real engine (${PG_ROWS}) equals the parsed seed — nothing dropped by the REAL expression-index ON CONFLICT, nothing deleted by the REAL ctid de-dup" \
+          || bad "row count on the real engine is '${PG_ROWS}' but the file declares $(g ROWS) rows — the two engines disagree about the file's net effect"
+
+        pgq mfa_required_gate -tA -c "${PG_FLIP_SEL}" | LC_ALL=C sort > "${W}/pg-flip"
+        sed -n 's/^FLIP //p' "${W}/real.out" | LC_ALL=C sort > "${W}/sq-flip"
+        PG_FLIPPED="$(grep -c . "${W}/pg-flip" || true)"
+        if cmp -s "${W}/pg-flip" "${W}/sq-flip"; then
+          ok "the mfa_required=true result set on the REAL engine (${PG_FLIPPED} rows) matches the sqlite replay ROW FOR ROW — the flipped set is now proven on the engine that executes the seed"
+        else
+          bad "the real engine's flip set DIFFERS from the sqlite replay: $(diff "${W}/sq-flip" "${W}/pg-flip" | head -n 6 | tr '\n' ';') — the dialect divergence this leg exists to catch"
+        fi
+        [ "${PG_FLIPPED}" -ge 9 ] \
+          && ok "…and carries at least the 9 rows under /bff/admin/** + /bff/superadmin/**" \
+          || bad "only ${PG_FLIPPED} row(s) are mfa_required=true on the real engine — expected at least the 9 under the two prefixes"
+
+        pgq mfa_required_gate -tA -c "${PG_ALL_SEL}" | LC_ALL=C sort > "${W}/pg-state1"
+        if ! pgq mfa_required_gate -f "${SQL}" >"${W}/pg2.log" 2>&1; then
+          bad "the file FAILED on an in-place re-apply on the real engine (the path every initdb re-run takes): $(tail -n 3 "${W}/pg2.log" | tr '\n' ';')"
+        else
+          pgq mfa_required_gate -tA -c "${PG_ALL_SEL}" | LC_ALL=C sort > "${W}/pg-state2"
+          cmp -s "${W}/pg-state1" "${W}/pg-state2" \
+            && ok "re-applying the WHOLE file on the real engine converges (final state byte-identical)" \
+            || bad "re-apply is NOT a no-op on the real engine: $(diff "${W}/pg-state1" "${W}/pg-state2" | head -n 4 | tr '\n' ';')"
+          if [ "${HAVE_UPDATE}" = "1" ]; then
+            # -q suppresses command tags, so this one call drops it and reads the tag.
+            PG_TAG="$(psql -X -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT:-5432}" \
+                       -U "${POSTGRES_USER:-postgres}" -d mfa_required_gate -c "$(g RAW_FLIP)" 2>&1 | tail -n 1)"
+            [ "${PG_TAG}" = "UPDATE 0" ] \
+              && ok "the seed's own flip UPDATE, run once more, tags UPDATE 0 — 'IS DISTINCT FROM true' is idempotent under the REAL engine's semantics" \
+              || bad "the flip UPDATE re-run tagged '${PG_TAG}' (expected UPDATE 0) — a re-apply rewrites rows on the real engine"
+          fi
+        fi
+
+        # The leg itself, proven to bite: an appended un-flip replayed on the
+        # real engine must break the flip-set agreement (same mutation class as
+        # the sqlite nc controls, exercised HERE so this comparison can never
+        # rot into a vacuous cmp of two empty files).
+        { cat "${SQL}"; echo; \
+          echo "UPDATE gateway_route_access SET mfa_required = false WHERE url_pattern LIKE '/bff/superadmin%';"; } > "${W}/pg-nc.sql"
+        if ! pg_fresh_replay mfa_required_gate_nc "${W}/pg-nc.sql" >"${W}/pg-nc.log" 2>&1; then
+          bad "negative control: the mutated seed did not replay on Postgres, so the control proves NOTHING: $(tail -n 2 "${W}/pg-nc.log" | tr '\n' ';')"
+        else
+          pgq mfa_required_gate_nc -tA -c "${PG_FLIP_SEL}" | LC_ALL=C sort > "${W}/pg-nc-flip"
+          if cmp -s "${W}/pg-nc-flip" "${W}/sq-flip"; then
+            bad "negative control: an appended superadmin un-flip left the real-engine flip set UNCHANGED — the cross-engine comparison is vacuous"
+          else
+            ok "negative control: an appended superadmin un-flip breaks the real-engine flip-set agreement ($(grep -c . "${W}/pg-nc-flip" || true) rows vs $(grep -c . "${W}/sq-flip" || true)) — the comparison bites"
+          fi
+        fi
+        pgq "${PGDB_ADMIN}" -c "DROP DATABASE IF EXISTS mfa_required_gate" >/dev/null 2>&1
+        pgq "${PGDB_ADMIN}" -c "DROP DATABASE IF EXISTS mfa_required_gate_nc" >/dev/null 2>&1
+      fi
+    fi
+  fi
 fi
 
 # ── (FIX 4) coverage of the admin surface, enumerated INDEPENDENTLY ────────────

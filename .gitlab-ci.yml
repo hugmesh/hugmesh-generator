@@ -97,6 +97,16 @@ lint:cluster-manifest-integrity:
     # regex cannot tell what a fused `for entry in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
 
+# Workload-console generator gate (tests/workload-console/test-workload-console.sh):
+# the two-SA RBAC least-privilege invariants (the security acceptance bar), the
+# optional-services registration (default off, hidden module), the
+# build-rpi5-stage4.sh gate branch (not selected => the RBAC app + manifests +
+# route-access rows are PRUNED; selected => kept), the digest-pin (@sha256:)
+# Kyverno deploy-provenance policy, and the route-access row + Application shape —
+# proven by sourcing the REAL builder helper functions against a sandbox tree, no
+# cross-build. Same offline python3+PyYAML recipe as lint:cluster-manifest-integrity
+# above; the suite was CI-orphaned until now.
+lint:workload-console:
 # Vault-PKI ISSUANCE SIMULATOR. The job above proves each `pki_int/issue/<role>`
 # an ExternalSecret calls EXISTS; it never asked whether the role would accept
 # the names asked of it, and the answer was no. The issuing roles allowed
@@ -122,6 +132,7 @@ lint:pki-role-san-coverage:
   before_script:
     - pip install --quiet pyyaml
   script:
+    - bash tests/workload-console/test-workload-console.sh
     # Same bash requirement as the job above, and for the same reason: the role
     # parameters are read by EXECUTING init-pki.sh under a vault stub.
     - bash tests/scripts/test-pki-role-san-coverage.sh
@@ -246,15 +257,37 @@ lint:catalog-discovery-gate-honesty:
 # apply. Controls also refuse to score a PASS off an EMPTY reading: if the checker
 # crashed or the key is simply absent, that is reported as proving nothing rather than
 # read as "the control bit".
-# PyYAML + the stdlib sqlite3 module only: no cluster, no docker, no network.
-# ⚠ Postgres is NOT available here, so the seed has never been executed on the
-# engine that will run it; the gate prints that caveat on every run.
+# PyYAML + the stdlib sqlite3 module drive the simulation + mutation-control legs,
+# PLUS a postgres:16-alpine SERVICE CONTAINER — the exact image the route-access
+# initdb runs in production — for the gate's real-engine leg (1c): with
+# POSTGRES_HOST set, the seed is replayed VERBATIM via psql (twice, ON_ERROR_STOP,
+# nothing translated, nothing skipped) and the resulting mfa_required set must
+# match the sqlite replay ROW FOR ROW. That proves the IS DISTINCT FROM /
+# ALTER COLUMN … SET NOT NULL / expression-index ON CONFLICT / ctid de-dup
+# semantics on the engine that executes them, on every pipeline — they used to be
+# sqlite-only, with a printed "never run on Postgres" caveat. The leg is
+# FAIL-CLOSED: with POSTGRES_HOST set, an unreachable service or a missing psql
+# fails the job, never skips. POSTGRES_HOST_AUTH_METHOD=trust configures the
+# throwaway service container only (job-network-scoped, torn down with the job —
+# no secret committed, nothing listens beyond the runner's service network).
+# Still no cluster and no docker of our own; the service container is the
+# runner's. First (and so far only) `services:` user in this file — the syntax
+# follows docs.gitlab.com/ci/services/postgres/.
 lint:mfa-required-rules:
   stage: lint
   image: python:3-slim
   tags: [hugmesh-x86]
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    # Read by the service container (official postgres image env) AND by the test
+    # (POSTGRES_HOST is the switch that makes leg 1c mandatory).
+    POSTGRES_HOST: postgres
+    POSTGRES_HOST_AUTH_METHOD: trust
   before_script:
     - pip install --quiet pyyaml
+    - apt-get update -qq && apt-get install -qq -y --no-install-recommends postgresql-client >/dev/null
   script:
     - bash tests/scripts/test-mfa-required-rules.sh
 
@@ -679,6 +712,29 @@ lint:mdm-manifests-render:
   script:
     - bash tests/stack/test-mdm-manifests-render.sh
 
+# coturn OPTIONAL-service RENDER + GATE-OFF gate — the pure-render pattern the MDM
+# job above mirrors, which until now existed only as that comment's referent: the
+# suite itself was CI-orphaned. kustomize-renders specs/cluster/manifests/coturn/
+# (kubectl kustomize, same as above) and asserts the manifest contract on the
+# RENDERED stream (per-app sa-coturn, unique MCS s0:c67, upstream image pin,
+# 3478/5349 + relay-window NetworkPolicy, use-auth-secret with NO literal
+# static-auth-secret value); that the optional toggle gates it OFF by default
+# (registry default:off, installed-services ConfigMap coturn:"false", 13a
+# ApplicationSet element installed:"false", no baked bootstrap Application); and
+# that tuwunel's TURN config references the SAME ESO secret (coturn-shared-secret)
+# and ships DARK (turn_secret="" + optional:true env). python3+py3-yaml drive the
+# registry/ConfigMap/13a/tuwunel parses — without them the registry check degrades
+# to a slug grep and the tuwunel optional-source check fails outright, so both are
+# installed here on purpose. Cheap; no cluster, no privileged runner needed.
+lint:coturn-optional-service:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache kubectl python3 py3-yaml coreutils grep sed
+  script:
+    - bash tests/stack/test-coturn-optional-service.sh
+
 # MDM Dockerfile PATCH-GATE lint, fully offline (the two manifest Dockerfiles
 # were proven by real builds; CI never rebuilds them). EXTRACTS the sed+grep RUN
 # blocks from the REAL Dockerfile text (the Dockerfile is the SUT) and executes
@@ -872,8 +928,11 @@ casdoor-jwt-custom-gate:
 # emit matrix for the signed #118 cross-domain export (byte-exact canonical bytes;
 # genuine ACCEPT; tampered/unsigned/foreign/rollback REJECT; defaults INERT). Needs
 # only bash + jq + openssl + base64 (no docker, no cluster) so it runs on any runner;
-# the test itself SKIPs (exit 0) if a tool is absent. Mirrors the device-registry /
-# node-storage / egress-vpn consumer tests (which are otherwise CI-unwired today).
+# the test itself SKIPs (exit 0) if a tool is absent. Mirrors the node-storage /
+# egress-vpn consumer suites (wired as the three jobs directly below) and the
+# device-registry allow-deny consumer test (tests/device-registry/
+# test-registry-allow-deny.sh — still CI-unwired; layer-a-headscale-acl wires only
+# the Layer-A script from that directory).
 domain-registry-reconcile-verify:
   stage: verify
   tags: [hugmesh-x86]
@@ -885,6 +944,112 @@ domain-registry-reconcile-verify:
         - specs/usr/sbin/hugmesh-domain-reconcile
         - specs/usr/lib/hugmesh/domain-verify.sh
         - tests/domain-registry/test-domain-reconcile-verify.sh
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Node-storage consumer suite (node-storage PR5-PR8), until now CI-orphaned: the
+# signed-export verify matrix for storage-verify.sh (genuine ACCEPT; unsigned /
+# tampered / foreign-key / rollback REJECT — same fail-closed gate class as the
+# domain-registry job above, throwaway Ed25519 key, no live BFF), the reconcile
+# agent's nodePathMap CAS-patch + pool-manifest jq programs (PV-binds-to-correct-
+# node), the graceful-degrade detection (unmounted pool => DEGRADED ack, node
+# stays up) + PDB/migration-Job safe posture, the provision_storage pool
+# invariants (`,nofail` on pool disks ONLY; --pool never touches system disks),
+# and the INERT-by-default 13b ApplicationSet (modelled on 13a; selector lever
+# replayed in python). Unlike the job above these suites hard-fail (exit 2) on a
+# missing tool instead of skipping, so the image + tool set is pinned (alpine:3
+# apk, same recipe as layer-a-headscale-acl below; python3+py3-yaml for the
+# ApplicationSet leg). No disks, no root, no cluster, no docker.
+node-storage-verify:
+  stage: verify
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk
+  script:
+    - bash tests/node-storage/test-node-agent.sh
+    - bash tests/node-storage/test-degrade.sh
+    - bash tests/node-storage/test-provision-pool.sh
+    - bash tests/node-storage/test-appset.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/usr/sbin/hugmesh-node-storage-reconcile
+        - specs/usr/lib/hugmesh/storage-verify.sh
+        - specs/etc/keys-provision/provision.sh
+        - specs/cluster/apps/13b-node-storage.yaml
+        - specs/cluster/apps/13a-optional-services.yaml
+        - specs/cluster/manifests/node-storage-placement/**/*
+        - tests/node-storage/**/*
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Egress-VPN consumer suite (egress-vpn PR1/PR2/PR5/PR6), until now CI-orphaned:
+# vpn-verify.sh's signed-export gate (canonical v1-vpn bytes asserted against a
+# reference string; ACCEPT/tamper/unsigned/foreign/rollback matrix, same class as
+# the two jobs above), provision_vpn's OWN-DOMAIN-ONLY key-USB routing (a config
+# staged under another tenant's domain is NEVER installed; 0600 root-owned;
+# .conf-over-.ovpn precedence; fail-closed no-op without a domain), the
+# split-tunnel routing invariants in hugmesh-vpn-runner (carve-out priorities
+# beat the fwmark catch-all; blackhole kill-switch v4+v6; down flushes — all via
+# a recording fake `ip`, the real-netns smoke self-skips without root), and the
+# builder's DEFAULT-OFF optional-service gate (not selected => NetworkPolicy +
+# packages pruned; selected => kept + runlevel link). Tool set pinned for the
+# same reason as node-storage-verify (hard exit-2 tool checks; python3+py3-yaml
+# for the registry leg, findutils for the runner scan). No root, no netns, no
+# cluster, no docker.
+egress-vpn-verify:
+  stage: verify
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils
+  script:
+    - bash tests/egress-vpn/test-vpn-reconcile-verify.sh
+    - bash tests/egress-vpn/test-provision-vpn.sh
+    - bash tests/egress-vpn/test-split-tunnel.sh
+    - bash tests/egress-vpn/test-optional-service-gate.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/usr/sbin/hugmesh-vpn-runner
+        - specs/usr/lib/hugmesh/vpn-verify.sh
+        - specs/etc/keys-provision/provision.sh
+        - build-rpi5-stage4.sh
+        - specs/cluster/optional-services.yaml
+        - tests/egress-vpn/**/*
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Desktop-governance consumer suite, until now CI-orphaned: provision_desktop_
+# governance()'s ships-dark rendering (Discover Flatpak remote at api.<domain>
+# with the domain SUBSTITUTED; flathub-off preset removal; polkit desktop-sudo
+# gate with the stock %wheel line commented out; SSSD-OIDC conf 0600 at the
+# per-domain issuer; bearer-forward.sh 0755; domain-precedence chain; no
+# templates or no domain => NOTHING rendered, no sudo granted) plus the GEN-SSO
+# session-start leg (OIDC-token deposit 0600 under XDG_RUNTIME_DIR, never
+# exported; ungoverned/no-token => fail-closed no-op; session-install renders the
+# autostart pair and refuses sed-metachar domains; templates byte-identical
+# between specs/etc/... and keys-template/...). Function bodies are extracted
+# from the REAL provision.sh and run against a sandbox /etc — no root, no
+# flatpak/sssd binaries, no cluster, no docker. Tool set pinned for the same
+# reason as the two jobs above.
+desktop-governance-verify:
+  stage: verify
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash jq coreutils grep sed gawk findutils diffutils
+  script:
+    - bash tests/desktop-governance/test-provision-desktop-governance.sh
+    - bash tests/desktop-governance/test-gen-sso-session-start.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/etc/keys-provision/provision.sh
+        - specs/etc/hugmesh/desktop-governance/**/*
+        - keys-template/desktop-governance/**/*
+        - tests/desktop-governance/**/*
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
