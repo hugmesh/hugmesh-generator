@@ -14,6 +14,7 @@ Subcommands
                                       print SCRIPT=/SECRETS=/SEED= for the shell
   static   <specs/cluster>            the source contract (below)
   conf     <specs/cluster>            the init_data.json wiring contract (below)
+  seed     <specs/cluster>            the init_data.json OBJECT-GRAPH contract (below)
 
 THE SOURCE CONTRACT — every discovered script must:
   (1) parse;
@@ -58,6 +59,43 @@ THE WIRING CONTRACT (`conf`) — for each casdoor Deployment:
       declared object, resetting each role's membership to the seed's empty list;
   (d) the init Job must mount the SAME seed ConfigMap at the directory its script
       reads, so its verification pass reads what Casdoor was given.
+
+THE OBJECT-GRAPH CONTRACT (`seed`) — a seed must be able to import ITSELF. The
+wiring contract above proves the file is READ; this proves the file is VIABLE.
+Reproduced statically from the pinned casbin/casdoor:3.80.0 source:
+
+  (s1) VIABILITY. A user may not be created in an organization that has no
+       application. object/init_data.go:81 -> initDefinedUser -> AddUser
+       (object/user.go:969), which at :1000-1007 does
+           if user.Owner != "built-in" {
+               applicationCount, _ := GetOrganizationApplicationCount(
+                   organization.Owner, organization.Name, "", "")
+               if applicationCount == 0 { return …"The organization: %s should have
+                   one application at least"… } }
+       and AddUser's error is panicked at init_data.go:368 — the container
+       CrashLoopBackOffs, the whole IdP never starts. The organization is resolved
+       as getOrganization("admin", user.Owner) (object/organization.go:305-311) and
+       the count is
+           SELECT count(*) FROM application
+           WHERE owner = <org.Owner> AND (organization = <org.Name> OR is_shared)
+       (object/application.go:194-197 + ormer_session.go:25-32), so the application
+       must be owned by the ORGANIZATION'S owner ("admin"), not by the org.
+       NOTE the message interpolates organization.OWNER, so it names "admin" for a
+       user in org "hugmesh" — the panic text does not identify the real org.
+  (s2) OWNERSHIP. Every declared application whose organization is declared here
+       must carry that organization's owner, or it does not count for (s1) and
+       cannot be reached as "<owner>/<name>" by the init Job's ensure_seed().
+  (s3) ORDERING. InitFromFile() applies kinds in a HARDCODED order
+       (object/init_data.go:71-156) — key order in the JSON is irrelevant. A
+       reference to an object this same file declares under a LATER kind is
+       created against something that does not exist yet: certs (84) and groups
+       (114) come AFTER applications (78) and users (81) respectively.
+  (s4) PHANTOM MEMBERSHIP. AddRole/AddPermission are bare inserts with no
+       referential check (object/role.go:151-158), so a role or permission naming
+       a user/role this file never creates is stored happily and grants nothing —
+       no error, anywhere, ever. A bootstrap seed must create everything it names.
+Every rule is applied to EVERY manifests/casdoor*/init-data-configmap.yaml, and
+REQUIRED_SEEDS below stops a rename from turning the sweep vacuous.
 
 PyYAML + the stdlib only: no cluster, no kubectl, no network.
 """
@@ -662,6 +700,266 @@ def check_conf(cluster):
                 f"{job_cm!r} there while the Deployment is seeded from {seed_cm!r}")
 
 
+# ── the object-graph contract ────────────────────────────────────────────────
+# The seeds that MUST be found, for the same reason as REQUIRED above: a renamed
+# directory that dropped one out of the sweep would report a pass having checked
+# nothing about it.
+REQUIRED_SEEDS = {"casdoor", "casdoor-games"}
+
+# object/init_data.go:71-156 — the HARDCODED sequence InitFromFile() creates kinds
+# in. Key order inside the JSON has no effect whatsoever; this list is the only
+# thing that decides what exists when.
+INIT_ORDER = [
+    "organizations", "providers", "applications", "users", "certs", "ldaps",
+    "models", "payments", "products", "resources", "roles", "syncers", "tokens",
+    "webhooks", "groups", "adapters", "enforcers", "permissions", "plans",
+    "pricings", "invitations", "records", "sessions", "subscriptions",
+    "transactions", "rules", "sites", "third_party_links",
+]
+
+# (from-kind, field, to-kind, shape). "id" fields hold a list of "<owner>/<name>"
+# strings; "name" fields hold a single bare name owned by "admin".
+SEED_REFS = [
+    ("applications", "cert",        "certs",  "name"),
+    ("applications", "signingCert", "certs",  "name"),
+    ("users",        "groups",      "groups", "id"),
+    ("roles",        "users",       "users",  "id"),
+    ("roles",        "roles",       "roles",  "id"),
+    ("permissions",  "users",       "users",  "id"),
+    ("permissions",  "roles",       "roles",  "id"),
+]
+# Where a dangling reference is silently accepted by casdoor and produces an
+# authority that does not exist (AddRole/AddPermission are bare inserts,
+# object/role.go:151-158) rather than an error anyone would ever see.
+SEED_MUST_DECLARE = {("roles", "users"), ("roles", "roles"),
+                     ("permissions", "users"), ("permissions", "roles")}
+
+# The owner every organization must carry. This is PINNED to the literal upstream
+# hardcodes, NOT derived from the seed: AddUser resolves the user's organization
+# through GetOrganizationByUser, which is
+#     return getOrganization("admin", user.Owner)
+# (object/organization.go:305-311), and getOrganization does an exact primary-key
+# Get on (owner, name) (object/organization.go:159-175). Casdoor's own bootstrap
+# writes the same literal (object/init.go:120-127). An organization row carrying
+# any other owner is therefore invisible to every user creation in the product,
+# and deriving the expectation from the seed's own organization block would let
+# an internally-consistent-but-unimportable file pass.
+ORG_OWNER = "admin"
+
+# object/init.go:115-152 creates this organization unconditionally from
+# object.InitDb() (main.go:59), which runs BEFORE object.InitFromFile()
+# (main.go:78). It is never declared by a seed and always exists by the time the
+# import runs, with HasPrivilegeConsent left at its zero value, false.
+BUILTIN_ORG = "built-in"
+# object/user.go:1010-1011 — the only user name the built-in organization accepts
+# while HasPrivilegeConsent is false.
+BUILTIN_ONLY_USER = "admin"
+
+
+def _seed_files(cluster):
+    """{directory-name: (path, parsed init_data.json)} for every seed in the tree."""
+    seeds = {}
+    for path in sorted(pathlib.Path(cluster, "manifests").glob(
+            "casdoor*/init-data-configmap.yaml")):
+        label = path.parent.name
+        cm = next((o for o in _load(path) if o.get("kind") == "ConfigMap"), None)
+        raw = ((cm or {}).get("data") or {}).get("init_data.json")
+        if raw is None:
+            bad(f"{label}: init-data-configmap.yaml carries no init_data.json key")
+            continue
+        try:
+            seeds[label] = (path, json.loads(raw))
+        except ValueError as e:
+            bad(f"{label}: init_data.json is not valid JSON ({e}) — casdoor panics "
+                f"on it at boot (object/init_data.go:66-69)")
+    return seeds
+
+
+def _ids(objs):
+    return {f"{o.get('owner')}/{o.get('name')}" for o in objs}
+
+
+def check_one_seed(label, seed):
+    orgs = {o.get("name"): o for o in seed.get("organizations") or []}
+    apps = seed.get("applications") or []
+
+    # (s0) THE OWNER IS NOT NEGOTIABLE. AddUser reaches the organization only
+    # through getOrganization("admin", user.Owner) — a primary-key Get with the
+    # owner written into the call site. An organization row with any other owner
+    # is not found, and AddUser returns "the organization: <name> is not found"
+    # (object/user.go:992-998) which initDefinedUser panics on at
+    # object/init_data.go:366-368, exactly like the missing-application case. The
+    # comparison below is against the literal, never against the seed's own idea
+    # of who owns the organization: an owner drift applied consistently across
+    # organization AND application is internally consistent and still unbootable.
+    for org in seed.get("organizations") or []:
+        if org.get("owner") != ORG_OWNER:
+            bad(f"{label}: organization {org.get('name')!r} declares "
+                f"owner={org.get('owner')!r}, but every organization casdoor can "
+                f"resolve is owned by the literal {ORG_OWNER!r} — "
+                f"GetOrganizationByUser hardcodes "
+                f"getOrganization({ORG_OWNER!r}, user.Owner) "
+                f"(object/organization.go:305-311) and casdoor's own bootstrap "
+                f"writes the same literal (object/init.go:120-127). This row is "
+                f"never found, so AddUser returns \"the organization: "
+                f"{org.get('name')} is not found\" (object/user.go:992-998) and "
+                f"initDefinedUser panics on it (object/init_data.go:366-368). "
+                f"Declaring the application under the same wrong owner does not "
+                f"help: the lookup never gets that far")
+
+    # (s2) an application owned by its own organization does not satisfy (s1):
+    # the count filters owner = <organization.Owner>, and (s0) has just pinned
+    # that to "admin", so this is pinned to "admin" too rather than re-derived.
+    for app in apps:
+        if app.get("organization") not in orgs:
+            continue
+        if app.get("owner") != ORG_OWNER:
+            bad(f"{label}: application {app.get('name')!r} is owned by "
+                f"{app.get('owner')!r}, not {ORG_OWNER!r} — AddUser calls "
+                f"GetOrganizationApplicationCount(organization.Owner, …) and the "
+                f"organization it resolved can only ever be the {ORG_OWNER!r}-owned "
+                f"row, so the count "
+                f"(SELECT count(*) … WHERE owner = {ORG_OWNER!r}, "
+                f"object/application.go:194-197) does not see this application: it "
+                f"does not make the organization viable and is not addressable as "
+                f"'{ORG_OWNER}/{app.get('name')}' by the init Job either")
+
+    def viable(org_name):
+        return [a for a in apps
+                if a.get("owner") == ORG_OWNER
+                and (a.get("organization") == org_name or a.get("isShared"))]
+
+    # (s1) THE LIVE PANIC. Every organization this file puts users (or roles) in
+    # must be made viable BY THIS FILE.
+    dependents = {}
+    for kind in ("users", "roles"):
+        for obj in seed.get(kind) or []:
+            dependents.setdefault(obj.get("owner"),
+                                  {"users": [], "roles": []})[kind].append(
+                                      obj.get("name"))
+    for owner, members in sorted(dependents.items(),
+                                 key=lambda kv: (kv[0] is None, kv[0])):
+        what = ", ".join(f"{len(v)} {k}" for k, v in members.items() if v)
+        users = members["users"]
+
+        # object/user.go:983-987 rejects an empty owner outright, before any
+        # organization is looked up at all.
+        if not owner:
+            if users:
+                bad(f"{label}: declares {len(users)} user(s) {sorted(users)!r} with "
+                    f"no owner — AddUser returns \"the user's owner and name should "
+                    f"not be empty\" (object/user.go:983-987) and initDefinedUser "
+                    f"panics on it (object/init_data.go:366-368)")
+            else:
+                bad(f"{label}: declares {what} with no owner — the object is not "
+                    f"addressable as '<owner>/<name>' by anything")
+            continue
+
+        # THE BUILT-IN ORGANIZATION. object/user.go:999 exempts it from the
+        # application-count check and from NOTHING ELSE. Two lines later,
+        # object/user.go:1010-1011 rejects
+        #     organization.Name == "built-in" && !organization.HasPrivilegeConsent
+        #                                     && user.Name != "admin"
+        # and that error is panicked at object/init_data.go:366-368 just the same.
+        # The organization is not the seed's to configure: object/init.go:115-152
+        # creates it from InitDb() (main.go:59) before InitFromFile() (main.go:78)
+        # ever runs, with HasPrivilegeConsent false — and a seed that re-declares
+        # it with hasPrivilegeConsent:true changes nothing, because
+        # initDefinedOrganization returns early on an existing row under the
+        # initDataNewOnly=true that section (2c) requires (init_data.go:291-299).
+        if owner == BUILTIN_ORG:
+            offenders = sorted(n for n in users if n != BUILTIN_ONLY_USER)
+            if offenders:
+                bad(f"{label}: declares user(s) {offenders!r} in the "
+                    f"{BUILTIN_ORG!r} organization — casdoor accepts no user there "
+                    f"but {BUILTIN_ONLY_USER!r} while HasPrivilegeConsent is false "
+                    f"(object/user.go:1010-1011), and initDefinedUser panics on the "
+                    f"refusal (object/init_data.go:366-368). The built-in "
+                    f"organization's users are global Casdoor administrators; put "
+                    f"service accounts in their own organization. Declaring "
+                    f"hasPrivilegeConsent here does not help — the row already "
+                    f"exists from InitDb() (object/init.go:115-152) and "
+                    f"initDataNewOnly=true makes the seed's copy a no-op "
+                    f"(object/init_data.go:291-299)")
+            elif users:
+                ok(f"{label}: the only user declared in {BUILTIN_ORG!r} is "
+                   f"{BUILTIN_ONLY_USER!r} — the one name "
+                   f"object/user.go:1010-1011 lets through")
+            continue
+
+        if owner not in orgs:
+            bad(f"{label}: declares {what} in organization {owner!r} that this file "
+                f"does not create — the seed cannot satisfy its own preconditions "
+                f"(object/init_data.go:72 creates organizations, :81 the users)")
+            continue
+        have = viable(owner)
+        if have:
+            ok(f"{label}: organization {owner!r} ({what}) is made viable by this "
+               f"file — application(s) {sorted(a.get('name') for a in have)} owned by "
+               f"{ORG_OWNER!r}, so AddUser's application-count precondition "
+               f"(object/user.go:999-1007) is satisfied at import time")
+        elif users:
+            bad(f"{label}: declares {what} in organization {owner!r} but NO "
+                f"application owned by {ORG_OWNER!r} for it — AddUser "
+                f"(object/user.go:999-1007) returns \"The organization: "
+                f"{ORG_OWNER} should have one application at least\" and "
+                f"initDefinedUser panics on it "
+                f"(object/init_data.go:366-368): casdoor CrashLoopBackOffs at boot "
+                f"and the init Job's /api/add-user is rejected the same way. "
+                f"Declare an application with owner={ORG_OWNER!r}, "
+                f"organization={owner!r} (no clientSecret — casdoor generates one, "
+                f"the Job injects the Vault value)")
+        else:
+            bad(f"{label}: declares {what} in organization {owner!r} but NO "
+                f"application owned by {ORG_OWNER!r} for it — the organization can "
+                f"never hold a user (object/user.go:999-1007), so those roles can "
+                f"never be granted to anyone")
+
+    # (s3)+(s4) references, against the fixed creation order.
+    for from_kind, field, to_kind, shape in SEED_REFS:
+        if from_kind not in seed:
+            continue
+        declared = seed.get(to_kind) or []
+        known = _ids(declared) if shape == "id" else {o.get("name") for o in declared}
+        later = INIT_ORDER.index(to_kind) > INIT_ORDER.index(from_kind)
+        for obj in seed[from_kind]:
+            value = obj.get(field)
+            refs = value if isinstance(value, list) else ([value] if value else [])
+            for ref in refs:
+                oid = f"{obj.get('owner')}/{obj.get('name')}"
+                if ref in known and later:
+                    bad(f"{label}: {from_kind[:-1]} {oid!r} references {to_kind[:-1]} "
+                        f"{ref!r}, which this file declares under a kind "
+                        f"InitFromFile() creates LATER ({to_kind} at position "
+                        f"{INIT_ORDER.index(to_kind)}, {from_kind} at "
+                        f"{INIT_ORDER.index(from_kind)} — object/init_data.go:71-156). "
+                        f"The reference is written against an object that does not "
+                        f"exist yet; JSON key order does not change this")
+                elif ref not in known and (from_kind, field) in SEED_MUST_DECLARE:
+                    bad(f"{label}: {from_kind[:-1]} {oid!r} names {to_kind[:-1]} "
+                        f"{ref!r}, which this file never creates — AddRole/"
+                        f"AddPermission are bare inserts with no referential check "
+                        f"(object/role.go:151-158), so this is stored as a phantom "
+                        f"membership: nothing errors and the authority never exists")
+    ok(f"{label}: {sum(len(v) for v in seed.values() if isinstance(v, list))} declared "
+       f"object(s), every cross-reference resolves to something an earlier kind "
+       f"creates")
+
+
+def check_seed(cluster):
+    seeds = _seed_files(cluster)
+    missing = REQUIRED_SEEDS - set(seeds)
+    if missing:
+        bad(f"seed: found {sorted(seeds)} but not {sorted(missing)} — refusing to "
+            f"report a pass off an incomplete sweep")
+    elif seeds:
+        ok(f"seed: {len(seeds)} declarative seed(s) found ({', '.join(sorted(seeds))})")
+    else:
+        bad("seed: found no init-data-configmap.yaml at all")
+    for label, (_, seed) in sorted(seeds.items()):
+        check_one_seed(label, seed)
+
+
 # ── extraction (for the behavioural half) ────────────────────────────────────
 def extract(cluster, outdir):
     out = pathlib.Path(outdir)
@@ -759,6 +1057,35 @@ def _sync_seeds(src, outdir):
     return paths[0], paths[1]
 
 
+# The superadmin fixture credentials, in one place so the secrets directory, the
+# stale-cluster stub store and the harness's secret sweep cannot drift apart.
+# Deliberately distinctive so the sweep can grep for them verbatim.
+SUPERADMIN_USER = "e2e-superadmin"
+SUPERADMIN_PW = "SUPERADMIN-FIXTURE-PW"
+SUPERADMIN_STALE_PW = "SUPERADMIN-PW-FROM-BEFORE-THE-ROTATION"
+
+
+def _stale_superadmin_seed(src, outdir):
+    """A stub store in which the superadmin account ALREADY EXISTS holding a
+    password that is not the one Vault now has — i.e. a rotation that has happened
+    in Vault and not yet in the IdP. Returns "" for a script with no superadmin
+    leg, so a harness scenario cannot silently pass by never running one.
+
+    This is the state no amount of re-running the Job could previously repair:
+    the update branch re-sent every field EXCEPT the password (update-user cannot
+    carry one), so the account kept the old credential forever."""
+    if "/superadmin/password" not in src:
+        return ""
+    org = _env_defaults(src).get("CASDOOR_ORG", "hugmesh")
+    store = {f"user:{org}/{SUPERADMIN_USER}": {
+        "owner": org, "name": SUPERADMIN_USER, "id": "stub-uuid-preexisting",
+        "displayName": "Platform Superadmin", "type": "normal-user",
+        "password": SUPERADMIN_STALE_PW}}
+    p = pathlib.Path(outdir, "stub-seed-stale-superadmin.json")
+    p.write_text(json.dumps(store, indent=1))
+    return str(p)
+
+
 def fixture(cluster, workdir, cm_name, admin_password):
     """Stage everything one script opens from disk, so the REAL script can be run
     offline. The per-app client-secret names come from the script's own APPS dict
@@ -778,16 +1105,19 @@ def fixture(cluster, workdir, cm_name, admin_password):
     (secrets / "app").mkdir(exist_ok=True)
     (secrets / "app" / "clientSecret").write_text("client-secret-for-threewizards-app")
     (secrets / "superadmin").mkdir(exist_ok=True)
-    (secrets / "superadmin" / "username").write_text("e2e-superadmin")
-    (secrets / "superadmin" / "password").write_text("SUPERADMIN-FIXTURE-PW")
+    (secrets / "superadmin" / "username").write_text(SUPERADMIN_USER)
+    (secrets / "superadmin" / "password").write_text(SUPERADMIN_PW)
     seed = out / "scripts" / f"{entry['dir']}__init_data.json"
     script_path = out / "scripts" / entry["script"]
-    add, prune = _sync_seeds(script_path.read_text(), out)
+    src = script_path.read_text()
+    add, prune = _sync_seeds(src, out)
     print(f"SCRIPT={script_path}")
     print(f"SECRETS={secrets}")
     print(f"SEED={seed if seed.exists() else ''}")
     print(f"STUB_SEED_ADD={add}")
     print(f"STUB_SEED_PRUNE={prune}")
+    print(f"STUB_SEED_STALE_SUPERADMIN={_stale_superadmin_seed(src, out)}")
+    print(f"SUPERADMIN_PW={SUPERADMIN_PW}")
 
 
 def main():
@@ -817,6 +1147,8 @@ def main():
             check_source(f"{cm_name}/{key}", src, is_init(cm_name))
     elif cmd == "conf":
         check_conf(cluster)
+    elif cmd == "seed":
+        check_seed(cluster)
     else:
         sys.exit(f"unknown subcommand {cmd!r}")
     print(f"  ({P} passed, {F} failed)")

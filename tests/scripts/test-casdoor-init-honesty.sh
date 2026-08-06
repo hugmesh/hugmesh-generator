@@ -39,6 +39,31 @@
 #      and re-adds every declared object on every restart, resetting role
 #      membership to the seed's empty lists), and the init Job must mount the
 #      same seed ConfigMap its verification pass reads.
+#   2b. THE OBJECT-GRAPH CONTRACT: a seed that IS imported must be able to import
+#      ITSELF. Wiring the import up is what exposed this: the very first boot that
+#      really read init_data.json died on
+#          panic: The organization: admin should have one application at least
+#      because casdoor refuses to create a user in an organization with no
+#      application (object/user.go:1000-1007, panicked at init_data.go:368) and
+#      the systems seed declared six service users, twenty-seven roles and NO
+#      application — the applications are created later, over the API, by the very
+#      Job that cannot run until casdoor is up. A wiring-only gate cannot see that:
+#      every path matched, every key was set, and the IdP still could not boot. So
+#      `seed` reproduces casdoor's own preconditions statically over every seed in
+#      the tree: organization viability, the owner the application count actually
+#      filters on, InitFromFile()'s hardcoded kind order, and the dangling
+#      role/permission members that casdoor stores without complaint.
+#      Those preconditions are PINNED to the literals upstream hardcodes, not
+#      derived from the seed, because two of them cannot be recovered from a
+#      self-consistent file: an organization owned by anything but "admin" is
+#      never found at all (GetOrganizationByUser is
+#      getOrganization("admin", user.Owner), object/organization.go:305-311), and
+#      the built-in organization's exemption at object/user.go:999 covers the
+#      application count and nothing else — object/user.go:1010-1011 still refuses
+#      every built-in user but "admin". Both panic at object/init_data.go:366-368
+#      exactly like the missing application did, and both are controlled in
+#      section 3 in BOTH directions, so neither rule can pass by banning the shape
+#      casdoor actually accepts.
 #   3. THE BEHAVIOUR, by RUNNING the real scripts against a stub Casdoor
 #      (tests/scripts/casdoor_stub.py) that reproduces the live failure shapes:
 #      a denied session, denied writes, writes that answer {"status":"ok"} while
@@ -52,8 +77,18 @@
 #      proving nothing, so the journal is asserted to contain the write. A
 #      happy-path run must still succeed, announce, and be idempotent on a second
 #      pass — and the announcement detector itself is asserted to FIRE there, so
-#      "announced nothing" can never be a property of a blind detector. Finally a
-#      secret sweep: no password may reach stdout or stderr on ANY path.
+#      "announced nothing" can never be a property of a blind detector.
+#      The credential legs get the same treatment TWICE OVER, because there are
+#      two accounts provisioned from Vault and only one of them is the session:
+#      the admin is proved by re-login, and every OTHER account (today, the
+#      superadmin) is proved by set-password's own refusal to re-set a password
+#      that already matches (object/check_password_complexity.go:104-124), which
+#      is the only read-back a password has — /api/get-user masks it as "***".
+#      Scenario (4g) starts from a cluster holding the PREVIOUS password, so a
+#      rotation that never left Vault is a failure rather than an invisible
+#      no-op; (4h) makes the write vanish and requires the run to fail rather
+#      than announce it. Finally a secret sweep: no password — neither account's
+#      — may reach stdout or stderr on ANY path.
 #
 # Every layer-1/2 check is also re-run against a deliberately corrupted staged
 # copy, so a check that silently stopped biting is reported, not passed over —
@@ -137,15 +172,17 @@ run_script() { # <script> <secrets-dir> <seed-file>
 # nothing" is paired with a happy-path run that asserts this DOES fire, so the
 # detector can never go blind unnoticed.
 announces_success() {
-    grep -Eq '^[[:space:]]*(added|updated|created)[[:space:]]|: done$|\+[1-9][0-9]* added|-[1-9][0-9]* removed|[1-9][0-9]* (qualified )?member\(s\)|already ==|: assigned |set user\.groups' "${WORK}/out"
+    grep -Eq '^[[:space:]]*(added|updated|created)[[:space:]]|: done$|\+[1-9][0-9]* added|-[1-9][0-9]* removed|[1-9][0-9]* (qualified )?member\(s\)|already ==|: assigned |set user\.groups|password rotated' "${WORK}/out"
 }
 
 # Stages one script and the files it opens; sets SCRIPT / SECRETS / SEED and, for
 # a derived-role sync Job, the two stub stores that take it to its write path. A
 # fixture that could not be built must not read as "the script behaved".
 SCRIPT=""; SECRETS=""; SEED=""; STUB_SEED_ADD=""; STUB_SEED_PRUNE=""
+STUB_SEED_STALE_SUPERADMIN=""; SUPERADMIN_PW=""
 stage_fixture() { # <cluster-root> <workdir> <configmap> <admin-password>
     SCRIPT=""; SECRETS=""; SEED=""; STUB_SEED_ADD=""; STUB_SEED_PRUNE=""
+    STUB_SEED_STALE_SUPERADMIN=""; SUPERADMIN_PW=""
     eval "$(python3 "${CONTRACT}" fixture "$1" "$2" "$3" "$4" 2>"${WORK}/fixture.err")"
     [ -n "${SCRIPT}" ] && [ -f "${SCRIPT}" ] && return 0
     bad "(4) $3: could not be staged for execution: $(tail -1 "${WORK}/fixture.err")"
@@ -174,6 +211,14 @@ if python3 "${CONTRACT}" conf "${CLUSTER}"; then
     ok "(2) both Casdoor deployments actually import the seed they mount"
 else
     bad "(2) the declarative seed is not wired to be imported (details above)"
+fi
+
+echo
+echo "== 2b. init_data.json object-graph contract =="
+if python3 "${CONTRACT}" seed "${CLUSTER}"; then
+    ok "(2b) every declarative seed can satisfy its own import preconditions"
+else
+    bad "(2b) a seed cannot be imported by the casdoor it is mounted into (details above)"
 fi
 
 echo
@@ -274,6 +319,126 @@ PY
 if [ $? -eq 0 ]; then control "a sync Job announces its write with no read-back" static
 else bad "(3) control [write with no read-back] could not be staged"; fi
 cp "${CLUSTER}/manifests/casdoor/games-admin-sync-job.yaml" "${SYNC_JOB}"
+
+# ── controls for the object-graph contract (2b) ──────────────────────────────
+# Each one edits the STAGED seed's embedded init_data.json and asserts `seed`
+# fails on it. The mutation is applied to the parsed JSON rather than by patching
+# text, so a reformatting of the ConfigMap cannot quietly stop these staging.
+SEED_CM="${STAGE}/manifests/casdoor/init-data-configmap.yaml"
+mutate_seed() { # <configmap-file> <python statement over `j`, asserting its own precondition>
+    python3 - "$1" "$2" <<'PY'
+import json, pathlib, sys, yaml
+p = pathlib.Path(sys.argv[1])
+doc = yaml.safe_load(p.read_text())
+j = json.loads(doc["data"]["init_data.json"])
+exec(sys.argv[2])
+doc["data"]["init_data.json"] = json.dumps(j, indent=2)
+p.write_text(yaml.safe_dump(doc))
+PY
+}
+
+# (nc7) THE SHIPPED BUG, restored: the applications block goes away and the seed
+# is byte-for-byte the shape that CrashLoopBackOff'd a live cluster.
+mutate_seed "${SEED_CM}" '
+assert j.get("applications"), "control precondition: no applications block to remove"
+assert j.get("users"), "control precondition: no users to be blocked by it"
+del j["applications"]'
+if [ $? -eq 0 ]; then control "the seed declares users for an org with no application" seed
+else bad "(3) control [users with no application] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+# (nc8) THE SUBTLE ONE. The application is there, but owned by the organization
+# instead of by "admin" — which reads perfectly naturally and makes the count
+# (owner = <organization.Owner>) return 0 just the same, so the panic comes back
+# with an applications block sitting right there in the file.
+mutate_seed "${SEED_CM}" '
+assert j["applications"] and j["applications"][0]["owner"] == "admin", \
+    "control precondition: application is not admin-owned to begin with"
+j["applications"][0]["owner"] = j["organizations"][0]["name"]'
+if [ $? -eq 0 ]; then control "the application is owned by the org, not by admin" seed
+else bad "(3) control [application owner drift] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+# (nc9) a role names a member the seed never creates. Casdoor stores it without a
+# murmur (bare insert, no FK), so nothing but a static check can ever see it.
+mutate_seed "${SEED_CM}" '
+r = [x for x in j["roles"] if x["name"] == "ROLE_ADMIN"]
+assert r, "control precondition: ROLE_ADMIN not found"
+r[0]["users"] = ["hugmesh/svc-does-not-exist"]'
+if [ $? -eq 0 ]; then control "a role names a user the seed never creates" seed
+else bad "(3) control [phantom role membership] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+# (nc10) the ordering rule, which nothing in the shipped tree exercises today: an
+# application naming a cert the SAME file declares. InitFromFile() creates certs
+# after applications, so the reference is written against nothing.
+mutate_seed "${SEED_CM}" '
+assert j.get("applications"), "control precondition: no application to give a cert"
+j["applications"][0]["cert"] = "cert-hugmesh"
+j["certs"] = [{"owner": "admin", "name": "cert-hugmesh", "type": "x509"}]'
+if [ $? -eq 0 ]; then control "an application names a cert declared later in the same file" seed
+else bad "(3) control [cert ordering] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+# (nc11) THE CONSISTENT LIE. A whole second tenant is added — organization,
+# its user and its own application — under an owner that is not "admin". Nothing
+# inside the file disagrees with anything else, so a rule that DERIVES the
+# required owner from the seed's own organization block passes it; casdoor still
+# never finds the organization, because GetOrganizationByUser hardcodes
+# getOrganization("admin", user.Owner) (object/organization.go:305-311), and
+# initDefinedUser panics on "the organization: acme is not found"
+# (object/user.go:992-998 -> object/init_data.go:366-368).
+mutate_seed "${SEED_CM}" '
+assert all(o["owner"] == "admin" for o in j["organizations"]), \
+    "control precondition: an organization is already non-admin-owned"
+j["organizations"].append({"owner": "acme", "name": "acme", "displayName": "Acme"})
+j["users"].append({"owner": "acme", "name": "svc-acme", "type": "normal-user"})
+j["applications"].append({"owner": "acme", "name": "app-acme",
+                          "organization": "acme", "clientId": "a" * 20})'
+if [ $? -eq 0 ]; then control "a self-consistent tenant owned by something other than admin" seed
+else bad "(3) control [non-admin organization owner] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+# (nc12) a service account is put in the built-in organization. AddUser exempts
+# built-in from the APPLICATION-COUNT check (object/user.go:999) and from nothing
+# else — object/user.go:1010-1011 rejects any built-in user not named "admin"
+# while HasPrivilegeConsent is false, and initDefinedUser panics on that too. A
+# guard that reads the first exemption as "built-in is exempt" skips the object
+# entirely and reports a pass.
+mutate_seed "${SEED_CM}" '
+assert not [u for u in j["users"] if u["owner"] == "built-in"], \
+    "control precondition: a built-in user already exists"
+j["users"].append({"owner": "built-in", "name": "svc-ops", "type": "normal-user"})'
+if [ $? -eq 0 ]; then control "a service account in the built-in organization" seed
+else bad "(3) control [built-in service account] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+# ── and the other direction, so nc12 is not passing off a blanket ban ─────────
+# The rule is "no built-in user but admin", not "no built-in user". If `seed`
+# rejected the built-in organization outright it would satisfy nc12 while
+# forbidding the one thing casdoor allows, so the legal shape is asserted to
+# still PASS. Same for an admin-owned second tenant against nc11.
+permits() { # <label> — the staged tree is legal and must still pass
+    if python3 "${CONTRACT}" seed "${STAGE}" >/dev/null 2>&1; then
+        ok "(3) control [$1]: still accepted, so the rule above is not a blanket ban"
+    else
+        bad "(3) control [$1]: \`seed\` rejects a shape casdoor accepts — over-broad"
+    fi
+}
+mutate_seed "${SEED_CM}" '
+j["users"].append({"owner": "built-in", "name": "admin", "type": "normal-user"})'
+if [ $? -eq 0 ]; then permits "the built-in user IS named admin"
+else bad "(3) control [built-in admin allowed] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
+
+mutate_seed "${SEED_CM}" '
+j["organizations"].append({"owner": "admin", "name": "acme", "displayName": "Acme"})
+j["users"].append({"owner": "acme", "name": "svc-acme", "type": "normal-user"})
+j["applications"].append({"owner": "admin", "name": "app-acme",
+                          "organization": "acme", "clientId": "a" * 20})'
+if [ $? -eq 0 ]; then permits "a second tenant declared the way casdoor requires"
+else bad "(3) control [admin-owned second tenant allowed] could not be staged"; fi
+cp "${CLUSTER}/manifests/casdoor/init-data-configmap.yaml" "${SEED_CM}"
 
 echo
 echo "== 4. behaviour — the real scripts against the live failure shapes =="
@@ -502,6 +667,48 @@ for cm in ${INIT_SCRIPTS}; do
         bad "(4f) ${cm}: accepted casdoor's default as the provisioned password (rc=${RC})"
     fi
     stub_down
+
+    # (4g) THE ROTATION. The admin account has its own leg above; this is every
+    # OTHER account the Job provisions from Vault, of which the superadmin is the
+    # one that exists. The cluster already holds the account with the PREVIOUS
+    # password — the state a rotation in Vault produces — and the run must move it,
+    # because /api/update-user cannot carry a password at all: for as long as this
+    # leg only re-sent the user object, a rotated Vault secret never reached the
+    # IdP and the divergence surfaced as a superadmin who could not log in.
+    stage_fixture "${CLUSTER}" "${WORK}/fx-rot" "${cm}" "${PROVISIONED_PW}" || continue
+    if [ -z "${STUB_SEED_STALE_SUPERADMIN}" ]; then
+        echo "  --   (4g) ${cm}: no Vault-provisioned non-admin account — nothing to rotate"
+    else
+        stub_up ok "${PROVISIONED_PW}" "${STUB_SEED_STALE_SUPERADMIN}" || continue
+        run_script "${SCRIPT}" "${SECRETS}" "${SEED}"
+        if [ "${RC}" -eq 0 ] && grep -q 'superadmin: password rotated' "${WORK}/out"; then
+            ok "(4g) ${cm}: an account already holding the PREVIOUS password is rotated to the Vault value"
+        else
+            bad "(4g) ${cm}: a rotated Vault password did not reach the IdP (rc=${RC}): $(grep -i 'superadmin: password' "${WORK}/out" | head -1)"
+        fi
+        # ...and the very next run must find it converged, off casdoor's own
+        # refusal to re-set an identical password — not off a remembered result.
+        run_script "${SCRIPT}" "${SECRETS}" "${SEED}"
+        if [ "${RC}" -eq 0 ] && grep -q 'superadmin: password already the provisioned value' "${WORK}/out"; then
+            ok "(4g) ${cm}: the re-run reads the rotation back out of casdoor and rotates nothing"
+        else
+            bad "(4g) ${cm}: the re-run did not confirm the rotation (rc=${RC}): $(grep -i 'superadmin: password' "${WORK}/out" | head -1)"
+        fi
+        stub_down
+
+        # (4h) and the lie this must not be able to tell: set-password answers ok
+        # and stores nothing (casdoor's wrapActionResponse shape). The admin
+        # password is already converged here, so the admin leg never touches
+        # set-password and the scenario lands squarely on the account leg.
+        stub_up setpw-noop "${PROVISIONED_PW}" "${STUB_SEED_STALE_SUPERADMIN}" || continue
+        run_script "${SCRIPT}" "${SECRETS}" "${SEED}"
+        if [ "${RC}" -ne 0 ] && ! grep -q 'superadmin: password rotated' "${WORK}/out"; then
+            ok "(4h) ${cm}: a set-password that reported ok and stored nothing -> exits non-zero, announces no rotation"
+        else
+            bad "(4h) ${cm}: announced a rotation the store never took (rc=${RC})"
+        fi
+        stub_down
+    fi
 done
 
 echo
@@ -565,12 +772,108 @@ else
     bad "(4z) control [role_obj swallows a denial] could not be staged"
 fi
 
+# The SECOND behavioural control: an init script that rebuilds an update-user
+# payload from scratch. It is invisible on a fresh cluster — the object does not
+# exist yet, so the ADD path runs and everything succeeds — and fails on every
+# run after that, which for a Job ArgoCD re-runs on each sync means it is broken
+# nearly all of the time. So the scenario must run the script TWICE and judge the
+# second run; a single-run harness cannot see this class at all.
+init_rerun_scenario() { # <cluster-root> <configmap> <what> <expect: catch|clean>
+    local rc1
+    stage_fixture "$1" "${WORK}/fx-nci" "$2" "${PROVISIONED_PW}" || return 1
+    stub_up ok "${CASDOOR_DEFAULT_PW}" || return 1
+    run_script "${SCRIPT}" "${SECRETS}" "${SEED}"
+    rc1=${RC}
+    run_script "${SCRIPT}" "${SECRETS}" "${SEED}"
+    if [ "${rc1}" -ne 0 ]; then
+        bad "(4z) [$3]: failed on its FIRST run (rc=${rc1}), so the re-run property \
+was never exercised: $(tail -2 "${WORK}/out" | tr '\n' ' ')"
+    elif [ "$4" = "catch" ]; then
+        if [ "${RC}" -ne 0 ] && grep -q 'ID is immutable' "${WORK}/out"; then
+            ok "(4z) control [$3]: caught — the first run passes and the re-run fails \
+with \"The ID is immutable.\", exactly what (4e)'s idempotence check scores as a FAIL"
+        else
+            bad "(4z) control [$3]: NOT caught (rc=${RC}) — the stub's immutable-ID \
+rule has stopped biting, so a reconciler that is broken on every re-sync would ship"
+        fi
+    elif [ "${RC}" -eq 0 ] && grep -q ': done$' "${WORK}/out"; then
+        ok "(4z) [$3]: the shipped script survives a second run against a casdoor that \
+enforces the immutable ID (so the control above is not passing on a script that \
+always fails)"
+    else
+        bad "(4z) [$3]: the shipped script does not survive a re-run (rc=${RC}): \
+$(tail -2 "${WORK}/out" | tr '\n' ' ')"
+    fi
+    stub_down
+}
+
+python3 - "${NCTREE}/manifests/casdoor/init-job.yaml" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+# The regression: the update payload stops being the object read back from
+# casdoor and becomes one built from scratch — no "id", so casdoor rejects it.
+needle = "            user = dict(existing)\n"
+assert s.count(needle) == 1, "control precondition: the re-fetched update payload"
+p.write_text(s.replace(needle, '            user = {"owner": ORG, "name": username}\n'))
+PY
+if [ $? -eq 0 ]; then
+    init_rerun_scenario "${NCTREE}" casdoor-init-script \
+        "update-user payload rebuilt from scratch instead of re-read" catch
+    init_rerun_scenario "${CLUSTER}" casdoor-init-script \
+        "casdoor-init re-run" clean
+else
+    bad "(4z) control [update-user payload rebuilt from scratch] could not be staged"
+fi
+
+# THE THIRD behavioural control, for (4h): apply_password() stops confirming and
+# reports the rotation off set-password's response envelope alone. That envelope
+# is not evidence — casdoor answers ok for a write that changed nothing — and a
+# password is the one object with no read endpoint at all (/api/get-user masks it
+# as "***", object/user.go:678), so the confirming refusal is the ONLY read-back
+# there is. If (4h) ever stops failing on this, the rotation leg is announcing an
+# unverified credential change, which is the same class of lie as the original
+# thirteen "added" lines.
+NCROT="${WORK}/nc-rot"
+rm -rf "${NCROT}"; mkdir -p "${NCROT}/manifests"
+cp -r "${CLUSTER}/manifests/casdoor" "${CLUSTER}/manifests/casdoor-games" "${NCROT}/manifests/"
+python3 - "${NCROT}/manifests/casdoor/init-job.yaml" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+m = re.search(r'( *)confirm = attempt\(\)\n(?:.*\n)*?'
+              r'.*credential is NOT what Vault holds"\)\n', s)
+assert m, "control precondition: apply_password's confirming second call"
+assert s.count("confirm = attempt()") == 1, "control precondition: one confirmation"
+p.write_text(s[:m.start()] + s[m.end():])
+PY
+if [ $? -eq 0 ]; then
+    stage_fixture "${NCROT}" "${WORK}/fx-ncrot" casdoor-init-script "${PROVISIONED_PW}" \
+        && [ -n "${STUB_SEED_STALE_SUPERADMIN}" ] \
+        && stub_up setpw-noop "${PROVISIONED_PW}" "${STUB_SEED_STALE_SUPERADMIN}" \
+        && run_script "${SCRIPT}" "${SECRETS}" "${SEED}"
+    if [ "${RC}" -eq 0 ] && grep -q 'superadmin: password rotated' "${WORK}/out"; then
+        ok "(4z) control [apply_password reports a rotation off the write envelope]: \
+caught — the regressed copy exits 0 announcing \"password rotated\" against a store \
+that kept the old password, which is exactly what (4h) reports as a FAIL"
+    else
+        bad "(4z) control [apply_password reports a rotation off the write envelope]: \
+NOT caught (rc=${RC}) — scenario (4h) is not biting"
+    fi
+    stub_down
+else
+    bad "(4z) control [apply_password drops its confirmation] could not be staged"
+fi
+
 echo
 echo "== 5. secret sweep — no password may reach stdout/stderr on any path =="
 if [ ! -s "${WORK}/sweep" ]; then
     bad "(5) no output was captured, so the sweep proves nothing"
+elif [ -z "${SUPERADMIN_PW}" ]; then
+    bad "(5) the fixture never reported a superadmin password, so the sweep below \
+would have been searching for an empty string and could not fail"
 elif grep -qF "${PROVISIONED_PW}" "${WORK}/sweep"; then
     bad "(5) the provisioned admin password was printed: $(grep -nF "${PROVISIONED_PW}" "${WORK}/sweep" | head -1)"
+elif grep -qF "${SUPERADMIN_PW}" "${WORK}/sweep"; then
+    bad "(5) the superadmin password was printed: $(grep -nF "${SUPERADMIN_PW}" "${WORK}/sweep" | head -1)"
 elif grep -qE '(password|Password)["=: ]+123\b' "${WORK}/sweep"; then
     bad "(5) a password value was printed alongside its name"
 else

@@ -16,9 +16,10 @@
 # used (tests/stack/seed-e2e.sh, which seeds the org/roles imperatively because
 # the compose Casdoor mounts no init_data.json at all).
 #
-# IMPORTANT: this file declares ONLY non-secret structure (orgs, roles, users).
-# NO client-secrets / passwords are committed here — the OAuth2 applications and
-# their secrets are created/injected by the casdoor-init Job from the ESO
+# IMPORTANT: this file declares ONLY non-secret structure (orgs, one application
+# STUB, roles, users). NO client-secrets / passwords are committed here — the
+# OAuth2 applications' configuration and their secrets are created/injected by
+# the casdoor-init Job from the ESO
 # Secret "casdoor-app-secrets" (sourced from Vault). The Casdoor roles map 1:1
 # to the SELinux roles in docs/SECURITY.md (ROLE_GATEWAY/ROLE_API/ROLE_ADMIN_API),
 # so a workload's container_t MCS identity and its Casdoor identity line up.
@@ -153,6 +154,78 @@
 # rows of its own — it exists so the federation availability endpoint can require
 # ROLE_SERVICE and the minted client-credentials token satisfies that gate.
 #
+# ⚠️ WHY THERE IS AN "applications" BLOCK BELOW, AND WHY IT MUST STAY.
+# CASDOOR REFUSES TO CREATE A USER IN AN ORGANIZATION THAT HAS NO APPLICATION.
+# Verbatim, from the pinned casbin/casdoor:3.80.0 (deployment.yaml) source:
+#
+#   object/init_data.go:81      for _, user := range initData.Users { initDefinedUser(user) }
+#   object/init_data.go:366-369 _, err = AddUser(user, "en"); if err != nil { panic(err) }
+#   object/user.go:1000-1007    if user.Owner != "built-in" {
+#                                   applicationCount, err := GetOrganizationApplicationCount(
+#                                       organization.Owner, organization.Name, "", "")
+#                                   if applicationCount == 0 {
+#                                       return false, fmt.Errorf(…"The organization: %s should
+#                                           have one application at least"…, organization.Owner) } }
+#   object/application.go:194-197 GetOrganizationApplicationCount = GetSession(owner…)
+#                                   .Where("organization = ? or is_shared = ?", organization, true)
+#                                   .Count(&Application{})
+#     -> SQL: SELECT count(*) FROM application
+#             WHERE owner = 'admin' AND (organization = 'hugmesh' OR is_shared = true)
+#
+# So EVERY seeded svc-* user (owner "hugmesh") requires at least one application
+# row whose OWNER is the ORGANIZATION'S owner ("admin", NOT "hugmesh") and whose
+# `organization` is "hugmesh". Give the application owner "hugmesh" and the count
+# stays 0 and the panic comes straight back.
+# The panic names org "admin" only because upstream interpolates
+# organization.OWNER into that message (user.go:1006), never its name — the
+# organization it is actually complaining about is "hugmesh".
+# This was INVISIBLE until app-conf-configmap.yaml gained `initDataFile`: with no
+# import, initDefinedUser never ran. The first boot that really imported this file
+# CrashLoopBackOff'd on it. The SAME defect sat in the casdoor-init Job's
+# ensure_seed(), which walks these keys in InitFromFile()'s order and would have
+# had /api/add-user rejected with the identical message.
+#
+# The application declared below is deliberately a STUB: identity only (owner /
+# name / organization / clientId), no grants, no redirect URIs, no secret. It is
+# not a second source of truth for app-user-bff's configuration — casdoor-init's
+# reconcile_app() owns that, and it must, because:
+#   * a clientSecret MUST NOT be committed. Omitting the key is safe: casdoor
+#     generates a random one (object/application.go:472-474) that nobody holds,
+#     and reconcile_app() then overwrites it with the Vault/ESO value —
+#     UpdateApplication writes client_secret with AllCols() and omits it ONLY for
+#     the literal "***" (object/application.go:445-453), so the injected secret
+#     really lands.
+#   * that same AllCols() update means any field declared here that
+#     reconcile_app()'s payload does not carry is CLEARED on the Job's first pass.
+#     Declaring more here would not survive, it would just rot.
+# Until the Job runs, the stub can mint nothing (no grantTypes, enablePassword
+# false, enableSignUp false, and a secret nobody knows) — it exists so the
+# organization is VIABLE, which is exactly what Casdoor is asking for.
+# `cert` is intentionally absent: an empty cert falls back to cert-built-in
+# (object/cert.go:327-337), which object.InitDb() creates before InitFromFile()
+# is ever called (main.go — InitDb() at :59, InitFromFile() at :78).
+# clientId is a PUBLIC OAuth identifier (reconcile_app() already derives it as
+# "app-<name>"), not a credential.
+# The sibling realm's seed (manifests/casdoor-games/init-data-configmap.yaml) has
+# always declared its one application this way; systems never did, and only ever
+# got away with it because its import never ran.
+#
+# ORDERING INSIDE THIS FILE IS FIXED BY UPSTREAM, NOT BY KEY ORDER. InitFromFile()
+# applies kinds in a hardcoded sequence (object/init_data.go:71-156):
+#   organizations(72) -> providers(75) -> applications(78) -> users(81) ->
+#   certs(84) -> … -> roles(102) -> … -> groups(114) -> … -> permissions(124)
+# Anything a declared object REFERENCES must be created by an EARLIER kind:
+#   * applications -> organizations  ✔ (72 < 78)   * roles -> users ✔ (81 < 102)
+#   * applications -> providers      ✔ (75 < 78)
+#   * applications -> certs          ✘ certs are created AFTER applications, so an
+#       application here may only name a cert Casdoor already made (cert-built-in).
+#   * users -> groups                ✘ groups are created AFTER users.
+# AddRole/AddPermission are bare inserts with no referential check
+# (object/role.go:151-158), so a role naming a user this file does not create is
+# accepted silently and yields a phantom membership — nothing errors, the
+# authority simply never exists. tests/scripts/test-casdoor-init-honesty.sh
+# section 2b reproduces all of the above statically over every seed in this repo.
+#
 # NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
 # against the deployed casbin/casdoor-all-in-one before relying on auto-import.
 apiVersion: v1
@@ -174,6 +247,17 @@ data:
           "languages": ["en"],
           "enableSoftDeletion": false,
           "isProfilePublic": false
+        }
+      ],
+      "applications": [
+        {
+          "owner": "admin",
+          "name": "app-user-bff",
+          "displayName": "hugmesh user-bff",
+          "organization": "hugmesh",
+          "clientId": "app-user-bff",
+          "enablePassword": false,
+          "enableSignUp": false
         }
       ],
       "roles": [

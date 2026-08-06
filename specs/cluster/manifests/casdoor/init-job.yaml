@@ -258,6 +258,64 @@ data:
             return False
         return True
 
+    # object/check_password_complexity.go:104-124 — casdoor REFUSES a set-password
+    # whose new value already hashes to what is stored
+    # (credManager.IsPasswordCorrect(newPassword, user.Password, salt)), answering
+    # with this message (controllers/user.go:629-633; the English text is
+    # i18n/locales/en/data.json, key user."The new password must be different from
+    # your current password"). That refusal is the ONLY read-back a password has:
+    # /api/get-user masks it as "***" (object/user.go:678) and casdoor exposes no
+    # endpoint that returns the stored hash. It is a real comparison against
+    # persisted state, not a response envelope, which is what makes it usable here.
+    PASSWORD_ALREADY_SET = "must be different from your current password"
+
+    def apply_password(owner, name, password):
+        """Make <owner>/<name>'s password the value Vault holds, and PROVE it.
+        Returns "rotated" or "already the provisioned value". Never prints, logs or
+        returns the password itself.
+
+        WHY IT IS SHAPED LIKE THIS. Two calls, always:
+          1. set-password with the desired value. "ok" means the stored hash did
+             NOT match and now does; the PASSWORD_ALREADY_SET refusal means it
+             already did; anything else is a real failure and is raised.
+          2. the same call again, purely as verification. It must be refused with
+             PASSWORD_ALREADY_SET — i.e. casdoor itself, comparing against the
+             stored hash, says the credential IS what Vault holds. A second "ok"
+             means the first write did not persist (the setpw-noop shape: casdoor's
+             wrapActionResponse answers ok for a write that changed nothing), and
+             that is a hard failure rather than a "rotated" line nobody can check.
+
+        NO LOGIN IS ATTEMPTED. This runs in the built-in admin's session, and
+        SetPassword checks oldPassword only when one is supplied on the isAdmin
+        branch (controllers/user.go:597-606), so no previous password is needed.
+        That matters: a rotation loop that verified by logging in as the target
+        would burn a failed sign-in on every ArgoCD sync whenever Vault and the IdP
+        disagreed, and casdoor locks an account out after five. This path can never
+        produce a failed sign-in at all."""
+        def attempt():
+            try:
+                call("/api/set-password", method="POST",
+                     form={"userOwner": owner, "userName": name,
+                           "oldPassword": "", "newPassword": password})
+                return None
+            except CasdoorError as e:
+                return str(e)
+        first = attempt()
+        if first is None:
+            verb = "rotated"
+        elif PASSWORD_ALREADY_SET in first:
+            verb = "already the provisioned value"
+        else:
+            raise CasdoorError(f"set-password for {owner}/{name} failed: {first}")
+        confirm = attempt()
+        if confirm is None or PASSWORD_ALREADY_SET not in confirm:
+            raise CasdoorError(
+                f"set-password for {owner}/{name} reported success but casdoor does "
+                f"not recognise the Vault value as that account's password "
+                f"({confirm or 'the identical write was accepted a second time'}) — "
+                f"the credential is NOT what Vault holds")
+        return verb
+
     def ensure_seed():
         """Create anything init_data.json declares that Casdoor's boot import did not.
 
@@ -492,34 +550,50 @@ data:
         verb = write_application(appname, app)
         print(f"  {verb} {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
 
+    MFA_ITEMS = [
+        {"name": "WebAuthn", "rule": "Optional"},
+        {"name": "TOTP",     "rule": "Optional"},
+    ]
+
     def reconcile_org_mfa():
-        """D8 — enable the org MFA CAPABILITY (WebAuthn + TOTP available) and set the
-        WebAuthn RP / TOTP issuer. SHIPS DARK: we make MFA AVAILABLE but do NOT mark it
-        required — enforcement is a later, operator-flipped step. GET-then-merge so we
-        never clobber org fields seeded by init_data.json (passwordType, languages, ...).
-        """
+        """D8 — make the org MFA CAPABILITY available (WebAuthn + TOTP) and set the
+        remember window. SHIPS DARK: MFA is AVAILABLE but not required — `rule:
+        "Optional"` offers it without forcing it; enforcement is a later, operator-
+        flipped step. GET-then-merge so we never clobber org fields seeded by
+        init_data.json (passwordType, languages, ...).
+
+        ⚠️ THERE IS NO `enableMfa` ON THIS CASDOOR. This step used to set it and then
+        assert it came back true, which casbin/casdoor:3.80.0 can NEVER satisfy: the
+        Organization struct carries only MfaItems + MfaRememberInHours (object/
+        organization.go), there is no EnableMfa field, and the live casdoor-pg
+        `organization` table has no enable_mfa column — an unknown JSON key is
+        dropped by the Go decoder, update-organization answers {"status":"ok"} and
+        the read-back is false forever. The step therefore failed on every run that
+        got far enough to make the call, which no run ever did until the seed was
+        fixed and casdoor could boot. mfaItems IS the capability list on this
+        version, so that is what is written and what is verified."""
         org_id = f"admin/{ORG}"
         org = probe(f"/api/get-organization?id={org_id}") or {}
         if not org:
             # ensure_seed() runs first and fails loudly when the organization cannot
             # be created, so reaching here means it vanished between the two calls.
             raise CasdoorError(f"organization {ORG} does not exist")
-        # Capability ON, NOT required (dark): mfaItems list MFA types that are AVAILABLE.
-        # `rule: "Optional"` => offered but not forced (enforcement flipped later).
-        org["enableMfa"] = True
-        org["mfaItems"] = [
-            {"name": "WebAuthn", "rule": "Optional"},
-            {"name": "TOTP",     "rule": "Optional"},
-        ]
+        org["mfaItems"] = MFA_ITEMS
         # WebAuthn relying-party + TOTP issuer scope the platform brand.
         org["mfaRememberInHours"] = 0
         org["websiteUrl"] = org.get("websiteUrl") or "https://hugmesh.systems"
         call(f"/api/update-organization?id={org_id}", org, "POST")
-        # Read the flag back: this is the one field the whole step exists to set.
-        if not (probe(f"/api/get-organization?id={org_id}") or {}).get("enableMfa"):
-            raise CasdoorError(f"update-organization reported success but enableMfa "
-                               f"is not set on {ORG}")
-        print(f"  org-mfa: enabled MFA capability (WebAuthn+TOTP available, NOT required) on {ORG}")
+        # Read the capability list back — this is the field the whole step exists to
+        # set, and an ok envelope is not evidence it persisted.
+        stored = (probe(f"/api/get-organization?id={org_id}") or {}).get("mfaItems") or []
+        want = {i["name"] for i in MFA_ITEMS}
+        got = {(i or {}).get("name") for i in stored}
+        if not want <= got:
+            raise CasdoorError(f"update-organization reported success but {ORG}'s "
+                               f"mfaItems came back as {sorted(got)} — the MFA types "
+                               f"{sorted(want - got)} are not available on the org")
+        print(f"  org-mfa: MFA capability available on {ORG} "
+              f"({', '.join(sorted(want))}, Optional — NOT required)")
 
     def write_provider(name, provider):
         """add-or-update a federation provider, verified by re-reading it."""
@@ -671,22 +745,52 @@ data:
             return
 
         user_id = f"{ORG}/{username}"
-        user = {
-            "owner": ORG, "name": username,
-            "displayName": "Platform Superadmin",
-            "type": "normal-user", "password": password,
-            "isAdmin": False, "isForbidden": False, "isDeleted": False,
-        }
         user_path = f"/api/get-user?id={user_id}"
-        if probe(user_path):
+        existing = probe(user_path)
+        if existing:
+            # RE-FETCH-THEN-MUTATE, never a payload built from scratch — the same
+            # discipline the group/user blocks below already use, and here it is not
+            # a nicety: casdoor gives every organization the DEFAULT account items
+            # (object/init_data.go:309-311 -> object/init.go:53), in which "ID" has
+            # ModifyRule "Immutable". A hand-built payload carries no "id", so
+            # CheckUpdateUser sees the user's real UUID changing to "" (object/
+            # user_util.go:553-559), CheckAccountItemModifyRule rejects it (object/
+            # organization.go:325-336) and update-user answers "The ID is
+            # immutable." — i.e. this leg could only ever succeed on the FIRST run
+            # against a given cluster, and ArgoCD re-runs this Job on every sync.
+            # The password is deliberately NOT sent HERE: casdoor masks it as "***"
+            # on read (object/user.go:678) and treats that value as "unchanged"
+            # (object/user.go:822/841), and /api/update-user cannot set a password
+            # at all (see reconcile_admin_password). apply_password() below does it
+            # through /api/set-password, which can — so a password rotated in Vault
+            # reaches an EXISTING superadmin, not only a freshly created one.
+            user = dict(existing)
+            user["displayName"] = "Platform Superadmin"
+            user["type"] = "normal-user"
+            user["isForbidden"] = False
+            user["isDeleted"] = False
             call(f"/api/update-user?id={user_id}", user, "POST")
             verb = "updated"
         else:
-            call("/api/add-user", user, "POST")
+            call("/api/add-user", {
+                "owner": ORG, "name": username,
+                "displayName": "Platform Superadmin",
+                "type": "normal-user", "password": password,
+                "isAdmin": False, "isForbidden": False, "isDeleted": False,
+            }, "POST")
             verb = "created"
         if not probe(user_path):
             raise CasdoorError(f"superadmin: {verb} user {username} but it is not readable")
         print(f"  superadmin: {verb} user {username} in org {ORG}")
+
+        # THE CREDENTIAL ITSELF, on both branches. On the create branch add-user
+        # already carried it, so this normally reports "already the provisioned
+        # value" — but it is run there too, because that is the only thing that
+        # PROVES what add-user stored. On the update branch it is the whole point:
+        # without it a password rotated in Vault never reached the IdP, the ESO
+        # Secret and the account silently diverged, and the operator's evidence
+        # that anything was wrong was a superadmin login that stopped working.
+        print(f"  superadmin: password {apply_password(ORG, username, password)}")
 
         # Assign ROLE_SUPERADMIN: GET current role, add the user, PUT back, then
         # re-read — the role is the authorization source, so an unpersisted write

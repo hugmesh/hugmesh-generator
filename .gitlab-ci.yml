@@ -1904,6 +1904,22 @@ lint:cassandra-cluster-wiring:
 # corrupted staged copy, and the write-honesty scenario against a copy regressed
 # to the exact bug it exists for, so a check that stopped biting is reported
 # rather than passed over.
+# It ALSO holds every init_data.json to casdoor's own import preconditions, which
+# is a different question from the wiring above and was learned the hard way: the
+# first boot that actually imported the systems seed died on
+#   panic: The organization: admin should have one application at least
+# because casdoor refuses to create a user in an organization that has no
+# application (object/user.go:1000-1007, panicked at init_data.go:368) and the
+# seed declared six service users, twenty-seven roles and no application — the
+# applications being created later, over the API, by the very Job that cannot run
+# until casdoor is up. Wiring the import up correctly is what exposed it, so the
+# gate now proves each seed can import ITSELF: organization viability, the owner
+# the application count actually filters on, InitFromFile()'s hardcoded kind
+# order, and the dangling role/permission members casdoor stores without a word.
+# The behavioural half additionally runs each init script TWICE against a stub
+# that enforces casdoor's immutable user ID, because a reconciler that rebuilds
+# an update payload from scratch passes on a fresh cluster and fails on every
+# ArgoCD re-sync afterwards — a single-run harness cannot see that class.
 # python:3-slim + PyYAML, same as lint:mfa-required-rules; the stub binds
 # 127.0.0.1 on an ephemeral port — no cluster, no docker, no network egress.
 lint:casdoor-init-honesty:

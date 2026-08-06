@@ -13,6 +13,17 @@ first real cluster:
     /api/update-group returns `{"status":"ok","data":"Affected"}` while not
     persisting group membership at all (LIVE-VERIFIED — see the note in
     manifests/casdoor/init-job.yaml).
+  * SERVER-SIDE STATE A PAYLOAD CANNOT INVENT. casdoor stamps a new user with a
+    UUID `id`, and every organization gets the default account items in which
+    "ID" has ModifyRule "Immutable" (object/init.go:53). /api/update-user with a
+    payload built from scratch therefore looks like a request to change that UUID
+    to "" and is REJECTED with "The ID is immutable." (object/user_util.go:
+    553-559 -> object/organization.go:325-336). The bite is that this only
+    happens on the SECOND and later runs — the first, against a user that does
+    not exist yet, takes the add path and succeeds — so a reconciler with this
+    bug looks perfect on a fresh cluster and fails on every ArgoCD re-sync
+    afterwards. `ok` mode reproduces it (LIVE-REPRODUCED: casdoor-init hit
+    exactly this on the kind cluster once the seed fix let it get that far).
 
 Modes (STUB_MODE), each a shape observed or reasoned about on the live cluster:
 
@@ -34,6 +45,15 @@ Modes (STUB_MODE), each a shape observed or reasoned about on the live cluster:
                 write still work, so the script gets all the way to its write.
   setpw-noop    like `ok`, except /api/set-password reports success without
                 changing the password.
+
+/api/set-password models casdoor's own refusal to re-set a password that already
+matches the stored one (object/check_password_complexity.go:104-124 ->
+controllers/user.go:629-633). That refusal is the ONLY read-back a password has —
+casdoor masks it as "***" on every read (object/user.go:678), which this stub does
+too — so a stub that accepted the identical write twice would let a reconciler
+"verify" a credential against nothing at all. A seeded user's "password" is the
+value the "cluster" already holds, which is how the rotation scenarios start from
+a superadmin carrying the PREVIOUS password.
 
 STUB_SEED optionally names a JSON file of {"<noun>:<owner>/<name>": {object}}
 loaded into the store before the first request, so a reconciler that only writes
@@ -75,8 +95,20 @@ _lock = threading.Lock()
 _password = os.environ.get("STUB_ADMIN_PASSWORD", "123")
 _sessions = set()
 _store = {}          # "<noun>:<owner>/<name>" -> object
+# The password of every user OTHER than the built-in admin, "<owner>/<name>" ->
+# value. Populated by add-user (casdoor hashes the body's password on create) and
+# by /api/set-password, so the two ways a credential can reach casdoor are both
+# modelled and a reconciler cannot tell them apart from the outside.
+_user_passwords = {}
 _counter = [0]
 _wrote = [False]     # has any write been attempted yet (readback-denied mode)
+
+# object/check_password_complexity.go:104-124 + controllers/user.go:629-633 —
+# casdoor REFUSES a set-password whose new value already hashes to the stored one.
+# That refusal is the only observable read-back a password has, so a stub that
+# accepted the identical write twice would let a reconciler "verify" a rotation
+# against nothing.
+SAME_AS_CURRENT = "The new password must be different from your current password"
 
 API_RE = re.compile(r"^/api/(get|add|update)-([a-z-]+)$")
 # Endpoints reachable without a session, exactly like casdoor's own public set.
@@ -192,17 +224,36 @@ class Handler(BaseHTTPRequestHandler):
         if MODE == "deny-writes":
             return self._error("Unauthorized operation")
         with _lock:
-            if form.get("userName") != ADMIN_USER:
-                return self._error("the user does not exist")
+            owner = form.get("userOwner") or ""
+            name = form.get("userName") or ""
+            new = form.get("newPassword") or ""
+            ident = f"{owner}/{name}"
+            # The built-in admin is the session credential and is kept separately;
+            # any other account must EXIST, exactly as controllers/user.go:520-531
+            # requires ("The user: %s doesn't exist").
+            is_admin_account = (name == ADMIN_USER and owner in ("built-in", ""))
+            if not is_admin_account and f"user:{ident}" not in _store:
+                return self._error(f"The user: {ident} doesn't exist")
+            current = _password if is_admin_account else _user_passwords.get(ident)
             old = form.get("oldPassword")
-            if old and old != _password:
+            # controllers/user.go:597-606: on the isAdmin branch the old password is
+            # checked only when one is supplied. Every request this stub sees is
+            # already an admin session (the authz gate above), so mirror that.
+            if old and old != current:
                 return self._error("old password is incorrect")
+            if current is not None and new == current:
+                return self._error(SAME_AS_CURRENT)
             if MODE in ("setpw-noop", "writes-vanish"):
                 return self._ok()          # reports success, changes nothing
-            globals()["_password"] = form.get("newPassword") or _password
-            # A real password change invalidates nothing here, but the caller is
-            # expected to re-login, so make the old cookies useless to be sure it does.
-            _sessions.clear()
+            if is_admin_account:
+                globals()["_password"] = new or _password
+                # A real password change invalidates nothing here, but the caller is
+                # expected to re-login, so make the old cookies useless to be sure
+                # it does. Only for the admin: casdoor invalidates the sessions of
+                # the user whose password changed, not the operator's.
+                _sessions.clear()
+            else:
+                _user_passwords[ident] = new
         return self._ok()
 
     def _crud(self, verb, noun, query, body):
@@ -229,7 +280,34 @@ class Handler(BaseHTTPRequestHandler):
         obj = body if isinstance(body, dict) else {}
         ident = (query.get("id") or [None])[0] or _ident(obj)
         with _lock:
-            _store[f"{noun}:{ident}"] = obj
+            key = f"{noun}:{ident}"
+            if noun == "user":
+                # casdoor stamps the id server-side; a caller cannot know it
+                # without reading the object back first.
+                if verb == "add":
+                    obj = dict(obj)
+                    _counter[0] += 1
+                    obj.setdefault("id", f"stub-uuid-{_counter[0]}")
+                    # AddUser hashes the body's password into the row
+                    # (object/user.go:1029-1031 UpdateUserPassword), so a create
+                    # DOES set the credential — which is why the shipped script's
+                    # proof on the create path must come out "already the
+                    # provisioned value" rather than "rotated".
+                    if obj.get("password"):
+                        _user_passwords[ident] = obj["password"]
+                else:
+                    stored_id = (_store.get(key) or {}).get("id")
+                    if stored_id and obj.get("id") != stored_id:
+                        # object/user_util.go:553-559 -> organization.go:325-336
+                        return self._error("The ID is immutable.")
+            # A password never survives a read: casdoor masks it as "***" on the
+            # way out (object/user.go:678). Storing the real value would let a
+            # script "verify" a credential by reading it back, which no real
+            # deployment can do — the mask is exactly why apply_password() has to
+            # prove itself through set-password's own refusal instead.
+            if noun == "user" and "password" in obj:
+                obj = dict(obj, password="***")
+            _store[key] = obj
         return self._ok("Affected")
 
 
@@ -239,6 +317,13 @@ def main():
             seeded = json.load(fh)
         if not isinstance(seeded, dict) or not seeded:
             sys.exit(f"casdoor_stub: STUB_SEED {SEED_FILE} is not a non-empty object")
+        # A seeded user's "password" is the credential the "cluster" already holds
+        # — the shape a rotation has to overwrite. It moves into _user_passwords
+        # and the stored row keeps only the mask, so nothing can be read back.
+        for key, obj in seeded.items():
+            if key.startswith("user:") and isinstance(obj, dict) and obj.get("password"):
+                _user_passwords[key.split(":", 1)[1]] = obj["password"]
+                seeded[key] = dict(obj, password="***")
         _store.update(seeded)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     if PORT_FILE:
