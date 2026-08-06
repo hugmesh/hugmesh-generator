@@ -59,7 +59,7 @@ files_type(hugmesh_vpn_runtime_t)
 ########################################
 allow hugmesh_vpn_runner_t self:capability { net_admin net_raw dac_override setuid setgid };  # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
 allow hugmesh_vpn_runner_t self:netlink_route_socket create_netlink_socket_perms;             # ip rule / ip route (rtnetlink)
-allow hugmesh_vpn_runner_t self:netlink_netfilter_socket create_netlink_socket_perms;         # nft (hugmesh-vpn-mark clear on down)
+allow hugmesh_vpn_runner_t self:netlink_netfilter_socket create_socket_perms;         # nft (hugmesh-vpn-mark clear on down)
 allow hugmesh_vpn_runner_t self:rawip_socket create_socket_perms;                              # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
 allow hugmesh_vpn_runner_t self:udp_socket create_socket_perms;                                # wireguard UDP
 allow hugmesh_vpn_runner_t self:tcp_socket create_stream_socket_perms;                         # openvpn / leak-check curl
@@ -121,7 +121,7 @@ auth_use_nsswitch(hugmesh_vpn_reconcile_t)
 allow hugmesh_vpn_reconcile_t self:tcp_socket create_stream_socket_perms;
 corenet_tcp_sendrecv_generic_node(hugmesh_vpn_reconcile_t)
 corenet_tcp_connect_all_ports(hugmesh_vpn_reconcile_t)                                          # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
-allow hugmesh_vpn_reconcile_t self:netlink_netfilter_socket create_netlink_socket_perms;        # nft (hugmesh-vpn-mark apply/clear); kubectl rides the tcp perms above
+allow hugmesh_vpn_reconcile_t self:netlink_netfilter_socket create_socket_perms;        # nft (hugmesh-vpn-mark apply/clear); kubectl rides the tcp perms above
 
 # Restart the runner after a verified flip (CERTAIN: `rc-service
 # hugmesh-egress-vpn restart` + `rc-update add`). Signal + run the init script.

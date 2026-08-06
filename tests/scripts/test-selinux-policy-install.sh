@@ -489,6 +489,58 @@ else
     done
 fi
 
+# D-real) compile EVERY shipped module against a REAL refpolicy header tree.
+# D-if (above) pins interface NAMES against a committed index. It cannot see a
+# second class of policy-language error: a PERMISSION that the class does not
+# define. 2026-08-06 shipped exactly that — `create_netlink_socket_perms` expands
+# to `{ create_socket_perms nlmsg_read nlmsg_write }`, and netlink_netfilter_socket
+# defines no nlmsg_* perms, so two allow rules in hugmesh_vpn.te aborted the policy
+# stage of a real mesh build. The class/permission map is compiled into base.pp,
+# not shipped as indexable text, so the honest oracle is checkmodule itself.
+#
+# Header trees are searched in this order; the FIRST usable one wins:
+#   $HUGMESH_SELINUX_HEADERS            explicit override (CI can point at anything)
+#   out/sessions/*/wl-*/sysroot/usr/share/selinux/*/include   a real build's sysroot
+#   /usr/share/selinux/*/include        the host, when sec-policy is installed
+# With none of them this leg SKIPS — loudly, with the reason and the remedy. A skip
+# is NOT a pass: it prints what went unchecked, so nobody reads green as proven.
+echo "-- D-real) every module compiles against a real refpolicy header tree --"
+_slx_find_headers() {
+    local h
+    if [ -n "${HUGMESH_SELINUX_HEADERS:-}" ]; then
+        [ -f "${HUGMESH_SELINUX_HEADERS}/Makefile" ] && { printf '%s' "${HUGMESH_SELINUX_HEADERS}"; return 0; }
+    fi
+    for h in "${GEN}"/out/sessions/*/wl-*/sysroot/usr/share/selinux/*/include \
+             /usr/share/selinux/*/include; do
+        [ -f "${h}/Makefile" ] && { printf '%s' "${h}"; return 0; }
+    done
+    return 1
+}
+if ! command -v checkmodule >/dev/null || ! command -v semodule_package >/dev/null || ! command -v m4 >/dev/null; then
+    echo "  SKIP D-real: policy toolchain absent (checkmodule/semodule_package/m4) — NOT a pass;"
+    echo "               ${SRC}/*.te were not compiled. Install sys-apps/checkpolicy + policycoreutils."
+elif ! HDR="$(_slx_find_headers)"; then
+    echo "  SKIP D-real: no refpolicy header tree found — NOT a pass; ${SRC}/*.te were not compiled."
+    echo "               Point HUGMESH_SELINUX_HEADERS at a <sysroot>/usr/share/selinux/<type>/include,"
+    echo "               or run this after any real build (its sysroot carries one)."
+else
+    _SLX_SHARE="$(dirname "${HDR}")"; _SLX_NAME="$(basename "${_SLX_SHARE}")"
+    echo "  using headers: ${HDR}"
+    for _te in "${SRC}"/*.te; do
+        _m="$(basename "${_te}" .te)"
+        _w="${TMP}/dreal/${_m}"; mkdir -p "${_w}"
+        cp "${_te}" "${_w}/"
+        [ -f "${SRC}/${_m}.fc" ] && cp "${SRC}/${_m}.fc" "${_w}/"
+        if make -s -C "${_w}" -f "${HDR}/Makefile" NAME="${_SLX_NAME}" \
+                SHAREDIR="$(dirname "${_SLX_SHARE}")" HEADERDIR="${HDR}" \
+                "${_m}.pp" >"${_w}/build.log" 2>&1; then
+            ok "${_m}: compiles against real refpolicy headers"
+        else
+            bad "${_m}: FAILS to compile against real refpolicy headers — $(grep -oE "(ERROR|error)[^\n]*" "${_w}/build.log" | head -1)"
+        fi
+    done
+fi
+
 # C15/C16: the REAL host toolchain, driven through the lib's own make invocation.
 echo "-- C-real) the genuine m4 -> checkmodule -> semodule_package recipe --"
 if command -v m4 >/dev/null && command -v checkmodule >/dev/null && command -v semodule_package >/dev/null; then
