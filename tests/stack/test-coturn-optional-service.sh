@@ -262,8 +262,31 @@ else
   echo "  SKIP overlay render assertions (no kustomize/kubectl)"
   grep -q 'hostNetwork: true' "${PUB_DIR}/deployment-hostnetwork.yaml" && ok "src: overlay hostNetwork patch present" || bad "src: overlay hostNetwork patch missing"
 fi
-grep -qE '^[[:space:]]*akkoma-proxy tuwunel-proxy coturn; do' "${PKI}" \
-  && ok "vault-pki: coturn issuing role in the per-app PKI loop" || bad "vault-pki: coturn role missing from the PKI loop"
+# The invariant is that an ISSUING ROLE NAMED coturn EXISTS, not that a
+# particular line of a particular loop is present. The previous form grepped for
+# the literal word-list of one loop, so it went green on a tree whose PKI
+# bootstrap did not parse at all (#527 re-introduced a dead loop; init-pki.sh was
+# invalid bash and created ZERO roles, and this assertion still passed). Assert
+# the role, and let the SAN-coverage gate own whether it can issue the names the
+# ExternalSecret asks for.
+if grep -qE '\$\{PKI\}/roles/coturn' "${PKI}"; then
+  ok "vault-pki: an issuing role named coturn is created"
+else
+  bad "vault-pki: no coturn issuing role — pki_int/issue/coturn would 404"
+fi
+# ...and the bootstrap must be RUNNABLE. A syntax error anywhere in init-pki.sh
+# means no roles at all, which every static grep above would happily miss.
+PKI_SH="$(mktemp)"
+python3 - "${PKI}" > "${PKI_SH}" <<'EXTRACT'
+import sys, yaml
+print(yaml.safe_load(open(sys.argv[1]))["data"]["init-pki.sh"])
+EXTRACT
+if bash -n "${PKI_SH}" 2>/dev/null; then
+  ok "vault-pki: init-pki.sh is valid bash (it would actually run)"
+else
+  bad "vault-pki: init-pki.sh does NOT parse — the init Job creates zero roles"
+fi
+rm -f "${PKI_SH}"
 
 # 6b') BEHAVIOURAL — the pod's OWN start script is what actually decides whether
 # external-ip is overridden and whether the turns: cert lines exist. Static YAML

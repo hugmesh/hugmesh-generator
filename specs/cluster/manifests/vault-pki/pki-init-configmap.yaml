@@ -161,24 +161,6 @@ data:
     #    covers the turn.<domain> CN; the generic "${app}" SANs cover the
     #    in-cluster names. The role existing unconditionally is harmless — a
     #    cert is only MINTED when the overlay's ESO generator is deployed.
-    for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
-               hugmesh-superadmin-gateway \
-               hugmesh-api hugmesh-admin-bff-api \
-               hugmesh-mod-bff-api hugmesh-user-bff-api \
-               hugmesh-forum-bff-api \
-               hugmesh-wiki-bff-api \
-               hugmesh-mesh-bff-api \
-               hugmesh-character-forge-bff-api \
-               hugmesh-federation-api \
-               route-access-db admin-bff-db mod-bff-db user-bff-db \
-               federation-db forum-bff-db wiki-bff-db mesh-bff-db \
-               character-forge-bff-db \
-               akkoma-proxy tuwunel-proxy coturn; do
-      echo "==> role ${PKI}/roles/${app}"
-      vault write "${PKI}/roles/${app}" \
-        allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
-        allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
-        allow_localhost=false server_flag=true client_flag=true \
     for entry in hugmesh-pki-gateway:hugmesh-pki-gateway.hugmesh-pki \
                  hugmesh-superadmin-gateway:hugmesh-superadmin-gateway.hugmesh-pki \
                  hugmesh-be-gateway:hugmesh-be-gateway.hugmesh-backend \
@@ -231,6 +213,26 @@ data:
     echo "==> role ${PKI}/roles/harbor"
     vault write "${PKI}/roles/harbor" \
       allowed_domains="harbor,harbor.hugmesh-pki,harbor.hugmesh-pki.svc.cluster.local,harbor-core,harbor-core.hugmesh-pki,harbor-core.hugmesh-pki.svc.cluster.local,registry.${DOMAIN}" \
+      allow_bare_domains=true allow_subdomains=false allow_glob_domains=false \
+      allow_any_name=false allow_localhost=false allow_ip_sans=false \
+      allow_wildcard_certificates=false enforce_hostnames=true \
+      server_flag=true client_flag=true \
+      key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
+      max_ttl=2160h ttl=720h
+
+    # coturn = the turns: (5349) SERVER cert for the PUBLIC TURN hostname
+    # (manifests/coturn-public/tls-externalsecret.yaml, the OPT-IN
+    # public-reachability overlay). Like harbor, this cannot fold into the
+    # entry loop: the loop derives its names from ONE <service>.<namespace>
+    # identity, and coturn's CN is the public turn.${DOMAIN} while its SANs are
+    # the in-cluster Service names — three names of two different kinds. Listed
+    # explicitly and exactly, rather than reached by re-widening the loop with
+    # allow_subdomains, which is the widening the entry loop exists to remove.
+    # The role existing unconditionally is harmless: a cert is only MINTED when
+    # the overlay's ESO generator is deployed.
+    echo "==> role ${PKI}/roles/coturn"
+    vault write "${PKI}/roles/coturn" \
+      allowed_domains="turn.${DOMAIN},coturn,coturn.hugmesh-backend,coturn.hugmesh-backend.svc.cluster.local" \
       allow_bare_domains=true allow_subdomains=false allow_glob_domains=false \
       allow_any_name=false allow_localhost=false allow_ip_sans=false \
       allow_wildcard_certificates=false enforce_hostnames=true \

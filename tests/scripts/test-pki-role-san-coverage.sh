@@ -178,7 +178,11 @@ assert s.count(old)==1, "loop allowed_domains anchor matched %d times, not 1" % 
 new = chr(36)+"{role},"+chr(36)+"{role}.svc.cluster.local,svc.cluster.local,"+chr(36)+"{DOMAIN}"
 s = s.replace(old, new, 1)
 flags = "allow_bare_domains=true allow_subdomains=false allow_glob_domains=false"
-assert s.count(flags)==2, "role flag anchor matched %d times, not 2" % s.count(flags)
+assert s.count(flags)==3, "role flag anchor matched %d times, not 3" % s.count(flags)
+# 3 = the entry loop + the two identities that genuinely cannot fold into it
+# (harbor: 3 names of 2 kinds; coturn: public turn.<domain> CN + in-cluster SANs).
+# This count is a tripwire that the file still has the shape the injection
+# assumes — bump it deliberately when a role is added, never to silence it.
 s = s.replace(flags, "allow_bare_domains=true allow_subdomains=true allow_glob_domains=true", 1)
 open(p,"w",encoding="utf-8").write(s)
 PY
@@ -197,7 +201,11 @@ old = chr(36)+"{svc},"+chr(36)+"{svc_ns},"+chr(36)+"{svc_ns}.svc.cluster.local"
 assert s.count(old)==1, "loop allowed_domains anchor matched %d times, not 1" % s.count(old)
 s = s.replace(old, old+",svc.cluster.local", 1)
 flags = "allow_bare_domains=true allow_subdomains=false allow_glob_domains=false"
-assert s.count(flags)==2, "role flag anchor matched %d times, not 2" % s.count(flags)
+assert s.count(flags)==3, "role flag anchor matched %d times, not 3" % s.count(flags)
+# 3 = the entry loop + the two identities that genuinely cannot fold into it
+# (harbor: 3 names of 2 kinds; coturn: public turn.<domain> CN + in-cluster SANs).
+# This count is a tripwire that the file still has the shape the injection
+# assumes — bump it deliberately when a role is added, never to silence it.
 s = s.replace(flags, "allow_bare_domains=true allow_subdomains=true allow_glob_domains=false", 1)
 open(p,"w",encoding="utf-8").write(s)
 PY
