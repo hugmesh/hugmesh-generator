@@ -295,6 +295,34 @@ spec:
           - id: hugmesh-user-bff-api-login
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/login
+          # REGISTRATION STAGE 2 LIVES ON admin-bff, NOT user-bff. AuthController
+          # (admin-bff) owns POST /bff/register/complete — "Registration stage 2:
+          # complete; releases service entitlement" — which calls store.markComplete
+          # and is what the login-ui's "Complete registration" button drives. user-bff
+          # has NO such endpoint (its SsoAuthController serves /bff/register only), so
+          # with the /bff/register/** catch-all below owning the whole subtree the
+          # stage-2 POST was routed to a service that does not implement it and
+          # answered 404. Verified live on kind 2026-08-06 through the real gateway:
+          #   POST /bff/login            -> 200, session roles ["user","fleet_admin"]
+          #   POST /bff/register/complete -> 404 Not Found
+          #   GET  /bff/session           -> registrationComplete STILL false
+          # i.e. NO account could ever finish onboarding on a cluster, and every
+          # authority the gateway grants stays at the bare ROLE_USER floor
+          # (BffSessionAuthFilter.buildAuthorities gates on registrationComplete).
+          # COMPOSE GETS THIS RIGHT AND THE CLUSTER DID NOT, the recurring shape of
+          # docs/KIND-SSO-E2E-FINDINGS.md: tests/stack/gateway-routes/fe/application-routes.yml
+          # lists the EXACT path (`Path=/bff/login,/bff/register,/bff/session,…`), so
+          # /bff/register/complete never matches there and falls through to the /bff/**
+          # admin-bff catch-all correctly. The cluster table used a `/**` SUBTREE for
+          # the same route and swallowed it.
+          # An explicit route for the one admin-bff endpoint is preferred over narrowing
+          # this one to the exact path: it stays correct if user-bff ever adds a
+          # /bff/register/<x> of its own.
+          # MORE SPECIFIC FIRST — Spring Cloud Gateway matches in declared order, the
+          # same reason /bff/mod/**, /bff/user/** and /bff/login sit above /bff/**.
+          - id: hugmesh-admin-bff-api-register-complete
+            uri: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/register/complete
           - id: hugmesh-user-bff-api-register
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/register/**

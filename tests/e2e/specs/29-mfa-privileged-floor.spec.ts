@@ -37,6 +37,31 @@ import { totpCode, totpCodeForStep } from './totp';
 // MFA_FLOOR env gate, mirroring spec 14's LIVE_GATEWAY gate.
 
 const FLOOR = process.env.MFA_FLOOR === '1';
+
+/**
+ * Whether the stack under test has the gateway's MFA enforcement leg ON.
+ *
+ * DEFAULT TRUE, on purpose. compose sets APP_MFA_ENABLED=true so the leg is
+ * exercisable end to end, and that is the posture this describe-block was written
+ * against — so an unset variable RUNS the tests and fails loudly. Defaulting the
+ * other way would let a forgotten export silently skip the only e2e coverage the
+ * per-row gate has, which is the "guard that never guards" failure this repo keeps
+ * shipping.
+ *
+ * The cluster deliberately ships it OFF and that is NOT a defect to fix here:
+ * tests/stack/compose.local.yaml documents the asymmetry — "enabling the floor
+ * before operators have enrolled a second factor locks them out of the privileged
+ * plane. Turning the cluster on is therefore an operator action with ONE
+ * precondition" — and tests/stack/test-gateway-mfa-env.sh pins it in BOTH
+ * directions, so flipping the manifest to make this spec green would break that
+ * gate and create a real lockout risk.
+ *
+ * Confirmed live on kind 2026-08-06: with APP_MFA_ENABLED=false the gateway never
+ * consults the mfa_required rows, the request reaches admin-bff, and its
+ * entitlement wall answers 403 with NO x-route-denied header — a deny from the
+ * wrong layer that looks like a pass of the wrong test.
+ */
+const MFA_ENFORCEMENT = process.env.APP_MFA_ENABLED !== 'false';
 const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
 
 // fe-gateway mfa_required surfaces (20-schema.sql, after its closing UPDATE):
@@ -86,8 +111,34 @@ async function loginAs(api: APIRequestContext, username: string): Promise<void> 
   expect(
     r.status(),
     `native login ${username} -> ${r.status()} — the persona must be seeded ` +
-      '(tests/stack/seed-e2e.sh EXTRA_SPECS) with the deterministic e2e password',
+      '(tests/e2e-extra-personas.sh, applied by BOTH lanes) with the deterministic e2e password',
   ).toBe(200);
+
+  // ONBOARD, don't assume someone else did. A seeded Casdoor persona logging in for
+  // the first time gets an account row with registration_complete=false: the flag is
+  // set by registration STAGE 2, the step the login-ui's "Complete registration"
+  // button drives, and nothing in the seed performs it. While it is false the gateway
+  // grants only the bare ROLE_USER floor (BffSessionAuthFilter.buildAuthorities), so
+  // every role assertion below would be vacuous and sessionOf() rightly refuses.
+  //
+  // This spec is API-only and never opens the registration UI, so it previously
+  // depended on some EARLIER spec in the suite having onboarded the same persona —
+  // an invisible ordering dependency that made it unrunnable standalone and against
+  // a fresh cluster. Doing stage 2 here explicitly (and asserting it took) makes the
+  // spec self-sufficient. It is the same call a real user's browser makes, not a
+  // back door: POST /bff/register/complete is admin-bff's public AuthController
+  // endpoint, reached through the gateway with the session cookie this context holds.
+  const session = await api.get('/bff/session', { headers: { accept: 'application/json' } });
+  expect(session.status(), `${username}: GET /bff/session after login`).toBe(200);
+  if (!(await session.json()).registrationComplete) {
+    const done = await api.post('/bff/register/complete', { data: { displayName: username } });
+    expect(
+      done.status(),
+      `${username}: POST /bff/register/complete -> ${done.status()}. A 404 here means the ` +
+        'gateway route table sends /bff/register/** to user-bff, which does not implement ' +
+        'stage 2 — admin-bff does (apps/20-gateway-fe.yaml declares the exact path first)',
+    ).toBe(200);
+  }
 }
 
 /** The non-secret session identity: `GET /bff/session` roles are LOWERCASED and
@@ -162,6 +213,19 @@ test.describe('TOTP generator: RFC 6238 Appendix B (stack-free)', () => {
 // ── the compose-DEFAULT per-row gate (enabled=true, floor off) — UNGATED ─────────
 
 test.describe('MFA per-row gate: the seeded mfa_required rows bite at the compose default', () => {
+  // Not a convenience skip: with enforcement off the gateway never consults the
+  // mfa_required rows at all, so a 403 here comes from admin-bff's entitlement wall
+  // instead — the right status from the wrong layer, which would "pass" a test about
+  // something else entirely. Skipping with the reason stated beats asserting a
+  // property the stack is deliberately configured not to have.
+  test.skip(
+    !MFA_ENFORCEMENT,
+    'APP_MFA_ENABLED=false on this stack — the gateway MFA leg is OFF by deliberate ' +
+      'design on clusters (enabling it before operators enrol a second factor locks ' +
+      'them out; see compose.local.yaml and tests/stack/test-gateway-mfa-env.sh). ' +
+      'These cases require the compose posture APP_MFA_ENABLED=true.',
+  );
+
   test('a pure ROLE_FLEET_ADMIN without a fresh stamp is DENIED /bff/admin/phone-fleet/**', async ({ baseURL }) => {
     const fleet = await apiContext(baseURL);
     await loginAs(fleet, 'e2e-fleet');
