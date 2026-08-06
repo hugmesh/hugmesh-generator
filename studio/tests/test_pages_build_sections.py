@@ -10,13 +10,26 @@ interleaved among five CHECKBOX siblings answering the SAME kind of question —
 get this artifact?" — plus a fourth such dropdown for Secure Boot (:308). The fix pins
 ONE idiom per kind:
 
-* on/off build toggles are CHECKBOXES — tri-state (the NetworkPage G34 idiom, square =
-  leave the builder default) where the builder has a --flag/--no-flag pair;
+* on/off build toggles are CHECKBOXES — TWO-STATE, always, with a definite default;
 * pick-one VALUE enumerations (backend / --env / installer front-end / --grow) stay
   DROPDOWNS;
 * actions (Packages… / Refresh preview / Build builder image now) stay PUSH BUTTONS.
 
-...and groups the page with _widgets.Collapsible sections (the NetworkPage pattern,
+ASK 13 (operator, verbatim, 2026-08): "cached iso, live iso, bundle, compress and resume
+should all be default on and should include the artifacts as they're the same thing side
+by side". The dropdowns had become tri-state CHECKBOXES in the first pass, whose
+part-checked square meant "leave the builder's own default"; that square is ask 1's
+complaint in the other direction and is gone. Every --flag/--no-flag box on this page is
+now two-state and defaults CHECKED, which is what the builder's own default already was
+(BUILD_IMG/LIVE_ISO/BUILD_TAR/SECURE_BOOT are all `true` — see the block above
+build._flag_check). What the file pins therefore INVERTED, and the inversion is the fix,
+not a slackening: the tests below now assert that no part-checked state survives and
+that "unchecked" reaches the argv as a definite --no-<flag>.
+
+"Image options" and "Artifacts" also stopped being two sections: an option and the
+artifact it yields are ONE row now (build.artifact_labels).
+
+...and the page is grouped with _widgets.Collapsible sections (the NetworkPage pattern,
 test_pages_network_sections.py is the model for this file). The same trap applies and
 is pinned again here: "collapsed" must never be confusable with the PLATFORM GATE that
 clears unsupported fields, and no reorganization may change the emitted argv.
@@ -118,22 +131,31 @@ def test_artifact_and_sb_toggles_are_all_checkboxes_no_dropdowns_left(wiz):
         assert isinstance(w, QtWidgets.QCheckBox), w
 
 
-def test_tri_state_pairs_keep_all_three_states(wiz):
-    """Do NOT collapse the flag-pairs to plain checkboxes: the combo they replaced
-    existed so the builder's own default could round-trip ('' emits neither --flag
-    nor --no-flag). The tri-state square is that emit-nothing state — a two-state
-    box would collapse it to an explicit on/off on first visit."""
+def test_flag_pairs_are_two_state_and_default_checked(wiz):
+    """THE INVERSE of the test this replaces (ask 13).
+
+    It used to require all THREE states, because the tri-square was how the builder's own
+    default round-tripped. Ask 13, verbatim: "cached iso, live iso, bundle, compress and
+    resume should all be default on" — so the square is gone here exactly as it went from
+    the NetworkPage service boxes, and the property it existed for is preserved a
+    different way: the builder default for every one of these flags IS on, so a checked
+    two-state box says it precisely.
+
+    Swept over EVERY checkbox on the page rather than a hand-listed four, so a control
+    added later cannot quietly arrive tri-state — that is how the page grew four of them."""
     build = advance_to(wiz, wizard_mod.BuildPage)
     for box in (build.build_img, build.live_iso, build.build_tar, build.secure_boot):
-        assert box.isTristate(), box.text()
-        # the default really is the square (= leave the builder default)
-        assert box.checkState() == Qt.CheckState.PartiallyChecked, box.text()
-        assert "3-state" in box.toolTip()
-    # ...and the single-flag toggles stay two-state — tri-stating a single positive
-    # flag would invent a "force off" state the builder has no flag for.
-    for box in (build.installer_iso, build.build_iso, build.sd_only,
-                build.skip_iso, build.image_only):
         assert not box.isTristate(), box.text()
+        assert box.checkState() == Qt.CheckState.Checked, box.text()
+        assert "two-state" in box.toolTip().lower(), box.text()
+    # ...and nothing anywhere else on the page kept a third state either.
+    for box in build.findChildren(QtWidgets.QCheckBox):
+        assert not box.isTristate(), box.text()
+        assert box.checkState() != Qt.CheckState.PartiallyChecked, box.text()
+    # ask 13's five, at their DEFINITE defaults: all five checked on arrival.
+    for box in (build.cached, build.live_iso, build.bundle_source, build.compress,
+                build.resume):
+        assert box.isChecked(), box.text()
 
 
 def test_value_enumerations_stay_dropdowns_and_actions_stay_buttons(wiz):
@@ -148,31 +170,44 @@ def test_value_enumerations_stay_dropdowns_and_actions_stay_buttons(wiz):
         assert isinstance(btn, QtWidgets.QPushButton), btn
 
 
-def test_tri_state_legend_is_visible_not_just_a_tooltip(wiz):
-    """The NetworkPage lesson, applied on arrival: the square's meaning must be on the
-    page in words — a hover tooltip alone produced the 'partially selected but it's
-    not clear why' report over there."""
+def test_the_tri_state_legend_went_with_the_third_state(wiz):
+    """The legend explained the square. Ask 1's whole point is that a screen needing a
+    paragraph to explain its own checkboxes has the wrong checkboxes, so removing the
+    square without removing its paragraph would have left the page contradicting itself.
+
+    Pinned as an ABSENCE plus a replacement: no legend attribute, no page text still
+    teaching the square, and every flag-pair box carrying the two-state explanation on
+    its own tooltip instead."""
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert build.tri_legend.isVisible()
-    text = build.tri_legend.text().lower()
-    assert "part-checked" in text or "partly" in text
-    assert "default" in text          # the square MEANS "leave the builder default"
-    assert "square" in text
+    assert not hasattr(build, "tri_legend")
+    for lab in build.findChildren(QtWidgets.QLabel):
+        low = lab.text().lower()
+        assert "part-checked" not in low and "3-state" not in low, lab.text()
+    for box in (build.build_img, build.live_iso, build.build_tar, build.secure_boot):
+        tip = box.toolTip().lower()
+        assert "--no-" in tip and "unchecked" in tip, box.text()
 
 
-def test_tri_checkbox_emission_is_byte_identical_to_the_old_dropdowns(wiz):
-    """The widget changed shape; the config domain must not have: square emits neither
-    flag, checked emits --flag, unchecked emits --no-flag — exactly what the combos'
-    ''/'on'/'off' currentData() produced."""
+def test_flag_pair_emission_is_definite_in_both_directions(wiz):
+    """The widget changed shape twice; what it EMITS must stay something the operator can
+    read off the box. Checked emits --flag, unchecked emits --no-flag, and there is no
+    longer any state that emits neither.
+
+    The arriving default now puts --img/--live-iso/--tar/--secure-boot on the argv where
+    it used to put nothing. That is the honesty change and NOT a build change: all four
+    builder defaults are already `true` (build-x86-host-stage4.sh:231/236/238/484), so the
+    added flags re-state what the builder would have done. Asserted here so the claim
+    lives next to the emission it is about."""
     build = advance_to(wiz, wizard_mod.BuildPage)
     build._preview()
     args = wiz.cfg.to_cli_args()
-    for flag in ("--img", "--no-img", "--live-iso", "--no-live-iso", "--tar",
-                 "--no-tar", "--secure-boot", "--no-secure-boot"):
-        assert flag not in args       # all squares -> the builder's own defaults
-    build.build_img.setCheckState(Qt.CheckState.Checked)
-    build.live_iso.setCheckState(Qt.CheckState.Unchecked)
-    build.secure_boot.setCheckState(Qt.CheckState.Unchecked)
+    for flag in ("--img", "--live-iso", "--tar", "--secure-boot"):
+        assert flag in args, f"{flag} missing — checked stopped meaning definitely on"
+    for flag in ("--no-img", "--no-live-iso", "--no-tar", "--no-secure-boot"):
+        assert flag not in args, flag
+    build.build_img.setChecked(True)
+    build.live_iso.setChecked(False)
+    build.secure_boot.setChecked(False)
     build._preview()
     args = wiz.cfg.to_cli_args()
     assert "--img" in args and "--live-iso" not in args
@@ -240,7 +275,11 @@ def test_default_expansion_keeps_the_review_surfaces_open(wiz):
     assert not build.plumbing_section.is_expanded()
     # the operator's entry points really are on screen
     assert build.backend.isVisible() and build.packages_btn.isVisible()
-    assert build.build_img.isVisible() and build.tri_legend.isVisible()
+    # ASK 13: the option and the artifact it yields are ONE row, so the artifact caption
+    # must be on screen beside its box — not in a section one scroll away.
+    assert build.build_img.isVisible()
+    assert build.artifact_labels["build_img"].isVisible()
+    assert ".img" in build.artifact_labels["build_img"].text()
 
 
 def test_a_non_default_plumbing_value_forces_the_section_open(wiz, monkeypatch):
@@ -368,12 +407,24 @@ def test_sections_live_inside_the_scroll_area(wiz):
     assert scroll.widgetResizable()
 
 
-def test_no_stray_tri_combo_helper_left(qapp):
-    """The _tri_combo factory is gone — a new call site cannot quietly reintroduce
-    the dropdown idiom the operator reported."""
+def test_no_stray_tri_helper_left_on_this_page(qapp):
+    """Neither retired factory may come back: _tri_combo (the dropdown idiom the operator
+    reported in 2026-07) nor _tri_check (the tri-state box ask 13 replaced). A new call
+    site cannot quietly reintroduce either, which is what kept happening — the second was
+    itself the fix for the first."""
     assert not hasattr(build_mod, "_tri_combo")
+    assert not hasattr(build_mod, "_tri_check")
+    assert not hasattr(build_mod, "_tri_value")
     # its replacement carries the whole contract this file pins
-    box = build_mod._tri_check("probe (--probe / --no-probe)")
-    assert box.isTristate()
-    assert box.checkState() == Qt.CheckState.PartiallyChecked
-    assert build_mod._tri_value(box) == ""
+    box = build_mod._flag_check("probe (--probe / --no-probe)")
+    assert not box.isTristate()
+    assert box.checkState() == Qt.CheckState.Checked
+    assert build_mod._flag_value(box) == "on"
+    box.setChecked(False)
+    assert build_mod._flag_value(box) == "off"       # never "" — ask 13
+    # the restore half: a config value still normalizes onto the box, including the
+    # '' a --config JSON or a headless caller may still legitimately carry.
+    build_mod._set_flag(box, "off")
+    assert not box.isChecked()
+    build_mod._set_flag(box, "")
+    assert box.isChecked(), "'' must read as checked — the builder default is ON"

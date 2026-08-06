@@ -329,12 +329,12 @@ def test_build_x86_artifact_matrix(wiz):
     # inapplicable artifact axes are now HIDDEN (setVisible False), not greyed
     for w in (build.build_iso, build.sd_only, build.image_only):
         assert not w.isVisible(), w
-    # tri-state flag-pairs are G34 tri-CHECKBOXES now (the build-page idiom fix:
-    # ☑=--flag, ☐=--no-flag, ■=leave the builder default); emission is unchanged.
-    build.build_img.setCheckState(Qt.CheckState.Unchecked)
-    build.live_iso.setCheckState(Qt.CheckState.Checked)
+    # flag-pairs are TWO-state checkboxes since ask 13 (☑=--flag, ☐=--no-flag; there is
+    # no "leave the builder default" square any more). Emission per state is unchanged.
+    build.build_img.setChecked(False)
+    build.live_iso.setChecked(True)
     build.installer_iso.setChecked(True)
-    build.build_tar.setCheckState(Qt.CheckState.Unchecked)
+    build.build_tar.setChecked(False)
     build.skip_iso.setChecked(True)
     build._preview()
     args = wiz.cfg.to_cli_args()
@@ -352,13 +352,67 @@ def test_buildpage_restores_jobs_from_config(wiz):
     assert wiz.cfg.jobs == 16                # round-trip: not clobbered back to the default
 
 
-def test_build_artifact_tristate_default_emits_nothing(wiz):
+def test_build_artifact_defaults_are_definite_not_unspecified(wiz):
+    """ASK 13 inverted this test, and the inversion IS the requirement.
+
+    It used to assert the arriving page emits NEITHER arm of every flag pair, because the
+    boxes started part-checked. The operator's complaint about that state ("unchecked
+    instead of half checked for default no", applied here in its positive form: "cached
+    iso, live iso, bundle, compress and resume should all be default on") removed it, so
+    the page now states its choices outright.
+
+    The distinction that matters is between a GUI change and a BUILD change, and it is
+    asserted separately below: the flag-pair arms added here re-state builder defaults
+    that were already `true`, whereas --cached / --compress / --resume are single flags
+    whose presence really does change the run. Both are ask 13; only the second changes
+    an artifact, and test_ask13_defaults_that_change_the_build_are_the_single_flags says
+    which is which."""
     build = advance_to(wiz, wizard_mod.BuildPage)
     build._preview()
     args = wiz.cfg.to_cli_args()
-    for flag in ("--img", "--no-img", "--live-iso", "--no-live-iso",
-                 "--installer-iso", "--tar", "--no-tar", "--skip-iso"):
-        assert flag not in args
+    for flag in ("--img", "--live-iso", "--tar"):
+        assert flag in args, f"{flag} missing — a definite default stopped being emitted"
+    for flag in ("--no-img", "--no-live-iso", "--no-tar", "--installer-iso",
+                 "--skip-iso"):
+        assert flag not in args, flag
+
+
+def test_ask13_defaults_that_change_the_build_are_the_single_flags(wiz):
+    """ASK 13's five, and the honest answer to "does turning it on change what a build
+    produces?" — the question the lane brief demands be answered out loud rather than
+    flipped quietly.
+
+    * live_iso     — NO. LIVE_ISO=true already (build-x86-host-stage4.sh:243); the box
+      now emits --live-iso explicitly where it emitted nothing, and the ISO is identical.
+    * bundle_source — NO CHANGE BY THIS LANE, which is a weaker and more accurate claim
+      than "the builder was already doing it": ImageConfig.bundle_source has defaulted
+      True since long before ask 13, so nothing moved. The BUILDER's own default is
+      BUNDLE_SOURCE="" resolved at x86:1495 to standalone?true:false, so on a node build
+      Studio has always overridden it. Pre-existing, and named rather than glossed.
+    * cached / compress / resume — YES. All three builder defaults are FALSE
+      (ISO_CACHED x86:403, COMPRESS_IMG x86:242/rpi5:186/jetson:165, RESUME x86:207/
+      rpi5:174/jetson:156) and each is a SINGLE positive flag, so flipping the ImageConfig
+      default is exactly what puts it on the argv: --cached embeds the binpkg cache into
+      the live ISO, --compress xz -9's every artifact, --resume reuses the previous
+      sysroot instead of wiping it. This test is the record of that, so a later reader
+      does not have to take the commit message's word for it."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    for box in (build.cached, build.live_iso, build.bundle_source, build.compress,
+                build.resume):
+        assert box.isChecked(), box.text()
+    build._preview()
+    args = wiz.cfg.to_cli_args()
+    for flag in ("--cached", "--compress", "--resume", "--live-iso"):
+        assert flag in args, flag
+    assert "--uncached" not in args and "--no-bundle-source" not in args
+    # and unticking each one is expressible — a definite default is not a locked one
+    build.cached.setChecked(False)
+    build.compress.setChecked(False)
+    build.resume.setChecked(False)
+    build._preview()
+    args = wiz.cfg.to_cli_args()
+    assert "--uncached" in args
+    assert "--compress" not in args and "--resume" not in args
 
 
 def test_build_rpi5_artifacts(wiz):

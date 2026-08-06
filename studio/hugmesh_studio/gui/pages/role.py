@@ -35,7 +35,7 @@ from ...core.config import (
     rpi_boards_for_role, x86_desktop_axis,
 )
 from ._widgets import _row, status_badge
-from .network import _tri_state, _tri_value
+from ._widgets import _tri_state, _tri_value
 
 # canonical machine order — x86 first (the default platform), matching today's
 # default-platform behaviour; ARM boards follow in a stable order.

@@ -255,7 +255,15 @@ SAMPLES = {
     "include_home_archive": [{"include_home_archive": "/tmp/home.tar"}],
     "seed_packages_from": [{"seed_packages_from": "/tmp/pkgs"}],
     "installer_ui": [{"installer_ui": "cli"}],
-    "cached": [{"cached": True}], "live_toram": [{"live_toram": False}],
+    # `cached` needs BOTH arms explicitly since ask 13 flipped its default to True
+    # (ImageConfig.cached). It is a --cached/--uncached PAIR like the tri-states below,
+    # but it used to get its off arm for free from the dataclass default: the baseline
+    # config emitted --uncached and the single {"cached": True} sample covered --cached.
+    # With the default on, nothing in the battery produced --uncached any more and the
+    # FORWARD check failed the x86 builder for a parsed-but-unfielded flag. Both arms are
+    # named now, so this cannot depend on which way the default happens to point.
+    "cached": [{"cached": True}, {"cached": False}],
+    "live_toram": [{"live_toram": False}],
     "bundle_source": [{"bundle_source": False}],
     "build_img": [{"build_img": "on"}, {"build_img": "off"}],
     "live_iso": [{"live_iso": "on"}, {"live_iso": "off"}],

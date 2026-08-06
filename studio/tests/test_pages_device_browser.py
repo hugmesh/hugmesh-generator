@@ -26,6 +26,12 @@ from hugmesh_studio.gui.qt import Qt, QtGui, QtWidgets  # noqa: E402
 
 from _helpers import advance_to, check_worklist_rows, pick_mode  # noqa: E402
 
+# ask 13 ("cached iso, live iso, bundle, compress and resume should all be default on")
+# put --compress/--resume on EVERY platform's argv: both are all-platform fields, so every
+# golden here gains the same two-token tail. Named rather than inlined so the next default
+# change is one edit. Mirrors tests/test_cli_args.ALL_TAIL.
+ALL_TAIL = ["--compress", "--resume"]
+
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
@@ -277,7 +283,8 @@ def test_emission_rpi3_cloud_desktop_golden_argv(wiz):
     advance_to(wiz, wizard_mod.HardwarePage)
     c = wiz.cfg
     assert (c.role, c.platform, c.board, c.flavor) == ("rpi5-desktop", "rpi5", "rpi3", "")
-    assert c.to_cli_args() == ["--role", "desktop", "--board", "rpi3", "--env", "test"]
+    assert c.to_cli_args() == ["--role", "desktop", "--board", "rpi3", "--env", "test",
+                               *ALL_TAIL]
 
 
 def test_emission_le_potato_cloud_flavor_both_golden_argv(wiz):
@@ -288,7 +295,7 @@ def test_emission_le_potato_cloud_flavor_both_golden_argv(wiz):
     assert (c.role, c.platform, c.board, c.flavor) == ("frite", "frite", "le-potato", "both")
     # --desktop light is the frite desktop knob's default — untouched by the browser
     assert c.to_cli_args() == ["--board", "le-potato", "--flavor", "both",
-                               "--desktop", "light", "--env", "test"]
+                               "--desktop", "light", "--env", "test", *ALL_TAIL]
 
 
 def test_emission_orange_pi_5_installer_golden_argv(wiz):
@@ -299,7 +306,7 @@ def test_emission_orange_pi_5_installer_golden_argv(wiz):
     assert (c.role, c.platform, c.board, c.flavor) == \
         ("orangepi5", "orangepi5", "orange-pi-5", "installer")
     assert c.to_cli_args() == \
-        ["--board", "orange-pi-5", "--flavor", "installer", "--env", "test"]
+        ["--board", "orange-pi-5", "--flavor", "installer", "--env", "test", *ALL_TAIL]
 
 
 def test_emission_orange_pi_zero2_live_golden_argv(wiz):
@@ -309,7 +316,7 @@ def test_emission_orange_pi_zero2_live_golden_argv(wiz):
     c = wiz.cfg
     assert (c.role, c.platform, c.board, c.flavor) == \
         ("orangepizero2", "orangepizero2", "", "live")
-    assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
+    assert c.to_cli_args() == ["--flavor", "live", "--env", "test", *ALL_TAIL]
 
 
 def test_emission_orange_pi_zero2w_live_golden_argv(wiz):
@@ -320,7 +327,7 @@ def test_emission_orange_pi_zero2w_live_golden_argv(wiz):
     c = wiz.cfg
     assert (c.role, c.platform, c.board, c.flavor) == \
         ("orangepizero2w", "orangepizero2w", "", "live")
-    assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
+    assert c.to_cli_args() == ["--flavor", "live", "--env", "test", *ALL_TAIL]
 
 
 def test_emission_orange_pi_zero3_live_golden_argv(wiz):
@@ -331,7 +338,7 @@ def test_emission_orange_pi_zero3_live_golden_argv(wiz):
     c = wiz.cfg
     assert (c.role, c.platform, c.board, c.flavor) == \
         ("orangepizero3", "orangepizero3", "", "live")
-    assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
+    assert c.to_cli_args() == ["--flavor", "live", "--env", "test", *ALL_TAIL]
 
 
 def test_emission_orange_pi_3_lts_live_golden_argv(wiz):
@@ -342,7 +349,7 @@ def test_emission_orange_pi_3_lts_live_golden_argv(wiz):
     c = wiz.cfg
     assert (c.role, c.platform, c.board, c.flavor) == \
         ("orangepi3-lts", "orangepi3-lts", "", "live")
-    assert c.to_cli_args() == ["--flavor", "live", "--env", "test"]
+    assert c.to_cli_args() == ["--flavor", "live", "--env", "test", *ALL_TAIL]
 
 
 def test_emission_experimental_rpi400_builds_as_rpi4(wiz):

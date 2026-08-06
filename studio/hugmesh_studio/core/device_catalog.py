@@ -187,6 +187,32 @@ def buildable(device_id: str, mode: str, role_id: str) -> bool:
     return selectable(device_id) and any(r == role_id for r, _l in roles_for(device_id, mode))
 
 
+def mesh_capable(device_id: str) -> bool:
+    """ASK 18, verbatim: "image/roles that cant be a mesh should be excluded from mesh
+    generation options". This is the predicate that says which those are.
+
+    True iff the device can carry AT LEAST ONE mesh role — i.e. iff it is selectable at
+    all AND ``roles_for(device_id, "mesh")`` is non-empty. Two disjoint populations answer
+    False and both were on the mesh screen:
+
+      * the 11 SINGLE-IMAGE devices — chromebook, the three La Frite boards, the seven
+        Orange Pi boards. They are supported and buildable, just never as a cluster node:
+        ROLE_CHOICES["mesh"] names no role on their builder platform, because their
+        builders bake no cluster GitOps tree at all;
+      * the 27 UNSUPPORTED devices (rpi2, opi6, bpi-f3, rock-5b, the legacy Jetsons, …),
+        which derive no roles in ANY mode (``builder_platform is None``).
+
+    Deliberately derived, never a hand-kept list: the authority stays ROLE_CHOICES +
+    role_allow + rpi_boards_for_role, so a device that GAINS a mesh role becomes
+    mesh-capable in the same commit that gives it one. A literal tuple here would be the
+    exact drift ``roles_for`` was written to prevent.
+
+    Qt-free and module-level on purpose — the gate belongs to the catalog, not to a
+    wizard page, so ``scripts/emit-image-catalog.py`` and any headless consumer get the
+    same answer WorklistPage does."""
+    return selectable(device_id) and bool(roles_for(device_id, "mesh"))
+
+
 def config_axes(device_id: str) -> dict[str, str]:
     """The exact cfg fields selecting this device writes: ``{"platform", "board"}``.
     ``board`` is "" for platforms with no --board flag (x86, orangepizero2,

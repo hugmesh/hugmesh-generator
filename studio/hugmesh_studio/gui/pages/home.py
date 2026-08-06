@@ -11,15 +11,17 @@ from dataclasses import MISSING
 from ..qt import QtWidgets
 from ._scroll import scrollable
 from ...core.config import (
-    HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, home_options_allowed, image_class,
+    HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, external_media_applies,
+    home_options_allowed, image_class, local_login_applies,
 )
 from ._gating import (
+    capability_allows_flow,
     clear_unsupported,
     gate_widgets,
     gate_widgets_role_class,
-    out_of_scope_note,
+    out_of_scope_note_flow,
     platform_supports,
-    scope_allows,
+    scope_allows_flow,
 )
 from ._widgets import _file_picker, _row
 
@@ -31,6 +33,26 @@ _MEDIA_DEFAULT = "(builder default: on)"
 _HOME_ROLE_CLASS_REASON = (
     "Home provisioning applies to desktops only — nodes are root-encrypted; homes "
     "are not separately provisioned or encrypted. Cleared when you leave the page.")
+
+# ASK 11, verbatim: "your login/standalone account doesnt belong on mesh builds, keep that
+# to the desktop mesh track". The group is hidden, not greyed, for the same reason the
+# home group is: a greyed control still advertises a decision, and there is no decision
+# here — a cluster node's console credentials are SystemPage's "Node fallback login (mesh
+# nodes)" group, which is a different pair of flags with a different lifetime.
+_LOCAL_LOGIN_REASON = (
+    "This is the DESKTOP login for a personal image — the account you sit down at. The "
+    "images in this build are cluster nodes, which log in over SSO and keep their "
+    "console/rescue credentials on the System step's \"Node fallback login\" group "
+    "instead. Not offered here so one concept is not asked twice.")
+
+# The Steam/Vaults media device: desktop-class for the same builder reason as the egress
+# VPN row (see core.config.external_media_applies) — a node would emerge the package set
+# for a session it does not have.
+_MEDIA_ROLE_CLASS_REASON = (
+    "An external Steam-library / Vaults data device belongs to a desktop image. On a "
+    "cluster node the builder still emerges the media-data package set "
+    "(packages-media-data.list) for a desktop session that never exists, so the wizard "
+    "does not offer it here. Cleared when you leave the page.")
 
 # Plain-language description of each home mode (the four values were opaque; each is a
 # different way the local user's home is provisioned into the built image). Keyed by the
@@ -125,6 +147,7 @@ class HomePage(QtWidgets.QWizardPage):
         # external media-data device (G32): Steam library + gocryptfs Vaults set —
         # x86 standalone surface; only --steam was fielded before.
         media = QtWidgets.QGroupBox("External media-data device (Steam library + gocryptfs Vaults)")
+        self.media_box = media          # gate target (ask 3): hidden on node-class flows
         ml = QtWidgets.QVBoxLayout(media)
         # tri-state like the proxy stack: leaving the builder default must round-trip,
         # so a plain checkbox (which collapses to explicit on/off) won't do.
@@ -298,7 +321,16 @@ class HomePage(QtWidgets.QWizardPage):
         # plus the every-visit re-gate that restores + collects the group again when a
         # desktop role is later selected. On desktop images the per-platform greying
         # above is left untouched.
-        home_allowed = home_options_allowed(c)
+        #
+        # ASK 3 ("options for standalone desktops shouldnt appear in the mesh wizard"):
+        # the predicate is asked of the FLOW, not of the shared mesh base. home_options_
+        # allowed reads image_class(cfg.mode, cfg.role), and WorklistPage stamps cfg.role
+        # from entries[0] — so a mesh worklist whose first checked row happened to be
+        # rpi5-desktop or jetson-desktop (both are in ROLE_CHOICES["mesh"]) turned home
+        # mode / device / backup / eCryptfs / seed back on for every node in it. Probe,
+        # before this landed: base role='pki' -> hidden, base role='rpi5-desktop' -> shown,
+        # SAME worklist. capability_allows_flow asks every row.
+        home_allowed = capability_allows_flow(home_options_allowed, c, self.wiz)
         if not home_allowed:
             gate_widgets_role_class(list(self._home_widgets), False,
                                     _HOME_ROLE_CLASS_REASON, hide=True)
@@ -320,9 +352,35 @@ class HomePage(QtWidgets.QWizardPage):
         # tree, yet the full desktop stack IS built — an image that can never join the mesh
         # it was built for, found out hours later at deploy. HIDE (not grey) it out of
         # scope, matching the home-group idiom above, so it cannot be set at all.
-        standalone_ok = scope_allows("standalone", c)
+        standalone_ok = scope_allows_flow("standalone", c, self.wiz)
         gate_widgets_role_class(self.standalone, standalone_ok,
-                                out_of_scope_note("standalone", c), hide=True)
+                                out_of_scope_note_flow("standalone", c, self.wiz), hide=True)
+        # ── ASK 11: the whole "Your login & standalone account" group ────────────────
+        # The standalone CHECKBOX above was already scoped. The GROUP around it never was:
+        # it is a bare QGroupBox added to the layout, nothing ever called setVisible on it,
+        # and its title says "standalone account" on every mesh node's screen. Inside it
+        # sit local_user (default "magus", emitted as --local-user on EVERY x86 build) and
+        # local_pass — which on a mesh flow rides the shared base that _materialize_one
+        # deepcopies onto every entry, i.e. a desktop password baked into every node image.
+        #
+        # Emission-neutral by construction, which is why this is a hide and not a
+        # narrowing of the FIELD: local_user stays at its dataclass default (so
+        # --local-user magus is emitted exactly as before — the x86 builder honours it on
+        # every role, :1597, and inventing a class rule there would repeat the mistake
+        # _STANDALONE_CLASS_GATED_PLATFORMS records), and local_pass is empty by default,
+        # so the only thing that stops reaching a node is a password the operator typed on
+        # a screen they should not have been shown.
+        login_ok = capability_allows_flow(local_login_applies, c, self.wiz)
+        gate_widgets_role_class(self.login, login_ok, _LOCAL_LOGIN_REASON, hide=True)
+        # ── ASK 3: the external media-data device (Steam library + gocryptfs Vaults) ──
+        # Had NO role-class gate at all — only the x86 platform one, which a mesh flow
+        # passes unconditionally because WorklistPage forces the base platform to "x86".
+        # So it was visible on every mesh node in BOTH probe runs, node-first and
+        # desktop-first alike. It is the most literally "standalone desktop" surface on
+        # the page: a Steam library.
+        media_ok = capability_allows_flow(external_media_applies, c, self.wiz)
+        gate_widgets_role_class(self.media_box, media_ok, _MEDIA_ROLE_CLASS_REASON,
+                                hide=True)
         # device-cannot-encrypt (spec 4): hide the --encrypt-root checkbox and show a
         # plain reason when the target platform has no FDE path (jetson). luks_pass is
         # _ALL_PLATFORMS and emits regardless, so it is NOT hidden/cleared here.
@@ -351,18 +409,33 @@ class HomePage(QtWidgets.QWizardPage):
         c.include_home_archive = self.include_archive.text().strip()
         c.home_seed_code_from = self.seed_code_from.text().strip()
         c.seed_packages_from = self.seed_packages.text().strip()
+        # Scope-gated collect for the media-data trio, mirroring the standalone line
+        # below: the HIDDEN widgets keep their values, so without this a Steam device
+        # picked while the flow was a desktop would ride a later switch to a node
+        # worklist. Fields reset to their dataclass defaults rather than to the widget
+        # state, so the gate is what decides the argv, not what happens to be on screen.
+        media_ok = capability_allows_flow(external_media_applies, c, self.wiz)
         md = self.media_data.currentText()
-        c.media_data = "" if md == _MEDIA_DEFAULT else md
-        c.media_label = self.media_label.text().strip()
-        c.no_vaults = self.no_vaults.isChecked()
+        c.media_data = ("" if md == _MEDIA_DEFAULT else md) if media_ok else ""
+        c.media_label = self.media_label.text().strip() if media_ok else ""
+        c.no_vaults = self.no_vaults.isChecked() and media_ok
         # Mirrors the encrypt_root line below: the collect itself carries the scope gate,
         # so a stale tick made on a standalone/cloud desktop can never survive a switch to
         # a mesh/node image (the hidden widget keeps its checked state; cfg is the source
         # of truth that initializePage re-reads). This is the emission-preserving half of
         # the hide above — on an in-scope image the value collects exactly as before.
-        c.standalone = self.standalone.isChecked() and scope_allows("standalone", c)
+        c.standalone = self.standalone.isChecked() and scope_allows_flow("standalone", c, self.wiz)
+        # ASK 11's emission half. `local_user` is collected UNCONDITIONALLY on purpose: the
+        # x86 builder honours --local-user on every role, the field defaults to "magus" and
+        # is emitted on every x86 build, so blanking it here would change the argv of every
+        # existing mesh flow — a gating fix must not do that. `local_pass` is the one that
+        # matters and the one that is gated: it is a SECRET_FIELD that would otherwise ride
+        # the shared mesh base onto every node image (_materialize_one deepcopies the base
+        # and clear_role_class_fields does not cover it), which is precisely the leak. On a
+        # flow where the group IS offered it collects exactly as before.
+        login_ok = capability_allows_flow(local_login_applies, c, self.wiz)
         c.local_user = self.local_user.text().strip() or c.local_user
-        c.local_pass = self.local_pass.text()
+        c.local_pass = self.local_pass.text() if login_ok else ""
         # encrypt_root only where the platform can do FDE (the checkbox is hidden on
         # jetson). Byte-identical: _ENC_PLATFORMS platforms are unchanged; jetson is
         # already excluded from encrypt_root emission (and to_cli_args RAISES on a
@@ -391,8 +464,10 @@ class HomePage(QtWidgets.QWizardPage):
                               "unlock_keyfile", "unlock_yubikey"))
         # role-class clear (spec 7, belt & braces mirroring materialize's
         # clear_role_class_fields I4): a node/mesh image carries no home provisioning,
-        # so reset HOME_DESKTOP_FIELDS to defaults regardless of platform.
-        if not home_options_allowed(c):
+        # so reset HOME_DESKTOP_FIELDS to defaults regardless of platform. FLOW-keyed to
+        # match the gate above — clearing on the base while the gate showed the group (or
+        # the reverse) is how a hidden field keeps a value, or a visible one loses it.
+        if not capability_allows_flow(home_options_allowed, c, self.wiz):
             for fld in HOME_DESKTOP_FIELDS:
                 f = ImageConfig.__dataclass_fields__[fld]
                 setattr(c, fld, f.default_factory() if f.default is MISSING else f.default)

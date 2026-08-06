@@ -162,6 +162,15 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.device_search.setClearButtonEnabled(True)
         trio_lay.addWidget(self.device_search, 1)
         lay.addWidget(trio_row)
+        # ASK 18's disclosure. Default UNCHECKED: the arriving screen shows the
+        # mesh-capable options and nothing else. Text (with the real count) is set after
+        # the rows are built — see the ask-18 block below.
+        self.show_non_mesh = QtWidgets.QCheckBox()
+        self.show_non_mesh.setToolTip(
+            "Devices with no cluster-node role: the single-image-only boards and the "
+            "unsupported tier. Listing them here explains why they are absent; they are "
+            "never checkable on this screen.")
+        lay.addWidget(self.show_non_mesh)
 
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setRootIsDecorated(True)
@@ -275,13 +284,35 @@ class WorklistPage(QtWidgets.QWizardPage):
             for platform in platforms:
                 self._build_row(role, platform)
 
-        # honest info rows (#351): every catalog device with NO mesh role — the
-        # single-image-only boards (frite/opi5/opz2, chromebook) and every UNSUPPORTED
-        # device with its reason. Visible, disabled, never checkable.
+        # ASK 18, verbatim: "image/roles that cant be a mesh should be excluded from mesh
+        # generation options."
+        #
+        # This screen carried 38 rows for devices that cannot be a mesh node — 11
+        # single-image-only boards (chromebook, the three La Frite boards, seven Orange
+        # Pis) and 27 unsupported devices — against 10 checkable role rows. They were
+        # added as honest visibility (#351: "the device exists, and here is exactly why it
+        # has nothing to build on the mesh path"), and #351 was right that DELETING them
+        # is a regression: silence is not honesty, and "why is my Orange Pi not here" is a
+        # real question this screen should answer.
+        #
+        # So they are EXCLUDED, not deleted: built once, hidden by default, and brought
+        # back by one explicitly-labelled checkbox that names how many there are. The
+        # default view is exactly the mesh-capable options and nothing else, which is the
+        # ask; the #351 guarantee is one click away and still uncheckable when shown.
+        #
+        # The gate is device_catalog.mesh_capable() — the catalog predicate, derived from
+        # ROLE_CHOICES + role_allow + rpi_boards_for_role — NOT a list of device ids kept
+        # here. A device that gains a mesh role appears on this screen in the same commit
+        # that gives it one, with no edit to this page.
+        self._info_items: list[QtWidgets.QTreeWidgetItem] = []
         for dev in self._catalog.devices:
-            if dev.status != "unsupported" and device_catalog.roles_for(dev.id, "mesh"):
+            if device_catalog.mesh_capable(dev.id):
                 continue   # covered by its platform's checkable role rows above
-            self._build_info_row(dev)
+            self._info_items.append(self._build_info_row(dev))
+        self.show_non_mesh.setText(
+            f"Also list the {len(self._info_items)} devices that cannot be mesh nodes "
+            "(read-only — they build single images on the other path)")
+        self.show_non_mesh.toggled.connect(self._apply_filter)
 
         # expand the buildable groups; collapse the info-only ones (visibility without
         # noise). A group is buildable iff any child carries an entry id.
@@ -294,6 +325,11 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.tree.itemChanged.connect(self._on_item_changed)
         self.arch_filter.currentIndexChanged.connect(self._apply_filter)
         self.device_search.textChanged.connect(self._apply_filter)
+        # Run the filter ONCE at construction so the excluded rows are already hidden on
+        # arrival. Without this the ask-18 exclusion would only take effect after the
+        # operator touched the arch filter or the search box — i.e. never, on the screen
+        # they complained about.
+        self._apply_filter()
 
     # ---- tree construction ---------------------------------------------------------
     def _family_group(self, family_id: str) -> QtWidgets.QTreeWidgetItem:
@@ -385,9 +421,13 @@ class WorklistPage(QtWidgets.QWizardPage):
         self._id_axes[rid] = (role, platform)
         self._sync_combo_enabled(rid)
 
-    def _build_info_row(self, dev) -> None:
+    def _build_info_row(self, dev) -> "QtWidgets.QTreeWidgetItem":
         """A disabled, uncheckable visibility row (#351): the device exists, and here
-        is exactly why it has nothing to build on the mesh path."""
+        is exactly why it has nothing to build on the mesh path.
+
+        Returns the item so the caller can register it in ``_info_items`` — ask 18 hides
+        these by default, and the filter needs to know which rows are the excluded ones
+        rather than re-deriving it per keystroke."""
         group = self._family_group(dev.family)
         item = QtWidgets.QTreeWidgetItem(group)
         item.setText(_COL_ROLE, dev.label)
@@ -405,16 +445,24 @@ class WorklistPage(QtWidgets.QWizardPage):
             item.setToolTip(col, reason)
         item.setFlags(Qt.ItemFlag.NoItemFlags)   # visible, never checkable/selectable
         self._item_arch[id(item)] = dev.arch
+        return item
 
     # ---- arch/search filtering (presentation only) ----------------------------------
     def _apply_filter(self, *_a) -> None:
         arch = self.arch_filter.currentData() or ""
         needle = self.device_search.text().strip().lower()
+        # ASK 18: the non-mesh-capable rows are excluded from the arriving view. Folded
+        # into the EXISTING filter rather than given a hide-pass of its own, because two
+        # independent writers of setHidden on the same items is how a row ends up visible
+        # after an arch filter clears — the search filter would have un-hidden every
+        # excluded row on the next keystroke.
+        excluded = set() if self.show_non_mesh.isChecked() else {id(i) for i in self._info_items}
         for fitem in self._family_items.values():
             any_visible = False
             for i in range(fitem.childCount()):
                 child = fitem.child(i)
-                show = not arch or self._item_arch.get(id(child), "") == arch
+                show = id(child) not in excluded
+                show = show and (not arch or self._item_arch.get(id(child), "") == arch)
                 if show and needle:
                     hay = " ".join(child.text(c) for c in
                                    (_COL_ROLE, _COL_PLATFORM, _COL_NOTES)).lower()

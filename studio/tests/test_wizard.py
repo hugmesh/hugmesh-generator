@@ -19,12 +19,14 @@ pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
-    ImageConfig, MODE_SKIPPED_PAGES, OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES,
+    BUILTIN_DEFAULT_SERVICES, ImageConfig, MODE_SKIPPED_PAGES,
+    OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES,
     UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, superadmin_plane_applies,
 )
 from hugmesh_studio.core.local_login_agent import load_manifest  # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo
 from hugmesh_studio.gui import wizard as wizard_mod
+from hugmesh_studio.gui.pages.network import _AI_GROUP
 from hugmesh_studio.gui.qt import Qt, QtWidgets
 
 from _helpers import check_worklist_rows  # noqa: E402
@@ -525,21 +527,26 @@ def test_buildpage_defaults_and_new_widget_emission(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
     # defaults mirror the config/builder defaults (standalone: bundle_source ON)
     assert build.img_size.value() == 0 and build.img_size.specialValueText()
-    assert not build.cached.isChecked()
+    # ask 13, verbatim: "cached iso, live iso, bundle, compress and resume should all be
+    # default on" — `cached` flipped with it (ImageConfig.cached = True).
+    assert build.cached.isChecked()
     assert build.live_toram.isChecked()
     assert build.bundle_source.isChecked() and build.bundle_source.isEnabled()
     assert not build.bundle_note.isVisible()
     # flip everything, refresh the preview, and check the emitted argv
     build.img_size.setValue(4096)
-    build.cached.setChecked(True)
+    build.cached.setChecked(False)
     build.live_toram.setChecked(False)
     build.bundle_source.setChecked(False)
     build._preview()
     c = wiz.cfg
-    assert (c.img_size, c.cached, c.live_toram, c.bundle_source) == (4096, True, False, False)
+    assert (c.img_size, c.cached, c.live_toram, c.bundle_source) == (4096, False, False, False)
     args = c.to_cli_args()
     assert ("--img-size", "4096") in zip(args, args[1:])
-    assert "--cached" in args and "--no-live-toram" in args and "--no-bundle-source" in args
+    # ask 13 inverted this half too: `cached` now DEFAULTS on, so the flip under test is
+    # to --uncached. Both arms are still emitted explicitly — the point of the two-state
+    # conversion is that the box never means "unspecified".
+    assert "--uncached" in args and "--no-live-toram" in args and "--no-bundle-source" in args
     assert "./build-x86-host-stage4.sh" in build.cmd.toPlainText()
 
 
@@ -597,11 +604,21 @@ def test_buildpage_role_detour_round_trips_bundle_source(wiz):
 
 def test_buildpage_iso_knobs_grey_out_off_x86(wiz):
     """The rpi5 generic server: cached/live-toram/bundle-source are x86 ISO knobs the
-    arm builders never parse — greyed out, and config.py emits none of them."""
+    arm builders never parse — absent from the page, and config.py emits none of them.
+
+    HIDDEN, not merely greyed, since ask 13 paired each option with the artifact it
+    produces: gate_widgets runs in hide=True mode there so an option whose artifact this
+    builder cannot produce takes its artifact caption off screen with it, rather than
+    leaving a greyed promise of a live.iso beside it. Emission is preserved by the same
+    two guards either way — clear_unsupported in validatePage, and the every-visit re-gate
+    that restores the row the moment the platform supports it again."""
     pick_role(wiz, "generic")
     build = advance_to(wiz, wizard_mod.BuildPage)
     for w in (build.cached, build.live_toram, build.bundle_source):
-        assert not w.isEnabled()
+        assert not w.isVisibleTo(build), w
+        # …and its artifact caption goes with it (no orphan caption)
+    for key in ("cached", "live_toram", "bundle_source"):
+        assert not build.artifact_labels[key].isVisibleTo(build), key
     assert build.img_size.isEnabled()      # --img-size IS an arm flag
     build.img_size.setValue(8192)
     build._preview()
@@ -631,10 +648,16 @@ def test_network_x86_only_widgets_grey_and_clear_on_arm_cloud(wiz):
     c.edge_ai_tts = True
     wiz.restart()
     net = advance_to(wiz, wizard_mod.NetworkPage)
+    # edge_ai_box is gone with ask 23's table — edge-AI's platform gate now names its
+    # widgets directly. tor/character-studio/edge-ai-tts/games are no longer in
+    # gate_widgets at all: their row is HIDDEN when unreachable (frite parses none of
+    # them), which is the stronger statement, so assert that instead of enabled-ness.
     for w in (net.sso, net.egress_row, net.egress_locked, net.proxy_stack,
-              net.snort, net.aide, net.edge_ai_box, net.tor_onion,
-              net.character_studio, net.edge_ai_tts, net.services_box, net.games):
+              net.snort, net.aide, net.edge_ai, net.edge_ai_runtime,
+              net.edge_ai_models, net.edge_ai_analysis, net.services_box):
         assert not w.isEnabled(), w
+    for slug in ("tor", "character-studio", "edge-ai-tts", "games"):
+        assert net._svc_items[slug].isHidden(), slug
     assert not net.sso.isChecked()      # cloud force-check suppressed off-x86
     assert net.tailscale.isEnabled()    # all-platform knobs stay live
     assert net.root_login.isEnabled()
@@ -666,9 +689,11 @@ def test_network_widgets_reenable_on_switch_back_to_x86(wiz):
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert net.sso.isEnabled() and net.sso.isChecked()
     for w in (net.egress_row, net.egress_locked, net.proxy_stack, net.snort,
-              net.aide, net.edge_ai_box, net.tor_onion, net.character_studio,
-              net.edge_ai_tts, net.services_box, net.games):
+              net.aide, net.edge_ai, net.edge_ai_runtime, net.tor_onion,
+              net.character_studio, net.edge_ai_tts, net.services_box, net.games):
         assert w.isEnabled(), w
+    for slug in ("tor", "character-studio", "edge-ai-tts", "games"):
+        assert not net._svc_items[slug].isHidden(), slug
 
 
 def test_standalone_rpi5_generic_reaches_services_and_games(wiz):
@@ -681,18 +706,26 @@ def test_standalone_rpi5_generic_reaches_services_and_games(wiz):
     assert net.services_box.isVisible() and net.services_box.isEnabled()
     assert net.games.isEnabled() and net.character_studio.isEnabled()
     assert net.edge_ai_tts.isEnabled()
-    # Node-only surfaces stay mode-gated. Assert the SECTION, not edge_ai_box: the box
-    # is the section's collapsible content, so its visibility also means "expanded" —
-    # asserting there would pass on a merely-collapsed section and stop pinning the gate.
-    assert not net.edge_ai_section.isVisible()
-    assert not net.tor_onion.isVisible()
-    net.services.item(0).setCheckState(Qt.CheckState.Checked)
+    # Node-only surfaces stay mode-gated. Assert the table's GROUP ROW hidden flag, not
+    # a widget's isVisible(): a widget inside a collapsed group would also report False,
+    # so asserting there would pass on a merely-folded group and stop pinning the gate.
+    assert net.group_items[_AI_GROUP].isHidden()
+    # tor on rpi5 rides the SLUG channel, which standalone 'generic' legitimately reaches
+    # (G16 — the one standalone role that DOES bake a cluster GitOps tree), so its row is
+    # present and live here. The mode gate applies to the x86 FLAG channel only.
+    assert not net._svc_items["tor"].isHidden() and net.tor_onion.isEnabled()
+    net.service_boxes[OPTIONAL_SERVICES_CHOICES[0]].setChecked(True)
     net.games.setChecked(True)
     net.character_studio.setChecked(True)
     net.edge_ai_tts.setChecked(True)
     advance_to(wiz, wizard_mod.HomePage)
     args = wiz.cfg.to_cli_args()
-    assert ("--optional-services", OPTIONAL_SERVICES_CHOICES[0]) in zip(args, args[1:])
+    # The builders' default set arrives ticked (it is what an untouched build ships), so
+    # the emitted list is those three plus whatever else is ticked — asserting the value
+    # equalled ONE slug would be asserting that ticking a row silently drops the rest.
+    value = dict(zip(args, args[1:]))["--optional-services"]
+    assert OPTIONAL_SERVICES_CHOICES[0] in value.split(), value
+    assert set(BUILTIN_DEFAULT_SERVICES) <= set(value.split()), value
     assert "--enable-games" in args and "--with-character-studio" in args
     assert "--with-edge-ai-tts" in args
 

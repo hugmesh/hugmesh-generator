@@ -1,8 +1,17 @@
 """NetworkPage — the domain/mesh/services step, as COLLAPSIBLE sections (identity &
 domain, tailnet/SSO, the mesh control plane incl. the orchestration superdomain,
-egress VPN, the security stack, edge-AI, and the optional cluster services — Tor,
-Character Studio, edge-ai-tts and the slug checklist with its explicit-none /
-all-services sentinels and subtractive exclude list).
+egress VPN, the security stack, edge-AI, and the cluster SERVICES list).
+
+The services surface was rebuilt for the operator's asks 1-5 and then again for ask 23
+(2026-08). What it is now: ONE TABLE (``services_table``, a QTreeWidget) carrying every
+service AND app the image can run — the --optional-services catalogue, the dedicated-flag
+services, edge-AI with its sub-options, and the managed backing services — with the OPTIONS
+as columns (On / Hosting-mode / Setting / What enabling it does) and the groups as
+expandable rows. What it stopped being: four loose 3-state checkboxes, a scrolling slug
+list, a free-text subtractive line edit and TWO further page sections of its own, with
+`character-forge` on screen twice. There is no part-checked state anywhere on this page any
+more; see the _OFF_TIP block below for what "definitely off" emits per flag and why that is
+honest rather than theatre. See the ASK 23 block in __init__ for the table's design.
 
 The tailnet/SSO group is user-editable ONLY for cloud branded desktops
 (``tailnet_sso_visible``, spec 3): standalone and mesh hide it (mesh forces
@@ -25,20 +34,30 @@ from __future__ import annotations
 
 from dataclasses import MISSING
 
-from ..qt import Qt, QtWidgets
+# NOT `from ..qt import Qt, QtWidgets` any more, and the missing name is the point: this
+# module used to be where the wizard's 3-state checkbox idiom lived (it owned _tri_state /
+# _tri_value, which RolePage imported from here). Asks 1 and 4 removed the last
+# part-checked box on the page, so nothing here touches Qt.CheckState at all — the helpers
+# moved to _widgets.py for their one remaining consumer. Importing Qt "just in case" would
+# leave the next reader a working import for the very idiom this page is now defined by
+# not having.
+from ..qt import QtWidgets
 from ._scroll import scrollable
 from ...core.config import (
+    BUILTIN_DEFAULT_SERVICES,
     ImageConfig,
     MANAGED_SERVICE_TIER3_BLOCKER,
     MANAGED_SERVICE_TIER3_IDS,
     MANAGED_SERVICE_TIER12_IDS,
     OPTIONAL_SERVICES_BY_PLATFORM,
-    OPTIONAL_SERVICES_CHOICES,
     RELEASE_STATE_CHOICES,
     RPI5_ROLE_MAP,
+    SERVICE_DESCRIPTIONS,
+    SERVICE_GROUPS,
     SERVICES_ALL,
     SERVICES_NONE,
     UNAFFILIATED_ROLE,
+    USER_LEVEL_SERVICES,
     X86_NODE_ROLES,
     tailnet_sso_visible,
 )
@@ -46,31 +65,50 @@ from ._gating import (
     clear_unsupported,
     gate_widgets,
     gate_widgets_role_class,
-    out_of_scope_note,
+    out_of_scope_note_flow,
     platform_supports,
     scope_allows,
+    scope_allows_flow,
 )
 from ._widgets import _file_picker, _row, collapsible
 
-# The three-state checkboxes (G34): a plain checkbox could only ever emit the
-# positive flag, so a brand-profile (-C) default could never be forced OFF from
-# the GUI. State map — Checked = --with-* / Unchecked = --no-* / PartiallyChecked
-# (the square) = emit neither and leave the brand.conf/builder default.
-_TRI_TIP = ("3-state: checked = force ON (--with-…), unchecked = force OFF (--no-…), "
-            "part-checked square = leave the brand-profile/builder default.")
-
-# The same explanation as _TRI_TIP, but VISIBLE. The tri-state was reported as
-# "options like tor, character studio and edge ai are partially selected but it's not
-# clear why" — the meaning existed only as a hover tooltip, which nobody hovers when
-# they do not already know there is something to learn. The square is the DEFAULT
-# state for these boxes, so the first thing the operator sees needs to explain itself
-# on the page. Same styled-QLabel idiom as services_role_note / _hint().
-_TRI_LEGEND = (
-    "These are 3-state boxes: ■ part-checked (the default) leaves the brand "
-    "profile's / builder's own choice alone · ☑ checked forces the service ON · "
-    "☐ unchecked forces it OFF. The square is why some boxes start part-selected — "
-    "it means \"don't override\", not \"partly enabled\"."
-)
+# ── DEFINITE OFF: why there is no tri-state left on this page ────────────────────────
+# Operator, verbatim (asks 1 + 4): "gui studio should leave optional services and edge ai
+# unchecked instead of half checked for default no" / "tor onion services are optional and
+# off and unchecked by default".
+#
+# The boxes used to be 3-state, where the part-checked SQUARE meant "emit neither flag,
+# leave the brand-profile/builder default alone" and was the INITIAL state. That state is
+# gone. Every service box here is an ordinary two-state checkbox with a DEFINITE default,
+# and unchecked means OFF — not "unspecified".
+#
+# WHAT "DEFINITELY OFF" EMITS, per flag — derived once, here, so the next reader does not
+# have to re-derive it from the builders:
+#
+#   box unchecked  ->  the config's "off" value  ->  --no-tor / --no-character-studio /
+#                      --no-character-forge / --no-edge-ai-tts / --no-edge-ai / --no-aide
+#
+# and that is the right call even though four of those six are no-ops in the common case:
+#
+#   * build-x86-host-stage4.sh acts ONLY on the `true` arm for tor (:1108),
+#     character-studio (:1119), character-forge (:1136) and edge-ai-tts (:1173) — there is
+#     no `= false` arm at all — and the builder's own default set (:134,
+#     OPTIONAL_SERVICES="akkoma tuwunel phpbb") contains none of them. So with no brand
+#     profile in play, --no-tor changes nothing;
+#   * BUT brand.conf is sourced at :841, BEFORE the arg loop at :887. A brand profile that
+#     sets WANT_TOR=true IS overridden by --no-tor. Emitting nothing there would leave the
+#     service ON while this page showed an unchecked box — the checkbox would be lying,
+#     which is precisely the ambiguity the operator asked us to remove. So we emit the
+#     strongest "off" the flag can express and the box's claim stays true.
+#   * --no-aide (:454 WANT_AIDE=false, consumed as a plain bool at :4245/:4574) and
+#     --no-edge-ai (:1082, the only way to suppress the edge_ai ROLE's auto-selection) are
+#     REAL subtraction, so for those two "definitely off" is load-bearing on every build.
+#
+# The one thing --no-* cannot do is remove a slug a brand.conf put directly into
+# OPTIONAL_SERVICES; only EXCLUDE_SERVICES (applied last, :1181-1199) does that. The
+# services checklist covers that case instead — see _SERVICES_OVERRIDE_NOTE.
+_OFF_TIP = ("Two-state: checked = ON for this build (--with-…), unchecked = OFF "
+            "(--no-…, which also overrides a brand profile that switched it on).")
 
 # Services are MESH-WIDE, not per-node — stated on the page because the operator
 # reasonably asked whether they were selectable per node (as the worklist's per-node
@@ -102,6 +140,29 @@ _SERVICES_NODE_SCOPE_CAVEAT = (
     "Note: tor and egress-vpn are node-scoped services in the platform registry, but "
     "Studio applies them mesh-wide today (every cluster node gets the same setting)."
 )
+
+# Why "tick anything and the default set is gone" is the honest headline, and why ask 2
+# ("remove the exclude services field, it makes no sense") is safe to satisfy in the GUI.
+# The builders resolve this precedence themselves — build-x86-host-stage4.sh:130-134 and
+# build-rpi5-stage4.sh:214-218, both verbatim "built-in < brand.conf < flag":
+#
+#     OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+#
+# i.e. --optional-services does not ADD to the built-in default, it REPLACES it. So an
+# explicit tick-list is already a complete subtraction: to build "forum-less" you tick
+# akkoma and tuwunel and leave phpbb alone. That is what --exclude-services was for from
+# this screen, and it is why a free-text slug field sitting next to a checklist that
+# already expresses the same thing "makes no sense". The flag itself is untouched and
+# still reachable from a brand profile (-C) or extra flags — it is the only knob that can
+# subtract from a brand.conf-injected OPTIONAL_SERVICES, so removing the FIELD would have
+# left the platform with no subtraction at all.
+_SERVICES_OVERRIDE_NOTE = (
+    "What is ticked is what gets built. {default} arrive ticked because they are the "
+    "builders' own default set — untick one and it is genuinely not built, because this "
+    "list REPLACES the default outright rather than adding to it (built-in &lt; brand "
+    "profile &lt; this list). That is also why there is no separate \"exclude\" field: "
+    "ticking the ones you want IS the subtraction."
+).format(default=", ".join(BUILTIN_DEFAULT_SERVICES))
 
 # Managed backing services (I8/M2). Honest inline note: 'managed' points ONE in-mesh
 # datastore/infra at a hosted cloud endpoint INSTEAD of running it in-cluster. Self-hosted
@@ -168,42 +229,119 @@ def _field_default(name: str):
     return f.default_factory() if f.default is MISSING else f.default
 
 
-def _tri_state(value):
-    """config tri-state value ('', 'on', 'off', or a back-compat bool) -> CheckState."""
-    if value is True or value == "on":
-        return Qt.CheckState.Checked
-    if value == "off":
-        return Qt.CheckState.Unchecked
-    return Qt.CheckState.PartiallyChecked
+def _on_off(value) -> bool:
+    """A service field's config value -> is the box CHECKED?
+
+    The config domain is unchanged (True/'on' | 'off' | ''/False), because the '' value is
+    still what a loaded JSON, a --config channel or a headless caller may carry and
+    to_cli_args still honours all three. What changed is how the GUI READS it: '' (and the
+    False dataclass default) now shows as UNCHECKED, because on every one of these flags
+    the builder's own unset behaviour IS off — the default OPTIONAL_SERVICES set
+    (build-x86-host-stage4.sh:134) contains none of them, WANT_AIDE defaults false (:454)
+    and EDGE_AI is set true only by the edge_ai role (:1243). So "unspecified" and "off"
+    were always the same picture; the square only ever advertised a distinction the
+    operator could not act on."""
+    return value is True or value == "on"
 
 
-def _tri_value(box):
-    """CheckState -> config tri-state value (True / 'off' / False-as-default)."""
-    s = box.checkState()
-    if s == Qt.CheckState.Checked:
-        return True
-    if s == Qt.CheckState.Unchecked:
-        return "off"
-    return False
+def _off_value(box):
+    """Checked box -> True ('on'); unchecked box -> 'off' (DEFINITELY off).
+
+    Never returns '' — the wizard no longer has a way to say "leave it unspecified",
+    which is the whole of asks 1 and 4. See the _OFF_TIP block at the top of this module
+    for what 'off' emits per flag and why that is the honest mapping rather than theatre."""
+    return True if box.isChecked() else "off"
+
+
+# Services that have their OWN builder flag as well as (or instead of) a catalogue slug.
+#   slug -> (ImageConfig field, does the field use the '' / True / 'off' tri-DOMAIN?)
+# The tri-DOMAIN note matters and is not cosmetic: `enable_games` is a plain bool, so
+# writing the string "off" into it would emit --enable-games (a non-empty string is
+# truthy). Recorded here rather than discovered again.
+_FLAG_SERVICE_FIELDS: dict[str, tuple[str, bool]] = {
+    "tor": ("tor_onion_service", True),
+    "character-studio": ("character_studio", True),
+    "character-forge": ("character_forge", True),
+    "edge-ai-tts": ("edge_ai_tts", True),
+    "games": ("enable_games", False),
+}
+
+
+def _service_channel(slug: str, platform: str, catalog: tuple) -> str:
+    """Which builder channel this platform reaches ``slug`` through: ``"flag"``,
+    ``"slug"`` or ``""`` (unreachable — the row is hidden and nothing is emitted).
+
+    The dedicated flag wins wherever the builder parses it, because that is what the
+    wizard emitted before this redo and keeping it keeps every golden argv intact; the
+    catalogue slug is the fallback that makes `tor` reachable on rpi5, whose builder has
+    no --with-tor at all. A service reachable BOTH ways emits exactly one of them."""
+    fld = _FLAG_SERVICE_FIELDS.get(slug)
+    if fld is not None and platform_supports(fld[0], platform):
+        return "flag"
+    if slug in catalog:
+        return "slug"
+    return ""
+
+
+# ── the services TABLE's column grid (ask 23) ────────────────────────────────────────
+# "columns as options": the four option columns are the four kinds of answer a service row
+# can carry. Index constants rather than literals so inserting a column is one edit, and so
+# a test can name the column it reads instead of asserting on a magic number.
+#   NAME    — the slug the builders parse (see _svc_row for why it is not prettified)
+#   ON      — the two-state checkbox: the whole of asks 1 and 4
+#   MODE    — the row's dropdown, where the question has NAMED values rather than on/off
+#             (edge-AI runtime; a backing service's self-hosted/managed hosting)
+#   SETTING — the row's free field (preload models, default model, hosted endpoint)
+#   DESC    — one line saying what ENABLING this row does (ask 5)
+_SVC_COL_NAME, _SVC_COL_ON, _SVC_COL_MODE, _SVC_COL_SETTING, _SVC_COL_DESC = range(5)
+_SVC_HEADERS = ("Service / app", "On", "Hosting / mode", "Setting",
+                "What enabling it does")
+
+# The two table groups that are NOT --optional-services catalogue slugs, and each of which
+# used to be a whole page section of its own. Named constants because initializePage hides
+# them on their own axes (edge-AI is a cloud/mesh cluster concern; so are the backing
+# services) and the tests address them by name.
+_AI_GROUP = "AI & inference"
+_BACKING_GROUP = "Backing services"
+
+# services_preset indices — the whole-set shortcuts (G13/G14). CUSTOM is the default and
+# means "read the table"; the other two REPLACE the table's slug rows entirely.
+_PRESET_CUSTOM, _PRESET_NONE, _PRESET_ALL = range(3)
+
+# Hosting dropdown for a backing service. Self-hosted is index 0 == the default, so a fresh
+# page emits no --managed-service at all and is byte-identical to before the table landed.
+_HOSTING_CHOICES = ("Self-hosted (in-cluster)", "Managed (hosted endpoint)")
+_HOSTING_SELF, _HOSTING_MANAGED = range(2)
 
 
 class NetworkPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        # Set by initializePage; read by validatePage to keep the UNAFFILIATED hide
+        # emission-neutral. Seeded here so a collect that somehow precedes a visit cannot
+        # AttributeError inside a Qt callback (which under PyQt6 is a qFatal, not a
+        # traceback).
+        self._services_hidden = False
+        self._service_offered: dict[str, bool] = {}
+        # The operator's own CUSTOM ticks while a whole-set preset is overriding them
+        # (None = we are in CUSTOM and nothing is being held). Seeded here for the same
+        # PyQt6 reason as the two above: _preset_changed is a slot.
+        self._custom_checked: dict[str, bool] | None = None
         # Title/subtitle are set path-aware in initializePage (a standalone desktop has
         # no mesh/tailnet, so this page IS its network-identity + egress + security step,
         # while cloud/mesh use it for the domain, superdomain and cluster services).
         self.setTitle("Network, identity & egress")
         lay = scrollable(self)
 
-        # The 3-state legend lives at PAGE level, not per section: tri-state boxes are
-        # spread across three sections (aide in Security, edge_ai in Edge-AI, tor /
-        # character-studio / edge-ai-tts in Services), so a per-section legend would be
-        # both repeated and invisible whenever that section is collapsed. One always-on
-        # line at the top explains the square wherever it turns up.
-        self.tri_legend = _hint(_TRI_LEGEND)
-        lay.addWidget(self.tri_legend)
+        # There is no tri-state legend any more, and its absence is the fix rather than an
+        # omission. The page used to open with a paragraph explaining what a part-checked
+        # square meant, because six boxes started in that state; the operator's report
+        # ("unchecked instead of half checked for default no") is that a screen needing a
+        # paragraph to explain its own checkboxes has the wrong checkboxes. Every box is
+        # two-state with a definite default now, so there is nothing left to explain — see
+        # the _OFF_TIP block at the top of this module for the per-flag emission mapping
+        # that replaced it.
 
         # ---- Group 1: brand identity & domain (visited in ALL modes) -------------
         # Each group is wrapped in a Collapsible (see _widgets.Collapsible) whose header
@@ -349,10 +487,15 @@ class NetworkPage(QtWidgets.QWizardPage):
         sl.addWidget(_row("Proxy stack — Squid (cache) + Privoxy (filter), "
                           "wired into Firefox (desktops)", self.proxy_stack))
         self.snort = QtWidgets.QCheckBox("Snort IDS (network intrusion detection)")
-        # AIDE is TRI-STATE (G34): a brand profile (-C) may default it ON, and the old
-        # two-state box could never force it back OFF (--no-aide).
+        # AIDE was the sixth tri-state on this page. It is two-state now like the rest —
+        # and unlike tor/character-*/edge-ai-tts its unchecked arm is REAL subtraction
+        # (WANT_AIDE is consumed as a plain bool at build-x86-host-stage4.sh:4245 and
+        # :4574), so "definitely off" here strips app-forensics/aide outright rather than
+        # merely declining to add it. Converted with them because the page cannot keep one
+        # lone square without keeping the legend that explains it, and the legend is what
+        # the operator was objecting to.
         self.aide = QtWidgets.QCheckBox("AIDE file-integrity IDS (DB baselined at first boot)")
-        self.aide.setTristate(True)
+        self.aide.setToolTip(_OFF_TIP)
         sl.addWidget(self.snort); sl.addWidget(self.aide)
         # Root SSH login — hardened DEFAULT is "no" (root locked; the non-root KEYS admin
         # is the entry point). Tri-state, matching --permit-root-login / the build-menu.
@@ -364,38 +507,55 @@ class NetworkPage(QtWidgets.QWizardPage):
         # default — initializePage re-expands it if anything is overridden or gated.
         self.security_section = collapsible("Security stack", sec, expanded=False)
         lay.addWidget(self.security_section)
-        # edge-AI inference (GPU cluster roles — cloud/mesh). Serves an OpenAI-compatible
-        # model API to the mesh; the model library (runtime/preload/default) is tunable.
-        self.edge_ai_box = QtWidgets.QGroupBox("")
-        el = QtWidgets.QVBoxLayout(self.edge_ai_box)
-        self.edge_ai = QtWidgets.QCheckBox(
-            "Serve an OpenAI-compatible model API on the GPU node (edge_ai role / be+gpu / omnibus)")
-        self.edge_ai.setTristate(True)   # G34: --with-edge-ai / --no-edge-ai / leave default
-        el.addWidget(self.edge_ai)
-        self.edge_ai_runtime = QtWidgets.QComboBox()
-        self.edge_ai_runtime.addItems(["ollama", "vllm"])
-        el.addWidget(_row("Runtime", self.edge_ai_runtime))
-        self.edge_ai_models = QtWidgets.QLineEdit()
-        self.edge_ai_models.setPlaceholderText("llama3.2:3b,nomic-embed-text  (empty = builder default)")
-        el.addWidget(_row("Preload models", self.edge_ai_models))
-        self.edge_ai_default = QtWidgets.QLineEdit()
-        self.edge_ai_default.setPlaceholderText("llama3.2:3b  (empty = builder default)")
-        el.addWidget(_row("Default model", self.edge_ai_default))
-        self.edge_ai_analysis = QtWidgets.QCheckBox(
-            "Analysis API — image NSFW/abuse classify + perceptual-hash, log triage (separate image)")
-        el.addWidget(self.edge_ai_analysis)
-        # Default-off service with builder-default runtime/models — folds away until it
-        # is actually in play (initializePage expands it when the tri-state is overridden,
-        # which includes the edge_ai role's auto-check).
-        self.edge_ai_section = collapsible(
-            "Edge-AI inference (GPU model API to the mesh)", self.edge_ai_box, expanded=False)
-        lay.addWidget(self.edge_ai_section)
-        # ---- the optional-services section --------------------------------------
-        # tor / character-studio / edge-ai-tts were loose on the page, directly above the
-        # services box they belong with; they are grouped into that SECTION now. They are
-        # deliberately kept as SIBLINGS of services_box, not children of it: gate_widgets
-        # maps "optional_services" -> services_box and disables it as a unit (G12), and
-        # reparenting these three into it would silently drag them into that grey.
+        # ── ASK 23: ONE TABLE FOR SERVICES *AND* APPS ─────────────────────────────────
+        # Operator, verbatim: "services as a table ... consolidate services AND apps into a
+        # TABLE layout — columns as options, with dropdowns, fields and submenus as makes
+        # sense", which SUPERSEDES ask 5 ("redo entire services section") — the earlier,
+        # vaguer form of the same complaint.
+        #
+        # WHAT IT REPLACED. One question — "do I want this service?" — asked in SIX widget
+        # idioms spread across THREE separate collapsible page sections:
+        #   * four loose 3-state checkboxes (tor / character-studio / character-forge /
+        #     edge-ai-tts) inside the Services box;
+        #   * a 140px scrolling QListWidget of bare slugs with its own check interaction;
+        #   * two mutually-exclusive sentinel checkboxes;
+        #   * a free-text subtractive line edit (removed outright — ask 2);
+        #   * a whole separate "Edge-AI inference" SECTION with a checkbox, a combo and
+        #     three line edits;
+        #   * a whole separate "Managed backing services" SECTION of checkbox+endpoint pairs.
+        # `character-forge` appeared TWICE on one screen (once as a dedicated-flag box, once
+        # as a list row) with nothing saying they were the same service, and no row anywhere
+        # said what any of them actually was.
+        #
+        # WHAT IT IS NOW. ONE QTreeWidget. Rows are services; the COLUMNS are the options
+        # (On / Hosting / Setting / What enabling it does); the top-level rows are the
+        # GROUPS — a real expander, which is the "submenu" the ask names, rather than a bold
+        # label pretending to be one; and a service that has sub-options (Edge-AI) carries
+        # them as CHILD rows beneath it, so "runtime", "preload models", "default model" and
+        # the analysis API are visibly part of the edge-AI row instead of a page section of
+        # their own.
+        #
+        # WHY A TREE AND NOT QTableWidget: this table needs group bands AND per-service
+        # sub-rows. QTableWidget can fake the first with setSpan and cannot do the second at
+        # all. QTreeWidget gives both and is still a column grid.
+        #
+        # WHY NOT THE #507 CHOICE-CARD IDIOM: a choice card is a pick-ONE affordance — one
+        # big tappable card per option, exactly one selected; its whole visual grammar says
+        # "these are alternatives". Services are INDEPENDENT toggles: a mesh that runs
+        # Akkoma does not thereby not run Matrix. Cards would have made fifteen independent
+        # yes/no questions look like one fifteen-way choice. The cards ARE right for the
+        # pick-one surfaces (ask 14) and deliberately wrong here.
+        #
+        # GATING NOTE. Everything lives inside `services_box` now, including the
+        # dedicated-flag rows that used to be siblings of it. That is safe only because it
+        # is provable: gate_widgets("optional_services", services_box) greys the group as a
+        # unit on a platform with no --optional-services, and every dedicated flag's
+        # platform set is a SUBSET of optional_services' (x86+rpi5) — tor is x86;
+        # character_studio / character_forge / edge_ai_tts are x86+rpi5 — so the group grey
+        # can never over-grey a box whose own builder would have taken it. Edge-AI and the
+        # backing services keep their OWN gate_widgets entries (their platform sets differ)
+        # and are greyed per widget rather than by the group.
+        # (tests/test_services_section.py::test_group_grey_never_over_greys_a_supported_service.)
         svc_content = QtWidgets.QWidget()
         sv_outer = QtWidgets.QVBoxLayout(svc_content)
         sv_outer.setContentsMargins(0, 0, 0, 0)
@@ -403,44 +563,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         sv_outer.addWidget(self.services_scope_note)
         self.services_node_scope_note = _hint(_SERVICES_NODE_SCOPE_CAVEAT)
         sv_outer.addWidget(self.services_node_scope_note)
-        # Tor v3 onion (hidden) service (node-scoped; cloud/mesh cluster node builds).
-        self.tor_onion = QtWidgets.QCheckBox(
-            "Tor v3 onion service — expose the cluster gateway as a .onion (default off)")
-        self.tor_onion.setTristate(True)   # G34: --with-tor / --no-tor / leave default
-        sv_outer.addWidget(self.tor_onion)
-        # Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate).
-        # Cloud/mesh cluster builds only (it is a frontend cluster service).
-        self.character_studio = QtWidgets.QCheckBox(
-            "Character Studio (VN) — character creator + chat remote at /character-studio (default off)")
-        self.character_studio.setTristate(True)   # G34: --with-/--no-character-studio / default
-        sv_outer.addWidget(self.character_studio)
-        # Character Forge (3D) multi-app slug — OPTIONAL, DEFAULT-OFF (admin gate).
-        # BFF db + BFF api + UI remote (the 3D character maker + XR chat avatars;
-        # docs/XR-CHAT.md). Cloud/mesh cluster builds only; gated exactly like
-        # character_studio above (PLATFORM capability, not mode).
-        self.character_forge = QtWidgets.QCheckBox(
-            "Character Forge (3D) — 3D character maker (BFF db+api + remote at /character-forge; default off)")
-        self.character_forge.setTristate(True)   # G34: --with-/--no-character-forge / default
-        sv_outer.addWidget(self.character_forge)
-        # edge-ai-tts (VN voice synthesis) — OPTIONAL, DEFAULT-OFF. CPU-only,
-        # self-contained (NO edge-ai/GPU dependency, unlike the Analysis API inside
-        # edge_ai_box above) — deliberately placed OUTSIDE edge_ai_box (which hides
-        # outside cloud/mesh mode) and gated like character_studio: PLATFORM
-        # capability only, not mode (G16) — reachable on any build that bakes a
-        # cluster tree, incl. standalone rpi5 'generic'.
-        self.edge_ai_tts = QtWidgets.QCheckBox(
-            "Edge AI — voice synthesis (TTS) — Piper TTS + viseme timeline for VN voice (default off)")
-        self.edge_ai_tts.setTristate(True)   # G34: --with-/--no-edge-ai-tts / default
-        sv_outer.addWidget(self.edge_ai_tts)
-        # cluster optional services (--optional-services multi-select) + the games stack.
-        # An empty checklist emits NOTHING (the builder default akkoma tuwunel phpbb
-        # applies), so the two sentinels get their own mutually-exclusive checkboxes:
-        # explicit none (G13) and the full user-level set (G14).
-        self.services_box = QtWidgets.QGroupBox("Optional cluster services (--optional-services)")
+        self.services_box = QtWidgets.QGroupBox("Services & apps")
         svl = QtWidgets.QVBoxLayout(self.services_box)
-        svl.addWidget(_hint(
-            "Which optional services this mesh runs (akkoma / tuwunel / phpbb "
-            "…). Leave everything unticked to keep the builder default set."))
+        self.services_override_note = _hint(_SERVICES_OVERRIDE_NOTE)
+        svl.addWidget(self.services_override_note)
         # UX-honesty note (PR #304 verify pass): on a CLIENT-class role the builders
         # ACCEPT these selections but never bake them — a desktop image carries no
         # cluster GitOps tree, so the build plan echoes OPTIONAL_SERVICES as
@@ -453,83 +579,285 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.services_role_note.setStyleSheet("color: #a65d00;")
         self.services_role_note.setVisible(False)
         svl.addWidget(self.services_role_note)
-        self.services_none = QtWidgets.QCheckBox(
-            'NO optional services — emits --optional-services "" (suppresses the '
-            "builder's akkoma tuwunel phpbb default)")
-        self.services_all = QtWidgets.QCheckBox(
-            "ALL user-level services (--all-services; infra slugs stay opt-in below)")
-        self.services_none.toggled.connect(lambda on: self._sentinel_toggled(self.services_none, on))
-        self.services_all.toggled.connect(lambda on: self._sentinel_toggled(self.services_all, on))
-        svl.addWidget(self.services_none)
-        svl.addWidget(self.services_all)
-        self.services = QtWidgets.QListWidget()
-        self.services.setMaximumHeight(140)
-        for slug in OPTIONAL_SERVICES_CHOICES:
-            it = QtWidgets.QListWidgetItem(slug)
-            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(Qt.CheckState.Unchecked)
-            self.services.addItem(it)
-        svl.addWidget(self.services)
-        # subtractive --exclude-services list, applied LAST — the only way to subtract
-        # slugs a brand profile (-C) injected (G14).
-        self.exclude = QtWidgets.QLineEdit()
-        self.exclude.setPlaceholderText(
-            "slugs to subtract, applied last — e.g. akkoma phpbb  (empty = none)")
-        svl.addWidget(_row("Exclude services", self.exclude))
-        self.games = QtWidgets.QCheckBox(
-            "Enable games — bake the HugMesh Game Studio + the games.<domain> service")
-        svl.addWidget(self.games)
-        sv_outer.addWidget(self.services_box)
-        # EXPANDED by default and not folded away: this section is where the tri-state
-        # boxes the operator asked about live, and the legend + the mesh-wide scope
-        # answer are only useful if they are on screen when the page loads.
-        self.services_section = collapsible("Optional cluster services", svc_content)
-        lay.addWidget(self.services_section)
 
-        # ---- managed backing services (I8/M2) -----------------------------------
-        # Per tier-1/2 backing service: a self-hosted(default)/managed toggle + an
-        # endpoint line-edit enabled ONLY when managed. Tier-3 ids are shown read-only
-        # with their blocker note (the builder REFUSES a managed swap for them in v1).
-        # Platform-gated to x86/rpi5 via gate_widgets("managed_services", managed_box) —
-        # the only two builders that parse --managed-service / bake a cluster tree.
-        self.managed_box = QtWidgets.QGroupBox("Managed backing services (--managed-service)")
-        mgl = QtWidgets.QVBoxLayout(self.managed_box)
-        mgl.addWidget(_hint(_MANAGED_SCOPE_NOTE))
-        # id -> (managed-checkbox, endpoint line-edit)
+        # The two whole-set shortcuts, as ONE dropdown instead of two checkboxes that had
+        # to be kept mutually exclusive by hand. They say something the per-service rows
+        # genuinely cannot, which is why they survive the redo at all:
+        #   * "none" emits --optional-services "" — ONE click for what the table can also
+        #     say the long way round (untick all eight), and the shape the config keeps
+        #     either way: validatePage maps an all-unticked table to the same sentinel,
+        #     because with the default set arriving ticked "nothing ticked" is an answer
+        #     rather than an absence (G13).
+        #   * "all" is NOT "tick every row": --all-services expands USER_LEVEL_SERVICES,
+        #     which EXCLUDES the infra slugs this catalog also offers (tor, egress-vpn,
+        #     anubis, workloadConsole — build-rpi5-stage4.sh:573-581), so the two are not
+        #     the same argv (G14). It is also the ONE selection this table cannot express
+        #     row-by-row on rpi5, where those infra rows exist.
+        # A combo also states the mutual exclusion structurally instead of enforcing it in a
+        # slot: three values, one selected, nothing to keep in sync.
+        self.services_preset = QtWidgets.QComboBox()
+        self.services_preset.addItems([
+            "Pick services individually in the table below",
+            "No optional services at all — suppress even the builders' default set "
+            "(akkoma, tuwunel, phpbb)",
+            "Every user-level service — the full catalogue (its rows tick and lock "
+            "below; infra services such as tor stay opt-in in the table)",
+        ])
+        self.services_preset.currentIndexChanged.connect(self._preset_changed)
+        svl.addWidget(_row("Selection", self.services_preset))
+
+        self.services_table = QtWidgets.QTreeWidget()
+        self.services_table.setColumnCount(len(_SVC_HEADERS))
+        self.services_table.setHeaderLabels(list(_SVC_HEADERS))
+        self.services_table.setRootIsDecorated(True)
+        self.services_table.setAlternatingRowColors(True)
+        self.services_table.setUniformRowHeights(False)
+        self.services_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        self.services_table.setMinimumHeight(340)
+        _hdr = self.services_table.header()
+        _hdr.setStretchLastSection(True)
+        for _c in (_SVC_COL_NAME, _SVC_COL_ON, _SVC_COL_MODE, _SVC_COL_SETTING):
+            _hdr.setSectionResizeMode(
+                _c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        svl.addWidget(self.services_table)
+
+        # ONE row per service, in SERVICE_GROUPS order, keyed by the slug the builders know
+        # it as. `service_boxes` is the single registry every later loop reads; `_svc_items`
+        # is its row twin (a row is hidden by hiding the ITEM — see initializePage).
+        #
+        # Which CHANNEL a row emits on is decided per platform at collect time, not by which
+        # pile the widget was built in — because for two slugs it genuinely differs per
+        # builder, and the old page expressed that by showing the service twice:
+        #   * `tor` on x86 is the dedicated --with-tor / --no-tor pair; on rpi5 there is no
+        #     such flag at all and listing the slug in --optional-services is the ONLY way to
+        #     bake a Tor-onion node (build-rpi5-stage4.sh:573-581, G15);
+        #   * `character-studio` / `character-forge` / `games` have BOTH a dedicated flag and
+        #     a catalogue slug on x86 and rpi5 — one service, two spellings, which is why the
+        #     operator met `character-forge` twice on one screen.
+        # See _service_channel() for the rule. One row, right flag, per platform.
+        self.service_boxes: dict[str, QtWidgets.QCheckBox] = {}
+        self._svc_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        self.group_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        for group_title, slugs in SERVICE_GROUPS:
+            gitem = self._group_row(group_title)
+            for slug in slugs:
+                item = self._svc_row(gitem, slug, SERVICE_DESCRIPTIONS.get(slug, ""))
+                box = QtWidgets.QCheckBox()
+                box.setToolTip(_OFF_TIP)
+                self.services_table.setItemWidget(item, _SVC_COL_ON, box)
+                self.service_boxes[slug] = box
+                self._svc_items[slug] = item
+        # Named handles for the services other pages/tests/gates refer to by name. Same
+        # widget objects as service_boxes[...] — an alias, never a second checkbox.
+        self.tor_onion = self.service_boxes["tor"]
+        self.character_studio = self.service_boxes["character-studio"]
+        self.character_forge = self.service_boxes["character-forge"]
+        self.edge_ai_tts = self.service_boxes["edge-ai-tts"]
+        self.games = self.service_boxes["games"]
+
+        # ---- AI & inference: the ex-"Edge-AI inference" SECTION, now a table group ----
+        # This is the clearest case for ask 23's "submenus": the service is one yes/no with
+        # a runtime (dropdown), a preload list (field) and two sub-options, and it used to
+        # be a whole page section for that. The sub-options are CHILD rows of the edge-AI
+        # row, so the tree says "these belong to edge-AI" instead of the operator having to
+        # infer it from adjacency.
+        ai_group = self._group_row(_AI_GROUP)
+        self.edge_ai_item = self._svc_row(
+            ai_group, "edge-ai",
+            "OpenAI-compatible model API served from the GPU node (edge_ai role / be+gpu / "
+            "omnibus) to every workload on the mesh.")
+        self.edge_ai = QtWidgets.QCheckBox()
+        # ASK 1, verbatim: "leave optional services and edge ai unchecked instead of half
+        # checked for default no". Two-state, default UNCHECKED — and unchecked here is the
+        # load-bearing kind: --no-edge-ai at build-x86-host-stage4.sh:1082 is the ONLY way
+        # to suppress the edge_ai ROLE's automatic selection of the service.
+        self.edge_ai.setToolTip(_OFF_TIP)
+        self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_ON, self.edge_ai)
+        self.edge_ai_runtime = QtWidgets.QComboBox()
+        self.edge_ai_runtime.addItems(["ollama", "vllm"])
+        self.edge_ai_runtime.setToolTip("Model runtime the node serves with (--edge-ai-runtime).")
+        self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_MODE, self.edge_ai_runtime)
+        self.edge_ai_models = QtWidgets.QLineEdit()
+        self.edge_ai_models.setPlaceholderText(
+            "preload: llama3.2:3b,nomic-embed-text  (empty = builder default)")
+        self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_SETTING, self.edge_ai_models)
+        _ai_default_item = self._svc_row(
+            self.edge_ai_item, "default model",
+            "Which preloaded model answers a request that names none.")
+        self.edge_ai_default = QtWidgets.QLineEdit()
+        self.edge_ai_default.setPlaceholderText("llama3.2:3b  (empty = builder default)")
+        self.services_table.setItemWidget(_ai_default_item, _SVC_COL_SETTING, self.edge_ai_default)
+        _ai_analysis_item = self._svc_row(
+            self.edge_ai_item, "analysis API",
+            "Image NSFW/abuse classification + perceptual hashing and log triage "
+            "(a separate image on the same node).")
+        self.edge_ai_analysis = QtWidgets.QCheckBox()
+        self.services_table.setItemWidget(_ai_analysis_item, _SVC_COL_ON, self.edge_ai_analysis)
+        # The edge-AI ROW is always on screen — it is one service among the others, which
+        # is the whole point of the table. What folds is its SUB-OPTIONS, and that is the
+        # surviving half of the old section's "an all-default optional section folds away"
+        # rule: collapsed while everything is at its default, opened by
+        # _apply_default_expansion the moment anything is not (the edge_ai ROLE
+        # auto-checking its own service is the case that matters).
+        self.edge_ai_item.setExpanded(False)
+
+        # ---- Backing services: the ex-"Managed backing services" SECTION (I8/M2) ------
+        # Per tier-1/2 backing service: a self-hosted(default) / managed DROPDOWN plus an
+        # endpoint field live only while 'Managed' is picked. Tier-3 ids are listed
+        # read-only with their blocker in the description column (the builder REFUSES a
+        # managed swap for them in v1). The dropdown replaces a checkbox labelled
+        # "managed" because the question has two NAMED values, which is what a combo is
+        # for — the same rule BuildPage states for its own controls.
+        backing = self._group_row(_BACKING_GROUP, _MANAGED_SCOPE_NOTE)
         self.managed_rows: dict[str, tuple] = {}
         for sid in MANAGED_SERVICE_TIER12_IDS:
-            chk = QtWidgets.QCheckBox(f"{sid} — managed (hosted endpoint)")
+            item = self._svc_row(
+                backing, sid,
+                "Runs in-cluster unless pointed at a hosted endpoint.")
+            combo = QtWidgets.QComboBox()
+            combo.addItems(list(_HOSTING_CHOICES))
             ep = QtWidgets.QLineEdit()
             ep.setPlaceholderText("hosted endpoint, e.g. host:port | https://host | aws")
             ep.setEnabled(False)
-            # endpoint is live only while 'managed' is checked (self-hosted = no endpoint)
-            chk.toggled.connect(lambda on, e=ep: e.setEnabled(on))
-            mgl.addWidget(chk)
-            mgl.addWidget(_row("  endpoint", ep))
-            self.managed_rows[sid] = (chk, ep)
-        # tier-3: named but REFUSED in v1 — read-only, with the blocker (why not yet).
-        mgl.addWidget(_hint(
-            "The following are named in the registry but stay self-hosted in v1 (the "
-            "builder refuses a managed swap for them — the reason is shown):"))
+            combo.currentIndexChanged.connect(
+                lambda idx, e=ep: self._hosting_changed(e, idx))
+            self.services_table.setItemWidget(item, _SVC_COL_MODE, combo)
+            self.services_table.setItemWidget(item, _SVC_COL_SETTING, ep)
+            self.managed_rows[sid] = (combo, ep)
         for sid in MANAGED_SERVICE_TIER3_IDS:
-            lab = QtWidgets.QLabel(
-                f"{sid}: self-hosted only — {MANAGED_SERVICE_TIER3_BLOCKER.get(sid, '')}")
-            lab.setWordWrap(True)
-            lab.setEnabled(False)
-            mgl.addWidget(lab)
-        self.managed_section = collapsible("Managed backing services", self.managed_box,
-                                           expanded=False)
-        lay.addWidget(self.managed_section)
+            item = self._svc_row(
+                backing, sid,
+                f"Self-hosted only in v1 — {MANAGED_SERVICE_TIER3_BLOCKER.get(sid, '')}")
+            item.setDisabled(True)
+        sv_outer.addWidget(self.services_box)
+        # EXPANDED by default and not folded away: this section is the one every operator
+        # report was about, and the mesh-wide scope answer is only useful on screen.
+        self.services_section = collapsible("Services & apps", svc_content)
+        lay.addWidget(self.services_section)
         lay.addStretch(1)
 
-    def _sentinel_toggled(self, box, on):
-        """Keep the explicit-none / all-services sentinels mutually exclusive and grey
-        the slug checklist while either is active (the sentinel replaces the list)."""
-        if on:
-            other = self.services_all if box is self.services_none else self.services_none
-            other.setChecked(False)
-        self.services.setEnabled(
-            not (self.services_none.isChecked() or self.services_all.isChecked()))
+    # ---- services-table row builders ---------------------------------------------
+    def _group_row(self, title: str, desc: str = "") -> "QtWidgets.QTreeWidgetItem":
+        """A top-level GROUP row — the table's "submenu" (a real expander, registered in
+        ``group_items`` so initializePage can hide a group whose every child is
+        unreachable on this platform)."""
+        item = QtWidgets.QTreeWidgetItem(self.services_table)
+        item.setText(_SVC_COL_NAME, title)
+        item.setText(_SVC_COL_DESC, desc)
+        font = item.font(_SVC_COL_NAME)
+        font.setBold(True)
+        item.setFont(_SVC_COL_NAME, font)
+        item.setExpanded(True)
+        self.group_items[title] = item
+        return item
+
+    def _svc_row(self, parent, name: str, desc: str) -> "QtWidgets.QTreeWidgetItem":
+        """One service row: its builder-facing NAME in column 0 and the one line saying
+        what enabling it does in the last column (ask 5's "a clear name and a one-line
+        description", now a column rather than a run-on label). The name is the slug the
+        builders parse, deliberately — it is what docs, brand.conf and --print-plan all
+        say, so a prettified display name would only make the two impossible to match up."""
+        item = QtWidgets.QTreeWidgetItem(parent)
+        item.setText(_SVC_COL_NAME, name)
+        item.setText(_SVC_COL_DESC, desc)
+        item.setToolTip(_SVC_COL_DESC, desc)
+        return item
+
+    def _preset_takes_over(self, slug: str, idx: int) -> bool:
+        """Does the whole-set preset `idx` DECIDE this row, leaving the operator no say?
+
+        The rule is builder truth, per preset, and it is NOT "the slug channel" — that was
+        the bug:
+
+        * NONE emits ``--optional-services ""``. It rewrites the slug list and nothing
+          else, so a service this platform reaches through its own ``--with-<x>`` stays
+          live underneath it: the fold at build-x86-host-stage4.sh:1119 runs AFTER the arg
+          loop, so ``--optional-services "" --with-character-studio`` really does build
+          character-studio alone. Only SLUG-channel rows are taken over.
+        * ALL emits ``--all-services``, which at build-x86-host-stage4.sh:1067-1069
+          replaces OPTIONAL_SERVICES with USER_LEVEL_SERVICES **before** those folds. So it
+          takes over TWO kinds of row:
+            - every slug-channel row (the list is replaced wholesale — an rpi5 `anubis`
+              tick is discarded by the sentinel and anubis is NOT built), and
+            - every row whose slug is in USER_LEVEL_SERVICES **whatever its channel**,
+              because the expansion bakes the slug and the dedicated flag cannot take it
+              back out: --no-character-studio / --no-character-forge only SKIP a fold-in
+              (:1124-1130, :1140-1146 are `if [ "${WANT_…}" = "true" ]` with no false arm),
+              and `games` has no --no- flag at all.
+          What it does NOT take over is a flag-channel row outside that set — `tor` on x86
+          and `edge-ai-tts` — which is the (true) half of the claim this method's
+          predecessor generalised from and got wrong for the other three.
+        """
+        if idx == _PRESET_CUSTOM:
+            return False
+        if self._channel(slug) == "slug":
+            return True
+        return idx == _PRESET_ALL and slug in USER_LEVEL_SERVICES
+
+    def _preset_changed(self, idx):
+        """Show, on the rows themselves, exactly what the whole-set preset builds.
+
+        A row the preset decides is set to the state the preset PRODUCES and greyed; a row
+        it leaves alone stays live. Before this, only the slug rows greyed and the
+        dedicated-flag rows sat enabled-and-unchecked underneath ``--all-services``, so
+        `games`, `character-studio` and `character-forge` read OFF (and emitted
+        ``--no-…``) while the build baked all three — the operator's own complaint,
+        inverted. See _preset_takes_over for the per-preset rule.
+
+        The operator's CUSTOM ticks are saved on the way in and restored on the way back,
+        so glancing at "every user-level service" and changing your mind cannot silently
+        rewrite a selection you made by hand.
+
+        "All except one" is still expressible — in the TABLE, not here: with the builders'
+        default set pre-ticked, ticking the seven you want emits them as an explicit
+        allow-list (--optional-services REPLACES, it does not add). The preset is the
+        shortcut; the table is the fine grain.
+
+        PyQt6 SAFETY: this is a `currentIndexChanged` SLOT. An exception escaping a slot
+        under PyQt6 calls qFatal and takes the whole Studio down (PySide6 merely prints
+        it), so the body is wrapped — the worst outcome of a bad state here must be a stale
+        grey, not a dead wizard."""
+        try:
+            if idx == _PRESET_CUSTOM:
+                saved, self._custom_checked = self._custom_checked, None
+                for slug, box in self.service_boxes.items():
+                    if saved is not None and slug in saved:
+                        box.setChecked(saved[slug])
+                    box.setEnabled(True)
+                return
+            # Snapshot ONCE per departure from CUSTOM: flipping none->all must not
+            # overwrite the operator's ticks with the previous preset's forced state.
+            if self._custom_checked is None:
+                self._custom_checked = {s: b.isChecked()
+                                        for s, b in self.service_boxes.items()}
+            for slug, box in self.service_boxes.items():
+                if not self._preset_takes_over(slug, idx):
+                    box.setEnabled(True)
+                    continue
+                box.setChecked(idx == _PRESET_ALL and slug in USER_LEVEL_SERVICES)
+                box.setEnabled(False)
+        except Exception:            # noqa: BLE001 — see the PyQt6 note above
+            pass
+
+    def _hosting_changed(self, ep, idx):
+        """Endpoint field is live only while this backing service is 'Managed'.
+
+        Deliberately does NOT clear the text: an operator who flips back and forth must not
+        lose a typed endpoint, and validatePage already drops a self-hosted row's endpoint
+        from the collected dict, so a stale string cannot reach the argv.
+
+        PyQt6 SAFETY: `currentIndexChanged` SLOT — see _preset_changed."""
+        try:
+            ep.setEnabled(idx == _HOSTING_MANAGED)
+        except Exception:            # noqa: BLE001
+            pass
+
+    def _channel(self, slug: str) -> str:
+        """``_service_channel`` for the CURRENT config (flag | slug | unreachable)."""
+        c = self.wiz.cfg
+        catalog = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86", ()))
+        return _service_channel(slug, c.platform, catalog)
 
     def initializePage(self):
         c = self.wiz.cfg
@@ -552,12 +880,12 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.proxy_stack.setCurrentText(c.proxy_stack if c.proxy_stack in ("auto", "on", "off")
                                         else "auto")
         self.snort.setChecked(c.snort)
-        # tri-states (G34): part-checked = leave the brand.conf/builder default; on an
-        # unsupported platform show fully-unchecked (never a misleading auto-check) —
-        # gate_widgets below greys them and validatePage clears the field anyway.
-        self.aide.setCheckState(_tri_state(c.aide)
-                                if platform_supports("aide", c.platform)
-                                else Qt.CheckState.Unchecked)
+        # Two-state now (asks 1/4). Unsupported platform still shows UNCHECKED — which is
+        # no longer a special case, because unchecked and "the builder would not do it
+        # anyway" have become the same picture; gate_widgets below greys it and
+        # validatePage clears the field regardless.
+        self.aide.setChecked(_on_off(c.aide)
+                             and platform_supports("aide", c.platform))
         self.root_login.setCurrentText(c.root_login or "no")
         # Tailnet + SSO is a cloud-branded-DESKTOP surface (spec 3). The group is shown
         # + user-editable only there; standalone/mesh HIDE it (mesh forces tailscale=sso
@@ -608,69 +936,124 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.egress.setText(c.egress_vpn)
         self.egress_locked.setChecked(c.egress_vpn_locked)
         # same rule for the edge_ai role's auto-check (G11: jetson greys out too)
-        edge_state = _tri_state(c.edge_ai_service)
+        edge_on = _on_off(c.edge_ai_service)
         if c.role == "edge_ai":
-            edge_state = Qt.CheckState.Checked      # the role auto-selects the service
+            edge_on = True                          # the role auto-selects the service
         if not platform_supports("edge_ai_service", c.platform):
-            edge_state = Qt.CheckState.Unchecked
-        self.edge_ai.setCheckState(edge_state)
+            edge_on = False
+        self.edge_ai.setChecked(edge_on)
         self.edge_ai_runtime.setCurrentText(c.edge_ai_runtime or "ollama")
         self.edge_ai_models.setText(c.edge_ai_models)
         self.edge_ai_default.setText(c.edge_ai_model_default)
         self.edge_ai_analysis.setChecked(c.edge_ai_analysis)
         # edge-AI is a GPU CLUSTER service — only meaningful for cloud/mesh node builds.
-        # The gate is pinned on the SECTION, never on edge_ai_box: the box is the
-        # section's collapsible CONTENT, so set_expanded() drives its setVisible() too.
-        # Setting the mode gate there as well would make edge_ai_box.isVisible() mean
-        # "applicable AND expanded" — two meanings on one flag, exactly the confusion
-        # between collapse and the platform/mode gate this page must not have (a
-        # collapsed section would read as an inapplicable one). The section is the
-        # gate's only carrier; the box's visibility means "expanded" and nothing else.
-        self.edge_ai_section.setVisible(c.mode in ("cloud", "mesh"))
-        self.tor_onion.setCheckState(_tri_state(c.tor_onion_service)
-                                     if platform_supports("tor_onion_service", c.platform)
-                                     else Qt.CheckState.Unchecked)
-        # Tor is a k8s-NODE service — only meaningful for cloud/mesh cluster builds.
-        self.tor_onion.setVisible(c.mode in ("cloud", "mesh"))
-        self.character_studio.setCheckState(_tri_state(c.character_studio)
-                                            if platform_supports("character_studio", c.platform)
-                                            else Qt.CheckState.Unchecked)
-        self.character_forge.setCheckState(_tri_state(c.character_forge)
-                                           if platform_supports("character_forge", c.platform)
-                                           else Qt.CheckState.Unchecked)
-        self.edge_ai_tts.setCheckState(_tri_state(c.edge_ai_tts)
-                                       if platform_supports("edge_ai_tts", c.platform)
-                                       else Qt.CheckState.Unchecked)
-        # rebuild the slug checklist for THIS platform's catalog (G15: rpi5 adds the
-        # infra slugs tor/egress-vpn/workloadConsole/anubis, which --all-services does
-        # NOT include and x86 covers via dedicated flags instead)
-        choices = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86",
-                                                          OPTIONAL_SERVICES_CHOICES))
-        if tuple(self.services.item(i).text() for i in range(self.services.count())) != choices:
-            self.services.clear()
-            for slug in choices:
-                it = QtWidgets.QListWidgetItem(slug)
-                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                it.setCheckState(Qt.CheckState.Unchecked)
-                self.services.addItem(it)
+        # The gate now hides the table's AI GROUP ROW, which takes the edge-AI row and its
+        # two child rows with it. Hiding the ROW rather than the widgets is what keeps
+        # "inapplicable" and "collapsed" distinguishable now that the section is gone: a
+        # collapsed GROUP still shows its header row, a gated one is not in the table at
+        # all. The widgets keep their values either way, so the gate changes no emission
+        # (validatePage reads values, and clear_unsupported keys on the capability table).
+        self.group_items[_AI_GROUP].setHidden(c.mode not in ("cloud", "mesh"))
+        # ── the service rows ────────────────────────────────────────────────────────
+        # ONE pass over service_boxes, seeding each row from whichever channel this
+        # platform reaches it through. G15 lives here now instead of in a rebuilt list
+        # widget: rpi5 has no --with-tor, so `tor` seeds from the optional_services SLUG
+        # list there and from tor_onion_service on x86 — one row either way.
+        catalog = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86", ()))
         picked = [s for s in c.optional_services if s not in (SERVICES_NONE, SERVICES_ALL)]
-        for i in range(self.services.count()):
-            it = self.services.item(i)
-            it.setCheckState(Qt.CheckState.Checked if it.text() in picked
-                             else Qt.CheckState.Unchecked)
-        self.services_none.setChecked(c.optional_services == [SERVICES_NONE])
-        self.services_all.setChecked(SERVICES_ALL in c.optional_services)
-        self._sentinel_toggled(self.services_none, self.services_none.isChecked())
-        self.exclude.setText(" ".join(c.exclude_services))
-        self.games.setChecked(c.enable_games)
-        # optional services / games / Character Studio gate on PLATFORM capability,
-        # not mode (G16): x86 AND rpi5 parse them on every role — notably standalone
-        # rpi5 'generic', the one standalone role that could never reach them while
-        # these boxes were mode-gated. gate_widgets() below greys them wherever the
-        # builder has no flag (G12: frite/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts/jetson).
-        self.character_studio.setVisible(True)
-        self.character_forge.setVisible(True)
-        self.edge_ai_tts.setVisible(True)
+        # ── the builders' OWN default set arrives TICKED ──────────────────────────────
+        # Ask 23's rule, verbatim: "anything off by default is UNCHECKED; only pre-check
+        # what is genuinely on by default" — and akkoma / tuwunel / phpbb are genuinely on
+        # by default. `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"`
+        # (build-x86-host-stage4.sh:134, build-rpi5-stage4.sh:218) means an untouched mesh
+        # ships all three, so three unticked boxes over three running services is the same
+        # lie as a part-checked square, merely spelled differently — and it made unticking
+        # `phpbb` a no-op, because --optional-services REPLACES rather than subtracts, so
+        # "nothing ticked" emitted nothing and left the forum up.
+        #
+        # Seeded ONLY when the config carries no selection of its own ([] — the "never been
+        # chosen" state). An explicit [none]/[all]/[slug,…] is the operator's answer and is
+        # shown as-is.
+        #
+        # THIS CHANGES THE ARGV of an untouched mesh flow, on purpose, and it is worth
+        # saying exactly how far: a default build now emits
+        # `--optional-services "akkoma tuwunel phpbb"` where it emitted nothing. Same three
+        # services, byte-identical image — EXCEPT when a brand profile (-C) sets its own
+        # OPTIONAL_SERVICES, which the explicit flag now overrides (built-in < brand.conf <
+        # flag). That is the same trade this page already makes for --no-tor and states in
+        # _OFF_TIP: the box beats the brand profile, because a box that a profile can
+        # silently contradict is the ambiguity the whole redo was asked to remove.
+        seed_builtin_defaults = not c.optional_services
+        # Which rows this flow actually OFFERS. validatePage collects exactly these and
+        # leaves the rest at their dataclass defaults — the hiding-must-not-change-the-
+        # build rule, which two-state boxes make sharper than tri-state ones did: an
+        # unoffered row left "unchecked" would now collect "off" and put a --no-<x> on the
+        # argv for a decision the operator was never shown.
+        self._service_offered: dict[str, bool] = {}
+        for slug, box in self.service_boxes.items():
+            channel = _service_channel(slug, c.platform, catalog)
+            offered = bool(channel)
+            # Tor's x86 dedicated flag is a k8s-NODE service — only meaningful on a
+            # cloud/mesh cluster build. The mode gate rides the FLAG channel only: on rpi5
+            # there is no --with-tor and `tor` is an ordinary catalogue slug, which
+            # standalone rpi5 'generic' legitimately reaches (G16 — it is the one
+            # standalone role that DOES bake a cluster GitOps tree). Gating the slug too
+            # was the first cut and it hid the only way to build a Tor-onion Pi node.
+            if slug == "tor" and channel == "flag" and c.mode not in ("cloud", "mesh"):
+                offered = False
+            if channel == "flag":
+                fld, tri = _FLAG_SERVICE_FIELDS[slug]
+                value = getattr(c, fld)
+                box.setChecked(offered and (_on_off(value) if tri else bool(value)))
+            elif channel == "slug":
+                box.setChecked(slug in picked
+                               or (seed_builtin_defaults
+                                   and slug in BUILTIN_DEFAULT_SERVICES))
+            else:
+                box.setChecked(False)
+            # A service this builder cannot express at all is HIDDEN, not greyed: there is
+            # no flag to explain, and gate_widgets' "cleared when you leave the page"
+            # tooltip would be describing a control that never had a value. The rows the
+            # builder DOES parse but the role makes pointless keep their grey + note.
+            #
+            # Hide the ROW, not the checkbox. In a QTreeWidget the checkbox is an ITEM
+            # WIDGET the view positions inside a cell, so hiding it alone would leave an
+            # empty row with a name and a description and no way to act on it — and
+            # setVisible(True) on a widget whose row is hidden is a stale-geometry bug
+            # waiting to happen. setHidden on the item takes the whole line with it.
+            self._svc_items[slug].setHidden(not offered)
+            self._service_offered[slug] = offered
+        # A group whose every row is unreachable on this platform loses its header too,
+        # or the section shows a bold "Network & access" over nothing (the orphan-header
+        # lesson the egress section already learned). Reads the flags we just computed,
+        # NOT isVisible() — a widget on a non-current QWizardPage reports isVisible()
+        # False regardless of its own flag, which would have collapsed every header the
+        # moment the page was built rather than shown.
+        for group_title, slugs in SERVICE_GROUPS:
+            self.group_items[group_title].setHidden(
+                not any(self._service_offered.get(s) for s in slugs))
+        if c.optional_services == [SERVICES_NONE]:
+            preset = _PRESET_NONE
+        elif SERVICES_ALL in c.optional_services:
+            preset = _PRESET_ALL
+        else:
+            preset = _PRESET_CUSTOM
+        self.services_preset.setCurrentIndex(preset)
+        # setCurrentIndex only emits currentIndexChanged when the index actually MOVES, so
+        # the grey has to be applied unconditionally — otherwise a revisit that lands on the
+        # same preset leaves the slug rows in whatever enabled-ness the last visit left.
+        self._preset_changed(preset)
+        # Forget any held-back CUSTOM ticks, AFTER the preset ran — deliberately after,
+        # and it is the difference between two behaviours:
+        #   * held ticks from the PREVIOUS visit are stale (the rows were just re-seeded
+        #     from the config) and must not be restored over the fresh seed;
+        #   * a page ARRIVING on a whole-set preset has nothing of the operator's to hold,
+        #     so switching to "pick individually" should hand them the rows exactly as the
+        #     preset left them — all eight ticked and now editable, which is how "all
+        #     except the forge" is reached in one untick. Resetting BEFORE the call instead
+        #     would snapshot the pre-forced (empty) state and blank the table on that
+        #     switch, i.e. turn a fine-tuning gesture into "no services at all".
+        self._custom_checked = None
         self.services_box.setVisible(True)
         # CLIENT-class role (builder ROLE_CLIENT — see _client_class_role): the
         # services are accepted but IGNORED (no cluster GitOps tree in a desktop
@@ -706,11 +1089,17 @@ class NetworkPage(QtWidgets.QWizardPage):
             # not change the build. (Caught by
             # test_hiding_the_services_box_leaves_the_emission_neutral, which failed on
             # exactly that first attempt.)
-            self.services_none.setChecked(False)
-            self.services_all.setChecked(False)
-            self.services.clearSelection()
+            self.services_preset.setCurrentIndex(_PRESET_CUSTOM)
+            for box in self.service_boxes.values():
+                box.setChecked(False)
             self.services_box.setVisible(False)
             self.services_role_note.setVisible(False)
+        # Remembered on the page so validatePage can keep the hide emission-neutral: with
+        # two-state boxes an unchecked row would otherwise collect "off" and put
+        # --no-tor / --no-character-studio on an UNAFFILIATED argv — a role defined by
+        # carrying no platform machinery at all. Hiding a control must not change the
+        # build, in either direction.
+        self._services_hidden = unaffiliated
         # per-platform capability greying (G10/G11/G12): x86-only emission fields
         # used to sit un-greyed on ARM and silently drop their values from the argv.
         # validatePage() clears whatever is greyed here (clear_unsupported).
@@ -723,23 +1112,43 @@ class NetworkPage(QtWidgets.QWizardPage):
             "proxy_stack": self.proxy_stack,
             "snort": self.snort,
             "aide": self.aide,
-            "edge_ai_service": self.edge_ai_box,
-            "tor_onion_service": self.tor_onion,
-            "character_studio": self.character_studio,
-            "character_forge": self.character_forge,
-            "edge_ai_tts": self.edge_ai_tts,
+            # Edge-AI and the backing services lost their group BOXES to the table, so
+            # their platform gate now names the widgets directly (gate_widgets takes a
+            # tuple). Same grey, same tooltip, same clear_unsupported partner in
+            # validatePage — only the carrier changed. It must NOT be folded into the
+            # services_box entry above: edge_ai_service is x86-ONLY while optional_services
+            # is x86+rpi5, so the group grey would under-grey edge-AI on an rpi5 mesh.
+            "edge_ai_service": (self.edge_ai, self.edge_ai_runtime, self.edge_ai_models,
+                                self.edge_ai_default, self.edge_ai_analysis),
+            # NO per-field entries for tor / character-studio / character-forge /
+            # edge-ai-tts / games any more, and their absence is a BUG FIX, not an
+            # oversight. Each of those rows is reachable through TWO channels and
+            # _service_channel picks per platform; a gate keyed on the DEDICATED FLAG
+            # therefore greyed the row wherever only the SLUG channel exists. `tor` on
+            # rpi5 is exactly that case — tor_onion_service is x86-only, so the flag gate
+            # greyed the rpi5 tor row, which is the ONLY way to bake a Tor-onion Pi node
+            # (build-rpi5-stage4.sh:573-581, G15). Probe, before this line went:
+            #     mesh/pki/rpi5   tor  ON=_/dis      <- greyed, unbuildable
+            #     mesh/pki/rpi5   tor  ON=_          <- after
+            # The row-level `offered` flag computed above already covers everything this
+            # gate was for and is CHANNEL-AWARE: an unreachable row is hidden outright,
+            # and a row that is offered is by construction emittable on this platform
+            # (_service_channel only returns a channel the builder parses). validatePage's
+            # clear_unsupported still resets every one of these fields per platform, so
+            # nothing stale can reach the argv either way.
+            # (tests/test_pages_identity.py::test_rpi5_tor_row_is_live_not_greyed.)
             "optional_services": self.services_box,
-            "enable_games": self.games,
-            "managed_services": self.managed_box,
+            "managed_services": tuple(
+                w for row in self.managed_rows.values() for w in row),
         })
         # Managed backing services (I8/M2): a cluster concern — shown for cloud/mesh
         # builds (a standalone desktop bakes no cluster tree), platform-gated to x86/rpi5
         # by gate_widgets above. Populate each tier-1/2 row from cfg.managed_services;
-        # an id present => managed (checked) with its endpoint, else self-hosted (default).
-        self.managed_section.setVisible(c.mode in ("cloud", "mesh"))
-        for sid, (chk, ep) in self.managed_rows.items():
+        # an id present => Managed with its endpoint, else Self-hosted (index 0, default).
+        self.group_items[_BACKING_GROUP].setHidden(c.mode not in ("cloud", "mesh"))
+        for sid, (combo, ep) in self.managed_rows.items():
             endpoint = c.managed_services.get(sid, "")
-            chk.setChecked(bool(endpoint))
+            combo.setCurrentIndex(_HOSTING_MANAGED if endpoint else _HOSTING_SELF)
             ep.setText(endpoint)
             ep.setEnabled(bool(endpoint))
         # Egress VPN is desktop-class ONLY, and the platform gate above cannot say so:
@@ -750,9 +1159,15 @@ class NetworkPage(QtWidgets.QWizardPage):
         # packages and the CONFIG_WIREGUARD kernel fragment are NOT role-gated, so a node
         # paid for a VPN it will never use. HIDE the row (same idiom as the home group and
         # the standalone checkbox) so it cannot be set on a node-class image at all.
-        egress_ok = scope_allows("egress_vpn", c)
+        #
+        # ASK 3 ("options for standalone desktops shouldnt appear in the mesh wizard"):
+        # scope_allows_FLOW, not scope_allows. The old base-keyed call read
+        # image_class(cfg.mode, cfg.role) off a base whose role WorklistPage had stamped
+        # from entries[0] — so a mesh worklist whose first checked row happened to be
+        # rpi5-desktop or jetson-desktop put the egress row back on every node in it.
+        egress_ok = scope_allows_flow("egress_vpn", c, self.wiz)
         gate_widgets_role_class([self.egress_row, self.egress_locked], egress_ok,
-                                out_of_scope_note("egress_vpn", c), hide=True)
+                                out_of_scope_note_flow("egress_vpn", c, self.wiz), hide=True)
         # Fold the whole SECTION away with its content: the gate above hides the field
         # and the lock box, but _row()'s "Egress VPN" caption and this section's header
         # are not gate members, so a node-class image was left with an Egress VPN header
@@ -761,12 +1176,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         # every existing egress gate assertion keeps its meaning.
         self.egress_section.setVisible(egress_ok)
         # gate_widgets blanks the tooltip on every ENABLED widget — restore the
-        # 3-state legend on the live tri-state boxes (disabled ones keep the
+        # definite-off explanation on the live service boxes (disabled ones keep the
         # unsupported-platform note it set).
-        for w in (self.aide, self.edge_ai, self.tor_onion, self.character_studio,
-                  self.character_forge, self.edge_ai_tts):
+        for w in (self.aide, self.edge_ai, *self.service_boxes.values()):
             if w.isEnabled():
-                w.setToolTip(_TRI_TIP)
+                w.setToolTip(_OFF_TIP)
         self._apply_default_expansion()
 
     def _apply_default_expansion(self):
@@ -780,8 +1194,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         the section that shows it (picking the edge_ai role auto-checks the service),
         but a section the operator opened by hand is never re-folded underneath them.
 
-        A section is force-expanded when it holds something the operator should see: an
-        overridden tri-state (i.e. one that is not the leave-the-default square), a
+        A section is force-expanded when it holds something the operator should see: a
         non-default value, or a greyed control whose gate note explains itself. The
         sections carrying required or must-set fields (identity, mesh/superdomain) and
         the ones the reports were about (services) are never collapsed by default."""
@@ -791,25 +1204,29 @@ class NetworkPage(QtWidgets.QWizardPage):
         # overridden it to off. _field_default() cannot drift from the dataclass.
         sec_default = (self.proxy_stack.currentText() == _field_default("proxy_stack")
                        and self.snort.isChecked() == _field_default("snort")
-                       and self.aide.checkState() == _tri_state(_field_default("aide"))
+                       and self.aide.isChecked() == _on_off(_field_default("aide"))
                        and self.root_login.currentText() == _field_default("root_login"))
         # A greyed control means a gate note the operator should be able to read.
         sec_gated = not (self.proxy_stack.isEnabled() and self.snort.isEnabled()
                          and self.aide.isEnabled())
         self.security_section.set_default_expanded(not sec_default or sec_gated)
-        # Edge-AI: the tri-state is the section's switch — expanded whenever it is
-        # overridden either way (the edge_ai ROLE auto-checks it, which must show), or
-        # when any of its tuning fields carry a value.
+        # Edge-AI and the backing services no longer have SECTIONS to expand — they are
+        # groups inside the services table (ask 23), and the services section itself is
+        # never folded by default. What survives of the rule is the part that carried
+        # information: a group holding a NON-DEFAULT value must be expanded so the operator
+        # sees it on arrival. The edge_ai ROLE auto-checking its own service is the case
+        # this exists for; it must not land inside a collapsed group row.
         edge_default = (
-            self.edge_ai.checkState() == _tri_state(_field_default("edge_ai_service"))
+            self.edge_ai.isChecked() == _on_off(_field_default("edge_ai_service"))
             and self.edge_ai_analysis.isChecked() == _field_default("edge_ai_analysis")
             and self.edge_ai_models.text().strip() == _field_default("edge_ai_models")
             and self.edge_ai_default.text().strip() == _field_default("edge_ai_model_default")
             and self.edge_ai_runtime.currentText() == _field_default("edge_ai_runtime"))
-        self.edge_ai_section.set_default_expanded(not edge_default)
-        # Managed backing services: all-default (nothing managed) folds away; a live
-        # managed selection forces it open so the endpoints are visible on load.
-        self.managed_section.set_default_expanded(bool(self.wiz.cfg.managed_services))
+        if not edge_default:
+            self.group_items[_AI_GROUP].setExpanded(True)
+            self.edge_ai_item.setExpanded(True)
+        if self.wiz.cfg.managed_services:
+            self.group_items[_BACKING_GROUP].setExpanded(True)
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -835,44 +1252,100 @@ class NetworkPage(QtWidgets.QWizardPage):
         # KEEPS its text/checked state, so without this a conf picked while the role was a
         # desktop would silently ride a later switch to a node role. cfg is the source of
         # truth initializePage re-reads, so an in-scope image collects exactly as before.
-        egress_ok = scope_allows("egress_vpn", c)
+        egress_ok = scope_allows_flow("egress_vpn", c, self.wiz)
         c.egress_vpn = self.egress.text().strip() if egress_ok else ""
         c.egress_vpn_locked = self.egress_locked.isChecked() and egress_ok
         c.proxy_stack = self.proxy_stack.currentText()
         c.snort = self.snort.isChecked()
-        c.aide = _tri_value(self.aide)
+        c.aide = _off_value(self.aide)
         c.root_login = self.root_login.currentText()
-        c.edge_ai_service = _tri_value(self.edge_ai)
+        c.edge_ai_service = _off_value(self.edge_ai)
         c.edge_ai_runtime = self.edge_ai_runtime.currentText()
         c.edge_ai_models = self.edge_ai_models.text().strip()
         c.edge_ai_model_default = self.edge_ai_default.text().strip()
         c.edge_ai_analysis = self.edge_ai_analysis.isChecked()
-        c.tor_onion_service = _tri_value(self.tor_onion)
-        c.character_studio = _tri_value(self.character_studio)
-        c.character_forge = _tri_value(self.character_forge)
-        c.edge_ai_tts = _tri_value(self.edge_ai_tts)
-        # the sentinels replace the checklist (see _services_args: [none] emits
-        # --optional-services "" and [all] emits --all-services); an empty custom
-        # list emits nothing, leaving the builder default (G13/G14)
-        if self.services_none.isChecked():
+        # ── the service rows, collected through whichever channel this platform uses ──
+        # A row is written to its dedicated field OR contributed to the optional-services
+        # allow-list, never both, and never to a channel this builder does not parse (see
+        # _service_channel). Unreachable rows are left at the dataclass default rather
+        # than at "off": emitting --no-<x> for a flag this builder never had would be a
+        # lie in the other direction, and clear_unsupported would strip it anyway.
+        catalog = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86", ()))
+        picked: list[str] = []
+        # Was the slug channel on screen at all on this flow? Distinguishes "the operator
+        # cleared every service" from "this platform's builder parses no --optional-services
+        # and there was never a row to clear" — see the empty-picked branch below.
+        slug_rows_offered = False
+        offered = self._service_offered if not self._services_hidden else {}
+        for slug, box in self.service_boxes.items():
+            channel = _service_channel(slug, c.platform, catalog)
+            if channel == "slug" and offered.get(slug):
+                slug_rows_offered = True
+            if not offered.get(slug):
+                # Not offered on this flow (unreachable flag, off-mode tor, or the whole
+                # box hidden for an UNAFFILIATED role): leave the field at its dataclass
+                # default. Hiding a control must change no argv, and with two-state boxes
+                # "collect what is on screen" would have emitted --no-tor etc. for a
+                # decision the operator was never shown.
+                if channel == "flag":
+                    fld, _tri = _FLAG_SERVICE_FIELDS[slug]
+                    setattr(c, fld, _field_default(fld))
+                continue
+            if channel == "flag":
+                fld, tri = _FLAG_SERVICE_FIELDS[slug]
+                setattr(c, fld, (_off_value(box) if tri else box.isChecked()))
+            elif channel == "slug" and box.isChecked():
+                picked.append(slug)
+        # the whole-set preset replaces the slug rows (see _services_args: [none] emits
+        # --optional-services "" and [all] emits --all-services) (G13/G14)
+        preset = self.services_preset.currentIndex()
+        if self._services_hidden:
+            c.optional_services = []
+        elif preset == _PRESET_NONE:
             c.optional_services = [SERVICES_NONE]
-        elif self.services_all.isChecked():
+        elif preset == _PRESET_ALL:
             c.optional_services = [SERVICES_ALL]
+        elif picked or not slug_rows_offered:
+            c.optional_services = picked
         else:
-            c.optional_services = [self.services.item(i).text()
-                                   for i in range(self.services.count())
-                                   if self.services.item(i).checkState() == Qt.CheckState.Checked]
-        c.exclude_services = self.exclude.text().replace(",", " ").split()
-        c.enable_games = self.games.isChecked()
-        # Managed backing services (I8/M2): a row contributes id -> endpoint ONLY when
-        # 'managed' is checked AND an endpoint is entered — a checked-but-empty row is an
-        # incomplete selection, dropped so the default (no boxes checked) stays byte-
-        # identical. Endpoint SHAPE is fail-closed later by to_cli_args/validate_identity
-        # (tier-3 refused, no shell metachars), the same boundary the idp fields use.
+            # CUSTOM with every offered slug row UNTICKED is now a real answer, and it is
+            # "none" — because the builders' default set arrives TICKED (see
+            # initializePage). Emitting [] here would emit no flag at all, so the builders'
+            # `${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}` would put the three back: the
+            # operator would have cleared every box and got a forum anyway, and the state
+            # would not even round-trip (the empty list re-ticks the defaults on the next
+            # visit). Guarded on slug_rows_offered so a platform that never showed a slug
+            # row — frite/jetson, whose builders parse no --optional-services — keeps
+            # emitting nothing rather than an unsupported explicit "none" that
+            # clear_unsupported would strip anyway.
+            c.optional_services = [SERVICES_NONE]
+        # ASK 2, verbatim: "remove the exclude services field, it makes no sense". The
+        # widget is gone; the FIELD and the --exclude-services flag are deliberately kept
+        # (it is the only knob that can subtract a slug a brand.conf injected directly
+        # into OPTIONAL_SERVICES — build-x86-host-stage4.sh:1181-1199, applied last — and
+        # tests/build-matrix/flag-coverage.sh would need two "no longer a GUI knob"
+        # allowlist entries if it went). It is now reachable only from a brand profile
+        # (-C) or extra flags. NOT reset here: a value loaded from a saved config or set
+        # through those channels must survive a trip through this page, which a blind
+        # `c.exclude_services = []` would have silently blanked on every Next.
+        #
+        # `enable_games` is NOT collected here — `games` is one of the service rows above
+        # and the channel loop already wrote it. Setting it twice was the first cut, and
+        # it broke exactly where it matters: on a platform whose builder has no
+        # --enable-games, the loop correctly leaves the field alone and the second write
+        # put the widget's state back.
+        # Managed backing services (I8/M2): a row contributes id -> endpoint ONLY when its
+        # hosting dropdown says Managed AND an endpoint is entered — a Managed row with an
+        # empty endpoint is an incomplete selection, dropped so the default (every row
+        # Self-hosted) stays byte-identical. This is also why _hosting_changed does not
+        # clear the field on switching back to Self-hosted: a stale string on a Self-hosted
+        # row cannot reach the argv, so keeping it costs nothing and losing it would annoy.
+        # Endpoint SHAPE is fail-closed later by to_cli_args/validate_identity (tier-3
+        # refused, no shell metachars), the same boundary the idp fields use.
         c.managed_services = {
             sid: ep.text().strip()
-            for sid, (chk, ep) in self.managed_rows.items()
-            if chk.isChecked() and ep.text().strip()
+            for sid, (combo, ep) in self.managed_rows.items()
+            if combo.currentIndex() == _HOSTING_MANAGED and ep.text().strip()
         }
         # the greyed (platform-unsupported) widgets were still collected above —
         # reset those fields to their defaults so a value picked while another

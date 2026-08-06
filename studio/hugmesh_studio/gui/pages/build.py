@@ -24,15 +24,20 @@ applied everywhere:
 * pick-one VALUE enumerations (backend engine, --env, installer front-end, --grow policy)
   are DROPDOWNS — they choose one named value among several, exactly what a combo is for
   (the grow combo stays editable: a size cap like "16G" types straight in);
-* on/off build toggles are CHECKBOXES — tri-state where the builder has a --flag/--no-flag
-  pair (the NetworkPage G34 idiom: the part-checked square = leave the builder default,
-  which is the property the old dropdowns existed for — see _tri_check);
+* on/off build toggles are CHECKBOXES — two-state, always, with a DEFINITE default. The
+  --flag/--no-flag pairs were tri-state until ask 13 ("cached iso, live iso, bundle,
+  compress and resume should all be default on"): the square meant "leave the builder's
+  default", and for every one of them that default is ON, so checked already said it —
+  see _flag_check;
 * actions (Packages… / Preview / Refresh preview / Build builder image now) are PUSH
   BUTTONS.
 
 Related controls are grouped into the wizard's Collapsible sections (_widgets.collapsible
 — the NetworkPage house pattern): Build execution / mesh worklist / Image options /
-Artifacts / Secure Boot / Build plumbing. Collapsing is PRESENTATION ONLY (see
+Artifacts & build options / Secure Boot / Build plumbing. "Image options" and "Artifacts"
+used to be two of those, which is what ask 13's "should include the artifacts as they're
+the same thing side by side" is about — an option and the artifact it yields are now ONE
+row, not two sections. Collapsing is PRESENTATION ONLY (see
 _widgets.Collapsible): validatePage/_preview read widget VALUES, which a folded widget
 keeps, and clear_unsupported keys on the capability table, never on visibility.
 """
@@ -87,65 +92,56 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
             f"standalone role to pick a different front-end.")
 
 
-# The same meaning as _TRI_TIP below, but VISIBLE on the page. NetworkPage learned this
-# the hard way (its tri-state services were reported as "partially selected but it's not
-# clear why" when the explanation lived only in a hover tooltip) — so the legend ships
-# with the boxes from day one here, not after the same report a second time.
-_TRI_LEGEND = (
-    "3-state boxes: ■ part-checked (the default) leaves the builder's own choice alone · "
-    "☑ checked forces the flag ON · ☐ unchecked forces it OFF (the --flag / --no-flag "
-    "pair). The square means \"don't override\", not \"partly enabled\"."
-)
+# ── DEFINITE DEFAULTS: why the part-checked square is gone from this page too ─────────
+# Ask 13, verbatim: "cached iso, live iso, bundle, compress and resume should all be
+# default on and should include the artifacts as they're the same thing side by side".
+# The first half is ask 1's complaint inverted — the operator wants these DEFINITELY
+# checked, not part-checked — so the flag-pair boxes here became two-state alongside the
+# NetworkPage service boxes, and the tri-state legend that explained the square went with
+# them.
+#
+# UNSET READS AS CHECKED, and that is not a guess: every flag-pair on this page has a
+# builder default of TRUE on every builder that parses it —
+#   BUILD_IMG=true   build-x86-host-stage4.sh:231, build-rpi5-stage4.sh:173, build-jetson-stage4.sh:154
+#   LIVE_ISO=true    build-x86-host-stage4.sh:236
+#   BUILD_TAR=true   build-x86-host-stage4.sh:238, build-rpi5-stage4.sh:175
+#   SECURE_BOOT=true build-x86-host-stage4.sh:484
+# so "leave the builder's default" and "checked" were always the same PICTURE; the square
+# only ever advertised a distinction in the argv, not in the image. Making it explicit
+# adds --img/--live-iso/--tar/--secure-boot to the emitted command and changes nothing
+# about what is built. tests/test_pages_build_sections.py pins that equivalence.
+_FLAG_TIP = ("Two-state: checked = --flag, unchecked = --no-flag. There is no "
+             "\"leave the builder's default\" state — the builder's default for this "
+             "one is ON, which is what checked already means.")
 
-_TRI_TIP = ("3-state: checked = force ON (--flag), unchecked = force OFF (--no-flag), "
-            "part-checked square = leave the builder default.")
 
-# config tri-state value <-> Qt CheckState. The config domain stays byte-identical to
-# what the old dropdowns' currentData() carried ('' / 'on' / 'off'), so nothing about
-# emission or save/load changes — only the widget changed shape.
-_TRI_STATES = {
-    "": Qt.CheckState.PartiallyChecked,
-    "on": Qt.CheckState.Checked,
-    "off": Qt.CheckState.Unchecked,
-}
+def _flag_check(text):
+    """A --flag / --no-flag pair as an ordinary two-state checkbox.
 
-
-def _tri_check(text):
-    """A tri-state flag-pair CHECKBOX (the NetworkPage G34 idiom): part-checked square =
-    leave the builder default (emit neither flag), checked = --flag, unchecked = --no-flag.
-
-    Replaces this page's old '(builder default)/on/off' _tri_combo DROPDOWNS. The combo
-    existed for one property — the builder's own default must round-trip, which a
-    two-state box can never do (it collapses the default to an explicit on/off on first
-    visit) — but it bought that property at the cost the operator reported (2026-07-29):
-    the Artifacts box interleaved three dropdowns among five checkbox siblings that
-    answer the SAME KIND of question, "do I get this artifact?". A tri-state checkbox
-    keeps the round-trip property (the square is the emit-nothing state) while looking
-    like what it is: an on/off toggle, same as its neighbours."""
+    Was ``_tri_check``. That existed to preserve one property — the builder's own default
+    must round-trip — which is only worth a third state when the builder's default is
+    something a two-state box cannot show. For all four boxes on this page it is not: the
+    default is ON (see the block above), so checked says it exactly."""
     box = QtWidgets.QCheckBox(text)
-    box.setTristate(True)
-    box.setCheckState(Qt.CheckState.PartiallyChecked)   # default: leave the builder's own
-    box.setToolTip(_TRI_TIP)
+    box.setChecked(True)
+    box.setToolTip(_FLAG_TIP)
     return box
 
 
-def _set_tri(box, value):
-    """Show a tri-state config value on its checkbox (bools normalize the same way
-    config.py's emission does — ImageConfig._tri is the single authority)."""
-    box.setCheckState(_TRI_STATES.get(ImageConfig._tri(value),
-                                      Qt.CheckState.PartiallyChecked))
+def _set_flag(box, value):
+    """Show a flag-pair config value. Only an explicit "off" unchecks — '' (never set),
+    True and "on" all read as checked, because the builder's unset behaviour for every
+    field using this helper is ON. ImageConfig._tri stays the single normalizer so bools
+    from a loaded config resolve exactly as the emission resolves them."""
+    box.setChecked(ImageConfig._tri(value) != "off")
 
 
-def _tri_value(box):
-    """Checkbox state -> the tri-state config value ('' / 'on' / 'off') — the exact
-    domain the old combos' currentData() emitted, so config/argv semantics are
-    untouched by the widget change."""
-    s = box.checkState()
-    if s == Qt.CheckState.Checked:
-        return "on"
-    if s == Qt.CheckState.Unchecked:
-        return "off"
-    return ""
+def _flag_value(box):
+    """Checkbox -> the config value. Always DEFINITE ('on' | 'off') — the wizard no longer
+    has a way to say '' (leave unspecified), which is the whole of ask 13's first half.
+    The config DOMAIN is unchanged, so a --config JSON or headless caller carrying '' is
+    still accepted and still emits neither flag."""
+    return "on" if box.isChecked() else "off"
 
 
 def _hint(text):
@@ -336,30 +332,6 @@ class BuildPage(QtWidgets.QWizardPage):
         self.packages_btn.clicked.connect(self._open_packages_single)
         self.packages_row = _row("Packages", self.packages_btn)
         im.addWidget(self.packages_row)
-        # x86 ISO finish knobs (like the installer-UI choice, the arm builders parse
-        # none of these — the widgets grey out off-x86, and config.py emits x86-only).
-        # Single-direction flags -> plain two-state checkboxes (idiom rule).
-        self.cached = QtWidgets.QCheckBox(
-            "Cached ISO — embed the binpkg cache (+distfiles) for offline rebuild / fast reinstall")
-        self.live_toram = QtWidgets.QCheckBox(
-            'Live ISO "Copy to RAM (removable)" boot entry')
-        self.bundle_source = QtWidgets.QCheckBox(
-            "Bundle the generator source — self-hosting image (standalone default)")
-        # shown INSTEAD of an enabled checkbox when the unaffiliated role is selected
-        self.bundle_note = QtWidgets.QLabel(
-            "Source bundling does not apply — unaffiliated build (bundling the HugMesh "
-            "generator source is a builder hard-conflict; the role presets it off).")
-        self.bundle_note.setWordWrap(True)
-        self.bundle_note.setStyleSheet("color: #a65d00;")
-        self.bundle_note.setVisible(False)
-        self.compress = QtWidgets.QCheckBox("Compress the finished image(s) (xz -9)")
-        self.resume = QtWidgets.QCheckBox("Resume — reuse an existing sysroot")
-        im.addWidget(self.cached)
-        im.addWidget(self.live_toram)
-        im.addWidget(self.bundle_source)
-        im.addWidget(self.bundle_note)
-        im.addWidget(self.compress)
-        im.addWidget(self.resume)
         # --grow fill|none|<size> first-boot root-growth policy (G25): a dropdown by
         # the idiom rule (named values fill/none), kept EDITABLE so a size cap ("16G",
         # "50%") types straight in; "" leaves the builder default.
@@ -380,39 +352,141 @@ class BuildPage(QtWidgets.QWizardPage):
         self.image_section = collapsible("Image options", self.image_box)
         lay.addWidget(self.image_section)
 
-        # ── section: Artifacts — the selection matrix (G23 x86 / G24 ARM), per-field
-        # platform-gated so exactly the axes THIS builder parses stay live. EVERY
-        # control here answers one kind of question — "do I get this artifact?" — so
-        # every control is a CHECKBOX: tri-state (G34) where the builder has a
-        # --flag/--no-flag pair, two-state where it has a single flag. This box is
-        # where the reported dropdown/checkbox mixture lived (three _tri_combo
-        # dropdowns between five checkboxes).
+        # ── section: Artifacts & build options ────────────────────────────────────────
+        # ASK 13's second half, verbatim: the artifact options "should include the
+        # artifacts as they're the same thing side by side".
+        #
+        # They were two sections. "Image options" held cached / live-toram / bundle-source
+        # / compress / resume; "Artifacts" held the .img / .iso / .tar toggles those five
+        # options act ON. So "Cached ISO" lived in one box and "Live ISO" — the ISO it
+        # caches into — lived in another, and the operator had to hold the pairing in
+        # their head. They are now ONE section of rows, each row saying the option and the
+        # artifact it yields side by side, with the two live-ISO modifiers indented under
+        # the Live ISO row they modify.
+        #
+        # The right-hand column is not decoration: it is where "does turning this on change
+        # what I get?" gets answered on screen. Ask 13 names five options, and they do NOT
+        # divide the way a first reading suggests — transcribed from the builders rather
+        # than assumed, because getting this wrong means quietly changing what a build
+        # produces while claiming to have changed a checkbox:
+        #
+        #   cached    ISO_CACHED=false   (build-x86-host-stage4.sh:403)  -> CHANGES the
+        #             build. Embeds the binpkg cache + distfiles in the live ISO: a
+        #             materially larger ISO that can rebuild offline.
+        #   compress  COMPRESS_IMG=false (x86:242, rpi5:186, jetson:165) -> CHANGES the
+        #             build. xz -9 over every finished artifact; a long build tail.
+        #   resume    RESUME=false       (x86:207, rpi5:174, jetson:156) -> CHANGES the
+        #             build. Reuses the previous sysroot instead of wiping it.
+        #   live_iso  LIVE_ISO=true      (x86:243)                       -> no change.
+        #             The box now emits --live-iso explicitly where it used to emit
+        #             nothing; the builder was already doing it.
+        #   bundle_source                                                -> no change BY
+        #             THIS LANE, and deliberately not claimed as "the builder was already
+        #             doing it": ImageConfig.bundle_source has defaulted True since long
+        #             before ask 13, so nothing here moved. The builder's own default is
+        #             BUNDLE_SOURCE="" resolved at x86:1495 to standalone?true:false — so
+        #             on a NODE build Studio has always overridden it to true. That is
+        #             pre-existing behaviour, out of this lane's scope, and recorded here
+        #             rather than smoothed over.
+        #
+        # So three of the five genuinely change output and two do not. That distinction was
+        # not visible anywhere before; it is now a caption beside each box, and
+        # tests/test_pages_build.py::test_ask13_defaults_that_change_the_build_are_the_
+        # single_flags pins it.
         art = QtWidgets.QGroupBox("")
         arl = QtWidgets.QVBoxLayout(art)
         self.artifacts_box = art
-        self.tri_legend = _hint(_TRI_LEGEND)
-        arl.addWidget(self.tri_legend)
-        self.build_img = _tri_check("Root image (--img / --no-img)")
-        arl.addWidget(self.build_img)
-        self.live_iso = _tri_check("Live ISO (--live-iso / --no-live-iso)")
-        arl.addWidget(self.live_iso)
-        self.installer_iso = QtWidgets.QCheckBox(
-            "Installer ISO (--installer-iso — direct, no longer only an encrypt-root side effect)")
-        arl.addWidget(self.installer_iso)
-        self.build_iso = QtWidgets.QCheckBox(
-            "Bootable installer ISO for an UNencrypted image (--iso; rpi5 — with the "
-            "root image too = the builder's --both)")
-        arl.addWidget(self.build_iso)
-        self.sd_only = QtWidgets.QCheckBox("SD-card image only (--sd-only; rpi5)")
-        arl.addWidget(self.sd_only)
-        self.build_tar = _tri_check("Rootfs tar (--tar / --no-tar)")
-        arl.addWidget(self.build_tar)
-        self.skip_iso = QtWidgets.QCheckBox("Skip the ISO stage (--skip-iso)")
-        arl.addWidget(self.skip_iso)
-        self.image_only = QtWidgets.QCheckBox(
-            "Image only — skip the live/installer media (--image-only; frite/jetson/orangepi*)")
-        arl.addWidget(self.image_only)
-        self.artifacts_section = collapsible("Artifacts", art)
+        arl.addWidget(_hint(
+            "Each row is an option and the artifact it produces. Ticked = you get it."))
+        grid = QtWidgets.QGridLayout()
+        grid.setColumnStretch(0, 1)
+        grid.setHorizontalSpacing(18)
+        self.artifact_labels: dict[str, QtWidgets.QLabel] = {}
+
+        def _art_row(box, artifact, key, indent=False):
+            """One [checkbox] ── [→ artifact] row. `key` names it for the tests and for
+            the per-platform gate, which drives the WHOLE row (a live checkbox beside a
+            greyed artifact caption would be the orphan-caption bug the NetworkPage egress
+            section already paid for)."""
+            row = grid.rowCount()
+            if indent:
+                box.setStyleSheet("margin-left: 18px;")
+            grid.addWidget(box, row, 0)
+            lab = QtWidgets.QLabel(artifact)
+            lab.setWordWrap(True)
+            lab.setStyleSheet("color: gray;")
+            self.artifact_labels[key] = lab
+            grid.addWidget(lab, row, 1)
+            return box
+
+        self.build_img = _art_row(
+            _flag_check("Root image"), "→ <brand>.img — the flashable raw disk image "
+            "(--img / --no-img)", "build_img")
+        self.live_iso = _art_row(
+            _flag_check("Live ISO"), "→ live.iso — self-booting live squashfs "
+            "(--live-iso / --no-live-iso)", "live_iso")
+        # The two live-ISO modifiers, indented under the artifact they modify. Both were
+        # in the OTHER section, one scroll away from the ISO they are about.
+        self.cached = _art_row(
+            QtWidgets.QCheckBox("…with the binpkg cache and distfiles embedded"),
+            "→ a MATERIALLY LARGER live.iso that can rebuild offline (--cached; "
+            "unticked emits --uncached)", "cached", indent=True)
+        self.live_toram = _art_row(
+            QtWidgets.QCheckBox('…with a "Copy to RAM (removable)" boot entry'),
+            "→ an extra entry in that ISO's boot menu (--live-toram)", "live_toram",
+            indent=True)
+        self.installer_iso = _art_row(
+            QtWidgets.QCheckBox("Installer ISO"),
+            "→ installer.iso — direct, no longer only an --encrypt-root side effect "
+            "(--installer-iso)", "installer_iso")
+        self.build_iso = _art_row(
+            QtWidgets.QCheckBox("Installer ISO for an UNencrypted image (rpi5)"),
+            "→ installer.iso; with the root image too this is the builder's --both "
+            "(--iso)", "build_iso")
+        self.sd_only = _art_row(
+            QtWidgets.QCheckBox("SD-card image only (rpi5)"),
+            "→ the SD image and nothing else (--sd-only)", "sd_only")
+        self.build_tar = _art_row(
+            _flag_check("Rootfs tar"), "→ fs.tar.xz — the mounted-filesystem tarball "
+            "(--tar / --no-tar)", "build_tar")
+        self.bundle_source = _art_row(
+            QtWidgets.QCheckBox("Bundle the generator source into the image"),
+            "→ the generator tree + /usr/sbin/hugmesh-regenerate INSIDE every artifact "
+            "— a self-hosting image (--bundle-source)", "bundle_source")
+        # shown INSTEAD of an enabled checkbox when the unaffiliated role is selected
+        self.bundle_note = QtWidgets.QLabel(
+            "Source bundling does not apply — unaffiliated build (bundling the HugMesh "
+            "generator source is a builder hard-conflict; the role presets it off).")
+        self.bundle_note.setWordWrap(True)
+        self.bundle_note.setStyleSheet("color: #a65d00;")
+        self.bundle_note.setVisible(False)
+        self.compress = _art_row(
+            QtWidgets.QCheckBox("Compress the finished image(s) — xz -9"),
+            "→ every artifact above gains .xz; smaller files, a long build tail "
+            "(--compress)", "compress")
+        self.resume = _art_row(
+            QtWidgets.QCheckBox("Resume — reuse the existing sysroot instead of wiping it"),
+            "→ the SAME artifacts, built incrementally over whatever tree the last run "
+            "left behind (--resume)", "resume")
+        self.skip_iso = _art_row(
+            QtWidgets.QCheckBox("Skip the ISO stage"),
+            "→ no ISO artifacts at all (--skip-iso)", "skip_iso")
+        self.image_only = _art_row(
+            QtWidgets.QCheckBox("Image only — skip the live/installer media"),
+            "→ the .img alone; frite/jetson/orangepi* (--image-only)", "image_only")
+        arl.addLayout(grid)
+        arl.addWidget(self.bundle_note)
+        # --resume is the one default in ask 13 that can surprise: a run WITHOUT it
+        # deliberately wipes the sysroot (scripts/build-menu.sh:644-649 documents that),
+        # so defaulting it ON makes every build incremental over whatever the last one
+        # left. That is what was asked for, and it is said out loud rather than shipped
+        # quietly — the honesty rule this codebase applies to builder contracts.
+        self.resume_note = _hint(
+            "Note: Resume is on by default, so a build continues from the previous "
+            "sysroot rather than starting from a clean one. Untick it when you want a "
+            "guaranteed-from-scratch build.")
+        arl.addWidget(self.resume_note)
+        self.artifacts_section = collapsible("Artifacts & build options", art)
         lay.addWidget(self.artifacts_section)
 
         # per-device flash / keys assignment table (replaces the old single-target
@@ -460,7 +534,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # information survives the widget change.
         sbl.addWidget(_hint("Builder default: ON, signed with a throwaway org key — "
                             "supply the fleet paths below to stay in the fleet chain."))
-        self.secure_boot = _tri_check("Secure Boot (--secure-boot / --no-secure-boot)")
+        self.secure_boot = _flag_check("Secure Boot (--secure-boot / --no-secure-boot)")
         sbl.addWidget(self.secure_boot)
         self.keys_usb = QtWidgets.QLineEdit()
         self.keys_usb.setPlaceholderText("KEYS USB dir providing Keys/kernel_key.{pem,der} (--keys-usb)")
@@ -700,11 +774,13 @@ class BuildPage(QtWidgets.QWizardPage):
         # c.jobs = self.jobs.value() back, so without this a saved non-default jobs value is
         # silently overwritten with the widget's construction default (8) on Review & Build.
         self.jobs.setValue(c.jobs)
-        # cached / live-toram / bundle-source are x86 ISO knobs too (config.py only
-        # emits them through _x86_args)
-        self.cached.setEnabled(c.platform in ("", "x86"))
+        # cached / live-toram / bundle-source are x86 ISO knobs (config.py emits them only
+        # through _x86_args). The per-platform gating is NOT done with a hand-written
+        # `c.platform in ("", "x86")` any more: they joined the artifact-row gate map
+        # below, which HIDES the whole row (checkbox + its "→ artifact" caption) off-x86.
+        # Two mechanisms on one widget was a live bug waiting to happen — setEnabled here
+        # and setVisible there do not compose into anything a reader can predict.
         self.cached.setChecked(c.cached)
-        self.live_toram.setEnabled(c.platform in ("", "x86"))
         self.live_toram.setChecked(c.live_toram)
         # bundling the generator source is a builder HARD CONFLICT on an unaffiliated
         # image (the dedicated role OR the composable --unaffiliated flag, G22) —
@@ -712,7 +788,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # pattern), so the wizard can never re-set what RolePage cleared
         # (config.py suppresses the flag pair for unaffiliated as the final guard).
         unaffiliated = c.role == UNAFFILIATED_ROLE or c.unaffiliated
-        self.bundle_source.setEnabled(c.platform in ("", "x86") and not unaffiliated)
+        self.bundle_source.setEnabled(not unaffiliated)   # platform half: the gate map below
         self.bundle_source.setChecked(False if unaffiliated else c.bundle_source)
         self.bundle_note.setVisible(unaffiliated)
         self.compress.setChecked(c.compress)
@@ -720,15 +796,15 @@ class BuildPage(QtWidgets.QWizardPage):
         self.grow.setCurrentText(c.grow)
         self.version.setText(c.version)
         self.release_tag.setText(c.release_tag)
-        _set_tri(self.build_img, c.build_img)
-        _set_tri(self.live_iso, c.live_iso)
+        _set_flag(self.build_img, c.build_img)
+        _set_flag(self.live_iso, c.live_iso)
         self.installer_iso.setChecked(c.installer_iso)
         self.build_iso.setChecked(c.build_iso)
         self.sd_only.setChecked(c.sd_only)
-        _set_tri(self.build_tar, c.build_tar)
+        _set_flag(self.build_tar, c.build_tar)
         self.skip_iso.setChecked(c.skip_iso)
         self.image_only.setChecked(c.image_only)
-        _set_tri(self.secure_boot, c.secure_boot)
+        _set_flag(self.secure_boot, c.secure_boot)
         self.keys_usb.setText(c.keys_usb)
         self.secureboot_key.setText(c.secureboot_key)
         self.secureboot_cert.setText(c.secureboot_cert)
@@ -761,16 +837,31 @@ class BuildPage(QtWidgets.QWizardPage):
         # in _preview/validatePage) still resets a hidden field to its default and the
         # every-visit re-gate restores it when the platform supports it again, so
         # emission is preserved (build-matrix stays 746/0).
+        #
+        # ASK 13 pairing: each artifact row's "→ artifact" caption is gated WITH its
+        # checkbox, as one unit. Gating only the box would leave a live caption promising
+        # an installer.iso next to a hidden control on a builder that produces none —
+        # exactly the orphan-caption bug the NetworkPage egress section already paid for.
+        _A = self.artifact_labels
         gate_widgets(c.platform, {
             "release_tag": self.release_tag,
-            "build_img": self.build_img,
-            "live_iso": self.live_iso,
-            "installer_iso": self.installer_iso,
-            "build_iso": self.build_iso,
-            "sd_only": self.sd_only,
-            "build_tar": self.build_tar,
-            "skip_iso": self.skip_iso,
-            "image_only": self.image_only,
+            "build_img": (self.build_img, _A["build_img"]),
+            "live_iso": (self.live_iso, _A["live_iso"]),
+            "cached": (self.cached, _A["cached"]),
+            "live_toram": (self.live_toram, _A["live_toram"]),
+            "installer_iso": (self.installer_iso, _A["installer_iso"]),
+            "build_iso": (self.build_iso, _A["build_iso"]),
+            "sd_only": (self.sd_only, _A["sd_only"]),
+            "build_tar": (self.build_tar, _A["build_tar"]),
+            "skip_iso": (self.skip_iso, _A["skip_iso"]),
+            "image_only": (self.image_only, _A["image_only"]),
+            "compress": (self.compress, _A["compress"]),
+            "resume": (self.resume, _A["resume"]),
+            # bundle_source's ROW is platform-gated here; its UNAFFILIATED half stays a
+            # setEnabled above, because that one is a builder HARD CONFLICT the operator
+            # must be able to read the reason for (bundle_note) — hiding it would delete
+            # the explanation along with the control.
+            "bundle_source": (self.bundle_source, _A["bundle_source"]),
             # the SECTION, not sb_box: sb_box is now the section's collapsible CONTENT,
             # and Collapsible.set_expanded drives the content's setVisible — a gate
             # pinned on the content would be fought by every expand. Hiding the section
@@ -781,16 +872,16 @@ class BuildPage(QtWidgets.QWizardPage):
             "distdir": self.distdir_row,
         }, hide=True)
         # gate_widgets blanks the tooltip on every SUPPORTED widget it gates — restore
-        # the 3-state explanation on the live tri-state boxes (an unsupported one keeps
-        # the platform note the gate set), the NetworkPage restore idiom. secure_boot's
-        # gate rides its SECTION, so the box's own tooltip is never blanked — set it
-        # anyway so all four tri-boxes stay uniform whatever the gate map becomes.
-        for tri_fld, tri_box in (("build_img", self.build_img),
-                                 ("live_iso", self.live_iso),
-                                 ("build_tar", self.build_tar),
-                                 ("secure_boot", self.secure_boot)):
-            if platform_supports(tri_fld, c.platform):
-                tri_box.setToolTip(_TRI_TIP)
+        # the flag-pair explanation on the live boxes (an unsupported one keeps the
+        # platform note the gate set), the NetworkPage restore idiom. secure_boot's gate
+        # rides its SECTION, so the box's own tooltip is never blanked — set it anyway so
+        # all four stay uniform whatever the gate map becomes.
+        for flag_fld, flag_box in (("build_img", self.build_img),
+                                   ("live_iso", self.live_iso),
+                                   ("build_tar", self.build_tar),
+                                   ("secure_boot", self.secure_boot)):
+            if platform_supports(flag_fld, c.platform):
+                flag_box.setToolTip(_FLAG_TIP)
         self.device_table.refresh()          # auto-refresh the device table on entry
         self._apply_default_expansion()
         self._preview()
@@ -867,19 +958,19 @@ class BuildPage(QtWidgets.QWizardPage):
         c.grow = self.grow.currentText().strip()
         c.version = self.version.text().strip()
         c.release_tag = self.release_tag.text().strip()
-        # tri-state checkboxes collect through _tri_value — the same ''/'on'/'off'
-        # domain the retired _tri_combo dropdowns' currentData() carried, so the
-        # emission (and every save/load round-trip) is byte-identical to before the
-        # widget change.
-        c.build_img = _tri_value(self.build_img)
-        c.live_iso = _tri_value(self.live_iso)
+        # flag-pair checkboxes collect through _flag_value — the same 'on'/'off' domain
+        # the retired tri-state carried, minus the '' arm the wizard no longer offers
+        # (ask 13). The config DOMAIN still accepts '', so a --config JSON or a headless
+        # caller that carries it round-trips and emits neither flag exactly as before.
+        c.build_img = _flag_value(self.build_img)
+        c.live_iso = _flag_value(self.live_iso)
         c.installer_iso = self.installer_iso.isChecked()
         c.build_iso = self.build_iso.isChecked()
         c.sd_only = self.sd_only.isChecked()
-        c.build_tar = _tri_value(self.build_tar)
+        c.build_tar = _flag_value(self.build_tar)
         c.skip_iso = self.skip_iso.isChecked()
         c.image_only = self.image_only.isChecked()
-        c.secure_boot = _tri_value(self.secure_boot)
+        c.secure_boot = _flag_value(self.secure_boot)
         c.keys_usb = self.keys_usb.text().strip()
         c.secureboot_key = self.secureboot_key.text().strip()
         c.secureboot_cert = self.secureboot_cert.text().strip()

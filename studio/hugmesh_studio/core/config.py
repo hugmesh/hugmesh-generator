@@ -375,6 +375,78 @@ OPTIONAL_SERVICES_BY_PLATFORM = {
 SERVICES_NONE = "none"
 SERVICES_ALL = "all"
 
+# The builders' OWN built-in default selection when no --optional-services is given:
+#   build-x86-host-stage4.sh:134   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+#   build-rpi5-stage4.sh:218       (identical line)
+# The services table PRE-TICKS exactly these rows on arrival, because they are what an
+# untouched build genuinely ships — eight unticked boxes over a mesh that runs three of
+# them anyway is the same lie as a part-checked square (ask 23: "anything off by default
+# is UNCHECKED; only pre-check what is genuinely on by default"), and it also made
+# unticking `phpbb` a no-op, since --optional-services REPLACES rather than subtracts.
+# tests/test_services_section.py parses both builder scripts and asserts set-equality with
+# this tuple, so it cannot rot into a comment.
+BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
+
+# What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
+# line both node builders declare it on:
+#   build-x86-host-stage4.sh:127   USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast
+#                                  tube character-studio character-forge"
+#   build-rpi5-stage4.sh:212       (identical line)
+# and expanded into OPTIONAL_SERVICES at build-x86-host-stage4.sh:1067-1069 /
+# build-rpi5-stage4.sh:1075 — BEFORE the --with-<x> opt-in folds, so a slug in this set is
+# BAKED by --all-services no matter what the dedicated flag says. That last clause is the
+# whole reason this constant exists in Studio: the wizard has to know which rows the "every
+# user-level service" preset takes over, or it shows `character-studio` unticked (and emits
+# --no-character-studio, whose false arm the builder does not even have) over a mesh that
+# builds it. NOT the same set as OPTIONAL_SERVICES_CHOICES conceptually — that is the
+# catalogue a platform's --optional-services accepts, this is what one sentinel expands to
+# — so it is mirrored separately and parsed out of both scripts by
+# tests/test_services_section.py rather than aliased.
+USER_LEVEL_SERVICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
+                       "character-studio", "character-forge")
+
+# One line per service saying what ENABLING it does — the operator's "redo entire
+# services section" was in large part "these are eight slugs and I cannot tell what any
+# of them is". Keyed by the slug the builders parse, so the label and the emitted token
+# can never drift apart. A test asserts every slug in OPTIONAL_SERVICES_CHOICES +
+# INFRA_SERVICES_CHOICES has an entry here (and that no entry is orphaned), which is what
+# stops a new slug landing as a bare identifier again.
+SERVICE_DESCRIPTIONS: dict[str, str] = {
+    "akkoma": "Fediverse social server — ActivityPub timelines, follows and DMs "
+              "at social.<domain>.",
+    "tuwunel": "Matrix homeserver — end-to-end-encrypted chat rooms and DMs for "
+               "everyone on the mesh.",
+    "phpbb": "Web forum — threaded boards at forum.<domain>, SSO-linked to mesh "
+             "accounts.",
+    "games": "Game Studio + the games.<domain> app store, with its own OIDC issuer.",
+    "owncast": "Self-hosted live video streaming — one channel, no third-party CDN.",
+    "tube": "Peer-to-peer video hosting and playback (PeerTube-style channels).",
+    "character-studio": "Character creator + VN chat remote at /character-studio.",
+    "character-forge": "3D character maker + XR chat avatars — BFF database, BFF API "
+                       "and the remote at /character-forge.",
+    "edge-ai-tts": "Voice synthesis for those characters — Piper TTS plus a viseme "
+                   "timeline for lip-sync. CPU-only; needs no GPU node.",
+    "tor": "Tor v3 onion service — publishes the cluster gateway as a .onion address "
+           "reachable without exposing a public IP.",
+    "egress-vpn": "Routes this node's outbound traffic through a provided VPN profile.",
+    "workloadConsole": "In-cluster workload console — inspect and restart mesh workloads "
+                       "from the browser.",
+    "anubis": "Anti-scraper proof-of-work gate in front of the public web routes.",
+}
+
+# Presentation grouping for the services surface: (group title, (slug, ...)). Ordered —
+# the section renders groups in this order and slugs in the order listed. A slug the
+# selected platform's catalog does not carry is simply not rendered, so one table drives
+# every platform. Grouping is by WHAT THE SERVICE IS FOR, which is the axis the operator
+# reads; the previous surface grouped by "which flag emits it", which is an
+# implementation detail they cannot see.
+SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Social & community", ("akkoma", "tuwunel", "phpbb")),
+    ("Media & play", ("owncast", "tube", "games")),
+    ("Characters & avatars", ("character-studio", "character-forge", "edge-ai-tts")),
+    ("Network & access", ("tor", "egress-vpn", "anubis", "workloadConsole")),
+)
+
 # --person-role client-identity picker (FD-08). The x86 builder honours --person-role/
 # --domains only for ROLE_CLIENT roles (the person-device desktops laptop/chromebook/
 # desktop AND the standalone desktops); on a cluster NODE role it warns + IGNORES them
@@ -950,6 +1022,121 @@ def home_options_allowed(cfg: "ImageConfig") -> bool:
     """Home provisioning applies to desktop-class images in any mode (spec 7); nodes are
     root-encrypted and have no separately-provisioned home."""
     return image_class(cfg.mode, cfg.role) == "desktop"
+
+
+def local_login_applies(cfg: "ImageConfig") -> bool:
+    """Whether the "Your login & standalone account" surface (the --local-user /
+    --local-pass desktop account, and the --standalone posture it frames) applies to
+    THIS image.
+
+    Operator report, verbatim: "your login/standalone account doesnt belong on mesh
+    builds, keep that to the desktop mesh track". They are right, and the reason is
+    structural rather than cosmetic: a cluster node's console credentials already have
+    their own surface — SystemPage's "Node fallback login (mesh nodes)" group
+    (--user-password / --root-password, gated by SystemPage._node_creds_apply). Showing
+    a SECOND login group titled "Your login & standalone account" on the same node flow
+    offers one concept twice, and the one it offers is the desktop one.
+
+    DESKTOP-CLASS, no mode axis — deliberately, and grounded the same way
+    ``FieldScope.class_platforms`` is: a mesh flow made entirely of rpi5-desktop rows is
+    the documented "desktop mesh track" the operator asked us to keep this on, and
+    build-rpi5-stage4.sh:998 sets ROLE_CLIENT=true for exactly that arm. A mode axis
+    would hide the group on the one flow it belongs to.
+
+    ...OR wherever ``--standalone`` itself is still in scope, and that second arm is not
+    belt-and-braces — it is the fix for a regression this predicate shipped and had to
+    take back within the hour. The first cut was a flat ``image_class == "desktop"``,
+    which hid the group on the orangepizero2 / -2w / -zero3 / -3-lts appliances. Those
+    roles are NODE-class and ``--standalone`` is their DEFINING posture (ROLE_CHOICES
+    calls them a "standalone HEADLESS APPLIANCE"; build-orangepi-zero2-stage4.sh:218-226
+    composes ${STANDALONE} with zero ROLE_CLIENT/ROLE_K8S anywhere in the script). The
+    standalone CHECKBOX lives inside this group, so hiding the group made the whole point
+    of that flow unreachable — precisely the bug ``_STANDALONE_CLASS_GATED_PLATFORMS``
+    and ``FieldScope.class_platforms`` exist to record, re-committed by the fix for a
+    different one. Deferring to ``field_in_scope("standalone", …)`` means the group's
+    scope IS its contents' scope, by construction, so the two cannot drift apart again.
+    (Pinned by test_pages_home.test_home_standalone_live_on_the_orangepizero2_node_class_appliance.)
+
+    NOT a claim about the builder, and it deliberately declares no FIELD_SCOPE
+    narrowing of its own: build-x86-host-stage4.sh:1597 honours --local-user on EVERY role
+    (it overrides DEFAULT_USER, :1598), so narrowing the FIELD would invent a builder
+    constraint that does not exist. This is a WIZARD-surface rule of the same family as
+    ``home_options_allowed``: it hides a group, and emission stays byte-identical because
+    ``local_user`` keeps its dataclass default ("magus", still emitted as --local-user
+    magus) while ``local_pass`` is empty by default — see HomePage.validatePage, which
+    collects the secret only while the surface applies."""
+    return (image_class(cfg.mode, cfg.role) == "desktop"
+            or field_in_scope("standalone", cfg))
+
+
+def external_media_applies(cfg: "ImageConfig") -> bool:
+    """Whether the external media-data device group (Steam library + gocryptfs Vaults)
+    applies to THIS image.
+
+    Same evidence shape as ``egress_vpn``'s role-class narrowing, which is why it gets a
+    predicate rather than a shrug: the x86 builder half-honours the option on a node.
+    ``build-x86-host-stage4.sh:1442`` role-gates only the STEAM leg
+    (``${ROLE_CLIENT} && ${MEDIA_DATA}``), while ``:4158`` and the package leg ``:4524``
+    (``packages-media-data.list``) are NOT role-gated — so a headless PKI node emerged a
+    Steam/Vaults media stack it has no session to use. It was reachable on every mesh node
+    because ``FIELD_SCOPE`` has no entry for ``media_data`` at all and the only gate was
+    the PLATFORM one, which a mesh flow passes unconditionally (WorklistPage forces the
+    shared base to platform="x86")."""
+    return image_class(cfg.mode, cfg.role) == "desktop"
+
+
+@dataclass(frozen=True)
+class ImageAxes:
+    """The three axes every scope/capability predicate reads — mode x role x platform.
+
+    A stand-in for a full ImageConfig so ``flow_images`` can ask "would this predicate
+    say yes for THAT image?" without materializing (deepcopying) a whole config per
+    worklist row on every initializePage. Every predicate in this module reads only
+    these three attributes (``image_class(mode, role)``, ``cfg.platform``, ``cfg.mode``),
+    which ``test_services_section.py`` pins so a predicate that grows a fourth input
+    cannot silently start reading a default off this shim."""
+    mode: str = ""
+    role: str = ""
+    platform: str = ""
+
+
+def flow_images(cfg: "ImageConfig", entries=None) -> tuple[ImageAxes, ...]:
+    """Every image THIS WIZARD FLOW will actually build, as (mode, role, platform) axes.
+
+    THE BUG THIS EXISTS TO KILL. ``WorklistPage.validatePage`` stamps the shared mesh base
+    with ``cfg.role = entries[0].role`` and ``cfg.platform = "x86"`` (the option superset)
+    — see gui/pages/worklist.py. Every desktop-class gate downstream then keys
+    ``image_class(cfg.mode, cfg.role)`` on ONE arbitrary row, so a mesh worklist whose
+    FIRST checked row happens to be ``rpi5-desktop`` or ``jetson-desktop``
+    (both are in ``ROLE_CHOICES["mesh"]``) makes the whole base read as "desktop-class"
+    and unlocks every standalone-desktop surface on a mesh flow — the operator's
+    "again, options for standalone desktops shouldnt appear in the mesh wizard".
+
+    Outside mesh (or with no worklist yet) there is exactly one image and this is the
+    base config itself, so every non-mesh flow keeps its existing answer byte-for-byte.
+    ``SystemPage._node_creds_apply`` is the precedent: the only gate in the flow that
+    already read the entries instead of the base, and the only one both probe runs got
+    right."""
+    if cfg.mode == "mesh" and entries:
+        return tuple(ImageAxes(mode=cfg.mode, role=e.role, platform=e.platform)
+                     for e in entries)
+    return (ImageAxes(mode=cfg.mode, role=cfg.role, platform=cfg.platform),)
+
+
+def flow_allows(pred, cfg: "ImageConfig", entries=None) -> bool:
+    """``pred`` must hold for EVERY image this flow builds.
+
+    ALL, not ANY, and that is the load-bearing choice. These surfaces live on the SHARED
+    mesh base, which ``WorklistConfig._materialize_one`` DEEPCOPIES onto every entry, and
+    ``clear_role_class_fields`` clears only the theme/home families — nothing per-entry
+    ever strips ``standalone`` / ``local_pass`` / the media-data trio / ``egress_vpn``.
+    So a value offered because ONE row could use it rides onto every OTHER row too. Under
+    ANY, a single ``rpi5-desktop`` row in a ten-node worklist would put a desktop login
+    password on all ten images — which is the leak, not the fix.
+
+    ALL is also exactly what the operator asked for: a mesh worklist of nodes hides these,
+    a worklist that is entirely desktop rows (the "desktop mesh track") keeps them."""
+    return all(pred(img) for img in flow_images(cfg, entries))
 
 
 def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
@@ -1608,7 +1795,28 @@ class ImageConfig:
     seed_packages_from: str = ""       # --seed-packages-from FILE (x86)
     # ── installer / ISO / artifact selection ──
     installer_ui: str = "all"          # cli|ncurses|calamares|all
-    cached: bool = False               # --cached / --uncached
+    # ASK 13 (operator, verbatim): "cached iso, live iso, bundle, compress and resume
+    # should all be default on". Three of the five are plain bools whose default lived
+    # HERE, so this is where the change has to land — a widget edit alone is a no-op,
+    # because BuildPage.initializePage re-seeds every control from cfg on every visit.
+    # The per-flag "does default-on change the build?" answer ships next to each
+    # checkbox, in the artifact caption BuildPage._art_row builds (and is pinned by
+    # tests/test_pages_build.py::
+    #   test_ask13_defaults_that_change_the_build_are_the_single_flags).
+    # Short version: cached / compress / resume DO change what a run produces (their
+    # builder defaults are all false); live_iso does not (LIVE_ISO=true already).
+    #
+    # bundle_source is the fifth and it is the one that needs saying out loud rather than
+    # being counted with either group. Its default here has been True since long before
+    # ask 13, so this lane moved nothing — but "default on" is NOT what a mesh operator
+    # sees, because ModePage:172 sets it to (mode == "standalone") when the mode is
+    # picked. That is deliberate and predates all of this: FieldScope pins bundle_source
+    # to classes=("desktop",) — baking the 33MB generator tree into a cluster NODE is not
+    # a thing anyone wants — so ask 13's "bundle … default on" holds on the standalone
+    # flow, where the option means something, and is deliberately off on mesh nodes.
+    # Left alone rather than "fixed" to match the ask literally: forcing it on for mesh
+    # would put a self-hosting generator tree inside every node image.
+    cached: bool = True                # --cached / --uncached  (ask 13: DEFAULT ON)
     live_toram: bool = True            # --live-toram / --no-live-toram
     bundle_source: bool = True         # --bundle-source / --no-bundle-source
     build_img: bool | str = ""         # tri-state --img / --no-img (x86/rpi5/jetson)
@@ -1633,8 +1841,8 @@ class ImageConfig:
     # to_dict/asdict pins the number into the saved JSON, and from_dict assigns a
     # present "jobs" key verbatim — an existing config's -j emission is byte-identical.
     jobs: int = field(default_factory=default_jobs)
-    compress: bool = False             # --compress: xz -9 the finished image(s)
-    resume: bool = False               # --resume: reuse an existing sysroot
+    compress: bool = True              # --compress: xz -9 the finished image(s)  (ask 13: DEFAULT ON)
+    resume: bool = True                # --resume: reuse an existing sysroot      (ask 13: DEFAULT ON)
     # build plumbing / phases (change baked content or phases, not artifacts)
     skip_kernel: bool = False          # --skip-kernel (all)
     skip_clean: bool = False           # --skip-clean (all)

@@ -150,3 +150,29 @@ def _file_picker(parent, line_edit, caption, file_filter="All files (*)", direct
     btn = QtWidgets.QPushButton("Browse…")
     btn.clicked.connect(pick)
     return btn
+
+
+# ── tri-state checkbox helpers ────────────────────────────────────────────────────────
+# These used to live on NetworkPage, which is where the 3-state idiom was introduced (G34)
+# and where every consumer was. That page has none left — the operator's asks 1/4 turned
+# every service box two-state with a definite default — so they moved HERE rather than
+# lingering in a module whose whole point is now that it does not do this. The SOLE
+# remaining consumer is RolePage's `sunshine` box, which is a different page and a
+# different lane; it keeps the third state until someone makes the same call for it.
+def _tri_state(value):
+    """config tri-state value ('', 'on', 'off', or a back-compat bool) -> CheckState."""
+    if value is True or value == "on":
+        return Qt.CheckState.Checked
+    if value == "off":
+        return Qt.CheckState.Unchecked
+    return Qt.CheckState.PartiallyChecked
+
+
+def _tri_value(box):
+    """CheckState -> config tri-state value (True / 'off' / False-as-default)."""
+    s = box.checkState()
+    if s == Qt.CheckState.Checked:
+        return True
+    if s == Qt.CheckState.Unchecked:
+        return "off"
+    return False

@@ -47,8 +47,17 @@ from hugmesh_studio.core.config import (
 )
 
 
-# the invariant x86 tail (script defaults made explicit by to_cli_args)
-X86_TAIL = ["--snort", "--installer-ui", "all", "--uncached", "--live-toram", "--bundle-source"]
+# The invariant x86 tail (script defaults made explicit by to_cli_args).
+# `--cached` (not `--uncached`) since ask 13 flipped ImageConfig.cached to True; the two
+# all-platform members of that ask, --compress and --resume, ride ALL_TAIL below because
+# every builder parses them.
+X86_TAIL = ["--snort", "--installer-ui", "all", "--cached", "--live-toram", "--bundle-source"]
+
+# The invariant ALL-PLATFORM tail. ask 13, verbatim: "cached iso, live iso, bundle,
+# compress and resume should all be default on". compress and resume are the two that are
+# not x86-only, so every platform's golden argv now ends with them. Emitted LAST by
+# to_cli_args on every builder (_x86_args tail and _arm_common_args tail alike).
+ALL_TAIL = ["--compress", "--resume"]
 
 
 def pairs(args):
@@ -122,7 +131,7 @@ def test_unknown_platform_rejected():
 def test_x86_standalone_roles_golden(role):
     args = ImageConfig(mode="standalone", role=role, platform="x86").to_cli_args()
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
-                    "--no-tailscale", "--no-sso", *X86_TAIL]
+                    "--no-tailscale", "--no-sso", *X86_TAIL, *ALL_TAIL]
 
 
 # ---- x86: the UNAFFILIATED plain-Gentoo desktop -------------------------------
@@ -135,7 +144,8 @@ def test_x86_standalone_unaffiliated_golden():
                        bundle_source=False).to_cli_args()
     assert args == ["--role", "standalone-unaffiliated", "--env", "test",
                     "--local-user", "magus",
-                    "--snort", "--installer-ui", "all", "--uncached", "--live-toram"]
+                    "--snort", "--installer-ui", "all", "--cached", "--live-toram",
+                    *ALL_TAIL]
 
 
 def test_x86_unaffiliated_never_emits_affiliation_flags():
@@ -225,7 +235,7 @@ def test_x86_client_roles_golden(role):
     args = ImageConfig(mode="cloud", role=role, platform="x86",
                        tailscale=True, sso=True).to_cli_args()
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
-                    "--with-tailscale", "--with-sso", "--person-role", "user", *X86_TAIL]
+                    "--with-tailscale", "--with-sso", "--person-role", "user", *X86_TAIL, *ALL_TAIL]
 
 
 # ---- Chromebook: a coreboot/UEFI laptop-class DESKTOP image (ADR-16) ----------
@@ -258,7 +268,7 @@ def test_x86_chromebook_standalone_golden():
     build-x86-host-stage4.sh --print-plan in the build-matrix GUI channel)."""
     args = ImageConfig(mode="standalone", role="chromebook", platform="x86").to_cli_args()
     assert args == ["--role", "chromebook", "--env", "test", "--local-user", "magus",
-                    "--no-tailscale", "--no-sso", *X86_TAIL]
+                    "--no-tailscale", "--no-sso", *X86_TAIL, *ALL_TAIL]
 
 
 # ---- Raspberry Pi board-per-role-class: rpi3 is desktop-only (1GB RAM) ---------
@@ -352,7 +362,7 @@ def test_x86_mesh_roles_golden(role):
     # <brand>.internal). --superdomain rides the cluster/mesh identity block.
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
                     "--with-tailscale", "--with-sso",
-                    "--superdomain", "hugmesh.internal", *X86_TAIL]
+                    "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
     assert "--person-role" not in args
     assert "--domains" not in args
 
@@ -533,7 +543,7 @@ def test_rpi5_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="rpi5", tailscale=True).to_cli_args()
     # WS-SUPER-B: mesh images record the derived orchestration superdomain.
     assert args == ["--role", builder_role, "--env", "test",
-                    "--superdomain", "hugmesh.internal"]
+                    "--superdomain", "hugmesh.internal", *ALL_TAIL]
 
 
 def test_rpi5_standalone_desktop():
@@ -545,7 +555,7 @@ def test_rpi5_standalone_desktop():
     assert args == ["--role", "desktop", "--env", "test",
                     "--superdomain", "hugmesh.internal",
                     "--standalone", "--local-user", "alice", "--local-pass", "s3cret",
-                    "--encrypt-root", "--luks-pass", "hunter2"]
+                    *ALL_TAIL, "--encrypt-root", "--luks-pass", "hunter2"]
 
 
 def test_rpi5_full_surface():
@@ -573,7 +583,7 @@ def test_rpi5_board_unset_emits_nothing():
     golden test above (none of them pass board=...)."""
     args = ImageConfig(mode="mesh", role="pki", platform="rpi5", tailscale=True).to_cli_args()
     assert args == ["--role", "pki", "--env", "test",
-                    "--superdomain", "hugmesh.internal"]
+                    "--superdomain", "hugmesh.internal", *ALL_TAIL]
     assert "--board" not in args
 
 
@@ -589,7 +599,7 @@ def test_rpi5_board_axis(board):
     args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
                        board=board).to_cli_args()
     assert args == ["--role", "backend", "--board", board, "--env", "test",
-                    "--superdomain", "hugmesh.internal"]
+                    "--superdomain", "hugmesh.internal", *ALL_TAIL]
 
 
 def test_rpi5_board_composes_with_desktop_standalone():
@@ -600,7 +610,7 @@ def test_rpi5_board_composes_with_desktop_standalone():
                        encrypt_root=True).to_cli_args()
     assert args == ["--role", "desktop", "--board", "rpi4", "--env", "test",
                     "--superdomain", "hugmesh.internal",
-                    "--standalone", "--local-user", "alice", "--encrypt-root"]
+                    "--standalone", "--local-user", "alice", *ALL_TAIL, "--encrypt-root"]
 
 
 def test_rpi5_board_rpi3_composes_with_desktop_standalone():
@@ -612,20 +622,20 @@ def test_rpi5_board_rpi3_composes_with_desktop_standalone():
                        encrypt_root=True).to_cli_args()
     assert args == ["--role", "desktop", "--board", "rpi3", "--env", "test",
                     "--superdomain", "hugmesh.internal",
-                    "--standalone", "--local-user", "alice", "--encrypt-root"]
+                    "--standalone", "--local-user", "alice", *ALL_TAIL, "--encrypt-root"]
 
 
 def test_rpi5_generic_golden():
     """The plain-Gentoo unbranded arm64 server (the rpi5 builder's default role) —
     standalone mode (no tailnet) emits --skip-mesh; role passes through unmapped."""
     args = ImageConfig(mode="standalone", role="generic", platform="rpi5").to_cli_args()
-    assert args == ["--role", "generic", "--env", "test", "--skip-mesh"]
+    assert args == ["--role", "generic", "--env", "test", "--skip-mesh", *ALL_TAIL]
 
 
 def test_rpi5_generic_with_mesh_golden():
     args = ImageConfig(mode="standalone", role="generic", platform="rpi5",
                        tailscale=True).to_cli_args()
-    assert args == ["--role", "generic", "--env", "test"]
+    assert args == ["--role", "generic", "--env", "test", *ALL_TAIL]
 
 
 def test_rpi5_never_emits_x86_only_flags():
@@ -677,7 +687,7 @@ def test_frite_defaults_golden():
     # mode default the GUI seeds — so NO --skip-mesh (a defaults-only cloud config
     # used to print a mesh-less client: the PR #304 verify-pass defect).
     args = ImageConfig(mode="cloud", role="frite", platform="frite").to_cli_args()
-    assert args == ["--board", "la-frite", "--flavor", "both", "--env", "test"]
+    assert args == ["--board", "la-frite", "--flavor", "both", "--env", "test", *ALL_TAIL]
 
 
 @pytest.mark.parametrize("board", ["la-frite", "le-potato", "sweet-potato"])
@@ -687,7 +697,7 @@ def test_frite_board_flavor_desktop_matrix(board, flavor, desktop):
     args = ImageConfig(mode="cloud", role="frite", platform="frite", tailscale=True,
                        board=board, flavor=flavor, desktop=desktop).to_cli_args()
     assert args == ["--board", board, "--flavor", flavor, "--desktop", desktop,
-                    "--env", "test"]
+                    "--env", "test", *ALL_TAIL]
     assert "--role" not in args
 
 
@@ -699,7 +709,7 @@ def test_frite_board_flavor_desktop_matrix(board, flavor, desktop):
 def test_jetson_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="jetson", tailscale=True).to_cli_args()
     assert args == ["--role", builder_role, "--env", "test",
-                    "--superdomain", "hugmesh.internal"]
+                    "--superdomain", "hugmesh.internal", *ALL_TAIL]
 
 
 def test_jetson_shared_arm_surface():
@@ -718,7 +728,7 @@ def test_jetson_board_axis(board):
     args = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
                        board=board).to_cli_args()
     assert args == ["--role", "edge_ai", "--board", board, "--env", "test",
-                    "--superdomain", "hugmesh.internal"]
+                    "--superdomain", "hugmesh.internal", *ALL_TAIL]
 
 
 # ---- env threading (test|prod baked per channel) ------------------------------
@@ -1502,14 +1512,17 @@ _FIELD_PROBE = {
     "home_seed_code_from": {"home_seed_code_from": "/tmp/seed"},
     "include_home_archive": {"include_home_archive": "/tmp/home.tar"},
     "seed_packages_from": {"seed_packages_from": "/tmp/pkgs"},
-    "installer_ui": {"installer_ui": "cli"}, "cached": {"cached": True},
+    "installer_ui": {"installer_ui": "cli"}, "cached": {"cached": False},
     "live_toram": {"live_toram": False}, "bundle_source": {"bundle_source": False},
     "build_img": {"build_img": "off"}, "live_iso": {"live_iso": "on"},
     "installer_iso": {"installer_iso": True}, "build_tar": {"build_tar": "off"},
     "skip_iso": {"skip_iso": True}, "build_iso": {"build_iso": True},
     "sd_only": {"sd_only": True}, "image_only": {"image_only": True},
     "grow": {"grow": "fill"}, "img_size": {"img_size": 4096},
-    "compress": {"compress": True}, "resume": {"resume": True},
+    # ask 13 defaults these ON, so the DIFF-probe has to set them off to see the
+    # flag move — the probe measures "which platforms change when this field
+    # changes", and a sample equal to the default changes nothing anywhere.
+    "compress": {"compress": False}, "resume": {"resume": False},
     "cpu": {"cpu": "cortex-a53"}, "defconfig": {"defconfig": "foo_defconfig"},
     "dtb": {"dtb": "foo.dtb"}, "dtb_prefix": {"dtb_prefix": "bcm2712"},
     "kernel_img": {"kernel_img": "Image"}, "pcie_gen3": {"pcie_gen3": True},
@@ -1930,7 +1943,7 @@ def test_enter_mesh_defaults_preserves_mesh_x86_golden():
     enter_mesh_defaults(cfg)
     assert cfg.to_cli_args() == ["--role", "omnibus", "--env", "test", "--local-user", "magus",
                                  "--with-tailscale", "--with-sso",
-                                 "--superdomain", "hugmesh.internal", *X86_TAIL]
+                                 "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
 
 
 def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():

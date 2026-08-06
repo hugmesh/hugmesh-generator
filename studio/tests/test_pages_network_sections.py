@@ -1,12 +1,18 @@
-"""NetworkPage — the collapsible sections and the tri-state legibility reports.
+"""NetworkPage — the collapsible sections and the services-legibility reports.
 
 Report (3): "options like tor, character studio and edge ai are partially selected but
 it's not clear why. If this is selectable per node, make sure that there's another
 option for this in another table like with the node images."
 
-  * The square is the G34 tri-state's "leave the brand-profile/builder default" state.
-    All three states are REQUIRED — a plain two-state box could never force a brand.conf
-    (-C) default back OFF — so the fix is to make the meaning VISIBLE, not to remove it.
+  * The square WAS the G34 tri-state's "leave the brand-profile/builder default" state,
+    and the first fix made its meaning visible with a legend rather than removing it.
+    The operator came back (ask 1, verbatim: "gui studio should leave optional services
+    and edge ai unchecked instead of half checked for default no") — a screen that needs
+    a paragraph to explain its own checkboxes has the wrong checkboxes. So the state is
+    GONE: every service box is two-state with a definite default, and unchecked emits the
+    strongest "off" the flag has. The tests below pin the absence, and pin that "off"
+    still reaches the argv — that property was the reason the third state existed, and
+    losing it would have been a real regression rather than a simplification.
   * Per-node: NO. Answered from the builders, not from UI convenience —
     ``build-rpi5-stage4.sh:1376`` gate_optional_services() prunes unselected slugs out of
     the CLUSTER GitOps tree at ``${SYSROOT}/var/lib/hugmesh/cluster``, and ``:2958``
@@ -30,11 +36,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from hugmesh_studio.core.config import ImageConfig                # noqa: E402
+from hugmesh_studio.core.config import (                          # noqa: E402
+    BUILTIN_DEFAULT_SERVICES, ImageConfig,
+)
 from hugmesh_studio.core.platform_info import HostInfo            # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod               # noqa: E402
 from hugmesh_studio.gui.qt import Qt, QtWidgets                   # noqa: E402
-from hugmesh_studio.gui.pages.network import NetworkPage          # noqa: E402
+from hugmesh_studio.gui.pages.network import (                    # noqa: E402
+    _AI_GROUP, _BACKING_GROUP, NetworkPage,
+)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -87,38 +97,58 @@ def _sections(page):
     return {
         "identity": page.identity_section, "tailnet": page.tailnet_section,
         "mesh": page.mesh_section, "egress": page.egress_section,
-        "security": page.security_section, "edge_ai": page.edge_ai_section,
+        "security": page.security_section,
+        # edge_ai and the backing services are GROUPS of the services table since ask 23,
+        # not page sections, so they are not in this map. Their fold and their mode gate
+        # are pinned directly, below.
         "services": page.services_section,
     }
 
 
-# ---------------------------------------------------------------- (3) tri-state legend
+# ------------------------------------------------- (1)/(4) no half-checked boxes remain
 
-def test_tri_state_legend_is_visible_not_just_a_tooltip(wiz):
-    """The report's actual cause: the meaning of the square existed ONLY as a hover
-    tooltip. It must be on the page, in words, without hovering."""
+def test_no_service_box_is_tristate_and_none_start_half_checked(wiz):
+    """ASK 1 + ASK 4. Every box in this section is an ordinary two-state checkbox with a
+    DEFINITE default, and that default is the state the builder would actually produce.
+
+    Sweeps `service_boxes` rather than a hand-listed five, so a service added later
+    cannot quietly arrive tri-state — that is exactly how the page grew six of them.
+
+    "Definite" is the property, not "off": ask 23 says pre-check what is genuinely on by
+    default, and BUILTIN_DEFAULT_SERVICES is what an untouched build ships
+    (`OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"`). Those three arrive
+    ticked; everything else arrives unticked; nothing arrives half."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    assert page.tri_legend.isVisible()
-    text = page.tri_legend.text().lower()
-    assert "part-checked" in text or "partly" in text
-    assert "default" in text          # the square MEANS "leave the default"
-    # and it must explain the confusing default state itself
-    assert "square" in text
+    for name, box in (("aide", page.aide), ("edge_ai", page.edge_ai),
+                      *page.service_boxes.items()):
+        assert not box.isTristate(), f"{name} is still a 3-state box"
+        assert box.checkState() != Qt.CheckState.PartiallyChecked, f"{name} half-checked"
+        assert box.isChecked() == (name in BUILTIN_DEFAULT_SERVICES), (
+            f"{name} does not default to what the builder would produce")
 
 
-def test_tri_state_boxes_keep_all_three_states(wiz):
-    """Do NOT collapse the tri-state to a plain checkbox: a two-state box could only
-    ever emit the positive flag, so a brand profile's (-C) default could never be
-    forced OFF (--no-tor / --no-character-studio / --no-edge-ai)."""
+def test_the_tri_state_legend_is_gone_because_there_is_nothing_left_to_explain(wiz):
+    """The legend paragraph WAS the fix for report (3); ask 1 is the operator saying the
+    fix was the wrong one. Pin its absence, not just the boxes' shape — a legend left
+    behind would describe a state the page can no longer be in."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    for box in (page.aide, page.edge_ai, page.tor_onion, page.character_studio,
-                page.edge_ai_tts):
-        assert box.isTristate(), box.text()
-    # the default really is the square (which is what prompted the report)
-    assert page.tor_onion.checkState() == Qt.CheckState.PartiallyChecked
-    assert page.character_studio.checkState() == Qt.CheckState.PartiallyChecked
-    # the tooltip is kept as well as the legend, not replaced by it
-    assert "3-state" in page.tor_onion.toolTip()
+    assert not hasattr(page, "tri_legend"), (
+        "the 3-state legend survived the two-state conversion")
+    for lab in page.findChildren(QtWidgets.QLabel):
+        assert "part-checked" not in lab.text().lower(), lab.text()
+
+
+def test_unchecked_still_reaches_the_argv_as_a_definite_off(wiz):
+    """The property the third state existed for, kept. A brand profile (-C) can set
+    WANT_TOR=true (build-x86-host-stage4.sh sources brand.conf at :841, BEFORE the arg
+    loop at :887), so an unchecked box that emitted NOTHING would leave the service on
+    while claiming otherwise. Unchecked emits --no-*; the box never lies."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    page.validatePage()
+    argv = wiz.cfg.to_cli_args()
+    for flag in ("--no-tor", "--no-character-studio", "--no-character-forge",
+                 "--no-edge-ai-tts", "--no-aide", "--no-edge-ai"):
+        assert flag in argv, f"{flag} missing — unchecked stopped meaning definitely off"
 
 
 # ------------------------------------------------- (3) the per-node question, answered
@@ -180,8 +210,8 @@ def test_collapsing_never_disables_children(wiz):
     do this". A collapsed section would be indistinguishable from a gated one."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
     page.services_section.set_expanded(False)
-    for w in (page.services_box, page.services, page.tor_onion, page.character_studio,
-              page.games):
+    for w in (page.services_box, page.tor_onion, page.character_studio, page.games,
+              page.service_boxes["akkoma"]):
         assert w.isEnabled(), f"{w} was disabled by COLLAPSING — reads as a gate"
 
 
@@ -200,7 +230,10 @@ def test_all_default_optional_sections_start_collapsed(wiz):
     is not a flat wall on arrival."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
     assert not page.security_section.is_expanded()
-    assert not page.edge_ai_section.is_expanded()
+    # edge-AI's fold is now its table row's sub-options (ask 23): the service row itself
+    # is always on screen — it is one service among the others — and what folds away
+    # while everything is default is its default-model / analysis-API sub-rows.
+    assert not page.edge_ai_item.isExpanded()
 
 
 def test_a_non_default_value_forces_its_section_open(wiz):
@@ -211,17 +244,25 @@ def test_a_non_default_value_forces_its_section_open(wiz):
     # a guess about which way each flag points.
     page = _net(wiz, mode="mesh", role="backend", platform="x86", snort=False)
     assert page.security_section.is_expanded(), "an overridden value was hidden"
-    page = _net(wiz, mode="mesh", role="backend", platform="x86", aide="off")
-    assert page.security_section.is_expanded(), "a forced-OFF tri-state was hidden"
+    # aide's dataclass default is False, which the two-state box reads as UNCHECKED and
+    # collects back as "off" — so "off" is now the DEFAULT picture and cannot be the
+    # override that forces the section open. "on" is.
+    page = _net(wiz, mode="mesh", role="backend", platform="x86", aide="on")
+    assert page.security_section.is_expanded(), "a forced-ON service box was hidden"
     page = _net(wiz, mode="mesh", role="backend", platform="x86", root_login="yes")
     assert page.security_section.is_expanded()
 
 
-def test_the_edge_ai_role_auto_check_forces_its_section_open(wiz):
-    """The edge_ai ROLE auto-selects the service; that must be visible, not folded."""
+def test_the_edge_ai_role_auto_check_forces_its_row_open(wiz):
+    """The edge_ai ROLE auto-selects the service; that must be visible, not folded.
+
+    The carrier changed (a table row's expander, not a page section) but the property is
+    identical, and it is the reason the rule exists at all: a value the operator did not
+    set must never land inside something folded shut."""
     page = _net(wiz, mode="mesh", role="edge_ai", platform="x86")
-    assert page.edge_ai.checkState() == Qt.CheckState.Checked
-    assert page.edge_ai_section.is_expanded()
+    assert page.edge_ai.isChecked()
+    assert page.edge_ai_item.isExpanded()
+    assert page.group_items[_AI_GROUP].isExpanded()
 
 
 def test_section_titles_are_not_eaten_as_mnemonics(wiz):
@@ -255,7 +296,10 @@ def test_mode_gated_sections_hide_their_header_too(wiz):
     nothing."""
     page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
     assert not page.mesh_section.isVisible() and not page.mesh_box.isVisible()
-    assert not page.edge_ai_section.isVisible() and not page.edge_ai_box.isVisible()
+    # edge-AI's mode gate hides its TABLE GROUP ROW, which takes the edge-AI row and both
+    # sub-rows with it — the table's equivalent of "no orphan header".
+    assert page.group_items[_AI_GROUP].isHidden()
+    assert page.group_items[_BACKING_GROUP].isHidden()
     assert not page.tailnet_section.isVisible()
     assert page.tailnet_reason.isVisible(), "the explain-why note went with the section"
 
@@ -270,9 +314,9 @@ def test_collapsing_every_section_does_not_change_the_emitted_argv(wiz):
     platform) — the capability table — never on widget visibility.
     """
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    page.services.item(0).setCheckState(Qt.CheckState.Checked)
-    page.character_studio.setCheckState(Qt.CheckState.Checked)
-    page.tor_onion.setCheckState(Qt.CheckState.Unchecked)     # force OFF
+    page.service_boxes["akkoma"].setChecked(True)
+    page.character_studio.setChecked(True)
+    page.tor_onion.setChecked(False)          # definite OFF
     page.snort.setChecked(True)
     page.domain.setText("example.org")
 
@@ -298,7 +342,7 @@ def test_collapsed_is_not_confused_with_the_platform_gate_that_clears(wiz):
     PLATFORM cannot do it — never because its section happens to be folded."""
     # x86 supports character_studio: collapsed or not, the value survives.
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    page.character_studio.setCheckState(Qt.CheckState.Checked)
+    page.character_studio.setChecked(True)
     page.services_section.set_expanded(False)
     page.validatePage()
     assert wiz.cfg.character_studio is True, (
@@ -307,7 +351,7 @@ def test_collapsed_is_not_confused_with_the_platform_gate_that_clears(wiz):
     # frite does NOT support it: the gate clears it even with the section EXPANDED.
     page = _net(wiz, mode="cloud", role="frite", platform="frite")
     page.services_section.set_expanded(True)
-    page.character_studio.setCheckState(Qt.CheckState.Checked)
+    page.character_studio.setChecked(True)
     page.validatePage()
     assert wiz.cfg.character_studio is False, (
         "the platform gate stopped clearing — expansion must not defeat it")
@@ -371,10 +415,10 @@ def test_an_untouched_section_still_tracks_the_config_on_revisit(wiz):
     service). This is what a blunt first-visit-only seed would have broken.
     """
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    assert not page.edge_ai_section.is_expanded()
+    assert not page.edge_ai_item.isExpanded()
     page = _net(wiz, mode="mesh", role="edge_ai", platform="x86")   # role changed earlier
-    assert page.edge_ai_section.is_expanded(), (
-        "an untouched section stopped tracking the config")
+    assert page.edge_ai_item.isExpanded(), (
+        "an untouched fold stopped tracking the config")
 
 
 def test_manual_expansion_state_is_presentation_only(wiz):
@@ -388,17 +432,28 @@ def test_manual_expansion_state_is_presentation_only(wiz):
     assert list(wiz.cfg.to_cli_args()) == before
 
 
-def test_collapsed_is_not_the_mode_gate_on_the_edge_ai_box(wiz):
-    """edge_ai_box is the edge-AI section's collapsible CONTENT, so its visibility means
-    "expanded". The MODE gate must therefore be pinned on the SECTION — setting it on the
-    box too would give one flag two meanings, and a collapsed section would read as an
-    inapplicable one.
+def test_collapsed_is_not_the_mode_gate_on_the_edge_ai_group(wiz):
+    """THE TRAP, carried over to the table. "Folded" and "the mode gate says no" must stay
+    two distinguishable states, or a folded group reads as an inapplicable one.
+
+    They are now two DIFFERENT calls on the same item — setExpanded (fold) and setHidden
+    (gate) — which is what makes them impossible to confuse. The old section could only
+    express both through visibility, which is why the gate had to live on the section and
+    never on its content box.
     """
-    # applicable mode, all-default => section SHOWN (gate says yes) but folded.
+    # applicable mode, all-default => the group is IN the table (gate says yes) and its
+    # service row is there; only the edge-AI row's sub-options are folded.
     page = _net(wiz, mode="cloud", role="backend", platform="x86")
-    assert page.edge_ai_section.isVisible(), "the mode gate wrongly hid an applicable section"
-    assert not page.edge_ai_section.is_expanded()
-    assert not page.edge_ai_box.isVisible(), "collapsed content should be hidden"
-    # inapplicable mode => the gate hides the whole section, header and all.
+    ai = page.group_items[_AI_GROUP]
+    assert not ai.isHidden(), "the mode gate wrongly hid an applicable group"
+    assert not page.edge_ai_item.isHidden()
+    assert not page.edge_ai_item.isExpanded(), "all-default sub-options should be folded"
+    # folding the GROUP by hand must not be mistaken for the gate…
+    ai.setExpanded(False)
+    assert not ai.isHidden(), "collapsing a group must not gate it"
+    # …and the values survive the fold, so nothing about the argv moves.
+    page.validatePage()
+    assert wiz.cfg.edge_ai_service == "off"
+    # inapplicable mode => the gate hides the group row, and with it every child.
     page = _net(wiz, mode="standalone", role="generic", platform="rpi5")
-    assert not page.edge_ai_section.isVisible()
+    assert page.group_items[_AI_GROUP].isHidden()
