@@ -1,0 +1,149 @@
+#!/bin/bash
+# hugmesh-coturn-firewall — marker-gated node firewall for coturn's OPT-IN
+# PUBLIC reachability mode (docs/COTURN.md §5). The coturn-public overlay puts
+# the relay on the NODE network (hostNetwork), so the pod NetworkPolicy no
+# longer constrains it — THIS script is the node-side enforcement point, keyed
+# on ONE marker:
+#
+#   /etc/hugmesh/coturn-public   ABSENT (default) => CLOSED
+#   /etc/hugmesh/coturn-public   present          => OPEN (public TURN mode)
+#
+# The operator (or a future wizard, mirroring how hugmesh-go-live owns
+# /etc/hugmesh/go-live) touches/deletes the marker on the relay node(s); the
+# 60s cron converges either way without a reboot.
+#
+# TWO LAYERS, one gate — both firewall layers of this fleet must agree before
+# a TURN packet reaches coturn. Each layer self-skips when its tool is absent,
+# which is not hypothetical: net-firewall/firewalld is a DELIBERATE EXCLUSION on
+# the cross-compiled ARM images (specs-rpi5/portage/packages.list — the glib
+# introspection bootstrap does not cross-compile), so on an rpi5 relay node the
+# nftables table below is the WHOLE gate, exactly as it is for the release gate.
+#
+#   * firewalld (the PRIMARY filter, x86 images): PROD images bake DefaultZone=drop, so
+#     inbound 3478/5349/relay-window is dead on arrival until admitted. Marker
+#     present => add the port set to the DEFAULT zone at RUNTIME (never
+#     --permanent: a firewalld restart falls back to the baked hardened
+#     baseline and the next cron tick re-admits — the same convergence-floor
+#     model as every other hugmesh reconcile). Marker absent => remove them.
+#     Explicitly-added ports are accepted even in a target=DROP zone (the zone
+#     target only applies to packets matching no rule — firewalld zone
+#     semantics), so this works against the prod drop default; on TEST images
+#     (DefaultZone=trusted, target ACCEPT) it is a harmless no-op layer.
+#   * an OWN nftables table (hugmesh_coturn_relay) as the fail-closed BACKSTOP:
+#     marker absent => DROP the TURN port set (except tailnet + loopback — the
+#     same admit-set as the release gate). This is what actually gates TEST
+#     images, where firewalld's trusted default would otherwise leave the
+#     hostNetwork relay wide open the moment the overlay is deployed. Marker
+#     present => the table carries no drops (accept fall-through; firewalld is
+#     the enforcement). Same single-table ownership contract as
+#     hugmesh-firewall-reconcile/hugmesh-sunshine-firewall: create-if-missing,
+#     flush, redefine, NEVER `flush ruleset`, never another table.
+#
+# PORT SET (MUST track specs/cluster/manifests/coturn/deployment.yaml —
+# turnserver.conf listening-port/tls-listening-port/min-port/max-port AND the
+# coturn NetworkPolicy relay window): STUN/TURN 3478 (UDP+TCP), TLS 5349
+# (UDP+TCP), relay window 49152-49200 (UDP). The relay window sits INSIDE the
+# kernel's ephemeral source-port range, so the backstop chain admits
+# established/related conntrack FIRST — a plain dport drop would randomly eat
+# inbound replies to unrelated outbound UDP flows whose local port landed in
+# the window.
+#
+# FAIL-CLOSED: any render/apply error KEEPS the existing ruleset; the
+# first-ever posture (no marker) is CLOSED — deny by default, never allow.
+
+set -uo pipefail
+
+MARKER="${HUGMESH_COTURN_PUBLIC_MARKER:-/etc/hugmesh/coturn-public}"
+TABLE="hugmesh_coturn_relay"
+# Tailnet source ranges — MUST track specs/etc/headscale/config.yaml `prefixes`
+# (dual-stack: `ip saddr` in an inet table never matches IPv6 packets, so the
+# v6 ULA prefix needs its own rules — the hugmesh-sunshine-firewall lesson).
+TS_V4_PREFIX="${HUGMESH_TS_V4_PREFIX:-100.64.0.0/10}"
+TS_V6_PREFIX="${HUGMESH_TS_V6_PREFIX:-fd7a:115c:a1e0::/48}"
+RELAY_MIN="${HUGMESH_COTURN_RELAY_MIN:-49152}"
+RELAY_MAX="${HUGMESH_COTURN_RELAY_MAX:-49200}"
+LOG_TAG="hugmesh-coturn-firewall"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+
+PUBLIC="absent"; [ -e "${MARKER}" ] && PUBLIC="present"
+
+# ── Layer 1: the own-table nftables backstop (fail-closed gate) ──────────────
+if command -v nft >/dev/null 2>&1; then
+    DROP_RULES=""
+    POSTURE="closed (TURN ports dropped except tailnet/loopback)"
+    if [ "${PUBLIC}" = "present" ]; then
+        POSTURE="public (backstop drops lifted; firewalld admits the TURN port set where firewalld exists)"
+    else
+        DROP_RULES="$(cat <<EOF
+        tcp dport { 3478, 5349 } drop
+        udp dport { 3478, 5349 } drop
+        udp dport ${RELAY_MIN}-${RELAY_MAX} drop
+EOF
+)"
+    fi
+    TMP="$(mktemp)" || { warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
+    trap 'rm -f "${TMP}"' EXIT
+    cat > "${TMP}" <<RULES
+#!/usr/sbin/nft -f
+# Managed by ${LOG_TAG} — DO NOT hand-edit (rewritten at boot + every 60s from
+# ${MARKER}).
+# STATE: coturn-public=${PUBLIC} -> ${POSTURE}
+
+table inet ${TABLE} {}
+flush table inet ${TABLE}
+
+table inet ${TABLE} {
+    chain input {
+        type filter hook input priority filter + 30; policy accept;
+        # Replies to OUTBOUND flows first: the relay window overlaps the kernel
+        # ephemeral range, so without this a closed posture would eat inbound
+        # answers to unrelated outbound UDP sockets bound inside the window.
+        ct state established,related accept
+        iifname "lo" accept
+        # Tailnet admitted both families (mirrors the release-gate admit-set).
+        ip saddr ${TS_V4_PREFIX} accept
+        ip6 saddr ${TS_V6_PREFIX} accept
+${DROP_RULES}
+    }
+}
+RULES
+    if ! NFT_ERR="$(nft -f "${TMP}" 2>&1)"; then
+        warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed)"
+        exit 0
+    fi
+else
+    warn "nft not found — skipping the coturn backstop table (firewalld layer still reconciled)"
+fi
+
+# ── Layer 2: firewalld runtime admission (the prod DefaultZone=drop opener) ──
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    ZONE="$(firewall-cmd --get-default-zone 2>/dev/null)"
+    if [ -z "${ZONE}" ]; then
+        warn "firewalld is running but --get-default-zone returned nothing — leaving firewalld untouched"
+    else
+        PORTS="3478/udp 3478/tcp 5349/udp 5349/tcp ${RELAY_MIN}-${RELAY_MAX}/udp"
+        for p in ${PORTS}; do
+            if [ "${PUBLIC}" = "present" ]; then
+                firewall-cmd --zone="${ZONE}" --query-port="${p}" >/dev/null 2>&1 \
+                    || firewall-cmd --zone="${ZONE}" --add-port="${p}" >/dev/null 2>&1 \
+                    || warn "firewall-cmd --add-port=${p} failed (zone ${ZONE})"
+            else
+                if firewall-cmd --zone="${ZONE}" --query-port="${p}" >/dev/null 2>&1; then
+                    firewall-cmd --zone="${ZONE}" --remove-port="${p}" >/dev/null 2>&1 \
+                        || warn "firewall-cmd --remove-port=${p} failed (zone ${ZONE})"
+                fi
+            fi
+        done
+    fi
+else
+    # No firewalld => nothing to admit here. EXPECTED on ARM images (deliberate
+    # exclusion, see the header): the nftables table above is the whole gate. On
+    # an x86 image it means the baked drop default is gone too — a larger problem
+    # than this script's scope, and not one it can fix by opening ports.
+    ZONE="(firewalld absent/not running)"
+fi
+
+log "applied: coturn-public=${PUBLIC} zone=${ZONE:-?} relay=${RELAY_MIN}-${RELAY_MAX}/udp"
+exit 0

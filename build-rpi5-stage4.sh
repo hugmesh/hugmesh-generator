@@ -2480,6 +2480,22 @@ bake_host_firewall() {
     cp "${SHARED_SPECS}/etc/init.d/hugmesh-firewall-reconcile" "${SYSROOT}/etc/init.d/hugmesh-firewall-reconcile"
     chmod +x "${SYSROOT}/etc/init.d/hugmesh-firewall-reconcile"
     cp "${SHARED_SPECS}/etc/cron.d/hugmesh-firewall-reconcile" "${SYSROOT}/etc/cron.d/hugmesh-firewall-reconcile"
+    # ── coturn public-TURN node firewall: the marker-gated opener/backstop for the
+    #    OPT-IN coturn-public overlay (docs/COTURN.md §5). Baked unconditionally
+    #    alongside the release-gate reconcile — inert-closed until an operator
+    #    touches /etc/hugmesh/coturn-public on the relay node (then it lifts its
+    #    own nftables backstop off 3478/5349 UDP+TCP + the 49152-49200/udp relay
+    #    window; converges <=60s).
+    #    ARM SPECIFIC: net-firewall/firewalld is a DELIBERATE EXCLUSION on this
+    #    cross-compiled platform (specs-rpi5/portage/packages.list — the glib
+    #    introspection bootstrap does not cross-compile), so the script's
+    #    firewalld half self-skips on `command -v firewall-cmd` and the nftables
+    #    table it owns is the WHOLE gate here — exactly as for the release gate.
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-coturn-firewall"      "${SYSROOT}/usr/sbin/hugmesh-coturn-firewall"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-coturn-firewall"
+    cp "${SHARED_SPECS}/etc/init.d/hugmesh-coturn-firewall"    "${SYSROOT}/etc/init.d/hugmesh-coturn-firewall"
+    chmod +x "${SYSROOT}/etc/init.d/hugmesh-coturn-firewall"
+    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-coturn-firewall"    "${SYSROOT}/etc/cron.d/hugmesh-coturn-firewall"
     # ── Go-Live wizard: the human-facing effector of this same firewall-reconcile /
     #    release-state mechanism (driver writes /etc/hugmesh/go-live; reconcile
     #    converges <=60s). Baked unconditionally alongside reconcile — inert until the
@@ -3758,7 +3774,7 @@ if ! ${ROLE_CLIENT}; then
     # roles (bake_host_firewall() is called from inside the `! ROLE_CLIENT &&
     # -d cluster` block above) — enabling the service here too, never on the
     # desktop branch below, mirrors build-x86-host-stage4.sh's own SVCS split.
-    DEFAULT_SVCS+=(hugmesh-firewall-reconcile hugmesh-go-live-reconcile containerd kubelet)
+    DEFAULT_SVCS+=(hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet)
 else
     # Desktop session bring-up: dbus + elogind (seat/login manager) + the
     # display-manager OpenRC service (provided by gui-libs/display-manager-init,

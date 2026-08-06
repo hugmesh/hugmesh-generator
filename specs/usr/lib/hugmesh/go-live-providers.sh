@@ -41,6 +41,11 @@
 #   GL_DOMAIN        the baked cluster domain (apex), e.g. hugmesh.systems
 #   GL_INGRESS_IP    IPv4 the public A records should point at (may be empty)
 #   GL_INGRESS_IPV6  IPv6 for AAAA records (may be empty)
+#   GL_TURN_IP       IPv4 of the coturn RELAY node for turn.<domain> (may be empty
+#                    -> falls back to GL_INGRESS_IP). Its own knob because the
+#                    relay is a hostNetwork pod on a backend node, which is not
+#                    necessarily the ingress node the other records point at.
+#   GL_TURN_IPV6     IPv6 twin of GL_TURN_IP (may be empty)
 #   GL_TUNNEL_CNAME  a tunnel/ALIAS CNAME target for CNAME-style records (may be empty)
 #   GL_TTL           record TTL seconds (default 300)
 #   GL_SUBDOMAINS    space-separated service sub-labels to publish (default from the driver)
@@ -51,7 +56,10 @@
 #                    (read from a FILE only — never passed on argv)
 #
 # The driver derives GL_SUBDOMAINS as the apex plus api./matrix./mastodon. — the
-# SAME hostnames apps/12-cloudflared.yaml + the gateway comments already promise.
+# SAME hostnames apps/12-cloudflared.yaml + the gateway comments already promise —
+# plus `turn` when the node carries /etc/hugmesh/coturn-public (coturn PUBLIC
+# mode, docs/COTURN.md §5). turn. is the ONE label that can never ride the HTTP
+# edge: see _glp_turn_host / _glp_record_for.
 
 # ── Registry rows ──────────────────────────────────────────────────────────────
 # Order here is the PRIORITISED v1 list (flagship first). The driver lists in
@@ -144,6 +152,26 @@ glp_hostnames() {
     done
 }
 
+# Is $1 the coturn PUBLIC-mode TURN hostname? Every provider that renders a
+# record set must ask, because turn.<domain> is the ONE hostname that cannot ride
+# the HTTP edge (see _glp_record_for).
+_glp_turn_host() { [ -n "${GL_DOMAIN:-}" ] && [ "$1" = "turn.${GL_DOMAIN}" ]; }
+
+# The one paragraph every record-emitting provider appends to instructions.txt
+# when turn. is in the set — the reason turn.<domain> is shaped differently from
+# every other row it just printed.
+_glp_turn_note() {
+    printf '\nTURN (coturn public mode): turn.%s MUST stay a DIRECT,\n' "${GL_DOMAIN}"
+    printf 'UNPROXIED A/AAAA record at the RELAY node — TURN is raw UDP/TCP on\n'
+    printf '3478/5349 plus the 49152-49200/udp relay window and cannot ride an HTTP\n'
+    printf 'tunnel/CDN proxy. The relay is a hostNetwork pod on a BACKEND node, which\n'
+    printf 'need not be the ingress node the other rows point at — name it with\n'
+    # %s, not a bare format string: this line STARTS with "--", which printf would
+    # eat as an end-of-options marker and then fail with no format argument.
+    printf '%s\n' '--turn-ip/--turn-ipv6. Keep /etc/hugmesh/coturn-public present on that'
+    printf 'node (hugmesh-coturn-firewall opens the ports). See docs/COTURN.md §5.\n'
+}
+
 # Decide the record TYPE + VALUE for a given host, from the available context.
 # Preference: an ingress IP -> A (+ AAAA if IPv6 present); else a tunnel CNAME.
 # The apex can NOT legally be a CNAME (RFC 1912), so when only a CNAME target is
@@ -152,6 +180,23 @@ glp_hostnames() {
 _glp_record_for() {
     local host="$1" is_apex="$2"
     _GLP_RTYPE=""; _GLP_RVALUE=""; _GLP_RTYPE2=""; _GLP_RVALUE2=""
+    # turn.<domain> (coturn PUBLIC mode) is raw UDP/TCP (3478/5349 + the relay
+    # window), NOT HTTP: a tunnel CNAME / CDN-proxied record can never carry it,
+    # so it is ALWAYS a direct A (+AAAA) at the RELAY node — never the tunnel
+    # target, and a distinct placeholder when no relay/ingress IP was given.
+    # GL_TURN_IP/GL_TURN_IPV6 are taken as a UNIT: once the operator names the
+    # relay node explicitly, the ingress node's AAAA is a different host and must
+    # not be pasted under turn.'s owner name.
+    if _glp_turn_host "${host}"; then
+        local v4 v6
+        if [ -n "${GL_TURN_IP:-}" ]; then v4="${GL_TURN_IP}"; v6="${GL_TURN_IPV6:-}"
+        else                              v4="${GL_INGRESS_IP:-}"; v6="${GL_INGRESS_IPV6:-}"; fi
+        _GLP_RTYPE="A"; _GLP_RVALUE="${v4:-REPLACE_WITH_RELAY_NODE_PUBLIC_IP}"
+        if [ -n "${v4}" ] && [ -n "${v6}" ]; then
+            _GLP_RTYPE2="AAAA"; _GLP_RVALUE2="${v6}"
+        fi
+        return 0
+    fi
     if [ -n "${GL_INGRESS_IP:-}" ]; then
         _GLP_RTYPE="A"; _GLP_RVALUE="${GL_INGRESS_IP}"
         if [ -n "${GL_INGRESS_IPV6:-}" ]; then _GLP_RTYPE2="AAAA"; _GLP_RVALUE2="${GL_INGRESS_IPV6}"; fi
@@ -280,6 +325,7 @@ glp_emit_byo-domain() {
             printf '\nNOTE: record VALUES are placeholders — re-run with --ingress-ip <IP>\n'
             printf '      or --tunnel-cname <name> to autofill the real targets.\n'
         fi
+        case " ${GL_SUBDOMAINS:-} " in *" turn "*) _glp_turn_note ;; esac
     } > "${out}/instructions.txt"
 
     return 0
@@ -313,6 +359,12 @@ glp_emit_cloudflare-tunnel() {
 
     # records.csv — Cloudflare bulk-import shape. Cloudflare CNAME-flattens the apex,
     # so a proxied CNAME at "@" is legal here (unlike a generic registrar).
+    #
+    # turn.<domain> is the EXCEPTION: the tunnel + the orange-cloud proxy are an
+    # HTTP(S) edge, and TURN is raw UDP/TCP (3478/5349 + the relay window). A
+    # proxied CNAME there advertises a relay address that answers no STUN packet
+    # at all, so it is emitted as a DIRECT, UNPROXIED A/AAAA at the relay node —
+    # the same rule _glp_record_for enforces for every other provider.
     {
         printf '# %s go-live record set for Cloudflare Tunnel (generated %s).\n' "${GL_DOMAIN}" "${now}"
         printf '# Add at Cloudflare -> DNS -> Records (or let cloudflared create them).\n'
@@ -321,6 +373,12 @@ glp_emit_cloudflare-tunnel() {
         printf 'type,name,content,ttl,proxied\n'
         local host
         while IFS= read -r host; do
+            if _glp_turn_host "${host}"; then
+                _glp_record_for "${host}" 0
+                printf '%s,%s,%s,%s,false\n' "${_GLP_RTYPE}" "${host}" "${_GLP_RVALUE}" "${ttl}"
+                [ -n "${_GLP_RTYPE2}" ] && printf '%s,%s,%s,%s,false\n' "${_GLP_RTYPE2}" "${host}" "${_GLP_RVALUE2}" "${ttl}"
+                continue
+            fi
             printf 'CNAME,%s,%s,%s,true\n' "${host}" "${target}" "${ttl}"
         done < <(glp_hostnames)
     } > "${out}/records.csv"
@@ -364,6 +422,7 @@ glp_emit_cloudflare-tunnel() {
         printf '     -> writes /etc/hugmesh/go-live; firewall-reconcile flips PUBLIC within 60s.\n'
         printf '5. Rollback:  hugmesh-go-live rollback\n'
         printf '\nNOTE: cloudflared is pruned from ENV=test images — needs an ENV=prod image.\n'
+        case " ${GL_SUBDOMAINS:-} " in *" turn "*) _glp_turn_note ;; esac
     } > "${out}/instructions.txt"
     return 0
 }

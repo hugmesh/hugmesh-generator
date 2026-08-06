@@ -1,0 +1,17 @@
+# Strategic-merge patch: put the coturn pod on the NODE network so 3478/5349
+# (UDP+TCP) and the whole 49152-49200/udp relay window bind 1:1 on the node's
+# interfaces — the only exposure that preserves the exact ports
+# XOR-RELAYED-ADDRESS advertises (see kustomization.yaml for why NodePort
+# cannot). dnsPolicy ClusterFirstWithHostNet keeps in-cluster DNS resolving
+# (the lan-dns hostNetwork idiom). Everything else — SA, MCS s0:c67, secret
+# mounts, hardened container securityContext — stays the base's.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-coturn
+  namespace: hugmesh-backend
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet

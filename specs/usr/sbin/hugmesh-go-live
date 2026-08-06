@@ -53,6 +53,11 @@ ETC="${GL_ETC_HUGMESH:-/etc/hugmesh}"
 CLUSTER_DOMAIN_FILE="${ETC}/cluster-domain"
 RELEASE_STATE_FILE="${ETC}/release-state"
 GO_LIVE_MARKER="${ETC}/go-live"
+# coturn PUBLIC-mode marker — the SAME node-side gate hugmesh-coturn-firewall
+# reads (docs/COTURN.md §5). When present, the TURN hostname joins the derived
+# record set below so turn.<domain> is provisioned by the same provider emits
+# as every other public hostname.
+COTURN_PUBLIC_MARKER="${ETC}/coturn-public"
 PROVIDERS_LIB="${GL_PROVIDERS_LIB:-/usr/lib/hugmesh/go-live-providers.sh}"
 DEFAULT_OUT_DIR="${GL_OUT_DIR:-/var/lib/hugmesh/go-live/out}"
 LOG_TAG="hugmesh-go-live"
@@ -89,6 +94,17 @@ validate_inputs() {
         [[ "${GL_INGRESS_IPV6}" =~ ^[0-9A-Fa-f:]{2,45}(\.[0-9]{1,3}(\.[0-9]{1,3}){2})?$ ]] \
             || die "--ingress-ipv6 is not a valid IPv6 literal"
     fi
+    # --turn-ip/--turn-ipv6 land verbatim in the SAME zone/CSV rows as the ingress
+    # pair, so they get the SAME shape check — a metachar/newline here would forge
+    # extra DNS rows exactly the way an unvalidated --ingress-ip would.
+    if [ -n "${GL_TURN_IP:-}" ]; then
+        [[ "${GL_TURN_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+            || die "--turn-ip is not a valid IPv4 address"
+    fi
+    if [ -n "${GL_TURN_IPV6:-}" ]; then
+        [[ "${GL_TURN_IPV6}" =~ ^[0-9A-Fa-f:]{2,45}(\.[0-9]{1,3}(\.[0-9]{1,3}){2})?$ ]] \
+            || die "--turn-ipv6 is not a valid IPv6 literal"
+    fi
     if [ -n "${GL_DDNS_SUBDOMAIN:-}" ]; then
         [[ "${GL_DDNS_SUBDOMAIN}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
             || die "--ddns-subdomain must be a single lowercase DNS label ([a-z0-9-], 1-63 chars, no dots)"
@@ -123,6 +139,17 @@ load_context() {
     # Derived: the public hostnames the record sets / autofill target — apex plus
     # the SAME service labels apps/12-cloudflared.yaml + the gateway promise.
     : "${GL_SUBDOMAINS:=@ api matrix mastodon}"
+    # coturn PUBLIC mode (marker-gated, DARK by default): with the coturn-public
+    # marker present the TURN hostname is appended so turn.<domain> rides the
+    # same record emits. Never appended twice; an explicit GL_SUBDOMAINS that
+    # already lists turn wins as-is. The providers special-case turn. to a
+    # DIRECT, UNPROXIED A record at --turn-ip (TURN is raw UDP/TCP — a
+    # tunnel/CDN-proxied record cannot carry it; see _glp_record_for and
+    # glp_emit_cloudflare-tunnel).
+    case " ${GL_SUBDOMAINS} " in
+        *" turn "*) ;;
+        *) [ -e "${COTURN_PUBLIC_MARKER}" ] && GL_SUBDOMAINS="${GL_SUBDOMAINS} turn" ;;
+    esac
     export GL_DOMAIN GL_SUBDOMAINS
 }
 
@@ -304,7 +331,8 @@ USAGE:
   hugmesh-go-live status
   hugmesh-go-live list
   hugmesh-go-live plan   --provider ID [--out-dir DIR] [--ingress-ip IP]
-                            [--ingress-ipv6 IP6] [--tunnel-cname NAME] [--domain D] [--ttl N]
+                            [--ingress-ipv6 IP6] [--turn-ip IP] [--turn-ipv6 IP6]
+                            [--tunnel-cname NAME] [--domain D] [--ttl N]
                             [--ddns-subdomain LABEL] [--ddns-service duckdns|cloudflare]
                             [--token-file PATH] [--keys-dir DIR]
   hugmesh-go-live commit --provider ID [--persist-public] [-y|--yes]
@@ -321,6 +349,7 @@ main() {
     local provider="" out="${DEFAULT_OUT_DIR}"
     ASSUME_YES=0 PERSIST_PUBLIC=0 REVERT_RELEASE_STATE=0
     GL_INGRESS_IP="${GL_INGRESS_IP:-}" GL_INGRESS_IPV6="${GL_INGRESS_IPV6:-}"
+    GL_TURN_IP="${GL_TURN_IP:-}" GL_TURN_IPV6="${GL_TURN_IPV6:-}"
     GL_TUNNEL_CNAME="${GL_TUNNEL_CNAME:-}" GL_TTL="${GL_TTL:-300}" GL_DOMAIN_OVERRIDE=""
     GL_DDNS_SUBDOMAIN="${GL_DDNS_SUBDOMAIN:-}" GL_DDNS_SERVICE="${GL_DDNS_SERVICE:-duckdns}"
     GL_TOKEN_FILE="${GL_TOKEN_FILE:-}" GL_KEYS_DIR="${GL_KEYS_DIR:-${ETC}/keys}"
@@ -331,6 +360,8 @@ main() {
             --out-dir)               out="$2"; shift 2 ;;
             --ingress-ip)            GL_INGRESS_IP="$2"; shift 2 ;;
             --ingress-ipv6)          GL_INGRESS_IPV6="$2"; shift 2 ;;
+            --turn-ip)               GL_TURN_IP="$2"; shift 2 ;;
+            --turn-ipv6)             GL_TURN_IPV6="$2"; shift 2 ;;
             --tunnel-cname)          GL_TUNNEL_CNAME="$2"; shift 2 ;;
             --ddns-subdomain)        GL_DDNS_SUBDOMAIN="$2"; shift 2 ;;
             --ddns-service)          GL_DDNS_SERVICE="$2"; shift 2 ;;
@@ -346,7 +377,7 @@ main() {
         esac
     done
     validate_inputs
-    export GL_INGRESS_IP GL_INGRESS_IPV6 GL_TUNNEL_CNAME GL_TTL
+    export GL_INGRESS_IP GL_INGRESS_IPV6 GL_TURN_IP GL_TURN_IPV6 GL_TUNNEL_CNAME GL_TTL
     export GL_DDNS_SUBDOMAIN GL_DDNS_SERVICE GL_TOKEN_FILE GL_KEYS_DIR
 
     case "${cmd}" in

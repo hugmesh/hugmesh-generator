@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+
+description="Reconcile the coturn public-TURN node firewall (marker-gated: /etc/hugmesh/coturn-public opens 3478/5349 + the relay window; absent = closed backstop)"
+
+# Runs ONCE at boot (a oneshot), AFTER firewalld and the release-gate backstop
+# (cosmetic layering — each owns its own nftables table and never conflicts)
+# and BEFORE containerd/kubelet so the closed-by-default backstop is live
+# before the coturn-public hostNetwork pod could ever bind a node port. The
+# 60s cron half (cron.d/hugmesh-coturn-firewall) is the convergence floor for
+# a LIVE marker flip (no reboot/reflash required).
+
+depend() {
+    need net
+    after firewall hugmesh-firewall-reconcile
+    before containerd kubelet tailscaled
+}
+
+command="/usr/sbin/hugmesh-coturn-firewall"
+command_background=false
+
+start() {
+    ebegin "Reconciling the coturn public-TURN node firewall (fail-closed to the existing ruleset on error)"
+    "${command}"
+    eend $? "coturn firewall reconcile reported an unexpected error (existing ruleset preserved)"
+}
+
+stop() {
+    return 0
+}

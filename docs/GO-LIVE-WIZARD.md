@@ -113,7 +113,13 @@ The driver reads brand context from the baked files: apex domain from
 `/etc/hugmesh/cluster-domain`, posture from `/etc/hugmesh/release-state`.
 The public hostnames it autofills are the apex plus `api.`, `matrix.`,
 `mastodon.` — the same set [`specs/cluster/apps/12-cloudflared.yaml`](../specs/cluster/apps/12-cloudflared.yaml)
-and the gateway already promise.
+and the gateway already promise — plus `turn.` **only** on a node carrying
+`/etc/hugmesh/coturn-public` (coturn public mode, [`COTURN.md`](COTURN.md) §5).
+Without that marker the emitted record sets are byte-identical to before the
+knob existed. `turn.` is the one hostname that never rides the HTTP edge: it is
+always a direct, unproxied A/AAAA at the relay node (`--turn-ip` /
+`--turn-ipv6`, defaulting to the ingress pair), never a tunnel CNAME — TURN is
+raw UDP/TCP and a proxied record would advertise a relay that answers nothing.
 
 > **The go-live wizard flips only the public apex — never the orchestration
 > superdomain.** Two domains coexist on a mesh and must not be conflated:

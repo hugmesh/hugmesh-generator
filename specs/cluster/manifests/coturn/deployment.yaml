@@ -10,11 +10,11 @@
 # manifests/external-secrets/coturn-externalsecrets.yaml.
 #
 # PORTS: STUN/TURN 3478 (UDP+TCP), TLS 5349 (UDP+TCP), relay range 49152-49200
-# (UDP) — a deliberately SMALL relay window (≈49 ports) so the K8s Service/NodePort
-# port list stays bounded; widen min-port/max-port + the Service ports together for
-# more concurrent calls. PUBLIC-REACHABILITY of these ports (NodePort/LoadBalancer +
-# external-ip + firewall) is operator/cluster-topology work — DEFERRED, documented
-# in docs/COTURN.md.
+# (UDP) — a deliberately SMALL relay window (≈49 ports); widen min-port/max-port +
+# the NetworkPolicy relay window + the node-firewall relay window together for
+# more concurrent calls. PUBLIC-REACHABILITY of these ports is the OPT-IN sibling
+# overlay ../coturn-public (hostNetwork + external-ip knob + turns: TLS cert) —
+# this base stays in-cluster-only and DARK-compatible. See docs/COTURN.md §5.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -73,10 +73,13 @@ data:
     log-file=stdout
     no-stdout-log=false
     simple-log
-    # external-ip is set at runtime from the pod's status.hostIP (downward API) so
-    # relay candidates advertise a routable address. For a node WITHOUT a public IP
-    # this falls back to the host IP; true public reachability (NodePort/LB +
-    # firewall) is DEFERRED operator work (docs/COTURN.md).
+    # external-ip is appended at runtime: the coturn-public-config override when
+    # set (NAT: the routable public IP, or coturn's "public/private" pair form),
+    # else the pod's status.hostIP (downward API). cert=/pkey= for the turns:
+    # listener are appended only when the coturn-tls Secret exists (the
+    # ../coturn-public overlay ships it). Both seams are DARK by default — with
+    # the overlay off neither source exists and the conf is byte-equivalent to
+    # the pre-overlay behaviour. See docs/COTURN.md §5.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -126,16 +129,32 @@ spec:
               CONF=/run/coturn/turnserver.conf
               cp /etc/coturn/turnserver.conf "${CONF}"
               echo "static-auth-secret=$(cat /run/secrets/coturn/secret)" >> "${CONF}"
-              echo "external-ip=${COTURN_EXTERNAL_IP}" >> "${CONF}"
+              echo "external-ip=${COTURN_EXTERNAL_IP_OVERRIDE:-${COTURN_EXTERNAL_IP}}" >> "${CONF}"
+              if [ -s /run/secrets/coturn-tls/tls.crt ] && [ -s /run/secrets/coturn-tls/tls.key ]; then
+                echo "cert=/run/secrets/coturn-tls/tls.crt" >> "${CONF}"
+                echo "pkey=/run/secrets/coturn-tls/tls.key" >> "${CONF}"
+              fi
               exec turnserver -c "${CONF}" --no-cli
           env:
             # external-ip for relay candidates — defaults to the node host IP via
-            # the downward API. PUBLIC reachability (NodePort/LB + firewall) is
-            # deferred operator work; the relay degrades to host-IP candidates.
+            # the downward API; behind NAT that address is NOT routable, so the
+            # coturn-public-config override (below) must carry the public IP.
             - name: COTURN_EXTERNAL_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            # OPT-IN NAT knob (DARK seam): coturn-public-config ships ONLY with the
+            # ../coturn-public overlay; optional:true keeps this env unset (and the
+            # downward-API default in force) whenever the overlay is off. The value
+            # is appended VERBATIM as external-ip=<value>, so both upstream forms
+            # work: "203.0.113.10" or the NAT pair "203.0.113.10/172.17.19.101"
+            # (public/private — coturn maps XOR-RELAYED-ADDRESS to the public IP).
+            - name: COTURN_EXTERNAL_IP_OVERRIDE
+              valueFrom:
+                configMapKeyRef:
+                  name: coturn-public-config
+                  key: external-ip
+                  optional: true
           ports:
             - { name: stun-udp,  containerPort: 3478, protocol: UDP }
             - { name: stun-tcp,  containerPort: 3478, protocol: TCP }
@@ -148,6 +167,7 @@ spec:
             - { name: config,  mountPath: /etc/coturn, readOnly: true }
             - { name: runtime, mountPath: /run/coturn }
             - { name: secret,  mountPath: /run/secrets/coturn, readOnly: true }
+            - { name: tls,     mountPath: /run/secrets/coturn-tls, readOnly: true }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -167,11 +187,22 @@ spec:
         - name: secret
           secret:
             secretName: coturn-shared-secret
+        # OPT-IN turns: TLS cert (DARK seam): the Vault-PKI-issued turn.<domain>
+        # server cert (Secret coturn-tls) ships ONLY with the ../coturn-public
+        # overlay; optional:true mounts an EMPTY volume when it is absent, the
+        # start script's -s test fails, and no cert=/pkey= lines are appended —
+        # the TLS listeners stay un-provisioned exactly as before.
+        - name: tls
+          secret:
+            secretName: coturn-tls
+            optional: true
 ---
 # ── Services ─────────────────────────────────────────────────────────────────
 # ClusterIP STUN/TURN Service (in-cluster discovery; tuwunel advertises this DNS
-# name in turn_uris). PUBLIC exposure (NodePort/LoadBalancer + external-ip) for
-# real off-LAN relay is DEFERRED operator/cluster-topology work — see docs/COTURN.md.
+# name in turn_uris by default). PUBLIC exposure for real off-LAN relay is the
+# OPT-IN ../coturn-public overlay (hostNetwork — NOT NodePort: the kube-proxy
+# NodePort range cannot claim 3478/5349 and cannot 1:1-preserve the 49152-49200
+# relay window that XOR-RELAYED-ADDRESS advertises) — see docs/COTURN.md §5.
 apiVersion: v1
 kind: Service
 metadata:

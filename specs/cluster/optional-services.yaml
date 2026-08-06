@@ -470,8 +470,9 @@ spec:
     # coturn owns NO gateway HOST and NO gateway routes: it is a direct UDP/TCP relay
     # (3478 STUN/TURN + 5349 TLS + a relay window), discovered by clients via the
     # Matrix voip/turnServer endpoint tuwunel serves — NOT via the be-gateway. PUBLIC
-    # reachability of those ports (NodePort/LoadBalancer + external-ip + firewall) is
-    # DEFERRED operator/cluster-topology work (docs/COTURN.md).
+    # reachability of those ports is the OPT-IN manifests/coturn-public overlay
+    # (repoint the 13a element's path; hostNetwork + external-ip knob + turns: cert
+    # + the /etc/hugmesh/coturn-public node-firewall marker) — docs/COTURN.md §5.
     - slug: coturn
       displayName: "coturn (TURN/STUN server)"
       namespace: hugmesh-backend

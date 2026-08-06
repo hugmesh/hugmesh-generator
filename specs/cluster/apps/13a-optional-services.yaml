@@ -83,7 +83,12 @@ spec:
           # host-only ICE). Flip to "true" (+ the installed-services ConfigMap
           # coturn flag) to add it on a LIVE cluster — the per-domain add/remove
           # lever. lands in hugmesh-backend so it shares the TURN shared secret
-          # with tuwunel.
+          # with tuwunel. PUBLIC reachability (OPT-IN): REPOINT this element's
+          # path to specs/cluster/manifests/coturn-public — the overlay renders
+          # the SAME base objects plus hostNetwork + the external-ip/turn-uris
+          # knobs + the turns: cert (the cassandra-hardening repoint idiom: one
+          # element, one Application, base and overlay can never collide). See
+          # docs/COTURN.md §5.
           - { slug: coturn,  path: specs/cluster/manifests/coturn,        namespace: hugmesh-backend,  installed: "false" }
           # meshbridge — Meshtastic LoRa mesh <-> Matrix bridge (DEFAULT-OFF,
           # RUNTIME-ONLY). Like coturn/anubis, meshbridge ships NO baked bootstrap

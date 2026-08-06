@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-backend
+
+# coturn-public — OPT-IN public-reachability overlay over ../coturn (docs/COTURN.md §5).
+#
+# ENABLE by REPOINTING the coturn element's `path` in apps/13a-optional-services.yaml
+# from specs/cluster/manifests/coturn to THIS dir (the cassandra-hardening
+# "repoint the source path" idiom) — one element, one Application, so the base
+# and the overlay can never fight over the same objects. Flip back to remove.
+#
+# WHY hostNetwork AND NOT NodePort/LoadBalancer:
+#   * kube-proxy's NodePort range (default 30000-32767) cannot claim 3478/5349,
+#     and TURN's relay window CANNOT be port-remapped at all — the client's peer
+#     sends straight to the XOR-RELAYED-ADDRESS ip:port coturn allocated
+#     (49152-49200/udp here), so every relay port must be reachable 1:1 at the
+#     advertised external-ip. hostNetwork binds all three ranges natively on the
+#     node (the lan-dns hostNetwork idiom), no remapping anywhere.
+#   * a cloud LoadBalancer with UDP passthrough + per-port mappings CAN do this
+#     instead (map 3478/5349 + the whole relay window 1:1, set the LB address as
+#     the external-ip override) — that path is documented, not shipped: the
+#     reference fleet has no cloud LB.
+#
+# The pod NetworkPolicy (../coturn/network-policy.yaml) does not constrain
+# host-network traffic — with this overlay the NODE firewall is the enforcement
+# point: hugmesh-coturn-firewall (specs/usr/sbin/) opens 3478/5349 (UDP+TCP) +
+# 49152-49200/udp ONLY while /etc/hugmesh/coturn-public exists on the relay node.
+resources:
+  - ../coturn
+  - public-config.yaml
+  - tls-externalsecret.yaml
+
+patches:
+  - path: deployment-hostnetwork.yaml
+    target: { kind: Deployment, name: hugmesh-coturn }

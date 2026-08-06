@@ -1,0 +1,31 @@
+# coturn-public-config — the two operator knobs of the public-reachability
+# overlay. Ships ONLY with this overlay; the base coturn Deployment and tuwunel
+# reference BOTH keys with optional:true, so when this ConfigMap is absent (the
+# dark default) neither consumer changes behaviour by a single byte.
+#
+#   external-ip  -> coturn's advertised relay address (Deployment env
+#                   COTURN_EXTERNAL_IP_OVERRIDE). Empty = keep the downward-API
+#                   node hostIP (fine when the node itself holds the public IP).
+#                   Behind NAT set the routable public IP — either upstream form
+#                   verbatim: "203.0.113.10" or "203.0.113.10/172.17.19.101"
+#                   (public/private pair; coturn NATs XOR-RELAYED-ADDRESS).
+#   turn-uris    -> the PUBLIC TURN URI set tuwunel advertises instead of the
+#                   in-cluster svc DNS name (env TUWUNEL_TURN_URIS — the
+#                   Conduit-family env override; a TOML/JSON array literal in
+#                   the value is the documented array syntax). Authored as
+#                   hugmesh.systems so rebrand_sysroot rewrites the domain; the
+#                   turns: URI matches the turn.<domain> cert this overlay
+#                   issues (tls-externalsecret.yaml). Roll the tuwunel pod after
+#                   enabling so it re-reads the now-present optional env.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coturn-public-config
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: coturn
+    app.kubernetes.io/part-of: hugmesh.systems
+    snapdragon.systems/optional-service: coturn
+data:
+  external-ip: ""
+  turn-uris: '["turn:turn.hugmesh.systems:3478?transport=udp", "turn:turn.hugmesh.systems:3478?transport=tcp", "turns:turn.hugmesh.systems:5349?transport=tcp"]'

@@ -1,0 +1,16 @@
+# hugmesh-coturn-firewall — coturn public-TURN node-firewall convergence timer (60s).
+#
+# The TIMER half of the coturn public-reachability gate (the OpenRC oneshot
+# renders the hugmesh_coturn_relay backstop + reconciles the firewalld runtime
+# port set once at boot; this cron re-runs it every 60s so touching/deleting
+# /etc/hugmesh/coturn-public on a LIVE relay node — or a firewalld restart
+# resetting the runtime port set to the baked baseline — converges without a
+# reboot). cronie reads /etc/cron.d — the same mechanism every other hugmesh
+# reconcile timer uses.
+#
+# The reconcile is idempotent + FAIL-CLOSED: a render/apply error leaves the
+# existing ruleset in place and logs here (stdout+stderr are captured, so cron
+# never mails root).
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/hugmesh-coturn-firewall >> /var/log/hugmesh-coturn-firewall.log 2>&1

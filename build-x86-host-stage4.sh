@@ -2922,6 +2922,17 @@ bake_host_firewall() {
     cp "${SHARED_SPECS}/etc/init.d/hugmesh-firewall-reconcile" "${SYSROOT}/etc/init.d/hugmesh-firewall-reconcile"
     chmod +x "${SYSROOT}/etc/init.d/hugmesh-firewall-reconcile"
     cp "${SHARED_SPECS}/etc/cron.d/hugmesh-firewall-reconcile" "${SYSROOT}/etc/cron.d/hugmesh-firewall-reconcile"
+    # ── coturn public-TURN node firewall: the marker-gated opener/backstop for the
+    #    OPT-IN coturn-public overlay (docs/COTURN.md §5). Baked unconditionally
+    #    alongside the release-gate reconcile — inert-closed until an operator
+    #    touches /etc/hugmesh/coturn-public on the relay node (then it admits
+    #    3478/5349 UDP+TCP + the 49152-49200/udp relay window through firewalld
+    #    at runtime and lifts its own nftables backstop; converges <=60s).
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-coturn-firewall"      "${SYSROOT}/usr/sbin/hugmesh-coturn-firewall"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-coturn-firewall"
+    cp "${SHARED_SPECS}/etc/init.d/hugmesh-coturn-firewall"    "${SYSROOT}/etc/init.d/hugmesh-coturn-firewall"
+    chmod +x "${SYSROOT}/etc/init.d/hugmesh-coturn-firewall"
+    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-coturn-firewall"    "${SYSROOT}/etc/cron.d/hugmesh-coturn-firewall"
     # ── Go-Live wizard: the human-facing effector of this same firewall-reconcile /
     #    release-state mechanism (driver writes /etc/hugmesh/go-live; reconcile
     #    converges <=60s). Baked unconditionally alongside reconcile — inert until the
@@ -4196,7 +4207,7 @@ LIGHTDM
         info "Media-data: /media auto-detect + Steam->${STEAM_DIR} + Vaults (gocryptfs) wired (steam=${STEAM_DELIVERY})"
     fi
 else
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall hugmesh-firewall-reconcile hugmesh-go-live-reconcile containerd kubelet auditd local)
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)

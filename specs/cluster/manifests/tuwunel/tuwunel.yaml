@@ -67,9 +67,11 @@ data:
     #
     # turn_uris is harmless to leave set even when coturn is off: it only matters if
     # a client receives a non-empty turn_secret (it never does while coturn is off).
-    # It points at the in-cluster coturn Service; for OFF-LAN clients the operator
-    # must additionally expose coturn publicly (NodePort/LoadBalancer + external-ip)
-    # and may set turn_uris to that public address — see docs/COTURN.md (DEFERRED).
+    # It points at the in-cluster coturn Service. For OFF-LAN clients the OPT-IN
+    # coturn-public overlay (manifests/coturn-public) ships the PUBLIC URI set in
+    # ConfigMap coturn-public-config, and the TUWUNEL_TURN_URIS env below
+    # (optional:true) overrides THIS default with it — the toml line itself never
+    # changes, so the dark default stays byte-identical. See docs/COTURN.md §5.
     turn_uris = ["turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=udp", "turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=tcp"]
     turn_secret = ""    # DARK: filled at runtime by TUWUNEL_TURN_SECRET only when coturn is up
     turn_ttl = 86400
@@ -161,6 +163,22 @@ spec:
                 secretKeyRef:
                   name: coturn-shared-secret
                   key: secret
+                  optional: true
+            # DARK/GATED public TURN URIs (optional service: coturn, PUBLIC mode).
+            # Same optional-source pattern as TUWUNEL_TURN_SECRET: ConfigMap
+            # coturn-public-config ships ONLY with the coturn-public overlay
+            # (manifests/coturn-public), so with the overlay off this env is
+            # unset and the in-cluster turn_uris default in tuwunel.toml stays in
+            # force — byte-identical dark behaviour. When the overlay is on, the
+            # value is a TOML/JSON array literal (the documented Conduit-family
+            # env syntax for array options, e.g. CONDUIT_TRUSTED_SERVERS=
+            # '["matrix.org"]') carrying the turn:/turns: turn.<domain> URIs that
+            # match the overlay's external-ip + coturn-tls cert.
+            - name: TUWUNEL_TURN_URIS
+              valueFrom:
+                configMapKeyRef:
+                  name: coturn-public-config
+                  key: turn-uris
                   optional: true
           volumeMounts:
             - { name: config, mountPath: /etc/tuwunel }

@@ -144,6 +144,41 @@ data:
     #    (manifests/media-poisoner; app/serve.py terminates TLS itself, no sidecar).
     #    server_flag+client_flag so the same cert can serve AND (future) present a
     #    client identity; the worker enforces ssl.CERT_REQUIRED against ca.crt.
+    #    Handled separately below (not in the generic loop): the real Service is
+    #    named hugmesh-media-poisoner, not media-poisoner, so
+    #    media-poisoner-externalsecrets.yaml requests hugmesh-media-poisoner
+    #    SANs the generic "${app},${app}.svc.cluster.local" pattern doesn't cover.
+    #    harbor = the Harbor registry's expose.tls server cert (manifests/harbor
+    #    via apps/03a-harbor.yaml) — the chart's bundled nginx front-end
+    #    terminates TLS with it. Same server_flag+client_flag shape as the rest.
+    #    Handled separately below (not in the generic loop): the Helm chart's
+    #    real Service name is harbor-core, not harbor, so harbor-externalsecrets.yaml
+    #    requests harbor-core SANs the generic "${app},${app}.svc.cluster.local"
+    #    pattern doesn't cover.
+    #    coturn = the turns: (5349) SERVER cert for the PUBLIC TURN hostname
+    #    turn.<domain> (manifests/coturn-public/tls-externalsecret.yaml, the
+    #    OPT-IN public-reachability overlay). allow_subdomains on ${DOMAIN}
+    #    covers the turn.<domain> CN; the generic "${app}" SANs cover the
+    #    in-cluster names. The role existing unconditionally is harmless — a
+    #    cert is only MINTED when the overlay's ESO generator is deployed.
+    for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
+               hugmesh-superadmin-gateway \
+               hugmesh-api hugmesh-admin-bff-api \
+               hugmesh-mod-bff-api hugmesh-user-bff-api \
+               hugmesh-forum-bff-api \
+               hugmesh-wiki-bff-api \
+               hugmesh-mesh-bff-api \
+               hugmesh-character-forge-bff-api \
+               hugmesh-federation-api \
+               route-access-db admin-bff-db mod-bff-db user-bff-db \
+               federation-db forum-bff-db wiki-bff-db mesh-bff-db \
+               character-forge-bff-db \
+               akkoma-proxy tuwunel-proxy coturn; do
+      echo "==> role ${PKI}/roles/${app}"
+      vault write "${PKI}/roles/${app}" \
+        allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
+        allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
+        allow_localhost=false server_flag=true client_flag=true \
     for entry in hugmesh-pki-gateway:hugmesh-pki-gateway.hugmesh-pki \
                  hugmesh-superadmin-gateway:hugmesh-superadmin-gateway.hugmesh-pki \
                  hugmesh-be-gateway:hugmesh-be-gateway.hugmesh-backend \
