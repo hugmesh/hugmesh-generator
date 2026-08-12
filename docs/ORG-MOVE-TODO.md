@@ -7,8 +7,9 @@ renamed in GitHub settings — same org id). The plan CHANGED from a rename of
 going forward (repos are created/pushed there), and `Snapdragon-Systems` stays
 put permanently as a secondary copy — it is NOT renamed and NOT deleted, so the
 step list below (written for the rename plan) is historical. Every URL in this
-repo now points at `github.com/hugmesh/...`; repos are mirrored into `hugmesh`
-progressively, so a URL may 404 until its repo's mirror lands.
+repo now points at `github.com/hugmesh/...`; the mirror pass COMPLETED on
+2026-08-12 — all 40 `Snapdragon-Systems` repos exist in `hugmesh` with content
+(verified per-repo via the API), so every flipped URL resolves.
 
 This file is the authoritative inventory and procedure. Code sites that a human
 would reach for first carry a `TODO(org-move)` comment pointing here; the other
