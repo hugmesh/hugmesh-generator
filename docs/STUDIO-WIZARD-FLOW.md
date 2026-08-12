@@ -77,13 +77,16 @@ Driven by `MODE_SKIPPED_PAGES` in
 in [`gui/wizard.py`](../studio/hugmesh_studio/gui/wizard.py). Only VISITED pages are
 collected into `cfg`.
 
-- **Mesh node** (`mesh`) — skips role/hardware/branding:
-  `welcome → mode → worklist → network → keyzip → domains → users → system → home → build`
-- **Local Docker mesh** (side-flow) — no page walk:
-  `welcome → mode →` **inline `LocalMeshDialog`** (runs the dockerized node; no image)
-- **Mesh desktop client** (`cloud`) — skips worklist:
+- **Mesh node** (`mesh`) — skips role/hardware (branding is no longer skipped: it
+  also hosts the mesh web-login theme):
+  `welcome → mode → idp → worklist → branding → network → keyzip → domains → users → system → home → build`
+- **Local Docker mesh** (side-flow) — terminal wizard page, no image build:
+  `welcome → mode → localmesh` (the `LocalMeshPage` runs the dockerized node in-place;
+  `LocalMeshDialog` only survives as a standalone-host shim around the same page, not
+  the flow's launcher — Finish ends the branch here, `isFinalPage()`)
+- **Mesh desktop client** (`cloud`) — skips worklist/idp:
   `welcome → mode → role → hardware → branding → network → keyzip → domains → users → system → home → build`
-- **Standalone Gentoo desktop** (`standalone`) — skips worklist/keyzip/domains/users:
+- **Standalone Gentoo desktop** (`standalone`) — skips idp/worklist/keyzip/domains/users:
   `welcome → mode → role → hardware → branding → network → system → home → build`
 
 `ProgressPage` terminates each image path once it lands (WS-REVIEWUI).

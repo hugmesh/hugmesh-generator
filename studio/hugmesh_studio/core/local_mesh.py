@@ -204,15 +204,11 @@ def main(argv: list[str] | None = None) -> int:
                           login_server=args.login_server, workdir=args.workdir)
     node = LocalMeshNode(args.generator_dir, cfg)
 
-    # REQUIRED: MeshNode.start()/._env() interpolate the compose template's required
-    # `${TS_AUTHKEY:?…}` from os.environ — LocalMeshNode stages the key into the
-    # workdir .env but does NOT export it. Export it here (when supplied) BEFORE any
-    # verb so start()'s inherited guard passes and down/status/logs interpolate with
-    # the real key. (The GUI path has the same latent gap: LocalMeshDialog._start
-    # never exports TS_AUTHKEY either — start() only works there because the tray/GUI
-    # process may already carry it; flagged for a follow-up.)
-    if auth_key:
-        os.environ[ENV_AUTHKEY] = auth_key
+    # No os.environ export needed here: LocalMeshNode._authkey() already prefers
+    # cfg.auth_key over the environment, and _env() always overwrites TS_AUTHKEY from
+    # that effective key before every compose invocation — an ambient env var would be
+    # clobbered anyway. Same reasoning covers the GUI's _start(), which builds its
+    # LocalMeshNode straight from the form-collected cfg.
 
     if args.subcommand == "up":
         ok, why = node.available()

@@ -57,6 +57,8 @@ from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
     discover_brands)
+from ...core.seeded_credentials import load_roster
+from ._credentials_dialog import CredentialsDialog
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible
@@ -512,6 +514,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "only after a TOR=1 bring-up has published the address.")
         self.copy_onion_btn.clicked.connect(self._copy_onion)
         brow.addWidget(self.copy_onion_btn)
+        self.creds_btn = QtWidgets.QPushButton("Sign-in credentials")
+        self.creds_btn.setToolTip(
+            "Show the accounts `make stack-seed` provisions (username, password, "
+            "roles) with one-click copy — the answer to \"the login page is up, "
+            "who do I log in AS?\". Read from the seeder itself, so it matches "
+            "what was actually seeded. Deterministic throwaway TEST credentials "
+            "for this local stack only.")
+        self.creds_btn.clicked.connect(self._show_credentials)
+        brow.addWidget(self.creds_btn)
         brow.addStretch(1)
         lay.addLayout(brow)
 
@@ -824,6 +835,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _open_web_ui(self):
         QtGui.QDesktopServices.openUrl(
             QtCore.QUrl(self.boot._stack_node().web_url))
+
+    def _show_credentials(self):
+        """Show the seeded persona roster (username / password / roles), copyable.
+
+        Opened from the bring-up row rather than popped automatically after a
+        successful `up`: the operator often wants it again later (a second browser,
+        a different role) and a one-shot toast would be gone by then. The roster is
+        parsed fresh on each open so it reflects the CURRENT checkout + the same env
+        the Studio hands `make stack-seed`."""
+        roster = load_roster(self.generator_dir,
+                             env=self.boot._stack_node()._build_env())
+        CredentialsDialog(roster, front_door=self.boot._stack_node().web_url,
+                          parent=self).exec()
 
     def _copy_onion(self):
         """Copy the published .onion address to the clipboard. A normal browser
