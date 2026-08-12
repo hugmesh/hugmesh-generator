@@ -199,7 +199,8 @@ def _count_track_banner_echoes(rel_path: str) -> int:
 
 
 def test_tracks_lists_the_known_tracks():
-    assert set(pp.tracks()) == {"golive-plan", "clouddeploy-plan", "clouddeploy-apply"}
+    assert set(pp.tracks()) == {"golive-plan", "clouddeploy-plan", "clouddeploy-apply",
+                                "localmesh-up", "localmesh-m2", "localmesh-clean"}
 
 
 def test_golive_plan_track_banner_drift_probe():

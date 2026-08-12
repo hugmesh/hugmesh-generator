@@ -290,6 +290,23 @@ services:
 
   hugmesh-pki-gateway:
     <<: *amd64
+    # RestartPolicy was "no" on all three gateways (verified live:
+    # `docker inspect -f '{{.HostConfig.RestartPolicy.Name}}'` -> no), so ANY boot
+    # crash was terminal — the container Exited(1) and stayed down for the life of
+    # the stack. That is not hypothetical: this gateway took exactly that exit once
+    # this session on the Cassandra DDL timeout the env var below now widens, and
+    # the whole stack ran on two gateways until someone noticed by hand.
+    # The :5 CAP is deliberate. A bare `on-failure` retries forever, which would
+    # turn precisely the failure shape we are guarding against — a TRANSIENT,
+    # timeout-flavoured boot crash — into a silent infinite crash-loop that looks
+    # like "starting" in `docker ps` and never surfaces. Five attempts is enough to
+    # ride out a slow Cassandra (worst measured DDL interval ~1.16s; five boots is
+    # far more headroom than any observed stall needed) and few enough that a REAL,
+    # deterministic misconfiguration still parks the container in Exited(1) where
+    # `make stack-up`'s bad-exit count and the log sweep can see it.
+    # depends_on health gating below is already correct and is NOT the same
+    # protection: it sequences the FIRST boot, it cannot recover a later crash.
+    restart: "on-failure:5"
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
@@ -310,6 +327,26 @@ services:
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: datacenter1
+      # Cassandra REQUEST timeout — widened from the DataStax driver's 2s default.
+      # The gateway runs CassandraSchemaMigrations.runOnce as a fail-fast
+      # @PostConstruct: it issues the keyspace DDL synchronously at boot with NO
+      # retry, so one request that overruns the driver timeout is a hard
+      # ApplicationContext failure and the container exits — which is the
+      # Exited(1) boot crash this gateway actually took this session. Measured
+      # worst-case DDL interval against this stack's single-node Cassandra was
+      # ~1.16s, i.e. inside 2s but under a 2x margin — far too thin for a
+      # cold-start container competing with 46 siblings for CPU.
+      # Property verified real, not guessed: spring.cassandra.request.timeout,
+      # java.time.Duration, defaultValue "2s", read out of
+      # META-INF/spring-configuration-metadata.json in
+      # BOOT-INF/lib/spring-boot-cassandra-4.0.7.jar inside THIS running image.
+      # It binds from this SCREAMING_SNAKE spelling by Spring's relaxed binding,
+      # the same way CASSANDRA_* above reach spring.cassandra.* via application.yml.
+      # 20s is a boot-time ceiling, not a steady-state latency budget: the runtime
+      # cache reads are async and unaffected in the healthy case; the only thing it
+      # changes is how long a stalled DDL is allowed to finish instead of killing
+      # the process.
+      SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       # ── MFA ENFORCEMENT (gateway) — ON for the local dev stack ────────────────
       # The gateway is what ENFORCES MFA at route level (GatewayRouteAccessFilter
@@ -380,6 +417,10 @@ services:
 
   hugmesh-be-gateway:
     <<: *amd64
+    # Same "no" restart policy, same terminal-boot-crash exposure, same deliberate
+    # :5 cap — the pki-gateway block above carries the full rationale for why the
+    # cap is there rather than a bare `on-failure`.
+    restart: "on-failure:5"
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
@@ -400,6 +441,10 @@ services:
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: datacenter1
+      # Cassandra request timeout — same fail-fast @PostConstruct DDL migration and
+      # the same 2s driver default this gateway shares with pki-gateway above, where
+      # the measurement, the verified property name and the 20s reasoning live.
+      SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       # BFF session introspection back-channel (BffSessionAuthFilter) — same fix the
       # fe-gateway block below carries: app.bff-session.bff-base-url defaults to the
@@ -439,6 +484,12 @@ services:
   # reaches the whole stack at http://localhost:${PUBLIC_HOST_PORT}.
   hugmesh-fe-gateway:
     <<: *amd64
+    # Same "no" restart policy and the same deliberate :5 cap as pki-gateway above
+    # (full rationale there). It matters most HERE: this instance is the published
+    # front door, so its Exited(1) is not a degraded stack, it is a dead
+    # http://localhost:${PUBLIC_HOST_PORT} and an e2e suite that fails on
+    # connection-refused rather than on anything it meant to assert.
+    restart: "on-failure:5"
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
@@ -459,6 +510,11 @@ services:
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: datacenter1
+      # Cassandra request timeout — same fail-fast @PostConstruct DDL migration and
+      # the same 2s driver default this gateway shares with pki-gateway above, where
+      # the measurement, the verified property name and the 20s reasoning live. A
+      # DDL overrun here takes the platform front door down, not one back-end hop.
+      SPRING_CASSANDRA_REQUEST_TIMEOUT: 20s
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       # BFF session introspection back-channel (BffSessionAuthFilter): the gateway swaps the
       # opaque bff_ cookie for the caller's identity/roles against admin-bff. The property
@@ -615,6 +671,13 @@ services:
       # custody is already keyed (APP_BFF_CUSTODY_KEY below). Fail-open by design: any
       # exchange failure falls through to the pre-fix "no bearer" behaviour.
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
+      # The cookie->JWT session exchange calls this BFF back on ITS OWN address. Left
+      # empty (application.yml's default) the app derives an IN-CLUSTER k8s DNS name
+      # (snapdragon-<svc>.snapdragon-backend.svc.cluster.local) that does not exist on
+      # compose, so the loopback never connects, the exchange yields no bearer, and every
+      # /api/** call made with a session cookie answers 401 — while /bff/** keeps working,
+      # which reads as an authz bug rather than an unreachable hostname.
+      APP_BFF_EXCHANGE_SELF_BASE_URL: ${APP_BFF_EXCHANGE_SELF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
       # Explicit in-DNS JWKS (key fetch) — same host as the issuer above, so discovery
       # + iss-validation agree.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
@@ -753,6 +816,13 @@ services:
       # APP_BFF_CUSTODY_KEY). Fail-open by design: an exchange failure degrades to
       # the pre-fix no-header behaviour (every downstream has its own fail-closed gate).
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
+      # The cookie->JWT session exchange calls this BFF back on ITS OWN address. Left
+      # empty (application.yml's default) the app derives an IN-CLUSTER k8s DNS name
+      # (snapdragon-<svc>.snapdragon-backend.svc.cluster.local) that does not exist on
+      # compose, so the loopback never connects, the exchange yields no bearer, and every
+      # /api/** call made with a session cookie answers 401 — while /bff/** keeps working,
+      # which reads as an authz bug rather than an unreachable hostname.
+      APP_BFF_EXCHANGE_SELF_BASE_URL: ${APP_BFF_EXCHANGE_SELF_BASE_URL:-http://hugmesh-mod-bff-api:8080}
       # POST /bff/mod/findings/test-seed — e2e-fixture-only route. Ships dark upstream
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime findings data (mod-bff-api#63).

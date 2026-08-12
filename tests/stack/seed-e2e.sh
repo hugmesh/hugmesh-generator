@@ -533,6 +533,19 @@ provision_platform() {  # <username> <matrix|mastodon> <jar>
 onboard_persona() {  # <username>
   local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code roles rc=0
   case " ${SEED_REGISTRATION_SKIP} " in *" ${u} "*) return 2 ;; esac
+  # NEVER onboard an EMAIL-shaped handle. Those are the invite-flow fixtures
+  # (mallory@, frank@, rbac-pending@, rbac-approved@ …) that the specs drive through
+  # the registration UI themselves — spec 03 registers frank@gmail.com and asserts the
+  # complete-view appears; spec 17 does the same for rbac-pending@gmail.com. Onboarding
+  # them here deletes the very state those specs exist to exercise, and they fail with
+  # a bare "getByTestId('complete-view') not found" that points nowhere near the cause.
+  # Specs that DO want these complete (e.g. 04's alice@/bob@…) call onboard() in
+  # helpers.ts themselves, so skipping here costs them nothing.
+  # This is a SHAPE rule, not a list, because the two spellings differ: the roster
+  # declares `rbac-pending@gmail.com` while Casdoor stores the normalised
+  # `rbac-pending-gmail-com`. A name-list written in either spelling silently misses
+  # the other — which is exactly how this regressed.
+  case "${u}" in *@*) return 2 ;; esac
   # Stage 1: a real session cookie, exactly as the browser gets one.
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -c "${jar}" \
             -X POST "${FRONT_DOOR}/bff/login" -H 'content-type: application/json' \

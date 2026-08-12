@@ -199,6 +199,20 @@ def track_declared_callsites(track: str, provider: str = "") -> int:
     return entry["banner_callsites"] if entry else 0
 
 
+def track_banner_sources(track: str, provider: str = "") -> list[str]:
+    """Generator-root-relative files whose ``==>`` echoes THIS track's patterns pin.
+
+    The go-live / cloud-deploy tracks each have exactly one driver script, so their
+    drift probes could name it in the test. A local-mesh bring-up has SIX emitters
+    (the Makefile plus five shell scripts it invokes), and the probe must not hardcode
+    that list next to the table it is checking — that is precisely the drift the probe
+    exists to catch. Declaring the emitters IN the table entry keeps one source of
+    truth: add a banner from a new script and the table (not the test) is what has to
+    learn about it. ``[]`` for a track that declares none (nothing to probe)."""
+    entry = _track_entry(track, provider)
+    return list(entry.get("banner_sources", ())) if entry else []
+
+
 @dataclass
 class ProgressState:
     phase_index: int          # -1 = no known phase reached yet (indeterminate)

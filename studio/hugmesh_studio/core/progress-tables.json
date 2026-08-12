@@ -733,6 +733,135 @@
                   ]
               }
           }
+      },
+      "localmesh-up": {
+          "banner_callsites": 12,
+          "banner_sources": [
+              "Makefile",
+              "scripts/clone-all-repos.sh",
+              "scripts/patch-stack-src.sh",
+              "tests/stack/gen-certs.sh",
+              "tests/stack/gen-mastodon-env.sh",
+              "tests/stack/m2-bootstrap.sh"
+          ],
+          "phases": [
+              {
+                  "label": "Private maven prerequisites",
+                  "any": [
+                      "Private-maven bootstrap"
+                  ]
+              },
+              {
+                  "label": "Fetch repo source",
+                  "any": [
+                      "Cloning ",
+                      "stack-clone: SKIPPED"
+                  ]
+              },
+              {
+                  "label": "Patch the checkouts",
+                  "any": [
+                      "patch-stack-src:"
+                  ]
+              },
+              {
+                  "label": "TLS front-door certificates",
+                  "any": [
+                      "Generating CA + server cert",
+                      "stack-certs:"
+                  ]
+              },
+              {
+                  "label": "Social tier env (Mastodon)",
+                  "any": [
+                      "Generating dev ",
+                      "present — healed any missing/empty keys"
+                  ]
+              },
+              {
+                  "label": "Build images + start containers",
+                  "any": [
+                      "Local stack: ENV="
+                  ]
+              },
+              {
+                  "label": "Front door up",
+                  "any": [
+                      "Up. Front door:"
+                  ]
+              },
+              {
+                  "label": "Seed identity + personas",
+                  "any": [
+                      "Seeding the running stack"
+                  ]
+              },
+              {
+                  "label": "Sign-in ready (overlay, Tor, finish)",
+                  "any": [
+                      "Seeded. Real SSO web login:"
+                  ]
+              }
+          ]
+      },
+      "localmesh-m2": {
+          "banner_callsites": 6,
+          "banner_sources": [
+              "tests/stack/m2-bootstrap.sh"
+          ],
+          "phases": [
+              {
+                  "label": "Build the private maven artifacts",
+                  "any": [
+                      "Private-maven bootstrap"
+                  ]
+              },
+              {
+                  "label": "Artifacts built / already cached",
+                  "any": [
+                      "Artifacts: "
+                  ]
+              },
+              {
+                  "label": "Registry container",
+                  "any": [
+                      "Starting registry container",
+                      "already running (kept)"
+                  ]
+              },
+              {
+                  "label": "Registry self-check",
+                  "any": [
+                      "Registry self-check OK"
+                  ]
+              },
+              {
+                  "label": "Write the compose env override",
+                  "any": [
+                      "Wrote "
+                  ]
+              }
+          ]
+      },
+      "localmesh-clean": {
+          "banner_callsites": 2,
+          "banner_sources": [
+              "Makefile"
+          ],
+          "phases": [
+              {
+                  "label": "Remove containers, volumes and built images",
+                  "any": [
+                      "Removing the local stack"
+                  ]
+              },
+              {
+                  "label": "Clean — next bring-up is cold",
+                  "any": [
+                      "Clean. Next bring-up is a COLD build"
+                  ]
+              }
+          ]
       }
   }
 }

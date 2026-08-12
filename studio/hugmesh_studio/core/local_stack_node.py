@@ -21,6 +21,8 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
+from .local_services import federation_env
+
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 
 # Where the OPT-IN hugmesh-tor service copies the minted v3 .onion hostname
@@ -90,11 +92,13 @@ class StackStatus:
 
 class LocalStackNode:
     def __init__(self, generator_dir: str, env: str = "test", social: bool = False,
-                 public_host_port: int = 8088, domain: str = "",
+                 public_host_port: int = 8088, public_https_port: int = 8488,
+                 domain: str = "",
                  source_mode: str = "clone", source_dir: str = "",
                  web_locales: tuple[str, ...] = (), login_theme_css: str = "",
                  with_tor: bool = False, idp: str = "casdoor",
-                 idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = ""):
+                 idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
+                 services=None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -105,6 +109,10 @@ class LocalStackNode:
         # stack is byte-identical to before (mirrors the `social` opt-in).
         self.with_tor = with_tor
         self.public_host_port = public_host_port
+        # The TLS front door (Makefile PUBLIC_HTTPS_PORT ?= 8488). web_url hands this
+        # out rather than the plaintext port, so every operator-facing surface teaches
+        # an https:// habit for a platform whose point is a private encrypted mesh.
+        self.public_https_port = public_https_port
         # Public apex threaded into `make stack-up` as DOMAIN. In prod the Makefile
         # derives CASDOOR_ISSUER = https://id.$(DOMAIN); left empty (the default, and
         # for ENV=test) the Makefile keeps its own default and the issuer stays
@@ -152,6 +160,16 @@ class LocalStackNode:
         # documented, not overclaimed. The local compose stack additionally keeps
         # its two-issuer Casdoor split, so an external IdP in the TEST env remains
         # validation-only config either way (docs/IDENTITY-PROVIDERS.md).
+        # The operator's full local-services selection (core/local_services.py slugs),
+        # or None when no picker was used. Only its FEDERATION half is consumed here:
+        # those services' containers are unconditional in compose.local.yaml, so what
+        # decides whether the operator can reach them is their federation_modules
+        # `enabled` row — a DB flip `make stack-seed` performs, NOT a profile flag.
+        # The compose half of the same selection has already been resolved into the
+        # social/with_tor booleans above by the caller, so there is exactly one place
+        # each mechanism is applied. None (and a selection equal to what the registry
+        # ships) exports NOTHING — see local_services.federation_env.
+        self.services = tuple(services) if services is not None else None
         self.idp = idp
         self.idp_issuer = idp_issuer
         self.idp_client_id = idp_client_id
@@ -159,6 +177,23 @@ class LocalStackNode:
 
     @property
     def web_url(self) -> str:
+        """The address to HAND THE OPERATOR — TLS by default.
+
+        The stack serves the same front door twice: plaintext on PUBLIC_HOST_PORT and
+        TLS on PUBLIC_HTTPS_PORT (Makefile: 8088 / 8488). This used to return the
+        plaintext one, so every surface that shows "where is my mesh" — the Open web UI
+        button, the credentials dialog — taught the operator an http:// habit for a
+        platform whose whole point is a private encrypted mesh, and one they would then
+        have to unlearn against a real deployment.
+        The cert is the per-machine CA minted into tests/stack/.tls-front/ca.crt, so a
+        browser warns until that CA is imported. That is a one-time, explainable prompt;
+        silently defaulting to plaintext to dodge it is the worse trade."""
+        return f"https://localhost:{self.public_https_port}"
+
+    @property
+    def plain_web_url(self) -> str:
+        """The plaintext front door. Kept for callers that must not hit a cert prompt —
+        health probes and anything scripted — not for anything shown to the operator."""
         return f"http://localhost:{self.public_host_port}"
 
     def onion_hostname(self) -> str:
@@ -374,6 +409,13 @@ class LocalStackNode:
                 env["OIDC_CLIENT_ID"] = self.idp_client_id.strip()
             if self.idp_jwks.strip():
                 env["OIDC_JWKS_URI"] = self.idp_jwks.strip()
+        # FEDERATION services: the enable/disable slug pair `make stack-seed` needs to
+        # flip federation_modules.enabled. Rides the SAME env channel as every other
+        # stack knob (never a new file format), and federation_env() returns {} both
+        # when no selection was made and when the selection already matches what the
+        # registry ships — so the untouched bring-up's env is byte-identical, which is
+        # what tests/test_local_mesh_tor.py's env-equality guard rests on.
+        env.update(federation_env(self.services))
         # extra_env carries per-target overrides (e.g. the bridged
         # E2E_SUPERADMIN_PASSWORD for `stack-seed`). Values ride the subprocess env
         # only — never argv — mirroring the golive/token-file secret discipline.

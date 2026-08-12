@@ -47,6 +47,10 @@ from . import theme
 from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
+from .local_services import (
+    FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_SOCIAL, PROFILE_TOR,
+    by_slug as by_local_slug, federation_env, federation_selection,
+    federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection)
 from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
 from .mesh_node import MeshNode
 
@@ -179,6 +183,22 @@ class LocalMeshBootstrapConfig:
     # the minted .onion address. Mirrors the NODE `tor` optional service, scaled to
     # the local docker mesh; reachability is over Tor, with no public IP/DNS/ports.
     with_tor: bool = False
+    # WHICH individual services the local mesh runs (core/local_services.py's
+    # catalogue slugs). Two mechanisms behind one list: the compose-profile slugs
+    # (`tuwunel` -> the social profile, `tor`) start/stop containers at bring-up,
+    # the federation slugs (wiki/owncast/tube/character-*) flip their
+    # federation_modules.enabled row at seed time on a stack whose containers are
+    # already up regardless.
+    #
+    # DEFAULT None means "no picker was ever used": profiles then come from the
+    # legacy `social`/`with_tor` booleans exactly as before, and NOTHING federation-
+    # shaped is exported, so the whole from-scratch path stays byte-identical for
+    # every existing caller (the CLI, the ncurses menu, the tests that construct this
+    # config positionally). A tuple — even an empty one — is an EXPLICIT selection and
+    # becomes authoritative for BOTH mechanisms; the GUI always sends one, and keeps
+    # `social`/`with_tor` in lock-step because its social/tor rows ARE those two
+    # checkboxes (one widget, never a second copy that can disagree).
+    services: tuple[str, ...] | None = None
     auth_key: str = ""
     login_server: str = ""
     node_name: str = ""
@@ -228,6 +248,26 @@ class LocalMeshBootstrapConfig:
 
     def is_prod(self) -> bool:
         return self.env == "prod"
+
+    # ── services selection -> the two back-ends ─────────────────────────────────
+    def effective_social(self) -> bool:
+        """Whether the `social` compose profile comes up. An explicit services
+        selection decides it (the picker's Matrix row IS the social switch — one
+        profile, six containers); with no selection the legacy flag still rules, so
+        every pre-picker caller behaves exactly as it did."""
+        if self.services is None:
+            return self.social
+        return profile_flags(self.services).get(PROFILE_SOCIAL, False)
+
+    def effective_with_tor(self) -> bool:
+        """Same rule as effective_social(), for the `tor` profile."""
+        if self.services is None:
+            return self.with_tor
+        return profile_flags(self.services).get(PROFILE_TOR, False)
+
+    def federation_services(self) -> tuple[str, ...]:
+        """The federation-mechanism half of the selection (catalogue order)."""
+        return federation_selection(self.services)
 
     def idp_external(self) -> bool:
         return self.idp != "casdoor"
@@ -293,13 +333,19 @@ class LocalMeshBootstrap:
         # the plan advertised — otherwise the running issuer silently defaults to the
         # brand apex. In test the issuer is localhost, so DOMAIN is left empty.
         domain = self.cfg.resolved_domain() if self.cfg.is_prod() else ""
+        # social/with_tor go through the config's effective_* rules so ONE fact
+        # decides each profile: the services picker when there is one, the legacy
+        # flags when there is not. `services` rides separately because the stack node
+        # consumes only its FEDERATION half (an env pair for `make stack-seed`) — the
+        # compose half has already become these two booleans by the time it gets here.
         return LocalStackNode(self.generator_dir, env=self.cfg.env,
-                              social=self.cfg.social, domain=domain,
+                              social=self.cfg.effective_social(), domain=domain,
+                              services=self.cfg.services,
                               source_mode=self.cfg.source_mode,
                               source_dir=self.cfg.source_dir,
                               web_locales=self.cfg.web_locales,
                               login_theme_css=self.cfg.login_theme_css,
-                              with_tor=self.cfg.with_tor,
+                              with_tor=self.cfg.effective_with_tor(),
                               idp=self.cfg.idp,
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),
@@ -402,6 +448,10 @@ class LocalMeshBootstrap:
                         f"{sd} holds NONE of the {len(self.expected_contexts())} "
                         f"expected build contexts (hugmesh-*) — almost certainly the "
                         f"wrong directory; compose errors on the first build context.")
+        # SERVICES — refuse a slug the local docker stack has no mechanism for, WITH
+        # the reason. Silently dropping it is the failure mode this whole axis exists
+        # to kill: the operator would be told the mesh runs something it cannot.
+        problems.extend(validate_selection(self.cfg.services))
         # FORM only. Whether a catalog actually EXISTS for a locale is checked by the
         # login-ui build itself (tools/i18n/emit-shipped-locales.mjs fails loudly on a
         # requested locale with no messages.<locale>.xlf). The catalogs live in that
@@ -543,13 +593,14 @@ class LocalMeshBootstrap:
         # (a stray duplicate of this line — the pre-locale variant — shipped in the
         # i18n union-rebase; ONE line, with every knob it carries, is the contract)
         _wl = ",".join(c.web_locales)
-        lines.append(f"      make stack-up   (ENV={c.env}, SOCIAL={'on' if c.social else 'off'}"
-                     + f", TOR={'on' if c.with_tor else 'off'}"
+        lines.append(f"      make stack-up   (ENV={c.env}, "
+                     f"SOCIAL={'on' if c.effective_social() else 'off'}"
+                     + f", TOR={'on' if c.effective_with_tor() else 'off'}"
                      + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "")
                      + (", SNAP_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
                      + (f", OIDC_ISSUER={c.idp_issuer.strip()}" if c.idp_external() else "")
                      + ")")
-        if c.with_tor:
+        if c.effective_with_tor():
             lines.append("          -> also starts hugmesh-tor (the `tor` profile):")
             lines.append("             publishes the fe-gateway as a v3 .onion, reachable")
             lines.append("             in Tor Browser (no public IP/DNS/ports). The address")
@@ -563,6 +614,39 @@ class LocalMeshBootstrap:
                          "rebrand needs no rebuild)")
         lines.append("      make stack-seed (provisions ROLE_SUPERADMIN with the minted")
         lines.append("                       password, bridged via env only)")
+        # SERVICES — spelled out per mechanism, because the operator's two questions
+        # ("does it start containers?" and "when does it take effect?") have opposite
+        # answers for the two halves, and a single flat list would hide that.
+        fed = c.federation_services()
+        fed_env = federation_env(c.services)
+        if c.services is not None:
+            chosen = set(c.services)
+            lines.append("")
+            lines.append("      SERVICES (compose profiles — start/stop containers here):")
+            for slug in profile_slugs():
+                lines.append(f"        [{'x' if slug in chosen else ' '}] {slug}"
+                             f"  (--profile {by_local_slug(slug).profile})")
+            lines.append("      SERVICES (federation registry — containers are ALWAYS up;")
+            lines.append("                this flips federation_modules.enabled at seed):")
+            for slug in federation_slugs():
+                lines.append(f"        [{'x' if slug in fed else ' '}] {slug}"
+                             f"  (module {by_local_slug(slug).module})")
+            if fed_env:
+                lines.append(f"        -> {FEDERATION_ENABLE_ENV}="
+                             f"{fed_env[FEDERATION_ENABLE_ENV] or '(none)'}")
+                lines.append(f"           {FEDERATION_DISABLE_ENV}="
+                             f"{fed_env[FEDERATION_DISABLE_ENV] or '(none)'}")
+                # HONEST LIMIT, same register as the IdP note: the vars are exported
+                # for `make stack-seed`, but tests/stack/seed-e2e.sh does not read
+                # them yet, so the row flip is PENDING that seeder hunk. Saying it
+                # here beats a picker that appears to work and changes nothing.
+                lines.append("           PENDING: seed-e2e.sh does not consume these "
+                             "yet — until it does,")
+                lines.append("           the federation rows keep whatever the "
+                             "registry shipped.")
+            else:
+                lines.append("        (matches what the registry ships — nothing to "
+                             "flip, env unchanged)")
         lines.append("")
         lines.append("(3) MESH OVERLAY (hugmesh-mesh compose project, tailscale):")
         if overlay:
@@ -772,7 +856,11 @@ class LocalMeshBootstrap:
         # Tor onion — report the minted .onion once the hugmesh-tor service
         # publishes it (tor bootstraps + uploads the descriptor in ~30s). Never
         # fatal: a slow/absent publish just tells the operator how to read it later.
-        if self.cfg.with_tor:
+        # effective_*, not the raw flag: with a services selection the tor ROW is what
+        # decided whether hugmesh-tor was started, so reading `with_tor` here would
+        # wait for (or skip) an onion that disagrees with the profile actually brought
+        # up — the stack node already went through the same rule.
+        if self.cfg.effective_with_tor():
             onion = self._await_onion(stack, _note, cancel)
             if onion:
                 _note(f"[tor] onion published — reachable in Tor Browser: {onion}")
@@ -896,6 +984,12 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
     return LocalMeshBootstrapConfig(
         env=args.env, superadmin_username=args.superadmin_username,
         out_dir=args.out, social=args.social, with_tor=args.with_tor,
+        # None (the flag absent) is NOT the same as an empty selection: absent means
+        # "no picker was used", which keeps --social/--with-tor authoritative and the
+        # stack env byte-identical to a pre-flag invocation. `--services ""` is the
+        # EXPLICIT nothing, the same none/untouched split --optional-services carries.
+        services=(None if args.services is None
+                  else tuple(args.services.replace(",", " ").split())),
         auth_key=_read_authkey(args),
         login_server=args.login_server, node_name=args.node_name,
         brand=args.brand, cluster_domain=args.cluster_domain,
@@ -938,6 +1032,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--with-tor", action="store_true",
                    help="also publish the fe-gateway as a Tor v3 .onion (the `tor` "
                         "profile) — reachable in Tor Browser, no public IP/DNS/ports.")
+    # The GUI grew a services picker; without this flag the CLI would be strictly less
+    # capable than the wizard — the same dead-default asymmetry --brand was added to
+    # fix. Absent = untouched (see _cfg_from_args).
+    p.add_argument("--services", default=None,
+                   help="which services this local mesh runs — space/comma separated "
+                        f"from: {' '.join(local_slugs())}. Omit to leave the stack as "
+                        "shipped (--social/--with-tor still apply); pass an empty "
+                        "string for an explicit none.")
     p.add_argument("--brand", default=DEFAULT_BRAND,
                    help=f"brand slug (default: {DEFAULT_BRAND}).")
     p.add_argument("--cluster-domain", default="",

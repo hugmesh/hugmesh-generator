@@ -269,13 +269,20 @@ def test_cancel_button_shows_during_a_cancellable_verb_and_stops_it(qapp):
     assert page.m2_btn.isEnabled()              # verbs re-armed after the cancel
 
 
-def test_open_web_ui_opens_the_stack_front_door(qapp, monkeypatch):
+def test_open_web_ui_opens_the_TLS_front_door(qapp, monkeypatch):
+    # The stack serves the SAME front door twice — plaintext on PUBLIC_HOST_PORT and
+    # TLS on PUBLIC_HTTPS_PORT (Makefile 8088 / 8488). This used to open the plaintext
+    # one, which taught an http:// habit for a platform whose whole point is a private
+    # encrypted mesh — and a habit the operator then has to unlearn against a real
+    # deployment. The cert is the per-machine CA in tests/stack/.tls-front/, so the
+    # browser warns until it is imported: a one-time, explainable prompt, which is a
+    # better trade than defaulting to plaintext to dodge it.
     opened = []
     monkeypatch.setattr(localmesh_mod.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: opened.append(url.toString()) or True))
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.page.open_web_btn.click()
-    assert opened == ["http://localhost:8088"]
+    assert opened == ["https://localhost:8488"]
 
 
 # ── Stop says WHAT it did ──────────────────────────────────────────────────────────

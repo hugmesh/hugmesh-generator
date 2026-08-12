@@ -19,7 +19,10 @@ from __future__ import annotations
 from ..qt import Qt, QtWidgets
 from ...core.seeded_credentials import Roster, as_copyable_text, suggested_signin
 
-_COLS = ("Username", "Password", "Roles")
+# "Opens" sits before "Roles" deliberately: it is the column that answers the
+# operator's actual question. The raw ROLE_* strings are kept for the reader who
+# needs them, but they are reference, not the answer.
+_COLS = ("Username", "Password", "Opens", "Roles")
 
 
 class CredentialsDialog(QtWidgets.QDialog):
@@ -70,12 +73,18 @@ class CredentialsDialog(QtWidgets.QDialog):
         self.table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         for row, u in enumerate(roster.users):
-            for col, text in enumerate((u.username, u.password, u.roles_display)):
-                self.table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+            cells = (u.username, u.password, u.apps_display, u.roles_display)
+            for col, text in enumerate(cells):
+                item = QtWidgets.QTableWidgetItem(text)
+                # The operator account is the one to reach for; make it findable in a
+                # 31-row table without hiding the rest.
+                if roster.operator and u.username == roster.operator:
+                    f = item.font(); f.setBold(True); item.setFont(f)
+                self.table.setItem(row, col, item)
         hh = self.table.horizontalHeader()
-        hh.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        for c in (0, 1, 2):
+            hh.setSectionResizeMode(c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.table.itemSelectionChanged.connect(self._sync_row_buttons)
         v.addWidget(self.table, 1)
 

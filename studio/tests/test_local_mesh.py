@@ -23,7 +23,9 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core.local_mesh import (  # noqa: E402  (after the importorskip gate)
     LocalMeshConfig, LocalMeshNode,
 )
+from hugmesh_studio.core import local_services  # noqa: E402
 from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrap  # noqa: E402
+from hugmesh_studio.core.local_stack_node import LocalStackNode  # noqa: E402
 from hugmesh_studio.core.mesh_node import MeshNode  # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
@@ -285,6 +287,114 @@ def test_bootstrap_up_blocked_by_validation(qapp, monkeypatch):
     dlg._bootstrap_up()
     assert up_ran["called"] is False
     assert "cannot start" in dlg.status.text().lower()
+
+
+# ---- the SERVICES picker (the local mesh's "which services" axis) ----
+
+def test_services_table_offers_every_locally_runnable_slug(qapp):
+    """One checkbox per slug core says the local mesh can genuinely run — and NONE
+    for the slugs it cannot, which are rendered as greyed rows carrying the reason.
+    Reading the registry from core is the point: a slug added there must appear here
+    with no GUI edit at all."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert set(dlg.service_boxes) == set(local_services.local_slugs())
+    for slug in local_services.UNAVAILABLE_LOCALLY:
+        assert slug not in dlg.service_boxes
+        item = dlg.page._svc_items[slug]
+        assert item.text(localmesh_mod._LS_COL_MECH) == "not available here"
+        assert item.text(localmesh_mod._LS_COL_DESC) == \
+            local_services.UNAVAILABLE_LOCALLY[slug]
+
+
+def test_services_rows_state_which_mechanism_applies_them(qapp):
+    """The operator's real question is "does ticking this restart my mesh?" — so the
+    row says which back-end it drives rather than leaving the two indistinguishable."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert dlg.page._svc_items["tor"].text(localmesh_mod._LS_COL_MECH) == \
+        "--profile tor"
+    assert dlg.page._svc_items["wiki"].text(localmesh_mod._LS_COL_MECH) == \
+        "federation: wiki"
+
+
+def test_social_and_tor_rows_are_the_same_widgets_not_copies(qapp):
+    """The two historical toggles moved INTO the table as the rows for their slugs.
+    Aliases, never second checkboxes — a copy could disagree with its row, which is
+    the exact "one service, two spellings" bug the node wizard's table killed."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert dlg.social is dlg.service_boxes["tuwunel"]
+    assert dlg.with_tor is dlg.service_boxes["tor"]
+    dlg.service_boxes["tor"].setChecked(True)
+    assert dlg.collect_bootstrap().with_tor is True
+
+
+def test_untouched_services_picker_leaves_the_bring_up_byte_identical(qapp):
+    """THE default-drift guard: on arrival nothing is ticked, the config carries an
+    empty (but explicit) selection, and the stack env is identical to the env a
+    bring-up produced before the picker existed."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert dlg.collect_services() == ()
+    cfg = dlg.collect_bootstrap()
+    assert cfg.services == ()
+    assert cfg.social is False and cfg.with_tor is False
+    before = LocalStackNode(GENERATOR_DIR)._build_env()
+    after = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env()
+    assert after == before
+
+
+def test_ticking_a_federation_service_reaches_the_seeder_env(qapp):
+    """The federation half's whole job: the chosen slugs become the enable/disable
+    env pair `make stack-seed` reads, and the complement is exported too so the seeder
+    can tell "leave it" from "turn it off"."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.service_boxes["wiki"].setChecked(True)
+    dlg.service_boxes["owncast"].setChecked(True)
+    cfg = dlg.collect_bootstrap()
+    assert cfg.services == ("wiki", "owncast")
+    env = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env()
+    assert env[local_services.FEDERATION_ENABLE_ENV] == "wiki owncast"
+    assert env[local_services.FEDERATION_DISABLE_ENV] == \
+        "tube character-studio character-forge"
+    # and the compose profiles are untouched by a federation-only selection
+    assert env["SOCIAL"] == "" and env["TOR"] == ""
+
+
+def test_ticking_a_profile_service_drives_the_compose_profile(qapp):
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.service_boxes["tuwunel"].setChecked(True)
+    cfg = dlg.collect_bootstrap()
+    assert cfg.effective_social() is True
+    env = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env()
+    assert env["SOCIAL"] == "1"
+    # a profile-only change must not invent a federation flip
+    assert local_services.FEDERATION_ENABLE_ENV not in env
+
+
+def test_services_selection_shows_up_in_the_plan_preview(qapp):
+    """Every other bootstrap control live-refreshes the confirm-before-run manifest;
+    a services row that did not would leave the plan describing a different mesh."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.service_boxes["tube"].setChecked(True)
+    plan = dlg.plan_view.toPlainText()
+    assert "[x] tube" in plan
+    assert "[ ] wiki" in plan
+    assert local_services.FEDERATION_ENABLE_ENV in plan
+    assert "PENDING" in plan          # the seeder hunk is honestly disclosed
+
+
+def test_bootstrap_up_carries_the_services_selection(qapp, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        LocalMeshBootstrap, "up",
+        lambda self, on_line=None, cancel=None:
+            seen.update(services=self.cfg.services) or (True, ["ok"]),
+        raising=True)
+    monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.service_boxes["character-forge"].setChecked(True)
+    dlg.ack.setChecked(True)
+    dlg._bootstrap_up()
+    _drain_worker(qapp, dlg.page)
+    assert seen["services"] == ("character-forge",)
 
 
 # ---- the pure-core runner (no Qt, no docker needed) ----

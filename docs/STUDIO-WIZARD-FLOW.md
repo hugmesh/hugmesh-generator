@@ -182,7 +182,7 @@ and the all-options-in-all-menus rule are in
 **Status (2026-07-16) — most of this section has shipped.** The **ncurses menu** and
 **CLI** four-choice parity, the **Local Docker mesh** face on both channels, and the
 **parity-enforcement** gate all landed in
-[#342](https://github.com/hugmesh/hugmesh-generator/pull/342); the ncurses
+[#342](https://github.com/Snapdragon-Systems/hugmesh-generator/pull/342); the ncurses
 Local-mesh screen was later extended with the from-scratch bootstrapper (#346) and the
 RPi/Chromebook desktop surfacing (#351). The build-matrix `TAXO` bucket
 (`tests/build-matrix/check.sh` → `run_parity_taxonomy_checks`) proves all three

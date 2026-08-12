@@ -36,11 +36,23 @@ NEW on the bootstrap tab (the operator's other two asks):
     rendering here?" in-product, and a disabled control can never lie.
 
 All verbs (join start/stop, bootstrap up/down) run on a _MeshWorker QThread — the
-golive _DriverWorker precedent. up() shells `make stack-up`, a multi-minute docker
-build; on the GUI thread it froze the old dialog solid (operator-reported). The
-thread buys a RESPONSIVE WIZARD, not live progress: LocalStackNode buffers output
-until exit (subprocess.run), so lines arrive at the end. That limitation is stated
-in the status text, not faked with a progress bar.
+golive _DriverWorker precedent. up() shells `make stack-up`, an hours-long docker
+build on a cold box; on the GUI thread it froze the old dialog solid
+(operator-reported). The long verbs additionally STREAM (on_line, cancel), so their
+output arrives live and the whole process group can be cancelled; the remaining
+buffered verbs state that caveat in the status text, never a faked progress bar.
+
+STAGED VIEW (replaces the flat scrolling log the operator asked to remove): the
+streamed lines drive core/progress_parse.ProgressParser + core/stage_tracker.StageTracker
+over the ``localmesh-*`` phase tables in core/progress-tables.json (see
+core/local_mesh_stages.py for which verb uses which). A QTreeWidget shows one row per
+verb RUN with its stages nested underneath (label, state, elapsed), and the single log
+pane below FOLLOWS the selection — a stage shows only its own captured slice, the run
+row the full raw log. This is deliberately progress.py's implementation, imported rather
+than re-created, down to the glyph palette. It stays honest by construction because
+StageTracker owns the semantics: a stage goes green only once the run advanced PAST it,
+a nonzero exit fails the RUNNING stage and leaves trailing ones pending, and a cancel
+marks the running stage 'stopped' (neutral), never failed.
 
 ``LocalMeshDialog`` survives as a thin standalone-host shim wrapping the page
 (``LocalMeshDialog(generator_dir).exec()`` still works, per its original promise).
@@ -48,20 +60,36 @@ in the status text, not faked with a progress bar.
 from __future__ import annotations
 
 import threading
+import time
 import types
+from collections import deque
 
-from ..qt import QtCore, QtGui, QtWidgets, Signal
+from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
     discover_brands)
+from ...core.local_mesh_stages import verb_phases
+from ...core.local_services import (
+    UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
+    describe as local_describe, local_groups, local_slugs)
+from ...core.progress_parse import ProgressParser
 from ...core.seeded_credentials import load_roster
+from ...core.stage_tracker import StageTracker
 from ._credentials_dialog import CredentialsDialog
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible
+# The staged view is progress.py's, not a second one: importing its glyph palette and
+# its two formatters is what keeps a stage rendered here byte-identical to the same
+# stage rendered on the image-build screen. Re-declaring {"done": ("✓", "#188038"), …}
+# would be exactly the duplicated catalogue the house rule forbids — and the first
+# palette change would leave the two screens disagreeing about what green means.
+# progress.py imports nothing from this module (the reverse dependency is via
+# gui/pages/__init__), so this cannot cycle.
+from .progress import _STAGE_GLYPH, _STATUS_GLYPH, _display_safe, _fmt_elapsed
 
 # Per-provider placeholder hints — the SAME endpoint shapes gui/pages/idp.py
 # carries (one picker, two frames: the node wizard page and this bootstrap tab).
@@ -70,6 +98,26 @@ _IDP_ISSUER_HINTS = {
     "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
     "oidc": "https://id.example.org (the token `iss` value, exactly)",
 }
+
+# ── the services table's column grid ────────────────────────────────────────────
+# Symbolic indices (network.py's rule): a test names the column it reads instead of
+# asserting on a magic number, and inserting a column stays one edit. MECH is this
+# table's own column — the local mesh drives services through TWO unrelated
+# back-ends, and which one a row uses decides whether ticking it restarts containers,
+# so hiding that in prose would leave the operator guessing.
+_LS_COL_NAME, _LS_COL_ON, _LS_COL_MECH, _LS_COL_DESC = range(4)
+_LS_HEADERS = ("Service", "On", "How it is applied", "What enabling it does")
+
+
+def _grey_note(text: str) -> "QtWidgets.QLabel":
+    """The page's standing idiom for a wrapped, grey, explain-the-limit line (the
+    source-coverage note, the IdP note) — one helper instead of a fourth copy."""
+    lbl = QtWidgets.QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet("color: gray;")
+    return lbl
+
+
 _IDP_JWKS_HINTS = {
     "entra": "empty = <issuer>/discovery/v2.0/keys",
     "aws": "empty = <issuer>/.well-known/jwks.json",
@@ -112,6 +160,46 @@ class _MeshWorker(QtCore.QThread):
         self.done.emit(bool(ok))
 
 
+# Stage-tree column indices — SYMBOLIC ONLY (progress.py's rule: nothing may hardcode a
+# column number, so inserting a column stays a one-line change).
+_ST_COL_NAME, _ST_COL_STATE, _ST_COL_TIME = 0, 1, 2
+
+#: Raw-log ring per run. A cold `make stack-up` prints far more than the ~4k lines an
+#: image build's tree row keeps, and this page holds at most a handful of runs, so the
+#: buffer is deliberately larger than progress.py's.
+_RUN_LOG_MAXLEN = 20000
+
+
+class _StageRun:
+    """One VERB run's stage bookkeeping — the local-mesh analogue of progress.py's
+    ``_Row``, minus the image-build-only machinery (no progress bar, no emerge package
+    ladder: `make stack-up` has no per-package stream).
+
+    Each launched verb gets its own run, so the tree keeps the HISTORY of this session
+    (readiness check, then m2, then the bring-up) instead of overwriting itself, and an
+    earlier run's log stays reachable by clicking its row. ``phases`` may be empty — a
+    verb whose shell prints no ``==> `` banners honestly gets zero stages rather than a
+    fabricated ladder."""
+
+    def __init__(self, label: str, phases: list[dict]):
+        self.label = label
+        # ONE table drives both: the parser turns a banner into a phase index, the
+        # tracker turns the index rise into stage transitions. Two tables could
+        # disagree; there is only one.
+        self.parser = ProgressParser(phases=phases)
+        self.tracker = StageTracker(phases)
+        self.buffer: deque[str] = deque(maxlen=_RUN_LOG_MAXLEN)
+        self.status = "running"          # _STATUS_GLYPH key: running/ok/failed/stopped
+        self.t_start = time.monotonic()
+        self.t_end: float | None = None
+        # tree items (wired by LocalMeshPage._build_run_item)
+        self.item: QtWidgets.QTreeWidgetItem | None = None
+        self.stage_items: list[QtWidgets.QTreeWidgetItem] = []
+
+    def elapsed(self, now: float) -> float:
+        return max((self.t_end if self.t_end is not None else now) - self.t_start, 0.0)
+
+
 class LocalMeshPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -139,14 +227,84 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                          "Generate && start a NEW local mesh from scratch")
         lay.addWidget(self.tabs)
 
-        # Shared status + log pane (used by BOTH tabs).
+        # Shared status line + staged view (used by BOTH tabs).
         self.status = QtWidgets.QLabel("")
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
 
+        # ── STAGED VIEW: stage tree above, the SAME single log below ─────────────────
+        # The flat scrolling log this replaces was the operator's complaint: an hour-long
+        # cold bring-up is ~100k lines of compose/maven output with nothing to say WHERE
+        # it is, and the one milestone that answers that ("==> Up. Front door:") scrolls
+        # past in a second. progress.py already solved this for image builds, so this is
+        # the same solution, not a second one: a tree of stages driven by
+        # core/stage_tracker.StageTracker, and the log pane FILTERED to whatever is
+        # selected — a stage shows only its own slice, the run row shows the raw log.
+        #
+        # self.log stays the same QPlainTextEdit object with the same parent for the
+        # page's whole life (tests read page.log, and _on_line's append path must not
+        # care which node is selected).
+        self.stage_tree = QtWidgets.QTreeWidget()
+        self.stage_tree.setColumnCount(3)
+        self.stage_tree.setHeaderLabels(["Stage", "State", "Time"])
+        self.stage_tree.setRootIsDecorated(True)
+        self.stage_tree.setUniformRowHeights(True)
+        self.stage_tree.setMinimumHeight(140)
+        self.stage_tree.setColumnWidth(_ST_COL_NAME, 340)
+        self.stage_tree.setColumnWidth(_ST_COL_STATE, 90)
+        self.stage_tree.itemClicked.connect(self._on_stage_clicked)
+        self.stage_hint = QtWidgets.QLabel(
+            "No verb has run yet. Start one from the tab above and its stages appear "
+            "here; click a stage to see only that stage's output in the log below.")
+        self.stage_hint.setWordWrap(True)
+        self.stage_hint.setStyleSheet("color: gray;")
+
+        tree_pane = QtWidgets.QWidget()
+        tree_lay = QtWidgets.QVBoxLayout(tree_pane)
+        tree_lay.setContentsMargins(0, 0, 0, 0)
+        tree_lay.addWidget(self.stage_tree, 1)
+        tree_lay.addWidget(self.stage_hint)
+
+        log_panel = QtWidgets.QWidget()
+        log_lay = QtWidgets.QVBoxLayout(log_panel)
+        log_lay.setContentsMargins(0, 0, 0, 0)
+        # The header is the honesty label of the filtered pane: without it, a stage slice
+        # and the full raw log look identical and the operator cannot tell which they are
+        # reading (progress.py's log_header, same job).
+        self.log_header = QtWidgets.QLabel("Log")
+        self.log_header.setStyleSheet("font-weight: bold;")
+        log_lay.addWidget(self.log_header)
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
-        lay.addWidget(self.log, 1)
+        self.log.setMinimumHeight(0)      # so the log pane can be dragged fully shut
+        log_lay.addWidget(self.log, 1)
+
+        # 2:1 with only the LOG collapsible — the tree can never be dragged shut, which
+        # is what makes the splitter safe to hand the operator (progress.py's split).
+        self.stage_splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+        self.stage_splitter.addWidget(tree_pane)
+        self.stage_splitter.addWidget(log_panel)
+        self.stage_splitter.setStretchFactor(0, 2)
+        self.stage_splitter.setStretchFactor(1, 1)
+        self.stage_splitter.setCollapsible(0, False)
+        self.stage_splitter.setCollapsible(1, True)
+        lay.addWidget(self.stage_splitter, 1)
+
+        # Run history + the drill-down selection. _selected_stage None = the run's raw
+        # log; an int = that stage's slice (the ONLY thing that filters the live stream).
+        self._runs: list[_StageRun] = []
+        self._selected = -1
+        self._selected_stage: int | None = None
+        # Page-authored lines emitted BEFORE a verb starts ("[bootstrap] generating
+        # credentials …", the WARNINGs): they belong to the run that is about to begin,
+        # so _launch drains them into its buffer — otherwise selecting the run row would
+        # silently drop the very lines that explain what it is doing.
+        self._pending: list[str] = []
+        # ONE 1 Hz clock (progress.py's rule: no second timer), running only while a verb
+        # is, so an idle page costs nothing. It re-renders the RUNNING stage only.
+        self._tick = QtCore.QTimer(self)
+        self._tick.setInterval(1000)
+        self._tick.timeout.connect(self._on_tick)
 
         # Run the gate ONCE now that every widget it touches exists: the operator
         # should see WHY 'Generate & start' is disabled before clicking it, not
@@ -346,17 +504,97 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "and written ONLY to the offline secrets bundle — never shown here.")
         lay.addWidget(_row("Superadmin", self.superadmin))
 
-        self.social = QtWidgets.QCheckBox("Also bring up the social (Matrix/Mastodon) profile")
-        lay.addWidget(self.social)
+        # ── SERVICES: which individual services this local mesh runs ─────────────
+        # This page used to expose exactly two coarse toggles (social, tor), so every
+        # service that ships DEFAULT-OFF in the federation registry — wiki, owncast,
+        # tube, character-forge — was running-but-invisible with no UI to turn it on.
+        # The surface is the node wizard's services-table idiom (network.py): grouped
+        # rows + a slug->checkbox registry, because services are INDEPENDENT toggles
+        # and a choice-card group would state a mutual exclusion that does not exist.
+        # The catalogue, the grouping, the descriptions and the shipped defaults all
+        # come from core (local_services / config) — this loop builds widgets only.
+        svc_box = QtWidgets.QGroupBox("Services to run on this local mesh")
+        svl = QtWidgets.QVBoxLayout(svc_box)
+        svl.addWidget(_grey_note(
+            "Two different mechanisms, one list. COMPOSE PROFILE rows start or stop "
+            "containers, so they take effect at bring-up and changing one later needs "
+            "a stop + start. FEDERATION rows do not start anything — those containers "
+            "are always up — they flip the service's federation_modules `enabled` row "
+            "at seed time, which is what makes it appear in (or vanish from) the mesh "
+            "menu. Rows the local docker stack has no mechanism for are greyed with "
+            "the reason instead of offered as a toggle that would change nothing."))
+        self.services_table = QtWidgets.QTreeWidget()
+        self.services_table.setColumnCount(len(_LS_HEADERS))
+        self.services_table.setHeaderLabels(list(_LS_HEADERS))
+        self.services_table.setRootIsDecorated(True)
+        self.services_table.setAlternatingRowColors(True)
+        self.services_table.setUniformRowHeights(False)
+        self.services_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        # The page body already lives in a QScrollArea (scrollable(self)), which gives
+        # a child tree zero height to negotiate for — without a floor the whole table
+        # collapses to its header row.
+        self.services_table.setMinimumHeight(300)
+        _svc_hdr = self.services_table.header()
+        _svc_hdr.setStretchLastSection(True)
+        for _c in (_LS_COL_NAME, _LS_COL_ON, _LS_COL_MECH):
+            _svc_hdr.setSectionResizeMode(
+                _c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        svl.addWidget(self.services_table)
 
-        # Tor v3 onion for the local mesh (the OPT-IN `tor` compose profile). When
-        # on, the bring-up also starts hugmesh-tor, which publishes the fe-gateway
-        # as a stable .onion — reachable in Tor Browser with no public IP/DNS/ports.
-        # The minted address is reported in the log + copyable via the button below.
-        self.with_tor = QtWidgets.QCheckBox(
-            "Expose the mesh as a Tor v3 .onion (reachable in Tor Browser — no public "
-            "IP/DNS/ports)")
-        lay.addWidget(self.with_tor)
+        # ONE row per slug, keyed by the slug core names it — deliberately NOT a
+        # prettified display name, so a row here, the plan preview's checklist and the
+        # federation_modules row can all be matched up by eye.
+        self.service_boxes: dict[str, QtWidgets.QCheckBox] = {}
+        self._svc_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        for _title, _slugs in local_groups():
+            gitem = QtWidgets.QTreeWidgetItem(self.services_table)
+            gitem.setText(_LS_COL_NAME, _title)
+            _gf = gitem.font(_LS_COL_NAME)
+            _gf.setBold(True)
+            gitem.setFont(_LS_COL_NAME, _gf)
+            gitem.setExpanded(True)
+            for _slug in _slugs:
+                item = QtWidgets.QTreeWidgetItem(gitem)
+                item.setText(_LS_COL_NAME, _slug)
+                self._svc_items[_slug] = item
+                svc = local_service(_slug)
+                if svc is None:
+                    # Unavailable locally: the honest row. It states the mechanism as
+                    # "not available here" and carries the concrete reason, the same
+                    # register as this page's permanently-disabled "render locally"
+                    # card — never a live checkbox over a mechanism that is absent.
+                    why = UNAVAILABLE_LOCALLY[_slug]
+                    item.setText(_LS_COL_MECH, "not available here")
+                    item.setText(_LS_COL_DESC, why)
+                    item.setToolTip(_LS_COL_DESC, why)
+                    grey = QtGui.QBrush(QtGui.QColor("#888888"))
+                    for _c in (_LS_COL_NAME, _LS_COL_MECH, _LS_COL_DESC):
+                        item.setForeground(_c, grey)
+                    continue
+                item.setText(_LS_COL_MECH,
+                             f"--profile {svc.profile}" if svc.is_profile()
+                             else f"federation: {svc.module}")
+                desc = local_describe(_slug)
+                item.setText(_LS_COL_DESC, desc)
+                item.setToolTip(_LS_COL_DESC, desc)
+                box = QtWidgets.QCheckBox()
+                box.setToolTip(desc)
+                # The SHIPPED state, not a guess: a box ticked for something the mesh
+                # does not actually run (or unticked for something it does) is the
+                # same lie either way.
+                box.setChecked(_slug in default_selection())
+                self.services_table.setItemWidget(item, _LS_COL_ON, box)
+                self.service_boxes[_slug] = box
+        # The two profile switches keep their historical attribute names because they
+        # ARE the config's social/with_tor fields and the whole page (plan preview,
+        # collect_bootstrap, the Tor buttons, the tests) refers to them by those names.
+        # Aliases of the very same widget — never a second checkbox that could disagree
+        # with its row, which is exactly the "one service, two spellings" bug the node
+        # wizard's services table was rebuilt to kill.
+        self.social = self.service_boxes["tuwunel"]
+        self.with_tor = self.service_boxes["tor"]
+        lay.addWidget(svc_box)
 
         # Web login languages. NOT a desktop-theming knob (those are x86-only and
         # skipped in mesh mode) — the web login is served to browsers BY the mesh,
@@ -534,8 +772,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.src_existing.toggled.connect(self._refresh_plan)
         self.src_dir.textChanged.connect(self._refresh_plan)
         self.superadmin.textChanged.connect(self._refresh_plan)
-        self.social.toggled.connect(self._refresh_plan)
-        self.with_tor.toggled.connect(self._refresh_plan)
+        # EVERY services row, not just the two profile ones — the plan preview prints
+        # the whole selection, so a row that did not refresh it would leave the
+        # confirm-before-run manifest describing a mesh the operator no longer chose.
+        # (self.social / self.with_tor ARE two of these boxes, so they are covered
+        # here; connecting them again would just refresh the plan twice per click.)
+        for _svc_box in self.service_boxes.values():
+            _svc_box.toggled.connect(self._refresh_plan)
         self.web_locales.textChanged.connect(self._refresh_plan)
         self.login_theme.primary.textChanged.connect(self._refresh_plan)
         self.login_theme.secondary.textChanged.connect(self._refresh_plan)
@@ -573,6 +816,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             login_server=self.login_server.text().strip(),
         )
 
+    def collect_services(self) -> tuple[str, ...]:
+        """The ticked services, in the core catalogue's order (never widget order —
+        the config, the plan checklist and the seeder env must all list them the same
+        way). Always a tuple, never None: this page HAS a picker, so its selection is
+        explicit even when it happens to equal the shipped defaults. Byte-identity on
+        the untouched path is preserved by core instead — federation_env() exports
+        nothing while the selection matches what the registry ships, and the two
+        profile rows are the same two booleans this page always sent."""
+        return tuple(s for s in local_slugs()
+                     if self.service_boxes[s].isChecked())
+
     def collect_bootstrap(self) -> LocalMeshBootstrapConfig:
         """BOOTSTRAP-tab widgets -> LocalMeshBootstrapConfig — EVERY operator-visible
         control, so none can silently do nothing (the dead-default class: ``brand``
@@ -581,8 +835,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return LocalMeshBootstrapConfig(
             env=("prod" if self.env_prod.isChecked() else "test"),
             superadmin_username=self.superadmin.text().strip() or "superadmin",
+            # social/with_tor stay because they are what LocalStackNode turns into
+            # SOCIAL=/TOR=; they read the SAME two widgets the services table hosts,
+            # so they can never disagree with the selection below.
             social=self.social.isChecked(),
             with_tor=self.with_tor.isChecked(),
+            services=self.collect_services(),
             cluster_domain=self.boot_domain.text().strip(),
             auth_key=self.boot_auth_key.text().strip(),
             login_server=self.boot_login_server.text().strip(),
@@ -612,13 +870,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     # ── worker plumbing (the no-freeze fix) ──────────────────────────────────────
     def _launch(self, label: str, fn, stream: bool = False,
-                cancellable: bool = False):
+                cancellable: bool = False, verb: str = ""):
         """Run one verb off the GUI thread; buttons + Finish re-arm on done.
         ``stream=True`` verbs take (on_line, cancel) and their output lands in the
         log LIVE (what makes an hour-long cold compose build watchable);
         ``cancellable`` arms the Cancel button, which terminates the verb's whole
         process group. Buffered verbs keep the honest old caveat: output arrives
-        when the step finishes."""
+        when the step finishes.
+
+        ``verb`` names the phase table to stage this run against
+        (core.local_mesh_stages.verb_phases). Omitted / unknown = no banners are
+        published by that shell, so the run gets ZERO stages and its drill-down is
+        simply the raw log — never an invented single-stage ladder."""
         if self._running:
             return
         self._running = True
@@ -635,9 +898,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                 f"finishes.")
         self.cancel_btn.setVisible(cancellable)
         self.cancel_btn.setEnabled(cancellable)
+        run = _StageRun(label, verb_phases(verb))
+        # the handler's own pre-flight lines are this run's first log lines
+        run.buffer.extend(self._pending)
+        self._pending.clear()
+        self._runs.append(run)
+        self._build_run_item(run)
+        self._load_detail(len(self._runs) - 1, None)
         self.worker = _MeshWorker(fn, parent=self, stream=stream, cancel=cancel)
-        self.worker.line.connect(self.log.appendPlainText)
+        # NOT appendPlainText: every line now goes through the parser/tracker first, so
+        # the tree advances and the pane only shows what the SELECTED node covers.
+        self.worker.line.connect(self._on_line)
         self.worker.done.connect(self._verb_done)
+        self._tick.start()
         self.completeChanged.emit()
         self.worker.start()
 
@@ -653,8 +926,180 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._set_verbs_enabled(True)
         self.cancel_btn.setVisible(False)
         self.status.setText("Done." if ok else "FAILED (see log).")
+        self._tick.stop()          # unconditionally: an idle page must own no clock
+        self._settle_run(ok)
         self._refresh_status()
         self.completeChanged.emit()
+
+    def _settle_run(self, ok: bool) -> None:
+        """Terminal stage bookkeeping, in StageTracker's documented vocabulary — the
+        exit code it wants is the one thing the GUI has to derive:
+
+          ok                      -> 0    (running stage done, trailing stages skipped)
+          cancelled by operator   -> None (running stage STOPPED, trailing left pending)
+          anything else           -> 1    (running stage FAILED, trailing left pending)
+
+        The cancel case must be distinguished BEFORE the failure case: a cancelled verb
+        returns ok=False like a broken one, and painting a stage the operator themself
+        stopped as a red ✗ failure is the exact dishonesty stage_tracker's docstring
+        forbids."""
+        if not self._runs:
+            return
+        run = self._runs[-1]
+        w = self.worker
+        cancelled = bool(w is not None and w.cancel is not None and w.cancel.is_set())
+        code = 0 if ok else (None if cancelled else 1)
+        now = time.monotonic()
+        run.tracker.finalize(code, now)
+        run.t_end = now
+        run.status = "ok" if ok else ("stopped" if cancelled else "failed")
+        for j in range(len(run.tracker.stages)):
+            self._render_stage(run, j, now)
+        self._render_run(run, now)
+        # A failure's first question is "which step, and what did it say?" — answer it
+        # by selecting the failed stage, so the log pane already holds that slice.
+        failed = run.tracker.failed_index()
+        if failed is not None:
+            self._focus_stage(len(self._runs) - 1, failed)
+
+    # ── staged view: tree building, rendering, drill-down ────────────────────────
+    def _note(self, text: str, queue: bool = True) -> None:
+        """A PAGE-authored log line (a warning, or the "here is what I am about to do"
+        line a handler prints before launching). It is not worker output, so it never
+        touches the parser — but it is queued for the run that is about to start, so the
+        run's raw log begins with the sentence that explains it.
+
+        ``queue=False`` for a note that announces NO run — the "you answered No"
+        line of an abandoned confirmation. Queuing that one would leave it sitting in
+        _pending until some unrelated later verb launched and adopted it, so the next
+        run's raw log would open by reporting a cancellation that is not part of it."""
+        if queue:
+            self._pending.append(text)
+        self.log.appendPlainText(text)
+
+    def _build_run_item(self, run: _StageRun) -> None:
+        """One top-level row per run, one child per phase-table row — created UP FRONT
+        (all pending) rather than as stages are reached, so the operator can see the
+        whole ladder, and what is still ahead, from the first second."""
+        i = len(self._runs) - 1
+        item = QtWidgets.QTreeWidgetItem(self.stage_tree)
+        item.setData(_ST_COL_NAME, Qt.ItemDataRole.UserRole, (i, None))
+        run.item = item
+        for j in range(len(run.tracker.stages)):
+            child = QtWidgets.QTreeWidgetItem(item)
+            child.setData(_ST_COL_NAME, Qt.ItemDataRole.UserRole, (i, j))
+            run.stage_items.append(child)
+            self._render_stage(run, j, run.t_start)
+        self._render_run(run, run.t_start)
+        self.stage_tree.expandItem(item)
+        self.stage_tree.setCurrentItem(item)
+        self.stage_hint.setText(
+            "Click a stage to show only that stage's output below; click the run row "
+            "for the full raw log. A stage turns green only once the run has moved "
+            "PAST it."
+            if run.stage_items else
+            f"{run.label}: this step publishes no stage banners, so it has no stages — "
+            f"the row's drill-down is its raw log.")
+
+    def _render_run(self, run: _StageRun, now: float) -> None:
+        """The run row's glyph/state/elapsed. Uses progress.py's JOB palette (the run is
+        this page's job) so a running/ok/failed/stopped row reads identically on both
+        build screens."""
+        if run.item is None:
+            return
+        sym, colour = _STATUS_GLYPH.get(run.status, ("○", "#888888"))
+        run.item.setText(_ST_COL_NAME, f"{sym}  {run.label}")
+        run.item.setForeground(_ST_COL_NAME,
+                               QtGui.QBrush(QtGui.QColor(colour)))
+        run.item.setText(_ST_COL_STATE, run.status)
+        run.item.setText(_ST_COL_TIME, _fmt_elapsed(run.elapsed(now)))
+
+    def _render_stage(self, run: _StageRun, j: int, now: float) -> None:
+        """Reflect one stage's tracker state onto its tree item (glyph+label, the raw
+        state word, elapsed). Called ONLY on a real transition, on the 1 Hz tick for the
+        running stage, and once per stage at terminal settle — never per line, which is
+        what keeps a 100k-line bring-up cheap to render."""
+        st = run.tracker.stages[j]
+        item = run.stage_items[j]
+        sym, colour = _STAGE_GLYPH.get(st.state, ("○", "#888888"))
+        item.setText(_ST_COL_NAME, f"{sym}  {st.label}")
+        item.setForeground(_ST_COL_NAME, QtGui.QBrush(QtGui.QColor(colour)))
+        item.setText(_ST_COL_STATE, st.state)
+        item.setText(_ST_COL_TIME, _fmt_elapsed(st.elapsed(now)))
+
+    def _on_line(self, raw_line: str) -> None:
+        """The ONE per-line path: sanitise -> raw buffer -> parser -> tracker -> render
+        only what transitioned -> append to the pane IFF the selection covers it."""
+        # Compose/maven colour their output unconditionally and portage-style progress
+        # bars carry CR; Qt paints a BOX for every escape byte it cannot render.
+        line = _display_safe(raw_line)
+        if not self._runs:
+            self.log.appendPlainText(line)      # a line with no run (defensive)
+            return
+        i = len(self._runs) - 1
+        run = self._runs[i]
+        run.buffer.append(line)
+        state = run.parser.feed(line)
+        now = time.monotonic()
+        delta = run.tracker.feed(line, state.phase_index, now)
+        if delta.any():
+            for j in delta.touched():
+                self._render_stage(run, j, now)
+            self._render_run(run, now)
+        # THE filtering rule: the live stream lands in the pane only when the selected
+        # node actually contains it — the whole run (stage None), or the stage that is
+        # running right now. Selecting an older stage freezes the pane on that slice.
+        if i == self._selected and (self._selected_stage is None
+                                    or run.tracker.cur == self._selected_stage):
+            self.log.appendPlainText(line)
+
+    def _on_tick(self) -> None:
+        """1 Hz: make the live run and its ONE running stage tick their elapsed time."""
+        if not self._runs:
+            return
+        run = self._runs[-1]
+        if run.t_end is not None:
+            return
+        now = time.monotonic()
+        self._render_run(run, now)
+        if run.tracker.cur >= 0:
+            self._render_stage(run, run.tracker.cur, now)
+
+    def _on_stage_clicked(self, item, _col: int = 0) -> None:
+        data = item.data(_ST_COL_NAME, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        i, j = data                     # RUN row = (i, None); STAGE row = (i, int)
+        self._load_detail(i, j)
+
+    def _load_detail(self, i: int, stage_j: int | None) -> None:
+        """Load the selected node into the shared pane: a RUN shows its full raw log, a
+        STAGE only the slice StageTracker captured for it. The pane is the same widget
+        either way — the header says which, because a slice and a full log are otherwise
+        indistinguishable."""
+        if not (0 <= i < len(self._runs)):
+            return
+        run = self._runs[i]
+        self._selected = i
+        self._selected_stage = stage_j
+        if stage_j is None:
+            self.log.setPlainText("\n".join(run.buffer))
+            self.log_header.setText(f"Log — {run.label}")
+        else:
+            st = run.tracker.stages[stage_j]
+            self.log.setPlainText("\n".join(st.lines))
+            self.log_header.setText(f"Log — {run.label} ▸ {st.label}")
+
+    def _focus_stage(self, i: int, stage_j: int) -> None:
+        """Select a stage programmatically (failure navigation). setCurrentItem does NOT
+        re-fire itemClicked, so the load has to be called explicitly."""
+        if not (0 <= i < len(self._runs)):
+            return
+        run = self._runs[i]
+        if run.item is not None and 0 <= stage_j < len(run.stage_items):
+            self.stage_tree.expandItem(run.item)
+            self.stage_tree.setCurrentItem(run.stage_items[stage_j])
+        self._load_detail(i, stage_j)
 
     def _set_verbs_enabled(self, on: bool):
         for b in (self.start_btn, self.stop_btn, self.logs_btn, self.boot_down_btn,
@@ -677,14 +1122,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if not ok:
             self.status.setText(f"Cannot start: {why}")
             return
-        self.log.appendPlainText("[local-mesh] docker compose up -d …")
+        self._note("[local-mesh] docker compose up -d …")
         self._launch("Starting the mesh node", self.node.start)
 
     def _stop(self):
         self._launch("Stopping the mesh node", self.node.stop)
 
     def _logs(self):
+        # A container-log dump is NOT a run: it has no stages and belongs to no row in
+        # the tree, so it takes over the pane and says so in the header, and the
+        # selection is dropped — otherwise the header would still name a run whose log
+        # is no longer on screen. (The button is disabled while a verb runs, so this can
+        # never steal the pane from a live stream.)
         self.log.setPlainText(self.node.logs() or "(no logs — node not started?)")
+        self.log_header.setText("Log — `docker compose logs` for the mesh node")
+        self._selected, self._selected_stage = -1, None
 
     # ── BOOTSTRAP handlers ───────────────────────────────────────────────────────
     def _refresh_plan(self):
@@ -761,13 +1213,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.status.setText("Cannot start: " + "; ".join(problems))
             return
         for warn in self.boot.warnings():
-            self.log.appendPlainText(f"WARNING: {warn}")
-        self.log.appendPlainText("[bootstrap] generating credentials + starting the "
-                                 "full platform stack from scratch …")
+            self._note(f"WARNING: {warn}")
+        self._note("[bootstrap] generating credentials + starting the full "
+                   "platform stack from scratch …")
         boot = self.boot
         self._launch("Bootstrapping",
                      lambda on_line, cancel: boot.up(on_line=on_line, cancel=cancel),
-                     stream=True, cancellable=True)
+                     stream=True, cancellable=True, verb="up")
 
     def _bootstrap_down(self):
         self._launch("Stopping the stack", self.boot.down)
@@ -790,15 +1242,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 | QtWidgets.QMessageBox.StandardButton.No,
                 QtWidgets.QMessageBox.StandardButton.No
         ) != QtWidgets.QMessageBox.StandardButton.Yes:
-            self.log.appendPlainText("[stack-clean] cancelled — nothing was removed.")
+            self._note("[stack-clean] cancelled — nothing was removed.", queue=False)
             return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         boot = self.boot
-        self.log.appendPlainText("[stack-clean] stopping the mesh and removing its "
-                                 "containers, volumes and built images …")
+        self._note("[stack-clean] stopping the mesh and removing its containers, "
+                   "volumes and built images …")
         self._launch("Stopping and cleaning Docker",
                      lambda on_line, cancel: boot.clean(on_line=on_line, cancel=cancel),
-                     stream=True, cancellable=True)
+                     stream=True, cancellable=True, verb="clean")
 
     def _check_readiness(self):
         """Read-only host preflight on demand — the exact probes `up` gates on,
@@ -824,13 +1276,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         the local registry container)."""
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         boot = self.boot
-        self.log.appendPlainText("[m2-bootstrap] building the private maven "
-                                 "artifacts from source (one-time cold-build "
-                                 "prerequisite) …")
+        self._note("[m2-bootstrap] building the private maven artifacts from "
+                   "source (one-time cold-build prerequisite) …")
         self._launch("Building maven prerequisites",
                      lambda on_line, cancel: boot.m2_bootstrap(on_line=on_line,
                                                                cancel=cancel),
-                     stream=True, cancellable=True)
+                     stream=True, cancellable=True, verb="m2")
 
     def _open_web_ui(self):
         QtGui.QDesktopServices.openUrl(
