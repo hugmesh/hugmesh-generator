@@ -1,7 +1,9 @@
 import { Page, expect, request } from '@playwright/test';
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, APIResponse } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { SYSTEMS_SEED_USERS, passwordFor } from './rbac-roles';
+import type { SystemsRole } from './rbac-roles';
 
 export const SHOTS = path.resolve(process.env.SNAP_SHOTS || 'screenshots');
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -114,6 +116,64 @@ export async function apiContext(baseUrl: string | undefined): Promise<APIReques
  */
 export const LOGIN_PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-pass';
 
+// ── platform-access personas (who may drive Matrix / Mastodon at all) ─────────
+/**
+ * Matrix and Mastodon are gated on the PER-PLATFORM access roles
+ * ROLE_MATRIX / ROLE_MASTODON. The broad ROLE_USER homeserver floor was removed
+ * (commit 0100d3b, see rbac-roles.ts on `e2e-user`), so the invite-handle personas
+ * (alice@…, bob@…, carol@…) — ROLE_USER and nothing else — are DENIED the
+ * homeserver backend BY DESIGN, and spec 17 asserts exactly that deny. Any spec
+ * that actually exercises Matrix/Mastodon must therefore drive a persona holding
+ * the platform role; granting alice ROLE_MATRIX to "fix" such a spec would
+ * contradict spec 17.
+ *
+ * Derived from the seed catalogue rather than hard-coded here so a roster change
+ * lands in one place. DOMAIN-LOCKED holders are excluded even though they carry
+ * the base access role: their federation lock is the SUBJECT of specs 19-23, and
+ * borrowing them for ordinary chat/post flows would entangle two proofs.
+ */
+export interface PlatformPersona {
+  /** Casdoor login handle. */
+  username: string;
+  /** Resolved per the catalogue's env-override chain (rbac-roles.ts passwordFor). */
+  password: string;
+  /** Roles granted in the seed — carried for assertion/diagnostic use. */
+  roles: readonly SystemsRole[];
+}
+
+export function platformPersonas(role: 'ROLE_MATRIX' | 'ROLE_MASTODON'): PlatformPersona[] {
+  const locked: SystemsRole = role === 'ROLE_MATRIX'
+    ? 'ROLE_MATRIX_DOMAINLOCKED'
+    : 'ROLE_MASTODON_DOMAINLOCKED';
+  return SYSTEMS_SEED_USERS
+    .filter((u) => u.roles.includes(role) && !u.roles.includes(locked) && u.registrationComplete)
+    .map((u) => ({ username: u.username, password: passwordFor(u), roles: u.roles }));
+}
+
+/**
+ * The first `count` platform-access personas for `role`, or a precise failure when
+ * the roster cannot supply them. The two-party specs (05/06/10/11) need TWO — if
+ * the catalogue ever shrinks to one, this says so by name instead of the spec
+ * dying on `undefined.username`, and the fix is a roster addition (a second
+ * seeded ROLE_MATRIX/ROLE_MASTODON persona), never granting the platform role to
+ * a plain-ROLE_USER handle.
+ */
+export function requirePlatformPersonas(
+  role: 'ROLE_MATRIX' | 'ROLE_MASTODON',
+  count: number,
+): PlatformPersona[] {
+  const all = platformPersonas(role);
+  if (all.length < count) {
+    throw new Error(
+      `need ${count} ${role} platform-access personas, the seed catalogue has ${all.length} `
+      + `(${all.map((p) => p.username).join(', ') || 'none'}). Add another seeded ${role} persona to `
+      + `SYSTEMS_SEED_USERS + seed-accounts.sh — do NOT grant ${role} to a plain ROLE_USER handle `
+      + `(alice@/bob@/…), which spec 17 asserts is denied the homeserver backend.`,
+    );
+  }
+  return all.slice(0, count);
+}
+
 /**
  * Non-secret session identity the login-ui carries post-login.
  *
@@ -134,6 +194,24 @@ export interface Session {
   roles: string[];
   /** Two-stage registration gate, hydrated from GET /bff/session. */
   registrationComplete: boolean;
+}
+
+/**
+ * Which persona a page is signed in as, remembered at sign-in time.
+ *
+ * The opaque-cookie model gives the browser NO readable identity (see Session
+ * above), so a failing helper cannot ask the page who it is. Every sign-in path
+ * goes through registerOnly(), so recording the handle there is enough to name
+ * the actor in an error message — which is the difference between "403" and
+ * "403 for a persona that never held the platform-access role". Keyed weakly so
+ * closed pages are collectable.
+ */
+const PERSONA = new WeakMap<Page, string>();
+
+/** The handle `page` last signed in as, or a placeholder when a spec drove the
+ *  login itself instead of going through registerOnly()/onboard(). */
+export function personaOf(page: Page): string {
+  return PERSONA.get(page) ?? '<unknown persona: page did not sign in via onboard()/registerOnly()>';
 }
 
 export async function shot(page: Page, name: string): Promise<void> {
@@ -166,6 +244,7 @@ export async function getSession(page: Page, username: string): Promise<Session>
  * instead (native login has no self-registration surface).
  */
 export async function registerOnly(page: Page, username: string, password = LOGIN_PASSWORD): Promise<void> {
+  PERSONA.set(page, username); // so a later helper failure can name the actor
   await page.goto('/login');
   await page.getByTestId('login-username').fill(username);
   await page.getByTestId('login-password').fill(password);
@@ -274,23 +353,227 @@ export async function onboard(page: Page, username: string, password = LOGIN_PAS
 // hsFetch(). `page.request` reuses the page's cookie jar, so the cookie rides.
 const MATRIX_HSPROXY = '/bff/user/matrix';
 
+/**
+ * Render a CS-API path PARAMETER (a room id, an mxid) as a URI path segment the
+ * whole chain actually understands.
+ *
+ * `encodeURIComponent(roomId)` — what these helpers used to do — is the textbook
+ * spelling and it DOES NOT WORK against this stack. Proven live, same room, same
+ * session, same second:
+ *
+ *   POST …/rooms/%21LmrBEFNwdPsY0FfToB%3Alocalhost/join
+ *     -> 400 {"errcode":"M_BAD_JSON","error":"deserialization failed: leading
+ *             sigil is incorrect or missing"}
+ *   POST …/rooms/!LmrBEFNwdPsY0FfToB:localhost/join
+ *     -> 200 {"room_id":"!LmrBEFNwdPsY0FfToB:localhost"}
+ *
+ * The user-bff hsproxy forwards the ALREADY-ENCODED path verbatim on purpose
+ * (HsReverseProxy: "the request path value + raw query are already URL-encoded →
+ * build(true)", part of its SSRF guard), and tuwunel v1.7.0 does not
+ * percent-decode the segment before handing it to the room-id deserializer — so
+ * `%21…` reaches it as the literal characters and the sigil check fails. That is
+ * an upstream/homeserver behaviour, not something a test can fix; the fix
+ * available here is to not encode what does not need encoding.
+ *
+ * So: percent-encode, then restore the characters RFC 3986 permits LITERALLY in a
+ * path segment (pchar = unreserved / sub-delims / ':' / '@'). `!` needs no help —
+ * encodeURIComponent already leaves it — `:` is the one that matters for
+ * `!room:server` and `@user:server`. This is a strictly VALID URI either way, so
+ * it is equally correct against a decoding server: the light lane's
+ * tests/stack/mock-matrix.mjs decodeURIComponent()s each segment, and decoding an
+ * unencoded segment is the identity.
+ *
+ * `/` stays encoded (it would otherwise split the segment) and therefore remains
+ * unreachable on tuwunel — no Matrix identifier grammar produces one.
+ */
+function pathParam(value: string): string {
+  return encodeURIComponent(value).replace(
+    /%(24|26|2B|2C|3A|3B|3D|40)/gi,
+    (m) => decodeURIComponent(m),
+  );
+}
+
+/**
+ * Fail an hsproxy call with the facts needed to diagnose it: the status, the URL
+ * and the PERSONA that made the call.
+ *
+ * WHY THIS EXISTS. Every one of these helpers used to do `(await r.json())` on an
+ * unchecked response. The gateway denies a caller without the per-platform access
+ * role with a 403 carrying an EMPTY body (verified live: alice@gmail.com, roles
+ * ["user"], POST createRoom -> 403, zero bytes), so `r.json()` threw
+ * "SyntaxError: Unexpected end of JSON input" from inside helpers.ts and the
+ * actual RBAC deny never appeared anywhere in the report. A 403 must read as a
+ * 403. The 403 branch names the likely cause because that is the single most
+ * common way these helpers fail: ROLE_MATRIX/ROLE_MASTODON are per-platform
+ * ACCESS roles and a plain ROLE_USER does NOT reach the homeserver backend
+ * (rbac-roles.ts; spec 17 asserts that deny).
+ */
+async function hsproxyFail(page: Page, r: APIResponse, what: string): Promise<never> {
+  const body = (await r.text().catch(() => '')).trim();
+  const hint = r.status() === 403
+    ? '\n  403 = RBAC deny. Matrix/Mastodon are gated on the per-platform ROLE_MATRIX/'
+      + 'ROLE_MASTODON access roles; a plain ROLE_USER is DENIED the homeserver backend '
+      + '(see specs/rbac-roles.ts and spec 17). Drive this flow with a platform-access '
+      + 'persona (e2e-matrix / e2e-mastodon and their peers).'
+    : '';
+  throw new Error(
+    `${what} failed: HTTP ${r.status()} ${r.statusText()}\n`
+    + `  url:     ${r.url()}\n`
+    + `  persona: ${personaOf(page)}\n`
+    + `  body:    ${body.length ? body.slice(0, 500) : '<empty>'}${hint}`,
+  );
+}
+
+/** Assert an hsproxy response is 2xx; on anything else throw the status/URL/persona
+ *  message above rather than letting the caller parse a body that isn't there. */
+async function hsproxyOk(page: Page, r: APIResponse, what: string): Promise<APIResponse> {
+  if (!r.ok()) await hsproxyFail(page, r, what);
+  return r;
+}
+
+/** Status-checked JSON: never hands an unparsed error body to JSON.parse, and
+ *  reports a genuinely-malformed 2xx body as such instead of as a bare SyntaxError. */
+async function hsproxyJson(page: Page, r: APIResponse, what: string): Promise<any> {
+  await hsproxyOk(page, r, what);
+  const text = await r.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      `${what} returned HTTP ${r.status()} with a non-JSON body\n`
+      + `  url:     ${r.url()}\n`
+      + `  persona: ${personaOf(page)}\n`
+      + `  body:    ${text.length ? text.slice(0, 500) : '<empty>'}`,
+    );
+  }
+}
+
 /** Resolve the caller's own Matrix user_id via the hsproxy whoami — the browser
  *  no longer holds it (it lived on the deleted Session.matrix.userId). */
 export async function matrixUserId(page: Page): Promise<string> {
-  const r = await page.request.get(`${MATRIX_HSPROXY}/_matrix/client/v3/account/whoami`);
-  return (await r.json()).user_id;
+  const url = `${MATRIX_HSPROXY}/_matrix/client/v3/account/whoami`;
+  const r = await page.request.get(url);
+  const body = await hsproxyJson(page, r, 'matrix whoami');
+  if (typeof body.user_id !== 'string' || !body.user_id) {
+    throw new Error(`matrix whoami returned no user_id for persona ${personaOf(page)}: ${JSON.stringify(body)}`);
+  }
+  return body.user_id;
 }
 
-/** Create a Matrix room (inviting `peerUserId`) as the signed-in `page` user,
- *  through the hsproxy. Returns the room_id. */
-export async function createRoom(page: Page, peerUserId: string, name: string): Promise<string> {
+/** Create a Matrix room as the signed-in `page` user, through the hsproxy.
+ *  `invitees` takes one user_id or several — a lone string keeps the historical
+ *  one-peer call sites (specs 05/10/11) source-compatible. `opts` forwards the
+ *  optional createRoom knobs the group specs exercise (preset/is_direct/topic);
+ *  omitted knobs are omitted from the body, preserving the server defaults the
+ *  existing specs were created under. Returns the room_id. */
+export async function createRoom(
+  page: Page,
+  invitees: string | string[],
+  name: string,
+  opts: { preset?: string; isDirect?: boolean; topic?: string } = {},
+): Promise<string> {
+  const invite = Array.isArray(invitees) ? invitees : [invitees];
   const r = await page.request.post(`${MATRIX_HSPROXY}/_matrix/client/v3/createRoom`, {
-    data: { name, invite: [peerUserId] },
+    data: {
+      name,
+      invite,
+      ...(opts.preset && { preset: opts.preset }),
+      ...(opts.isDirect && { is_direct: true }),
+      ...(opts.topic && { topic: opts.topic }),
+    },
   });
-  return (await r.json()).room_id;
+  const body = await hsproxyJson(page, r, `createRoom '${name}' inviting [${invite.join(', ')}]`);
+  if (typeof body.room_id !== 'string' || !body.room_id) {
+    throw new Error(
+      `createRoom '${name}' returned no room_id for persona ${personaOf(page)}: ${JSON.stringify(body)}`,
+    );
+  }
+  return body.room_id;
+}
+
+/** Invite `userId` into an existing room as the signed-in `page` user, through
+ *  the hsproxy. The invitee sees the room under /sync `rooms.invite` (the UI's
+ *  pending-invite rows) until they join or leave (decline). */
+export async function inviteToRoom(page: Page, roomId: string, userId: string): Promise<void> {
+  const r = await page.request.post(
+    `${MATRIX_HSPROXY}/_matrix/client/v3/rooms/${pathParam(roomId)}/invite`,
+    { data: { user_id: userId } },
+  );
+  // Same reason as createRoom: an unchecked invite made a later "the invite row
+  // never appeared" the visible failure instead of the deny that caused it.
+  await hsproxyOk(page, r, `invite ${userId} into ${roomId}`);
 }
 
 /** Join a Matrix room as the signed-in `page` user, through the hsproxy. */
 export async function joinRoom(page: Page, roomId: string): Promise<void> {
-  await page.request.post(`${MATRIX_HSPROXY}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/join`);
+  const r = await page.request.post(`${MATRIX_HSPROXY}/_matrix/client/v3/rooms/${pathParam(roomId)}/join`);
+  await hsproxyOk(page, r, `join ${roomId}`);
+}
+
+/** The room-scoped event PUT the matrix-ui issues for a composed message or a
+ *  call-signalling event: `/rooms/<roomId>/send/<eventType>/<txn>`. */
+export const UI_ROOM_SEND = /\/_matrix\/client\/v3\/rooms\/[^/]+\/send\//;
+
+/**
+ * Run `action` (a UI interaction) and require the hsproxy call it triggers — the
+ * first response whose URL matches `pathRe` — to come back 2xx.
+ *
+ * DIAGNOSTIC, NOT A WEAKENING: the assertions that follow are unchanged; this only
+ * makes the FIRST thing that broke the visible failure. Without it, a UI-side
+ * CS-API call that 4xx/5xxs surfaces 15s later as `toContainText` receiving `""`,
+ * which names neither the request nor the status — exactly how the encoded-room-id
+ * defect below hid. It also pins WHICH request the click is supposed to make.
+ */
+export async function expectUiCallOk<T>(
+  page: Page,
+  pathRe: RegExp,
+  what: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const pending = page.waitForResponse((r) => pathRe.test(r.url()));
+  const result = await action();
+  const r = await pending;
+  if (!r.ok()) {
+    const body = (await r.text().catch(() => '')).trim();
+    throw new Error(
+      `${what}: the UI's own request failed — HTTP ${r.status()}\n`
+      + `  url:     ${r.url()}\n`
+      + `  persona: ${personaOf(page)}\n`
+      + `  body:    ${body.length ? body.slice(0, 500) : '<empty>'}`,
+    );
+  }
+  return result;
+}
+
+// ── Mastodon setup via the user-bff hsproxy (same custody model as Matrix) ─────
+// MastodonProxyController is the sibling of MatrixProxyController in the same
+// hsproxy package: same-origin prefix, prefix stripped, verbatim `/api/...` path
+// forwarded, server-held token injected, auth = the httpOnly bff_session cookie.
+const MASTODON_HSPROXY = '/bff/user/mastodon';
+
+/** The signed-in `page` user's OWN Mastodon account id. Like matrixUserId(), this
+ *  has to come from the server: the browser holds no Mastodon token or account id,
+ *  and the account's username is the opaque Casdoor subject, not the handle. */
+export async function mastodonAccountId(page: Page): Promise<string> {
+  const r = await page.request.get(`${MASTODON_HSPROXY}/api/v1/accounts/verify_credentials`);
+  const body = await hsproxyJson(page, r, 'mastodon verify_credentials');
+  if (!body.id) {
+    throw new Error(`mastodon verify_credentials returned no account id for persona ${personaOf(page)}`);
+  }
+  return String(body.id);
+}
+
+/**
+ * The signed-in `page` user FOLLOWS `accountId`.
+ *
+ * Needed because the UI's "Home" tab is the real `/api/v1/timelines/home` — the
+ * FOLLOW graph decides what lands there, so "user B sees user A's post" is only
+ * true once B follows A. (On the light lane's mock-mastodon every status shows up
+ * on home regardless, which is why a spec could look green without this.) Follow
+ * BEFORE the author posts: Mastodon fans a new status out to its followers' home
+ * feeds at post time, so that ordering needs no backfill and no polling for it.
+ */
+export async function mastodonFollow(page: Page, accountId: string): Promise<void> {
+  const r = await page.request.post(`${MASTODON_HSPROXY}/api/v1/accounts/${pathParam(accountId)}/follow`);
+  await hsproxyOk(page, r, `follow mastodon account ${accountId}`);
 }

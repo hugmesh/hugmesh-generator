@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#4a4257"/>
+  <rect y="600" width="1600" height="300" fill="#37313f"/>
+  <rect y="600" width="1600" height="12" fill="#57506a"/>
+  <polygon points="620,612 980,612 1220,900 380,900" fill="#8c2f39"/>
+  <polygon points="660,612 940,612 1140,900 460,900" fill="#a53c46"/>
+  <path d="M360 200 a90 90 0 0 1 180 0 v260 h-180 Z" fill="#efe3c0" opacity=".9"/>
+  <path d="M710 160 a90 90 0 0 1 180 0 v300 h-180 Z" fill="#efe3c0" opacity=".95"/>
+  <path d="M1060 200 a90 90 0 0 1 180 0 v260 h-180 Z" fill="#efe3c0" opacity=".9"/>
+  <polygon points="710,460 890,460 1010,900 590,900" fill="#efe3c0" opacity=".10"/>
+  <rect x="60" y="120" width="70" height="500" fill="#5c5370"/>
+  <rect x="46" y="90" width="98" height="34" rx="8" fill="#6a6180"/>
+  <rect x="46" y="612" width="98" height="26" rx="6" fill="#6a6180"/>
+  <rect x="1470" y="120" width="70" height="500" fill="#5c5370"/>
+  <rect x="1456" y="90" width="98" height="34" rx="8" fill="#6a6180"/>
+  <rect x="1456" y="612" width="98" height="26" rx="6" fill="#6a6180"/>
+  <polygon points="230,110 330,110 330,330 280,290 230,330" fill="#8c2f39"/>
+  <rect x="230" y="110" width="100" height="24" fill="#ffd27f"/>
+  <circle cx="280" cy="200" r="26" fill="#ffd27f" opacity=".85"/>
+  <polygon points="1270,110 1370,110 1370,330 1320,290 1270,330" fill="#274e7a"/>
+  <rect x="1270" y="110" width="100" height="24" fill="#ffd27f"/>
+  <circle cx="1320" cy="200" r="26" fill="#ffd27f" opacity=".85"/>
+  <rect x="580" y="330" width="18" height="70" rx="6" fill="#2e2838"/>
+  <polygon points="571,330 607,330 589,290" fill="#ffb75d"/>
+  <circle cx="589" cy="300" r="20" fill="#ffd27f" opacity=".35"/>
+  <rect x="1002" y="330" width="18" height="70" rx="6" fill="#2e2838"/>
+  <polygon points="993,330 1029,330 1011,290" fill="#ffb75d"/>
+  <circle cx="1011" cy="300" r="20" fill="#ffd27f" opacity=".35"/>
+  <rect y="70" width="1600" height="16" fill="#3b3547"/>
+  <rect y="86" width="1600" height="6" fill="#6a6180" opacity=".6"/>
+</svg>

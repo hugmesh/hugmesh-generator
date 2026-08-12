@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#232838"/>
+  <rect y="0" width="1600" height="70" fill="#1a1f2e"/>
+  <rect y="70" width="1600" height="10" rx="5" fill="#9fd8ff" opacity=".7"/>
+  <polygon points="240,140 1360,140 1440,520 160,520" fill="#3a4258"/>
+  <polygon points="280,170 1320,170 1390,490 210,490" fill="#060812"/>
+  <circle cx="1120" cy="300" r="90" fill="#7c5fae"/>
+  <circle cx="1090" cy="280" r="70" fill="#8f74c0"/>
+  <ellipse cx="1120" cy="310" rx="150" ry="26" fill="#b388ff" opacity=".35"/>
+  <circle cx="420" cy="230" r="3" fill="#e8e8f0"/>
+  <circle cx="560" cy="330" r="2" fill="#e8e8f0"/>
+  <circle cx="700" cy="220" r="3" fill="#e8e8f0"/>
+  <circle cx="840" cy="380" r="2" fill="#e8e8f0"/>
+  <circle cx="950" cy="240" r="2" fill="#e8e8f0"/>
+  <circle cx="360" cy="420" r="2" fill="#e8e8f0"/>
+  <circle cx="1280" cy="420" r="3" fill="#e8e8f0"/>
+  <circle cx="520" cy="440" r="2" fill="#e8e8f0"/>
+  <rect x="60" y="140" width="90" height="420" rx="10" fill="#1a1f2e"/>
+  <rect x="78" y="170" width="54" height="10" rx="5" fill="#58e0c0" opacity=".8"/>
+  <rect x="78" y="200" width="54" height="10" rx="5" fill="#58e0c0" opacity=".5"/>
+  <rect x="78" y="230" width="54" height="10" rx="5" fill="#ff6b6b" opacity=".6"/>
+  <rect x="1450" y="140" width="90" height="420" rx="10" fill="#1a1f2e"/>
+  <rect x="1468" y="170" width="54" height="10" rx="5" fill="#9fd8ff" opacity=".8"/>
+  <rect x="1468" y="200" width="54" height="10" rx="5" fill="#9fd8ff" opacity=".5"/>
+  <rect x="1468" y="230" width="54" height="10" rx="5" fill="#58e0c0" opacity=".6"/>
+  <rect y="700" width="1600" height="200" fill="#1a1f2e"/>
+  <polygon points="700,700 900,700 1040,900 560,900" fill="#232838"/>
+  <rect x="700" y="700" width="200" height="6" fill="#9fd8ff" opacity=".5"/>
+  <rect x="180" y="560" width="360" height="140" rx="12" fill="#12162a"/>
+  <rect x="220" y="590" width="120" height="50" rx="6" fill="#58e0c0" opacity=".75"/>
+  <rect x="360" y="590" width="60" height="50" rx="6" fill="#9fd8ff" opacity=".6"/>
+  <rect x="440" y="590" width="60" height="50" rx="6" fill="#ffd27f" opacity=".5"/>
+  <rect x="1060" y="560" width="360" height="140" rx="12" fill="#12162a"/>
+  <rect x="1100" y="590" width="120" height="50" rx="6" fill="#9fd8ff" opacity=".75"/>
+  <rect x="1240" y="590" width="60" height="50" rx="6" fill="#58e0c0" opacity=".6"/>
+  <rect x="1320" y="590" width="60" height="50" rx="6" fill="#ff6b6b" opacity=".45"/>
+</svg>

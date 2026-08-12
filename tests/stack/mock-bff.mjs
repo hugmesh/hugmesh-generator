@@ -190,6 +190,14 @@ function seedPersonas() {
                    'eve@gmail.com', 'frank@gmail.com', 'dragoneer', 'e2e-user']) {
     provisionAccount(u, { complete: false });
   }
+  // The rbac-roles.ts catalogue's NON-domain-locked ROLE_MATRIX holders — the
+  // personas spec 31 (group chat) signs in with. Seeded incomplete so onboard()
+  // drives the real two-stage flow, with the platform role the real Casdoor
+  // seed grants (the mock's hsproxy does not role-gate, but /bff/session must
+  // report what the real BFF would).
+  for (const u of ['e2e-matrix', 'e2e-matrix-groupchat', 'e2e-matrix-external-client']) {
+    provisionAccount(u, { roles: ['user', 'matrix'], complete: false });
+  }
 }
 
 // ── CSRF: native mutating /bff/** (non-mint) use an XSRF double-submit. The mock
