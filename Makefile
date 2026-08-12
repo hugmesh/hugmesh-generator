@@ -1362,6 +1362,11 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )bash tests/stack/seed-e2e.sh
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
+	@echo "    NOTE: this seeds registration STAGE 1 (the Casdoor identity) only. Until stage 2"
+	@echo "    (POST /bff/register/complete) runs, GET /bff/session reports registrationComplete=false,"
+	@echo "    the gateway grants only a bare ROLE_USER, and every service route 403s — you can sign in"
+	@echo "    but not navigate. Re-run with SEED_COMPLETE_REGISTRATION=1 to onboard the personas too"
+	@echo "    (the Studio's local-mesh bring-up passes it; the e2e suite deliberately does not)."
 
 stack-down: ## stop the local stack and drop its volumes
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v

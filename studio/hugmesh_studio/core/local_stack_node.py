@@ -494,8 +494,20 @@ class LocalStackNode:
              timeout: int = 600, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make stack-seed` — provision Casdoor identity (org+roles+personas) into
         the already-running stack. ``extra_env`` bridges secret values (the minted
-        E2E_SUPERADMIN_PASSWORD) through the subprocess env, never argv."""
-        return self._make("stack-seed", timeout=timeout, extra_env=extra_env,
+        E2E_SUPERADMIN_PASSWORD) through the subprocess env, never argv.
+
+        Also opts INTO registration stage 2 (seed-e2e.sh leg 1c). Seeding a Casdoor
+        identity alone leaves `registrationComplete=false`, and the gateway then
+        grants that identity a bare ROLE_USER whatever roles Casdoor holds — so
+        every service remote 403s and the shell greys its tiles with "Complete your
+        registration to use this." A mesh you can sign into but not navigate reads
+        as broken, and THIS path's product is a clickable mesh. The seeder keeps the
+        flag off by default because the e2e suite needs personas that are still
+        gated (spec 17 drives the pending-registration UI); an explicit caller
+        override in ``extra_env`` still wins."""
+        env = {"SEED_COMPLETE_REGISTRATION": "1"}
+        env.update(extra_env or {})
+        return self._make("stack-seed", timeout=timeout, extra_env=env,
                           on_line=on_line, cancel=cancel)
 
     def m2_bootstrap(self, on_line=None, cancel=None) -> tuple[bool, str]:

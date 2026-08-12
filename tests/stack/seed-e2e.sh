@@ -73,6 +73,12 @@
 #   SEED_WORKDIR          default tests/stack/.seed-e2e (rendered JSON + minted
 #                                           JWTs land here; gitignored)
 #   SEED_STRICT           default 0        (1 = the second-tenant WARN becomes fatal)
+#   SEED_WAIT_S           default 180      (seconds the preflight waits for each
+#                                           dependency's port to answer. `make
+#                                           stack-up` returns before the stack
+#                                           SERVES, so a seed run straight after it
+#                                           must wait rather than die on the first
+#                                           refused connection.)
 # =============================================================================
 set -euo pipefail
 
@@ -107,6 +113,14 @@ SEED_STRICT="${SEED_STRICT:-0}"
 # + personas) and stops before the Matrix/Mastodon social legs — enough for real SSO
 # web login on the CORE (non-SOCIAL) stack, which has no Synapse/Mastodon to seed.
 SEED_CASDOOR_ONLY="${SEED_CASDOOR_ONLY:-0}"
+# How long the preflight waits for a dependency's port to start answering.
+# `make stack-up` returns the moment `compose up -d` has STARTED the containers —
+# it does NOT wait for them to serve (fe-gateway's only compose dependents use
+# `condition: service_started`), so a `make stack-seed` launched straight after
+# stack-up hits a dead port for the whole gateway JVM boot (~17 s measured warm,
+# far longer cold / with SOCIAL=1). A single un-retried curl turned that ordinary
+# startup latency into "UNMET DEPENDENCY: front door is not answering".
+SEED_WAIT_S="${SEED_WAIT_S:-180}"
 
 log()  { echo "[seed-e2e] $*"; }
 warn() { echo "[seed-e2e] WARN: $*" >&2; }
@@ -118,11 +132,33 @@ command -v jq     >/dev/null 2>&1 || die "jq is required"
 command -v docker >/dev/null 2>&1 || die "docker is required (the social-tier legs exec into the compose containers)"
 [ -f "${SEED_ACCOUNTS}" ]         || die "base seeder not found: ${SEED_ACCOUNTS}"
 
-curl -sf -o /dev/null --max-time 5 "${FRONT_DOOR}/actuator/health/readiness" \
-  || curl -sf -o /dev/null --max-time 5 "${FRONT_DOOR}/" \
-  || die "front door ${FRONT_DOOR} is not answering — bring the stack up first: make stack-up"
-curl -sf -o /dev/null --max-time 5 "${CASDOOR_URL}/" \
-  || die "Casdoor ${CASDOOR_URL} is not answering — bring the stack up first: make stack-up"
+# A dependency is "up" when its port answers with a REAL status. 401 counts: the
+# fe-gateway front door is default-DENY for anonymous, so an auth challenge proves
+# the gateway is serving. 5xx does NOT count — a JVM that has bound its port but
+# not yet wired its routes answers 502/503, and accepting that would just move the
+# failure deeper into the seed with a more confusing message.
+# NOTE: the old first probe here was `curl -sf .../actuator/health/readiness`.
+# That endpoint is behind auth and ALWAYS answers 401 -> `curl -sf` exits 22, so it
+# was dead code and the entire gate was one 5 s shot at `/`. Do not reinstate it.
+http_up() {  # <url>
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$1" 2>/dev/null || echo 000)"
+  case "${code}" in 2??|3??|401) return 0 ;; *) return 1 ;; esac
+}
+wait_up() {  # <label> <url> <die-hint>
+  local t=0
+  http_up "$2" && return 0
+  log "waiting for $1 $2 (up to ${SEED_WAIT_S}s — stack-up does not wait for readiness)"
+  while [ "${t}" -lt "${SEED_WAIT_S}" ]; do
+    sleep 3; t=$((t+3))
+    http_up "$2" && { log "$1: answering after ${t}s"; return 0; }
+  done
+  die "$1 $2 is not answering after ${SEED_WAIT_S}s — $3"
+}
+# Casdoor FIRST: it is the seed's only hard dependency (the SEED_CASDOOR_ONLY=1 leg
+# that `make stack-seed` runs on the non-SOCIAL path never touches the front door).
+wait_up "Casdoor"    "${CASDOOR_URL}/" "bring the stack up first: make stack-up"
+wait_up "front door" "${FRONT_DOOR}/"  "bring the stack up first: make stack-up (check: make stack-ps)"
 # The social-tier legs exec INSIDE the containers (register_new_matrix_user /
 # tootctl / rails runner). Find them by compose service name, whichever project
 # (hugmesh-local or hugmesh-real) is running them.
@@ -380,6 +416,89 @@ for persona in e2e-user e2e-mod e2e-admin "${SUPERADMIN_PERSONA}" e2e-banned \
     || die "persona ${persona} did not land in Casdoor ${CASDOOR_URL} (apply hook incomplete)"
 done
 log "leg 1 OK: standard persona set verified in Casdoor"
+
+# ── LEG 1c: registration stage 2 (OPT-IN) ────────────────────────────────────
+# Seeding a Casdoor identity is only STAGE 1. Until stage 2 (`POST
+# /bff/register/complete`) runs, `GET /bff/session` reports
+# registrationComplete=false, and the gateway then grants the identity only a
+# bare ROLE_USER regardless of the roles Casdoor holds — so EVERY service
+# federation remote (/admin, /mod, /user, /social/**, /apidocs) answers 403 and
+# the host shell greys its tiles with "Complete your registration to use this."
+# A freshly-seeded local mesh therefore renders a login page you can sign into
+# and then cannot navigate anywhere from, which reads as a broken mesh.
+#
+# OFF BY DEFAULT — this is deliberate, not timidity. Several e2e specs need
+# personas that are still gated: spec 17 drives the pending-registration UI with
+# rbac-pending@gmail.com, and spec 29 asserts it can perform stage 2 itself.
+# Completing registration for everyone would delete the very state those specs
+# exercise. The Studio's local-mesh bring-up passes 1 because ITS product is a
+# clickable mesh, not a test fixture (core/local_stack_node.py seed()).
+SEED_COMPLETE_REGISTRATION="${SEED_COMPLETE_REGISTRATION:-0}"
+# Personas whose GATED state is load-bearing for the e2e suite; never completed
+# even when the flag is on:
+#   e2e-pending            — tests/e2e/specs/rbac-roles.ts is the contract, and it
+#                            is the single entry declaring registrationComplete:false.
+#   rbac-pending-gmail-com — spec 17 drives the pending-registration UI with it and
+#                            asserts the gate HOLDS (17-rbac-user-and-pending.spec.ts).
+#   e2e-banned             — spec 28 pins it 403 on both homeserver surfaces; its
+#                            whole identity is "blocked", so onboarding it would
+#                            launder away the state under test.
+SEED_REGISTRATION_SKIP="${SEED_REGISTRATION_SKIP:-e2e-pending rbac-pending-gmail-com e2e-banned}"
+
+# Derive BOTH the persona list and each password from the SAME rendered spec set
+# leg 1 just applied ("username:ROLES_CSV:passwordEnv"), never a second copy of
+# the table — the same no-drift rule the base render above is built on.
+ALL_SPECS="${BASE_SPECS}${EXTRA_SPECS}"
+REGISTRATION_PERSONAS="$(for s in ${ALL_SPECS}; do printf '%s ' "${s%%:*}"; done)"
+
+persona_password() {  # <username> -> per-user env override, else shared, else default
+  local u="$1" spec env_name="" val=""
+  for spec in ${ALL_SPECS}; do
+    case "${spec}" in "${u}:"*) env_name="${spec##*:}"; break ;; esac
+  done
+  [ -n "${env_name}" ] && val="$(printenv "${env_name}" 2>/dev/null || true)"
+  [ -n "${val}" ] || val="${E2E_PASSWORD}"
+  printf '%s' "${val}"
+}
+
+# rc 0 = completed, 2 = deliberately left gated, 1 = attempted and failed.
+complete_registration() {  # <username>
+  local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code
+  case " ${SEED_REGISTRATION_SKIP} " in *" ${u} "*) return 2 ;; esac
+  # Stage 1: a real session cookie, exactly as the browser gets one.
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -c "${jar}" \
+            -X POST "${FRONT_DOOR}/bff/login" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg u "${u}" --arg p "$(persona_password "${u}")" \
+                    '{username:$u,password:$p}')" 2>/dev/null || echo 000)"
+  [ "${code}" = "200" ] || { warn "registration: login for ${u} -> ${code} (skipped)"; rm -f "${jar}"; return 0; }
+  # Stage 2: admin-bff's public AuthController, through the gateway, with that
+  # cookie — the same call tests/e2e/specs/29-mfa-privileged-floor.spec.ts makes.
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -b "${jar}" -c "${jar}" \
+            -X POST "${FRONT_DOOR}/bff/register/complete" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg d "${u}" '{displayName:$d}')" 2>/dev/null || echo 000)"
+  rm -f "${jar}"
+  case "${code}" in
+    200) return 0 ;;
+    404) warn "registration: ${u} -> 404. The gateway route table sends /bff/register/** to a service that does not implement stage 2 (admin-bff does)." ; return 1 ;;
+    *)   warn "registration: ${u} -> ${code}" ; return 1 ;;
+  esac
+}
+
+if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
+  log "leg 1c: completing registration (stage 2) so personas can reach services"
+  reg_ok=0; reg_gated=0; reg_fail=0
+  for persona in ${REGISTRATION_PERSONAS}; do
+    complete_registration "${persona}" && { reg_ok=$((reg_ok+1)); continue; }
+    case "$?" in
+      2) reg_gated=$((reg_gated+1)) ;;
+      *) reg_fail=$((reg_fail+1)) ;;
+    esac
+  done
+  log "leg 1c OK: ${reg_ok} registration-complete, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} failed"
+  # A failure here is NOT fatal: leg 1's identities are seeded either way, and the
+  # operator can still complete registration from the UI. Say it plainly instead.
+  [ "${reg_fail}" -eq 0 ] || warn "leg 1c: ${reg_fail} persona(s) could not complete registration (see the WARNs above)"
+fi
 
 # ── LEG 1b: second-tenant persona (needs a brand-B Casdoor) ──────────────────
 if [ -n "${CASDOOR_BRAND_B_URL}" ]; then
