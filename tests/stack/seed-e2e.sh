@@ -461,43 +461,83 @@ persona_password() {  # <username> -> per-user env override, else shared, else d
   printf '%s' "${val}"
 }
 
-# rc 0 = completed, 2 = deliberately left gated, 1 = attempted and failed.
-complete_registration() {  # <username>
-  local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code
+persona_roles() {  # <username> -> the ROLES_CSV this persona was rendered with
+  local u="$1" spec rest
+  for spec in ${ALL_SPECS}; do
+    case "${spec}" in "${u}:"*) rest="${spec#*:}"; printf '%s' "${rest%:*}"; return 0 ;; esac
+  done
+}
+
+# Mint the per-platform account behind the hsproxy. Stage 2 alone does NOT do this:
+# it flips registration_complete (which is what makes the gateway map the persona's
+# REAL roles instead of the bare ROLE_USER floor), but the Matrix/Mastodon accounts
+# are minted separately by `POST /bff/provision/<platform>`. Skipping it leaves the
+# operator with a Matrix UI that renders its whole shell and then 403s on
+# whoami/joined_rooms/sync — an app that "opens" but shows nothing.
+# The browser does this automatically at login (login-ui bff.service.ts); the seeder
+# must do it explicitly. Provisioning is ROLE-GATED, so we only ask for a platform
+# the persona actually holds the access role for — asking anyway would log a 403 for
+# every admin-only persona and teach the operator to ignore the warnings.
+provision_platform() {  # <username> <matrix|mastodon> <jar>
+  local u="$1" plat="$2" jar="$3" code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 40 -b "${jar}" -c "${jar}" \
+            -X POST "${FRONT_DOOR}/bff/provision/${plat}" \
+            -H 'content-type: application/json' -d '{}' 2>/dev/null || echo 000)"
+  case "${code}" in
+    200|201|204) return 0 ;;
+    *) warn "provision ${plat} for ${u} -> ${code}" ; return 1 ;;
+  esac
+}
+
+# rc 0 = onboarded, 2 = deliberately left gated, 1 = attempted and failed.
+onboard_persona() {  # <username>
+  local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code roles rc=0
   case " ${SEED_REGISTRATION_SKIP} " in *" ${u} "*) return 2 ;; esac
   # Stage 1: a real session cookie, exactly as the browser gets one.
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -c "${jar}" \
             -X POST "${FRONT_DOOR}/bff/login" -H 'content-type: application/json' \
             -d "$(jq -nc --arg u "${u}" --arg p "$(persona_password "${u}")" \
                     '{username:$u,password:$p}')" 2>/dev/null || echo 000)"
-  [ "${code}" = "200" ] || { warn "registration: login for ${u} -> ${code} (skipped)"; rm -f "${jar}"; return 0; }
+  # A login that does not return 200 is a REAL failure, not a skip: the persona was
+  # just seeded, so it must be able to log in.
+  [ "${code}" = "200" ] || { warn "onboard: login for ${u} -> ${code}"; rm -f "${jar}"; return 1; }
   # Stage 2: admin-bff's public AuthController, through the gateway, with that
   # cookie — the same call tests/e2e/specs/29-mfa-privileged-floor.spec.ts makes.
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -b "${jar}" -c "${jar}" \
             -X POST "${FRONT_DOOR}/bff/register/complete" -H 'content-type: application/json' \
             -d "$(jq -nc --arg d "${u}" '{displayName:$d}')" 2>/dev/null || echo 000)"
-  rm -f "${jar}"
   case "${code}" in
-    200) return 0 ;;
-    404) warn "registration: ${u} -> 404. The gateway route table sends /bff/register/** to a service that does not implement stage 2 (admin-bff does)." ; return 1 ;;
-    *)   warn "registration: ${u} -> ${code}" ; return 1 ;;
+    200) ;;
+    404) warn "onboard: ${u} -> 404. The gateway route table sends /bff/register/** to a service that does not implement stage 2 (admin-bff does)." ; rm -f "${jar}"; return 1 ;;
+    *)   warn "onboard: ${u} -> ${code}" ; rm -f "${jar}"; return 1 ;;
   esac
+  # Stage 3: the platform accounts, only for the roles this persona actually holds.
+  roles=",$(persona_roles "${u}"),"
+  case "${roles}" in *,ROLE_MATRIX,*)   provision_platform "${u}" matrix   "${jar}" || rc=1 ;; esac
+  case "${roles}" in *,ROLE_MASTODON,*) provision_platform "${u}" mastodon "${jar}" || rc=1 ;; esac
+  rm -f "${jar}"
+  return "${rc}"
 }
 
 if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
-  log "leg 1c: completing registration (stage 2) so personas can reach services"
+  log "leg 1c: onboarding personas (registration stage 2 + platform provisioning)"
   reg_ok=0; reg_gated=0; reg_fail=0
   for persona in ${REGISTRATION_PERSONAS}; do
-    complete_registration "${persona}" && { reg_ok=$((reg_ok+1)); continue; }
+    onboard_persona "${persona}" && { reg_ok=$((reg_ok+1)); continue; }
     case "$?" in
       2) reg_gated=$((reg_gated+1)) ;;
       *) reg_fail=$((reg_fail+1)) ;;
     esac
   done
-  log "leg 1c OK: ${reg_ok} registration-complete, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} failed"
+  log "leg 1c OK: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} failed"
   # A failure here is NOT fatal: leg 1's identities are seeded either way, and the
   # operator can still complete registration from the UI. Say it plainly instead.
-  [ "${reg_fail}" -eq 0 ] || warn "leg 1c: ${reg_fail} persona(s) could not complete registration (see the WARNs above)"
+  [ "${reg_fail}" -eq 0 ] || warn "leg 1c: ${reg_fail} persona(s) could not be fully onboarded (see the WARNs above)"
+  # Which persona opens which app is ROLE-gated, and that is the single most common
+  # confusion here: signing in as e2e-admin renders the Matrix UI shell and then 403s
+  # on every call, because e2e-admin holds no ROLE_MATRIX. Name the right accounts.
+  log "          Matrix needs ROLE_MATRIX (e.g. e2e-matrix); Mastodon needs ROLE_MASTODON (e.g. e2e-mastodon)."
+  log "          e2e-admin/e2e-mod hold NO platform-access role — their Matrix/Mastodon tabs will 403 BY DESIGN."
 fi
 
 # ── LEG 1b: second-tenant persona (needs a brand-B Casdoor) ──────────────────
