@@ -1,4 +1,4 @@
-# Snapdragon-Systems image build / flash / emulate / test orchestrator.
+# hugmesh-net image build / flash / emulate / test orchestrator.
 #
 # Front door over the build scripts and tooling. Every target just invokes the
 # underlying script with the right flags, so the flags remain the engine and
@@ -1177,7 +1177,7 @@ PUBLIC_HTTPS_PORT ?= 8488
 # committed mock-stack fixtures whose CA key is public in the repo.
 STACK_TLS_DIR   := tests/stack/.tls-front
 # TODO(org-move): legacy GitHub org — see docs/ORG-MOVE-TODO.md.
-GIT_BASE        ?= https://github.com/Snapdragon-Systems
+GIT_BASE        ?= https://github.com/hugmesh-net
 GIT_REF         ?= main
 SOCIAL          ?=
 # ENV -> Casdoor issuer URI used by every service (overridable via CASDOOR_ISSUER).

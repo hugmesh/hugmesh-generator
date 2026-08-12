@@ -64,7 +64,7 @@ ok "sliced the REAL allowlist-validation block from the builder"
 err() { echo "ERROR: $1" >&2; }
 # Defaults for every var the slice touches; the case under test overrides one.
 _defaults() {
-    BRAND="hugmesh"; ORG="Snapdragon-Systems"
+    BRAND="hugmesh"; ORG="hugmesh-net"
     CLUSTER_DOMAIN="hugmesh.systems"
     HOSTNAME="hugmesh-frite"; DEFAULT_USER="frite"
     BRAND_TITLE="HugMesh Systems"; RPI_CPU="cortex-a53"

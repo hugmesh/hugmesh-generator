@@ -21,12 +21,12 @@ out-of-band and never committed.
 ## Decision #1 — ApplicationSet scoping: PER-TENANT FORGEJO ORG (chosen)
 `13d-brand-repos.yaml.hbs` uses `scmProvider.gitea.owner: {{ORG}}` — the tenant's
 OWN Forgejo org — so a tenant's discovery can never sweep in another tenant's or
-the upstream Snapdragon-Systems repos. A `^{{BRAND}}-` repositoryMatch is kept as
+the upstream hugmesh-net repos. A `^{{BRAND}}-` repositoryMatch is kept as
 belt-and-suspenders. **The publish tail MUST push to the same org** (`FORGEJO_ORG={{ORG}}`).
-- Rejected alternative: shared `Snapdragon-Systems` org + `repositoryMatch: "^<brand>-"`
+- Rejected alternative: shared `hugmesh-net` org + `repositoryMatch: "^<brand>-"`
   only. Cheaper (one org) but a filter typo/regex slip cross-discovers tenants; the
   per-tenant org is a hard boundary, the filter a soft one.
-- NOTE: `publish-tenant-set.sh` defaults `FORGEJO_ORG=Snapdragon-Systems` (matches the
+- NOTE: `publish-tenant-set.sh` defaults `FORGEJO_ORG=hugmesh-net` (matches the
   existing working appset out of the box for a single-tenant bring-up). For the
   per-tenant model set `FORGEJO_ORG` / `--org` to the tenant org == the 13d owner.
 

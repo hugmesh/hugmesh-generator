@@ -12,10 +12,10 @@
 # SCOPING DECISION (Phase-5 spec, decision #1 — recorded here + in
 # docs/PHASE5-DECISIONS.md): PER-TENANT FORGEJO ORG as the scmProvider `owner`.
 # owner={{ORG}} is the tenant's own org, so a tenant's discovery can NEVER sweep
-# in another tenant's or the upstream Snapdragon-Systems repos. The publish tail
+# in another tenant's or the upstream hugmesh-net repos. The publish tail
 # MUST push to the SAME org (FORGEJO_ORG={{ORG}}). A `^{{BRAND}}-` repositoryMatch
 # is kept as belt-and-suspenders even inside the per-tenant org (rendered trees are
-# named <brand>-<repo>).  Alternative (shared Snapdragon-Systems org + name-prefix
+# named <brand>-<repo>).  Alternative (shared hugmesh-net org + name-prefix
 # filter) is documented+rejected in docs/PHASE5-DECISIONS.md.
 #
 # ⚠️ PREREQUISITES (scaffold until met — same as 13-service-catalog): the tenant's

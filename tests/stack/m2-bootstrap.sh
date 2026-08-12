@@ -40,7 +40,7 @@
 # Env knobs:
 #   M2_CACHE        (default ~/.cache/hugmesh-stack-maven) persistent cache:
 #                   src/ (pinned clones) + m2/ (maven repo, container-written)
-#   GIT_BASE        (default https://github.com/Snapdragon-Systems)
+#   GIT_BASE        (default https://github.com/hugmesh-net)
 #   MAVEN_IMAGE     (default maven:3.9-eclipse-temurin-25 — the libs target
 #                   maven.compiler.release=25)
 #   REGISTRY_IMAGE  (default busybox:stable — httpd serves the static tree)
@@ -52,7 +52,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 M2_CACHE="${M2_CACHE:-${HOME}/.cache/hugmesh-stack-maven}"
-GIT_BASE="${GIT_BASE:-https://github.com/Snapdragon-Systems}"
+GIT_BASE="${GIT_BASE:-https://github.com/hugmesh-net}"
 MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9-eclipse-temurin-25}"
 REGISTRY_IMAGE="${REGISTRY_IMAGE:-busybox:stable}"
 REGISTRY_NAME="${REGISTRY_NAME:-hugmesh-m2-registry}"

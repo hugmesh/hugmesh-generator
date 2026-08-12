@@ -113,7 +113,7 @@ def test_org_and_release_state_defaults_emit_nothing(wiz):
     mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert net.release_state.currentText() == "default"
-    assert net.org.text() == "Snapdragon-Systems"
+    assert net.org.text() == "hugmesh-net"
     advance_to(wiz, wizard_mod.KeyZipPage)
     args = wiz.cfg.to_cli_args()
     assert "--org" not in args and "--release-state" not in args and "--config" not in args

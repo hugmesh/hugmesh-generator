@@ -3,7 +3,7 @@
 # instead of hanging or dying with a git-level message nobody can act on.
 #
 # WHY THIS EXISTS.
-# Snapdragon-Systems is a PRIVATE org (an anonymous API GET of any repo returns
+# hugmesh-net is a PRIVATE org (an anonymous API GET of any repo returns
 # 404, GitHub's masking for private). Every first-party clone therefore needs
 # credentials, and before this lib the two failure modes were both bad:
 #
@@ -59,7 +59,7 @@ gh_auth_interactive() {
 }
 
 gh_auth_hint() {
-    local what="${1:-github.com/Snapdragon-Systems}"
+    local what="${1:-github.com/hugmesh-net}"
     echo "[github-auth] No usable GitHub credentials for ${what}." >&2
     echo "[github-auth]   This org is PRIVATE — an anonymous clone gets 404, not a login prompt." >&2
     echo "[github-auth]   Fix (any one):" >&2
@@ -114,7 +114,7 @@ gh_auth_askpass_end() {
 # the hint and a clean non-zero, so the build fails fast and legibly instead of
 # blocking on a question nobody will answer.
 gh_auth_ensure() {
-    local what="${1:-github.com/Snapdragon-Systems}" tok=""
+    local what="${1:-github.com/hugmesh-net}" tok=""
     if tok="$(gh_auth_token)" && [ -n "${tok}" ]; then
         gh_auth_askpass_begin "${tok}" || return 1
         return 0

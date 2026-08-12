@@ -17,7 +17,7 @@
 # Mirrors the clone-all-repos.sh idiom (GIT_BASE knob defaulting to GitHub).
 #
 # Env knobs:
-#   GIT_BASE         (default https://github.com/Snapdragon-Systems)  clone base URL.
+#   GIT_BASE         (default https://github.com/hugmesh-net)  clone base URL.
 #                    Point at the internal mirror on the VPN, e.g.
 #                    GIT_BASE=https://gitlab.hugmesh.systems/hugmesh
 #   GIT_REF          (default main)  branch/tag to check out.
@@ -143,7 +143,7 @@ REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 #   docs/ORG-MOVE-TODO.md flip together, and GitHub's org-rename redirects keep
 #   old remotes working only until the old name is re-registered by someone else.
 #   Draft commits for the flip are prepared; see docs/ORG-MOVE-TODO.md.
-GIT_BASE="${GIT_BASE:-https://github.com/Snapdragon-Systems}"
+GIT_BASE="${GIT_BASE:-https://github.com/hugmesh-net}"
 GIT_REF="${GIT_REF:-main}"
 REPO_BASE_CACHE="${REPO_BASE_CACHE:-${REPO_ROOT}/.repo-base}"
 OFFLINE="${OFFLINE:-0}"
@@ -401,7 +401,7 @@ fi
 # DEFERRED (documented, not a bug): the FIRST-PARTY base is git-cloned over TLS
 # with NO commit signature / content-digest / provenance / SBOM / vuln
 # verification. That is an ACCEPTABLE deferral ONLY because the base is
-# FIRST-PARTY (Snapdragon-Systems, same mesh) pulled over TLS — treat it as
+# FIRST-PARTY (hugmesh-net, same mesh) pulled over TLS — treat it as
 # trusted-transport, not trusted-and-verified. A compromised upstream could
 # inject non-secret code (Dockerfile/src) that neither the secret scanner nor
 # the drift validator (checks only the overlaid files) would catch. FOREIGN
@@ -409,7 +409,7 @@ fi
 # above, which requires the full Phase-7 ingestion gate
 # (scripts/ingest-foreign-base.sh). See docs/MESH-TEMPLATING.md, Phase 7.
 log "cloning read-only base ${GIT_BASE}/${REPO}.git @ ${GIT_REF} -> ${CLONE_DIR} (TLS only; integrity UNVERIFIED — Phase 8)"
-# ASK FOR CREDENTIALS FIRST. Snapdragon-Systems is private, so an unauthenticated
+# ASK FOR CREDENTIALS FIRST. hugmesh-net is private, so an unauthenticated
 # clone here used to die with git's own "could not read Username for
 # 'https://github.com'" (no TTY) or block on a Username/Password prompt GitHub
 # stopped honouring in 2021 (TTY). gh_auth_ensure resolves a token, offers

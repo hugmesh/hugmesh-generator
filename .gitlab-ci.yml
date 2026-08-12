@@ -1869,7 +1869,7 @@ build:images:
     # so Kaniko's git-context clone would fail on every run. A matrix/child pipeline that
     # knows the app's resolved commit passes it here (and as IMAGE_TAG, below).
     IMAGE_REF: "main"
-    IMAGE_CONTEXT: "git://github.com/Snapdragon-Systems/hugmesh-gateway.git#${IMAGE_REF}"
+    IMAGE_CONTEXT: "git://github.com/hugmesh-net/hugmesh-gateway.git#${IMAGE_REF}"
     IMAGE_DOCKERFILE: "Dockerfile"
     # Where the built image lands. <app> is IMAGE_APP; the tags are computed in `script`.
     DEST_REPO: "registry.hugmesh.systems/hugmesh/hugmesh-gateway"

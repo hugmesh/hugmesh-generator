@@ -120,7 +120,7 @@ missing-`make` caveat for real builds).
 ## 1. Clone the generator
 
 ```bash
-git clone https://github.com/Snapdragon-Systems/hugmesh-generator
+git clone https://github.com/hugmesh-net/hugmesh-generator
 cd hugmesh-generator
 ```
 
@@ -157,7 +157,7 @@ cp brands/example.conf brands/acme.conf
 |---|---|---|
 | `BRAND` | `hugmesh` | short slug → namespaces, gateway names, hostnames |
 | `BRAND_TITLE` | `HugMesh Systems` | human title shown in UIs |
-| `ORG` | `Snapdragon-Systems` | GitHub org / container-image namespace |
+| `ORG` | `hugmesh-net` | GitHub org / container-image namespace |
 | `CLUSTER_DOMAIN` | `hugmesh.systems` | base domain (`id.`/`api.`/`matrix.`/`mastodon.` derived) |
 | `OPTIONAL_SERVICES` | `akkoma tuwunel phpbb games` (all) | which optional services to bake (see §2a) |
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
@@ -740,7 +740,7 @@ generic-package release assets for the admin UI's download links. ISOs carry **n
 keys** — KEYS material always comes from the USB at first boot.
 
 ```bash
-# mirror every Snapdragon-Systems GitHub repo into the internal GitLab (admin/CI):
+# mirror every hugmesh-net GitHub repo into the internal GitLab (admin/CI):
 GITLAB_TOKEN=… ./scripts/gitlab-mirror-org.sh
 ```
 

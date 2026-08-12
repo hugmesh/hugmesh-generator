@@ -5,7 +5,7 @@
 # /character-studio (ROLE_USER floor). Talks to the always-present BFFs via the
 # same-origin /bff/** fe-gateway routes (no dedicated BFF in this slug yet).
 #
-# Repo (image source, to be built+pushed): github.com/Snapdragon-Systems/hugmesh-character-studio-ui
+# Repo (image source, to be built+pushed): github.com/hugmesh-net/hugmesh-character-studio-ui
 #
 # OPTIONAL service (DEFAULT-OFF, admin gate): add/remove-by-command on a generated
 # USB. When the slug is deselected, gate_optional_services() prunes this Application

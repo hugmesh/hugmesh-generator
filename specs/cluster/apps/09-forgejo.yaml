@@ -11,7 +11,7 @@
 #                      --key <client-id> --secret <client-secret>
 #   3. Seed from GitHub (mirror the org), then flip the GitOps source:
 #        re-run bootstrap.sh with HUGMESH_GITOPS_REPO=\
-#          http://forgejo.hugmesh-pki.svc.cluster.local:3000/Snapdragon-Systems/hugmesh-generator.git
+#          http://forgejo.hugmesh-pki.svc.cluster.local:3000/hugmesh-net/hugmesh-generator.git
 #      (kept on GitHub until Forgejo is seeded so ArgoCD's own bootstrap never breaks).
 #   4. Replicas: configure pull-mirrors of the pki Forgejo on backend + devops
 #      (a lightweight Forgejo/git-daemon mirror; read-only standby copies).
@@ -25,7 +25,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/forgejo
   destination:

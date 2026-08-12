@@ -177,7 +177,7 @@ metadata:
   name: example-harbor
 spec:
   source:
-    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
     helm:
       values: |
         harborAdminPassword: ""

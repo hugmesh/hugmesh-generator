@@ -3,7 +3,7 @@
 # - Login via Casdoor OIDC; only Casdoor ROLE_ADMIN users (admin group) get in
 #   (no public sign-up). Reached over the VPN at gitlab.hugmesh.systems
 #   through the fe/devops gateway — never exposed externally.
-# - Pull-mirrors every Snapdragon-Systems GitHub repo (scripts/gitlab-mirror-org.sh)
+# - Pull-mirrors every hugmesh-net GitHub repo (scripts/gitlab-mirror-org.sh)
 #   and runs CI (gitlab-runner) that builds all ISOs + container images.
 # - Storage on hugmesh-local (the host's device disk + attached USB).
 #

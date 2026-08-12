@@ -56,7 +56,7 @@ EOF
 reset_prof() {
   PB_BRAND=hugmesh
   PB_TITLE="HugMesh Systems"
-  PB_ORG=Snapdragon-Systems
+  PB_ORG=hugmesh-net
   PB_DOMAIN=hugmesh.systems
   PB_HS=https://headscale.hugmesh.systems
   PB_MESH=tag:hugmesh
@@ -141,7 +141,7 @@ echo "-- #13 hugmesh-domain-reconcile entry_fields_ok --"
 # shellcheck source=/dev/null
 ( . "${AGENT}" 2>/dev/null
   rc=0
-  entry_fields_ok "hugmesh" "hugmesh.systems" "Snapdragon-Systems" "tag:hugmesh" 2>/dev/null || rc=1
+  entry_fields_ok "hugmesh" "hugmesh.systems" "hugmesh-net" "tag:hugmesh" 2>/dev/null || rc=1
   exit $rc )
 [ $? -eq 0 ] && ok "#13 clean entry accepted" || bad "#13 clean entry wrongly rejected"
 
