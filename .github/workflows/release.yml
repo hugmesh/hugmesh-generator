@@ -1,0 +1,26 @@
+# Manual-only for now (workflow_dispatch). Switch to `push: tags: ['v*']` once ready.
+#
+# Scope note: the full image matrix (rpi5/frite/jetson/orangepi/x86, see .gitlab-ci.yml's
+# `build:isos` job) is a crossdev cross-compilation build that needs a privileged x86_64
+# host with qemu — that doesn't fit a standard GitHub-hosted runner. This workflow starts
+# with just the x86 host image, which crossdev can build natively on a GitHub-hosted
+# runner; the ARM role images need a self-hosted runner (or a hosted-runner ARM cross
+# toolchain pass) as a follow-up before they can join this workflow.
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-x86-iso:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build x86 host image
+        run: ./build-x86-host-stage4.sh -j "$(nproc)" -w x86-host-build
+      - name: Collect artifact
+        run: mkdir -p out && cp x86-host-build/*.iso out/
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.iso
