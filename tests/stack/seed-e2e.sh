@@ -126,6 +126,12 @@ SEED_CASDOOR_ONLY="${SEED_CASDOOR_ONLY:-0}"
 # far longer cold / with SOCIAL=1). A single un-retried curl turned that ordinary
 # startup latency into "UNMET DEPENDENCY: front door is not answering".
 SEED_WAIT_S="${SEED_WAIT_S:-180}"
+# Onboard the seeded personas (registration stage 2 + platform provisioning) and
+# seed the broad local-mesh operator account. OFF by default — the e2e suite needs
+# personas that are still gated. Resolved HERE, with the other knobs, because it is
+# read in two places far apart: the EXTRA_SPECS block below and leg 1c.
+# Full rationale at leg 1c.
+SEED_COMPLETE_REGISTRATION="${SEED_COMPLETE_REGISTRATION:-0}"
 
 log()  { echo "[seed-e2e] $*"; }
 warn() { echo "[seed-e2e] WARN: $*" >&2; }
@@ -379,6 +385,32 @@ ensure_fragment_sync_client "${CASDOOR_URL}" "${CASDOOR_ORG}"
 . "${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}/tests/e2e-extra-personas.sh"
 EXTRA_SPECS="${E2E_EXTRA_PERSONAS}"
 
+# ── The LOCAL-MESH OPERATOR persona (opt-in, same flag as stage 2) ────────────
+# Every seeded persona is deliberately NARROW, because each one exists to prove a
+# specific RBAC boundary: e2e-admin holds ROLE_ADMIN but NOT ROLE_MATRIX, so its
+# Matrix tab renders and then 403s; e2e-matrix is the reverse and cannot open the
+# admin panel or the API docs; e2e-superadmin reaches those two but holds no
+# platform-access role, so it cannot provision Matrix either. That matrix is
+# CORRECT for the e2e suite and hostile to an operator who just brought up their
+# own mesh and wants to click through it — there is no account that opens
+# everything, and nothing on screen says so.
+#
+# So the local-mesh path seeds ONE broad account. It is added to EXTRA_SPECS, which
+# means it flows through the SAME render+apply path as every other persona (no
+# special-casing), and it is gated behind SEED_COMPLETE_REGISTRATION so the e2e
+# suite's role matrix is untouched — spec 15 walks rbac-roles.ts, not Casdoor, so
+# an extra account is invisible to it.
+#
+# ROLE_GAMES_ADMIN and ROLE_FORUM_MOD are NEVER granted directly (both are DERIVED
+# by their reconcile Jobs — seed-accounts.sh declares them present-but-empty), and
+# the *_DOMAINLOCKED / *_EXTERNAL_CLIENT markers are RESTRICTIONS, not grants, so
+# handing them to an operator would take capability away.
+LOCAL_OPERATOR_USER="${LOCAL_OPERATOR_USER:-mesh-operator}"
+LOCAL_OPERATOR_ROLES="${LOCAL_OPERATOR_ROLES:-ROLE_SUPERADMIN,ROLE_ADMIN,ROLE_MOD,ROLE_MATRIX,ROLE_MASTODON,ROLE_FORUM,ROLE_WIKI,ROLE_GAMES,ROLE_FLEET_ADMIN,ROLE_USER}"
+if [ "${SEED_COMPLETE_REGISTRATION:-0}" = "1" ]; then
+  EXTRA_SPECS="${EXTRA_SPECS} ${LOCAL_OPERATOR_USER}:${LOCAL_OPERATOR_ROLES}:E2E_PASSWORD"
+fi
+
 ROLES_DIR="${SEED_WORKDIR}/roles-render"
 BASE_RENDER="${SEED_WORKDIR}/roles-render-base"
 mkdir -p "${ROLES_DIR}" "${BASE_RENDER}"
@@ -440,7 +472,8 @@ log "leg 1 OK: standard persona set verified in Casdoor"
 # Completing registration for everyone would delete the very state those specs
 # exercise. The Studio's local-mesh bring-up passes 1 because ITS product is a
 # clickable mesh, not a test fixture (core/local_stack_node.py seed()).
-SEED_COMPLETE_REGISTRATION="${SEED_COMPLETE_REGISTRATION:-0}"
+# (The flag itself is resolved with the other knobs at the top — it is also read by
+# the EXTRA_SPECS block, which runs before this point.)
 # Personas whose GATED state is load-bearing for the e2e suite; never completed
 # even when the flag is on:
 #   e2e-pending            — tests/e2e/specs/rbac-roles.ts is the contract, and it
@@ -468,45 +501,111 @@ persona_password() {  # <username> -> per-user env override, else shared, else d
   printf '%s' "${val}"
 }
 
-# rc 0 = completed, 2 = deliberately left gated, 1 = attempted and failed.
-complete_registration() {  # <username>
-  local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code
+persona_roles() {  # <username> -> the ROLES_CSV this persona was rendered with
+  local u="$1" spec rest
+  for spec in ${ALL_SPECS}; do
+    case "${spec}" in "${u}:"*) rest="${spec#*:}"; printf '%s' "${rest%:*}"; return 0 ;; esac
+  done
+}
+
+# Mint the per-platform account behind the hsproxy. Stage 2 alone does NOT do this:
+# it flips registration_complete (which is what makes the gateway map the persona's
+# REAL roles instead of the bare ROLE_USER floor), but the Matrix/Mastodon accounts
+# are minted separately by `POST /bff/provision/<platform>`. Skipping it leaves the
+# operator with a Matrix UI that renders its whole shell and then 403s on
+# whoami/joined_rooms/sync — an app that "opens" but shows nothing.
+# The browser does this automatically at login (login-ui bff.service.ts); the seeder
+# must do it explicitly. Provisioning is ROLE-GATED, so we only ask for a platform
+# the persona actually holds the access role for — asking anyway would log a 403 for
+# every admin-only persona and teach the operator to ignore the warnings.
+provision_platform() {  # <username> <matrix|mastodon> <jar>
+  local u="$1" plat="$2" jar="$3" code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 40 -b "${jar}" -c "${jar}" \
+            -X POST "${FRONT_DOOR}/bff/provision/${plat}" \
+            -H 'content-type: application/json' -d '{}' 2>/dev/null || echo 000)"
+  case "${code}" in
+    200|201|204) return 0 ;;
+    *) warn "provision ${plat} for ${u} -> ${code}" ; return 1 ;;
+  esac
+}
+
+# rc 0 = onboarded, 2 = deliberately left gated, 1 = attempted and failed.
+onboard_persona() {  # <username>
+  local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code roles rc=0
   case " ${SEED_REGISTRATION_SKIP} " in *" ${u} "*) return 2 ;; esac
   # Stage 1: a real session cookie, exactly as the browser gets one.
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -c "${jar}" \
             -X POST "${FRONT_DOOR}/bff/login" -H 'content-type: application/json' \
             -d "$(jq -nc --arg u "${u}" --arg p "$(persona_password "${u}")" \
                     '{username:$u,password:$p}')" 2>/dev/null || echo 000)"
-  [ "${code}" = "200" ] || { warn "registration: login for ${u} -> ${code} (skipped)"; rm -f "${jar}"; return 0; }
+  # A login that does not return 200 is a REAL failure, not a skip: the persona was
+  # just seeded, so it must be able to log in.
+  [ "${code}" = "200" ] || { warn "onboard: login for ${u} -> ${code}"; rm -f "${jar}"; return 1; }
   # Stage 2: admin-bff's public AuthController, through the gateway, with that
   # cookie — the same call tests/e2e/specs/29-mfa-privileged-floor.spec.ts makes.
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -b "${jar}" -c "${jar}" \
             -X POST "${FRONT_DOOR}/bff/register/complete" -H 'content-type: application/json' \
             -d "$(jq -nc --arg d "${u}" '{displayName:$d}')" 2>/dev/null || echo 000)"
-  rm -f "${jar}"
   case "${code}" in
-    200) return 0 ;;
-    404) warn "registration: ${u} -> 404. The gateway route table sends /bff/register/** to a service that does not implement stage 2 (admin-bff does)." ; return 1 ;;
-    *)   warn "registration: ${u} -> ${code}" ; return 1 ;;
+    200) ;;
+    404) warn "onboard: ${u} -> 404. The gateway route table sends /bff/register/** to a service that does not implement stage 2 (admin-bff does)." ; rm -f "${jar}"; return 1 ;;
+    *)   warn "onboard: ${u} -> ${code}" ; rm -f "${jar}"; return 1 ;;
   esac
+  # Stage 3: the platform accounts, only for the roles this persona actually holds.
+  roles=",$(persona_roles "${u}"),"
+  case "${roles}" in *,ROLE_MATRIX,*)   provision_platform "${u}" matrix   "${jar}" || rc=1 ;; esac
+  case "${roles}" in *,ROLE_MASTODON,*) provision_platform "${u}" mastodon "${jar}" || rc=1 ;; esac
+  rm -f "${jar}"
+  return "${rc}"
 }
 
 if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
-  log "leg 1c: completing registration (stage 2) so personas can reach services"
+  log "leg 1c: onboarding personas (registration stage 2 + platform provisioning)"
   reg_ok=0; reg_gated=0; reg_fail=0
   for persona in ${REGISTRATION_PERSONAS}; do
-    complete_registration "${persona}" && { reg_ok=$((reg_ok+1)); continue; }
+    onboard_persona "${persona}" && { reg_ok=$((reg_ok+1)); continue; }
     case "$?" in
       2) reg_gated=$((reg_gated+1)) ;;
       *) reg_fail=$((reg_fail+1)) ;;
     esac
   done
-  log "leg 1c OK: ${reg_ok} registration-complete, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} failed"
+  # CONFIRM the Mastodon accounts the broker just registered. Mastodon refuses every
+  # authenticated API call from an unconfirmed login — `verify_credentials` answers
+  # 403 "Your login is missing a confirmed e-mail address" — so provisioning would
+  # return a valid access_token that cannot be used, and the operator gets a Mastodon
+  # tab that loads and cannot toot. The broker registers over the API and has no way
+  # to confirm (no mail is delivered on a throwaway local stack), and the personas
+  # seeded in leg 3 dodge this only because `tootctl accounts create --confirmed`
+  # bypasses the API entirely.
+  # Driven off the DB rather than a derived username: the broker's local username is
+  # the Casdoor UUID with '-' -> '_' TRUNCATED to Mastodon's 30-char limit
+  # (2158d2dd_f0d8_42a5_8cfc_66dd69), which is fragile to reconstruct here. Asking
+  # which logins are unconfirmed is exact, and self-heals accounts left behind by an
+  # earlier partial run.
+  mastodon_confirm_unconfirmed() {
+    local db u n=0
+    db="$(find_ctr mastodon-db || true)"
+    [ -n "${db}" ] && [ -n "${MASTODON_CTR:-}" ] || return 0
+    for u in $(docker exec "${db}" psql -U mastodon -d mastodon -tAc \
+                 "select a.username from users u join accounts a on a.id=u.account_id
+                   where u.confirmed_at is null;" 2>/dev/null); do
+      docker exec "${MASTODON_CTR}" bin/tootctl accounts modify "${u}" --confirm >/dev/null 2>&1 \
+        && n=$((n+1)) || warn "could not confirm Mastodon login ${u}"
+    done
+    [ "${n}" -eq 0 ] || log "confirmed ${n} broker-registered Mastodon login(s)"
+  }
+  mastodon_confirm_unconfirmed
+
+  log "leg 1c OK: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} failed"
   # A failure here is NOT fatal: leg 1's identities are seeded either way, and the
   # operator can still complete registration from the UI. Say it plainly instead.
-  [ "${reg_fail}" -eq 0 ] || warn "leg 1c: ${reg_fail} persona(s) could not complete registration (see the WARNs above)"
+  [ "${reg_fail}" -eq 0 ] || warn "leg 1c: ${reg_fail} persona(s) could not be fully onboarded (see the WARNs above)"
+  # Which persona opens which app is ROLE-gated, and that is the single most common
+  # confusion here: signing in as e2e-admin renders the Matrix UI shell and then 403s
+  # on every call, because e2e-admin holds no ROLE_MATRIX. Name the right accounts.
+  log "          Matrix needs ROLE_MATRIX (e.g. e2e-matrix); Mastodon needs ROLE_MASTODON (e.g. e2e-mastodon)."
+  log "          e2e-admin/e2e-mod hold NO platform-access role — their Matrix/Mastodon tabs will 403 BY DESIGN."
 fi
-
 # ── LEG 1b: second-tenant persona (needs a brand-B Casdoor) ──────────────────
 if [ -n "${CASDOOR_BRAND_B_URL}" ]; then
   log "leg 1b: second-tenant persona at ${CASDOOR_BRAND_B_URL}"
@@ -636,6 +735,37 @@ log "leg 2 OK: room X (public) + room Y (invite-only) verified"
 
 # ══ LEG 3: Mastodon — accounts, follow userB->userA, pending mod-queue item ══
 log "leg 3: Mastodon accounts + follow + pending report at ${MASTODON_URL}"
+
+# OPEN REGISTRATIONS, or the platform-provisioning leg cannot mint an account.
+# Mastodon ships `Setting.registrations_mode = 'none'` here, and with it closed
+# `POST /api/v1/accounts` answers 403 — so user-bff's Mastodon broker fails with
+# "mastodon mint: no access_token" (it gets a client-credentials token fine, is
+# refused the register call, then finds no account for the password grant) and
+# /bff/provision/mastodon 502s. The operator sees a Mastodon tab that loads and
+# cannot toot.
+# This was invisible until leg 1c started exercising the API path: the personas
+# below are made with `tootctl accounts create`, which bypasses the API and is
+# unaffected by registrations_mode. So the seed looked green while the surface a
+# real user goes through was closed.
+# `open` matches this stack's LAN-test posture (it is a throwaway local Mastodon
+# on localhost), and EMAIL_DOMAIN_ALLOWLIST still gates who may actually sign up.
+# NOTE: registrations_mode is a DB Setting, not an env var — there is no
+# REGISTRATIONS_MODE in the container's environment, so this cannot move to
+# gen-mastodon-env.sh.
+mastodon_open_registrations() {
+  local cur
+  cur="$(docker exec "${MASTODON_CTR}" bin/tootctl settings registrations 2>/dev/null \
+         | tr -d '[:space:]' || true)"
+  case "${cur}" in
+    *open*) log "mastodon registrations already open" ; return 0 ;;
+  esac
+  if docker exec "${MASTODON_CTR}" bin/tootctl settings registrations open >/dev/null 2>&1; then
+    log "mastodon registrations opened (was: ${cur:-none})"
+  else
+    warn "could not open Mastodon registrations — /bff/provision/mastodon will 502 with \"mastodon mint: no access_token\" until it is open (tootctl settings registrations open)"
+  fi
+}
+mastodon_open_registrations
 
 mastodon_account() { # <user>
   local out

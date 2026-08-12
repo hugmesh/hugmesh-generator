@@ -332,6 +332,75 @@ def test_stage_overrides_any_bundled_env_key(tmp_path):
     assert env["OTHER"] == "keep"          # unrelated keys are preserved
 
 
+# ---- the seeded-credentials dialog (operator: "show me who to log in as") ----
+
+def test_page_exposes_a_credentials_button(qapp):
+    # The whole point of the feature: a freshly-seeded mesh renders a login page,
+    # and the operator has nowhere on screen telling them WHICH account to use.
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert hasattr(dlg.page, "creds_btn")
+    assert "credential" in dlg.page.creds_btn.text().lower()
+
+
+def test_credentials_dialog_lists_the_real_seeded_personas(qapp):
+    from hugmesh_studio.core.seeded_credentials import load_roster
+    from hugmesh_studio.gui.pages._credentials_dialog import CredentialsDialog
+    roster = load_roster(GENERATOR_DIR)
+    d = CredentialsDialog(roster, front_door="http://localhost:8088")
+    assert d.table.rowCount() == len(roster.users)
+    shown = {d.table.item(r, 0).text() for r in range(d.table.rowCount())}
+    assert {"e2e-admin", "e2e-user"} <= shown
+    # the password column carries the resolved value, not the env-var NAME
+    row = next(r for r in range(d.table.rowCount())
+               if d.table.item(r, 0).text() == "e2e-admin")
+    assert d.table.item(row, 1).text() == "e2e-pass"
+    assert "E2E_" not in d.table.item(row, 1).text()
+
+
+def test_credentials_dialog_copies_only_on_an_explicit_click(qapp):
+    from hugmesh_studio.core.seeded_credentials import Roster, SeededUser
+    from hugmesh_studio.gui.pages._credentials_dialog import CredentialsDialog
+    roster = Roster(users=[SeededUser("e2e-admin", ("ROLE_ADMIN",), "hunter2")])
+    QtWidgets.QApplication.clipboard().setText("untouched")
+    d = CredentialsDialog(roster)
+    # merely OPENING the dialog must not put a credential on the clipboard
+    assert QtWidgets.QApplication.clipboard().text() == "untouched"
+    d.table.selectRow(0)
+    d.copy_pass.click()
+    assert QtWidgets.QApplication.clipboard().text() == "hunter2"
+    d.copy_user.click()
+    assert QtWidgets.QApplication.clipboard().text() == "e2e-admin"
+    d.copy_all.click()
+    assert "e2e-admin\thunter2\t" in QtWidgets.QApplication.clipboard().text()
+
+
+def test_credentials_dialog_says_so_when_the_roster_is_unreadable(qapp, tmp_path):
+    # A silently empty table would read as "the seed created no users" — a
+    # different, scarier claim than "I could not read the roster".
+    from hugmesh_studio.core.seeded_credentials import load_roster
+    from hugmesh_studio.gui.pages._credentials_dialog import CredentialsDialog
+    d = CredentialsDialog(load_roster(str(tmp_path)))
+    assert not hasattr(d, "table")
+    texts = " ".join(w.text() for w in d.findChildren(QtWidgets.QLabel))
+    assert "could not read" in texts.lower()
+
+
+def test_field_auth_key_reaches_subprocess_env_without_os_environ(monkeypatch):
+    # The runtime (not the staged .env file) invariant behind start()/stop()/status()/
+    # logs(): a field-only auth key (no TS_AUTHKEY anywhere in the environment) must
+    # still be the EFFECTIVE key those verbs hand to `docker compose`, since callers
+    # (the CLI, the GUI's _start()) never export it to os.environ — LocalMeshNode's
+    # _authkey() override is the only thing that makes cfg.auth_key reach them.
+    monkeypatch.delenv("TS_AUTHKEY", raising=False)
+    node = LocalMeshNode(GENERATOR_DIR, LocalMeshConfig(auth_key="field-key-999"))
+    assert node._authkey() == "field-key-999"
+    assert node._env()["TS_AUTHKEY"] == "field-key-999"
+    # and it wins even over a stale/different ambient value
+    monkeypatch.setenv("TS_AUTHKEY", "ambient-key")
+    assert node._authkey() == "field-key-999"
+    assert node._env()["TS_AUTHKEY"] == "field-key-999"
+
+
 def _read_env(path):
     out = {}
     for line in path.read_text().splitlines():

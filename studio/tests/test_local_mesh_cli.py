@@ -6,8 +6,10 @@ NO Qt (core.local_mesh imports only .mesh_node), so they run in the Qt-free syst
 environment CI uses for the build-matrix, proving the ncurses/Makefile channels' backend
 works there.
 
-Pins in particular the REQUIRED FIX: main() must export os.environ["TS_AUTHKEY"] before
-node.start(), so MeshNode.start()'s inherited `${TS_AUTHKEY}` guard passes.
+Pins in particular that main() threads the resolved key into LocalMeshConfig.auth_key
+(NOT os.environ — LocalMeshNode._authkey() already prefers cfg.auth_key over the
+environment, and _env() unconditionally overwrites TS_AUTHKEY from that effective key
+before every compose invocation, so an env export would be redundant).
 """
 import os
 
@@ -16,7 +18,7 @@ from hugmesh_studio.core.local_mesh import LocalMeshNode, main
 from hugmesh_studio.core.mesh_node import MeshStatus
 
 
-def test_up_reads_authkey_file_and_exports_ts_authkey(tmp_path, monkeypatch):
+def test_up_reads_authkey_file_into_cfg(tmp_path, monkeypatch):
     monkeypatch.delenv("TS_AUTHKEY", raising=False)
     seen = {}
 
@@ -24,8 +26,6 @@ def test_up_reads_authkey_file_and_exports_ts_authkey(tmp_path, monkeypatch):
         return True, ""
 
     def _fake_start(self):
-        # the whole point: TS_AUTHKEY must be in the ENV by the time start() runs
-        seen["env_key"] = os.environ.get("TS_AUTHKEY")
         seen["cfg_key"] = self.cfg.auth_key
         return True, "up"
 
@@ -38,7 +38,6 @@ def test_up_reads_authkey_file_and_exports_ts_authkey(tmp_path, monkeypatch):
                "--node-name", "n1", "--generator-dir", str(tmp_path)])
     assert rc == 0
     assert seen["cfg_key"] == "tskey-fromfile"
-    assert seen["env_key"] == "tskey-fromfile"      # the REQUIRED FIX: exported pre-start
 
 
 def test_up_without_key_is_gated_and_never_starts(tmp_path, monkeypatch):
