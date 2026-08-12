@@ -1,5 +1,5 @@
 # hugmesh.systems Angular host — the gateway-forwarded front page.
-# Built from github.com/hugmesh-net/hugmesh.systems (Dockerfile +
+# Built from github.com/hugmesh/hugmesh.systems (Dockerfile +
 # nginx.conf in that repo). Shows Matrix/Mastodon links to logged-in users;
 # login/registration is delegated to Casdoor (Google + admin accounts).
 apiVersion: apps/v1

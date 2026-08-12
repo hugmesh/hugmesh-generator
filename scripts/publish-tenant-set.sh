@@ -46,7 +46,7 @@
 #                     (in-cluster svc DNS). From a build host on the tailnet, set
 #                     this to the tailnet-reachable Forgejo host (svc.cluster.local
 #                     does not resolve off-cluster).
-#   FORGEJO_ORG       default hugmesh-net (the working appset's gitea.owner).
+#   FORGEJO_ORG       default hugmesh (the working appset's gitea.owner).
 #                     For the recommended per-tenant-org isolation model, set this to
 #                     the tenant's own Forgejo org (== the 13d appset {{ORG}} owner).
 #   FORGEJO_API_MODE  rest (default) — create org/repo via Forgejo REST.
@@ -130,7 +130,7 @@ SET_DIR="$(cd "$SET_DIR" && pwd)"
 
 # ── config ───────────────────────────────────────────────────────────────────
 FORGEJO_BASE_URL="${FORGEJO_BASE_URL:-http://forgejo.hugmesh-pki.svc.cluster.local:3000}"
-FORGEJO_ORG="${ORG_OVERRIDE:-${FORGEJO_ORG:-hugmesh-net}}"
+FORGEJO_ORG="${ORG_OVERRIDE:-${FORGEJO_ORG:-hugmesh}}"
 FORGEJO_API_MODE="${FORGEJO_API_MODE:-rest}"
 FORGEJO_REMOTE_TEMPLATE="${FORGEJO_REMOTE_TEMPLATE:-${FORGEJO_BASE_URL%/}/${FORGEJO_ORG}/%s.git}"
 # Org name shape guard (used in the REST URL + remote path).

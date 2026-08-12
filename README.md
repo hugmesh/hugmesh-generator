@@ -940,7 +940,7 @@ The PUBLISH path (marking a user's profile fragment `visibility=public` when the
 enable vanity in user-bff-api) and the SERVING page (the host shell that renders
 the resolved fragment) are documented — including the honest cross-service
 deferrals — in the
-[hugmesh-federation-api README](https://github.com/hugmesh-net/hugmesh-federation-api)
+[hugmesh-federation-api README](https://github.com/hugmesh/hugmesh-federation-api)
 ("Vanity subdomains" + "Deferred / stubbed").
 
 ## Secrets (Vault + USB)

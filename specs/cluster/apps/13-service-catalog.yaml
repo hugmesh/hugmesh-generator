@@ -27,7 +27,7 @@ spec:
   generators:
     - scmProvider:
         gitea:
-          owner: hugmesh-net
+          owner: hugmesh
           api: http://forgejo.hugmesh-pki.svc.cluster.local:3000
           allBranches: false
           tokenRef:

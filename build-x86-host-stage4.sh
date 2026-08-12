@@ -110,7 +110,7 @@ CLUSTER_DOMAIN="hugmesh.systems"
 SUPERDOMAIN=""
 BRAND="hugmesh"
 BRAND_TITLE="HugMesh Systems"
-ORG="hugmesh-net"
+ORG="hugmesh"
 # Games portal domain. DEFAULT serves games as a SUBDOMAIN of the primary domain
 # (games.<CLUSTER_DOMAIN>) until the real .games TLD is obtained; flip to the TLD
 # later with GAMES_DOMAIN=<brand>.games. The default literal "games.hugmesh.systems"
@@ -799,7 +799,7 @@ exit "${1:-0}"
 # all injection vectors. Reject anything outside a strict charset, fail-closed, at
 # the earliest boundary (arg/config parse). The escaping at each sink stays as a
 # second layer. Legit values (user 'snap', brand 'hugmesh', domain
-# 'hugmesh.systems', org 'hugmesh-net', title 'HugMesh Systems') pass.
+# 'hugmesh.systems', org 'hugmesh', title 'HugMesh Systems') pass.
 _validate_username() {   # $1=field-name $2=value ; POSIX-ish login name
     case "$2" in
         '') return 0 ;;  # empty = "use the default" downstream; not user-injected
@@ -811,7 +811,7 @@ _validate_slug() {       # $1=field-name $2=value ; single DNS label / brand slu
     [[ "$2" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
         || { err "$1 '$2' is not a valid slug (allowed: lowercase DNS label ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\$)"; exit 1; }
 }
-_validate_org() {        # $1=field-name $2=value ; org name (mixed case, e.g. hugmesh-net)
+_validate_org() {        # $1=field-name $2=value ; org name (mixed case, e.g. hugmesh)
     # No slash/space/quote/backslash/$/backtick/|/&/newline — it is lowercased into a
     # path component (org_lc) and used as a sed replacement; keep it a safe identifier.
     [[ "$2" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$ ]] \
@@ -1337,7 +1337,7 @@ if ${UNAFFILIATED}; then
     ${ROLE_CLIENT} || { err "--unaffiliated composes onto desktop/client roles only (got --role ${ROLE} — a cluster node is HugMesh platform machinery by definition)"; exit 1; }
     STANDALONE=true
     # Brand identity flags conflict (a brand IS an affiliation — including a custom one).
-    if [ "${BRAND}" != "hugmesh" ] || [ "${BRAND_TITLE}" != "HugMesh Systems" ] || [ "${ORG}" != "hugmesh-net" ]; then
+    if [ "${BRAND}" != "hugmesh" ] || [ "${BRAND_TITLE}" != "HugMesh Systems" ] || [ "${ORG}" != "hugmesh" ]; then
         err "--unaffiliated builds carry no brand identity: drop --brand/--brand-title/--org (and any --config brand profile)"; exit 1
     fi
     # Branding-asset flags conflict (nothing to theme against).
@@ -3032,7 +3032,7 @@ bake_host_firewall() {
 # Rebrand the baked cluster tree (no-op for default hugmesh naming).
 rebrand_sysroot() {
     if [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] \
-       && [ "${ORG}" = "hugmesh-net" ] && [ "${BRAND_TITLE}" = "HugMesh Systems" ]; then
+       && [ "${ORG}" = "hugmesh" ] && [ "${BRAND_TITLE}" = "HugMesh Systems" ]; then
         info "Branding: default (hugmesh) — no rebrand"; return 0
     fi
     banner "Rebranding baked config -> brand=${BRAND} domain=${CLUSTER_DOMAIN} org=${ORG}"
@@ -3064,7 +3064,7 @@ rebrand_sysroot() {
             -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
             -e "s|snapdragon-systems/|${_orglc}/|g" \
-            -e "s|hugmesh-net|${_org}|g" \
+            -e "s|hugmesh|${_org}|g" \
             -e "s|//id\.hugmesh\.games|//id.${_games}|g" \
             -e "s|//hugmesh\.games|//${_games}|g" \
             -e "s|hugmesh\.systems|${_domain}|g" \

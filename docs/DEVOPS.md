@@ -9,7 +9,7 @@ web interface.**
 | Component | What | Access |
 |---|---|---|
 | **ArgoCD** | GitOps engine; syncs `specs/cluster/apps`. Hard-pinned `kubernetes.io/arch=amd64`. | VPN, Casdoor admins |
-| **GitLab** (`apps/03-gitlab.yaml`) | Internal forge; pull-mirrors **every** hugmesh-net repo; runs CI. Casdoor OIDC, admin-only, no public sign-up. | `gitlab.<domain>` over VPN |
+| **GitLab** (`apps/03-gitlab.yaml`) | Internal forge; pull-mirrors **every** hugmesh repo; runs CI. Casdoor OIDC, admin-only, no public sign-up. | `gitlab.<domain>` over VPN |
 | **GitLab Runner** (`apps/04-gitlab-runner.yaml`) | Privileged CI runner on the x86 host (root + crossdev + qemu) — builds ISOs + images. | in-cluster |
 | **Binhost** (`apps/02-binhost.yaml`) | Gentoo binary-package host; serves `/binpkgs/{arm64,amd64}` over the VPN (hostPort 8086). | every Gentoo node |
 | **local-path** | StorageClass `hugmesh-local` from device disk (`/mnt/data`) + USB (`/mnt/usb`). | cluster default |
@@ -32,7 +32,7 @@ ISO artifacts (admin-only; the BFF exposes `/bff/admin/isos`).
 ## Mirror the org into GitLab
 
 `scripts/gitlab-mirror-org.sh` creates a **pull mirror** in GitLab for every
-hugmesh-net GitHub repo (`mirror_trigger_builds=true`), so CI builds from
+hugmesh GitHub repo (`mirror_trigger_builds=true`), so CI builds from
 a complete in-VPN copy. Repos contain no secrets (keys are git-ignored and live
 only on the USB + Vault), so the mirror exposes nothing sensitive.
 
@@ -48,7 +48,7 @@ source-of-truth is **scaffolded but not cut over**:
   ^hugmesh-`) — and the deploy contract
   (`specs/cluster/catalog/snapdragon-deploy.example.yaml`).
 - ✅ **Adoption started (9 of the 32 image-producing repos, all ships-dark).**
-  Counted over the whole org, not a local tree: `gh repo list hugmesh-net`
+  Counted over the whole org, not a local tree: `gh repo list hugmesh`
   returns **38** `hugmesh-*` repos, **32** of which ship a root `Dockerfile` (the
   six that do not are `auth-core`, `build-config`, `commons`, `games`, `generator`,
   `parent`). Registered in `specs/cluster/catalog/adopters.yaml`, whose `spec.sweep`

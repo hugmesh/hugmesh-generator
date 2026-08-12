@@ -7,7 +7,7 @@
 # the always-present /bff/** routes). See docs/XR-CHAT.md.
 #
 # Repo (image source, to be built+pushed): the frontend/ dir of
-# github.com/hugmesh-net/hugmesh-character-forge-bff-api (ONE repo holds
+# github.com/hugmesh/hugmesh-character-forge-bff-api (ONE repo holds
 # the BFF root + godot/ + frontend/; the CI builds+pushes BOTH images).
 #
 # OPTIONAL service (DEFAULT-OFF, admin gate): add/remove-by-command on a generated

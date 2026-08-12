@@ -4,7 +4,7 @@
 #   hugmesh-mastodon-ui (/social/mastodon)
 #   hugmesh-login-ui    (/login)
 #   hugmesh-admin-ui    (/admin, /admin/usage, /admin/namespaces — admin role)
-# Repos: github.com/hugmesh-net/hugmesh-{matrix,mastodon,login,admin}-ui
+# Repos: github.com/hugmesh/hugmesh-{matrix,mastodon,login,admin}-ui
 ---
 apiVersion: apps/v1
 kind: Deployment

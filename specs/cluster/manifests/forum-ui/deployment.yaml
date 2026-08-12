@@ -5,7 +5,7 @@
 # host's loadRemoteModule consumes, mounted at /social/forum (forum role) —
 # congruent with the matrix/mastodon shells (/social/matrix, /social/mastodon).
 # Talks to forum-bff-api via the same-origin /bff/forum/** fe-gateway route.
-# Repo: github.com/hugmesh-net/hugmesh-forum-ui
+# Repo: github.com/hugmesh/hugmesh-forum-ui
 ---
 apiVersion: apps/v1
 kind: Deployment

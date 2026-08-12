@@ -101,7 +101,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
+        repoURL: https://github.com/hugmesh/hugmesh-generator.git
         targetRevision: main
         path: specs/cluster/manifests/node-storage-placement
         kustomize:

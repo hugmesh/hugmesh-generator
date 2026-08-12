@@ -10,4 +10,4 @@ type: application
 version: 0.1.0
 appVersion: "dev"
 keywords: [gateway, spring-cloud-gateway, casdoor, oauth2, hugmesh]
-home: https://github.com/hugmesh-net/hugmesh-gateway
+home: https://github.com/hugmesh/hugmesh-gateway

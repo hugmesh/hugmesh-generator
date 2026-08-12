@@ -3,7 +3,7 @@
 # (own repo + pod) in the hugmesh-frontend namespace, federated into the
 # hugmesh.systems host: it serves a remoteEntry.json the host's loadRemoteModule
 # consumes. Talks to wiki-bff-api via the same-origin /bff/wiki/** fe-gateway route.
-# Repo: github.com/hugmesh-net/hugmesh-wiki-ui
+# Repo: github.com/hugmesh/hugmesh-wiki-ui
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -1894,7 +1894,7 @@ class ImageConfig:
     # TODO(org-move): the default GitHub org is still the legacy one. This field
     # is ALSO compared against the literal in two validators below, so the flip is
     # three coordinated edits in this file, not one. See docs/ORG-MOVE-TODO.md.
-    org: str = "hugmesh-net"
+    org: str = "hugmesh"
     brand_profile: str = ""            # -C/--config brands/*.conf (carries HEADSCALE_URL/RELEASE_STATE/… presets)
     cluster_domain: str = "hugmesh.systems"
     # Ask 8 — "only show steps for users and domains if its selected to start with
@@ -2519,7 +2519,7 @@ class ImageConfig:
             a += ["--brand", self.brand]
         if self.brand_title != "HugMesh Systems":
             a += ["--brand-title", self.brand_title]
-        if self.org != "hugmesh-net":
+        if self.org != "hugmesh":
             a += ["--org", self.org]
         return a
 
@@ -3024,7 +3024,7 @@ class ImageConfig:
         the neutral identity itself)."""
         conflicts: list[str] = []
         if (self.brand != "hugmesh" or self.brand_title != "HugMesh Systems"
-                or self.org != "hugmesh-net"):
+                or self.org != "hugmesh"):
             conflicts.append("a brand identity (brand/brand_title/org — the builder "
                              "forces the neutral gentoo identity itself)")
         assets = [name for name, val in (

@@ -9,7 +9,7 @@ export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
 
 ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
-REPO="${HUGMESH_GITOPS_REPO:-https://github.com/hugmesh-net/hugmesh-generator.git}"
+REPO="${HUGMESH_GITOPS_REPO:-https://github.com/hugmesh/hugmesh-generator.git}"
 REV="${HUGMESH_GITOPS_REV:-main}"
 
 command -v kubectl >/dev/null || { echo "kubectl not found" >&2; exit 1; }
@@ -83,7 +83,7 @@ else
 fi
 
 echo "==> Applying root app-of-apps (ns=${ARGOCD_NS} repo=${REPO} rev=${REV})"
-sed -e "s#repoURL: https://github.com/hugmesh-net/hugmesh-generator.git#repoURL: ${REPO}#" \
+sed -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
     -e "s#targetRevision: main#targetRevision: ${REV}#" \
     "${CLUSTER_DIR}/app-of-apps.yaml" | kubectl apply -f -
 

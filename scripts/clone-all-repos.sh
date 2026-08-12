@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# clone-all-repos.sh — clone (or update) every hugmesh-net repo the local
+# clone-all-repos.sh — clone (or update) every hugmesh repo the local
 # docker-compose stack builds from, into a single source dir (default ./.stack-src).
 #
 # Assumes you are authenticated to GitHub (gh CLI logged in, or a git credential
@@ -12,7 +12,7 @@
 #
 # Env knobs:
 #   STACK_SRC   (default ./.stack-src)  where to clone the repos
-#   GIT_BASE    (default https://github.com/hugmesh-net)  clone base URL.
+#   GIT_BASE    (default https://github.com/hugmesh)  clone base URL.
 #               Point at the internal mirror on the VPN, e.g.
 #               GIT_BASE=https://gitlab.hugmesh.systems/hugmesh
 #   GIT_REF     (default main)  branch/tag to check out
@@ -27,7 +27,7 @@ STACK_SRC="${STACK_SRC:-${REPO_ROOT}/.stack-src}"
 # the ORG rename is not. See docs/ORG-MOVE-TODO.md for the full inventory (268
 # occurrences / 154 files), the ordering that avoids breaking a live cluster, and
 # the undecided target name ("hugmesh.net" is not a legal GitHub org login).
-GIT_BASE="${GIT_BASE:-https://github.com/hugmesh-net}"
+GIT_BASE="${GIT_BASE:-https://github.com/hugmesh}"
 GIT_REF="${GIT_REF:-main}"
 USE_GH="${USE_GH:-auto}"
 

@@ -48,7 +48,7 @@ edits:
       # Same single CI-include seam as every other archetype: the centralized
       # include org/group. PRESENCE-TOLERANT (required: false) — deliberately,
       # and unlike spring-bff/angular-mfe: the generator's OWN CI today carries
-      # NO `hugmesh-net/hugmesh-generator` include (the other repos
+      # NO `hugmesh/hugmesh-generator` include (the other repos
       # include FROM it; it does not include itself — verified against the real
       # base, where a required:true here would be a false DRIFT). The anchor
       # stays so the seam rebrands the moment the generator's CI ever adopts

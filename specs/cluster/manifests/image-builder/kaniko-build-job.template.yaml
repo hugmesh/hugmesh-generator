@@ -33,7 +33,7 @@
 #   ${BUILD_NAME}      a DNS-safe per-build id (e.g. gateway-be-<short-sha>)
 #   ${BUILD_NAMESPACE} the build namespace (default hugmesh-image-builds)
 #   ${CONTEXT}         the Kaniko build context: git://<repo>#<ref> (e.g.
-#                      git://github.com/hugmesh-net/hugmesh-gateway.git#main)
+#                      git://github.com/hugmesh/hugmesh-gateway.git#main)
 #   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
 #   ${DEST_IMAGE}      the IMMUTABLE destination image ref WITH a tag/digest in the in-cluster
 #                      registry, matching the app kustomizations' newName convention, e.g.

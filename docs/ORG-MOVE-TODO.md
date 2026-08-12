@@ -1,10 +1,14 @@
 # TODO: moving to the HugMesh GitHub org
 
-**Status: NOT DONE. This is the last piece of the 2026-07 rebrand.** All 38 repos
-were content-rebranded to `hugmesh-*` and every PR merged, but the GitHub **org**
-is still `Snapdragon-Systems`. Renaming an org is a browser-only operation in
-GitHub's settings that nobody has run, so every URL in this repo still points at
-the legacy org.
+**Status: LANDED 2026-08-12 (revised plan).** The name question below was settled
+by the operator: the new org is **`hugmesh`** (created as `hugmesh-net`, then
+renamed in GitHub settings — same org id). The plan CHANGED from a rename of
+`Snapdragon-Systems` to a **new-primary topology**: `hugmesh` is the primary org
+going forward (repos are created/pushed there), and `Snapdragon-Systems` stays
+put permanently as a secondary copy — it is NOT renamed and NOT deleted, so the
+step list below (written for the rename plan) is historical. Every URL in this
+repo now points at `github.com/hugmesh/...`; repos are mirrored into `hugmesh`
+progressively, so a URL may 404 until its repo's mirror lands.
 
 This file is the authoritative inventory and procedure. Code sites that a human
 would reach for first carry a `TODO(org-move)` comment pointing here; the other
@@ -18,7 +22,7 @@ grep -rn "Snapdragon-Systems" --include='*.sh' --include='*.py' \
      --include='*.yml' --include='*.yaml' --include=Makefile --include='*.md' .
 ```
 
-## OPEN QUESTION — the new org name is not decided
+## OPEN QUESTION — the new org name is not decided (RESOLVED: `hugmesh`, see Status)
 
 The ask named it "the hugmesh.net github org", but **`hugmesh.net` cannot be a
 GitHub org name**: GitHub org logins allow alphanumerics and single hyphens only,

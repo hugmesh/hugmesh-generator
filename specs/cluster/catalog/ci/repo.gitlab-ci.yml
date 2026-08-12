@@ -28,7 +28,7 @@
 # =============================================================================
 
 include:
-  - project: 'hugmesh-net/hugmesh-generator'
+  - project: 'hugmesh/hugmesh-generator'
     ref: main
     file: '/tests/pentest/ci/pentest-stage.gitlab-ci.yml'
 

@@ -40,7 +40,7 @@ REPO_ROOT="$(cd "${CLUSTER_DIR}/../.." && pwd)"        # repo root (for `git sho
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
 ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
-REPO="${HUGMESH_GITOPS_REPO:-https://github.com/hugmesh-net/hugmesh-generator.git}"
+REPO="${HUGMESH_GITOPS_REPO:-https://github.com/hugmesh/hugmesh-generator.git}"
 REV="${HUGMESH_GITOPS_REV:-main}"
 # Both former branch overrides (the Harbor migration and the vault-tls-init
 # openssl fix) have since MERGED to main — apps/03a+03b and the fixed
@@ -292,7 +292,7 @@ fi
 apply_core_app() {
   local file="$1"
   log "Applying (main) specs/cluster/apps/${file}"
-  sed -e "s#repoURL: https://github.com/hugmesh-net/hugmesh-generator.git#repoURL: ${REPO}#" \
+  sed -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
       -e "s#targetRevision: main#targetRevision: ${REV}#" \
       "${CLUSTER_DIR}/apps/${file}" | kubectl apply -f -
 }
@@ -326,7 +326,7 @@ VREF="$(vault_ref)"
 log "Applying (${VREF}) specs/cluster/apps/02-vault.yaml (targetRevision overridden: main -> ${VAULT_BRANCH}, picks up the vault-tls-init openssl fix)"
 git -C "${REPO_ROOT}" show "${VREF}:specs/cluster/apps/02-vault.yaml" \
   | sed -e "s#targetRevision: main#targetRevision: ${VAULT_BRANCH}#" \
-        -e "s#repoURL: https://github.com/hugmesh-net/hugmesh-generator.git#repoURL: ${REPO}#" \
+        -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
   | kubectl apply -f -
 
 log "Fetching Harbor Applications from branch '${HARBOR_BRANCH}' (not yet merged to main)"
@@ -349,7 +349,7 @@ git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03a-harbor.yaml" | kubect
 log "Applying (${HREF}) specs/cluster/apps/03b-harbor-provision.yaml (targetRevision overridden: main -> ${HARBOR_BRANCH})"
 git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml" \
   | sed -e "s#targetRevision: main#targetRevision: ${HARBOR_BRANCH}#" \
-        -e "s#repoURL: https://github.com/hugmesh-net/hugmesh-generator.git#repoURL: ${REPO}#" \
+        -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
   | kubectl apply -f -
 
 # Explicitly NOT applied under KIND_PROFILE=core (deliberately out of scope

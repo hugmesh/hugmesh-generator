@@ -46,7 +46,7 @@ metadata:
   name: catalog-adopters
 spec:
   # The org whose repos the upstream catalog generator scans (13-service-catalog).
-  org: hugmesh-net
+  org: hugmesh
 
   # PROVENANCE of the `adopters` list below — machine-checked by stage 1 of
   # scripts/validate-catalog-discovery.sh, which FAILS when `sweptRepos` is less
@@ -55,10 +55,10 @@ spec:
   sweep:
     date: "2026-07-30"
     # How the repo list was ENUMERATED (must cover the org, not a local tree):
-    #   env -u GH_TOKEN gh repo list hugmesh-net --limit 200 \
+    #   env -u GH_TOKEN gh repo list hugmesh --limit 200 \
     #     --json name,defaultBranchRef -q '.[] | select(.name|startswith("hugmesh-"))'
     # and, per repo, the ROOT tree at its DEFAULT branch:
-    #   env -u GH_TOKEN gh api "repos/hugmesh-net/<repo>/contents/?ref=<branch>"
+    #   env -u GH_TOKEN gh api "repos/hugmesh/<repo>/contents/?ref=<branch>"
     # (default branch, not literally `main`: hugmesh-user-mesh-ui defaults to
     # wip/scaffold, and the catalog scmProvider likewise scans the default branch.)
     method: gh-api-org-listing

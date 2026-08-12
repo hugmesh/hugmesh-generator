@@ -11,7 +11,7 @@ lands; the canonical metadata also lives inline in
 
 ## Where to add it
 
-Repo: `hugmesh-net/hugmesh-federation-api`
+Repo: `hugmesh/hugmesh-federation-api`
 
 1. New file: `src/main/resources/db/changelog/037-register-character-forge-module.xml`
    (036 is already reserved for character-studio — see

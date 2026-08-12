@@ -141,8 +141,8 @@ the cluster** (there is no public ingress to Casdoor; the browser never sees it)
   fediverse, OIDC) both SSO against Casdoor, so the `hugmesh.systems` front
   page can show **Matrix / Mastodon links to logged-in users** and hand each
   module a service access token — the
-  [`hugmesh-matrix-ui`](https://github.com/hugmesh-net/hugmesh-matrix-ui)
-  and [`hugmesh-mastodon-ui`](https://github.com/hugmesh-net/hugmesh-mastodon-ui)
+  [`hugmesh-matrix-ui`](https://github.com/hugmesh/hugmesh-matrix-ui)
+  and [`hugmesh-mastodon-ui`](https://github.com/hugmesh/hugmesh-mastodon-ui)
   Angular micro-frontends never render their own login forms. The public
   hostnames stay `matrix.<domain>` / `mastodon.<domain>` for API compatibility,
   but the backing servers are tuwunel / Akkoma (never Synapse / Mastodon).
@@ -550,52 +550,52 @@ implementation on `main`.
 
 | Repo | Role |
 |---|---|
-| `hugmesh-net/hugmesh-parent` | Metapom every Java service inherits (**2.8.0** — Spring Boot 4.0.7 / Spring Cloud 2025.1.2 / Java 25) |
-| `hugmesh-net/hugmesh-commons` | Shared security/tenancy library, `systems.hugmesh.commons.*` (**2.1.0**) |
-| `hugmesh-net/hugmesh-auth-core` | Shared account/session/bff-session store, Casdoor-admin client, MFA subsystem, session-cookie + internal-token filters (**2.4.2**; consumed by user-bff + admin-bff only) |
-| `hugmesh-net/hugmesh-build-config` | Shared PMD/Checkstyle/SpotBugs rulesets referenced by the parent (**0.5.0**) |
+| `hugmesh/hugmesh-parent` | Metapom every Java service inherits (**2.8.0** — Spring Boot 4.0.7 / Spring Cloud 2025.1.2 / Java 25) |
+| `hugmesh/hugmesh-commons` | Shared security/tenancy library, `systems.hugmesh.commons.*` (**2.1.0**) |
+| `hugmesh/hugmesh-auth-core` | Shared account/session/bff-session store, Casdoor-admin client, MFA subsystem, session-cookie + internal-token filters (**2.4.2**; consumed by user-bff + admin-bff only) |
+| `hugmesh/hugmesh-build-config` | Shared PMD/Checkstyle/SpotBugs rulesets referenced by the parent (**0.5.0**) |
 
 ### Platform services
 
 | Repo | Role |
 |---|---|
-| `hugmesh-net/hugmesh-generator` | This repo — image builders, provisioning, GitOps payload |
-| `hugmesh-net/hugmesh-gateway` | Shared Spring Cloud Gateway code/image |
-| `hugmesh-net/hugmesh-pki-gateway` | PKI/identity gateway (Casdoor OAuth2, Postgres routes) |
-| `hugmesh-net/hugmesh-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |
-| `hugmesh-net/hugmesh-fe-gateway` | Frontend gateway (per-node, reuses the shared gateway image) |
-| `hugmesh-net/hugmesh-actions` | Spring APIs |
-| `hugmesh-net/hugmesh-admin-bff-api` | Spring admin BFF (allowlist, namespace access, usage, token broker; also the Workload Console, cloud-backups and desktop-governance modules) |
-| `hugmesh-net/hugmesh-mod-bff-api` | Spring moderator BFF |
-| `hugmesh-net/hugmesh-user-bff-api` | Spring user BFF (owns native login / session / Casdoor exchange) |
-| `hugmesh-net/hugmesh-forum-bff-api` | Spring forum BFF (phpBB-facing) |
-| `hugmesh-net/hugmesh-forum-api` | phpBB 3.3 headless JSON API extension — the forum-bff backend |
-| `hugmesh-net/hugmesh-wiki-bff-api` | Spring wiki BFF (wiki pages, attachments, audit log; `/bff/wiki/**`) |
-| `hugmesh-net/hugmesh-mesh-bff-api` | Mesh BFF: Meshtastic node directory, bridge-sync ingest, mesh functions (`/bff/mesh/**`) |
-| `hugmesh-net/hugmesh-character-forge-bff-api` | 3D character forge: BFF + Godot character-maker + federated UI (SVG VN characters → 3D avatars for the XR chat room) |
-| `hugmesh-net/hugmesh-owncast-bff-api` | Owncast BFF — broadcast grant/timeout/ban overlay + per-streamer provisioning (x86+GPU optional service) |
-| `hugmesh-net/hugmesh-tube-bff-api` | Tube (LocalTube) BFF — use grants, download, owner-private viewing (x86+GPU optional service) |
-| `hugmesh-net/hugmesh-federation-api` | Public-profile / vanity-subdomain + federation resolver (owns the `federation_modules` registrations) |
+| `hugmesh/hugmesh-generator` | This repo — image builders, provisioning, GitOps payload |
+| `hugmesh/hugmesh-gateway` | Shared Spring Cloud Gateway code/image |
+| `hugmesh/hugmesh-pki-gateway` | PKI/identity gateway (Casdoor OAuth2, Postgres routes) |
+| `hugmesh/hugmesh-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |
+| `hugmesh/hugmesh-fe-gateway` | Frontend gateway (per-node, reuses the shared gateway image) |
+| `hugmesh/hugmesh-actions` | Spring APIs |
+| `hugmesh/hugmesh-admin-bff-api` | Spring admin BFF (allowlist, namespace access, usage, token broker; also the Workload Console, cloud-backups and desktop-governance modules) |
+| `hugmesh/hugmesh-mod-bff-api` | Spring moderator BFF |
+| `hugmesh/hugmesh-user-bff-api` | Spring user BFF (owns native login / session / Casdoor exchange) |
+| `hugmesh/hugmesh-forum-bff-api` | Spring forum BFF (phpBB-facing) |
+| `hugmesh/hugmesh-forum-api` | phpBB 3.3 headless JSON API extension — the forum-bff backend |
+| `hugmesh/hugmesh-wiki-bff-api` | Spring wiki BFF (wiki pages, attachments, audit log; `/bff/wiki/**`) |
+| `hugmesh/hugmesh-mesh-bff-api` | Mesh BFF: Meshtastic node directory, bridge-sync ingest, mesh functions (`/bff/mesh/**`) |
+| `hugmesh/hugmesh-character-forge-bff-api` | 3D character forge: BFF + Godot character-maker + federated UI (SVG VN characters → 3D avatars for the XR chat room) |
+| `hugmesh/hugmesh-owncast-bff-api` | Owncast BFF — broadcast grant/timeout/ban overlay + per-streamer provisioning (x86+GPU optional service) |
+| `hugmesh/hugmesh-tube-bff-api` | Tube (LocalTube) BFF — use grants, download, owner-private viewing (x86+GPU optional service) |
+| `hugmesh/hugmesh-federation-api` | Public-profile / vanity-subdomain + federation resolver (owns the `federation_modules` registrations) |
 
 ### Front ends (native-federation remotes)
 
 | Repo | Role |
 |---|---|
-| `hugmesh-net/hugmesh-host-shell` | Angular host shell / front page — federates every remote below (was `snapdragon.systems`) |
-| `hugmesh-net/hugmesh-matrix-ui` | Matrix chat + WebRTC video micro-frontend |
-| `hugmesh-net/hugmesh-mastodon-ui` | Mastodon micro-frontend |
-| `hugmesh-net/hugmesh-login-ui` | Login/registration micro-frontend (the native login form) |
-| `hugmesh-net/hugmesh-admin-ui` | Admin console micro-frontend (role-gated; hosts the hidden-tier Workload Console face) |
-| `hugmesh-net/hugmesh-mod-ui` | Moderator console micro-frontend |
-| `hugmesh-net/hugmesh-user-ui` | User console micro-frontend |
-| `hugmesh-net/hugmesh-forum-ui` | Forum micro-frontend |
-| `hugmesh-net/hugmesh-wiki-ui` | Wiki micro-frontend |
-| `hugmesh-net/hugmesh-user-mesh-ui` | User-facing mesh dashboard: LoRa node directory, my mesh devices, mesh-enabled channels |
-| `hugmesh-net/hugmesh-character-studio-ui` | VN character studio — layered-SVG avatar creator (optional service, default-off) |
-| `hugmesh-net/hugmesh-owncast-ui` | Owncast console remote (My Stream + admin broadcast grants + mod view) |
-| `hugmesh-net/hugmesh-tube-ui` | Tube console remote (My Tube + admin access grants + storage budgets) |
-| `hugmesh-net/hugmesh-api-docs` | Admin-gated remote: browse the platform OpenAPI specs |
-| `hugmesh-net/hugmesh-superadmin-service-catalog-ui` | Superadmin App-Store / Service Catalog console (tailnet-only, mounted at `/appstore`) |
-| `hugmesh-net/hugmesh-remote-fragment` | Sync-and-serve-static nginx fleet serving DB-hosted federated fragment bundles |
-| `hugmesh-net/hugmesh-games` | Godot 4 WASM game studio and portal (runs on the x86_64 GPU worker) |
+| `hugmesh/hugmesh-host-shell` | Angular host shell / front page — federates every remote below (was `snapdragon.systems`) |
+| `hugmesh/hugmesh-matrix-ui` | Matrix chat + WebRTC video micro-frontend |
+| `hugmesh/hugmesh-mastodon-ui` | Mastodon micro-frontend |
+| `hugmesh/hugmesh-login-ui` | Login/registration micro-frontend (the native login form) |
+| `hugmesh/hugmesh-admin-ui` | Admin console micro-frontend (role-gated; hosts the hidden-tier Workload Console face) |
+| `hugmesh/hugmesh-mod-ui` | Moderator console micro-frontend |
+| `hugmesh/hugmesh-user-ui` | User console micro-frontend |
+| `hugmesh/hugmesh-forum-ui` | Forum micro-frontend |
+| `hugmesh/hugmesh-wiki-ui` | Wiki micro-frontend |
+| `hugmesh/hugmesh-user-mesh-ui` | User-facing mesh dashboard: LoRa node directory, my mesh devices, mesh-enabled channels |
+| `hugmesh/hugmesh-character-studio-ui` | VN character studio — layered-SVG avatar creator (optional service, default-off) |
+| `hugmesh/hugmesh-owncast-ui` | Owncast console remote (My Stream + admin broadcast grants + mod view) |
+| `hugmesh/hugmesh-tube-ui` | Tube console remote (My Tube + admin access grants + storage budgets) |
+| `hugmesh/hugmesh-api-docs` | Admin-gated remote: browse the platform OpenAPI specs |
+| `hugmesh/hugmesh-superadmin-service-catalog-ui` | Superadmin App-Store / Service Catalog console (tailnet-only, mounted at `/appstore`) |
+| `hugmesh/hugmesh-remote-fragment` | Sync-and-serve-static nginx fleet serving DB-hosted federated fragment bundles |
+| `hugmesh/hugmesh-games` | Godot 4 WASM game studio and portal (runs on the x86_64 GPU worker) |
 | `owncast` / LocalTube (`tube`) | Upstream GPU-dependent video services (per-domain enable, federated per-user remotes) |

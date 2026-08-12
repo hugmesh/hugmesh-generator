@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# fetch-repos.sh — clone (or update) the hugmesh-net org repos next to this
+# fetch-repos.sh — clone (or update) the hugmesh org repos next to this
 # script so hugmesh-stack can build the whole stack from source. Private repos
 # need auth (gh auth login, or an SSH key); public ones clone anonymously.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORG="${HUGMESH_ORG:-hugmesh-net}"
+ORG="${HUGMESH_ORG:-hugmesh}"
 BASE="${HUGMESH_GIT_BASE:-https://github.com/${ORG}}"
 
 # The core stack repos (extend freely). hugmesh-generator carries the cluster +

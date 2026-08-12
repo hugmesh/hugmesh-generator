@@ -409,7 +409,7 @@ doc = {
             "spec": {
                 "project": "default",
                 "source": {
-                    "repoURL": "https://github.com/hugmesh-net/hugmesh-generator.git",
+                    "repoURL": "https://github.com/hugmesh/hugmesh-generator.git",
                     "targetRevision": "main",
                     "path": "specs/cluster/charts/hugmesh-gateway",
                     "helm": {"values": "instance:\n  name: hugmesh-{{ .region }}-gateway\n"},

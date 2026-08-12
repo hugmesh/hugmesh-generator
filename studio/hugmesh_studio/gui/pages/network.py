@@ -1252,7 +1252,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.brand_profile = self.brand_profile.text().strip()
         c.brand = self.brand.text().strip() or "hugmesh"
         c.brand_title = self.brand_title.text().strip() or "HugMesh Systems"
-        c.org = self.org.text().strip() or "hugmesh-net"
+        c.org = self.org.text().strip() or "hugmesh"
         c.cluster_domain = self.domain.text().strip() or "hugmesh.systems"
         c.games_domain = self.games_domain.text().strip()
         rs = self.release_state.currentText()

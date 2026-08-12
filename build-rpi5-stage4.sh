@@ -218,7 +218,7 @@ CLUSTER_DOMAIN="hugmesh.systems"
 SUPERDOMAIN=""
 BRAND="hugmesh"                  # name slug (namespaces, gateways, hostnames)
 BRAND_TITLE="HugMesh Systems"    # human-readable title
-ORG="hugmesh-net"            # GitHub org / image namespace
+ORG="hugmesh"            # GitHub org / image namespace
 # Games portal domain. DEFAULT = SUBDOMAIN of the primary (games.<CLUSTER_DOMAIN>)
 # until the real .games TLD is obtained; flip with GAMES_DOMAIN=<brand>.games. The
 # default literal composes with rebrand_sysroot (hugmesh.systems->CLUSTER_DOMAIN).
@@ -1334,7 +1334,7 @@ fi
 # a quote, or a newline can never reach a render sink or a sourced KEY=VALUE file.
 # Escaping at the render sink (_sed_rep_escape) is defense-in-depth on top of this.
 # Each regex below ACCEPTS every legitimate default (brand=hugmesh,
-# org=hugmesh-net, domain=hugmesh.systems, user=pi, cpu=cortex-a76,
+# org=hugmesh, domain=hugmesh.systems, user=pi, cpu=cortex-a76,
 # target=aarch64-unknown-linux-gnu, kernel_2712.img, title "HugMesh Systems").
 _require_match() {  # <human-name> <value> <regex>
     [[ "$2" =~ $3 ]] || { err "invalid $1: '$2' (must match ${3})"; exit 1; }
@@ -2579,7 +2579,7 @@ bake_host_firewall() {
 # provisioning JSON key are intentionally NOT touched (tool vendor namespace).
 rebrand_sysroot() {
     if [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] \
-       && [ "${ORG}" = "hugmesh-net" ] && [ "${BRAND_TITLE}" = "HugMesh Systems" ]; then
+       && [ "${ORG}" = "hugmesh" ] && [ "${BRAND_TITLE}" = "HugMesh Systems" ]; then
         info "Branding: default (hugmesh) — no rebrand"
         return 0
     fi
@@ -2603,7 +2603,7 @@ rebrand_sysroot() {
             -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${BRAND_TITLE}|g" \
             -e "s|snapdragon-systems/|${org_lc}/|g" \
-            -e "s|hugmesh-net|${ORG}|g" \
+            -e "s|hugmesh|${ORG}|g" \
             -e "s|//id\.hugmesh\.games|//id.${GAMES_DOMAIN}|g" \
             -e "s|//hugmesh\.games|//${GAMES_DOMAIN}|g" \
             -e "s|hugmesh\.systems|${CLUSTER_DOMAIN}|g" \

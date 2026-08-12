@@ -79,13 +79,13 @@ KEYFP="$(base64 -d "${TRUST}/${MESH}/foreign-provenance-pub.ed25519" 2>/dev/null
 # ── Fixture builders ────────────────────────────────────────────────────────────
 # A CLEAN foreign angular-mfe base carrying the archetype recipe's required upstream
 # anchors (so the positive control also renders). Not secrets; not our frozen
-# protocol constants (hugmesh-net/ and @hugmesh/ are NOT snapdragon.systems/).
+# protocol constants (hugmesh/ and @hugmesh/ are NOT snapdragon.systems/).
 mkclean_base() { # mkclean_base DIR
   local d="$1"
   mkdir -p "${d}/src"
   printf '{\n  "name": "@snapdragon/login",\n  "version": "1.0.0"\n}\n' > "${d}/package.json"
   printf '<html><head><title>Snapdragon Login (remote)</title></head><body></body></html>\n' > "${d}/src/index.html"
-  printf 'include:\n  - project: hugmesh-net/snapdragon-generator\n    file: ci.yml\n' > "${d}/.gitlab-ci.yml"
+  printf 'include:\n  - project: hugmesh/snapdragon-generator\n    file: ci.yml\n' > "${d}/.gitlab-ci.yml"
   printf 'export const remoteEntry = "login";\n' > "${d}/federation-base.js"
   cat > "${d}/.hugmesh-sbom.json" <<'JSON'
 { "bomFormat":"CycloneDX","specVersion":"1.5",

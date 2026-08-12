@@ -11,7 +11,7 @@ lands; the canonical metadata also lives inline in
 
 ## Where to add it
 
-Repo: `hugmesh-net/hugmesh-federation-api`
+Repo: `hugmesh/hugmesh-federation-api`
 
 1. New file: `src/main/resources/db/changelog/036-register-character-studio-module.xml`
    (036 is the next free number after the current tail `035-user-modules-domain.xml`).

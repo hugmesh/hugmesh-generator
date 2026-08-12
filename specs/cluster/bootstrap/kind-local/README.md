@@ -179,7 +179,7 @@ Env overrides (all optional):
 | Var | Default | Purpose |
 |---|---|---|
 | `KIND_CLUSTER_NAME` | `hugmesh-local` | kind cluster name |
-| `HUGMESH_GITOPS_REPO` | `https://github.com/hugmesh-net/hugmesh-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`) |
+| `HUGMESH_GITOPS_REPO` | `https://github.com/hugmesh/hugmesh-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`) |
 | `HUGMESH_GITOPS_REV` | `main` | targetRevision rewritten into every non-Harbor Application |
 | `HARBOR_BRANCH` | `feat/harbor-registry-migration` | branch the two Harbor Applications (+ `03b`'s manifests) are fetched from |
 | `VAULT_BRANCH` | `feat/kind-local-bringup` | branch `02-vault.yaml` (and, live, `manifests/vault`) is fetched from — carries the `vault-tls-init` openssl fix (bug #2 above) until it merges to `main`; drop it (or set to `main`) once merged |

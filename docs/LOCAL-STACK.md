@@ -182,7 +182,7 @@ same bootstrap container, then drive compose directly. From the repo root
 
 ```bat
 docker run --rm -v "%cd%\scripts:/scripts:ro" -v "%cd%\.stack-src:/stack-src" ^
-  -e STACK_SRC=/stack-src -e GIT_BASE=https://github.com/hugmesh-net ^
+  -e STACK_SRC=/stack-src -e GIT_BASE=https://github.com/hugmesh ^
   -e USE_GH=0 -e GH_TOKEN=%GH_TOKEN% alpine/git:latest sh /scripts/clone-all-repos.sh
 
 set STACK_SRC=../../.stack-src
