@@ -88,10 +88,10 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 # The org repos have NO git tags, hence SHA pins. Order matters: build-config FIRST
 # (parent's plugin dep), then parent (everything else's <parent>), then commons/auth-core.
 PINS=(
-  "hugmesh-build-config|7f5f643d8f08ced145569d3a9db6b4be8849516f|hugmesh-build-config|0.5.0|jar"
-  "hugmesh-parent|389f34e98c6da846b21bda9e1553cf1418dc92eb|hugmesh-parent|2.8.0|pom"
-  "hugmesh-commons|4eaeb58876fb389f8929caff99aae3a06de22586|hugmesh-commons|2.1.0|jar+tests"
-  "hugmesh-auth-core|b50696be9ad769515c2bda7f5b29420f110a65dc|hugmesh-auth-core|2.4.2|jar"
+  "hugmesh-build-config|7f5f643d8f08ced145569d3a9db6b4be8849516f|hugmesh-build-config|0.5.0|jar|systems/hugmesh"
+  "hugmesh-parent|389f34e98c6da846b21bda9e1553cf1418dc92eb|hugmesh-parent|2.8.0|pom|systems/hugmesh"
+  "hugmesh-commons|fc6e5591da81a68d10146ab6864a6ffbfd0f7491|hugmesh-commons|2.1.0|jar+tests|net/hugmesh"
+  "hugmesh-auth-core|b50696be9ad769515c2bda7f5b29420f110a65dc|hugmesh-auth-core|2.4.2|jar|systems/hugmesh"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"
@@ -115,8 +115,13 @@ EOF
   echo "==> wrote ${SETTINGS}"
 fi
 
-have_artifact() { # artifactId version kind(pom|jar|jar+tests)
-  local base="${M2_REPO}/systems/hugmesh/$1/$2/$1-$2"
+have_artifact() { # artifactId version kind(pom|jar|jar+tests) groupPath
+  # groupPath is passed per-artifact and NOT assumed: hugmesh-commons moved to
+  # net.hugmesh (completing the .net domain move) while build-config/parent/
+  # auth-core are still systems.hugmesh. Hard-coding one group here made the
+  # script report a SUCCESSFUL build as "still missing", because it looked for
+  # the jar under the group the artifact no longer publishes to.
+  local base="${M2_REPO}/${4}/$1/$2/$1-$2"
   [ -f "${base}.pom" ] || return 1
   case "$3" in
     pom)       : ;;
@@ -181,8 +186,8 @@ build_one() { # repo -> mvn install from ${SRC_DIR}/<repo> into the cached m2
 echo "==> Private-maven bootstrap (cache: ${M2_CACHE})"
 built=0 skipped=0
 for pin in "${PINS[@]}"; do
-  IFS='|' read -r repo sha artifact version kind <<< "${pin}"
-  if have_artifact "${artifact}" "${version}" "${kind}"; then
+  IFS='|' read -r repo sha artifact version kind group <<< "${pin}"
+  if have_artifact "${artifact}" "${version}" "${kind}" "${group}"; then
     echo "  == ${artifact} ${version}: already in the m2 cache (skipping clone+build)"
     skipped=$((skipped+1))
     continue
@@ -190,7 +195,7 @@ for pin in "${PINS[@]}"; do
   echo "  ++ ${artifact} ${version}: building from source (${repo}@${sha:0:12})"
   ensure_src_at "${repo}" "${sha}"
   build_one "${repo}"
-  have_artifact "${artifact}" "${version}" "${kind}" || {
+  have_artifact "${artifact}" "${version}" "${kind}" "${group}" || {
     echo "ERROR: build finished but ${artifact} ${version} (${kind}) is still missing from ${M2_REPO}" >&2
     exit 1
   }
