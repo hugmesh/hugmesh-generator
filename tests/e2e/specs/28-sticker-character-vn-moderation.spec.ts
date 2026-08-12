@@ -47,9 +47,10 @@ import { tags } from './report-tags';
 //     (MOD authorized, USER 403) and marks the finding round-trip pending.
 //   * The Matrix send path needs the ROLE_MATRIX access role: e2e-user (plain
 //     ROLE_USER) is 403 on the hsproxy, so e2e-matrix is the Matrix actor.
-//   * The room_id in a CS-API path must be sent RAW (Synapse rejects the
-//     percent-encoded form through this hsproxy — verified: encoded PUT -> 403,
-//     raw PUT -> 200).
+//   * The room_id in a CS-API path is sent RAW. On Synapse that was load-bearing
+//     (encoded PUT -> 403, raw PUT -> 200, verified live); tuwunel accepts BOTH
+//     forms (verified live against the swapped stack: raw AND percent-encoded
+//     PUT -> 200). Raw stays the one portable spelling — keep sending it.
 // ────────────────────────────────────────────────────────────────────────────
 
 // A minimal but genuinely-valid 1x1 PNG (passes the magic-byte sniff). Used for
@@ -66,7 +67,7 @@ const PNG_OVERSIZE = Buffer.concat([
 // Not an image (SVG is text/markup) — trips the magic-byte sniff (-> 400).
 const SVG_BYTES = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>');
 
-const HS = '/bff/user/matrix';                       // user-bff Synapse reverse proxy
+const HS = '/bff/user/matrix';                       // user-bff homeserver (tuwunel) reverse proxy
 const MASTO = '/bff/user/mastodon';                  // user-bff Mastodon reverse proxy
 const BOGUS_ID = '00000000-0000-0000-0000-000000000000';
 
@@ -207,10 +208,12 @@ test.describe('28 GROUP A — sticker/character/VN surfaces that EXIST today', (
         info: { w: 256, h: 256, mimetype: 'image/png' },
         'systems.hugmesh.vn': { expression: 'neutral' },
       };
-      // NB raw room_id in the path — the percent-encoded form is rejected by Synapse
-      // through this hsproxy (verified live).
+      // NB raw room_id in the path — the portable spelling. Synapse rejected the
+      // percent-encoded form (403, verified live); tuwunel accepts both raw and
+      // encoded (200, verified live — this exact content shape round-trips
+      // verbatim, systems.hugmesh.vn namespace included). Raw works everywhere.
       const put = await mx.put(`${HS}/_matrix/client/v3/rooms/${roomId}/send/m.sticker/${txn()}`, { data: content });
-      expect(put.status(), 'm.sticker send accepted by Synapse').toBe(200);
+      expect(put.status(), 'm.sticker send accepted by the homeserver').toBe(200);
       const eventId = (await put.json()).event_id as string;
       expect(eventId).toBeTruthy();
 
@@ -499,8 +502,8 @@ test.describe('28 GROUP B — fine-grained sticker/character ban (CONTRACT, capa
       //     PUT .../send/m.room.message/{txn} { 'systems.hugmesh.vn': { characterId } } -> 403 (or stripped)
       //   WHILE a plain-text send (no characterId) is unaffected -> 200.
       // Today the only per-message VN field is a free-form `vn.expression`; there is
-      // NO stored character identity and NO send-time enforcement (Synapse forwards
-      // custom content verbatim — A2 proves it round-trips unchecked).
+      // NO stored character identity and NO send-time enforcement (the homeserver
+      // forwards custom content verbatim — A2 proves it round-trips unchecked).
       const admin = await loggedIn(baseURL, 'e2e-admin');
       const characterId = 'a-character-id';
       const ban = await admin.post(`/bff/admin/character/${characterId}/ban`, { data: { reason: 'policy' } });

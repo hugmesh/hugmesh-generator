@@ -4,7 +4,7 @@
 #
 # Provisions, against the RUNNING compose stack (front door
 # http://localhost:8088, Casdoor http://localhost:8000, social tier
-# Synapse + Mastodon), everything the UI e2e suites assume exists:
+# tuwunel + Mastodon), everything the UI e2e suites assume exists:
 #
 #   1. PERSONAS (Casdoor, org "hugmesh") — the standard set:
 #        e2e-user / e2e-mod / e2e-admin / e2e-superadmin
@@ -20,7 +20,7 @@
 #      Rendering + apply reuse tests/qemu/seed-accounts.sh --roles (the SAME
 #      machinery the cluster/pentest seeds use — tests/pentest/seed-personas.sh
 #      wraps it the same way), extended via SYSTEMS_ROLE_USERS.
-#   2. MATRIX (Synapse) — users e2e-user + e2e-mod; PUBLIC room X
+#   2. MATRIX (tuwunel) — users e2e-user + e2e-mod; PUBLIC room X
 #      (#e2e-public-x:<server>) and INVITE-ONLY room Y (#e2e-invite-y:<server>,
 #      created by e2e-mod, e2e-user invited; e2e-user joined to X).
 #   3. MASTODON — accounts e2e_usera + e2e_userb (underscore, not hyphen: Mastodon's
@@ -40,13 +40,15 @@
 # Casdoor — that limitation is documented in docs/LOCAL-STACK.md.
 #
 # NOTE for suite authors (documented in docs/LOCAL-STACK.md): the compose
-# social tier is MAINLINE Synapse + Mastodon, not tuwunel + Akkoma. Scenarios
-# that drive pleroma-admin-only verbs (mod-bff block/ban Akkoma leg) will see
-# the bff's HONEST degraded envelope here (the upstream 404s); the mod-bff
-# Matrix leg is STUBBED BY DESIGN (202/STUBBED) everywhere. Domain-lock
-# ENFORCEMENT (the Akkoma MRF / egress backstop) does not exist on mainline
-# Mastodon, so specs 19-23 stay skipped on compose — the personas above are
-# still seeded so the UI surfaces (role badges, disabled controls) render.
+# social tier is tuwunel + MAINLINE Mastodon — the Matrix half now matches the
+# cluster payload (same tuwunel image tag), the fediverse half does not (Akkoma
+# on the cluster). Scenarios that drive pleroma-admin-only verbs (mod-bff
+# block/ban Akkoma leg) will see the bff's HONEST degraded envelope here (the
+# upstream 404s); the mod-bff Matrix leg is STUBBED BY DESIGN (202/STUBBED)
+# everywhere. Domain-lock ENFORCEMENT (the Akkoma MRF / egress backstop) does
+# not exist on mainline Mastodon, so specs 19-23 stay skipped on compose — the
+# personas above are still seeded so the UI surfaces (role badges, disabled
+# controls) render.
 #
 # ENV (all optional; defaults target the compose stack):
 #   FRONT_DOOR            default http://localhost:8088   (fe-gateway)
@@ -65,14 +67,23 @@
 #                         the real cluster script offline instead.
 #   CASDOOR_ORG           default hugmesh
 #   CASDOOR_BRAND_B_URL   unset            (second-tenant Casdoor; enables leg 1b)
-#   SYNAPSE_URL           default http://localhost:8008
-#   SYNAPSE_SERVER_NAME   default localhost    (must match up-real.sh)
+#   SYNAPSE_URL           default http://localhost:8008   (tuwunel; the env NAME
+#                                           mirrors the frozen Spring-BFF property
+#                                           contract broker.synapse-url)
+#   MATRIX_SERVER_NAME    default localhost    (must match up-real.sh / the
+#                                           tuwunel service's TUWUNEL_SERVER_NAME)
 #   MASTODON_URL          default http://localhost:3000
 #   E2E_PASSWORD          default e2e-pass (per-user E2E_<UPPER>_PASSWORD wins —
 #                                           the seed-accounts.sh convention)
 #   SEED_WORKDIR          default tests/stack/.seed-e2e (rendered JSON + minted
 #                                           JWTs land here; gitignored)
 #   SEED_STRICT           default 0        (1 = the second-tenant WARN becomes fatal)
+#   SEED_WAIT_S           default 180      (seconds the preflight waits for each
+#                                           dependency's port to answer. `make
+#                                           stack-up` returns before the stack
+#                                           SERVES, so a seed run straight after it
+#                                           must wait rather than die on the first
+#                                           refused connection.)
 # =============================================================================
 set -euo pipefail
 
@@ -98,15 +109,23 @@ CASDOOR_APP_SECRET="${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}"
 CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://hugmesh-user-bff-api:8080/bff/auth/callback}"
 CASDOOR_BRAND_B_URL="${CASDOOR_BRAND_B_URL:-}"
 SYNAPSE_URL="${SYNAPSE_URL:-http://localhost:8008}"
-SYNAPSE_SERVER_NAME="${SYNAPSE_SERVER_NAME:-localhost}"
+MATRIX_SERVER_NAME="${MATRIX_SERVER_NAME:-localhost}"
 MASTODON_URL="${MASTODON_URL:-http://localhost:3000}"
 E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}"
 SEED_WORKDIR="${SEED_WORKDIR:-${HERE}/.seed-e2e}"
 SEED_STRICT="${SEED_STRICT:-0}"
 # SEED_CASDOOR_ONLY=1 seeds ONLY the Casdoor identity leg (org + roles + app-user-bff
 # + personas) and stops before the Matrix/Mastodon social legs — enough for real SSO
-# web login on the CORE (non-SOCIAL) stack, which has no Synapse/Mastodon to seed.
+# web login on the CORE (non-SOCIAL) stack, which has no tuwunel/Mastodon to seed.
 SEED_CASDOOR_ONLY="${SEED_CASDOOR_ONLY:-0}"
+# How long the preflight waits for a dependency's port to start answering.
+# `make stack-up` returns the moment `compose up -d` has STARTED the containers —
+# it does NOT wait for them to serve (fe-gateway's only compose dependents use
+# `condition: service_started`), so a `make stack-seed` launched straight after
+# stack-up hits a dead port for the whole gateway JVM boot (~17 s measured warm,
+# far longer cold / with SOCIAL=1). A single un-retried curl turned that ordinary
+# startup latency into "UNMET DEPENDENCY: front door is not answering".
+SEED_WAIT_S="${SEED_WAIT_S:-180}"
 
 log()  { echo "[seed-e2e] $*"; }
 warn() { echo "[seed-e2e] WARN: $*" >&2; }
@@ -115,28 +134,52 @@ die()  { echo "${PROG}: UNMET DEPENDENCY: $*" >&2; exit 2; }
 # ── Preflight: tools + the running stack, each named on failure ──────────────
 command -v curl   >/dev/null 2>&1 || die "curl is required"
 command -v jq     >/dev/null 2>&1 || die "jq is required"
-command -v docker >/dev/null 2>&1 || die "docker is required (the social-tier legs exec into the compose containers)"
+command -v docker >/dev/null 2>&1 || die "docker is required (the Mastodon leg execs into its container; the Matrix leg is seeded over HTTP and needs no exec)"
 [ -f "${SEED_ACCOUNTS}" ]         || die "base seeder not found: ${SEED_ACCOUNTS}"
 
-curl -sf -o /dev/null --max-time 5 "${FRONT_DOOR}/actuator/health/readiness" \
-  || curl -sf -o /dev/null --max-time 5 "${FRONT_DOOR}/" \
-  || die "front door ${FRONT_DOOR} is not answering — bring the stack up first: make stack-up"
-curl -sf -o /dev/null --max-time 5 "${CASDOOR_URL}/" \
-  || die "Casdoor ${CASDOOR_URL} is not answering — bring the stack up first: make stack-up"
-# The social-tier legs exec INSIDE the containers (register_new_matrix_user /
-# tootctl / rails runner). Find them by compose service name, whichever project
-# (hugmesh-local or hugmesh-real) is running them.
+# A dependency is "up" when its port answers with a REAL status. 401 counts: the
+# fe-gateway front door is default-DENY for anonymous, so an auth challenge proves
+# the gateway is serving. 5xx does NOT count — a JVM that has bound its port but
+# not yet wired its routes answers 502/503, and accepting that would just move the
+# failure deeper into the seed with a more confusing message.
+# NOTE: the old first probe here was `curl -sf .../actuator/health/readiness`.
+# That endpoint is behind auth and ALWAYS answers 401 -> `curl -sf` exits 22, so it
+# was dead code and the entire gate was one 5 s shot at `/`. Do not reinstate it.
+http_up() {  # <url>
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$1" 2>/dev/null || echo 000)"
+  case "${code}" in 2??|3??|401) return 0 ;; *) return 1 ;; esac
+}
+wait_up() {  # <label> <url> <die-hint>
+  local t=0
+  http_up "$2" && return 0
+  log "waiting for $1 $2 (up to ${SEED_WAIT_S}s — stack-up does not wait for readiness)"
+  while [ "${t}" -lt "${SEED_WAIT_S}" ]; do
+    sleep 3; t=$((t+3))
+    http_up "$2" && { log "$1: answering after ${t}s"; return 0; }
+  done
+  die "$1 $2 is not answering after ${SEED_WAIT_S}s — $3"
+}
+# Casdoor FIRST: it is the seed's only hard dependency (the SEED_CASDOOR_ONLY=1 leg
+# that `make stack-seed` runs on the non-SOCIAL path never touches the front door).
+wait_up "Casdoor"    "${CASDOOR_URL}/" "bring the stack up first: make stack-up"
+wait_up "front door" "${FRONT_DOOR}/"  "bring the stack up first: make stack-up (check: make stack-ps)"
+# The Mastodon leg execs INSIDE its container (tootctl / rails runner). Find it
+# by compose service name, whichever project (hugmesh-local or hugmesh-real) is
+# running it. The Matrix leg needs NO container exec: tuwunel is seeded entirely
+# over its HTTP CS-API (the distroless tuwunel image has no shell to exec into).
 find_ctr() { # <service-substring>
   docker ps --format '{{.Names}}' | grep -E "(^|[-_])$1([-_][0-9]+)?$" | head -1
 }
 if [ "${SEED_CASDOOR_ONLY}" != "1" ]; then
-  curl -sf -o /dev/null --max-time 5 "${SYNAPSE_URL}/health" \
-    || die "Synapse ${SYNAPSE_URL} is not answering — bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh for the full first-run setup). For SSO login only, use SEED_CASDOOR_ONLY=1 (make stack-seed)."
-  curl -sf -o /dev/null --max-time 5 "${MASTODON_URL}/health" \
-    || die "Mastodon ${MASTODON_URL} is not answering — bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh, which also runs rails db:prepare). For SSO login only, use SEED_CASDOOR_ONLY=1 (make stack-seed)."
-  SYNAPSE_CTR="$(find_ctr synapse || true)"
+  # Same bounded SEED_WAIT_S retry as Casdoor/front door above — a seed launched
+  # right after `make stack-up SOCIAL=1` must ride out ordinary boot latency
+  # (Mastodon's Rails boot especially). /_matrix/client/versions is tuwunel's
+  # readiness surface (the same endpoint the cluster readinessProbe uses;
+  # Synapse's /health does not exist here).
+  wait_up "tuwunel"  "${SYNAPSE_URL}/_matrix/client/versions" "bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh for the full first-run setup). For SSO login only, use SEED_CASDOOR_ONLY=1 (make stack-seed)."
+  wait_up "Mastodon" "${MASTODON_URL}/health" "bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh, which also runs rails db:prepare). For SSO login only, use SEED_CASDOOR_ONLY=1 (make stack-seed)."
   MASTODON_CTR="$(find_ctr mastodon-web || true)"
-  [ -n "${SYNAPSE_CTR}" ]  || die "no running synapse container found (docker ps) — is the social tier up?"
   [ -n "${MASTODON_CTR}" ] || die "no running mastodon-web container found (docker ps) — is the social tier up?"
 fi
 
@@ -381,6 +424,89 @@ for persona in e2e-user e2e-mod e2e-admin "${SUPERADMIN_PERSONA}" e2e-banned \
 done
 log "leg 1 OK: standard persona set verified in Casdoor"
 
+# ── LEG 1c: registration stage 2 (OPT-IN) ────────────────────────────────────
+# Seeding a Casdoor identity is only STAGE 1. Until stage 2 (`POST
+# /bff/register/complete`) runs, `GET /bff/session` reports
+# registrationComplete=false, and the gateway then grants the identity only a
+# bare ROLE_USER regardless of the roles Casdoor holds — so EVERY service
+# federation remote (/admin, /mod, /user, /social/**, /apidocs) answers 403 and
+# the host shell greys its tiles with "Complete your registration to use this."
+# A freshly-seeded local mesh therefore renders a login page you can sign into
+# and then cannot navigate anywhere from, which reads as a broken mesh.
+#
+# OFF BY DEFAULT — this is deliberate, not timidity. Several e2e specs need
+# personas that are still gated: spec 17 drives the pending-registration UI with
+# rbac-pending@gmail.com, and spec 29 asserts it can perform stage 2 itself.
+# Completing registration for everyone would delete the very state those specs
+# exercise. The Studio's local-mesh bring-up passes 1 because ITS product is a
+# clickable mesh, not a test fixture (core/local_stack_node.py seed()).
+SEED_COMPLETE_REGISTRATION="${SEED_COMPLETE_REGISTRATION:-0}"
+# Personas whose GATED state is load-bearing for the e2e suite; never completed
+# even when the flag is on:
+#   e2e-pending            — tests/e2e/specs/rbac-roles.ts is the contract, and it
+#                            is the single entry declaring registrationComplete:false.
+#   rbac-pending-gmail-com — spec 17 drives the pending-registration UI with it and
+#                            asserts the gate HOLDS (17-rbac-user-and-pending.spec.ts).
+#   e2e-banned             — spec 28 pins it 403 on both homeserver surfaces; its
+#                            whole identity is "blocked", so onboarding it would
+#                            launder away the state under test.
+SEED_REGISTRATION_SKIP="${SEED_REGISTRATION_SKIP:-e2e-pending rbac-pending-gmail-com e2e-banned}"
+
+# Derive BOTH the persona list and each password from the SAME rendered spec set
+# leg 1 just applied ("username:ROLES_CSV:passwordEnv"), never a second copy of
+# the table — the same no-drift rule the base render above is built on.
+ALL_SPECS="${BASE_SPECS}${EXTRA_SPECS}"
+REGISTRATION_PERSONAS="$(for s in ${ALL_SPECS}; do printf '%s ' "${s%%:*}"; done)"
+
+persona_password() {  # <username> -> per-user env override, else shared, else default
+  local u="$1" spec env_name="" val=""
+  for spec in ${ALL_SPECS}; do
+    case "${spec}" in "${u}:"*) env_name="${spec##*:}"; break ;; esac
+  done
+  [ -n "${env_name}" ] && val="$(printenv "${env_name}" 2>/dev/null || true)"
+  [ -n "${val}" ] || val="${E2E_PASSWORD}"
+  printf '%s' "${val}"
+}
+
+# rc 0 = completed, 2 = deliberately left gated, 1 = attempted and failed.
+complete_registration() {  # <username>
+  local u="$1" jar="${SEED_WORKDIR}/.reg-${1}.cookies" code
+  case " ${SEED_REGISTRATION_SKIP} " in *" ${u} "*) return 2 ;; esac
+  # Stage 1: a real session cookie, exactly as the browser gets one.
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -c "${jar}" \
+            -X POST "${FRONT_DOOR}/bff/login" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg u "${u}" --arg p "$(persona_password "${u}")" \
+                    '{username:$u,password:$p}')" 2>/dev/null || echo 000)"
+  [ "${code}" = "200" ] || { warn "registration: login for ${u} -> ${code} (skipped)"; rm -f "${jar}"; return 0; }
+  # Stage 2: admin-bff's public AuthController, through the gateway, with that
+  # cookie — the same call tests/e2e/specs/29-mfa-privileged-floor.spec.ts makes.
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -b "${jar}" -c "${jar}" \
+            -X POST "${FRONT_DOOR}/bff/register/complete" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg d "${u}" '{displayName:$d}')" 2>/dev/null || echo 000)"
+  rm -f "${jar}"
+  case "${code}" in
+    200) return 0 ;;
+    404) warn "registration: ${u} -> 404. The gateway route table sends /bff/register/** to a service that does not implement stage 2 (admin-bff does)." ; return 1 ;;
+    *)   warn "registration: ${u} -> ${code}" ; return 1 ;;
+  esac
+}
+
+if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
+  log "leg 1c: completing registration (stage 2) so personas can reach services"
+  reg_ok=0; reg_gated=0; reg_fail=0
+  for persona in ${REGISTRATION_PERSONAS}; do
+    complete_registration "${persona}" && { reg_ok=$((reg_ok+1)); continue; }
+    case "$?" in
+      2) reg_gated=$((reg_gated+1)) ;;
+      *) reg_fail=$((reg_fail+1)) ;;
+    esac
+  done
+  log "leg 1c OK: ${reg_ok} registration-complete, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} failed"
+  # A failure here is NOT fatal: leg 1's identities are seeded either way, and the
+  # operator can still complete registration from the UI. Say it plainly instead.
+  [ "${reg_fail}" -eq 0 ] || warn "leg 1c: ${reg_fail} persona(s) could not complete registration (see the WARNs above)"
+fi
+
 # ── LEG 1b: second-tenant persona (needs a brand-B Casdoor) ──────────────────
 if [ -n "${CASDOOR_BRAND_B_URL}" ]; then
   log "leg 1b: second-tenant persona at ${CASDOOR_BRAND_B_URL}"
@@ -417,20 +543,43 @@ if [ "${SEED_CASDOOR_ONLY}" = "1" ]; then
 fi
 
 # ══ LEG 2: Matrix — users + public room X + invite-only room Y ═══════════════
-log "leg 2: Matrix users + rooms at ${SYNAPSE_URL} (server_name=${SYNAPSE_SERVER_NAME})"
+log "leg 2: Matrix users + rooms at ${SYNAPSE_URL} (server_name=${MATRIX_SERVER_NAME})"
 
 matrix_register() { # <user>
-  local out
-  # register_new_matrix_user reads registration_shared_secret from the config
-  # the synapse service's own entrypoint ensures (compose.real.yaml — self-
-  # heals on every container start); "User ID already taken" is the
+  local first out err
+  # Public CS-API UIAA registration (the same flow the BFF's Matrix-account
+  # mint uses): POST /register without auth -> 401 carrying a UIAA session
+  # advertising m.login.dummy (the tuwunel service enables open registration —
+  # compose.real.yaml), then complete the dummy stage. Registered users are
+  # PLAIN users (the tuwunel service sets grant_admin_to_first_user=false, so
+  # nobody is silently promoted to server admin). M_USER_IN_USE is the
   # idempotent no-op.
-  out="$(docker exec "${SYNAPSE_CTR}" register_new_matrix_user \
-          -u "$1" -p "${E2E_PASSWORD}" --no-admin -c /data/homeserver.yaml \
-          "http://localhost:8008" 2>&1)" \
-    || { echo "${out}" | grep -qi "already taken\|already exists\|M_USER_IN_USE" \
-           || die "could not register Matrix user $1: ${out} (is the synapse container's config missing registration_shared_secret? see compose.real.yaml's synapse entrypoint)"; }
-  log "matrix user $1 present"
+  # `|| true` guards: a transient curl failure or a non-JSON body must fall
+  # through to the crafted die below, not abort via set -e/pipefail with a raw
+  # curl/jq error.
+  first="$(curl -s "${SYNAPSE_URL}/_matrix/client/v3/register" -X POST \
+    -H 'content-type: application/json' \
+    -d "{\"username\":\"$1\",\"password\":\"${E2E_PASSWORD}\"}" || true)"
+  if echo "${first}" | jq -e '.user_id // empty | length > 0' >/dev/null; then
+    log "matrix user $1 registered"; return 0
+  fi
+  if echo "${first}" | jq -e '.errcode == "M_USER_IN_USE"' >/dev/null; then
+    log "matrix user $1 present"; return 0
+  fi
+  local session
+  session="$(echo "${first}" | jq -r '.session // empty' 2>/dev/null || true)"
+  [ -n "${session}" ] \
+    || die "could not register Matrix user $1: ${first} (does the tuwunel service enable registration? see compose.real.yaml's TUWUNEL_ALLOW_REGISTRATION env)"
+  out="$(curl -s "${SYNAPSE_URL}/_matrix/client/v3/register" -X POST \
+    -H 'content-type: application/json' \
+    -d "{\"username\":\"$1\",\"password\":\"${E2E_PASSWORD}\",\"auth\":{\"type\":\"m.login.dummy\",\"session\":\"${session}\"}}" || true)"
+  if echo "${out}" | jq -e '.user_id // empty | length > 0' >/dev/null; then
+    log "matrix user $1 registered"
+  elif echo "${out}" | jq -e '.errcode == "M_USER_IN_USE"' >/dev/null; then
+    log "matrix user $1 present"
+  else
+    die "could not register Matrix user $1: ${out} (does the tuwunel service enable registration? see compose.real.yaml's TUWUNEL_ALLOW_REGISTRATION env)"
+  fi
 }
 
 matrix_token() { # <user>
@@ -442,7 +591,7 @@ matrix_token() { # <user>
 }
 
 matrix_room_by_alias() { # <alias-localpart> -> room_id or empty
-  curl -s "${SYNAPSE_URL}/_matrix/client/v3/directory/room/%23$1%3A${SYNAPSE_SERVER_NAME}" \
+  curl -s "${SYNAPSE_URL}/_matrix/client/v3/directory/room/%23$1%3A${MATRIX_SERVER_NAME}" \
     | jq -r '.room_id // empty'
 }
 
@@ -470,7 +619,7 @@ ROOM_Y="$(matrix_room_by_alias e2e-invite-y)"
 if [ -z "${ROOM_Y}" ]; then
   ROOM_Y="$(curl -sf "${SYNAPSE_URL}/_matrix/client/v3/createRoom" -X POST \
       -H "authorization: Bearer ${MOD_TOK}" -H 'content-type: application/json' \
-      -d "{\"preset\":\"private_chat\",\"room_alias_name\":\"e2e-invite-y\",\"name\":\"E2E Invite-Only Room Y\",\"invite\":[\"@e2e-user:${SYNAPSE_SERVER_NAME}\"]}" \
+      -d "{\"preset\":\"private_chat\",\"room_alias_name\":\"e2e-invite-y\",\"name\":\"E2E Invite-Only Room Y\",\"invite\":[\"@e2e-user:${MATRIX_SERVER_NAME}\"]}" \
     | jq -re '.room_id')" || die "could not create invite-only room Y"
   log "room Y created: ${ROOM_Y} (e2e-user invited)"
 else
@@ -480,7 +629,7 @@ fi
 # VERIFY (fail-honest): both aliases must resolve, and Y must be invite-only.
 [ -n "$(matrix_room_by_alias e2e-public-x)" ] || die "room X alias did not resolve after seed"
 [ -n "$(matrix_room_by_alias e2e-invite-y)" ] || die "room Y alias did not resolve after seed"
-JOIN_RULE="$(curl -s "${SYNAPSE_URL}/_matrix/client/v3/rooms/$(jq -rn --arg r "${ROOM_Y}" '$r|@uri')/state/m.room.join_rules/" \
+JOIN_RULE="$(curl -s "${SYNAPSE_URL}/_matrix/client/v3/rooms/$(jq -rn --arg r "${ROOM_Y}" '$r|@uri')/state/m.room.join_rules" \
   -H "authorization: Bearer ${MOD_TOK}" | jq -r '.join_rule // empty')"
 [ "${JOIN_RULE}" = "invite" ] || die "room Y join_rule is '${JOIN_RULE}', expected 'invite' (invite-only contract)"
 log "leg 2 OK: room X (public) + room Y (invite-only) verified"

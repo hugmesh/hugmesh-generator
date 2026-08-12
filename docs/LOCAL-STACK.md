@@ -37,7 +37,7 @@ compose topology is a faithful translation of those manifests to compose DNS.
   - the VPN + the internal mirror (`GIT_BASE=https://gitlab.hugmesh.systems/hugmesh`).
 - **Resources:** the core platform is ~10 JVM/nginx containers + 3 Postgres +
   Cassandra. Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
-  (Synapse + the full Mastodon tier). First build compiles several Maven + Angular
+  (tuwunel + the full Mastodon tier). First build compiles several Maven + Angular
   projects and is **slow** (tens of minutes, network-bound).
 
 ---
@@ -81,7 +81,7 @@ browser-facing role. In the cluster Casdoor gets no public ingress at all.
 Useful overrides:
 
 ```bash
-make stack-up SOCIAL=1                       # also bring up Synapse + Mastodon
+make stack-up SOCIAL=1                       # also bring up tuwunel + Mastodon
 make stack-up PUBLIC_HOST_PORT=9090          # publish the front door elsewhere
 make stack-up PUBLIC_HTTPS_PORT=9443         # publish the HTTPS front door elsewhere
 make stack-up STACK_SRC=/srv/snap-src        # clone/build from a different dir
@@ -160,7 +160,7 @@ either — just pass a token for private repos.
 ```powershell
 # From the repo root, in PowerShell:
 pwsh -File scripts\stack-up.ps1 -GhToken ghp_yourtoken         # ENV=test (default)
-pwsh -File scripts\stack-up.ps1 -GhToken ghp_yourtoken -Social # + Synapse/Mastodon
+pwsh -File scripts\stack-up.ps1 -GhToken ghp_yourtoken -Social # + tuwunel/Mastodon
 pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.hugmesh.systems
 pwsh -File scripts\stack-up.ps1 -Down                          # tear down (-v)
 ```
@@ -233,7 +233,7 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | http://localhost:8088 | **Front door** — fe-gateway (Angular host + remotes, /bff, /_fragments, /be) |
 | https://localhost:8488 | **Front door (HTTPS)** — same fe-gateway via the `https-front` TLS terminator; per-machine CA at `tests/stack/.tls-front/ca.crt` (knob: `PUBLIC_HTTPS_PORT`) |
 | http://localhost:8000 | Casdoor (OIDC identity) — **admin/seed transport only**, not the login path; the browser never uses it (in-cluster it has no public ingress) |
-| http://localhost:8008 | Synapse / Matrix (only with `SOCIAL=1`) |
+| http://localhost:8008 | tuwunel / Matrix (only with `SOCIAL=1`) |
 | http://localhost:3000 | Mastodon web (only with `SOCIAL=1`) |
 | http://localhost:4000 | Mastodon streaming (only with `SOCIAL=1`) |
 | 127.0.0.1:9042 | Cassandra (gateway revocation list + URL registry) |
@@ -282,7 +282,9 @@ Casdoor apply hook — the same machinery the cluster/pentest seeds use):
    role members and pre-mints per-persona JWTs into `tests/stack/.seed-e2e/jwt-cache`
    (usable as `SNAP_PREMINT_DIR`). Default admin creds are the fresh-casdoor dev
    default (`admin`/`123`) — override `CASDOOR_ADMIN_PASS` otherwise.
-3. **Matrix (Synapse)**: users `e2e-mod` + `e2e-user`; **public room X**
+3. **Matrix (tuwunel)**: users `e2e-mod` + `e2e-user` — registered from the
+   host over the public CS-API (UIAA `m.login.dummy`; no container exec, the
+   distroless tuwunel image has no shell); **public room X**
    (`#e2e-public-x:localhost`) and **invite-only room Y** (`#e2e-invite-y:localhost`,
    `e2e-user` invited; verified `join_rule=invite`).
 4. **Mastodon**: accounts `e2e_usera` + `e2e_userb` (underscore — Mastodon's
@@ -301,14 +303,19 @@ not verify.
   `e2e-tenant2-user` persona / cross-tenant brand-wall scenarios cannot be modeled
   here. The script WARNs loudly (fatal with `SEED_STRICT=1`); set
   `CASDOOR_BRAND_B_URL` (e.g. the pentest two-brand profile) to seed it for real.
-- **pleroma-admin-only verbs**: the compose social tier is **mainline Synapse +
-  Mastodon**, not prod tuwunel + Akkoma. mod-bff actions wired to the
+- **pleroma-admin-only verbs**: the compose social tier is **tuwunel + mainline
+  Mastodon** — the Matrix half now runs the same homeserver + image tag as the
+  cluster payload (`ghcr.io/matrix-construct/tuwunel:v1.7.0`), though in
+  LAN-test posture (open registration, federation off, no mTLS proxy — the
+  cluster runs closed registration behind `tuwunel-proxy:4443`), while the
+  fediverse half is still Mastodon, not Akkoma. mod-bff actions wired to the
   pleroma-admin API (block/ban Akkoma leg: `PATCH /api/v1/pleroma/admin/users/
   deactivate`, `DELETE /api/v1/pleroma/admin/instances/{host}`) will 404 upstream —
   suites must assert the bff's **honest DEGRADED envelope** here, never a fake
   success. The mod-bff **Matrix block leg is STUBBED BY DESIGN** everywhere
-  (tuwunel has no REST admin API) — it returns an honest 202/STUBBED envelope,
-  never "OK".
+  (tuwunel has no general REST admin API — only the Synapse-compat
+  `/_synapse/admin/v1/register` shared-secret shim; moderation lives in the
+  admin room) — it returns an honest 202/STUBBED envelope, never "OK".
 - **Domain-lock enforcement**: the Akkoma `ForceLocalForUsers` MRF + the egress
   backstop do not exist on mainline Mastodon/compose, so the non-federation specs
   (`tests/e2e/specs/19-23`) stay honestly **skipped** here (`SNAP_FEDERATION_PEER`
@@ -338,7 +345,7 @@ not verify.
 | `forum-bff-db` / `wiki-bff-db` / `owncast-bff-db` / `tube-bff-db` | `postgres:16-alpine` | `manifests/forum-bff-db` / `wiki-bff-db` / (owncast/tube: no dedicated DB manifest yet — pre-existing cluster-side gap) |
 | `character-forge-bff-db` | `postgres:16-alpine` | `manifests/character-forge-bff-db` |
 | `cassandra`, `casdoor`, `casdoor-db` | upstream images | `compose.real.yaml` (included) |
-| `synapse`, `mastodon-*` | upstream images (`social` profile) | `compose.real.yaml` (included, opt-in) |
+| `tuwunel`, `mastodon-*` | upstream images (`social` profile) | `compose.real.yaml` (included, opt-in) |
 
 The gateway route tables in `tests/stack/gateway-routes/{pki,be,fe}/` are the
 compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
@@ -371,12 +378,12 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 - **hugmesh-actions two-Casdoor sync is inert:** both Casdoor URLs point at the
   single local Casdoor with placeholder client creds, so the games sync job does
   nothing locally (no separate games Casdoor in this stack).
-- **Social tier is heavy + opt-in.** `SOCIAL=1` pulls Synapse + Mastodon
-  (web/sidekiq/streaming + Postgres/Redis). Synapse needs no separate
-  first-run step any more — its `synapse` service entrypoint
-  (`tests/stack/compose.real.yaml`) generates its config and self-heals
-  registration on every container start, the same way whether you bring it
-  up via `SOCIAL=1` or `tests/stack/up-real.sh`. Mastodon's `db:prepare`
+- **Social tier is heavy + opt-in.** `SOCIAL=1` pulls tuwunel + Mastodon
+  (web/sidekiq/streaming + Postgres/Redis). tuwunel needs no first-run
+  step at all — the `tuwunel` service (`tests/stack/compose.real.yaml`) is
+  configured entirely declaratively via `TUWUNEL_*` env, so a fresh volume
+  comes up registration-enabled on every bring-up path, the same whether you
+  go via `SOCIAL=1` or `tests/stack/up-real.sh`. Mastodon's `db:prepare`
   first-run migration is NOT run by `SOCIAL=1`, though; for a fully working
   Mastodon (and to skip a manual `rails db:prepare`), use
   `tests/stack/up-real.sh` (the dedicated real-services bring-up), which

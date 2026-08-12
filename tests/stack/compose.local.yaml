@@ -7,7 +7,7 @@
 # i.e. ./.stack-src at the repo root; populated by scripts/clone-all-repos.sh).
 # The datastores + identity (Casdoor,
 # Postgres x3, Cassandra) come up alongside them. The heavy third-party social
-# servers (Synapse/Matrix + the full Mastodon tier) are OPT-IN behind the
+# servers (tuwunel/Matrix + the full Mastodon tier) are OPT-IN behind the
 # `social` compose profile, included from compose.real.yaml — the core platform
 # comes up WITHOUT them.
 #
@@ -27,14 +27,14 @@
 # http://hugmesh-federation-api:8080).
 name: hugmesh-local
 
-# Pull in the heavy third-party social tier (Synapse + Mastodon web/sidekiq/
+# Pull in the heavy third-party social tier (tuwunel + Mastodon web/sidekiq/
 # streaming + their Postgres/Redis) from the existing real-services compose.
 # Those services are tagged with the `social` profile via the override below, so
 # `docker compose up` (no profile) skips them and the core platform comes up
 # alone. Enable with `--profile social` (or `make stack-up SOCIAL=1`).
 include:
   - path: compose.real.yaml
-  # Overlay that tags the synapse/mastodon services with the `social` profile so
+  # Overlay that tags the tuwunel/mastodon services with the `social` profile so
   # they are OPT-IN (`--profile social`); casdoor/cassandra stay core (always up).
   - path: compose.social-profile.yaml
 
@@ -628,10 +628,13 @@ services:
       # defaults for broker.synapse-url / broker.mastodon-url are cluster-DNS hosts,
       # unresolvable in compose — point them at the compose social tier (profile
       # `social`; when it's down the provision legs fail with a named 502, same as
-      # any other absent upstream). Email domain: same contract + value as user-bff's
+      # any other absent upstream). The env NAME stays SYNAPSE_URL — it is the
+      # admin-bff-api Spring property contract (broker.synapse-url), frozen even
+      # though the homeserver behind it is tuwunel — exactly the compat pattern the
+      # cluster manifests keep. Email domain: same contract + value as user-bff's
       # APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN above (admin-bff-api reads
       # broker.mastodon-email-domain <- MASTODON_EMAIL_DOMAIN).
-      SYNAPSE_URL: ${SYNAPSE_URL:-http://synapse:8008}
+      SYNAPSE_URL: ${SYNAPSE_URL:-http://tuwunel:8008}
       MASTODON_URL: ${ADMIN_BFF_MASTODON_URL:-http://mastodon-web:3000}
       MASTODON_EMAIL_DOMAIN: ${MASTODON_EMAIL_DOMAIN:-e2e.local}
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
@@ -837,9 +840,11 @@ services:
       # is INERT and the hsproxy 503s. Dev key (compose dev posture; any passphrase is folded to a
       # 256-bit AES key via SHA-256). The upstream matrix/mastodon proxy URLs default to cluster DNS
       # (tuwunel-proxy / akkoma-proxy) which are absent in compose — point them at the compose
-      # Synapse + Mastodon so the proxied CS-API / Mastodon calls reach a live homeserver.
+      # tuwunel + Mastodon so the proxied CS-API / Mastodon calls reach a live homeserver
+      # (locally that is plain-HTTP tuwunel:8008; the cluster fronts the same server with
+      # the mTLS tuwunel-proxy:4443).
       APP_HS_TOKEN_KEY: ${APP_HS_TOKEN_KEY:-dev-hs-token-key-do-not-use-in-prod}
-      APP_HS_TOKEN_MATRIX_URL: ${APP_HS_TOKEN_MATRIX_URL:-http://synapse:8008}
+      APP_HS_TOKEN_MATRIX_URL: ${APP_HS_TOKEN_MATRIX_URL:-http://tuwunel:8008}
       APP_HS_TOKEN_MASTODON_URL: ${APP_HS_TOKEN_MASTODON_URL:-http://mastodon-web:3000}
       # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
       APP_SESSION_COOKIE_SECURE: "false"

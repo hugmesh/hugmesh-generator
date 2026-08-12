@@ -1,6 +1,6 @@
 // mock-matrix.mjs — Angular UI UNIT-TEST double ONLY (fast, in-memory).
 // DO NOT use for integration tests: those run the REAL Matrix homeserver
-// (Synapse) from tests/stack/compose.real.yaml. This double implements just
+// (tuwunel) from tests/stack/compose.real.yaml. This double implements just
 // the client-server endpoints the UI calls, for component/unit tests.
 //
 //   POST /_matrix/client/v3/register            {username,password} -> {user_id,access_token}

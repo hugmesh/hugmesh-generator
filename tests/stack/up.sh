@@ -7,11 +7,13 @@ RUN="${HERE}/.run"; mkdir -p "${RUN}"
 CERTS="${HERE}/certs"
 UI_DIST="${UI_DIST:-${HERE}/.uidist}"
 MATRIX_PORT="${MATRIX_PORT:-8401}"; MASTODON_PORT="${MASTODON_PORT:-8402}"; BFF_PORT="${BFF_PORT:-8403}"; UI_PORT="${UI_PORT:-8443}"
-# REAL_MATRIX=1 routes the UI's /_matrix to the real Synapse (tests/stack
-# brings it up) and mock-bff.mjs brokers real Synapse tokens against it — the
-# BFF itself stays mock-bff.mjs either way (this never runs a real Spring
-# BFF/gateway; for that use `make stack-up`, see docs/LOCAL-STACK.md). Default
-# uses the fast in-memory double for Angular UI-unit runs.
+# REAL_MATRIX=1 routes the UI's /_matrix to the real tuwunel homeserver
+# (tests/stack brings it up) and mock-bff.mjs brokers real Matrix tokens
+# against it — the BFF itself stays mock-bff.mjs either way (this never runs a
+# real Spring BFF/gateway; for that use `make stack-up`, see
+# docs/LOCAL-STACK.md). Default uses the fast in-memory double for Angular
+# UI-unit runs. (SYNAPSE_URL is the frozen Spring-BFF env-name contract; the
+# server behind it is tuwunel.)
 SYNAPSE_URL="${SYNAPSE_URL:-http://127.0.0.1:8008}"
 if [ "${REAL_MATRIX:-0}" = "1" ]; then MATRIX_TARGET="${SYNAPSE_URL}"; else MATRIX_TARGET="http://127.0.0.1:${MATRIX_PORT}"; fi
 
@@ -40,7 +42,7 @@ PORT="${MATRIX_PORT}"   start matrix   node "${HERE}/mock-matrix.mjs"
 PORT="${MASTODON_PORT}" start mastodon node "${HERE}/mock-mastodon.mjs"
 # The BFF brokers Matrix service tokens against the SAME matrix endpoint the UI
 # talks to (MATRIX_TARGET): the in-memory mock-matrix (:8401) by default, or the
-# real Synapse when REAL_MATRIX=1. (Previously this always pointed at :8008, so
+# real tuwunel when REAL_MATRIX=1. (Previously this always pointed at :8008, so
 # in mock mode token brokering hit a dead port and matrix.token came back empty.)
 PORT="${BFF_PORT}" ADMIN_EMAILS="${ADMIN_EMAILS:-admin@hugmesh.systems}" \
   SYNAPSE_URL="${MATRIX_TARGET}" MASTODON_URL="http://127.0.0.1:${MASTODON_PORT}" \

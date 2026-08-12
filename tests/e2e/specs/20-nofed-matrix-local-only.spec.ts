@@ -33,7 +33,7 @@ test.describe('non-federation: Matrix domain-locked room/event stays local', () 
 
     const matrixBase =
       process.env['SNAP_MATRIX_BASE'] ??
-      'http://tuwunel.hugmesh-backend.svc.cluster.local:6167';
+      'http://tuwunel.hugmesh-backend.svc.cluster.local:8008';
     const remoteServer = process.env['SNAP_MATRIX_REMOTE_SERVER'] ?? 'peer.test';
 
     // Attempt to JOIN a room hosted on the REMOTE server by alias. With the egress

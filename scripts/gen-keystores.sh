@@ -182,7 +182,7 @@ gen_private_key() {
 }
 
 # Java API machine-users that get an mTLS identity keystore: "name:namespace".
-# (Casdoor=Go, Synapse=Python, Mastodon=Ruby are not Java; they consume the same
+# (Casdoor=Go, tuwunel=Rust, Mastodon=Ruby are not Java; they consume the same
 #  CA via PEM and are issued certs by gen-cluster-secrets if needed.)
 # Parameterised by brand so each domain in the loop gets its own brand's service
 # set; with the single default brand this yields exactly the historical list.

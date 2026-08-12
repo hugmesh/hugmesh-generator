@@ -1164,7 +1164,7 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 # ENV selector (same test|prod knob as the image build): test = local placeholder
 # Casdoor issuer (http://localhost:8000); prod = the REAL issuer (CASDOOR_ISSUER
 # or https://id.<DOMAIN>; prod creds come from your env / keys USB, NOT committed).
-# SOCIAL=1 also brings up the heavy Synapse/Mastodon tier (the `social` profile).
+# SOCIAL=1 also brings up the heavy tuwunel/Mastodon tier (the `social` profile).
 STACK_COMPOSE   := tests/stack/compose.local.yaml
 STACK_SRC       ?= $(CURDIR)/.stack-src
 PUBLIC_HOST_PORT ?= 8088
@@ -1304,10 +1304,10 @@ stack-clone: ## clone/update all hugmesh repos into ./.stack-src (idempotent; ST
 	fi
 
 # Guarantee tests/stack/.mastodon.env exists with non-empty dev secrets (only the
-# SOCIAL=1 path needs it). Synapse's config/registration self-heals via its own
-# service entrypoint (compose.real.yaml), same as tests/stack/up-real.sh; for
-# Mastodon's db:prepare too, use tests/stack/up-real.sh instead — see
-# docs/LOCAL-STACK.md.
+# SOCIAL=1 path needs it). tuwunel needs no first-run step: it is configured
+# entirely declaratively via TUWUNEL_* env on its service (compose.real.yaml),
+# same as tests/stack/up-real.sh; for Mastodon's db:prepare too, use
+# tests/stack/up-real.sh instead — see docs/LOCAL-STACK.md.
 #
 # ALTERNATE_DOMAINS=mastodon-web:3000 is REQUIRED, not cosmetic: Mastodon's
 # config/initializers/1_hosts.rb builds Rails' config.hosts from LOCAL_DOMAIN +
@@ -1362,6 +1362,11 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )bash tests/stack/seed-e2e.sh
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
+	@echo "    NOTE: this seeds registration STAGE 1 (the Casdoor identity) only. Until stage 2"
+	@echo "    (POST /bff/register/complete) runs, GET /bff/session reports registrationComplete=false,"
+	@echo "    the gateway grants only a bare ROLE_USER, and every service route 403s — you can sign in"
+	@echo "    but not navigate. Re-run with SEED_COMPLETE_REGISTRATION=1 to onboard the personas too"
+	@echo "    (the Studio's local-mesh bring-up passes it; the e2e suite deliberately does not)."
 
 stack-down: ## stop the local stack and drop its volumes
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v

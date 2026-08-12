@@ -45,9 +45,11 @@ const ISOS = [
   { name: 'gentoo-rpi5-arm64-frontend-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-frontend-k8s-2026.0.iso' },
   { name: 'gentoo-x86-hugmesh-host-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-x86-hugmesh-host-2026.0.iso' },
 ];
-// Real-service brokering: the BFF mints Matrix (Synapse) + Mastodon tokens
+// Real-service brokering: the BFF mints Matrix (tuwunel) + Mastodon tokens
 // server-side so the UI never holds homeserver admin creds. Point at the real
-// Synapse/Mastodon; default to the integration stack ports.
+// tuwunel/Mastodon; default to the integration stack ports. The env NAME
+// SYNAPSE_URL mirrors the real Spring BFF property contract (broker.synapse-url)
+// — frozen even though the homeserver behind it is tuwunel.
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const MASTODON_URL = process.env.MASTODON_URL || 'http://localhost:8402';
 const SVC_PW = process.env.SVC_PASSWORD || 'hugmesh-svc-pw';
@@ -129,9 +131,12 @@ function usageFromMemory() {
   };
 }
 
-// ── Real-service token brokering (Synapse / Mastodon) ──────────────
+// ── Real-service token brokering (tuwunel / Mastodon) ──────────────
+// Standard CS-API UIAA: register (m.login.dummy under the stack's open
+// registration) with password-login fallback — works against any Matrix
+// homeserver; the compose stack runs tuwunel.
 const matrixUser = (handle) => (handle || 'user').split('@')[0].toLowerCase().replace(/[^a-z0-9._=\/-]/g, '');
-async function synapseToken(username) {
+async function matrixToken(username) {
   const reg = (auth) => fetch(`${SYNAPSE_URL}/_matrix/client/v3/register`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(auth ? { username, password: SVC_PW, auth } : { username, password: SVC_PW }) });
@@ -143,7 +148,7 @@ async function synapseToken(username) {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'm.login.password', identifier: { type: 'm.id.user', user: username }, password: SVC_PW }) });
   const lj = await lr.json();
-  if (!lj.access_token) throw new Error('synapse: ' + JSON.stringify(lj));
+  if (!lj.access_token) throw new Error('matrix: ' + JSON.stringify(lj));
   return { access_token: lj.access_token, user_id: lj.user_id };
 }
 async function mastodonToken(username) {
@@ -259,7 +264,7 @@ const server = http.createServer(async (req, res) => {
       if (!me.registrationComplete) return send(res, 403, { error: 'complete registration first' });
       const u = matrixUser(me.username);
       try {
-        if (p.endsWith('matrix')) { me.matrix = await synapseToken(u); return send(res, 200, { ok: true }); }
+        if (p.endsWith('matrix')) { me.matrix = await matrixToken(u); return send(res, 200, { ok: true }); }
         me.mastodon = await mastodonToken(u); return send(res, 200, { ok: true });
       } catch (e) { return send(res, 502, { error: String(e) }); }
     }
