@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "scenes": [
+    { "id": "vn_scene_bedroom", "displayName": "Bedroom", "file": "vn_scene_bedroom.svg", "tags": ["indoor", "cozy", "day"] },
+    { "id": "vn_scene_classroom", "displayName": "Classroom", "file": "vn_scene_classroom.svg", "tags": ["indoor", "school", "day"] },
+    { "id": "vn_scene_cafe", "displayName": "Café", "file": "vn_scene_cafe.svg", "tags": ["indoor", "cozy", "food"] },
+    { "id": "vn_scene_forest_park", "displayName": "Forest Park", "file": "vn_scene_forest_park.svg", "tags": ["outdoor", "nature", "day"] },
+    { "id": "vn_scene_beach_sunset", "displayName": "Beach Sunset", "file": "vn_scene_beach_sunset.svg", "tags": ["outdoor", "nature", "evening"] },
+    { "id": "vn_scene_night_city", "displayName": "Night City", "file": "vn_scene_night_city.svg", "tags": ["outdoor", "urban", "night"] },
+    { "id": "vn_scene_castle_hall", "displayName": "Castle Hall", "file": "vn_scene_castle_hall.svg", "tags": ["indoor", "fantasy"] },
+    { "id": "vn_scene_starship", "displayName": "Starship Bridge", "file": "vn_scene_starship.svg", "tags": ["indoor", "scifi", "space"] }
+  ],
+  "props": [
+    { "id": "vn_prop_table", "displayName": "Table", "file": "vn_prop_table.svg", "defaultScale": 1 },
+    { "id": "vn_prop_sofa", "displayName": "Sofa", "file": "vn_prop_sofa.svg", "defaultScale": 1.2 },
+    { "id": "vn_prop_plant", "displayName": "Potted Plant", "file": "vn_prop_plant.svg", "defaultScale": 0.8 },
+    { "id": "vn_prop_lamp", "displayName": "Floor Lamp", "file": "vn_prop_lamp.svg", "defaultScale": 1 },
+    { "id": "vn_prop_bookshelf", "displayName": "Bookshelf", "file": "vn_prop_bookshelf.svg", "defaultScale": 1.2 },
+    { "id": "vn_prop_mic_stand", "displayName": "Mic Stand", "file": "vn_prop_mic_stand.svg", "defaultScale": 0.9 },
+    { "id": "vn_prop_drink", "displayName": "Drink", "file": "vn_prop_drink.svg", "defaultScale": 0.35 },
+    { "id": "vn_prop_laptop", "displayName": "Laptop", "file": "vn_prop_laptop.svg", "defaultScale": 0.5 },
+    { "id": "vn_prop_moon_lamp", "displayName": "Moon Lamp", "file": "vn_prop_moon_lamp.svg", "defaultScale": 0.5 },
+    { "id": "vn_prop_banner", "displayName": "Party Banner", "file": "vn_prop_banner.svg", "defaultScale": 1.4 }
+  ]
+}

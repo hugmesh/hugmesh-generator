@@ -161,6 +161,20 @@ export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
     note: 'Matrix access (NOT domain-locked) — the federating CONTROL user: its events MUST reach the peer (positive control for spec 20).',
   },
   {
+    // Third plain-access Matrix holder: multi-party (3+) group-chat proofs
+    // (spec 31) need a creator plus TWO invitees, and the other ROLE_MATRIX
+    // holders are the SUBJECTS of their own proofs (domain-locked = the
+    // non-federation proof, external-client = the passthrough proof) — a
+    // roster that borrows them entangles two proofs. No federationProbe /
+    // federationControl: this persona plays no part in the federation matrix.
+    username: 'e2e-matrix-groupchat',
+    passwordEnv: 'E2E_MATRIX_GROUPCHAT_PASSWORD',
+    roles: ['ROLE_MATRIX', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    note: 'Matrix access (NOT domain-locked) — third plain-access holder so spec 31 has a full three-party group-chat roster.',
+  },
+  {
     username: 'e2e-mastodon',
     passwordEnv: 'E2E_MASTODON_PASSWORD',
     roles: ['ROLE_MASTODON', 'ROLE_USER'],

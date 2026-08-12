@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#4e342e"/>
+  <rect y="440" width="1600" height="20" fill="#3a2620"/>
+  <rect y="460" width="1600" height="160" fill="#5d4037"/>
+  <rect y="620" width="1600" height="280" fill="#6b4a33"/>
+  <rect y="620" width="1600" height="12" fill="#84603f"/>
+  <rect x="90" y="120" width="380" height="330" rx="10" fill="#33211a"/>
+  <rect x="110" y="140" width="160" height="290" fill="#b8dcf0"/>
+  <rect x="290" y="140" width="160" height="290" fill="#a5cde4"/>
+  <polygon points="110,430 450,430 560,900 20,900" fill="#ffe9b0" opacity=".08"/>
+  <rect x="1010" y="150" width="420" height="200" rx="10" fill="#26160f"/>
+  <rect x="1030" y="170" width="180" height="12" rx="6" fill="#e8d8b0" opacity=".7"/>
+  <rect x="1030" y="205" width="240" height="10" rx="5" fill="#e8d8b0" opacity=".45"/>
+  <rect x="1030" y="235" width="200" height="10" rx="5" fill="#e8d8b0" opacity=".45"/>
+  <rect x="1030" y="265" width="150" height="10" rx="5" fill="#ffd27f" opacity=".6"/>
+  <rect x="950" y="430" width="560" height="34" rx="8" fill="#d7b189"/>
+  <rect x="960" y="464" width="540" height="200" fill="#2f1e18"/>
+  <rect x="960" y="464" width="540" height="20" fill="#40291f"/>
+  <rect x="1010" y="520" width="90" height="70" rx="8" fill="#8c5a3a"/>
+  <rect x="1150" y="520" width="90" height="70" rx="8" fill="#8c5a3a"/>
+  <rect x="1290" y="520" width="90" height="70" rx="8" fill="#8c5a3a"/>
+  <rect x="618" y="0" width="6" height="180" fill="#26160f"/>
+  <polygon points="580,180 662,180 640,240 602,240" fill="#e0a04f"/>
+  <ellipse cx="621" cy="248" rx="40" ry="14" fill="#ffd27f" opacity=".5"/>
+  <rect x="838" y="0" width="6" height="140" fill="#26160f"/>
+  <polygon points="800,140 882,140 860,200 822,200" fill="#e0a04f"/>
+  <ellipse cx="841" cy="208" rx="40" ry="14" fill="#ffd27f" opacity=".5"/>
+  <ellipse cx="330" cy="608" rx="150" ry="18" fill="#33211a"/>
+  <rect x="200" y="600" width="260" height="18" rx="9" fill="#4a2f22"/>
+  <rect x="316" y="618" width="26" height="130" fill="#33211a"/>
+  <ellipse cx="330" cy="756" rx="70" ry="14" fill="#33211a"/>
+  <rect x="560" y="590" width="90" height="16" rx="8" fill="#33211a"/>
+  <rect x="594" y="606" width="18" height="120" fill="#2a1a13"/>
+  <rect x="540" y="530" width="18" height="90" rx="8" fill="#33211a"/>
+</svg>
