@@ -55,7 +55,7 @@
 #          render emit-scan's src/main/java + src/test carve-out is a FIRST-PARTY CI
 #          concern and MUST NOT apply to untrusted foreign source).
 #   [f]    FROZEN / DENYLIST — foreign code must not carry OUR frozen protocol
-#          identity (snapdragon.systems/* label-key namespace, X-Snapdragon-Local &
+#          identity (snapdragon.systems/* label-key namespace, X-HugMesh-Local &
 #          the other wire headers, the step-up subprotocol prefix); the declared
 #          mesh-id / manifest identity fields are screened via token-classifier.
 #

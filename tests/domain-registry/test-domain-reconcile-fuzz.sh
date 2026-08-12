@@ -21,7 +21,7 @@
 #   (a) sed/Handlebars-metachar + template-injection in a brand value
 #   (b) path-traversal in BRAND/domain/repo name (../, absolute, '.', symlink)
 #   (c) secret injected into a templated field (high-entropy + denylisted key)
-#   (d) protocol-namespace override (snapdragon.systems/*, X-Snapdragon-Local)
+#   (d) protocol-namespace override (snapdragon.systems/*, X-HugMesh-Local)
 #   (e) oversized / entries-loop DoS
 #   (f) YAML/newline splice into an auth-relevant default
 # Plus a LEGIT export POSITIVE CONTROL: it renders/scans clean, promotes, AND the
@@ -201,7 +201,7 @@ done
 echo
 
 # ── (d) protocol-namespace override ────────────────────────────────────────────
-echo "-- (d) protocol-namespace override (snapdragon.systems/*, X-Snapdragon-Local) --"
+echo "-- (d) protocol-namespace override (snapdragon.systems/*, X-HugMesh-Local) --"
 # d1: dotted/slashed brand/org/mesh -> validators reject on the reconcile path.
 new_case
 mkexport1 "${WORK}/d.json" 'snapdragon.systems/domain' acme.test 'snapdragon.systems/domain' 'tag:hugmesh.systems'
@@ -217,7 +217,7 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
       // header, subprotocol prefix. (The tag:hugmesh.systems mesh form is rejected
       // by the DNS/mesh VALIDATOR on the reconcile path — asserted in d1 above — not
       // by isFrozen, whose label-ns match is the slashed 'snapdragon.systems/' key.)
-      const frozen = ["snapdragon.systems/domain","X-Snapdragon-Local","snapdragon.device-terminal.stepup.x"];
+      const frozen = ["snapdragon.systems/domain","X-HugMesh-Local","snapdragon.device-terminal.stepup.x"];
       const denied = ["CASDOOR_ADMIN_CLIENT_SECRET","ROOT_PASS","APP_REGISTRY_SIGNING_KEY"];
       for (const t of frozen) if (!c.isFrozen(t)) { console.error("NOT frozen:", t); process.exit(1); }
       for (const t of denied) if (!c.isDenied(t)) { console.error("NOT denied:", t); process.exit(1); }

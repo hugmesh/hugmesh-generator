@@ -627,7 +627,7 @@ _require_match() {  # <human-name> <value> <regex>
 }
 # DNS label (slug): lowercase alnum, internal hyphens, 1..63 chars.
 _RE_SLUG='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
-# Org slug: like a slug but allow upper-case (e.g. Snapdragon-Systems).
+# Org slug: like a slug but allow upper-case (e.g. HugMesh-Systems).
 _RE_ORG='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
 # DNS name: dot-joined labels (case-insensitive), no trailing dot.
 _RE_DNS='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'

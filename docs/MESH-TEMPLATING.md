@@ -88,7 +88,7 @@ rule) in both the sed script and the Handlebars wrapper.
   references a denylisted token aborts the whole render, and only allowlisted
   tokens are placed in the render context.
 * **frozen protocol constants** — `snapdragon.systems/*` label KEYS and the
-  `X-Snapdragon-Local` wire header are **out-of-scope-for-tokenization**: they are
+  `X-HugMesh-Local` wire header are **out-of-scope-for-tokenization**: they are
   protocol/wire identity (not tenant brand) and must stay literal in every emitted
   repo. A blind reverse-substitution that rebrands the literal `hugmesh` would
   corrupt these — do not tokenize them.
@@ -184,7 +184,7 @@ proves the **overlay-primary, skeleton-fallback** model on a real app repo:
   | `.gitlab-ci.yml.hbs` | `{{GENERATOR_ORG_GROUP}}` (`<org-slug>/hugmesh-generator`) | the CI `include:` project org/group |
 
   Deliberately **left untemplated** (grounding): `nginx.conf` (brand-neutral),
-  `docker-entrypoint.d/*` (runtime env-injected), the `X-Snapdragon-Local` wire
+  `docker-entrypoint.d/*` (runtime env-injected), the `X-HugMesh-Local` wire
   header (frozen protocol constant), the `snap-login-root` element, and every
   `snapdragon` in `src/**` / comments / groupId — that is **upstream code
   identity**, not tenant brand. Tier-1 is deliberately narrow.
@@ -332,7 +332,7 @@ export at the same or a higher generation.
 ## Every export field is hostile
 `entry_fields_ok()` (reconcile) + the generator's own DNS-label/DNS-name/URL/
 single-line/length guards + the token classifier (denylist + frozen
-`snapdragon.systems/*` / `X-Snapdragon-Local` constants) validate every field.
+`snapdragon.systems/*` / `X-HugMesh-Local` constants) validate every field.
 `BRAND_TITLE` now also **rejects braces** (`{` `}`) to kill second-order
 `{{TOKEN}}` template re-expansion. A DoS cap (`DR_MAX_ENTRIES`, default 256)
 refuses a huge `entries[]` before the render loop can fork.
@@ -426,7 +426,7 @@ order (each fail-closed; a missing tool is a REJECT, never a skip):
 8. **[e] secret scan** — `secret-scan.sh` over the ENTIRE tree with NO excludes
    (the render emit-scan's first-party carve-outs do NOT apply to foreign code);
 9. **[f] frozen/denylist** — foreign code must not carry OUR frozen protocol
-   identity (`snapdragon.systems/*` label keys, the `X-Snapdragon-Local` &
+   identity (`snapdragon.systems/*` label keys, the `X-HugMesh-Local` &
    friends wire headers, the step-up subprotocol prefix); declared origin fields
    are screened through the same token classifier the render path uses. Only the
    ROOT-level attestation envelope is exempt from the tree grep — a same-named
