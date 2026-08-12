@@ -229,9 +229,9 @@ run_gate frozen "$B" "$MESH" "$PIN"; assert_reject "(frozen snapdragon.systems/*
 
 # ── (8b) FROZEN WIRE HEADER injected in foreign code ─────────────────────────────
 B="${WORK}/header"; mkclean_base "$B"
-printf 'const h = { "X-Snapdragon-Local": "1" };\n' > "${B}/src/wire.ts"
+printf 'const h = { "X-HugMesh-Local": "1" };\n' > "${B}/src/wire.ts"
 PIN="$(digest_of header)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
-run_gate header "$B" "$MESH" "$PIN"; assert_reject "(frozen X-Snapdragon-Local wire header in foreign code)"
+run_gate header "$B" "$MESH" "$PIN"; assert_reject "(frozen X-HugMesh-Local wire header in foreign code)"
 
 # ── (8c) NUL-BYTE-CLOAKED FROZEN CONSTANT (mustFix: frozen screen must FORCE-TEXT) ─
 #         A frozen constant hidden in a file that also carries a NUL byte. The old

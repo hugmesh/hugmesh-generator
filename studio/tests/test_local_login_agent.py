@@ -3,7 +3,7 @@
 These drive a REAL agent over a real loopback socket (bound to 127.0.0.1:0 so the
 suite never needs the fixed prod port free) with hand-crafted http.client requests,
 exercising the security contract: loopback bind, exact-match Origin allow-list, the
-X-Snapdragon-Local preflight header, the DNS-rebinding Host check, never-'*' CORS,
+X-HugMesh-Local preflight header, the DNS-rebinding Host check, never-'*' CORS,
 and the single-use / short-TTL credential handoff. No Qt, no network off-box.
 """
 import http.client
@@ -84,7 +84,7 @@ def _request(port, method, path, *, origin=GOOD_ORIGIN, local_header=True,
     if origin is not None:
         headers["Origin"] = origin
     if local_header:
-        headers["X-Snapdragon-Local"] = "1"
+        headers["X-HugMesh-Local"] = "1"
     if body is not None:
         headers["Content-Type"] = "application/json"
     if extra_headers:
@@ -207,7 +207,7 @@ def test_preflight_echoes_exact_origin_never_wildcard(server):
     assert acao == GOOD_ORIGIN
     assert acao != "*"
     assert resp.getheader("Access-Control-Allow-Methods") == "GET, POST"
-    assert resp.getheader("Access-Control-Allow-Headers") == "X-Snapdragon-Local"
+    assert resp.getheader("Access-Control-Allow-Headers") == "X-HugMesh-Local"
     assert resp.getheader("Access-Control-Max-Age")
 
 

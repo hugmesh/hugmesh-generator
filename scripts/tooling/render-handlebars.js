@@ -100,7 +100,7 @@ function referencedTokens(src) {
 // Extract the RAW body of every mustache — i.e. whatever sits between {{ and }},
 // NOT just valid {{identifier}} names. This is the reachability fix for the
 // Phase-3 red-team gate: the frozen protocol constants (snapdragon.systems/…,
-// X-Snapdragon-Local, snapdragon.device-terminal.stepup.) and some denylisted
+// X-HugMesh-Local, snapdragon.device-terminal.stepup.) and some denylisted
 // keys are NOT valid Handlebars identifiers (they carry ./ / -), so TOKEN_RE
 // above never captures them. A template that literally wrote
 // `{{snapdragon.systems/domain}}` would therefore slip past the identifier-only

@@ -36,7 +36,7 @@ SECURITY MODEL  (why a page on the public internet cannot use this agent)
   manifest, PLUS the localhost dev origins only when dev mode is explicitly opted in —
   see below). No wildcards, no suffix matching. A missing or unlisted Origin => ``403``
   and the request STOPS before any role metadata or secret is touched.
-* **Custom-header preflight requirement.** Both routes require ``X-Snapdragon-Local:
+* **Custom-header preflight requirement.** Both routes require ``X-HugMesh-Local:
   1``. That header is not CORS-safelisted, so a browser MUST send a CORS preflight
   (``OPTIONS``) first — a "simple request" (form POST, ``<img>``, ``sendBeacon``) can
   never reach a route. A request missing the header => ``403``.
@@ -47,7 +47,7 @@ SECURITY MODEL  (why a page on the public internet cannot use this agent)
   most once per ``GET /v1/roles`` probe (a fresh probe re-arms it) and stamps
   ``expiresAt = now + 30s`` so the browser submits immediately and never persists it.
 
-ROUTES  (both require ``X-Snapdragon-Local: 1``)
+ROUTES  (both require ``X-HugMesh-Local: 1``)
   * ``GET  /v1/roles``   -> metadata only, NEVER secrets.
   * ``POST /v1/handoff`` -> single-use, short-TTL credential handoff.
 
@@ -104,7 +104,7 @@ BIND_HOST = "127.0.0.1"          # loopback ONLY — never 0.0.0.0 / a LAN inter
 PORT = 27621                     # FIXED (see module docstring for the justification)
 AGENT_NAME = "hugmesh-local-login"
 PROTOCOL_VERSION = 1
-LOCAL_HEADER = "X-Snapdragon-Local"    # required on both routes; forces a CORS preflight
+LOCAL_HEADER = "X-HugMesh-Local"    # required on both routes; forces a CORS preflight
 HANDOFF_TTL_SECONDS = 30               # expiresAt = now + 30s
 CORS_MAX_AGE = 600                     # Access-Control-Max-Age for the preflight
 MAX_BODY = 64 * 1024                   # cap the POST body (roleId only — kept tiny)
@@ -474,7 +474,7 @@ class _Handler(BaseHTTPRequestHandler):
         ok, origin = self._guard_common()
         if not ok:
             return
-        # Preflight: the browser doesn't send X-Snapdragon-Local here (it advertises it
+        # Preflight: the browser doesn't send X-HugMesh-Local here (it advertises it
         # in Access-Control-Request-Headers); we just answer with the allowed surface.
         self.send_response(204)
         self._cors(origin)
@@ -524,7 +524,7 @@ class _Handler(BaseHTTPRequestHandler):
 class _LoopbackAuthServer(ThreadingHTTPServer):
     """ThreadingHTTPServer that ALSO enforces an OS-level peer-uid check (FINDING 1).
 
-    A loopback bind plus the forgeable Origin / X-Snapdragon-Local / Host headers is not
+    A loopback bind plus the forgeable Origin / X-HugMesh-Local / Host headers is not
     enough on a MULTI-USER host: any local user can connect to 127.0.0.1:27621 and forge
     all three request-controlled strings. So on each accepted connection we verify the
     connecting socket's peer uid equals THIS process's uid, and drop the connection
