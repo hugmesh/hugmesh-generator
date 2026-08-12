@@ -11,7 +11,7 @@ The doc set for the image/infra layer. State key used throughout:
 - [`SERVE-YOUR-MESH.md`](SERVE-YOUR-MESH.md) — the end-to-end path from nothing to a reachable login page: generate a whole platform, serve it **locally**, then optionally expose it **publicly** over a Tor `.onion`, a Dynamic-DNS host, or a tunnel.
 - [`NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) — launching the Studio wizard + ncurses menu on NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora: the additive Nix flake (`flake.nix`/`shell.nix`) + the portable POSIX launcher (`scripts/studio-launch.sh`) for hosts without `python3`/`make`/FHS (✅).
 - [`LOCAL-TESTING.md`](LOCAL-TESTING.md) — LAN `.test` fleet testing.
-- [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream Synapse/Mastodon for dev only).
+- [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream tuwunel/Mastodon for dev only).
 - [`DEVOPS.md`](DEVOPS.md) — GitLab CI, runner, binhost, build distribution.
 - [`BUILD-MATRIX.md`](BUILD-MATRIX.md) — the canonical platform×role×env build matrix, the four build channels (CLI / make / ncurses menu / Studio GUI), the **all-options-in-all-menus** rule + the `make matrix-check` harness (✅).
 - [`IMAGE-INVENTORY.md`](IMAGE-INVENTORY.md) — generated full cross-product of every advertised image × every build channel (125 distinct images, 62 with a channel gap); regenerate with `scripts/emit-image-inventory.py`, gated by `make inventory-check` — do not hand-edit.

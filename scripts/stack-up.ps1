@@ -15,7 +15,7 @@
     1. clone/update all repos into .stack-src (in a git:alpine container, or on
        the host if -UseHostGit and git is installed);
     2. docker compose build  (every first-party service from its repo);
-    3. docker compose up -d   (core platform; add -Social for Synapse/Mastodon).
+    3. docker compose up -d   (core platform; add -Social for tuwunel/Mastodon).
 
 .PARAMETER Env
   test (default) | prod. test = local placeholder issuer/creds (Casdoor at
@@ -30,7 +30,7 @@
   internal mirror on the VPN, e.g. https://gitlab.hugmesh.systems/hugmesh.
 
 .PARAMETER Social
-  Also bring up the heavy Synapse/Mastodon social tier (the `social` profile).
+  Also bring up the heavy tuwunel/Mastodon social tier (the `social` profile).
 
 .PARAMETER Tor
   Also publish the fe-gateway as a Tor v3 .onion (the `tor` profile) — INBOUND

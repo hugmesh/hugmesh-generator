@@ -1,6 +1,6 @@
 # be-gateway routes (compose). Translated from specs/cluster/apps/20-gateway-be.yaml
 # to compose service DNS. The mastodon/* + matrix routes target the OPT-IN social
-# tier (mastodon-web:3000 / synapse:8008); they only resolve when the stack is
+# tier (mastodon-web:3000 / tuwunel:8008); they only resolve when the stack is
 # brought up with `--profile social` (otherwise those routes simply 503 — the rest
 # of the be-gateway works). federation-api MUST precede the /api/** catch-all.
 spring:
@@ -22,7 +22,7 @@ spring:
                 - Path=/api/v1/**
             # --- Matrix (opt-in social tier) ---
             - id: matrix-api
-              uri: http://synapse:8008
+              uri: http://tuwunel:8008
               predicates:
                 - Path=/_matrix/**
             # --- hugmesh-federation-api (MORE specific than /api/** — declared first) ---

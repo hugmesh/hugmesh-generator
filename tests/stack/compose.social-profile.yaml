@@ -1,5 +1,5 @@
 # compose.social-profile.yaml — merge overlay that puts the heavy third-party
-# SOCIAL tier (Synapse/Matrix + the full Mastodon web/sidekiq/streaming + their
+# SOCIAL tier (tuwunel/Matrix + the full Mastodon web/sidekiq/streaming + their
 # Postgres/Redis) behind the `social` compose profile, so the core platform comes
 # up WITHOUT them. compose.local.yaml `include:`s compose.real.yaml (the service
 # definitions) AND this file (the profile tags); compose merges the two by service
@@ -13,7 +13,7 @@
 name: hugmesh-local
 
 services:
-  synapse:
+  tuwunel:
     profiles: ["social"]
   mastodon-db:
     profiles: ["social"]

@@ -10,7 +10,7 @@
 #   * one Discord allowlist entry:    dragoneer
 #   * Matrix localpart = email local-part  (alice@gmail.com -> @alice:<server>)
 #   * one shared service password (SVC_PASSWORD) the BFF uses to mint
-#     Synapse/Mastodon service tokens.
+#     tuwunel/Mastodon service tokens.
 #
 # Two delivery modes (use either or both):
 #
@@ -158,7 +158,7 @@ Identity options (defaults mirror tests/e2e/specs):
                     Default: ${GMAIL_USERS_DEFAULT}
   --discord "A B"   Space/comma-separated Discord allowlist.
                     Default: ${DISCORD_USERS_DEFAULT}
-  --svc-password P  Shared service password (Synapse/Mastodon). Default: (env SVC_PASSWORD)
+  --svc-password P  Shared service password (tuwunel/Mastodon). Default: (env SVC_PASSWORD)
   --domain DOMAIN   Cluster domain (matrix server_name). Default: ${CLUSTER_DOMAIN}
 
 KEYS (--emit) options:
