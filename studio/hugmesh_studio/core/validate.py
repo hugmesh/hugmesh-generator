@@ -24,7 +24,7 @@ import re
 # A DNS label: brand slugs and per-label hostnames. Lowercase (BRAND is used as a
 # hostname slug, e.g. "${BRAND}-pki", so it must be a legal DNS label).
 _DNS_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
-# ORG is a display/cert org name (default "Snapdragon-Systems"): a DNS label but
+# ORG is a display/cert org name (default "hugmesh-net"): a DNS label but
 # case-insensitive (the generator lowercases it for paths via org_lc).
 _DNS_LABEL_CI = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 # A DNS name: one or more labels joined by dots. NO comma (the generator joins

@@ -204,7 +204,7 @@ CLUSTER_DOMAIN="hugmesh.systems"
 SUPERDOMAIN=""
 BRAND="hugmesh"
 BRAND_TITLE="HugMesh Systems"
-ORG="Snapdragon-Systems"
+ORG="hugmesh-net"
 # ENV (test|prod) selector — kept for parity with the cluster builders (it shapes
 # the same branding/creds knobs), BUT this Frite image is a LEAN DESKTOP CLIENT,
 # NOT a K8s cluster node: it bakes NO specs/cluster GitOps tree (see the
@@ -619,7 +619,7 @@ fi
 # sed/shell metacharacters, a quote, or a newline can never reach a render sink or
 # a sourced KEY=VALUE file. Escaping at the render sink (_sed_rep_escape) is
 # defense-in-depth on top of this. Each regex below ACCEPTS every legitimate
-# default (brand=hugmesh, org=Snapdragon-Systems, domain=hugmesh.systems,
+# default (brand=hugmesh, org=hugmesh-net, domain=hugmesh.systems,
 # user=frite, cpu=cortex-a53, target=aarch64-unknown-linux-gnu, title
 # "HugMesh Systems"); HOSTNAME is derived from the validated brand above.
 _require_match() {  # <human-name> <value> <regex>
@@ -850,7 +850,7 @@ rebrand_sysroot() {
             -e "s|^hugmesh\.systems/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
-            -e "s|Snapdragon-Systems|${_org}|g" \
+            -e "s|hugmesh-net|${_org}|g" \
             -e "s|hugmesh\.systems|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${_brand}-|g" \

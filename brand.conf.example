@@ -13,7 +13,7 @@
 # ── Branding ────────────────────────────────────────────────────────
 BRAND="hugmesh"                  # short slug used in names (namespaces, gateways, hosts)
 BRAND_TITLE="HugMesh Systems"    # human-readable title shown in UIs/messages
-ORG="Snapdragon-Systems"            # GitHub org / container-image namespace
+ORG="hugmesh-net"            # GitHub org / container-image namespace
 CLUSTER_DOMAIN="hugmesh.systems" # base domain (id./matrix./mastodon./api. derived)
 RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | public (internet-facing)
 

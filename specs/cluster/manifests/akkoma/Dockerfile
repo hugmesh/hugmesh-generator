@@ -72,4 +72,4 @@ COPY --from=build /opt/akkoma/_build /opt/akkoma/_build
 COPY --from=build /opt/akkoma/lib/pleroma/web/activity_pub/mrf/force_local_for_users_policy.ex \
                   /opt/akkoma/lib/pleroma/web/activity_pub/mrf/force_local_for_users_policy.ex
 # In-app AGPL source offer (a /static or env the instance surfaces to users).
-ENV AKKOMA_SOURCE_URL="https://github.com/Snapdragon-Systems/hugmesh-generator/tree/main/specs/cluster/manifests/akkoma"
+ENV AKKOMA_SOURCE_URL="https://github.com/hugmesh-net/hugmesh-generator/tree/main/specs/cluster/manifests/akkoma"

@@ -37,7 +37,7 @@ FROM hugmesh-builder:latest
 
 LABEL org.opencontainers.image.title="hugmesh-image-gen" \
       org.opencontainers.image.description="admin-bff-api image-build worker: runs one on-request device image build and reports the terminal result back to the BFF ingest endpoint." \
-      org.opencontainers.image.source="https://github.com/Snapdragon-Systems/hugmesh-generator"
+      org.opencontainers.image.source="https://github.com/hugmesh-net/hugmesh-generator"
 
 # net-misc/openssh isn't part of the Dockerfile.build toolchain (that image is
 # scoped to the build/image/test toolchain the local dev flow needs); this

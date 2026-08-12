@@ -3,7 +3,7 @@
 # hugmesh.systems host: it serves a remoteEntry.json the host's loadRemoteModule
 # consumes, mounted at /mod (mod role). Talks to mod-bff-api via the same-origin
 # /bff/mod/** fe-gateway route.
-# Repo: github.com/Snapdragon-Systems/hugmesh-mod-ui
+# Repo: github.com/hugmesh-net/hugmesh-mod-ui
 ---
 apiVersion: apps/v1
 kind: Deployment

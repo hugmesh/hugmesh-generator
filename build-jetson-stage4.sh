@@ -195,7 +195,7 @@ CLUSTER_DOMAIN="hugmesh.systems"
 SUPERDOMAIN=""
 BRAND="hugmesh"
 BRAND_TITLE="HugMesh Systems"
-ORG="Snapdragon-Systems"
+ORG="hugmesh-net"
 # ENV (test|prod) selector — same semantics as the cluster builders: it shapes
 # branding/creds and gates the baked cluster tree's env apps posture.
 ENV="test"
@@ -943,7 +943,7 @@ rebrand_sysroot() {
             -e "s|^hugmesh\.systems/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
-            -e "s|Snapdragon-Systems|${_org}|g" \
+            -e "s|hugmesh-net|${_org}|g" \
             -e "s|hugmesh\.systems|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${_brand}-|g" \

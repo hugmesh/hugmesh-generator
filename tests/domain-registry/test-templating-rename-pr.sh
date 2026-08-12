@@ -235,7 +235,7 @@ HugMesh cluster — fabricated tiny base for the archetype test.
 EOF
   cat > "${d}/.gitlab-ci.yml" <<'EOF'
 include:
-  - project: Snapdragon-Systems/hugmesh-generator
+  - project: hugmesh-net/hugmesh-generator
     file: ci/pentest-stage.yml
 stages: [verify]
 EOF

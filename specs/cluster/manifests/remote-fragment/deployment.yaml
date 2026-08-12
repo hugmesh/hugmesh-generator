@@ -18,7 +18,7 @@
 # Both runtime containers + the init share the `bundles` emptyDir at the nginx
 # root, so the sidecar writes the bytes nginx reads.
 #
-# Repo: github.com/Snapdragon-Systems/hugmesh-remote-fragment (the sync image;
+# Repo: github.com/hugmesh-net/hugmesh-remote-fragment (the sync image;
 # the nginx image is the public nginxinc/nginx-unprivileged, NOT rewritten).
 apiVersion: apps/v1
 kind: Deployment

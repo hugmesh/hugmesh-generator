@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gitlab-mirror-org.sh — mirror every Snapdragon-Systems GitHub repo into the
+# gitlab-mirror-org.sh — mirror every hugmesh-net GitHub repo into the
 # internal GitLab (devops namespace) as a PULL MIRROR, so CI can build all ISOs
 # and images from a complete in-VPN copy ("copy everything from GitHub").
 #
@@ -11,7 +11,7 @@
 # are never committed, so nothing secret is exposed via the mirror.
 set -euo pipefail
 
-ORG="${ORG:-Snapdragon-Systems}"
+ORG="${ORG:-hugmesh-net}"
 GITLAB_URL="${GITLAB_URL:-https://gitlab.hugmesh.systems}"
 GITLAB_GROUP="${GITLAB_GROUP:-hugmesh}"
 : "${GITLAB_TOKEN:?set GITLAB_TOKEN (GitLab PAT, api scope)}"

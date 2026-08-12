@@ -13,7 +13,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
+    repoURL: https://github.com/hugmesh-net/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/signup-gate
   destination:

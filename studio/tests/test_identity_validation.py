@@ -29,9 +29,9 @@ from hugmesh_studio.core.validate import (
 # ---- ImageConfig.to_cli_args() validates identity fields -------------------
 
 def test_clean_defaults_pass():
-    """The committed defaults (brand snap-class, org Snapdragon-Systems, user, domain)
+    """The committed defaults (brand snap-class, org hugmesh-net, user, domain)
     must still produce a CLI arg list without raising."""
-    cfg = ImageConfig(brand="hugmesh", org="Snapdragon-Systems",
+    cfg = ImageConfig(brand="hugmesh", org="hugmesh-net",
                       brand_title="HugMesh Systems",
                       cluster_domain="hugmesh.systems", local_user="snap")
     args = cfg.to_cli_args()
@@ -244,7 +244,7 @@ def test_keyzip_domain_conf_mixed(tmp_path):
     warnings: list[str] = []
     keyzip._apply_domain_conf(path, cfg, warnings)
     assert cfg.brand == "acme"
-    assert cfg.org == "Snapdragon-Systems"     # bad ORG rejected, default preserved
+    assert cfg.org == "hugmesh-net"     # bad ORG rejected, default preserved
     assert any("ORG" in w for w in warnings)
 
 

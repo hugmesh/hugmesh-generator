@@ -26,7 +26,7 @@
   / $env:GITHUB_TOKEN. On the VPN with public mirrors you may not need it.
 
 .PARAMETER GitBase
-  Clone base URL. Default https://github.com/Snapdragon-Systems. Point at the
+  Clone base URL. Default https://github.com/hugmesh-net. Point at the
   internal mirror on the VPN, e.g. https://gitlab.hugmesh.systems/hugmesh.
 
 .PARAMETER Social
@@ -54,7 +54,7 @@
 param(
   [ValidateSet('test','prod')] [string]$Env = 'test',
   [string]$GhToken = $env:GH_TOKEN,
-  [string]$GitBase = 'https://github.com/Snapdragon-Systems',
+  [string]$GitBase = 'https://github.com/hugmesh-net',
   [string]$GitRef = 'main',
   [string]$CasdoorIssuer = '',
   [int]$PublicHostPort = 8088,
