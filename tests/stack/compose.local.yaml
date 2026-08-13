@@ -500,6 +500,23 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
       SPRING_APPLICATION_NAME: hugmesh-fe-gateway
+      # Cookie -> custody-JWT exchange (BffJwtExchangeWebFilter). WITHOUT this the
+      # gateway's cookie bridge forwards the raw OPAQUE `bff_...` session value as
+      # the Bearer. The three original BFFs never noticed — admin-bff terminates
+      # the cookie itself and mod-bff ships its own introspection filter
+      # (BffCookieAuthenticationWebFilter) — but forum/wiki/tube/owncast-bff are
+      # PURE JWT resource servers: they received `Bearer bff_...`, which is not a
+      # JWT, and answered a bare 401 (`WWW-Authenticate: Bearer`, no error=) with
+      # nothing in any log. Every /bff/{forum,wiki,tube,owncast}/** call failed
+      # for every user while their sibling surfaces worked, which reads as a
+      # role/gateway bug rather than a dark feature flag.
+      # Fail-safe by design: if the exchange errors, the bearer flows through
+      # unswapped and 401s exactly as before. INTERNAL_TOKEN stays blank in dev
+      # (admin-bff's InternalTokenWebFilter is non-enforcing when blank).
+      HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED: "true"
+      # The default (http://admin-bff:8080) is the CLUSTER service name, which
+      # does not resolve on compose.
+      HUGMESH_GATEWAY_BFF_EXCHANGE_ADMIN_BFF_URI: "http://hugmesh-admin-bff-api:8080"
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
