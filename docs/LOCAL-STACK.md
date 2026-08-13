@@ -265,16 +265,19 @@ is unaffected:
 
 | Knob | Service | Alternative to | Port |
 |---|---|---|---|
-| `PHPBB=1` | phpBB 3.3.15 | the first-party `hugmesh-forum-ui` + `hugmesh-forum-bff-api` | 8081, **and `/social/phpbb/` at the front door** |
+| `PHPBB=1` | phpBB 3.3 + the `hugmesh/forumapi` headless extension | the BACKEND behind `hugmesh-forum-ui` + `hugmesh-forum-bff-api` | 8081 (API only) |
 | `AKKOMA=1` | Akkoma v3.20.0 | Mastodon (Akkoma is a Pleroma fork with the same ActivityPub + Mastodon-client API surface) | 4001 |
 
-phpBB is also mounted on the fe-gateway at **`/social/phpbb/`**, a sibling of the
-first-party `/social/forum/`, so the two are comparable at the same front door.
-It is auth-gated identically (all three of `/social/forum/`, `/social/phpbb/`
-and `/social/mastodon/` return 401 unauthenticated). Note its route has **no**
-`StripPrefix`, unlike every other route in that file: phpBB is installed with
-`script_path=/social/phpbb` and builds its absolute URLs from it, so the
-upstream must receive the full path.
+phpBB is deliberately **not** browsable, at the front door or anywhere else.
+The image (built from `hugmesh-forum-api`) locks down phpBB's native UI and ACP
+— Apache answers 403 on the docroot by design — and serves only the headless
+extension API under `/app.php/api/v1/hugmesh/**`. The single browser path to
+phpBB content is the federated forum remote: `/social/forum/` →
+`/bff/forum/**` → `hugmesh-forum-bff-api` → the extension, exactly the shape
+the route-access schema documents ("the SINGLE browser->phpBB path"). An
+earlier revision of this stack ran a vanilla phpBB with a browsable
+`/social/phpbb/` mount; both were removed when the real image landed — a
+direct mount can only ever render Apache's 403 and reads as a permissions bug.
 
 Akkoma is reachable on its published port only; it is not wired into the
 gateway, because unlike Mastodon it has no platform OAuth/BFF integration to
