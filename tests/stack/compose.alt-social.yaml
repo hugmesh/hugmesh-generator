@@ -1,0 +1,130 @@
+# compose.alt-social.yaml — ALTERNATIVE third-party social backends for the
+# local test stack, each behind its OWN compose profile so the core platform (and
+# even `SOCIAL=1`) comes up without them:
+#
+#   phpBB   — an alternative FORUM to the first-party hugmesh-forum-ui +
+#             hugmesh-forum-bff-api pair.        `make stack-up PHPBB=1`
+#   Akkoma  — an alternative FEDIVERSE server to Mastodon (Akkoma is a Pleroma
+#             fork, same ActivityPub/Mastodon-client API surface).
+#                                                `make stack-up AKKOMA=1`
+#
+# Both are DEFAULT-OFF, following the tube/owncast precedent: optional services
+# that must never slow down or destabilise the default bring-up. They compose
+# freely with SOCIAL=1 (`make stack-up SOCIAL=1 AKKOMA=1` runs Mastodon AND
+# Akkoma side by side, which is the point — the test stack can then prove the
+# federation surface against two different server implementations).
+#
+# Each gets its OWN Postgres rather than sharing mastodon-db: Akkoma requires
+# database superuser-level extensions (citext/pg_trgm/uuid-ossp) and phpBB owns
+# its schema outright, so sharing would couple two independent teardowns.
+#
+# ── UPSTREAM PACKAGING REALITY (checked 2026-08-12) ──
+# Neither project publishes a maintained first-party image, unlike
+# mastodon/tuwunel/postgres which this stack pins directly:
+#   phpBB  — no official image anywhere; github.com/phpbb/docker is stale
+#            test scaffolding (PHP 5.4-7.0) and bitnami/phpbb 404s. So we build
+#            a thin image from the OFFICIAL release zip, pinned by sha256
+#            (./phpbb/Dockerfile).
+#   Akkoma — upstream ships no prebuilt image at all; its own docker-compose
+#            builds from source via docker-resources/build.sh. A from-source
+#            Elixir build would add many minutes to a DEFAULT-OFF option, so we
+#            use the actively-maintained community mirror below, PINNED BY
+#            DIGEST. That is an UNOFFICIAL image and is called out as such in
+#            docs/LOCAL-STACK.md — acceptable for a local test lane, NOT a
+#            pattern to copy into specs/cluster/ for a real deployment.
+name: hugmesh-local
+
+services:
+  # ── phpBB (profile: phpbb) ────────────────────────────────────────────────
+  phpbb-db:
+    image: postgres:16-alpine
+    profiles: ["phpbb"]
+    environment:
+      POSTGRES_DB: phpbb
+      POSTGRES_USER: phpbb
+      POSTGRES_PASSWORD: phpbb
+    volumes: [phpbb-pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phpbb"]
+      interval: 5s
+      retries: 20
+
+  phpbb:
+    build:
+      context: ./phpbb
+    profiles: ["phpbb"]
+    environment:
+      PHPBB_DB_HOST: phpbb-db
+      PHPBB_DB_PORT: "5432"
+      PHPBB_DB_NAME: phpbb
+      PHPBB_DB_USER: phpbb
+      PHPBB_DB_PASSWORD: phpbb
+      # DEV PLACEHOLDER credentials, consistent with the rest of this file.
+      PHPBB_ADMIN_USER: admin
+      PHPBB_ADMIN_PASSWORD: adminadmin
+      PHPBB_ADMIN_EMAIL: admin@hugmesh.local
+      # Must match the fe-gateway route below — phpBB bakes its base path into
+      # generated URLs at install time.
+      PHPBB_SCRIPT_PATH: /social/phpbb
+      PHPBB_SERVER_NAME: localhost
+      PHPBB_SERVER_PORT: "${PUBLIC_HOST_PORT:-8088}"
+    depends_on:
+      phpbb-db: { condition: service_healthy }
+    # Published so the option is reachable directly while the gateway route is
+    # being wired, mirroring mastodon-web's 3000:3000.
+    ports: ["8081:80"]
+
+  # ── Akkoma (profile: akkoma) ──────────────────────────────────────────────
+  akkoma-db:
+    image: postgres:16-alpine
+    profiles: ["akkoma"]
+    environment:
+      POSTGRES_DB: akkoma
+      POSTGRES_USER: akkoma
+      POSTGRES_PASSWORD: akkoma
+    volumes: [akkoma-pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akkoma"]
+      interval: 5s
+      retries: 20
+
+  akkoma:
+    # UNOFFICIAL community mirror of AkkomaGang/akkoma (upstream publishes no
+    # image — see the header). Pinned by DIGEST, not just tag, so the content is
+    # immutable even if the tag is force-pushed. v3.20.0.
+    image: teslamint/akkoma:v3.20.0@sha256:3b0929d8553bc5f98619f632b4840c09642a863ec16061bd5def6e77518df78c
+    profiles: ["akkoma"]
+    environment:
+      DB_HOST: akkoma-db
+      DB_PORT: "5432"
+      DB_NAME: akkoma
+      DB_USER: akkoma
+      DB_PASS: akkoma
+      # Akkoma derives every federated URL from these; they must match the host
+      # the instance is reached on or ActivityPub ids are generated wrong.
+      INSTANCE_NAME: "HugMesh Test (Akkoma)"
+      DOMAIN: "localhost"
+      ADMIN_EMAIL: admin@hugmesh.local
+      NOTIFY_EMAIL: admin@hugmesh.local
+    depends_on:
+      akkoma-db: { condition: service_healthy }
+    volumes:
+      # ONE volume at /var/lib/pleroma (the image's data root — it is a Pleroma
+      # fork and kept the pleroma paths): it holds uploads/, static/ AND the
+      # secret.exs the image GENERATES on first boot (secret_key_base, signing
+      # salt, VAPID keypair). Without persistence those are regenerated every
+      # start, which invalidates existing sessions and web-push subscriptions.
+      - akkoma-data:/var/lib/pleroma
+      # Imported last by the baked /etc/pleroma/config.exs, so it overrides it.
+      # Supplies the upload base_url the image omits — the container exits 1 on
+      # boot without it. Read-only: the container must never rewrite its own
+      # committed config.
+      - ./akkoma/config.exs:/var/lib/pleroma/config.exs:ro
+    # The image entrypoint waits for postgres and runs `pleroma_ctl migrate`
+    # itself, so no init sidecar is needed (unlike mastodon-init).
+    ports: ["4001:4000"]
+
+volumes:
+  phpbb-pg:
+  akkoma-pg:
+  akkoma-data:

@@ -132,14 +132,83 @@ migrate_legacy_dir() { # canonical name
   git -C "${STACK_SRC}/${new}" remote set-url origin "${GIT_BASE}/${new}.git" 2>/dev/null || true
 }
 
-ok=0 fail=0
+# Fetch, falling back to the gh-CLI credential helper.
+#
+# WHY THE FALLBACK: an ambient FINE-GRAINED `GH_TOKEN` in the environment takes
+# precedence over the gh keyring credential and 403s ("Write access to
+# repository not granted") on this org — on FETCH, not just push, because git
+# authenticates the whole exchange. The keyring token is a CLASSIC one with full
+# `repo` scope and works. Without this fallback every repo fails, `stack-clone`
+# exits 1, and `make stack-up` aborts before building anything — which reads as
+# "the local mesh is broken" when in fact only the credential is wrong.
+git_try() { # git <args...>, retried once under the gh-CLI credential helper
+  git "$@" 2>/dev/null && return 0
+  env -u GH_TOKEN -u GITHUB_TOKEN \
+    git -c credential.helper='!gh auth git-credential' "$@" 2>/dev/null
+}
+
+fetch_ref() { # <checkout-dir> <ref>
+  local d="$1" ref="$2"
+  # NOT `--depth 1` on the update path. A shallow fetch truncates origin/${ref}
+  # to a single commit, which destroys the merge base — `rev-list origin/ref..HEAD`
+  # then reports every commit in the checkout's history as "local work"
+  # (measured: admin-ui 171, mastodon-ui 82, matrix-ui 3, all of them actually
+  # in sync). checkout_is_disposable below is only as trustworthy as the
+  # ancestry it can see, so the update path fetches REAL history and unshallows
+  # a checkout left shallow by an earlier clone. One-time cost per repo, and it
+  # only applies to persistent developer checkouts — CI takes the clone path.
+  if [ "$(git -C "${d}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+    git_try -C "${d}" fetch --quiet --unshallow origin "${ref}" && return 0
+  fi
+  git_try -C "${d}" fetch --quiet origin "${ref}"
+}
+
+# Is this checkout safe to `reset --hard` over?
+#
+# The reset below is a DATA-LOSS operation, and it has already silently eaten
+# work on a developer machine: it discards local commits AND tracked-file edits
+# with no prompt. That is fine in CI (every checkout is a fresh shallow clone,
+# so this always returns true and behaviour is unchanged) but wrong on a working
+# tree carrying un-merged fix branches — you lose them and the stack then builds
+# a DIFFERENT tree than the one you were testing.
+#
+# Only COMMITTED local work counts. Working-tree edits are deliberately NOT
+# counted, because patch-stack-src.sh edits tracked files (Dockerfiles) on every
+# run BY DESIGN and the reset is what gives it a clean base to re-apply onto —
+# treating those edits as precious would freeze every patched checkout at its
+# current commit and silently stop pulling ${GIT_REF} forever. Untracked files
+# survive a reset anyway.
+checkout_is_disposable() { # <checkout-dir> <ref>
+  local ahead
+  ahead="$(git -C "$1" rev-list --count "origin/$2..HEAD" 2>/dev/null || echo 0)"
+  [ "${ahead:-0}" -eq 0 ]
+}
+
+ok=0 fail=0 kept=0
 for repo in "${REPOS[@]}"; do
   migrate_legacy_dir "${repo}"
   dest="${STACK_SRC}/${repo}"
   if [ -d "${dest}/.git" ]; then
     echo "  -- ${repo}: present, updating (${GIT_REF})"
-    if git -C "${dest}" fetch --quiet --depth 1 origin "${GIT_REF}" 2>/dev/null \
-       && git -C "${dest}" checkout --quiet "${GIT_REF}" 2>/dev/null \
+    if ! fetch_ref "${dest}" "${GIT_REF}"; then
+      echo "     WARN: could not fetch ${repo} (kept existing checkout)" >&2
+      fail=$((fail+1))
+      continue
+    fi
+    if ! checkout_is_disposable "${dest}" "${GIT_REF}"; then
+      echo "     KEPT: ${repo} has local work not in ${GIT_REF} — NOT resetting." >&2
+      echo "           Land it, or build this tree as-is with STACK_NO_CLONE=1." >&2
+      kept=$((kept+1))
+      continue
+    fi
+    # --force is safe HERE and only here: checkout_is_disposable has already
+    # established there are no local commits to lose, so the only thing being
+    # discarded is patch-stack-src.sh's working-tree edits — which the pass at
+    # the end of this script re-applies. Without it, a checkout sitting on a
+    # local branch with a patched Dockerfile fails with "local changes would be
+    # overwritten" and is reported as an update FAILURE (exit 1) rather than
+    # being refreshed.
+    if git -C "${dest}" checkout --quiet --force "${GIT_REF}" 2>/dev/null \
        && git -C "${dest}" reset --hard --quiet "origin/${GIT_REF}" 2>/dev/null; then
       ok=$((ok+1))
     else
@@ -174,7 +243,14 @@ done
 # above `reset --hard`s each checkout, wiping any previously applied patch.
 bash "${HERE}/patch-stack-src.sh" "${STACK_SRC}"
 
-echo "==> Done: ${ok} ok, ${fail} failed/skipped, in ${STACK_SRC}"
+echo "==> Done: ${ok} ok, ${fail} failed/skipped, ${kept} kept (local work), in ${STACK_SRC}"
+if [ "${kept}" -gt 0 ]; then
+  # NOT an error: the checkouts are intact and buildable, they just were not
+  # reset onto ${GIT_REF}. Exiting non-zero here would block `make stack-up` on
+  # exactly the machines doing active development.
+  echo "    ${kept} checkout(s) kept local work and were left alone (see KEPT above)."
+  echo "    The stack will build THOSE trees, not ${GIT_REF}."
+fi
 if [ "${fail}" -gt 0 ]; then
   echo "    Some repos did not clone. Check GitHub auth (gh auth login) or the"
   echo "    internal VPN + GIT_BASE, then re-run. Existing checkouts were kept." >&2
