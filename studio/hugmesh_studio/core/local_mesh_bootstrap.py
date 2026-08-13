@@ -48,7 +48,7 @@ from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
-    FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_SOCIAL, PROFILE_TOR,
+    FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_AKKOMA, PROFILE_PHPBB, PROFILE_SOCIAL, PROFILE_TOR,
     by_slug as by_local_slug, federation_env, federation_selection,
     federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection)
 from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
@@ -265,6 +265,22 @@ class LocalMeshBootstrapConfig:
             return self.with_tor
         return profile_flags(self.services).get(PROFILE_TOR, False)
 
+    def effective_phpbb(self) -> bool:
+        """Same rule again, for the `phpbb` profile (PHPBB=1 -> STACK_ALT_PROFILE).
+
+        No legacy flag to fall back on: unlike social/tor these slugs never had a
+        pre-picker boolean, so with NO selection they are simply off — which keeps a
+        pre-picker caller's stack byte-identical to before these profiles existed."""
+        if self.services is None:
+            return False
+        return profile_flags(self.services).get(PROFILE_PHPBB, False)
+
+    def effective_akkoma(self) -> bool:
+        """Same rule, for the `akkoma` profile (AKKOMA=1 -> STACK_ALT_PROFILE)."""
+        if self.services is None:
+            return False
+        return profile_flags(self.services).get(PROFILE_AKKOMA, False)
+
     def federation_services(self) -> tuple[str, ...]:
         """The federation-mechanism half of the selection (catalogue order)."""
         return federation_selection(self.services)
@@ -346,6 +362,8 @@ class LocalMeshBootstrap:
                               web_locales=self.cfg.web_locales,
                               login_theme_css=self.cfg.login_theme_css,
                               with_tor=self.cfg.effective_with_tor(),
+                              with_phpbb=self.cfg.effective_phpbb(),
+                              with_akkoma=self.cfg.effective_akkoma(),
                               idp=self.cfg.idp,
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),

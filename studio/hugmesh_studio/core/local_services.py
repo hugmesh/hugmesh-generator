@@ -54,11 +54,17 @@ from .config import SERVICE_DESCRIPTIONS, SERVICE_GROUPS
 MECH_COMPOSE_PROFILE = "compose-profile"
 MECH_FEDERATION = "federation"
 
-# The ONLY two compose profiles tests/stack/ defines (Makefile:1252-1253 ->
-# STACK_PROFILE / STACK_TOR_PROFILE). Named so the GUI can say WHICH profile a row
-# drives without restating the mapping.
+# The compose profiles tests/stack/ defines, each turned into a `--profile` flag by
+# one Makefile variable off one env knob. Named so the GUI can say WHICH profile a
+# row drives without restating the mapping.
+#   social -> STACK_PROFILE      (SOCIAL=1)
+#   tor    -> STACK_TOR_PROFILE  (TOR=1)
+#   phpbb  -> STACK_ALT_PROFILE  (PHPBB=1)
+#   akkoma -> STACK_ALT_PROFILE  (AKKOMA=1)
 PROFILE_SOCIAL = "social"
 PROFILE_TOR = "tor"
+PROFILE_PHPBB = "phpbb"
+PROFILE_AKKOMA = "akkoma"
 
 # ── the seeder contract for the federation half ─────────────────────────────────
 # TODO(tests/stack/seed-e2e.sh): the seeder does not read these yet — another agent
@@ -129,6 +135,28 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
         local_note="Starts hugmesh-tor and publishes the fe-gateway as a v3 .onion. "
                    "Needs a stack restart to change."),
     LocalService(
+        slug="phpbb", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_PHPBB,
+        # Registry says `default: on`; OFF here for the same reason tuwunel is —
+        # a from-scratch bring-up should not silently grow containers. The row is
+        # a real toggle now: it was in UNAVAILABLE_LOCALLY ("NO phpBB backend —
+        # nothing to enable"), which stopped being true when the phpbb profile
+        # landed in tests/stack/compose.alt-social.yaml.
+        default_on=False,
+        local_note="phpBB 3.3 + its own Postgres, built from the official release "
+                   "(pinned by sha256) and installed unattended on first run. Serves "
+                   "on :8081 and at /social/phpbb/ behind the gateway. Needs a stack "
+                   "restart to change — it starts/stops containers."),
+    LocalService(
+        slug="akkoma", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_AKKOMA,
+        # Same deviation from the registry's `default: on`. Previously listed as
+        # unavailable ("the local social profile ships MASTODON, not Akkoma") —
+        # true until the akkoma profile landed; Akkoma now runs ALONGSIDE Mastodon
+        # rather than replacing it, so both can be exercised in one stack.
+        default_on=False,
+        local_note="Akkoma (Pleroma fork, same ActivityPub + Mastodon-client API) "
+                   "+ its own Postgres, on :4001. Independent of the social profile, "
+                   "so it can run beside Mastodon. Needs a stack restart to change."),
+    LocalService(
         slug="wiki", mechanism=MECH_FEDERATION, module="wiki", default_on=False,
         local_note="Containers are always up (hugmesh-wiki-bff-api + hugmesh-wiki-ui "
                    "+ wiki-bff-db carry no compose profile); this flips the menu "
@@ -154,11 +182,6 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
 # the reason the surface shows. Offering these as live toggles is the exact failure this
 # module exists to prevent: a checkbox that changes no bytes.
 UNAVAILABLE_LOCALLY: dict[str, str] = {
-    "akkoma": "the local social profile ships MASTODON, not Akkoma, and it comes up "
-              "with the Matrix (tuwunel) row above — one `social` compose profile, "
-              "one switch. There is no separate Akkoma service here.",
-    "phpbb": "the local stack builds the forum BFF + UI but NO phpBB backend "
-             "(docs/LOCAL-STACK.md, honest limitations) — nothing to enable.",
     "games": "no games service in tests/stack/compose.local.yaml, and the two-Casdoor "
              "games realm is inert locally (docs/LOCAL-STACK.md).",
     "edge-ai-tts": "image/GitOps tier only — no edge-AI service in the local compose "

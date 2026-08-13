@@ -96,7 +96,8 @@ class LocalStackNode:
                  domain: str = "",
                  source_mode: str = "clone", source_dir: str = "",
                  web_locales: tuple[str, ...] = (), login_theme_css: str = "",
-                 with_tor: bool = False, idp: str = "casdoor",
+                 with_tor: bool = False, with_phpbb: bool = False,
+                 with_akkoma: bool = False, idp: str = "casdoor",
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
                  services=None):
         self.generator_dir = os.path.abspath(generator_dir)
@@ -108,6 +109,11 @@ class LocalStackNode:
         # up, publishing the fe-gateway as a .onion. DEFAULT off — the unprofiled
         # stack is byte-identical to before (mirrors the `social` opt-in).
         self.with_tor = with_tor
+        # PHPBB=1 / AKKOMA=1 -> the Makefile's STACK_ALT_PROFILE adds
+        # `--profile phpbb` / `--profile akkoma`. DEFAULT off, same opt-in
+        # shape as social/with_tor, so an unselected stack is unchanged.
+        self.with_phpbb = with_phpbb
+        self.with_akkoma = with_akkoma
         self.public_host_port = public_host_port
         # The TLS front door (Makefile PUBLIC_HTTPS_PORT ?= 8488). web_url hands this
         # out rather than the plaintext port, so every operator-facing surface teaches
@@ -374,6 +380,11 @@ class LocalStackNode:
         # TOR=1 in the operator's shell can't silently flip it, exactly like SOCIAL —
         # and `$(strip $(TOR))` empty leaves the unprofiled env byte-identical.
         env["TOR"] = "1" if self.with_tor else ""
+        # Set explicitly ("" = off) for the same reason as SOCIAL/TOR: an
+        # inherited PHPBB=1/AKKOMA=1 in the operator's shell must not silently
+        # flip a stack the picker said nothing about.
+        env["PHPBB"] = "1" if self.with_phpbb else ""
+        env["AKKOMA"] = "1" if self.with_akkoma else ""
         env["PUBLIC_HOST_PORT"] = str(self.public_host_port)
         # Only export DOMAIN when set, so existing callers (and ENV=test) keep the
         # Makefile's own default. In prod this pins the Casdoor issuer to the same

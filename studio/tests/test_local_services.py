@@ -30,6 +30,8 @@ REGISTRY = os.path.join(GENERATOR_DIR, "specs", "cluster", "optional-services.ya
 COMPOSE_LOCAL = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.local.yaml")
 COMPOSE_SOCIAL = os.path.join(GENERATOR_DIR, "tests", "stack",
                               "compose.social-profile.yaml")
+COMPOSE_ALT = os.path.join(GENERATOR_DIR, "tests", "stack",
+                           "compose.alt-social.yaml")
 MAKEFILE = os.path.join(GENERATOR_DIR, "Makefile")
 
 
@@ -82,18 +84,30 @@ def test_every_offered_slug_has_a_real_local_mechanism():
 
 
 def test_profile_slugs_name_a_profile_compose_actually_declares():
-    """`social` and `tor` are the only two compose profiles in the local stack — the
-    Makefile turns each into a `--profile` flag off one env var. A third profile slug
-    would be a toggle nothing consumes."""
+    """Every profile slug must name a compose profile the Makefile actually turns into
+    a `--profile` flag — a slug nothing consumes would be a toggle that lies.
+
+    `phpbb` and `akkoma` joined `social`/`tor` when tests/stack/compose.alt-social.yaml
+    landed; both were previously in UNAVAILABLE_LOCALLY ("no phpBB backend" / "ships
+    MASTODON, not Akkoma"), which stopped being true then. They share ONE Makefile
+    variable (STACK_ALT_PROFILE) because they stack additively with SOCIAL."""
     mk = _read(MAKEFILE)
     local = _read(COMPOSE_LOCAL)
     social = _read(COMPOSE_SOCIAL)
+    alt = _read(COMPOSE_ALT)
     assert "STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)" in mk
     assert "STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)" in mk
+    assert "$(if $(strip $(PHPBB)),--profile phpbb,)" in mk
+    assert "$(if $(strip $(AKKOMA)),--profile akkoma,)" in mk
     profiles = {s.profile for s in ls.LOCAL_SERVICES if s.is_profile()}
-    assert profiles == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR}
+    assert profiles == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR,
+                        ls.PROFILE_PHPBB, ls.PROFILE_AKKOMA}
     assert 'profiles: ["tor"]' in local
     assert "social" in social and "profiles:" in social
+    assert 'profiles: ["phpbb"]' in alt and 'profiles: ["akkoma"]' in alt
+    # `down`/`clean` must reap these even when the knob that started them is not
+    # repeated, so both profiles are listed UNCONDITIONALLY on the down path.
+    assert "--profile phpbb --profile akkoma down -v" in mk
 
 
 def test_federation_slugs_have_containers_in_the_local_stack():
@@ -183,11 +197,20 @@ def test_federation_env_is_empty_for_untouched_and_for_the_shipped_selection():
 
 # ── 4. the two mechanisms stay apart ────────────────────────────────────────────
 def test_profile_flags_read_only_the_profile_half():
-    assert ls.profile_flags(None) == {ls.PROFILE_SOCIAL: False, ls.PROFILE_TOR: False}
-    assert ls.profile_flags(("wiki", "tube")) == {ls.PROFILE_SOCIAL: False,
-                                                  ls.PROFILE_TOR: False}
+    # Derived from the catalogue, so it covers every profile slug rather than a
+    # hardcoded pair — `phpbb` and `akkoma` joined `social`/`tor` with
+    # compose.alt-social.yaml, and a hardcoded set silently rots when one is added.
+    all_off = {s.profile: False for s in ls.LOCAL_SERVICES if s.is_profile()}
+    assert set(all_off) == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR,
+                            ls.PROFILE_PHPBB, ls.PROFILE_AKKOMA}
+    assert ls.profile_flags(None) == all_off
+    assert ls.profile_flags(("wiki", "tube")) == all_off
     assert ls.profile_flags(("tuwunel",))[ls.PROFILE_SOCIAL] is True
     assert ls.profile_flags(("tor",))[ls.PROFILE_TOR] is True
+    assert ls.profile_flags(("phpbb",))[ls.PROFILE_PHPBB] is True
+    assert ls.profile_flags(("akkoma",))[ls.PROFILE_AKKOMA] is True
+    # the two mechanisms stay apart: a profile pick is never a federation flip
+    assert ls.federation_env(("phpbb", "akkoma")) == {}
 
 
 def test_federation_env_exports_both_sides_as_module_slugs():

@@ -157,10 +157,18 @@ services:
   # which requires no activation at all — so this gap is specific to running
   # mainline Mastodon on compose, and is not something the product must solve.
   #
-  # One Rails boot, then a poll loop: `rails runner` costs ~10s of JVM-ish boot
-  # per invocation, so a cron-style re-exec would be far heavier than this.
-  # Accounts are minted DURING a test run, so a one-shot at seed time would miss
-  # them — it has to keep watching.
+  # A TRIGGER, not just a poll loop. Polling alone is inherently racy: the broker
+  # mints an account and uses its token microseconds later, so any poll interval
+  # leaves a window where the very next call answers
+  #   403 {"error":"Your login is missing a confirmed e-mail address"}
+  # — which is exactly how spec 06 flaked with a 5s loop. The BEFORE INSERT
+  # trigger closes the account's confirmation in the same transaction that
+  # creates it, so there is no window at all.
+  #
+  # The loop is kept only as a BACKSTOP for rows that already existed before the
+  # trigger was installed (e.g. a stack that ran before this landed); on a fresh
+  # database it finds nothing to do. One Rails boot, then poll — `rails runner`
+  # costs ~10s of boot per invocation, so a cron-style re-exec would be heavier.
   mastodon-autoconfirm:
     image: ghcr.io/mastodon/mastodon:v4.3.1
     profiles: [social]
@@ -170,12 +178,30 @@ services:
       - "rails"
       - "runner"
       - |
+        # The function body is SINGLE-QUOTED, not dollar-quoted, on purpose.
+        # docker compose interpolates this command string and collapses `$$` to a
+        # literal `$`, so the usual `AS $$ ... $$` arrives at Postgres as `AS $ ... $`
+        # and dies with: syntax error at or near "$". A `$tag$` form is worse — compose
+        # would try to expand `$tag` as a variable. Single quotes contain no `$` at all,
+        # so nothing can rewrite them; the body just must not contain a single quote.
+        ActiveRecord::Base.connection.execute(<<~SQL)
+          CREATE OR REPLACE FUNCTION hugmesh_autoconfirm() RETURNS trigger AS '
+          BEGIN
+            IF NEW.confirmed_at IS NULL THEN NEW.confirmed_at := now(); END IF;
+            NEW.approved := true;
+            RETURN NEW;
+          END ' LANGUAGE plpgsql;
+          DROP TRIGGER IF EXISTS hugmesh_autoconfirm_trg ON users;
+          CREATE TRIGGER hugmesh_autoconfirm_trg BEFORE INSERT ON users
+            FOR EACH ROW EXECUTE FUNCTION hugmesh_autoconfirm();
+        SQL
+        Rails.logger.info("[autoconfirm] BEFORE INSERT trigger installed on users")
         loop do
           begin
             User.where(confirmed_at: nil).find_each do |u|
               u.mark_email_as_confirmed!
               begin; u.approve!; rescue StandardError; end
-              Rails.logger.info("[autoconfirm] confirmed #{u.account&.username}")
+              Rails.logger.info("[autoconfirm] backfilled #{u.account&.username}")
             end
           rescue StandardError => e
             Rails.logger.warn("[autoconfirm] #{e.class}: #{e.message}")
