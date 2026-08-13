@@ -99,6 +99,20 @@ DELETE FROM gateway_route_access a USING gateway_route_access b
 CREATE UNIQUE INDEX IF NOT EXISTS uq_route_access_row
   ON gateway_route_access (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(domain, ''));
 
+-- Retire the STALE '/apidocs/**' fe-gateway row on pre-existing databases (this
+-- file's header supports in-place re-application). The api-docs remote's REAL
+-- asset prefix is '/api-docs/**' — the image is built with --base-href=/api-docs/
+-- and the host-shell federation manifest loads "/api-docs/remoteEntry.json" — so
+-- the old row admin-gated a prefix nothing fetches (only the /apidocs SPA
+-- deep-link, which the catch-all shell serves), while the REAL asset path was
+-- ungoverned: Decision.NO_RULE forwards on the coarse authenticated() check, so
+-- ANY logged-in ROLE_USER could pull the admin-only rendered API docs. The
+-- INSERT below re-adds the corrected '/api-docs/**' row; DELETE (not UPDATE) so
+-- re-application cannot collide with an already-corrected row under
+-- uq_route_access_row. No-op on a fresh or already-converged database.
+DELETE FROM gateway_route_access
+  WHERE gateway = 'hugmesh-fe-gateway' AND url_pattern = '/apidocs/**' AND role = 'ROLE_ADMIN';
+
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
 -- contract. Role semantics (mirroring the hugmesh.games SecurityConfig
 -- casdoorAuthoritiesConverter):
@@ -413,10 +427,13 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- ⚠ gate_optional_services REMOVES this row when the character-forge slug is
   -- deselected (so a matched route to a pruned upstream cannot stale-grant / 502).
   ('hugmesh-fe-gateway',  '/character-forge/**',   'ROLE_USER',      true),  -- character-forge 3D UI
-  -- API documentation micro-frontend UI (hugmesh-api-docs at /apidocs/**).
-  -- ROLE_ADMIN only — the rendered OpenAPI/spec docs are admin-gated, matching
-  -- federation's spec floor (its swagger-ui is ROLE_ADMIN).
-  ('hugmesh-fe-gateway',  '/apidocs/**',           'ROLE_ADMIN',     true),  -- API docs UI (admin only)
+  -- API documentation micro-frontend UI (hugmesh-api-docs at /api-docs/**, the
+  -- remote's REAL asset prefix: its image builds with --base-href=/api-docs/ and
+  -- the host-shell federation manifest loads /api-docs/remoteEntry.json; the
+  -- host-shell's CLIENT-side route stays /apidocs and is served by the shell
+  -- catch-all). ROLE_ADMIN only — the rendered OpenAPI/spec docs are
+  -- admin-gated, matching federation's spec floor (its swagger-ui is ROLE_ADMIN).
+  ('hugmesh-fe-gateway',  '/api-docs/**',          'ROLE_ADMIN',     true),  -- API docs UI (admin only)
   -- hugmesh-games namespace admin UI (games admin surface, namespaced under
   -- /games/** so it does NOT collide with the platform /admin/** row above). Same
   -- games + (admin|mod) gate: keyed on the DERIVED composite ROLE_GAMES_ADMIN
