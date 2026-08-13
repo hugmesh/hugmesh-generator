@@ -17,6 +17,11 @@
 //   POST /_matrix/client/v3/rooms/{id}/receipt/{type}/{eventId}     -> {}           records the caller's last-read event
 //   POST /_matrix/client/v3/rooms/{id}/read_markers                 -> {}           m.read / m.fully_read do the same
 //   GET/PUT /_matrix/client/v3/user/{uid}/account_data/{type}       per-user store; GET 404 M_NOT_FOUND when unset
+//   GET  /_matrix/client/v3/rooms/{id}/state                        -> [full state events] joined members only; synthesizes
+//                                                                      m.room.member (join) + m.room.name rows alongside the stored ones
+//   GET/PUT /_matrix/client/v3/rooms/{id}/state/{type}[/{key}]      per-room state (chat3d etc.); joined members only;
+//                                                                      GET -> content | 404 M_NOT_FOUND; PUT -> {event_id};
+//                                                                      the empty state key rides the trailing-slash form /state/{type}/
 //   GET  /_matrix/client/v3/sync    rooms.join {timeline,name state,unread_notifications} + rooms.invite {invite_state}
 import http from 'node:http';
 
@@ -25,7 +30,8 @@ const SERVER = process.env.MATRIX_SERVER_NAME || 'hugmesh.systems';
 const users = new Map();   // token -> userId
 const accounts = new Map();// userId -> {password}
 // roomId -> { name, preset, joined:Set, invited:Set, inviters:Map(userId->inviter),
-//             reads:Map(userId->last-read event_id), events:[] }
+//             reads:Map(userId->last-read event_id), events:[],
+//             state:Map(`${type} ${state_key}` -> {type,state_key,content,sender,event_id,origin_server_ts}) }
 const rooms = new Map();
 const accountData = new Map(); // userId -> Map(type -> content)
 let nextRoom = 1, nextEvent = 1, syncSeq = 0;
@@ -88,7 +94,7 @@ const server = http.createServer(async (req, res) => {
       invited.delete(me);
       rooms.set(roomId, { name: b.name || roomId, preset: b.preset || 'private_chat',
         joined: new Set([me]), invited, inviters: new Map([...invited].map((u) => [u, me])),
-        reads: new Map(), events: [] });
+        reads: new Map(), events: [], state: new Map() });
       syncSeq++;
       return send(res, 200, { room_id: roomId });
     }
@@ -168,6 +174,44 @@ const server = http.createServer(async (req, res) => {
         if (!accountData.has(userId)) accountData.set(userId, new Map());
         accountData.get(userId).set(type, b);
         return send(res, 200, {});
+      }
+    }
+    // Room STATE (net.hugmesh.chat3d / chat3d.avatar etc.). Matrix hides state
+    // from non-members, so every shape below is joined-members-only (403
+    // M_FORBIDDEN otherwise). Room ids/state keys may arrive with RAW pchars
+    // (':' '@' — the raw-pchar spelling every client on this stack sends).
+    // Full current state: the STORED events plus synthesized m.room.member
+    // (join) + m.room.name rows — a real homeserver always carries membership
+    // in /state, and matrix-ui's avatar roster fails CLOSED without it.
+    if ((m = p.match(new RegExp(`^${M}/rooms/([^/]+)/state$`))) && req.method === 'GET') {
+      const roomId = decodeURIComponent(m[1]); const r = rooms.get(roomId);
+      if (!r) return send(res, 404, { errcode: 'M_NOT_FOUND' });
+      if (!r.joined.has(me)) return send(res, 403, { errcode: 'M_FORBIDDEN', error: 'not a joined member' });
+      const members = [...r.joined].map((u) => ({ type: 'm.room.member', state_key: u, sender: u,
+        content: { membership: 'join', displayname: localpart(u) }, event_id: `$member_${u}`, origin_server_ts: 0 }));
+      const nameEv = { type: 'm.room.name', state_key: '', sender: me,
+        content: { name: r.name }, event_id: `$name_${roomId}`, origin_server_ts: 0 };
+      return send(res, 200, [...members, nameEv, ...r.state.values()]);
+    }
+    // One state event by {type} + optional {key}. matrix.service spells the
+    // EMPTY state key as the trailing-slash form `/state/<type>/`, so the final
+    // segment may be empty or absent — both mean state_key ''.
+    if ((m = p.match(new RegExp(`^${M}/rooms/([^/]+)/state/([^/]+)(?:/([^/]*))?$`)))) {
+      const r = rooms.get(decodeURIComponent(m[1]));
+      const type = decodeURIComponent(m[2]); const key = decodeURIComponent(m[3] || '');
+      if (!r) return send(res, 404, { errcode: 'M_NOT_FOUND' });
+      if (!r.joined.has(me)) return send(res, 403, { errcode: 'M_FORBIDDEN', error: 'not a joined member' });
+      if (req.method === 'GET') {
+        const ev = r.state.get(`${type} ${key}`);
+        if (!ev) return send(res, 404, { errcode: 'M_NOT_FOUND' });
+        return send(res, 200, ev.content); // the CS-API returns the content json alone
+      }
+      if (req.method === 'PUT') {
+        const b = await bodyOf(req);
+        const ev = { type, state_key: key, content: b, sender: me,
+          event_id: `$ev${nextEvent++}`, origin_server_ts: Date.now() };
+        r.state.set(`${type} ${key}`, ev); syncSeq++;
+        return send(res, 200, { event_id: ev.event_id });
       }
     }
     // Generic event send — m.room.message AND m.call.* (WebRTC signalling).

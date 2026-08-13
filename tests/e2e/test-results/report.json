@@ -2,13 +2,16 @@
   "config": {
     "argv": [
       "/usr/bin/node",
-      "/home/magus/GitHub/.wt/roadmap/gen-kind-e2e/tests/e2e/node_modules/.bin/playwright",
+      "/home/magus/Github/hugmesh-generator/tests/e2e/node_modules/.bin/playwright",
       "test",
-      "--list",
-      "specs/27-native-login.spec.ts"
+      "-c",
+      "playwright.config.ts",
+      "32-matrix-chat3d.spec.ts",
+      "31-matrix-group-chat.spec.ts",
+      "05-matrix-chat.spec.ts"
     ],
-    "configFile": "/home/magus/GitHub/.wt/roadmap/gen-kind-e2e/tests/e2e/playwright.config.ts",
-    "rootDir": "/home/magus/GitHub/.wt/roadmap/gen-kind-e2e/tests/e2e/specs",
+    "configFile": "/home/magus/Github/hugmesh-generator/tests/e2e/playwright.config.ts",
+    "rootDir": "/home/magus/Github/hugmesh-generator/tests/e2e/specs",
     "failOnFlakyTests": false,
     "forbidOnly": false,
     "fullyParallel": false,
@@ -18,17 +21,21 @@
     "grep": {},
     "grepInvert": null,
     "maxFailures": 0,
-    "metadata": {},
+    "metadata": {
+      "actualWorkers": 1
+    },
     "preserveOutput": "always",
     "projects": [
       {
-        "outputDir": "/home/magus/GitHub/.wt/roadmap/gen-kind-e2e/tests/e2e/test-results",
+        "outputDir": "/home/magus/Github/hugmesh-generator/tests/e2e/test-results",
         "repeatEach": 1,
         "retries": 1,
-        "metadata": {},
+        "metadata": {
+          "actualWorkers": 1
+        },
         "id": "chromium",
         "name": "chromium",
-        "testDir": "/home/magus/GitHub/.wt/roadmap/gen-kind-e2e/tests/e2e/specs",
+        "testDir": "/home/magus/Github/hugmesh-generator/tests/e2e/specs",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -55,7 +62,7 @@
         }
       ],
       [
-        "/home/magus/GitHub/.wt/roadmap/gen-kind-e2e/tests/e2e/reporters/hugmesh-reporter.ts",
+        "/home/magus/Github/hugmesh-generator/tests/e2e/reporters/hugmesh-reporter.ts",
         null
       ]
     ],
@@ -73,49 +80,255 @@
   },
   "suites": [
     {
-      "title": "27-native-login.spec.ts",
-      "file": "27-native-login.spec.ts",
+      "title": "05-matrix-chat.spec.ts",
+      "file": "05-matrix-chat.spec.ts",
       "column": 0,
       "line": 0,
-      "specs": [],
-      "suites": [
+      "specs": [
         {
-          "title": "native login: our own form drives /bff/login (Casdoor never browser-exposed)",
-          "file": "27-native-login.spec.ts",
-          "line": 16,
-          "column": 6,
-          "specs": [
+          "title": "two users chat with each other through the Matrix UI",
+          "ok": true,
+          "tags": [],
+          "tests": [
             {
-              "title": "POST /bff/login mints an httpOnly bff_session cookie; no navigation to a Casdoor origin",
-              "ok": true,
-              "tags": [],
-              "tests": [
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
                 {
-                  "timeout": 90000,
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3721,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-13T01:40:57.395Z",
                   "annotations": [],
-                  "expectedStatus": "passed",
-                  "projectId": "chromium",
-                  "projectName": "chromium",
-                  "results": [],
-                  "status": "skipped"
+                  "attachments": []
                 }
               ],
-              "id": "d5bede9beb8d4763eb6a-58c17791b2f418e58bca",
-              "file": "27-native-login.spec.ts",
-              "line": 17,
-              "column": 7
+              "status": "expected"
             }
-          ]
+          ],
+          "id": "4ceca9d441c60c5b433d-b9f515c9fa06386434bf",
+          "file": "05-matrix-chat.spec.ts",
+          "line": 25,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "31-matrix-group-chat.spec.ts",
+      "file": "31-matrix-group-chat.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "three-user group room: pending invites accepted in the UI, all members see all messages with sender attribution @role:ROLE_USER @layer:ui",
+          "ok": true,
+          "tags": [
+            "role:ROLE_USER",
+            "layer:ui"
+          ],
+          "tests": [
+            {
+              "timeout": 240000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 4413,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-13T01:41:01.175Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d5205c06a2b55f244306-55cdd1689b0cf96cae86",
+          "file": "31-matrix-group-chat.spec.ts",
+          "line": 145,
+          "column": 5
+        },
+        {
+          "title": "room switching: the backgrounded room grows an unread badge and opening it clears the badge @role:ROLE_USER @layer:ui",
+          "ok": true,
+          "tags": [
+            "role:ROLE_USER",
+            "layer:ui"
+          ],
+          "tests": [
+            {
+              "timeout": 240000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2897,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-13T01:41:05.594Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d5205c06a2b55f244306-78333ac3e77f4c6e097b",
+          "file": "31-matrix-group-chat.spec.ts",
+          "line": 306,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "32-matrix-chat3d.spec.ts",
+      "file": "32-matrix-chat3d.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "wasm bundle delivery: shadows-of-the-net html/js/wasm/pck all 200, index.wasm served as application/wasm @role:ROLE_USER @layer:ui",
+          "ok": true,
+          "tags": [
+            "role:ROLE_USER",
+            "layer:ui"
+          ],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 130,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-13T01:41:08.503Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1ee7755b4a1a13a82a73-fad1527d2f3fdf975243",
+          "file": "32-matrix-chat3d.spec.ts",
+          "line": 192,
+          "column": 5
+        },
+        {
+          "title": "3D room boot: enable chat3d, enter as a seeded guest, the wasm boots headless and my avatar is published as room state @role:ROLE_USER @layer:ui",
+          "ok": true,
+          "tags": [
+            "role:ROLE_USER",
+            "layer:ui"
+          ],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2179,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-13T01:41:08.641Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1ee7755b4a1a13a82a73-978e0b8937d9ba654bf1",
+          "file": "32-matrix-chat3d.spec.ts",
+          "line": 207,
+          "column": 5
+        },
+        {
+          "title": "character generation → avatar: a created+activated forge character is offered by name in the join menu and rides the published avatar state @role:ROLE_USER @layer:ui",
+          "ok": true,
+          "tags": [
+            "role:ROLE_USER",
+            "layer:ui"
+          ],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2066,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-13T01:41:10.824Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1ee7755b4a1a13a82a73-acbd50f40960dc743ef6",
+          "file": "32-matrix-chat3d.spec.ts",
+          "line": 261,
+          "column": 5
         }
       ]
     }
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-08-05T19:42:22.887Z",
-    "duration": 34.438999999999965,
-    "expected": 0,
-    "skipped": 1,
+    "startTime": "2026-08-13T01:40:57.174Z",
+    "duration": 15747.144999999999,
+    "expected": 6,
+    "skipped": 0,
     "unexpected": 0,
     "flaky": 0
   }

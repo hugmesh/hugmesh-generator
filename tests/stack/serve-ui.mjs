@@ -14,6 +14,14 @@ const DIST = process.env.UI_DIST || path.resolve('tests/stack/.uidist');
 // mixed-content/CORS. run-all.sh assembles them under ${UI_DIST}/_remotes/.
 const REMOTES_ROOT = process.env.REMOTES_ROOT || path.join(DIST, '_remotes');
 const REMOTES = (process.env.REMOTES || 'login,matrix,mastodon,admin').split(',').map((s) => s.trim()).filter(Boolean);
+// STATIC remotes: plain asset trees served under /_remotes/<name>/ that are NOT
+// native-federation remotes — they carry no remoteEntry.json and MUST stay out
+// of the synthesized manifest (initFederation eagerly fetches every manifest
+// entry, so a bogus row breaks host boot). Today: the games-stack wasm bundles
+// (wasm-fragment/<slug>/ — e.g. shadows-of-the-net, assembled by up.sh from the
+// sibling hugmesh-games repo), addressed by matrix-ui's chat3d host via
+// __HUG_GAMES_URL__ + /_remotes/wasm-fragment/<slug>/index.html.
+const STATIC_REMOTES = (process.env.STATIC_REMOTES || 'wasm-fragment').split(',').map((s) => s.trim()).filter(Boolean);
 const MATRIX_TARGET = process.env.MATRIX_TARGET || 'http://127.0.0.1:8401';
 const MASTODON_TARGET = process.env.MASTODON_TARGET || 'http://127.0.0.1:8402';
 const BFF_TARGET = process.env.BFF_TARGET || 'http://127.0.0.1:8403';
@@ -21,7 +29,10 @@ const values = JSON.parse(fs.readFileSync(path.join(CERTS, 'values.json'), 'utf8
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.ico': 'image/x-icon', '.svg': 'image/svg+xml',
-  '.woff2': 'font/woff2', '.map': 'application/json', '.txt': 'text/plain' };
+  '.woff2': 'font/woff2', '.map': 'application/json', '.txt': 'text/plain',
+  // Godot web-export bundle types: application/wasm enables streaming
+  // instantiation (octet-stream forces the slow non-streaming path).
+  '.wasm': 'application/wasm', '.pck': 'application/octet-stream', '.png': 'image/png' };
 
 // Runtime config the UI reads (same-origin '' base => calls get proxied below).
 // NATIVE-LOGIN: the login-ui runs in opaque-cookie session mode — it holds only the
@@ -37,6 +48,12 @@ const CONFIG_SCRIPT = `<script>
   window.__SNAP_CASDOOR_ISSUER__=${JSON.stringify(values.casdoorIssuer)};
   window.__SNAP_UPTRACE_URL__=${JSON.stringify(values.uptraceUrl || 'https://uptrace.hugmesh.systems')};
   window.__SNAP_VALUES__=${JSON.stringify(values)};
+  // Games origin for matrix-ui's chat3d host (GAMES_BASE_URL token): this SAME
+  // origin — new URL(...) needs an ABSOLUTE url, and same-origin serving keeps
+  // the ?origin= handshake trivially consistent. NOTE the e2e must browse via
+  // localhost (SNAP_BASE_URL default) — a 127.0.0.1 page would mismatch this
+  // exact-string origin and the room would sit at "Loading the 3D room…".
+  window.__HUG_GAMES_URL__=${JSON.stringify(`https://localhost:${PORT}`)};
 </script>`;
 
 function proxy(req, res, target) {
@@ -76,7 +93,7 @@ function serveRemote(req, res) {
   const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).slice('/_remotes/'.length);
   const seg = rel.split('/');
   const name = seg.shift();
-  if (!REMOTES.includes(name)) { res.writeHead(404); return res.end('no such remote'); }
+  if (!REMOTES.includes(name) && !STATIC_REMOTES.includes(name)) { res.writeHead(404); return res.end('no such remote'); }
   const remoteRoot = path.resolve(path.join(REMOTES_ROOT, name));
   const resolved = path.resolve(path.join(remoteRoot, seg.join('/')));
   if (resolved !== remoteRoot && !resolved.startsWith(remoteRoot + path.sep)) { res.writeHead(403); return res.end('forbidden'); }

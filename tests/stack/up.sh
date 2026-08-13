@@ -30,6 +30,26 @@ for n in login matrix mastodon admin; do
     echo "       Build + assemble the remotes first: tests/e2e/run-all.sh (step 1)."; exit 1; }
 done
 
+# The shadows-of-the-net Godot WASM bundle (matrix-ui's chat3d room) is a
+# STATIC remote — no remoteEntry.json, never in the federation manifest. It is
+# assembled from the sibling hugmesh-games repo's COMMITTED export (the same
+# bundle the games stack's wasm-fragment nginx bakes; built there via
+# `make build-godot`, preset Shadows-Of-The-Net). Absent bundle = warn and
+# serve without it — the chat3d e2e then skips with a precise reason instead
+# of failing on a 404 iframe. The copy is gitignored (a ~40MB assemble-time
+# artifact, not generator content).
+GAMES_REPO="${GAMES_REPO:-${HERE}/../../../hugmesh-games}"
+SOTN_SRC="${GAMES_REPO}/backend/src/main/resources/assets/levels/shadows-of-the-net"
+if [ -f "${SOTN_SRC}/index.wasm" ]; then
+  mkdir -p "${REMOTES_ROOT}/wasm-fragment"
+  rm -rf "${REMOTES_ROOT}/wasm-fragment/shadows-of-the-net"
+  cp -r "${SOTN_SRC}" "${REMOTES_ROOT}/wasm-fragment/shadows-of-the-net"
+  echo "  assembled wasm-fragment/shadows-of-the-net from ${GAMES_REPO}"
+else
+  echo "  WARN: shadows-of-the-net bundle not found at ${SOTN_SRC} — 3D-room e2e will skip"
+  echo "        (build it in hugmesh-games: make build-godot, preset Shadows-Of-The-Net)"
+fi
+
 start() { # name cmd...
   local name="$1"; shift
   nohup "$@" >"${RUN}/${name}.log" 2>&1 &

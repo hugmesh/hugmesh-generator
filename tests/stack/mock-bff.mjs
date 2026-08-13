@@ -16,7 +16,12 @@
 //      registration; the Matrix/Mastodon service tokens are brokered server-side on
 //      POST /bff/provision/{matrix,mastodon} and injected by the /bff/user/**
 //      hsproxy — the browser never holds a homeserver token. In-memory.
+//
+// Also doubles the character-forge BFF's /bff/character-forge/characters/**
+// subset matrix-ui's 3D-room join menu consumes (create / activate / GET
+// .../active), per-session-user in-memory, CharacterView-shaped responses.
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8403);
 const ADMINS = new Set((process.env.ADMIN_EMAILS || 'admin@hugmesh.systems').split(','));
@@ -28,6 +33,7 @@ const allowDiscord = new Set();               // discord handles an admin invite
 const accounts = new Map();                   // username -> {username,label,roles,registrationComplete,password,matrix?,mastodon?}
 const sessions = new Map();                   // bff_ token -> username
 const grants = new Map();                     // username -> Set(namespace) (admin-granted namespace access)
+const forgeChars = new Map();                 // username -> Map(id -> CharacterView) (character-forge double)
 const usageMem = [];                          // in-memory usage events (fallback when ClickHouse is absent)
 const NAMESPACES = ['hugmesh-pki', 'hugmesh-backend', 'hugmesh-frontend', 'hugmesh-games', 'observability'];
 // Per-gateway role->URL external access rules (stands in for the Postgres
@@ -298,6 +304,48 @@ const server = http.createServer(async (req, res) => {
           'access-control-allow-origin': '*', 'access-control-allow-credentials': 'true' });
         return res.end(text);
       } catch (e) { return send(res, 502, { error: String(e) }); }
+    }
+
+    // ── Character-forge BFF double: the /bff/character-forge/characters/**
+    //    subset the 3D-room join menu needs. Route + response SHAPES mirror the
+    //    real hugmesh-character-forge-bff-api CharacterForgeController/DTO:
+    //    CharacterView = {id, name, active, definition, createdAt, updatedAt}
+    //    (id = uuid string, timestamps ISO); owner-scoped, foreign id → 404,
+    //    never 403; single ACTIVE character per owner. The `definition` is
+    //    stored/returned OPAQUE — the real BFF runs the full Char3DConfig
+    //    validator, which this mock deliberately does NOT implement (matrix-ui
+    //    re-validates every definition through its own mirror anyway). ──
+    if (p.startsWith('/bff/character-forge/characters')) {
+      if (!me) return send(res, 401, { error: 'login required' });
+      if (!forgeChars.has(me.username)) forgeChars.set(me.username, new Map());
+      const mine = forgeChars.get(me.username);
+      // POST /bff/character-forge/characters {name, definition} → 201 CharacterView
+      if (req.method === 'POST' && p === '/bff/character-forge/characters') {
+        const b = await bodyOf(req);
+        if (typeof b.name !== 'string' || !b.name.trim() || b.definition === undefined) {
+          return send(res, 400, { error: 'name and definition are required' });
+        }
+        const now = new Date().toISOString();
+        const c = { id: randomUUID(), name: b.name, active: false, definition: b.definition,
+          createdAt: now, updatedAt: now };
+        mine.set(c.id, c);
+        return send(res, 201, c);
+      }
+      // GET /bff/character-forge/characters/active → CharacterView | 404 (none active)
+      if (req.method === 'GET' && p === '/bff/character-forge/characters/active') {
+        const active = [...mine.values()].find((c) => c.active);
+        return active ? send(res, 200, active) : send(res, 404, { error: 'no active character' });
+      }
+      // PUT /bff/character-forge/characters/{id}/active → CharacterView (the previous active clears)
+      let cm;
+      if (req.method === 'PUT' && (cm = p.match(/^\/bff\/character-forge\/characters\/([^/]+)\/active$/))) {
+        const c = mine.get(cm[1]);
+        if (!c) return send(res, 404, { error: 'not found' });
+        for (const other of mine.values()) other.active = false;
+        c.active = true; c.updatedAt = new Date().toISOString();
+        return send(res, 200, c);
+      }
+      return send(res, 404, { error: 'not found', path: p });
     }
 
     // ── Admin allowlist (the INVITE = provision a native account) ──

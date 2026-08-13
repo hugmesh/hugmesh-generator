@@ -143,3 +143,4 @@ tests/scripts/__pycache__/
 # Never part of the product — created ad hoc by review/CI sandboxes; see the
 # workflow-no-real-builds convention. Ignored so a sandbox run cannot commit them.
 .nobuild-bin/
+tests/stack/.uidist/_remotes/wasm-fragment/

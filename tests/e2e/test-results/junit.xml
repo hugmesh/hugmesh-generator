@@ -1,8 +1,20 @@
-<testsuites id="" name="" tests="1" failures="0" skipped="1" errors="0" time="0.03443899999999996">
-<testsuite name="27-native-login.spec.ts" timestamp="2026-08-05T19:42:22.922Z" hostname="chromium" tests="1" failures="0" skipped="1" time="0" errors="0">
-<testcase name="native login: our own form drives /bff/login (Casdoor never browser-exposed) › POST /bff/login mints an httpOnly bff_session cookie; no navigation to a Casdoor origin" classname="27-native-login.spec.ts">
-<skipped>
-</skipped>
+<testsuites id="" name="" tests="6" failures="0" skipped="0" errors="0" time="15.747144999999998">
+<testsuite name="05-matrix-chat.spec.ts" timestamp="2026-08-13T01:40:57.188Z" hostname="chromium" tests="1" failures="0" skipped="0" time="3.721" errors="0">
+<testcase name="two users chat with each other through the Matrix UI" classname="05-matrix-chat.spec.ts" time="3.721">
+</testcase>
+</testsuite>
+<testsuite name="31-matrix-group-chat.spec.ts" timestamp="2026-08-13T01:40:57.188Z" hostname="chromium" tests="2" failures="0" skipped="0" time="7.31" errors="0">
+<testcase name="three-user group room: pending invites accepted in the UI, all members see all messages with sender attribution @role:ROLE_USER @layer:ui" classname="31-matrix-group-chat.spec.ts" time="4.413">
+</testcase>
+<testcase name="room switching: the backgrounded room grows an unread badge and opening it clears the badge @role:ROLE_USER @layer:ui" classname="31-matrix-group-chat.spec.ts" time="2.897">
+</testcase>
+</testsuite>
+<testsuite name="32-matrix-chat3d.spec.ts" timestamp="2026-08-13T01:40:57.188Z" hostname="chromium" tests="3" failures="0" skipped="0" time="4.375" errors="0">
+<testcase name="wasm bundle delivery: shadows-of-the-net html/js/wasm/pck all 200, index.wasm served as application/wasm @role:ROLE_USER @layer:ui" classname="32-matrix-chat3d.spec.ts" time="0.13">
+</testcase>
+<testcase name="3D room boot: enable chat3d, enter as a seeded guest, the wasm boots headless and my avatar is published as room state @role:ROLE_USER @layer:ui" classname="32-matrix-chat3d.spec.ts" time="2.179">
+</testcase>
+<testcase name="character generation → avatar: a created+activated forge character is offered by name in the join menu and rides the published avatar state @role:ROLE_USER @layer:ui" classname="32-matrix-chat3d.spec.ts" time="2.066">
 </testcase>
 </testsuite>
 </testsuites>
