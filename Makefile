@@ -1180,6 +1180,14 @@ STACK_TLS_DIR   := tests/stack/.tls-front
 GIT_BASE        ?= https://github.com/hugmesh
 GIT_REF         ?= main
 SOCIAL          ?=
+# ALTERNATIVE third-party social backends (tests/stack/compose.alt-social.yaml),
+# each DEFAULT-OFF behind its own compose profile and independent of SOCIAL:
+#   PHPBB=1   phpBB       — alternative FORUM to the first-party forum-ui/-bff
+#   AKKOMA=1  Akkoma      — alternative FEDIVERSE server to Mastodon
+# They compose with each other and with SOCIAL, e.g.
+#   make stack-up SOCIAL=1 AKKOMA=1     (Mastodon AND Akkoma side by side)
+PHPBB           ?=
+AKKOMA          ?=
 # ENV -> Casdoor issuer URI used by every service (overridable via CASDOOR_ISSUER).
 ifeq ($(ENV),prod)
 CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)
@@ -1251,6 +1259,12 @@ STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
+# Alternative-backend profiles (phpBB / Akkoma). Separate from STACK_PROFILE so
+# they stack additively: SOCIAL=1 AKKOMA=1 passes BOTH --profile flags. These
+# must be threaded into every compose call that STACK_PROFILE is, or the service
+# is invisible to it — a `down` that omits the profile silently leaves the
+# containers running, and `ps`/`logs` show nothing.
+STACK_ALT_PROFILE := $(if $(strip $(PHPBB)),--profile phpbb,) $(if $(strip $(AKKOMA)),--profile akkoma,)
 COMPOSE_CMD   ?= docker compose
 # ── private-maven cold-build wiring (see tests/stack/m2-bootstrap.sh) ──
 # Four Java services (admin/user/mod-bff, federation-api) resolve org-PRIVATE
@@ -1348,12 +1362,12 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	fi
 
 stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) build
 
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
@@ -1369,7 +1383,11 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "    (the Studio's local-mesh bring-up passes it; the e2e suite deliberately does not)."
 
 stack-down: ## stop the local stack and drop its volumes
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v
+	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
+	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
+	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
+	# akkoma containers and volumes orphaned while reporting success.
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor --profile phpbb --profile akkoma down -v
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -1381,13 +1399,13 @@ stack-down: ## stop the local stack and drop its volumes
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v --rmi local --remove-orphans
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor --profile phpbb --profile akkoma down -v --rmi local --remove-orphans
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) ps

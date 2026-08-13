@@ -144,6 +144,50 @@ services:
       mastodon-db: { condition: service_healthy }
       mastodon-redis: { condition: service_healthy }
 
+  # Auto-confirm broker-minted accounts (LOCAL TEST LANE ONLY).
+  #
+  # user-bff's Mastodon broker registers an account per user through
+  # POST /api/v1/accounts (ServiceTokenBroker#mintMastodon). Mainline Mastodon
+  # creates those UNCONFIRMED and then answers 403 on every authenticated call
+  # until the email is confirmed — and this stack has no SMTP
+  # (SMTP_DELIVERY_METHOD=file), so nobody can ever click the link. The failure
+  # surfaces far from its cause, as a 502 out of /bff/user/mastodon/**.
+  # ServiceTokenBroker's own javadoc records the manual workaround
+  # ("tootctl accounts modify --confirm") and notes the CLUSTER target is Akkoma,
+  # which requires no activation at all — so this gap is specific to running
+  # mainline Mastodon on compose, and is not something the product must solve.
+  #
+  # One Rails boot, then a poll loop: `rails runner` costs ~10s of JVM-ish boot
+  # per invocation, so a cron-style re-exec would be far heavier than this.
+  # Accounts are minted DURING a test run, so a one-shot at seed time would miss
+  # them — it has to keep watching.
+  mastodon-autoconfirm:
+    image: ghcr.io/mastodon/mastodon:v4.3.1
+    profiles: [social]
+    command:
+      - "bundle"
+      - "exec"
+      - "rails"
+      - "runner"
+      - |
+        loop do
+          begin
+            User.where(confirmed_at: nil).find_each do |u|
+              u.mark_email_as_confirmed!
+              begin; u.approve!; rescue StandardError; end
+              Rails.logger.info("[autoconfirm] confirmed #{u.account&.username}")
+            end
+          rescue StandardError => e
+            Rails.logger.warn("[autoconfirm] #{e.class}: #{e.message}")
+          end
+          sleep 5
+        end
+    env_file: [.mastodon.env]
+    restart: unless-stopped
+    depends_on:
+      mastodon-db: { condition: service_healthy }
+      mastodon-redis: { condition: service_healthy }
+
   mastodon-web:
     image: ghcr.io/mastodon/mastodon:v4.3.1
     command: ["bundle", "exec", "puma", "-C", "config/puma.rb"]

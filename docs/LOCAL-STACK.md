@@ -82,6 +82,10 @@ Useful overrides:
 
 ```bash
 make stack-up SOCIAL=1                       # also bring up tuwunel + Mastodon
+make stack-up PHPBB=1                        # also bring up phpBB (alt forum)
+make stack-up AKKOMA=1                       # also bring up Akkoma (alt fediverse)
+make stack-up SOCIAL=1 AKKOMA=1              # Mastodon AND Akkoma side by side
+make stack-up STACK_NO_CLONE=1               # build .stack-src AS-IS (see below)
 make stack-up PUBLIC_HOST_PORT=9090          # publish the front door elsewhere
 make stack-up PUBLIC_HTTPS_PORT=9443         # publish the HTTPS front door elsewhere
 make stack-up STACK_SRC=/srv/snap-src        # clone/build from a different dir
@@ -236,6 +240,8 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | http://localhost:8008 | tuwunel / Matrix (only with `SOCIAL=1`) |
 | http://localhost:3000 | Mastodon web (only with `SOCIAL=1`) |
 | http://localhost:4000 | Mastodon streaming (only with `SOCIAL=1`) |
+| http://localhost:8081 | phpBB (only with `PHPBB=1`) — alternative forum |
+| http://localhost:4001 | Akkoma (only with `AKKOMA=1`) — alternative fediverse server |
 | 127.0.0.1:9042 | Cassandra (gateway revocation list + URL registry) |
 
 The fe-gateway routes (`tests/stack/gateway-routes/fe/`) fan out from the front
@@ -246,6 +252,75 @@ then the admin-bff catch-all), `/_fragments/**` (fragment fleet), and `/be/**`
 (the be-gateway → federation + actions). Only the fe-gateway is published to the
 host; everything else is internal compose DNS, exactly as in the cluster only the
 gateways are ingress-exposed.
+
+---
+
+## Alternative social backends — `PHPBB=1` / `AKKOMA=1`
+
+Two third-party servers are available as **options** alongside the first-party
+stack, each behind its own compose profile in
+`tests/stack/compose.alt-social.yaml`. Both are **DEFAULT-OFF** (the
+tube/owncast precedent) and independent of `SOCIAL`, so a plain `make stack-up`
+is unaffected:
+
+| Knob | Service | Alternative to | Port |
+|---|---|---|---|
+| `PHPBB=1` | phpBB 3.3.15 | the first-party `hugmesh-forum-ui` + `hugmesh-forum-bff-api` | 8081, **and `/social/phpbb/` at the front door** |
+| `AKKOMA=1` | Akkoma v3.20.0 | Mastodon (Akkoma is a Pleroma fork with the same ActivityPub + Mastodon-client API surface) | 4001 |
+
+phpBB is also mounted on the fe-gateway at **`/social/phpbb/`**, a sibling of the
+first-party `/social/forum/`, so the two are comparable at the same front door.
+It is auth-gated identically (all three of `/social/forum/`, `/social/phpbb/`
+and `/social/mastodon/` return 401 unauthenticated). Note its route has **no**
+`StripPrefix`, unlike every other route in that file: phpBB is installed with
+`script_path=/social/phpbb` and builds its absolute URLs from it, so the
+upstream must receive the full path.
+
+Akkoma is reachable on its published port only; it is not wired into the
+gateway, because unlike Mastodon it has no platform OAuth/BFF integration to
+route to. Its Mastodon-compatible API answers directly, e.g.
+`curl http://localhost:4001/api/v1/instance`.
+
+```bash
+make stack-up PHPBB=1                 # core platform + phpBB
+make stack-up SOCIAL=1 AKKOMA=1       # Mastodon AND Akkoma together
+make stack-up SOCIAL=1 PHPBB=1 AKKOMA=1
+```
+
+Each gets its **own Postgres** rather than sharing `mastodon-db`: Akkoma needs
+database-level extensions and phpBB owns its schema outright, so sharing would
+couple two otherwise independent teardowns.
+
+`make stack-down` / `stack-clean` pass **every** profile unconditionally, so
+they reap these containers even when the `down` invocation does not repeat the
+knob that started them.
+
+### Packaging caveats (checked 2026-08-12) — read before copying this pattern
+
+Unlike `mastodon`/`tuwunel`/`postgres`, which this stack pins to maintained
+upstream images, **neither project publishes a usable first-party image**:
+
+- **phpBB** — there is no official image on Docker Hub or ghcr;
+  `github.com/phpbb/docker` is CI scaffolding pinned to PHP 5.4–7.0, and
+  `bitnami/phpbb` 404s. We therefore build a thin image
+  (`tests/stack/phpbb/Dockerfile`) from the **official release zip, pinned by
+  version and sha256**. The checksum is the supply-chain control — the zip
+  comes over a CDN, so an unverified download would silently accept a
+  substituted archive. Bump the version and the hash together; a mismatch
+  fails the build closed.
+  First run executes phpBB's own unattended CLI installer
+  (`install/phpbbcli.php`) so the profile comes up as a **working forum**
+  rather than a setup wizard — the same role `mastodon-init` plays for
+  Mastodon — then deletes `install/`, which phpBB requires post-install.
+  Dev-placeholder admin: `admin` / `adminadmin`.
+- **Akkoma** — upstream ships **no prebuilt image at all**; its own
+  docker-compose builds from source via `docker-resources/build.sh`. A
+  from-source Elixir build would add many minutes to a default-off option, so
+  the compose file uses an actively-maintained **community mirror**
+  (`teslamint/akkoma`) **pinned by digest**, not merely by tag, so the content
+  is immutable even if the tag is force-pushed. That image is **unofficial**:
+  fine for a local test lane, **not** a pattern to copy into `specs/cluster/`
+  for a real deployment, where it should be replaced by a first-party build.
 
 ---
 

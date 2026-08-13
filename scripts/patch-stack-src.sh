@@ -129,7 +129,8 @@ drop_pre_rename_commons_dep() { # <repo-checkout-dir>
 
 # ── patch: give a private-artifact consumer that ships NO settings.xml a way to
 #           resolve one ────────────────────────────────────────────────────────
-# hugmesh-gateway and hugmesh-actions DEPEND on systems.hugmesh:hugmesh-commons
+# hugmesh-gateway and hugmesh-actions DEPEND on the private hugmesh-commons
+# (now net.hugmesh:hugmesh-commons; see the groupId note on the matcher below)
 # but — unlike their eight BFF/federation siblings — ship no settings.xml, take
 # no CI_API_V4_URL build arg and never pass `-s`. Maven therefore resolves from
 # central only and the image build dies at the very first goal:
@@ -145,10 +146,19 @@ drop_pre_rename_commons_dep() { # <repo-checkout-dir>
 #
 # UPSTREAM FIX: these repos should ship the same settings.xml + ARG pair their
 # siblings already have; the marker below then keeps this a no-op.
+# BOTH groupId spellings must match. The private artifacts are mid-rename:
+# hugmesh-commons already publishes as net.hugmesh (m2-bootstrap.sh PINS group
+# path net/hugmesh) while hugmesh-parent/auth-core/build-config are still
+# systems.hugmesh. Matching only `systems.hugmesh` made this detector blind to
+# hugmesh-actions once its commons dep was renamed: the repo silently fell
+# through as "no private dependency", never got its settings file wired, and the
+# image build died at the first goal with
+#   Could not find artifact net.hugmesh:hugmesh-commons:jar:2.1.0 in central
+# — with no mention of the local registry, because `-s` was never threaded in.
 POM_NEEDS_PRIVATE_AWK='
   /<dependency>/ && !inblock { inblock=1; hit=0 }
   inblock {
-    if ($0 ~ /<groupId>systems\.hugmesh</) hit=1
+    if ($0 ~ /<groupId>(systems|net)\.hugmesh</) hit=1
     if ($0 ~ /<\/dependency>/) { if (hit) { found=1 }; inblock=0 }
     next
   }

@@ -765,17 +765,39 @@ log "leg 3: Mastodon accounts + follow + pending report at ${MASTODON_URL}"
 # NOTE: registrations_mode is a DB Setting, not an env var — there is no
 # REGISTRATIONS_MODE in the container's environment, so this cannot move to
 # gen-mastodon-env.sh.
+# Read the REAL setting. `bin/tootctl settings registrations` with no subcommand
+# does NOT print the current mode — it prints its HELP TEXT:
+#     tootctl registrations approved   # Open approval-based registrations
+#     tootctl registrations open       # Open registrations
+# registrations_mode is a DB Setting with no tootctl reader, so go through Rails.
+mastodon_registrations_mode() {
+  docker exec "${MASTODON_CTR}" bin/rails runner 'print Setting.registrations_mode' 2>/dev/null \
+    | tr -d '[:space:]' || true
+}
+
 mastodon_open_registrations() {
-  local cur
-  cur="$(docker exec "${MASTODON_CTR}" bin/tootctl settings registrations 2>/dev/null \
-         | tr -d '[:space:]' || true)"
-  case "${cur}" in
-    *open*) log "mastodon registrations already open" ; return 0 ;;
-  esac
-  if docker exec "${MASTODON_CTR}" bin/tootctl settings registrations open >/dev/null 2>&1; then
-    log "mastodon registrations opened (was: ${cur:-none})"
+  local mode
+  mode="$(mastodon_registrations_mode)"
+  # The previous check was `case "$(tootctl settings registrations)" in *open*)`,
+  # a SUBSTRING match against the help text above — which contains "open" twice.
+  # It therefore matched on EVERY run, logged "already open", and returned
+  # without opening anything. registrations_mode stayed `none`, POST
+  # /api/v1/accounts kept answering 403, and the damage surfaced far from its
+  # cause: user-bff's Mastodon broker could not mint an account, so
+  # /bff/user/mastodon/** answered 502 and the Mastodon e2e leg failed with a
+  # green-looking seed. Compare the exact value instead.
+  if [ "${mode}" = "open" ]; then
+    log "mastodon registrations already open"
+    return 0
+  fi
+  docker exec "${MASTODON_CTR}" bin/tootctl settings registrations open >/dev/null 2>&1 || true
+  # VERIFY the outcome, not the exit status — re-read the setting.
+  local after
+  after="$(mastodon_registrations_mode)"
+  if [ "${after}" = "open" ]; then
+    log "mastodon registrations opened (was: ${mode:-unknown})"
   else
-    warn "could not open Mastodon registrations — /bff/provision/mastodon will 502 with \"mastodon mint: no access_token\" until it is open (tootctl settings registrations open)"
+    warn "could not open Mastodon registrations (still '${after:-unknown}') — /bff/user/mastodon/** and /bff/provision/mastodon will 502 with \"mastodon mint: no access_token\" until it is open (tootctl settings registrations open)"
   fi
 }
 mastodon_open_registrations

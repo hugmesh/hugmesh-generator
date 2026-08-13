@@ -37,6 +37,12 @@ include:
   # Overlay that tags the tuwunel/mastodon services with the `social` profile so
   # they are OPT-IN (`--profile social`); casdoor/cassandra stay core (always up).
   - path: compose.social-profile.yaml
+  # ALTERNATIVE third-party social backends, each behind its own profile:
+  # phpBB (`--profile phpbb`, an alternative to the first-party forum) and
+  # Akkoma (`--profile akkoma`, an alternative fediverse server to Mastodon).
+  # Both DEFAULT-OFF and independent of `social`, so they add nothing to a plain
+  # `make stack-up`. Enable with `make stack-up PHPBB=1` / `AKKOMA=1`.
+  - path: compose.alt-social.yaml
 
 # x86_64 only — first-party images are amd64 (Temurin JRE / node-alpine / nginx).
 # On Docker Desktop for Windows this matches the default linux/amd64 engine.
