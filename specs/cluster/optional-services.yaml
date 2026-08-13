@@ -496,7 +496,7 @@ spec:
     # meshbridge attaches LoRa mesh radios (USB-serial, LoRa-WiFi TCP:4403, or a
     # WAN-linked mesh via Meshtastic's MQTT JSON integration) and bridges their
     # text traffic into tuwunel as a Matrix APPSERVICE (exclusive @mesh-.* user
-    # namespace; per-room opt-in via the systems.hugmesh.mesh.bridge state
+    # namespace; per-room opt-in via the net.hugmesh.mesh.bridge state
     # event). See docs/MESHTASTIC-BRIDGE.md. It lands in hugmesh-backend
     # ALONGSIDE tuwunel because the appservice speaks the plain in-namespace CS
     # API (tuwunel:8008) and receives AS transaction pushes on :8009 — neither

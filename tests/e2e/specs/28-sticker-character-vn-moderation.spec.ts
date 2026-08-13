@@ -206,12 +206,12 @@ test.describe('28 GROUP A — sticker/character/VN surfaces that EXIST today', (
         body: 'neutral sticker',
         url: 'mxc://stub.invalid/e2e-a2',
         info: { w: 256, h: 256, mimetype: 'image/png' },
-        'systems.hugmesh.vn': { expression: 'neutral' },
+        'net.hugmesh.vn': { expression: 'neutral' },
       };
       // NB raw room_id in the path — the portable spelling. Synapse rejected the
       // percent-encoded form (403, verified live); tuwunel accepts both raw and
       // encoded (200, verified live — this exact content shape round-trips
-      // verbatim, systems.hugmesh.vn namespace included). Raw works everywhere.
+      // verbatim, net.hugmesh.vn namespace included). Raw works everywhere.
       const put = await mx.put(`${HS}/_matrix/client/v3/rooms/${roomId}/send/m.sticker/${txn()}`, { data: content });
       expect(put.status(), 'm.sticker send accepted by the homeserver').toBe(200);
       const eventId = (await put.json()).event_id as string;
@@ -223,7 +223,7 @@ test.describe('28 GROUP A — sticker/character/VN surfaces that EXIST today', (
       const stored = await ev.json();
       expect(stored.type).toBe('m.sticker');
       expect(String(stored.content.url).startsWith('mxc://')).toBe(true);
-      expect(stored.content['systems.hugmesh.vn'].expression).toBe('neutral');
+      expect(stored.content['net.hugmesh.vn'].expression).toBe('neutral');
       expect(stored.content.body).toBe('neutral sticker');
       await mx.dispose();
     });
@@ -456,7 +456,7 @@ test.describe('28 GROUP B — fine-grained sticker/character ban (CONTRACT, capa
       });
       expect(save.status(), 'feature-banned user cannot SAVE a sticker').toBe(403);
       const sticker = await target.put(`${HS}/_matrix/client/v3/rooms/${room}/send/m.sticker/${txn()}`,
-        { data: { body: 'x', url: 'mxc://stub.invalid/x', info: { w: 256, h: 256 }, 'systems.hugmesh.vn': { expression: 'neutral' } } });
+        { data: { body: 'x', url: 'mxc://stub.invalid/x', info: { w: 256, h: 256 }, 'net.hugmesh.vn': { expression: 'neutral' } } });
       expect(sticker.status(), 'feature-banned user cannot SEND a sticker').toBe(403);
       const textMsg = await target.put(`${HS}/_matrix/client/v3/rooms/${room}/send/m.room.message/${txn()}`,
         { data: { msgtype: 'm.text', body: 'text still works' } });
@@ -495,11 +495,11 @@ test.describe('28 GROUP B — fine-grained sticker/character ban (CONTRACT, capa
   test.fixme(`B4 ban a SPECIFIC character used in messages (needs first-class per-message character identity + send-time enforcement) ${tags({ role: 'ROLE_ADMIN', layer: 'homeserver' })}`,
     async ({ baseURL }) => {
       // DESIRED (gap a, character variant): a character is a first-class identity
-      // carried per-message (e.g. content['systems.hugmesh.vn'].characterId), and
+      // carried per-message (e.g. content['net.hugmesh.vn'].characterId), and
       // banning it enforces at SEND time.
       //   POST /bff/admin/character/{characterId}/ban { reason }  -> 200
       //   THEN a send referencing that character:
-      //     PUT .../send/m.room.message/{txn} { 'systems.hugmesh.vn': { characterId } } -> 403 (or stripped)
+      //     PUT .../send/m.room.message/{txn} { 'net.hugmesh.vn': { characterId } } -> 403 (or stripped)
       //   WHILE a plain-text send (no characterId) is unaffected -> 200.
       // Today the only per-message VN field is a free-form `vn.expression`; there is
       // NO stored character identity and NO send-time enforcement (the homeserver
@@ -513,7 +513,7 @@ test.describe('28 GROUP B — fine-grained sticker/character ban (CONTRACT, capa
       const target = await loggedIn(baseURL, 'e2e-matrix');
       const room = await createRoom(target, 'B4');
       const withChar = await target.put(`${HS}/_matrix/client/v3/rooms/${room}/send/m.room.message/${txn()}`,
-        { data: { msgtype: 'm.text', body: 'in character', 'systems.hugmesh.vn': { characterId } } });
+        { data: { msgtype: 'm.text', body: 'in character', 'net.hugmesh.vn': { characterId } } });
       expect(withChar.status(), 'a send referencing the banned character is rejected').toBe(403);
       const plain = await target.put(`${HS}/_matrix/client/v3/rooms/${room}/send/m.room.message/${txn()}`,
         { data: { msgtype: 'm.text', body: 'plain text' } });
