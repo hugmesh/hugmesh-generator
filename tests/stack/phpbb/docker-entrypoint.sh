@@ -89,13 +89,23 @@ YML
 
 echo "[phpbb-entrypoint] running phpBB unattended installer"
 cd "${DOCROOT}"
-if ! php install/phpbbcli.php install "${INSTALL_YML}"; then
-    echo "[phpbb-entrypoint] INSTALL FAILED — leaving the installer in place so the" >&2
-    echo "                   web wizard at ${PHPBB_SCRIPT_PATH}/install/ still works" >&2
-    rm -f "${INSTALL_YML}"
+php install/phpbbcli.php install "${INSTALL_YML}" || true
+rm -f "${INSTALL_YML}"
+
+# Verify the OUTCOME, not the exit status. phpbbcli exits 0 even when the
+# install fails — e.g. against a database that already holds a phpBB schema it
+# prints "[ERROR] Tables with the specified prefix already exist" and still
+# returns 0. Trusting `if ! php ...` therefore reported a successful install and
+# went on to delete install/, leaving a board that could neither be used nor
+# re-installed. A non-empty config.php is the only trustworthy signal.
+if [ ! -s "${CONFIG}" ]; then
+    echo "[phpbb-entrypoint] INSTALL FAILED (no config.php written)." >&2
+    echo "                   Leaving install/ in place so the web wizard at" >&2
+    echo "                   ${PHPBB_SCRIPT_PATH}/install/ can still be used." >&2
+    echo "                   If the database already holds a phpBB schema, drop" >&2
+    echo "                   the phpbb-pg volume (make stack-down passes -v)." >&2
     exec "$@"
 fi
-rm -f "${INSTALL_YML}"
 
 # phpBB refuses to serve a board while install/ is present (it is the documented
 # post-install step, and leaving it exposed is a real admin-takeover vector).

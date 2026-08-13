@@ -70,8 +70,22 @@ services:
       PHPBB_SERVER_PORT: "${PUBLIC_HOST_PORT:-8088}"
     depends_on:
       phpbb-db: { condition: service_healthy }
-    # Published so the option is reachable directly while the gateway route is
-    # being wired, mirroring mastodon-web's 3000:3000.
+    volumes:
+      # The docroot MUST persist. phpBB's install state lives in TWO places —
+      # the database AND config.php in the docroot — and without this volume
+      # only the database survives a container recreate. The two then
+      # desynchronise: the entrypoint sees no config.php, re-runs the installer,
+      # and the installer refuses with "Tables with the specified prefix already
+      # exist", leaving the board serving its setup wizard again. This also
+      # keeps user uploads/avatars and any installed extension across recreates.
+      #
+      # CAVEAT: a named volume masks the image's docroot after first creation,
+      # so bumping PHPBB_VERSION in the Dockerfile does NOT take effect until
+      # the volume is dropped. `make stack-down` / `stack-clean` both pass -v,
+      # so any full teardown cycle picks the new version up.
+      - phpbb-html:/var/www/html
+    # Published so the option is reachable directly as well as through the
+    # gateway at /social/phpbb/, mirroring mastodon-web's 3000:3000.
     ports: ["8081:80"]
 
   # ── Akkoma (profile: akkoma) ──────────────────────────────────────────────
@@ -126,5 +140,6 @@ services:
 
 volumes:
   phpbb-pg:
+  phpbb-html:
   akkoma-pg:
   akkoma-data:
