@@ -409,6 +409,20 @@ class LocalStackNode:
         # stays byte-identical to every existing caller.
         if self.login_theme_css.strip():
             env["SNAP_THEME_CSS"] = self.login_theme_css
+            # ALSO persist it (tests/stack/.theme.css, gitignored): the env var only
+            # covers THIS invocation, so before this write a terminal `make stack-up`
+            # (a restore, a rebuild, a peer's bring-up) silently reverted the login
+            # page to the shipped brand — the operator's "my theme isn't applied".
+            # The Makefile threads the file's text back as SNAP_THEME_CSS whenever it
+            # exists (STACK_THEME_ENV). Best-effort on purpose: an unwritable file
+            # must never block a bring-up, and the env var above still applies now.
+            try:
+                theme_file = os.path.join(
+                    self.generator_dir, "tests", "stack", ".theme.css")
+                with open(theme_file, "w", encoding="utf-8") as fh:
+                    fh.write(self.login_theme_css)
+            except OSError:
+                pass
         # External IdP (I6.6): exported ONLY for an external provider WITH an issuer,
         # so the casdoor default (and a half-configured external) leaves the env
         # byte-identical. Consumed by the Lane-B Makefile OIDC seam when it lands;

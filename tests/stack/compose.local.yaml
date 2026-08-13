@@ -735,6 +735,15 @@ services:
       # console actually talks to the forum BFF that compose already runs.
       EXTERNAL_FORUM_ENABLED: "true"
       EXTERNAL_FORUM_BASE_URL: "http://hugmesh-forum-bff-api:8080"
+      # Platform-capability k8s probe: application.yml defaults
+      # PLATFORM_CAPABILITIES_K8S_ENABLED to TRUE (cluster deployments), but compose has
+      # no k8s API server — the fabric8 client autoconfigures to the unresolvable
+      # https://kubernetes.default.svc and each read only fails after long internal
+      # retries (~96s for the 5 reads, occasionally never), which exceeds every client
+      # timeout AND the controller's 45s cache TTL, so GET /bff/admin/platform-capabilities
+      # reads as hung. Wire the NoopPlatformCapabilityProbe instead: instant response,
+      # honest NOT_WIRED warning, runtime capabilities reported absent.
+      PLATFORM_CAPABILITIES_K8S_ENABLED: "false"
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       # MANAGED backing service seam: default in-stack admin-bff-db; set
       # MANAGED_ADMIN_BFF_{R2DBC,LIQUIBASE}_URL (via STACK_ENV) to a hosted RDS/Azure-PG
@@ -1003,6 +1012,16 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: casdoor
       CASDOOR_SYSTEMS_URL: "http://casdoor:8000"
+      # hugmesh-actions binds its resource-server issuer to CASDOOR_SYSTEMS_URL,
+      # which must STAY in-DNS (it doubles as the Casdoor API base). But Casdoor
+      # stamps iss from the REQUEST origin, so tokens minted through the
+      # browser/host-facing localhost:8000 carry that iss and every bearer call
+      # here answered 401 "The iss claim is not valid" (spec 14's LIVE probes).
+      # Override the two Spring resource-server properties directly: validate
+      # the host-facing issuer, fetch keys in-DNS — the same split every sibling
+      # service's CASDOOR_ISSUER_URI/CASDOOR_JWKS_URI pair encodes.
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: "http://casdoor:8000/.well-known/jwks"
       CASDOOR_SYSTEMS_ORG: hugmesh
       CASDOOR_SYSTEMS_CLIENT_ID: dev-systems-client
       CASDOOR_SYSTEMS_CLIENT_SECRET: dev-systems-secret
@@ -1050,7 +1069,8 @@ services:
       # upstream stub-seam OFF so forum-bff boots clean and always-audits instead
       # of failing every forum call against an absent backend (documented
       # limitation, same class as admin-bff's Kafka/ClickHouse omission above).
-      PHPBB_ENABLED: "false"
+      PHPBB_ENABLED: "true"
+      PHPBB_API_BASE_URL: "http://phpbb:8080"
       EXTERNAL_FORUM_ENABLED: "false"
       # MANAGED backing service seam (default in-stack forum-bff-db; UNSET = default).
       SPRING_R2DBC_URL: "${MANAGED_FORUM_BFF_R2DBC_URL:-r2dbc:postgresql://forum-bff-db:5432/forumbff}"

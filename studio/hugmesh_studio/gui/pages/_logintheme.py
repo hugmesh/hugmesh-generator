@@ -28,7 +28,7 @@ import os
 
 from ..qt import QtCore, QtGui, QtWidgets
 from ...core import fonts as core_fonts
-from ...core import login_preview, platform_preview, theme
+from ...core import login_preview, platform_preview, theme, theme_presets
 from ._widgets import _file_picker, _row
 
 _HEX_PLACEHOLDER = "#RRGGBB — empty keeps the shipped colour"
@@ -61,6 +61,40 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
             "container start (no image rebuild); empty = the shipped brand.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
+
+        # ── theme preset (the wizard's one-click path; Custom = type hex below) ──
+        self.theme_preset = QtWidgets.QComboBox()
+        self.theme_preset.addItem("Custom (type colours below)", "")
+        for group in theme_presets.groups():
+            self.theme_preset.insertSeparator(self.theme_preset.count())
+            for pr in theme_presets.PRESETS:
+                if pr.group == group:
+                    label = f"{group}: {pr.label}"
+                    self.theme_preset.addItem(label, pr.preset_id)
+                    if pr.note:
+                        self.theme_preset.setItemData(
+                            self.theme_preset.count() - 1, pr.note,
+                            QtCore.Qt.ItemDataRole.ToolTipRole)
+        self.theme_mode = QtWidgets.QComboBox()
+        self.theme_mode.addItem("Dark ramp", "dark")
+        self.theme_mode.addItem("Light ramp", "light")
+        self.theme_mode.setToolTip(
+            "The neutral background/text ramp under the accent colours. Light "
+            "re-anchors accent text against the light background (still WCAG AA "
+            "by construction).")
+        pw = QtWidgets.QWidget()
+        ph = QtWidgets.QHBoxLayout(pw)
+        ph.setContentsMargins(0, 0, 0, 0)
+        ph.addWidget(self.theme_preset, 1)
+        ph.addWidget(self.theme_mode)
+        lay.addWidget(_row("Theme preset", pw))
+        self.preset_swatches = QtWidgets.QWidget()
+        self.preset_swatches_lay = QtWidgets.QHBoxLayout(self.preset_swatches)
+        self.preset_swatches_lay.setContentsMargins(0, 0, 0, 0)
+        self.preset_swatches_lay.setSpacing(0)
+        self.preset_swatches.setFixedHeight(14)
+        self.preset_swatches.setVisible(False)
+        lay.addWidget(_row("", self.preset_swatches))
 
         # ── colours ──
         self.primary = QtWidgets.QLineEdit()
@@ -182,12 +216,30 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
 
         self.primary.textChanged.connect(self._refresh)
         self.secondary.textChanged.connect(self._refresh)
+        # Preset interplay: choosing a preset FILLS the hex fields (so the token
+        # board + browser preview keep telling the truth through the existing
+        # paths); hand-editing a hex field afterwards flips back to Custom —
+        # the combo never silently overrides what the operator typed.
+        self._applying_preset = False
+        self.theme_preset.currentIndexChanged.connect(self._preset_chosen)
+        self.theme_mode.currentIndexChanged.connect(self._preset_chosen)
+        self.primary.textChanged.connect(self._maybe_clear_preset)
+        self.secondary.textChanged.connect(self._maybe_clear_preset)
         self.font_preset.currentIndexChanged.connect(self._refresh)
         self.font_file.textChanged.connect(self._font_changed)
         self._refresh()
 
     # ── cfg binding ──────────────────────────────────────────────────────────────
     def load(self, cfg) -> None:
+        preset_id = getattr(cfg, "login_theme_preset", "")
+        idxp = self.theme_preset.findData(preset_id) if preset_id else 0
+        self._applying_preset = True
+        try:
+            self.theme_preset.setCurrentIndex(idxp if idxp > 0 else 0)
+            idxm = self.theme_mode.findData(getattr(cfg, "login_theme_mode", "dark"))
+            self.theme_mode.setCurrentIndex(idxm if idxm >= 0 else 0)
+        finally:
+            self._applying_preset = False
         self.primary.setText(cfg.login_primary_color)
         self.secondary.setText(cfg.login_secondary_color)
         idx = self.font_preset.findText(cfg.login_font) if cfg.login_font else 0
@@ -201,6 +253,8 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         cfg.login_theme_css() / compose_css so every consumer shares it)."""
         cfg.login_primary_color = self.primary.text().strip()
         cfg.login_secondary_color = self.secondary.text().strip()
+        cfg.login_theme_preset = self.theme_preset.currentData() or ""
+        cfg.login_theme_mode = self.theme_mode.currentData() or "dark" 
         cfg.login_font = self._preset_name()
         cfg.login_font_file = self.font_file.text().strip()
         cfg.login_font_licence = self.font_licence.text().strip()
@@ -213,6 +267,50 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
     def error_text(self) -> str:
         return self._error
 
+    def _preset_chosen(self, *_):
+        """Fill the hex fields from the chosen preset; slot-safe (never raises)."""
+        pid = self.theme_preset.currentData() or ""
+        # clear the stripe bar
+        while self.preset_swatches_lay.count():
+            item = self.preset_swatches_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        if not pid:
+            self.preset_swatches.setVisible(False)
+            self._refresh()
+            return
+        try:
+            preset = theme_presets.by_id(pid)
+        except KeyError:
+            self.preset_swatches.setVisible(False)
+            return
+        self._applying_preset = True
+        try:
+            self.primary.setText(preset.primary)
+            self.secondary.setText(preset.secondary)
+        finally:
+            self._applying_preset = False
+        for stripe in preset.stripes:
+            sw = QtWidgets.QLabel()
+            sw.setStyleSheet(f"background: {stripe};")
+            sw.setMinimumWidth(8)
+            self.preset_swatches_lay.addWidget(sw, 1)
+        self.preset_swatches.setVisible(bool(preset.stripes))
+        self._refresh()
+
+    def _maybe_clear_preset(self, *_):
+        """A hand-edited hex field means Custom — the combo must not lie."""
+        if self._applying_preset:
+            return
+        if self.theme_preset.currentIndex() != 0:
+            self._applying_preset = True
+            try:
+                self.theme_preset.setCurrentIndex(0)
+                self.preset_swatches.setVisible(False)
+            finally:
+                self._applying_preset = False
+
     def compose_css(self) -> str:
         """The derived snap-theme.css text for the current widget state, or "" when
         unthemed OR invalid — with the reason in error_text() and shown in red.
@@ -223,6 +321,15 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
                 self.primary.text(), self.secondary.text(),
                 font_preset=self._preset_name(),
                 font_family=self._font_family, font_bytes=self._font_bytes)
+            # A preset's extras (light ramp / flag stripes) land as an appended
+            # :root:root block — same mechanism the cfg delivery path uses, so
+            # what this page previews is byte-for-byte what ships.
+            pid = self.theme_preset.currentData() or ""
+            if pid:
+                delta = theme_presets.delta_css(
+                    pid, self.theme_mode.currentData() or "dark")
+                if delta:
+                    css = (css + "\n" if css else "") + delta
             self._error = ""
         except ValueError as exc:
             css, self._error = "", str(exc)
