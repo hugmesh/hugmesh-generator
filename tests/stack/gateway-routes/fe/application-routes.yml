@@ -55,6 +55,15 @@ spring:
               uri: http://phpbb:8080
               predicates:
                 - Path=/social/phpbb/**
+              filters:
+                # StripPrefix=2 because the hugmesh-forum-api IMAGE installs phpBB
+                # with script_path=/ (its shipped install-config.compose.yml), so the
+                # upstream expects paths rooted at /. An earlier revision of this
+                # route deliberately had NO StripPrefix — correct for the since-
+                # replaced vanilla image, whose installer was fed
+                # script_path=/social/phpbb; with the real image that produced a
+                # themed phpBB 404 on every /social/phpbb/** URL.
+                - StripPrefix=2
             # login-ui is a STANDALONE Angular app (its own index.html; no
             # module-federation remoteEntry in this stack) built with
             # base-href=/login/ (hugmesh-login-ui companion change), so the
