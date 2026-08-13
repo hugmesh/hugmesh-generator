@@ -77,6 +77,30 @@ const BOGUS_ID = '00000000-0000-0000-0000-000000000000';
 async function loginAs(api: APIRequestContext, username: string): Promise<void> {
   const r = await api.post('/bff/login', { data: { username, password: LOGIN_PASSWORD } });
   expect(r.status(), `native login ${username}`).toBe(200);
+
+  // ONBOARD (registration STAGE 2) — the same fix spec 29 already carries.
+  //
+  // Login alone leaves the account at registration_complete=false, and while that
+  // is false the gateway grants ONLY the bare ROLE_USER floor
+  // (BffSessionAuthFilter.buildAuthorities) no matter what roles Casdoor holds.
+  // e2e-mod then reads back as roles:['mod'] but 403s on /bff/mod/**, so A4's
+  // "MOD must be AUTHORIZED" assertion fails and A5-A7's role assertions would be
+  // vacuous. Nothing in the seed performs stage 2 on purpose: seed-e2e.sh keeps
+  // SEED_COMPLETE_REGISTRATION off because other specs need still-gated personas.
+  //
+  // Without this, the spec passed ONLY when some earlier spec in the same run had
+  // already onboarded the same persona — an invisible ordering dependency that
+  // makes it unrunnable standalone or against a fresh stack.
+  //
+  // Not a back door: POST /bff/register/complete is admin-bff's public
+  // AuthController endpoint, exactly what the login-ui's "Complete registration"
+  // button calls, reached through the gateway with this context's session cookie.
+  const session = await api.get('/bff/session', { headers: { accept: 'application/json' } });
+  expect(session.status(), `${username}: GET /bff/session after login`).toBe(200);
+  if (!(await session.json()).registrationComplete) {
+    const done = await api.post('/bff/register/complete', { data: { displayName: username } });
+    expect(done.status(), `${username}: POST /bff/register/complete`).toBe(200);
+  }
 }
 
 /** A fresh request context already signed in as `username`. */
