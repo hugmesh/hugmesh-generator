@@ -1,5 +1,21 @@
 import { test, expect } from '@playwright/test';
-import { onboard, matrixUserId, createRoom, joinRoom, shot } from './helpers';
+import {
+  onboard, matrixUserId, createRoom, joinRoom, requirePlatformPersonas,
+  expectUiCallOk, UI_ROOM_SEND, shot,
+} from './helpers';
+
+// KNOWN BLOCKER: both halves of this journey (the composer send and the m.call.*
+// signalling) ride the room-scoped `/rooms/<id>/send/...` path that spec 05
+// documents at the bottom of its file — hugmesh-matrix-ui percent-encodes the
+// room id and tuwunel v1.7.0 does not decode it. Needs a matrix-ui source change
+// + image rebuild; the assertions here are left intact.
+//
+// PERSONAS — see 05: chat AND the room-signalled call both hit the Matrix
+// backend, which is gated on the per-platform ROLE_MATRIX access role. alice@/bob@
+// hold ROLE_USER only and are denied it by design (spec 17), so this journey runs
+// on the two seeded ROLE_MATRIX personas. Intent unchanged: the same two users
+// chat, then escalate to a voice call in that same room.
+const [ALICE, BOB] = requirePlatformPersonas('ROLE_MATRIX', 2);
 
 // End-to-end social flow: two onboarded users hold a text chat in a shared
 // Matrix room, then escalate to a real-WebRTC VOICE call signalled over that
@@ -13,8 +29,8 @@ test('two users chat, then escalate to a voice call', async ({ browser }) => {
   const alice = await a.newPage();
   const bob = await b.newPage();
 
-  await onboard(alice, 'alice@gmail.com');
-  await onboard(bob, 'bob@gmail.com');
+  await onboard(alice, ALICE.username, ALICE.password);
+  await onboard(bob, BOB.username, BOB.password);
 
   // Shared room, created + joined BEFORE opening the views (the chat component
   // reads joined rooms on init, then polls; the call module signals through it).
@@ -30,12 +46,18 @@ test('two users chat, then escalate to a voice call', async ({ browser }) => {
   await expect(alice.getByTestId('matrix-view')).toBeVisible();
   await expect(bob.getByTestId('matrix-view')).toBeVisible();
 
-  await alice.getByTestId('matrix-input').fill('hey Bob — voice call in a sec?');
-  await alice.getByTestId('matrix-send').click();
+  // Each send is wrapped so a failing CS-API call reports as itself (status +
+  // URL) instead of as an empty log 15s later.
+  await expectUiCallOk(alice, UI_ROOM_SEND, "alice's composer send", async () => {
+    await alice.getByTestId('matrix-input').fill('hey Bob — voice call in a sec?');
+    await alice.getByTestId('matrix-send').click();
+  });
   await expect(bob.getByTestId('matrix-log')).toContainText('hey Bob — voice call in a sec?');
 
-  await bob.getByTestId('matrix-input').fill('sure Alice — ring me');
-  await bob.getByTestId('matrix-send').click();
+  await expectUiCallOk(bob, UI_ROOM_SEND, "bob's composer send", async () => {
+    await bob.getByTestId('matrix-input').fill('sure Alice — ring me');
+    await bob.getByTestId('matrix-send').click();
+  });
   await expect(alice.getByTestId('matrix-log')).toContainText('sure Alice — ring me');
 
   // ── 2. Alice starts a voice call in the same room; Bob answers ─────
@@ -44,7 +66,9 @@ test('two users chat, then escalate to a voice call', async ({ browser }) => {
   await expect(alice.getByTestId('call-view')).toBeVisible();
   await expect(bob.getByTestId('call-view')).toBeVisible();
 
-  await alice.getByTestId('call-start').click();
+  await expectUiCallOk(alice, UI_ROOM_SEND, "alice's call-start signalling event", async () => {
+    await alice.getByTestId('call-start').click();
+  });
   await expect(bob.getByTestId('call-state')).toHaveText('ringing', { timeout: 15_000 });
   await bob.getByTestId('call-join').click();
 

@@ -89,9 +89,9 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 # (parent's plugin dep), then parent (everything else's <parent>), then commons/auth-core.
 PINS=(
   "hugmesh-build-config|7f5f643d8f08ced145569d3a9db6b4be8849516f|hugmesh-build-config|0.5.0|jar|systems/hugmesh"
-  "hugmesh-parent|389f34e98c6da846b21bda9e1553cf1418dc92eb|hugmesh-parent|2.8.0|pom|systems/hugmesh"
+  "hugmesh-parent|b333b1195465da9f5c76b209f727e1e3420cdf1f|hugmesh-parent|2.8.0|pom|systems/hugmesh"
   "hugmesh-commons|fc6e5591da81a68d10146ab6864a6ffbfd0f7491|hugmesh-commons|2.1.0|jar+tests|net/hugmesh"
-  "hugmesh-auth-core|b50696be9ad769515c2bda7f5b29420f110a65dc|hugmesh-auth-core|2.4.2|jar|systems/hugmesh"
+  "hugmesh-auth-core|87dab73d455ece2c9006ed2f044f40562a4cbe9b|hugmesh-auth-core|2.4.2|jar|systems/hugmesh"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"
