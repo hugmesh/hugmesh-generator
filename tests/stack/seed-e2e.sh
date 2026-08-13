@@ -573,7 +573,47 @@ onboard_persona() {  # <username>
 }
 
 if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
+# Mastodon registrations must be OPEN before leg 1c, not after it.
+# These used to be defined down in LEG 3, ~230 lines BELOW their first consumer:
+# leg 1c provisions each persona's Mastodon account through the API, and with
+# registrations still `none` every one of those answered 403, so the broker could
+# not mint and the seed ended with "4 persona(s) could not be fully onboarded"
+# on a FRESH stack. Leg 3 still calls it; the function checks the real setting
+# first, so the second call just logs "already open".
+# registrations_mode is a DB Setting with no tootctl reader, so go through Rails.
+mastodon_registrations_mode() {
+  docker exec "${MASTODON_CTR}" bin/rails runner 'print Setting.registrations_mode' 2>/dev/null \
+    | tr -d '[:space:]' || true
+}
+
+mastodon_open_registrations() {
+  local mode
+  mode="$(mastodon_registrations_mode)"
+  # The previous check was `case "$(tootctl settings registrations)" in *open*)`,
+  # a SUBSTRING match against the help text above — which contains "open" twice.
+  # It therefore matched on EVERY run, logged "already open", and returned
+  # without opening anything. registrations_mode stayed `none`, POST
+  # /api/v1/accounts kept answering 403, and the damage surfaced far from its
+  # cause: user-bff's Mastodon broker could not mint an account, so
+  # /bff/user/mastodon/** answered 502 and the Mastodon e2e leg failed with a
+  # green-looking seed. Compare the exact value instead.
+  if [ "${mode}" = "open" ]; then
+    log "mastodon registrations already open"
+    return 0
+  fi
+  docker exec "${MASTODON_CTR}" bin/tootctl settings registrations open >/dev/null 2>&1 || true
+  # VERIFY the outcome, not the exit status — re-read the setting.
+  local after
+  after="$(mastodon_registrations_mode)"
+  if [ "${after}" = "open" ]; then
+    log "mastodon registrations opened (was: ${mode:-unknown})"
+  else
+    warn "could not open Mastodon registrations (still '${after:-unknown}') — /bff/user/mastodon/** and /bff/provision/mastodon will 502 with \"mastodon mint: no access_token\" until it is open (tootctl settings registrations open)"
+  fi
+}
+
   log "leg 1c: onboarding personas (registration stage 2 + platform provisioning)"
+  mastodon_open_registrations
   reg_ok=0; reg_gated=0; reg_fail=0
   for persona in ${REGISTRATION_PERSONAS}; do
     onboard_persona "${persona}" && { reg_ok=$((reg_ok+1)); continue; }
@@ -769,38 +809,7 @@ log "leg 3: Mastodon accounts + follow + pending report at ${MASTODON_URL}"
 # does NOT print the current mode — it prints its HELP TEXT:
 #     tootctl registrations approved   # Open approval-based registrations
 #     tootctl registrations open       # Open registrations
-# registrations_mode is a DB Setting with no tootctl reader, so go through Rails.
-mastodon_registrations_mode() {
-  docker exec "${MASTODON_CTR}" bin/rails runner 'print Setting.registrations_mode' 2>/dev/null \
-    | tr -d '[:space:]' || true
-}
-
-mastodon_open_registrations() {
-  local mode
-  mode="$(mastodon_registrations_mode)"
-  # The previous check was `case "$(tootctl settings registrations)" in *open*)`,
-  # a SUBSTRING match against the help text above — which contains "open" twice.
-  # It therefore matched on EVERY run, logged "already open", and returned
-  # without opening anything. registrations_mode stayed `none`, POST
-  # /api/v1/accounts kept answering 403, and the damage surfaced far from its
-  # cause: user-bff's Mastodon broker could not mint an account, so
-  # /bff/user/mastodon/** answered 502 and the Mastodon e2e leg failed with a
-  # green-looking seed. Compare the exact value instead.
-  if [ "${mode}" = "open" ]; then
-    log "mastodon registrations already open"
-    return 0
-  fi
-  docker exec "${MASTODON_CTR}" bin/tootctl settings registrations open >/dev/null 2>&1 || true
-  # VERIFY the outcome, not the exit status — re-read the setting.
-  local after
-  after="$(mastodon_registrations_mode)"
-  if [ "${after}" = "open" ]; then
-    log "mastodon registrations opened (was: ${mode:-unknown})"
-  else
-    warn "could not open Mastodon registrations (still '${after:-unknown}') — /bff/user/mastodon/** and /bff/provision/mastodon will 502 with \"mastodon mint: no access_token\" until it is open (tootctl settings registrations open)"
-  fi
-}
-mastodon_open_registrations
+mastodon_open_registrations   # idempotent: leg 1c already opened it
 
 mastodon_account() { # <user>
   local out
