@@ -52,7 +52,7 @@ spring:
             # profile is up; with the profile off the route simply has no
             # backend, exactly as those do without SOCIAL=1.
             - id: phpbb
-              uri: http://phpbb:80
+              uri: http://phpbb:8080
               predicates:
                 - Path=/social/phpbb/**
             # login-ui is a STANDALONE Angular app (its own index.html; no

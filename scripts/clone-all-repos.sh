@@ -66,6 +66,11 @@ REPOS=(
   # ── forum/wiki/owncast/tube/character-studio UI+BFF pairs ──
   hugmesh-forum-ui
   hugmesh-forum-bff-api
+  # The phpBB IMAGE repo: official phpBB 3.3 + the `hugmesh/forumapi` headless
+  # extension, which is what hugmesh-forum-bff-api actually calls
+  # (/api/v1/hugmesh/**). compose.alt-social.yaml builds the `phpbb` service
+  # from this context, so the phpbb profile cannot come up without it.
+  hugmesh-forum-api
   hugmesh-wiki-ui
   hugmesh-wiki-bff-api
   hugmesh-owncast-ui

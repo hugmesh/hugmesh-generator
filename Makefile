@@ -383,7 +383,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-down stack-logs stack-ps \
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps \
         kind-images kind-up kind-e2e kind-down kind-honesty
 
 help: ## list targets
@@ -1382,7 +1382,18 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "    but not navigate. Re-run with SEED_COMPLETE_REGISTRATION=1 to onboard the personas too"
 	@echo "    (the Studio's local-mesh bring-up passes it; the e2e suite deliberately does not)."
 
-stack-down: ## stop the local stack and drop its volumes
+stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
+	# The NON-DESTRUCTIVE stop. `stack-down` below passes -v, which drops every
+	# named volume — Casdoor identity, Matrix rooms, Mastodon accounts, the phpBB
+	# board and all the BFF databases. That is the right default for a throwaway
+	# test lane, but it is NOT what an operator means by "stop my mesh": the
+	# Studio's Stop button called stack-down and silently wiped the operator's
+	# whole mesh, so restarting left them unable to log in, post, or open the
+	# forum until a full re-seed. Containers and images still go; only the data
+	# survives, so `make stack-up` brings the same mesh back.
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor --profile phpbb --profile akkoma down
+
+stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
