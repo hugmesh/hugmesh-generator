@@ -1,0 +1,95 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.qemu-runner — the containerized QEMU emulated-device test runner.
+#
+# WHY THIS EXISTS
+# ---------------
+# tests/qemu/run-qemu-test.sh and tests/qemu/launch-*.sh need ROOT, and not
+# incidentally: they loop-mount (losetup -P) the golden .img to lift the kernel
+# out of its boot partition, mkfs.ext4 a throwaway rootfs, and untar a stage4
+# WITH xattrs (SELinux labels). On a developer workstation that means `sudo`,
+# and an interactive sudo password makes the whole matrix unrunnable from a GUI
+# or from CI.
+#
+# A --privileged container is root WITHOUT sudo for anyone in the `docker`
+# group, so this image is how the Studio (and CI) run the emulated-device tests
+# unattended. The container is the EXECUTION ENVIRONMENT only — the test logic
+# stays in tests/qemu/*.sh, which are bind-mounted in at /src, never copied.
+# One source of truth: fix a launcher and the container picks it up next run.
+#
+# NETWORKING NOTE (deliberate): the guest's port forwards stay INSIDE the
+# container. tests/qemu/launch-pi.sh forwards host :8080 -> guest :80 and the
+# developer's live hugmesh-local stack already owns :8080 on the host. Because
+# the assertions SSH from inside this container to its OWN localhost, we never
+# publish those ports and therefore never collide with a running stack.
+#
+# Build:
+#   docker build -f docker/Dockerfile.qemu-runner -t hugmesh-qemu-runner:latest .
+#   # (or: make qemu-docker-image)
+#
+# Run (see tests/qemu/run-qemu-docker.sh, which is the supported entry point):
+#   docker run --rm --privileged --device /dev/kvm \
+#       -v "$PWD":/src:ro -v /path/to/images:/artifacts:ro -v /path/to/work:/work \
+#       hugmesh-qemu-runner:latest --platform rpi5 --role pki
+FROM debian:bookworm-slim
+
+# qemu-system-arm  : qemu-system-aarch64, for every ARM platform (rpi5 kernel-direct
+#                    boot, plus the generalized launch-arm.sh -M virt path).
+# qemu-system-x86  : qemu-system-x86_64 for the q35+OVMF x86 rows.
+# ovmf             : the UEFI firmware launch-x86.sh feeds -drive if=pflash.
+# qemu-utils       : qemu-img, for the per-run qcow2 overlay over the golden .img.
+# util-linux       : losetup + mount, used to read the image's boot partition.
+# fdisk            : sfdisk, which reads the partition table so the entrypoint can
+#                    mount a partition BY BYTE OFFSET. Required because in a
+#                    container `losetup -P` never materializes /dev/loopNpM nodes
+#                    (they are created on the host devtmpfs, not this /dev).
+#                    Debian ships sfdisk in `fdisk`, NOT in `util-linux`.
+# mtools           : mcopy, so make-test-keys.sh can populate the FAT32 KEYS image
+#                    WITHOUT a loop mount (its preferred, faster path).
+# xz-utils         : the artifacts ship as .img.xz / .stage4.tar.xz.
+# openssh-client   : the assertions are driven over ssh into the guest.
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        qemu-system-arm \
+        qemu-system-x86 \
+        qemu-utils \
+        ovmf \
+        util-linux \
+        fdisk \
+        e2fsprogs \
+        dosfstools \
+        mtools \
+        xz-utils \
+        openssh-client \
+        iproute2 \
+        procps \
+        jq \
+        ca-certificates \
+        bash \
+        coreutils \
+        tar \
+    && rm -rf /var/lib/apt/lists/*
+
+# tests/qemu/launch-x86.sh defaults OVMF_DIR to the Gentoo host layout
+# (/usr/share/edk2/OvmfX64/OVMF_{CODE,VARS}.fd — launch-x86.sh:35-37). Debian's
+# ovmf package installs to /usr/share/OVMF/ and, on bookworm, names the 4MB
+# variants OVMF_CODE_4M.fd / OVMF_VARS_4M.fd. Materialize the Gentoo-shaped
+# paths here so the SAME launcher runs unpatched on the host and in this image
+# — the alternative (teaching the launcher a second path) would fork behavior
+# between the two environments for no gain.
+RUN mkdir -p /usr/share/edk2/OvmfX64 \
+    && for n in CODE VARS; do \
+         for cand in /usr/share/OVMF/OVMF_${n}.fd /usr/share/OVMF/OVMF_${n}_4M.fd; do \
+           if [ -e "$cand" ]; then ln -sf "$cand" /usr/share/edk2/OvmfX64/OVMF_${n}.fd; break; fi; \
+         done; \
+       done \
+    && ls -l /usr/share/edk2/OvmfX64/
+
+# /src       the repo, bind-mounted READ-ONLY (tests/qemu/*.sh + specs/)
+# /artifacts the built images, bind-mounted READ-ONLY (.img/.img.xz/.stage4.tar.xz)
+# /work      writable scratch: decompressed images, overlays, consoles, results
+WORKDIR /work
+COPY tests/qemu/docker-entrypoint.sh /usr/local/bin/qemu-runner-entrypoint
+RUN chmod +x /usr/local/bin/qemu-runner-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/qemu-runner-entrypoint"]

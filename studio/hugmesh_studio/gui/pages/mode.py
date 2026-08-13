@@ -40,6 +40,7 @@ _MODE_ICONS = {
     "phone": "phone",               # a handset under a cloud
     "quest": "quest",               # a VR headset under a cloud
     "deploy": "cloud-deploy",       # three-way arrow up to AWS / AZURE / CF marks
+    "qemu": "mesh",                 # reuses the boards-under-a-cloud mark: emulated devices
 }
 
 _GENTOO_URL = "https://www.gentoo.org/"
@@ -53,15 +54,16 @@ class ModePage(QtWidgets.QWizardPage):
         self.setSubTitle(
             "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
             "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
-            "QUEST HEADSET enrolls a Meta Quest 3/3S, and CLOUD DEPLOY publishes an "
-            "already-packaged image to a cloud provider.")
-        # seven cards are taller than seven radios were: scroll, never clip
+            "QUEST HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
+            "already-packaged image to a cloud provider, and QEMU DEVICE TESTS boots "
+            "built images as emulated devices.")
+        # eight cards are taller than eight radios were: scroll, never clip
         lay = scrollable(self)
         self.group = ChoiceCardGroup(self)
-        # SEVEN clearly-distinct choices, in the spec's STEP-1 order. Each carries
+        # EIGHT clearly-distinct choices, in the spec's STEP-1 order. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
-        # exactly as before; "localmesh", "phone", "quest" and "deploy" are transient
-        # side-flows that never touch cfg.mode. The DEFAULT is chosen by id
+        # exactly as before; "localmesh", "phone", "quest", "deploy" and "qemu" are
+        # transient side-flows that never touch cfg.mode. The DEFAULT is chosen by id
         # (standalone) below, NOT by index, so a visual reorder can't change which
         # choice the no-pick default flow exercises.
         self.modes = [
@@ -88,6 +90,10 @@ class ModePage(QtWidgets.QWizardPage):
              "Publish an already-built, cloud-packaged x86 image to a cloud provider "
              "(AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are "
              "rendered offline; apply is confirmed by the driver."),
+            ("qemu", "QEMU device tests",
+             "Boot built images as emulated devices in Docker and assert they "
+             "provisioned correctly — Pi roles first, then x86. Test images from an "
+             "earlier build session, or build new ones and test them after."),
         ]
         self._buttons = {}
         for i, (mid, label, desc) in enumerate(self.modes):
@@ -163,7 +169,12 @@ class ModePage(QtWidgets.QWizardPage):
         # CLOUD DEPLOY is the third side-flow: it publishes an EXISTING packaged image
         # and commits NOTHING to cfg.mode, advancing into the registered DeployPage.
         self.wiz.deploy_selected = (mid == "deploy")
-        if mid in ("localmesh", "phone", "quest", "deploy"):
+        # QEMU DEVICE TESTS is the fourth side-flow: it boots ALREADY-BUILT images as
+        # emulated devices and commits nothing to cfg.mode. Unlike the other three it
+        # can rejoin the image flow — "build new images first, then test them" — which
+        # QemuPage expresses through its own nextId(), not through cfg.mode.
+        self.wiz.qemu_selected = (mid == "qemu")
+        if mid in ("localmesh", "phone", "quest", "deploy", "qemu"):
             return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid

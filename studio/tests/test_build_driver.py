@@ -161,6 +161,22 @@ def test_pentest_env_knob_forwarded_both_backends(tmp_path):
     assert not any("--pentest" in x for x in native + docker[:-1])
 
 
+def test_qemu_e2e_env_knob_forwarded_both_backends(tmp_path):
+    """cfg.qemu_e2e (the post-build emulated-device tests) rides the SAME env
+    channel as PENTEST — HUGMESH_QEMU_E2E=1, the opt-in gate the qemu harness
+    layer already reads — and never becomes a builder flag."""
+    cfg = cfg_for("x86", tmp_path)
+    cfg.qemu_e2e = True
+    native = BuildDriver(str(tmp_path), host(is_root=True)).command(cfg, "native")
+    assert native[:3] == ["env", "HUGMESH_QEMU_E2E=1", "bash"]
+    docker = BuildDriver(str(tmp_path), host()).command(cfg, "docker")
+    i = docker.index("-e")
+    assert docker[i + 1] == "HUGMESH_QEMU_E2E=1"
+    # tmp_path itself contains "qemu" (pytest names it after this test), so probe
+    # for a FLAG token, not the substring: no builder ever grows a --qemu-* arg.
+    assert not any("--qemu" in x for x in native + docker)
+
+
 def test_command_string_is_shell_quoted(tmp_path):
     d = BuildDriver(str(tmp_path), host(is_root=True))
     cfg = cfg_for("x86", tmp_path)

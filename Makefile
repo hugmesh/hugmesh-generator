@@ -1101,6 +1101,26 @@ qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=
 qemu-matrix-enumerate: ## dry-run enumerate every matrix row + its launcher/size/RAM (no boot, no build)
 	tests/qemu/run-matrix-e2e.sh --dry-run $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
 
+# Containerized emulated-device tests (tests/qemu/run-qemu-docker.sh): one
+# --privileged container per platform/role row, against a build session's
+# artifacts. NO $(SUDO) on purpose — the whole point of the container is that
+# `docker` group membership replaces the interactive sudo password the loop
+# mounts would otherwise demand (see docker/Dockerfile.qemu-runner).
+.PHONY: qemu-docker qemu-docker-image qemu-docker-list
+# NOT $(JOBS): that defaults to nproc for compiles — nproc CONCURRENT emulated
+# devices would hold nproc x 2GB of guest RAM. Two is the deliberate default
+# (one slow TCG ARM row + one KVM x86 row).
+QEMU_JOBS ?= 2
+qemu-docker-image: ## build the containerized QEMU runner image (hugmesh-qemu-runner:latest)
+	docker build -f docker/Dockerfile.qemu-runner -t hugmesh-qemu-runner:latest .
+
+qemu-docker: ## containerized device tests, Pi rows first (SESSION=out/sessions/<id>; MATRIX_FILTER=rpi5/pki; QEMU_JOBS=2)
+	tests/qemu/run-qemu-docker.sh $(if $(SESSION),--session "$(SESSION)",) \
+	  $(if $(MATRIX_FILTER),--only "$(MATRIX_FILTER)",) --jobs $(QEMU_JOBS)
+
+qemu-docker-list: ## enumerate the device rows a session's artifacts can boot (nothing runs)
+	tests/qemu/run-qemu-docker.sh $(if $(SESSION),--session "$(SESSION)",) --list
+
 # ── kind SSO e2e — the same native-login proof the compose stack runs
 # (tests/e2e/specs/27-native-login.spec.ts), against a REAL kind cluster
 # running the GitOps payload (ArgoCD + Vault/ESO/Casdoor + fe-gateway + BFFs).

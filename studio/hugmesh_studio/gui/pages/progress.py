@@ -61,6 +61,7 @@ from .. import flag_badges
 from ..tray import write_build_status
 from ...core import build_sessions
 from ...core import flash_targets
+from ...core import qemu_tests
 from ...core import secret_files
 from ...core.emerge_packages import (
     EmergePackageParser, GROUP_UNKNOWN, PackageProgress, STEP_DONE, STEP_FAILED,
@@ -607,6 +608,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._tick.timeout.connect(self._on_tick)
         # flash-to-a-device state (post-build)
         self.flash_worker: _FlashWorker | None = None
+        # post-build QEMU emulated-device tests (BuildPage's qemu_e2e opt-in) — its own
+        # worker slot, never flash_worker's: a flash plan and a device-test run are
+        # independent opt-ins and must not steal each other's done signal.
+        self.qemu_worker: _FlashWorker | None = None
         self._flash_targets: list = []
         self._flash_queue: list = []       # Review-page plan assignments, run sequentially
         # entry_id -> the CONCRETE artifact that entry's build produced (snapshot diff
@@ -1346,6 +1351,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         if self._run_all_ok():
             self._refresh_flash_targets()
             self._maybe_auto_flash()
+            self._maybe_qemu_tests()
         self.completeChanged.emit()
         self._sync_back_button()
 
@@ -2146,6 +2152,17 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._flash_queue = []
         if self.flash_worker is not None and self.flash_worker.isRunning():
             self.flash_worker.wait(3000)
+        # A still-running QEMU device-test run is NOT joined: it can run for hours,
+        # touches no physical device, and (ASK 16) a window close must not stop it.
+        # Its signals are detached so the closing widgets are never emitted into —
+        # the containers run to completion and their per-device result JSON lands in
+        # out/qemu-runs/results, which QemuPage re-reads on its next visit.
+        if self.qemu_worker is not None and self.qemu_worker.isRunning():
+            try:
+                self.qemu_worker.line.disconnect()
+                self.qemu_worker.done.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     def _abort_run(self, *_a) -> None:
         """Cancel and join a still-running build. Reserved for a REAL teardown (the
@@ -2346,6 +2363,45 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_refresh_btn.setEnabled(True)
         self._refresh_flash_targets()
         self._flash_next()                    # chain the next plan assignment (if any)
+
+    # ---- post-build QEMU emulated-device tests (cfg.qemu_e2e opt-in) ------------
+    def _maybe_qemu_tests(self) -> None:
+        """BuildPage's "after the build, run the QEMU emulated-device tests" opt-in
+        (cfg.qemu_e2e — a NON-ARGV field, offered only for --env test builds; the
+        gate lives on BuildPage and is re-enforced at collect time).
+
+        Runs tests/qemu/run-qemu-docker.sh against THIS session's workdir — the same
+        containerized harness QemuPage drives interactively, so "build then test"
+        and "test what exists" are one code path — streaming its output into the
+        shared log. Called only from an all-ok _on_finished_all: booting the
+        artifacts of a failed run would assert against images that were never fully
+        produced. The checkbox WAS the explicit opt-in, so there is no second
+        confirm (the _maybe_auto_flash precedent)."""
+        if not getattr(self.wiz.cfg, "qemu_e2e", False):
+            return
+        workdir = self._session.workdir if self._session is not None else ""
+        if not workdir or not os.path.isdir(workdir):
+            self.log.appendPlainText(
+                "QEMU device tests: no session workdir to test — skipped.")
+            return
+        if self.qemu_worker is not None and self.qemu_worker.isRunning():
+            return
+        opts = qemu_tests.QemuRunOptions(artifacts_dir=workdir)
+        self.log.appendPlainText(
+            "\n=== QEMU emulated-device tests (opted in with the build) ===\n"
+            f"$ {qemu_tests.command_string(self.wiz.generator_dir, opts)}")
+        self.qemu_worker = _FlashWorker(
+            qemu_tests.runner_command(self.wiz.generator_dir, opts),
+            self.wiz.generator_dir)
+        self.qemu_worker.line.connect(lambda s: self.log.appendPlainText(s))
+        self.qemu_worker.done.connect(self._qemu_tests_done)
+        self.qemu_worker.start()
+
+    def _qemu_tests_done(self, code: int) -> None:
+        self.log.appendPlainText(
+            "=== QEMU device tests passed ===" if code == 0 else
+            f"=== QEMU device tests reported failures (exit {code}) — per-device "
+            "results are under out/qemu-runs/results ===")
 
     # ---- wizard contract --------------------------------------------------------
     def _sync_back_button(self) -> None:
