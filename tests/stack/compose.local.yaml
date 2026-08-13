@@ -706,6 +706,18 @@ services:
       SYNAPSE_URL: ${SYNAPSE_URL:-http://tuwunel:8008}
       MASTODON_URL: ${ADMIN_BFF_MASTODON_URL:-http://mastodon-web:3000}
       MASTODON_EMAIL_DOMAIN: ${MASTODON_EMAIL_DOMAIN:-e2e.local}
+      # Forum (phpBB) admin console — the /admin -> "Forum admin" page.
+      #
+      # The console is fully built and reachable (admin-ui ForumAdminComponent +
+      # /bff/admin/forum/** on admin-bff), but ForumAdminConfig defaults
+      # `external.forum.enabled` to FALSE, so every call returns a
+      # not-enabled outcome and the page looks empty/broken rather than saying
+      # why. Its base-url default is also stale — it still names the pre-rebrand
+      # `snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local`, which does
+      # not resolve anywhere in this stack. Both are set explicitly here so the
+      # console actually talks to the forum BFF that compose already runs.
+      EXTERNAL_FORUM_ENABLED: "true"
+      EXTERNAL_FORUM_BASE_URL: "http://hugmesh-forum-bff-api:8080"
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       # MANAGED backing service seam: default in-stack admin-bff-db; set
       # MANAGED_ADMIN_BFF_{R2DBC,LIQUIBASE}_URL (via STACK_ENV) to a hosted RDS/Azure-PG

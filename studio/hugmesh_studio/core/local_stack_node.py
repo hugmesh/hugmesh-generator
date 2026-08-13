@@ -573,7 +573,16 @@ class LocalStackNode:
                           on_line=on_line, cancel=cancel)
 
     def stop(self) -> tuple[bool, str]:
-        return self._make("stack-down", timeout=300)
+        """`make stack-halt` — stop the mesh and KEEP its data.
+
+        Deliberately NOT `stack-down`, which passes `down -v` and drops every named
+        volume: Casdoor identity, Matrix rooms, Mastodon accounts, the phpBB board
+        and all the BFF databases. This method backs the operator-facing Stop
+        button, where "stop my mesh" must not mean "destroy my mesh" — pressing it
+        used to leave the operator unable to log in, post or open the forum after a
+        restart, because their whole identity tier had been wiped and never
+        re-seeded. `clean()` below remains the destructive one, and says so."""
+        return self._make("stack-halt", timeout=300)
 
     def clean(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make stack-clean` — stop the stack AND reclaim its disk: the ~28 images

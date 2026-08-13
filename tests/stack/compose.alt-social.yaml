@@ -18,13 +18,17 @@
 # database superuser-level extensions (citext/pg_trgm/uuid-ossp) and phpBB owns
 # its schema outright, so sharing would couple two independent teardowns.
 #
-# ── UPSTREAM PACKAGING REALITY (checked 2026-08-12) ──
-# Neither project publishes a maintained first-party image, unlike
-# mastodon/tuwunel/postgres which this stack pins directly:
-#   phpBB  — no official image anywhere; github.com/phpbb/docker is stale
-#            test scaffolding (PHP 5.4-7.0) and bitnami/phpbb 404s. So we build
-#            a thin image from the OFFICIAL release zip, pinned by sha256
-#            (./phpbb/Dockerfile).
+# ── WHERE THE IMAGES COME FROM ──
+#   phpBB  — built from hugmesh-forum-api, which IS the phpBB image this platform
+#            deploys: official phpBB 3.3 plus the `hugmesh/forumapi` headless
+#            extension. That extension is not optional decoration — phpBB ships no
+#            REST API, so it is the only thing hugmesh-forum-bff-api can talk to.
+#            (An earlier revision of this file built a VANILLA phpBB from the
+#            release zip; that board answered 401 on every /api/v1/hugmesh/** call
+#            because the routes simply did not exist.) Upstream phpBB publishes no
+#            usable image of its own — github.com/phpbb/docker is stale PHP 5.4-7.0
+#            scaffolding and bitnami/phpbb 404s — which is why the platform builds
+#            its own rather than pinning one.
 #   Akkoma — upstream ships no prebuilt image at all; its own docker-compose
 #            builds from source via docker-resources/build.sh. A from-source
 #            Elixir build would add many minutes to a DEFAULT-OFF option, so we
@@ -43,6 +47,13 @@ services:
       POSTGRES_DB: phpbb
       POSTGRES_USER: phpbb
       POSTGRES_PASSWORD: phpbb
+    networks:
+      default:
+        # The extension repo's shipped install YAML hardcodes `dbhost: db`, and it
+        # is consumed verbatim by the image entrypoint on first boot. An alias is
+        # cheaper and less surprising than forking their file or renaming this
+        # service to the very generic `db`.
+        aliases: [db]
     volumes: [phpbb-pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U phpbb"]
@@ -50,43 +61,46 @@ services:
       retries: 20
 
   phpbb:
+    # The REAL phpBB image: official phpBB 3.3 with the `hugmesh/forumapi` headless
+    # extension baked in — the same image the cluster deployment references as
+    # `<org>/phpbb:dev` (specs/cluster/manifests/forum/phpbb.yaml).
+    #
+    # This REPLACES an earlier hand-rolled vanilla-phpBB Dockerfile in tests/stack/.
+    # Vanilla phpBB was the wrong backend: phpBB ships NO REST API, so the whole
+    # forum path — hugmesh-forum-ui -> /bff/forum/** -> hugmesh-forum-bff-api ->
+    # /api/v1/hugmesh/** -> phpBB's own services — has nothing to talk to without
+    # the extension. A vanilla board answers 401 on every one of those routes and
+    # the admin console reports `degraded`, which looks like an auth bug rather
+    # than a missing server component.
+    #
+    # Serves on 8080 (not 80) and runs as UID 33; its entrypoint regenerates
+    # config.php from the PHPBB_DB_* env each boot, installs the schema ONCE when
+    # the DB is empty, and enables the extension.
     build:
-      context: ./phpbb
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-api
     profiles: ["phpbb"]
     environment:
       PHPBB_DB_HOST: phpbb-db
       PHPBB_DB_PORT: "5432"
       PHPBB_DB_NAME: phpbb
       PHPBB_DB_USER: phpbb
-      PHPBB_DB_PASSWORD: phpbb
-      # DEV PLACEHOLDER credentials, consistent with the rest of this file.
-      PHPBB_ADMIN_USER: admin
-      PHPBB_ADMIN_PASSWORD: adminadmin
-      PHPBB_ADMIN_EMAIL: admin@hugmesh.local
-      # Must match the fe-gateway route below — phpBB bakes its base path into
-      # generated URLs at install time.
-      PHPBB_SCRIPT_PATH: /social/phpbb
-      PHPBB_SERVER_NAME: localhost
-      PHPBB_SERVER_PORT: "${PUBLIC_HOST_PORT:-8088}"
+      PHPBB_APP_PASSWORD: phpbb
+      PHPBB_TABLE_PREFIX: phpbb_
+      # Shipped BY the extension repo for exactly this lane; the entrypoint runs it
+      # once against an empty DB, then removes install/. Dev-only literals
+      # (sysadmin/adminadmin) live in that file, not here.
+      PHPBB_INSTALL_CONFIG: /var/www/html/ext/hugmesh/forumapi/docker/install-config.compose.yml
+      # The extension validates the Casdoor JWT server-side and fails CLOSED, so
+      # both must be right or every API call 401s. JWKS is fetched in-network from
+      # the casdoor container; the issuer must match the `iss` claim the browser's
+      # token actually carries, which is the PUBLISHED issuer, not the in-network
+      # DNS name — same split the BFFs use above.
+      HUGMESH_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      HUGMESH_JWT_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
     depends_on:
       phpbb-db: { condition: service_healthy }
-    volumes:
-      # The docroot MUST persist. phpBB's install state lives in TWO places —
-      # the database AND config.php in the docroot — and without this volume
-      # only the database survives a container recreate. The two then
-      # desynchronise: the entrypoint sees no config.php, re-runs the installer,
-      # and the installer refuses with "Tables with the specified prefix already
-      # exist", leaving the board serving its setup wizard again. This also
-      # keeps user uploads/avatars and any installed extension across recreates.
-      #
-      # CAVEAT: a named volume masks the image's docroot after first creation,
-      # so bumping PHPBB_VERSION in the Dockerfile does NOT take effect until
-      # the volume is dropped. `make stack-down` / `stack-clean` both pass -v,
-      # so any full teardown cycle picks the new version up.
-      - phpbb-html:/var/www/html
-    # Published so the option is reachable directly as well as through the
-    # gateway at /social/phpbb/, mirroring mastodon-web's 3000:3000.
-    ports: ["8081:80"]
+    # Published for direct access; the gateway also serves it at /social/phpbb/.
+    ports: ["8081:8080"]
 
   # ── Akkoma (profile: akkoma) ──────────────────────────────────────────────
   akkoma-db:
@@ -140,6 +154,5 @@ services:
 
 volumes:
   phpbb-pg:
-  phpbb-html:
   akkoma-pg:
   akkoma-data:
