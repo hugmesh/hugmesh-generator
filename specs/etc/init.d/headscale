@@ -20,4 +20,8 @@ start_pre() {
     getent passwd headscale >/dev/null || \
         useradd -r -g headscale -d /var/lib/headscale -s /sbin/nologin headscale
     checkpath -d -o headscale:headscale -m 0750 /etc/headscale /var/lib/headscale /run/headscale
+    # Logfiles must be daemon-owned: a stale root-owned log (e.g. left by a
+    # provisioning-time inline start) makes start-stop-daemon's unprivileged
+    # open fail with "unable to open the logfile for stdout".
+    checkpath -f -m 0640 -o headscale:headscale /var/log/headscale.log /var/log/headscale.err
 }
