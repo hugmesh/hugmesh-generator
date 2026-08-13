@@ -1266,7 +1266,19 @@ MANAGED_WIKI_BFF_LIQUIBASE_URL  ?=
 #   make stack-up MFA_FLOOR=1
 MFA_FLOOR ?=
 STACK_MFA_FLOOR_ENV := $(if $(strip $(MFA_FLOOR)), APP_MFA_ENFORCE_PRIVILEGED_FLOOR='true',)
-STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
+# Runtime web-login THEME persistence (tests/stack/.theme.css, gitignored).
+# The Studio's theme choice used to travel ONLY as an env var on the GUI's own
+# `make` invocation — so any TERMINAL `make stack-up` (a restore, a rebuild, a
+# peer's bring-up) silently reverted the login page to the shipped default
+# brand, which reads as "my theme choices are not applied". The Studio now also
+# WRITES the composed --sd-* token CSS to this file, and whenever it exists the
+# recipe shell threads its text as SNAP_THEME_CSS (login-ui's 50-snap-theme.sh
+# writes it verbatim at container start — env is the transport BY DESIGN, no
+# image rebuild). Delete the file to return to the shipped brand.
+STACK_THEME_FILE := tests/stack/.theme.css
+STACK_THEME_ENV := $(if $(wildcard $(STACK_THEME_FILE)),SNAP_THEME_CSS="$$(cat $(STACK_THEME_FILE))",)
+STACK_ENV := $(STACK_THEME_ENV) \
+             STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
              SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \

@@ -710,6 +710,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
 NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_primary_color", "login_secondary_color", "login_font",
                    "login_font_file", "login_font_licence", "login_font_source",
+                   "login_theme_preset", "login_theme_mode",
                    "additional_domains", "configure_users", "qemu_e2e")
 
 
@@ -1994,6 +1995,14 @@ class ImageConfig:
     login_font_file: str = ""          # uploaded woff2/woff/ttf/otf, embedded as a data: URI
     login_font_licence: str = ""       # REQUIRED with login_font_file (recorded for audit)
     login_font_source: str = ""        # REQUIRED with login_font_file: vendor/URL provenance
+    # Named theme PRESET (core/theme_presets.py id: light/dark cores, basic
+    # colours, pride flags) + ramp mode. "" preset = the raw primary/secondary
+    # fields above rule alone (full back-compat: old configs load unchanged).
+    # When set, the preset SUPPLIES primary/secondary and the delivery path
+    # appends its delta block (light neutrals / flag stripes) after the shared
+    # compose_login_css output, so fonts + derivation stay single-sourced.
+    login_theme_preset: str = ""       # theme_presets.PRESETS id; "" = custom colours
+    login_theme_mode: str = "dark"     # "dark" | "light" neutral ramp
     # ── egress VPN ──
     egress_vpn: str = ""               # --egress-vpn FILE
     egress_vpn_locked: bool = False
@@ -2251,9 +2260,29 @@ class ImageConfig:
                 raise ValueError("; ".join(blocks))
             family = os.path.splitext(os.path.basename(self.login_font_file))[0] \
                 .replace("-", " ").replace("_", " ")
-        return _theme.compose_login_css(
-            self.login_primary_color, self.login_secondary_color,
+        primary, secondary = self.login_primary_color, self.login_secondary_color
+        delta = ""
+        if self.login_theme_preset:
+            # A preset supplies the colours and its delta block; the shared
+            # compose_login_css below still owns derivation + fonts, so the two
+            # paths cannot drift. Unknown ids / modes raise ValueError like every
+            # other invalid theme input (fail-closed, surfaced by the callers).
+            from . import theme_presets as _presets
+            try:
+                preset = _presets.by_id(self.login_theme_preset)
+            except KeyError as exc:
+                raise ValueError(str(exc)) from exc
+            primary, secondary = preset.primary, preset.secondary
+            delta = _presets.delta_css(
+                self.login_theme_preset, self.login_theme_mode or "dark")
+        css = _theme.compose_login_css(
+            primary, secondary,
             font_preset=self.login_font, font_family=family, font_bytes=font_bytes)
+        if delta:
+            # Later :root:root block wins at equal specificity — the delta lands
+            # after the base tokens without touching the shared composer.
+            css = (css + "\n" if css else "") + delta
+        return css
 
     def validate_identity(self) -> None:
         """Allowlist every identity field that flows into a root-sourced KEY=VALUE

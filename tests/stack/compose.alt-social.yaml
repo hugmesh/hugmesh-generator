@@ -96,6 +96,14 @@ services:
       # token actually carries, which is the PUBLISHED issuer, not the in-network
       # DNS name — same split the BFFs use above.
       HUGMESH_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      # The extension's JWKS fetch is https-only BY DESIGN (a plain-http JWKS is
+      # a signing-key downgrade vector) — but this lane's Casdoor is plain http
+      # on the in-cluster network, and the container trusts no local CA. This
+      # explicit default-off knob (hugmesh-forum-api config_provider/
+      # jwks_provider) permits http:// ONLY when set to exactly '1', and never
+      # relaxes verification for https URLs. Without it EVERY extension route,
+      # including /health, answers HTML 500. Never set this in a cluster.
+      HUGMESH_JWKS_ALLOW_INSECURE_HTTP: "1"
       HUGMESH_JWT_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
     depends_on:
       phpbb-db: { condition: service_healthy }

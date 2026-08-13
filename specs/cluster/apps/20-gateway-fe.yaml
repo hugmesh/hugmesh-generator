@@ -205,11 +205,8 @@ spec:
             filters:
               - StripPrefix=1
           # API documentation micro-frontend remote (/api-docs/** -> hugmesh-api-docs).
-          # /api-docs is the remote's REAL asset prefix — the image builds with
-          # --base-href=/api-docs/ and the host-shell federation manifest loads
-          # /api-docs/remoteEntry.json (the /apidocs SPA deep-link stays with the
-          # shell catch-all). Role floor ROLE_ADMIN (route-DB) — the rendered
-          # OpenAPI/spec docs are admin-only, matching federation's spec floor.
+          # Role floor ROLE_ADMIN (route-DB) — the rendered OpenAPI/spec docs are
+          # admin-only, matching federation's spec floor.
           - id: api-docs
             uri: http://hugmesh-api-docs.hugmesh-frontend.svc.cluster.local:80
             path: /api-docs/**
