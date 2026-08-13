@@ -76,8 +76,12 @@ mesh attribution as convenience, not authentication.
 
 ## Per-room opt-in
 
-Room state event **`systems.hugmesh.mesh.bridge`** (state key `""`,
-power-level-gated like `systems.hugmesh.vn.scene`):
+Room state event **`net.hugmesh.mesh.bridge`** (state key `""`,
+power-level-gated like `net.hugmesh.vn.scene`; the canonical wire prefix
+follows the `.net` domain move, and the bridge also HONORS the two legacy
+spellings — post-squash `systems.hugmesh.mesh.bridge` and pre-rebrand
+`systems.snapdragon.mesh.bridge` — on read, canonical winning when several
+exist; only the canonical type is ever written):
 
 ```json
 { "enabled": true, "device": "default", "meshChannel": 0 }

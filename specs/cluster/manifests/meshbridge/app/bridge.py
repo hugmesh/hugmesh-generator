@@ -33,7 +33,17 @@ from matrix_cs import ClientError, MatrixError
 
 log = logging.getLogger("meshbridge.core")
 
-MESH_STATE_TYPE = "systems.hugmesh.mesh.bridge"
+# Canonical wire name follows the .net domain move (the same reasoning as the
+# Java package rename systems.hugmesh -> net.hugmesh). Rooms may still carry
+# the two OLDER spellings — the post-squash systems.hugmesh one and the
+# pre-rebrand systems.snapdragon one — so the bridge HONORS all three on read.
+# Precedence when a room carries several: canonical first, then each legacy
+# generation (refresh_room scans in MESH_STATE_TYPES order). Writers (the
+# matrix-ui room-settings section) mint ONLY the canonical type.
+MESH_STATE_TYPE = "net.hugmesh.mesh.bridge"
+LEGACY_MESH_STATE_TYPES = ("systems.hugmesh.mesh.bridge",
+                           "systems.snapdragon.mesh.bridge")
+MESH_STATE_TYPES = (MESH_STATE_TYPE, *LEGACY_MESH_STATE_TYPES)
 MESH_META_KEY = "com.hugmesh.mesh"
 
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -98,9 +108,13 @@ def parse_mesh_flag(raw: object) -> dict | None:
             "meshChannel": channel}
 
 
-def sender_may_set_flag(state_events: list[dict], sender: str) -> bool:
+def sender_may_set_flag(state_events: list[dict], sender: str,
+                        flag_type: str = MESH_STATE_TYPE) -> bool:
     """True when `sender` holds the room's required power level for the mesh
-    flag state event (events[type] override, else state_default)."""
+    flag state event (events[type] override, else state_default). `flag_type`
+    is the SPELLING of the honored flag event — a legacy-named flag is gated by
+    its own type's power-level entry, exactly as the homeserver enforced it
+    when that event was accepted."""
     pl_content: dict = {}
     for e in state_events:
         if e.get("type") == "m.room.power_levels" and e.get("state_key", "") == "":
@@ -114,7 +128,7 @@ def sender_may_set_flag(state_events: list[dict], sender: str) -> bool:
     if not isinstance(sender_level, int):
         sender_level = 0
     events = pl_content.get("events") if isinstance(pl_content.get("events"), dict) else {}
-    required = events.get(MESH_STATE_TYPE, pl_content.get("state_default", 50))
+    required = events.get(flag_type, pl_content.get("state_default", 50))
     if not isinstance(required, int):
         required = 50
     return sender_level >= required
@@ -256,17 +270,23 @@ class Bridge:
         except MatrixError as e:
             log.warning("room %s state fetch failed: %s", room_id, e)
             return
+        # Canonical spelling wins; each legacy generation is honored only when
+        # no newer-named flag exists (MESH_STATE_TYPES is precedence-ordered).
         flag_event = None
-        for e in state:
-            if e.get("type") == MESH_STATE_TYPE and e.get("state_key", "") == "":
-                flag_event = e
+        for wanted in MESH_STATE_TYPES:
+            for e in state:
+                if e.get("type") == wanted and e.get("state_key", "") == "":
+                    flag_event = e
+                    break
+            if flag_event is not None:
                 break
         old = self.mappings.get(room_id)
         new = None
         if flag_event is not None:
             flag = parse_mesh_flag(flag_event.get("content"))
             if flag and flag["enabled"]:
-                if not sender_may_set_flag(state, flag_event.get("sender", "")):
+                if not sender_may_set_flag(state, flag_event.get("sender", ""),
+                                           flag_event.get("type", MESH_STATE_TYPE)):
                     log.warning("room %s: mesh flag from underprivileged sender %s "
                                 "ignored", room_id, flag_event.get("sender"))
                 elif flag["device"] not in self.links:
@@ -336,7 +356,7 @@ class Bridge:
                 log.info("bot removed from %s (%s) — mapping dropped",
                          room_id, membership)
             return
-        if etype in (MESH_STATE_TYPE, "m.room.power_levels"):
+        if etype in MESH_STATE_TYPES or etype == "m.room.power_levels":
             await self.refresh_room(room_id)
             return
         if etype == "m.room.encrypted":
