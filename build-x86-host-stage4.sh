@@ -5993,6 +5993,11 @@ build_img() {
     # filesystem, not the partition table, so blkid -s PARTUUID would be empty here.
     info "Root identity: root PARTUUID=${root_uuid}  ESP PARTUUID=${esp_uuid}"
     local root_fsuuid; root_fsuuid="$(blkid -s UUID -o value "${root_part}")"
+    # The ESP's FILESYSTEM UUID (not its PARTUUID): grub.cfg's UKI menuentry must
+    # `search --fs-uuid` its way to the ESP before chainloading (see below) — the
+    # embedded grub-mkimage config points $root at the ext4 ROOT partition, where
+    # the UKI does not live.
+    local esp_fsuuid; esp_fsuuid="$(blkid -s UUID -o value "${esp_part}")"
     info "Root identity: root PARTUUID=${root_uuid}  ESP PARTUUID=${esp_uuid}"
     # The stage4 already carries specs-x86/etc/fstab with the two tokens; rewrite
     # them to the real PARTUUIDs of this image.
@@ -6110,11 +6115,23 @@ build_img() {
         echo "set default=0"
         echo "insmod part_gpt"
         echo "insmod ext2"
+        echo "insmod fat"
         echo "insmod search_fs_uuid"
-        echo "insmod chainloader"
+        # GRUB's EFI chainload command lives in chain.mod — `insmod chainloader`
+        # names a module that does not exist, so the UKI menuentry died with
+        # "can't find command \`chainloader'" and GRUB sat at its menu until the
+        # harness SSH timeout (the whole-x86-column 2400s hang, matrix triage
+        # 2026-08-13). The module tree copied to /boot/grub above makes insmod
+        # chain resolvable at runtime.
+        echo "insmod chain"
         # UKI entry: direct chainload from ESP — preferred when Secure Boot is active.
         if [ -f "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}" ]; then
             echo "menuentry \"${BRAND_TITLE} (${ROLE}) — Secure Boot UKI\" {"
+            # $root still points at the ext4 ROOT partition here (the embedded
+            # grub-mkimage config search'd for ${root_fsuuid}), but the UKI was
+            # installed on the ESP — re-point $root at the ESP's fs-UUID first
+            # or the chainloader line fails file-not-found.
+            echo "    search --no-floppy --fs-uuid --set=root ${esp_fsuuid}"
             echo "    chainloader /EFI/Linux/${UKI_NAME}"
             echo "}"
         fi
