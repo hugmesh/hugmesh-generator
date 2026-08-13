@@ -617,6 +617,18 @@ class BuildPage(QtWidgets.QWizardPage):
         self.pentest = QtWidgets.QCheckBox(
             "OWASP pen-test bake (PENTEST=1 — env knob forwarded to the build, not a builder flag)")
         pl.addWidget(self.pentest)
+        # Post-build QEMU emulated-device tests. Like PENTEST this is a driver-level
+        # step, not a builder flag (NON_ARGV_FIELDS), so it changes no argv.
+        #
+        # Gated on --env test: a prod build has the in-cluster test runner pruned out
+        # of its ArgoCD app tree, so booting one would assert against a stack that was
+        # deliberately removed. Greyed rather than hidden, because the reason is a
+        # decision the operator made one dropdown above and can reverse.
+        self.qemu_e2e = QtWidgets.QCheckBox(
+            "After the build, run the QEMU emulated-device tests in Docker "
+            "(all platforms, Pi first)")
+        pl.addWidget(self.qemu_e2e)
+        self.env.currentTextChanged.connect(self._sync_qemu_e2e_gate)
         # escape hatch: EVERY builder CLI option stays expressible, fielded or not
         self.extra_flags = QtWidgets.QLineEdit()
         self.extra_flags.setPlaceholderText(
@@ -858,6 +870,8 @@ class BuildPage(QtWidgets.QWizardPage):
         self.build_subdir.setText(c.build_subdir)
         self.seed_url.setText(c.seed_url)
         self.pentest.setChecked(c.pentest)
+        self.qemu_e2e.setChecked(c.qemu_e2e)
+        self._sync_qemu_e2e_gate()
         self.extra_flags.setText(c.extra_flags)
         # mesh shows the per-image worklist summary + node-key opt-out; standalone/cloud
         # show the single-image Packages… button (each image's tri-tier package dialog).
@@ -942,8 +956,28 @@ class BuildPage(QtWidgets.QWizardPage):
         plumbing_default = all(
             getattr(c, f) == _field_default(f)
             for f in ("skip_kernel", "skip_clean", "distdir", "build_subdir",
-                      "seed_url", "pentest", "extra_flags"))
+                      "seed_url", "pentest", "qemu_e2e", "extra_flags"))
         self.plumbing_section.set_default_expanded(not plumbing_default)
+
+    def _sync_qemu_e2e_gate(self, *_a):
+        """Enable the post-build device tests only for --env test.
+
+        A prod build prunes the in-cluster test runner out of its app tree, so the
+        emulated-device assertions would be checking for a stack the build removed on
+        purpose. Greying (not hiding) keeps the reason legible: the operator set --env
+        one row above and can set it back. Unticking on the way out stops a config
+        saved as prod from carrying a flag its own env forbids."""
+        is_test = self.env.currentText() == "test"
+        self.qemu_e2e.setEnabled(is_test)
+        if not is_test:
+            self.qemu_e2e.setChecked(False)
+        self.qemu_e2e.setToolTip(
+            "Boots each image this build produces as an emulated device in Docker and "
+            "runs the assertions — Pi roles first, then x86."
+            if is_test else
+            "Only available for --env test: a prod image has the test runner pruned "
+            "from its app tree, so the assertions would check for a stack that was "
+            "deliberately removed.")
 
     def _backend(self):
         b = self.backend.currentText()
@@ -1020,6 +1054,9 @@ class BuildPage(QtWidgets.QWizardPage):
         c.build_subdir = self.build_subdir.text().strip()
         c.seed_url = self.seed_url.text().strip()
         c.pentest = self.pentest.isChecked()
+        # Only a test-env build can carry the post-build device tests (see the gate);
+        # collecting the raw checkbox would let a test->prod switch strand a True.
+        c.qemu_e2e = self.qemu_e2e.isChecked() and self.env.currentText() == "test"
         c.extra_flags = self.extra_flags.text().strip()
         # the greyed (platform-unsupported) widgets were still collected above —
         # reset those fields to their defaults so a value picked while another

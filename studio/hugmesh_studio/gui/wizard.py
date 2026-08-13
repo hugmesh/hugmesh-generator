@@ -20,7 +20,7 @@ from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
     HomePage, IdpPage, KeyZipPage, LaunchPage, LocalMeshPage, ModePage, NetworkPage,
-    PhonePage, ProgressPage, QuestPage, RolePage, SystemPage, UsersChoicePage,
+    PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SystemPage, UsersChoicePage,
     UsersPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
@@ -31,7 +31,7 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
     "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
-    "DeployPage", "IdpPage",
+    "DeployPage", "QemuPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
@@ -122,6 +122,11 @@ class StudioWizard(QtWidgets.QWizard):
         # transient: ModePage's CLOUD DEPLOY choice — read by DeployPage.applies_to(),
         # likewise NEVER persisted into cfg (a deploy is not an image mode).
         self.deploy_selected = False
+        # transient: ModePage's QEMU DEVICE TESTS choice — read by QemuPage.applies_to(),
+        # likewise NEVER persisted into cfg (running tests is not an image mode; the one
+        # durable thing QemuPage may set is cfg.qemu_e2e, the same NON-ARGV field the
+        # BuildPage checkbox drives, when the operator picks "build first, then test").
+        self.qemu_selected = False
         # The build-session id of the NEXT dispatch (core/build_sessions): minted lazily
         # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
         # record + workdir reused), cleared by ProgressPage at finish.
@@ -151,6 +156,7 @@ class StudioWizard(QtWidgets.QWizard):
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
             WelcomePage, ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
+            QemuPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,

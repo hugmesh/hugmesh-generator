@@ -276,13 +276,19 @@ class BuildDriver:
         same env channel). PENTEST=1 (G40) is the OWASP pen-test knob consumed by
         the fleet/make layer (scripts/build-all-roles.sh / the Makefile), forwarded
         here so the BuildPage checkbox is never a widget-level no-op and the same
-        config drives every channel identically. Empty/false values are omitted so
-        an untouched config adds nothing."""
+        config drives every channel identically. HUGMESH_QEMU_E2E=1 rides the same
+        channel for cfg.qemu_e2e (the post-build emulated-device tests): it is the
+        opt-in gate the qemu harness layer already reads (tests/qemu/, the Makefile's
+        qemu-matrix target), so any build-side hook sees the SAME knob the Studio's
+        own post-build step acts on — never a builder flag. Empty/false values are
+        omitted so an untouched config adds nothing."""
         env: dict[str, str] = {}
         if cfg.headscale_url:
             env["HEADSCALE_URL"] = cfg.headscale_url
         if cfg.pentest:
             env["PENTEST"] = "1"
+        if cfg.qemu_e2e:
+            env["HUGMESH_QEMU_E2E"] = "1"
         return env
 
     def command(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:

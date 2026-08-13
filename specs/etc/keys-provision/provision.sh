@@ -698,6 +698,8 @@ provision_headscale() {
 
     rc-update add headscale default 2>/dev/null || true
     rc-service headscale start 2>/dev/null || warn "headscale failed to start"
+    # Root-owned logfiles left by this inline start would EPERM headscale's unprivileged ordered restart — chown to the daemon user.
+    chown headscale:headscale /var/log/headscale.log /var/log/headscale.err 2>/dev/null || true
 
     # Wait for the control server to come up, then create users + preauth keys
     local t=0

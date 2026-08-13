@@ -113,7 +113,8 @@ def test_page_slugs_map_to_the_right_pages(wiz):
     expect = {"welcome": wizard_mod.WelcomePage, "mode": wizard_mod.ModePage,
               "localmesh": wizard_mod.LocalMeshPage, "phone": wizard_mod.PhonePage,
               "quest": wizard_mod.QuestPage,
-              "deploy": wizard_mod.DeployPage, "idp": wizard_mod.IdpPage,
+              "deploy": wizard_mod.DeployPage, "qemu": wizard_mod.QemuPage,
+              "idp": wizard_mod.IdpPage,
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
               "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,
               "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,
@@ -335,7 +336,8 @@ def test_phone_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # phone never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
-    for slug in ("localmesh", "quest", "deploy", "role", "hardware", "branding", "build"):
+    for slug in ("localmesh", "quest", "deploy", "qemu", "role", "hardware", "branding",
+                 "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 
@@ -352,7 +354,8 @@ def test_quest_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # quest never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
-    for slug in ("localmesh", "phone", "deploy", "role", "hardware", "branding", "build"):
+    for slug in ("localmesh", "phone", "deploy", "qemu", "role", "hardware", "branding",
+                 "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 
@@ -369,7 +372,39 @@ def test_deploy_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # deploy never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
-    for slug in ("localmesh", "phone", "quest", "role", "hardware", "branding", "build"):
+    for slug in ("localmesh", "phone", "quest", "qemu", "role", "hardware", "branding",
+                 "build"):
+        assert not wiz.hasVisitedPage(wiz._page_ids[slug])
+
+
+def test_qemu_side_flow_reaches_terminal_page_and_skips_images(wiz, monkeypatch):
+    """QEMU device tests is the fourth non-image side-flow: the card routes Mode →
+    Qemu, leaves cfg.mode an image mode untouched, and on its default arm ("images
+    from a previous build session") the page is terminal. Unlike its siblings the
+    -1 is conditional — the "build first, then test" radio rejoins the image flow
+    (covered with the rest of the page's behavior in test_pages_qemu.py). Docker
+    probing and session discovery are stubbed: this test is about ROUTING, and the
+    real probes would make it depend on the host's docker daemon and out/ tree."""
+    from hugmesh_studio.core import qemu_tests
+
+    fake = qemu_tests.BuildSession(path="/nowhere/s1", name="s1", rows=[
+        qemu_tests.DeviceRow(platform="rpi5", arch="arm64", role="pki", env="test",
+                             image="/nowhere/s1/hugmesh-rpi5-arm64-pki-test-0.img")])
+    monkeypatch.setattr(qemu_tests, "discover_sessions", lambda *_a, **_k: [fake])
+    monkeypatch.setattr(qemu_tests, "docker_available",
+                        lambda: (True, "docker is available."))
+    pick_mode(wiz, "qemu")
+    before = wiz.cfg.mode
+    page = advance_to(wiz, wizard_mod.QemuPage)
+    assert wiz.qemu_selected is True
+    assert wiz.deploy_selected is False
+    assert wiz.phone_selected is False
+    assert wiz.localmesh_selected is False
+    assert wiz.cfg.mode == before                       # qemu never sets cfg.mode
+    assert page.use_existing.isChecked()                # default arm: test what exists
+    assert page.nextId() == -1 and page.isFinalPage()   # terminal on that arm
+    for slug in ("localmesh", "phone", "quest", "deploy", "role", "hardware",
+                 "branding", "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 

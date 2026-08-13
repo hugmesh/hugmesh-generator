@@ -117,6 +117,7 @@ MODE_DEFAULT_ROLE = {
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
 WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "quest", "deploy",
+                     "qemu",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "users_choice", "users",
@@ -709,7 +710,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
 NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_primary_color", "login_secondary_color", "login_font",
                    "login_font_file", "login_font_licence", "login_font_source",
-                   "additional_domains", "configure_users")
+                   "additional_domains", "configure_users", "qemu_e2e")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -2136,6 +2137,13 @@ class ImageConfig:
     # PENTEST=1 OWASP pen-test toggle — NOT a per-builder flag; a FLEET/env knob the
     # build_driver/fleet channel forwards (build-all-roles.sh / Makefile), never argv (G40).
     pentest: bool = False
+    # Run the QEMU emulated-device tests (tests/qemu/run-qemu-docker.sh) against this
+    # build's images once it finishes. Like pentest this is NOT a builder flag — it is a
+    # post-build step the Studio drives, so it stays in NON_ARGV_FIELDS and never
+    # reaches argv. Only meaningful on ENV=test images: a prod build has the test
+    # runner pruned out of its app tree, so booting one proves nothing about the
+    # stack the assertions look for (BuildPage gates the checkbox on env accordingly).
+    qemu_e2e: bool = False
     extra_flags: str = ""              # escape hatch — shlex-split, appended verbatim
 
     # ---- (de)serialization -------------------------------------------------

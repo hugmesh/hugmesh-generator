@@ -1423,18 +1423,23 @@ def test_non_argv_fields_set():
     # accounts gen-provision-keys.sh mints. Each gates its table STEP and nothing else:
     # no builder parses either, and the rows they gate reach the cluster through the mesh
     # manifest, not the argv.
+    # qemu_e2e (post-build emulated-device tests) follows the pentest precedent
+    # exactly: a Studio-driven step AFTER the build (tests/qemu/run-qemu-docker.sh),
+    # forwarded to the build environment as HUGMESH_QEMU_E2E=1 — never a builder flag.
     assert set(NON_ARGV_FIELDS) == {
         "headscale_url", "pentest", "hw_profile",
         "login_primary_color", "login_secondary_color", "login_font",
         "login_font_file", "login_font_licence", "login_font_source",
-        "additional_domains", "configure_users"}
-    # neither flow flag may reach ANY builder argv, on any platform, in any mode
+        "additional_domains", "configure_users", "qemu_e2e"}
+    # no flow flag may reach ANY builder argv, on any platform, in any mode
     for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
         cfg = ImageConfig(mode=mode, role=role, platform="x86",
-                          additional_domains=True, configure_users=True)
+                          additional_domains=True, configure_users=True,
+                          qemu_e2e=True)
         args = cfg.to_cli_args()
         for token in ("--additional-domains", "--configure-users",
-                      "additional_domains", "configure_users"):
+                      "additional_domains", "configure_users",
+                      "--qemu-e2e", "qemu_e2e"):
             assert token not in args
     # and none of them appear in the capability table (they are not "silently dropped")
     for f in NON_ARGV_FIELDS:
