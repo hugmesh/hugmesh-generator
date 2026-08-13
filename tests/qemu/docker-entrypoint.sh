@@ -234,6 +234,13 @@ extract_kernel() {
     mnt="${RUN_DIR}/boot-mnt"; mkdir -p "${mnt}"
     umount "${mnt}" 2>/dev/null || true
 
+    # fd 9 -> a lock file on the SHARED /work volume: every runner container of
+    # a parallel matrix run opens the same inode, so flock(9) serializes the
+    # loop-claim critical section HOST-WIDE (the containers share the host's
+    # loop-device pool, not its /dev). The subshell this function runs in (it
+    # is always called via command substitution) closes the fd on return.
+    exec 9>"${WORK}/.loop-mount.lock"
+
     while read -r start size; do
         [ -n "${start}" ] && [ -n "${size}" ] || continue
         [ "${size}" -gt 0 ] 2>/dev/null || continue
@@ -242,13 +249,18 @@ extract_kernel() {
         # container, and mount's auto-allocation is find-free-then-claim, which
         # races when several rows start at once — the loser gets EBUSY. Without
         # this, running the matrix with --jobs >1 fails rows non-deterministically
-        # while the same row passes when run alone.
+        # while the same row passes when run alone. The flock makes the claim
+        # deterministic; the sleep-retry stays as a belt-and-suspenders backstop
+        # (and still recovers if the lock cannot be taken at all).
         local attempt=0 mounted=false
         while [ "${attempt}" -lt 10 ]; do
+            flock -w 120 9 2>/dev/null || true
             if mount -o "ro,offset=$((start * 512)),sizelimit=$((size * 512))" \
                      "${IMG}" "${mnt}" 2>/dev/null; then
+                flock -u 9 2>/dev/null || true
                 mounted=true; break
             fi
+            flock -u 9 2>/dev/null || true
             attempt=$((attempt + 1))
             sleep $((RANDOM % 3 + 1))
         done
@@ -272,13 +284,13 @@ extract_kernel() {
 case "${PLATFORM}" in
     x86) : ;;  # self-boots through OVMF/UEFI — no external kernel needed
     rpi5)
-        step "Extracting kernel_2712.img from the golden image (losetup -P)"
+        step "Extracting kernel_2712.img from the golden image (offset mount)"
         KERNEL="$(extract_kernel kernel_2712.img)" \
             || die "could not extract kernel_2712.img from ${IMG}"
         info "kernel: ${KERNEL}"
         ;;
     *)
-        step "Extracting Image from the golden image (losetup -P)"
+        step "Extracting Image from the golden image (offset mount)"
         KERNEL="$(extract_kernel Image)" \
             || die "could not extract kernel Image from ${IMG}"
         info "kernel: ${KERNEL}"
@@ -336,12 +348,25 @@ cat > "${KEYS_SRC}/users.json" <<EOF
 }
 EOF
 
+# headscale is a ROLE-specific service: the builders link it into the default
+# runlevel ONLY for the identity/control roles — rpi5: pki|generic
+# (build-rpi5-stage4.sh:3842-3845) and x86: pki|omnibus (ROLE_HEADSCALE,
+# build-x86-host-stage4.sh:1239/1256) — and explicitly REMOVE the symlink for
+# every other role (build-rpi5-stage4.sh:3906-3908). A payload that says
+# enabled:true for EVERY role asserts a service the product deliberately does
+# not run on workers, which failed the headscale assertions on all four rpi5
+# rows (matrix triage 2026-08-13). Keep the payload role-accurate instead.
+HS_ENABLED=false
+case "${ROLE}" in
+    pki|generic|omnibus) HS_ENABLED=true ;;
+esac
+
 cat > "${KEYS_SRC}/provision.json" <<EOF
 {
   "version": 1,
   "hostname": "hugmesh-${ROLE}-qemu",
   "timezone": "UTC",
-  "headscale": { "enabled": true, "config_file": "headscale/config.yaml" },
+  "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml" },
   "tailscale": { "enabled": false },
   "kubernetes": { "role": "control-plane", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
@@ -435,6 +460,26 @@ set -e
 
 PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1)"
 FAILED="$(grep -oE '[0-9]+ failed'          "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1)"
+
+# ── Guest diagnostics: pin failures that die INSIDE the guest ───────────────
+# The rpi5/pki row really fails to start headscale, but the guest's log files
+# were unreadable from the host (root-owned ext4 inside the golden image), so
+# the exact error was never pinned. Pull the provisioning + headscale logs out
+# over the SSH channel we already hold, into the row's run dir, before the
+# guest is powered off.
+# TODO(pki/headscale): suspected OpenRC inception — keys-provision's start()
+# inline-starts headscale while the declared init ordering also runs
+# keys-provision BEFORE headscale. Fixing that is an IMAGE-side change (only
+# matters after a rebuild) and is deliberately deferred until these captured
+# logs pin the exact startup error.
+step "Collecting guest diagnostics into ${RUN_DIR}"
+for gf in /var/log/keys-provision.log /var/log/headscale.err /var/log/headscale.log; do
+    ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" "sudo cat ${gf}" \
+        > "${RUN_DIR}/guest$(echo "${gf}" | tr '/' '_')" 2>/dev/null || true
+done
+ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+    'sudo rc-service headscale status 2>&1; echo "--- rc-update ---"; sudo rc-update show default 2>&1' \
+    > "${RUN_DIR}/guest_headscale-status.txt" 2>/dev/null || true
 
 step "Powering down guest"
 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo poweroff' 2>/dev/null || true

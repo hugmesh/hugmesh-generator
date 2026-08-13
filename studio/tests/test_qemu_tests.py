@@ -202,12 +202,11 @@ def test_runner_script_list_agrees_with_python(tmp_path):
     for n in SAMPLES:
         _touch(tmp_path, n)
     for n in REJECTS:
-        # KNOWN divergence, excluded rather than papered over: the shell's
-        # both-ends field strip happily "parses" a too-short hugmesh-*.img name
-        # (yielding role==env) where the Python side refuses it. No builder emits
-        # such a name; the Python refusal is the safer behavior to keep.
-        if n == "hugmesh-x86-be.img":
-            continue
+        # This includes the too-short hugmesh-x86-be.img: the shell's both-ends
+        # field strip used to "parse" it (yielding role==env) where the Python
+        # side refuses it, and this test had to carve it out. discover_rows()
+        # now enforces the same >=6-field contract, so the divergence is gone
+        # and every REJECT is exercised on both sides.
         _touch(tmp_path, n)
 
     proc = subprocess.run(

@@ -89,7 +89,21 @@ RUN mkdir -p /usr/share/edk2/OvmfX64 \
 # /artifacts the built images, bind-mounted READ-ONLY (.img/.img.xz/.stage4.tar.xz)
 # /work      writable scratch: decompressed images, overlays, consoles, results
 WORKDIR /work
-COPY tests/qemu/docker-entrypoint.sh /usr/local/bin/qemu-runner-entrypoint
-RUN chmod +x /usr/local/bin/qemu-runner-entrypoint
+# The header above promises "the test logic stays in tests/qemu/*.sh,
+# bind-mounted in at /src, never copied" — but baking the entrypoint via COPY
+# silently broke that promise for the entrypoint itself: edits to
+# docker-entrypoint.sh no-op'd until the next --build-image. Keep the baked
+# copy ONLY as a fallback for running the image without /src mounted; the real
+# entrypoint is a shim that prefers the live bind-mounted script.
+COPY tests/qemu/docker-entrypoint.sh /usr/local/bin/qemu-runner-entrypoint.baked
+RUN chmod +x /usr/local/bin/qemu-runner-entrypoint.baked \
+    && printf '%s\n' \
+        '#!/bin/bash' \
+        '# shim: prefer the live /src entrypoint so edits apply without --build-image' \
+        'live="${SRC:-/src}/tests/qemu/docker-entrypoint.sh"' \
+        '[ -r "${live}" ] && exec bash "${live}" "$@"' \
+        'exec /usr/local/bin/qemu-runner-entrypoint.baked "$@"' \
+        > /usr/local/bin/qemu-runner-entrypoint \
+    && chmod +x /usr/local/bin/qemu-runner-entrypoint
 
 ENTRYPOINT ["/usr/local/bin/qemu-runner-entrypoint"]

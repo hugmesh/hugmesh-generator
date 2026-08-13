@@ -85,10 +85,25 @@ check "net.ipv4.conf.all.rp_filter=1 (reverse-path filtering)" \
 check "sshd PermitRootLogin disabled" \
     'sshd -T 2>/dev/null | grep -qi "^permitrootlogin no"'
 # firewalld: must be running and DefaultZone must be drop (prod) or trusted (test/dev).
-check "firewalld running" \
-    'rc-service firewalld status 2>/dev/null | grep -qi started || systemctl is-active firewalld 2>/dev/null | grep -q active || pgrep firewalld'
-check "firewalld default zone is drop or trusted" \
-    'firewall-cmd --get-default-zone 2>/dev/null | grep -qE "^(drop|trusted)$"'
+# GATED on the binary actually shipping: firewalld is DELIBERATELY excluded from the
+# cross-compiled ARM images since 2026-08-05 (specs-rpi5/portage/packages.list:25-41 —
+# the pygobject -> glib[introspection] bootstrap does not cross-compile). On those
+# images the host firewall is nftables driven by the hugmesh-firewall-reconcile
+# OpenRC service, so assert THAT replacement instead of failing four rows on a
+# package the product refuses to install. Same self-skip-when-tool-absent posture
+# as specs/usr/sbin/hugmesh-coturn-firewall.
+if command -v firewall-cmd >/dev/null 2>&1; then
+    check "firewalld running" \
+        'rc-service firewalld status 2>/dev/null | grep -qi started || systemctl is-active firewalld 2>/dev/null | grep -q active || pgrep firewalld'
+    check "firewalld default zone is drop or trusted" \
+        'firewall-cmd --get-default-zone 2>/dev/null | grep -qE "^(drop|trusted)$"'
+else
+    ok "firewalld (skipped — deliberately not shipped on this image; nftables owns the host firewall)"
+    check "nftables present (firewalld replacement)" \
+        'command -v nft'
+    check "hugmesh-firewall-reconcile service started (nftables backstop reconciled)" \
+        'rc-service hugmesh-firewall-reconcile status 2>/dev/null | grep -qi started'
+fi
 
 echo
 echo "== RESULT: ${PASS} passed, ${FAIL} failed =="

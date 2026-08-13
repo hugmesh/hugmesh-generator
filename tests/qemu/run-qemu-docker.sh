@@ -128,12 +128,21 @@ WORK="$(readlink -f "${WORK}")"
 # before the extension are <env>-<stamp>.
 discover_rows() {
     local f base rest platform arch role env
+    local -a _fields
     for f in "${ARTIFACTS}"/*.img "${ARTIFACTS}"/*.img.xz; do
         [ -e "${f}" ] || continue
         base="$(basename "${f}")"
         base="${base%.xz}"; base="${base%.img}"
         case "${base}" in *kernel*|*initramfs*|*initrd*|*squashfs*) continue ;; esac
         [[ "${base}" == hugmesh-* ]] || continue
+        # Match the Python contract (studio/hugmesh_studio/core/qemu_tests.py
+        # parse_artifact_name): hugmesh+platform+arch+<role...>+env+stamp is at
+        # least 6 '-'-separated fields. Without this guard the both-ends strip
+        # below happily "parses" a too-short name (e.g. hugmesh-x86-be.img)
+        # into role==env, where the Python side refuses it — the divergence
+        # studio/tests/test_qemu_tests.py had to carve out.
+        IFS='-' read -r -a _fields <<< "${base}"
+        [ "${#_fields[@]}" -ge 6 ] || continue
         rest="${base#hugmesh-}"
         platform="${rest%%-*}"; rest="${rest#*-}"
         arch="${rest%%-*}";     rest="${rest#*-}"
