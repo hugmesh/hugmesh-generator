@@ -1492,7 +1492,7 @@ stack-clean: ## stop the local stack AND remove the images it built + the m2 reg
 stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (needs stack-up + stack-seed; once: make playwright-deps)
 	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
 	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
-	  npx playwright test -c playwright.config.ts --reporter=list
+	  npx playwright test -c playwright.config.ts
 
 stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) logs -f --tail=100

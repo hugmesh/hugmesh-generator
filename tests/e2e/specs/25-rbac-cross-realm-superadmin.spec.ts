@@ -2,7 +2,7 @@ import { test, expect, request, APIRequestContext } from '@playwright/test';
 import {
   SYSTEMS_SEED_USERS, GAMES_SEED_USERS, systemsUser, passwordFor,
   SUPERADMIN_GATEWAY, SUPERADMIN_ALLOW_ROUTES, SUPERADMIN_DENY_ROLES,
-  SYSTEMS_ISSUER, GAMES_ISSUER,
+  SUPERADMIN_USERNAME, SYSTEMS_ISSUER, GAMES_ISSUER,
 } from './rbac-roles';
 import { gatewayDecision, effectiveRoles, Gateway } from './rbac-route-access';
 import { tags } from './report-tags';
@@ -196,16 +196,23 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
 // ── LIVE superadmin-gateway probe — pending, like spec 14 ────────────────────
 async function casdoorToken(api: APIRequestContext, username: string): Promise<string> {
   const u = systemsUser(username);
-  const r = await api.post(`${CASDOOR_URL}/api/login/oauth/access_token`, {
-    form: {
-      grant_type: 'password',
-      client_id: CASDOOR_CLIENT_ID,
-      client_secret: CASDOOR_CLIENT_SECRET,
-      username: `${CASDOOR_ORG}/${username}`,
-      password: passwordFor(u),
-    },
-  });
-  const body = await r.json();
+  const mint = async (user: string) => {
+    const r = await api.post(`${CASDOOR_URL}/api/login/oauth/access_token`, {
+      form: {
+        grant_type: 'password',
+        client_id: CASDOOR_CLIENT_ID,
+        client_secret: CASDOOR_CLIENT_SECRET,
+        username: user,
+        password: passwordFor(u),
+      },
+    });
+    return r.json();
+  };
+  // Same plain-first/org-name-fallback as spec 14's casdoorToken: Casdoor
+  // resolves the password grant inside the app's organization, so "org/name"
+  // answers "the user does not exist" there.
+  let body = await mint(username);
+  if (!body.access_token) body = await mint(`${CASDOOR_ORG}/${username}`);
   if (!body.access_token) throw new Error(`casdoor token for ${username}: ${JSON.stringify(body)}`);
   return body.access_token as string;
 }
@@ -215,9 +222,16 @@ test.describe('RBAC: LIVE superadmin-gateway enforcement', () => {
     'pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded with the '
     + 'superadmin role (seed-accounts.sh --roles) + the tailnet superadmin-gateway '
     + 'up (hugmesh-superadmin-gateway is README/manifest-only offline).');
+  // The superadmin-gateway is TAILNET-ONLY — the compose stack never runs one,
+  // so LIVE_GATEWAY=1 alone must not activate these probes against the
+  // unreachable https://superadmin.localhost fallback. Probe only when the
+  // operator explicitly points SUPERADMIN_GATEWAY_URL at a live instance.
+  test.skip(!process.env.SUPERADMIN_GATEWAY_URL,
+    'superadmin-gateway is tailnet-only (absent in the compose lane) — set '
+    + 'SUPERADMIN_GATEWAY_URL to a live instance to activate these probes.');
 
   for (const route of SUPERADMIN_ALLOW_ROUTES) {
-    for (const username of ['e2e-superadmin', 'e2e-admin']) {
+    for (const username of [SUPERADMIN_USERNAME, 'e2e-admin']) {
       const expected = gatewayDecision(
         SUPERADMIN_GATEWAY as Gateway, route.probe, eff(username),
       );

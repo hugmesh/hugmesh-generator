@@ -1419,8 +1419,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return
         self._note(f"[e2e] running the Playwright suite against {node.web_url} "
                    f"(seeded ENV=test stack) …")
+        # Bridge the mesh's REAL superadmin identity (minted by this bootstrap)
+        # into the suite: without it every superadmin login 401s, because the
+        # seeded handle/password are the minted ones, not the e2e defaults.
+        bridge: dict[str, str] = {}
+        creds = self.boot.superadmin_login()
+        if creds:
+            bridge = {"CASDOOR_SUPERADMIN_USERNAME": creds[0],
+                      "E2E_SUPERADMIN_PASSWORD": creds[1]}
+            self._note(f"[e2e] superadmin identity bridged: {creds[0]} "
+                       "(password from the minted secrets bundle)")
         self._launch("Running the e2e suite",
-                     lambda on_line, cancel: node.run_e2e(on_line=on_line,
+                     lambda on_line, cancel: node.run_e2e(extra_env=bridge,
+                                                          on_line=on_line,
                                                           cancel=cancel),
                      stream=True, cancellable=True, verb="e2e")
 

@@ -373,6 +373,22 @@ class LocalMeshBootstrap:
     def secrets_json(self) -> str:
         return os.path.join(self.vault_dir, "secrets.json")
 
+    def superadmin_login(self) -> tuple[str, str] | None:
+        """(username, password) of the MINTED platform superadmin from the runtime
+        secrets bundle, or None when no bundle exists (terminal-seeded stack — the
+        deterministic e2e defaults apply there). Read fresh each call: the bundle
+        is re-minted by every from-scratch bring-up. Used to bridge the suite's
+        CASDOOR_SUPERADMIN_USERNAME / E2E_SUPERADMIN_PASSWORD (subprocess env,
+        never argv, never logged)."""
+        try:
+            with open(self.secrets_json, encoding="utf-8") as fh:
+                s = json.load(fh)
+            entry = s[f"{self.cfg.brand}-pki"]["casdoor-superadmin"]
+            user, pw = entry["username"], entry["password"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return (user, pw) if user and pw else None
+
     def overlay_will_attach(self) -> bool:
         """The mesh overlay's tailscale service REQUIRES ``${TS_AUTHKEY:?}``, so it is
         only attached when a key is supplied — the prod path. In test/LAN-only mode

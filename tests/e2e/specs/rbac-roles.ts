@@ -81,7 +81,10 @@ export interface SystemsSeedUser {
 
 export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
   {
-    username: 'e2e-superadmin',
+    // A studio-bootstrapped mesh seeds the superadmin under the operator's
+    // minted username (SUPERADMIN_USERNAME below); the terminal lane keeps
+    // the deterministic default. Same passwordEnv either way.
+    username: process.env.CASDOOR_SUPERADMIN_USERNAME ?? 'e2e-superadmin',
     passwordEnv: 'E2E_SUPERADMIN_PASSWORD',
     // ROLE_SUPERADMIN is its OWN tier — it does NOT carry ROLE_ADMIN. The
     // superadmin-gateway routes are keyed on ROLE_SUPERADMIN alone (schema.sql
@@ -423,7 +426,16 @@ export function passwordFor(user: { passwordEnv: string }): string {
       ?? 'e2e-pass';
 }
 
+/** The superadmin's LOGIN HANDLE: env-driven on a studio-bootstrapped mesh
+ *  (CASDOOR_SUPERADMIN_USERNAME), the deterministic default elsewhere. The
+ *  catalogue's 'e2e-superadmin' remains the stable IDENTITY specs may look up. */
+export const SUPERADMIN_USERNAME =
+  process.env.CASDOOR_SUPERADMIN_USERNAME ?? 'e2e-superadmin';
+
 export function systemsUser(username: string): SystemsSeedUser {
+  // 'e2e-superadmin' is the catalogue IDENTITY; the seeded login handle may be
+  // the minted CASDOOR_SUPERADMIN_USERNAME — alias so both resolve.
+  if (username === 'e2e-superadmin') username = SUPERADMIN_USERNAME;
   const u = SYSTEMS_SEED_USERS.find((x) => x.username === username);
   if (!u) throw new Error(`unknown systems seed user: ${username}`);
   return u;
