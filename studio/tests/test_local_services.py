@@ -100,10 +100,12 @@ def test_profile_slugs_name_a_profile_compose_actually_declares():
     assert "$(if $(strip $(PHPBB)),--profile phpbb,)" in mk
     assert "$(if $(strip $(AKKOMA)),--profile akkoma,)" in mk
     assert "$(if $(strip $(ANUBIS)),--profile anubis,)" in mk
+    assert "$(if $(strip $(EGRESS_VPN)),-f $(STACK_EGRESS_COMPOSE) --profile egress-vpn,)" in mk
     profiles = {s.profile for s in ls.LOCAL_SERVICES if s.is_profile()}
     assert profiles == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR, ls.PROFILE_PHPBB,
                         ls.PROFILE_AKKOMA, ls.PROFILE_ANUBIS,
-                        ls.PROFILE_GAMES, ls.PROFILE_EDGE_AI_TTS}
+                        ls.PROFILE_GAMES, ls.PROFILE_EDGE_AI_TTS,
+                        ls.PROFILE_EGRESS_VPN}
     assert 'profiles: ["tor"]' in local
     assert 'profiles: ["anubis"]' in local
     assert "social" in social and "profiles:" in social
@@ -207,7 +209,8 @@ def test_profile_flags_read_only_the_profile_half():
     all_off = {s.profile: False for s in ls.LOCAL_SERVICES if s.is_profile()}
     assert set(all_off) == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR, ls.PROFILE_PHPBB,
                             ls.PROFILE_AKKOMA, ls.PROFILE_ANUBIS,
-                            ls.PROFILE_GAMES, ls.PROFILE_EDGE_AI_TTS}
+                            ls.PROFILE_GAMES, ls.PROFILE_EDGE_AI_TTS,
+                            ls.PROFILE_EGRESS_VPN}
     assert ls.profile_flags(None) == all_off
     assert ls.profile_flags(("wiki", "tube")) == all_off
     assert ls.profile_flags(("tuwunel",))[ls.PROFILE_SOCIAL] is True

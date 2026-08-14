@@ -109,7 +109,9 @@ class LocalStackNode:
                  web_locales: tuple[str, ...] = (), login_theme_css: str = "",
                  with_tor: bool = False, with_phpbb: bool = False,
                  with_akkoma: bool = False, with_anubis: bool = False,
-                 with_games: bool = False, idp: str = "casdoor",
+                 with_games: bool = False, with_tts: bool = False,
+                 with_egress_vpn: bool = False, egress_vpn_conf: str = "",
+                 idp: str = "casdoor",
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
                  services=None):
         self.generator_dir = os.path.abspath(generator_dir)
@@ -131,6 +133,19 @@ class LocalStackNode:
         # opt-in shape as phpbb/akkoma.
         self.with_games = with_games
         self.with_anubis = with_anubis
+        # TTS=1 -> the Makefile adds `--profile edge-ai-tts` (built from source,
+        # specs/cluster/manifests/edge-ai-tts/image). Was a dead toggle until
+        # 2026-08-14: the row existed but nothing exported the env.
+        self.with_tts = with_tts
+        # EGRESS_VPN=1 + EGRESS_VPN_CONF -> STACK_EGRESS_FLAGS adds the
+        # compose.egress-vpn.yaml overlay + profile. Deliberately NO raise here on
+        # a missing conf: the plan preview constructs this node mid-selection (a
+        # ctor raise would escape a Qt slot and qFatal the Studio — see
+        # feedback memory "no-modals-in-page-logic" for the class). Fail-closed is
+        # layered elsewhere: bootstrap.validate() blocks the verbs, the page's
+        # exit gate unchecks, and a conf-less container refuses to start.
+        self.with_egress_vpn = with_egress_vpn
+        self.egress_vpn_conf = (egress_vpn_conf or "").strip()
         self.public_host_port = public_host_port
         # The TLS front door (Makefile PUBLIC_HTTPS_PORT ?= 8488). web_url hands this
         # out rather than the plaintext port, so every operator-facing surface teaches
@@ -404,6 +419,14 @@ class LocalStackNode:
         env["AKKOMA"] = "1" if self.with_akkoma else ""
         env["GAMES"] = "1" if self.with_games else ""
         env["ANUBIS"] = "1" if self.with_anubis else ""
+        env["TTS"] = "1" if self.with_tts else ""
+        env["EGRESS_VPN"] = "1" if self.with_egress_vpn else ""
+        if self.with_egress_vpn and self.egress_vpn_conf:
+            # abspath: the Makefile $(abspath) would resolve a relative path
+            # against ITS cwd, not the operator's picker — hand it absolute.
+            # (conf-less stays unexported: compose mounts /dev/null and the
+            # container refuses — the terminal fail-closed layer.)
+            env["EGRESS_VPN_CONF"] = os.path.abspath(self.egress_vpn_conf)
         env["PUBLIC_HOST_PORT"] = str(self.public_host_port)
         # Only export DOMAIN when set, so existing callers (and ENV=test) keep the
         # Makefile's own default. In prod this pins the Casdoor issuer to the same

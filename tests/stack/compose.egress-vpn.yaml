@@ -18,6 +18,9 @@ services:
     build:
       context: ./wireguard
     cap_add: [NET_ADMIN]
+    # userspace tun for the OpenVPN lane (the WireGuard lane is kernel-side and
+    # ignores it) — harmless when unused, required for an .ovpn conf.
+    devices: ["/dev/net/tun:/dev/net/tun"]
     sysctls:
       net.ipv4.conf.all.src_valid_mark: 1
     volumes:

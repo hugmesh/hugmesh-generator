@@ -49,9 +49,11 @@ from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
     FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_AKKOMA, PROFILE_ANUBIS,
-    PROFILE_EDGE_AI_TTS, PROFILE_GAMES, PROFILE_PHPBB, PROFILE_SOCIAL, PROFILE_TOR,
+    PROFILE_EDGE_AI_TTS, PROFILE_EGRESS_VPN, PROFILE_GAMES, PROFILE_PHPBB,
+    PROFILE_SOCIAL, PROFILE_TOR,
     by_slug as by_local_slug, federation_env, federation_selection,
     federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection)
+from .egress_conf import validate_egress_conf
 from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
 from .mesh_node import MeshNode
 
@@ -200,6 +202,12 @@ class LocalMeshBootstrapConfig:
     # `social`/`with_tor` in lock-step because its social/tor rows ARE those two
     # checkboxes (one widget, never a second copy that can disagree).
     services: tuple[str, ...] | None = None
+    # The VPN provider conf backing an `egress-vpn` selection (WireGuard .conf or
+    # OpenVPN .ovpn — core.egress_conf validates both with the container's own
+    # sniff rules). REQUIRED whenever the egress-vpn slug is selected: validate()
+    # blocks the up and the page unchecks the box rather than leave it lying
+    # (operator ask 2026-08-14 — fail-closed at every layer).
+    egress_vpn_conf: str = ""
     auth_key: str = ""
     login_server: str = ""
     node_name: str = ""
@@ -295,6 +303,21 @@ class LocalMeshBootstrapConfig:
             return False
         return profile_flags(self.services).get(PROFILE_ANUBIS, False)
 
+    def effective_tts(self) -> bool:
+        """Same rule, for the `edge-ai-tts` profile (TTS=1). Threading this was
+        MISSED when the row graduated (2026-08-14): the checkbox existed but
+        exported nothing, so a checked box brought up no container."""
+        if self.services is None:
+            return False
+        return profile_flags(self.services).get(PROFILE_EDGE_AI_TTS, False)
+
+    def effective_egress_vpn(self) -> bool:
+        """Same rule, for the `egress-vpn` profile (EGRESS_VPN=1 +
+        EGRESS_VPN_CONF=<path> -> STACK_EGRESS_FLAGS)."""
+        if self.services is None:
+            return False
+        return profile_flags(self.services).get(PROFILE_EGRESS_VPN, False)
+
     def federation_services(self) -> tuple[str, ...]:
         """The federation-mechanism half of the selection (catalogue order)."""
         return federation_selection(self.services)
@@ -380,6 +403,9 @@ class LocalMeshBootstrap:
                               with_akkoma=self.cfg.effective_akkoma(),
                               with_games=self.cfg.effective_games(),
                               with_anubis=self.cfg.effective_anubis(),
+                              with_tts=self.cfg.effective_tts(),
+                              with_egress_vpn=self.cfg.effective_egress_vpn(),
+                              egress_vpn_conf=self.cfg.egress_vpn_conf.strip(),
                               idp=self.cfg.idp,
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),
@@ -486,6 +512,15 @@ class LocalMeshBootstrap:
         # the reason. Silently dropping it is the failure mode this whole axis exists
         # to kill: the operator would be told the mesh runs something it cannot.
         problems.extend(validate_selection(self.cfg.services))
+        # EGRESS VPN — selected means a VALID provider conf must back it (the
+        # container refuses to start without one, fail-closed; this preflight moves
+        # that refusal from minutes into the up to the plan). Same sniff rules as
+        # the entrypoint via core.egress_conf.
+        if self.cfg.effective_egress_vpn():
+            _kind, err = validate_egress_conf(self.cfg.egress_vpn_conf.strip())
+            if err:
+                problems.append(f"Egress VPN is selected but has no usable config "
+                                f"file: {err}")
         # FORM only. Whether a catalog actually EXISTS for a locale is checked by the
         # login-ui build itself (tools/i18n/emit-shipped-locales.mjs fails loudly on a
         # requested locale with no messages.<locale>.xlf). The catalogs live in that
