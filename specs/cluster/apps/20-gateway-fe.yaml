@@ -420,7 +420,7 @@ spec:
           # …then the hugmesh.net Angular host catches everything else
           # (the apex + any path the routes above did not claim).
           - id: frontend-host
-            uri: http://snapdragon-systems-web.hugmesh-frontend.svc.cluster.local:80
+            uri: http://hugmesh-systems-web.hugmesh-frontend.svc.cluster.local:80
             path: /**
   destination:
     server: https://kubernetes.default.svc

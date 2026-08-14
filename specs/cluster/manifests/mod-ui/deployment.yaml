@@ -21,7 +21,7 @@ spec:
           level: "s0:c46"
       containers:
         - name: web
-          image: snapdragon-systems/mod-ui:dev
+          image: hugmesh/mod-ui:dev
           ports: [{ name: http, containerPort: 80 }]
           resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
 ---

@@ -17,7 +17,7 @@ generatorOptions:
 # Custom build-from-source image pulls from the in-cluster Harbor registry
 # (mutable :main tag; hugmesh-pki is not in the Kyverno digest-pin
 # enforced-namespace list). NOTE: unlike forum/kustomization.yaml's phpbb.yaml
-# base (which uses the short placeholder `image: snapdragon-systems/phpbb:dev`
+# base (which uses the short placeholder `image: hugmesh/phpbb:dev`
 # for kustomize's images: transform to rewrite), headwind.yaml's Deployment
 # already hardcodes the FULL final image ref directly — an `images:` stanza
 # here would match no container (kustomize's images transformer only rewrites

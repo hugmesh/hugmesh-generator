@@ -3,7 +3,7 @@ name: hugmesh-gateway
 description: >-
   HugMesh Spring Cloud Gateway — one chart, deployed once per namespace as
   hugmesh-pki-gateway / hugmesh-be-gateway / hugmesh-fe-gateway. Each
-  release runs the same image (snapdragon-systems/gateway) differentiated by
+  release runs the same image (hugmesh/gateway) differentiated by
   SPRING_APPLICATION_NAME, validates an internal Casdoor OAuth2 JWT, appends
   External-* identity headers downstream, and never exposes an external login.
 type: application

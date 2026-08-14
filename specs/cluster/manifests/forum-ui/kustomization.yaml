@@ -12,7 +12,7 @@ resources:
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
-  - { name: snapdragon-systems/forum-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-forum-ui, newTag: main }
+  - { name: hugmesh/forum-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-forum-ui, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

@@ -16,7 +16,7 @@
 # CONTAINER: the first-party UI image is built FROM nginxinc/nginx-unprivileged:1.27-alpine
 # (runs as uid 101, listens on :8080 — no root, no NET_BIND privilege) and bakes the
 # Angular `dist/` remote (remoteEntry.json + chunks). The image placeholder below
-# (snapdragon-systems/character-studio-ui) is rewritten by the kustomization `images:`
+# (hugmesh/character-studio-ui) is rewritten by the kustomization `images:`
 # transform to the in-cluster Harbor registry tag, matching the user-ui/wiki-ui shape.
 ---
 apiVersion: apps/v1
@@ -47,7 +47,7 @@ spec:
         - name: web
           # PLACEHOLDER image (rewritten by kustomization images: transform). The base
           # is nginxinc/nginx-unprivileged:1.27-alpine — non-root (uid 101), :8080.
-          image: snapdragon-systems/character-studio-ui:dev
+          image: hugmesh/character-studio-ui:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             runAsNonRoot: true

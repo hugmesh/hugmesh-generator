@@ -23,11 +23,11 @@ resources:
 # LITERAL + raw-kustomize-buildable and is NOT Handlebars-templated: the per-tenant
 # brand substitution of THIS tree is the EXISTING build-x86-host-stage4.sh
 # rebrand_sysroot ISO-build sed pass, which rewrites the baked cluster tree
-# (hugmesh.net -> CLUSTER_DOMAIN, hugmesh- -> BRAND-, snapdragon-systems/
+# (hugmesh.net -> CLUSTER_DOMAIN, hugmesh- -> BRAND-, hugmesh/
 # -> org/, "HugMesh Systems" -> BRAND_TITLE). That pass already rebrands the
 # registry HOST (registry.hugmesh.net -> registry.<domain>) + the repo NAME
 # (hugmesh-admin-bff-api -> <brand>-admin-bff-api) + the image name: prefix
-# (snapdragon-systems/ -> <org>/). Putting {{tokens}} here instead would break the
+# (hugmesh/ -> <org>/). Putting {{tokens}} here instead would break the
 # raw ArgoCD kustomize sync (YAML flow-map parse error on {{ }}) and double-brand.
 # KNOWN GAP (reported, not fixed here to avoid breaking sync): the standalone Harbor
 # PROJECT segment `/hugmesh/` matches no rebrand_sysroot rule (it is neither
@@ -35,7 +35,7 @@ resources:
 # Harbor project — a rebrand_sysroot rule (or a first-class HARBOR_PROJECT seam) is
 # owed. namespace stays hugmesh-backend (frozen backend tier / frozen svc DNS).
 images:
-  - { name: snapdragon-systems/admin-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-admin-bff-api, newTag: main }
+  - { name: hugmesh/admin-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-admin-bff-api, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

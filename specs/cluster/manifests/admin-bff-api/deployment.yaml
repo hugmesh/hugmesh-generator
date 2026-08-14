@@ -68,7 +68,7 @@ spec:
       # leaves the pod.
       initContainers:
         - name: build-keystore
-          image: snapdragon-systems/admin-bff-api:dev
+          image: hugmesh/admin-bff-api:dev
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -109,7 +109,7 @@ spec:
             - { name: stores, mountPath: /stores }
       containers:
         - name: hugmesh-admin-bff-api
-          image: snapdragon-systems/admin-bff-api:dev
+          image: hugmesh/admin-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false

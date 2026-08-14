@@ -52,7 +52,7 @@ spec:
       # The SAME keystore.p12 is presented as the CLIENT cert to the phpBB extension.
       initContainers:
         - name: build-keystore
-          image: snapdragon-systems/forum-bff-api:dev
+          image: hugmesh/forum-bff-api:dev
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -100,7 +100,7 @@ spec:
             - { name: stores, mountPath: /stores }
       containers:
         - name: hugmesh-forum-bff-api
-          image: snapdragon-systems/forum-bff-api:dev
+          image: hugmesh/forum-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false

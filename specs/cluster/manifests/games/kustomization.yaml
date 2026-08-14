@@ -10,7 +10,7 @@ resources:
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
-  - { name: snapdragon-systems/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh.games/backend, newTag: main }
+  - { name: hugmesh/hugmesh.games-backend, newName: registry.hugmesh.net/hugmesh/hugmesh.games/backend, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

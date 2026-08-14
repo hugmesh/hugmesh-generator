@@ -52,7 +52,7 @@ spec:
       # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
       initContainers:
         - name: build-keystore
-          image: snapdragon-systems/user-bff-api:dev
+          image: hugmesh/user-bff-api:dev
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -106,7 +106,7 @@ spec:
             - { name: stores, mountPath: /stores }
       containers:
         - name: hugmesh-user-bff-api
-          image: snapdragon-systems/user-bff-api:dev
+          image: hugmesh/user-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false

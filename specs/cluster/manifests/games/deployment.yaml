@@ -23,7 +23,7 @@ spec:
           level: "s0:c33"
       containers:
         - name: games
-          image: snapdragon-systems/hugmesh.games-backend:dev
+          image: hugmesh/hugmesh.games-backend:dev
           ports: [{ name: http, containerPort: 8080 }]
           env:
             # GAMES-realm Casdoor (casdoor-games, org "threewizards") — the SEPARATE,

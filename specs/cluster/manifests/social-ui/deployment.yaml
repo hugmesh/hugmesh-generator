@@ -22,7 +22,7 @@ spec:
           level: "s0:c41"
       containers:
         - name: web
-          image: snapdragon-systems/matrix-ui:dev
+          image: hugmesh/matrix-ui:dev
           ports: [{ name: http, containerPort: 80 }]
           resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
 ---
@@ -47,7 +47,7 @@ spec:
           level: "s0:c42"
       containers:
         - name: web
-          image: snapdragon-systems/mastodon-ui:dev
+          image: hugmesh/mastodon-ui:dev
           ports: [{ name: http, containerPort: 80 }]
           resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
 ---
@@ -72,7 +72,7 @@ spec:
           level: "s0:c43"
       containers:
         - name: web
-          image: snapdragon-systems/login-ui:dev
+          image: hugmesh/login-ui:dev
           ports: [{ name: http, containerPort: 80 }]
           # Without this, the login-ui nginx entrypoint (40-snap-config.sh)
           # defaults window.__SNAP_OIDC_ENABLED__ to false, so session.service.ts's
@@ -120,7 +120,7 @@ spec:
           level: "s0:c44"
       containers:
         - name: web
-          image: snapdragon-systems/admin-ui:dev
+          image: hugmesh/admin-ui:dev
           ports: [{ name: http, containerPort: 80 }]
           resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
 ---

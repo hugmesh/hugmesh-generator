@@ -36,7 +36,7 @@ data:
     NS_PKI="${NS_PKI:-hugmesh-pki}"
     # REQUIRED workloads (ENUMERATED, not "every Deployment") whose readiness
     # gates the LEAN run. Name:namespace. Keep in step with the deployed apps.
-    REQUIRED_LEAN="${REQUIRED_LEAN:-snapdragon-systems-web:${NS_FE} hugmesh-admin-bff-api:${NS_BE} hugmesh-federation-api:${NS_BE}}"
+    REQUIRED_LEAN="${REQUIRED_LEAN:-hugmesh-systems-web:${NS_FE} hugmesh-admin-bff-api:${NS_BE} hugmesh-federation-api:${NS_BE}}"
     # ArgoCD Applications that must be Synced+Healthy before the lean run.
     REQUIRED_APPS="${REQUIRED_APPS:-frontend admin-bff-api federation-api}"
     # Seed/admin-sync Jobs that must be Complete (positive seed signal).

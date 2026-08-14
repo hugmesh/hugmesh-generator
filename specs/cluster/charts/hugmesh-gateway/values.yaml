@@ -10,7 +10,7 @@ instance:
 replicaCount: 1
 
 # PRE-EXISTING BUG, fixed during the Harbor migration: `repository` had NO
-# registry-host prefix at all (just "snapdragon-systems/gateway"), so a
+# registry-host prefix at all (just "hugmesh/gateway"), so a
 # deployment would have resolved this image against Docker Hub, not the
 # in-cluster registry — while .gitlab-ci.yml's build:images job has always
 # pushed to registry.hugmesh.net/hugmesh/hugmesh-gateway. Fixed to

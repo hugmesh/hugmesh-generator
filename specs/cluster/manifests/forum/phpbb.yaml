@@ -211,7 +211,7 @@ spec:
           # ⚠️ Custom image = official phpBB + the hugmesh/forumapi extension baked
           # in (immutable, version-locked). Placeholder pinned to the in-cluster
           # registry; replace newTag when the extension image is built (kustomization).
-          image: snapdragon-systems/phpbb:dev
+          image: hugmesh/phpbb:dev
           command: ["/bin/sh", "/config/bootstrap.sh"]
           env:
             # OWNER role password for the install DDL (from phpbb-secrets). Consumed by
@@ -237,7 +237,7 @@ spec:
             - { name: data,   mountPath: /var/www/html/store }
       containers:
         - name: phpbb
-          image: snapdragon-systems/phpbb:dev
+          image: hugmesh/phpbb:dev
           ports:
             # ROOTLESS: apache listens on 8080 (non-privileged; bindable by UID 33). The
             # named port `http` is what the probes + Service targetPort resolve to.

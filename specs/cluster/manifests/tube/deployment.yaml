@@ -29,7 +29,7 @@ spec:
       containers:
         # ── tube-bff-api — Spring Boot BFF (Google OAuth sync + download queue) ──
         - name: tube-bff-api
-          image: snapdragon-systems/tube-bff-api
+          image: hugmesh/tube-bff-api
           ports:
             - { name: bff-http, containerPort: 8080, protocol: TCP }
           env:
@@ -67,7 +67,7 @@ spec:
 
         # ── tube-ui — Angular remote micro-frontend ───────────────────────────────
         - name: tube-ui
-          image: snapdragon-systems/tube-ui
+          image: hugmesh/tube-ui
           ports:
             - { name: ui-http, containerPort: 8080, protocol: TCP }
           resources:

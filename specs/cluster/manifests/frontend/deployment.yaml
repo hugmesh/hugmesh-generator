@@ -5,14 +5,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-systems-web
+  name: hugmesh-systems-web
   namespace: hugmesh-frontend
-  labels: { app: snapdragon-systems-web, app.kubernetes.io/part-of: hugmesh.net }
+  labels: { app: hugmesh-systems-web, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-systems-web } }
+  selector: { matchLabels: { app: hugmesh-systems-web } }
   template:
-    metadata: { labels: { app: snapdragon-systems-web } }
+    metadata: { labels: { app: hugmesh-systems-web } }
     spec:
       nodeSelector: { hugmesh.net/frontend: "true" }
       # POD-level hardening (replicates the media-poisoner exemplar pattern):
@@ -29,7 +29,7 @@ spec:
           level: "s0:c40"
       containers:
         - name: web
-          image: snapdragon-systems/hugmesh.net:dev
+          image: hugmesh/hugmesh.net:dev
           ports: [{ name: http, containerPort: 8080 }]  # nginx-unprivileged listens on 8080 (non-root can't bind 80); probe + Service targetPort follow the named 'http' port
           # CONTAINER-level hardening (audit: pod-only seLinuxOptions had NO
           # container securityContext). CIS K8s 5.2.5 (allowPrivilegeEscalation:
@@ -69,8 +69,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-systems-web
+  name: hugmesh-systems-web
   namespace: hugmesh-frontend
 spec:
-  selector: { app: snapdragon-systems-web }
+  selector: { app: hugmesh-systems-web }
   ports: [{ name: http, port: 80, targetPort: http }]

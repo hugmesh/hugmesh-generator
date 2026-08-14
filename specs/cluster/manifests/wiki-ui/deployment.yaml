@@ -31,7 +31,7 @@ spec:
           level: "s0:c71"
       containers:
         - name: web
-          image: snapdragon-systems/wiki-ui:dev
+          image: hugmesh/wiki-ui:dev
           # nginx-unprivileged listens on 8080 (UID 101 cannot bind <1024); the
           # named 'http' port feeds the Service targetPort: http, so it follows.
           # (Also corrects a latent mismatch: the image EXPOSE/listen is 8080 but

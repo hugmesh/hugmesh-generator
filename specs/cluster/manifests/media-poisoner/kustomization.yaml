@@ -11,7 +11,7 @@ resources:
 # harbor-registry imagePullSecret (ESO-materialized, see manifests/external-secrets),
 # patched in below — same pattern as manifests/games.
 images:
-  - { name: snapdragon-systems/hugmesh-media-poisoner, newName: registry.hugmesh.net/hugmesh/hugmesh-media-poisoner, newTag: main }
+  - { name: hugmesh/hugmesh-media-poisoner, newName: registry.hugmesh.net/hugmesh/hugmesh-media-poisoner, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

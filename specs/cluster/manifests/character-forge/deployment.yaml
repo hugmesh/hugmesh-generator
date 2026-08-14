@@ -20,7 +20,7 @@
 # (runs as uid 101, listens on :8080 — no root, no NET_BIND privilege) and bakes the
 # Angular `dist/` remote (remoteEntry.json + chunks + the Godot web export under
 # assets/game/ once baked). The image placeholder below
-# (snapdragon-systems/character-forge-ui) is rewritten by the kustomization `images:`
+# (hugmesh/character-forge-ui) is rewritten by the kustomization `images:`
 # transform to the in-cluster Harbor registry tag, matching the character-studio shape.
 ---
 apiVersion: apps/v1
@@ -51,7 +51,7 @@ spec:
         - name: web
           # PLACEHOLDER image (rewritten by kustomization images: transform). The base
           # is nginxinc/nginx-unprivileged:1.27-alpine — non-root (uid 101), :8080.
-          image: snapdragon-systems/character-forge-ui:dev
+          image: hugmesh/character-forge-ui:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             runAsNonRoot: true

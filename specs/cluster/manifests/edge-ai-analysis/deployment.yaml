@@ -39,7 +39,7 @@ spec:
           # Built from image/ (FastAPI + httpx + Pillow + imagehash). Remapped to the
           # registry by kustomization.yaml. Until the image is built + pushed, keep this
           # slug deselected (DEFAULT-OFF) so no node tries to pull it.
-          image: snapdragon-systems/edge-ai-analysis
+          image: hugmesh/edge-ai-analysis
           ports:
             - { name: http, containerPort: 8080, protocol: TCP }
           env:

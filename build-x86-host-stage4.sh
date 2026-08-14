@@ -2871,7 +2871,7 @@ parameterize_games_domain() {
     # URL-SCHEME-ANCHORED: only rewrite hugmesh.games when it is a HOST (right
     # after the // of https://...), so the games-realm origin/issuer/redirect/website
     # URLs flip to ${GAMES_DOMAIN} while the canonical IMAGE repo paths
-    # (snapdragon-systems/hugmesh.games-backend, .../hugmesh.games/backend) are
+    # (hugmesh/hugmesh.games-backend, .../hugmesh.games/backend) are
     # left untouched. id.hugmesh.games -> id.${GAMES_DOMAIN}; bare host -> ${GAMES_DOMAIN}.
     while IFS= read -r -d '' f; do
         if grep -q '//id\.hugmesh\.games\|//hugmesh\.games' "${f}" 2>/dev/null; then
@@ -3063,7 +3063,6 @@ rebrand_sysroot() {
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
-            -e "s|snapdragon-systems/|${_orglc}/|g" \
             -e "s|hugmesh|${_org}|g" \
             -e "s|//id\.hugmesh\.games|//id.${_games}|g" \
             -e "s|//hugmesh\.games|//${_games}|g" \

@@ -13,7 +13,7 @@ resources:
 # :main here for dev. Pulls need the harbor-registry imagePullSecret (ESO-
 # materialized; the hugmesh-backend ExternalSecret already exists).
 images:
-  - { name: snapdragon-systems/hugmesh-federation-api, newName: registry.hugmesh.net/hugmesh/hugmesh-federation-api, newTag: main }
+  - { name: hugmesh/hugmesh-federation-api, newName: registry.hugmesh.net/hugmesh/hugmesh-federation-api, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

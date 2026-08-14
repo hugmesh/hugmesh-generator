@@ -44,7 +44,7 @@ spec:
 
         # ── owncast-bff-api — Spring Boot resource server (JWT validation) ───────
         - name: owncast-bff-api
-          image: snapdragon-systems/owncast-bff-api
+          image: hugmesh/owncast-bff-api
           ports:
             - { name: bff-http, containerPort: 8080, protocol: TCP }
           env:
@@ -73,7 +73,7 @@ spec:
 
         # ── owncast-ui — Angular remote micro-frontend ────────────────────────────
         - name: owncast-ui
-          image: snapdragon-systems/owncast-ui
+          image: hugmesh/owncast-ui
           ports:
             - { name: ui-http, containerPort: 8080, protocol: TCP }
           resources:

@@ -47,7 +47,7 @@ spec:
           # Built from image/ (FastAPI + piper-tts + onnxruntime, CPU-only). Remapped
           # to the registry by kustomization.yaml. Until the image is built + pushed,
           # keep this slug deselected (DEFAULT-OFF) so no node tries to pull it.
-          image: snapdragon-systems/edge-ai-tts
+          image: hugmesh/edge-ai-tts
           ports:
             - { name: http, containerPort: 8080, protocol: TCP }
           env:

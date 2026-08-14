@@ -16,7 +16,7 @@ resources:
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets). Mirrors user-ui/wiki-ui.
 images:
-  - name: snapdragon-systems/character-studio-ui
+  - name: hugmesh/character-studio-ui
     newName: registry.hugmesh.net/hugmesh/hugmesh-character-studio-ui
     newTag: main
 patches:

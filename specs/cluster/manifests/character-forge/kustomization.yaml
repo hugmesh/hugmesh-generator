@@ -16,7 +16,7 @@ resources:
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets). Mirrors user-ui/wiki-ui.
 images:
-  - name: snapdragon-systems/character-forge-ui
+  - name: hugmesh/character-forge-ui
     newName: registry.hugmesh.net/hugmesh/hugmesh-character-forge-ui
     newTag: main
 patches:

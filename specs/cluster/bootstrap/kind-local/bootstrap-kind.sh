@@ -392,7 +392,7 @@ SSO_APPS=(
   31-admin-bff-api.yaml   # session custody + internal-token back-channel
   34-user-bff-db.yaml
   37-user-bff-api.yaml    # POST /bff/login (native-login relocation)
-  40-frontend.yaml        # Angular host shell (snapdragon-systems-web)
+  40-frontend.yaml        # Angular host shell (hugmesh-systems-web)
   45-social-ui.yaml       # login-ui remote (+ matrix/mastodon/admin remotes)
   14-workload-console-rbac.yaml # workload-console SAs + token Secrets (lights the dual-SA client the committed admin-bff overlay already enables; RoleBindings for app-tier namespaces absent from this slice degrade that Application partially, which is the honest state)
 )
@@ -426,7 +426,7 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   # status table — so a Cassandra with no roles looked, from the bootstrap's own
   # output, exactly like a healthy one, and the failure surfaced much later as an
   # unrelated-looking gateway auth error.
-  APP_NAMES+=(cassandra cassandra-init route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api snapdragon-systems-web hugmesh-social-ui)
+  APP_NAMES+=(cassandra cassandra-init route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api hugmesh-systems-web hugmesh-social-ui)
 fi
 log "Waiting up to 5m for curated Applications to reach Synced/Healthy (best-effort)"
 deadline=$((SECONDS + 300))

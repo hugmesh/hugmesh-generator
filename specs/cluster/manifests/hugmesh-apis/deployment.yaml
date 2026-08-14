@@ -35,7 +35,7 @@ spec:
       # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
       initContainers:
         - name: build-keystore
-          image: snapdragon-systems/actions:dev
+          image: hugmesh/actions:dev
           # CONTAINER-level hardening (audit: pod-only seLinux, no container ctx).
           # CIS K8s 5.2.5 / 5.2.7-5.2.9. The store password is generated here and
           # written ONLY to the /stores tmpfs (already a Memory emptyDir, RW);
@@ -78,7 +78,7 @@ spec:
       containers:
         - name: api
           # hugmesh-actions — "Spring Actions for hugmesh hybrid architecture"
-          image: snapdragon-systems/actions:dev
+          image: hugmesh/actions:dev
           # hugmesh-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
           # service here, which defaults to 8080) — see application.yml's
           # `server.port: ${PORT:8090}`. The Service below stays on the stable

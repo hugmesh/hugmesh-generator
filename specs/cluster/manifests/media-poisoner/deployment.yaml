@@ -76,7 +76,7 @@ spec:
         - name: media-poisoner
           # First-party image, rewritten to the in-cluster Harbor registry by the
           # kustomization (like every other app). :dev tracked for dev.
-          image: snapdragon-systems/hugmesh-media-poisoner:dev
+          image: hugmesh/hugmesh-media-poisoner:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false

@@ -56,7 +56,7 @@ spec:
       containers:
         - name: game-server
           # Placeholder digest-pinned image (re-pinned per instance by the catalog).
-          image: ghcr.io/snapdragon-systems/games/placeholder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: ghcr.io/hugmesh/games/placeholder@sha256:0000000000000000000000000000000000000000000000000000000000000000
           ports:
             - { name: console, containerPort: 8080 }
             - { name: game,    containerPort: 30000, protocol: UDP }

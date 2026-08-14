@@ -42,7 +42,7 @@ worker and is where ArgoCD + games are scheduled (via node labels).
 ## The gateway pattern (`charts/hugmesh-gateway`)
 
 One Helm chart, deployed three times. Each release runs the same
-`snapdragon-systems/gateway` image differentiated by `SPRING_APPLICATION_NAME`
+`hugmesh/gateway` image differentiated by `SPRING_APPLICATION_NAME`
 (`hugmesh-pki/be/fe-gateway`), validates the **internal Casdoor JWT**, and
 appends `External-*` identity headers to downstream requests. Public paths
 (`/api/auth`, `/api/login`, `/api/registration`) allow Google-federated sign-up;

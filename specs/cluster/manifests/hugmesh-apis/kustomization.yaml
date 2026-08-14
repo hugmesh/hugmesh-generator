@@ -10,7 +10,7 @@ resources:
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
-  - { name: snapdragon-systems/actions, newName: registry.hugmesh.net/hugmesh/hugmesh-actions, newTag: main }
+  - { name: hugmesh/actions, newName: registry.hugmesh.net/hugmesh/hugmesh-actions, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |
