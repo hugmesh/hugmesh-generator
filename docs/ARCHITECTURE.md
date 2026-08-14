@@ -543,7 +543,7 @@ implementation on `main`.
 > `snapdragon-*` ones. The **GitHub organization itself** is still named
 > `Snapdragon-Systems` (that rename is browser-only and outstanding), which is why
 > the paths below keep that prefix. Two repos changed shape as well as name:
-> `snapdragon.systems` → `hugmesh-host-shell`, `snapdragon.games` →
+> `snapdragon.systems` → `hugmesh-host-shell`, `hugmesh.games` →
 > `hugmesh-games`. The old `Snapdragon-Systems/sdn` repo **no longer exists**.
 
 ### Shared Maven libraries
