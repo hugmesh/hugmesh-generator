@@ -294,6 +294,17 @@ def _read_operator(generator_dir: str) -> tuple[str, tuple[str, ...], str] | Non
     return (mu.group("v").strip(), roles, _SHARED_PASSWORD_ENV)
 
 
+def grantable_roles(generator_dir: str) -> tuple[str, ...]:
+    """The role catalogue an Add-user surface may offer: LOCAL_OPERATOR_ROLES
+    parsed from seed-e2e.sh — the broadest DIRECTLY-grantable set, and a strict
+    subset of the roles seed-e2e.sh ensure_roles() pre-creates. Derived roles
+    (ROLE_GAMES_ADMIN, ROLE_FORUM_MOD) and the *_DOMAINLOCKED /
+    *_EXTERNAL_CLIENT restriction markers are deliberately absent: the first
+    two are materialized by reconcile Jobs, the rest take capability away."""
+    op = _read_operator(generator_dir)
+    return op[1] if op else ("ROLE_USER",)
+
+
 def suggested_signin(roster: Roster) -> SeededUser | None:
     """The persona to lead with in the UI: the most privileged ordinary account an
     operator would try first. Falls back to the first entry so the dialog always has

@@ -1,0 +1,33 @@
+# compose.egress-vpn.yaml — OPT-IN egress VPN for the LOCAL docker mesh.
+# Passed as an EXTRA -f only when EGRESS_VPN=1 (Makefile STACK_EGRESS_FLAGS): the
+# sidekiq network_mode below must not exist in the default model at all, so this
+# cannot ride compose.local.yaml's include: list. Local translation of the builder's
+# egress-vpn lanes (build-x86-host-stage4.sh:4044-4101; docs/EGRESS-VPN.md): the
+# WireGuard client netns carries the ATTACHED services' public egress, fail-closed.
+# v1 attaches ONLY mastodon-sidekiq (Mastodon's ActivityPub delivery + fetch worker:
+# no ports, never resolved by DNS — zero blast radius). NOT attached, with reasons:
+# mastodon-web/streaming (gateway routes target their DNS names + published ports;
+# network_mode forbids ports), akkoma (also serves inbound on :4001 — manual
+# attachment documented in docs/LOCAL-STACK.md), tuwunel (federation is OFF locally,
+# compose.real.yaml:105 — nothing to route).
+name: hugmesh-local
+
+services:
+  hugmesh-egress-vpn:
+    profiles: ["egress-vpn"]
+    build:
+      context: ./wireguard
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: 1
+    volumes:
+      # :-/dev/null so a conf-less `make stack-down` still renders; a conf-less UP
+      # mounts an empty file and the entrypoint refuses to start (fail-closed).
+      - ${EGRESS_VPN_CONF:-/dev/null}:/etc/wireguard/wg0.conf:ro
+    restart: unless-stopped
+
+  mastodon-sidekiq:
+    network_mode: "service:hugmesh-egress-vpn"
+    depends_on:
+      hugmesh-egress-vpn:
+        condition: service_started

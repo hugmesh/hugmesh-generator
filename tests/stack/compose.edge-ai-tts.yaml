@@ -1,0 +1,43 @@
+# compose.edge-ai-tts.yaml — the edge-ai-tts optional service (CPU-only Piper TTS
+# + even-split viseme timeline; the VN voice backend, B3) behind its OWN compose
+# profile, DEFAULT-OFF:  `make stack-up TTS=1`.
+#
+# ── WHERE THE IMAGE COMES FROM ──
+# Built from the IN-REPO container source specs/cluster/manifests/edge-ai-tts/image
+# — the same source the cluster image is built from. It CANNOT be pulled: the
+# deployment's coordinates are the in-mesh registry
+# (registry.hugmesh.systems/hugmesh/edge-ai-tts:main, kustomization.yaml), which
+# does not resolve off-cluster, and no public registry carries it. That source has
+# never had its container-build spike executed (image/README.md: "runtime
+# synthesis was NOT executed") — the first `make stack-up TTS=1` IS that spike.
+#
+# CPU-only (python:3.12-slim + onnxruntime; no GPU, no edge-ai/Ollama upstream —
+# the default voice is baked in at build time), so unlike edge-ai/edge-ai-analysis
+# it genuinely runs on a workstation. Build needs network (PyPI wheels + the
+# piper.download_voices voice fetch); runtime is offline.
+#
+# No published port: the be-gateway dials http://hugmesh-edge-ai-tts:8080
+# in-network (route id `edge-ai-tts`, gateway-routes/be/application-routes.yml);
+# the ROLE_USER route-access row for /v1/synthesize/** is already seeded from
+# specs/cluster/manifests/route-access/initdb/20-schema.sql.
+name: hugmesh-local
+
+services:
+  hugmesh-edge-ai-tts:
+    platform: linux/amd64
+    profiles: ["edge-ai-tts"]
+    build:
+      context: ../../specs/cluster/manifests/edge-ai-tts/image
+    # Mirror the pod hardening (manifests/edge-ai-tts/deployment.yaml): non-root
+    # uid 65532 is baked into the image (Dockerfile USER); read-only rootfs with a
+    # writable /tmp for uvicorn.
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      # /readyz = ready iff the baked voice files are on disk (image/README.md).
+      # The slim image ships no curl/wget; python is the one guaranteed client.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/readyz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s

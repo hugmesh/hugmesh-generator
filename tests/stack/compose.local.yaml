@@ -43,6 +43,18 @@ include:
   # Both DEFAULT-OFF and independent of `social`, so they add nothing to a plain
   # `make stack-up`. Enable with `make stack-up PHPBB=1` / `AKKOMA=1`.
   - path: compose.alt-social.yaml
+  # Second-brand Casdoor (`--profile brandb`): a real brand-B identity tier for
+  # cross-tenant (brand-wall) work. Enable with `make stack-up BRAND_B=1`.
+  - path: compose.brand-b.yaml
+  # edge-ai-tts (Piper TTS + visemes, the VN voice backend) behind its own
+  # DEFAULT-OFF profile — built from specs/cluster/manifests/edge-ai-tts/image
+  # (the in-mesh registry image is unreachable off-cluster). `make stack-up TTS=1`.
+  - path: compose.edge-ai-tts.yaml
+  # Games WASM asset tier (`--profile games`, make stack-up GAMES=1): the
+  # hugmesh-games wasm-fragment nginx serving the committed Godot bundles at
+  # /_remotes/wasm-fragment/** behind the fe-gateway. DEFAULT-OFF; builds from
+  # the SIBLING hugmesh-games clone (GAMES_SRC), see compose.games.yaml.
+  - path: compose.games.yaml
 
 # x86_64 only — first-party images are amd64 (Temurin JRE / node-alpine / nginx).
 # On Docker Desktop for Windows this matches the default linux/amd64 engine.
@@ -317,6 +329,10 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
       SPRING_APPLICATION_NAME: hugmesh-pki-gateway
+      # Opt-in multi-brand registry — EMPTY on a plain bring-up (single-issuer,
+      # byte-identical); `make stack-up BRAND_B=1` threads the two-issuer CSV.
+      APP_TENANCY_ISSUERS: ${APP_TENANCY_ISSUERS:-}
+      APP_TENANCY_HOSTS: ${APP_TENANCY_HOSTS:-}
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
@@ -431,6 +447,8 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
       SPRING_APPLICATION_NAME: hugmesh-be-gateway
+      APP_TENANCY_ISSUERS: ${APP_TENANCY_ISSUERS:-}
+      APP_TENANCY_HOSTS: ${APP_TENANCY_HOSTS:-}
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
@@ -500,6 +518,8 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
       SPRING_APPLICATION_NAME: hugmesh-fe-gateway
+      APP_TENANCY_ISSUERS: ${APP_TENANCY_ISSUERS:-}
+      APP_TENANCY_HOSTS: ${APP_TENANCY_HOSTS:-}
       # Cookie -> custody-JWT exchange (BffJwtExchangeWebFilter). WITHOUT this the
       # gateway's cookie bridge forwards the raw OPAQUE `bff_...` session value as
       # the Bearer. The three original BFFs never noticed — admin-bff terminates
@@ -1288,6 +1308,15 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-ui
+    environment:
+      # Runtime THEME: already-derived --sd-* token text (studio core/theme.py
+      # css_root(); same contract and threading as login-ui's SNAP_THEME_CSS
+      # above). The entrypoint hook (50-snap-theme.sh) writes it verbatim to
+      # /tmp/snap-theme.css (SNAP_THEME_OUT in the image) and nginx serves it
+      # via the exact-match /snap-theme.css alias. An ENV VAR, not a build arg,
+      # and that distinction is the point: a rebrand is compose up with a new
+      # value, NO image rebuild. Empty (the default) => shipped default brand.
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   hugmesh-mod-ui:
     <<: *amd64
@@ -1476,6 +1505,48 @@ services:
     volumes:
       - tor-onion-keys:/var/lib/tor/hugmesh-onion
       - ./tor-onion:/onion-out
+    depends_on:
+      hugmesh-fe-gateway:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── hugmesh-anubis — Techaro Anubis PoW anti-scraper gate (OPT-IN) ──
+  # Mirrors specs/cluster/manifests/anubis/deployment.yaml (cluster: public
+  # Ingress -> Anubis :8923 -> fe-gateway :8080). Locally it is an ALTERNATIVE
+  # published front door, the tor precedent above: the direct :8088/:8488 doors
+  # are untouched and http://localhost:${ANUBIS_HOST_PORT:-8923} serves the same
+  # platform THROUGH the PoW gate. OPT-IN behind the `anubis` profile
+  # (`make stack-up ANUBIS=1`); a default stack never creates it, so the
+  # unprofiled bring-up stays byte-identical. Image PINNED like the cluster
+  # (specs/cluster/manifests/anubis/kustomization.yaml); multi-arch, so no
+  # platform pin — same as hugmesh-tor. Anubis is its own Go reverse proxy
+  # (TARGET env) and re-resolves upstream DNS at dial time via Docker's embedded
+  # DNS, so it does NOT need the nginx variables+resolver idiom that
+  # tls-front/default.conf documents — no stale-IP trap in this path.
+  # NO healthcheck on purpose: the upstream image is distroless (no shell/curl;
+  # the cluster probes /healthz via kubelet httpGet, which needs no in-container
+  # binary). Add test: ["CMD", "anubis", "--healthcheck"] only after verifying
+  # the flag against this tag at first bring-up.
+  hugmesh-anubis:
+    profiles: ["anubis"]
+    image: ghcr.io/techarohq/anubis:v1.25.0
+    environment:
+      # Same knobs as the cluster Deployment's env block.
+      BIND: ":8923"
+      METRICS_BIND: ":9090"
+      TARGET: ${ANUBIS_TARGET:-http://hugmesh-fe-gateway:8080}
+      # This door is PUBLISHED DIRECTLY (no fronting proxy), so no one sets
+      # X-Real-Ip and Anubis's default (trust the header, for cluster ingress)
+      # 500s every request with "[misconfiguration] X-Real-Ip header is not
+      # set". On this topology the socket's remote address IS the client.
+      USE_REMOTE_ADDRESS: "true"
+      DIFFICULTY: "5"
+      SERVE_ROBOTS_TXT: "true"
+    ports:
+      # The PoW-gated door; 8923 is free on this stack and matches the cluster
+      # gate port. The :9090 metrics/health listener stays UNPUBLISHED (the
+      # cluster keeps it internal too — admin-bff-only).
+      - "${ANUBIS_HOST_PORT:-8923}:8923"
     depends_on:
       hugmesh-fe-gateway:
         condition: service_started

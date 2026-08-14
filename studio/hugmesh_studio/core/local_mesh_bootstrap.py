@@ -48,7 +48,8 @@ from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_services import (
-    FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_AKKOMA, PROFILE_PHPBB, PROFILE_SOCIAL, PROFILE_TOR,
+    FEDERATION_DISABLE_ENV, FEDERATION_ENABLE_ENV, PROFILE_AKKOMA, PROFILE_ANUBIS,
+    PROFILE_EDGE_AI_TTS, PROFILE_GAMES, PROFILE_PHPBB, PROFILE_SOCIAL, PROFILE_TOR,
     by_slug as by_local_slug, federation_env, federation_selection,
     federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection)
 from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
@@ -281,6 +282,19 @@ class LocalMeshBootstrapConfig:
             return False
         return profile_flags(self.services).get(PROFILE_AKKOMA, False)
 
+    def effective_games(self) -> bool:
+        """Same rule, for the `games` profile (GAMES=1 -> STACK_GAMES_PROFILE).
+        No legacy flag, like phpbb/akkoma: with no selection it is simply off."""
+        if self.services is None:
+            return False
+        return profile_flags(self.services).get(PROFILE_GAMES, False)
+
+    def effective_anubis(self) -> bool:
+        """Same rule, for the `anubis` profile (ANUBIS=1 -> STACK_ALT_PROFILE)."""
+        if self.services is None:
+            return False
+        return profile_flags(self.services).get(PROFILE_ANUBIS, False)
+
     def federation_services(self) -> tuple[str, ...]:
         """The federation-mechanism half of the selection (catalogue order)."""
         return federation_selection(self.services)
@@ -364,6 +378,8 @@ class LocalMeshBootstrap:
                               with_tor=self.cfg.effective_with_tor(),
                               with_phpbb=self.cfg.effective_phpbb(),
                               with_akkoma=self.cfg.effective_akkoma(),
+                              with_games=self.cfg.effective_games(),
+                              with_anubis=self.cfg.effective_anubis(),
                               idp=self.cfg.idp,
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),

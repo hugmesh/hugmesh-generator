@@ -12,6 +12,7 @@ docker compose (read-only, cheap) since they don't need any of that setup.
 from __future__ import annotations
 
 import collections
+import json
 import os
 import select
 import shutil
@@ -68,6 +69,16 @@ PREFLIGHT_MIN_FREE_GIB = 20
 WARM_STACK_UP_TIMEOUT_S = 1800
 COLD_STACK_UP_TIMEOUT_S = 6 * 3600
 M2_BOOTSTRAP_TIMEOUT_S = 3 * 3600
+# Full-suite Playwright ceiling: 32 spec files x 90 s test timeout, workers=1,
+# retries=1 — a healthy run is well under an hour; past that rely on the
+# streamed output + operator Cancel, like the stack-up ceilings above.
+E2E_TIMEOUT_S = 2 * 3600
+# Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
+# creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
+# WITHOUT auth — data.name == "e2e-admin" when seeded, data: null when not.
+# (CASDOOR_ORG is seed-e2e.sh's default; an operator override would defeat
+# this probe, which then honestly reports 'not seeded' and blocks the run.)
+E2E_SEED_PROBE_URL = "http://localhost:8000/api/get-user?id=hugmesh/e2e-admin"
 
 
 def _compose_base() -> list[str]:
@@ -97,7 +108,8 @@ class LocalStackNode:
                  source_mode: str = "clone", source_dir: str = "",
                  web_locales: tuple[str, ...] = (), login_theme_css: str = "",
                  with_tor: bool = False, with_phpbb: bool = False,
-                 with_akkoma: bool = False, idp: str = "casdoor",
+                 with_akkoma: bool = False, with_anubis: bool = False,
+                 with_games: bool = False, idp: str = "casdoor",
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
                  services=None):
         self.generator_dir = os.path.abspath(generator_dir)
@@ -114,6 +126,11 @@ class LocalStackNode:
         # shape as social/with_tor, so an unselected stack is unchanged.
         self.with_phpbb = with_phpbb
         self.with_akkoma = with_akkoma
+        # GAMES=1 -> the Makefile's STACK_GAMES_PROFILE adds `--profile games`
+        # (the wasm-fragment asset tier, compose.games.yaml). DEFAULT off, same
+        # opt-in shape as phpbb/akkoma.
+        self.with_games = with_games
+        self.with_anubis = with_anubis
         self.public_host_port = public_host_port
         # The TLS front door (Makefile PUBLIC_HTTPS_PORT ?= 8488). web_url hands this
         # out rather than the plaintext port, so every operator-facing surface teaches
@@ -385,6 +402,8 @@ class LocalStackNode:
         # flip a stack the picker said nothing about.
         env["PHPBB"] = "1" if self.with_phpbb else ""
         env["AKKOMA"] = "1" if self.with_akkoma else ""
+        env["GAMES"] = "1" if self.with_games else ""
+        env["ANUBIS"] = "1" if self.with_anubis else ""
         env["PUBLIC_HOST_PORT"] = str(self.public_host_port)
         # Only export DOMAIN when set, so existing callers (and ENV=test) keep the
         # Makefile's own default. In prod this pins the Casdoor issuer to the same
@@ -585,6 +604,117 @@ class LocalStackNode:
         from-scratch bring-up never needs a terminal."""
         return self._make("stack-m2-bootstrap", timeout=M2_BOOTSTRAP_TIMEOUT_S,
                           on_line=on_line, cancel=cancel)
+
+    # ---- e2e suite against the RUNNING stack -------------------------------------
+
+    def running_env(self) -> str:
+        """The ENV the RUNNING stack was started with — "test", "prod", or ""
+        when unreadable (stack down, docker absent). Nothing records ENV on
+        disk: the Makefile resolves it to CASDOOR_ISSUER and threads it into
+        every service as CASDOOR_ISSUER_URI (STACK_ENV), so the one honest
+        source is the running fe-gateway container's env — an http://localhost
+        issuer is test, https://… is prod. ``self.env`` is only what the FORM
+        currently says, which is exactly why it is not consulted here."""
+        base = _compose_base()
+        if not base or not os.path.exists(self.compose_file):
+            return ""
+        try:
+            r = subprocess.run([*base, "-f", self.compose_file, "ps", "-q",
+                                "hugmesh-fe-gateway"],
+                               cwd=self.generator_dir, capture_output=True,
+                               text=True, timeout=30)
+            cid = r.stdout.strip().splitlines()[0].strip() if r.stdout.strip() else ""
+            if not cid:
+                return ""
+            r = subprocess.run(
+                ["docker", "inspect", "-f",
+                 "{{range .Config.Env}}{{println .}}{{end}}", cid],
+                capture_output=True, text=True, timeout=30)
+            for ln in r.stdout.splitlines():
+                if ln.startswith("CASDOOR_ISSUER_URI="):
+                    issuer = ln.partition("=")[2]
+                    if issuer.startswith("https://"):
+                        return "prod"
+                    if issuer.startswith("http://"):
+                        return "test"
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return ""
+
+    def e2e_seeded(self) -> tuple[bool, str]:
+        """Has `make stack-seed` actually provisioned the e2e personas? A
+        READ-ONLY probe of the running Casdoor (no token minted, nothing
+        written): see E2E_SEED_PROBE_URL. Any error — Casdoor down, port not
+        published — reports why instead of raising."""
+        try:
+            with urllib.request.urlopen(E2E_SEED_PROBE_URL, timeout=5) as r:  # noqa: S310 - fixed localhost URL
+                data = json.load(r)
+        except (OSError, ValueError) as e:
+            return False, f"Casdoor not answering on localhost:8000 ({e})"
+        user = data.get("data") if isinstance(data, dict) else None
+        if isinstance(user, dict) and user.get("name") == "e2e-admin":
+            return True, ""
+        return False, ("persona 'e2e-admin' not in Casdoor — the stack is up "
+                       "but unseeded; run `make stack-seed` (the bootstrap's "
+                       "bring-up seeds automatically)")
+
+    def e2e_ready(self) -> list[str]:
+        """Every reason the e2e suite cannot run RIGHT NOW (empty = ready) —
+        read-only probes only, cheapest first. This one list is BOTH the GUI
+        button's enablement and run_e2e()'s fail-fast gate, so they can never
+        disagree."""
+        problems: list[str] = []
+        e2e_dir = os.path.join(self.generator_dir, "tests", "e2e")
+        if not os.path.isdir(e2e_dir):
+            problems.append("tests/e2e not found in this checkout.")
+        elif not os.path.isdir(os.path.join(e2e_dir, "node_modules")):
+            problems.append("tests/e2e/node_modules missing — run `make "
+                            "playwright-deps` once (npm ci + chromium).")
+        if not self.status().running:
+            problems.append("the local stack is not running — bring it up first.")
+            return problems
+        env = self.running_env()
+        if env != "test":
+            problems.append(
+                f"the RUNNING stack's env is '{env or 'unreadable'}', not "
+                f"'test' — the suite drives throwaway e2e personas against "
+                f"the localhost issuer and must never run against a prod mesh.")
+            return problems
+        ok, why = self.e2e_seeded()
+        if not ok:
+            problems.append(f"e2e personas not seeded: {why}")
+        return problems
+
+    def run_e2e(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make stack-e2e` — the Playwright suite (tests/e2e) against the
+        RUNNING local stack's TLS front door (SNAP_BASE_URL=web_url's port).
+        Streams like the other long verbs; Cancel kills the whole process
+        group (make + npx + browsers). Afterwards the run's summary.json (the
+        hugmesh reporter's DURABLE artifact: passed/failed/skipped) is read
+        back and reported as ONE honest counts line — never scraped from the
+        scrolling list output; a missing summary is reported as exactly that."""
+        problems = self.e2e_ready()
+        if problems:
+            return False, "\n".join(problems)
+        report_rel = os.path.join(
+            "test-results", time.strftime("studio-%Y%m%d-%H%M%S"))
+        ok, msg = self._make("stack-e2e", timeout=E2E_TIMEOUT_S,
+                             extra_env={"SNAP_REPORT_DIR": report_rel},
+                             on_line=on_line, cancel=cancel)
+        summary_path = os.path.join(self.generator_dir, "tests", "e2e",
+                                    report_rel, "summary.json")
+        try:
+            with open(summary_path, encoding="utf-8") as fh:
+                s = json.load(fh)
+            line = (f"[e2e] {s.get('passed', 0)} passed, "
+                    f"{s.get('failed', 0)} failed, "
+                    f"{s.get('skipped', 0)} skipped — summary: {summary_path}")
+        except (OSError, ValueError):
+            line = ("[e2e] no summary.json written (the run ended before the "
+                    "reporter finished) — see the log above.")
+        if on_line is not None:
+            on_line(line)
+        return ok, f"{line}\n{msg}"
 
     def stop(self) -> tuple[bool, str]:
         """`make stack-halt` — stop the mesh and KEEP its data.
