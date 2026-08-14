@@ -36,8 +36,10 @@ from .config import (
     OPTIONAL_SERVICES_BY_PLATFORM,
     ImageConfig,
     SECRET_FIELDS,
+    User,
     clear_role_class_fields,
     emit_note_once,
+    image_class,
     resolve_installer_ui_default,
     resolve_platform_defaults,
     strip_platform_unsupported,
@@ -122,6 +124,14 @@ class WorklistEntry:
     # mesh-wide Network-page default; emitted via each platform's real mechanism in
     # materialize (x86 tor -> --with-tor; rpi5 tor/egress-vpn -> --optional-services).
     infra_services: tuple[str, ...] = ()
+    # The PERSON on a desktop-class entry (operator ask 2026-08-14): checking a
+    # desktop row on the mesh WorklistPage collects its user's name + role via a
+    # popup. materialize() stamps the role as --person-role on the entry's own
+    # image and derives a manifest User on the internal orchestration superdomain
+    # (the account can later be added to other domains via the Users table).
+    # Node entries always leave both blank.
+    desktop_user: str = ""
+    desktop_user_role: str = "user"    # PERSON_ROLE_CHOICES: user|mod|admin|superadmin
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -143,6 +153,8 @@ class WorklistEntry:
             "packages_add": self.packages_add, "packages_drop": self.packages_drop,
             # a JSON list on disk; __post_init__ re-tuples it on load
             "infra_services": list(self.infra_services),
+            "desktop_user": self.desktop_user,
+            "desktop_user_role": self.desktop_user_role,
         }
 
     @classmethod
@@ -215,6 +227,27 @@ class WorklistConfig:
                 for k in SECRET_FIELDS if getattr(self.base, k)]
 
     # ---- projection back to single-image configs ---------------------------
+    def desktop_users(self, skip: set[tuple[str, str]] = frozenset()) -> list[User]:
+        """The manifest Users derived from desktop entries' named people (operator ask
+        2026-08-14): one per desktop-class entry with a ``desktop_user``, attached to
+        the internal orchestration superdomain — the same domain the Users table locks
+        superadmins to. ``skip`` drops (username, domain) pairs the caller already
+        carries so a Users-table row (richer: email/registration) always wins. The
+        account can later be added to other/additional domains via that table."""
+        domain = self.base.effective_superdomain()
+        out: list[User] = []
+        seen = set(skip)
+        for e in self.entries:
+            name = (e.desktop_user or "").strip()
+            if not name or image_class(self.base.mode, e.role) != "desktop":
+                continue
+            if (name, domain) in seen:
+                continue
+            seen.add((name, domain))
+            out.append(User(username=name, domain=domain,
+                            role=e.desktop_user_role or "user"))
+        return out
+
     def materialize(self) -> list[tuple[WorklistEntry, ImageConfig]]:
         """Project the envelope into a list of (entry, plain ImageConfig) — the
         deterministic, unit-pinned pipeline (design 2.4). Each output config is a fully
@@ -258,8 +291,28 @@ class WorklistConfig:
         cfg.domains = [copy.deepcopy(d) for d in self.base.domains
                        if not d.images or entry.id in d.images]
 
-        # 3. Users are manifest-only and never per-image filtered — carry them whole.
+        # 3. Users are manifest-only and never per-image filtered — carry them whole,
+        #    PLUS the desktop-entry people (operator ask 2026-08-14): every desktop
+        #    entry's named user becomes a manifest User on the internal orchestration
+        #    superdomain, so cluster provisioning creates the account exactly like a
+        #    Users-table row. Deduped against the table (a superadmin who already
+        #    named the person keeps their richer row — email/registration survive).
         cfg.users = [copy.deepcopy(u) for u in self.base.users]
+        cfg.users += self.desktop_users(
+            skip={(u.username, u.domain) for u in cfg.users})
+
+        # 3b. The FD-08 person identity for THIS image — MESH worklists only (a
+        #    cloud/standalone flat config wrapped by from_flat keeps the RolePage's
+        #    own person_role byte-identical). A desktop entry with a named person
+        #    carries their role as --person-role (x86 clients emit it; ARM desktops
+        #    drop it via strip_platform_unsupported below — their builders parse no
+        #    such flag). Every other mesh entry resets it, so a desktop pick can
+        #    never leak onto a node's argv (the builder would warn+ignore it anyway).
+        if cfg.mode == "mesh":
+            if image_class(cfg.mode, entry.role) == "desktop" and entry.desktop_user:
+                cfg.person_role = entry.desktop_user_role
+            else:
+                cfg.person_role = ""
 
         # 4. Per-image package deltas (kept SEPARATE from the frozen extra_packages —
         #    no merging) + the encrypt_root resolution + the collision-guard subdir.

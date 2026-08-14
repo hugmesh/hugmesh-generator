@@ -53,6 +53,7 @@ from ._scroll import scrollable
 from ...core import build_sessions
 from ...core import cross_dracut
 from ...core import flash_targets
+from ...core import root_size_floor
 from ...core import secret_files
 from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
@@ -347,7 +348,21 @@ class BuildPage(QtWidgets.QWizardPage):
         self.img_size.setRange(0, 1 << 20)
         self.img_size.setSuffix(" MiB")
         self.img_size.setSpecialValueText("(role default)")
+        self.img_size.setToolTip(
+            "Compact ext4 root size baked into the .img (growroot expands it to "
+            "the disk on first boot). 0 = the builder's role default, sized from "
+            "MEASURED payloads (x86 thin desktop 16384, full 24576, capable "
+            "51200; nodes 14336/20480; ARM installers 2048-9216). An explicit "
+            "size below that floor is refused on Build — it would abort in the "
+            ".img pre-flight only after the full emerge.")
         im.addWidget(_row("Root image size", self.img_size))
+        # inline (NEVER a modal QMessageBox: validatePage runs headless in tests and
+        # a modal would hang them) — set by validatePage when the size is undersized.
+        self.img_size_err = QtWidgets.QLabel("")
+        self.img_size_err.setWordWrap(True)
+        self.img_size_err.setStyleSheet("color: #c62828;")
+        self.img_size_err.setVisible(False)
+        im.addWidget(self.img_size_err)
         # single-image Packages… (standalone/cloud) — replaces the retired free-text
         # extra-packages field with the per-image tri-tier dialog. An ACTION, so a
         # push button (idiom rule). The whole ROW is mode-gated in initializePage:
@@ -1408,6 +1423,22 @@ class BuildPage(QtWidgets.QWizardPage):
         advance (commit) to the terminal ProgressPage."""
         self._preview()
         self.wiz.worklist = self._current_worklist()
+        # Refuse an explicit root size below the builder's own derived payload
+        # floor (core/root_size_floor.py mirrors the builder tables) — otherwise
+        # the doom lands hours later in the .img pre-flight ("Payload NNNN MiB
+        # exceeds the ... root partition"). 0 = role default, always accepted;
+        # experts can still pass --img-size via Extra builder flags.
+        c = self.wiz.cfg
+        self.img_size_err.setVisible(False)
+        if c.img_size:
+            for entry in self.wiz.worklist.entries:
+                err = root_size_floor.img_size_error(
+                    entry.platform, c.mode, entry.role, c.img_size,
+                    desktop=entry.desktop or c.desktop, capable=bool(c.capable))
+                if err:
+                    self.img_size_err.setText(err)
+                    self.img_size_err.setVisible(True)
+                    return False
         self.wiz.build_backend = self._backend()
         self.wiz.generate_node_keys = (self.gen_keys.isChecked()
                                        if self.wiz.cfg.mode == "mesh" else True)

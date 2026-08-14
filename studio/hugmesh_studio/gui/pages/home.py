@@ -278,6 +278,21 @@ class HomePage(QtWidgets.QWizardPage):
         el.addWidget(_row("LUKS passphrase", self.luks_pass))
         self.unlock_keyfile = QtWidgets.QComboBox()
         self.unlock_keyfile.addItems(["(off)", "boot", "login"])
+        # Provenance is otherwise invisible from this page, so spell it out here
+        # (build-x86:6598 generates; install-x86.sh:173/200 enrolls + places it).
+        self.unlock_keyfile.setToolTip(
+            "Where the keyfile comes from:\n"
+            "  boot — the BUILD generates a random 4 KiB keyfile (build host\n"
+            "    /dev/urandom) onto the installer ISO; the installer enrolls it as a\n"
+            "    SECOND LUKS keyslot and installs it to the ESP as /boot/cryptroot.key\n"
+            "    for unattended unlock. A recovery copy lands in the work dir\n"
+            "    (<image>.luks-keyfile — stash it on a KEYS USB). The install-time\n"
+            "    passphrase keyslot still works. Note: the ESP is unencrypted, so a\n"
+            "    stolen whole disk auto-unlocks — choose (off) for theft protection.\n"
+            "  login — no keyfile is generated at build; a marker makes it a PAM\n"
+            "    factor enrolled at first login (desktop images only).\n"
+            "  (off) — no keyfile anywhere; boot prompts for the passphrase chosen\n"
+            "    at install time.")
         el.addWidget(_row("Keyfile unlock", self.unlock_keyfile))
         self.unlock_yubikey = QtWidgets.QComboBox()
         self.unlock_yubikey.addItems(["(off)", "boot", "login"])

@@ -66,6 +66,18 @@
             "role": "omnibus"
           },
           {
+            "label": "Laptop desktop \u2014 tailnet + SSO client for a person on this mesh",
+            "role": "laptop"
+          },
+          {
+            "label": "Chromebook desktop \u2014 coreboot/UEFI laptop client (ADR-16); tailnet + SSO",
+            "role": "chromebook"
+          },
+          {
+            "label": "Desktop client \u2014 tailnet + SSO client for a person on this mesh",
+            "role": "desktop"
+          },
+          {
             "label": "Edge-AI node \u2014 GPU + OpenAI-compatible model API",
             "role": "edge_ai"
           }
@@ -140,6 +152,18 @@
             "role": "omnibus"
           },
           {
+            "label": "Laptop desktop \u2014 tailnet + SSO client for a person on this mesh",
+            "role": "laptop"
+          },
+          {
+            "label": "Chromebook desktop \u2014 coreboot/UEFI laptop client (ADR-16); tailnet + SSO",
+            "role": "chromebook"
+          },
+          {
+            "label": "Desktop client \u2014 tailnet + SSO client for a person on this mesh",
+            "role": "desktop"
+          },
+          {
             "label": "Edge-AI node \u2014 GPU + OpenAI-compatible model API",
             "role": "edge_ai"
           }
@@ -184,7 +208,12 @@
             "role": "chromebook"
           }
         ],
-        "mesh": [],
+        "mesh": [
+          {
+            "label": "Chromebook desktop \u2014 coreboot/UEFI laptop client (ADR-16); tailnet + SSO",
+            "role": "chromebook"
+          }
+        ],
         "standalone": [
           {
             "label": "Chromebook desktop \u2014 coreboot/UEFI laptop image (ADR-16), standalone (no mesh/SSO)",
@@ -1651,6 +1680,54 @@
           }
         ],
         "role": "omnibus"
+      },
+      {
+        "image_class": "desktop",
+        "label": "Laptop desktop \u2014 tailnet + SSO client for a person on this mesh",
+        "platforms": [
+          {
+            "axes": {
+              "desktop": [
+                "thin",
+                "full"
+              ]
+            },
+            "platform": "x86"
+          }
+        ],
+        "role": "laptop"
+      },
+      {
+        "image_class": "desktop",
+        "label": "Chromebook desktop \u2014 coreboot/UEFI laptop client (ADR-16); tailnet + SSO",
+        "platforms": [
+          {
+            "axes": {
+              "desktop": [
+                "thin",
+                "full"
+              ]
+            },
+            "platform": "x86"
+          }
+        ],
+        "role": "chromebook"
+      },
+      {
+        "image_class": "desktop",
+        "label": "Desktop client \u2014 tailnet + SSO client for a person on this mesh",
+        "platforms": [
+          {
+            "axes": {
+              "desktop": [
+                "thin",
+                "full"
+              ]
+            },
+            "platform": "x86"
+          }
+        ],
+        "role": "desktop"
       },
       {
         "image_class": "desktop",

@@ -266,6 +266,10 @@ def test_local_login_composes_without_standalone_on_arm(wiz):
     c = wiz.cfg
     c.mode = "mesh"; c.role = "rpi5-desktop"; c.platform = "rpi5"
     wiz.restart()
+    # a mesh desktop entry must name its person (operator ask 2026-08-14) before
+    # the worklist advances — the pre-checked rpi5-desktop row gets one here.
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    wl._desktop_people["rpi5-desktop.rpi5"] = ("gamer", "user")
     home = advance_to(wiz, wizard_mod.HomePage)
     assert not hasattr(home, "standalone"), "ask 21: the checkbox is still on HomePage"
     assert c.standalone is False
@@ -472,6 +476,8 @@ def test_system_credentials_survive_desktop_first_mesh_worklist(wiz):
     wiz.restart()
     wl = advance_to(wiz, wizard_mod.WorklistPage)
     check_worklist_rows(wl, "rpi5-desktop.rpi5", "edge_ai.x86")
+    # a checked desktop must name its person (operator ask 2026-08-14)
+    wl._desktop_people["rpi5-desktop.rpi5"] = ("gamer", "user")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     # premise of the regression: the FIRST entry really is desktop-class
     assert wiz.worklist.entries[0].role == "rpi5-desktop"
@@ -532,6 +538,8 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     while not isinstance(wiz.currentPage(), wizard_mod.WorklistPage):
         wiz.back()                                 # back to the worklist...
     check_worklist_rows(wiz.currentPage(), "rpi5-desktop.rpi5", "edge_ai.x86")
+    # the freshly-added desktop row needs its person (operator ask 2026-08-14)
+    wiz.currentPage()._desktop_people["rpi5-desktop.rpi5"] = ("gamer", "user")
     sysp = advance_to(wiz, wizard_mod.SystemPage)  # ...and forward again
     assert wiz.worklist.entries[0].role == "rpi5-desktop"
     assert sysp.creds.isVisible()

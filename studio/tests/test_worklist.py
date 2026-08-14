@@ -608,3 +608,65 @@ def test_roles_for_platform_inversion():
     assert roles_for_platform("jetson") == frozenset({"edge_ai", "full", "gpu-host", "jetson-desktop"})
     assert "standalone-thick" in roles_for_platform("x86")
     assert roles_for_platform("") == roles_for_platform("x86")   # "" defaults to x86
+
+
+# ---- desktop people (operator ask 2026-08-14) ---------------------------------
+
+def _mesh_base(**kw):
+    return ImageConfig(mode="mesh", role="pki", platform="x86", brand="hugmesh", **kw)
+
+
+def test_desktop_user_roundtrips_the_wire_format():
+    e = WorklistEntry(role="laptop", platform="x86",
+                      desktop_user="alice", desktop_user_role="admin")
+    e2 = WorklistEntry.from_dict(e.to_dict())
+    assert (e2.desktop_user, e2.desktop_user_role) == ("alice", "admin")
+    # a pre-feature JSON (no keys) loads with the blank defaults
+    d = e.to_dict()
+    del d["desktop_user"], d["desktop_user_role"]
+    e3 = WorklistEntry.from_dict(d)
+    assert (e3.desktop_user, e3.desktop_user_role) == ("", "user")
+
+
+def test_desktop_users_derive_on_the_superdomain_only_for_desktops():
+    base = _mesh_base()
+    wl = WorklistConfig(base=base, entries=[
+        WorklistEntry(role="pki", platform="x86",
+                      desktop_user="mallory"),          # node: ignored even if set
+        WorklistEntry(role="laptop", platform="x86",
+                      desktop_user="alice", desktop_user_role="admin"),
+        WorklistEntry(role="desktop", platform="x86"),  # no person named
+    ])
+    users = wl.desktop_users()
+    assert [(u.username, u.role) for u in users] == [("alice", "admin")]
+    assert users[0].domain == base.effective_superdomain()
+
+
+def test_materialize_stamps_person_role_and_manifest_user():
+    base = _mesh_base(users=[User(username="bob", domain="tenant.example", role="admin")])
+    wl = WorklistConfig(base=base, entries=[
+        WorklistEntry(role="pki", platform="x86"),
+        WorklistEntry(role="laptop", platform="x86",
+                      desktop_user="alice", desktop_user_role="mod"),
+    ])
+    by_id = {e.id: cfg for e, cfg in wl.materialize()}
+    lap, pki = by_id["laptop.x86"], by_id["pki.x86"]
+    assert lap.person_role == "mod"
+    assert pki.person_role == ""            # a desktop pick can never leak onto a node
+    dom = base.effective_superdomain()
+    for cfg in (lap, pki):                  # users are manifest-only: carried whole
+        assert ("alice", dom, "mod") in [(u.username, u.domain, u.role) for u in cfg.users]
+        assert ("bob", "tenant.example") in [(u.username, u.domain) for u in cfg.users]
+
+
+def test_desktop_users_dedup_against_the_users_table():
+    base = _mesh_base()
+    base.users = [User(username="alice", domain=base.effective_superdomain(),
+                       role="superadmin", email="a@example.org")]
+    wl = WorklistConfig(base=base, entries=[
+        WorklistEntry(role="laptop", platform="x86",
+                      desktop_user="alice", desktop_user_role="user")])
+    _e, cfg = wl.materialize()[0]
+    rows = [u for u in cfg.users if u.username == "alice"]
+    # the richer Users-table row wins; no duplicate derived row
+    assert len(rows) == 1 and rows[0].role == "superadmin" and rows[0].email
