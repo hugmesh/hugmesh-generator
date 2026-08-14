@@ -79,6 +79,7 @@ class DeviceRow:
     role: str
     env: str
     image: str          # absolute path to the .img / .img.xz
+    stamp: str = ""     # <stamp> from the filename; "" when unparseable
 
     @property
     def label(self) -> str:
@@ -157,12 +158,43 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
     return platform, arch, role, env
 
 
+def artifact_stamp(basename: str) -> str:
+    """The ``<stamp>`` field of an artifact name, or "" if it has none.
+
+    Kept separate from ``parse_artifact_name`` so that function's 4-tuple stays
+    the parsing contract the shell runner is checked against.
+    """
+    name = basename
+    for suffix in _IMAGE_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    else:
+        return ""
+    parts = name.split("-")
+    return parts[-1] if len(parts) >= 6 else ""
+
+
 def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
     """Every device row the artifacts in ``artifacts_dir`` can boot, Pi first.
 
-    When both a ``.img`` and its ``.img.xz`` exist for the same artifact, the
-    decompressed one wins: the runner would otherwise spend minutes re-expanding
-    9-20GB it already has on disk.
+    One row per (platform, role) — a directory routinely holds several builds of
+    the same role, and booting each would multiply a 20-minute emulated run by
+    however many rebuilds happened to land there.
+
+    Which one survives matters more than it looks. Selection is NEWEST STAMP
+    FIRST, and only then decompressed-over-compressed:
+
+    * Newest wins because the whole point of rebuilding a role is to test the
+      rebuild. Entries arrive in sorted-name order, i.e. oldest first, so a
+      "keep the incumbent" rule silently pins every result to the OLDEST
+      artifact — a freshly rebuilt image reports a green pass its bits were
+      never involved in (2026-08-14: rpi5/pki resolved to the 08-07 build while
+      a rebuild of the same role sat beside it).
+    * Decompressed wins among equal stamps because the runner would otherwise
+      spend minutes re-expanding 9-20GB it already has on disk.
+
+    Stamps are ``YYYYmmddTHHMMSSZ``, so a plain string compare is chronological.
     """
     if not os.path.isdir(artifacts_dir):
         return []
@@ -181,10 +213,11 @@ def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
         path = os.path.join(artifacts_dir, entry)
         if not os.path.isfile(path):
             continue
-        row = DeviceRow(platform=platform, arch=arch, role=role, env=env, image=path)
+        row = DeviceRow(platform=platform, arch=arch, role=role, env=env, image=path,
+                        stamp=artifact_stamp(entry))
         key = (platform, role)
         prior = best.get(key)
-        if prior is None or (prior.compressed and not row.compressed):
+        if prior is None or (row.stamp, not row.compressed) > (prior.stamp, not prior.compressed):
             best[key] = row
 
     return sorted(best.values(), key=lambda r: (platform_rank(r.platform), r.platform, r.role))

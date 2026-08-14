@@ -93,6 +93,36 @@ def test_discover_rows_prefers_decompressed_over_xz(tmp_path):
     assert rows[0].image.endswith(".img")
 
 
+def test_discover_rows_picks_newest_build_of_a_role(tmp_path):
+    """A rebuilt role must supersede its predecessor, not lose to it.
+
+    Entries are enumerated in sorted-name order, i.e. OLDEST first, so the old
+    keep-the-incumbent rule pinned the row to the stale artifact: rebuilding a
+    role produced a green run whose bits were never tested.
+    """
+    _write(str(tmp_path),
+           "hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img",
+           "hugmesh-rpi5-arm64-pki-test-20260814T160000Z.img")
+    rows = qt.discover_rows(str(tmp_path))
+    assert len(rows) == 1
+    assert rows[0].basename == "hugmesh-rpi5-arm64-pki-test-20260814T160000Z.img"
+
+
+def test_discover_rows_newest_wins_even_when_older_is_decompressed(tmp_path):
+    """Freshness outranks the re-expansion shortcut.
+
+    The stale build is the convenient one here — already decompressed, no xz
+    pass needed — and picking it would still be wrong.
+    """
+    _write(str(tmp_path),
+           "hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img",
+           "hugmesh-rpi5-arm64-pki-test-20260814T160000Z.img.xz")
+    rows = qt.discover_rows(str(tmp_path))
+    assert len(rows) == 1
+    assert rows[0].stamp == "20260814T160000Z"
+    assert rows[0].compressed
+
+
 def test_discover_rows_empty_for_missing_dir(tmp_path):
     assert qt.discover_rows(str(tmp_path / "nope")) == []
 
@@ -172,6 +202,25 @@ def test_read_results_empty_without_dir(tmp_path):
 
 
 @pytest.mark.skipif(not os.path.exists(RUNNER), reason="runner script not present")
+def _shell_rows(tmp_path) -> set[tuple[str, str]]:
+    """(label, image basename) pairs from the real runner's --list."""
+    proc = subprocess.run(
+        ["bash", RUNNER, "--artifacts", str(tmp_path), "--work", str(tmp_path / "w"), "--list"],
+        capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    rows = set()
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        # rows render as: "<n> <platform> <role> <env> <image>"
+        if len(parts) >= 5 and parts[0].isdigit():
+            rows.add((f"{parts[1]}/{parts[2]}", parts[4]))
+    return rows
+
+
+def _py_rows(tmp_path) -> set[tuple[str, str]]:
+    return {(r.label, r.basename) for r in qt.discover_rows(str(tmp_path))}
+
+
 def test_shell_and_python_agree_on_row_discovery(tmp_path):
     """The shell runner and this module must select the SAME rows.
 
@@ -179,22 +228,35 @@ def test_shell_and_python_agree_on_row_discovery(tmp_path):
     so drift in either direction would silently boot the wrong image for a row. This is
     the only test that can catch that, and it needs no docker: --list enumerates and
     exits before the image build or any container starts.
+
+    The comparison includes the chosen IMAGE, not just the label. Comparing labels
+    alone is what let the two implementations diverge unnoticed: both agreed there
+    was one ``rpi5/pki`` row while disagreeing about which artifact it meant.
     """
     _write(str(tmp_path), *_REAL_NAMES)
-    proc = subprocess.run(
-        ["bash", RUNNER, "--artifacts", str(tmp_path), "--work", str(tmp_path / "w"), "--list"],
-        capture_output=True, text=True, timeout=120)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _shell_rows(tmp_path) == _py_rows(tmp_path)
 
-    shell_rows = set()
-    for line in proc.stdout.splitlines():
-        parts = line.split()
-        # rows render as: "<n> <platform> <role> <env> <image>"
-        if len(parts) >= 5 and parts[0].isdigit():
-            shell_rows.add(f"{parts[1]}/{parts[2]}")
 
-    py_rows = {r.label for r in qt.discover_rows(str(tmp_path))}
-    assert shell_rows == py_rows
+def test_shell_and_python_agree_on_which_build_wins(tmp_path):
+    """Parity under ambiguity: same role rebuilt, and one artifact in both forms.
+
+    Six files collapse to two rows. Before the fix bash emitted all six and Python
+    emitted two stale ones — agreeing on neither count nor content.
+    """
+    _write(str(tmp_path),
+           "hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img",
+           "hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img.xz",
+           "hugmesh-rpi5-arm64-pki-test-20260814T160000Z.img",
+           "hugmesh-x86-amd64-be-test-20260814T112817Z.img",
+           "hugmesh-x86-amd64-be-test-20260814T112817Z.img.xz",
+           "hugmesh-x86-amd64-be-test-20260801T090000Z.img")
+
+    expected = {
+        ("rpi5/pki", "hugmesh-rpi5-arm64-pki-test-20260814T160000Z.img"),
+        ("x86/be", "hugmesh-x86-amd64-be-test-20260814T112817Z.img"),
+    }
+    assert _py_rows(tmp_path) == expected
+    assert _shell_rows(tmp_path) == expected
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
