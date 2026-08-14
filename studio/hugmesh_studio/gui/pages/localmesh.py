@@ -798,6 +798,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # upstream ArgoCD and applies this mesh's app tree), so the DevOps
         # surface is genuinely reachable instead of permanently greyed
         # (operator ask 2026-08-14).
+        self.devops_tools_btn = QtWidgets.QPushButton("Install DevOps prerequisites")
+        self.devops_tools_btn.setToolTip(
+            "Fetch the DevOps lane's missing CLIs (kind, kubectl) into this "
+            "repo's out/tools/bin — USER-LOCAL: no sudo, nothing installed "
+            "outside the repo, pinned versions, each binary SHA-256 verified "
+            "against its published checksum before it is made executable. "
+            "Delete that directory to undo. Runs only when you press this.")
+        self.devops_tools_btn.clicked.connect(self._devops_install_tools)
+        brow.addWidget(self.devops_tools_btn)
         self.devops_up_btn = QtWidgets.QPushButton("Start DevOps lane (Kubernetes)")
         self.devops_up_btn.setToolTip(
             "Create the local Kubernetes cluster and bootstrap the mesh on it: "
@@ -1431,6 +1440,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "reporter's summary.json."
             if not problems else
             "Disabled:\n- " + "\n- ".join(problems))
+
+    def _devops_install_tools(self):
+        """Install the lane's missing CLIs (user-local, checksum-verified)."""
+        node = self.boot._stack_node()
+        need = node.devops_available()
+        if not need:
+            self.status.setText("DevOps prerequisites are already installed.")
+            return
+        self._note("[devops] installing the DevOps lane's prerequisites into "
+                   "out/tools/bin (user-local, checksum-verified) …")
+        self._launch("Installing DevOps prerequisites",
+                     lambda on_line, cancel: node.devops_install_tools(on_line=on_line),
+                     stream=True, verb="devops-tools")
 
     def _devops_up(self):
         """Start the DevOps (Kubernetes) lane. The tool check runs HERE too, so
