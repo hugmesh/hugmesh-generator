@@ -151,6 +151,34 @@ Access: **`/social/forum`**, role `ROLE_FORUM`.
 
 ---
 
+## 5b. Connecting your own Matrix / Mastodon client
+
+The ROLES for this exist and are grantable today from **Admin → Roles**
+(`ROLE_MATRIX_EXTERNAL_CLIENT`, `ROLE_MASTODON_EXTERNAL_CLIENT`), and the
+platform seeds gateway rules for them:
+
+| Role | Granted access (be-gateway) |
+|---|---|
+| `ROLE_MATRIX_EXTERNAL_CLIENT` | `/_matrix/client/v3/login`, `/_matrix/client/r0/login` |
+| `ROLE_MASTODON_EXTERNAL_CLIENT` | `/oauth/**`, `/api/v1/apps` |
+
+**But there is no working connection address on the local compose lane yet, so
+do not hand one to a user.** Probed live 2026-08-14:
+
+* `https://localhost:8488/_matrix/client/versions` → **200, and the body is the
+  shell's `index.html`** — an SPA fallback, not a homeserver. `/api/v1/instance`
+  and `/oauth/authorize` behave the same way. A native client pointed here gets
+  HTML where it expects JSON.
+* `/be/_matrix/client/versions` (the be-gateway path the rules name) → **401**
+  unauthenticated, **500** with a session cookie.
+
+So the grant is real, the entitlement rows are real, and the transport is not
+wired on this lane. Granting the role today changes what the gateway would
+*permit*; it does not yet give the user a working address. Anything that
+displays a "connect your client here" URL should stay unbuilt until a native
+endpoint answers a real Matrix/Mastodon handshake — a banner advertising an SPA
+fallback is worse than no banner.
+
 ## 6. Known gaps (real work, not mysteries)
 
 Ordered by value. The first two are UI-only — the backends already work.
