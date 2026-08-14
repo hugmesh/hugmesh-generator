@@ -61,10 +61,20 @@ MECH_FEDERATION = "federation"
 #   tor    -> STACK_TOR_PROFILE  (TOR=1)
 #   phpbb  -> STACK_ALT_PROFILE  (PHPBB=1)
 #   akkoma -> STACK_ALT_PROFILE  (AKKOMA=1)
+#   anubis -> STACK_ALT_PROFILE  (ANUBIS=1)
 PROFILE_SOCIAL = "social"
 PROFILE_TOR = "tor"
 PROFILE_PHPBB = "phpbb"
 PROFILE_AKKOMA = "akkoma"
+#   games  -> STACK_GAMES_PROFILE (GAMES=1): the hugmesh-games wasm-fragment
+#   asset tier from tests/stack/compose.games.yaml.
+PROFILE_GAMES = "games"
+PROFILE_ANUBIS = "anubis"
+#   edge-ai-tts -> STACK_BRAND_B_PROFILE line (TTS=1): built FROM SOURCE from
+#   specs/cluster/manifests/edge-ai-tts/image — the pinned registry coordinates
+#   do not resolve off-mesh, and the container build is the repo's own pending
+#   spike, so the first TTS=1 bring-up IS that spike.
+PROFILE_EDGE_AI_TTS = "edge-ai-tts"
 
 # ── the seeder contract for the federation half ─────────────────────────────────
 # TODO(tests/stack/seed-e2e.sh): the seeder does not read these yet — another agent
@@ -157,6 +167,17 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
                    "+ its own Postgres, on :4001. Independent of the social profile, "
                    "so it can run beside Mastodon. Needs a stack restart to change."),
     LocalService(
+        slug="anubis", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_ANUBIS,
+        # Matches the registry's `default: off` / envConditional test:off — the
+        # local stack IS the test env, so no deviation note is needed here.
+        default_on=False,
+        local_note="Techaro Anubis (pinned upstream image) as a SECOND published "
+                   "front door on :8923: the PoW challenge fronts the same "
+                   "fe-gateway the direct :8088/:8488 doors hit, mirroring the "
+                   "cluster's ingress-through-Anubis wiring. Browsers solve a "
+                   "one-time JS proof-of-work; non-browser agents pass through. "
+                   "Needs a stack restart to change — it starts/stops a container."),
+    LocalService(
         slug="wiki", mechanism=MECH_FEDERATION, module="wiki", default_on=False,
         local_note="Containers are always up (hugmesh-wiki-bff-api + hugmesh-wiki-ui "
                    "+ wiki-bff-db carry no compose profile); this flips the menu "
@@ -176,22 +197,50 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
         default_on=False,
         local_note="BFF + db + UI containers are always up; this flips the registry "
                    "row."),
+    LocalService(
+        slug="edge-ai-tts", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_EDGE_AI_TTS,
+        default_on=False,
+        local_note="BUILT FROM SOURCE (specs/cluster/manifests/edge-ai-tts/image) — "
+                   "the pinned registry image does not resolve off-mesh, and the "
+                   "container build is the repo's own pending spike: the first "
+                   "TTS=1 bring-up IS that spike and may surface build gaps. "
+                   "Consumers keep their __HUG_VOICE_TTS__ flag dark until wired. "
+                   "Needs a stack restart to change."),
+    LocalService(
+        slug="games", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_GAMES,
+        # Registry agreement: optional-services.yaml ships games `default: off`,
+        # so unlike tuwunel/phpbb/akkoma this is NOT a local deviation.
+        default_on=False,
+        local_note="LOCAL SUBSET: one nginx (the hugmesh-games wasm-fragment "
+                   "asset tier) serving the committed Godot WASM bundles at "
+                   "/_remotes/wasm-fragment/<slug>/ behind the front door — "
+                   "shadows-of-the-net included. The games portal, app store, "
+                   "games admin and the second (games-realm) Casdoor stay "
+                   "ABSENT locally; /games remains the host shell's guarded "
+                   "placeholder. Needs a hugmesh-games checkout next to this "
+                   "repo (GAMES_SRC overrides). Needs a stack restart to "
+                   "change — it starts/stops a container."),
 )
 
 # Slugs the shared catalogue carries that the LOCAL docker stack cannot run, each with
 # the reason the surface shows. Offering these as live toggles is the exact failure this
 # module exists to prevent: a checkbox that changes no bytes.
 UNAVAILABLE_LOCALLY: dict[str, str] = {
-    "games": "no games service in tests/stack/compose.local.yaml, and the two-Casdoor "
-             "games realm is inert locally (docs/LOCAL-STACK.md).",
-    "edge-ai-tts": "image/GitOps tier only — no edge-AI service in the local compose "
-                   "stack.",
-    "egress-vpn": "a NODE-level route (the image's outbound traffic), not something a "
-                  "docker compose stack on your workstation can apply.",
-    "anubis": "cluster ingress tier — the local front door is the compose gateway, "
-              "with no Anubis in front of it.",
-    "workloadConsole": "an in-CLUSTER workload console (k8s); the local stack has no "
-                       "cluster to inspect.",
+
+
+    "egress-vpn": "needs a provider WireGuard .conf this checkbox cannot carry: the "
+                  "stack CAN route it — `make stack-up SOCIAL=1 EGRESS_VPN=1 "
+                  "EGRESS_VPN_CONF=<wg .conf>` runs a fail-closed WireGuard client "
+                  "container and tunnels mastodon-sidekiq's federation egress "
+                  "(tests/stack/compose.egress-vpn.yaml). The row goes live once a "
+                  "conf-path channel exists; until then only the terminal knob is honest.",
+
+    "workloadConsole": "first-party k8s pod console inside admin-bff (its only real "
+                       "driver is the fabric8 k8s client — no docker driver exists), so "
+                       "the compose stack has nothing for it to inspect. It runs for "
+                       "real only against the kind lane: make kind-up KIND_PROFILE=sso "
+                       "already lights its env via the committed admin-bff overlay, and "
+                       "apps/14-workload-console-rbac.yaml supplies the SA tokens.",
 }
 
 # `wiki` is deliberately absent from core.config's catalogues: those mirror the node

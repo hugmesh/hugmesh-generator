@@ -383,7 +383,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps \
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
         kind-images kind-up kind-e2e kind-down kind-honesty
 
 help: ## list targets
@@ -797,7 +797,7 @@ endif
 x86: ## build the 4 default x86 roles (.img + live ISO + .fs.tar.xz each)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make x86 NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
+	$(DOCKER_RUN) make x86 NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) X86_ROLE_LIST='$(X86_ROLE_LIST)' $(BRAND_PASS)
 else
 	@for r in $(X86_ROLE_LIST); do echo "==> x86 $$r"; $(X86) --role $$r || exit 1; done
 	$(chown-artifacts)
@@ -1208,6 +1208,18 @@ SOCIAL          ?=
 #   make stack-up SOCIAL=1 AKKOMA=1     (Mastodon AND Akkoma side by side)
 PHPBB           ?=
 AKKOMA          ?=
+# TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
+TTS             ?=
+# Egress VPN for the local mesh (tests/stack/compose.egress-vpn.yaml): EGRESS_VPN=1
+# brings up a fail-closed WireGuard CLIENT container and attaches mastodon-sidekiq's
+# netns to it, so Mastodon's outbound federation egresses via the tunnel — the local
+# translation of the builder's --egress-vpn FILE lane (build-x86-host-stage4.sh:4044).
+# EGRESS_VPN_CONF must point at a provider wg-quick .conf (WireGuard ONLY — .ovpn is
+# not supported locally). DEFAULT-OFF; without the conf the VPN container refuses to
+# start and the attached service stays down (fail-closed, never a direct leak).
+#   make stack-up SOCIAL=1 EGRESS_VPN=1 EGRESS_VPN_CONF=$$HOME/proton-wg0.conf
+EGRESS_VPN      ?=
+EGRESS_VPN_CONF ?=
 # ENV -> Casdoor issuer URI used by every service (overridable via CASDOOR_ISSUER).
 ifeq ($(ENV),prod)
 CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)
@@ -1277,7 +1289,13 @@ STACK_MFA_FLOOR_ENV := $(if $(strip $(MFA_FLOOR)), APP_MFA_ENFORCE_PRIVILEGED_FL
 # image rebuild). Delete the file to return to the shipped brand.
 STACK_THEME_FILE := tests/stack/.theme.css
 STACK_THEME_ENV := $(if $(wildcard $(STACK_THEME_FILE)),SNAP_THEME_CSS="$$(cat $(STACK_THEME_FILE))",)
-STACK_ENV := $(STACK_THEME_ENV) \
+BRANDB_CASDOOR := http://casdoor-brandb.localtest.me:8001
+comma := ,
+# BRAND_B=1 -> the opt-in per-brand issuer registry (DomainRegistry /
+# TenancyResourceServerConfig). Empty otherwise: every service stays
+# byte-identical single-issuer (the '=' ConditionalOnExpression never fires).
+STACK_BRAND_B_ENV := $(if $(strip $(BRAND_B)),APP_TENANCY_ISSUERS='$(CASDOOR_ISSUER)=default$(comma)$(BRANDB_CASDOOR)=brandb' APP_TENANCY_HOSTS='brandb.localtest.me=brandb' ,)
+STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_THEME_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -1288,6 +1306,7 @@ STACK_ENV := $(STACK_THEME_ENV) \
              MANAGED_FORUM_BFF_LIQUIBASE_URL='$(MANAGED_FORUM_BFF_LIQUIBASE_URL)' \
              MANAGED_WIKI_BFF_R2DBC_URL='$(MANAGED_WIKI_BFF_R2DBC_URL)' \
              MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV) \
+             EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
@@ -1297,6 +1316,20 @@ STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 # is invisible to it — a `down` that omits the profile silently leaves the
 # containers running, and `ps`/`logs` show nothing.
 STACK_ALT_PROFILE := $(if $(strip $(PHPBB)),--profile phpbb,) $(if $(strip $(AKKOMA)),--profile akkoma,)
+# Second-brand Casdoor (BRAND_B=1) — tests/stack/compose.brand-b.yaml. Also see
+# STACK_BRAND_B_ENV above: the same knob threads the multi-issuer registry.
+STACK_BRAND_B_PROFILE := $(if $(strip $(BRAND_B)),--profile brandb,) $(if $(strip $(TTS)),--profile edge-ai-tts,)
+# Games WASM asset tier (compose.games.yaml). GAMES=1 -> `--profile games`.
+# Builds from the SIBLING ../hugmesh-games clone (GAMES_SRC overrides) — NOT
+# cloned by stack-clone. Threaded everywhere STACK_PROFILE is (see the
+# STACK_ALT_PROFILE note above for why a missed `down` strands containers).
+STACK_GAMES_PROFILE := $(if $(strip $(GAMES)),--profile games,)
+# Egress-VPN overlay: a conditional -f (NOT just a profile) because the overlay also
+# sets network_mode: service:hugmesh-egress-vpn on mastodon-sidekiq, which must not
+# be in the model at all unless EGRESS_VPN=1. The down targets pass the -f + profile
+# UNCONDITIONALLY (same reap rule as the alt profiles above).
+STACK_EGRESS_COMPOSE := tests/stack/compose.egress-vpn.yaml
+STACK_EGRESS_FLAGS := $(if $(strip $(EGRESS_VPN)),-f $(STACK_EGRESS_COMPOSE) --profile egress-vpn,) $(if $(strip $(ANUBIS)),--profile anubis,)
 COMPOSE_CMD   ?= docker compose
 # ── private-maven cold-build wiring (see tests/stack/m2-bootstrap.sh) ──
 # Four Java services (admin/user/mod-bff, federation-api) resolve org-PRIVATE
@@ -1394,19 +1427,19 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	fi
 
 stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) build
 
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
-	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )bash tests/stack/seed-e2e.sh
+	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )$(if $(strip $(BRAND_B)),CASDOOR_BRAND_B_URL='$(BRANDB_CASDOOR)' )bash tests/stack/seed-e2e.sh
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
 	@echo "    NOTE: this seeds registration STAGE 1 (the Casdoor identity) only. Until stage 2"
 	@echo "    (POST /bff/register/complete) runs, GET /bff/session reports registrationComplete=false,"
@@ -1423,14 +1456,14 @@ stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts
 	# whole mesh, so restarting left them unable to log in, post, or open the
 	# forum until a full re-seed. Containers and images still go; only the data
 	# survives, so `make stack-up` brings the same mesh back.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor --profile phpbb --profile akkoma down
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile egress-vpn down
 
 stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor --profile phpbb --profile akkoma down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile egress-vpn down -v
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -1442,13 +1475,27 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor --profile phpbb --profile akkoma down -v --rmi local --remove-orphans
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile egress-vpn down -v --rmi local --remove-orphans
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
 
+# Run the Playwright e2e suite (tests/e2e) against the RUNNING local stack's TLS
+# front door. Preconditions: `make stack-up` + `make stack-seed` (stack-seed's
+# SEED_REGISTRATION_SKIP keeps the pending/banned personas gated even under
+# SEED_COMPLETE_REGISTRATION=1, so a Studio-seeded stack still satisfies specs
+# 17/28/29). node_modules is CHECKED, not auto-installed: playwright-deps runs
+# `npx playwright install --with-deps`, which wants a Debian-ish root and must
+# stay an explicit once-per-box step. SNAP_REPORT_DIR (optional, tests/e2e-
+# relative, inherited from the environment) redirects the junit/json/summary
+# artifacts; the hugmesh reporter's summary.json there is the durable result.
+stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (needs stack-up + stack-seed; once: make playwright-deps)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
+	  npx playwright test -c playwright.config.ts --reporter=list
+
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) ps

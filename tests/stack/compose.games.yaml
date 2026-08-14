@@ -1,0 +1,29 @@
+# compose.games.yaml — the games WASM ASSET TIER behind the `games` profile
+# (`make stack-up GAMES=1`), following the alt-social single-file precedent.
+#
+# HONEST SCOPE: this is the asset tier ONLY — one nginx serving the committed
+# Godot Web exports (shadows-of-the-net + friends) at
+# /_remotes/wasm-fragment/<slug>/, which is exactly the origin matrix-ui's
+# chat3d stage and the host's games surfaces address. The games PORTAL, games
+# BFF, app store and the two-Casdoor games realm stay ABSENT locally; /games in
+# the host shell remains the guarded placeholder it documents.
+#
+# BUILD CONTEXT IS THE SIBLING CLONE: hugmesh-games is 333M of committed game
+# bundles and is deliberately NOT in scripts/clone-all-repos.sh; the mock lane
+# (tests/stack/up.sh GAMES_REPO) already established the sibling-path
+# convention this reuses. Clone github.com/hugmesh/hugmesh-games next to
+# hugmesh-generator, or point GAMES_SRC at a checkout.
+name: hugmesh-local
+
+services:
+  hugmesh-wasm-fragment:
+    profiles: ["games"]
+    image: hugmesh-games/wasm-fragment:dev
+    build:
+      context: ${GAMES_SRC:-../../../hugmesh-games}
+      dockerfile: wasm-fragment/Dockerfile
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/shadows-of-the-net/index.html || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

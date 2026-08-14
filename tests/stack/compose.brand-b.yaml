@@ -1,0 +1,46 @@
+# compose.brand-b.yaml — OPT-IN second-brand Casdoor (`--profile brandb`, `make
+# stack-up BRAND_B=1`). Gives the local stack a REAL second tenant: seed-e2e.sh
+# leg 1b seeds e2e-tenant2-user here, and the gateways' opt-in multi-issuer
+# registry (APP_TENANCY_ISSUERS/_HOSTS, threaded by the Makefile on BRAND_B=1)
+# maps this issuer to DOMAIN_brandb and hard-denies a brand-A token replayed
+# with a brandb Host. The issuer URL is the one tests/pentest/env/compose.env
+# already standardizes: http://casdoor-brandb.localtest.me:8001 resolves BOTH on
+# the host (localtest.me -> 127.0.0.1, published :8001) and in-network (the
+# dotted alias below) — required because the per-brand decoder runs OIDC
+# discovery against the iss URL from INSIDE the containers.
+name: hugmesh-local
+
+services:
+  casdoor-brandb-db:
+    image: postgres:16-alpine
+    profiles: ["brandb"]
+    environment: { POSTGRES_DB: casdoor, POSTGRES_USER: casdoor, POSTGRES_PASSWORD: casdoor }
+    volumes: [casdoor-brandb-pg:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U casdoor"], interval: 5s, retries: 20 }
+
+  casdoor-brandb:
+    image: casbin/casdoor:latest
+    profiles: ["brandb"]
+    depends_on: { casdoor-brandb-db: { condition: service_healthy } }
+    environment:
+      RUNNING_IN_DOCKER: "true"
+      driverName: postgres
+      dataSourceName: "user=casdoor password=casdoor host=casdoor-brandb-db port=5432 sslmode=disable dbname=casdoor"
+      # Same issuer-pinning rationale as the brand-A casdoor (compose.real.yaml).
+      origin: "http://casdoor-brandb.localtest.me:8001"
+      # NOTE: an httpport env override was tried and DISPROVEN LIVE — the
+      # container kept listening on :8000 ("http server Running on http://:8000")
+      # with httpport: "8001" in its env, unlike driverName where env does win.
+      # So the LISTEN port stays 8000 and the split mirrors brand A exactly:
+      #   issuer/origin  = the PUBLISHED host URL (localtest.me:8001 below)
+      #   in-network JWKS = http://casdoor-brandb:8000/.well-known/jwks
+      # (brand A: issuer localhost:8000 vs jwks casdoor:8000 — same shape).
+    ports:
+      # host 8001 -> container 8000 (brand A owns host 8000).
+      - "8001:8000"
+    networks:
+      default:
+        aliases: [casdoor-brandb.localtest.me]
+
+volumes:
+  casdoor-brandb-pg:

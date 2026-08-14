@@ -99,15 +99,19 @@ def test_profile_slugs_name_a_profile_compose_actually_declares():
     assert "STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)" in mk
     assert "$(if $(strip $(PHPBB)),--profile phpbb,)" in mk
     assert "$(if $(strip $(AKKOMA)),--profile akkoma,)" in mk
+    assert "$(if $(strip $(ANUBIS)),--profile anubis,)" in mk
     profiles = {s.profile for s in ls.LOCAL_SERVICES if s.is_profile()}
-    assert profiles == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR,
-                        ls.PROFILE_PHPBB, ls.PROFILE_AKKOMA}
+    assert profiles == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR, ls.PROFILE_PHPBB,
+                        ls.PROFILE_AKKOMA, ls.PROFILE_ANUBIS,
+                        ls.PROFILE_GAMES, ls.PROFILE_EDGE_AI_TTS}
     assert 'profiles: ["tor"]' in local
+    assert 'profiles: ["anubis"]' in local
     assert "social" in social and "profiles:" in social
     assert 'profiles: ["phpbb"]' in alt and 'profiles: ["akkoma"]' in alt
     # `down`/`clean` must reap these even when the knob that started them is not
     # repeated, so both profiles are listed UNCONDITIONALLY on the down path.
-    assert "--profile phpbb --profile akkoma down -v" in mk
+    assert ("--profile anubis --profile phpbb --profile akkoma --profile games "
+            "--profile brandb --profile edge-ai-tts --profile egress-vpn down -v" in mk)
 
 
 def test_federation_slugs_have_containers_in_the_local_stack():
@@ -201,8 +205,9 @@ def test_profile_flags_read_only_the_profile_half():
     # hardcoded pair — `phpbb` and `akkoma` joined `social`/`tor` with
     # compose.alt-social.yaml, and a hardcoded set silently rots when one is added.
     all_off = {s.profile: False for s in ls.LOCAL_SERVICES if s.is_profile()}
-    assert set(all_off) == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR,
-                            ls.PROFILE_PHPBB, ls.PROFILE_AKKOMA}
+    assert set(all_off) == {ls.PROFILE_SOCIAL, ls.PROFILE_TOR, ls.PROFILE_PHPBB,
+                            ls.PROFILE_AKKOMA, ls.PROFILE_ANUBIS,
+                            ls.PROFILE_GAMES, ls.PROFILE_EDGE_AI_TTS}
     assert ls.profile_flags(None) == all_off
     assert ls.profile_flags(("wiki", "tube")) == all_off
     assert ls.profile_flags(("tuwunel",))[ls.PROFILE_SOCIAL] is True
@@ -229,7 +234,9 @@ def test_federation_selection_is_catalogue_ordered():
 def test_validate_refuses_unavailable_and_unknown_slugs_with_a_reason():
     assert ls.validate_selection(None) == []
     assert ls.validate_selection(ls.local_slugs()) == []
-    problems = ls.validate_selection(("games",))
-    assert len(problems) == 1 and "games" in problems[0] and "local" in problems[0]
+    # edge-ai-tts graduated to a real profile row (TTS=1); workloadConsole is
+    # still genuinely k8s-only, so it carries the refusal contract now.
+    problems = ls.validate_selection(("workloadConsole",))
+    assert len(problems) == 1 and "workloadConsole" in problems[0]
     problems = ls.validate_selection(("nope",))
     assert len(problems) == 1 and "unknown" in problems[0]

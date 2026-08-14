@@ -35,6 +35,35 @@ spring:
                 - Path=/social/forum/**
               filters:
                 - StripPrefix=2
+            # phpbb — the ALTERNATIVE forum (compose profile `phpbb`, off by
+            # default; `make stack-up PHPBB=1`). Mounted as a sibling of
+            # /social/forum so the two are directly comparable at the same front
+            # door, rather than only on a published port.
+            #
+            # NO StripPrefix, unlike every route above: phpBB is installed with
+            # script_path=/social/phpbb and builds its ABSOLUTE urls (redirects,
+            # canonical links, emails) from it, so the upstream expects to
+            # receive the full path. Stripping it here would make every
+            # generated link 404 while the index page still rendered, because
+            # phpBB's in-page links are relative and would keep working — a
+            # failure that looks fine on first load.
+            #
+            # Like the mastodon/matrix routes, this resolves only when its
+            # profile is up; with the profile off the route simply has no
+            # backend, exactly as those do without SOCIAL=1.
+            - id: phpbb
+              uri: http://phpbb:8080
+              predicates:
+                - Path=/social/phpbb/**
+              filters:
+                # StripPrefix=2 because the hugmesh-forum-api IMAGE installs phpBB
+                # with script_path=/ (its shipped install-config.compose.yml), so the
+                # upstream expects paths rooted at /. An earlier revision of this
+                # route deliberately had NO StripPrefix — correct for the since-
+                # replaced vanilla image, whose installer was fed
+                # script_path=/social/phpbb; with the real image that produced a
+                # themed phpBB 404 on every /social/phpbb/** URL.
+                - StripPrefix=2
             # login-ui is a STANDALONE Angular app (its own index.html; no
             # module-federation remoteEntry in this stack) built with
             # base-href=/login/ (hugmesh-login-ui companion change), so the
@@ -194,6 +223,23 @@ spring:
               uri: http://hugmesh-federation-api:8080
               predicates:
                 - Path=/api/federation/capabilities,/api/federation/manifest
+            # Godot WASM game bundles (`games` profile — make stack-up GAMES=1;
+            # compose.games.yaml). StripPrefix=2: the wasm-fragment nginx serves
+            # /<slug>/index.html, so /_remotes/wasm-fragment/<slug>/** maps onto
+            # its docroot exactly as the games portal's own proxy does — this is
+            # the URL matrix-ui's chat3d bridge builds (CHAT3D_BUNDLE_PATH).
+            # Like phpbb above, the route resolves only when its profile is up.
+            # Deliberately NO gateway_route_access row (optional-services.yaml
+            # games.routeAccessRows has no /_remotes entry): per-slug access is
+            # the gateway's own ResourceAccessFilter "game" pattern on this very
+            # path — ROLE_ADMIN/ROLE_GAME-MASTER pass, others need a
+            # resource_access grant (none seeded locally; see stack docs).
+            - id: wasm-fragment
+              uri: http://hugmesh-wasm-fragment:8080
+              predicates:
+                - Path=/_remotes/wasm-fragment/**
+              filters:
+                - StripPrefix=2
             # DB-hosted module-federation FRAGMENT bundles (static fleet).
             - id: remote-fragment
               uri: http://hugmesh-remote-fragment:8081

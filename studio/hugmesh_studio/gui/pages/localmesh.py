@@ -79,6 +79,7 @@ from ...core.progress_parse import ProgressParser
 from ...core.seeded_credentials import load_roster
 from ...core.stage_tracker import StageTracker
 from ._credentials_dialog import CredentialsDialog
+from ._add_user_dialog import AddUserDialog
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible
@@ -208,6 +209,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.node = LocalMeshNode(self.generator_dir, LocalMeshConfig())
         self.boot = LocalMeshBootstrap(self.generator_dir, LocalMeshBootstrapConfig())
         self.worker: _MeshWorker | None = None
+        # Users added via the Add-user verb THIS session, as seeder specs
+        # ("name:ROLES:PW_ENV"). The FULL list rides every Add-user re-seed:
+        # apply-systems-roles.sh writes EXACT role member sets, so a spec that
+        # drops out of a later render loses its role memberships.
+        self._added_user_specs: list[str] = []
         self._running = False
         self.setTitle("Local Docker mesh")
         self.setSubTitle("Run a HugMesh mesh on THIS machine in Docker — no image "
@@ -761,6 +767,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "for this local stack only.")
         self.creds_btn.clicked.connect(self._show_credentials)
         brow.addWidget(self.creds_btn)
+        # Runs tests/e2e against the RUNNING stack. Enablement + tooltip are
+        # owned by _sync_e2e_gate (test env + stack up + seeded — live probes,
+        # never the form's un-applied selection).
+        self.e2e_btn = QtWidgets.QPushButton("Run e2e suite")
+        self.e2e_btn.setEnabled(False)
+        self.e2e_btn.clicked.connect(self._run_e2e)
+        brow.addWidget(self.e2e_btn)
+        self.add_user_btn = QtWidgets.QPushButton("Add user…")
+        self.add_user_btn.setToolTip(
+            "Create a NEW named account on the RUNNING mesh (username, password, "
+            "roles) by re-running the idempotent seeder with EXTRA_ROLE_USERS — "
+            "the same machinery that seeds mesh-operator, including registration "
+            "stage 2 and Matrix/Mastodon provisioning for the roles it holds. "
+            "The stack must be up (the seeder says so plainly if it is not).")
+        self.add_user_btn.clicked.connect(self._add_user)
+        brow.addWidget(self.add_user_btn)
         brow.addStretch(1)
         lay.addLayout(brow)
 
@@ -1103,7 +1125,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _set_verbs_enabled(self, on: bool):
         for b in (self.start_btn, self.stop_btn, self.logs_btn, self.boot_down_btn,
-                  self.boot_clean_btn, self.preflight_btn, self.m2_btn):
+                  self.boot_clean_btn, self.preflight_btn, self.m2_btn,
+                  self.e2e_btn):
             b.setEnabled(on)
         # the bootstrap start additionally requires the acknowledgement — and carries
         # the "why am I disabled?" tooltip, so route it through the one gate.
@@ -1115,6 +1138,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.status.setText(f"Status: {'running' if st.running else 'stopped'} ({st.detail})")
         if not self._running:
             self.stop_btn.setEnabled(st.running)
+        self._sync_e2e_gate()
 
     def _start(self):
         self.node = LocalMeshNode(self.generator_dir, self.collect())
@@ -1283,6 +1307,50 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                                                cancel=cancel),
                      stream=True, cancellable=True, verb="m2")
 
+    def _sync_e2e_gate(self):
+        """Honest enablement for 'Run e2e suite': enabled ONLY when the RUNNING
+        stack is up, was started with ENV=test, and the e2e personas are seeded
+        (LocalStackNode.e2e_ready — read-only probes of the live stack, never
+        the form's un-applied env cards). The tooltip always names the exact
+        blockers (the _sync_boot_gate rule: a disabled button that explains
+        nothing reads as 'the app is broken'). Runs from _refresh_status —
+        page entry + verb end, never on a timer: the probes shell docker, the
+        same blocking-probe precedent status() already set on this thread."""
+        btn = getattr(self, "e2e_btn", None)
+        if btn is None:
+            return
+        if self._running:
+            btn.setEnabled(False)
+            btn.setToolTip("A verb is running — wait for it to finish.")
+            return
+        problems = self.boot._stack_node().e2e_ready()
+        btn.setEnabled(not problems)
+        btn.setToolTip(
+            "Run the Playwright e2e suite (tests/e2e) against the running "
+            "local mesh's TLS front door. Output streams below; specs that "
+            "need the mock lane or a federation peer SKIP with their reason, "
+            "and the final line reports passed/failed/skipped from the "
+            "reporter's summary.json."
+            if not problems else
+            "Disabled:\n- " + "\n- ".join(problems))
+
+    def _run_e2e(self):
+        """Run the e2e suite against the RUNNING stack. The gate is re-probed
+        here (and again inside run_e2e) because enablement can go stale the
+        moment the stack changes underneath the page."""
+        node = self.boot._stack_node()
+        problems = node.e2e_ready()
+        if problems:
+            self.status.setText("Cannot run e2e: " + "; ".join(problems))
+            self._sync_e2e_gate()
+            return
+        self._note(f"[e2e] running the Playwright suite against {node.web_url} "
+                   f"(seeded ENV=test stack) …")
+        self._launch("Running the e2e suite",
+                     lambda on_line, cancel: node.run_e2e(on_line=on_line,
+                                                          cancel=cancel),
+                     stream=True, cancellable=True, verb="e2e")
+
     def _open_web_ui(self):
         QtGui.QDesktopServices.openUrl(
             QtCore.QUrl(self.boot._stack_node().web_url))
@@ -1299,6 +1367,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                              env=self.boot._stack_node()._build_env())
         CredentialsDialog(roster, front_door=self.boot._stack_node().web_url,
                           parent=self).exec()
+
+    def _add_user(self):
+        """Add ONE named user to the RUNNING mesh by re-running the idempotent
+        seeder with EXTRA_ROLE_USERS appended (seed-accounts.sh's additive door).
+        The FULL re-seed is the only correct lane: apply-systems-roles.sh sets
+        each role's members to EXACTLY the rendered list, so a single-user
+        render would wipe every other persona's memberships."""
+        dlg = AddUserDialog(self.generator_dir, parent=self)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        spec, pw_env, password = dlg.result_spec()
+        uname = spec.split(":", 1)[0]
+        self._added_user_specs = [s for s in self._added_user_specs
+                                  if s.split(":", 1)[0] != uname]
+        self._added_user_specs.append(spec)
+        env = {"EXTRA_ROLE_USERS": " ".join(self._added_user_specs)}
+        if password:
+            env[pw_env] = password          # env-only — never argv, never logged
+        stack = self.boot._stack_node()
+        self._note(f"[add-user] re-seeding with '{uname}' appended (idempotent; "
+                   "existing personas re-applied unchanged) …")
+        self._launch(f"Adding user {uname}",
+                     lambda on_line, cancel: stack.seed(env, on_line=on_line,
+                                                        cancel=cancel),
+                     stream=True, cancellable=True)
 
     def _copy_onion(self):
         """Copy the published .onion address to the clipboard. A normal browser
