@@ -157,6 +157,34 @@ spring:
             # front-door route to Casdoor — the browser NEVER reaches Casdoor's
             # /login/oauth/authorize or its hosted UI (that origin is internal-only, in-DNS
             # http://casdoor:8000, reachable solely by user-bff/be-gateway).
+            # OpenAPI specs for the api-docs UI. Each BFF publishes springdoc at its
+            # OWN root (/v3/api-docs — verified live inside the containers), but the
+            # /bff/<svc>/** routes below forward VERBATIM (no StripPrefix), so the
+            # api-docs UI's documented fallback `/bff/<svc>/v3/api-docs` arrived as
+            # `/bff/<svc>/v3/api-docs` upstream and 404'd — the operator saw "Could
+            # not load the Admin BFF OpenAPI spec … 404" for every service whose
+            # committed asset was missing. These three routes strip the two-segment
+            # prefix so the fallback resolves. They MUST precede the sibling routes
+            # below (first match wins) and are scoped to the exact spec path only —
+            # every other /bff/<svc>/** call keeps its verbatim forwarding.
+            - id: hugmesh-admin-bff-api-openapi
+              uri: http://hugmesh-admin-bff-api:8080
+              predicates:
+                - Path=/bff/admin/v3/api-docs,/bff/admin/v3/api-docs/**
+              filters:
+                - StripPrefix=2
+            - id: hugmesh-mod-bff-api-openapi
+              uri: http://hugmesh-mod-bff-api:8080
+              predicates:
+                - Path=/bff/mod/v3/api-docs,/bff/mod/v3/api-docs/**
+              filters:
+                - StripPrefix=2
+            - id: hugmesh-user-bff-api-openapi
+              uri: http://hugmesh-user-bff-api:8080
+              predicates:
+                - Path=/bff/user/v3/api-docs,/bff/user/v3/api-docs/**
+              filters:
+                - StripPrefix=2
             - id: hugmesh-user-bff-api
               uri: http://hugmesh-user-bff-api:8080
               predicates:
