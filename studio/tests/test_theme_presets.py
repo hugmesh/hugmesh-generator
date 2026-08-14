@@ -102,3 +102,19 @@ def test_unknown_preset_and_mode_fail_loudly():
         tp.by_id("no-such-theme")
     with pytest.raises(ValueError):
         tp.compose_tokens("pride", "sepia")
+<<<<<<< HEAD
+=======
+
+
+def test_css_emits_the_hug_runtime_contract():
+    # The fleet's UIs consume var(--hug-*) — the rebrand renamed the cross-repo
+    # contract while this module's internals stayed --sd-*. css_root must emit
+    # BOTH, or the served theme is a silent no-op everywhere (it was, for the
+    # feature's whole life). Pin the twin for a neutral, a brand token, and the
+    # flag extras.
+    css = tp.compose_css("pride", "dark")
+    for pair in (("--sd-bg-0", "--hug-bg-0"),
+                 ("--sd-accent-soft", "--hug-accent-soft"),
+                 ("--sd-flag-stripes", "--hug-flag-stripes")):
+        assert pair[0] in css and pair[1] in css, pair
+>>>>>>> 1d0fa63 (fix(theme): emit the --hug-* runtime contract, and thread the theme env to shell+admin)

@@ -1271,6 +1271,14 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-host-shell
     environment:
+      # Runtime THEME — the HIGHEST-LEVERAGE hook in the fleet: this shell's
+      # :root defines the cross-repo --hug-* contract, and the federated remotes
+      # render INSIDE this document, so one :root:root override here re-themes
+      # every token-adopted remote at once. Same login-ui mechanism: the
+      # entrypoint hook writes the env verbatim to /tmp/snap-theme.css
+      # (SNAP_THEME_OUT — the docroot is NOT writable for uid 101 on
+      # nginx-unprivileged) and nginx serves it via an exact-match alias.
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
       CASDOOR_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       MATRIX_URL: ${MATRIX_URL:-http://localhost:8008}
       MASTODON_URL: ${MASTODON_URL:-http://localhost:3000}
