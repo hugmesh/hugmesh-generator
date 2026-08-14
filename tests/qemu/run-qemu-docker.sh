@@ -262,6 +262,21 @@ run_row() {
     return "${rc}"
 }
 
+# Result path for a row — MUST match docker-entrypoint.sh's RESULT_JSON.
+row_result_json() { printf '%s/%s.json\n' "${RESULT_DIR}" "$(echo "$1" | tr '/+' '__')"; }
+
+# Purge THIS run's rows before booting anything. ${WORK} is deliberately
+# persistent (it caches multi-GB decompressed images), so results/ accumulates
+# every row ever run — across sessions, artifacts and days. Without this purge a
+# row whose container dies before emit_result leaves its PREVIOUS verdict on
+# disk, and the summary below reports that stale PASS as this run's outcome.
+# Only this run's rows are removed: results for rows outside the current filters
+# are left alone, and the summary no longer reads them either.
+for r in "${ROWS[@]}"; do
+    IFS='|' read -r _rank platform role env img <<< "${r}"
+    rm -f "$(row_result_json "${platform}/${role}")"
+done
+
 step "Running ${#ROWS[@]} row(s), ${JOBS} at a time"
 FAILED=0
 running=0
@@ -285,11 +300,23 @@ echo "======================================================================"
 echo " RESULTS"
 echo "======================================================================"
 printf '%-24s %-8s %-6s %-6s %s\n' "LABEL" "STATUS" "PASS" "FAIL" "DETAIL"
+# Iterate THIS RUN'S ROWS — never a glob of the results dir. A glob tabulates
+# every row ever run into this persistent ${WORK}, so `--platform rpi5 --role pki`
+# used to print a table of eight rows from two different artifact generations and
+# compute passed/total across all of them. Driving from ROWS also means a row that
+# produced no JSON is visible as NO RESULT instead of vanishing from the count.
 total=0; passed=0
-for j in "${RESULT_DIR}"/*.json; do
-    [ -e "${j}" ] || continue
+for r in "${ROWS[@]}"; do
+    IFS='|' read -r _rank platform role env img <<< "${r}"
+    lbl="${platform}/${role}"
+    j="$(row_result_json "${lbl}")"
     total=$((total+1))
-    lbl="$(jq -r '.label'  "${j}" 2>/dev/null || echo '?')"
+    if [ ! -e "${j}" ]; then
+        # The container never emitted a verdict (crash, kill, cancel, OOM).
+        printf '%-24s %-8s %-6s %-6s %s\n' "${lbl}" "NO-RESULT" "-" "-" \
+            "container wrote no result JSON"
+        continue
+    fi
     st="$(jq  -r '.status' "${j}" 2>/dev/null || echo '?')"
     p="$(jq   -r '.assertions_passed' "${j}" 2>/dev/null || echo '?')"
     f="$(jq   -r '.assertions_failed' "${j}" 2>/dev/null || echo '?')"

@@ -197,6 +197,35 @@ def test_read_results_survives_a_corrupt_file(tmp_path):
     assert [r["label"] for r in qt.read_results(str(tmp_path))] == ["a"]
 
 
+def test_read_results_scopes_to_this_runs_labels(tmp_path):
+    """Rows from an earlier run must not be reported as this run's outcome.
+
+    The results dir lives under the persistent work dir (it caches multi-GB
+    decompressed images and is never wiped), so it accumulates every row ever
+    run. Reading it wholesale showed a one-image session as an 8-device matrix,
+    mixing artifacts and days.
+    """
+    results = tmp_path / "results"
+    results.mkdir()
+    for name, label, status in (("rpi5_pki.json", "rpi5/pki", "PASS"),
+                                ("x86_be.json", "x86/be", "FAIL"),
+                                ("x86_omnibus.json", "x86/omnibus", "PASS")):
+        (results / name).write_text(json.dumps({"label": label, "status": status}))
+
+    scoped = qt.read_results(str(tmp_path), labels=["rpi5/pki"])
+    assert [r["label"] for r in scoped] == ["rpi5/pki"]
+    # No labels = legacy whole-dir read, still supported for ad-hoc inspection.
+    assert len(qt.read_results(str(tmp_path))) == 3
+    # An empty label list is "this run had no rows", NOT "show me everything".
+    assert qt.read_results(str(tmp_path), labels=[]) == []
+
+
+def test_result_filename_matches_the_runner(tmp_path):
+    """Mirrors RESULT_JSON in docker-entrypoint.sh: label -> <platform>_<role>.json."""
+    assert qt.result_filename("rpi5/pki") == "rpi5_pki.json"
+    assert qt.result_filename("x86/standalone-thin") == "x86_standalone-thin.json"
+
+
 def test_read_results_empty_without_dir(tmp_path):
     assert qt.read_results(str(tmp_path)) == []
 

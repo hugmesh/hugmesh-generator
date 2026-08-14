@@ -344,9 +344,20 @@ class QemuPage(QtWidgets.QWizardPage):
         self.log.appendPlainText(
             "== device tests passed ==" if ok else "== device tests reported failures ==")
 
+    def _run_labels(self) -> list[str]:
+        """Labels of the rows THIS page would run, under the current filters."""
+        session = self._current_session()
+        if not session:
+            return []
+        want = self.platform_combo.currentData() or ""
+        return [r.label for r in session.rows if not want or r.platform == want]
+
     def _reload_results(self):
         work = os.path.join(self.wiz.generator_dir, qemu_tests.DEFAULT_WORK_SUBDIR)
-        results = qemu_tests.read_results(work)
+        # Scope to this run's rows. The results dir sits under the persistent work
+        # dir and keeps every row ever run, so an unscoped read shows rows from
+        # older sessions and other artifacts as if they were this run's outcome.
+        results = qemu_tests.read_results(work, labels=self._run_labels())
         self.results.setRowCount(len(results))
         for row, r in enumerate(results):
             status = str(r.get("status", "?"))
