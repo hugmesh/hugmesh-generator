@@ -759,10 +759,32 @@ provision_headscale() {
                 warn "SSH ACL user '${ssh_user}' is not a valid username ([a-z_][a-z0-9_-]*) — leaving placeholder (no SSH granted)"
             fi
         fi
-        if headscale policy set -f "${policy_file}" 2>/dev/null; then
+        # stderr was previously sent to /dev/null, which is exactly why this failure has
+        # never been diagnosable: the warning guessed at two possible causes and printed
+        # neither the real one. Capture it and say what actually went wrong.
+        local policy_err policy_rc=0
+        policy_err="$(headscale policy set -f "${policy_file}" 2>&1)" || policy_rc=$?
+        if [ "${policy_rc}" -eq 0 ]; then
             log "Loaded headscale ACL policy from ${policy_file}"
         else
-            warn "headscale policy set failed for ${policy_file} (check hujson syntax / mode: file)"
+            warn "headscale policy set failed for ${policy_file}: ${policy_err:-<no output>}"
+            # config.yaml ships policy.mode=file (specs/etc/headscale/config.yaml:42-44),
+            # where the policy is read at STARTUP and `policy set` is not the reload path.
+            # The @@TS_SSH_USER@@ substitution above runs AFTER `rc-service headscale
+            # start` (earlier in this function), so with no reload the RUNNING server keeps
+            # serving the PRE-substitution policy — i.e. the "SSH ACL scoped to privileged
+            # user" line logged just above is not true of the live tailnet. (It fails
+            # CLOSED: the unsubstituted literal placeholder matches no user, so nobody is
+            # granted tailnet SSH. Misleading rather than dangerous — but the intended ACL
+            # is not in force.) Restart so the rewritten file is actually loaded.
+            #
+            # NB this restart is the one that used to die on a root-owned
+            # /var/log/headscale.log; see the checkpath in specs/etc/init.d/headscale.
+            if rc-service headscale restart >/dev/null 2>&1; then
+                log "headscale restarted to load ${policy_file} (policy.mode=file reloads at startup)"
+            else
+                warn "headscale restart FAILED — the running server is still using the policy it read at startup"
+            fi
         fi
     else
         warn "No headscale policy.hujson found — tailnet runs allow-all (no tags/route approval)"
