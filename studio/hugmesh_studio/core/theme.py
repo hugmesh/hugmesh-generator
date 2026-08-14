@@ -282,6 +282,20 @@ def css_root(tokens: dict[str, str], *, font_faces: str = "") -> str:
         if "var(" in value:
             raise ValueError(f"token {name} is not a literal: {value!r}")
         lines.append(f"  {name}: {value};")
+        # RUNTIME-CONTRACT BRIDGE: the fleet's UIs consume --hug-* (the rebrand
+        # renamed the cross-repo contract — login-ui styles.scss calls --hug-*
+        # "the cross-repo HugMesh contract any remote can reach for"), while this
+        # module's internal names stayed --sd-*. Before this duplication the
+        # emitted theme was a SILENT NO-OP everywhere: the css was served,
+        # measured, and consumed by nothing — the deepest root of "my theme
+        # choices are not applied". Every --sd-* token is therefore emitted a
+        # second time under its --hug-* twin (same literal), unless the map
+        # already carries that twin explicitly. Internal names stay --sd-* so
+        # the Studio's token board, tests and derivation pins are untouched.
+        if name.startswith("--sd-"):
+            twin = "--hug-" + name[len("--sd-"):]
+            if twin not in tokens:
+                lines.append(f"  {twin}: {value};")
     lines.append("}")
     body = "\n".join(lines) + "\n"
     if font_faces.strip():
