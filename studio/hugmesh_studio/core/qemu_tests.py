@@ -316,18 +316,33 @@ def command_string(generator_dir: str, opts: QemuRunOptions) -> str:
     return " ".join(shlex.quote(x) for x in runner_command(generator_dir, opts))
 
 
-def read_results(work_dir: str) -> list[dict]:
+def result_filename(label: str) -> str:
+    """``rpi5/pki`` -> ``rpi5_pki.json``. Mirrors RESULT_JSON in docker-entrypoint.sh."""
+    return label.replace("/", "_").replace("+", "_") + ".json"
+
+
+def read_results(work_dir: str, labels: list[str] | None = None) -> list[dict]:
     """The per-row result JSON the runner emits, worst-first.
 
     Failures sort to the top: a 7-row matrix where one row failed should not make
     the operator scroll to find it.
+
+    ``labels`` scopes the read to the rows of ONE run and should be passed
+    whenever the caller knows them. The results dir lives under the persistent
+    work dir (it caches multi-GB decompressed images, so it is never wiped), and
+    therefore accumulates every row ever run — across sessions, artifacts and
+    days. Reading it wholesale presents rows from an unrelated earlier run, or a
+    different artifact generation, as the current run's outcome.
     """
     results_dir = os.path.join(work_dir, "results")
     if not os.path.isdir(results_dir):
         return []
+    wanted = {result_filename(l) for l in labels} if labels is not None else None
     out: list[dict] = []
     for name in sorted(os.listdir(results_dir)):
         if not name.endswith(".json"):
+            continue
+        if wanted is not None and name not in wanted:
             continue
         try:
             with open(os.path.join(results_dir, name), encoding="utf-8") as fh:

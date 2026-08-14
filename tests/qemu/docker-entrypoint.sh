@@ -318,8 +318,12 @@ if [ "${MODE}" = "stage4" ]; then
         --timeout "${TIMEOUT}" $( ${KEEP} && echo --keep ) 2>&1 | tee "${RUN_DIR}/stage4.log"
     rc=${PIPESTATUS[0]}
     set -e
-    p="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/stage4.log" | grep -oE '[0-9]+' | head -1)"
-    f="$(grep -oE '[0-9]+ failed'         "${RUN_DIR}/stage4.log" | grep -oE '[0-9]+' | head -1)"
+    # '|| true' is load-bearing, NOT defensive noise — see the twin at the golden
+    # path below: under `set -e` + pipefail these assignments ABORT the script
+    # whenever the log has no RESULT line, skipping every emit_result and leaving
+    # the row's previous result JSON in place to be reported as this run's.
+    p="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/stage4.log" | grep -oE '[0-9]+' | head -1 || true)"
+    f="$(grep -oE '[0-9]+ failed'         "${RUN_DIR}/stage4.log" | grep -oE '[0-9]+' | head -1 || true)"
     if [ "${rc}" -eq 0 ]; then emit_result PASS "stage4 provisioning test passed" "${p:-0}" "${f:-0}"
     else                       emit_result FAIL "run-qemu-test.sh rc=${rc}"       "${p:-0}" "${f:-0}"; fi
     exit "${rc}"
@@ -468,8 +472,17 @@ ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
 ARC=${PIPESTATUS[0]}
 set -e
 
-PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1)"
-FAILED="$(grep -oE '[0-9]+ failed'          "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1)"
+# '|| true' is load-bearing. The prologue is `set -uo pipefail` WITHOUT -e, but
+# errexit is switched on three lines up — so under pipefail a log with no
+# "RESULT: N passed" line makes this pipeline exit 1, the assignment inherits
+# that status, and errexit KILLS THE SCRIPT RIGHT HERE: past the diagnostics,
+# past both emit_result calls, past the `exit ${ARC}`. The container exits 1
+# while ${WORK}/results/<label>.json still holds the PREVIOUS run's verdict,
+# which the CLI summary and the Studio grid then report as this run's — a stale
+# green for a row that never finished. Exactly the case this fires on is the one
+# that matters: a guest that panics or drops SSH part-way through assertions.sh.
+PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1 || true)"
+FAILED="$(grep -oE '[0-9]+ failed'          "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1 || true)"
 
 # ── Guest diagnostics: pin failures that die INSIDE the guest ───────────────
 # The rpi5/pki row really fails to start headscale, but the guest's log files
