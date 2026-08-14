@@ -67,6 +67,7 @@ from collections import deque
 
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from ..flow_layout import flow_box
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -709,7 +710,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "I understand this will MINT credentials and START containers on this machine.")
         lay.addWidget(self.ack)
 
-        brow = QtWidgets.QHBoxLayout()
+        # A WRAPPING block, not a row. These fourteen actions in a QHBoxLayout
+        # made the page's minimum width the SUM of all fourteen buttons — wider
+        # than a laptop screen, so everything past "Generate && start" drifted
+        # off the right edge with no way to resize or scroll to it (operator
+        # report 2026-08-14). FlowLayout reports a ONE-BUTTON minimum and wraps
+        # onto as many rows as the window is narrow enough to need.
+        brow_box, brow = flow_box("Actions")
         self.boot_start_btn = QtWidgets.QPushButton("Generate && start")
         self.boot_down_btn = QtWidgets.QPushButton("Stop mesh")
         self.boot_start_btn.clicked.connect(self._bootstrap_up)
@@ -834,8 +841,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "The stack must be up (the seeder says so plainly if it is not).")
         self.add_user_btn.clicked.connect(self._add_user)
         brow.addWidget(self.add_user_btn)
-        brow.addStretch(1)
-        lay.addLayout(brow)
+        # No trailing addStretch: a FlowLayout has no stretch concept, and a
+        # spacer item would be wrapped as if it were another button.
+        lay.addWidget(brow_box)
 
         # Live-refresh the plan + gate the start button on the acknowledgement.
         self.env_test.toggled.connect(self._refresh_plan)

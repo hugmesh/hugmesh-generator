@@ -11,6 +11,48 @@ spring:
       server:
         webflux:
           routes:
+            # ── SPA DEEP-LINK FALLBACK — MUST BE THE FIRST ROUTE ──────────────
+            # Every remote below is mounted in the Angular host shell at the SAME
+            # path the gateway proxies to the remote's own container
+            # (app.routes.ts: 'character-studio', 'wiki', 'social/matrix', …).
+            # That collision is invisible while you navigate INSIDE the shell —
+            # the router handles it client-side — and breaks the moment the
+            # browser makes a real request for one of those URLs:
+            #
+            #   REFRESH on https://…/character-studio  ->  matches the
+            #   character-studio-ui route below  ->  StripPrefix  ->  that
+            #   container's nginx `try_files $uri $uri/ /index.html`  ->  the
+            #   REMOTE's OWN standalone index.html.
+            #
+            # So refreshing (or opening a bookmark, or following a shared link)
+            # dropped the operator out of the shell and into the bare remote,
+            # with no menu, no shell chrome and no session UI — reported
+            # 2026-08-14: "refreshing takes us into the federated remote instead
+            # of just refreshing the view". /user, /admin and /mod never showed
+            # it because they have NO gateway route and already fell through to
+            # the catch-all host.
+            #
+            # This route sends only HTML NAVIGATIONS for those prefixes to the
+            # shell, which serves index.html (with its nonce-CSP injection
+            # intact — hence forwarding the path VERBATIM rather than SetPath,
+            # so the host's own `location /` block still rewrites it) and lets
+            # Angular resolve the deep link and load the remote properly.
+            #
+            # It is deliberately POSITIVE-matching on `Accept: text/html` rather
+            # than a negative lookahead on the remote routes: every non-navigation
+            # request — remoteEntry.json, chunk imports, assets, XHR, and any
+            # request with NO Accept header at all — fails this predicate and
+            # continues to the remote exactly as before. The blast radius is the
+            # one case that is already broken.
+            #
+            # NOT listed here: /social/phpbb (a server-rendered app, not a shell
+            # remote — it must keep serving its own HTML) and /api-docs (mounted
+            # in the shell at the DIFFERENT path /admin/docs, so it never collides).
+            - id: remote-deeplink-to-host-shell
+              uri: http://snapdragon-systems-web:8080
+              predicates:
+                - Path=/social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**
+                - Header=Accept, .*text/html.*
             - id: matrix-ui
               uri: http://hugmesh-matrix-ui:80
               predicates:

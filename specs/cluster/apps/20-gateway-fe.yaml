@@ -133,6 +133,24 @@ spec:
           # character-studio-ui have no compose-stack equivalent to live-test
           # against, but share the identical architecture, so the fix is applied
           # here for consistency — NOT independently live-verified for those two.
+          # SPA DEEP-LINK FALLBACK — MUST STAY FIRST (SCG matches in list order).
+          # Every remote below is mounted in the Angular host shell at the SAME
+          # path this gateway proxies to the remote's own container, so a real
+          # browser request for one of those URLs (refresh, bookmark, shared
+          # link) is served the REMOTE's standalone index.html by its nginx SPA
+          # fallback instead of the shell — dropping the user out of the shell
+          # entirely. Observed and fixed on the compose stack 2026-08-14; applied
+          # here for parity (this cluster lane is NOT live on this machine, so
+          # unlike the compose route it is not independently live-verified).
+          # Matches POSITIVELY on Accept: text/html so every asset/XHR/
+          # remoteEntry.json request — including any with no Accept header —
+          # falls through to the remote routes below, unchanged.
+          # Excludes /social/phpbb (server-rendered, must serve its own HTML) and
+          # /api-docs (mounted in the shell at /admin/docs, so it never collides).
+          - id: remote-deeplink-to-host-shell
+            uri: http://hugmesh-systems-web.hugmesh-frontend.svc.cluster.local:80
+            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**
+            header: "Accept, .*text/html.*"
           - id: matrix-ui
             uri: http://hugmesh-matrix-ui.hugmesh-frontend.svc.cluster.local:80
             path: /social/matrix/**

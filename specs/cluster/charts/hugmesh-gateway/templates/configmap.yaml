@@ -28,6 +28,15 @@ data:
                     {{- if .path }}
                     - Path={{ .path }}
                     {{- end }}
+                    {{- /* Optional header predicate. Needed by the SPA deep-link
+                           fallback route, which must distinguish a browser
+                           NAVIGATION (Accept: text/html -> serve the host shell)
+                           from a remote's asset/XHR fetch (-> serve the remote).
+                           Purely additive: a route without `header` renders
+                           byte-identically to before. */}}
+                    {{- if .header }}
+                    - Header={{ .header }}
+                    {{- end }}
                   {{- with .filters }}
                   filters:
                     {{- toYaml . | nindent 20 }}
