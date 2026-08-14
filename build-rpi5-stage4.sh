@@ -3114,6 +3114,34 @@ sys-libs/libselinux python
 sys-process/audit python
 HOSTPYUSE
     info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
+
+    # ── gettext-0.23.x empty-$(DOMAIN) .mo-collision dodge (HOST side) ──────────
+    # gettext-0.23.2 miscomputes $(DOMAIN), so autotools-NLS packages each install
+    # a file literally named /usr/share/locale/<lang>/LC_MESSAGES/.mo. Two packages
+    # claiming one path is a file collision, and collision-protect refuses the
+    # WHOLE merge — so gettext, sed and util-linux all fail, and because they are
+    # BDEPENDs of nearly everything, every subsequent atom is warn-skipped too.
+    #
+    # This MUST be seeded host-side, not in specs-rpi5/portage/make.conf.tmpl:
+    # that template renders to ${SYSROOT}/etc/portage/make.conf, and these are
+    # BDEPENDs that portage merges to "/" — the collision happens on the BUILD
+    # CONTAINER's root, against its own bash-5.3_p9-r2 which already owns 41 such
+    # empty-stem catalogs (and ships no bash.mo).
+    #
+    # build-x86-host-stage4.sh:2010/2019 has carried this dodge since the
+    # 2026-07-08 proof build "lost 143 packages to this"; the Pi builder never got
+    # it, and a 2026-08-14 rpi5/pki run burned ~2h before the requested-atom gate
+    # failed on the warn-skipped sys-kernel/raspberrypi-sources. Masking ONLY the
+    # empty-basename catalogs keeps real ones (NetworkManager.mo etc.) intact.
+    # Idempotent: the marker makes a re-run a no-op (twin of the PORTAGE_RO_DISTDIRS
+    # guard below), since this block appends to a make.conf the container may reuse.
+    if ! grep -q 'hugmesh-mo-collision' /etc/portage/make.conf 2>/dev/null; then
+        {
+            printf '\n# hugmesh-mo-collision: gettext-0.23.x empty-$(DOMAIN) catalogs\n'
+            printf 'INSTALL_MASK="${INSTALL_MASK} /usr/share/locale/*/LC_MESSAGES/.mo"\n'
+        } >> /etc/portage/make.conf
+        info "Pre-seeded HOST INSTALL_MASK: gettext empty-\$(DOMAIN) .mo collision dodge"
+    fi
 elif [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
     # Native root on a real host: VERIFY read-only, never write. Proceeds when the
     # host already satisfies the config; else fails fast with a reviewable command.
@@ -4471,6 +4499,32 @@ else
             grep -q "^${must}=y" .config || { err "k8s node kernel option ${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
         done
         grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
+        # ...and every NAME in that string must have its module COMPILED IN. The
+        # string-only assert above is structurally blind to the failure that
+        # actually shipped: the kernel does not diagnose an LSM name it cannot
+        # resolve, it initializes a SHORTER stack and boots on. The Pi pki image
+        # asked for lsm=lockdown,yama,selinux,bpf and dmesg answered
+        # "LSM: initializing lsm=lockdown,capability,selinux"
+        # (out/qemu-runs/runs/rpi5_pki/launch/console.log:79) because neither
+        # CONFIG_SECURITY_YAMA nor CONFIG_BPF_LSM was set. Derive the required
+        # symbols FROM the string so a name can never outlive its module again.
+        # Kept IDENTICAL to the build-x86-host-stage4.sh mirror.
+        for _l in $(sed -n 's/^CONFIG_LSM="\(.*\)"$/\1/p' .config | tr ',' ' '); do
+            case "${_l}" in
+                capability) continue ;;                      # always built in with CONFIG_SECURITY
+                lockdown)   _sym=CONFIG_SECURITY_LOCKDOWN_LSM ;;
+                yama)       _sym=CONFIG_SECURITY_YAMA ;;
+                selinux)    _sym=CONFIG_SECURITY_SELINUX ;;
+                bpf)        _sym=CONFIG_BPF_LSM ;;
+                apparmor)   _sym=CONFIG_SECURITY_APPARMOR ;;
+                loadpin)    _sym=CONFIG_SECURITY_LOADPIN ;;
+                safesetid)  _sym=CONFIG_SECURITY_SAFESETID ;;
+                landlock)   _sym=CONFIG_SECURITY_LANDLOCK ;;
+                integrity)  _sym=CONFIG_INTEGRITY ;;
+                *) err "CONFIG_LSM names '${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
+            esac
+            grep -q "^${_sym}=y$" .config || { err "CONFIG_LSM names '${_l}' but ${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
+        done
         # LUKS2/dm-crypt (hardened-k8s.config enables this unconditionally, for
         # BOTH the existing attached-disk data-partition use case and the
         # --encrypt-root path): refuse to ship a kernel that silently lost it,
