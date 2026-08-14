@@ -88,8 +88,8 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 # The org repos have NO git tags, hence SHA pins. Order matters: build-config FIRST
 # (parent's plugin dep), then parent (everything else's <parent>), then commons/auth-core.
 PINS=(
-  "hugmesh-build-config|7f5f643d8f08ced145569d3a9db6b4be8849516f|hugmesh-build-config|0.5.0|jar|systems/hugmesh"
-  "hugmesh-parent|b333b1195465da9f5c76b209f727e1e3420cdf1f|hugmesh-parent|2.8.0|pom|systems/hugmesh"
+  "hugmesh-build-config|5c02b991b5cde3957f0bb41679411596c467c7c3|hugmesh-build-config|0.5.0|jar|net/hugmesh"
+  "hugmesh-parent|c31d9dc0998b901d73d900949ae207907cb5f524|hugmesh-parent|2.8.0|pom|net/hugmesh"
   # hugmesh-commons SHA bumped 2026-08-13 (5a48f7e: idempotent ROLE_ prefix in
   # CasdoorAuthorities — without it every hasRole() on the four resource-server
   # BFFs answered 403 because seeded Casdoor roles are literally named ROLE_*).
@@ -100,8 +100,8 @@ PINS=(
   # script (have_artifact skips by version, so a stale cache otherwise wins),
   # then rebuild consumers with --no-cache (their go-offline Docker layer holds
   # the OLD jar bytes otherwise).
-  "hugmesh-commons|5a48f7e0d7384fd4d035790878952772638c28c5|hugmesh-commons|2.1.0|jar+tests|net/hugmesh"
-  "hugmesh-auth-core|87dab73d455ece2c9006ed2f044f40562a4cbe9b|hugmesh-auth-core|2.4.2|jar|systems/hugmesh"
+  "hugmesh-commons|156b7687db7cb4287db73708d46404a8cb685b3f|hugmesh-commons|2.1.0|jar+tests|net/hugmesh"
+  "hugmesh-auth-core|401ca9e38168791e5642125d96dd1f65487b8ff1|hugmesh-auth-core|2.4.2|jar|net/hugmesh"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"
