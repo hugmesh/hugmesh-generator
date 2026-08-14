@@ -53,6 +53,15 @@ from .config import SERVICE_DESCRIPTIONS, SERVICE_GROUPS
 # ── the two mechanisms, as values rather than an is-it-tor special case ──────────
 MECH_COMPOSE_PROFILE = "compose-profile"
 MECH_FEDERATION = "federation"
+# DEVOPS-LANE services (``MECH_KIND``). These are KUBERNETES controllers: they
+# reconcile cluster objects, so the docker-compose lane has nothing for them to
+# operate on and no compose profile could ever make them real (the same honesty
+# rule that kept workloadConsole greyed). They run on the repo's OWN local
+# Kubernetes lane — `make kind-up` (specs/cluster/bootstrap/kind-local), which
+# installs real ArgoCD — so the Studio offers them as a SEPARATE lane rather
+# than pretending a compose profile exists (operator ask 2026-08-14: "ArgoCD and
+# all devops should be an option to enable with local mesh").
+MECH_KIND = "kind"
 
 # The compose profiles tests/stack/ defines, each turned into a `--profile` flag by
 # one Makefile variable off one env knob. Named so the GUI can say WHICH profile a
@@ -126,6 +135,9 @@ class LocalService:
 
     def is_federation(self) -> bool:
         return self.mechanism == MECH_FEDERATION
+
+    def is_kind(self) -> bool:
+        return self.mechanism == MECH_KIND
 
 
 # The catalogue. Every entry is backed by a mechanism that exists in THIS repo's
@@ -226,6 +238,25 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
                    "placeholder. Needs a hugmesh-games checkout next to this "
                    "repo (GAMES_SRC overrides). Needs a stack restart to "
                    "change — it starts/stops a container."),
+    # ── the DEVOPS lane (MECH_KIND): real Kubernetes, not a compose profile ──
+    LocalService(
+        slug="argocd", mechanism=MECH_KIND,
+        default_on=False,
+        local_note="GitOps continuous delivery. Runs on the DevOps (Kubernetes) "
+                   "lane, not the docker lane: ArgoCD reconciles cluster objects, "
+                   "so there is nothing for it to manage without Kubernetes. "
+                   "Starting that lane installs the real upstream ArgoCD and "
+                   "applies this mesh's app tree."),
+    LocalService(
+        slug="workloadConsole", mechanism=MECH_KIND,
+        default_on=False,
+        # Graduated out of UNAVAILABLE_LOCALLY (operator ask 2026-08-14): its
+        # backend driver is the fabric8 k8s client and no docker driver exists,
+        # which is exactly what the DevOps lane supplies. The compose lane still
+        # cannot run it — that is now stated as a LANE, not a refusal.
+        local_note="Pod console + workload inspection. Runs on the DevOps "
+                   "(Kubernetes) lane: its only backend driver is the Kubernetes "
+                   "API, so the docker lane has nothing to show it."),
     LocalService(
         slug="egress-vpn", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_EGRESS_VPN,
         default_on=False,
@@ -244,14 +275,12 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
 # Reasons are ONE lay-user sentence (operator ask 2026-08-14: "just say disabled
 # and clean up language"): the row's visible text is "Disabled" + this sentence.
 # Technical whys live here as comments, not on the surface.
-UNAVAILABLE_LOCALLY: dict[str, str] = {
-    # admin-bff's pod console drives only the fabric8 k8s client — no docker
-    # driver exists, so the compose stack has nothing for it to inspect. It runs
-    # for real only against the kind lane (make kind-up KIND_PROFILE=sso; the
-    # committed admin-bff overlay + apps/14-workload-console-rbac.yaml wire it).
-    "workloadConsole": "Only works on a full Kubernetes cluster — this local mesh "
-                       "doesn't use one.",
-}
+# EMPTY as of 2026-08-14: every catalogued slug now has a real lane. The map and
+# its honesty contract STAY — a future slug the local mesh genuinely cannot run
+# belongs here with one lay sentence, never as a live checkbox over a mechanism
+# that does not exist. (workloadConsole left this map when the DevOps/kind lane
+# gave it the Kubernetes API its only driver needs.)
+UNAVAILABLE_LOCALLY: dict[str, str] = {}
 
 # `wiki` is deliberately absent from core.config's catalogues: those mirror the node
 # builders' --optional-services slugs, and a test there asserts SERVICE_DESCRIPTIONS
@@ -266,7 +295,8 @@ LOCAL_ONLY_DESCRIPTIONS: dict[str, str] = {
 # A wiki is a shared-authorship community surface, so it joins that group rather than
 # earning a one-row group of its own — which would make the local services surface
 # grouped differently from the node wizard's for no operator gain.
-LOCAL_ONLY_GROUP: dict[str, str] = {"wiki": "Social & community"}
+LOCAL_ONLY_GROUP: dict[str, str] = {"wiki": "Social & community",
+                                    "argocd": "Network & access"}
 
 
 # ── catalogue accessors ─────────────────────────────────────────────────────────
