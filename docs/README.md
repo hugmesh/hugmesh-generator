@@ -12,6 +12,7 @@ The doc set for the image/infra layer. State key used throughout:
 - [`NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) — launching the Studio wizard + ncurses menu on NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora: the additive Nix flake (`flake.nix`/`shell.nix`) + the portable POSIX launcher (`scripts/studio-launch.sh`) for hosts without `python3`/`make`/FHS (✅).
 - [`LOCAL-TESTING.md`](LOCAL-TESTING.md) — LAN `.test` fleet testing.
 - [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream tuwunel/Mastodon for dev only).
+- [`ADMIN-CONSOLES.md`](ADMIN-CONSOLES.md) — **every admin/moderation console: URL, the role that opens it, and its HONEST state** (probed live). Which panels are dark and why; what Matrix/Mastodon/forum administration can and cannot do on this mesh; how to sign in with an account that holds the roles.
 - [`DEVOPS.md`](DEVOPS.md) — GitLab CI, runner, binhost, build distribution.
 - [`BUILD-MATRIX.md`](BUILD-MATRIX.md) — the canonical platform×role×env build matrix, the four build channels (CLI / make / ncurses menu / Studio GUI), the **all-options-in-all-menus** rule + the `make matrix-check` harness (✅).
 - [`IMAGE-INVENTORY.md`](IMAGE-INVENTORY.md) — generated full cross-product of every advertised image × every build channel (125 distinct images, 62 with a channel gap); regenerate with `scripts/emit-image-inventory.py`, gated by `make inventory-check` — do not hand-edit.
