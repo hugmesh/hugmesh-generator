@@ -34,16 +34,23 @@ WAVED_ROOT = "specs/cluster/apps/00-app-of-apps-waved.yaml"
 CI_FILE = ".gitlab-ci.yml"
 CI_JOB = "build:images"
 
-# Pre-rebrand scan. Two occurrences of the old brand are NOT stale and must survive —
-# but ONLY IN ONE SYNTACTIC POSITION EACH:
-#   * `snapdragon.systems/<name>:` as a YAML mapping KEY — the FROZEN label-KEY /
-#     annotation namespace. It is wire identity, not brand: docs/BRANDING.md ("Never
-#     rebranded … label KEYS") and scripts/tooling/tokens.json
-#     ("label_key_namespaces": ["snapdragon.systems/"]), enforced fail-closed at render.
+# Pre-rebrand scan. Exactly ONE occurrence of the old brand is still NOT stale, and only in
+# one syntactic position:
 #   * `snapdragon-deploy.yaml` (and its `.example.` sibling) — the LEGACY service-catalog
 #     deploy-descriptor filename, which 6 of the 9 adopting repos still ship on disk and
 #     which both catalog generators deliberately still accept (#498).
 # Everything else bearing the old brand in this surface is a rebrand miss.
+#
+# RETIRED ALLOWLIST ENTRY — `snapdragon.systems/<name>:` label KEYS (was entry (a)). The
+# operator has ruled that hugmesh carries NO `.systems` token at all: `snapdragon.systems`
+# is their PRIVATE control-plane domain, not hugmesh naming. The label-key/annotation
+# namespace therefore migrated to `hugmesh.net/<name>`, together with the CRD API group
+# (`platform.hugmesh.systems` -> `platform.hugmesh.net`) and every hugmesh.systems host.
+# That migration could be done outright, with no dual-label transition, because there is no
+# live cluster to keep schedulable — set-sites and selectors moved in the same pass.
+# The exemption is gone, so a `snapdragon.systems/` label key is now a finding EVEN IN
+# mapping-key position. docs/BRANDING.md and scripts/tooling/tokens.json
+# (`frozen_protocol_constants.label_key_namespaces`) must agree with this.
 #
 # RETIRED ALLOWLIST ENTRY — `github.com/Snapdragon-Systems/` (was entry (b)). Git hosting
 # has since moved: every repo's `origin` is `github.com/hugmesh/<repo>`, and no file in this
@@ -69,16 +76,6 @@ CI_JOB = "build:images"
 # frozen. An occurrence anywhere else is a finding, no matter what text surrounds it.
 BRAND_RE = re.compile(r"snapdragon", re.IGNORECASE)
 ALLOWLIST_RES = (
-    # (a) the frozen label-KEY namespace, in mapping-KEY position only: nothing may precede
-    #     it on the line except indentation / a YAML list dash, and a `:` must follow the
-    #     label name. `registry.snapdragon.systems/…` and `…/snapdragon.systems/x` are NOT
-    #     matched — the `^[ \t-]*` anchor is what makes this positional rather than textual.
-    #     The label NAME is the Kubernetes grammar exactly (alphanumerics, `-`, `_`, `.`;
-    #     NO further `/`), so that a registry path in key position —
-    #     `snapdragon.systems/hugmesh/hugmesh-gateway:` — cannot borrow the frozen prefix to
-    #     smuggle a `host/project/repo` identifier past the check. A wider charset here would
-    #     re-open the very hole this allowlist was rewritten to close (negative control 9i).
-    re.compile(r"^[ \t-]*(?P<tok>snapdragon\.systems)/[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?:"),
     # (c) the LEGACY DEPLOY-DESCRIPTOR FILENAME, which is still live on disk in other repos.
     #     The rebrand renamed it to `hugmesh-deploy.yaml` in only 3 of the 9 adopting repos;
     #     the other 6 still ship `snapdragon-deploy.yaml`, and the service-catalog generators
@@ -540,9 +537,9 @@ def main(root: str) -> int:
                 fail(
                     "pre-rebrand",
                     f"{rel}:{lineno}:{lo + 1} carries a retired pre-rebrand identifier in a "
-                    f"NON-frozen position (the org renamed every repo to hugmesh-*; only the "
-                    f"snapdragon.systems/ label KEY and the github.com/Snapdragon-Systems/ org "
-                    f"segment survive): {line.strip()[:120]}",
+                    f"NON-frozen position (hugmesh carries no snapdragon token and no .systems "
+                    f"token at all; the only survivor is the legacy snapdragon-deploy.yaml "
+                    f"descriptor FILENAME): {line.strip()[:120]}",
                 )
     if scanned < 4:
         fail("pre-rebrand", f"only {scanned} file(s) of the image-builder surface were scanned — the check is vacuous")
@@ -550,11 +547,20 @@ def main(root: str) -> int:
     # positional patterns stop being exercised by the positive run and could rot into
     # never-matching regexes without anyone noticing (at which point a real regression in
     # them would only ever be visible as a false FAIL, never as this silent false PASS).
-    if frozen_seen < 2:
+    # Threshold is 1, not 2: the allowlist is down to a SINGLE entry (the legacy
+    # snapdragon-deploy.yaml descriptor filename) now that the label-KEY and GitHub-org
+    # exemptions have been retired. If that last live filename ever lands in the catalog's
+    # new spelling everywhere, this whole allowlist — and this anti-vacuity guard with it —
+    # should be deleted rather than have the threshold dropped to 0, because at 0 the check
+    # can no longer distinguish "correctly nothing to exempt" from "regex rotted to never
+    # match", which is the exact silent false PASS this guard exists to prevent.
+    if frozen_seen < 1:
         fail(
             "pre-rebrand",
             f"only {frozen_seen} frozen-position brand occurrence(s) found in the surface — the "
-            f"allowlist patterns are no longer exercised, so the positional check is unproven",
+            f"allowlist pattern is no longer exercised, so the positional check is unproven. If "
+            f"snapdragon-deploy.yaml is genuinely gone fleet-wide, DELETE the allowlist and this "
+            f"guard instead of lowering the threshold.",
         )
 
     for f in findings:

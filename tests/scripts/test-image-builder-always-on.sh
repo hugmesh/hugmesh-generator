@@ -273,12 +273,12 @@ expect_catch "stale repo name reinstated in the sca:dependency-check matrix" "[p
 # (9c) the retired brand as the REGISTRY HOST in the synced Job template: where every image
 #      this pipeline builds gets pushed.
 expect_catch "retired brand as the registry host in the Job template" "[pre-rebrand]" '
-  sed -i "s|registry.hugmesh.systems/hugmesh/|registry.snapdragon.systems/hugmesh/|g" \
+  sed -i "s|registry.hugmesh.net/hugmesh/|registry.snapdragon.systems/hugmesh/|g" \
       "$T/specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml"
 '
 # (9e) the retired brand as the registry host in the dispatcher'"'"'s PUSH destination.
 expect_catch "retired brand as the registry host in build:images DEST_REPO" "[pre-rebrand]" '
-  sed -i "s|DEST_REPO: \"registry.hugmesh.systems/|DEST_REPO: \"registry.snapdragon.systems/|" \
+  sed -i "s|DEST_REPO: \"registry.hugmesh.net/|DEST_REPO: \"registry.snapdragon.systems/|" \
       "$T/.gitlab-ci.yml"
 '
 # (9f) the retired brand as the GIT HOST in the Application repoURL — the field that decides
@@ -290,12 +290,14 @@ expect_catch "retired brand as the git host in the Application repoURL" "[pre-re
   sed -i -E "s|repoURL: https://github.com/[^/]+/hugmesh-generator.git|repoURL: https://git.snapdragon.systems/hugmesh/hugmesh-generator.git|" \
       "$T/specs/cluster/apps/60-image-builder.yaml"
 '
-# (9g) THE ALLOWLIST'"'"'S OWN ANCHOR: the frozen label KEY is exempt because it sits in
-#      mapping-KEY position. Moved out of that position (given a host prefix) it is an
-#      ordinary stale identifier and must be caught — otherwise the exemption is textual,
-#      not positional, and 9c/9e/9f could be evaded by re-using the frozen spelling.
-expect_catch "frozen label-key namespace re-used as a host prefix" "[pre-rebrand]" '
-  sed -i "s|    snapdragon.systems/image-build:|    registry.snapdragon.systems/image-build:|g" \
+# (9g) the RETIRED label-KEY namespace. `snapdragon.systems/<name>:` in mapping-KEY position
+#      used to be exempt as frozen wire identity. The label keys have since migrated to
+#      `hugmesh.net/<name>` (hugmesh carries no .systems token at all), so that exemption is
+#      gone and the old key must now be caught EVEN IN the position that used to make it
+#      exempt. This is the inverse of the old 9g: it pins the REMOVAL of the exemption, so
+#      re-adding entry (a) would fail this control.
+expect_catch "retired label-key namespace in the mapping-key position it used to be exempt in" "[pre-rebrand]" '
+  sed -i "s|    hugmesh.net/image-build:|    snapdragon.systems/image-build:|g" \
       "$T/specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml"
 '
 # (9h) the RETIRED org segment: `github.com/Snapdragon-Systems/` used to be allowlisted as
@@ -307,38 +309,38 @@ expect_catch "retired org segment under the github.com host it used to be exempt
   sed -i -E "s|repoURL: https://github.com/[^/]+/hugmesh-generator.git|repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git|" \
       "$T/specs/cluster/apps/60-image-builder.yaml"
 '
-# (9i) THE ALLOWLIST BORROWED AS A PREFIX: a `host/project/repo` identifier written into
-#      mapping-KEY position, re-using the frozen spelling to inherit its exemption. A
-#      Kubernetes label key is `<namespace>/<name>` with NO second slash, so the label-name
-#      charset must not admit one — otherwise the positional anchor is satisfied and the
-#      registry path rides through, which is 9c/9e/9f all over again.
-expect_catch "registry path smuggled into label-key position under the frozen prefix" "[pre-rebrand]" '
-  sed -i "s|    snapdragon.systems/image-build: \"\${BUILD_NAME}\"|    snapdragon.systems/hugmesh/hugmesh-gateway: \"\${BUILD_NAME}\"|" \
-      "$T/specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml"
-'
+# (9i) RETIRED WITH ENTRY (a). This used to prove that entry (a)'"'"'s label-NAME charset
+#      admitted no second slash, so a `host/project/repo` identifier could not be smuggled
+#      into mapping-key position to inherit the frozen prefix'"'"'s exemption. With entry (a)
+#      deleted there is no prefix left to borrow — any snapdragon.systems spelling is caught
+#      in every position, which 9g now proves directly — so the control has no subject.
+#      Deliberately not replaced with a weaker variant: a control that cannot fail is worse
+#      than no control, because it reads as coverage.
 # (9j) THIRD ALLOWLIST ANCHOR, same test: the legacy `snapdragon-deploy.yaml` descriptor
 #      filename is exempt only as a WHOLE filename token. Re-used as a registry HOST it is
 #      an ordinary stale identifier and must be caught, or entry (c) becomes a textual
 #      blanket mute for anything containing that string.
 expect_catch "legacy deploy-descriptor filename re-used as a registry host" "[pre-rebrand]" '
-  sed -i "s|DEST_REPO: \"registry.hugmesh.systems/|DEST_REPO: \"registry.snapdragon-deploy.yaml/|" \
+  sed -i "s|DEST_REPO: \"registry.hugmesh.net/|DEST_REPO: \"registry.snapdragon-deploy.yaml/|" \
       "$T/.gitlab-ci.yml"
 '
-# (9d) POSITIVE CONTROL for the allowlist: the FROZEN snapdragon.systems/ label KEY (in
-#      mapping-key position) must NOT be flagged. Without this, check 9 could be "fixed" by
-#      rewriting protocol identity the renderer freezes. Together with 9g this pins the
-#      exemption to the POSITION rather than to the spelling, in both directions.
-#      The org-segment half of this control was dropped with allowlist entry (b): the tree
-#      no longer carries github.com/Snapdragon-Systems/ anywhere, and 9h now asserts the
-#      opposite (that it IS caught), so asserting its presence here would contradict it.
+# (9d) POSITIVE CONTROL for the ONE surviving allowlist entry: the legacy
+#      `snapdragon-deploy.yaml` descriptor FILENAME must NOT be flagged. It is still shipped
+#      on disk by 6 of the 9 adopting repos and both catalog generators deliberately accept
+#      it, so flagging it would push someone to "fix" a live filename and make those repos
+#      invisible to the catalog. Together with 9j (same filename re-used as a registry HOST
+#      must be caught) this pins the exemption to the POSITION, not the spelling.
+#      Both other halves of this control are gone: entry (a) (label keys) and entry (b)
+#      (the GitHub org path) were retired, and 9g/9h now assert the OPPOSITE for those two —
+#      that they ARE caught — so asserting their exemption here would contradict them.
 T="${WORK}/allowlist"; rm -rf "${T}"; mkdir -p "${T}/specs"
 cp "${REPO}/.gitlab-ci.yml" "${T}/.gitlab-ci.yml"
 cp -r "${REPO}/specs/cluster" "${T}/specs/cluster"
-if grep -q 'snapdragon.systems/image-build' "${T}/specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml" \
+if grep -q 'snapdragon-deploy\.yaml' "${T}/.gitlab-ci.yml" \
    && python3 "${CHECKER}" "${T}" >/dev/null 2>&1; then
-  neg_ok "frozen snapdragon.systems/ label key in mapping-key position is NOT flagged"
+  neg_ok "legacy snapdragon-deploy.yaml descriptor filename is NOT flagged"
 else
-  neg_bad "allowlist positive control: the frozen label key was absent or wrongly flagged"
+  neg_bad "allowlist positive control: the legacy descriptor filename was absent or wrongly flagged"
 fi
 
 echo
