@@ -129,6 +129,32 @@ _IDP_JWKS_HINTS = {
 }
 
 
+class _StatusProbe(QtCore.QThread):
+    """Ask the RUNNING stack what it is, off the GUI thread.
+
+    `docker compose ps` shells out and can block for seconds (a busy or wedged
+    daemon blocks for its whole timeout), so this must never run inline — that is
+    the same class of bug as the per-line log delivery: work on the GUI thread
+    with no way for the event loop to breathe. It runs on page entry, so doing it
+    inline would freeze the window exactly when the operator first looks at it.
+
+    Emits (running, detail). Never raises: LocalStackNode.status() already folds
+    every failure into StackStatus(running=False, detail=<why>), which is the
+    honest answer for "docker is not there" as much as for "nothing is up"."""
+    result = Signal(bool, str)
+
+    def __init__(self, node, parent=None):
+        super().__init__(parent)
+        self._node = node
+
+    def run(self):
+        try:
+            st = self._node.status()
+            self.result.emit(bool(st.running), str(st.detail or ""))
+        except Exception as e:                      # never kill the page over a probe
+            self.result.emit(False, f"{type(e).__name__}: {e}")
+
+
 class _MeshWorker(QtCore.QThread):
     """Runs ONE mesh verb off the GUI thread. Hold a reference on the page
     (self.worker) — a local would be GC'd mid-run and take the thread with it.
@@ -315,6 +341,37 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._tick.setInterval(1000)
         self._tick.timeout.connect(self._on_tick)
 
+        # ── LINE COALESCING — why the window used to freeze ──────────────────
+        # _MeshWorker emits ONE queued signal PER OUTPUT LINE, and the old slot
+        # did the whole per-line pipeline inline: sanitise -> parse -> track ->
+        # re-render the touched stage rows -> appendPlainText. That is fine for a
+        # chatty verb and fatal for a torrential one. `make kind-up` (kind cluster
+        # create + image pulls + ArgoCD rollouts) emits tens of thousands of lines
+        # in bursts, so the GUI thread got tens of thousands of queued slot calls
+        # each doing a widget repaint — the event loop never got back to painting
+        # or input handling and the window went white/unresponsive (operator
+        # report 2026-08-14: "starting the devops pipeline seemed to freeze the
+        # window"). The verb itself was ALWAYS off-thread; it was the delivery
+        # that blocked.
+        #
+        # Now the worker's signal does one cheap thing — append to this deque —
+        # and a ~20 Hz drain does the pipeline for the whole batch, rendering and
+        # appending ONCE per tick instead of once per line. Cost becomes O(ticks),
+        # not O(lines), so the pane still looks live (50 ms is below the ~100 ms
+        # threshold where a UI reads as laggy) while the event loop stays free.
+        # Nothing is dropped: every line still reaches run.buffer and the parser,
+        # just in batches.
+        self._line_inbox: deque[str] = deque()
+        self._drain = QtCore.QTimer(self)
+        self._drain.setInterval(50)
+        self._drain.timeout.connect(self._drain_lines)
+
+        # Is a local mesh up RIGHT NOW? None until the first probe answers — a
+        # tri-state on purpose, because "unknown" must not be treated as "no"
+        # (that would grey the teardown buttons on every page entry for as long
+        # as `docker compose ps` takes).
+        self._mesh_up: bool | None = None
+
         # Run the gate ONCE now that every widget it touches exists: the operator
         # should see WHY 'Generate & start' is disabled before clicking it, not
         # only after toggling the checkbox.
@@ -343,6 +400,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def initializePage(self):
         self._refresh_status()
         self._refresh_plan()
+        # ENTERING THE PAGE MUST TELL YOU WHAT IS ALREADY RUNNING. The stage tree
+        # only ever showed THIS session's runs, so after a Studio restart it was
+        # empty and the page looked identical whether the mesh was up or down —
+        # "Stop mesh" was enabled with nothing to stop, and "Generate && start"
+        # invited a second bring-up over a live stack (operator report
+        # 2026-08-14). Probe the real compose project instead of assuming.
+        self._probe_mesh_state()
 
     # ── JOIN tab (handlers now threaded; widget names unchanged) ─────────────────
     def _build_join_tab(self) -> QtWidgets.QWidget:
@@ -706,6 +770,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.plan_view.setFont(f)
         lay.addWidget(self.plan_view, 1)
 
+        # What is ALREADY up, answered on page entry by the off-thread probe. This
+        # is the first thing to read after a Studio restart: the stage tree below
+        # only ever shows THIS session's runs, so without this the page looks
+        # identical whether the mesh is live or absent.
+        self._mesh_state_label = QtWidgets.QLabel("Mesh state: checking…")
+        self._mesh_state_label.setWordWrap(True)
+        self._mesh_state_label.setToolTip(
+            "Whether a local mesh is running right now, read from the actual "
+            "compose project (not from anything this session did). Re-checked "
+            "when you enter this page and after every verb finishes.")
+        lay.addWidget(self._mesh_state_label)
+
         self.ack = QtWidgets.QCheckBox(
             "I understand this will MINT credentials and START containers on this machine.")
         lay.addWidget(self.ack)
@@ -1048,6 +1124,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.worker.line.connect(self._on_line)
         self.worker.done.connect(self._verb_done)
         self._tick.start()
+        self._drain.start()     # stopped in _verb_done, after a final flush
         self.completeChanged.emit()
         self.worker.start()
 
@@ -1060,12 +1137,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _verb_done(self, ok: bool):
         self._running = False
+        # FLUSH BEFORE SETTLING: up to one drain interval of output can still be
+        # banked when the verb finishes, and those are exactly the lines that say
+        # HOW it finished. Draining after _settle_run would file them under a run
+        # already marked terminal; dropping them would lose the failure reason.
+        self._drain_lines()
+        self._drain.stop()         # same rule as the clock: an idle page owns no timer
         self._set_verbs_enabled(True)
         self.cancel_btn.setVisible(False)
         self.status.setText("Done." if ok else "FAILED (see log).")
         self._tick.stop()          # unconditionally: an idle page must own no clock
         self._settle_run(ok)
         self._refresh_status()
+        # A verb is the one thing that CHANGES whether a mesh is up (start, stop,
+        # clean), so re-read the real state rather than inferring it from the
+        # verb's exit code — a partially-failed bring-up leaves containers behind
+        # and "failed" would otherwise be recorded as "nothing is running".
+        self._probe_mesh_state()
         self.completeChanged.emit()
 
     def _settle_run(self, ok: bool) -> None:
@@ -1165,30 +1253,58 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         item.setText(_ST_COL_TIME, _fmt_elapsed(st.elapsed(now)))
 
     def _on_line(self, raw_line: str) -> None:
-        """The ONE per-line path: sanitise -> raw buffer -> parser -> tracker -> render
-        only what transitioned -> append to the pane IFF the selection covers it."""
-        # Compose/maven colour their output unconditionally and portage-style progress
-        # bars carry CR; Qt paints a BOX for every escape byte it cannot render.
-        line = _display_safe(raw_line)
-        if not self._runs:
-            self.log.appendPlainText(line)      # a line with no run (defensive)
+        """Worker-signal slot. Deliberately does NOTHING but enqueue — see the
+        coalescing note where ``_drain`` is constructed. Any real work here runs
+        once PER OUTPUT LINE on the GUI thread, which is what froze the window."""
+        self._line_inbox.append(raw_line)
+
+    def _drain_lines(self) -> None:
+        """Process every line banked since the last tick: sanitise -> raw buffer ->
+        parser -> tracker for each, then render the touched stages and append to
+        the pane ONCE for the whole batch.
+
+        The per-line half (parse/track/buffer) still runs for every line — it is
+        pure CPU and cheap. The expensive half (stage re-render, appendPlainText)
+        is what gets batched, because those repaint."""
+        if not self._line_inbox:
             return
+        # Snapshot and clear FIRST: the worker thread keeps appending while this
+        # runs, and draining in place would livelock on a fast producer.
+        batch = [self._line_inbox.popleft() for _ in range(len(self._line_inbox))]
+
+        # Compose/maven colour their output unconditionally and portage-style
+        # progress bars carry CR; Qt paints a BOX for every escape byte it cannot
+        # render.
+        if not self._runs:                       # lines with no run (defensive)
+            self.log.appendPlainText("\n".join(_display_safe(ln) for ln in batch))
+            return
+
         i = len(self._runs) - 1
         run = self._runs[i]
-        run.buffer.append(line)
-        state = run.parser.feed(line)
         now = time.monotonic()
-        delta = run.tracker.feed(line, state.phase_index, now)
-        if delta.any():
-            for j in delta.touched():
+        touched: set[int] = set()
+        visible: list[str] = []
+        for raw_line in batch:
+            line = _display_safe(raw_line)
+            run.buffer.append(line)
+            state = run.parser.feed(line)
+            delta = run.tracker.feed(line, state.phase_index, now)
+            if delta.any():
+                touched.update(delta.touched())
+            # THE filtering rule (unchanged): the live stream lands in the pane only
+            # when the selected node actually contains it — the whole run (stage
+            # None), or the stage that is running right now. Selecting an older
+            # stage freezes the pane on that slice. Evaluated PER LINE because
+            # tracker.cur can move partway through a batch.
+            if i == self._selected and (self._selected_stage is None
+                                        or run.tracker.cur == self._selected_stage):
+                visible.append(line)
+        if touched:
+            for j in sorted(touched):
                 self._render_stage(run, j, now)
             self._render_run(run, now)
-        # THE filtering rule: the live stream lands in the pane only when the selected
-        # node actually contains it — the whole run (stage None), or the stage that is
-        # running right now. Selecting an older stage freezes the pane on that slice.
-        if i == self._selected and (self._selected_stage is None
-                                    or run.tracker.cur == self._selected_stage):
-            self.log.appendPlainText(line)
+        if visible:
+            self.log.appendPlainText("\n".join(visible))
 
     def _on_tick(self) -> None:
         """1 Hz: make the live run and its ONE running stage tick their elapsed time."""
@@ -1243,6 +1359,20 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                   self.boot_clean_btn, self.preflight_btn, self.m2_btn,
                   self.e2e_btn):
             b.setEnabled(on)
+        # STATE-AWARE TEARDOWN. Stopping/cleaning a stack that is not up does
+        # nothing but stream a confusing no-op, and the buttons being live implied
+        # there was something to stop. `_mesh_up` is None until the first probe
+        # answers — leave them enabled in that window rather than briefly greying
+        # controls that may well be valid (an unknown is not a "no").
+        if on and self._mesh_up is False:
+            for b in (self.boot_down_btn, self.boot_clean_btn):
+                b.setEnabled(False)
+                b.setToolTip("Disabled: no local mesh is running — nothing to "
+                             "stop or clean. (Checked on entry; re-checked after "
+                             "every verb.)")
+        # The onion/creds/web buttons are only meaningful against a live stack too,
+        # but they are read-only and self-explaining when it is down, so they keep
+        # their existing behaviour rather than growing another disabled state.
         # the bootstrap start additionally requires the acknowledgement — and carries
         # the "why am I disabled?" tooltip, so route it through the one gate.
         self._sync_boot_gate()
@@ -1315,6 +1445,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                  f"built-in defaults (profile presets stay unset).")
         self.plan_view.setPlainText(self.boot.plan())
         self._sync_boot_gate()
+
+    def _probe_mesh_state(self):
+        """Kick off the off-thread stack probe (see _StatusProbe). Re-entrant-safe:
+        a probe already in flight is left alone rather than stacking threads."""
+        probe = getattr(self, "_probe", None)
+        if probe is not None and probe.isRunning():
+            return
+        self._mesh_state_label.setText("Mesh state: checking…")
+        self._probe = _StatusProbe(self.boot._stack_node(), parent=self)
+        self._probe.result.connect(self._on_mesh_state)
+        self._probe.start()
+
+    def _on_mesh_state(self, running: bool, detail: str):
+        self._mesh_up = running
+        if running:
+            self._mesh_state_label.setText(
+                f"Mesh state: RUNNING — {detail}. 'Generate && start' would bring up "
+                f"a second time over the live stack; stop it first if you want a "
+                f"clean bring-up.")
+        else:
+            self._mesh_state_label.setText(
+                f"Mesh state: not running ({detail}). Nothing to stop or clean.")
+        # Re-run the gates now that the answer is known.
+        if not self._running:
+            self._set_verbs_enabled(True)
 
     def _sync_boot_gate(self):
         # The from-scratch start is gated behind the explicit acknowledgement — nothing
