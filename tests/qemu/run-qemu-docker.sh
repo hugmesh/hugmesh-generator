@@ -127,7 +127,7 @@ WORK="$(readlink -f "${WORK}")"
 # fields 1..2 are hugmesh+platform, the arch follows, and the last two fields
 # before the extension are <env>-<stamp>.
 discover_rows() {
-    local f base rest platform arch role env
+    local f base rest platform arch role env stamp prefer
     local -a _fields
     for f in "${ARTIFACTS}"/*.img "${ARTIFACTS}"/*.img.xz; do
         [ -e "${f}" ] || continue
@@ -151,8 +151,25 @@ discover_rows() {
         env="${rest##*-}"          # <env>
         role="${rest%-*}"          # <role>, '-' and all
         [ -n "${platform}" ] && [ -n "${role}" ] || continue
-        printf '%s\t%s\t%s\t%s\n' "${platform}" "${role}" "${env}" "${f}"
+        stamp="${base##*-}"
+        # Emit the sort key first, strip it after collapsing. Field 2 is
+        # "1" for a decompressed .img so it outranks its own .img.xz.
+        case "${f}" in *.xz) prefer=0 ;; *) prefer=1 ;; esac
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "${stamp}" "${prefer}" "${platform}" "${role}" "${env}" "${f}"
     done
+}
+
+# ONE row per platform/role — newest stamp, then decompressed-over-compressed.
+#
+# Without this the same artifact present as BOTH .img and .img.xz enumerated
+# TWICE and the runner booted it twice, re-expanding 9-20GB for the duplicate;
+# and every superseded rebuild of a role kept its own row. The tie-break matches
+# studio/hugmesh_studio/core/qemu_tests.py discover_rows() so the GUI and the
+# CLI can never disagree about which artifact a green result refers to.
+collapse_rows() {
+    sort -t$'\t' -k3,3 -k4,4 -k1,1r -k2,2r \
+        | awk -F'\t' '{ key = $3 "/" $4 } !seen[key]++ { print $3 "\t" $4 "\t" $5 "\t" $6 }'
 }
 
 # Pi first, then other ARM, then x86 (see the ORDERING note in the header).
@@ -171,7 +188,7 @@ while IFS=$'\t' read -r platform role env img; do
     [ -z "${ROLE_FILTER}" ]     || [ "${role}" = "${ROLE_FILTER}" ]         || continue
     [ -z "${ONLY}" ]            || [[ "${platform}/${role}" == *"${ONLY}"* ]] || continue
     ROWS+=("$(platform_rank "${platform}")|${platform}|${role}|${env}|${img}")
-done < <(discover_rows)
+done < <(discover_rows | collapse_rows)
 
 [ "${#ROWS[@]}" -gt 0 ] || die "no runnable rows found in ${ARTIFACTS} (filters: platform='${PLATFORM_FILTER}' role='${ROLE_FILTER}' only='${ONLY}')"
 
