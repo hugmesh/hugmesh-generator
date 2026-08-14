@@ -146,11 +146,45 @@ ensure_src_at() { # repo sha -> checkout ${SRC_DIR}/<repo> at <sha> (detached)
     git init -q "${dir}"
     git -C "${dir}" remote add origin "${GIT_BASE}/$1.git"
   fi
+  # RECONCILE the remote on EVERY call, not just at clone time. The cache is
+  # long-lived and GIT_BASE moved (github.com/Snapdragon-Systems ->
+  # github.com/hugmesh); a clone created under the old base kept pointing there
+  # forever, so pins from the NEW org could never be fetched and the failure read
+  # as "not our ref <sha>" — a sha the new org's main was literally at. That took
+  # down every Java image build, i.e. the local mesh could not build at all
+  # (operator report 2026-08-14). Cheap, idempotent, and it makes the cache
+  # follow GIT_BASE the way callers already assume it does.
+  git -C "${dir}" remote set-url origin "${GIT_BASE}/$1.git"
   if [ "$(git -C "${dir}" rev-parse HEAD 2>/dev/null || true)" = "${sha}" ]; then
     return 0
   fi
   echo "    fetching $1@${sha:0:12}"
-  git -C "${dir}" fetch -q --depth 1 origin "${sha}"
+  # A BARE-SHA want is not universally served. GitHub refuses it unless the repo
+  # enables uploadpack.allowReachableSHA1InWant, answering
+  #   fatal: remote error: upload-pack: not our ref <sha>
+  # EVEN WHEN the sha is the tip of main (verified: git ls-remote showed the exact
+  # pinned sha on refs/heads/main while this fetch failed). That broke the whole
+  # bootstrap — and with it every Java image, i.e. the local mesh could not build
+  # at all (operator report 2026-08-14).
+  #
+  # So: try the cheap shallow SHA fetch, and fall back to fetching the branches
+  # and checking the pinned sha out of them. The fallback is NOT shallow on
+  # purpose — a --depth 1 branch fetch only carries each tip, so a pin that is
+  # not currently a tip would still be missing, which is exactly the case a pin
+  # exists to survive.
+  if ! git -C "${dir}" fetch -q --depth 1 origin "${sha}" 2>/dev/null; then
+    echo "    (bare-sha fetch refused by the server — fetching refs instead)"
+    # The refused attempt can leave the clone SHALLOW, and a plain ref fetch into
+    # a shallow clone still lacks the pinned commit's tree ("fatal: unable to read
+    # tree"). Deepen when shallow — including a clone left shallow by an EARLIER
+    # failed run, which is why this tests the repo's state rather than this run's.
+    if [ "$(git -C "${dir}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+      git -C "${dir}" fetch -q --tags --unshallow origin '+refs/heads/*:refs/remotes/origin/*' \
+        || git -C "${dir}" fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+    else
+      git -C "${dir}" fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+    fi
+  fi
   git -C "${dir}" checkout -q --detach "${sha}"
 }
 
