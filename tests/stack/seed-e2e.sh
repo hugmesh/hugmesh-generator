@@ -586,12 +586,28 @@ onboard_persona() {  # <username>
 # (flag-off) seed die at leg 3 with "mastodon_open_registrations: command not
 # found".
 # registrations_mode is a DB Setting with no tootctl reader, so go through Rails.
+# MASTODON_CTR is only assigned inside the social-tier branch above, but these
+# helpers are called unconditionally (leg 1c onboards personas on ANY stack).
+# Under `set -u` that made a NON-SOCIAL stack die with
+#   seed-e2e.sh: line 590: MASTODON_CTR: unbound variable
+# which aborted the WHOLE seed — so registration stage 2 never ran for anyone and
+# every platform action 403'd afterwards, with the failure pointing at Mastodon
+# rather than at the seed it killed (hit live 2026-08-14 on a freshly rebuilt
+# stack). Default it to empty and treat "no container" as "nothing to do": a
+# stack without Mastodon has no Mastodon registrations to open.
+: "${MASTODON_CTR:=}"
+
 mastodon_registrations_mode() {
+  [ -n "${MASTODON_CTR}" ] || { printf ''; return 0; }
   docker exec "${MASTODON_CTR}" bin/rails runner 'print Setting.registrations_mode' 2>/dev/null \
     | tr -d '[:space:]' || true
 }
 
 mastodon_open_registrations() {
+  if [ -z "${MASTODON_CTR}" ]; then
+    log "mastodon not in this stack — skipping registrations (bring it up with SOCIAL=1)"
+    return 0
+  fi
   local mode
   mode="$(mastodon_registrations_mode)"
   # The previous check was `case "$(tootctl settings registrations)" in *open*)`,
