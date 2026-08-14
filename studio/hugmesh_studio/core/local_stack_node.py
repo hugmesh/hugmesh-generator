@@ -114,6 +114,7 @@ class LocalStackNode:
                  with_tor: bool = False, with_phpbb: bool = False,
                  with_akkoma: bool = False, with_anubis: bool = False,
                  with_games: bool = False, with_tts: bool = False,
+                 with_poisoner: bool = False,
                  with_egress_vpn: bool = False, egress_vpn_conf: str = "",
                  idp: str = "casdoor",
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
@@ -141,6 +142,11 @@ class LocalStackNode:
         # specs/cluster/manifests/edge-ai-tts/image). Was a dead toggle until
         # 2026-08-14: the row existed but nothing exported the env.
         self.with_tts = with_tts
+        # POISONER=1 -> `--profile media-poisoner` AND the user-bff's four
+        # media.poisoning.* env knobs (Makefile STACK_POISONER_ENV). The BFF
+        # ships the cloak DARK, so BOTH halves are required — with only the
+        # worker, the 'AI media cloak' control still renders unavailable.
+        self.with_poisoner = with_poisoner
         # EGRESS_VPN=1 + EGRESS_VPN_CONF -> STACK_EGRESS_FLAGS adds the
         # compose.egress-vpn.yaml overlay + profile. Deliberately NO raise here on
         # a missing conf: the plan preview constructs this node mid-selection (a
@@ -431,6 +437,7 @@ class LocalStackNode:
         env["GAMES"] = "1" if self.with_games else ""
         env["ANUBIS"] = "1" if self.with_anubis else ""
         env["TTS"] = "1" if self.with_tts else ""
+        env["POISONER"] = "1" if self.with_poisoner else ""
         env["EGRESS_VPN"] = "1" if self.with_egress_vpn else ""
         if self.with_egress_vpn and self.egress_vpn_conf:
             # abspath: the Makefile $(abspath) would resolve a relative path

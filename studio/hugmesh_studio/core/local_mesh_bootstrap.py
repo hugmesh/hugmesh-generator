@@ -52,7 +52,9 @@ from .local_services import (
     PROFILE_EDGE_AI_TTS, PROFILE_EGRESS_VPN, PROFILE_GAMES, PROFILE_PHPBB,
     PROFILE_SOCIAL, PROFILE_TOR,
     by_slug as by_local_slug, federation_env, federation_selection,
-    federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection)
+    federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection,
+    PROFILE_MEDIA_POISONER,
+)
 from .egress_conf import validate_egress_conf
 from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
 from .mesh_node import MeshNode
@@ -311,6 +313,15 @@ class LocalMeshBootstrapConfig:
             return False
         return profile_flags(self.services).get(PROFILE_EDGE_AI_TTS, False)
 
+    def effective_poisoner(self) -> bool:
+        """Same rule, for the `media-poisoner` profile (POISONER=1) — the AI
+        media cloak. Threading this is NOT optional bookkeeping: the exact same
+        link was missed for edge-ai-tts above, and the symptom is a checkbox
+        that reports success and brings up nothing."""
+        if self.services is None:
+            return False
+        return profile_flags(self.services).get(PROFILE_MEDIA_POISONER, False)
+
     def effective_egress_vpn(self) -> bool:
         """Same rule, for the `egress-vpn` profile (EGRESS_VPN=1 +
         EGRESS_VPN_CONF=<path> -> STACK_EGRESS_FLAGS)."""
@@ -420,6 +431,7 @@ class LocalMeshBootstrap:
                               with_games=self.cfg.effective_games(),
                               with_anubis=self.cfg.effective_anubis(),
                               with_tts=self.cfg.effective_tts(),
+                              with_poisoner=self.cfg.effective_poisoner(),
                               with_egress_vpn=self.cfg.effective_egress_vpn(),
                               egress_vpn_conf=self.cfg.egress_vpn_conf.strip(),
                               idp=self.cfg.idp,
