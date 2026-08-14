@@ -1137,6 +1137,28 @@ lint:x86-kernel-net-symbols:
   script:
     - bash tests/scripts/test-x86-kernel-net-symbols.sh
 
+# LSM posture honesty across all 10 device builders. The kernel does not diagnose an
+# `lsm=` name whose module is absent — it initializes a SHORTER stack and boots on,
+# silently — so `yama` and `bpf` sat in CONFIG_LSM, in specs-x86/etc/default/grub, in
+# the generated grub.cfg and in the SIGNED UKI for months while the running kernel had
+# neither (console.log: asked lsm=lockdown,yama,selinux,bpf, got
+# "LSM: initializing lsm=lockdown,capability,selinux"). The old build guard string-
+# matched CONFIG_LSM and the old boot-verify grepped /proc/cmdline for the word
+# "lockdown" — both graded the image's claim about itself. This offline lint asserts
+# (1) every name in a fragment's CONFIG_LSM has its enabling CONFIG_* in that same
+# fragment, (2) each board's boot cmdline asks for exactly what the fragment builds
+# (lsm= AND lockdown=, both directions), (3) every builder's guard is fail-closed and
+# DERIVES its symbols from CONFIG_LSM, (4) the x86 grub cmdline (whose consumers all
+# use a silent `${VAR:-short}` fallback) carries and asserts the full hardening set,
+# and (5) the QEMU launchers do not -append a posture the image does not have. Cheap;
+# no kernel tree, no privileged runner.
+lint:lsm-posture-honesty:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-lsm-posture-honesty.sh
+
 # Shell-injection remediation regression suite. Runs the fail-closed identity /
 # path / manifest validators added by the shell-injection hardening (build-x86 /
 # rpi5 / frite, gen-keystores, generate-brand-repos, provision.sh) against

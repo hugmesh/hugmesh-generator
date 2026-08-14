@@ -1986,7 +1986,31 @@ else
         for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
-        grep -q '^CONFIG_LSM="yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux,bpf)"; exit 1; }
+        grep -q '^CONFIG_LSM="yama,selinux"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux)"; exit 1; }
+        # ...and every NAME in that string must have its module COMPILED IN. The
+        # string-only assert above is structurally blind to how this actually
+        # failed on the fleet: the kernel does not diagnose an LSM name it cannot
+        # resolve, it initializes a SHORTER stack and boots on. x86 and the Pi
+        # both shipped lsm=lockdown,yama,selinux,bpf while dmesg reported
+        # "LSM: initializing lsm=lockdown,capability,selinux". Derive the required
+        # symbols FROM the string, so a name can never outlive its module here
+        # either. Kept IDENTICAL to the x86/rpi5 mirrors.
+        for _l in $(sed -n 's/^CONFIG_LSM="\(.*\)"$/\1/p' .config | tr ',' ' '); do
+            case "${_l}" in
+                capability) continue ;;                      # always built in with CONFIG_SECURITY
+                lockdown)   _sym=CONFIG_SECURITY_LOCKDOWN_LSM ;;
+                yama)       _sym=CONFIG_SECURITY_YAMA ;;
+                selinux)    _sym=CONFIG_SECURITY_SELINUX ;;
+                bpf)        _sym=CONFIG_BPF_LSM ;;
+                apparmor)   _sym=CONFIG_SECURITY_APPARMOR ;;
+                loadpin)    _sym=CONFIG_SECURITY_LOADPIN ;;
+                safesetid)  _sym=CONFIG_SECURITY_SAFESETID ;;
+                landlock)   _sym=CONFIG_SECURITY_LANDLOCK ;;
+                integrity)  _sym=CONFIG_INTEGRITY ;;
+                *) err "CONFIG_LSM names '${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
+            esac
+            grep -q "^${_sym}=y$" .config || { err "CONFIG_LSM names '${_l}' but ${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
+        done
         # Refuse to ship a kernel that silently lost LUKS2/dm-crypt support for
         # --encrypt-root builds (CONFIG_MD/BLK_DEV_DM/DM_CRYPT depend on each other
         # transitively — a --defconfig override lacking CONFIG_MD would otherwise

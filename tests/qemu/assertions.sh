@@ -61,11 +61,45 @@ echo "-- tooling --"
 check "jq present (JSON provisioning)"            'command -v jq'
 
 echo "-- kernel hardening --"
-# Lockdown LSM must be active (integrity or higher); this prevents /dev/mem writes,
-# unsigned module loading, etc. On QEMU we pass lockdown=integrity on the cmdline.
-check "kernel lockdown active (integrity|confidentiality)" \
-    '[ -f /sys/kernel/security/lockdown ] && grep -qE "^(integrity|confidentiality)" /sys/kernel/security/lockdown 2>/dev/null || \
-     cat /proc/cmdline 2>/dev/null | grep -q lockdown'
+# THE LSM STACK THE IMAGE ASKED FOR MUST BE THE ONE THE KERNEL IS RUNNING.
+#
+# The kernel does not diagnose an lsm= name it cannot resolve. It initializes a
+# SHORTER stack and boots on, silently. That is how two LSMs rode the whole fleet
+# as decoration: the 2026-08-14 x86 and Pi images both booted
+#   Command line: ... lsm=lockdown,yama,selinux,bpf lockdown=integrity ...
+#   LSM: initializing lsm=lockdown,capability,selinux
+# (out/qemu-runs/runs/newbuild2_x86-pki/launch/console.log:11,:181 and
+#  out/qemu-runs/runs/rpi5_pki/launch/console.log:79) because CONFIG_SECURITY_YAMA
+# and CONFIG_BPF_LSM were never compiled in. The old lockdown check could not see
+# it — and could not see much else either: it was an OR whose right arm passed on
+# the mere presence of the word "lockdown" in /proc/cmdline, i.e. on the image's
+# own claim about itself. Ask the kernel instead. /sys/kernel/security/lsm is its
+# answer, and every name the cmdline requested has to appear in it.
+_lsm_req="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^lsm=//p' | tr ',' ' ')"
+_lsm_live="$(cat /sys/kernel/security/lsm 2>/dev/null || true)"
+_lsm_missing=""
+for _l in ${_lsm_req}; do
+    case ",${_lsm_live}," in *",${_l},"*) ;; *) _lsm_missing="${_lsm_missing} ${_l}" ;; esac
+done
+check "every LSM the cmdline requests is initialized (asked:${_lsm_req:-<none>} live:${_lsm_live:-<none>})" \
+    '[ -n "${_lsm_req}" ] && [ -n "${_lsm_live}" ] && [ -z "${_lsm_missing}" ]'
+# Lockdown (integrity or higher) prevents /dev/mem writes, unsigned module loading,
+# kprobe redirection. It is requested by x86 + rpi5 only: the 8 ARM board images
+# ship no lockdown= in cmdline.base and no CONFIG_SECURITY_LOCKDOWN_LSM in their
+# fragments, so asserting it unconditionally would only ever grade the harness's
+# own -append literal. Assert it where the image ASKS for it, from the kernel's
+# report — never from the cmdline word, which is the claim under test.
+_lockdown_req="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^lockdown=//p')"
+if [ -n "${_lockdown_req}" ]; then
+    # securityfs marks the active level in brackets ("none [integrity] confidentiality");
+    # tolerate a leading-token spelling too, and fall back to the kernel's own
+    # initialized-LSM list, which is still real evidence rather than self-report.
+    check "kernel lockdown active (requested ${_lockdown_req})" \
+        '[ -f /sys/kernel/security/lockdown ] && grep -qE "(^|\[)(integrity|confidentiality)" /sys/kernel/security/lockdown 2>/dev/null || \
+         grep -qw lockdown /sys/kernel/security/lsm 2>/dev/null'
+else
+    ok "kernel lockdown (skipped — this image requests none; lockdown is x86 + rpi5 only)"
+fi
 # SELinux must be enforcing (provision_selinux sets it after first-boot relabel).
 # In test we accept permissive (SELinux not yet enforcing after relabel under QEMU).
 check "SELinux loaded (enforcing or permissive)" \

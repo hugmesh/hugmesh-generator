@@ -252,9 +252,40 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ── The board's OWN security posture, read from its cmdline.base ──────────────
+# We boot with -kernel/-append, so this string REPLACES the image's cmdline
+# entirely. That makes a hardcoded posture here actively misleading: this launcher
+# used to append `lsm=lockdown,yama,selinux,bpf lockdown=integrity` for ALL eight
+# non-Pi boards, none of which ships lockdown in its cmdline.base or builds
+# CONFIG_SECURITY_LOCKDOWN_LSM. Every in-guest LSM/lockdown assertion was therefore
+# grading the harness's own literal instead of the image — it could not fail.
+# Take the security tokens from the board's real cmdline.base; root=/console= stay
+# QEMU-specific below because -M virt has neither the board's storage nor its UART.
+specs_dir_for() {
+    case "$1" in
+        frite)          echo "specs-frite" ;;
+        jetson)         echo "specs-jetson" ;;
+        orangepi5)      echo "specs-orangepi5" ;;
+        orangepizero2)  echo "specs-orangepi-zero2" ;;
+        orangepizero2w) echo "specs-orangepi-zero2w" ;;
+        orangepizero3)  echo "specs-orangepi-zero3" ;;
+        orangepi3-lts)  echo "specs-orangepi3-lts" ;;
+        orangepi4-lts)  echo "specs-orangepi4-lts" ;;
+        *)              echo "" ;;
+    esac
+}
+BOARD_CMDLINE_BASE="${REPO_DIR}/$(specs_dir_for "${PLATFORM}")/boot/cmdline.base"
+[ -f "${BOARD_CMDLINE_BASE}" ] \
+    || die "no cmdline.base for platform=${PLATFORM} (looked in ${BOARD_CMDLINE_BASE}) — refusing to boot with a hardcoded security posture the image may not have"
+LSM_APPEND="$(tr ' ' '\n' < "${BOARD_CMDLINE_BASE}" \
+    | grep -E '^(lsm=|lockdown=|selinux=|audit=)' | tr '\n' ' ' | sed 's/ *$//')"
+[ -n "${LSM_APPEND}" ] \
+    || die "${BOARD_CMDLINE_BASE} carries no lsm=/selinux=/audit= tokens — the image has no asserted security posture to reproduce"
+info "board security posture from cmdline.base: ${LSM_APPEND}"
+
 # ── Kernel cmdline: ext4 root on vda2, PL011/8250 console ─────────────────────
 CMDLINE="root=${ROOT_PART} rootfstype=ext4 rw rootwait console=ttyAMA0,115200 net.ifnames=0 \
-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1 cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
+${LSM_APPEND} cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
 systemd.unified_cgroup_hierarchy=1 slab_nomerge init_on_alloc=1 randomize_kstack_offset=on"
 [ -n "${EXTRA_APPEND}" ] && CMDLINE="${CMDLINE} ${EXTRA_APPEND}"
 
