@@ -122,11 +122,11 @@ spec:
             #
             # SYSTEMS side — the in-cluster systems Casdoor (org "hugmesh"). Its
             # JWKS also backs the actions resource server (application.yml issuer-uri
-            # defaults to ${CASDOOR_SYSTEMS_URL}).
-            - { name: CASDOOR_SYSTEMS_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
-            - { name: CASDOOR_SYSTEMS_ORG, value: "hugmesh" }
-            - { name: CASDOOR_SYSTEMS_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientId } } }
-            - { name: CASDOOR_SYSTEMS_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientSecret } } }
+            # defaults to ${CASDOOR_PLATFORM_URL}).
+            - { name: CASDOOR_PLATFORM_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_PLATFORM_ORG, value: "hugmesh" }
+            - { name: CASDOOR_PLATFORM_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientId } } }
+            - { name: CASDOOR_PLATFORM_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientSecret } } }
             # GAMES side — the SEPARATE in-cluster games Casdoor (org "threewizards").
             - { name: CASDOOR_GAMES_URL, value: "http://casdoor-games.hugmesh-games.svc.cluster.local:8000" }
             - { name: CASDOOR_GAMES_ORG, value: "threewizards" }

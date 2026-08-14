@@ -12,7 +12,7 @@
 #
 # Security model: an OAuth2 RESOURCE SERVER for inbound (CASDOOR_ISSUER_URI,
 # JWKS auto-discovered), PLUS one outbound identity of its own: a Casdoor
-# client-credentials client (APP_CASDOOR_SYSTEMS_*) minting the ROLE_SERVICE
+# client-credentials client (APP_CASDOOR_PLATFORM_*) minting the ROLE_SERVICE
 # bearer for user-bff's /bff/user/internal/mesh-devices — presented together
 # with this pod's mTLS client cert (user-bff terminates client-auth=need).
 apiVersion: apps/v1
@@ -140,12 +140,12 @@ spec:
             # Client id/secret are ESO-synced (Secret mesh-bff-casdoor-client —
             # provisioned manually in Casdoor alongside the role grant; see
             # external-secrets/mesh-bff-externalsecrets.yaml).
-            - name: APP_CASDOOR_SYSTEMS_BASE_URL
+            - name: APP_CASDOOR_PLATFORM_BASE_URL
               value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
-            - name: APP_CASDOOR_SYSTEMS_CLIENT_ID
+            - name: APP_CASDOOR_PLATFORM_CLIENT_ID
               valueFrom:
                 secretKeyRef: { name: mesh-bff-casdoor-client, key: client_id }
-            - name: APP_CASDOOR_SYSTEMS_CLIENT_SECRET
+            - name: APP_CASDOOR_PLATFORM_CLIENT_SECRET
               valueFrom:
                 secretKeyRef: { name: mesh-bff-casdoor-client, key: client_secret }
             # Config datastore: the mesh_node_directory + mesh_room tables. The app's

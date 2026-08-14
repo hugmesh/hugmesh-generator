@@ -1031,8 +1031,8 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-actions
     environment:
       SPRING_PROFILES_ACTIVE: casdoor
-      CASDOOR_SYSTEMS_URL: "http://casdoor:8000"
-      # hugmesh-actions binds its resource-server issuer to CASDOOR_SYSTEMS_URL,
+      CASDOOR_PLATFORM_URL: "http://casdoor:8000"
+      # hugmesh-actions binds its resource-server issuer to CASDOOR_PLATFORM_URL,
       # which must STAY in-DNS (it doubles as the Casdoor API base). But Casdoor
       # stamps iss from the REQUEST origin, so tokens minted through the
       # browser/host-facing localhost:8000 carry that iss and every bearer call
@@ -1042,9 +1042,9 @@ services:
       # service's CASDOOR_ISSUER_URI/CASDOOR_JWKS_URI pair encodes.
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: "http://casdoor:8000/.well-known/jwks"
-      CASDOOR_SYSTEMS_ORG: hugmesh
-      CASDOOR_SYSTEMS_CLIENT_ID: dev-systems-client
-      CASDOOR_SYSTEMS_CLIENT_SECRET: dev-systems-secret
+      CASDOOR_PLATFORM_ORG: hugmesh
+      CASDOOR_PLATFORM_CLIENT_ID: dev-systems-client
+      CASDOOR_PLATFORM_CLIENT_SECRET: dev-systems-secret
       CASDOOR_GAMES_URL: "http://casdoor:8000"
       CASDOOR_GAMES_ORG: threewizards
       CASDOOR_GAMES_CLIENT_ID: dev-games-client
