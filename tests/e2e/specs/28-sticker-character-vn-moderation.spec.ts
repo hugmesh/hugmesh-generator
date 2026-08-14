@@ -1,6 +1,6 @@
 import { test, expect, request } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
-import { LOGIN_PASSWORD } from './helpers';
+import { SUPERADMIN_USERNAME, personaPassword } from './helpers';
 import { tags } from './report-tags';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -75,7 +75,9 @@ const BOGUS_ID = '00000000-0000-0000-0000-000000000000';
  *  cookie into THIS request context's jar (no bearer token exposed). Mirrors the
  *  loginAs in spec 13/17. Every seeded persona uses the deterministic e2e password. */
 async function loginAs(api: APIRequestContext, username: string): Promise<void> {
-  const r = await api.post('/bff/login', { data: { username, password: LOGIN_PASSWORD } });
+  // personaPassword, not LOGIN_PASSWORD: the superadmin's password is the minted
+  // E2E_SUPERADMIN_PASSWORD on a studio-bootstrapped mesh (2026-08-14 failure).
+  const r = await api.post('/bff/login', { data: { username, password: personaPassword(username) } });
   expect(r.status(), `native login ${username}`).toBe(200);
 
   // ONBOARD (registration STAGE 2) — the same fix spec 29 already carries.
@@ -202,7 +204,7 @@ test.describe('28 GROUP A — sticker/character/VN surfaces that EXIST today', (
       // every authenticated principal regardless of their Casdoor role claims, so
       // hasRole('USER') is really an "any authenticated user" floor here. The ONLY
       // DENY is anonymous (401, asserted above).
-      for (const role of ['e2e-mod', 'e2e-superadmin']) {
+      for (const role of ['e2e-mod', SUPERADMIN_USERNAME]) {
         const api = await loggedIn(baseURL, role);
         const g = await api.get('/bff/user/character/stickers');
         expect(g.status(), `${role} is unconditionally floored to ROLE_USER -> reaches the sticker surface`).toBe(200);

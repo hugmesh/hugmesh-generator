@@ -2,7 +2,8 @@ import { Page, expect, request } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { SYSTEMS_SEED_USERS, passwordFor } from './rbac-roles';
+import { SUPERADMIN_USERNAME, SYSTEMS_SEED_USERS, passwordFor } from './rbac-roles';
+export { SUPERADMIN_USERNAME };
 import type { SystemsRole } from './rbac-roles';
 
 export const SHOTS = path.resolve(process.env.SNAP_SHOTS || 'screenshots');
@@ -115,6 +116,29 @@ export async function apiContext(baseUrl: string | undefined): Promise<APIReques
  * as a native Casdoor account (username = the persona handle) with this password.
  */
 export const LOGIN_PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-pass';
+
+/**
+ * The SUPERADMIN identity is the one persona whose login handle is not fixed:
+ * a Studio-bootstrapped mesh seeds it under the operator's minted username
+ * (seed-e2e.sh reads CASDOOR_SUPERADMIN_USERNAME; the terminal lane defaults to
+ * 'e2e-superadmin') with the minted E2E_SUPERADMIN_PASSWORD. Specs MUST use
+ * these instead of literals, or they 401 on every studio-bootstrapped mesh —
+ * exactly the spec-28 failure of 2026-08-14.
+ */
+/**
+ * Per-persona password resolution, mirroring seed-e2e.sh persona_password():
+ * the persona's own E2E_<FOLDED>_PASSWORD env (non-alphanumerics fold to '_',
+ * so 'e2e-mod' -> E2E_MOD_PASSWORD) -> shared LOGIN_PASSWORD. The superadmin's
+ * env is pinned to E2E_SUPERADMIN_PASSWORD whatever its username (the seed
+ * render pins the same passwordEnv on the persona).
+ */
+export function personaPassword(username: string): string {
+  if (username === SUPERADMIN_USERNAME) {
+    return process.env.E2E_SUPERADMIN_PASSWORD ?? LOGIN_PASSWORD;
+  }
+  const folded = username.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  return process.env[`${folded}_PASSWORD`] ?? LOGIN_PASSWORD;
+}
 
 // ── platform-access personas (who may drive Matrix / Mastodon at all) ─────────
 /**

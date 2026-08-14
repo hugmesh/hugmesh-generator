@@ -708,7 +708,8 @@ class LocalStackNode:
             problems.append(f"e2e personas not seeded: {why}")
         return problems
 
-    def run_e2e(self, on_line=None, cancel=None) -> tuple[bool, str]:
+    def run_e2e(self, extra_env: dict[str, str] | None = None,
+                on_line=None, cancel=None) -> tuple[bool, str]:
         """`make stack-e2e` — the Playwright suite (tests/e2e) against the
         RUNNING local stack's TLS front door (SNAP_BASE_URL=web_url's port).
         Streams like the other long verbs; Cancel kills the whole process
@@ -721,8 +722,15 @@ class LocalStackNode:
             return False, "\n".join(problems)
         report_rel = os.path.join(
             "test-results", time.strftime("studio-%Y%m%d-%H%M%S"))
+        # extra_env bridges the mesh's real superadmin identity
+        # (CASDOOR_SUPERADMIN_USERNAME + the minted E2E_SUPERADMIN_PASSWORD)
+        # into the suite — without it every superadmin login 401s on a
+        # studio-bootstrapped mesh (spec-28 failure, 2026-08-14). Values ride
+        # the subprocess env, never argv.
+        env = {"SNAP_REPORT_DIR": report_rel}
+        env.update(extra_env or {})
         ok, msg = self._make("stack-e2e", timeout=E2E_TIMEOUT_S,
-                             extra_env={"SNAP_REPORT_DIR": report_rel},
+                             extra_env=env,
                              on_line=on_line, cancel=cancel)
         summary_path = os.path.join(self.generator_dir, "tests", "e2e",
                                     report_rel, "summary.json")
