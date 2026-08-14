@@ -1,0 +1,66 @@
+# compose.media-poisoner.yaml — the AI-CLOAK worker (hugmesh-media-poisoner)
+# behind its OWN compose profile, DEFAULT-OFF:  `make stack-up POISONER=1`.
+#
+# WHY THIS FILE EXISTS
+# The AI media cloak has a full UI (hugmesh-user-ui preferences: "AI media cloak",
+# a default-mode select) and a full BFF surface (user-bff-api media-proxy,
+# poison-before-ingest, the media_poison_decision audit table), but the control
+# rendered permanently UNAVAILABLE on the local mesh — the operator enabled every
+# AI service in the Studio and it stayed greyed (report 2026-08-14). Two causes,
+# both fixed here and in the Makefile knob:
+#   1. there was no compose service for the worker AT ALL (it existed only as a
+#      MANUAL-sync ArgoCD Application, specs/cluster/apps/51-media-poisoner.yaml),
+#      so the BFF's /health capability probe had nothing to reach; and
+#   2. the BFF ships the feature DARK (MEDIA_POISONING_ENABLED defaults false,
+#      application.yml), so even with a worker present it stayed off.
+#
+# ── WHERE THE IMAGE COMES FROM ──
+# Built from the IN-REPO worker source specs/cluster/manifests/media-poisoner/worker
+# — the same source the cluster image is built from. It cannot be pulled: the
+# kustomization rewrites the ref to the in-mesh registry, which does not resolve
+# off-cluster.
+#
+# ── WHY THIS RUNS ON A WORKSTATION AT ALL ──
+# The cluster Application is GPU-gated (nodeSelector arch=amd64 + compute=gpu), but
+# that gate is about the HEAVY tier. The DEFAULT image is deliberately the lean,
+# CPU-portable baseline: requirements.txt is fastapi + uvicorn + python-multipart +
+# pillow with NO torch, and the worker's own Dockerfile says it "runs on any node
+# (including a CPU-only test node), so the BFF round-trip survival gate is
+# exercisable end-to-end without a GPU". poison.py picks its device in the order
+# override -> CUDA -> ROCm -> CPU and reports the choice on /health, so on this box
+# it comes up `cpu` and honestly says so rather than pretending to be the GPU tier.
+#
+# The BFF's fallback-mode knob (MEDIA_POISONING_FALLBACK_MODE, default `skip`)
+# governs what happens when the heavy tier is absent; with this worker up, uploads
+# get the reduced-strength CPU cloak instead of being forwarded uncloaked.
+#
+# No published port: the user-bff dials http://hugmesh-media-poisoner:8080
+# in-network, exactly as the cluster Deployment's Service name is dialled.
+name: hugmesh-local
+
+services:
+  hugmesh-media-poisoner:
+    platform: linux/amd64
+    profiles: ["media-poisoner"]
+    build:
+      context: ../../specs/cluster/manifests/media-poisoner/worker
+    # Mirror the pod hardening (manifests/media-poisoner/deployment.yaml): the
+    # image bakes a non-root USER and the app writes nothing to disk (the
+    # perturbation is in-memory), so a read-only rootfs costs nothing and a
+    # writable /tmp is all uvicorn needs.
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      # Let the worker discover its own device. Set POISON_DEVICE=cpu to pin it
+      # (the override branch in poison.py:74) if a host GPU is present but should
+      # not be used by the local mesh.
+      POISON_VARIANT: "${POISON_VARIANT:-lean}"
+    healthcheck:
+      # /health is the SAME endpoint the BFF capability-probes, so a healthy
+      # container and a usable cloak are the same statement. The slim image ships
+      # no curl/wget; python is the one guaranteed client.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s

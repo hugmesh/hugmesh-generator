@@ -449,6 +449,10 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
     "phpbb": "Web forum — threaded boards at forum.<domain>, SSO-linked to mesh "
              "accounts.",
     "games": "Game Studio + the games.<domain> app store, with its own OIDC issuer.",
+    "media-poisoner": "AI media cloak — perturbs an opted-in image before it is "
+                      "posted, so a scraped copy degrades a training run instead "
+                      "of feeding it. Turns on the 'AI media cloak' control in "
+                      "user preferences.",
     "owncast": "Self-hosted live video streaming — one channel, no third-party CDN.",
     "tube": "Peer-to-peer video hosting and playback (PeerTube-style channels).",
     "character-studio": "Character creator + VN chat remote at /character-studio.",
@@ -475,6 +479,9 @@ SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Media & play", ("owncast", "tube", "games")),
     ("Characters & avatars", ("character-studio", "character-forge", "edge-ai-tts")),
     ("Network & access", ("tor", "egress-vpn", "anubis", "workloadConsole")),
+    # The AI cloak sits under privacy rather than "Characters & avatars": it is a
+    # protection applied to what a person UPLOADS, not a thing they create with.
+    ("Privacy & anti-scraping", ("media-poisoner",)),
 )
 
 # --person-role client-identity picker (FD-08). The x86 builder honours --person-role/

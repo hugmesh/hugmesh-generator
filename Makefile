@@ -1210,6 +1210,26 @@ PHPBB           ?=
 AKKOMA          ?=
 # TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
 TTS             ?=
+# POISONER=1 — the AI MEDIA CLOAK worker (hugmesh-media-poisoner;
+# compose.media-poisoner.yaml, DEFAULT-OFF). Turning this on does BOTH halves,
+# which is the whole point of the knob: it starts the worker AND flips the
+# user-bff's media.poisoning.enabled, which ships DARK (application.yml
+# MEDIA_POISONING_ENABLED:false). With only one half the "AI media cloak" control
+# in the user preferences stays greyed out — exactly the state the operator hit
+# after enabling every AI service (report 2026-08-14).
+#
+# Runs CPU-only here: the worker's default image is the lean Pillow+numpy baseline
+# with no torch (its Dockerfile is explicit that it "runs on any node, including a
+# CPU-only test node"). /health then reports device `cpu`, and the cloak is the
+# reduced-strength tier rather than the GPU PGD one — real, and honestly labelled.
+#   make stack-up POISONER=1
+POISONER        ?=
+# The cloak mode applied to an opted-in upload, and what happens when the heavy
+# tier is unavailable. Defaults match the BFF's own (glaze / skip); with the
+# worker up, `light` is the useful fallback because there IS a CPU tier to fall
+# back TO — `skip` would forward the image UNCLOAKED.
+POISON_MODE     ?= glaze
+POISON_FALLBACK ?= light
 # Egress VPN for the local mesh (tests/stack/compose.egress-vpn.yaml): EGRESS_VPN=1
 # brings up a fail-closed WireGuard CLIENT container and attaches mastodon-sidekiq's
 # netns to it, so Mastodon's outbound federation egresses via the tunnel — the local
@@ -1295,7 +1315,14 @@ comma := ,
 # TenancyResourceServerConfig). Empty otherwise: every service stays
 # byte-identical single-issuer (the '=' ConditionalOnExpression never fires).
 STACK_BRAND_B_ENV := $(if $(strip $(BRAND_B)),APP_TENANCY_ISSUERS='$(CASDOOR_ISSUER)=default$(comma)$(BRANDB_CASDOOR)=brandb' APP_TENANCY_HOSTS='brandb.localtest.me=brandb' ,)
-STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_THEME_ENV) \
+# AI-cloak env threaded into the user-bff (see the POISONER knob above). Empty
+# unless POISONER=1, so the BFF keeps its shipped-dark defaults otherwise. The
+# worker URL is the compose service name — the same in-network dial the cluster
+# Deployment does via its Service name. MUST be defined ABOVE STACK_ENV: that is
+# a `:=` immediate assignment, so a variable referenced there but defined later
+# expands to EMPTY and the knob silently does nothing.
+STACK_POISONER_ENV := $(if $(strip $(POISONER)),MEDIA_POISONING_ENABLED='true' MEDIA_POISONING_WORKER_URL='http://hugmesh-media-poisoner:8080' MEDIA_POISONING_DEFAULT_MODE='$(POISON_MODE)' MEDIA_POISONING_FALLBACK_MODE='$(POISON_FALLBACK)' ,)
+STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_THEME_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
@@ -1318,7 +1345,7 @@ STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 STACK_ALT_PROFILE := $(if $(strip $(PHPBB)),--profile phpbb,) $(if $(strip $(AKKOMA)),--profile akkoma,)
 # Second-brand Casdoor (BRAND_B=1) — tests/stack/compose.brand-b.yaml. Also see
 # STACK_BRAND_B_ENV above: the same knob threads the multi-issuer registry.
-STACK_BRAND_B_PROFILE := $(if $(strip $(BRAND_B)),--profile brandb,) $(if $(strip $(TTS)),--profile edge-ai-tts,)
+STACK_BRAND_B_PROFILE := $(if $(strip $(BRAND_B)),--profile brandb,) $(if $(strip $(TTS)),--profile edge-ai-tts,) $(if $(strip $(POISONER)),--profile media-poisoner,)
 # Games WASM asset tier (compose.games.yaml). GAMES=1 -> `--profile games`.
 # Builds from the SIBLING ../hugmesh-games clone (GAMES_SRC overrides) — NOT
 # cloned by stack-clone. Threaded everywhere STACK_PROFILE is (see the
@@ -1456,14 +1483,14 @@ stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts
 	# whole mesh, so restarting left them unable to log in, post, or open the
 	# forum until a full re-seed. Containers and images still go; only the data
 	# survives, so `make stack-up` brings the same mesh back.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile egress-vpn down
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn down
 
 stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile egress-vpn down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn down -v
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -1475,7 +1502,7 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile egress-vpn down -v --rmi local --remove-orphans
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn down -v --rmi local --remove-orphans
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'

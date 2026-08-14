@@ -84,6 +84,9 @@ PROFILE_ANUBIS = "anubis"
 #   do not resolve off-mesh, and the container build is the repo's own pending
 #   spike, so the first TTS=1 bring-up IS that spike.
 PROFILE_EDGE_AI_TTS = "edge-ai-tts"
+#   media-poisoner -> the AI MEDIA CLOAK worker (POISONER=1). Built FROM SOURCE
+#   from specs/cluster/manifests/media-poisoner/worker.
+PROFILE_MEDIA_POISONER = "media-poisoner"
 #   egress-vpn -> STACK_EGRESS_FLAGS (EGRESS_VPN=1 + EGRESS_VPN_CONF=<abs path>):
 #   the fail-closed VPN client from tests/stack/compose.egress-vpn.yaml routing
 #   mastodon-sidekiq's federation egress. The conf (WireGuard .conf or OpenVPN
@@ -224,6 +227,25 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
                    "TTS=1 bring-up IS that spike and may surface build gaps. "
                    "Consumers keep their __HUG_VOICE_TTS__ flag dark until wired. "
                    "Needs a stack restart to change."),
+    LocalService(
+        slug="media-poisoner", mechanism=MECH_COMPOSE_PROFILE,
+        profile=PROFILE_MEDIA_POISONER,
+        default_on=False,
+        local_note="THE AI MEDIA CLOAK. Poisons an opted-in image before it is "
+                   "ingested by the homeserver, so a scraped copy degrades a "
+                   "training run. The UI (user preferences 'AI media cloak') and "
+                   "the whole BFF media-proxy already shipped; what was missing "
+                   "locally was the WORKER, which existed only as a MANUAL-sync "
+                   "cluster Application — so the control rendered permanently "
+                   "unavailable no matter how many AI services were enabled "
+                   "(operator report 2026-08-14). Enabling this starts the worker "
+                   "AND flips the BFF's media.poisoning.enabled, which ships dark; "
+                   "either half alone leaves the control greyed. BUILT FROM SOURCE "
+                   "(specs/cluster/manifests/media-poisoner/worker). CPU-ONLY here: "
+                   "the default image is the lean Pillow baseline with no torch, so "
+                   "/health reports device 'cpu' and the cloak is the "
+                   "reduced-strength tier, NOT the GPU PGD one. Needs a stack "
+                   "restart to change."),
     LocalService(
         slug="games", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_GAMES,
         # Registry agreement: optional-services.yaml ships games `default: off`,

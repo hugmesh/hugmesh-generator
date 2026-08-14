@@ -55,6 +55,10 @@ include:
   # /_remotes/wasm-fragment/** behind the fe-gateway. DEFAULT-OFF; builds from
   # the SIBLING hugmesh-games clone (GAMES_SRC), see compose.games.yaml.
   - path: compose.games.yaml
+  # AI media cloak (`--profile media-poisoner`, make stack-up POISONER=1): the
+  # hugmesh-media-poisoner worker the user-bff media-proxy poisons uploads
+  # through. DEFAULT-OFF; CPU-portable lean image, see compose.media-poisoner.yaml.
+  - path: compose.media-poisoner.yaml
 
 # x86_64 only — first-party images are amd64 (Temurin JRE / node-alpine / nginx).
 # On Docker Desktop for Windows this matches the default linux/amd64 engine.
@@ -968,6 +972,17 @@ services:
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
       APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://hugmesh-user-bff-api:8080/bff/auth/callback}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      # ── AI media cloak (poison-before-ingest) ──────────────────────────────
+      # Ships DARK, matching the BFF's own application.yml default: with no
+      # POISONER=1 these resolve to enabled=false, so the controller is mounted
+      # but inert and the user-preferences "AI media cloak" control renders
+      # unavailable. `make stack-up POISONER=1` sets all four (Makefile
+      # STACK_POISONER_ENV) AND starts the worker — BOTH halves are required, and
+      # having only one is exactly what left the control permanently greyed.
+      MEDIA_POISONING_ENABLED: ${MEDIA_POISONING_ENABLED:-false}
+      MEDIA_POISONING_WORKER_URL: ${MEDIA_POISONING_WORKER_URL:-http://hugmesh-media-poisoner:8080}
+      MEDIA_POISONING_DEFAULT_MODE: ${MEDIA_POISONING_DEFAULT_MODE:-glaze}
+      MEDIA_POISONING_FALLBACK_MODE: ${MEDIA_POISONING_FALLBACK_MODE:-skip}
       ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://hugmesh-admin-bff-api:8080}
       # Homeserver-token custody for the hsproxy (/bff/user/{matrix,mastodon}/**): app.hs-token.key
       # encrypts the brokered Matrix/Mastodon access tokens AT REST. Without a key the HsTokenCipher
