@@ -301,9 +301,10 @@ def test_services_table_offers_every_locally_runnable_slug(qapp):
     for slug in local_services.UNAVAILABLE_LOCALLY:
         assert slug not in dlg.service_boxes
         item = dlg.page._svc_items[slug]
-        assert item.text(localmesh_mod._LS_COL_MECH) == "not available here"
+        # lay-user copy (operator ask 2026-08-14): "disabled" + one plain sentence
+        assert item.text(localmesh_mod._LS_COL_MECH) == "disabled"
         assert item.text(localmesh_mod._LS_COL_DESC) == \
-            local_services.UNAVAILABLE_LOCALLY[slug]
+            f"Disabled — {local_services.UNAVAILABLE_LOCALLY[slug]}"
 
 
 def test_services_rows_state_which_mechanism_applies_them(qapp):

@@ -75,6 +75,12 @@ PROFILE_ANUBIS = "anubis"
 #   do not resolve off-mesh, and the container build is the repo's own pending
 #   spike, so the first TTS=1 bring-up IS that spike.
 PROFILE_EDGE_AI_TTS = "edge-ai-tts"
+#   egress-vpn -> STACK_EGRESS_FLAGS (EGRESS_VPN=1 + EGRESS_VPN_CONF=<abs path>):
+#   the fail-closed VPN client from tests/stack/compose.egress-vpn.yaml routing
+#   mastodon-sidekiq's federation egress. The conf (WireGuard .conf or OpenVPN
+#   .ovpn) comes from the page's file popup — core.egress_conf validates it with
+#   the same sniff rules the container entrypoint applies.
+PROFILE_EGRESS_VPN = "egress-vpn"
 
 # ── the seeder contract for the federation half ─────────────────────────────────
 # TODO(tests/stack/seed-e2e.sh): the seeder does not read these yet — another agent
@@ -220,27 +226,31 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
                    "placeholder. Needs a hugmesh-games checkout next to this "
                    "repo (GAMES_SRC overrides). Needs a stack restart to "
                    "change — it starts/stops a container."),
+    LocalService(
+        slug="egress-vpn", mechanism=MECH_COMPOSE_PROFILE, profile=PROFILE_EGRESS_VPN,
+        default_on=False,
+        # Graduated from UNAVAILABLE_LOCALLY (operator ask 2026-08-14): the page
+        # now carries the conf-path channel — checking the box pops a file picker
+        # and the box cannot stay checked without a valid conf (fail-closed at
+        # the surface, mirroring the container's own refusal).
+        local_note="Routes Mastodon's federation traffic through your own VPN. "
+                   "Checking this asks for your VPN provider's WireGuard (.conf) "
+                   "or OpenVPN (.ovpn) file. Needs a stack restart to change."),
 )
 
 # Slugs the shared catalogue carries that the LOCAL docker stack cannot run, each with
 # the reason the surface shows. Offering these as live toggles is the exact failure this
 # module exists to prevent: a checkbox that changes no bytes.
+# Reasons are ONE lay-user sentence (operator ask 2026-08-14: "just say disabled
+# and clean up language"): the row's visible text is "Disabled" + this sentence.
+# Technical whys live here as comments, not on the surface.
 UNAVAILABLE_LOCALLY: dict[str, str] = {
-
-
-    "egress-vpn": "needs a provider WireGuard .conf this checkbox cannot carry: the "
-                  "stack CAN route it — `make stack-up SOCIAL=1 EGRESS_VPN=1 "
-                  "EGRESS_VPN_CONF=<wg .conf>` runs a fail-closed WireGuard client "
-                  "container and tunnels mastodon-sidekiq's federation egress "
-                  "(tests/stack/compose.egress-vpn.yaml). The row goes live once a "
-                  "conf-path channel exists; until then only the terminal knob is honest.",
-
-    "workloadConsole": "first-party k8s pod console inside admin-bff (its only real "
-                       "driver is the fabric8 k8s client — no docker driver exists), so "
-                       "the compose stack has nothing for it to inspect. It runs for "
-                       "real only against the kind lane: make kind-up KIND_PROFILE=sso "
-                       "already lights its env via the committed admin-bff overlay, and "
-                       "apps/14-workload-console-rbac.yaml supplies the SA tokens.",
+    # admin-bff's pod console drives only the fabric8 k8s client — no docker
+    # driver exists, so the compose stack has nothing for it to inspect. It runs
+    # for real only against the kind lane (make kind-up KIND_PROFILE=sso; the
+    # committed admin-bff overlay + apps/14-workload-console-rbac.yaml wire it).
+    "workloadConsole": "Only works on a full Kubernetes cluster — this local mesh "
+                       "doesn't use one.",
 }
 
 # `wiki` is deliberately absent from core.config's catalogues: those mirror the node

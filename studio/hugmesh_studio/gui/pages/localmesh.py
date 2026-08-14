@@ -59,6 +59,7 @@ marks the running stage 'stopped' (neutral), never failed.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import types
@@ -67,6 +68,7 @@ from collections import deque
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
@@ -553,6 +555,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # federation_modules row can all be matched up by eye.
         self.service_boxes: dict[str, QtWidgets.QCheckBox] = {}
         self._svc_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        # The VPN conf backing the egress-vpn checkbox ("" = none picked yet).
+        self._egress_vpn_conf = ""
         for _title, _slugs in local_groups():
             gitem = QtWidgets.QTreeWidgetItem(self.services_table)
             gitem.setText(_LS_COL_NAME, _title)
@@ -566,14 +570,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 self._svc_items[_slug] = item
                 svc = local_service(_slug)
                 if svc is None:
-                    # Unavailable locally: the honest row. It states the mechanism as
-                    # "not available here" and carries the concrete reason, the same
-                    # register as this page's permanently-disabled "render locally"
-                    # card — never a live checkbox over a mechanism that is absent.
+                    # Unavailable locally: the honest row — never a live checkbox
+                    # over a mechanism that is absent. Copy is LAY-USER short
+                    # (operator ask 2026-08-14): "Disabled" + the map's one plain
+                    # sentence; the technical why lives beside the map entry.
                     why = UNAVAILABLE_LOCALLY[_slug]
-                    item.setText(_LS_COL_MECH, "not available here")
-                    item.setText(_LS_COL_DESC, why)
-                    item.setToolTip(_LS_COL_DESC, why)
+                    item.setText(_LS_COL_MECH, "disabled")
+                    item.setText(_LS_COL_DESC, f"Disabled — {why}")
+                    item.setToolTip(_LS_COL_DESC, f"Disabled — {why}")
                     grey = QtGui.QBrush(QtGui.QColor("#888888"))
                     for _c in (_LS_COL_NAME, _LS_COL_MECH, _LS_COL_DESC):
                         item.setForeground(_c, grey)
@@ -590,6 +594,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 # does not actually run (or unticked for something it does) is the
                 # same lie either way.
                 box.setChecked(_slug in default_selection())
+                if _slug == "egress-vpn":
+                    # This toggle needs a FILE to mean anything: a USER click pops
+                    # the conf picker (`clicked` never fires for programmatic
+                    # setChecked — the no-modal rule that keeps headless tests
+                    # alive), and _enforce_egress_conf unchecks a conf-less box at
+                    # every exit so it can never be LEFT checked while unusable.
+                    box.clicked.connect(self._egress_vpn_clicked)
                 self.services_table.setItemWidget(item, _LS_COL_ON, box)
                 self.service_boxes[_slug] = box
         # The two profile switches keep their historical attribute names because they
@@ -600,6 +611,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # wizard's services table was rebuilt to kill.
         self.social = self.service_boxes["tuwunel"]
         self.with_tor = self.service_boxes["tor"]
+        # egress-vpn status line: which conf backs the checkbox, or why it was
+        # unchecked. Inline, never a message box (no-modal rule).
+        self.egress_note = QtWidgets.QLabel("")
+        self.egress_note.setWordWrap(True)
+        self.egress_note.setVisible(False)
+        svl.addWidget(self.egress_note)
         lay.addWidget(svc_box)
 
         # Web login languages. NOT a desktop-theming knob (those are x86-only and
@@ -838,6 +855,56 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             login_server=self.login_server.text().strip(),
         )
 
+    # ── egress-vpn conf channel (operator ask 2026-08-14) ────────────────────────
+    def _egress_vpn_clicked(self, checked: bool) -> None:
+        """USER toggled the egress-vpn box (mouse/keyboard — `clicked` never fires
+        for programmatic setChecked, so no dialog can hang a headless test).
+        Checking demands a conf immediately; cancel/invalid mean the check does
+        not stand."""
+        if not checked:
+            self._egress_vpn_conf = ""
+            self.egress_note.setVisible(False)
+            return
+        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Pick your VPN provider's config file", "",
+            "VPN configs (*.conf *.ovpn);;All files (*)")
+        kind, err = validate_egress_conf(path)
+        if err:
+            self.service_boxes["egress-vpn"].setChecked(False)
+            self._egress_vpn_conf = ""
+            self.egress_note.setStyleSheet("color: #c62828;")
+            self.egress_note.setText(f"Egress VPN stays off — {err}")
+            self.egress_note.setVisible(True)
+            self._refresh_plan()
+            return
+        self._egress_vpn_conf = path
+        self.egress_note.setStyleSheet("color: gray;")
+        self.egress_note.setText(
+            f"Egress VPN config: {os.path.basename(path)} ({kind}).")
+        self.egress_note.setVisible(True)
+        # the box's `toggled` already refreshed the plan BEFORE this handler ran
+        # (with no conf yet) — refresh again now the conf exists.
+        self._refresh_plan()
+
+    def _enforce_egress_conf(self) -> None:
+        """The exit gate: the box may not be LEFT checked without a valid conf
+        (the file may also have vanished since it was picked). Silent uncheck +
+        inline note — never a dialog (this runs from hideEvent and collectors)."""
+        box = self.service_boxes.get("egress-vpn")
+        if box is None or not box.isChecked():
+            return
+        _kind, err = validate_egress_conf(self._egress_vpn_conf)
+        if err:
+            box.setChecked(False)
+            self._egress_vpn_conf = ""
+            self.egress_note.setStyleSheet("color: #c62828;")
+            self.egress_note.setText(f"Egress VPN was turned OFF — {err}")
+            self.egress_note.setVisible(True)
+
+    def hideEvent(self, event) -> None:                       # noqa: N802 (Qt)
+        self._enforce_egress_conf()
+        super().hideEvent(event)
+
     def collect_services(self) -> tuple[str, ...]:
         """The ticked services, in the core catalogue's order (never widget order —
         the config, the plan checklist and the seeder env must all list them the same
@@ -846,6 +913,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         the untouched path is preserved by core instead — federation_env() exports
         nothing while the selection matches what the registry ships, and the two
         profile rows are the same two booleans this page always sent."""
+        # NO enforcement here: every box's `toggled` refreshes the plan preview
+        # through this method, so unchecking from here would revert a user's click
+        # BEFORE its `clicked` handler could open the conf dialog. The pending
+        # conf-less moment is covered by bootstrap.validate()'s blocking problem
+        # (shown in the plan) and _enforce_egress_conf at the real exits.
         return tuple(s for s in local_slugs()
                      if self.service_boxes[s].isChecked())
 
@@ -863,6 +935,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             social=self.social.isChecked(),
             with_tor=self.with_tor.isChecked(),
             services=self.collect_services(),
+            egress_vpn_conf=self._egress_vpn_conf,
             cluster_domain=self.boot_domain.text().strip(),
             auth_key=self.boot_auth_key.text().strip(),
             login_server=self.boot_login_server.text().strip(),
