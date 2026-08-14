@@ -12,7 +12,7 @@
 # NOT select it — it is a distinct app with its own policy here.
 #
 # EGRESS-VPN INTERACTION (optional): when egress-vpn is selected AND coturn is named
-# in an assignment, the reconcile agent adds snapdragon.systems/vpn-egress=true to
+# in an assignment, the reconcile agent adds hugmesh.net/vpn-egress=true to
 # the coturn pod and the egress-vpn-interaction NetworkPolicy tunnels its direct
 # egress through wg0. coturn works WITHOUT that label (public relay, not federated),
 # so the label is OPTIONAL — this policy always permits direct relay egress.
@@ -27,8 +27,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: coturn
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: coturn
 spec:
   podSelector:
     matchLabels:

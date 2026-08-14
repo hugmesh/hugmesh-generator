@@ -8,7 +8,7 @@
 # ingest gate, scripts/ingest-foreign-base.sh).
 #
 # SHIP-DARK BY DEFAULT. Nothing here opens anything until an operator DELIBERATELY
-# opts in by setting `snapdragon.systems/mesh-forge-exposed: "true"` (the default is
+# opts in by setting `hugmesh.net/mesh-forge-exposed: "true"` (the default is
 # "false"). Even then the exposure is:
 #   * TAILNET-ONLY — never the public internet. The NetworkPolicy below only admits
 #     the tailnet CIDR; forgejo stays ClusterIP (no LoadBalancer / public Ingress).
@@ -32,7 +32,7 @@ metadata:
   name: mesh-forge-exposure
   namespace: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/name: mesh-forge
 data:
   # THE OPT-IN. "false" => fully dark (this whole exposure is inert). Flip to "true"
@@ -56,7 +56,7 @@ metadata:
   name: mesh-forge-default-deny
   namespace: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/name: mesh-forge
 spec:
   podSelector:

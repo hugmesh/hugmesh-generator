@@ -10,7 +10,7 @@
 #      registry-verify.sh primitives + the baked registry-pub.ed25519),
 #   4. builds a pool-manifest and runs `provision.sh --pool` (FDE/LUKS reuse,
 #      mount the pool disk at poolPath),
-#   5. labels THIS node snapdragon.systems/local-path=true + CAS-patches the
+#   5. labels THIS node hugmesh.net/local-path=true + CAS-patches the
 #      local-path-config nodePathMap via kubectl.
 #
 # WHY a dedicated domain: today it runs as an UNCONFINED initrc domain. It needs

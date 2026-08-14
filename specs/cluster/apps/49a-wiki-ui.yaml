@@ -1,5 +1,5 @@
 # hugmesh-wiki-ui — the platform wiki Angular micro-frontend, federated into the
-# hugmesh.systems host. Frontend Pis. Talks to wiki-bff-api via the same-origin
+# hugmesh.net host. Frontend Pis. Talks to wiki-bff-api via the same-origin
 # /bff/wiki/** fe-gateway route.
 apiVersion: argoproj.io/v1alpha1
 kind: Application

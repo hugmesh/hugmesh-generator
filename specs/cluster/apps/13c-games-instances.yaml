@@ -34,7 +34,7 @@ metadata:
     # The installed flag here is mirrored from the games slug in the installed-services
     # ConfigMap (rendered from optional-services.yaml). Flipped on for a games cluster by
     # gate_optional_services (PR10).
-    snapdragon.systems/source-of-truth: specs/cluster/optional-services.yaml
+    hugmesh.net/source-of-truth: specs/cluster/optional-services.yaml
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
@@ -52,8 +52,8 @@ spec:
     metadata:
       name: "games-{{ .slug }}"
       labels:
-        app.kubernetes.io/part-of: hugmesh.systems
-        snapdragon.systems/games-instances: "{{ .slug }}"
+        app.kubernetes.io/part-of: hugmesh.net
+        hugmesh.net/games-instances: "{{ .slug }}"
     spec:
       project: default
       source:

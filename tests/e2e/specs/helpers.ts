@@ -14,7 +14,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
  * real hostname (the fe-gateway Ingress matches on Host) and hand Chromium
  * `SNAP_HOST_RESOLVER` so no /etc/hosts edit or sudo is needed. Node never sees
  * that flag, so anything Playwright sends from Node — `request.newContext()`,
- * `page.request` — dies on `getaddrinfo ENOTFOUND hugmesh.systems`.
+ * `page.request` — dies on `getaddrinfo ENOTFOUND hugmesh.net`.
  *
  * Verified, not assumed: BOTH Node-side context kinds fail this way, including
  * `page.request`, which is easy to mistake for browser-side because it shares the
@@ -23,7 +23,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
  * The fix is to dial the mapped IP and carry the hostname in the `Host` header,
  * which is what ingress-nginx routes on. Proven live on kind with its own control:
  *
- *     Host: hugmesh.systems  -> 401 from the BFF   (routed to the gateway)
+ *     Host: hugmesh.net  -> 401 from the BFF   (routed to the gateway)
  *     (no Host header)       -> 404 from nginx     (default backend; did not route)
  *
  * NO-OP WITHOUT THE FLAG. When SNAP_HOST_RESOLVER is unset — every compose run —
@@ -33,7 +33,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
  */
 /**
  * Parse Chromium's `--host-resolver-rules` syntax:
- * `"MAP hugmesh.systems 127.0.0.1, MAP *.hugmesh.systems 127.0.0.1"`.
+ * `"MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1"`.
  * Malformed entries are dropped rather than half-applied. Wildcards are kept
  * verbatim and matched by suffix in {@link mappedIp}.
  *

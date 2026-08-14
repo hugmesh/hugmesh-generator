@@ -13,7 +13,7 @@ import type { APIRequestContext } from '@playwright/test';
 // NOTE on identity (NATIVE login): the browser's only auth is the opaque httpOnly
 // `bff_session` cookie minted by POST /bff/login — no bearer token is ever exposed
 // to the caller. The mock grants the admin role IFF the login username is in
-// ADMIN_EMAILS (default admin@hugmesh.systems); a real Casdoor would carry the
+// ADMIN_EMAILS (default admin@hugmesh.net); a real Casdoor would carry the
 // ROLE_ADMIN claim on the session instead — the assertion (admin 200 / non-admin
 // 403) is identical. Each Playwright request context keeps its OWN cookie jar, so
 // "logged-in as admin" vs "logged-in as a plain user" vs "anonymous" are just
@@ -21,7 +21,7 @@ import type { APIRequestContext } from '@playwright/test';
 // posture a ROLE_MOD / ROLE_GAMES / ROLE_USER principal must have against the admin
 // API (mod/games are siblings of admin, never supersets).
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.systems';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // The deterministic native password every seeded/invited persona signs in with —
 // mirrors the mock-bff LOGIN_PASSWORD and the e2e helper (E2E_PASSWORD ?? 'e2e-pass').
 const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';

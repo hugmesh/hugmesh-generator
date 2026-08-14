@@ -1,6 +1,6 @@
 # admin-bff — Backend-For-Frontend for the hugmesh-admin-ui. ClusterIP in
 # hugmesh-backend; the ONLY way in is the fe-gateway /bff/** route (same
-# origin as hugmesh.systems). Writes the gateway_route_access table that the
+# origin as hugmesh.net). Writes the gateway_route_access table that the
 # gateways read-cache for their external access rules.
 apiVersion: argoproj.io/v1alpha1
 kind: Application

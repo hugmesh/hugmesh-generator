@@ -25,8 +25,8 @@ metadata:
   labels:
     app.kubernetes.io/name: meshbridge
     app: hugmesh-meshbridge
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: meshbridge
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: meshbridge
 spec:
   replicas: 1                  # single writer: per-device serial/TCP/MQTT sessions + txn dedupe are in-process
   selector:
@@ -37,13 +37,13 @@ spec:
       labels:
         app: hugmesh-meshbridge
         app.kubernetes.io/name: meshbridge
-        app.kubernetes.io/part-of: hugmesh.systems
-        snapdragon.systems/optional-service: meshbridge
+        app.kubernetes.io/part-of: hugmesh.net
+        hugmesh.net/optional-service: meshbridge
     spec:
       serviceAccountName: sa-meshbridge
       automountServiceAccountToken: false
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       # ── USB-serial LoRa attachment (OPTIONAL — ships commented-out) ─────────
       # A `serial` device (devices.json transport:"serial") needs the host device
       # file, and a hostPath only exists on the ONE node the radio is physically
@@ -55,7 +55,7 @@ spec:
       # hostname:
       #
       # nodeSelector:
-      #   snapdragon.systems/backend: "true"
+      #   hugmesh.net/backend: "true"
       #   kubernetes.io/hostname: <frontend-node-with-radio>   # the node the radio is plugged into
       securityContext:
         # Unique MCS category s0:c76 (docs/SECURITY.md §3 matrix row). No two
@@ -74,7 +74,7 @@ spec:
           env:
             # ── Matrix (tuwunel) — in-namespace CS API + AS listener ──────────
             - { name: MATRIX_URL,         value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
-            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.net" }
             # The AS HTTP listener (tuwunel pushes PUT /_matrix/app/v1/transactions
             # here) + /healthz share this port; must match the Service/registration.
             - { name: MESHBRIDGE_LISTEN_PORT, value: "8009" }
@@ -199,8 +199,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: meshbridge
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: meshbridge
 spec:
   type: ClusterIP
   selector:

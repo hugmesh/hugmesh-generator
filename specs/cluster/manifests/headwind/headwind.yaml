@@ -13,7 +13,7 @@
 # (which itself curls an unsigned prebuilt WAR from h-mdm.com at build time —
 # pinning that image by digest would only pin the download *recipe*, not the
 # WAR's actual source provenance). See §3 of the top-level spec for the full
-# rationale. Image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main
+# rationale. Image: registry.hugmesh.net/hugmesh/hugmesh-headwind:main
 # (built FROM tomcat:9-jdk11/eclipse-temurin, Maven-built ROOT.war baked into
 # webapps/, explicit non-root USER — mirrors phpbb.yaml's rootless rationale;
 # stock tomcat:9-jdk11 runs as root, so the custom Dockerfile needs USER + a
@@ -53,7 +53,7 @@ kind: ConfigMap
 metadata:
   name: headwind-config
   namespace: hugmesh-pki
-  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.net }
 data:
   # VERIFIED real env shape (github.com/h-mdm/hmdm-docker docker-entrypoint.sh):
   # these are templated into $CATALINA_BASE/conf/Catalina/localhost/ROOT.xml as
@@ -73,14 +73,14 @@ data:
   # context_template.xml: the entrypoint substitutes _BASE_DOMAIN_ into the
   # context's `base.url` Parameter (_PROTOCOL_://_BASE_DOMAIN_) — this key is
   # exactly what the derived docker-entrypoint.sh reads.
-  BASE_DOMAIN: superadmin.hugmesh.systems
+  BASE_DOMAIN: superadmin.hugmesh.net
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: headwind
   namespace: hugmesh-pki
-  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over the RWO files PVC (phpbb.yaml precedent)
@@ -89,7 +89,7 @@ spec:
     metadata: { labels: { app.kubernetes.io/name: headwind } }
     spec:
       serviceAccountName: sa-headwind
-      nodeSelector: { snapdragon.systems/pki: "true" }
+      nodeSelector: { hugmesh.net/pki: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000    # CONFIRMED by a real image build+boot: USER hmdm is uid=1000/gid=1000
@@ -99,7 +99,7 @@ spec:
         seLinuxOptions: { type: container_t, level: "s0:c78" }  # next free MCS category (headwind-db takes c77)
       containers:
         - name: headwind
-          image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main
+          image: registry.hugmesh.net/hugmesh/hugmesh-headwind:main
           ports:
             - { name: http, containerPort: 8080 }
             - { name: mqtt, containerPort: 31000, protocol: TCP }

@@ -6,7 +6,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${1:-${HERE}/certs}"
-DOMAIN="${SNAP_DOMAIN:-hugmesh.systems}"
+DOMAIN="${SNAP_DOMAIN:-hugmesh.net}"
 mkdir -p "${OUT}"
 
 echo "==> Generating CA + server cert for *.${DOMAIN} (+localhost) in ${OUT}"

@@ -55,7 +55,7 @@ kind: ConfigMap
 metadata:
   name: signup-gate-proxy
   namespace: hugmesh-pki
-  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.net }
 data:
   proxy.py: |
     #!/usr/bin/env python3

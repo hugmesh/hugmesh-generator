@@ -3,6 +3,6 @@ kind: Namespace
 metadata:
   name: hugmesh-tube
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional: "true"
-    snapdragon.systems/slug: tube
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional: "true"
+    hugmesh.net/slug: tube

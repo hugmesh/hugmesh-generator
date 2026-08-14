@@ -10,7 +10,7 @@ kind: Deployment
 metadata:
   name: clickhouse
   namespace: hugmesh-backend
-  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: clickhouse } }
@@ -48,7 +48,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: clickhouse-data
   namespace: hugmesh-backend
-  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: hugmesh-local

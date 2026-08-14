@@ -6,7 +6,7 @@
 # blocks the OBVIOUS, statically-visible dev-only artifacts at admission so they
 # can never even be created in a prod cluster:
 #
-#   (1) ANY resource labelled snapdragon.systems/tier: test — the MOCK ActivityPub
+#   (1) ANY resource labelled hugmesh.net/tier: test — the MOCK ActivityPub
 #       peer, the whole test-runner harness, the lean/heavy Jobs. (Defence in depth
 #       to the build's gate_env_apps prune: even if a tier:test manifest leaked
 #       into the prod GitOps tree, Kyverno rejects it.)
@@ -27,7 +27,7 @@ kind: ClusterPolicy
 metadata:
   name: prod-hygiene
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/component: policy
   annotations:
     policies.kyverno.io/title: Prod hygiene — no dev-only server / no test harness
@@ -36,7 +36,7 @@ metadata:
     policies.kyverno.io/subject: Pod, Deployment, Job, any tier:test resource
     policies.kyverno.io/description: >-
       Blocks dev-only servers and the ENV=test e2e harness from a prod cluster:
-      any snapdragon.systems/tier:test resource, a Vault dev server, and floating
+      any hugmesh.net/tier:test resource, a Vault dev server, and floating
       :dev / *-dev first-party images. The authoritative RUNTIME check is the
       prod-hygiene PreSync hook Job (scripts/validate-prod-hygiene.sh --runtime).
 spec:
@@ -52,14 +52,14 @@ spec:
               kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Service", "ConfigMap"]
       validate:
         message: >-
-          A snapdragon.systems/tier: test resource is forbidden in a prod cluster
+          A hugmesh.net/tier: test resource is forbidden in a prod cluster
           (the e2e test-runner harness / MOCK ActivityPub peer is ENV=test only).
         pattern:
           metadata:
             labels:
               # MUST NOT equal "test". (=(value) means "if the key exists it must
               # not be test"; resources without the label are unaffected.)
-              =(snapdragon.systems/tier): "!test"
+              =(hugmesh.net/tier): "!test"
 
     # (2) No Vault dev server: forbid a -dev arg/command or a VAULT_DEV_* env on
     #     any Pod template container. Matches Pods directly + the Pod templates.

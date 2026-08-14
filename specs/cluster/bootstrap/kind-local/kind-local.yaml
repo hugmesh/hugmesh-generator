@@ -15,7 +15,7 @@ name: hugmesh-local
 nodes:
   - role: control-plane
     # extraPortMappings: ingress-nginx-internal (apps/11-ingress-nginx-internal)
-    # runs as a hostNetwork DaemonSet pinned to snapdragon.systems/pki=true —
+    # runs as a hostNetwork DaemonSet pinned to hugmesh.net/pki=true —
     # i.e. it binds directly to THIS node's network namespace on :80/:443. Map
     # those container ports out to the docker host so `curl --resolve
     # <host>:443:127.0.0.1 ...` from the dev machine (see README) can reach it
@@ -30,5 +30,5 @@ nodes:
     # No extraMounts: the hugmesh-local StorageClass (rancher.io/local-path)
     # just mkdir -p's /mnt/data/local-path + /mnt/usb/local-path INSIDE the kind
     # node container's own filesystem once the node carries
-    # snapdragon.systems/local-path=true — there is no real block device to
+    # hugmesh.net/local-path=true — there is no real block device to
     # bind-mount for this validation pass (see bootstrap-kind.sh).

@@ -75,7 +75,7 @@
 #     manifest). Only remove it if BOTH homeservers are deselected (see the
 #     sharedApps note on each slug).
 
-apiVersion: snapdragon.systems/v1
+apiVersion: hugmesh.net/v1
 kind: OptionalServiceRegistry
 metadata:
   name: optional-services
@@ -193,7 +193,7 @@ spec:
       esoFile: null
       esoKeys: [casdoor-games-db, casdoor-games-app]
       # NOTE: the games host is GAMES_DOMAIN (parameterized below), NOT a
-      # hugmesh.systems subdomain literal — see gamesDomain.
+      # hugmesh.net subdomain literal — see gamesDomain.
       gatewayHost: games.${GAMES_DOMAIN}
       # games = the games portal host route; games-servers-console = the games app-store
       # per-instance HTTP console path-route (both pruned when games is deselected).
@@ -258,7 +258,7 @@ spec:
     # ── character-studio — VN character-studio remote (creator + chat surface) ──
     # The VN (visual-novel) furry/anthro character-studio Angular native-federation
     # REMOTE: layered-2D character creator + chat surface, federated into the
-    # hugmesh.systems host at /character-studio (ROLE_USER floor). It is a pure
+    # hugmesh.net host at /character-studio (ROLE_USER floor). It is a pure
     # FRONTEND micro-frontend served by its own non-root nginx pod in the
     # hugmesh-frontend namespace (no dedicated BFF in this slug yet — it talks to
     # the always-present /bff/** routes), so — like user-ui/forum-ui — it carries NO
@@ -550,7 +550,7 @@ spec:
     # (vpn_config/vpn_node_assignment) lives in admin-bff; the K8s Secret carrying a
     # config's bytes is materialised by ESO under the per-config secret_ref. Service
     # opt-in is NODE-PLACEMENT-driven: a DOMAIN/NODE assignment marks the public pods
-    # (akkoma/tuwunel/coturn) via the snapdragon.systems/vpn-egress=true label; the
+    # (akkoma/tuwunel/coturn) via the hugmesh.net/vpn-egress=true label; the
     # NetworkPolicy interaction (manifests/networkpolicy/egress-vpn-interaction.yaml)
     # loosens akkoma/tuwunel egress ONTO the VPN only on an explicit assignment.
     - slug: egress-vpn
@@ -572,7 +572,7 @@ spec:
       nodePackages: [net-vpn/wireguard-tools, net-vpn/openvpn]
       nodeServices: [hugmesh-egress-vpn, hugmesh-vpn-reconcile]
       # The per-service opt-in label the NetworkPolicy interaction keys off.
-      vpnEgressLabel: snapdragon.systems/vpn-egress
+      vpnEgressLabel: hugmesh.net/vpn-egress
       # ── Runtime config-byte DELIVERY (the ESO Secret -> node hostPath hop) ────
       # The reconcile agent reads the config BYTES from ${VPN_SECRET_DIR}/<secretRef>
       # on the node HOST (hugmesh-vpn-reconcile:52, default /etc/hugmesh/vpn-secret).
@@ -610,9 +610,9 @@ spec:
       # `secretRef`, because that is the filename the reconcile agent opens.
       secretContract: specs/cluster/egress-vpn-secret-contract.env
       secretNamespace: hugmesh-egress-vpn
-      secretLabel: snapdragon.systems/optional-service=egress-vpn
+      secretLabel: hugmesh.net/optional-service=egress-vpn
       secretKey: "@name"
-      nodeDeliveryLabel: snapdragon.systems/egress-vpn
+      nodeDeliveryLabel: hugmesh.net/egress-vpn
 
     # ── tor — node-level v3 Tor onion (hidden) service (DEFAULT-OFF) ──────────
     # LIKE egress-vpn, tor is a NODE service (the DISTRO Tor daemon — net-vpn/tor,
@@ -625,7 +625,7 @@ spec:
     # under /var/lib/tor/hugmesh-onion (tor:tor 0700; never a Secret, never git) on
     # first boot, and exposes the in-cluster fe-gateway as a stable .onion — INBOUND
     # reachability with no public IP / DDNS / Cloudflare. The per-service opt-in label
-    # (snapdragon.systems/tor-onion) keys the NetworkPolicy interaction
+    # (hugmesh.net/tor-onion) keys the NetworkPolicy interaction
     # (manifests/networkpolicy/tor-onion-marked.yaml) — a forward-hook for the OPT-IN
     # pod-egress-via-tor capability (inert by default). nodeServices lists the DISTRO
     # `tor` service (baked with the package, linked when selected) + our reconcile agent.
@@ -649,7 +649,7 @@ spec:
       nodePackages: [net-vpn/tor]
       nodeServices: [tor, hugmesh-tor-reconcile]
       # The per-service opt-in label the NetworkPolicy interaction keys off.
-      torOnionLabel: snapdragon.systems/tor-onion
+      torOnionLabel: hugmesh.net/tor-onion
       # The in-cluster upstream the v3 hidden service exposes (host:port). A HOST-level
       # Tor daemon can't resolve cluster DNS, so the node-local fe-gateway ingress is the
       # default; override per node via /etc/hugmesh/tor/upstream.
@@ -701,7 +701,7 @@ spec:
     # above, and consistent with every other non-be/fe-gateway optional-service
     # (coturn/tube/owncast/meshbridge all set gatewayHost: null too). The
     # superadmin console itself resolves via a LITERAL host
-    # (superadmin.hugmesh.systems) + a LAN/VPN /etc/hosts alias, never a
+    # (superadmin.hugmesh.net) + a LAN/VPN /etc/hosts alias, never a
     # public wildcard — the OPTIONAL headwind.<domain> friendly alias, if ever
     # added, is an `ingress.extraHosts` entry on that SAME Application, not a
     # second Ingress/Application.

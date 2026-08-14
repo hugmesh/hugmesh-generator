@@ -23,7 +23,7 @@ kind: ConfigMap
 metadata:
   name: akkoma-admin-sync-script
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.net }
 data:
   sync.py: |
     #!/usr/bin/env python3
@@ -85,7 +85,7 @@ kind: Job
 metadata:
   name: akkoma-admin-sync
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.net }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -98,7 +98,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

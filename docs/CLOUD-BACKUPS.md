@@ -134,13 +134,13 @@ The catalog status (`backup_set.status`) is written by the admin-bff
 `BackupSetRepository.markStatus(id, …)` keyed on the **raw** set id, via the
 least-privilege `adminbff_app` Postgres role. A generator CronJob cannot correctly
 write it: it would (a) duplicate the BFF's sole-writer authority and need its own
-DB credential, and (b) the CR label `hugmesh.systems/backup-set-id` is a *lossy*
+DB credential, and (b) the CR label `hugmesh.net/backup-set-id` is a *lossy*
 slug of the raw id. So the sweep is **split**:
 
 - **Generator CronJob (`sweep-cronjob.yaml`)** — the CR-read half: finds Velero
   CRs labelled `app.kubernetes.io/managed-by=hugmesh-admin-bff` that reached a
   terminal `.status.phase` and mirrors it onto the CR as the annotation
-  `hugmesh.systems/catalog-status=complete|failed` (the exact key the admin-bff
+  `hugmesh.net/catalog-status=complete|failed` (the exact key the admin-bff
   reader's `CATALOG_STATUS_ANNOTATION` constant names).
 - **Admin-bff reconciler (SHIPPED on admin-bff main)** — the catalog-write half:
   the `cloudbackup` package's `BackupStatusReconciler` (scheduled, leader-gated,
@@ -148,7 +148,7 @@ slug of the raw id. So the sweep is **split**:
   `.status.phase` **directly**; the CronJob's mirror annotation is only its
   *fallback* phase source, so the reconciler works with or without the sweep
   deployed. Each terminal CR maps back to the **raw** `backup_set` id (the
-  `hugmesh.systems/backup-set-id` annotation, else the same-named slug label) and
+  `hugmesh.net/backup-set-id` annotation, else the same-named slug label) and
   `markStatus(id, complete|failed)` flips the row. A SUPERADMIN-only on-demand
   trigger exists at `POST /bff/superadmin/cloud-backups/sweep`
   (`BackupSweepController`).

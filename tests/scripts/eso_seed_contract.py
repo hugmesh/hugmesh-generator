@@ -72,11 +72,11 @@ not here.
 WHY [domain-coupled] EXISTS. The manifests under specs/cluster are NOT what a
 cluster runs: build-*-stage4.sh copies specs/cluster to
 ${SYSROOT}/var/lib/hugmesh/cluster and rebrand_sysroot() then seds
-`hugmesh.systems` -> `${CLUSTER_DOMAIN}` across that tree. So a template.data
+`hugmesh.net` -> `${CLUSTER_DOMAIN}` across that tree. So a template.data
 literal containing the default domain is really `<something>@${CLUSTER_DOMAIN}`
 at deploy time, and the offline bundle must derive the SAME value from
 CLUSTER_DOMAIN. A byte-comparison against the repo manifest cannot see this —
-both sides read `hugmesh.systems` on the default brand — so the gate re-runs the
+both sides read `hugmesh.net` on the default brand — so the gate re-runs the
 seeder under a non-default domain and requires the value to move with it.
 
 Deliberately dependency-light: PyYAML + python3 only. No cluster, no kubectl, no
@@ -790,7 +790,7 @@ def main():
 
     # ── (4b) DOMAIN-COUPLED literals must TRACK CLUSTER_DOMAIN ───────────────
     # Check (4) proves the two paths agree on the DEFAULT brand — and that is all
-    # it can prove, because both sides read `hugmesh.systems` there. But the
+    # it can prove, because both sides read `hugmesh.net` there. But the
     # manifest a cluster actually runs is the BAKED copy, and rebrand_sysroot()
     # seds the default domain to ${CLUSTER_DOMAIN} across it. So a literal that
     # embeds the default domain is really `<x>@${CLUSTER_DOMAIN}` online, and the

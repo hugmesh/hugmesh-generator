@@ -49,9 +49,9 @@ metadata:
   name: default
   namespace: velero
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/managed-by: hugmesh-generator
-    snapdragon.systems/backup-scope: total
+    hugmesh.net/backup-scope: total
 spec:
   provider: aws
   # The default BSL Velero writes to when a Backup CR doesn't pick another.
@@ -84,7 +84,7 @@ metadata:
   name: default
   namespace: velero
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/managed-by: hugmesh-generator
 spec:
   provider: aws
@@ -106,10 +106,10 @@ spec:
 #   name: <BRAND-DESTINATION-REF>          # == backup_destination.destination_ref
 #   namespace: velero
 #   labels:
-#     app.kubernetes.io/part-of: hugmesh.systems
+#     app.kubernetes.io/part-of: hugmesh.net
 #     app.kubernetes.io/managed-by: hugmesh-generator
-#     snapdragon.systems/backup-scope: domain
-#     snapdragon.systems/domain: <brand-domain>
+#     hugmesh.net/backup-scope: domain
+#     hugmesh.net/domain: <brand-domain>
 # spec:
 #   provider: aws
 #   default: false

@@ -50,8 +50,8 @@
 
   "hugmesh": {
     "role": "pki",
-    "cluster_domain": "hugmesh.systems",
-    "facade_host": "scale.hugmesh.systems",
+    "cluster_domain": "hugmesh.net",
+    "facade_host": "scale.hugmesh.net",
     "gitops": {
       "enabled": true,
       "argocd": true,
@@ -104,7 +104,7 @@
   "_comment_vault": "Vault is PERSISTENT + AUTO-UNSEALING (manifests/vault: Raft on the LUKS /mnt/data, TLS listener, Shamir seal). Custody (NEVER git, same offline USB model as the cluster CA + luks.key): vault/token = the bootstrap/root token (seeds the vault-bootstrap Secret the vault-pki-init Job authenticates with, and the external-secrets vault-token Secret for ESO); vault/unseal-key = the Shamir unseal key (seeds the vault-unseal Secret the auto-unseal sidecar uses to unseal on every restart). Produce both ONCE with `vault operator init -key-shares=1 -key-threshold=1` after first deploy, write them to the KEYS stick, and keep them offline. See keys-template/vault/README.md + docs/ENCRYPTION-AT-REST.md.",
   "vault": {
     "enabled": true,
-    "address": "https://vault.hugmesh.systems",
+    "address": "https://vault.hugmesh.net",
     "kv_mount": "secret",
     "base_path": "hugmesh",
     "token_file": "vault/token",

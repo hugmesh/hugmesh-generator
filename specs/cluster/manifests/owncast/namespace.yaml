@@ -3,6 +3,6 @@ kind: Namespace
 metadata:
   name: hugmesh-owncast
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional: "true"
-    snapdragon.systems/slug: owncast
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional: "true"
+    hugmesh.net/slug: owncast

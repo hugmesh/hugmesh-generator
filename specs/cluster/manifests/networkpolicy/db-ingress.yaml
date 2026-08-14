@@ -45,7 +45,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-route-access-db
   namespace: hugmesh-pki
-  labels: { app: route-access-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: route-access-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: route-access-db }
@@ -80,7 +80,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-admin-bff-db
   namespace: hugmesh-backend
-  labels: { app: admin-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: admin-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: admin-bff-db }
@@ -99,7 +99,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-mod-bff-db
   namespace: hugmesh-backend
-  labels: { app: mod-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: mod-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: mod-bff-db }
@@ -118,7 +118,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-user-bff-db
   namespace: hugmesh-backend
-  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: user-bff-db }
@@ -139,7 +139,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-federation-db
   namespace: hugmesh-backend
-  labels: { app: federation-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: federation-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: federation-db }
@@ -160,7 +160,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-forum-bff-db
   namespace: hugmesh-backend
-  labels: { app: forum-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: forum-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: forum-bff-db }
@@ -182,7 +182,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-mesh-bff-db
   namespace: hugmesh-backend
-  labels: { app: mesh-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: mesh-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: mesh-bff-db }
@@ -203,7 +203,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-character-forge-bff-db
   namespace: hugmesh-backend
-  labels: { app: character-forge-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: character-forge-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: character-forge-bff-db }
@@ -222,7 +222,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-wiki-bff-db
   namespace: hugmesh-backend
-  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: wiki-bff-db }
@@ -245,7 +245,7 @@ kind: NetworkPolicy
 metadata:
   name: db-ingress-cassandra
   namespace: hugmesh-pki
-  labels: { app.kubernetes.io/name: cassandra, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: cassandra, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: cassandra }

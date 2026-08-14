@@ -15,7 +15,7 @@ metadata:
   namespace: devops
   labels:
     app.kubernetes.io/name: cloudflared
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   replicas: 2                       # HA: two tunnel connectors
   selector:
@@ -28,7 +28,7 @@ spec:
       # nginx and lan-dns/prod pin to). cloudflared dials OUT to Cloudflare, so it
       # needs no host ports.
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

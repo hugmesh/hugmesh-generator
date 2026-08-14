@@ -32,7 +32,7 @@ subjects:
   - { kind: ServiceAccount, name: local-path-provisioner, namespace: devops }
 ---
 # NODE-STORAGE: a DaemonSet (not a single Deployment) gated on the node label
-# snapdragon.systems/local-path=true. The control-plane (x86 host) ALWAYS carries
+# hugmesh.net/local-path=true. The control-plane (x86 host) ALWAYS carries
 # that label (keys-provision _label_control_plane), so the provisioner runs there
 # exactly as the old Deployment did — FULL BACK-COMPAT, since the nodePathMap below
 # still carries only the DEFAULT_PATH entry. When an operator attaches + registers a
@@ -51,7 +51,7 @@ spec:
     metadata: { labels: { app: local-path-provisioner } }
     spec:
       serviceAccountName: local-path-provisioner
-      nodeSelector: { snapdragon.systems/local-path: "true" }   # the x86 host + any node-storage node
+      nodeSelector: { hugmesh.net/local-path: "true" }   # the x86 host + any node-storage node
       securityContext:
         seLinuxOptions:
           type: spc_t
@@ -80,7 +80,7 @@ metadata:
     # carved from this class is encrypted at rest by INHERITANCE from the node
     # disk — the same disk that holds etcd + Vault state. See
     # docs/ENCRYPTION-AT-REST.md.
-    snapdragon.systems/encryption-at-rest: "luks2-node-inherited"
+    hugmesh.net/encryption-at-rest: "luks2-node-inherited"
 provisioner: rancher.io/local-path
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete

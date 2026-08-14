@@ -8,8 +8,8 @@ metadata:
   name: edge-ai-analysis
   namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/slug: edge-ai-analysis
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/slug: edge-ai-analysis
 data:
   # Which edge-ai model serves each task (must be in the edge-ai-models catalog/preload).
   vision-model: "llava:7b"       # image classify/moderate

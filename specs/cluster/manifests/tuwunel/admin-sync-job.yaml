@@ -1,7 +1,7 @@
 # tuwunel-admin-sync — maps Casdoor roles to Matrix authority. Conduit-family
 # (tuwunel) has NO homeserver moderator tier, so the two roles map differently:
 #   ROLE_ADMIN -> Matrix SERVER admin: MEMBERSHIP of the admin room
-#                 (#admins:hugmesh.systems). Conduit-family grants server admin
+#                 (#admins:hugmesh.net). Conduit-family grants server admin
 #                 via that room membership, NOT a REST API or an OIDC-group claim.
 #   ROLE_MOD   -> per-ROOM MODERATOR (power level 50: ban/redact/kick) in the
 #                 managed community/public rooms, set via the admin bot's
@@ -13,7 +13,7 @@
 # readOnlyRootFilesystem, Vault-sourced admin token, idempotent, ArgoCD PostSync).
 #
 # Flow: read ROLE_ADMIN + ROLE_MOD membership from Casdoor, derive each member's
-# @<localpart>:hugmesh.systems MXID. ROLE_ADMIN members are invited/joined into
+# @<localpart>:hugmesh.net MXID. ROLE_ADMIN members are invited/joined into
 # the server admin room (membership IS server admin: network-wide). ROLE_MOD
 # members are set to power level 50 in each managed room via the admin bot's
 # set-power-level command (room-scoped moderation only). The Matrix admin/mod
@@ -30,14 +30,14 @@ kind: ConfigMap
 metadata:
   name: tuwunel-admin-sync-script
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.net }
 data:
   sync.py: |
     #!/usr/bin/env python3
     """Reconcile Casdoor roles into Matrix authority. Conduit-family has no
     homeserver moderator tier, so:
       ROLE_ADMIN -> server admin: membership of the admin room
-                    (#admins:hugmesh.systems).
+                    (#admins:hugmesh.net).
       ROLE_MOD   -> per-room MODERATOR: power level 50 (ban/redact/kick) in each
                     managed community/public room, via the admin bot's
                     set-power-level command. NOT server admin, NOT #admins, NOT PL100.
@@ -47,12 +47,12 @@ data:
     CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
     ORG     = os.environ.get("CASDOOR_ORG", "hugmesh")
     MATRIX  = os.environ.get("MATRIX_URL", "http://tuwunel.hugmesh-backend.svc.cluster.local:8008")
-    SERVER  = os.environ.get("MATRIX_SERVER_NAME", "hugmesh.systems")
-    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:hugmesh.systems")
+    SERVER  = os.environ.get("MATRIX_SERVER_NAME", "hugmesh.net")
+    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:hugmesh.net")
     # Managed community/public rooms where ROLE_MOD gets room-level moderator (PL50).
     # Comma-separated room aliases; placeholder list — set to the real managed rooms.
     MANAGED_ROOMS = [r.strip() for r in os.environ.get(
-        "MATRIX_MANAGED_ROOMS", "#general:hugmesh.systems,#lounge:hugmesh.systems"
+        "MATRIX_MANAGED_ROOMS", "#general:hugmesh.net,#lounge:hugmesh.net"
     ).split(",") if r.strip()]
     # ROLE_ADMIN -> Matrix SERVER admin (admin-room membership). Network-wide.
     ADMIN_ROLES = ["ROLE_ADMIN"]
@@ -186,7 +186,7 @@ kind: Job
 metadata:
   name: tuwunel-admin-sync
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.net }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -199,7 +199,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -212,12 +212,12 @@ spec:
             - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             - { name: CASDOOR_ORG, value: "hugmesh" }
             - { name: MATRIX_URL,  value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
-            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.net" }
             # ROLE_ADMIN -> server admin via membership of this room.
-            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:hugmesh.systems" }
+            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:hugmesh.net" }
             # ROLE_MOD -> room-level moderator (PL50) in these managed community/
             # public rooms (placeholder list — set to the real managed rooms).
-            - { name: MATRIX_MANAGED_ROOMS, value: "#general:hugmesh.systems,#lounge:hugmesh.systems" }
+            - { name: MATRIX_MANAGED_ROOMS, value: "#general:hugmesh.net,#lounge:hugmesh.net" }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

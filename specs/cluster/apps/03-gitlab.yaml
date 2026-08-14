@@ -1,7 +1,7 @@
 # GitLab — internal DevOps forge in the devops namespace (x86_64 host).
 #
 # - Login via Casdoor OIDC; only Casdoor ROLE_ADMIN users (admin group) get in
-#   (no public sign-up). Reached over the VPN at gitlab.hugmesh.systems
+#   (no public sign-up). Reached over the VPN at gitlab.hugmesh.net
 #   through the fe/devops gateway — never exposed externally.
 # - Pull-mirrors every hugmesh GitHub repo (scripts/gitlab-mirror-org.sh)
 #   and runs CI (gitlab-runner) that builds all ISOs + container images.
@@ -25,7 +25,7 @@ spec:
       releaseName: gitlab
       values: |
         global:
-          hosts: { domain: hugmesh.systems, https: true, gitlab: { name: gitlab.hugmesh.systems } }
+          hosts: { domain: hugmesh.net, https: true, gitlab: { name: gitlab.hugmesh.net } }
           ingress: { configureCertmanager: false }   # internal/VPN only; gateway terminates TLS
           # Casdoor OIDC — admin-only login, no public sign-up.
           appConfig:
@@ -43,7 +43,7 @@ spec:
         certmanager: { install: false }
         nginx-ingress: { enabled: false }
         # Container Registry disabled — Harbor (apps/03a-harbor.yaml) now serves
-        # registry.hugmesh.systems as the platform's full-replacement
+        # registry.hugmesh.net as the platform's full-replacement
         # container registry; leaving this on would race Harbor's own Ingress
         # for the same hostname.
         registry: { enabled: false }

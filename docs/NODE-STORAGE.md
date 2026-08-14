@@ -119,7 +119,7 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
      `/var/lib/hugmesh/node-storage/pool-manifest.json`) and never the KEYS media's
      `provision.json`, and `provision_storage --pool` skips every device without a `pool:{}`
      marker, so a system disk is never reachable from this path,
-   - labels the node `snapdragon.systems/local-path=true`,
+   - labels the node `hugmesh.net/local-path=true`,
    - CAS-patches the local-path `nodePathMap` so THIS node serves PVs from the pool path.
 4. **Place** (ArgoCD): the `13b-node-storage` ApplicationSet renders one Application per active
    assignment; it injects `nodeAffinity` (pin the pod to the pool's node) + a node-pinned PVC.
@@ -134,7 +134,7 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
 ## Local-path provisioner: DaemonSet on a label
 
 The Rancher local-path-provisioner is a **DaemonSet** gated on
-`nodeSelector: snapdragon.systems/local-path=true` (not a single Deployment). The control-plane
+`nodeSelector: hugmesh.net/local-path=true` (not a single Deployment). The control-plane
 (x86 host) always carries that label, so the provisioner runs there exactly as before
 (**full back-compat** — `DEFAULT_PATH` retained); a node-storage node gets the label when its
 first pool is provisioned, so a provisioner instance + a per-node `nodePathMap` entry come up

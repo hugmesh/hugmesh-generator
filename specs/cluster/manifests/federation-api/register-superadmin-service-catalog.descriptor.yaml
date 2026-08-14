@@ -16,7 +16,7 @@
 #   superadmin-gateway (apps/22-gateway-superadmin.yaml), the gateway route-access ROLE_SUPERADMIN
 #   rows (manifests/route-access/initdb/20-schema.sql), and the Angular superadminGuard (in the UI
 #   repo), this is the full three-lock tailnet-only surface.
-apiVersion: snapdragon.systems/v1
+apiVersion: hugmesh.net/v1
 kind: FederationModuleRegistration
 metadata:
   name: superadmin-service-catalog

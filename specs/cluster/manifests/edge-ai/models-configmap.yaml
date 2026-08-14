@@ -16,8 +16,8 @@ metadata:
   name: edge-ai-models
   namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/slug: edge-ai
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/slug: edge-ai
 data:
   # The inference runtime: ollama (default) | vllm. Patched by --edge-ai-runtime.
   runtime: "ollama"

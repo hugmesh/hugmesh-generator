@@ -37,7 +37,7 @@ kind: ConfigMap
 metadata:
   name: egress-proxy-config
   namespace: hugmesh-backend
-  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.net }
 data:
   # Default PASS-THROUGH config (gate OFF). Forwards all federation traffic; the
   # homeservers route through here only because the NetworkPolicy forces it.
@@ -109,23 +109,23 @@ kind: ConfigMap
 metadata:
   name: domainlock-allowlist
   namespace: hugmesh-backend
-  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.net }
 data:
   federation-allowlist.txt: |
     # Local server names — always allowed (self-delivery / local inboxes).
     # The reconcile loop appends the per-actor permitted remote destinations here;
     # a fully domain-locked instance keeps ONLY these local entries (no remote
-    # federation). Replace hugmesh.systems with ${CLUSTER_DOMAIN} at rebrand.
-    hugmesh.systems
-    mastodon.hugmesh.systems
-    matrix.hugmesh.systems
+    # federation). Replace hugmesh.net with ${CLUSTER_DOMAIN} at rebrand.
+    hugmesh.net
+    mastodon.hugmesh.net
+    matrix.hugmesh.net
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: egress-proxy
   namespace: hugmesh-backend
-  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 2
   selector: { matchLabels: { app: egress-proxy } }
@@ -133,7 +133,7 @@ spec:
     metadata:
       labels: { app: egress-proxy }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -191,7 +191,7 @@ kind: Service
 metadata:
   name: egress-proxy
   namespace: hugmesh-backend
-  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: egress-proxy, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   type: ClusterIP
   selector: { app: egress-proxy }

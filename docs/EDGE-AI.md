@@ -13,7 +13,7 @@ It ships as two cooperating pieces:
 
 | Piece | What it is | Where |
 |---|---|---|
-| `edge_ai` **node role** | a `be+gpu`-class worker whose purpose is inference: NVIDIA proprietary + CUDA + the containerd `nvidia` runtime + `app-containers/nvidia-container-toolkit`, labelled `snapdragon.systems/edge-ai=true`, and it **auto-selects** the `edge-ai` service | `build-x86-host-stage4.sh --role edge_ai` |
+| `edge_ai` **node role** | a `be+gpu`-class worker whose purpose is inference: NVIDIA proprietary + CUDA + the containerd `nvidia` runtime + `app-containers/nvidia-container-toolkit`, labelled `hugmesh.net/edge-ai=true`, and it **auto-selects** the `edge-ai` service | `build-x86-host-stage4.sh --role edge_ai` |
 | `edge-ai` **optional service** | the cluster workload: an Ollama Deployment + Service + the model-library ConfigMap, GPU-scheduled, fronted by the `ai.<domain>` gateway route. DEFAULT-OFF, GPU-gated | `specs/cluster/{apps/54-edge-ai.yaml, manifests/edge-ai/}` |
 
 Both run unchanged on **x86_64** (e.g. the RTX-4060 host) and on the **NVIDIA
@@ -126,7 +126,7 @@ spec:
         limits:
           nvidia.com/gpu: "1"
   nodeSelector:
-    snapdragon.systems/compute: gpu
+    hugmesh.net/compute: gpu
 ```
 
 This is how owncast (video transcode), coturn/Matrix A/V (media), LocalTube
@@ -172,7 +172,7 @@ live in the BFF/federation Java repos and land separately.
 **Slug:** `edge-ai-analysis`, **DEFAULT-OFF**, `dependsOn: edge-ai` (greyed in the
 console when edge-ai is off). The container is a **separate build artifact** — its
 source is `specs/cluster/manifests/edge-ai-analysis/image/` (FastAPI + Pillow +
-imagehash); build + push `registry.hugmesh.systems/hugmesh/edge-ai-analysis:main`
+imagehash); build + push `registry.hugmesh.net/hugmesh/edge-ai-analysis:main`
 then select the slug. Keep it deselected until the image is pushed (so no node
 ImagePull-fails). Everything stays on-prem — the wrapper only calls the in-cluster
 Ollama upstream.
@@ -221,7 +221,7 @@ Studio (platform-gated like it, not mode-gated like the GPU Edge-AI group);
 **Slug:** `edge-ai-tts`, **DEFAULT-OFF**, **NO `dependsOn`**. The container is a
 **separate build artifact** — its source is
 `specs/cluster/manifests/edge-ai-tts/image/` (FastAPI + piper-tts + onnxruntime,
-CPU); build + push `registry.hugmesh.systems/hugmesh/edge-ai-tts:main` then
+CPU); build + push `registry.hugmesh.net/hugmesh/edge-ai-tts:main` then
 select the slug. Keep it deselected until the image is pushed (so no node
 ImagePull-fails). Everything stays on-prem — synthesis is local CPU work.
 

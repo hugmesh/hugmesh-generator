@@ -2,7 +2,7 @@
 # GPU node so the scheduler can place GPU workloads. Standard upstream plugin
 # (nvcr.io/nvidia/k8s-device-plugin), constrained to HugMesh GPU nodes.
 #
-# GPU-NODE-ONLY: the nodeSelector snapdragon.systems/compute=gpu (the label
+# GPU-NODE-ONLY: the nodeSelector hugmesh.net/compute=gpu (the label
 # keys-provision sets on be+gpu / omnibus / edge_ai) means this DaemonSet runs
 # ONLY where there is actually an NVIDIA GPU + the nvidia container runtime; on a
 # GPU-less cluster it schedules nothing.
@@ -19,7 +19,7 @@ metadata:
   name: nvidia-device-plugin-daemonset
   namespace: kube-system
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app: nvidia-device-plugin
 spec:
   selector:
@@ -34,7 +34,7 @@ spec:
       # plugin can see the devices.
       nodeSelector:
         kubernetes.io/arch: amd64
-        snapdragon.systems/compute: gpu
+        hugmesh.net/compute: gpu
       runtimeClassName: nvidia
       priorityClassName: system-node-critical
       tolerations:

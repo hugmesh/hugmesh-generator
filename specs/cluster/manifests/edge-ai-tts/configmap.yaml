@@ -9,8 +9,8 @@ metadata:
   name: edge-ai-tts
   namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/slug: edge-ai-tts
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/slug: edge-ai-tts
 data:
   # Where voice files (<id>.onnx + <id>.onnx.json) live. The default voice is baked
   # in at build time; additional voices can be pulled to a PVC mounted at the same

@@ -197,7 +197,7 @@ is guarded and logged; a failure never aborts the rest of provisioning.
 | Field | Meaning |
 |---|---|
 | `enabled` | Master switch. If not `true`, Vault/ESO seeding is skipped. |
-| `address` | Vault URL (e.g. `https://vault.hugmesh.systems`). Empty ⇒ offline-only. |
+| `address` | Vault URL (e.g. `https://vault.hugmesh.net`). Empty ⇒ offline-only. |
 | `kv_mount` | KV v2 mount used by the `ClusterSecretStore` (default `secret`). |
 | `base_path` | Base segment under the mount; equals the brand slug (default `hugmesh`). |
 | `token_file` | Path on KEYS to a Vault token / AppRole secret-id (default `vault/token`). |

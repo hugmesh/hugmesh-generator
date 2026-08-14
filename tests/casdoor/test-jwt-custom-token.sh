@@ -152,7 +152,7 @@ api POST /api/add-organization "${ORGJSON}" >/dev/null 2>&1 || true
 # Reconcile a JWT-Custom app with EXACTLY the field set init-job.yaml seeds
 # (including the "groups" Existing-Field attribute added 2026-07-09 for the
 # headscale mesh-join OIDC gate — see JWT_CUSTOM_TOKEN_ATTRIBUTES).
-APPJSON='{"owner":"admin","name":"app-jwtcustom-test","displayName":"jwtcustom test","organization":"hugmesh","clientId":"app-jwtcustom-test","clientSecret":"test-secret-not-real","redirectUris":["https://x.hugmesh.systems/callback"],"grantTypes":["authorization_code","client_credentials","password"],"expireInHours":168,"enablePassword":true,"enableSignUp":false,"tokenFormat":"JWT-Custom","tokenSigningMethod":"RS256","tokenFields":["Id","Name","Email","IsAdmin","Properties.mfa_satisfied","Properties.mfa_satisfied_at"],"tokenAttributes":[{"name":"roles","category":"Existing Field","value":"Roles","type":"Array"},{"name":"permissions","category":"Existing Field","value":"Permissions","type":"Array"},{"name":"groups","category":"Existing Field","value":"Groups","type":"Array"}]}'
+APPJSON='{"owner":"admin","name":"app-jwtcustom-test","displayName":"jwtcustom test","organization":"hugmesh","clientId":"app-jwtcustom-test","clientSecret":"test-secret-not-real","redirectUris":["https://x.hugmesh.net/callback"],"grantTypes":["authorization_code","client_credentials","password"],"expireInHours":168,"enablePassword":true,"enableSignUp":false,"tokenFormat":"JWT-Custom","tokenSigningMethod":"RS256","tokenFields":["Id","Name","Email","IsAdmin","Properties.mfa_satisfied","Properties.mfa_satisfied_at"],"tokenAttributes":[{"name":"roles","category":"Existing Field","value":"Roles","type":"Array"},{"name":"permissions","category":"Existing Field","value":"Permissions","type":"Array"},{"name":"groups","category":"Existing Field","value":"Groups","type":"Array"}]}'
 if api GET "/api/get-application?id=admin/app-jwtcustom-test" 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);sys.exit(0 if d.get("data") else 1)' 2>/dev/null; then
   api POST "/api/update-application?id=admin/app-jwtcustom-test" "${APPJSON}" >/dev/null 2>&1
 else
@@ -162,7 +162,7 @@ ok "JWT-Custom app reconciled"
 
 # Seed the user in 'hugmesh' WITH the secrets actively populated, so we prove the
 # allow-list strips them even when present. Casdoor properties are a string-map.
-USERJSON='{"owner":"hugmesh","name":"jwtcustom-test","displayName":"JWT Custom Test","type":"normal-user","password":"Sn4p!testPW","email":"jwtcustom@hugmesh.systems","isAdmin":true,"totpSecret":"JBSWY3DPEHPK3PXP","recoveryCodes":["aaaa-bbbb","cccc-dddd"],"properties":{"mfa_satisfied":"true","mfa_satisfied_at":"1750233600000"}}'
+USERJSON='{"owner":"hugmesh","name":"jwtcustom-test","displayName":"JWT Custom Test","type":"normal-user","password":"Sn4p!testPW","email":"jwtcustom@hugmesh.net","isAdmin":true,"totpSecret":"JBSWY3DPEHPK3PXP","recoveryCodes":["aaaa-bbbb","cccc-dddd"],"properties":{"mfa_satisfied":"true","mfa_satisfied_at":"1750233600000"}}'
 api POST /api/add-user "${USERJSON}" >/dev/null 2>&1 || true
 api POST "/api/update-user?id=hugmesh/jwtcustom-test" "${USERJSON}" >/dev/null 2>&1 || true
 

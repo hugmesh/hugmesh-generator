@@ -17,7 +17,7 @@ metadata:
   name: hugmesh-user-ui
   labels:
     app: hugmesh-user-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:

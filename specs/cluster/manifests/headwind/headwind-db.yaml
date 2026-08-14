@@ -22,7 +22,7 @@ kind: Deployment
 metadata:
   name: headwind-db
   namespace: hugmesh-pki
-  labels: { app.kubernetes.io/name: headwind-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: headwind-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over an RWO PVC (phpbb-db.yaml precedent)
@@ -31,7 +31,7 @@ spec:
     metadata: { labels: { app.kubernetes.io/name: headwind-db } }
     spec:
       serviceAccountName: sa-headwind-db
-      nodeSelector: { snapdragon.systems/pki: "true" }   # co-locate w/ harbor/vault/casdoor
+      nodeSelector: { hugmesh.net/pki: "true" }   # co-locate w/ harbor/vault/casdoor
       securityContext:
         seLinuxOptions: { type: container_t, level: "s0:c77" }  # next free MCS category after meshbridge's c76 (docs/SECURITY.md)
       containers:

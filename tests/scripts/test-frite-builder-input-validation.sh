@@ -65,7 +65,7 @@ err() { echo "ERROR: $1" >&2; }
 # Defaults for every var the slice touches; the case under test overrides one.
 _defaults() {
     BRAND="hugmesh"; ORG="hugmesh"
-    CLUSTER_DOMAIN="hugmesh.systems"
+    CLUSTER_DOMAIN="hugmesh.net"
     HOSTNAME="hugmesh-frite"; DEFAULT_USER="frite"
     BRAND_TITLE="HugMesh Systems"; RPI_CPU="cortex-a53"
     CROSS_TARGET="aarch64-unknown-linux-gnu"

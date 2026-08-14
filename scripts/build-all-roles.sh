@@ -116,7 +116,7 @@
 # PENTEST_ONLY=1 runs ONLY the pen-test (skips the image builds + keys).
 #
 # Any extra args are passed through to BOTH builders, e.g.:
-#   ./scripts/build-all-roles.sh -j 16 --cluster-domain hugmesh.systems
+#   ./scripts/build-all-roles.sh -j 16 --cluster-domain hugmesh.net
 #
 # Build ENV (baked at image creation) is just another pass-through flag:
 #   ./scripts/build-all-roles.sh --env test  --config brands/local.conf  # LAN fleet

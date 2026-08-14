@@ -22,8 +22,8 @@ kind: Namespace
 metadata:
   name: hugmesh-forum
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     # Selectable by NetworkPolicy namespaceSelector from the backend ns (the
     # forum-bff / admin-bff ingress allow rules key on this label).
     kubernetes.io/metadata.name: hugmesh-forum
-    snapdragon.systems/tier: forum
+    hugmesh.net/tier: forum

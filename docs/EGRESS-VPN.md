@@ -55,7 +55,7 @@ apply`, which — in the SAME pass, marks before labels —
    table): a `prerouting`/mangle chain that `return`s early for pod/service/
    tailnet destinations and sets `meta mark set 0x76` on packets sourced from
    the resolved pod IPs;
-3. labels those pods `snapdragon.systems/vpn-egress=true` so the
+3. labels those pods `hugmesh.net/vpn-egress=true` so the
    `egress-vpn-interaction` NetworkPolicy loosens their direct egress — which
    the mark then routes into table 176.
 
@@ -110,7 +110,7 @@ single byte:
 | what | contract | the reader shipped | the writer shipped |
 |---|---|---|---|
 | namespace | `hugmesh-egress-vpn` | `hugmesh-egress-vpn` ✔ | `hugmesh-backend` ✘ |
-| label | `snapdragon.systems/optional-service=egress-vpn` | ✔ | ✔ |
+| label | `hugmesh.net/optional-service=egress-vpn` | ✔ | ✔ |
 | data key | the Secret's own `metadata.name` (`@name`) | `config` ✘ | ✔ |
 | Secret name | == the export's `secretRef` | ✔ | ✔ |
 
@@ -154,7 +154,7 @@ assertion helpers, so deleting an assertion drops the file back out) or
 *exempt with a written reason*. A copy that did not exist when the census was
 written still fails it. The one standing exemption is
 `manifests/networkpolicy/egress-vpn-interaction.yaml`, where
-`snapdragon.systems/optional-service: egress-vpn` is the slug TAG every
+`hugmesh.net/optional-service: egress-vpn` is the slug TAG every
 optional-service object carries, not the Secret selector.
 
 The registry's three fields are copies and now say so: they sit under a
@@ -166,7 +166,7 @@ scalar, so bare `@name` is a parse error rather than a string.
 `resources: []` and is reachable only through the MANUAL-sync
 `apps/13e-egress-vpn.yaml` (no `automated:` block) — the
 `apps/08a-networkpolicy-egress.yaml` pattern. Even once synced, the DaemonSet's
-`nodeSelector: snapdragon.systems/egress-vpn=true` matches no node until an
+`nodeSelector: hugmesh.net/egress-vpn=true` matches no node until an
 operator labels the ones holding an assignment. Both halves are pruned wholesale
 with the slug by `gate_optional_services()`.
 
@@ -185,11 +185,11 @@ side of it.
 **How it is asserted, and why not the obvious way.** The expected value is read
 from the DaemonSet's `nodeSelector` mapping — the key the kube-scheduler
 actually evaluates — and every other carrier is graded against *that*. The first
-attempt instead counted, per file, how many `snapdragon.systems/*egress-vpn*`
+attempt instead counted, per file, how many `hugmesh.net/*egress-vpn*`
 tokens a runbook contained versus how many spelled the contract key: two numbers
 off the same file, which move together for any edit that stays inside the
 pattern. It passed a renamed prefix, it passed the transposition into
-`snapdragon.systems/vpn-egress` (the **pod** opt-in label documented 111 lines
+`hugmesh.net/vpn-egress` (the **pod** opt-in label documented 111 lines
 above the node label — the single likeliest way to get this wrong), and it
 passed deleting the instruction outright, printing "every node-label mention
 spells the key" each time. The replacement finds label-shaped tokens by the

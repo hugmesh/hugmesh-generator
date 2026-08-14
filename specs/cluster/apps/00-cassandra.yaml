@@ -84,7 +84,7 @@ spec:
         persistence:
           size: 8Gi
         nodeSelector:
-          snapdragon.systems/role: pki
+          hugmesh.net/role: pki
         resources:
           requests: { cpu: 250m, memory: 768Mi }
           limits:   { cpu: "1",  memory: 1536Mi }

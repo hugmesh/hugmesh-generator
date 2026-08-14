@@ -16,7 +16,7 @@ for i in $(seq 1 20); do curl -s "${B}/bff/admin/isos" >/dev/null 2>&1 && break;
 echo "== admin BFF: route-access + ISO links =="
 # admin@ is seeded admin; register to create the account, grab the token.
 ATOK="$(curl -s -XPOST "${B}/bff/register/google" -H 'content-type: application/json' \
-  -d '{"email":"admin@hugmesh.systems"}' | jqp 'd["token"]')"
+  -d '{"email":"admin@hugmesh.net"}' | jqp 'd["token"]')"
 [ -n "${ATOK}" ] && ok "admin session obtained" || bad "no admin token"
 
 n0="$(curl -s "${B}/bff/admin/route-access" -H "authorization: Bearer ${ATOK}" | jqp 'len(d["rules"])')"

@@ -45,13 +45,13 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: optionalservices.platform.hugmesh.systems
+  name: optionalservices.platform.hugmesh.net
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: crd
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
-  group: platform.hugmesh.systems
+  group: platform.hugmesh.net
   scope: Namespaced
   names:
     kind: OptionalService

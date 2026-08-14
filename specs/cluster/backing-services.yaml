@@ -82,7 +82,7 @@
 #     postgres-casdoor rewrite flips the host AND sslmode; a managed PG still needs
 #     the CA trusted at the Casdoor layer separately.
 
-apiVersion: snapdragon.systems/v1
+apiVersion: hugmesh.net/v1
 kind: BackingServiceRegistry
 metadata:
   name: backing-services

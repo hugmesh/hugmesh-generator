@@ -93,7 +93,7 @@ class MeshBffSync(UserBffClient):
 
 async def _run() -> None:
     matrix_url = _env("MATRIX_URL", "http://tuwunel.hugmesh-backend.svc.cluster.local:8008")
-    server_name = _env("MATRIX_SERVER_NAME", "hugmesh.systems")
+    server_name = _env("MATRIX_SERVER_NAME", "hugmesh.net")
     sender_localpart = _env("MESHBRIDGE_SENDER_LOCALPART", "meshbridge")
     listen_port = int(_env("MESHBRIDGE_LISTEN_PORT", "8009"))
 

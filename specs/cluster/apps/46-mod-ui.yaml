@@ -1,5 +1,5 @@
 # hugmesh-mod-ui — moderation Angular micro-frontend, served at /mod and
-# federated into the hugmesh.systems host. Frontend Pis.
+# federated into the hugmesh.net host. Frontend Pis.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

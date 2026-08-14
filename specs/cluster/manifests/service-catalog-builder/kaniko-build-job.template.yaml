@@ -27,7 +27,7 @@
 #                      the uploaded zip materialized to a context (ZIP); see docs.
 #   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
 #   ${DEST_IMAGE}      the destination image ref WITH a tag/digest in the in-cluster registry
-#                      (e.g. registry.hugmesh.systems/<brand>/<service>:<sha>)
+#                      (e.g. registry.hugmesh.net/<brand>/<service>:<sha>)
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -35,8 +35,8 @@ metadata:
   namespace: ${BUILD_NAMESPACE}
   labels:
     app.kubernetes.io/name: service-catalog-builder
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/appstore-build: "${BUILD_NAME}"
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/appstore-build: "${BUILD_NAME}"
 spec:
   backoffLimit: 1
   # Reap the Job 1h after completion so finished builds don't accumulate.
@@ -46,7 +46,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: service-catalog-builder
-        snapdragon.systems/appstore-build: "${BUILD_NAME}"
+        hugmesh.net/appstore-build: "${BUILD_NAME}"
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false

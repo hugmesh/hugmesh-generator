@@ -33,7 +33,7 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: vault
-  labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: secrets }
+  labels: { app.kubernetes.io/part-of: hugmesh.net, hugmesh.net/tier: secrets }
 ---
 # Real (non-dev) Vault server config: Raft integrated storage + a TLS listener.
 apiVersion: v1
@@ -41,7 +41,7 @@ kind: ConfigMap
 metadata:
   name: vault-config
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.net }
 data:
   config.hcl: |
     ui = true
@@ -101,7 +101,7 @@ kind: ConfigMap
 metadata:
   name: vault-tls-init
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.net }
 data:
   gen-tls.sh: |
     #!/bin/sh
@@ -144,7 +144,7 @@ kind: ConfigMap
 metadata:
   name: vault-unseal
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.net }
 data:
   auto-unseal.sh: |
     #!/bin/sh
@@ -183,7 +183,7 @@ kind: StatefulSet
 metadata:
   name: vault
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   serviceName: vault
   replicas: 1   # single-node Raft; multi-replica HA is a documented follow-up
@@ -198,7 +198,7 @@ spec:
       # other node reaches it via the cluster Service vault.vault.svc:8200 (ESO)
       # or the mesh name vault.<domain> (devices / online sync).
       nodeSelector:
-        snapdragon.systems/pki: "true"
+        hugmesh.net/pki: "true"
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists

@@ -1,5 +1,5 @@
 # hugmesh-user-ui — self-service user Angular micro-frontend, served at /user
-# and federated into the hugmesh.systems host. Frontend Pis.
+# and federated into the hugmesh.net host. Frontend Pis.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

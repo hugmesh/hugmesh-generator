@@ -27,8 +27,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: meshbridge
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: meshbridge
 spec:
   podSelector:
     matchLabels:
@@ -118,8 +118,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: meshbridge
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: meshbridge
 spec:
   # Selects the TUWUNEL pod (this is the widening side; the bridge's own policy
   # is meshbridge-allow above).

@@ -34,7 +34,7 @@ kind: NetworkPolicy
 metadata:
   name: forum-default-deny-ingress
   namespace: hugmesh-forum
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector: {}
   policyTypes: [Ingress]
@@ -46,7 +46,7 @@ kind: NetworkPolicy
 metadata:
   name: forum-allow-phpbb-ingress
   namespace: hugmesh-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: phpbb }
@@ -87,7 +87,7 @@ kind: NetworkPolicy
 metadata:
   name: forum-allow-phpbb-db-ingress
   namespace: hugmesh-forum
-  labels: { app.kubernetes.io/name: phpbb-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: phpbb-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: phpbb-db }

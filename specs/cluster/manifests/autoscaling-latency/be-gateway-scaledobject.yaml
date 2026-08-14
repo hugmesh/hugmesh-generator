@@ -9,11 +9,11 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: hugmesh-be-gateway
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/autoscaler: latency-rps
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/autoscaler: latency-rps
   annotations:
-    snapdragon.systems/dark: "true"
-    snapdragon.systems/metric-source: "prometheus (ABSENT — see README)"
+    hugmesh.net/dark: "true"
+    hugmesh.net/metric-source: "prometheus (ABSENT — see README)"
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

@@ -26,7 +26,7 @@
 import http from 'node:http';
 
 const PORT = Number(process.env.PORT || 8401);
-const SERVER = process.env.MATRIX_SERVER_NAME || 'hugmesh.systems';
+const SERVER = process.env.MATRIX_SERVER_NAME || 'hugmesh.net';
 const users = new Map();   // token -> userId
 const accounts = new Map();// userId -> {password}
 // roomId -> { name, preset, joined:Set, invited:Set, inviters:Map(userId->inviter),

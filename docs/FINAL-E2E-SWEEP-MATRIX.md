@@ -94,7 +94,7 @@ the forum rows + the `domain` column (absent from that oracle) are mirrored 1:1 
 unperturbed. **VALIDATES OFFLINE** (no cluster); **LIVE pending a kernel-fixed x86
 image** (the QEMU cluster cannot boot yet).
 
-The realms: **SYSTEMS** (org `hugmesh`, issuer `id.hugmesh.systems`, native
+The realms: **SYSTEMS** (org `hugmesh`, issuer `id.hugmesh.net`, native
 `ROLE_*`), **GAMES** (org `threewizards`, issuer `id.hugmesh.games`, independent
 Casdoor, native lowercase `player`/`admin`; namespace surfaces `/games/admin/**` +
 `/games/api/admin/**` gated on the DERIVED systems `ROLE_GAMES_ADMIN`), **FORUM**

@@ -29,7 +29,7 @@ kind: ConfigMap
 metadata:
   name: casdoor-init-script
   namespace: hugmesh-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
 data:
   reconcile.py: |
     #!/usr/bin/env python3
@@ -110,7 +110,7 @@ data:
         # PR #280 fixed. reconcile_app() gives it the headscale-specific
         # redirectUris override below (its OIDC callback path is FIXED by the
         # headscale binary at "<server_url>/oidc/callback", not the generic
-        # "https://<name>.hugmesh.systems/callback" other apps use).
+        # "https://<name>.hugmesh.net/callback" other apps use).
         "headscale": "ROLE_USER",
     }
 
@@ -420,7 +420,7 @@ data:
         app = {
             "owner": "admin", "name": appname, "displayName": f"hugmesh {name}",
             "organization": ORG, "clientId": appname, "clientSecret": secret,
-            "redirectUris": [f"https://{name}.hugmesh.systems/callback"],
+            "redirectUris": [f"https://{name}.hugmesh.net/callback"],
             # password grant kept (custom BFF login uses it) + authorization_code +
             # client_credentials (existing machine apps).
             "grantTypes": ["authorization_code", "client_credentials", "password"],
@@ -442,17 +442,17 @@ data:
         # app.mfa.freshness-window (600000 ms = 10 min) — it is 24x that window, and
         # 168h below is 1008x. No seeded expiry makes the raw-JWT MFA leg satisfiable;
         # see docs/MFA-ROLLOUT.md §2.4 before assuming otherwise. Single-domain
-        # seed (…hugmesh.systems) matching the confidential apps' convention;
+        # seed (…hugmesh.net) matching the confidential apps' convention;
         # per-brand hosts layer via the rebrand/handlebars path, not here.
         if name == "user-bff":
             app["grantTypes"] = app["grantTypes"] + ["refresh_token"]
-            app["redirectUris"] = ["https://hugmesh.systems/login/callback"]
+            app["redirectUris"] = ["https://hugmesh.net/login/callback"]
             app["expireInHours"] = 4
         # headscale's OIDC callback path is FIXED by the headscale binary itself
         # at "<server_url>/oidc/callback" (confirmed in its compiled string
-        # table) — not the generic "https://<name>.hugmesh.systems/callback"
+        # table) — not the generic "https://<name>.hugmesh.net/callback"
         # every other app gets. server_url defaults to the baked
-        # https://scale.hugmesh.systems (keys-template/headscale/config.yaml),
+        # https://scale.hugmesh.net (keys-template/headscale/config.yaml),
         # so that is what we register here.
         # !!! CAVEAT: like user-bff's callback, this is a single-domain bootstrap
         # !!! seed. keys-provision CAN rewrite server_url at first boot (LAN-IP
@@ -463,7 +463,7 @@ data:
         # !!! server_url change (with the new value substituted here) is a
         # !!! follow-up, not yet automated.
         if name == "headscale":
-            app["redirectUris"] = ["https://scale.hugmesh.systems/oidc/callback"]
+            app["redirectUris"] = ["https://scale.hugmesh.net/oidc/callback"]
         verb = write_application(appname, app)
         print(f"  {verb} {appname} (role {role})")
 
@@ -511,7 +511,7 @@ data:
         PUBLIC client: clientSecret is EMPTY (PKCE, no secret baked into the image),
         isPublic=True marks it as a public client; redirectUris are the native loopback
         + OOB URIs the desktop OIDC flow uses. Idempotent (update-if-exists).
-        Single-domain seed today, matching the confidential apps' `…hugmesh.systems`
+        Single-domain seed today, matching the confidential apps' `…hugmesh.net`
         convention — per-brand domains are layered by the rebrand path, not by this
         bootstrap seed.
 
@@ -584,7 +584,7 @@ data:
         org["mfaItems"] = MFA_ITEMS
         # WebAuthn relying-party + TOTP issuer scope the platform brand.
         org["mfaRememberInHours"] = 0
-        org["websiteUrl"] = org.get("websiteUrl") or "https://hugmesh.systems"
+        org["websiteUrl"] = org.get("websiteUrl") or "https://hugmesh.net"
         call(f"/api/update-organization?id={org_id}", org, "POST")
         # Read the capability list back — this is the field the whole step exists to
         # set, and an ok envelope is not evidence it persisted.
@@ -977,7 +977,7 @@ kind: Job
 metadata:
   name: casdoor-init
   namespace: hugmesh-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -990,7 +990,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/pki: "true"
+        hugmesh.net/pki: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

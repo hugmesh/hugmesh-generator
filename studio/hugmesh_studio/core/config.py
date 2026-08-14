@@ -1910,7 +1910,7 @@ class ImageConfig:
     # three coordinated edits in this file, not one. See docs/ORG-MOVE-TODO.md.
     org: str = "hugmesh"
     brand_profile: str = ""            # -C/--config brands/*.conf (carries HEADSCALE_URL/RELEASE_STATE/… presets)
-    cluster_domain: str = "hugmesh.systems"
+    cluster_domain: str = "hugmesh.net"
     # Ask 8 — "only show steps for users and domains if its selected to start with
     # aditional domains". WIZARD-FLOW state, never argv (NON_ARGV_FIELDS): False means
     # this mesh serves only its own cluster domain, so the Domains and Users tables have
@@ -2760,7 +2760,7 @@ class ImageConfig:
         a: list[str] = ["--env", self.env]
         a += self._brand_args()
         a += self._identity_args()
-        if self.cluster_domain != "hugmesh.systems":
+        if self.cluster_domain != "hugmesh.net":
             a += ["--cluster-domain", self.cluster_domain]
         # Orchestration superdomain — mesh-only, grouped with the cluster/mesh identity
         # plane (see _superdomain_args). Empty for cloud/standalone, so every existing
@@ -3153,7 +3153,7 @@ class ImageConfig:
         # G1). --person-role/--domains are ROLE_CLIENT-only (FD-08): on a cluster NODE
         # role the builder warns + ignores them, so emit them for any NON-node role (G18).
         if self.mode in ("cloud", "mesh"):
-            if self.cluster_domain != "hugmesh.systems":
+            if self.cluster_domain != "hugmesh.net":
                 a += ["--cluster-domain", self.cluster_domain]
             # Orchestration superdomain — mesh-only (see _superdomain_args), emitted for
             # every mesh role (nodes AND clients), so it sits OUTSIDE the node-role gate

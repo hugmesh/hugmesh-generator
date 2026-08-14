@@ -10,7 +10,7 @@
 # explicit assignment — akkoma/matrix federation.
 #
 # THE MODEL: a pod opts INTO VPN egress by carrying the label
-# `snapdragon.systems/vpn-egress=true`. The egress-VPN reconcile agent (PR5) sets
+# `hugmesh.net/vpn-egress=true`. The egress-VPN reconcile agent (PR5) sets
 # that label on the pods named by an ACTIVE assignment (a DOMAIN assignment marks
 # every public pod in the brand; a per-service assignment marks just akkoma /
 # tuwunel / coturn). This NetworkPolicy RE-ALLOWS direct internet egress for
@@ -47,12 +47,12 @@ metadata:
   name: egress-vpn-allow-marked
   namespace: hugmesh-backend
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: egress-vpn
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: egress-vpn
 spec:
   podSelector:
     matchLabels:
-      snapdragon.systems/vpn-egress: "true"
+      hugmesh.net/vpn-egress: "true"
   policyTypes: [Egress]
   egress:
     # DNS still needed (CoreDNS in kube-system) — keep it explicit so a

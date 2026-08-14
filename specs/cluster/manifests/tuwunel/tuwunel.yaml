@@ -1,7 +1,7 @@
 # tuwunel — Matrix homeserver (Rust Conduit/conduwuit fork), replaces Synapse.
 # Single binary + embedded RocksDB → far lighter than Synapse on a Pi. Serves the
 # Matrix client/server API on :8008 (the be-gateway already routes /_matrix/** and
-# the matrix.hugmesh.systems host here). Matrix-spec compatible, so the existing
+# the matrix.hugmesh.net host here). Matrix-spec compatible, so the existing
 # hugmesh-matrix-ui keeps working.
 #
 # ⚠️ VALIDATE ON CLUSTER: confirm the image tag + the exact config keys/env-prefix
@@ -17,7 +17,7 @@ metadata:
 data:
   tuwunel.toml: |
     [global]
-    server_name = "hugmesh.systems"
+    server_name = "hugmesh.net"
     address = "0.0.0.0"
     port = 8008
     database_path = "/var/lib/tuwunel"
@@ -25,14 +25,14 @@ data:
     allow_registration = false
     allow_federation = true
     # The client/server .well-known is served by the gateway host
-    # matrix.hugmesh.systems (be-gateway route matrix-wellknown).
-    well_known_client = "https://matrix.hugmesh.systems"
-    well_known_server = "matrix.hugmesh.systems:443"
+    # matrix.hugmesh.net (be-gateway route matrix-wellknown).
+    well_known_client = "https://matrix.hugmesh.net"
+    well_known_server = "matrix.hugmesh.net:443"
     trusted_servers = ["matrix.org"]
     # --- Matrix authority: ROLE_ADMIN = server-admin / ROLE_MOD = room-moderator ---
     # Conduit-family (tuwunel) has NO Synapse-style /_synapse/admin REST API, no
     # OIDC-group->admin auto-promotion, and NO homeserver moderator tier: server
-    # admin == membership of the auto-created admin room (#admins:hugmesh.systems).
+    # admin == membership of the auto-created admin room (#admins:hugmesh.net).
     # The tuwunel admin bot honours ban/redact/room-management commands from members
     # of that room.
     #   ROLE_ADMIN is mapped to Matrix SERVER admin by reconciling members INTO
@@ -50,7 +50,7 @@ data:
     # and injected at runtime (TUWUNEL_EMERGENCY_PASSWORD), so this manifest holds
     # intent only. Leave it unset here.
     # emergency_password = "<from Vault/ESO via Secret tuwunel-admin>"
-    admin_room_default = "#admins:hugmesh.systems"
+    admin_room_default = "#admins:hugmesh.net"
     # --- TURN/STUN (optional service: coturn) — DARK / GATED ---------------------
     # When the OPTIONAL, DEFAULT-OFF coturn relay is deployed, tuwunel advertises its
     # TURN URIs + mints time-limited credentials so Matrix WebRTC calls can relay
@@ -88,7 +88,7 @@ kind: ConfigMap
 metadata:
   name: tuwunel-proxy-nginx
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.net }
 data:
   nginx.conf: |
     worker_processes 1;
@@ -139,7 +139,7 @@ spec:
       labels: { app.kubernetes.io/name: tuwunel }
     spec:
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       securityContext:
         seLinuxOptions:
           type: container_t
@@ -220,7 +220,7 @@ kind: Service
 metadata:
   name: tuwunel-proxy
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   type: ClusterIP
   selector: { app.kubernetes.io/name: tuwunel }

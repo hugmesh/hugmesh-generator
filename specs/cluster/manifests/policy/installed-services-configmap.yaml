@@ -28,8 +28,8 @@ metadata:
   name: installed-services
   namespace: hugmesh-policy
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/registry: optional-services
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/registry: optional-services
 data:
   # Per-slug install-state. "true" = installed (ApplicationSet creates its app);
   # "false" = removed (ApplicationSet prunes it). Rendered from optional-services.yaml

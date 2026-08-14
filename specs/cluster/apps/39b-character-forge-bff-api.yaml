@@ -1,7 +1,7 @@
 # character-forge-bff — Backend-For-Frontend for the character-forge remote (the
 # 3D character maker + the XR chat room's avatar source). ClusterIP in
 # hugmesh-backend; the ONLY way in is the fe-gateway /bff/character-forge/**
-# route (same origin as hugmesh.systems). Owns the character_forge_character
+# route (same origin as hugmesh.net). Owns the character_forge_character
 # table in character-forge-bff-db. See docs/XR-CHAT.md.
 #
 # DEPLOY ORDERING: lands AFTER character-forge-bff-db (38b) + its mTLS/db ESO

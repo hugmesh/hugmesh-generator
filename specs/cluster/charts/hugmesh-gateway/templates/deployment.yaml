@@ -21,7 +21,7 @@ spec:
         {{- if not (has .Values.cassandra.access (list "schema-owner" "dml" "read-only")) }}
         {{- fail (printf "cassandra.access must be one of schema-owner|dml|read-only when cassandra.username is set (got %q) — it is the permission class manifests/cassandra-init GRANTs are checked against" .Values.cassandra.access) }}
         {{- end }}
-        snapdragon.systems/cassandra-access: {{ .Values.cassandra.access | quote }}
+        hugmesh.net/cassandra-access: {{ .Values.cassandra.access | quote }}
         {{- end }}
       labels:
         {{- include "hugmesh-gateway.selectorLabels" . | nindent 8 }}

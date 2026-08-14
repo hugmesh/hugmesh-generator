@@ -47,7 +47,7 @@ metadata:
   labels:
     app.kubernetes.io/name: egress-vpn
     app.kubernetes.io/component: config-writer-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -61,7 +61,7 @@ metadata:
   labels:
     app.kubernetes.io/name: egress-vpn
     app.kubernetes.io/component: config-writer-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

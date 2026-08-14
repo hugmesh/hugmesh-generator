@@ -13,7 +13,7 @@
 #                   in-cluster svc DNS name (env TUWUNEL_TURN_URIS — the
 #                   Conduit-family env override; a TOML/JSON array literal in
 #                   the value is the documented array syntax). Authored as
-#                   hugmesh.systems so rebrand_sysroot rewrites the domain; the
+#                   hugmesh.net so rebrand_sysroot rewrites the domain; the
 #                   turns: URI matches the turn.<domain> cert this overlay
 #                   issues (tls-externalsecret.yaml). Roll the tuwunel pod after
 #                   enabling so it re-reads the now-present optional env.
@@ -24,8 +24,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: coturn
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: coturn
 data:
   external-ip: ""
-  turn-uris: '["turn:turn.hugmesh.systems:3478?transport=udp", "turn:turn.hugmesh.systems:3478?transport=tcp", "turns:turn.hugmesh.systems:5349?transport=tcp"]'
+  turn-uris: '["turn:turn.hugmesh.net:3478?transport=udp", "turn:turn.hugmesh.net:3478?transport=tcp", "turns:turn.hugmesh.net:5349?transport=tcp"]'

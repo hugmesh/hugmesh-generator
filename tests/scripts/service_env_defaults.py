@@ -26,7 +26,7 @@ THE THREE DERIVED RULES — none of them contains a brand string:
   R3 foreign-domain       the default names a public DNS host whose registrable
                           domain is not a domain this cluster serves (derived from
                           the Ingress/route host positions in specs/cluster).
-                          Finding #13's shape: https://snapdragon.systems/... .
+                          Finding #13's shape: https://hugmesh.net/... .
 
 Spring semantics this relies on, verified against upstream docs:
   * `${NAME:default}` — ":" is the value separator
@@ -192,7 +192,7 @@ class ClusterFacts:
     `app.kubernetes.io/part-of` label every object carries (which is how the
     second platform domain, hugmesh.games, states itself: its public host is
     `games.${GAMES_DOMAIN}`, a template hole no host position resolves).
-    Position matters: `snapdragon.systems/backend` is a live, deliberately frozen
+    Position matters: `hugmesh.net/backend` is a live, deliberately frozen
     nodeSelector LABEL KEY, and reading it as a domain would be wrong.
     """
 

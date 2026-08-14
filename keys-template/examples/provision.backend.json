@@ -28,9 +28,9 @@
   },
   "hugmesh": {
     "role": "backend",
-    "cluster_domain": "hugmesh.systems",
+    "cluster_domain": "hugmesh.net",
     "node_labels": {
-      "snapdragon.systems/backend": "true"
+      "hugmesh.net/backend": "true"
     }
   },
   "_comment_nodes": "Reach the pki control-plane + mesh + binhost by IP (written to /etc/hosts), so tailscale login_server and kubeadm api_server resolve before DNS exists.",

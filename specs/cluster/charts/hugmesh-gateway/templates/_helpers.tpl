@@ -5,7 +5,7 @@
 {{- define "hugmesh-gateway.labels" -}}
 app.kubernetes.io/name: {{ include "hugmesh-gateway.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/part-of: hugmesh.systems
+app.kubernetes.io/part-of: hugmesh.net
 app.kubernetes.io/component: gateway
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end -}}

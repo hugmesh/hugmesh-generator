@@ -59,11 +59,11 @@ metadata:
   namespace: hugmesh-frontend
   labels:
     app.kubernetes.io/name: hugmesh-fe-gateway
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/autoscaler: latency-rps
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/autoscaler: latency-rps
   annotations:
-    snapdragon.systems/dark: "true"
-    snapdragon.systems/metric-source: "prometheus (ABSENT — see README; requires (a) Prometheus scraping /actuator/prometheus or (b) OTel prometheus exporter)"
+    hugmesh.net/dark: "true"
+    hugmesh.net/metric-source: "prometheus (ABSENT — see README; requires (a) Prometheus scraping /actuator/prometheus or (b) OTel prometheus exporter)"
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

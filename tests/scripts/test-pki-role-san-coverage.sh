@@ -242,7 +242,7 @@ expect_catch "role identity derived from the role name, not the Service name" \
 '
 # (7) harbor is the one role outside the loop; it must be checked identically.
 expect_catch "harbor loses the public registry host from allowed_domains" \
-  "[pki-san-coverage]" "registry.hugmesh.systems" '
+  "[pki-san-coverage]" "registry.hugmesh.net" '
   sed -i "s|,registry.\${DOMAIN}\"|\"|" \
       "$T/manifests/vault-pki/pki-init-configmap.yaml"
 '

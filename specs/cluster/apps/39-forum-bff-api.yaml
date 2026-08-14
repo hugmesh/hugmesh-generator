@@ -1,6 +1,6 @@
 # forum-bff — Backend-For-Frontend for the hugmesh-forum-ui. ClusterIP in
 # hugmesh-backend; the ONLY way in is the fe-gateway /bff/forum/** route (same
-# origin as hugmesh.systems). It is the SINGLE browser->phpBB path and the
+# origin as hugmesh.net). It is the SINGLE browser->phpBB path and the
 # egress source into the isolated hugmesh-forum namespace. Owns the
 # forum_user_role / forum_action tables in forum-bff-db.
 #

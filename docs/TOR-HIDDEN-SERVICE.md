@@ -41,7 +41,7 @@ The hidden service maps `:443` → the **node-local fe-gateway ingress**. A HOST
 daemon cannot resolve cluster DNS, so the default upstream is `127.0.0.1:8443`; override
 per node by writing one `host:port` line to `/etc/hugmesh/tor/upstream`.
 
-A secondary, **opt-in** capability (`snapdragon.systems/tor-onion=true` label +
+A secondary, **opt-in** capability (`hugmesh.net/tor-onion=true` label +
 `tor-onion-marked` NetworkPolicy) lets a pod egress through the node Tor SOCKS proxy. It
 is **inert by default** and additionally requires binding `SocksPort` to the pod network
 (a deliberate future enablement) — see the header of

@@ -7,13 +7,13 @@ A **reserved label** is a username / vanity-profile handle that a user may
 path-prefix or subdomain route** on the platform gateways. Vanity profiles are
 addressed as:
 
-- `<username>.hugmesh.systems` (a subdomain; resolved by the fe-gateway
-  `Host=*.hugmesh.systems` route → federation-api, see
+- `<username>.hugmesh.net` (a subdomain; resolved by the fe-gateway
+  `Host=*.hugmesh.net` route → federation-api, see
   [`docs/ROUTE-ACCESS.md`](ROUTE-ACCESS.md) and the cluster README "Vanity
   subdomains"), and the equivalent `*.hugmesh.games` surfaces.
 
-If a user could register, say, `admin`, then `admin.hugmesh.systems` /
-`snapdragon.systems/admin` would **shadow** (or be shadowed by) the real
+If a user could register, say, `admin`, then `admin.hugmesh.net` /
+`hugmesh.net/admin` would **shadow** (or be shadowed by) the real
 platform route — a **vanity-collision**. The reserved set forbids exactly those
 labels.
 
@@ -85,7 +85,7 @@ be reserved" rule — which would be **red on day one** — is avoided.
 
 | Layer | Where | What it enforces |
 |---|---|---|
-| **vanity-resolve** | `federation-api` `VanityController` / `ReservedNames` | refuses a reserved first-label when resolving `<user>.hugmesh.systems` |
+| **vanity-resolve** | `federation-api` `VanityController` / `ReservedNames` | refuses a reserved first-label when resolving `<user>.hugmesh.net` |
 | **profile DB / registration** | `user-bff-api` `ReservedNames`, `hugmesh-actions` | a profile/handle can't be saved/registered with a reserved name |
 | **admin-route management** | `admin-bff-api` `ReservedNames` | an admin can't create a route-access row that conflicts with a reserved name |
 | **GitOps / admission** *(this repo)* | Kyverno `ClusterPolicy` + ConfigMap | blocks vanity-shadowing Ingress/HTTPRoute hosts + reserved vanity CRD handles at admission/sync |
@@ -116,8 +116,8 @@ is a Kyverno `ClusterPolicy` (`validationFailureAction: Enforce`) that reads the
 reserved list **from the ConfigMap** (single source) and:
 
 1. **rejects an Ingress** whose host's first DNS label under
-   `*.hugmesh.systems` / `*.hugmesh.games` is reserved (unless the object
-   is a platform component, `app.kubernetes.io/part-of=hugmesh.systems`),
+   `*.hugmesh.net` / `*.hugmesh.games` is reserved (unless the object
+   is a platform component, `app.kubernetes.io/part-of=hugmesh.net`),
 2. **rejects a Gateway-API `HTTPRoute`** on the same hostname rule, and
 3. **defensively rejects** a `VanityClaim`/`Profile`/`User` CRD whose handle is
    reserved — **inert** until such a CRD exists (the kind won't match), so it is
@@ -249,7 +249,7 @@ to reporting a clean PASS on a skipped run.
   other mechanism (a future Ingress/HTTPRoute) is covered by the Kyverno host
   policy, not stage 4. The internal allowlist is intentionally a script-side
   constant here; promoting it to a manifest label
-  (`snapdragon.systems/reserved-exempt: true`) is a documented follow-up.
+  (`hugmesh.net/reserved-exempt: true`) is a documented follow-up.
 
 ## The Casdoor pre-signup confusable gate
 

@@ -38,12 +38,12 @@ metadata:
   name: total-cloud-nightly
   namespace: velero
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     # hugmesh-generator, NOT hugmesh-admin-bff: the sweep CronJob + the admin-bff
     # BackupStatusReconciler select managed-by=hugmesh-admin-bff, so backups this
     # Schedule produces are (correctly) invisible to the catalog machinery.
     app.kubernetes.io/managed-by: hugmesh-generator
-    snapdragon.systems/backup-scope: total
+    hugmesh.net/backup-scope: total
 spec:
   # Gate 2: applied paused. Unpausing is the explicit superadmin opt-in.
   paused: true

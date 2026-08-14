@@ -37,7 +37,7 @@ import { onboard, shot } from './helpers';
 // full the moment a lane serves source="clickhouse" (the k8s/heavy lane), the
 // same way specs 19-23 skip on an absent federation peer.
 test('admin views live infra usage analytics (ClickHouse-backed)', async ({ page }) => {
-  await onboard(page, 'admin@hugmesh.systems'); // admin role; also generates events
+  await onboard(page, 'admin@hugmesh.net'); // admin role; also generates events
 
   // Ask the BFF which analytics backend actually served this request. `source`
   // is admin-bff's own honest self-report, so this detects the dependency

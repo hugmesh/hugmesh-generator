@@ -20,7 +20,7 @@ metadata:
   namespace: hugmesh-frontend
   labels:
     app: hugmesh-character-studio-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   # parentRefs MUST be set to the cluster's frontend Gateway when the Gateway API is
   # adopted (placeholder name below; matches the ingress-nginx/Envoy Gateway naming).

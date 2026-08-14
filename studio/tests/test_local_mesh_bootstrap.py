@@ -334,7 +334,7 @@ def test_up_stops_if_superadmin_unreadable(tmp_path, monkeypatch):
 def test_prod_stack_node_threads_domain_test_does_not(tmp_path):
     # prod: the resolved apex is handed to LocalStackNode as DOMAIN, so `make
     # stack-up` derives CASDOOR_ISSUER=https://id.<domain> — matching the minted
-    # secrets and the plan, not the silent hugmesh.systems default.
+    # secrets and the plan, not the silent hugmesh.net default.
     prod = _boot(tmp_path, env="prod", cluster_domain="corp.example",
                  auth_key="tskey-x")
     assert prod._stack_node().domain == "corp.example"

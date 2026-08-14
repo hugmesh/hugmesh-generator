@@ -68,7 +68,7 @@ kind: ConfigMap
 metadata:
   name: harbor-provision-script
   namespace: hugmesh-pki
-  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.net }
 data:
   reconcile.py: |
     #!/usr/bin/env python3
@@ -83,7 +83,7 @@ data:
     VAULT_ADDR = os.environ.get("VAULT_ADDR", "https://vault.vault.svc.cluster.local:8200")
     VAULT_KV_MOUNT = os.environ.get("VAULT_KV_MOUNT", "secret")
     VAULT_KV_BASE  = os.environ.get("VAULT_KV_BASE", "hugmesh")
-    CASDOOR_OIDC_ENDPOINT = os.environ.get("CASDOOR_OIDC_ENDPOINT", "https://id.hugmesh.systems")
+    CASDOOR_OIDC_ENDPOINT = os.environ.get("CASDOOR_OIDC_ENDPOINT", "https://id.hugmesh.net")
 
     ADMIN_USER = open("/secrets/admin/username").read().strip()
     ADMIN_PASS = open("/secrets/admin/password").read().strip()
@@ -272,7 +272,7 @@ kind: Job
 metadata:
   name: harbor-provision
   namespace: hugmesh-pki
-  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.net }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -285,7 +285,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/pki: "true"
+        hugmesh.net/pki: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -306,7 +306,7 @@ spec:
             - name: VAULT_KV_BASE
               value: "hugmesh"
             - name: CASDOOR_OIDC_ENDPOINT
-              value: "https://id.hugmesh.systems"
+              value: "https://id.hugmesh.net"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

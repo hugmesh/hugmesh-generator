@@ -6,7 +6,7 @@
 # Built from the IN-REPO container source specs/cluster/manifests/edge-ai-tts/image
 # — the same source the cluster image is built from. It CANNOT be pulled: the
 # deployment's coordinates are the in-mesh registry
-# (registry.hugmesh.systems/hugmesh/edge-ai-tts:main, kustomization.yaml), which
+# (registry.hugmesh.net/hugmesh/edge-ai-tts:main, kustomization.yaml), which
 # does not resolve off-cluster, and no public registry carries it. That source has
 # never had its container-build spike executed (image/README.md: "runtime
 # synthesis was NOT executed") — the first `make stack-up TTS=1` IS that spike.

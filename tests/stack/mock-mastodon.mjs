@@ -19,7 +19,7 @@ const tok = (u) => `msk_${u}_${Math.random().toString(36).slice(2, 10)}`;
 function acct(u) {
   if (!accounts.has(u)) accounts.set(u, {
     id: String(nextAcct++), username: u, acct: u, display_name: u,
-    url: `https://mastodon.hugmesh.systems/@${u}`, avatar: '', avatar_static: '',
+    url: `https://mastodon.hugmesh.net/@${u}`, avatar: '', avatar_static: '',
     header: '', header_static: '', note: '', locked: false, bot: false,
     created_at: new Date().toISOString(), followers_count: 0, following_count: 0,
     statuses_count: 0, fields: [], emojis: [],
@@ -31,8 +31,8 @@ function acct(u) {
 // so the double must mirror that shape — a minimal status breaks the card.
 function fullStatus(p) {
   return {
-    id: p.id, uri: `https://mastodon.hugmesh.systems/statuses/${p.id}`,
-    url: `https://mastodon.hugmesh.systems/@${p.account.acct}/${p.id}`,
+    id: p.id, uri: `https://mastodon.hugmesh.net/statuses/${p.id}`,
+    url: `https://mastodon.hugmesh.net/@${p.account.acct}/${p.id}`,
     created_at: p.created_at, edited_at: null, content: p.content,
     visibility: p.visibility || 'public', sensitive: false, spoiler_text: p.spoiler_text || '',
     language: 'en', replies_count: 0, reblogs_count: 0, favourites_count: 0,

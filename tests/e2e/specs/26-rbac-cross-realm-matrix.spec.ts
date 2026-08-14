@@ -27,7 +27,7 @@ import { tags } from './report-tags';
 //
 // THREE REALMS, one decision oracle. The "realms" here are:
 //
-//   * SYSTEMS — org "hugmesh", issuer id.hugmesh.systems. Native roles are
+//   * SYSTEMS — org "hugmesh", issuer id.hugmesh.net. Native roles are
 //     systems ROLE_* (ROLE_ADMIN/ROLE_MOD/ROLE_USER/…). Enforced by the systems
 //     fe/be/pki gateways (rbac-route-access.ROUTE_ACCESS, the schema.sql mirror).
 //   * GAMES — org "threewizards", issuer id.hugmesh.games, an INDEPENDENT

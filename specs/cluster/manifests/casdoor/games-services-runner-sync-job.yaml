@@ -26,7 +26,7 @@ kind: ConfigMap
 metadata:
   name: games-services-runner-sync-script
   namespace: hugmesh-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
 data:
   sync.py: |
     #!/usr/bin/env python3
@@ -182,7 +182,7 @@ kind: Job
 metadata:
   name: games-services-runner-sync
   namespace: hugmesh-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -195,7 +195,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/pki: "true"
+        hugmesh.net/pki: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

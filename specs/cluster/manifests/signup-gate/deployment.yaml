@@ -8,14 +8,14 @@ kind: Deployment
 metadata:
   name: signup-gate
   namespace: hugmesh-pki
-  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 2
   selector: { matchLabels: { app: signup-gate } }
   template:
     metadata: { labels: { app: signup-gate } }
     spec:
-      nodeSelector: { snapdragon.systems/pki: "true" }
+      nodeSelector: { hugmesh.net/pki: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -78,7 +78,7 @@ kind: Service
 metadata:
   name: signup-gate
   namespace: hugmesh-pki
-  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   selector: { app: signup-gate }
   ports:

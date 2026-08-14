@@ -48,7 +48,7 @@ kind: NetworkPolicy
 metadata:
   name: homeserver-egress-akkoma
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: akkoma }
@@ -87,7 +87,7 @@ kind: NetworkPolicy
 metadata:
   name: homeserver-egress-akkoma-db
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: akkoma-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: akkoma-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: akkoma-db }
@@ -112,7 +112,7 @@ kind: NetworkPolicy
 metadata:
   name: homeserver-egress-tuwunel
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: tuwunel }

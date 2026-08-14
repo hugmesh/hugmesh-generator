@@ -8,8 +8,8 @@ metadata:
   name: edge-ai-models-cache
   namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/slug: edge-ai
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/slug: edge-ai
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: local-path

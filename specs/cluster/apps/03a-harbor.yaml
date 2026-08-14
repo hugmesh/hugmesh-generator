@@ -5,7 +5,7 @@
 # REPLACES GitLab's bundled container registry as the thing that actually
 # serves images (GitLab itself, and its Generic Package Registry used for ISO
 # delivery, are UNCHANGED — see .gitlab-ci.yml deliver:isos). The hostname
-# registry.{{CLUSTER_DOMAIN}} / registry.hugmesh.systems IS repointed by this
+# registry.{{CLUSTER_DOMAIN}} / registry.hugmesh.net IS repointed by this
 # Application: expose.type: ingress below claims that hostname directly, and
 # GitLab's own bundled registry subchart is disabled in apps/03-gitlab.yaml
 # (registry.enabled: false) in the SAME migration so nothing else can claim it.
@@ -40,10 +40,10 @@
 # (unaffected by the above) for the provisioning Job (harbor-provision, see
 # manifests/harbor/) and for be-gateway/image-builder pull+push via
 # imagePullSecrets/newName (already wired, see the harbor-registry/
-# image-builder-registry ExternalSecrets and the registry.hugmesh.systems
+# image-builder-registry ExternalSecrets and the registry.hugmesh.net
 # newName rewrites across manifests/*/kustomization.yaml).
 #
-# NOTE (operator/DNS): registry.hugmesh.systems resolving to the pki node's
+# NOTE (operator/DNS): registry.hugmesh.net resolving to the pki node's
 # IP for LAN/VPN clients (mirroring the scale.<domain> facade alias
 # provision_hosts already writes) is a platform DNS-topology question that
 # predates this migration and applies identically regardless of which backend
@@ -101,16 +101,16 @@ spec:
               secretName: harbor-mtls
           ingress:
             hosts:
-              core: registry.hugmesh.systems
+              core: registry.hugmesh.net
             className: nginx-internal
-        externalURL: https://registry.hugmesh.systems
+        externalURL: https://registry.hugmesh.net
         harborAdminPassword: ""     # unused; existingSecret below wins
         existingSecretAdminPassword: harbor-admin
         existingSecretAdminPasswordKey: HARBOR_ADMIN_PASSWORD
         # Pin everything to the pki/control-plane node, matching every other
         # hugmesh-pki workload (casdoor, route-access-db, vault, ...).
         nodeSelector:
-          snapdragon.systems/pki: "true"
+          hugmesh.net/pki: "true"
         persistence:
           persistentVolumeClaim:
             registry:      { storageClass: hugmesh-local }

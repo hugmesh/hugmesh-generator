@@ -1,5 +1,5 @@
 # tuwunel — Matrix homeserver (Rust Conduit fork, replaces Synapse).
-# matrix.hugmesh.systems, backend namespace. Matrix-spec compatible, so
+# matrix.hugmesh.net, backend namespace. Matrix-spec compatible, so
 # hugmesh-matrix-ui (in hugmesh-social-ui) is unchanged. Raw manifests
 # (no Helm chart). See manifests/tuwunel for image/config validation notes.
 apiVersion: argoproj.io/v1alpha1

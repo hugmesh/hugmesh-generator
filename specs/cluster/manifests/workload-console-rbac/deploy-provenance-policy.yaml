@@ -17,7 +17,7 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: policy
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   validationFailureAction: Enforce
   background: true

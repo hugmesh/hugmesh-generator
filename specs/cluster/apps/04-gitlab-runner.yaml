@@ -15,7 +15,7 @@ spec:
     helm:
       releaseName: gitlab-runner
       values: |
-        gitlabUrl: https://gitlab.hugmesh.systems
+        gitlabUrl: https://gitlab.hugmesh.net
         # runnerToken from Vault/ESO secret 'gitlab-runner-secret'.
         runners:
           config: |

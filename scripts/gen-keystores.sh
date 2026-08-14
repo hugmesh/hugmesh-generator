@@ -58,7 +58,7 @@ if [ -n "${BRAND:-}" ] && [ -f "${REPO}/brands/${BRAND}.conf" ]; then
   # shellcheck disable=SC1090
   . "${REPO}/brands/${BRAND}.conf"
 fi
-DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
+DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
 BRAND="${BRAND:-hugmesh}"
 
 # ── Multi-tenancy: per-domain CA loop (PR4) ─────────────────────────
@@ -378,7 +378,7 @@ EXT
 #   _ca_dir="${CA}/${_b}"; _ks_dir="${KS}/${_b}"  -> mkdir -p / rm -f (as root)
 # so a value containing '/' or '..' would escape the output tree. Validate each
 # parsed row up front and FAIL CLOSED on a bad slug/domain; legit slugs
-# (e.g. hugmesh) and domains (e.g. hugmesh.systems) still pass.
+# (e.g. hugmesh) and domains (e.g. hugmesh.net) still pass.
 _KS_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 _KS_DNS_NAME='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
 validate_brand_domain() {

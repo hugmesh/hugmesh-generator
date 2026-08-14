@@ -39,7 +39,7 @@ metadata:
     # Wave 1 so the CRDs + server land before the config app (wave 2) applies the
     # BackupStorageLocation (a velero.io CRD) + RBAC + sweep.
     argocd.argoproj.io/sync-wave: "1"
-    snapdragon.systems/ships-dark: "manual-sync + app.backups.effector.enabled=false"
+    hugmesh.net/ships-dark: "manual-sync + app.backups.effector.enabled=false"
 spec:
   project: default
   source:

@@ -1,5 +1,5 @@
 # hugmesh-api-docs — API documentation Angular micro-frontend, served at
-# /apidocs and federated into the hugmesh.systems host. Frontend Pis. The
+# /apidocs and federated into the hugmesh.net host. Frontend Pis. The
 # rendered OpenAPI/spec docs are gated to ROLE_ADMIN at the fe-gateway.
 apiVersion: argoproj.io/v1alpha1
 kind: Application

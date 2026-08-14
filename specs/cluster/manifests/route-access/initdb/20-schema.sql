@@ -136,13 +136,13 @@ DELETE FROM gateway_route_access
 -- A request is allowed iff the caller holds the role of a matching allow row for
 -- THIS gateway; the most specific matching url_pattern wins (admin paths first).
 INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
-  -- pki-gateway (id.hugmesh.systems -> Casdoor)
+  -- pki-gateway (id.hugmesh.net -> Casdoor)
   ('hugmesh-pki-gateway', '/api/auth/**',          'ROLE_USER',      true),  -- public-floor
   ('hugmesh-pki-gateway', '/login/**',             'PUBLIC', true),  -- public
   ('hugmesh-pki-gateway', '/.well-known/**',       'PUBLIC', true),  -- public (OIDC/jwks)
   ('hugmesh-pki-gateway', '/**',                   'ROLE_SUPERADMIN', true),  -- headscale control-plane (scale.) catch-all -> SUPERADMIN-only; the 3 specific rows above win by most-specific match (bug #15)
 
-  -- be-gateway (api./matrix./mastodon.hugmesh.systems -> APIs/Matrix/Mastodon)
+  -- be-gateway (api./matrix./mastodon.hugmesh.net -> APIs/Matrix/Mastodon)
   -- ROLE_MOD moderation surfaces — MORE SPECIFIC than the ROLE_MASTODON /api/v1/**
   -- platform-access floor below, so they win the most-specific match and gate
   -- akkoma moderation to moderators/admins (NOT plain ROLE_MASTODON). ROLE_ADMIN is
@@ -337,7 +337,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-be-gateway',  '/v1/synthesize/**',     'ROLE_USER',      true),  -- edge-ai-tts voice synthesis API
   ('hugmesh-be-gateway',  '/v1/**',                'ROLE_USER',      true),  -- edge-ai OpenAI-compatible inference API
 
-  -- fe-gateway (hugmesh.systems -> Angular host + MFEs + same-origin /bff)
+  -- fe-gateway (hugmesh.net -> Angular host + MFEs + same-origin /bff)
   ('hugmesh-fe-gateway',  '/',                     'PUBLIC', true),  -- public front page
   -- The rest of the anonymous SPA shell the '/' row already implies: the
   -- document, the root-level hashed bundles the Angular browser build serves
@@ -376,7 +376,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('hugmesh-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
   -- phpBB forum micro-frontend UI (hugmesh-forum-ui at /social/forum/**),
-  -- served at the apex PATH (NOT a forum. subdomain — the *.hugmesh.systems
+  -- served at the apex PATH (NOT a forum. subdomain — the *.hugmesh.net
   -- vanity wildcard would swallow forum.<domain>). Gated by the dedicated forum
   -- ACCESS role ROLE_FORUM (the new Casdoor forum-access role) — congruent with
   -- how /social/matrix + /social/mastodon gate the social shells, and the model

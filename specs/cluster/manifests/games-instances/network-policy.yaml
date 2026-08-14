@@ -23,7 +23,7 @@ kind: NetworkPolicy
 metadata:
   name: games-instances-default-deny
   namespace: hugmesh-games-instances
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
@@ -35,7 +35,7 @@ kind: NetworkPolicy
 metadata:
   name: games-instances-allow-dns-egress
   namespace: hugmesh-games-instances
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector: {}
   policyTypes: [Egress]
@@ -49,7 +49,7 @@ spec:
         - { protocol: TCP, port: 53 }
 ---
 # ── allow be-gateway -> instance HTTP console ──────────────────────────────────────────
-# Every instance pod carries the label snapdragon.systems/games-instance: "true" (the
+# Every instance pod carries the label hugmesh.net/games-instance: "true" (the
 # 13c ApplicationSet template stamps it). Ingress to the console port is admitted ONLY
 # from the be-gateway pod in hugmesh-backend (defence-in-depth: namespace label AND
 # pod label both required).
@@ -58,10 +58,10 @@ kind: NetworkPolicy
 metadata:
   name: games-instances-allow-be-gateway-console
   namespace: hugmesh-games-instances
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
-    matchLabels: { snapdragon.systems/games-instance: "true" }
+    matchLabels: { hugmesh.net/games-instance: "true" }
   policyTypes: [Ingress]
   ingress:
     - from:

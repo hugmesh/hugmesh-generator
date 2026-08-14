@@ -14,7 +14,7 @@ kind: ConfigMap
 metadata:
   name: vault-pki-init
   namespace: vault
-  labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: secrets }
+  labels: { app.kubernetes.io/part-of: hugmesh.net, hugmesh.net/tier: secrets }
 data:
   init-pki.sh: |
     #!/bin/sh
@@ -25,7 +25,7 @@ data:
     # Vault has NO static dev "root" token, so there is no insecure default here.
     export VAULT_ADDR="${VAULT_ADDR:-https://vault.vault.svc.cluster.local:8200}"
     export VAULT_TOKEN="${VAULT_TOKEN:-}"
-    DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
+    DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
     PKI="pki_int"
 
     # ── Crypto agility knobs (override via the Job env) ────────────────
@@ -114,7 +114,7 @@ data:
     #    issue `hugmesh-be-gateway.hugmesh-backend.svc.cluster.local` or
     #    `vault.vault.svc.cluster.local` and walk straight through the mesh's
     #    peer verification; `${DOMAIN}` + allow_subdomains did the same for every
-    #    public *.hugmesh.systems host including registry.hugmesh.systems. Both
+    #    public *.hugmesh.net host including registry.hugmesh.net. Both
     #    blankets are gone. Named entries + allow_bare_domains give exact-match
     #    semantics, so subdomains/globs/wildcards/IP-SANs are all switched OFF
     #    explicitly (they are Vault's defaults for the first three, but a PKI role

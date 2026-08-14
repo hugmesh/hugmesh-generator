@@ -7,7 +7,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: uptrace-pg-data
   namespace: observability
-  labels: { app: uptrace-pg, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: uptrace-pg, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: hugmesh-local

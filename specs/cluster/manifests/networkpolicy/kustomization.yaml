@@ -6,8 +6,8 @@ resources:
   - harbor-ingress.yaml   # Harbor registry per-pod Ingress backstop (be-gateway + hugmesh-image-builds only); paired with the tier-ingress `app: harbor` NotIn exclude
   - homeserver-isolation.yaml
   - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
-  - egress-vpn-interaction.yaml   # per-service opt-in (snapdragon.systems/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)
-  - tor-onion-marked.yaml   # per-service opt-in (snapdragon.systems/tor-onion=true) egress to the node Tor SOCKS proxy; forward-hook for pod-egress-via-tor; PRUNED when tor is not selected (default-off)
+  - egress-vpn-interaction.yaml   # per-service opt-in (hugmesh.net/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)
+  - tor-onion-marked.yaml   # per-service opt-in (hugmesh.net/tor-onion=true) egress to the node Tor SOCKS proxy; forward-hook for pod-egress-via-tor; PRUNED when tor is not selected (default-off)
   # SHIPS DARK — tier-egress.yaml (tier-wide default-deny EGRESS, CLUSTER-HARDENING-PLAN §B)
   # is INTENTIONALLY NOT listed here. This auto-sync app (apps/08-networkpolicy.yaml) stays
   # INGRESS-ONLY. Default-deny egress is HIGH blast radius (a missed allow black-holes a

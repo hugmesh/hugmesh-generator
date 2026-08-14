@@ -21,7 +21,7 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: rbac-superadmin-read
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -31,7 +31,7 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: rbac-superadmin-read
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"]
@@ -53,7 +53,7 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: rbac-superadmin-read
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

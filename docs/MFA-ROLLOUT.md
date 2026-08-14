@@ -658,13 +658,13 @@ origin. The auth-core defaults are localhost-shaped and wrong for any real deplo
 
 ```yaml
 - name: APP_MFA_WEBAUTHN_RP_ID
-  value: "admin.hugmesh.systems"
+  value: "admin.hugmesh.net"
 - name: APP_MFA_WEBAUTHN_ORIGINS
-  value: "https://admin.hugmesh.systems"
+  value: "https://admin.hugmesh.net"
 ```
 
 For your own domain these must be rewritten (the `rebrand_sysroot` path rewrites
-`admin.hugmesh.systems` → `admin.<domain>` per tenant — confirm it did). Rules:
+`admin.hugmesh.net` → `admin.<domain>` per tenant — confirm it did). Rules:
 
 - RP-ID must be the registrable suffix of every origin the admin UI is served from.
   A credential registered under one RP-ID **cannot** be asserted under another —

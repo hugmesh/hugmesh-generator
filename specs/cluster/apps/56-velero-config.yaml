@@ -34,7 +34,7 @@ metadata:
   namespace: devops
   annotations:
     argocd.argoproj.io/sync-wave: "2"
-    snapdragon.systems/ships-dark: "manual-sync + sweep suspend:true until effector enabled"
+    hugmesh.net/ships-dark: "manual-sync + sweep suspend:true until effector enabled"
 spec:
   project: default
   source:

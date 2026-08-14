@@ -43,9 +43,9 @@ metadata:
   name: cassandra-auth-config
   namespace: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: db-hardening
-    snapdragon.systems/ships: dark
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: db-hardening
+    hugmesh.net/ships: dark
 data:
   # The cassandra.yaml deltas this hardening enables (reference; see header for
   # how they are actually applied via extraEnvVars at flip time).

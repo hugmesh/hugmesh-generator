@@ -97,7 +97,7 @@ else bad "ssid NOT rejected: real embedded newline"; fi
 for c in US GB us De; do
   if country_ok "${c}"; then ok "country accepted: ${c}"; else bad "country rejected: ${c}"; fi
 done
-for h in node-1 host.example.com localhost a hugmesh.systems node-1.fleet.local; do
+for h in node-1 host.example.com localhost a hugmesh.net node-1.fleet.local; do
   if hostname_ok "${h}"; then ok "hostname accepted: ${h}"; else bad "hostname rejected: ${h}"; fi
 done
 for s in 'My WiFi 5G' 'HomeNet' 'guest-2.4GHz' 'a.b'; do

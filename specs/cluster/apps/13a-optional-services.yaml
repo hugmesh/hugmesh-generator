@@ -33,7 +33,7 @@ metadata:
     # Build/runtime: the installed flags here are mirrored from the
     # installed-services ConfigMap (rendered from optional-services.yaml). Flip a
     # slug's installed value to add/remove it at runtime.
-    snapdragon.systems/source-of-truth: specs/cluster/optional-services.yaml
+    hugmesh.net/source-of-truth: specs/cluster/optional-services.yaml
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
@@ -119,8 +119,8 @@ spec:
     metadata:
       name: "optional-{{ .slug }}"
       labels:
-        app.kubernetes.io/part-of: hugmesh.systems
-        snapdragon.systems/optional-service: "{{ .slug }}"
+        app.kubernetes.io/part-of: hugmesh.net
+        hugmesh.net/optional-service: "{{ .slug }}"
     spec:
       project: default
       source:

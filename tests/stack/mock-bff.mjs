@@ -24,7 +24,7 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8403);
-const ADMINS = new Set((process.env.ADMIN_EMAILS || 'admin@hugmesh.systems').split(','));
+const ADMINS = new Set((process.env.ADMIN_EMAILS || 'admin@hugmesh.net').split(','));
 // The deterministic native password every seeded/invited persona signs in with —
 // matches the e2e helper's LOGIN_PASSWORD (E2E_PASSWORD ?? 'e2e-pass').
 const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
@@ -46,10 +46,10 @@ const routeAccess = [
 ];
 // Latest delivered ISO artifacts (stands in for the GitLab generic package "latest" links).
 const ISOS = [
-  { name: 'gentoo-rpi5-arm64-pki-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-pki-k8s-2026.0.iso' },
-  { name: 'gentoo-rpi5-arm64-backend-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-backend-k8s-2026.0.iso' },
-  { name: 'gentoo-rpi5-arm64-frontend-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-frontend-k8s-2026.0.iso' },
-  { name: 'gentoo-x86-hugmesh-host-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-x86-hugmesh-host-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-pki-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.net/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-pki-k8s-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-backend-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.net/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-backend-k8s-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-frontend-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.net/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-frontend-k8s-2026.0.iso' },
+  { name: 'gentoo-x86-hugmesh-host-2026.0.iso', url: 'https://gitlab.hugmesh.net/api/v4/projects/1/packages/generic/iso/latest/gentoo-x86-hugmesh-host-2026.0.iso' },
 ];
 // Real-service brokering: the BFF mints Matrix (tuwunel) + Mastodon tokens
 // server-side so the UI never holds homeserver admin creds. Point at the real

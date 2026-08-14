@@ -123,7 +123,7 @@ byte-identically to the pre-overlay mainline.
      replacing the offline CA — the platform's standing ACME stance).
 
    **Which node is "the relay node"?** The pod keeps the base
-   `nodeSelector snapdragon.systems/backend: "true"` and `replicas: 1`, so on a
+   `nodeSelector hugmesh.net/backend: "true"` and `replicas: 1`, so on a
    mesh with **one** backend node (the reference topology — the x86 host) that
    node is the relay. With **several** backend nodes the scheduler picks one, and
    the marker/DNS/`external-ip` must all name that same node: pin it (add a
@@ -179,7 +179,7 @@ byte-identically to the pre-overlay mainline.
 coturn is a candidate for the per-service **egress VPN** (see
 [`docs/EGRESS-VPN.md`](EGRESS-VPN.md)). When `egress-vpn` is selected **and** an
 assignment names coturn, the reconcile agent labels the coturn pod
-`snapdragon.systems/vpn-egress=true` and `egress-vpn-interaction.yaml` tunnels its
+`hugmesh.net/vpn-egress=true` and `egress-vpn-interaction.yaml` tunnels its
 direct egress through `wg0`. coturn works **without** the VPN (it is a public
 relay, not federated traffic), so the label is **optional** — coturn's own
 `network-policy.yaml` always permits direct relay egress.

@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// Drives the hugmesh.systems host (served over the GENERATED TLS cert with
+// Drives the hugmesh.net host (served over the GENERATED TLS cert with
 // the GENERATED runtime values) and the federated Matrix/Mastodon/login/admin
 // micro-frontends. Run against the rootless integration stack (tests/stack).
 export default defineConfig({
@@ -40,7 +40,7 @@ export default defineConfig({
         // Kind runs address the cluster by its REAL hostname (the fe-gateway
         // Ingress matches on Host), reached via kind-local.yaml's 8443 port
         // map — SNAP_HOST_RESOLVER carries Chromium host-resolver-rules
-        // (e.g. 'MAP hugmesh.systems 127.0.0.1') so no /etc/hosts edit or
+        // (e.g. 'MAP hugmesh.net 127.0.0.1') so no /etc/hosts edit or
         // sudo is needed. Unset (compose runs) adds nothing.
         ...(process.env.SNAP_HOST_RESOLVER
           ? [`--host-resolver-rules=${process.env.SNAP_HOST_RESOLVER}`]

@@ -41,8 +41,8 @@ EOF
 { "version": 1, "hostname": "hugmesh-${role}", "timezone": "UTC",
   "headscale": { "enabled": false }, "tailscale": { "enabled": false },
   "kubernetes": { "role": "${krole}", "bootstrap": false },
-  "hugmesh": { "role": "${role}", "cluster_domain": "hugmesh.systems",
-                  "node_labels": { "snapdragon.systems/role": "${role}" } } }
+  "hugmesh": { "role": "${role}", "cluster_domain": "hugmesh.net",
+                  "node_labels": { "hugmesh.net/role": "${role}" } } }
 EOF
 
   echo "================ first-boot emulation: role=${role} (k8s=${krole}) ================"

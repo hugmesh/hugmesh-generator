@@ -9,7 +9,7 @@ metadata:
   name: hugmesh-edge-ai-tts
   namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   podSelector:
     matchLabels: { app: hugmesh-edge-ai-tts }

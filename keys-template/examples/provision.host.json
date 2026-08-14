@@ -28,13 +28,13 @@
   },
   "hugmesh": {
     "role": "host",
-    "cluster_domain": "hugmesh.systems",
+    "cluster_domain": "hugmesh.net",
     "node_labels": {
-      "snapdragon.systems/frontend": "true",
-      "snapdragon.systems/backend": "true",
-      "snapdragon.systems/games": "true",
-      "snapdragon.systems/devops": "true",
-      "snapdragon.systems/compute": "gpu"
+      "hugmesh.net/frontend": "true",
+      "hugmesh.net/backend": "true",
+      "hugmesh.net/games": "true",
+      "hugmesh.net/devops": "true",
+      "hugmesh.net/compute": "gpu"
     }
   },
   "nodes": [

@@ -9,7 +9,7 @@
 # admin-bff Deployment's serviceAccountName). No new SA; we only bind grants to it.
 #
 # The reconcile does EXACTLY these fabric8 calls (see the optionalservices package):
-#   • genericKubernetesResources(platform.hugmesh.systems/v1alpha1 OptionalService)
+#   • genericKubernetesResources(platform.hugmesh.net/v1alpha1 OptionalService)
 #       .inNamespace("devops").list()                         -> optionalservices: get/list/watch
 #   • ...resource(cr).updateStatus()                          -> optionalservices/status: update/patch
 #   • genericKubernetesResources(argoproj.io/v1alpha1 ApplicationSet)
@@ -47,16 +47,16 @@ metadata:
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   # Reconcile READ of the desired-state objects. create/update/patch/delete are the
   # follow-on BFF mutation endpoint's grants (same SA); the reconcile loop itself
   # only exercises get/list/watch.
-  - apiGroups: ["platform.hugmesh.systems"]
+  - apiGroups: ["platform.hugmesh.net"]
     resources: ["optionalservices"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Status subresource writes (observedGeneration / installed / phase / conditions).
-  - apiGroups: ["platform.hugmesh.systems"]
+  - apiGroups: ["platform.hugmesh.net"]
     resources: ["optionalservices/status"]
     verbs: ["get", "update", "patch"]
   # The ONE ApplicationSet the controller is the single writer of. resourceNames
@@ -77,7 +77,7 @@ metadata:
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -100,7 +100,7 @@ metadata:
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -115,7 +115,7 @@ metadata:
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

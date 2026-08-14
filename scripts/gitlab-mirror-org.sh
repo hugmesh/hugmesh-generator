@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ORG="${ORG:-hugmesh}"
-GITLAB_URL="${GITLAB_URL:-https://gitlab.hugmesh.systems}"
+GITLAB_URL="${GITLAB_URL:-https://gitlab.hugmesh.net}"
 GITLAB_GROUP="${GITLAB_GROUP:-hugmesh}"
 : "${GITLAB_TOKEN:?set GITLAB_TOKEN (GitLab PAT, api scope)}"
 

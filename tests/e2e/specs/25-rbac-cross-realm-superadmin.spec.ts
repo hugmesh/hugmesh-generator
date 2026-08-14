@@ -22,7 +22,7 @@ import { tags } from './report-tags';
 //       down-cascade.
 //
 //  (ii) Cross-realm issuer isolation. The SYSTEMS Casdoor (org "hugmesh",
-//       issuer id.hugmesh.systems) and the GAMES Casdoor (org "threewizards",
+//       issuer id.hugmesh.net) and the GAMES Casdoor (org "threewizards",
 //       issuer id.hugmesh.games) are INDEPENDENT. A token minted by one issuer
 //       carries that realm's roles ONLY; the OTHER realm's gateway must treat its
 //       claims as absent. We assert a games-realm identity carries NO systems
@@ -115,7 +115,7 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
   test('the two realms have DISTINCT issuers '
     + tags({ layer: 'casdoor' }), async () => {
     expect(SYSTEMS_ISSUER).not.toBe(GAMES_ISSUER);
-    expect(SYSTEMS_ISSUER).toBe('id.hugmesh.systems');
+    expect(SYSTEMS_ISSUER).toBe('id.hugmesh.net');
     expect(GAMES_ISSUER).toBe('id.hugmesh.games');
   });
 

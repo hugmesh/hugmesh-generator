@@ -1,6 +1,6 @@
 # mod-bff — Backend-For-Frontend for the hugmesh-mod-ui. ClusterIP in
 # hugmesh-backend; the ONLY way in is the fe-gateway /bff/mod/** route (same
-# origin as hugmesh.systems). Owns the mod_action audit table in mod-bff-db and
+# origin as hugmesh.net). Owns the mod_action audit table in mod-bff-db and
 # calls federation-api (JWT-bearing WebClient) for moderation_requests.
 apiVersion: argoproj.io/v1alpha1
 kind: Application

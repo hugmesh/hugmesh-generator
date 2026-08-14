@@ -86,7 +86,7 @@ _die() { echo "[generate-brand-repos] FATAL: $*" >&2; exit 1; }
 # ORG is also lowercased->slugged below; require it to be safe to slug.
 [[ "$ORG" =~ ^[A-Za-z0-9._-]{1,63}$ ]] \
   || _die "invalid ORG '${ORG}' (allowed: A-Za-z0-9._- , 1..63)"
-# CLUSTER_DOMAIN: full DNS name (e.g. hugmesh.systems).
+# CLUSTER_DOMAIN: full DNS name (e.g. hugmesh.net).
 [[ "$CLUSTER_DOMAIN" =~ $_DNS_NAME ]] \
   || _die "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS name)"
 # RELEASE_STATE: "internal" (DEFAULT, LAN/tailnet-only) or "public" (internet-

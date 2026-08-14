@@ -1,5 +1,5 @@
 # hugmesh-character-studio-ui — the VN character-studio Angular micro-frontend,
-# federated into the hugmesh.systems host at /character-studio (ROLE_USER floor).
+# federated into the hugmesh.net host at /character-studio (ROLE_USER floor).
 # Frontend Pis. OPTIONAL service (DEFAULT-OFF, admin gate): pruned by
 # gate_optional_services() when the 'character-studio' slug is not selected, and
 # rendered installed:"false" in the optional-services ApplicationSet / ConfigMap.

@@ -17,7 +17,7 @@ metadata:
   name: hugmesh-api-docs
   labels:
     app: hugmesh-api-docs
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:

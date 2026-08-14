@@ -12,11 +12,11 @@ kind: PersistentVolumeClaim
 metadata:
   name: PLACEHOLDER_PVC_NAME            # <- assignment.pvc_name (rendered)
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/node-storage-pvc: "true"
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/node-storage-pvc: "true"
   annotations:
     # The pool's node-local path the local-path provisioner serves this PV from (audit).
-    snapdragon.systems/storage-pool-path: PLACEHOLDER_POOL_PATH
+    hugmesh.net/storage-pool-path: PLACEHOLDER_POOL_PATH
 spec:
   accessModes: [ReadWriteOnce]          # node-pinned local storage is RWO by nature
   storageClassName: hugmesh-local    # the WaitForFirstConsumer local-path class

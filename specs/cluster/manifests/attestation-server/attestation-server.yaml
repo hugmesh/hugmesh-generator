@@ -35,7 +35,7 @@ kind: Deployment
 metadata:
   name: attestation-server
   namespace: hugmesh-pki
-  labels: { app.kubernetes.io/name: attestation-server, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: attestation-server, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1   # MUST stay 1 — two pods writing the same SQLite WAL files is unsafe; not horizontally scalable
   strategy: { type: Recreate }   # avoid two pods ever mounting the RWO PVC concurrently during a rollout
@@ -44,7 +44,7 @@ spec:
     metadata: { labels: { app.kubernetes.io/name: attestation-server } }
     spec:
       serviceAccountName: sa-attestation-server
-      nodeSelector: { snapdragon.systems/pki: "true" }   # co-locate w/ harbor/vault/casdoor/headwind
+      nodeSelector: { hugmesh.net/pki: "true" }   # co-locate w/ harbor/vault/casdoor/headwind
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000    # CONFIRMED by a real image build+boot: USER attestation is uid=1000
@@ -54,7 +54,7 @@ spec:
         seLinuxOptions: { type: container_t, level: "s0:c79" }  # next free MCS category (headwind-db holds c77, headwind holds c78 — docs/SECURITY.md)
       containers:
         - name: attestation-server
-          image: registry.hugmesh.systems/hugmesh/hugmesh-attestation-server:main
+          image: registry.hugmesh.net/hugmesh/hugmesh-attestation-server:main
           imagePullPolicy: Always
           ports: [{ name: http, containerPort: 8080 }]
           workingDir: /data

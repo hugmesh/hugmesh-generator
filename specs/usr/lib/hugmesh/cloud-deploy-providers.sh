@@ -37,7 +37,7 @@
 #
 # CONTEXT the emit functions read (globals the driver sets before calling emit;
 # same process, so no export needed — the driver SOURCES this file):
-#   CD_DOMAIN        the baked cluster domain (apex), e.g. hugmesh.systems
+#   CD_DOMAIN        the baked cluster domain (apex), e.g. hugmesh.net
 #   CD_IMAGE         the PACKAGED artifact path from scripts/cloud-package.sh
 #                    (raw for aws-ec2, fixed VHD for azure-image, qcow2 for
 #                    openshift-cnv/generic-qcow2) — may be empty; the emitted
@@ -893,7 +893,7 @@ BODY
         printf '* Bootstrap: bootstrap.sh (kubeadm + curl-installed ArgoCD + amd64 patch loop)\n'
         printf '  conflicts with the OpenShift GitOps operator model; keys-provision/firstboot\n'
         printf '  are Gentoo-image-specific. Nothing Ignition-shaped exists in-tree today.\n'
-        printf '* Scheduling: everything selects snapdragon.systems/* capability labels — a\n'
+        printf '* Scheduling: everything selects hugmesh.net/* capability labels — a\n'
         printf '  MachineSet/labeling story is required on any managed cluster.\n\n'
         printf 'CNV itself: the DataVolume/VM here assume the CNV (or upstream KubeVirt+CDI)\n'
         printf 'operator is installed and the namespace can schedule VMs.\n'

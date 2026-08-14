@@ -88,7 +88,7 @@ openssl genpkey -algorithm ed25519 -out "${FPRIV}" 2>/dev/null
 # shellcheck source=/dev/null
 . "${LIB}" || { echo "  FAIL could not source ${LIB}"; exit 1; }
 
-NODE="mkey:abc"; GEN=7; DOM="acme.hugmesh.systems"
+NODE="mkey:abc"; GEN=7; DOM="acme.hugmesh.net"
 # Build a signed go-live export carrying ONE entry (this node's domain), signed by $1
 # (priv pem) at generation $2. Sign the FILE (not a captured string — command substitution
 # strips trailing newlines and would diverge from what verify_sig reads).
@@ -103,7 +103,7 @@ make_signed_export() {
             { clusterDomain: $dom, targetState: $state,
               exposureModel: (if $state == "public" then "tunnel" else "" end),
               provider: (if $state == "public" then $provider else "" end),
-              requestedBy: "superadmin@acme.hugmesh.systems", intentId: "intent-1", generation: $gen }
+              requestedBy: "superadmin@acme.hugmesh.net", intentId: "intent-1", generation: $gen }
         ] end)
     }')"
     jq -n --argjson b "${body}" '{ body:$b, contentHash:"x", signature:null, publicKey:"advertised-ignored", signed:false }' > "${out}"
@@ -121,7 +121,7 @@ canon_ref() {
     printf 'node=%s\n' "${NODE}"
     printf 'generation=%s\n' "${GEN}"
     printf 'dom=%s\tstate=%s\tmodel=%s\tprovider=%s\tby=%s\tintent=%s\tgen=%s\n' \
-        "${DOM}" "public" "tunnel" "generic-registrar" "superadmin@acme.hugmesh.systems" "intent-1" "${GEN}"
+        "${DOM}" "public" "tunnel" "generic-registrar" "superadmin@acme.hugmesh.net" "intent-1" "${GEN}"
 }
 make_signed_export "${PRIV}" "${GEN}" "${WORK}/good.json" "public" "generic-registrar" "${DOM}"
 REFC="${WORK}/ref.bin"; canon_ref > "${REFC}"
@@ -275,7 +275,7 @@ else
 fi
 
 # ── Case (b''): absence contract — no entry for this node's domain -> no-op ──────────
-make_signed_export "${PRIV}" 9 "${WORK}/other-domain.json" "public" "generic-registrar" "other-brand.hugmesh.systems"
+make_signed_export "${PRIV}" 9 "${WORK}/other-domain.json" "public" "generic-registrar" "other-brand.hugmesh.net"
 NO_ENTRY="$(gv_entry_for_domain "${WORK}/other-domain.json" "${DOM}")"
 if [ -z "${NO_ENTRY}" ]; then
     ok "(b'') absence contract: no entry found for this node's own domain in a foreign-domain export"
@@ -412,7 +412,7 @@ printf 'dummy-cert\n' > "${CERT_FILE}"; printf 'dummy-key\n' > "${KEY_FILE}"
 rm -f "${MARKER}" "${SANDBOX_ETC}/release-state" "${ACK_STUB_DIR}/requests.log"
 entry_ack_ok="$(jq -nc --arg dom "${DOM}" '{
     clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.net",
     intentId:"intent-ack-ok", generation:321
 }')"
 PATH="${ACK_STUB_DIR}/bin:${PATH}" MACHINE_KEY_FP="${ACK_NODE_FP}" BFF_URL="${ACK_BFF}" \
@@ -438,7 +438,7 @@ rm -f "${MARKER}" "${SANDBOX_ETC}/release-state" "${ACK_STUB_DIR}/requests.log"
 printf 'fail\n' > "${ACK_STUB_DIR}/mode"
 entry_ack_fail="$(jq -nc --arg dom "${DOM}" '{
     clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.net",
     intentId:"intent-ack-fail", generation:322
 }')"
 RC=0
@@ -477,7 +477,7 @@ split_body="$(jq -n --argjson envgen "${ENVELOPE_GEN}" --argjson rowgen "${ROW_G
     --arg node "${NODE}" --arg dom "${DOM}" --arg intent "${ACK_SPLIT_INTENT}" '{
     node:$node, generation:$envgen,
     entries: [ { clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-                 provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
+                 provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.net",
                  intentId:$intent, generation:$rowgen } ]
 }')"
 jq -n --argjson b "${split_body}" '{ body:$b, contentHash:"x", signature:null, publicKey:"advertised-ignored", signed:false }' > "${WORK}/split-gen.json"
@@ -548,7 +548,7 @@ fi
 # the same already-converged state).
 entry_new_but_converged="$(jq -nc --arg dom "${DOM}" '{
     clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.net",
     intentId:"intent-new-never-seen-before", generation:999
 }')"
 REQ_COUNT_BEFORE_O="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"

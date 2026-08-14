@@ -34,7 +34,7 @@ spec:
           dnsPolicy: ClusterFirstWithHostNet
           # Pin the public edge to the backend node only (the router's target).
           nodeSelector:
-            snapdragon.systems/backend: "true"
+            hugmesh.net/backend: "true"
           # arm64 + amd64 nodes both run here; the image is multi-arch.
           # Two ingress-nginx instances coexist (public here; internal on pki):
           # each needs a distinct class name, controllerValue, and election ID.

@@ -3,7 +3,7 @@
 This bundle is the **runtime test harness** the platform runs against the REAL
 in-cluster services. It is forbidden in `ENV=prod`: the prod-hygiene gate
 (`scripts/validate-prod-hygiene.sh` + the Kyverno `prod-hygiene` ClusterPolicy)
-rejects every component here by its `snapdragon.systems/tier: test` label, and
+rejects every component here by its `hugmesh.net/tier: test` label, and
 `gate_env_apps` (build-x86-host-stage4.sh) prunes `apps/99-test-runner.yaml` +
 this whole directory out of the baked prod tree.
 

@@ -30,4 +30,4 @@ resources:
 #   - path: placement-patch.yaml
 #     target:
 #       kind: Deployment
-#       annotationSelector: snapdragon.systems/storage-service=<service>
+#       annotationSelector: hugmesh.net/storage-service=<service>

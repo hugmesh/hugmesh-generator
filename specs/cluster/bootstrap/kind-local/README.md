@@ -9,7 +9,7 @@
 > identity catalogue (`tests/qemu/seed-accounts.sh --roles` applied over a
 > Casdoor port-forward). First-party images are **built locally and
 > `kind load`ed** under the exact refs the manifests render
-> (`registry.hugmesh.systems/hugmesh/<repo>:main`, gateway `:dev`) — the
+> (`registry.hugmesh.net/hugmesh/<repo>:main`, gateway `:dev`) — the
 > in-cluster Harbor is empty on a fresh cluster and is not used.
 >
 > Driven end-to-end from the repo root:
@@ -19,11 +19,11 @@
 >                    # already-seeded Vault KV is KEPT, not re-minted; see
 >                    # "The script is idempotent" below for why that matters)
 > make kind-images   # build from ./.stack-src + kind load  (before/after kind-up both work)
-> make kind-e2e      # spec 27 (native login) against https://hugmesh.systems:8443
+> make kind-e2e      # spec 27 (native login) against https://hugmesh.net:8443
 > make kind-down
 > ```
 >
-> `make kind-e2e` maps `hugmesh.systems -> 127.0.0.1` with a Chromium
+> `make kind-e2e` maps `hugmesh.net -> 127.0.0.1` with a Chromium
 > host-resolver rule (no `/etc/hosts`, no sudo) and rides the
 > `kind-local.yaml` 443→8443 host port map into the internal ingress. This is
 > the kind-cluster leg of the SSO e2e roadmap item — the same proof
@@ -32,7 +32,7 @@
 A reusable, local, single-node [kind](https://kind.sigs.k8s.io/) cluster that
 brings up a **curated slice** of the HugMesh GitOps tree so you can
 validate the Vault → PKI → Casdoor → Harbor chain before it ever touches the
-real multi-Pi hardware. This targets the **CORE reference `hugmesh.systems`
+real multi-Pi hardware. This targets the **CORE reference `hugmesh.net`
 apps/ tree** (`specs/cluster/apps/*.yaml` as committed to this repo) — it is
 NOT a brand-templated tenant bring-up (that's `templates/apps/*.hbs` +
 `brands/*.conf`, a separate rendering layer this script doesn't touch).
@@ -258,8 +258,8 @@ hook could therefore run the entire seed anonymously — empty cookie jar, every
 1. Create the kind cluster from `kind-local.yaml` (single control-plane node;
    this is a validation tool, not a hardware topology simulation) — skipped
    if it already exists.
-2. Label the node `snapdragon.systems/pki=true` +
-   `snapdragon.systems/local-path=true` (the only two capability labels the
+2. Label the node `hugmesh.net/pki=true` +
+   `hugmesh.net/local-path=true` (the only two capability labels the
    curated manifests actually select on — checked by grepping every
    `nodeSelector` in the included manifests; `kubernetes.io/arch=amd64` is
    already correct on a kind/amd64 node).
@@ -292,7 +292,7 @@ cluster.
 ## Reaching the real-looking hostnames from your dev machine
 
 The core manifests hardcode real reference-cluster hostnames
-(`registry.hugmesh.systems`, `*.hugmesh.systems`) rather than a
+(`registry.hugmesh.net`, `*.hugmesh.net`) rather than a
 templated `{{CLUSTER_DOMAIN}}` — that templating only applies to
 `templates/apps/*.hbs` for *other* tenant brands. There's no need to fake a
 different domain for this validation; you do need a way to resolve those
@@ -301,8 +301,8 @@ assumed). `kind-local.yaml` maps the node's hostNetwork `ingress-nginx-internal`
 ports out to the docker host at `:8080`/`:8443`, so from the dev machine:
 
 ```bash
-curl -k --resolve registry.hugmesh.systems:8443:127.0.0.1 https://registry.hugmesh.systems:8443/v2/
-curl -k --resolve scale.hugmesh.systems:8443:127.0.0.1  https://scale.hugmesh.systems:8443/
+curl -k --resolve registry.hugmesh.net:8443:127.0.0.1 https://registry.hugmesh.net:8443/v2/
+curl -k --resolve scale.hugmesh.net:8443:127.0.0.1  https://scale.hugmesh.net:8443/
 ```
 
 (`--resolve` only affects that one `curl` invocation — no system-wide DNS/hosts

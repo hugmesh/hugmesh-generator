@@ -38,7 +38,7 @@ test.describe('non-federation: admin announcement stays local', () => {
     const peerToken = process.env['SNAP_PEER_TOKEN'] ?? '';
     test.skip(!adminToken || !peerToken, 'admin/peer Mastodon tokens not provisioned for this run');
 
-    const adminAcct = `e2e-admin@mastodon.hugmesh.systems`;
+    const adminAcct = `e2e-admin@mastodon.hugmesh.net`;
 
     // Peer follows the admin so a leak WOULD be observable.
     const followed = await peerFollow(request, peerToken, adminAcct);

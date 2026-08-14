@@ -7,7 +7,7 @@
 ---
 apiVersion: v1
 kind: Namespace
-metadata: { name: observability, labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: observability } }
+metadata: { name: observability, labels: { app.kubernetes.io/part-of: hugmesh.net, hugmesh.net/tier: observability } }
 ---
 # Uptrace backing Postgres (metadata; telemetry lives in ClickHouse).
 apiVersion: apps/v1
@@ -66,7 +66,7 @@ data:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: uptrace, namespace: observability, labels: { app: uptrace, app.kubernetes.io/part-of: hugmesh.systems } }
+metadata: { name: uptrace, namespace: observability, labels: { app: uptrace, app.kubernetes.io/part-of: hugmesh.net } }
 spec:
   replicas: 1
   selector: { matchLabels: { app: uptrace } }

@@ -211,7 +211,7 @@ fi
 # ── 6. mark the assigned service pods 0x76 (tunnel is up from step 5) ──────────
 # Record the desired marked-service set from the VERIFIED export, then hand it
 # to hugmesh-vpn-mark, which resolves the slugs to running pod IPs, installs
-# the fwmark nft rules, and sets the snapdragon.systems/vpn-egress labels in
+# the fwmark nft rules, and sets the hugmesh.net/vpn-egress labels in
 # the SAME pass (marks BEFORE labels — no loosened-but-uncaptured pod). On a
 # marker failure NOTHING is half-applied (the marker rolls back to the cleared
 # state), so report 'failed' and keep the tunnel as-is for the next cycle.

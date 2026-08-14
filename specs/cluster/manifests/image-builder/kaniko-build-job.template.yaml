@@ -1,6 +1,6 @@
 # kaniko-build-job.template.yaml — the GENERIC, REUSABLE per-build ROOTLESS Kaniko Job
 # TEMPLATE for building a first-party HugMesh APP IMAGE in-cluster and pushing it to the
-# in-cluster Harbor registry (registry.hugmesh.systems; see apps/03a-harbor.yaml).
+# in-cluster Harbor registry (registry.hugmesh.net; see apps/03a-harbor.yaml).
 #
 # WHY THIS EXISTS: the `.gitlab-ci.yml` `build:images` job was an ECHO STUB — app images
 # (gateway, frontends, BFFs, games, …) built only in the GitLab org mirror; there was no
@@ -37,10 +37,10 @@
 #   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
 #   ${DEST_IMAGE}      the IMMUTABLE destination image ref WITH a tag/digest in the in-cluster
 #                      registry, matching the app kustomizations' newName convention, e.g.
-#                      registry.hugmesh.systems/hugmesh/hugmesh-gateway:<sha> (or :<tag>
+#                      registry.hugmesh.net/hugmesh/hugmesh-gateway:<sha> (or :<tag>
 #                      for a release). Kaniko pushes this in the same build.
 #   ${DEST_IMAGE_MOVING} the MOVING destination ref the deploy/kustomize tracks for dev, e.g.
-#                      registry.hugmesh.systems/hugmesh/hugmesh-gateway:<ref-slug>
+#                      registry.hugmesh.net/hugmesh/hugmesh-gateway:<ref-slug>
 #                      (the default branch resolves to :main, matching the app kustomizations'
 #                      newTag: main). Kaniko pushes BOTH destinations from the ONE build, so the
 #                      moving + immutable tags always point at byte-identical layers. A driver
@@ -53,8 +53,8 @@ metadata:
   namespace: ${BUILD_NAMESPACE}
   labels:
     app.kubernetes.io/name: image-builder
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/image-build: "${BUILD_NAME}"
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/image-build: "${BUILD_NAME}"
 spec:
   backoffLimit: 1
   # Reap the Job 1h after completion so finished builds don't accumulate.
@@ -64,7 +64,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: image-builder
-        snapdragon.systems/image-build: "${BUILD_NAME}"
+        hugmesh.net/image-build: "${BUILD_NAME}"
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -135,7 +135,7 @@ spec:
             # ESO-materialized PUSH secret for this builder's namespace, created by the
             # image-builder-registry ExternalSecret (manifests/external-secrets/
             # image-builder-externalsecrets.yaml): a dockerconfigjson with write_registry scope
-            # for registry.hugmesh.systems, sourced from Vault secret/<brand>/harbor-robots (push_name/push_secret) via the harbor-provision Job.
+            # for registry.hugmesh.net, sourced from Vault secret/<brand>/harbor-robots (push_name/push_secret) via the harbor-provision Job.
             # NEVER in git. Mirrors the #110 service-catalog-builder-registry contract.
             secretName: image-builder-registry
             items:

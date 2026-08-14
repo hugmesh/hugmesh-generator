@@ -15,7 +15,7 @@ kind: ConfigMap
 metadata:
   name: casdoor-app-conf
   namespace: hugmesh-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
 data:
   app.conf.template: |
     appname = casdoor
@@ -38,7 +38,7 @@ data:
     verificationCodeTimeout = 10
     initScore = 0
     logPostOnly = true
-    origin = "https://id.hugmesh.systems"
+    origin = "https://id.hugmesh.net"
     enableGzip = true
     # ── Declarative seed (init_data.json) ───────────────────────────────────
     # WITHOUT initDataFile CASDOOR NEVER READS THE MOUNTED SEED. This file

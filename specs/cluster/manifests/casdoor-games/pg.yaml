@@ -30,7 +30,7 @@ spec:
   template:
     metadata: { labels: { app: casdoor-games-pg } }
     spec:
-      nodeSelector: { snapdragon.systems/games: "true" }
+      nodeSelector: { hugmesh.net/games: "true" }
       securityContext:
         seLinuxOptions:
           type: container_t

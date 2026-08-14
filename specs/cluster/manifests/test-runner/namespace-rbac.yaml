@@ -15,16 +15,16 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: hugmesh-test-runner-read
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 rules:
   # Workload readiness for the LEAN edge (cross-namespace fe/be/pki).
   - apiGroups: ["apps"]
@@ -50,8 +50,8 @@ kind: ClusterRoleBinding
 metadata:
   name: hugmesh-test-runner-read
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -68,8 +68,8 @@ metadata:
   name: hugmesh-test-runner-jobs
   namespace: hugmesh-backend
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
@@ -84,8 +84,8 @@ metadata:
   name: hugmesh-test-runner-jobs
   namespace: hugmesh-backend
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

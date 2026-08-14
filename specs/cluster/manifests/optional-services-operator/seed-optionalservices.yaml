@@ -17,108 +17,108 @@
 # MANAGE the same manifests as the still-present hardcoded apps/30-akkoma.yaml (name
 # `akkoma`) etc. — see docs/OPTIONAL-SERVICES.md §10 (the cluster-gated cut-over).
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: akkoma
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: akkoma
   enabled: true
   reason: build-seed (DEFAULT-ON baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: tuwunel
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: tuwunel
   enabled: true
   reason: build-seed (DEFAULT-ON baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: phpbb
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: phpbb
   enabled: true
   reason: build-seed (DEFAULT-ON baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: games
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: games
   enabled: false
   reason: build-seed (DEFAULT-OFF baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: owncast
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: owncast
   enabled: false
   reason: build-seed (DEFAULT-OFF baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: tube
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: tube
   enabled: false
   reason: build-seed (DEFAULT-OFF baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: character-studio
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: character-studio
   enabled: false
   reason: build-seed (DEFAULT-OFF baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: character-forge
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: character-forge
   enabled: false
   reason: build-seed (DEFAULT-OFF baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: anubis
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: anubis
   # SAFE TEST BASELINE (optional-services.yaml anubis default:off; PROD flips it on
@@ -127,48 +127,48 @@ spec:
   reason: build-seed (ENV-conditional; safe test baseline)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: coturn
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: coturn
   enabled: false
   reason: build-seed (DEFAULT-OFF, runtime-only)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: edge-ai
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: edge-ai
   enabled: false
   reason: build-seed (DEFAULT-OFF, GPU-gated)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: edge-ai-analysis
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: edge-ai-analysis
   enabled: false
   reason: build-seed (DEFAULT-OFF, dependsOn edge-ai)
   requestedBy: generator:_opt_render_optionalservice_cr
 ---
-apiVersion: platform.hugmesh.systems/v1alpha1
+apiVersion: platform.hugmesh.net/v1alpha1
 kind: OptionalService
 metadata:
   name: edge-ai-tts
   namespace: devops
-  labels: { app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.net }
 spec:
   slug: edge-ai-tts
   enabled: false

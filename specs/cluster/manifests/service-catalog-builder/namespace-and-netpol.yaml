@@ -8,7 +8,7 @@ metadata:
   name: hugmesh-service-catalog-builds
   labels:
     kubernetes.io/metadata.name: hugmesh-service-catalog-builds
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     # Pod Security Standards: restricted — rootless Kaniko complies (no privileged,
     # runAsNonRoot, drop ALL caps), so the namespace can enforce the strictest tier.
     pod-security.kubernetes.io/enforce: restricted

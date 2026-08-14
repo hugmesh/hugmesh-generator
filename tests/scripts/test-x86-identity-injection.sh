@@ -14,7 +14,7 @@
 #   (A) the up-front validators REJECT injection inputs (`;`, `'`, `|`, `&`, newline,
 #       spaces, shell-meta) for usernames/brand/org/domains/title/accent, and EXIT;
 #   (B) every legitimate default still PASSES (snap / hugmesh / hugmesh
-#       / hugmesh.systems / "HugMesh Systems" / #1f6feb);
+#       / hugmesh.net / "HugMesh Systems" / #1f6feb);
 #   (C) _sed_rep_escape neutralises `|`/`&`/`\` so a tainted-but-validated value cannot
 #       smuggle a second sed command;
 #   (D) brand.conf / home.conf emitted with `printf %q` cannot execute injected code
@@ -85,8 +85,8 @@ accepts _validate_username "DEFAULT_USER" ""                && ok "empty usernam
 accepts _validate_username "LOCAL_USER"   "media_user-1"    && ok "username 'media_user-1' accepted"        || bad "username 'media_user-1' rejected"
 accepts _validate_slug     "--brand"      "hugmesh"      && ok "brand 'hugmesh' accepted"             || bad "brand 'hugmesh' rejected"
 accepts _validate_org      "--org"        "hugmesh" && ok "org 'hugmesh' accepted"    || bad "org 'hugmesh' rejected"
-accepts _validate_dnsname  "--cluster-domain" "hugmesh.systems" && ok "domain 'hugmesh.systems' accepted" || bad "domain rejected"
-accepts _validate_dnsname  "--games-domain"   "games.hugmesh.systems" && ok "games domain accepted"      || bad "games domain rejected"
+accepts _validate_dnsname  "--cluster-domain" "hugmesh.net" && ok "domain 'hugmesh.net' accepted" || bad "domain rejected"
+accepts _validate_dnsname  "--games-domain"   "games.hugmesh.net" && ok "games domain accepted"      || bad "games domain rejected"
 accepts _validate_hostname "--hostname"   ""                && ok "empty hostname (role-derived) accepted"  || bad "empty hostname rejected"
 accepts _validate_hostname "--hostname"   "snap-omnibus"    && ok "hostname 'snap-omnibus' accepted"        || bad "hostname rejected"
 accepts _validate_title    "--brand-title" "HugMesh Systems" && ok "title 'HugMesh Systems' accepted" || bad "title rejected"

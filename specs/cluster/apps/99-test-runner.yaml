@@ -18,7 +18,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "99"
   labels:
-    snapdragon.systems/tier: test
+    hugmesh.net/tier: test
 spec:
   project: default
   source:

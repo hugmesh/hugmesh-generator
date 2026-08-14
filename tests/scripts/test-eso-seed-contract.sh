@@ -62,10 +62,10 @@
 #
 # DOMAIN COUPLING. specs/cluster is NOT what a cluster runs: build-*-stage4.sh
 # copies it to /var/lib/hugmesh/cluster and rebrand_sysroot() then seds
-# `hugmesh.systems` -> `${CLUSTER_DOMAIN}` across that whole tree. So a template
+# `hugmesh.net` -> `${CLUSTER_DOMAIN}` across that whole tree. So a template
 # literal embedding the default domain is really `<x>@${CLUSTER_DOMAIN}` online,
 # and the offline bundle must derive it the same way. Comparing the repo manifest
-# to a default-brand bundle cannot see that (both read hugmesh.systems), so the
+# to a default-brand bundle cannot see that (both read hugmesh.net), so the
 # gate runs the seeder a FIFTH time under a non-default CLUSTER_DOMAIN and
 # requires every domain-bearing literal to move with it — and every domain-free
 # literal to stay put.
@@ -202,7 +202,7 @@ run_gen mail           "${DEFAULT_DOMAIN}" "${MAIL_ENV[@]}"          || die_earl
 run_gen managed-velero "${DEFAULT_DOMAIN}" "${VELERO_ENV[@]}"        || die_early
 run_gen all-features   "${DEFAULT_DOMAIN}" "${MAIL_ENV[@]}" "${VELERO_ENV[@]}" || die_early
 # The REBRAND PROBE: a plain default run under a NON-default CLUSTER_DOMAIN. The
-# baked manifests are sed'd hugmesh.systems -> ${CLUSTER_DOMAIN} by
+# baked manifests are sed'd hugmesh.net -> ${CLUSTER_DOMAIN} by
 # rebrand_sysroot(), so any template literal embedding the domain must move with
 # it in the bundle too. Nothing but [domain-coupled] reads this run.
 run_gen rebranded      "${PROBE_DOMAIN}"                             || die_early
@@ -569,8 +569,8 @@ python3 - "$T" <<PY
 import sys
 p = sys.argv[1] + "/manifests/external-secrets/headwind-externalsecrets.yaml"
 s = open(p, encoding="utf-8").read()
-s = s.replace("        email: \"admin@hugmesh.systems\"",
-              "        email: \"admin@hugmesh.systems\"\n"
+s = s.replace("        email: \"admin@hugmesh.net\"",
+              "        email: \"admin@hugmesh.net\"\n"
               "        phantom: \"{{ .nothing_provides_this }}\"", 1)
 open(p, "w", encoding="utf-8").write(s)
 PY
@@ -586,8 +586,8 @@ rm -rf "$R"/managed-velero
 
 # (n17) THE DOMAIN-COUPLING HOLE that (n13) alone cannot see. headwind-admin's
 # `email` is the one template literal embedding the cluster domain, and the baked
-# manifest is sed'd hugmesh.systems -> ${CLUSTER_DOMAIN} by rebrand_sysroot(). So
-# HARDCODING "admin@hugmesh.systems" in the offline bundle matches the manifest
+# manifest is sed'd hugmesh.net -> ${CLUSTER_DOMAIN} by rebrand_sysroot(). So
+# HARDCODING "admin@hugmesh.net" in the offline bundle matches the manifest
 # byte-for-byte on the DEFAULT brand — (n13) and the whole [literal-value] check
 # stay green — while handing every REBRANDED cluster's headwind pod a different
 # ADMIN_EMAIL online than offline. This injects exactly that hardcode into the
@@ -598,7 +598,7 @@ python3 - "$R"/rebranded <<PY
 import json, sys
 p = sys.argv[1] + "/bundle/secrets.json"
 b = json.load(open(p))
-b["hugmesh-pki"]["headwind-admin"]["email"] = "admin@hugmesh.systems"
+b["hugmesh-pki"]["headwind-admin"]["email"] = "admin@hugmesh.net"
 json.dump(b, open(p, "w"), indent=2, sort_keys=True)
 PY
 '

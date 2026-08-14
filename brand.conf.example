@@ -7,14 +7,14 @@
 # The built-in defaults ARE the values below (the existing HugMesh naming),
 # so an empty/absent file changes nothing. Set any subset to rebrand the ISOs:
 # every namespace, hostname, gateway name, image org, ingress host and title in
-# the baked cluster payload is rewritten from "hugmesh"/"hugmesh.systems"
+# the baked cluster payload is rewritten from "hugmesh"/"hugmesh.net"
 # to your brand/domain at build time.
 
 # ── Branding ────────────────────────────────────────────────────────
 BRAND="hugmesh"                  # short slug used in names (namespaces, gateways, hosts)
 BRAND_TITLE="HugMesh Systems"    # human-readable title shown in UIs/messages
 ORG="hugmesh"            # GitHub org / container-image namespace
-CLUSTER_DOMAIN="hugmesh.systems" # base domain (id./matrix./mastodon./api. derived)
+CLUSTER_DOMAIN="hugmesh.net" # base domain (id./matrix./mastodon./api. derived)
 RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | public (internet-facing)
 
 # ── Optional services (build-time excludable, add/remove-by-command) ──────────
@@ -53,7 +53,7 @@ RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | pub
 #   OPTIONAL_SERVICES="all" EXCLUDE_SERVICES="games"   # all-but-games
 
 # Games portal domain. BY DEFAULT games is served as a SUBDOMAIN of the primary
-# domain (games.<CLUSTER_DOMAIN>, e.g. games.hugmesh.systems) until the real
+# domain (games.<CLUSTER_DOMAIN>, e.g. games.hugmesh.net) until the real
 # .games TLD is obtained; flip to the TLD later with GAMES_DOMAIN=<brand>.games.
 # This one value drives every games host + OIDC issuer/redirect (parameterized by
 # the builders + casdoor-games re-seed on ArgoCD sync). See docs/OPTIONAL-SERVICES.md
@@ -102,7 +102,7 @@ RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | pub
 DEFAULT_USER="pi"                   # fallback non-root user
 DEFAULT_USER_PASS="raspberry"       # CHANGE for real builds
 ROOT_PASS="gentoo"                  # CHANGE for real builds
-ADMIN_EMAILS="admin@hugmesh.systems"   # seeded Casdoor admin (BFF allowlist)
+ADMIN_EMAILS="admin@hugmesh.net"   # seeded Casdoor admin (BFF allowlist)
 
 # ── Outbound mail (OPTIONAL — absent by default) ───────────────────
 # Selects the SMTP preset Casdoor (email-verify / password-reset) and Akkoma
@@ -168,7 +168,7 @@ TAILSCALE_VERSION="1.78.1"
 # still writes keys-out/vault/{secrets.json,token} for the KEYS stick, and no
 # Vault server is contacted. Set it (plus VAULT_TOKEN in the environment, never
 # committed here) to also push the secrets into Vault for online ESO sync.
-VAULT_ADDR=""                       # e.g. https://vault.hugmesh.systems  (empty = offline/USB-only)
+VAULT_ADDR=""                       # e.g. https://vault.hugmesh.net  (empty = offline/USB-only)
 VAULT_KV_MOUNT="secret"             # KV v2 mount the ClusterSecretStore reads
 
 # ── External CA (optional — use an EXISTING CA as the cert issuer) ──

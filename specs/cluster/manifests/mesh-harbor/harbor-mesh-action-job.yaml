@@ -34,7 +34,7 @@ metadata:
   namespace: hugmesh-pki
   labels:
     app: harbor
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/name: mesh-harbor
 data:
   # BRAND/mesh come from the ServiceCatalogEntry / domain-creation event; injected as
@@ -65,7 +65,7 @@ metadata:
   namespace: hugmesh-pki
   labels:
     app: harbor
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/name: mesh-harbor
   annotations:
     # PostSync so it runs after Harbor is reconciled by the Phase-5 provision job.
@@ -73,7 +73,7 @@ metadata:
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
     # SHIP-DARK: this Job is inert until an operator sets mesh-action-enabled=true on
     # the tenant (the domain-creation ApplicationSet only instantiates it then).
-    snapdragon.systems/mesh-action-enabled: "false"
+    hugmesh.net/mesh-action-enabled: "false"
 spec:
   backoffLimit: 2
   template:

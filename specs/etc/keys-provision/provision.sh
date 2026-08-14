@@ -1286,15 +1286,15 @@ _distribute_kubeconfig() {
 # the pki-tier workloads (Vault, Casdoor, Cassandra, headscale) schedule here.
 _label_control_plane() {
     local sr; sr="$(jqm '.hugmesh.role // "pki"')"
-    KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/role=${sr}" --overwrite 2>/dev/null || true
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "hugmesh.net/role=${sr}" --overwrite 2>/dev/null || true
     # NODE-STORAGE: the control-plane (x86 host) holds the cluster disks (/mnt/data,
-    # /mnt/usb), so it ALWAYS carries snapdragon.systems/local-path=true — the label
+    # /mnt/usb), so it ALWAYS carries hugmesh.net/local-path=true — the label
     # the local-path-provisioner DaemonSet schedules on. This is FULL BACK-COMPAT: the
     # provisioner runs here exactly as the old Deployment did (it kept its DEFAULT_PATH
     # nodePathMap). A node-storage node ALSO gets this label when its first pool is
     # provisioned (node-agent reconcile, PR6), which is what lets a pool on another node
     # get its own provisioner instance + nodePathMap entry.
-    KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/local-path=true" --overwrite 2>/dev/null || true
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "hugmesh.net/local-path=true" --overwrite 2>/dev/null || true
     KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint nodes "$(hostname)" node-role.kubernetes.io/control-plane- 2>/dev/null || true
     log "Control-plane node labelled role=${sr} + local-path=true, control-plane taint removed"
 }
@@ -2347,7 +2347,7 @@ provision_update() {
 # ── HugMesh GitOps (ArgoCD app-of-apps) — control-plane only ────
 provision_hugmesh() {
     local role label
-    # Node label hint (snapdragon.systems/role / compute) for scheduling.
+    # Node label hint (hugmesh.net/role / compute) for scheduling.
     label="$(jqm '.hugmesh.node_labels // {} | to_entries | map("\(.key)=\(.value)") | join(",")')"
     if [ -n "${label}" ] && [ "${label}" != "null" ] && [ -f /etc/kubernetes/admin.conf ]; then
         KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" ${label//,/ } --overwrite 2>/dev/null || true

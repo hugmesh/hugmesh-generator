@@ -2,7 +2,7 @@
 # fronts all of its traffic and validates the internal Casdoor OAuth2 JWT.
 #
 # Placement is by capability labels (booleans), not a single role, so the
-# x86_64 host can carry several. Workloads nodeSelect snapdragon.systems/<tier>=true:
+# x86_64 host can carry several. Workloads nodeSelect hugmesh.net/<tier>=true:
 #   hugmesh-pki       pki=true        -> pki Pi (control-plane): headscale, Casdoor, auth
 #   hugmesh-backend   backend=true    -> backend Pis AND the x86_64 host
 #   hugmesh-frontend  frontend=true   -> frontend Pis AND the x86_64 host
@@ -27,8 +27,8 @@ kind: Namespace
 metadata:
   name: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: pki
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: pki
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
     pod-security.kubernetes.io/audit: restricted
@@ -39,8 +39,8 @@ kind: Namespace
 metadata:
   name: hugmesh-backend
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: backend
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: backend
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
     pod-security.kubernetes.io/audit: restricted
@@ -51,8 +51,8 @@ kind: Namespace
 metadata:
   name: hugmesh-frontend
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: frontend
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: frontend
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
     pod-security.kubernetes.io/audit: restricted
@@ -63,8 +63,8 @@ kind: Namespace
 metadata:
   name: hugmesh-games
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: games
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: games
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
     pod-security.kubernetes.io/audit: restricted
@@ -75,8 +75,8 @@ kind: Namespace
 metadata:
   name: devops
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: devops
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: devops
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
     pod-security.kubernetes.io/audit: restricted
@@ -90,4 +90,4 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: hugmesh-policy
-  labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: devops }
+  labels: { app.kubernetes.io/part-of: hugmesh.net, hugmesh.net/tier: devops }

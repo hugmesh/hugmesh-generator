@@ -140,7 +140,7 @@ never share a sysroot.
 ## 2. Configure — `brand.conf` + build knobs
 
 Everything is string-independent. The default brand is `hugmesh` /
-`hugmesh.systems`; you can build for any brand/domain. Precedence is always
+`hugmesh.net`; you can build for any brand/domain. Precedence is always
 **built-in defaults < brand profile < CLI flags**, so an absent profile changes
 nothing.
 
@@ -158,7 +158,7 @@ cp brands/example.conf brands/acme.conf
 | `BRAND` | `hugmesh` | short slug → namespaces, gateway names, hostnames |
 | `BRAND_TITLE` | `HugMesh Systems` | human title shown in UIs |
 | `ORG` | `hugmesh` | GitHub org / container-image namespace |
-| `CLUSTER_DOMAIN` | `hugmesh.systems` | base domain (`id.`/`api.`/`matrix.`/`mastodon.` derived) |
+| `CLUSTER_DOMAIN` | `hugmesh.net` | base domain (`id.`/`api.`/`matrix.`/`mastodon.` derived) |
 | `OPTIONAL_SERVICES` | `akkoma tuwunel phpbb games` (all) | which optional services to bake (see §2a) |
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
 | `GROW_POLICY` | `fill` | first-boot root-grow policy baked into the `.img` (see §2c) |

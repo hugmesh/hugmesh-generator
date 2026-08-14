@@ -4,10 +4,10 @@
 # touches credentials + must be verified):
 #   1. Admin user:   kubectl -n hugmesh-pki exec sts/forgejo -- \
 #                      forgejo admin user create --admin --username snapadmin \
-#                      --email admin@hugmesh.systems --random-password
+#                      --email admin@hugmesh.net --random-password
 #   2. Casdoor OIDC: forgejo admin auth add-oauth --name casdoor \
 #                      --provider openidConnect \
-#                      --auto-discovery-url https://id.hugmesh.systems/.well-known/openid-configuration \
+#                      --auto-discovery-url https://id.hugmesh.net/.well-known/openid-configuration \
 #                      --key <client-id> --secret <client-secret>
 #   3. Seed from GitHub (mirror the org), then flip the GitOps source:
 #        re-run bootstrap.sh with HUGMESH_GITOPS_REPO=\

@@ -1,6 +1,6 @@
 # user-bff — Backend-For-Frontend for the hugmesh-user-ui. ClusterIP in
 # hugmesh-backend; the ONLY way in is the fe-gateway /bff/user/** route (same
-# origin as hugmesh.systems). Owns the user_profile / user_preference /
+# origin as hugmesh.net). Owns the user_profile / user_preference /
 # user_block tables in user-bff-db and calls federation-api (JWT-bearing WebClient)
 # for the user's federated module/profile data.
 apiVersion: argoproj.io/v1alpha1

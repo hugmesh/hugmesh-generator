@@ -8,7 +8,7 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/name: lan-dns
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   type: ClusterIP
   selector:

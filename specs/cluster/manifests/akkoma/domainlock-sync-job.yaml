@@ -29,7 +29,7 @@ kind: ConfigMap
 metadata:
   name: akkoma-domainlock-sync-script
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.net }
 data:
   sync.py: |
     #!/usr/bin/env python3
@@ -40,7 +40,7 @@ data:
     CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
     ORG     = os.environ.get("CASDOOR_ORG", "hugmesh")
     PLEROMA_CTL = os.environ.get("PLEROMA_CTL", "/opt/akkoma/bin/pleroma_ctl")
-    LOCAL_HOST  = os.environ.get("AKKOMA_HOST", "mastodon.hugmesh.systems")
+    LOCAL_HOST  = os.environ.get("AKKOMA_HOST", "mastodon.hugmesh.net")
     # The Mastodon domain-lock marker role. Members are forced local-only.
     ROLE = "ROLE_MASTODON_DOMAINLOCKED"
 
@@ -96,7 +96,7 @@ kind: Job
 metadata:
   name: akkoma-domainlock-sync
   namespace: hugmesh-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.net }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -109,7 +109,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -125,7 +125,7 @@ spec:
             - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             - { name: CASDOOR_ORG, value: "hugmesh" }
             - { name: PLEROMA_CTL, value: "/opt/akkoma/bin/pleroma_ctl" }
-            - { name: AKKOMA_HOST, value: "mastodon.hugmesh.systems" }
+            - { name: AKKOMA_HOST, value: "mastodon.hugmesh.net" }
           envFrom: [{ secretRef: { name: akkoma-secrets } }]
           securityContext:
             allowPrivilegeEscalation: false

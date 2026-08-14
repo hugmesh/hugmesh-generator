@@ -30,7 +30,7 @@ spec:
           dnsPolicy: ClusterFirstWithHostNet
           # Pin to the pki (control-plane) node; internal/VPN access only.
           nodeSelector:
-            snapdragon.systems/pki: "true"
+            hugmesh.net/pki: "true"
           # Distinct from the public instance so the two controllers coexist.
           electionID: ingress-nginx-internal-leader
           ingressClassResource:

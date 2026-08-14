@@ -15,7 +15,7 @@
 # gateway -> this headscale, and internal nodes resolve the same name to the pki
 # node IP via /etc/hosts (the provision_hosts facade alias). The MagicDNS
 # control-plane name stays stable across the IP->domain transition.
-server_url: https://scale.hugmesh.systems
+server_url: https://scale.hugmesh.net
 listen_addr: 0.0.0.0:8080
 # /metrics + /debug — bound to loopback; scrape via a node-local exporter or an
 # Endpoints that targets the pki node, and keep it off the public facade.
@@ -69,7 +69,7 @@ dns:
     # the tailnet) so in-cluster lookups stay private. Pin the resolver address
     # for this deployment, e.g.:
     #   split:
-    #     hugmesh.systems:
+    #     hugmesh.net:
     #       - 100.64.0.1   # tailnet IP of the cluster DNS resolver (CoreDNS)
 
 # ACL policy — fleet full-mesh, file mode.
@@ -122,7 +122,7 @@ oidc:
   email_verified_required: true
   # Hint Casdoor toward the right org/domain on the authorization request.
   extra_params:
-    domain_hint: hugmesh.systems
+    domain_hint: hugmesh.net
   # The "headscale" group in the "hugmesh" Casdoor org must exist and be
   # granted to the operators allowed to enrol nodes (reconcile_superadmin() in
   # specs/cluster/manifests/casdoor/init-job.yaml seeds/grants it for the

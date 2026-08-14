@@ -21,11 +21,11 @@ kind: Namespace
 metadata:
   name: hugmesh-games-instances
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     # Selectable by NetworkPolicy namespaceSelector (the be-gateway ingress allow keys
     # on this label).
     kubernetes.io/metadata.name: hugmesh-games-instances
-    snapdragon.systems/tier: games-instances
+    hugmesh.net/tier: games-instances
     # ENFORCE the restricted Pod Security Standard at admission (not audit) — a curated
     # image that tries to run privileged / as root / with caps is REJECTED at the API
     # server, defence-in-depth alongside podsecurity.yaml's per-pod securityContext.

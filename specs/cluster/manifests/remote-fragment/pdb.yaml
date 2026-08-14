@@ -17,7 +17,7 @@ metadata:
   name: hugmesh-remote-fragment
   labels:
     app: hugmesh-remote-fragment
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:

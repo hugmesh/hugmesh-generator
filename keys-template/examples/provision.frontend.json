@@ -28,9 +28,9 @@
   },
   "hugmesh": {
     "role": "frontend",
-    "cluster_domain": "hugmesh.systems",
+    "cluster_domain": "hugmesh.net",
     "node_labels": {
-      "snapdragon.systems/frontend": "true"
+      "hugmesh.net/frontend": "true"
     }
   },
   "_comment_nodes": "Reach the pki control-plane + mesh by IP (written to /etc/hosts), so tailscale login_server (-> pki node) and the kubeadm cp_dns_name target resolve before MagicDNS/public DNS exists.",

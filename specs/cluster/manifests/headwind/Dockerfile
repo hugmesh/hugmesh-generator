@@ -2,8 +2,8 @@
 # baked from the h-mdm/hmdm-server Maven reactor into a Tomcat9/JDK11 ROOT.war.
 # Build + push to the mesh registry the deployment (headwind.yaml/kustomization.yaml)
 # expects:
-#   docker build -t registry.hugmesh.systems/hugmesh/hugmesh-headwind:main .
-#   docker push  registry.hugmesh.systems/hugmesh/hugmesh-headwind:main
+#   docker build -t registry.hugmesh.net/hugmesh/hugmesh-headwind:main .
+#   docker push  registry.hugmesh.net/hugmesh/hugmesh-headwind:main
 #
 # WHY build-from-source (not upstream h-mdm/hmdm-docker's own recipe): that
 # image curls an UNSIGNED prebuilt WAR from h-mdm.com at build time — pinning

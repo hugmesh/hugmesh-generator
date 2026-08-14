@@ -36,7 +36,7 @@ test.describe('non-federation positive control: a non-locked user DOES federate'
     const peerToken = process.env['SNAP_PEER_TOKEN'] ?? '';
     test.skip(!controlToken || !peerToken, 'control/peer Mastodon tokens not provisioned for this run');
 
-    const controlAcct = `${CONTROL.username}@mastodon.hugmesh.systems`;
+    const controlAcct = `${CONTROL.username}@mastodon.hugmesh.net`;
 
     const followed = await peerFollow(request, peerToken, controlAcct);
     expect(followed, 'peer must FOLLOW the control user (delivery target)').toBeTruthy();

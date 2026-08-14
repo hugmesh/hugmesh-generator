@@ -86,7 +86,7 @@ test.describe('domain-lock × mod-ban: independent axes, no federation leak', ()
     test.skip(!subjectToken || !peerToken || !modJwt,
       'subject/peer Mastodon tokens or e2e-mod Casdoor JWT not provisioned for this run');
 
-    const subjectAcct = `${SUBJECT.username}@mastodon.hugmesh.systems`;
+    const subjectAcct = `${SUBJECT.username}@mastodon.hugmesh.net`;
 
     // ── Phase 0: the peer follows the subject, so any leak WOULD deliver here. ──
     const followed = await peerFollow(request, peerToken, subjectAcct);

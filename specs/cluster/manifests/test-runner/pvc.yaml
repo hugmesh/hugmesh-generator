@@ -18,8 +18,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-reports
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: hugmesh-local

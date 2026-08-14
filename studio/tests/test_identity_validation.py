@@ -33,7 +33,7 @@ def test_clean_defaults_pass():
     must still produce a CLI arg list without raising."""
     cfg = ImageConfig(brand="hugmesh", org="hugmesh",
                       brand_title="HugMesh Systems",
-                      cluster_domain="hugmesh.systems", local_user="snap")
+                      cluster_domain="hugmesh.net", local_user="snap")
     args = cfg.to_cli_args()
     assert "--local-user" in args and "snap" in args
 

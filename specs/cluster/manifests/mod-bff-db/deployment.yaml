@@ -26,7 +26,7 @@ kind: Deployment
 metadata:
   name: mod-bff-db
   namespace: hugmesh-backend
-  labels: { app: mod-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: mod-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC
@@ -34,7 +34,7 @@ spec:
   template:
     metadata: { labels: { app: mod-bff-db } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         seLinuxOptions:
           type: container_t

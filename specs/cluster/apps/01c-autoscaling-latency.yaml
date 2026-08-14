@@ -40,7 +40,7 @@ metadata:
   namespace: devops
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
-    snapdragon.systems/dark: "false"
+    hugmesh.net/dark: "false"
 spec:
   project: default
   source:

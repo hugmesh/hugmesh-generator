@@ -26,7 +26,7 @@ kind: Deployment
 metadata:
   name: user-bff-db
   namespace: hugmesh-backend
-  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC
@@ -34,7 +34,7 @@ spec:
   template:
     metadata: { labels: { app: user-bff-db } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         seLinuxOptions:
           # c36 collided with signup-gate; user-bff-db takes c38 (free).

@@ -14,5 +14,5 @@ echo "[post-provision] hook running; KEYS at ${KEYS_BASE:-<none>}"
 # kubeconfig exists (control-plane only).
 if [ -f /etc/kubernetes/admin.conf ]; then
     export KUBECONFIG=/etc/kubernetes/admin.conf
-    kubectl label node "$(hostname)" snapdragon.systems/role=backend --overwrite || true
+    kubectl label node "$(hostname)" hugmesh.net/role=backend --overwrite || true
 fi

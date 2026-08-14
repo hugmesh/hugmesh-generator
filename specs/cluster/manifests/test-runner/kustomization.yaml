@@ -2,7 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 # ENV=test ONLY. This whole bundle (and its ArgoCD app apps/99-test-runner.yaml)
 # is pruned from the baked prod tree by build-x86-host-stage4.sh gate_env_apps and
-# rejected by the prod-hygiene Kyverno ClusterPolicy on its snapdragon.systems/
+# rejected by the prod-hygiene Kyverno ClusterPolicy on its hugmesh.net/
 # tier: test label. Do NOT add prod workloads here.
 namespace: hugmesh-backend
 resources:
@@ -28,5 +28,5 @@ generatorOptions:
   disableNameSuffixHash: true
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test

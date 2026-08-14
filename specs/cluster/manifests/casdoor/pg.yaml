@@ -8,7 +8,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: casdoor-pg-data
   namespace: hugmesh-pki
-  labels: { app: casdoor-pg, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor-pg, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: hugmesh-local
@@ -19,7 +19,7 @@ kind: Deployment
 metadata:
   name: casdoor-pg
   namespace: hugmesh-pki
-  labels: { app: casdoor-pg, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor-pg, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -27,7 +27,7 @@ spec:
   template:
     metadata: { labels: { app: casdoor-pg } }
     spec:
-      nodeSelector: { snapdragon.systems/pki: "true" }
+      nodeSelector: { hugmesh.net/pki: "true" }
       securityContext:
         seLinuxOptions:
           type: container_t

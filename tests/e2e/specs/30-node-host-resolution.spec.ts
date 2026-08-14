@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
 // and hand Chromium SNAP_HOST_RESOLVER so no /etc/hosts edit or sudo is needed. Node
 // never sees that flag, so `request.newContext()` — and `page.request`, which is easy
 // to mistake for browser-side because it shares the cookie jar — die on
-// `getaddrinfo ENOTFOUND hugmesh.systems`. resolveForNode() dials the mapped IP and
+// `getaddrinfo ENOTFOUND hugmesh.net`. resolveForNode() dials the mapped IP and
 // carries the hostname in the Host header, which is what ingress-nginx routes on.
 // Proven live on kind with its own control: with the Host header the BFF answered
 // 401 (routed); without it nginx answered 404 (default backend, did not route).
@@ -27,27 +27,27 @@ import { resolveForNode, parseResolverRules } from './helpers';
 
 const NO_RULES = parseResolverRules(undefined);
 
-const RULES = parseResolverRules('MAP hugmesh.systems 127.0.0.1, MAP *.hugmesh.systems 127.0.0.1');
+const RULES = parseResolverRules('MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1');
 
 test.describe('resolveForNode: Node-side host resolution for kind', () => {
   test('NO-OP when SNAP_HOST_RESOLVER is unset (the compose lane must be untouched)', () => {
-    const r = resolveForNode('https://hugmesh.systems:8443/bff/session', NO_RULES);
-    expect(r.url).toBe('https://hugmesh.systems:8443/bff/session');
+    const r = resolveForNode('https://hugmesh.net:8443/bff/session', NO_RULES);
+    expect(r.url).toBe('https://hugmesh.net:8443/bff/session');
     expect(r.headers).toEqual({});
   });
 
   test('rewrites a mapped host to its IP and carries the hostname in Host', () => {
-    const r = resolveForNode('https://hugmesh.systems:8443/bff/session', RULES);
+    const r = resolveForNode('https://hugmesh.net:8443/bff/session', RULES);
     expect(new URL(r.url).hostname).toBe('127.0.0.1');
     expect(new URL(r.url).port).toBe('8443');
     // Hostname WITHOUT the port — the exact shape proven to route on kind.
-    expect(r.headers.Host).toBe('hugmesh.systems');
+    expect(r.headers.Host).toBe('hugmesh.net');
   });
 
   test('honours a wildcard rule for subdomains', () => {
-    const r = resolveForNode('https://registry.hugmesh.systems/v2/', RULES);
+    const r = resolveForNode('https://registry.hugmesh.net/v2/', RULES);
     expect(new URL(r.url).hostname).toBe('127.0.0.1');
-    expect(r.headers.Host).toBe('registry.hugmesh.systems');
+    expect(r.headers.Host).toBe('registry.hugmesh.net');
   });
 
   test('leaves an UNMAPPED host alone even when rules are present', () => {
@@ -63,8 +63,8 @@ test.describe('resolveForNode: Node-side host resolution for kind', () => {
   });
 
   test('ignores malformed resolver entries instead of half-applying them', () => {
-    const messy = parseResolverRules('MAP, NOTARULE, MAP hugmesh.systems 127.0.0.1');
-    const good = resolveForNode('https://hugmesh.systems:8443/x', messy);
+    const messy = parseResolverRules('MAP, NOTARULE, MAP hugmesh.net 127.0.0.1');
+    const good = resolveForNode('https://hugmesh.net:8443/x', messy);
     expect(new URL(good.url).hostname).toBe('127.0.0.1');
     const other = resolveForNode('https://elsewhere.test/x', messy);
     expect(other.headers).toEqual({});

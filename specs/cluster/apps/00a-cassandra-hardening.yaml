@@ -39,9 +39,9 @@ metadata:
   name: cassandra-hardening
   namespace: devops
   labels:
-    snapdragon.systems/ships: dark
+    hugmesh.net/ships: dark
   annotations:
-    snapdragon.systems/dark: "manual-sync; empty source until operator flips — see docs/CLUSTER-HARDENING-PLAN.md §H"
+    hugmesh.net/dark: "manual-sync; empty source until operator flips — see docs/CLUSTER-HARDENING-PLAN.md §H"
     # Run after Cassandra itself (apps/00-cassandra.yaml, default wave 0).
     argocd.argoproj.io/sync-wave: "5"
 spec:

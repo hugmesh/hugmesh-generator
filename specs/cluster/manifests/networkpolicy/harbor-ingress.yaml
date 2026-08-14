@@ -47,7 +47,7 @@ kind: NetworkPolicy
 metadata:
   name: harbor-ingress
   namespace: hugmesh-pki
-  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: harbor, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   podSelector:
     matchLabels: { app: harbor }

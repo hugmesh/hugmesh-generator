@@ -38,7 +38,7 @@
 #
 # CONTEXT the emit functions read (globals the driver sets before calling emit;
 # same process, so no export needed — the driver SOURCES this file):
-#   GL_DOMAIN        the baked cluster domain (apex), e.g. hugmesh.systems
+#   GL_DOMAIN        the baked cluster domain (apex), e.g. hugmesh.net
 #   GL_INGRESS_IP    IPv4 the public A records should point at (may be empty)
 #   GL_INGRESS_IPV6  IPv6 for AAAA records (may be empty)
 #   GL_TURN_IP       IPv4 of the coturn RELAY node for turn.<domain> (may be empty

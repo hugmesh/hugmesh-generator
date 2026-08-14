@@ -3,7 +3,7 @@
 # Dockerfile.image-gen — the admin-bff-api image-gen builder worker.
 #
 # This is the container image admin-bff-api's k8s Job runs (as
-# registry.hugmesh.systems/hugmesh/image-gen:latest — see
+# registry.hugmesh.net/hugmesh/image-gen:latest — see
 # hugmesh-admin-bff-api's src/main/resources/jobs/image-gen-job.yaml,
 # read-only source of truth for the exact env/mount contract this image and
 # docker/build-image.sh implement). It bundles:
@@ -19,7 +19,7 @@
 # Build (two steps — the FIRST is the existing, already-documented toolchain
 # layer; the SECOND is this file, layered on top of it):
 #   docker build -f Dockerfile.build -t hugmesh-builder .     # (or: make docker-image)
-#   docker build -f docker/Dockerfile.image-gen -t registry.hugmesh.systems/hugmesh/image-gen:latest .
+#   docker build -f docker/Dockerfile.image-gen -t registry.hugmesh.net/hugmesh/image-gen:latest .
 #   # (or: make image-gen-docker-image, which also passes
 #   # --build-arg GIT_SHA=<short HEAD sha> so GENERATOR_REV below carries the
 #   # real revision instead of staying empty — see the GIT_SHA ARG further down)

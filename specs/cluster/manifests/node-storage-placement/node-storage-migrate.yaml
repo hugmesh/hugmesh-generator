@@ -31,10 +31,10 @@ kind: Job
 metadata:
   name: PLACEHOLDER_SERVICE_NAME-storage-migrate   # <- rendered per migration
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/node-storage-migrate: "true"
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/node-storage-migrate: "true"
   annotations:
-    snapdragon.systems/node-storage-note: >-
+    hugmesh.net/node-storage-note: >-
       EXPLICIT downtime migration. Scale the service to 0 BEFORE applying (the RWO PVC
       cannot rebind otherwise). The mesh only RECOMMENDS; the operator confirms + applies.
 spec:
@@ -43,14 +43,14 @@ spec:
   backoffLimit: 0
   template:
     metadata:
-      labels: { app.kubernetes.io/part-of: hugmesh.systems }
+      labels: { app.kubernetes.io/part-of: hugmesh.net }
     spec:
       restartPolicy: Never
       # Pin the migrate Job to the SOURCE pool's node so the source PV is local (the target
       # PV's node is reached over the rsync if cross-node, or both are local for a same-node
       # pool swap). Rendered per migration.
       nodeSelector:
-        snapdragon.systems/local-path: "true"
+        hugmesh.net/local-path: "true"
         kubernetes.io/hostname: PLACEHOLDER_SOURCE_NODE   # <- rendered
       securityContext:
         seLinuxOptions:

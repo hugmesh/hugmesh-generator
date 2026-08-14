@@ -13,7 +13,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: hugmesh-mod-ui
   namespace: hugmesh-frontend
-  labels: { app: hugmesh-mod-ui, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-mod-ui, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

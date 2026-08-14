@@ -46,7 +46,7 @@ if [ -n "${BRAND:-}" ] && [ -f "${REPO}/brands/${BRAND}.conf" ]; then
   # shellcheck disable=SC1090
   . "${REPO}/brands/${BRAND}.conf"
 fi
-DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
+DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
 BRAND="${BRAND:-hugmesh}"
 
 # ── External CA inputs (optional) ──────────────────────────────────

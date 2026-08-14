@@ -5,7 +5,7 @@ Before this directory, the `.gitlab-ci.yml` `build:images` job was an **echo stu
 path existed** — first-party app images (gateway, frontends, BFFs, games, …) built only in
 the GitLab org mirror. This directory is that missing in-cluster path: a **reusable, generic**
 rootless-Kaniko build pipeline that builds an app image from its repo and pushes it to the
-in-cluster Harbor registry (`registry.hugmesh.systems`; see `../../apps/03a-harbor.yaml` —
+in-cluster Harbor registry (`registry.hugmesh.net`; see `../../apps/03a-harbor.yaml` —
 GitLab's own bundled registry no longer serves this hostname).
 
 It is **modeled 1:1 on the proven [#110](../service-catalog-builder/) Service-Catalog Kaniko
@@ -19,7 +19,7 @@ Dockerfile rather than only Service-Catalog DOCKERFILE/ZIP sources.
   driver renders ONE copy per build (binding `${BUILD_NAME}` / `${BUILD_NAMESPACE}` /
   `${CONTEXT}` / `${DOCKERFILE}` / `${DEST_IMAGE}` / `${DEST_IMAGE_MOVING}`) and creates it in
   the build namespace. Kaniko builds the Dockerfile in userspace (no Docker daemon, no
-  privileged socket) and pushes the image to `registry.hugmesh.systems`. Security posture
+  privileged socket) and pushes the image to `registry.hugmesh.net`. Security posture
   matches the platform build Jobs: `runAsNonRoot`, drop `ALL` caps, `seccompProfile: RuntimeDefault`,
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,
   `ttlSecondsAfterFinished` + `activeDeadlineSeconds` reaping. A dedicated MCS level
@@ -72,7 +72,7 @@ Covered by the `lint:image-builder-always-on` CI gate
 (`../../../../tests/scripts/test-image-builder-always-on.sh`).
 
 Registry push creds (`image-builder-registry`, a `dockerconfigjson` with **push** scope for
-`registry.hugmesh.systems`) are **ESO-materialized** into the build namespace — **never in
+`registry.hugmesh.net`) are **ESO-materialized** into the build namespace — **never in
 git** — by the `image-builder-registry` ExternalSecret
 (`../external-secrets/image-builder-externalsecrets.yaml`, wired into the ESO kustomization).
 It sources Vault `secret/<brand>/harbor-robots` (`push_name`/`push_secret`) — Harbor's

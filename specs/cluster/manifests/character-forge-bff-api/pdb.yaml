@@ -17,7 +17,7 @@ metadata:
   name: hugmesh-character-forge-bff-api
   labels:
     app: hugmesh-character-forge-bff-api
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:

@@ -16,7 +16,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: hugmesh-matrix-ui
   namespace: hugmesh-frontend
-  labels: { app: hugmesh-matrix-ui, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-matrix-ui, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -39,7 +39,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: hugmesh-mastodon-ui
   namespace: hugmesh-frontend
-  labels: { app: hugmesh-mastodon-ui, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-mastodon-ui, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -62,7 +62,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: hugmesh-login-ui
   namespace: hugmesh-frontend
-  labels: { app: hugmesh-login-ui, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-login-ui, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -85,7 +85,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: hugmesh-admin-ui
   namespace: hugmesh-frontend
-  labels: { app: hugmesh-admin-ui, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-admin-ui, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

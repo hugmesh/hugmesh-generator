@@ -75,7 +75,7 @@ case "\${sel}" in
     app.kubernetes.io/name=coturn)  printf 'coturn-abc 10.244.1.5 Running\ncoturn-xyz 10.244.1.6 Running\n' ;;
     app.kubernetes.io/name=akkoma)  printf 'akkoma-1 10.244.2.9 Running\nakkoma-old 10.244.2.8 Succeeded\n' ;;
     app.kubernetes.io/name=badpods) printf 'bad-1 192.168.1.10 Running\n' ;;
-    snapdragon.systems/vpn-egress=true*) cat "${WORK}/stale" 2>/dev/null || true ;;
+    hugmesh.net/vpn-egress=true*) cat "${WORK}/stale" 2>/dev/null || true ;;
 esac
 exit 0
 EOF
@@ -130,8 +130,8 @@ if [ -n "${nft_line}" ] && [ -n "${lbl_line}" ] && [ "${nft_line}" -lt "${lbl_li
 else
     bad "labels applied before marks (nft@${nft_line:-none} label@${lbl_line:-none})"
 fi
-grep -q 'label pod coturn-abc snapdragon.systems/vpn-egress=true --overwrite' "${ORDER}" \
-    && grep -q 'label pod akkoma-1 snapdragon.systems/vpn-egress=true --overwrite' "${ORDER}" \
+grep -q 'label pod coturn-abc hugmesh.net/vpn-egress=true --overwrite' "${ORDER}" \
+    && grep -q 'label pod akkoma-1 hugmesh.net/vpn-egress=true --overwrite' "${ORDER}" \
     && ok "assigned pods labelled vpn-egress=true (the NetworkPolicy loosen)" || bad "missing a label add"
 grep -q 'label pod akkoma-old' "${ORDER}" \
     && bad "labelled a non-Running pod" || ok "non-Running pod not labelled"
@@ -180,7 +180,7 @@ run_mark apply >/dev/null 2>&1 || true
 printf 'akkoma-1\n' > "${WORK}/stale"
 reset_order
 run_mark clear && ok "clear exits 0" || bad "clear failed"
-grep -q 'label pod akkoma-1 snapdragon.systems/vpn-egress-' "${ORDER}" \
+grep -q 'label pod akkoma-1 hugmesh.net/vpn-egress-' "${ORDER}" \
     && ok "clear removes the vpn-egress label (NetworkPolicy re-locks the pod)" || bad "clear did not unlabel"
 grep -q 'nft delete table inet hugmesh_vpn' "${ORDER}" \
     && ok "clear deletes table inet hugmesh_vpn (teardown removes ALL hugmesh-vpn rules)" || bad "clear left the table"

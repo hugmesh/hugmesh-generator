@@ -1,7 +1,7 @@
 #!/bin/bash
 # hugmesh-vpn-mark — the PACKET-MARKING leg of the egress VPN: turn the verified
 # marked-services set into (a) fwmark 0x76 nftables rules and (b) the
-# snapdragon.systems/vpn-egress=true pod labels, in the SAME pass — exactly the
+# hugmesh.net/vpn-egress=true pod labels, in the SAME pass — exactly the
 # "the agent labels the pod and the node marks it 0x76 in the SAME reconcile
 # pass" contract the egress-vpn-interaction NetworkPolicy documents. Without
 # this leg the tunnel comes up but carries ZERO traffic: nothing sets the mark
@@ -58,7 +58,7 @@ POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
 SVC_CIDR="${SVC_CIDR:-10.96.0.0/12}"
 TAILNET_CIDR="${TAILNET_CIDR:-100.64.0.0/10}"
 NS="${VPN_MARK_NS:-hugmesh-backend}"
-VPN_EGRESS_LABEL="${VPN_EGRESS_LABEL:-snapdragon.systems/vpn-egress}"
+VPN_EGRESS_LABEL="${VPN_EGRESS_LABEL:-hugmesh.net/vpn-egress}"
 TABLE="hugmesh_vpn"
 KUBECTL_KUBECONFIG="/etc/kubernetes/admin.conf"
 LOG_TAG="hugmesh-vpn-mark"

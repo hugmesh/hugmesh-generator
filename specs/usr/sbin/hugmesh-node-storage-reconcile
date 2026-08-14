@@ -20,7 +20,7 @@
 #   5. RECONCILE each pool in the export: resolve its disk by serial via lsblk, write/refresh
 #      a `.storage.devices[]` element with a `pool:{}` marker into the local pool-manifest,
 #      run `provision_storage --pool` (FDE reuse, ,nofail), label THIS node
-#      snapdragon.systems/local-path=true, and CAS-patch the local-path-config nodePathMap so
+#      hugmesh.net/local-path=true, and CAS-patch the local-path-config nodePathMap so
 #      THIS node serves PVs from the attached disk's path (PV binds to the correct node).
 #   6. /ack: POST the applied generation back to the BFF so the UI propagation chip flips
 #      pending->applied (best-effort; the BFF reconciles forward regardless).
@@ -207,7 +207,7 @@ ack_pool_state() {
 }
 
 # ── (5c) label THIS node local-path=true + CAS-patch the nodePathMap ──────────
-# The DaemonSet (PR5) schedules a provisioner on every snapdragon.systems/local-path=true
+# The DaemonSet (PR5) schedules a provisioner on every hugmesh.net/local-path=true
 # node; the nodePathMap entry makes THIS node's provisioner serve PVs from the pool path.
 # Together with WaitForFirstConsumer + the service's nodeAffinity (PR7) this guarantees a PV
 # BINDS TO THE CORRECT NODE (the one the disk is physically attached to).
@@ -224,7 +224,7 @@ label_and_patch_nodepathmap() {
 
     # 1) label the node (idempotent).
     "${NS_KUBECTL}" --kubeconfig "${KUBECONFIG_OVERRIDE:-${KUBECTL_KUBECONFIG}}" \
-        label node "${hostname}" "snapdragon.systems/local-path=true" --overwrite >/dev/null 2>&1 \
+        label node "${hostname}" "hugmesh.net/local-path=true" --overwrite >/dev/null 2>&1 \
         || warn "node label failed (kubectl unreachable?) — provisioner DaemonSet won't schedule here yet"
 
     # 2) CAS-patch the nodePathMap: read the current config.json, add/replace THIS node's

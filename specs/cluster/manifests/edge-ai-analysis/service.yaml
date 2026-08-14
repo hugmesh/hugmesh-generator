@@ -9,7 +9,7 @@ metadata:
   namespace: hugmesh-inference
   labels:
     app: hugmesh-edge-ai-analysis
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   selector: { app: hugmesh-edge-ai-analysis }
   ports:

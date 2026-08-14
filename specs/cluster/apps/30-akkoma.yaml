@@ -1,4 +1,4 @@
-# Akkoma — fediverse server (replaces Mastodon). mastodon.hugmesh.systems,
+# Akkoma — fediverse server (replaces Mastodon). mastodon.hugmesh.net,
 # backend namespace. Mastodon-API compatible, so hugmesh-mastodon-ui is
 # unchanged. Raw manifests (no official Akkoma Helm chart). See manifests/akkoma
 # for the one-time setup/validation notes.

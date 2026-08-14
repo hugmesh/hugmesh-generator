@@ -1,6 +1,6 @@
 # wiki-bff — Backend-For-Frontend for the hugmesh-wiki-ui. ClusterIP in
 # hugmesh-backend; the ONLY way in is the fe-gateway /bff/wiki/** route (same
-# origin as hugmesh.systems). Owns the wiki_page / wiki_attachment /
+# origin as hugmesh.net). Owns the wiki_page / wiki_attachment /
 # wiki_audit_log tables in wiki-bff-db.
 #
 # DEPLOY ORDERING: lands AFTER wiki-bff-db (34a) + its mTLS/db ESO secrets.

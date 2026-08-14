@@ -3,6 +3,6 @@ kind: Namespace
 metadata:
   name: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional: "true"
-    snapdragon.systems/slug: edge-ai
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional: "true"
+    hugmesh.net/slug: edge-ai

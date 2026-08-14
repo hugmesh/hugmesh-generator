@@ -10,7 +10,7 @@
 > see the per-feature docs ([index](README.md)) and `git log`; for what remains
 > planned see the Roadmap in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-Snapshot of where the hugmesh.systems build stands after the
+Snapshot of where the hugmesh.net build stands after the
 **image / k8s / networking / security / role** focus pass, and where to pick up
 everything else. Dated 2026-06-06.
 
@@ -73,7 +73,7 @@ No metrics-server anywhere → `manifests/remote-fragment/hpa.yaml` can't scale 
 - Later hardening: egress default-deny per tier; per-port micro-seg (route-access-db:5432, federation-db:5432 only from their clients).
 
 ### 3.6 Gateway issuer-URI mismatch — auth, NEEDS VERIFICATION
-Gateway chart `charts/hugmesh-gateway/values.yaml:29` validates JWT against `http://casdoor.hugmesh-pki.svc.cluster.local:8000`, but Casdoor `origin` (`manifests/casdoor/app-conf-configmap.yaml:39`) issues `iss=https://id.hugmesh.systems`. If the gateway image doesn't normalize the issuer, **all gateway JWT validation rejects** → auth dead at the primary ingress. **Verify** with the gateway image; if real, set the gateway `casdoor.issuerUri` to `https://id.hugmesh.systems` (ensure JWKS reachable in-cluster) or confirm in-image normalization.
+Gateway chart `charts/hugmesh-gateway/values.yaml:29` validates JWT against `http://casdoor.hugmesh-pki.svc.cluster.local:8000`, but Casdoor `origin` (`manifests/casdoor/app-conf-configmap.yaml:39`) issues `iss=https://id.hugmesh.net`. If the gateway image doesn't normalize the issuer, **all gateway JWT validation rejects** → auth dead at the primary ingress. **Verify** with the gateway image; if real, set the gateway `casdoor.issuerUri` to `https://id.hugmesh.net` (ensure JWKS reachable in-cluster) or confirm in-image normalization.
 
 ### 3.7 Smaller, lower-risk
 - **mTLS not mounted** on admin-bff-api / federation-api / actions / remote-fragment (certs/roles provisioned but unused → plaintext intra-cluster). Roll the keystore mount across the charts/manifests.
@@ -96,9 +96,9 @@ Gateway chart `charts/hugmesh-gateway/values.yaml:29` validates JWT against `htt
 
 ### 4.2 Per-role UIs + host shell + federation UX
 - `hugmesh-mod-ui` / `hugmesh-user-ui` (paired with their bff-api; `hugmesh-admin-ui` exists).
-- **Host shell** (`hugmesh.systems`): authgate → **universal nav** (`Home | Mastodon | Matrix | …profile (+admin/mod)`) → **swappable content outlet** (default = role home remote; Mastodon/Matrix swap to those remotes). Home defaults to a role-tailored **welcome/getting-started guide** (dismiss-once via user-bff-api). Profile + own-component menus + special-area modules (moderation, monitoring, OpenAPI viewer) are **federated modules shipped by the role remote**, not the host.
+- **Host shell** (`hugmesh.net`): authgate → **universal nav** (`Home | Mastodon | Matrix | …profile (+admin/mod)`) → **swappable content outlet** (default = role home remote; Mastodon/Matrix swap to those remotes). Home defaults to a role-tailored **welcome/getting-started guide** (dismiss-once via user-bff-api). Profile + own-component menus + special-area modules (moderation, monitoring, OpenAPI viewer) are **federated modules shipped by the role remote**, not the host.
 - **mastodon-ui / matrix-ui role-responsive**: user self-actions→user-bff-api, mod→mod-bff-api, admin→admin-bff-api (conditional on JWT role claims).
-- Host manifest-driven `main.ts` (federation manifest from `hugmesh-federation-api` via gateway), `<username>.hugmesh.systems` vanity subdomains + public/internal visibility.
+- Host manifest-driven `main.ts` (federation manifest from `hugmesh-federation-api` via gateway), `<username>.hugmesh.net` vanity subdomains + public/internal visibility.
 
 ### 4.3 Federation app features
 Kill-switch read-path (`federation_override` scope role|user applied to the manifest read), moderation appeal/recommendation chain wiring, unified Matrix/Mastodon blocking, S3/MinIO bundle storage (federation `S3BundleStorage` is a 501 stub), multi-file zip bundle pipeline.

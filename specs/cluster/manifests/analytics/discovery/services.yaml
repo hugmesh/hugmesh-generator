@@ -17,7 +17,7 @@ kind: Service
 metadata:
   name: clickhouse
   namespace: hugmesh-backend
-  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: analytics-floor }
+  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.net, hugmesh.net/tier: analytics-floor }
 spec:
   selector: { app: clickhouse }
   ports: [{ name: http, port: 8123, targetPort: http }, { name: native, port: 9000, targetPort: native }]
@@ -27,7 +27,7 @@ kind: Service
 metadata:
   name: kafka
   namespace: hugmesh-backend
-  labels: { app: kafka, app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: analytics-floor }
+  labels: { app: kafka, app.kubernetes.io/part-of: hugmesh.net, hugmesh.net/tier: analytics-floor }
 spec:
   selector: { app: kafka }
   ports: [{ name: kafka, port: 9092, targetPort: kafka }]

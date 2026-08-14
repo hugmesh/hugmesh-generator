@@ -78,7 +78,7 @@ SEED_SUPERADMIN_USERNAME_ENV = "CASDOOR_SUPERADMIN_USERNAME"
 
 # Default brand + its apex domain (mirrors gen-cluster-secrets.sh's own defaults).
 DEFAULT_BRAND = "hugmesh"
-DEFAULT_DOMAIN = "hugmesh.systems"
+DEFAULT_DOMAIN = "hugmesh.net"
 
 # A BCP-47-shaped locale tag: a primary subtag plus optional script/region subtags
 # (e.g. de, fr, pt-BR, zh-Hant, en-XA). Deliberately lenient on SHAPE only — the

@@ -31,9 +31,9 @@
   },
   "hugmesh": {
     "role": "pki",
-    "cluster_domain": "hugmesh.systems",
+    "cluster_domain": "hugmesh.net",
     "node_labels": {
-      "snapdragon.systems/role": "pki"
+      "hugmesh.net/role": "pki"
     }
   },
   "_comment_nodes": "Reach the first pki control-plane + mesh by IP (written to /etc/hosts) so tailscale login_server and the cp_dns_name kubeadm target resolve before MagicDNS converges.",

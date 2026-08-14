@@ -83,7 +83,7 @@ export async function postLocalDirectStatus(
 }
 
 /** Have a follower account ON THE PEER follow `localAcct` (e.g. user@mastodon.
- *  hugmesh.systems) so the local user's public posts have a remote delivery
+ *  hugmesh.net) so the local user's public posts have a remote delivery
  *  target. Uses the peer's Mastodon-compatible search+follow API. Returns true if
  *  the remote actor resolved on the peer at all (federation reachability). */
 export async function peerFollow(

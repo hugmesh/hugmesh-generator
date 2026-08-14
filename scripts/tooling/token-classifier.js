@@ -39,12 +39,12 @@ const FROZEN_HEADERS = (FROZEN.wire_headers || []).map((h) => h.toLowerCase());
 const FROZEN_SUBPROTO = FROZEN.subprotocol_prefixes || [];
 
 /** A token whose render TARGET is a frozen protocol constant — a k8s label-KEY
- *  namespace (snapdragon.systems/…), a wire header name, or a Sec-WebSocket
+ *  namespace (hugmesh.net/…), a wire header name, or a Sec-WebSocket
  *  subprotocol prefix. These are compiled-in wire/label identity, NOT tenant
  *  brand; templating one would corrupt the protocol (and, for label keys, need a
  *  per-tenant recompile). Fail-closed: any token string that lands on one of
  *  these is refused at emit. This is the Phase-3 red-team gate — a brand profile
- *  that tries to override e.g. `snapdragon.systems/domain` is BLOCKED.
+ *  that tries to override e.g. `hugmesh.net/domain` is BLOCKED.
  *  Match is on the token STRING (a frozen-namespace substring, or an exact
  *  header/subprotocol identity), so it fires even though these are not valid
  *  {{identifier}} names. */

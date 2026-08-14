@@ -20,6 +20,6 @@ kind: Namespace
 metadata:
   name: hugmesh-egress-vpn
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional: "true"
-    snapdragon.systems/slug: egress-vpn
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional: "true"
+    hugmesh.net/slug: egress-vpn

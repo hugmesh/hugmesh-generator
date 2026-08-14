@@ -92,7 +92,7 @@ sed -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${R
 # (apps/07-headscale-svc.yaml) at the pki node's internal IP so the pki gateway can
 # reach it. The node IP is per-deployment, so inject the Endpoints here.
 echo "==> headscale Endpoints (host service on the pki node)"
-PKI_IP="$(kubectl get node -l snapdragon.systems/pki=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+PKI_IP="$(kubectl get node -l hugmesh.net/pki=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
 [ -n "${PKI_IP}" ] || PKI_IP="$(kubectl get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
 if [ -n "${PKI_IP}" ]; then
     kubectl apply -f - <<EOF && echo "   headscale -> ${PKI_IP}:8080" || true
@@ -131,7 +131,7 @@ fi
 echo "==> lan-dns wildcard resolver (ingress node IP; gated on RELEASE_STATE)"
 RELEASE_STATE="internal"
 [ -r /etc/hugmesh/release-state ] && RELEASE_STATE="$(cat /etc/hugmesh/release-state 2>/dev/null || echo internal)"
-BACKEND_IP="$(kubectl get node -l snapdragon.systems/backend=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+BACKEND_IP="$(kubectl get node -l hugmesh.net/backend=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
 [ -n "${BACKEND_IP}" ] || BACKEND_IP="$(kubectl get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
 if [ "${RELEASE_STATE}" = "public" ]; then
     NODE_KIND="backend"

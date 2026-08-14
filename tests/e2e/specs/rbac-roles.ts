@@ -3,7 +3,7 @@
 // This is the systems analogue of hugmesh.games/e2e/tests/helpers/roles.ts
 // SEED_USERS: a single authoritative list of seed identities + the Casdoor roles
 // each one holds, in the SYSTEMS realm (org "hugmesh", issuer
-// id.hugmesh.systems). The specs drive a per-role test matrix off this list
+// id.hugmesh.net). The specs drive a per-role test matrix off this list
 // instead of hard-coding strings in each `test.describe` body, so adding a role
 // is a one-line change here and the assertions follow.
 //
@@ -380,7 +380,7 @@ export const SUPERADMIN_DENY_ROLES: SystemsRole[] = [
 // treat its ROLE_*/role claims as absent (issuer isolation). The spec uses these
 // to assert a games-realm identity carries NO systems ROLE_* into a systems
 // gateway decision (and vice-versa).
-export const SYSTEMS_ISSUER = 'id.hugmesh.systems' as const;  // org "hugmesh"
+export const SYSTEMS_ISSUER = 'id.hugmesh.net' as const;  // org "hugmesh"
 export const GAMES_ISSUER = 'id.hugmesh.games' as const;      // org "threewizards"
 
 /** The GAMES realm (org "threewizards", issuer id.hugmesh.games) is an

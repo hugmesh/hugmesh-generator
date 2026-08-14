@@ -17,8 +17,8 @@ trusts and stamps the gateway-validated `X-Tenant-ID` / `X-User-ID` headers.
 
 ## Build
 ```sh
-docker build -t registry.hugmesh.systems/hugmesh/edge-ai-analysis:main .
-docker push  registry.hugmesh.systems/hugmesh/edge-ai-analysis:main
+docker build -t registry.hugmesh.net/hugmesh/edge-ai-analysis:main .
+docker push  registry.hugmesh.net/hugmesh/edge-ai-analysis:main
 ```
 Then select the slug (`--with-edge-ai-analysis` / `--optional-services edge-ai-analysis`)
 and ArgoCD deploys it alongside the edge-ai node. Until the image is pushed, keep the

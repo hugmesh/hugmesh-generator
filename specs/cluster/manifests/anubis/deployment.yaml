@@ -27,9 +27,9 @@ metadata:
   namespace: hugmesh-frontend
   labels:
     app: hugmesh-anubis
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional: "true"
-    snapdragon.systems/slug: anubis
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional: "true"
+    hugmesh.net/slug: anubis
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-anubis } }
@@ -37,8 +37,8 @@ spec:
     metadata: { labels: { app: hugmesh-anubis } }
     spec:
       # Co-locate with the rest of the front door (frontend Pis / x86 host carry
-      # this label), same as the hugmesh.systems web host + fe-gateway.
-      nodeSelector: { snapdragon.systems/frontend: "true" }
+      # this label), same as the hugmesh.net web host + fe-gateway.
+      nodeSelector: { hugmesh.net/frontend: "true" }
       # POD-level hardening (mirrors the frontend/media-poisoner exemplars):
       # CIS K8s 5.2.6 (runAsNonRoot), 5.7.2 (seccomp RuntimeDefault). The upstream
       # Anubis image runs fine as an unprivileged user binding high ports (8923/9090).
@@ -96,7 +96,7 @@ metadata:
   namespace: hugmesh-frontend
   labels:
     app: hugmesh-anubis
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   selector: { app: hugmesh-anubis }
   ports:

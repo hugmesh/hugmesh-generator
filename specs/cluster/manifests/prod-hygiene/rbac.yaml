@@ -11,7 +11,7 @@ metadata:
   name: prod-hygiene-gate
   namespace: hugmesh-policy
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/component: policy
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -19,7 +19,7 @@ kind: ClusterRole
 metadata:
   name: prod-hygiene-gate-read
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/component: policy
 rules:
   # Read every pod spec (images, args, labels, the seam-probe annotation) in all
@@ -33,7 +33,7 @@ kind: ClusterRoleBinding
 metadata:
   name: prod-hygiene-gate-read
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/component: policy
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -51,7 +51,7 @@ metadata:
   name: prod-hygiene-gate-vault-exec
   namespace: vault
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -66,7 +66,7 @@ metadata:
   name: prod-hygiene-gate-vault-exec
   namespace: vault
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -84,7 +84,7 @@ metadata:
   name: prod-hygiene-gate-probe
   namespace: hugmesh-policy
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
@@ -96,7 +96,7 @@ metadata:
   name: prod-hygiene-gate-probe
   namespace: hugmesh-policy
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

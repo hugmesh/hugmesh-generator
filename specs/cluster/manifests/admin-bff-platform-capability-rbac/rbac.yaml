@@ -40,7 +40,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   # CRD presence checks (.customResourceDefinitions().withName(crd).get()). A named
   # .get() needs `get`; no list/watch, no create/patch/delete. resourceNames is
@@ -64,7 +64,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -87,7 +87,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -101,7 +101,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -122,7 +122,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -136,7 +136,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

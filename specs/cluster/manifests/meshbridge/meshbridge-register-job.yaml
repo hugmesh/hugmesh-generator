@@ -32,8 +32,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: meshbridge
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: meshbridge
 data:
   register.py: |
     #!/usr/bin/env python3
@@ -44,8 +44,8 @@ data:
     import json, os, sys, time, urllib.request, urllib.error
 
     MATRIX     = os.environ.get("MATRIX_URL", "http://tuwunel.hugmesh-backend.svc.cluster.local:8008")
-    SERVER     = os.environ.get("MATRIX_SERVER_NAME", "hugmesh.systems")
-    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:hugmesh.systems")
+    SERVER     = os.environ.get("MATRIX_SERVER_NAME", "hugmesh.net")
+    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:hugmesh.net")
     # The bridge's AS-push URL — must match the meshbridge Service (deployment.yaml).
     AS_URL     = os.environ.get("MESHBRIDGE_AS_URL", "http://meshbridge.hugmesh-backend.svc.cluster.local:8009")
 
@@ -169,8 +169,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: meshbridge
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: meshbridge
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -185,7 +185,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -196,10 +196,10 @@ spec:
           command: ["python3", "/script/register.py"]
           env:
             - { name: MATRIX_URL,         value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
-            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.net" }
             # Registration is issued by posting into this admin room (membership
             # of it IS server admin in Conduit-family — see admin-sync-job.yaml).
-            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:hugmesh.systems" }
+            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:hugmesh.net" }
             # Where tuwunel will push AS transactions — the meshbridge Service.
             - { name: MESHBRIDGE_AS_URL,  value: "http://meshbridge.hugmesh-backend.svc.cluster.local:8009" }
           securityContext:

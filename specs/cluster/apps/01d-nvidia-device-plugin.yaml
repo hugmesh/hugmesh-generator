@@ -8,7 +8,7 @@
 # services".
 #
 # ALWAYS-ON INFRA, harmless without GPU: the DaemonSet has a hard nodeSelector on
-# snapdragon.systems/compute=gpu, so on a GPU-less cluster it schedules ZERO pods
+# hugmesh.net/compute=gpu, so on a GPU-less cluster it schedules ZERO pods
 # and the RuntimeClass is inert. It therefore does NOT need optional-service gating
 # (unlike edge-ai itself, which is opt-in) — it is deployed like calico/metrics.
 #

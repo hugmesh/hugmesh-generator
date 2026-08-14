@@ -5,7 +5,7 @@
 # scripts/validate-prod-hygiene.sh --runtime (mounted from the prod-hygiene-script
 # ConfigMap), which reads LIVE cluster signals — NOT a manifest grep — so it
 # catches a templated/conditional dev server that has no static fingerprint:
-#   * any RUNNING pod labelled snapdragon.systems/tier: test (the MOCK ActivityPub
+#   * any RUNNING pod labelled hugmesh.net/tier: test (the MOCK ActivityPub
 #     peer + the test-runner harness),
 #   * a RUNNING Vault container started with -dev (args) AND a dev seal-status,
 #   * a RUNNING first-party container on a :dev / *-dev image,
@@ -34,7 +34,7 @@ metadata:
   namespace: hugmesh-policy
   labels:
     app.kubernetes.io/name: prod-hygiene
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/component: policy
   annotations:
     argocd.argoproj.io/hook: PreSync
@@ -47,7 +47,7 @@ spec:
     metadata:
       labels:
         app: prod-hygiene-gate
-        app.kubernetes.io/part-of: hugmesh.systems
+        app.kubernetes.io/part-of: hugmesh.net
     spec:
       restartPolicy: Never
       serviceAccountName: prod-hygiene-gate

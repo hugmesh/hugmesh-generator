@@ -2,7 +2,7 @@
 # CANONICAL RESERVED PREFIX / USERNAME LIST — single auditable source of truth.
 # =============================================================================
 # These labels are RESERVED: a vanity username / profile handle
-# (<label>.hugmesh.systems, snapdragon.systems/<label>, and the equivalent
+# (<label>.hugmesh.net, hugmesh.net/<label>, and the equivalent
 # *.hugmesh.games surfaces) may NEVER be one of these, because each label is
 # (or may become) a DEDICATED app path-prefix or subdomain route on the
 # fe/be/pki gateways. If a user could register one of these handles their vanity
@@ -83,7 +83,7 @@ metadata:
   # `favicon` label, since the validator matches literal path segments, not
   # prefixes of them). The app-repo ReservedNames copies should add these four
   # too to stay in sync.
-  # revision 5 -> 6: route-consistency check flags `ai` (host `ai.hugmesh.systems`,
+  # revision 5 -> 6: route-consistency check flags `ai` (host `ai.hugmesh.net`,
   # apps/20-gateway-be.yaml route[edge-ai].host + route[edge-ai-analysis].host — the
   # edge-AI inference tier, model API + `/v1/analyze/**` analysis API) as a DEPLOYED
   # publicly-routable host the YAML was missing, introduced by PR #189 (commit
@@ -177,7 +177,7 @@ spec:
     - matrix
     - mastodon
     # `ai`: the edge-AI inference tier is served on its own host
-    # `ai.hugmesh.systems` (apps/20-gateway-be.yaml route[edge-ai].host +
+    # `ai.hugmesh.net` (apps/20-gateway-be.yaml route[edge-ai].host +
     # route[edge-ai-analysis].host — the raw model API catchall plus the more
     # specific `/v1/analyze/**` analysis API) — a DEDICATED reserved host, so a
     # vanity `ai` handle would shadow it. Added by the route-consistency check
@@ -305,8 +305,8 @@ spec:
     # route-consistency drift check will NOT demand them — they are reserved here
     # PROACTIVELY so a user cannot squat the handle before the service ships. The
     # phpBB community forum is referenced as a planned/announced surface in
-    # snapdragon.systems/src/app/announcements/announcement.model.ts. When the
-    # forum lands (a `forum.hugmesh.systems` subdomain + a be/fe gateway route),
+    # hugmesh.net/src/app/announcements/announcement.model.ts. When the
+    # forum lands (a `forum.hugmesh.net` subdomain + a be/fe gateway route),
     # move these up into the routable categories above; until then they are a
     # forward-reserve, NOT drift. The app-repo ReservedNames copies should add them
     # too so the handle is forbidden at registration before the route exists.

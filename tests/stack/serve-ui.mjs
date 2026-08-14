@@ -46,7 +46,7 @@ const CONFIG_SCRIPT = `<script>
   window.__SNAP_MASTODON_URL__='';
   window.__SNAP_SESSION_COOKIE_MODE__=true;
   window.__SNAP_CASDOOR_ISSUER__=${JSON.stringify(values.casdoorIssuer)};
-  window.__SNAP_UPTRACE_URL__=${JSON.stringify(values.uptraceUrl || 'https://uptrace.hugmesh.systems')};
+  window.__SNAP_UPTRACE_URL__=${JSON.stringify(values.uptraceUrl || 'https://uptrace.hugmesh.net')};
   window.__SNAP_VALUES__=${JSON.stringify(values)};
   // Games origin for matrix-ui's chat3d host (GAMES_BASE_URL token): this SAME
   // origin — new URL(...) needs an ABSOLUTE url, and same-origin serving keeps

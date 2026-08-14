@@ -16,7 +16,7 @@ metadata:
   name: hugmesh-matrix-ui
   labels:
     app: hugmesh-matrix-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:
@@ -29,7 +29,7 @@ metadata:
   name: hugmesh-mastodon-ui
   labels:
     app: hugmesh-mastodon-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:
@@ -42,7 +42,7 @@ metadata:
   name: hugmesh-login-ui
   labels:
     app: hugmesh-login-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:
@@ -55,7 +55,7 @@ metadata:
   name: hugmesh-admin-ui
   labels:
     app: hugmesh-admin-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   minAvailable: 1
   selector:

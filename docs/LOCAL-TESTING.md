@@ -23,7 +23,7 @@ Then do the **one-time resolver step** below, and browse to
 
 | | `test` (default) | `prod` |
 |---|---|---|
-| domain | `<brand>.test` (e.g. `hugmesh.test`) | real domain (e.g. `hugmesh.systems`) |
+| domain | `<brand>.test` (e.g. `hugmesh.test`) | real domain (e.g. `hugmesh.net`) |
 | DNS | in-cluster **wildcard DNS** (`apps/09-lan-dns.yaml`) | public DNS / Cloudflare (`apps/12-cloudflared.yaml`) |
 | certs | internal cluster CA (Vault-PKI) | cluster CA **+** ACME/public (additive) |
 | OAuth / SMTP / Cloudflare | optional / absent | from the keys USB |
@@ -76,7 +76,7 @@ IP on port 53. Then every LAN device resolves `*.<domain>` to the cluster.
 1. Find the backend node IP (the one your router forwards 80/443 to):
 
    ```bash
-   kubectl get node -l snapdragon.systems/backend=true \
+   kubectl get node -l hugmesh.net/backend=true \
      -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
    ```
 

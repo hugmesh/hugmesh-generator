@@ -151,7 +151,7 @@ Put the raw token in `KEYS/cloudflared/tunnel-token` (see that folder's README).
 ./scripts/gen-cluster-secrets.sh
 
 # Online + offline: also pushes to Vault
-VAULT_ADDR=https://vault.hugmesh.systems VAULT_TOKEN=s.xxxx \
+VAULT_ADDR=https://vault.hugmesh.net VAULT_TOKEN=s.xxxx \
   ./scripts/gen-cluster-secrets.sh
 ```
 

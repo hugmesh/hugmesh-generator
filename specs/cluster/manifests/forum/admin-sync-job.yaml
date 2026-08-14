@@ -42,7 +42,7 @@ kind: ConfigMap
 metadata:
   name: forum-admin-sync-script
   namespace: hugmesh-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.net }
 data:
   sync.py: |
     #!/usr/bin/env python3
@@ -166,7 +166,7 @@ kind: Job
 metadata:
   name: forum-admin-sync
   namespace: hugmesh-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.net }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -178,7 +178,7 @@ spec:
       labels: { app: forum-admin-sync }
     spec:
       restartPolicy: OnFailure
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -219,7 +219,7 @@ kind: CronJob
 metadata:
   name: forum-admin-sync-cron
   namespace: hugmesh-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
@@ -234,7 +234,7 @@ spec:
           labels: { app: forum-admin-sync }
         spec:
           restartPolicy: OnFailure
-          nodeSelector: { snapdragon.systems/backend: "true" }
+          nodeSelector: { hugmesh.net/backend: "true" }
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000

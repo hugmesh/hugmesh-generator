@@ -25,7 +25,7 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: rbac-read
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"]

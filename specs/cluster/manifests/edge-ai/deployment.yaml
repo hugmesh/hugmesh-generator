@@ -17,7 +17,7 @@ metadata:
   namespace: hugmesh-inference
   labels:
     app: hugmesh-edge-ai
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   replicas: 1
   # Models are big; never run two pods fighting over one GPU's VRAM during a rollout.
@@ -29,7 +29,7 @@ spec:
       # GPU-gated: require an NVIDIA GPU worker (labelled by keys-provision). On a
       # dedicated inference node this is the edge_ai role; be+gpu / omnibus also match.
       nodeSelector:
-        snapdragon.systems/compute: gpu
+        hugmesh.net/compute: gpu
       runtimeClassName: nvidia
       securityContext:
         seLinuxOptions:
@@ -102,7 +102,7 @@ metadata:
   namespace: hugmesh-inference
   labels:
     app: hugmesh-edge-ai
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   selector: { app: hugmesh-edge-ai }
   ports:

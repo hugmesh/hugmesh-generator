@@ -1,5 +1,5 @@
 # hugmesh-forum-ui — the phpBB forum Angular micro-frontend, served at
-# /social/forum and federated into the hugmesh.systems host (congruent with the
+# /social/forum and federated into the hugmesh.net host (congruent with the
 # matrix/mastodon shells at /social/matrix, /social/mastodon). Frontend Pis. Talks
 # to forum-bff-api via the same-origin /bff/forum/** fe-gateway route. Our own UI is
 # the single source of truth — no phpBB HTML/CSS ever reaches the browser.

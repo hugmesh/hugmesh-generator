@@ -22,15 +22,15 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: coturn
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: coturn
 data:
   # turnserver.conf — HARDENED, SECRET-FREE. The static-auth-secret is NEVER in
   # this file: it is appended at start from the ESO-mounted Secret by the pod's
   # command (see the Deployment below), so no secret is ever committed to git.
   turnserver.conf: |
     # Matrix realm — matches the homeserver server_name (tuwunel).
-    realm=hugmesh.systems
+    realm=hugmesh.net
     server-name=coturn.hugmesh-backend.svc.cluster.local
     # Listen on all pod interfaces.
     listening-ip=0.0.0.0
@@ -89,8 +89,8 @@ metadata:
   labels:
     app.kubernetes.io/name: coturn
     app: hugmesh-coturn
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: coturn
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: coturn
 spec:
   replicas: 1
   selector:
@@ -101,13 +101,13 @@ spec:
       labels:
         app: hugmesh-coturn
         app.kubernetes.io/name: coturn
-        app.kubernetes.io/part-of: hugmesh.systems
-        snapdragon.systems/optional-service: coturn
+        app.kubernetes.io/part-of: hugmesh.net
+        hugmesh.net/optional-service: coturn
     spec:
       serviceAccountName: sa-coturn
       automountServiceAccountToken: false
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       securityContext:
         # Unique MCS category s0:c67 (docs/SECURITY.md §3 matrix row). No two
         # workloads may share a category — coturn is isolated from tuwunel (c32)
@@ -210,8 +210,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: coturn
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: coturn
 spec:
   type: ClusterIP
   selector:

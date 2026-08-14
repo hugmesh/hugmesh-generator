@@ -167,7 +167,7 @@ if [ -f "${DS}" ]; then
     grep -Fq "path: ${SECRET_DIR}" "${DS}" \
         && ok "projector hostPath == the reconcile agent's VPN_SECRET_DIR (${SECRET_DIR})" \
         || bad "projector hostPath does not match ${SECRET_DIR} — the bytes would land where nothing reads them"
-    grep -Fq 'snapdragon.systems/egress-vpn: "true"' "${DS}" \
+    grep -Fq 'hugmesh.net/egress-vpn: "true"' "${DS}" \
         && ok "DARK gate 2: nodeSelector on a label no node carries by default" \
         || bad "projector has no node-label gate — an enabled sync would hit every node"
     grep -Fq 'type: spc_t' "${DS}" \

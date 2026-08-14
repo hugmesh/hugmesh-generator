@@ -19,7 +19,7 @@
 #       dot-sourced launch.env must be validated + single-quote-escaped.
 #
 # In every case we assert BOTH: the injection/traversal input is REJECTED, AND a
-# legitimate value (brand hugmesh, domain hugmesh.systems, role admin) still
+# legitimate value (brand hugmesh, domain hugmesh.net, role admin) still
 # PASSES. Runs ANYWHERE with bash + sed (no root, no network, no crypto needed —
 # the validation gates fire before any openssl/keytool work).
 set -uo pipefail
@@ -57,8 +57,8 @@ reset_prof() {
   PB_BRAND=hugmesh
   PB_TITLE="HugMesh Systems"
   PB_ORG=hugmesh
-  PB_DOMAIN=hugmesh.systems
-  PB_HS=https://headscale.hugmesh.systems
+  PB_DOMAIN=hugmesh.net
+  PB_HS=https://headscale.hugmesh.net
   PB_MESH=tag:hugmesh
 }
 
@@ -71,7 +71,7 @@ echo "-- #8/#12/#15 generate-brand-repos.sh --"
 reset_prof; write_prof "${W}/clean.conf"
 if bash "${GEN_BRAND}" "${W}/clean.conf" --out-dir "${W}/out" >/dev/null 2>"${W}/e" \
    && [ -d "${W}/out/hugmesh-gitops/apps" ]; then
-  ok "clean brand profile renders (hugmesh / hugmesh.systems)"
+  ok "clean brand profile renders (hugmesh / hugmesh.net)"
 else
   bad "clean brand profile was rejected:"; sed 's/^/      /' "${W}/e"
 fi
@@ -141,7 +141,7 @@ echo "-- #13 hugmesh-domain-reconcile entry_fields_ok --"
 # shellcheck source=/dev/null
 ( . "${AGENT}" 2>/dev/null
   rc=0
-  entry_fields_ok "hugmesh" "hugmesh.systems" "hugmesh" "tag:hugmesh" 2>/dev/null || rc=1
+  entry_fields_ok "hugmesh" "hugmesh.net" "hugmesh" "tag:hugmesh" 2>/dev/null || rc=1
   exit $rc )
 [ $? -eq 0 ] && ok "#13 clean entry accepted" || bad "#13 clean entry wrongly rejected"
 
@@ -203,7 +203,7 @@ if [ -r "${RH}" ] && grep -q '_hbdie' "${RH}"; then
   [ $? -ne 0 ] && grep -q "invalid CLUSTER_DOMAIN" "${W}/re" \
     && ok "render-handlebars newline CLUSTER_DOMAIN rejected (parity with sed engine)" \
     || bad "render-handlebars newline CLUSTER_DOMAIN ACCEPTED (opt-in engine still injectable)"
-  ( BRAND=hugmesh BRAND_TITLE=HugMesh ORG=hugmesh CLUSTER_DOMAIN=hugmesh.systems \
+  ( BRAND=hugmesh BRAND_TITLE=HugMesh ORG=hugmesh CLUSTER_DOMAIN=hugmesh.net \
     HEADSCALE_URL= MESH_TAG=; source "${W}/rhguards.sh" ) >"${W}/ro2" 2>"${W}/re2"
   [ $? -eq 0 ] && ok "render-handlebars legit brand accepted" \
     || bad "render-handlebars legit brand REJECTED: $(cat "${W}/re2")"

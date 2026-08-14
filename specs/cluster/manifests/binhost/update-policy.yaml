@@ -38,7 +38,7 @@ metadata:
   namespace: devops
   labels:
     app.kubernetes.io/part-of: hugmesh-binhost
-    snapdragon.systems/superadmin-editable: "true"
+    hugmesh.net/superadmin-editable: "true"
 data:
   policy.json: |
     {

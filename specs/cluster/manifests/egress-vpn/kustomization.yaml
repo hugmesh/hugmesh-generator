@@ -23,7 +23,7 @@ kind: Kustomization
 #
 # TO ENABLE (deliberate, operator-driven):
 #   1. Confirm the control-plane half is live: a Secret in `hugmesh-egress-vpn`
-#      labelled snapdragon.systems/optional-service=egress-vpn, NAMED exactly the
+#      labelled hugmesh.net/optional-service=egress-vpn, NAMED exactly the
 #      `secretRef` the signed per-node export carries, with the config bytes
 #      under a data key of THAT SAME NAME. All three values come from
 #      specs/cluster/egress-vpn-secret-contract.env — do not read them off this
@@ -34,7 +34,7 @@ kind: Kustomization
 #   2. Un-comment the four resource lines below.
 #   3. Manually sync apps/13e-egress-vpn.yaml (it has NO `automated:` block).
 #   4. Label ONLY the nodes that hold an assignment:
-#        kubectl label node <node> snapdragon.systems/egress-vpn=true
+#        kubectl label node <node> hugmesh.net/egress-vpn=true
 #      (until a node carries it the DaemonSet schedules nothing there).
 #   5. Verify on that node: /etc/hugmesh/vpn-secret/<secretRef> exists, is 0600
 #      root-owned, and the next `hugmesh-vpn-reconcile` pass logs
@@ -47,4 +47,4 @@ resources: []
   # - namespace.yaml                    # hugmesh-egress-vpn — the Secret namespace that IS the RBAC boundary
   # - secret-projector-rbac.yaml        # READER: SA + namespaced Role (secrets get/list) + RoleBinding — no ClusterRole
   # - writer-rbac.yaml                  # WRITER: admin-bff's backups-effector SA — secrets get/create/patch/update HERE only
-  # - secret-projector-daemonset.yaml   # the projector itself — nodeSelector snapdragon.systems/egress-vpn=true
+  # - secret-projector-daemonset.yaml   # the projector itself — nodeSelector hugmesh.net/egress-vpn=true

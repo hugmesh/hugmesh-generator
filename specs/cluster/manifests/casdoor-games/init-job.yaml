@@ -353,7 +353,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       nodeSelector:
-        snapdragon.systems/games: "true"
+        hugmesh.net/games: "true"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

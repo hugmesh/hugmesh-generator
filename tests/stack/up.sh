@@ -64,7 +64,7 @@ PORT="${MASTODON_PORT}" start mastodon node "${HERE}/mock-mastodon.mjs"
 # talks to (MATRIX_TARGET): the in-memory mock-matrix (:8401) by default, or the
 # real tuwunel when REAL_MATRIX=1. (Previously this always pointed at :8008, so
 # in mock mode token brokering hit a dead port and matrix.token came back empty.)
-PORT="${BFF_PORT}" ADMIN_EMAILS="${ADMIN_EMAILS:-admin@hugmesh.systems}" \
+PORT="${BFF_PORT}" ADMIN_EMAILS="${ADMIN_EMAILS:-admin@hugmesh.net}" \
   SYNAPSE_URL="${MATRIX_TARGET}" MASTODON_URL="http://127.0.0.1:${MASTODON_PORT}" \
   start bff node "${HERE}/mock-bff.mjs"
 CERTS="${CERTS}" UI_DIST="${UI_DIST}" PORT="${UI_PORT}" \

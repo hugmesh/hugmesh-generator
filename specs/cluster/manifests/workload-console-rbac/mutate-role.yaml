@@ -20,7 +20,7 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: rbac-mutate
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 rules:
   - apiGroups: [""]
     resources: ["pods"]

@@ -7,7 +7,7 @@ import {
 // 15 — Per-realm login.
 //
 // Two INDEPENDENT realms:
-//   * SYSTEMS Casdoor (org "hugmesh", issuer id.hugmesh.systems)
+//   * SYSTEMS Casdoor (org "hugmesh", issuer id.hugmesh.net)
 //   * GAMES  Casdoor (org "threewizards", issuer id.hugmesh.games)
 //
 // What's testable TODAY vs what's pending:
@@ -26,7 +26,7 @@ import {
 //     only assert the cross-realm catalogue agrees (the e2e-player handle + the
 //     synced e2e-gamesadmin -> games admin expectation).
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.systems';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // Deterministic native password every seeded/invited persona signs in with.
 const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
 

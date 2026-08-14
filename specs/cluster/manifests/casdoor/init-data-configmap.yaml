@@ -233,7 +233,7 @@ kind: ConfigMap
 metadata:
   name: casdoor-init-data
   namespace: hugmesh-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
 data:
   init_data.json: |
     {
@@ -242,7 +242,7 @@ data:
           "owner": "admin",
           "name": "hugmesh",
           "displayName": "HugMesh Systems",
-          "websiteUrl": "https://hugmesh.systems",
+          "websiteUrl": "https://hugmesh.net",
           "passwordType": "pbkdf2-salt",
           "languages": ["en"],
           "enableSoftDeletion": false,

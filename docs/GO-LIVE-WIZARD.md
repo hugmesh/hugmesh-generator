@@ -125,7 +125,7 @@ raw UDP/TCP and a proxied record would advertise a relay that answers nothing.
 > superdomain.** Two domains coexist on a mesh and must not be conflated:
 >
 > - **Public apex** — `cluster_domain` (`/etc/hugmesh/cluster-domain`, e.g.
->   `hugmesh.systems`). This is the go-live *target*: the wizard provisions the
+>   `hugmesh.net`). This is the go-live *target*: the wizard provisions the
 >   public edge for it and trips `release-state` `internal → public`.
 > - **Orchestration superdomain** — `<brand>.internal` (default
 >   `hugmesh.internal`), the headscale MagicDNS `base_domain` every mesh node

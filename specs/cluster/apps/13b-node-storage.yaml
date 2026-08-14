@@ -56,7 +56,7 @@ metadata:
     # The elements here are mirrored from the node-storage-assignments ConfigMap (rendered
     # from the BFF's ACTIVE storage_service_assignment rows). Flip an element's `state` (or
     # remove it) to unplace at runtime; the BFF CAS-revoke is what removes it upstream.
-    snapdragon.systems/source-of-truth: bff:/bff/admin/device-storage-pools (active storage_service_assignment rows)
+    hugmesh.net/source-of-truth: bff:/bff/admin/device-storage-pools (active storage_service_assignment rows)
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
@@ -92,12 +92,12 @@ spec:
     metadata:
       name: "node-storage-{{ .id }}"
       labels:
-        app.kubernetes.io/part-of: hugmesh.systems
-        snapdragon.systems/storage-assignment: "{{ .id }}"
-        snapdragon.systems/storage-service: "{{ .service }}"
+        app.kubernetes.io/part-of: hugmesh.net
+        hugmesh.net/storage-assignment: "{{ .id }}"
+        hugmesh.net/storage-service: "{{ .service }}"
       annotations:
-        snapdragon.systems/storage-node: "{{ .nodeName }}"
-        snapdragon.systems/storage-pool-path: "{{ .poolPath }}"
+        hugmesh.net/storage-node: "{{ .nodeName }}"
+        hugmesh.net/storage-pool-path: "{{ .poolPath }}"
     spec:
       project: default
       source:
@@ -109,11 +109,11 @@ spec:
           # the nodeAffinity + PVC for THIS assignment. (The overlay is generic; the per-
           # assignment values come from these labels/annotations + the rendered ConfigMap.)
           commonAnnotations:
-            snapdragon.systems/storage-assignment-id: "{{ .id }}"
-            snapdragon.systems/storage-service: "{{ .service }}"
-            snapdragon.systems/storage-pvc: "{{ .pvc }}"
-            snapdragon.systems/storage-node: "{{ .nodeName }}"
-            snapdragon.systems/storage-requested-gi: "{{ .requested }}"
+            hugmesh.net/storage-assignment-id: "{{ .id }}"
+            hugmesh.net/storage-service: "{{ .service }}"
+            hugmesh.net/storage-pvc: "{{ .pvc }}"
+            hugmesh.net/storage-node: "{{ .nodeName }}"
+            hugmesh.net/storage-requested-gi: "{{ .requested }}"
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{ .namespace }}"

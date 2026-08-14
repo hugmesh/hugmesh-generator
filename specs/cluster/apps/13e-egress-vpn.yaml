@@ -14,7 +14,7 @@
 #
 # TO ENABLE: follow manifests/egress-vpn/kustomization.yaml's header
 # (un-comment the resources, sync THIS app manually, then label the assigned
-# nodes `snapdragon.systems/egress-vpn=true`).
+# nodes `hugmesh.net/egress-vpn=true`).
 #
 # ROLLBACK: re-comment the overlay resources and manual-sync. Nodes fall back to
 # their key-USB-provisioned config; this is a delivery rollback, not an outage.

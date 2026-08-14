@@ -29,7 +29,7 @@ kind: Deployment
 metadata:
   name: route-access-db
   namespace: hugmesh-pki
-  labels: { app: route-access-db, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: route-access-db, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC
@@ -37,7 +37,7 @@ spec:
   template:
     metadata: { labels: { app: route-access-db } }
     spec:
-      nodeSelector: { snapdragon.systems/pki: "true" }
+      nodeSelector: { hugmesh.net/pki: "true" }
       securityContext:
         seLinuxOptions:
           type: container_t

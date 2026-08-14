@@ -298,7 +298,7 @@ are the image's documented non-root user; **confirm against the running image**
 - **Files:** node labelling in `specs/etc/keys-provision/provision.sh` (tier
   labels) + tolerations on the sensitive workloads
 - **Control:** 800-53 AC-6/SC-7; CIS K8s 5.7 (workload isolation)
-- **Change:** taint the **pki** node (`snapdragon.systems/pki=true:NoSchedule`)
+- **Change:** taint the **pki** node (`hugmesh.net/pki=true:NoSchedule`)
   and any sensitive tier so only tolerating workloads (Vault, Casdoor,
   headscale) land there; general workloads are kept off the secrets node.
 - **Validation:** the intended pods still schedule (they carry the toleration —

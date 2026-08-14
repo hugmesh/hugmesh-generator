@@ -10,7 +10,7 @@
 # WHAT THIS POLICY IS: the SECONDARY, forward-compatible hook for the OPT-IN
 # pod-egress-via-tor capability — a pod that wants to make OUTBOUND connections
 # anonymously through the node's Tor SOCKS proxy. A pod opts in by carrying the label
-# `snapdragon.systems/tor-onion=true`; this policy then re-allows it the egress it
+# `hugmesh.net/tor-onion=true`; this policy then re-allows it the egress it
 # needs to reach the SOCKS proxy + resolve DNS. It is the exact mirror of
 # egress-vpn-interaction.yaml's label-gated, additive, inert-by-default model.
 #
@@ -35,12 +35,12 @@ metadata:
   name: tor-onion-marked
   namespace: hugmesh-backend
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/optional-service: tor
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/optional-service: tor
 spec:
   podSelector:
     matchLabels:
-      snapdragon.systems/tor-onion: "true"
+      hugmesh.net/tor-onion: "true"
   policyTypes: [Egress]
   egress:
     # DNS (CoreDNS in kube-system) — keep explicit so a tor-onion pod that is NOT also

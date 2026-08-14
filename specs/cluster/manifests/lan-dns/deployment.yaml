@@ -13,7 +13,7 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/name: lan-dns
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single host-port binder per node
@@ -26,7 +26,7 @@ spec:
       # Land on the backend node — the router's 80/443 target, so the IP this
       # resolver hands out is the IP where ingress-nginx already listens.
       nodeSelector:
-        snapdragon.systems/backend: "true"
+        hugmesh.net/backend: "true"
       # Bind the node's :53 directly and resolve upstream via the host resolver.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet

@@ -29,7 +29,7 @@ metadata:
   name: hugmesh-root-waved
   namespace: devops
   annotations:
-    snapdragon.systems/topology: waved-hook-gated
+    hugmesh.net/topology: waved-hook-gated
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
