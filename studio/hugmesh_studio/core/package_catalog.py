@@ -138,6 +138,11 @@ class ListSpec:
     list_id: str
     gate: str
     predicate: Callable[[ImageConfig], bool]
+    # addable=False: the list's atoms need builder machinery beyond a bare emerge
+    # (overlay sync, multilib ABI, licence acceptance), so the raw packages_add
+    # channel can NEVER install them — the dialog must not offer them as tier-3
+    # extras. They still tier normally (essential/removable) when gated in.
+    addable: bool = True
 
 
 # Which lists each platform concatenates, and the gate id + predicate that pulls each in.
@@ -162,8 +167,16 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
         ListSpec("packages-desktop-capable", "desktop-capable",
                  lambda cfg: _is_desktop(cfg) and bool(cfg.capable)),
         ListSpec("packages-media-data", "media-data", _media_on),
+        # Native Steam (games-util/steam-launcher) lives in the steam-overlay; the
+        # builder gates it on native delivery + client + media-data + gaming desktop
+        # (build-x86:1465) and only THAT path syncs the overlay, flips ABI_X86
+        # multilib and accepts the Valve licence. A checked tier-3 extra compiles to
+        # --packages-add, which has none of that machinery — the atom is unsatisfiable
+        # there by construction (proven: standalone-unaffiliated 20260814, "there are
+        # no ebuilds to satisfy"). addable=False keeps it out of the dialog; the
+        # Steam-delivery knob on the role page is the real control.
         ListSpec("packages-steam-native", "steam-native",
-                 lambda cfg: _is_desktop(cfg) and bool(getattr(cfg, "steam_native", False))),
+                 lambda cfg: False, addable=False),
     ),
     "rpi5": (
         ListSpec("packages", "base", _ALWAYS),
@@ -326,13 +339,23 @@ def all_platform_atoms(generator_dir: str, platform: str) -> set[str]:
     return atoms
 
 
+def addable_platform_atoms(generator_dir: str, platform: str) -> set[str]:
+    """The tier-3 candidate pool: atoms from addable lists only. Non-addable lists
+    (see ListSpec.addable) hold atoms the raw packages_add channel cannot install."""
+    atoms: set[str] = set()
+    for spec in PLATFORM_LISTS.get(platform or "x86", ()):
+        if spec.addable:
+            atoms.update(list_atoms(generator_dir, platform, spec.list_id))
+    return atoms
+
+
 def tiers(generator_dir: str, cfg: ImageConfig) -> dict[str, list[str]]:
     """Split the platform catalog into the dialog's three tiers for this config:
     essential (locked), removable (default-on, uncheck -> drop), available (off, check ->
     add). Sorted for stable rendering + diffing."""
     default = default_set(generator_dir, cfg)
     floor = essential_floor(generator_dir, cfg)
-    available = all_platform_atoms(generator_dir, cfg.platform) - default
+    available = addable_platform_atoms(generator_dir, cfg.platform) - default
     return {
         "essential": sorted(floor),
         "removable": sorted(default - floor),
@@ -447,7 +470,7 @@ def validate_roles_tiers(generator_dir: str, roles: dict) -> None:
                              f"(demoted={sorted(floor - e)} promoted={sorted(e - floor)})")
         if e | r != default:
             raise ValueError(f"{role} x {platform}: essential+removable != default set")
-        if e | r | a != all_platform_atoms(generator_dir, platform) | default:
+        if e | r | a != addable_platform_atoms(generator_dir, platform) | default:
             raise ValueError(f"{role} x {platform}: tiers do not cover the platform "
                              "universe")
 

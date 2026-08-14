@@ -112,10 +112,25 @@ def test_tiers_partition_the_catalog(name, cfg):
     e, r, a = set(t["essential"]), set(t["removable"]), set(t["available"])
     assert e.isdisjoint(r) and e.isdisjoint(a) and r.isdisjoint(a), f"{name}: tiers overlap"
     # essential+removable = the builder's default install set (list atoms + adhoc adds);
-    # +available = that plus every not-gated-in list atom (the full addable universe).
+    # +available = that plus every not-gated-in ADDABLE list atom. Non-addable lists
+    # (steam-native: overlay-only, packages_add can't install it) stay out of tier 3.
     assert e | r == pc.default_set(_GEN, cfg)
-    universe = pc.all_platform_atoms(_GEN, cfg.platform) | pc.default_set(_GEN, cfg)
+    universe = pc.addable_platform_atoms(_GEN, cfg.platform) | pc.default_set(_GEN, cfg)
     assert e | r | a == universe
+
+
+def test_overlay_only_steam_atom_is_never_offered():
+    # games-util/steam-launcher lives in the steam-overlay; only the builder's
+    # STEAM_NATIVE path (Steam-delivery knob) syncs that overlay. Offering it as a
+    # checkable extra compiles to --packages-add, which resolves against ::gentoo
+    # alone and aborts the whole image emerge group (standalone-unaffiliated,
+    # 20260814: 'there are no ebuilds to satisfy "games-util/steam-launcher"').
+    for role in ("standalone-unaffiliated", "standalone-thin", "standalone-thick",
+                 "laptop", "desktop"):
+        cfg = ImageConfig(mode="cloud", role=role, platform="x86")
+        t = pc.tiers(_GEN, cfg)
+        for tier in ("essential", "removable", "available"):
+            assert "games-util/steam-launcher" not in t[tier], f"{role}.{tier}"
 
 
 def test_node_k8s_payload_is_locked():

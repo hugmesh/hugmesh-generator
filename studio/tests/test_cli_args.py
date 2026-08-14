@@ -1430,6 +1430,7 @@ def test_non_argv_fields_set():
         "headscale_url", "pentest", "hw_profile",
         "login_primary_color", "login_secondary_color", "login_font",
         "login_font_file", "login_font_licence", "login_font_source",
+        "login_theme_preset", "login_theme_mode",
         "additional_domains", "configure_users", "qemu_e2e"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode
     for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
@@ -1917,13 +1918,15 @@ def test_image_class_desktop_vs_node():
 
 
 def test_branding_allowed_predicate():
-    # desktop, non-mesh -> allowed
+    # desktop-class -> allowed in ANY mode (operator ask 2026-08-14 superseded
+    # spec 2's never-in-mesh: mesh client desktops get the desktop theme too; the
+    # per-entry clear in materialize() keeps it off node entries)
     assert branding_allowed(ImageConfig(mode="standalone", role="standalone-thick"))
     assert branding_allowed(ImageConfig(mode="cloud", role="desktop"))
-    # node role -> never
+    assert branding_allowed(ImageConfig(mode="mesh", role="rpi5-desktop"))
+    # node role -> never, in any mode
     assert not branding_allowed(ImageConfig(mode="cloud", role="omnibus"))
-    # mesh -> never, even for a desktop-class row
-    assert not branding_allowed(ImageConfig(mode="mesh", role="rpi5-desktop"))
+    assert not branding_allowed(ImageConfig(mode="mesh", role="pki"))
 
 
 def test_tailnet_sso_visible_predicate():

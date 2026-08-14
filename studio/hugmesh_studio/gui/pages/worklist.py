@@ -39,6 +39,7 @@ from ...core.config import (
 from ...core.worklist import (
     WORKLIST_INFRA_SERVICES, WorklistConfig, WorklistEntry, entry_id,
 )
+from ._desktop_user_dialog import DesktopUserDialog
 
 
 def _infra_service_options(platform: str) -> list[tuple[str, tuple[str, ...]]]:
@@ -104,7 +105,8 @@ def _row_notes(role: str, platform: str) -> str:
     if role in _GPU_ROLES:
         parts.append("GPU")
     if cls == "desktop":
-        parts.append("desktop client — brand defaults, no per-image theming")
+        parts.append("desktop client — checking asks who uses it; "
+                     "theme it on the Branding step")
     return " · ".join(parts)
 
 
@@ -123,11 +125,12 @@ class WorklistPage(QtWidgets.QWizardPage):
         # spec 2c: this IS the "mesh node" path's multi-image step. Say plainly that each
         # row is one server node image, that pki+be+fe are required together, and that
         # GPU / Edge-AI nodes can wait — the core "make each step clear" ask.
-        self.setTitle("Choose the node images to build")
+        self.setTitle("Choose the images to build")
         self.setSubTitle(
-            "Select every server node this mesh needs. PKI + Backend + Frontend are "
+            "Select every server node this mesh needs — PKI + Backend + Frontend are "
             "required together; GPU / Edge-AI nodes can be built later from a provided "
-            "config.")
+            "config. Desktop devices can be added for the mesh's people: checking one "
+            "asks who uses it (the account is created on the internal domain).")
         lay = QtWidgets.QVBoxLayout(self)
 
         self.header = QtWidgets.QLabel("")
@@ -238,6 +241,30 @@ class WorklistPage(QtWidgets.QWizardPage):
                        "Auto: this node's encryption reality, GPU, and client-brand caveats.")
         lay.addWidget(self.tree, 1)
 
+        # ── the mesh's desktop PEOPLE (operator ask 2026-08-14) ──────────────────
+        # Checking a desktop-class row pops DesktopUserDialog; the collected pairs
+        # live here, visible, and are stamped onto the entries on Next. The user is
+        # provisioned on the internal orchestration superdomain (manifest User —
+        # core/worklist.desktop_users); the Users step can later add the same
+        # account to other domains, e.g. as an admin.
+        self._desktop_people: dict[str, tuple[str, str]] = {}   # rid -> (user, role)
+        self.people_label = QtWidgets.QLabel("<b>Desktop users</b> — one per checked "
+                                             "desktop; double-click a row to edit.")
+        self.people_label.setVisible(False)
+        lay.addWidget(self.people_label)
+        self.people_table = QtWidgets.QTableWidget(0, 3)
+        self.people_table.setHorizontalHeaderLabels(["Device", "Username", "Role"])
+        self.people_table.horizontalHeader().setStretchLastSection(True)
+        self.people_table.verticalHeader().setVisible(False)
+        self.people_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.people_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.people_table.setMaximumHeight(120)
+        self.people_table.setVisible(False)
+        self.people_table.cellDoubleClicked.connect(self._edit_person)
+        lay.addWidget(self.people_table)
+
         # spec 4: answer the WHICH-device question for the fleet-wide LUKS passphrase —
         # it is set ONCE on the Home step and applies to every encrypted node here; the
         # per-row Encryption column above scopes WHETHER each node is encrypted.
@@ -323,6 +350,7 @@ class WorklistPage(QtWidgets.QWizardPage):
             fitem.setExpanded(has_rows)
 
         self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.itemClicked.connect(self._on_item_clicked)
         self.arch_filter.currentIndexChanged.connect(self._apply_filter)
         self.device_search.textChanged.connect(self._apply_filter)
         # Run the filter ONCE at construction so the excluded rows are already hidden on
@@ -491,7 +519,78 @@ class WorklistPage(QtWidgets.QWizardPage):
         rid = item.data(_COL_CHECK, Qt.ItemDataRole.UserRole)
         if rid in self._combos:
             self._sync_combo_enabled(rid)
+        # Desktop rows carry a PERSON (operator ask 2026-08-14). Checking one adds a
+        # PLACEHOLDER pair (unnamed) to the on-screen table and disables Next until
+        # it is named (isComplete). The modal who-uses-it dialog is NEVER opened
+        # from this signal: programmatic setCheckState (test helpers, initializePage
+        # re-seeding without blockSignals) would hang forever on a dialog. A real
+        # mouse click reaches _on_item_clicked below, which prompts immediately —
+        # so the interactive flow still asks the moment the box is ticked.
+        if rid in self._id_axes:
+            role, _platform = self._id_axes[rid]
+            if image_class("mesh", role) == "desktop":
+                if self._is_checked(item) and rid not in self._desktop_people:
+                    self._desktop_people[rid] = ("", "user")
+                    self._refresh_people_table()
+                elif not self._is_checked(item) and rid in self._desktop_people:
+                    del self._desktop_people[rid]
+                    self._refresh_people_table()
         self.completeChanged.emit()
+
+    def _on_item_clicked(self, item: QtWidgets.QTreeWidgetItem, _col: int) -> None:
+        """Mouse-only companion to _on_item_changed: itemClicked never fires for a
+        programmatic check, so the modal prompt here can never hang a test. Cancel
+        means "not this device after all" — the row is unchecked again."""
+        rid = item.data(_COL_CHECK, Qt.ItemDataRole.UserRole)
+        if rid not in self._id_axes or not self._is_checked(item):
+            return
+        user, _role = self._desktop_people.get(rid, (None, ""))
+        if user == "" and not self._ask_person(rid):
+            self.tree.blockSignals(True)
+            item.setCheckState(_COL_CHECK, Qt.CheckState.Unchecked)
+            self.tree.blockSignals(False)
+            del self._desktop_people[rid]
+            self._refresh_people_table()
+            self._sync_combo_enabled(rid)
+            self.completeChanged.emit()
+
+    # ── desktop-people helpers (operator ask 2026-08-14) ─────────────────────────
+    def _device_label(self, rid: str) -> str:
+        role, platform = self._id_axes[rid]
+        return f"{role} ({PLATFORM_LABELS.get(platform, platform)})"
+
+    def _ask_person(self, rid: str) -> bool:
+        """Open the who-uses-it dialog for rid (prefilled when editing). True iff
+        accepted; the collected pair lands in _desktop_people + the table."""
+        prev = self._desktop_people.get(rid, ("", "user"))
+        dlg = DesktopUserDialog(self._device_label(rid), prev[0], prev[1], self)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return False
+        self._desktop_people[rid] = (dlg.user(), dlg.person_role())
+        self._refresh_people_table()
+        return True
+
+    def _edit_person(self, table_row: int, _col: int) -> None:
+        it = self.people_table.item(table_row, 0)
+        rid = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
+        if rid in self._desktop_people:
+            self._ask_person(rid)
+
+    def _refresh_people_table(self) -> None:
+        self.people_table.setRowCount(len(self._desktop_people))
+        for i, (rid, (user, role)) in enumerate(self._desktop_people.items()):
+            dev = QtWidgets.QTableWidgetItem(self._device_label(rid))
+            dev.setData(Qt.ItemDataRole.UserRole, rid)
+            self.people_table.setItem(i, 0, dev)
+            name_item = QtWidgets.QTableWidgetItem(
+                user or "⚠ double-click to set the user")
+            if not user:
+                name_item.setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
+            self.people_table.setItem(i, 1, name_item)
+            self.people_table.setItem(i, 2, QtWidgets.QTableWidgetItem(role))
+        visible = bool(self._desktop_people)
+        self.people_label.setVisible(visible)
+        self.people_table.setVisible(visible)
 
     def _select_trio(self) -> None:
         """spec 2c: check the pki+be+fe rows in one click, on every architecture the arch
@@ -520,7 +619,12 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.completeChanged.emit()
 
     def isComplete(self) -> bool:
-        return any(self._is_checked(it) for it in self.rows.values())
+        # ≥1 checked row, AND every checked desktop has its person named (the
+        # placeholder rows _on_item_changed adds keep Next disabled until the
+        # who-uses-it dialog — double-click the table row — has been answered).
+        if not any(self._is_checked(it) for it in self.rows.values()):
+            return False
+        return all(user for user, _role in self._desktop_people.values())
 
     # ---- (de)serialize the check/axes state against the worklist -----------------
     def initializePage(self) -> None:
@@ -531,6 +635,14 @@ class WorklistPage(QtWidgets.QWizardPage):
             "Superadmins belong to it.")
 
         wl = getattr(self.wiz, "worklist", None)
+        # re-seed the desktop-people map from the saved entries (revisit path); a
+        # fresh flow starts empty. Rebuilt BEFORE the check-state loop so the
+        # blockSignals'd programmatic checks below never pop the dialog.
+        self._desktop_people = {
+            e.id: (e.desktop_user, e.desktop_user_role or "user")
+            for e in (wl.entries if wl is not None else ())
+            if e.desktop_user and e.id in self.rows}
+        self._refresh_people_table()
         self.tree.blockSignals(True)
         if wl is not None and wl.entries:
             by_id = {e.id: e for e in wl.entries}
@@ -555,6 +667,20 @@ class WorklistPage(QtWidgets.QWizardPage):
             if default_id is not None:
                 self.rows[default_id].setCheckState(_COL_CHECK, Qt.CheckState.Checked)
         self.tree.blockSignals(False)
+        # Reconcile the people map against the check states (the loop above ran
+        # under blockSignals, so _on_item_changed never saw these): every checked
+        # desktop row needs at least the PLACEHOLDER pair — otherwise the
+        # default-precheck path would disable Next with an EMPTY table and no
+        # visible reason — and an unchecked row's person is forgotten.
+        for rid, item in self.rows.items():
+            role, _p = self._id_axes[rid]
+            if image_class("mesh", role) != "desktop":
+                continue
+            if self._is_checked(item) and rid not in self._desktop_people:
+                self._desktop_people[rid] = ("", "user")
+            elif not self._is_checked(item) and rid in self._desktop_people:
+                del self._desktop_people[rid]
+        self._refresh_people_table()
         for rid in self.rows:
             self._sync_combo_enabled(rid)
         self.completeChanged.emit()
@@ -625,6 +751,11 @@ class WorklistPage(QtWidgets.QWizardPage):
                 infra_services = tuple(services_combo.currentData() or ())
             else:
                 infra_services = keep.infra_services if keep else ()
+            # the desktop person collected by the check-popup (desktop-class rows
+            # only; a node rid is never in the map). The pair rides the entry into
+            # materialize: --person-role on this image + a manifest User on the
+            # internal orchestration superdomain.
+            person_user, person_role = self._desktop_people.get(rid, ("", "user"))
             entries.append(WorklistEntry(
                 role=role, platform=platform, board=board, flavor=flavor,
                 desktop=keep.desktop if keep else "",
@@ -632,9 +763,14 @@ class WorklistPage(QtWidgets.QWizardPage):
                 packages_add=keep.packages_add if keep else "",
                 packages_drop=keep.packages_drop if keep else "",
                 infra_services=infra_services,
+                desktop_user=person_user,
+                desktop_user_role=person_role,
             ))
         if not entries:
             return False   # isComplete() already blocks Next; guard the collect path too
+        if any(image_class("mesh", e.role) == "desktop" and not e.desktop_user
+               for e in entries):
+            return False   # a checked desktop must name its person (isComplete mirror)
 
         checked = {e.id for e in entries}
         # dangling-ref reconciliation: an unchecked row's id can no longer be attached.

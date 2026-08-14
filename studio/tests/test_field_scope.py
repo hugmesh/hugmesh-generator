@@ -131,13 +131,16 @@ def test_home_field_scope_matches_home_options_allowed(fld, mode, role):
 
 
 def test_the_declared_narrowings_actually_narrow():
-    """Guard against a vacuous pass: the two families really must exclude node-class (and
-    theming really must exclude mesh), or the tests above prove nothing."""
+    """Guard against a vacuous pass: the two families really must exclude node-class,
+    or the tests above prove nothing. (Theming's extra never-in-mesh narrowing was
+    spec 2; the 2026-08-14 operator ask superseded it — desktop theming now follows
+    home_mode's shape: desktop-class in any mode, applied per-entry in mesh.)"""
     node_role = NODE_ROLES[0]
     desktop_role = DESKTOP_ROLES[0]
     assert not _in_scope("theme", "cloud", node_role), "theme not node-excluded"
-    assert not _in_scope("theme", "mesh", desktop_role), "theme not mesh-excluded"
+    assert not _in_scope("theme", "mesh", node_role), "theme not node-excluded in mesh"
     assert _in_scope("theme", "cloud", desktop_role), "theme wrongly excluded on a desktop"
+    assert _in_scope("theme", "mesh", desktop_role), "theme wrongly mesh-excluded"
     assert not _in_scope("home_mode", "cloud", node_role), "home_mode not node-excluded"
     assert _in_scope("home_mode", "mesh", desktop_role), "home_mode wrongly mesh-excluded"
 

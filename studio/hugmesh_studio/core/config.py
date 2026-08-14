@@ -141,8 +141,9 @@ MODE_SKIPPED_PAGES = {
     "cloud": ("idp", "worklist", "domains_choice", "users_choice"),  # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
     # the WEB login theme (login_* — NON_ARGV_FIELDS), which themes the login-ui the
-    # MESH serves to browsers. The desktop-asset half still greys+clears in mesh via
-    # branding_allowed (role-class), so unskipping shows exactly the mesh-relevant half.
+    # MESH serves to browsers. The DESKTOP-theme half shows in mesh too whenever the
+    # worklist carries a desktop-class x86 entry (laptop/chromebook) — materialize()'s
+    # per-entry clear keeps the theme off node entries — and greys otherwise.
     "mesh": ("role", "hardware"),                              # the WorklistPage owns role x platform
 }
 
@@ -231,6 +232,14 @@ ROLE_CHOICES = {
         ("fe", ("x86", "rpi5"), "Frontend node (x86 or Raspberry Pi 4/5)"),
         ("be+gpu", ("x86",), "Backend + GPU node"),
         ("omnibus", ("x86",), "Omnibus — every cluster role on one node"),
+        # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
+        # checking one on the WorklistPage asks for the person's user + role via a
+        # popup; the account is provisioned on the internal orchestration
+        # superdomain and the role rides the image as --person-role (FD-08).
+        ("laptop", ("x86",), "Laptop desktop — tailnet + SSO client for a person on this mesh"),
+        ("chromebook", ("x86",),
+         "Chromebook desktop — coreboot/UEFI laptop client (ADR-16); tailnet + SSO"),
+        ("desktop", ("x86",), "Desktop client — tailnet + SSO client for a person on this mesh"),
         ("rpi5-desktop", ("rpi5",),
          "Raspberry Pi 5 / 4 / 3 desktop — arm64 client (compose with --standalone for FDE, no mesh)"),
         ("edge_ai", ("x86", "jetson"), "Edge-AI node — GPU + OpenAI-compatible model API"),
@@ -902,7 +911,7 @@ _STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
 # Role-class / mode narrowings. Entries here either restate a rule the codebase ALREADY
 # enforces elsewhere — a test pins each to the predicate that owns it so the two cannot
 # disagree — or carry an enforcement landing in the SAME commit:
-#   * THEME_FIELDS       -> branding_allowed()      (desktop-class, and never in mesh)
+#   * THEME_FIELDS       -> branding_allowed()      (desktop-class, any mode)
 #   * HOME_DESKTOP_FIELDS-> home_options_allowed()  (desktop-class, any mode)
 #   * standalone         -> HomePage's hide gate + scope_allows()  [finding 1]
 # bundle_source's classes=("desktop",) is the ONE narrowing here with no enforcement yet: it
@@ -913,8 +922,7 @@ _STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
 # deliberately undeclared: a scope nothing reads would be policy with no effect. They land
 # with their enforcement, not before.
 _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
-    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",),
-                     modes=tuple(m for m in _ALL_MODES if m != "mesh"))
+    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
        for f in THEME_FIELDS},
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
        for f in HOME_DESKTOP_FIELDS},
@@ -1040,8 +1048,12 @@ def x86_desktop_axis(role: str) -> tuple[str, ...]:
 
 
 def branding_allowed(cfg: "ImageConfig") -> bool:
-    """Theming is offered only on desktop-class images and never in mesh mode (spec 2)."""
-    return image_class(cfg.mode, cfg.role) == "desktop" and cfg.mode != "mesh"
+    """Desktop theming is offered on desktop-class images in ANY mode (operator ask,
+    2026-08-14 — supersedes spec 2's never-in-mesh). A mesh WORKLIST has no single
+    role, so this stays False for the mesh flow cfg itself; BrandingPage extends the
+    gate to "the worklist carries a desktop-class x86 entry", and materialize()'s
+    per-entry clear_role_class_fields keeps the theme off every node entry."""
+    return image_class(cfg.mode, cfg.role) == "desktop"
 
 
 def tailnet_sso_visible(cfg: "ImageConfig") -> bool:

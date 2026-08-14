@@ -1,10 +1,14 @@
 """BrandingPage — TWO branding surfaces with opposite scopes:
 
 * DESKTOP assets (premade theme XOR custom boot/login/wallpaper/GRUB/accent, plus
-  the brand lock): x86-only emission, greys+clears on node images and in mesh mode
-  (``branding_allowed``) and on the unaffiliated role (a builder hard-conflict).
-  The premade picker and the eight custom fields are an exclusive either/or so the
-  two branding channels can never fight.
+  the brand lock): x86-only emission, greys+clears on node images
+  (``branding_allowed`` / ``_desktop_half_allowed``) and on the unaffiliated role
+  (a builder hard-conflict). In MESH mode the half is live whenever the worklist
+  carries a desktop-class x86 entry — the theme rides the shared cfg and
+  materialize()'s per-entry clear keeps it off every node image (operator ask
+  2026-08-14; supersedes spec 2's never-in-mesh). The premade picker and the eight
+  custom fields are an exclusive either/or so the two branding channels can never
+  fight.
 * The WEB LOGIN THEME (colours/fonts for the login page the MESH serves to
   browsers): NON-argv mesh-plane fields (config NON_ARGV_FIELDS), deliberately
   OUTSIDE the desktop gating — mesh mode visits this page exactly FOR this half,
@@ -37,7 +41,7 @@ from __future__ import annotations
 from ..qt import QtWidgets
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ...core.branding_themes import theme_set_problem
-from ...core.config import UNAFFILIATED_ROLE, branding_allowed
+from ...core.config import UNAFFILIATED_ROLE, branding_allowed, image_class
 from ._gating import (
     clear_unsupported, gate_widgets_role_class, platform_supports, unsupported_note,
 )
@@ -61,8 +65,10 @@ _CUSTOM_FIELDS = ("branding_dir", "wallpaper", "grub_background", "grub_theme",
                   "login_background", "brand_logo", "color_scheme", "accent_color")
 
 _ROLE_CLASS_REASON = (
-    "Theming applies to desktop images only — node / mesh images take the brand "
-    "defaults, no per-image theme. Cleared when you leave the page.")
+    "Desktop theming applies to desktop images only — cluster-node images take "
+    "the brand defaults. In mesh mode it unlocks when the worklist carries a "
+    "desktop-class x86 entry (laptop/chromebook); the theme is applied to those "
+    "entries and never to the nodes. Cleared when you leave the page.")
 
 _NOTE_STYLE = "color: #a65d00;"
 
@@ -96,6 +102,14 @@ class BrandingPage(QtWidgets.QWizardPage):
         form_lay = QtWidgets.QVBoxLayout(self.form)
         form_lay.setContentsMargins(0, 0, 0, 0)
         form_lay.setSpacing(8)
+        # The page hosts TWO theme surfaces with different destinations; name this
+        # one so it can never be confused with the web login theme group below.
+        desktop_hdr = QtWidgets.QLabel(
+            "<b>Desktop theme</b> — baked into the IMAGE itself: wallpaper, GRUB "
+            "boot screen, login greeter, colours. (The web login page the mesh "
+            "serves to browsers is themed separately, below.)")
+        desktop_hdr.setWordWrap(True)
+        form_lay.addWidget(desktop_hdr)
 
         # ── the fork: premade theme XOR custom branding ──────────────────────────
         # An exclusive either/or (spec 2). Both stay visible/scannable; selecting one
@@ -243,16 +257,31 @@ class BrandingPage(QtWidgets.QWizardPage):
         return not (getattr(cfg, "role", "") == UNAFFILIATED_ROLE
                     or getattr(cfg, "unaffiliated", False))
 
+    def _desktop_half_allowed(self, c) -> bool:
+        """The desktop-theme half applies when the image (or, in mesh, ANY worklist
+        entry) is a desktop on a theme-emitting platform. Mesh has no single role —
+        the theme rides the shared cfg and materialize()'s per-entry
+        clear_role_class_fields strips it from every node entry, so offering it here
+        cannot leak a --theme onto a node image."""
+        if branding_allowed(c) and platform_supports("theme", c.platform):
+            return True
+        if c.mode == "mesh":
+            wl = getattr(self.wiz, "worklist", None)
+            return bool(wl and any(
+                image_class("mesh", e.role) == "desktop"
+                and platform_supports("theme", e.platform)
+                for e in getattr(wl, "entries", ())))
+        return False
+
     def initializePage(self):
         c = self.wiz.cfg
         unaffiliated = c.role == UNAFFILIATED_ROLE
         self.unaffiliated_note.setVisible(unaffiliated)
         # theming is desktop-class AND x86-only emission — grey the whole form when
-        # (a) the unaffiliated role is selected, (b) it is a node/mesh image
-        # (branding_allowed), or (c) the platform's builder parses no --theme/… flag.
-        role_class_ok = branding_allowed(c)
-        platform_ok = platform_supports("theme", c.platform)
-        enabled = not unaffiliated and role_class_ok and platform_ok
+        # (a) the unaffiliated role is selected, (b) neither the image nor any mesh
+        # worklist entry is a themable desktop (_desktop_half_allowed), or (c) the
+        # platform's builder parses no --theme/… flag.
+        enabled = not unaffiliated and self._desktop_half_allowed(c)
 
         # SET EQUALITY, surfaced. theme_set_problem() compares the offered four
         # against the on-disk theme directories — which ARE the set the builder
@@ -296,11 +325,20 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.mode_group.blockSignals(False)
         self._mode_toggled()   # sync enable + clear the inactive channel
 
-        reason = unsupported_note(c.platform) if not platform_ok else _ROLE_CLASS_REASON
+        reason = (unsupported_note(c.platform)
+                  if not platform_supports("theme", c.platform) and c.mode != "mesh"
+                  else _ROLE_CLASS_REASON)
         gate_widgets_role_class(self.form, enabled, "" if enabled else reason)
+        # Mesh with NO desktop entries in the worklist: the desktop-theme section
+        # would theme nothing being built — HIDE it outright (operator ask
+        # 2026-08-14: "if no desktops were selected to be built, there's no desktop
+        # theming section") rather than greying it. Other modes keep the greyed
+        # form + reason: there a single image is being configured and the note
+        # explains why it cannot carry a theme.
+        self.form.setVisible(not (c.mode == "mesh" and not enabled))
 
-        # web login theme: ALWAYS active (mesh-plane, not desktop). In mesh the
-        # desktop half is greyed, so this half IS the page — open it by default
+        # web login theme: ALWAYS active (mesh-plane, not desktop). In mesh it is
+        # the half every worklist renders, so keep it opened by default there
         # (respecting an operator who folded it themselves).
         self.login_theme.load(c)
         self.login_collapsible.set_default_expanded(c.mode == "mesh")
@@ -331,9 +369,12 @@ class BrandingPage(QtWidgets.QWizardPage):
             # everything so a role switch cannot poison the argv.
             self._blank_all(c)
             return True
-        if not (branding_allowed(c) and platform_supports("theme", c.platform)):
-            # node / mesh / off-x86: the form is greyed — clear every branding field
-            # (belt & braces, mirrored by materialize()'s clear_role_class_fields I4).
+        if not self._desktop_half_allowed(c):
+            # node / off-x86 / mesh-without-desktop-entries: the form is greyed —
+            # clear every branding field (belt & braces, mirrored by materialize()'s
+            # clear_role_class_fields I4). A mesh worklist WITH desktop entries keeps
+            # the picked theme on the shared cfg; the per-entry clear strips it from
+            # every node image at materialize time.
             self._blank_all(c)
             return True
         if self.rb_preset.isChecked():
