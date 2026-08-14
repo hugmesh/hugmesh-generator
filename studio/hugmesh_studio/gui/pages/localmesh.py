@@ -791,6 +791,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.e2e_btn.setEnabled(False)
         self.e2e_btn.clicked.connect(self._run_e2e)
         brow.addWidget(self.e2e_btn)
+        # ── the DEVOPS lane (Kubernetes) ────────────────────────────────────
+        # ArgoCD + the workload console are k8s CONTROLLERS — no compose profile
+        # can host them (core/local_services.MECH_KIND). These two buttons drive
+        # the repo's real local Kubernetes lane (`make kind-up`, which installs
+        # upstream ArgoCD and applies this mesh's app tree), so the DevOps
+        # surface is genuinely reachable instead of permanently greyed
+        # (operator ask 2026-08-14).
+        self.devops_up_btn = QtWidgets.QPushButton("Start DevOps lane (Kubernetes)")
+        self.devops_up_btn.setToolTip(
+            "Create the local Kubernetes cluster and bootstrap the mesh on it: "
+            "real upstream ArgoCD (GitOps), the app tree, Vault KV and the "
+            "identity seed — the lane where ArgoCD and the workload console "
+            "actually work. SEPARATE from the docker mesh above: starting it "
+            "changes nothing about the running containers. LONG (image pulls + "
+            "rollouts); output streams below and Cancel stays available. "
+            "Requires `kind` and `kubectl` on PATH — you are told up front if "
+            "either is missing.")
+        self.devops_up_btn.clicked.connect(self._devops_up)
+        brow.addWidget(self.devops_up_btn)
+        self.devops_down_btn = QtWidgets.QPushButton("Delete DevOps lane")
+        self.devops_down_btn.setToolTip(
+            "Delete the local Kubernetes cluster. Destroys the DevOps lane ONLY "
+            "— the docker mesh and every one of its volumes are untouched.")
+        self.devops_down_btn.clicked.connect(self._devops_down)
+        brow.addWidget(self.devops_down_btn)
         self.add_user_btn = QtWidgets.QPushButton("Add user…")
         self.add_user_btn.setToolTip(
             "Create a NEW named account on the RUNNING mesh (username, password, "
@@ -1406,6 +1431,33 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "reporter's summary.json."
             if not problems else
             "Disabled:\n- " + "\n- ".join(problems))
+
+    def _devops_up(self):
+        """Start the DevOps (Kubernetes) lane. The tool check runs HERE too, so
+        the operator gets the missing-prerequisite sentence instead of a failed
+        make deep in a streamed log."""
+        node = self.boot._stack_node()
+        problems = node.devops_available()
+        if problems:
+            self.status.setText("Cannot start the DevOps lane: "
+                                + "; ".join(problems))
+            return
+        self._note("[devops] creating the local Kubernetes cluster and "
+                   "bootstrapping ArgoCD + the app tree — this is long; the "
+                   "docker mesh above is unaffected …")
+        self._launch("Starting the DevOps lane",
+                     lambda on_line, cancel: node.devops_up(on_line=on_line,
+                                                            cancel=cancel),
+                     stream=True, cancellable=True, verb="devops-up")
+
+    def _devops_down(self):
+        node = self.boot._stack_node()
+        self._note("[devops] deleting the local Kubernetes cluster (the docker "
+                   "mesh and its volumes are untouched) …")
+        self._launch("Deleting the DevOps lane",
+                     lambda on_line, cancel: node.devops_down(on_line=on_line,
+                                                              cancel=cancel),
+                     stream=True, cancellable=True, verb="devops-down")
 
     def _run_e2e(self):
         """Run the e2e suite against the RUNNING stack. The gate is re-probed

@@ -73,6 +73,9 @@ M2_BOOTSTRAP_TIMEOUT_S = 3 * 3600
 # retries=1 — a healthy run is well under an hour; past that rely on the
 # streamed output + operator Cancel, like the stack-up ceilings above.
 E2E_TIMEOUT_S = 2 * 3600
+# The DevOps (kind) lane: cluster create + image pulls + rollouts. Same
+# order as a cold compose bring-up, so it gets the same generous ceiling.
+DEVOPS_UP_TIMEOUT_S = 3600
 # Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
 # creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
 # WITHOUT auth — data.name == "e2e-admin" when seeded, data: null when not.
@@ -746,6 +749,49 @@ class LocalStackNode:
         if on_line is not None:
             on_line(line)
         return ok, f"{line}\n{msg}"
+
+    # ── the DEVOPS lane (Kubernetes) ─────────────────────────────────────────
+    # ArgoCD and the workload console are Kubernetes CONTROLLERS: they reconcile
+    # / inspect cluster objects, so no compose profile could ever make them real
+    # (core/local_services.MECH_KIND). The repo already ships a real local
+    # Kubernetes lane — specs/cluster/bootstrap/kind-local/bootstrap-kind.sh,
+    # driven by `make kind-up`, which installs UPSTREAM ArgoCD and applies this
+    # mesh's app tree. These verbs expose that lane instead of pretending the
+    # docker lane can host it (operator ask 2026-08-14).
+    def devops_available(self) -> list[str]:
+        """Why the DevOps lane cannot start right now (empty = it can). Checked
+        BEFORE the long verb so the operator is told up front, in the same
+        register as e2e_ready()."""
+        problems: list[str] = []
+        if shutil.which("kind") is None:
+            problems.append("`kind` is not installed — the DevOps lane needs it "
+                            "to create the local Kubernetes cluster "
+                            "(https://kind.sigs.k8s.io).")
+        if shutil.which("kubectl") is None:
+            problems.append("`kubectl` is not installed — the DevOps lane needs "
+                            "it to apply the cluster's app tree.")
+        return problems
+
+    def devops_up(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make kind-up` — create the local Kubernetes cluster and bootstrap the
+        SSO slice: real upstream ArgoCD, the app tree, Vault KV and the identity
+        seed. LONG (image pulls + rollouts) and streamed like stack-up; Cancel
+        terminates the whole process group.
+
+        Deliberately SEPARATE from the docker lane rather than folded into it:
+        the two are different backends for the same mesh, and starting one must
+        never silently reconfigure the other."""
+        problems = self.devops_available()
+        if problems:
+            return False, "\n".join(problems)
+        return self._make("kind-up", timeout=DEVOPS_UP_TIMEOUT_S,
+                          on_line=on_line, cancel=cancel)
+
+    def devops_down(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make kind-down` — delete the local Kubernetes cluster. Destructive for
+        the DevOps lane ONLY: the docker mesh and its volumes are untouched."""
+        return self._make("kind-down", timeout=600,
+                          on_line=on_line, cancel=cancel)
 
     def stop(self) -> tuple[bool, str]:
         """`make stack-halt` — stop the mesh and KEEP its data.

@@ -76,11 +76,32 @@ def _registry():
 # ── 1. nothing is offered that the local stack cannot run ───────────────────────
 def test_every_offered_slug_has_a_real_local_mechanism():
     for svc in ls.LOCAL_SERVICES:
-        assert svc.mechanism in (ls.MECH_COMPOSE_PROFILE, ls.MECH_FEDERATION)
+        assert svc.mechanism in (ls.MECH_COMPOSE_PROFILE, ls.MECH_FEDERATION,
+                                 ls.MECH_KIND)
         if svc.is_profile():
             assert svc.profile and not svc.module
-        else:
+        elif svc.is_federation():
             assert svc.module and not svc.profile
+        else:
+            # DEVOPS lane (MECH_KIND): a Kubernetes controller. It names neither
+            # a compose profile nor a federation module — `make kind-up` IS its
+            # mechanism, so asserting either field would invent a mapping.
+            assert svc.is_kind() and not svc.profile and not svc.module
+
+
+def test_kind_lane_rows_name_the_make_target_that_runs_them():
+    """The DevOps lane must be backed by a REAL target, or the rows lie exactly
+    like a compose profile nothing consumes would."""
+    mk = _read(MAKEFILE)
+    assert "kind-up:" in mk and "bootstrap-kind.sh" in mk
+    assert "kind-down:" in mk
+    kind_slugs = {s.slug for s in ls.LOCAL_SERVICES if s.is_kind()}
+    assert kind_slugs == {"argocd", "workloadConsole"}
+    # and the bootstrap really installs ArgoCD (not a placeholder)
+    boot = _read(os.path.join(
+        GENERATOR_DIR, "specs", "cluster", "bootstrap", "kind-local",
+        "bootstrap-kind.sh"))
+    assert "argo-cd" in boot and "argocd-repo-server" in boot
 
 
 def test_profile_slugs_name_a_profile_compose_actually_declares():
@@ -237,9 +258,32 @@ def test_federation_selection_is_catalogue_ordered():
 def test_validate_refuses_unavailable_and_unknown_slugs_with_a_reason():
     assert ls.validate_selection(None) == []
     assert ls.validate_selection(ls.local_slugs()) == []
-    # edge-ai-tts graduated to a real profile row (TTS=1); workloadConsole is
-    # still genuinely k8s-only, so it carries the refusal contract now.
-    problems = ls.validate_selection(("workloadConsole",))
-    assert len(problems) == 1 and "workloadConsole" in problems[0]
+    # UNAVAILABLE_LOCALLY is EMPTY as of 2026-08-14 — every catalogued slug has a
+    # lane (workloadConsole moved onto the DevOps/kind lane, which supplies the
+    # Kubernetes API its only driver needs). The refusal contract still holds for
+    # an unknown slug, and the map stays for a future genuinely-unrunnable one.
+    assert ls.UNAVAILABLE_LOCALLY == {}
     problems = ls.validate_selection(("nope",))
     assert len(problems) == 1 and "unknown" in problems[0]
+
+
+# ── 6. the DevOps (Kubernetes) lane ─────────────────────────────────────────────
+def test_kind_rows_are_neither_compose_nor_federation():
+    """The lane is a THIRD mechanism, not a compose profile in disguise: a kind
+    row must never leak into profile_flags() (which would invent a `--profile`
+    flag) nor into federation_selection() (which would flip a registry row)."""
+    sel = ("argocd", "workloadConsole", "tuwunel", "wiki")
+    assert "argocd" not in ls.profile_flags(sel)
+    assert "workloadConsole" not in ls.profile_flags(sel)
+    assert ls.federation_selection(sel) == ("wiki",)
+    # …and selecting them is VALID (they have a real lane now)
+    assert ls.validate_selection(("argocd", "workloadConsole")) == []
+
+
+def test_kind_lane_slugs_are_offered_and_default_off():
+    for slug in ("argocd", "workloadConsole"):
+        svc = ls.by_slug(slug)
+        assert svc is not None and svc.is_kind()
+        assert svc.default_on is False
+        assert "Kubernetes" in svc.local_note
+    assert slug in ls.local_slugs()
