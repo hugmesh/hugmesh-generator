@@ -102,8 +102,6 @@ def test_unknown_preset_and_mode_fail_loudly():
         tp.by_id("no-such-theme")
     with pytest.raises(ValueError):
         tp.compose_tokens("pride", "sepia")
-<<<<<<< HEAD
-=======
 
 
 def test_css_emits_the_hug_runtime_contract():
@@ -117,4 +115,3 @@ def test_css_emits_the_hug_runtime_contract():
                  ("--sd-accent-soft", "--hug-accent-soft"),
                  ("--sd-flag-stripes", "--hug-flag-stripes")):
         assert pair[0] in css and pair[1] in css, pair
->>>>>>> 1d0fa63 (fix(theme): emit the --hug-* runtime contract, and thread the theme env to shell+admin)
