@@ -13,14 +13,14 @@ replicaCount: 1
 # registry-host prefix at all (just "snapdragon-systems/gateway"), so a
 # deployment would have resolved this image against Docker Hub, not the
 # in-cluster registry — while .gitlab-ci.yml's build:images job has always
-# pushed to registry.hugmesh.systems/hugmesh/hugmesh-gateway. Fixed to
+# pushed to registry.hugmesh.net/hugmesh/hugmesh-gateway. Fixed to
 # match that same push destination and every other kustomization's `newName`
-# convention (registry.hugmesh.systems/hugmesh/<repo>). The registry
+# convention (registry.hugmesh.net/hugmesh/<repo>). The registry
 # behind this hostname is now Harbor (apps/03a-harbor.yaml), not GitLab's
 # bundled one — see that Application's header comment for why the hostname
 # itself is unchanged.
 image:
-  repository: registry.hugmesh.systems/hugmesh/hugmesh-gateway
+  repository: registry.hugmesh.net/hugmesh/hugmesh-gateway
   tag: dev
   pullPolicy: IfNotPresent
 
@@ -52,7 +52,7 @@ service:
 # hugmesh-pki namespace on the control-plane (pki) Pi.
 #
 # issuerUri MUST equal the `iss` claim Casdoor mints (its configured origin,
-# https://id.hugmesh.systems — see manifests/casdoor app-conf `origin`), because
+# https://id.hugmesh.net — see manifests/casdoor app-conf `origin`), because
 # the gateway sets BOTH spring...jwt.issuer-uri AND jwk-set-uri, so Spring Boot
 # fetches keys from jwk-set-uri but ALSO adds a JwtIssuerValidator that enforces
 # token.iss == issuer-uri. Pointing issuerUri at the internal casdoor svc URL made
@@ -61,7 +61,7 @@ service:
 # fetch — so the public URL need not resolve in-cluster. jwksUri stays the INTERNAL
 # casdoor svc so key fetch works without leaving the cluster.
 casdoor:
-  issuerUri: https://id.hugmesh.systems
+  issuerUri: https://id.hugmesh.net
   jwksUri: http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks
 
 # Cassandra backs the gateway's revocation list + URL registry (shared).
@@ -146,7 +146,7 @@ cassandra:
   # is expressible as ALL PERMISSIONS or ON ALL KEYSPACES — the gate rejects those
   # grant forms outright rather than trying to score them.
   #
-  # Rendered onto the pod as the snapdragon.systems/cassandra-access annotation,
+  # Rendered onto the pod as the hugmesh.net/cassandra-access annotation,
   # so the declared class is readable on the LIVE object (`kubectl get pod -o
   # yaml`) next to the role it is claimed for, not only in git. Required whenever
   # `username` is set — an unclassified role cannot be checked, so the template
@@ -299,7 +299,7 @@ keystore:
 ingress:
   enabled: false
   className: ""
-  host: hugmesh.systems
+  host: hugmesh.net
   # Additional hosts this gateway's Ingress serves (same backend). Used e.g. by
   # the be-gateway to front scale.<domain> (headscale) and forward it to pki.
   extraHosts: []

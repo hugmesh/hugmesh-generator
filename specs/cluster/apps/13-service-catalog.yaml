@@ -63,8 +63,8 @@ spec:
     metadata:
       name: "{{ .repository }}"
       labels:
-        app.kubernetes.io/part-of: hugmesh.systems
-        snapdragon.systems/catalog: "true"
+        app.kubernetes.io/part-of: hugmesh.net
+        hugmesh.net/catalog: "true"
     spec:
       project: default
       source:

@@ -4,7 +4,7 @@ Crossdev / native build scripts that produce **hardened Gentoo images** for the
 HugMesh cluster — three Raspberry Pi 5 (aarch64) role images plus an x86_64
 GPU host — and the **GitOps payload** that runs Casdoor, tuwunel (Matrix) + Akkoma (fediverse), the
 Spring APIs and hugmesh.games on them. Everything connects **behind
-`hugmesh.systems`** through per-namespace Spring Cloud Gateways.
+`hugmesh.net`** through per-namespace Spring Cloud Gateways.
 
 Every image boots, then provisions itself at first boot from a USB **FAT32
 `KEYS` partition** (users, SSH keys, passwords, certificates, headscale/k8s
@@ -424,7 +424,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 - **✅ Node storage** — attach + register extra storage to a node, node-pinned
   local PV / local-path (FDE), capacity-aware scheduling. [`docs/NODE-STORAGE.md`](docs/NODE-STORAGE.md).
 - **✅ Games App-Store control plane**, **✅ owncast** + **✅ tube** (GPU-dependent
-  video), **✅ notifications in-app MVP + SSE real-time push** — notification bell (60 s polling) + `SseNotificationBus` per-user multicast stream (`GET /bff/user/notifications/events`, user-bff PR #72) + `NotificationToastService` bearer-fetch SSE toast (hugmesh.systems PR #104) are all shipped. And the **✅ superadmin Service Catalog**
+  video), **✅ notifications in-app MVP + SSE real-time push** — notification bell (60 s polling) + `SseNotificationBus` per-user multicast stream (`GET /bff/user/notifications/events`, user-bff PR #72) + `NotificationToastService` bearer-fetch SSE toast (hugmesh.net PR #104) are all shipped. And the **✅ superadmin Service Catalog**
   (data layer + tailnet superadmin-gateway + Kaniko builder, PR #110).
   [`docs/GAMES-APPSTORE.md`](docs/GAMES-APPSTORE.md).
 - **✅ Device-license registry** — physical-ownership / domain-residency / SSH
@@ -449,7 +449,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 |---|---|---|
 | **pki** (RPi 5) | `./build-rpi5-stage4.sh --role pki` | k8s control plane, headscale, Casdoor, Cassandra, pki-gateway |
 | **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway, LAN wildcard DNS (test) |
-| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | hugmesh.systems Angular host + login/matrix/mastodon/wiki remotes, fe-gateway |
+| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | hugmesh.net Angular host + login/matrix/mastodon/wiki remotes, fe-gateway |
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, hugmesh.games, backend capacity |
 | **edge_ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge_ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors, `--desktop light\|none` |
@@ -477,7 +477,7 @@ bakes the right posture into the image — you do **not** flip it at runtime.
 
 | | **`test`** (default) | **`prod`** |
 |---|---|---|
-| domain | `<brand>.test` (e.g. `hugmesh.test`) | the **real** domain (e.g. `hugmesh.systems`) |
+| domain | `<brand>.test` (e.g. `hugmesh.test`) | the **real** domain (e.g. `hugmesh.net`) |
 | DNS mode | in-cluster **wildcard DNS** (`apps/09-lan-dns.yaml` kept — **only for a `.test` domain**) | public DNS / Cloudflare (`apps/12-cloudflared.yaml` kept) |
 | the other DNS app | `12-cloudflared.yaml` **pruned** from the baked tree (and `09-lan-dns.yaml` is **also** pruned if the domain is **not** `.test`, so an `ENV=test` build on a real domain keeps neither edge) | `09-lan-dns.yaml` **pruned** from the baked tree |
 | cloudflared / external-DNS / ACME | off | on (go-live edge; creds from the keys USB) |
@@ -520,7 +520,7 @@ Two pieces make that work with zero internet:
 
    ```bash
    # backend node IP (the one your router forwards 80/443 to):
-   kubectl get node -l snapdragon.systems/backend=true \
+   kubectl get node -l hugmesh.net/backend=true \
      -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
    # point a client at it, then:
    dig @<BACKEND_IP> id.hugmesh.test +short      # -> the backend node IP
@@ -538,7 +538,7 @@ wildcard resolver. See [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md).
 ## Rebranding (brand profiles in `brands/`)
 
 Everything is **string-independent**: the default naming is `hugmesh` /
-`hugmesh.systems`, but you can build images for any brand/domain. A **brand
+`hugmesh.net`, but you can build images for any brand/domain. A **brand
 profile** is a plain shell file the builders `source` (via `--config FILE`, or an
 auto-detected `./brand.conf`). Precedence is **built-in defaults < profile < CLI
 flags**, so an absent file changes nothing. See [`brands/README.md`](brands/).
@@ -870,17 +870,17 @@ cloudflared go-live edge instead. See
 > Postgres table (`manifests/route-access/initdb/20-schema.sql`) read by the
 > gateway's `GatewayRouteAccessFilter`.
 
-### Vanity subdomains (`<username>.hugmesh.systems`)
+### Vanity subdomains (`<username>.hugmesh.net`)
 
-A user can serve their PUBLIC profile at `https://<username>.hugmesh.systems`.
+A user can serve their PUBLIC profile at `https://<username>.hugmesh.net`.
 The routing is:
 
 ```
-*.hugmesh.systems  ──►  backend ingress  ──►  fe-gateway
+*.hugmesh.net  ──►  backend ingress  ──►  fe-gateway
    (wildcard DNS:                                  │  (apps/20-gateway-fe.yaml)
     lan-dns in test,                               │
     Cloudflare wildcard in prod)                   ▼
-   Host=*.hugmesh.systems route  ──►  federation-api  (direct, no be-gateway)
+   Host=*.hugmesh.net route  ──►  federation-api  (direct, no be-gateway)
    (SetPath=/api/federation/vanity,        GET /api/federation/vanity
     Host header preserved)                 resolves the PUBLIC profile fragment
                                            by the first DNS label of the Host
@@ -888,17 +888,17 @@ The routing is:
 
 Three baked-in pieces make this work:
 
-1. **Wildcard DNS already points `*.hugmesh.systems` at the backend ingress** —
+1. **Wildcard DNS already points `*.hugmesh.net` at the backend ingress** —
    `manifests/lan-dns` answers the whole brand zone (apex + every subdomain) with
    the ingress IP in `ENV=test`; the Cloudflare wildcard does so in `ENV=prod`.
    The reserved service subdomains (`id. api. matrix. mastodon. scale. headscale.`)
    are fronted by the **be-gateway** ingress + cloudflared, not the fe-gateway.
 
 2. **fe-gateway ingress admits the wildcard** — `apps/20-gateway-fe.yaml` adds
-   `ingress.extraHosts: ["*.hugmesh.systems"]`, so the nginx Ingress accepts the
+   `ingress.extraHosts: ["*.hugmesh.net"]`, so the nginx Ingress accepts the
    vanity hosts and hands them to the gateway.
 
-3. **A `Host=*.hugmesh.systems` gateway route, ordered for PRECEDENCE.** Spring
+3. **A `Host=*.hugmesh.net` gateway route, ordered for PRECEDENCE.** Spring
    Cloud Gateway matches routes **first-in-declared-order**, so the route is placed
    **after** the apex/path routes and **before** the `frontend-host` `Path=/**`
    catch-all. The `Host=*.<domain>` predicate matches `alice.<domain>` but **not**
@@ -916,7 +916,7 @@ Three baked-in pieces make this work:
 **Precedence summary (first-match wins, top to bottom):** the reserved service
 subdomains (`id. api. matrix. mastodon. scale. headscale.`) are claimed by the
 **be-gateway** ingress + the cloudflared rules *above* the wildcard, so they never
-reach the fe-gateway. The apex `hugmesh.systems` is not matched by
+reach the fe-gateway. The apex `hugmesh.net` is not matched by
 `Host=*.<domain>` and falls through to `frontend-host`. Only the remaining
 `<username>.<domain>` hosts hit the vanity route. The cloudflared `*.<domain>` rule
 (`manifests/cloudflared`) is likewise ordered **after** the reserved hostnames and
@@ -1029,7 +1029,7 @@ for the full man-style reference. Highlights:
 | `-r, --role` | `generic` | `pki` \| `backend` \| `frontend` (RPi). Sets hostname, services, GitOps payload. |
 | `--env test\|prod` | `test` | **Build ENV, baked into `/etc/hugmesh/env`.** `test` = LAN-only (wildcard DNS kept, cloudflared/ACME pruned, internal CA); `prod` = real public domain (cloudflared/ACME kept, announced banner). See [Build ENV](#build-env-testprod-baked-at-image-creation). |
 | `-C, --config FILE` | auto `./brand.conf` | Source a brand profile (e.g. `brands/local.conf`). |
-| `--cluster-domain` | `hugmesh.systems` | Base domain for gateways / Casdoor. |
+| `--cluster-domain` | `hugmesh.net` | Base domain for gateways / Casdoor. |
 | `-w, --work-dir` | `./rpi5-stage4-build` | Git-ignored output directory. |
 | `-j, --jobs` | `$(nproc)` | Parallel emerge/make jobs. |
 | `--headscale-version` / `--tailscale-version` | pinned | Mesh binary versions. |
@@ -1119,7 +1119,7 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 
 This repo is the image/infra layer; application code lives in sibling repos —
 see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
-`hugmesh.systems` host shell federates the per-feature remotes
+`hugmesh.net` host shell federates the per-feature remotes
 (`hugmesh-login-ui`, `hugmesh-matrix-ui`, `hugmesh-mastodon-ui`,
 `hugmesh-admin-ui`, `hugmesh-mod-ui`, `hugmesh-user-ui`,
 `hugmesh-forum-ui`, `hugmesh-wiki-ui`) over module federation, backed by the

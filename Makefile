@@ -545,7 +545,7 @@ prod: ## build the PROD fleet (ENV=prod, REAL domain) — announced; creds from 
 #   make go-live                                  # preview byo-domain for DOMAIN
 #   make go-live PROVIDER=byo-domain DOMAIN=acme.example INGRESS_IP=203.0.113.10
 GOLIVE_PROVIDER ?= $(if $(strip $(PROVIDER)),$(PROVIDER),byo-domain)
-GOLIVE_DOMAIN   ?= $(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)
+GOLIVE_DOMAIN   ?= $(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.net)
 GOLIVE_OUT      ?= $(WORK_DIR)/go-live
 go-live: ## preview the on-device go-live wizard (DRY-RUN plan; PROVIDER=/DOMAIN=/INGRESS_IP= knobs)
 	@echo "==> go-live wizard PREVIEW (dry-run; posture is NEVER touched here)"
@@ -788,7 +788,7 @@ endif
 rpi: ## build all 3 Pi cluster roles (.img + .fs.tar.xz each; RPI_BOARD=rpi5 [DEFAULT] | rpi4 — rpi3 is desktop-only, use rpi-desktop instead)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make rpi NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' $(BRAND_PASS)
+	$(DOCKER_RUN) make rpi NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' RPI_ROLES='$(RPI_ROLES)' $(BRAND_PASS)
 else
 	@for r in $(RPI_ROLES); do echo "==> Pi $$r ($(RPI_BOARD))"; $(RPI) --role $$r || exit 1; done
 	$(chown-artifacts)
@@ -1071,7 +1071,7 @@ docker-image: ## build the self-contained Gentoo builder image (LONG first time:
 # purely for the build-image.sh terminal ingest message to report which
 # generator revision produced the image; falls back to empty (not a fake
 # placeholder) outside a git checkout so the message suffix just stays absent.
-IMAGE_GEN_TAG ?= registry.hugmesh.systems/hugmesh/image-gen:latest
+IMAGE_GEN_TAG ?= registry.hugmesh.net/hugmesh/image-gen:latest
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 image-gen-docker-image: ## build the admin-bff-api image-gen Job worker (needs $(IMAGE) built first)
 	docker build -f docker/Dockerfile.image-gen --build-arg GIT_SHA=$(GIT_SHA) -t $(IMAGE_GEN_TAG) .
@@ -1127,7 +1127,7 @@ qemu-docker-list: ## enumerate the device rows a session's artifacts can boot (n
 # Flow: kind-images builds the first-party images from ./.stack-src and
 # `kind load`s them under the exact rendered refs; kind-up brings up
 # bootstrap-kind.sh KIND_PROFILE=sso (apps + Vault KV + e2e identity seed);
-# kind-e2e resolver-maps hugmesh.systems -> 127.0.0.1 (kind-local.yaml maps
+# kind-e2e resolver-maps hugmesh.net -> 127.0.0.1 (kind-local.yaml maps
 # the internal ingress out on :8443) and runs spec 27. No /etc/hosts edits,
 # no sudo. See specs/cluster/bootstrap/kind-local/README.md.
 kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice first-party images (needs the kind cluster to exist)
@@ -1138,8 +1138,8 @@ kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vaul
 
 kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
 	cd tests/e2e && \
-	  SNAP_BASE_URL='https://hugmesh.systems:8443' \
-	  SNAP_HOST_RESOLVER='MAP hugmesh.systems 127.0.0.1, MAP *.hugmesh.systems 127.0.0.1' \
+	  SNAP_BASE_URL='https://hugmesh.net:8443' \
+	  SNAP_HOST_RESOLVER='MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1' \
 	  npx playwright test specs/27-native-login.spec.ts
 
 kind-down: ## delete the kind cluster
@@ -1222,7 +1222,7 @@ EGRESS_VPN      ?=
 EGRESS_VPN_CONF ?=
 # ENV -> Casdoor issuer URI used by every service (overridable via CASDOOR_ISSUER).
 ifeq ($(ENV),prod)
-CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)
+CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.net)
 else
 CASDOOR_ISSUER ?= http://localhost:8000
 endif
@@ -1420,7 +1420,7 @@ stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.hugmesh mave
 # domain in the SANs; localhost/127.0.0.1 are ALWAYS included (gen-certs.sh).
 stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (idempotent; rm -rf tests/stack/.tls-front to re-mint)
 	@if [ ! -f '$(STACK_TLS_DIR)/server.crt' ]; then \
-	  SNAP_DOMAIN='$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)' \
+	  SNAP_DOMAIN='$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.net)' \
 	    bash tests/stack/gen-certs.sh '$(STACK_TLS_DIR)'; \
 	else \
 	  echo "==> stack-certs: $(STACK_TLS_DIR)/server.crt present - keeping it (rm -rf $(STACK_TLS_DIR) to re-mint)"; \

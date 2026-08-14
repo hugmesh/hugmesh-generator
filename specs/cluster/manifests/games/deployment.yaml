@@ -6,7 +6,7 @@ kind: Deployment
 metadata:
   name: hugmesh-games
   namespace: hugmesh-games
-  labels: { app: hugmesh-games, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-games, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-games } }
@@ -16,7 +16,7 @@ spec:
       # Require the x86_64 GPU node (labelled by keys-provision on that image).
       nodeSelector:
         kubernetes.io/arch: amd64
-        snapdragon.systems/compute: gpu
+        hugmesh.net/compute: gpu
       securityContext:
         seLinuxOptions:
           type: container_t

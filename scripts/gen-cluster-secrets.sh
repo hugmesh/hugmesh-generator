@@ -24,7 +24,7 @@ OUT_DIR="${REPO_DIR}/keys-out/vault"
 
 # ── brand.conf (built-in defaults < brand.conf < env) ───────────────
 BRAND="${BRAND:-hugmesh}"
-CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
+CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
 VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
 if [ -f "${REPO_DIR}/brand.conf" ]; then
     # shellcheck disable=SC1091
@@ -949,14 +949,14 @@ data = {
             "password": os.environ["HEADWIND_ADMIN_PASSWORD"],
             # Non-secret, and DOMAIN-COUPLED — not a fixed string.
             # headwind-externalsecrets.yaml's template.data.email reads
-            # "admin@hugmesh.systems" IN THE REPO, and ESO writes that value
+            # "admin@hugmesh.net" IN THE REPO, and ESO writes that value
             # verbatim online — but the manifest the cluster actually runs is the
             # BAKED copy: build-*-stage4.sh does
             #   cp -r specs/cluster -> ${SYSROOT}/var/lib/hugmesh/cluster
-            # and then rebrand_sysroot() seds `hugmesh.systems` ->
+            # and then rebrand_sysroot() seds `hugmesh.net` ->
             # `${CLUSTER_DOMAIN}` across that whole tree. So on every non-default
             # brand the ONLINE value is admin@${CLUSTER_DOMAIN}, and this offline
-            # value has to track it. Hardcoding "admin@hugmesh.systems" here
+            # value has to track it. Hardcoding "admin@hugmesh.net" here
             # would match only the default brand and hand a rebranded cluster's
             # SAME pod two different ADMIN_EMAILs depending on which delivery
             # path provisioned it.

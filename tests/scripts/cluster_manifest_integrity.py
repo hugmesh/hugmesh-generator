@@ -66,7 +66,7 @@ PKI_ROLES_KNOWN_UNPROVISIONED = {
     #  ... until then the Secret never materializes and the pod mounts it optional:".
     "meshbridge-client",
     # manifests/cassandra-hardening ships DARK behind a manual-sync Application
-    # (apps/00a-cassandra-hardening.yaml: snapdragon.systems/ships: dark).
+    # (apps/00a-cassandra-hardening.yaml: hugmesh.net/ships: dark).
     "cassandra",
 }
 

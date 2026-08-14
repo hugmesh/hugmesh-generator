@@ -27,7 +27,7 @@ kind: Deployment
 metadata:
   name: hugmesh-federation-api
   namespace: hugmesh-backend
-  labels: { app: hugmesh-federation-api, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-federation-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over the RWO bundles PVC
@@ -43,9 +43,9 @@ spec:
         # writes rows. Its federation_manifest TABLE is created by the
         # cassandra-init bootstrap precisely because this service has no schema
         # runner of its own and therefore must not hold CREATE/ALTER.
-        snapdragon.systems/cassandra-access: dml
+        hugmesh.net/cassandra-access: dml
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -123,7 +123,7 @@ spec:
             # by admin-bff + the remote-fragment sync sidecar. JWKS auto-discovered
             # from the issuer well-known; no jwk-set-uri / client secret needed.
             - name: CASDOOR_ISSUER_URI
-              value: "https://id.hugmesh.systems"
+              value: "https://id.hugmesh.net"
             # Runtime reactive handle to federation's OWN Postgres (federation-db).
             # NOT the dangling `hugmesh-pg` the app default points at.
             # RUNTIME handle: log in as the dedicated NON-OWNER least-privilege role

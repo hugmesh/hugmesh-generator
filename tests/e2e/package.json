@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "@playwright/test": "~1.61.1"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0"
   }
 }

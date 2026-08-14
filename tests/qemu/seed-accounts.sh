@@ -4,7 +4,7 @@
 # a QEMU-booted image instead of the rootless mock stack (tests/stack).
 #
 # The specs expect:
-#   * an admin (Casdoor admin role):  admin@hugmesh.systems
+#   * an admin (Casdoor admin role):  admin@hugmesh.net
 #   * five basic Gmail users:         alice,bob,carol,dave,eve @gmail.com
 #     (+ frank@gmail.com, invited-but-not-completed in spec 03)
 #   * one Discord allowlist entry:    dragoneer
@@ -56,13 +56,13 @@
 set -euo pipefail
 
 # ── Identity defaults (kept in lock-step with tests/e2e/specs + mock-bff.mjs) ──
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@hugmesh.systems}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@hugmesh.net}"
 GMAIL_USERS_DEFAULT="alice@gmail.com bob@gmail.com carol@gmail.com dave@gmail.com eve@gmail.com frank@gmail.com"
 DISCORD_USERS_DEFAULT="dragoneer"
 GMAIL_USERS="${GMAIL_USERS:-${GMAIL_USERS_DEFAULT}}"
 DISCORD_USERS="${DISCORD_USERS:-${DISCORD_USERS_DEFAULT}}"
 SVC_PASSWORD="${SVC_PASSWORD:-hugmesh-svc-pw}"
-CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
+CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
 
 # ── RBAC role matrix (kept in lock-step with tests/e2e/specs/rbac-roles.ts) ──
 # Deterministic e2e password, same convention as the games harness (E2E_PASSWORD
@@ -483,7 +483,7 @@ REMOTE
 
 # Casdoor's add-user rejects any name that isn't alphanumeric/hyphen/underline
 # (no leading/trailing/consecutive -_ ), so an email-shaped SYSTEMS_ROLE_USERS
-# spec (admin@hugmesh.systems, alice@gmail.com, …) can never be the Casdoor
+# spec (admin@hugmesh.net, alice@gmail.com, …) can never be the Casdoor
 # `name` verbatim. Pass the ORIGINAL handle through unchanged when it's already
 # legal (every existing e2e-* spec); otherwise fold every disallowed run of
 # characters to a single hyphen and trim the ends. The sanitized string is used
@@ -765,20 +765,32 @@ log "done — REMEMBER to run the games-admin-sync Job so ROLE_GAMES_ADMIN mater
 # 0 and printed the same cheerful line whether it minted 126 tokens or none).
 PREMINT_DIR="${PREMINT_DIR:-${HERE}/jwt-cache}"
 APP="${PREMINT_APP:-app-built-in}"
+# Confidential clients (e.g. the compose stack's app-user-bff) refuse the grant
+# without their secret; empty keeps today's public-client behavior.
+APP_SECRET="${PREMINT_CLIENT_SECRET:-}"
 mkdir -p "${PREMINT_DIR}"
 minted=0; premint_total=0
+# Casdoor resolves the password grant inside the APP's organization, so the
+# PLAIN username is the canonical spelling — the org/name form answers "the
+# user does not exist" there. Try plain first; keep org/name as a fallback for
+# deployments that accepted it.
+premint_token() { # <username> <password>
+  curl -s "${BASE}/api/login/oauth/access_token" \
+      -H 'content-type: application/x-www-form-urlencoded' \
+      --data-urlencode "grant_type=password" \
+      --data-urlencode "username=$1" \
+      --data-urlencode "password=$2" \
+      --data-urlencode "client_id=${APP}" \
+      ${APP_SECRET:+--data-urlencode "client_secret=${APP_SECRET}"} 2>/dev/null \
+    | jq -r '.access_token // empty' 2>/dev/null || true
+}
 while IFS= read -r u; do
   [ -n "${u}" ] || continue
   premint_total=$((premint_total+1))
   name="$(printf '%s' "$u" | jq -r '.name')"
   pass="$(printf '%s' "$u" | jq -r '.password')"
-  tok="$(curl -s "${BASE}/api/login/oauth/access_token" \
-          -H 'content-type: application/x-www-form-urlencoded' \
-          --data-urlencode "grant_type=password" \
-          --data-urlencode "username=${ORG}/${name}" \
-          --data-urlencode "password=${pass}" \
-          --data-urlencode "client_id=${APP}" 2>/dev/null \
-        | jq -r '.access_token // empty' 2>/dev/null || true)"
+  tok="$(premint_token "${name}" "${pass}")"
+  [ -n "${tok}" ] || tok="$(premint_token "${ORG}/${name}" "${pass}")"
   if [ -n "${tok}" ]; then
     printf '%s' "${tok}" > "${PREMINT_DIR}/${name}.jwt"
     minted=$((minted+1))

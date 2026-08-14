@@ -55,7 +55,7 @@
 #          render emit-scan's src/main/java + src/test carve-out is a FIRST-PARTY CI
 #          concern and MUST NOT apply to untrusted foreign source).
 #   [f]    FROZEN / DENYLIST — foreign code must not carry OUR frozen protocol
-#          identity (snapdragon.systems/* label-key namespace, X-HugMesh-Local &
+#          identity (hugmesh.net/* label-key namespace, X-HugMesh-Local &
 #          the other wire headers, the step-up subprotocol prefix); the declared
 #          mesh-id / manifest identity fields are screened via token-classifier.
 #
@@ -560,7 +560,7 @@ ingest_foreign_base() {
   fi
   # (f.2) node-free frozen-constant grep over the foreign CODE tree (excludes the
   #       ROOT-LEVEL attestation envelope ONLY, whose schema legitimately uses
-  #       snapdragon.systems/ — exact-path -vxF match, so a file merely NAMED like
+  #       hugmesh.net/ — exact-path -vxF match, so a file merely NAMED like
   #       the envelope in a SUBDIR is ordinary foreign code and IS screened).
   #       Foreign code must NOT carry OUR wire/label protocol identity — that is
   #       impersonation / a laundering vector. Frozen set is sourced from tokens.json.

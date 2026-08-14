@@ -34,7 +34,7 @@ WHAT IT ASSERTS, and why each line of it was earned on a real cluster
                  which issues no DDL, the writer). A presence check scores that
                  green. The class is declared next to the credential it governs —
                  `cassandra.access` in the gateway Applications, the
-                 snapdragon.systems/cassandra-access pod annotation elsewhere —
+                 hugmesh.net/cassandra-access pod annotation elsewhere —
                  and the bootstrap's GRANTs are checked against it, so landing
                  either half alone fails. Roles are never shared between
                  consumers, never SUPERUSER, never granted on a keyspace they do
@@ -160,7 +160,7 @@ WORKLOAD_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
 # The CQL permission class a workload claims for its role. Declared on the POD
 # (so it is readable on the live object next to the role it is claimed for), and
 # the thing manifests/cassandra-init's GRANTs are checked against.
-ACCESS_ANNOTATION = "snapdragon.systems/cassandra-access"
+ACCESS_ANNOTATION = "hugmesh.net/cassandra-access"
 
 
 def pod_template(doc):

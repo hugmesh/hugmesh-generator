@@ -43,16 +43,23 @@ const GW_BASE: Record<Gateway, string> = {
  *  the OIDC token endpoint (no UI). */
 async function casdoorToken(api: APIRequestContext, username: string): Promise<string> {
   const u = systemsUser(username);
-  const r = await api.post(`${CASDOOR_URL}/api/login/oauth/access_token`, {
-    form: {
-      grant_type: 'password',
-      client_id: CASDOOR_CLIENT_ID,
-      client_secret: CASDOOR_CLIENT_SECRET,
-      username: `${CASDOOR_ORG}/${username}`,
-      password: passwordFor(u),
-    },
-  });
-  const body = await r.json();
+  const mint = async (user: string) => {
+    const r = await api.post(`${CASDOOR_URL}/api/login/oauth/access_token`, {
+      form: {
+        grant_type: 'password',
+        client_id: CASDOOR_CLIENT_ID,
+        client_secret: CASDOOR_CLIENT_SECRET,
+        username: user,
+        password: passwordFor(u),
+      },
+    });
+    return r.json();
+  };
+  // Casdoor resolves the password grant inside the app's organization, so the
+  // plain username is canonical ("org/name" answers "the user does not exist"
+  // there); org/name is kept as a fallback for deployments that accepted it.
+  let body = await mint(username);
+  if (!body.access_token) body = await mint(`${CASDOOR_ORG}/${username}`);
   if (!body.access_token) throw new Error(`casdoor token for ${username}: ${JSON.stringify(body)}`);
   return body.access_token as string;
 }
@@ -93,11 +100,27 @@ test.describe('RBAC: LIVE gateway route-access enforcement', () => {
         const r = await api.get(`${GW_BASE[probe.gw]}${probe.path}`, {
           headers: { authorization: `Bearer ${token}` },
         });
-        const denied = r.status() === 401 || r.status() === 403;
+        // The contract under test is the GATEWAY's route-access decision, and
+        // the gateway says which 401/403s are ITS OWN: an RBAC deny carries
+        // X-Route-Denied (RouteAccessWebFilter), a token the resource server
+        // rejected carries WWW-Authenticate: Bearer. A 401/403 with NEITHER
+        // marker came from the proxied backend — e.g. tuwunel's M_UNKNOWN_TOKEN
+        // or Mastodon refusing the relayed Casdoor bearer (both gateways relay
+        // the caller's bearer verbatim; no homeserver token exchange has
+        // landed) — which PROVES the gateway allowed the route. Judging bare
+        // status codes here misread every homeserver ALLOW as a deny.
+        const gatewayDenied =
+          (r.status() === 401 || r.status() === 403)
+          && (r.headers()['x-route-denied'] !== undefined
+              || (r.headers()['www-authenticate'] ?? '').startsWith('Bearer'));
         if (expected === 'DENY') {
-          expect(denied, `${username} expected DENY but got ${r.status()}`).toBeTruthy();
+          expect(gatewayDenied,
+            `${username} expected a gateway DENY but got ${r.status()} `
+            + `(x-route-denied: ${r.headers()['x-route-denied'] ?? 'absent'})`).toBeTruthy();
         } else {
-          expect(denied, `${username} expected ALLOW but gateway returned ${r.status()}`).toBeFalsy();
+          expect(gatewayDenied,
+            `${username} expected ALLOW but the gateway denied with ${r.status()} `
+            + `(x-route-denied: ${r.headers()['x-route-denied'] ?? 'absent'})`).toBeFalsy();
         }
         await api.dispose();
       });

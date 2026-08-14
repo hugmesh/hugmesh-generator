@@ -11,13 +11,13 @@ resources:
   - httproute.yaml
 
 # First-party images pull from the in-cluster Harbor container registry
-# (registry.hugmesh.systems = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
+# (registry.hugmesh.net = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
 # path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets). Mirrors user-ui/wiki-ui.
 images:
   - name: snapdragon-systems/character-forge-ui
-    newName: registry.hugmesh.systems/hugmesh/hugmesh-character-forge-ui
+    newName: registry.hugmesh.net/hugmesh/hugmesh-character-forge-ui
     newTag: main
 patches:
   - target: { kind: Deployment }

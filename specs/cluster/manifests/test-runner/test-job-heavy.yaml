@@ -14,7 +14,7 @@
 # Reports land in the SAME test-reports PVC under heavy/${RUN_ID}/ (the admin-bff
 # TestReportsController lists lean/ and heavy/ side by side). Secrets are scrubbed
 # at write time by the hugmesh reporter AND by the belt-and-braces sed pass
-# below. The whole bundle is pruned for ENV=prod (snapdragon.systems/tier: test).
+# below. The whole bundle is pruned for ENV=prod (hugmesh.net/tier: test).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -22,11 +22,11 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
-    snapdragon.systems/test-tier: heavy
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
+    hugmesh.net/test-tier: heavy
   annotations:
-    snapdragon.systems/run-id: "${RUN_ID}"
+    hugmesh.net/run-id: "${RUN_ID}"
 spec:
   backoffLimit: 1
   ttlSecondsAfterFinished: 86400
@@ -34,7 +34,7 @@ spec:
     metadata:
       labels:
         app: test-runner-heavy
-        snapdragon.systems/tier: test
+        hugmesh.net/tier: test
     spec:
       restartPolicy: Never
       serviceAccountName: hugmesh-test-runner
@@ -52,7 +52,7 @@ spec:
         - name: e2e
           # SAME generator-built image as LEAN (tests/e2e + Chromium +
           # seed-accounts.sh). Pinned by the build; :dev here, pruned for prod.
-          image: registry.hugmesh.systems/hugmesh-test-runner:dev
+          image: registry.hugmesh.net/hugmesh-test-runner:dev
           command: ["/bin/sh", "-c"]
           args:
             - |

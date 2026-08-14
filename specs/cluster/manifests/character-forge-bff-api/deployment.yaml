@@ -21,14 +21,14 @@ kind: Deployment
 metadata:
   name: hugmesh-character-forge-bff-api
   namespace: hugmesh-backend
-  labels: { app: hugmesh-character-forge-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-character-forge-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-character-forge-bff-api } }
   template:
     metadata: { labels: { app: hugmesh-character-forge-bff-api } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -104,7 +104,7 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
             # NO downstream homeserver leg (unlike forum-bff's phpBB extension):
             # the character-forge datastore below is this BFF's only dependency.
             # Datastore: the character_forge_character table. The app's

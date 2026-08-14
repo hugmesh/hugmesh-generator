@@ -27,14 +27,14 @@ kind: Deployment
 metadata:
   name: hugmesh-user-bff-api
   namespace: hugmesh-backend
-  labels: { app: hugmesh-user-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-user-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-user-bff-api } }
   template:
     metadata: { labels: { app: hugmesh-user-bff-api } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -148,7 +148,7 @@ spec:
             # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
             # client secret needed (pure resource server, like federation-api).
             - name: CASDOOR_ISSUER_URI
-              value: "https://id.hugmesh.systems"
+              value: "https://id.hugmesh.net"
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION every login resolves against. casdoor-init
             # (manifests/casdoor/init-job.yaml) and init_data.json create org
@@ -369,9 +369,9 @@ spec:
             # EVERY value below is a CROSS-FILE CONTRACT with
             # manifests/casdoor/init-job.yaml's reconcile_app(): it registers each
             # application as `app-<name>` and gives user-bff the redirect-uri
-            # override https://hugmesh.systems/login/callback. This app's own
+            # override https://hugmesh.net/login/callback. This app's own
             # defaults are `user-bff` and the PRE-REBRAND
-            # https://snapdragon.systems/login/callback, and nothing here overrode
+            # https://hugmesh.net/login/callback, and nothing here overrode
             # them — so a fresh cluster got, in order,
             #   "Invalid client_id"                                    (finding #12)
             #   "Redirect URI … doesn't exist in the allowed Redirect URI list" (#13)
@@ -390,7 +390,7 @@ spec:
             - { name: APP_BFF_OIDC_ORGANIZATION, value: "hugmesh" }
             # PKCE-match string ONLY — no browser ever dereferences it; Casdoor just
             # requires it to byte-match a registered redirectUri of app-user-bff.
-            - { name: APP_BFF_OIDC_REDIRECT_URI, value: "https://hugmesh.systems/login/callback" }
+            - { name: APP_BFF_OIDC_REDIRECT_URI, value: "https://hugmesh.net/login/callback" }
             # TWO internal-Casdoor legs, TWO distinct properties — both must target
             # the in-cluster Casdoor Service, NEVER the browser-facing issuer:
             #   • APP_BFF_OIDC_LOGIN_BASE — the /api/login credential POST. Its app

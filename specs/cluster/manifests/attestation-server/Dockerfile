@@ -21,7 +21,7 @@
 #
 #   server AUDITOR_SIGNER_DIGEST  ===  our Auditor fork's release-signing-cert SHA-256  (Track 2 output)
 #   server AUDITOR_PACKAGE        ===  our Auditor fork's applicationId (systems.hugmesh.auditor)
-#   server ATTESTATION_DOMAIN     ===  fork DOMAIN  ===  attestation.hugmesh.systems (both sides)
+#   server ATTESTATION_DOMAIN     ===  fork DOMAIN  ===  attestation.hugmesh.net (both sides)
 #
 # These are BUILT AND SET TOGETHER. If AUDITOR_SIGNER_DIGEST does not exactly equal the real fork
 # release cert's SHA-256 digest, this server will REJECT EVERY ATTESTATION from our own app — there is
@@ -41,7 +41,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ARG ATTESTATION_COMMIT=98b6c130
-ARG ATTESTATION_DOMAIN=attestation.hugmesh.systems
+ARG ATTESTATION_DOMAIN=attestation.hugmesh.net
 # Our Auditor fork's identity (see FORK COUPLING banner above). AUDITOR_SIGNER_DIGEST is a
 # placeholder: SET-FROM-FORK-RELEASE-CERT — replace with
 # `keytool -printcert -jarfile <fork-release.apk>` (or an equivalent apksigner cert-dump), SHA-256,

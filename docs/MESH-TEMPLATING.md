@@ -87,7 +87,7 @@ rule) in both the sed script and the Handlebars wrapper.
   key-name regex. The Handlebars renderer **fails closed**: any template that
   references a denylisted token aborts the whole render, and only allowlisted
   tokens are placed in the render context.
-* **frozen protocol constants** — `snapdragon.systems/*` label KEYS and the
+* **frozen protocol constants** — `hugmesh.net/*` label KEYS and the
   `X-HugMesh-Local` wire header are **out-of-scope-for-tokenization**: they are
   protocol/wire identity (not tenant brand) and must stay literal in every emitted
   repo. A blind reverse-substitution that rebrands the literal `hugmesh` would
@@ -332,7 +332,7 @@ export at the same or a higher generation.
 ## Every export field is hostile
 `entry_fields_ok()` (reconcile) + the generator's own DNS-label/DNS-name/URL/
 single-line/length guards + the token classifier (denylist + frozen
-`snapdragon.systems/*` / `X-HugMesh-Local` constants) validate every field.
+`hugmesh.net/*` / `X-HugMesh-Local` constants) validate every field.
 `BRAND_TITLE` now also **rejects braces** (`{` `}`) to kill second-order
 `{{TOKEN}}` template re-expansion. A DoS cap (`DR_MAX_ENTRIES`, default 256)
 refuses a huge `entries[]` before the render loop can fork.
@@ -426,7 +426,7 @@ order (each fail-closed; a missing tool is a REJECT, never a skip):
 8. **[e] secret scan** — `secret-scan.sh` over the ENTIRE tree with NO excludes
    (the render emit-scan's first-party carve-outs do NOT apply to foreign code);
 9. **[f] frozen/denylist** — foreign code must not carry OUR frozen protocol
-   identity (`snapdragon.systems/*` label keys, the `X-HugMesh-Local` &
+   identity (`hugmesh.net/*` label keys, the `X-HugMesh-Local` &
    friends wire headers, the step-up subprotocol prefix); declared origin fields
    are screened through the same token classifier the render path uses. Only the
    ROOT-level attestation envelope is exempt from the tree grep — a same-named

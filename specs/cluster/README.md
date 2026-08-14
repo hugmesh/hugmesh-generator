@@ -2,7 +2,7 @@
 
 This tree is baked into every image at `/var/lib/hugmesh/cluster` and is the
 single source of truth ArgoCD syncs from. Everything sits **behind
-hugmesh.systems** via the per-namespace Spring Cloud Gateways.
+hugmesh.net** via the per-namespace Spring Cloud Gateways.
 
 ## Build ENV: test (LAN) vs prod (public)
 
@@ -30,9 +30,9 @@ merely **adds** Cloudflare/ACME on top.
 
 | Namespace | Runs on | Front door | Contents |
 |---|---|---|---|
-| `hugmesh-pki` | pki Pi (control-plane) | `hugmesh-pki-gateway` (`id.hugmesh.systems`) | Casdoor (Google + admin login), Cassandra, headscale/auth |
+| `hugmesh-pki` | pki Pi (control-plane) | `hugmesh-pki-gateway` (`id.hugmesh.net`) | Casdoor (Google + admin login), Cassandra, headscale/auth |
 | `hugmesh-backend` | backend Pis | `hugmesh-be-gateway` (`api.` / `matrix.` / `mastodon.`) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs (incl. `hugmesh-federation-api` module-federation registry at `/api/federation/**`), DBs |
-| `hugmesh-frontend` | frontend Pis | `hugmesh-fe-gateway` (`hugmesh.systems`) | hugmesh.systems Angular host + social-ui micro-frontends + remote-fragment fleet (DB-hosted federation fragment bundles at `/_fragments/**`) |
+| `hugmesh-frontend` | frontend Pis | `hugmesh-fe-gateway` (`hugmesh.net`) | hugmesh.net Angular host + social-ui micro-frontends + remote-fragment fleet (DB-hosted federation fragment bundles at `/_fragments/**`) |
 | `hugmesh-games` | x86_64 GPU worker | (internal) | hugmesh.games (Mesa/Vulkan via `/dev/dri`) |
 | `argocd` | x86_64 worker | (internal) | ArgoCD GitOps engine |
 
@@ -51,22 +51,22 @@ login UI** — login is internal to Casdoor. Routes per release are rendered int
 an `application-routes.yml` ConfigMap and loaded via
 `SPRING_CONFIG_ADDITIONAL_LOCATION`.
 
-## Vanity subdomains (`<username>.hugmesh.systems`)
+## Vanity subdomains (`<username>.hugmesh.net`)
 
-A user serves their **public** profile at `https://<username>.hugmesh.systems`.
+A user serves their **public** profile at `https://<username>.hugmesh.net`.
 End-to-end the request path is:
 
 ```
-<username>.hugmesh.systems
+<username>.hugmesh.net
    │  wildcard DNS  (manifests/lan-dns answers the whole brand zone in test;
    │                 Cloudflare wildcard + manifests/cloudflared in prod)
    ▼
 backend ingress  (ingress-nginx)
    │  admitted because apps/20-gateway-fe.yaml ingress.extraHosts includes
-   │  "*.hugmesh.systems"
+   │  "*.hugmesh.net"
    ▼
 hugmesh-fe-gateway   (charts/hugmesh-gateway, fe release)
-   │  Host=*.hugmesh.systems route (apps/20-gateway-fe.yaml, id: vanity-subdomain)
+   │  Host=*.hugmesh.net route (apps/20-gateway-fe.yaml, id: vanity-subdomain)
    │  SetPath=/api/federation/vanity, Host header preserved, forwarded DIRECT to
    │  federation-api (NOT via be-gateway — see "direct hop" below)
    ▼
@@ -88,7 +88,7 @@ Spring Cloud Gateway matches routes **first-in-declared-order**, so ordering in
    likewise ordered **after** the explicit reserved hostnames (cloudflared is
    first-match-top-down) and **before** the 404 catch-all. Defence-in-depth:
    federation-api's `VanityController` also refuses those reserved first-labels.
-2. **The apex** `hugmesh.systems` is **not** matched by `Host=*.<domain>` (the
+2. **The apex** `hugmesh.net` is **not** matched by `Host=*.<domain>` (the
    `*` requires ≥1 label), so it falls through to the `frontend-host` `Path=/**`
    catch-all (the Angular host front page).
 3. **`<username>.<domain>`** matches the `vanity-subdomain` route, which is
@@ -162,7 +162,7 @@ Dockerfile) ships under `manifests/media-poisoner/worker/`.
   `ReadWriteOnce`, already mounted by the homeserver pod) — it is pure
   byte-in/byte-out.
 * **Scheduling.** Clones the `hugmesh-games` contract verbatim
-  (`nodeSelector` `kubernetes.io/arch: amd64` + `snapdragon.systems/compute: gpu`,
+  (`nodeSelector` `kubernetes.io/arch: amd64` + `hugmesh.net/compute: gpu`,
   vendor-agnostic GPU via the `/dev/dri` hostPath). The ArgoCD app
   (`apps/51-media-poisoner.yaml`) is **MANUAL** (no `automated:` block) so an
   operator opts in only on a GPU-equipped cluster.
@@ -240,7 +240,7 @@ unchanged.
 
 - First-party images now pull from the in-cluster **Harbor** registry (see
   `apps/03a-harbor.yaml`; GitLab's own bundled registry no longer serves this)
-  (`registry.hugmesh.systems/hugmesh/<repo>:main`, set per app via kustomize
+  (`registry.hugmesh.net/hugmesh/<repo>:main`, set per app via kustomize
   `images:`) with the ESO-materialized `harbor-registry` imagePullSecret (renamed
   from `gitlab-registry`). This is now AUTOMATED, not an operator-pasted token: the
   `harbor-provision` PostSync Job (`apps/03b-harbor-provision.yaml` +

@@ -79,7 +79,7 @@ KEYFP="$(base64 -d "${TRUST}/${MESH}/foreign-provenance-pub.ed25519" 2>/dev/null
 # ── Fixture builders ────────────────────────────────────────────────────────────
 # A CLEAN foreign angular-mfe base carrying the archetype recipe's required upstream
 # anchors (so the positive control also renders). Not secrets; not our frozen
-# protocol constants (hugmesh/ and @hugmesh/ are NOT snapdragon.systems/).
+# protocol constants (hugmesh/ and @hugmesh/ are NOT hugmesh.net/).
 mkclean_base() { # mkclean_base DIR
   local d="$1"
   mkdir -p "${d}/src"
@@ -101,7 +101,7 @@ sign_base() {
   rm -f "${d}/.snapdragon-provenance.json" "${d}/.snapdragon-provenance.json.sig"
   local tree; tree="$(_fib_tree_digest "$d")"
   cat > "${d}/.snapdragon-provenance.json" <<JSON
-{ "schema":"snapdragon.systems/provenance/v1",
+{ "schema":"hugmesh.net/provenance/v1",
   "base":{"repo":"hugmesh-login-ui","commitSha":"${pin}","meshId":"${mesh}","treeSha256":"${tree}","generation":${gen},"mode":"overlay"},
   "template":{"archetype":"angular-mfe"},
   "tenant":{"brand":"acme","org":"Acme-Inc","clusterDomain":"acme.test"} }
@@ -189,7 +189,7 @@ run_gate digestswap "$B" "$MESH" "$PIN"; assert_reject "(digest-swap: manifest u
 #         MUST break the digest binding (regression test for the fail-open where
 #         -name excluded it from the digest everywhere in the tree). ─────────────
 B="${WORK}/subenv"; mkclean_base "$B"; PIN="$(digest_of subenv)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
-printf '{"schema":"snapdragon.systems/provenance/v1","note":"planted post-sign"}\n' > "${B}/src/.snapdragon-provenance.json"
+printf '{"schema":"hugmesh.net/provenance/v1","note":"planted post-sign"}\n' > "${B}/src/.snapdragon-provenance.json"
 run_gate subenv "$B" "$MESH" "$PIN"; assert_reject "(post-sign SUBDIR envelope-named plant: digest-covered)"
 
 # ── (4d) SIGNED-IN SUBDIR ENVELOPE-NAMED FROZEN CARRIER — present at signing (so
@@ -197,7 +197,7 @@ run_gate subenv "$B" "$MESH" "$PIN"; assert_reject "(post-sign SUBDIR envelope-n
 #         envelope-shaped name. The frozen screen excludes ONLY the root-level
 #         envelope, so this MUST still reject (laundering-vector regression). ────
 B="${WORK}/subenvfrozen"; mkclean_base "$B"
-printf 'labels: { snapdragon.systems/domain: attacker }\n' > "${B}/src/.snapdragon-provenance.json"
+printf 'labels: { hugmesh.net/domain: attacker }\n' > "${B}/src/.snapdragon-provenance.json"
 PIN="$(digest_of subenvfrozen)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate subenvfrozen "$B" "$MESH" "$PIN"; assert_reject "(signed-in SUBDIR envelope-named frozen-constant carrier)"
 
@@ -223,9 +223,9 @@ run_gate bearer "$B" "$MESH" "$PIN"; assert_reject "(keyless high-entropy creden
 
 # ── (8) FROZEN-NAMESPACE OVERRIDE in foreign code ────────────────────────────────
 B="${WORK}/frozen"; mkclean_base "$B"
-printf 'metadata:\n  labels:\n    snapdragon.systems/domain: attacker\n' > "${B}/src/hijack.yaml"
+printf 'metadata:\n  labels:\n    hugmesh.net/domain: attacker\n' > "${B}/src/hijack.yaml"
 PIN="$(digest_of frozen)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
-run_gate frozen "$B" "$MESH" "$PIN"; assert_reject "(frozen snapdragon.systems/* override in foreign code)"
+run_gate frozen "$B" "$MESH" "$PIN"; assert_reject "(frozen hugmesh.net/* override in foreign code)"
 
 # ── (8b) FROZEN WIRE HEADER injected in foreign code ─────────────────────────────
 B="${WORK}/header"; mkclean_base "$B"
@@ -237,11 +237,11 @@ run_gate header "$B" "$MESH" "$PIN"; assert_reject "(frozen X-HugMesh-Local wire
 #         A frozen constant hidden in a file that also carries a NUL byte. The old
 #         'grep -I' treated any NUL-bearing file as binary and SKIPPED it, so this
 #         impersonation/laundering carrier was ADMITTED (rc=0). The screen now scans
-#         with -a (force-text): the frozen 'snapdragon.systems/' label-key MUST reject.
+#         with -a (force-text): the frozen 'hugmesh.net/' label-key MUST reject.
 B="${WORK}/nulfrozen"; mkclean_base "$B"
-printf 'cfg\x00 label: snapdragon.systems/domain: attacker\n' > "${B}/src/hijack.conf"
+printf 'cfg\x00 label: hugmesh.net/domain: attacker\n' > "${B}/src/hijack.conf"
 PIN="$(digest_of nulfrozen)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
-run_gate nulfrozen "$B" "$MESH" "$PIN"; assert_reject "(NUL-cloaked frozen snapdragon.systems/ constant — force-text screen)"
+run_gate nulfrozen "$B" "$MESH" "$PIN"; assert_reject "(NUL-cloaked frozen hugmesh.net/ constant — force-text screen)"
 
 # ── (8d) NUL-BYTE-CLOAKED FROZEN WIRE HEADER ─────────────────────────────────────
 B="${WORK}/nulheader"; mkclean_base "$B"

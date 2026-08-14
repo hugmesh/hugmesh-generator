@@ -1,4 +1,4 @@
-# hugmesh-fe-gateway — front door for hugmesh.systems (the Angular host
+# hugmesh-fe-gateway — front door for hugmesh.net (the Angular host
 # front page) + the integrated matrix/mastodon social-ui micro-frontends.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -48,20 +48,20 @@ spec:
           # edge; this nginx Ingress is the in-cluster alternative/secondary
           # path. Either way only the gateway Service is exposed.
           className: nginx
-          host: hugmesh.systems
-          # VANITY SUBDOMAINS: admit *.hugmesh.systems so the ingress accepts
-          # <username>.hugmesh.systems and hands it to this gateway, where the
-          # Host=*.hugmesh.systems route (below) resolves the public profile.
+          host: hugmesh.net
+          # VANITY SUBDOMAINS: admit *.hugmesh.net so the ingress accepts
+          # <username>.hugmesh.net and hands it to this gateway, where the
+          # Host=*.hugmesh.net route (below) resolves the public profile.
           # The wildcard DNS (manifests/lan-dns in test; Cloudflare wildcard in
-          # prod) already points *.hugmesh.systems at the backend ingress; this
+          # prod) already points *.hugmesh.net at the backend ingress; this
           # extraHosts entry makes the fe-gateway ingress admit the vanity hosts.
           # The reserved service hosts (id. api. matrix. mastodon. scale.
           # headscale.) are served by the BE gateway ingress + cloudflared, not
           # this one, so they are unaffected.
           extraHosts:
-            - "*.hugmesh.systems"
+            - "*.hugmesh.net"
         nodeSelector:
-          snapdragon.systems/frontend: "true"
+          hugmesh.net/frontend: "true"
         seLinux:
           level: "s0:c13"
         # Least-privilege DB identity: this gateway logs in as its OWN read-only
@@ -144,7 +144,7 @@ spec:
             filters:
               - StripPrefix=2
           # phpBB forum micro-frontend remote, served at the apex PATH
-          # /social/forum/** (NOT a forum. subdomain — the *.hugmesh.systems
+          # /social/forum/** (NOT a forum. subdomain — the *.hugmesh.net
           # vanity wildcard would swallow forum.<domain>). Congruent with the
           # matrix/mastodon shells. The phpBB pod itself is NEVER routed (backend-
           # only, isolated in hugmesh-forum); only this Angular remote + the
@@ -214,7 +214,7 @@ spec:
               - StripPrefix=1
           # Same-origin BFFs: the /bff/** family proxies to the role BFFs in the
           # backend namespace, so the UIs' bff.service calls are first-party to
-          # hugmesh.systems. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER,
+          # hugmesh.net. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER,
           # so the MORE SPECIFIC subpaths are declared BEFORE the /bff/** catch-all:
           #   /bff/mod/**  -> mod-bff-api   (ROLE_MOD,  +ADMIN superset)
           #   /bff/user/** -> user-bff-api  (ROLE_USER)
@@ -348,7 +348,7 @@ spec:
           - id: remote-fragment
             uri: http://hugmesh-remote-fragment.hugmesh-frontend.svc.cluster.local:80
             path: /_fragments/**
-          # Default cross-namespace scope: snapdragon.systems/be/** -> the backend
+          # Default cross-namespace scope: hugmesh.net/be/** -> the backend
           # gateway (StripPrefix drops /be so /be/api -> /api at the be-gateway).
           # Ships by default; once DB-driven route definitions land (Phase 2 core,
           # in the gateway/admin-bff repos) an admin can re-point this entry via
@@ -358,8 +358,8 @@ spec:
             path: /be/**
             filters:
               - StripPrefix=1
-          # --- VANITY SUBDOMAINS: <username>.hugmesh.systems ---
-          # A Host=*.hugmesh.systems predicate. Spring Cloud Gateway matches
+          # --- VANITY SUBDOMAINS: <username>.hugmesh.net ---
+          # A Host=*.hugmesh.net predicate. Spring Cloud Gateway matches
           # routes FIRST-IN-DECLARED-ORDER, so PRECEDENCE is everything here:
           #
           #   * The Host=*.<domain> wildcard predicate matches ANY single-label
@@ -413,11 +413,11 @@ spec:
           # PUBLIC read at the federation app layer (permitAll GET vanity/**) — mTLS
           # only authenticates the GATEWAY pod to federation, not the end user.
           - id: vanity-subdomain
-            host: "*.hugmesh.systems"
+            host: "*.hugmesh.net"
             uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
             filters:
               - SetPath=/api/federation/vanity
-          # …then the hugmesh.systems Angular host catches everything else
+          # …then the hugmesh.net Angular host catches everything else
           # (the apex + any path the routes above did not claim).
           - id: frontend-host
             uri: http://snapdragon-systems-web.hugmesh-frontend.svc.cluster.local:80

@@ -34,7 +34,7 @@ compose topology is a faithful translation of those manifests to compose DNS.
 - **GitHub access OR internal VPN** so the repos can be cloned. Either:
   - `gh auth login` (GitHub CLI logged in), or
   - a git credential helper / token (`GH_TOKEN` / `GITHUB_TOKEN`), or
-  - the VPN + the internal mirror (`GIT_BASE=https://gitlab.hugmesh.systems/hugmesh`).
+  - the VPN + the internal mirror (`GIT_BASE=https://gitlab.hugmesh.net/hugmesh`).
 - **Resources:** the core platform is ~10 JVM/nginx containers + 3 Postgres +
   Cassandra. Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
   (tuwunel + the full Mastodon tier). First build compiles several Maven + Angular
@@ -89,8 +89,8 @@ make stack-up STACK_NO_CLONE=1               # build .stack-src AS-IS (see below
 make stack-up PUBLIC_HOST_PORT=9090          # publish the front door elsewhere
 make stack-up PUBLIC_HTTPS_PORT=9443         # publish the HTTPS front door elsewhere
 make stack-up STACK_SRC=/srv/snap-src        # clone/build from a different dir
-make stack-clone GIT_BASE=https://gitlab.hugmesh.systems/hugmesh  # VPN mirror
-make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.systems     # prod mode
+make stack-clone GIT_BASE=https://gitlab.hugmesh.net/hugmesh  # VPN mirror
+make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.net     # prod mode
 ```
 
 ---
@@ -165,14 +165,14 @@ either — just pass a token for private repos.
 # From the repo root, in PowerShell:
 pwsh -File scripts\stack-up.ps1 -GhToken ghp_yourtoken         # ENV=test (default)
 pwsh -File scripts\stack-up.ps1 -GhToken ghp_yourtoken -Social # + tuwunel/Mastodon
-pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.hugmesh.systems
+pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.hugmesh.net
 pwsh -File scripts\stack-up.ps1 -Down                          # tear down (-v)
 ```
 
 On the VPN with public mirrors you can skip the token and point at the mirror:
 
 ```powershell
-pwsh -File scripts\stack-up.ps1 -GitBase https://gitlab.hugmesh.systems/hugmesh
+pwsh -File scripts\stack-up.ps1 -GitBase https://gitlab.hugmesh.net/hugmesh
 ```
 
 If you DO have git on Windows and prefer it over the container clone, add
@@ -216,7 +216,7 @@ selects the identity issuer the whole stack trusts:
 
 | | `test` (default) | `prod` |
 |---|---|---|
-| Casdoor issuer (`CASDOOR_ISSUER_URI`) | `http://localhost:8000` (the local Casdoor) | the **real** issuer, e.g. `https://id.hugmesh.systems` |
+| Casdoor issuer (`CASDOOR_ISSUER_URI`) | `http://localhost:8000` (the local Casdoor) | the **real** issuer, e.g. `https://id.hugmesh.net` |
 | creds | **dev placeholders** (committed: `gateway`/`federation`/`adminbff` DB passwords, dev Casdoor client ids) | **real** — sourced from **your env / the keys USB**, NOT committed |
 | domain-ish env (host MATRIX_URL/MASTODON_URL) | `http://localhost:…` | real `https://…` domain |
 

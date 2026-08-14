@@ -27,8 +27,8 @@ metadata:
   labels:
     app: cassandra-bootstrap
     app.kubernetes.io/name: cassandra
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: db-bootstrap
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: db-bootstrap
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -42,7 +42,7 @@ spec:
         # db-ingress-cassandra allow-list — that policy is default-deny-except, so
         # a Job pod without this label cannot reach :9042 at all.
         app: cassandra-bootstrap
-        app.kubernetes.io/part-of: hugmesh.systems
+        app.kubernetes.io/part-of: hugmesh.net
     spec:
       restartPolicy: Never
       # No nodeSelector on purpose: this is a short-lived CQL client that only

@@ -32,12 +32,12 @@ edits:
       # OIDC issuer + JWKS default host (appears >=1x: issuer-uri and, nested,
       # jwk-set-uri). REQUIRED — a BFF with no id.<domain> issuer seam is a drift.
       - id: oidc-issuer-host
-        find: "https://id.snapdragon.systems"
+        find: "https://id.hugmesh.net"
         replace: "https://id.{{CLUSTER_DOMAIN}}"
         required: true
       # OIDC login redirect host (user/mod/... BFFs; admin-bff lacks it -> no-op).
       - id: oidc-redirect-host
-        find: "https://snapdragon.systems/login/callback"
+        find: "https://hugmesh.net/login/callback"
         replace: "https://{{CLUSTER_DOMAIN}}/login/callback"
       # TOTP issuer = the authenticator display brand (admin-bff only -> no-op elsewhere).
       # NOTE the `{{!}}` empty-comment before the closing env-brace: it stops
@@ -48,11 +48,11 @@ edits:
         replace: "${APP_MFA_TOTP_ISSUER:{{BRAND_TITLE}}{{!}}}"
       # Platform admin-notification address default (admin-bff only -> no-op elsewhere).
       - id: admin-emails-host
-        find: "admin@snapdragon.systems"
+        find: "admin@hugmesh.net"
         replace: "admin@{{CLUSTER_DOMAIN}}"
       # Appstore builder registry host (admin-bff only -> no-op elsewhere).
       - id: appstore-registry-host
-        find: "registry.snapdragon.systems"
+        find: "registry.hugmesh.net"
         replace: "registry.{{CLUSTER_DOMAIN}}"
   - file: .gitlab-ci.yml
     optional: false

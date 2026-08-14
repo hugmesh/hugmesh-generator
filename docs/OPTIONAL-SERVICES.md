@@ -228,7 +228,7 @@ On the cluster, `argocd app list` shows no `akkoma`/`phpbb`/`forum-*` apps;
 Games is **opt-in** (see §3 — off by default; enable with `--enable-games`).
 **When games is enabled**, it normally lives at its own TLD, but **by default**
 it is served as a **subdomain of the primary domain** — `games.<CLUSTER_DOMAIN>`
-(e.g. `games.hugmesh.systems`) — until the real `.games` TLD is obtained. One
+(e.g. `games.hugmesh.net`) — until the real `.games` TLD is obtained. One
 knob drives it (only consulted when games is selected):
 
 ```sh
@@ -256,14 +256,14 @@ Plus the games **public host**: a be-gateway host route `id: games`
 entry, and the `/games/**` route-access floor — all added in
 `apps/20-gateway-be.yaml` + `20-schema.sql`.
 
-**Why this matters:** `rebrand_sysroot` rewrites `hugmesh.systems` and
+**Why this matters:** `rebrand_sysroot` rewrites `hugmesh.net` and
 `hugmesh-` but historically **left `.games` untouched**, so on the subdomain
 default the public host became `games.<primary>` while Casdoor still minted
 `iss=https://id.hugmesh.games` — the iss-strict `JwtIssuerValidator` then
 rejected **every** games token and login broke. The parameterization fixes that.
 
 Under the subdomain default, games **rides the existing `*.<primary>`
-wildcard** (CoreDNS catch-all in test; cloudflared `*.hugmesh.systems` catch +
+wildcard** (CoreDNS catch-all in test; cloudflared `*.hugmesh.net` catch +
 the existing wildcard cert in prod) — **no new DNS record or cert** is required.
 
 ## 6. Games TLD flip (later, when you own `.games`)
@@ -291,7 +291,7 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 
 > **STATUS: build-time prune ✅ SHIPPED · build-time 13a render ✅ SHIPPED ·
 > federation `OverrideService` + public `GET /api/federation/capabilities` ✅ SHIPPED ·
-> host (hugmesh.systems) capabilities consumption + `menu.component` `enabled()`
+> host (hugmesh.net) capabilities consumption + `menu.component` `enabled()`
 > greying ✅ SHIPPED · live admin-driven flip 🟡 CODE-COMPLETE, SHIPS DARK (the
 > `OptionalService` **CRD + controller** — §7.1; reconciler
 > `app.optional-services.reconcile.enabled=false` by default) · hardcoded-app
@@ -630,7 +630,7 @@ When a service is **absent**, a user sees:
 - **hugmesh-gateway ✅:** `CanonicalSeed.java`'s baked route-access floor now
   carries the `games.<GAMES_DOMAIN>` host floor in sync with the rows
   `gate_optional_services` prunes.
-- **hugmesh.systems (host) ✅:** the host shell consumes install-state at
+- **hugmesh.net (host) ✅:** the host shell consumes install-state at
   bootstrap (HttpClient → the public capabilities endpoint) and `menu.component`'s
   `enabled()` greys out absent services (nav + data-driven home-services cards).
 

@@ -162,7 +162,7 @@ done
 # already tells the reader to go read the contract instead — but a pointer beside
 # a stale literal is how you get a confidently wrong operator, so the literal is
 # asserted too.
-K_SEL="$(grep -oE 'snapdragon\.systems/optional-service=[A-Za-z0-9._-]+' "${KUST}" | head -1)"
+K_SEL="$(grep -oE 'hugmesh\.net/optional-service=[A-Za-z0-9._-]+' "${KUST}" | head -1)"
 eqf "${KUST}" "kustomization runbook selector (step 1)" "${K_SEL:-<absent>}" "${C_SEL}"
 
 # ── THE NODE-ARMING LABEL — gate 2, and the one that fails SILENTLY ───────────
@@ -181,11 +181,11 @@ eqf "${KUST}" "kustomization runbook selector (step 1)" "${K_SEL:-<absent>}" "${
 # fails to match.
 #
 # THE FIRST CUT OF THIS CONTROL WAS VACUOUS AND THIS IS THE POST-MORTEM. It
-# compared, per file, `grep -c` of `snapdragon.systems/*egress-vpn*` against
+# compared, per file, `grep -c` of `hugmesh.net/*egress-vpn*` against
 # `grep -c` of the contract key — two counts off the SAME FILE. Both counts move
 # together for every edit that leaves the pattern behind, so it passed on:
-#   * a renamed prefix   (`hugmesh.systems/egress-vpn=true`)   0 == 0
-#   * the transposition  (`snapdragon.systems/vpn-egress=true`) 0 == 0 — and that
+#   * a renamed prefix   (`renamed.example/egress-vpn=true`) 0 == 0
+#   * the transposition  (`hugmesh.net/vpn-egress=true`) 0 == 0 — and that
 #     is not a hypothetical typo, it is the POD opt-in label this feature already
 #     uses, spelled out 111 lines above the node label in docs/EGRESS-VPN.md
 #   * deleting the instruction outright                         0 == 0
@@ -207,7 +207,7 @@ eqf "${DS}" "projector nodeSelector key (what the scheduler evaluates)" "${DS_NO
 # upstream defines for a label key ("an optional prefix and name, separated by a
 # slash (/) … the prefix must be a DNS subdomain"). It therefore matches a label
 # key nobody here has thought of yet, which is the entire point. Deliberately NOT
-# anchored on `snapdragon.systems` or on `egress-vpn`: a scanner that finds node
+# anchored on `hugmesh.net` or on `egress-vpn`: a scanner that finds node
 # labels by grepping for the node label can only ever re-find the one it was
 # built around. (Filesystem paths do not match — the grammar requires the `=`/`:`
 # and an alphanumeric value right after the name segment.)
@@ -241,7 +241,7 @@ node_label_scan() {
 # window classifier missed cannot sit quietly in the OTHER bucket.
 #
 # This list governs the OTHER bucket ONLY. It is not an escape hatch from the
-# NODE comparison — `snapdragon.systems/vpn-egress` is listed here as a POD
+# NODE comparison — `hugmesh.net/vpn-egress` is listed here as a POD
 # label, and if it ever appears in a node-arming passage it is still graded
 # against DS_NODE and still fails. That ordering is the first defence against
 # the transposition.
@@ -262,11 +262,11 @@ node_label_other_ok() {
         echo "upstream's recommended object labels — they select Pods for the DaemonSet's own matchLabels, never Nodes" ;;
       *:argocd.argoproj.io/*)
         echo "ArgoCD's own annotation namespace (sync-wave) — ordering metadata on the Application, not a node label" ;;
-      *:snapdragon.systems/optional-service)
+      *:hugmesh.net/optional-service)
         echo "the SLUG selector: the label on the config Secrets (and the tag on every optional-service object). Graded against the contract by the kustomization/registry/writer assertions in this file — a Secret selector, not a node selector" ;;
-      EGRESS-VPN.md:snapdragon.systems/vpn-egress)
+      EGRESS-VPN.md:hugmesh.net/vpn-egress)
         echo "the POD opt-in label: hugmesh-vpn-mark sets it on marked pods and manifests/networkpolicy/egress-vpn-interaction.yaml's podSelector matches it. A different carrier with a different consumer, and ONE TRANSPOSITION away from the node key — so it is legal HERE, in the doc that explains the pod leg, and nowhere else" ;;
-      secret-projector-daemonset.yaml:snapdragon.systems/compute)
+      secret-projector-daemonset.yaml:hugmesh.net/compute)
         echo "the GPU plugin's node label, cited in this DaemonSet's header as the shape this one copies — another service's key, legal in this header and nowhere else" ;;
       secret-projector-daemonset.yaml:bitnami/kubectl)
         echo "the projector's container image reference; \`repo/name:tag\` collides with the label grammar by coincidence and selects nothing" ;;
@@ -421,7 +421,7 @@ echo "-- copy census (every machine-read carrier of a contract value)"
 census_exempt(){ # census_exempt <path> -> prints the reason, or nothing
     case "$1" in
       specs/cluster/manifests/networkpolicy/egress-vpn-interaction.yaml)
-        echo "slug TAG on a NetworkPolicy object (every optional-service object carries snapdragon.systems/optional-service), NOT a copy of the Secret SELECTOR — nothing here selects a Secret, and coupling the two would turn a legitimate slug-tag change into a false contract break" ;;
+        echo "slug TAG on a NetworkPolicy object (every optional-service object carries hugmesh.net/optional-service), NOT a copy of the Secret SELECTOR — nothing here selects a Secret, and coupling the two would turn a legitimate slug-tag change into a false contract break" ;;
       tests/egress-vpn/*)
         echo "the guards themselves + lib: they READ the contract, and their fixtures deliberately carry the OLD wrong values (ns=hugmesh-backend, key=config) to prove the guard fails on them — asserting fixtures against the contract would delete the negative cases" ;;
       *) echo "" ;;
@@ -429,7 +429,7 @@ census_exempt(){ # census_exempt <path> -> prints the reason, or nothing
 }
 
 RE_A='EGRESS_VPN_SECRET_[A-Z_]+|SECRET_(NS|SEL|KEY)([^A-Z_]|$)'
-RE_A="${RE_A}|snapdragon\\.systems/optional-service[[:space:]]*[=:][[:space:]]*egress-vpn|@name"
+RE_A="${RE_A}|hugmesh\\.net/optional-service[[:space:]]*[=:][[:space:]]*egress-vpn|@name"
 RE_A="${RE_A}|^[[:space:]]*(namespace|name|secretNamespace):[[:space:]]*\"?${C_NS}\"?[[:space:]]*\$"
 RE_A="${RE_A}|(-n|--namespace[= ])[[:space:]]*\"?${C_NS}"
 RE_A="${RE_A}|${C_NODE}[=:]|nodeDeliveryLabel[[:space:]]*:"

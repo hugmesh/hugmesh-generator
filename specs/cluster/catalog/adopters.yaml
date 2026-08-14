@@ -40,7 +40,7 @@
 # NOT a Kubernetes object and not referenced by any kustomization — it is a
 # registry, exactly like specs/cluster/reserved-prefixes.yaml.
 # -----------------------------------------------------------------------------
-apiVersion: hugmesh.systems/v1
+apiVersion: hugmesh.net/v1
 kind: ServiceCatalogAdopters
 metadata:
   name: catalog-adopters

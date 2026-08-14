@@ -15,7 +15,7 @@ kind: Deployment
 metadata:
   name: hugmesh-admin-bff-api
   namespace: hugmesh-backend
-  labels: { app: hugmesh-admin-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-admin-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-admin-bff-api } }
@@ -33,9 +33,9 @@ spec:
         # (admin-bff the writer, the gateways SELECT-only readers), which is why
         # the class is declared here and the grants are checked against it rather
         # than merely counted.
-        snapdragon.systems/cassandra-access: dml
+        hugmesh.net/cassandra-access: dml
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       # ── Cloud-backups effector identity (least-privilege Velero CR apply) ────
       # The cloudbackup VeleroBackupEffector's fabric8 in-cluster client runs as
       # THIS pod's ServiceAccount. backups-effector (manifests/velero/rbac.yaml) is
@@ -118,10 +118,10 @@ spec:
           env:
             # ── EFFECTIVE in-cluster BRAND env (mesh repo-templating, Phase 3) ──
             # These override the application.yml env-defaults (deploy env wins).
-            # Kept LITERAL hugmesh.systems (NOT {{tokens}}): this manifest is the
+            # Kept LITERAL hugmesh.net (NOT {{tokens}}): this manifest is the
             # canonical, RAW ArgoCD-synced deploy source, and its per-tenant brand
             # substitution is the existing build-x86-host-stage4.sh rebrand_sysroot
-            # sed pass (hugmesh.systems -> CLUSTER_DOMAIN), which rewrites all of
+            # sed pass (hugmesh.net -> CLUSTER_DOMAIN), which rewrites all of
             # these to the tenant domain at ISO build. All must derive from that SAME
             # domain as the app.yml overlay or a tenant gets a self-inconsistent
             # issuer. Frozen (untouched): label keys, nodeSelector, mTLS/ESO secret
@@ -129,7 +129,7 @@ spec:
             #
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
-              value: "https://id.hugmesh.systems"
+              value: "https://id.hugmesh.net"
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION every login / admin write resolves against.
             # casdoor-init + init_data.json create org `hugmesh`; this app's
@@ -156,20 +156,20 @@ spec:
             - { name: CASDOOR_ADMIN_BASE_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             # Default-admin Gmail/allowlist seed (local-part 'admin' stays literal).
             - name: ADMIN_EMAILS
-              value: "admin@hugmesh.systems"
+              value: "admin@hugmesh.net"
             # WebAuthn brand value lives HERE, NOT app.yml (whose rp-id/origins
             # defaults are the dev-safe localhost/https://localhost — WRONG for an
             # in-cluster deploy). RP-ID = the admin host; origins = its https origin.
             # Previously ABSENT (a latent bug: in-cluster WebAuthn RP-ID fell back to
             # 'localhost'); adding the brand admin subdomain fixes it. rebrand_sysroot
-            # carries admin.hugmesh.systems -> admin.<domain> per tenant.
+            # carries admin.hugmesh.net -> admin.<domain> per tenant.
             - name: APP_MFA_WEBAUTHN_RP_ID
-              value: "admin.hugmesh.systems"
+              value: "admin.hugmesh.net"
             - name: APP_MFA_WEBAUTHN_ORIGINS
-              value: "https://admin.hugmesh.systems"
+              value: "https://admin.hugmesh.net"
             # In-cluster app-store Kaniko push registry host (brand).
             - name: APPSTORE_BUILDER_REGISTRY
-              value: "registry.hugmesh.systems"
+              value: "registry.hugmesh.net"
             # ── API-to-API mTLS (server side) ─────────────────────────────────
             # Enforce a client cert chaining to the cluster CA. The store passwords
             # come from /stores/application.properties (in-pod generated, loaded

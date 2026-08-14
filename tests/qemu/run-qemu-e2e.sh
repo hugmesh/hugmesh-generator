@@ -19,13 +19,17 @@
 # artifact autodetect are testable without root (use --dry-run).
 #
 # LAUNCHER CONTRACT (launch-x86.sh / launch-pi.sh, Phase 0 siblings):
-#   launch-x86.sh --img FILE   --ssh-port N --ui-port N --pidfile F --console F \
-#                 [--mem MB --smp N --accel kvm|tcg] --daemonize
-#   launch-pi.sh  --kernel FILE --stage4 FILE --keys-img FILE \
-#                 --ssh-port N --ui-port N --pidfile F --console F --daemonize
-#   Both: write the QEMU pid to --pidfile, forward 22->ssh-port and the UI
-#   HTTPS port (default 8443 in-guest) -> ui-port, and daemonize. The .img
-#   carries its own KEYS partition or accepts --keys-img for the Pi path.
+#   launch-x86.sh --img FILE --keys-img FILE --ssh-port N --ui-port N \
+#                 [--mem MB --smp N --accel kvm|tcg] --run-dir DIR --keep
+#   launch-pi.sh  -w DIR -r ROLE --kernel FILE --keys-img FILE \
+#                 --ssh-port N --ui-port N --run-dir DIR --keep
+#   Both: daemonize BY DEFAULT (--foreground is the opt-in), and write qemu.pid +
+#   console.log INSIDE --run-dir — there is no --pidfile/--console/--daemonize flag,
+#   and an unknown flag is a hard error, so this block is load-bearing. --keep stops
+#   the launcher's EXIT trap from deleting that dir out from under this driver.
+#   Both forward 22->ssh-port and the guest UI HTTPS port -> ui-port. Neither takes
+#   --stage4: fabricating a rootfs from a stage4 is run-qemu-test.sh's job, a
+#   different harness; these launchers boot the golden .img.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -187,10 +191,16 @@ for t in ssh ssh-keygen curl; do command -v "$t" >/dev/null || die "missing tool
 
 rm -rf "${TEST_DIR}"; mkdir -p "${TEST_DIR}"
 SSHKEY="${TEST_DIR}/id_ed25519"
-PIDFILE_X86="${TEST_DIR}/qemu-x86.pid"
-PIDFILE_PI="${TEST_DIR}/qemu-pi.pid"
-CONSOLE_X86="${TEST_DIR}/console-x86.log"
-CONSOLE_PI="${TEST_DIR}/console-pi.log"
+# The launchers do NOT take --pidfile/--console: they take ONE --run-dir and write
+# qemu.pid + console.log inside it (launch-x86.sh / launch-pi.sh "--run-dir DIR
+# Scratch dir for overlay/vars/pidfile/console"). Deriving both paths from the run
+# dir here is what keeps this driver and the launchers agreeing on where they are.
+RUN_DIR_X86="${TEST_DIR}/qemu-x86"
+RUN_DIR_PI="${TEST_DIR}/qemu-pi"
+PIDFILE_X86="${RUN_DIR_X86}/qemu.pid"
+PIDFILE_PI="${RUN_DIR_PI}/qemu.pid"
+CONSOLE_X86="${RUN_DIR_X86}/console.log"
+CONSOLE_PI="${RUN_DIR_PI}/console.log"
 KEYS_DIR="${TEST_DIR}/keys"
 KEYS_IMG="${TEST_DIR}/keys.img"
 
@@ -227,7 +237,7 @@ if command -v jq >/dev/null 2>&1; then
     else
         cat > "${PJ}" <<EOF
 { "version": 1, "hostname": "hugmesh-e2e", "timezone": "UTC",
-  "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.systems" },
+  "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.net" },
   "run": ["seed/seed-bff.sh"] }
 EOF
     fi
@@ -241,10 +251,12 @@ booted=()
 if [[ "${TARGET}" == "x86" || "${TARGET}" == "both" ]]; then
     need_launcher "${LAUNCH_X86}" "x86 launcher"
     step "[1/5] Booting x86 host VM (accel=${ACCEL}, mem=${MEM}M)"
+    # --keep: without it the launcher's EXIT trap deletes the run dir (and with it the
+    # pidfile/console this driver is about to read) the moment it daemonizes.
     "${LAUNCH_X86}" --img "${IMG}" --keys-img "${KEYS_IMG}" \
         --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
         --mem "${MEM}" --smp "${SMP}" --accel "${ACCEL}" \
-        --pidfile "${PIDFILE_X86}" --console "${CONSOLE_X86}" --daemonize
+        --run-dir "${RUN_DIR_X86}" --keep
     booted+=("x86")
 fi
 if [[ "${TARGET}" == "pi" || "${TARGET}" == "both" ]]; then
@@ -253,10 +265,15 @@ if [[ "${TARGET}" == "pi" || "${TARGET}" == "both" ]]; then
     PI_SSH=$([[ "${TARGET}" == both ]] && echo $((SSH_PORT+1)) || echo "${SSH_PORT}")
     PI_UI=$([[ "${TARGET}" == both ]] && echo $((UI_PORT+1)) || echo "${UI_PORT}")
     step "[1/5] Booting Pi role VM (-M virt, mem=${MEM}M)"
-    "${LAUNCH_PI}" --kernel "${KERNEL}" --stage4 "${STAGE4}" --keys-img "${KEYS_IMG}" \
+    # launch-pi.sh boots the golden .img (with --kernel loaded directly, since QEMU has
+    # no BCM2712 firmware chain) — it has no --stage4 at all; that is run-qemu-test.sh's
+    # input, a different harness. Point it at the work dir + role and let its own
+    # autodetect pick the .img, exactly as `make qemu-rpi` does.
+    "${LAUNCH_PI}" -w "${WORK_DIR}" -r "${ROLE}" \
+        --kernel "${KERNEL}" --keys-img "${KEYS_IMG}" \
         --ssh-port "${PI_SSH}" --ui-port "${PI_UI}" \
         --mem "${MEM}" --smp "${SMP}" \
-        --pidfile "${PIDFILE_PI}" --console "${CONSOLE_PI}" --daemonize
+        --run-dir "${RUN_DIR_PI}" --keep
     booted+=("pi")
     # The primary target the specs drive: prefer x86 if both, else pi's ports.
     [[ "${TARGET}" == "pi" ]] && { SSH_PORT="${PI_SSH}"; UI_PORT="${PI_UI}"; }

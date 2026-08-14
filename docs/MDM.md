@@ -963,7 +963,7 @@ not treated as a driver defect.
 never clobbered) — signer-pinned via `--auditor-signer-sha256`, using the same
 shared apksigner-verify helper `mdm-enroll` and `enroll` use. It then prints a
 runbook pointing the operator at the self-hosted AttestationServer console
-(`--attestation-url`, e.g. `https://attestation.hugmesh.systems`) to scan
+(`--attestation-url`, e.g. `https://attestation.hugmesh.net`) to scan
 the pairing QR code from inside the Auditor app. **The in-app camera scan
 cannot be driven over adb** — this wizard performs no cryptographic
 verification of the attestation chain itself, so the pairing is recorded
@@ -988,7 +988,7 @@ GrapheneOS Auditor's published pin. Concretely:
 
 ```
 server AUDITOR_SIGNER_DIGEST  ===  HugMesh Auditor fork's release-signing-cert SHA-256
-server ATTESTATION_DOMAIN     ===  fork's DOMAIN constant  ===  attestation.hugmesh.systems
+server ATTESTATION_DOMAIN     ===  fork's DOMAIN constant  ===  attestation.hugmesh.net
 ```
 
 These are **built and set together** — if `AUDITOR_SIGNER_DIGEST` does not

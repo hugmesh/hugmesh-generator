@@ -13,7 +13,7 @@ REPOS=(
     hugmesh-generator snapdragon-commons snapdragon-parent
     admin-bff user-bff mod-bff forum-bff owncast-bff tube-bff wiki-bff
     auth-core federation-api
-    snapdragon.systems login-ui admin-ui mod-ui matrix-ui owncast-ui tube-ui
+    hugmesh.net login-ui admin-ui mod-ui matrix-ui owncast-ui tube-ui
 )
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then

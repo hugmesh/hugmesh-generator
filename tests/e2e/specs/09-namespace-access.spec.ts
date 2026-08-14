@@ -7,7 +7,7 @@ import { onboard, shot } from './helpers';
 // testid that no longer exists anywhere in the current UI.
 //
 // Uptrace observability is server-configured (BffService.uptraceUrl(), wired to
-// https://uptrace.hugmesh.systems by default) but has NO UI entry point
+// https://uptrace.hugmesh.net by default) but has NO UI entry point
 // anywhere in admin-ui or the host — no `nav-uptrace` equivalent was ever built.
 // This spec no longer asserts it (queued as an open product gap, not a test bug).
 //
@@ -56,7 +56,7 @@ import { onboard, shot } from './helpers';
 // user-visible product defect behind a green suite.
 // ─────────────────────────────────────────────────────────────────────────────
 test('admin grants a registered user access to a namespace', async ({ page }) => {
-  await onboard(page, 'admin@hugmesh.systems');
+  await onboard(page, 'admin@hugmesh.net');
 
   await page.getByTestId('profile-trigger').click();
   await page.getByTestId('menu-admin').click();

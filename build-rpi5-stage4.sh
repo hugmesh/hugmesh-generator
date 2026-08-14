@@ -211,7 +211,7 @@ TIMEZONE="UTC"
 HOSTNAME=""
 ROLE="generic"          # generic | pki | backend | frontend | desktop
 DESKTOP="none"          # derived: 'light' for --role desktop, else none (--print-plan/banner display only)
-CLUSTER_DOMAIN="hugmesh.systems"
+CLUSTER_DOMAIN="hugmesh.net"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
 # node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
 # <effective> only for MESH builds; permanently internal, never the go-live apex.
@@ -221,9 +221,9 @@ BRAND_TITLE="HugMesh Systems"    # human-readable title
 ORG="hugmesh"            # GitHub org / image namespace
 # Games portal domain. DEFAULT = SUBDOMAIN of the primary (games.<CLUSTER_DOMAIN>)
 # until the real .games TLD is obtained; flip with GAMES_DOMAIN=<brand>.games. The
-# default literal composes with rebrand_sysroot (hugmesh.systems->CLUSTER_DOMAIN).
+# default literal composes with rebrand_sysroot (hugmesh.net->CLUSTER_DOMAIN).
 # Drives the games host + OIDC issuer/redirects via parameterize_games_domain().
-GAMES_DOMAIN="games.hugmesh.systems"
+GAMES_DOMAIN="games.hugmesh.net"
 # ── DEFAULT-INCLUSION POLICY (user 2026-06-17) ───────────────────────
 # USER_LEVEL_SERVICES is the SINGLE source-of-truth set of user-level OPTIONAL
 # slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
@@ -1334,7 +1334,7 @@ fi
 # a quote, or a newline can never reach a render sink or a sourced KEY=VALUE file.
 # Escaping at the render sink (_sed_rep_escape) is defense-in-depth on top of this.
 # Each regex below ACCEPTS every legitimate default (brand=hugmesh,
-# org=hugmesh, domain=hugmesh.systems, user=pi, cpu=cortex-a76,
+# org=hugmesh, domain=hugmesh.net, user=pi, cpu=cortex-a76,
 # target=aarch64-unknown-linux-gnu, kernel_2712.img, title "HugMesh Systems").
 _require_match() {  # <human-name> <value> <regex>
     [[ "$2" =~ $3 ]] || { err "invalid $1: '$2' (must match ${3})"; exit 1; }
@@ -1677,7 +1677,7 @@ GROWFS_EOF
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
 #           LAN wildcard-DNS app is kept ONLY for a `.test` domain, so it can
 #           never become authoritative for a real public domain (e.g. a default
-#           ENV=test build still on hugmesh.systems keeps neither edge).
+#           ENV=test build still on hugmesh.net keeps neither edge).
 # ── OPTIONAL-SERVICE gate ───────────────────────────────────────────────────
 # Prune every OPTIONAL service (akkoma/tuwunel/phpbb/games) NOT selected in
 # OPTIONAL_SERVICES from the baked GitOps tree, enumerated by
@@ -2363,8 +2363,8 @@ gate_backing_services() {
 }
 
 # Put the Anubis PoW gate genuinely IN FRONT of public ingress when installed.
-# The fe-gateway chart renders the public Ingress (host hugmesh.systems +
-# *.hugmesh.systems) with its backend Service overridable via the new
+# The fe-gateway chart renders the public Ingress (host hugmesh.net +
+# *.hugmesh.net) with its backend Service overridable via the new
 # `ingress.backendServiceName`/`ingress.backendServicePort` values. When Anubis is
 # installed we point that Ingress backend at the anubis Service (:8923); Anubis
 # forwards verified requests to the fe-gateway (its TARGET=fe-gateway:8080). When
@@ -2405,7 +2405,7 @@ _opt_wire_anubis_ingress() {
 }
 # Parameterize the games-realm OIDC identity on GAMES_DOMAIN (rebrand_sysroot does
 # not touch .games). Runs UNCONDITIONALLY and BEFORE rebrand so the default literal
-# games.hugmesh.systems composes with hugmesh.systems->CLUSTER_DOMAIN; a custom
+# games.hugmesh.net composes with hugmesh.net->CLUSTER_DOMAIN; a custom
 # GAMES_DOMAIN is rebrand-neutral. Fixes iss-strict games login on the subdomain default.
 parameterize_games_domain() {
     local tree="${SYSROOT}/var/lib/hugmesh/cluster"
@@ -2428,10 +2428,10 @@ parameterize_games_domain() {
     info "Games domain: parameterized games host URLs -> ${GAMES_DOMAIN} in ${n} file(s)"
     # If the operator set a CUSTOM GAMES_DOMAIN (e.g. the real <brand>.games TLD),
     # the games PUBLIC host (gateway-be route host + ingress extraHost) must follow
-    # it; the default "games.hugmesh.systems" otherwise composes with rebrand.
-    if [ "${GAMES_DOMAIN}" != "games.hugmesh.systems" ]; then
+    # it; the default "games.hugmesh.net" otherwise composes with rebrand.
+    if [ "${GAMES_DOMAIN}" != "games.hugmesh.net" ]; then
         local be="${tree}/apps/20-gateway-be.yaml"
-        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.systems#${GAMES_DOMAIN}#g" "${be}"
+        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.net#${GAMES_DOMAIN}#g" "${be}"
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }
@@ -2574,11 +2574,11 @@ bake_host_firewall() {
 }
 
 # Rewrites the cluster GitOps payload + role markers from the default
-# "hugmesh"/"hugmesh.systems" naming to ${BRAND}/${CLUSTER_DOMAIN}/${ORG}.
+# "hugmesh"/"hugmesh.net" naming to ${BRAND}/${CLUSTER_DOMAIN}/${ORG}.
 # Internal install paths (/var/lib/hugmesh, /etc/hugmesh) and the
 # provisioning JSON key are intentionally NOT touched (tool vendor namespace).
 rebrand_sysroot() {
-    if [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] \
+    if [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.net" ] \
        && [ "${ORG}" = "hugmesh" ] && [ "${BRAND_TITLE}" = "HugMesh Systems" ]; then
         info "Branding: default (hugmesh) — no rebrand"
         return 0
@@ -2591,25 +2591,25 @@ rebrand_sysroot() {
     local roots=("${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh")
     local f
     while IFS= read -r -d '' f; do
-        # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
+        # FROZEN k8s label-KEY / API-group namespace `hugmesh.net/<suffix>` must NOT
         # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
         # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
         # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
         # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
         # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
-        # neither `hugmesh.systems` nor `hugmesh-`, so the middle rules skip it.
+        # neither `hugmesh.net` nor `hugmesh-`, so the middle rules skip it.
         sed -i \
-            -e "s|^hugmesh\.systems/|@@SDSYSKEY@@/|g" \
-            -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
+            -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${BRAND_TITLE}|g" \
             -e "s|snapdragon-systems/|${org_lc}/|g" \
             -e "s|hugmesh|${ORG}|g" \
             -e "s|//id\.hugmesh\.games|//id.${GAMES_DOMAIN}|g" \
             -e "s|//hugmesh\.games|//${GAMES_DOMAIN}|g" \
-            -e "s|hugmesh\.systems|${CLUSTER_DOMAIN}|g" \
+            -e "s|hugmesh\.net|${CLUSTER_DOMAIN}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${BRAND}-|g" \
-            -e "s|@@SDSYSKEY@@/|hugmesh.systems/|g" \
+            -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             "${f}"
     done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
     info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
@@ -3777,7 +3777,7 @@ fi
 
 # Apply the configured brand/domain to the baked tree (no-op for defaults).
 # Runs AFTER gate_env_apps so the surviving lan-dns/cloudflared manifests get
-# their hugmesh.systems -> ${CLUSTER_DOMAIN} rewrite too.
+# their hugmesh.net -> ${CLUSTER_DOMAIN} rewrite too.
 rebrand_sysroot
 # I6.3: AFTER rebrand — idp.conf bake + issuer/JWKS rewrite + Casdoor-app gating +
 # README-IDP.md. casdoor default = guaranteed no-op (byte-identity).

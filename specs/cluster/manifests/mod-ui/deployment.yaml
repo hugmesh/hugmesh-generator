@@ -1,20 +1,20 @@
 # hugmesh-mod-ui — the moderation Angular micro-frontend remote. Its own nginx
 # (own repo + pod) in the hugmesh-frontend namespace, federated into the
-# hugmesh.systems host: it serves a remoteEntry.json the host's loadRemoteModule
+# hugmesh.net host: it serves a remoteEntry.json the host's loadRemoteModule
 # consumes, mounted at /mod (mod role). Talks to mod-bff-api via the same-origin
 # /bff/mod/** fe-gateway route.
 # Repo: github.com/hugmesh/hugmesh-mod-ui
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: hugmesh-mod-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-mod-ui, app.kubernetes.io/part-of: hugmesh.systems } }
+metadata: { name: hugmesh-mod-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-mod-ui, app.kubernetes.io/part-of: hugmesh.net } }
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-mod-ui } }
   template:
     metadata: { labels: { app: hugmesh-mod-ui } }
     spec:
-      nodeSelector: { snapdragon.systems/frontend: "true" }
+      nodeSelector: { hugmesh.net/frontend: "true" }
       securityContext:
         seLinuxOptions:
           type: container_t

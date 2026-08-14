@@ -53,11 +53,21 @@ _ma_py() {
 # bootable image.
 resolve_artifact() {
     local plat="$1" board="$2" role="$3" wd="${4:-${WORK_DIR:-.}}" f pat
+    # Every pattern keeps the ROLE, and none matches .img.xz. Both rules are load-bearing:
+    #
+    #  * A role-less fallback (formerly "hugmesh-${plat}-*.img") silently resolved EVERY
+    #    row of a platform to the newest image of ANY role — so a `pki` row would boot
+    #    the `backend` image and assert against it, reporting a pass for a row that was
+    #    never exercised.
+    #  * A .img.xz is NOT a disk. The caller hands this straight to the launcher as
+    #    --img, which does `qemu-img create -f qcow2 -b <img> -F raw` — presenting an xz
+    #    stream to QEMU as a raw disk. That yields an unbootable VM and a confusing
+    #    timeout rather than a clean "artifact not built yet" SKIP. Decompress first
+    #    (tests/qemu/run-qemu-docker.sh does this) and re-run.
     for pat in \
         "${wd}/hugmesh-${plat}-${board:+${board}-}"*"${role}"*".img" \
-        "${wd}/hugmesh-${plat}-"*".img" \
-        "${wd}/hugmesh-${plat}-"*".img.xz" \
-        "${wd}/"*".img" ; do
+        "${wd}/hugmesh-${plat}-"*"-${role}-"*".img" \
+        "${wd}/"*"-${role}-"*".img" ; do
         # shellcheck disable=SC2086 -- intentional glob expansion of the pattern
         f="$(ls -1t ${pat} 2>/dev/null | grep -viE '(kernel|initramfs|initrd|squashfs|/Image$|rootfs\.img)' | head -1)"
         [ -n "${f}" ] && { printf '%s' "${f}"; return 0; }

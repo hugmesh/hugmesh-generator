@@ -5,7 +5,7 @@
 # reserved set (specs/cluster/reserved-prefixes.yaml, mirrored into the
 # hugmesh-policy/reserved-prefixes ConfigMap) an enforced invariant at
 # admission/sync time, so a reserved label can never be (mis)used where it would
-# create a vanity-shadowing collision on .systems or .games.
+# create a vanity-shadowing collision on .net or .games.
 #
 # SINGLE SOURCE OF TRUTH: every rule loads the reserved list from the ConfigMap
 # via a `context` (configMap + parseJson), so the policy and the GitOps list
@@ -32,14 +32,14 @@ kind: ClusterPolicy
 metadata:
   name: reserved-prefixes
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
     app.kubernetes.io/component: policy
   annotations:
     policies.kyverno.io/title: Reserved prefixes / vanity-collision guard
     policies.kyverno.io/category: HugMesh Routing
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Ingress, HTTPRoute, User/Profile/Vanity CRDs
-    snapdragon.systems/source: specs/cluster/reserved-prefixes.yaml
+    hugmesh.net/source: specs/cluster/reserved-prefixes.yaml
     policies.kyverno.io/description: >-
       Blocks resources that would let a vanity username / profile handle collide
       with a dedicated platform route prefix or reserved subdomain. The reserved
@@ -51,9 +51,9 @@ spec:
   failurePolicy: Fail
   rules:
     # -------------------------------------------------------------------------
-    # (1) INGRESS — a vanity host is <label>.hugmesh.systems /
+    # (1) INGRESS — a vanity host is <label>.hugmesh.net /
     #     <label>.hugmesh.games. Any Ingress that admits a wildcard vanity
-    #     host (*.hugmesh.systems / *.hugmesh.games) is the gateway's own
+    #     host (*.hugmesh.net / *.hugmesh.games) is the gateway's own
     #     vanity ingress and is exempt (it dispatches to the resolver, which does
     #     its own reserved check). A NON-wildcard Ingress whose host's FIRST DNS
     #     LABEL is reserved is fine when it IS the platform service for that label
@@ -72,7 +72,7 @@ spec:
           # Skip the platform's own components (gateways/cloudflared carry this).
           - key: "{{ request.object.metadata.labels.\"app.kubernetes.io/part-of\" || '' }}"
             operator: NotEquals
-            value: "hugmesh.systems"
+            value: "hugmesh.net"
       context:
         - name: reserved
           configMap:
@@ -84,7 +84,7 @@ spec:
           shadow a dedicated platform route/subdomain. Reserved labels live in
           specs/cluster/reserved-prefixes.yaml (hugmesh-policy/reserved-prefixes
           ConfigMap). Pick a non-reserved host or label the platform component
-          app.kubernetes.io/part-of=hugmesh.systems.
+          app.kubernetes.io/part-of=hugmesh.net.
         foreach:
           - list: "request.object.spec.rules[].host"
             # First DNS label of the host (everything before the first dot).
@@ -93,7 +93,7 @@ spec:
             deny:
               conditions:
                 all:
-                  # only consider hugmesh.systems / .games hosts
+                  # only consider hugmesh.net / .games hosts
                   - key: "{{ regex_match('^[^.]+\\.hugmesh\\.(systems|games)$', element) }}"
                     operator: Equals
                     value: true
@@ -106,7 +106,7 @@ spec:
     # (2) GATEWAY-API HTTPRoute — same rule for hostnames, PLUS a path-prefix
     #     guard: a HTTPRoute whose first path segment is a reserved prefix is a
     #     dedicated platform route and must be owned by a platform component
-    #     (part-of=hugmesh.systems); anything else claiming /<reserved>/** is
+    #     (part-of=hugmesh.net); anything else claiming /<reserved>/** is
     #     a shadowing collision and is rejected.
     # -------------------------------------------------------------------------
     - name: httproute-host-not-reserved-vanity
@@ -119,7 +119,7 @@ spec:
         all:
           - key: "{{ request.object.metadata.labels.\"app.kubernetes.io/part-of\" || '' }}"
             operator: NotEquals
-            value: "hugmesh.systems"
+            value: "hugmesh.net"
       context:
         - name: reserved
           configMap:
@@ -157,9 +157,9 @@ spec:
               kinds:
                 # Group-qualified so this only ever matches a hugmesh CRD,
                 # never some unrelated "User" kind from another API group.
-                - snapdragon.systems/v1alpha1/VanityClaim
-                - snapdragon.systems/v1alpha1/Profile
-                - snapdragon.systems/v1alpha1/User
+                - hugmesh.net/v1alpha1/VanityClaim
+                - hugmesh.net/v1alpha1/Profile
+                - hugmesh.net/v1alpha1/User
       context:
         - name: reserved
           configMap:

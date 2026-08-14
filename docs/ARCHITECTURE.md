@@ -1,8 +1,8 @@
 # HugMesh cluster architecture
 
-Everything connects **behind `hugmesh.systems`** through per-namespace
+Everything connects **behind `hugmesh.net`** through per-namespace
 Spring Cloud Gateways that validate a single internal Casdoor OAuth2 JWT.
-Cloudflare maps the public `hugmesh.systems` / `hugmesh.games` names onto
+Cloudflare maps the public `hugmesh.net` / `hugmesh.games` names onto
 those gateways (configured later, out of scope here).
 
 ## Nodes & images
@@ -11,7 +11,7 @@ those gateways (configured later, out of scope here).
 |---|---|---|---|
 | `pki` | `build-rpi5-stage4.sh --role pki` | aarch64 (RPi 5) | **Kubernetes control plane** + identity: headscale (mesh control), Casdoor, Cassandra, `hugmesh-pki-gateway` |
 | `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `hugmesh-be-gateway` |
-| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `hugmesh.systems` Angular host federating `hugmesh-matrix-ui` + `hugmesh-mastodon-ui` + `hugmesh-wiki-ui` + login/admin/mod/user/forum remotes, `hugmesh-fe-gateway` |
+| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `hugmesh.net` Angular host federating `hugmesh-matrix-ui` + `hugmesh-mastodon-ui` + `hugmesh-wiki-ui` + login/admin/mod/user/forum remotes, `hugmesh-fe-gateway` |
 | `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `hugmesh.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
 | `edge_ai` | `build-x86-host-stage4.sh --role edge_ai` (x86_64) **/** `build-jetson-stage4.sh --role edge_ai` (Jetson Orin Nano, arm64 crossdev — the x86 builder is amd64-only and cannot produce a Jetson image) | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
 
@@ -19,17 +19,17 @@ All nodes are hardened Gentoo, join one Kubernetes cluster, sit on one headscale
 mesh, and are provisioned at first boot from a USB **KEYS** stick (see
 [`keys-template/`](../keys-template/README.md)). The pki Pi is the kubeadm
 control plane; backend/frontend Pis and the x86_64 host join it as workers and
-are labelled (`snapdragon.systems/role`, `…/compute=gpu`) so workloads land on
+are labelled (`hugmesh.net/role`, `…/compute=gpu`) so workloads land on
 the right hardware.
 
 ```mermaid
 flowchart TD
-    CF["Cloudflare edge<br/>hugmesh.systems / hugmesh.games"]
-    CF --> FEGW["hugmesh-fe-gateway<br/>(hugmesh.systems)"]
+    CF["Cloudflare edge<br/>hugmesh.net / hugmesh.games"]
+    CF --> FEGW["hugmesh-fe-gateway<br/>(hugmesh.net)"]
     CF --> BEGW["hugmesh-be-gateway<br/>(api / matrix / mastodon .*)"]
 
     subgraph FE["hugmesh-frontend (frontend Pis)"]
-        HOST["hugmesh.systems Angular host shell"]
+        HOST["hugmesh.net Angular host shell"]
         HOST --> MUI["hugmesh-matrix-ui"]
         HOST --> MASTUI["hugmesh-mastodon-ui"]
         HOST --> LOGINUI["hugmesh-login-ui"]
@@ -68,8 +68,8 @@ flowchart TD
     FEGW --> FE
     BEGW --> BE
     BE -. "games ns + argocd ns scheduled here" .-> X86
-    BEGW -. "ai.hugmesh.systems (tailnet-only, not on the public CF fan-out)" .-> INFER
-    BEGW -. "headscale-forward ONLY (scale.hugmesh.systems) — pki is NOT internet-facing" .-> PKIGW["hugmesh-pki-gateway<br/>(internal ingress on the pki node only)"]
+    BEGW -. "ai.hugmesh.net (tailnet-only, not on the public CF fan-out)" .-> INFER
+    BEGW -. "headscale-forward ONLY (scale.hugmesh.net) — pki is NOT internet-facing" .-> PKIGW["hugmesh-pki-gateway<br/>(internal ingress on the pki node only)"]
     PKIGW --> PKI
 
     subgraph SSO["SSO / native login — shipped, lit by default"]
@@ -130,7 +130,7 @@ flowchart TD
 
 ## Identity & login
 
-Casdoor (`id.hugmesh.systems`) is the single IdP, reached **only from inside
+Casdoor (`id.hugmesh.net`) is the single IdP, reached **only from inside
 the cluster** (there is no public ingress to Casdoor; the browser never sees it):
 
 - **Admin-created accounts** sign in through the platform's **native login form**
@@ -138,7 +138,7 @@ the cluster** (there is no public ingress to Casdoor; the browser never sees it)
   drives Casdoor over the internal network.
 - **Google federation** handles public registration/sign-up.
 - **tuwunel** (Matrix homeserver, OIDC) and **Akkoma** (Mastodon-API-compatible
-  fediverse, OIDC) both SSO against Casdoor, so the `hugmesh.systems` front
+  fediverse, OIDC) both SSO against Casdoor, so the `hugmesh.net` front
   page can show **Matrix / Mastodon links to logged-in users** and hand each
   module a service access token — the
   [`hugmesh-matrix-ui`](https://github.com/hugmesh/hugmesh-matrix-ui)

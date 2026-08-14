@@ -19,7 +19,7 @@ applied by `build.Dockerfile` by default.
 
 | File | Line | Current | Patch |
 |---|---|---|---|
-| `app/src/main/java/app/attestation/auditor/RemoteVerifyJob.java` | 49 | `static final String DOMAIN = "attestation.app";` | `static final String DOMAIN = "attestation.hugmesh.systems";` |
+| `app/src/main/java/app/attestation/auditor/RemoteVerifyJob.java` | 49 | `static final String DOMAIN = "attestation.app";` | `static final String DOMAIN = "attestation.hugmesh.net";` |
 
 Everything downstream of `DOMAIN` recomputes automatically — **do not**
 hand-patch these separately:
@@ -32,7 +32,7 @@ hand-patch these separately:
   lines 118-139): `!RemoteVerifyJob.DOMAIN.equals(values[0])` — the acceptance
   check for the 4-field space-separated QR payload
   (`domain userId subscribeKey verifyInterval`). It automatically starts
-  accepting `attestation.hugmesh.systems` once `DOMAIN` is patched — no
+  accepting `attestation.hugmesh.net` once `DOMAIN` is patched — no
   separate edit needed.
 
 HTTPS and port 443 are hardcoded (`"https://"` literal, no port anywhere ->
@@ -46,26 +46,26 @@ without a smoke test.
 
 | File | Line | Current | Patch |
 |---|---|---|---|
-| `app/src/main/res/xml/network_security_config.xml` | 5 | `<domain includeSubdomains="true">attestation.app</domain>` | `<domain includeSubdomains="true">attestation.hugmesh.systems</domain>` |
+| `app/src/main/res/xml/network_security_config.xml` | 5 | `<domain includeSubdomains="true">attestation.app</domain>` | `<domain includeSubdomains="true">attestation.hugmesh.net</domain>` |
 
 **CRITICAL — read this before shipping a build.** Lines 7-25 of the same
 `<domain-config>` block pin 6 SHA-256 values (ISRG Root X1 / X2 / YE / YR —
 all Let's Encrypt roots — plus two ECDSA secp256r1/secp384r1 "backup key"
 pins). `cleartextTrafficPermitted="false"` is set on the same block.
 
-**If `attestation.hugmesh.systems`'s real TLS certificate does not chain to
+**If `attestation.hugmesh.net`'s real TLS certificate does not chain to
 one of these exact pinned roots/keys, every connection TLS HARD-FAILS with a
 pinning error** — even though the `<domain>` hostname text was correctly
 patched. The app will look "installed and configured" and simply never be
 able to reach the server. This is the #1 way this fork silently breaks.
 
 Fix: regenerate the pin-set for the real chain actually served by
-`attestation.hugmesh.systems` before shipping:
+`attestation.hugmesh.net` before shipping:
 
 ```bash
 # Get the leaf cert's public-key pin (SHA-256 of the DER SubjectPublicKeyInfo,
 # base64 — the format network_security_config.xml <pin digest="SHA-256"> expects).
-openssl s_client -connect attestation.hugmesh.systems:443 -showcerts </dev/null 2>/dev/null \
+openssl s_client -connect attestation.hugmesh.net:443 -showcerts </dev/null 2>/dev/null \
   | openssl x509 -pubkey -noout \
   | openssl pkey -pubin -outform der \
   | openssl dgst -sha256 -binary | openssl enc -base64
@@ -75,7 +75,7 @@ Run this once per certificate in the real chain (leaf, intermediate(s), and —
 for pin robustness across renewals — the issuing root or a documented backup
 key), and replace the `<pin digest="SHA-256">...</pin>` values at lines 7-25
 by hand. **This step is CA-dependent and cannot be scripted blindly.** If
-`attestation.hugmesh.systems` chains to public Let's Encrypt roots (same as
+`attestation.hugmesh.net` chains to public Let's Encrypt roots (same as
 upstream `attestation.app`), the inherited pins may already work unmodified.
 If it chains to an internal/Vault PKI root (the pattern this platform uses
 elsewhere), **the pins must be regenerated or the app will be permanently
@@ -123,7 +123,7 @@ this whole patch needs re-deriving — check for that on every rebase.
 ## 5. Local device-to-device QR audit identity (OPTIONAL — skip unless needed)
 
 A **separate, third** hardcoded-identity mechanism from §1/§2. It does **not**
-gate the `RemoteVerifyJob` -> `attestation.hugmesh.systems` remote-server
+gate the `RemoteVerifyJob` -> `attestation.hugmesh.net` remote-server
 flow (`verifySerialized()` is called only from `AttestationActivity.java:339`,
 the local on-device QR-scan-the-other-phone flow — never from
 `RemoteVerifyJob.java`). **Irrelevant to the remote-server flow this fork is

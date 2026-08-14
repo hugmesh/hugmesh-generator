@@ -17,14 +17,14 @@ kind: Deployment
 metadata:
   name: hugmesh-wiki-bff-api
   namespace: hugmesh-backend
-  labels: { app: hugmesh-wiki-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-wiki-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-wiki-bff-api } }
   template:
     metadata: { labels: { app: hugmesh-wiki-bff-api } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -99,7 +99,7 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
             # APP_TENANCY_ISSUERS is deliberately NOT set here. Do not "fix" this by
             # adding it — doing so silently hides every existing wiki page and ACL.
             # Unset, commons' DomainRegistry seeds the back-compat single-issuer entry
@@ -108,7 +108,7 @@ spec:
             # wiki_attachment / wiki_audit_log / wiki_access each declare
             # `domain varchar(64) defaultValue="default"`).
             # Setting it to the gateway archetype's pattern
-            # ("https://id.hugmesh.systems=<brand>") makes domainOf() return "<brand>",
+            # ("https://id.hugmesh.net=<brand>") makes domainOf() return "<brand>",
             # so every `WHERE domain = ...` read stops matching those "default" rows.
             # A single pair also leaves isMultiIssuer() false, so the fail-closed
             # multi-issuer decoder never activates: no 401, no error — the rows just

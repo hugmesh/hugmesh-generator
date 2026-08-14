@@ -99,11 +99,11 @@ function referencedTokens(src) {
 
 // Extract the RAW body of every mustache — i.e. whatever sits between {{ and }},
 // NOT just valid {{identifier}} names. This is the reachability fix for the
-// Phase-3 red-team gate: the frozen protocol constants (snapdragon.systems/…,
+// Phase-3 red-team gate: the frozen protocol constants (hugmesh.net/…,
 // X-HugMesh-Local, snapdragon.device-terminal.stepup.) and some denylisted
 // keys are NOT valid Handlebars identifiers (they carry ./ / -), so TOKEN_RE
 // above never captures them. A template that literally wrote
-// `{{snapdragon.systems/domain}}` would therefore slip past the identifier-only
+// `{{hugmesh.net/domain}}` would therefore slip past the identifier-only
 // check and render to an EMPTY string (exit 0) instead of being refused. Scanning
 // the raw body lets isFrozen()/isDenied() actually fire on the constants they
 // name, so the reference-side gate is reachable — not theater. We do NOT run the
@@ -161,7 +161,7 @@ function main() {
     // otherwise render to an empty string (silently dropping content) while the
     // legacy sed path leaves the literal `{{token}}`. The raw-body scan inside
     // assertTemplateSafe also catches a frozen constant / secret written as a
-    // non-identifier mustache body (e.g. {{snapdragon.systems/domain}}).
+    // non-identifier mustache body (e.g. {{hugmesh.net/domain}}).
     try {
       assertTemplateSafe(src, `template ${path.relative(templatesDir, tmpl)}`);
     } catch (e) {
@@ -179,7 +179,7 @@ function main() {
     // output is byte-identical to sed (this is what keeps the parity gate green).
     // SAFETY: assertTemplateSafe()'s fail-closed frozen/denied RAW-BODY scan has
     // ALREADY run over these bodies above, so a dot-body naming a frozen constant
-    // (e.g. {{ .hugmesh.systems/x }}) was refused before we reach here — this
+    // (e.g. {{ .hugmesh.net/x }}) was refused before we reach here — this
     // passthrough only ever carries inert ArgoCD context refs, never a brand token or
     // a secret value.
     const goTmpl = [];

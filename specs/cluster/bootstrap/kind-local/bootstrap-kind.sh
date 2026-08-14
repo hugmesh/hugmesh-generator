@@ -26,7 +26,7 @@
 # `password authentication failed for user "userbff"`. KIND_KV_RESEED=1 is the
 # deliberate, destructive re-mint (fresh cluster / wiped PVCs only).
 #
-# Targets the CORE reference "hugmesh.systems" apps/ tree (specs/cluster/
+# Targets the CORE reference "hugmesh.net" apps/ tree (specs/cluster/
 # apps/*.yaml as committed on the GitOps repo), NOT a brand-templated tenant
 # (templates/apps/*.hbs + brands/*.conf render OTHER tenant domains from these
 # same core apps — this script intentionally does not touch that templating
@@ -108,32 +108,32 @@ kubectl version >/dev/null 2>&1 || { echo "cluster not reachable after kind crea
 # ─────────────────────────────────────────────────────────────────────────
 # 2) Label the single node with every capability the curated app subset
 #    needs. Discovered by grepping the actual manifests (not guessed):
-#      - snapdragon.systems/pki=true         (vault, vault-pki-init, casdoor +
+#      - hugmesh.net/pki=true         (vault, vault-pki-init, casdoor +
 #        casdoor-pg, harbor + harbor-provision — all pinned to the pki node)
-#      - snapdragon.systems/local-path=true  (the local-path-provisioner
+#      - hugmesh.net/local-path=true  (the local-path-provisioner
 #        DaemonSet; every PVC above is carved from the hugmesh-local SC)
 #    kubernetes.io/arch=amd64 is already correct on a kind/amd64 host. Nothing
-#    in this curated subset needs snapdragon.systems/backend or a
-#    snapdragon.systems/role=pki style label (checked — only the two above).
+#    in this curated subset needs hugmesh.net/backend or a
+#    hugmesh.net/role=pki style label (checked — only the two above).
 # ─────────────────────────────────────────────────────────────────────────
 NODE="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
 log "Labeling node '${NODE}' (pki=true, local-path=true)"
 kubectl label node "${NODE}" \
-  snapdragon.systems/pki=true \
-  snapdragon.systems/local-path=true \
+  hugmesh.net/pki=true \
+  hugmesh.net/local-path=true \
   --overwrite >/dev/null
 if [ "${KIND_PROFILE}" = "sso" ]; then
   # The SSO slice adds workloads pinned to the backend tier (BFFs, their
   # Postgres) and the frontend tier (host shell, login/social UI remotes) —
   # same single-node collapse as pki/local-path above. Cassandra is the one
   # workload in the slice that pins the ROLE-shaped label
-  # (snapdragon.systems/role: pki), not a capability=true label — the core
+  # (hugmesh.net/role: pki), not a capability=true label — the core
   # profile's "nothing needs role=pki" note holds only for the core subset.
   log "Labeling node '${NODE}' (backend=true, frontend=true, role=pki — KIND_PROFILE=sso)"
   kubectl label node "${NODE}" \
-    snapdragon.systems/backend=true \
-    snapdragon.systems/frontend=true \
-    snapdragon.systems/role=pki \
+    hugmesh.net/backend=true \
+    hugmesh.net/frontend=true \
+    hugmesh.net/role=pki \
     --overwrite >/dev/null
 fi
 
@@ -175,7 +175,7 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # 4) Local storage. On kind this works AS-IS once the node carries
-#    snapdragon.systems/local-path=true — the provisioner just mkdir -p's
+#    hugmesh.net/local-path=true — the provisioner just mkdir -p's
 #    /mnt/data/local-path + /mnt/usb/local-path INSIDE the kind node
 #    container's own filesystem; no real block devices needed.
 # ─────────────────────────────────────────────────────────────────────────
@@ -394,6 +394,7 @@ SSO_APPS=(
   37-user-bff-api.yaml    # POST /bff/login (native-login relocation)
   40-frontend.yaml        # Angular host shell (snapdragon-systems-web)
   45-social-ui.yaml       # login-ui remote (+ matrix/mastodon/admin remotes)
+  14-workload-console-rbac.yaml # workload-console SAs + token Secrets (lights the dual-SA client the committed admin-bff overlay already enables; RoleBindings for app-tier namespaces absent from this slice degrade that Application partially, which is the honest state)
 )
 if [ "${KIND_PROFILE}" = "sso" ]; then
   for f in "${SSO_APPS[@]}"; do
@@ -808,8 +809,8 @@ SHIM
   echo
   # Reached only after apply-systems-roles.sh AND verify-seeded-identities.sh
   # both succeeded, so this line is a claim the script has evidence for.
-  log "SSO slice seeded (identity catalogue read back and verified). Host entry: https://hugmesh.systems via 127.0.0.1:8443 (kind-local.yaml port map)"
-  echo "    e2e:  make kind-e2e   (repo root — resolver-maps hugmesh.systems -> 127.0.0.1, runs spec 27)"
+  log "SSO slice seeded (identity catalogue read back and verified). Host entry: https://hugmesh.net via 127.0.0.1:8443 (kind-local.yaml port map)"
+  echo "    e2e:  make kind-e2e   (repo root — resolver-maps hugmesh.net -> 127.0.0.1, runs spec 27)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────

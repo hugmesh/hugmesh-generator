@@ -283,7 +283,7 @@ ensure_discovery_contract() {
 # ApplicationSet (specs/cluster/apps/13d-brand-repos.yaml[.hbs]) filters on to
 # auto-discover this repo. Synthesised by publish-tenant-set.sh when the rendered
 # tree did not already ship one; replace with the repo's real descriptor.
-apiVersion: snapdragon.systems/v1
+apiVersion: hugmesh.net/v1
 kind: ServiceCatalogEntry
 metadata:
   name: ${brand}-${repo}
@@ -304,9 +304,9 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources: []
 commonLabels:
-  app.kubernetes.io/part-of: hugmesh.systems
-  snapdragon.systems/brand: ${brand}
-  snapdragon.systems/repo: ${repo}
+  app.kubernetes.io/part-of: hugmesh.net
+  hugmesh.net/brand: ${brand}
+  hugmesh.net/repo: ${repo}
 EOF
     _log "  + synthesised deploy/kustomization.yaml (discovery contract)"
   fi
@@ -544,7 +544,7 @@ publish_one() {
   if [[ ! -d "${dir}/.git" ]]; then
     git -C "$dir" init -q -b main
   fi
-  git -C "$dir" config user.email "generator@hugmesh.systems" >/dev/null 2>&1 || true
+  git -C "$dir" config user.email "generator@hugmesh.net" >/dev/null 2>&1 || true
   git -C "$dir" config user.name  "hugmesh-generator" >/dev/null 2>&1 || true
   git -C "$dir" add -A
   if git -C "$dir" diff --cached --quiet 2>/dev/null; then

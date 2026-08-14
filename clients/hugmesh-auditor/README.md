@@ -16,7 +16,7 @@ report of a build that actually ran. See "What has NOT been verified" below.
 A fork of [GrapheneOS/Auditor](https://github.com/GrapheneOS/Auditor) (MIT
 licensed), repointed at HugMesh's own self-hosted `AttestationServer`
 (`specs/cluster/manifests/attestation-server/`) at
-`attestation.hugmesh.systems` instead of upstream's `attestation.app`,
+`attestation.hugmesh.net` instead of upstream's `attestation.app`,
 built under HugMesh's own `applicationId`
 (`systems.hugmesh.auditor`), re-signed with a HugMesh release key, and
 distributed to managed phones via `scripts/phone-wizard.sh`'s existing
@@ -71,7 +71,7 @@ What can silently break on an upstream Auditor rebase:
    `attestation.app`'s real certificate chain. Every time upstream rotates
    or adds to this pin-set (which tracks Let's Encrypt's own root rotation
    schedule, not something this fork controls), our regenerated
-   `attestation.hugmesh.systems` pin-set needs re-validating against
+   `attestation.hugmesh.net` pin-set needs re-validating against
    whatever changed — a stale pin-set means the app TLS-hard-fails against
    our own server with no obvious error.
 3. **`RemoteVerifyJob`'s `DOMAIN`/`BASE_URL` handling** (`patches.md` §1) —
@@ -103,7 +103,7 @@ What can silently break on an upstream Auditor rebase:
    device that already trusts the old one, and desyncs the
    AttestationServer's `AUDITOR_SIGNER_DIGEST` pin until that's updated too.
 6. If the pin-set was touched upstream, re-verify
-   `attestation.hugmesh.systems`'s certificate still chains under the
+   `attestation.hugmesh.net`'s certificate still chains under the
    fork's pins (or regenerate per `patches.md` §2).
 7. Record the new pinned commit + sync date at the bottom of this section.
 
@@ -120,7 +120,7 @@ See `patches.md` for the full file:line detail. Summary:
 
 | # | What | Mandatory? |
 |---|---|---|
-| 1 | `RemoteVerifyJob.java` `DOMAIN` constant -> `attestation.hugmesh.systems` | Yes — this is the entire point of the fork |
+| 1 | `RemoteVerifyJob.java` `DOMAIN` constant -> `attestation.hugmesh.net` | Yes — this is the entire point of the fork |
 | 2 | `network_security_config.xml` hostname + **certificate pin-set** | Yes — hostname is scripted; pin-set is a manual, CA-dependent regeneration |
 | 3 | `README.md` / `.github/FUNDING.yml` cosmetic links | No, cosmetic only |
 | 4 | `app/build.gradle.kts` `applicationId` -> `systems.hugmesh.auditor` (namespace untouched) | Yes |
@@ -160,7 +160,7 @@ in this file** — see "Secret hygiene" below. Before trusting this build for
 a real device population, also complete the manual pin-set regeneration
 (`patches.md` §2) inside the cloned tree — the Dockerfile only patches the
 hostname, not the pins, because the pins depend on
-`attestation.hugmesh.systems`'s real certificate chain, which this
+`attestation.hugmesh.net`'s real certificate chain, which this
 Dockerfile has no way to know at build time.
 
 ### 3. Sign the APK (offline, separately)
@@ -261,7 +261,7 @@ grep -i 'COPY.*\(jks\|keystore\|properties\)' build.Dockerfile   # must be empty
   `build.Dockerfile`) — no real commit has been pinned yet; the Dockerfile
   refuses to build past this placeholder.
 - **The `network_security_config.xml` pin-set has not been regenerated**
-  against `attestation.hugmesh.systems`'s real certificate chain — only
+  against `attestation.hugmesh.net`'s real certificate chain — only
   the hostname is patched by `build.Dockerfile`. Whether the inherited
   Let's Encrypt pins happen to already work depends entirely on what CA
   actually issues that server's certificate, which was not checked here.

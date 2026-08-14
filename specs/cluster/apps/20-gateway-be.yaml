@@ -50,24 +50,24 @@ spec:
         ingress:
           enabled: true
           # Cloudflare Tunnel (manifests/cloudflared) fronts api./matrix./
-          # mastodon.hugmesh.systems; this nginx Ingress is the in-cluster
+          # mastodon.hugmesh.net; this nginx Ingress is the in-cluster
           # secondary path for the api host. Host routing for matrix/mastodon is
           # done by the gateway's Host predicates regardless of ingress.
           className: nginx
-          host: api.hugmesh.systems
+          host: api.hugmesh.net
           # Also front the headscale endpoint; forwarded to the pki gateway (the
           # headscale-forward route) so external tailscale clients never hit pki direct.
           extraHosts:
-            - scale.hugmesh.systems
+            - scale.hugmesh.net
             # games.<GAMES_DOMAIN> — the games portal host. Default GAMES_DOMAIN =
             # games.<CLUSTER_DOMAIN>, so this literal rebrands with the primary
             # domain; a custom GAMES_DOMAIN (e.g. the real .games TLD) is rewritten
             # by parameterize_games_domain() in the stage4 builders. The host route
             # is the `games` route below; the federation manifest greys it out when
             # the games slug is omitted (gate_optional_services prunes the route).
-            - games.hugmesh.systems
+            - games.hugmesh.net
         nodeSelector:
-          snapdragon.systems/backend: "true"
+          hugmesh.net/backend: "true"
         seLinux:
           level: "s0:c12"
         # Least-privilege DB identity: this gateway logs in as its OWN read-only
@@ -117,9 +117,9 @@ spec:
           # this backend gateway and are forwarded to the pki gateway -> headscale,
           # so the pki gateway never faces the internet (no direct external path).
           - id: headscale-forward
-            host: scale.hugmesh.systems
+            host: scale.hugmesh.net
             uri: http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080
-          # --- Mastodon (mastodon.hugmesh.systems) — specific paths first ---
+          # --- Mastodon (mastodon.hugmesh.net) — specific paths first ---
           # ⚠️ REPOINTED to the akkoma-proxy mTLS sidecar (:4443, https) — the
           # homeservers are network-isolated (manifests/networkpolicy/homeserver-
           # isolation.yaml) and reachable only via the cluster-CA-mTLS proxy. The
@@ -130,33 +130,33 @@ spec:
           # not the broad ROLE_USER floor.
           # Mastodon's OAuth endpoints (authorize/token), gated /oauth/** distinctly.
           - id: mastodon-oauth
-            host: mastodon.hugmesh.systems
+            host: mastodon.hugmesh.net
             uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /oauth/**
           # Mastodon REST API (statuses, timelines, …) under the mastodon host.
           - id: mastodon-api
-            host: mastodon.hugmesh.systems
+            host: mastodon.hugmesh.net
             uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /api/v1/**
           # Everything else on the mastodon host (web UI, streaming, .well-known).
           - id: mastodon-web
-            host: mastodon.hugmesh.systems
+            host: mastodon.hugmesh.net
             uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
-          # --- Matrix (matrix.hugmesh.systems) ---
+          # --- Matrix (matrix.hugmesh.net) ---
           # ⚠️ REPOINTED to the tuwunel-proxy mTLS sidecar (:4443, https) — same
           # isolation + client-cert presentation as the mastodon routes above.
           # The Matrix client/server API. Present both as a host route and a
           # path route so /_matrix/** resolves whether or not the Host header is
           # the matrix subdomain (federation .well-known hits the apex too).
           - id: matrix-api
-            host: matrix.hugmesh.systems
+            host: matrix.hugmesh.net
             uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /_matrix/**
           - id: matrix-wellknown
             uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /_matrix/**
           - id: matrix
-            host: matrix.hugmesh.systems
+            host: matrix.hugmesh.net
             uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
           # --- HugMesh Games (games.<GAMES_DOMAIN>) ---
           # Host route for the games portal. Default GAMES_DOMAIN =
@@ -170,7 +170,7 @@ spec:
           # TODO(gateway wave): keep CanonicalSeed.java (hugmesh-gateway repo)
           # + cloudflared games hostname in sync — see docs/OPTIONAL-SERVICES.md.
           - id: games
-            host: games.hugmesh.systems
+            host: games.hugmesh.net
             uri: http://hugmesh-games.hugmesh-games.svc.cluster.local:8080
           # --- Games app-store per-instance HTTP CONSOLES (PR7) ---
           # /games/servers/<slug>/<name>/** path-routes to the per-instance HTTP console
@@ -188,7 +188,7 @@ spec:
           - id: games-servers-console
             uri: http://games-instances-console.hugmesh-games-instances.svc.cluster.local:8080
             path: /games/servers/**
-          # --- hugmesh-federation-api (api.hugmesh.systems) — the module-
+          # --- hugmesh-federation-api (api.hugmesh.net) — the module-
           # federation registry/manifest/bundles API. MORE SPECIFIC than the
           # /api/** hugmesh-api catch-all below, so it MUST be declared FIRST
           # (Spring Cloud Gateway matches routes in declared order) or the broad
@@ -201,7 +201,7 @@ spec:
           - id: federation-api
             uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
             path: /api/federation/**
-          # --- HugMesh Spring APIs (api.hugmesh.systems) ---
+          # --- HugMesh Spring APIs (api.hugmesh.net) ---
           # https:// — hugmesh-api now enforces mTLS (client-auth=need).
           - id: hugmesh-api
             uri: https://hugmesh-api.hugmesh-backend.svc.cluster.local:8080
@@ -218,15 +218,15 @@ spec:
           # the catchall stops the last prune cleanly at `destination:` touching no
           # other route's comments.
           - id: edge-ai-analysis
-            host: ai.hugmesh.systems
+            host: ai.hugmesh.net
             uri: http://hugmesh-edge-ai-analysis.hugmesh-inference.svc.cluster.local:8080
             path: /v1/analyze/**
           - id: edge-ai-tts
-            host: ai.hugmesh.systems
+            host: ai.hugmesh.net
             uri: http://hugmesh-edge-ai-tts.hugmesh-inference.svc.cluster.local:8080
             path: /v1/synthesize/**
           - id: edge-ai
-            host: ai.hugmesh.systems
+            host: ai.hugmesh.net
             uri: http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434
   destination:
     server: https://kubernetes.default.svc

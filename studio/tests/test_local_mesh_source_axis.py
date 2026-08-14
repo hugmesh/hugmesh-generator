@@ -242,7 +242,7 @@ def test_clone_script_migrates_pre_rename_checkouts_instead_of_re_cloning():
     path = os.path.join(GENERATOR_DIR, "scripts", "clone-all-repos.sh")
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
-    assert "migrate_legacy_dir" in text and "snapdragon.systems" in text, \
+    assert "migrate_legacy_dir" in text and "hugmesh.net" in text, \
         "the pre-rename directory migration is gone"
     assert text.index("migrate_legacy_dir \"${repo}\"") < text.index('dest="${STACK_SRC}/${repo}"'), \
         "migration must run BEFORE the present/absent check that decides clone-vs-update"

@@ -14,7 +14,7 @@
 #   STACK_SRC   (default ./.stack-src)  where to clone the repos
 #   GIT_BASE    (default https://github.com/hugmesh)  clone base URL.
 #               Point at the internal mirror on the VPN, e.g.
-#               GIT_BASE=https://gitlab.hugmesh.systems/hugmesh
+#               GIT_BASE=https://gitlab.hugmesh.net/hugmesh
 #   GIT_REF     (default main)  branch/tag to check out
 #   USE_GH      (default auto)  "1" forces `gh repo clone`, "0" forces git clone
 #   GH_TOKEN / GITHUB_TOKEN     if set, used for an https token clone (CI / Windows)

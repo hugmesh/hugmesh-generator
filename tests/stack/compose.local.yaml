@@ -646,7 +646,7 @@ services:
       # poll). Casdoor stamps iss=http://casdoor:8000 (the in-DNS name login mints
       # through), so the resource server MUST validate against that — the browser-facing
       # http://localhost:8000 used elsewhere never matches a real token here and 401s
-      # EVERY forwarded/service call. (Cluster is uniform https://id.hugmesh.systems,
+      # EVERY forwarded/service call. (Cluster is uniform https://id.hugmesh.net,
       # so this split is compose-only.)
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       # Explicit in-DNS JWKS (key fetch) — same host, so discovery + validation agree.
@@ -704,7 +704,7 @@ services:
       #    admin-bff-api#205) custody-exchanges a native-login admin's bff_ session for a
       #    real Casdoor JWT (loopback to its own /bff/internal/session/exchange) and
       #    forwards THAT to federation-api. That leg ships dark behind app.bff-exchange.enabled.
-      # Cluster is uniform (https://id.hugmesh.systems everywhere Casdoor also stamps),
+      # Cluster is uniform (https://id.hugmesh.net everywhere Casdoor also stamps),
       # so the issuer split is compose-only.
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       # Turn ON admin-bff's decide custody-exchange (admin-bff-api#205) so a native-login
@@ -1406,7 +1406,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-api-docs
 
   # forum-ui — mounted at /social/forum/** (a PATH remote, not a forum.<domain>
-  # subdomain — the *.hugmesh.systems vanity wildcard would swallow it),
+  # subdomain — the *.hugmesh.net vanity wildcard would swallow it),
   # congruent with the matrix-ui/mastodon-ui shells at /social/matrix,
   # /social/mastodon (specs/cluster/apps/49-forum-ui.yaml). No env needed, same as
   # matrix-ui/mastodon-ui above.

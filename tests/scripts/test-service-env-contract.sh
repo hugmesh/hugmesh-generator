@@ -151,10 +151,10 @@ expect_catch "OIDC client-id reverted to the app default 'user-bff' (finding #12
 "
 
 # (3) #13 verbatim: the pre-rebrand redirect URI comes back.
-expect_catch "redirect-uri reverted to https://snapdragon.systems/login/callback (finding #13)" \
+expect_catch "redirect-uri reverted to https://hugmesh.net/login/callback (finding #13)" \
   "[casdoor-agreement] hugmesh-user-bff-api: APP_BFF_OIDC_REDIRECT_URI" "
   python3 -c '${PY_ENV}' \"\$T/manifests/user-bff-api/deployment.yaml\" hugmesh-user-bff-api \
-    '[e.update(value=\"https://snapdragon.systems/login/callback\") for e in env if e[\"name\"]==\"APP_BFF_OIDC_REDIRECT_URI\"]'
+    '[e.update(value=\"https://hugmesh.net/login/callback\") for e in env if e[\"name\"]==\"APP_BFF_OIDC_REDIRECT_URI\"]'
 "
 
 # (4) #15 verbatim: admin-bff loses the mandatory placeholder again. It must be caught
@@ -209,9 +209,9 @@ expect_catch "casdoor-init drifts: user-bff redirect override changed (manifests
 import sys, pathlib
 p = pathlib.Path(sys.argv[1]) / 'manifests/casdoor/init-job.yaml'
 s = p.read_text(encoding='utf-8')
-old = 'app[\"redirectUris\"] = [\"https://hugmesh.systems/login/callback\"]'
+old = 'app[\"redirectUris\"] = [\"https://hugmesh.net/login/callback\"]'
 assert old in s, 'injection anchor not found'
-p.write_text(s.replace(old, 'app[\"redirectUris\"] = [\"https://hugmesh.systems/bff/auth/callback\"]'), encoding='utf-8')
+p.write_text(s.replace(old, 'app[\"redirectUris\"] = [\"https://hugmesh.net/bff/auth/callback\"]'), encoding='utf-8')
 PY
 "
 
@@ -348,7 +348,7 @@ spec:
         - name: hugmesh-newthing-bff-api
           image: snapdragon-systems/newthing-bff-api:dev
           env:
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
 YAML
   cat > "$2/hugmesh-newthing-bff-api/src/main/resources/application.yml" <<'YAML'
 newthing:

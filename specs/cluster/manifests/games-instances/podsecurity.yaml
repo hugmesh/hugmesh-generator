@@ -27,23 +27,23 @@ metadata:
   name: games-instance-template
   namespace: hugmesh-games-instances
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/games-instance: "true"
-    snapdragon.systems/games-instance-template: "true"
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/games-instance: "true"
+    hugmesh.net/games-instance-template: "true"
   annotations:
-    snapdragon.systems/note: >-
+    hugmesh.net/note: >-
       Reference template only (replicas:0). Live instances are rendered by
       apps/13c-games-instances.yaml from the admin-bff per-domain ConfigMaps.
 spec:
   # NOT applied as a workload — replicas 0. The shape is what matters.
   replicas: 0
   selector:
-    matchLabels: { snapdragon.systems/games-instance-template: "true" }
+    matchLabels: { hugmesh.net/games-instance-template: "true" }
   template:
     metadata:
       labels:
-        snapdragon.systems/games-instance: "true"
-        snapdragon.systems/games-instance-template: "true"
+        hugmesh.net/games-instance: "true"
+        hugmesh.net/games-instance-template: "true"
     spec:
       # Pod-level hardening (PodSecurity restricted).
       securityContext:
@@ -87,8 +87,8 @@ metadata:
   name: games-instance-template-world
   namespace: hugmesh-games-instances
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/games-instance-template: "true"
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/games-instance-template: "true"
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: hugmesh-local

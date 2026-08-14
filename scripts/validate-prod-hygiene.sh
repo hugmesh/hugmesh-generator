@@ -7,7 +7,7 @@
 #              forbidden artifacts: the ENV=test e2e harness wave, a Vault
 #              `server -dev`, floating first-party `:dev` image tags, `*-dev`
 #              image tags, the test-only MOCK ActivityPub peer, and any
-#              snapdragon.systems/tier: test resource. Fails the build if any
+#              hugmesh.net/tier: test resource. Fails the build if any
 #              survive into the prod tree.
 #
 #   --runtime  (in-cluster; ArgoCD PreSync hook / on-demand)  Read RUNTIME
@@ -15,7 +15,7 @@
 #              a templated/conditional dev server (rendered by a chart value, an
 #              `if eq .Values.env "dev"`, or a kustomize overlay) is invisible to
 #              a static scan but is REAL in the running pod. We therefore check:
-#                (a) NO running pod carries snapdragon.systems/tier: test
+#                (a) NO running pod carries hugmesh.net/tier: test
 #                    (the MOCK ActivityPub peer + the whole test-runner harness);
 #                (b) NO running container runs Vault in dev mode — probe the live
 #                    Vault seal-status API (a `-dev` server is auto-unsealed,
@@ -89,14 +89,14 @@ static_mode() {
     ok "no ENV=test test-runner harness in the tree"
   fi
 
-  # (2) Any resource labelled snapdragon.systems/tier: test is forbidden in prod.
+  # (2) Any resource labelled hugmesh.net/tier: test is forbidden in prod.
   local tier_hits
-  tier_hits="$(grep -rln "${SELF[@]}" 'snapdragon.systems/tier:[[:space:]]*test' "${tree}" 2>/dev/null || true)"
+  tier_hits="$(grep -rln "${SELF[@]}" 'hugmesh.net/tier:[[:space:]]*test' "${tree}" 2>/dev/null || true)"
   if [ -n "${tier_hits}" ]; then
     fail "tier:test resources present in the prod tree:"
     printf '      %s\n' ${tier_hits} >&2
   else
-    ok "no snapdragon.systems/tier: test resources in the tree"
+    ok "no hugmesh.net/tier: test resources in the tree"
   fi
 
   # (3) Vault must NOT be `server -dev` (in-memory, auto-unseal, unsealed root).
@@ -143,11 +143,11 @@ runtime_mode() {
   echo "prod-hygiene (runtime) — reading live cluster signals"
   command -v kubectl >/dev/null || { fail "kubectl not found (runtime mode needs cluster access)"; return; }
 
-  # (a) NO running pod is labelled snapdragon.systems/tier: test (the MOCK
+  # (a) NO running pod is labelled hugmesh.net/tier: test (the MOCK
   #     ActivityPub peer + the whole test-runner harness). This is the single
   #     strongest runtime signal: the test peer is flagged for exactly this gate.
   local testpods
-  testpods="$(kubectl get pods -A -l 'snapdragon.systems/tier=test' \
+  testpods="$(kubectl get pods -A -l 'hugmesh.net/tier=test' \
       -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
   if [ -n "${testpods}" ]; then
     fail "tier:test pods are RUNNING in this (prod) cluster:"
@@ -205,7 +205,7 @@ runtime_mode() {
   #     The convention: a workload that gates a feature behind a documented
   #     STUB-SEAM exposes its real-vs-stub state at a /healthz-style endpoint and
   #     ALSO advertises it with the pod annotation
-  #         snapdragon.systems/seam-probe: "<scheme>://<svc-FQDN>:<port>/<path>#<jsonkey>"
+  #         hugmesh.net/seam-probe: "<scheme>://<svc-FQDN>:<port>/<path>#<jsonkey>"
   #     The host MUST be a cluster FQDN (svc.<ns>.svc.cluster.local) so the probe
   #     pod — which runs in PROBE_NS (the gate's own namespace, where its RBAC
   #     permits pod-create) — can reach it cross-namespace. An un-flipped seam
@@ -215,10 +215,10 @@ runtime_mode() {
   local PROBE_NS="${PROD_HYGIENE_PROBE_NS:-hugmesh-policy}"
   local probes
   probes="$(kubectl get pods -A \
-      -o jsonpath='{range .items[*]}{.metadata.annotations.hugmesh\.systems/seam-probe}{"\n"}{end}' 2>/dev/null \
+      -o jsonpath='{range .items[*]}{.metadata.annotations.hugmesh\.net/seam-probe}{"\n"}{end}' 2>/dev/null \
       | awk 'NF>0' | sort -u || true)"
   if [ -z "${probes}" ]; then
-    ylw "  ~ no pods advertise a snapdragon.systems/seam-probe annotation (no seam-bearing services to verify)"
+    ylw "  ~ no pods advertise a hugmesh.net/seam-probe annotation (no seam-bearing services to verify)"
   else
     local target key body
     printf '%s\n' "${probes}" | while read -r target; do

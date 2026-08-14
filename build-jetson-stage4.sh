@@ -188,7 +188,7 @@ PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived s
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
-CLUSTER_DOMAIN="hugmesh.systems"
+CLUSTER_DOMAIN="hugmesh.net"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
 # node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
 # <effective> only for MESH builds; permanently internal, never the go-live apex.
@@ -920,7 +920,7 @@ ZRAM_EOF
 
 # ── rebrand_sysroot (covers the baked cluster tree too, like rpi5/x86) ──
 rebrand_sysroot() {
-    [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] && return 0
+    [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.net" ] && return 0
     banner "Rebranding baked config -> brand=${BRAND} domain=${CLUSTER_DOMAIN} org=${ORG}"
     local _btitle _org _domain _brand _hproj
     _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
@@ -932,22 +932,22 @@ rebrand_sysroot() {
     _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
-        # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
+        # FROZEN k8s label-KEY / API-group namespace `hugmesh.net/<suffix>` must NOT
         # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
         # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
         # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
         # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
         # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
-        # neither `hugmesh.systems` nor `hugmesh-`, so the middle rules skip it.
+        # neither `hugmesh.net` nor `hugmesh-`, so the middle rules skip it.
         sed -i \
-            -e "s|^hugmesh\.systems/|@@SDSYSKEY@@/|g" \
-            -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
+            -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
             -e "s|hugmesh|${_org}|g" \
-            -e "s|hugmesh\.systems|${_domain}|g" \
+            -e "s|hugmesh\.net|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${_brand}-|g" \
-            -e "s|@@SDSYSKEY@@/|hugmesh.systems/|g" \
+            -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/hugmesh" "${SYSROOT}/var/lib/hugmesh/cluster" -type f -print0 2>/dev/null)
 }

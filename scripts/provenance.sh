@@ -125,7 +125,7 @@ case "$cmd" in
     local_runner="$(id -un 2>/dev/null || echo unknown)@$(hostname 2>/dev/null || echo unknown)"
     {
       printf '{\n'
-      printf '  "schema": "snapdragon.systems/provenance/v1",\n'
+      printf '  "schema": "hugmesh.net/provenance/v1",\n'
       printf '  "base": {\n'
       printf '    "repo": "hugmesh-%s",\n' "$(_jesc "$REPO")"
       printf '    "commitSha": "%s",\n' "$(_jesc "$BASE_SHA")"

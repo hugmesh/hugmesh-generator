@@ -40,7 +40,7 @@
 #     keyspace it used; the matrix was simply the wrong way round. So each
 #     consumer DECLARES its CQL permission class next to the credential it uses
 #     (cassandra.access in the gateway Applications, the
-#     snapdragon.systems/cassandra-access pod annotation in the plain manifests)
+#     hugmesh.net/cassandra-access pod annotation in the plain manifests)
 #     and the bootstrap's grants are checked against it for SET EQUALITY — too
 #     few permissions and too many are both build failures, on either side of the
 #     contract. The first control in that block re-lands that historical matrix
@@ -287,12 +287,12 @@ expect_catch "a seventh, unowned privileged login role" "[role]" '
 '
 expect_catch "declared class promoted without touching a single GRANT" "[role]" '
   sub "$T/specs/cluster/manifests/admin-bff-api/deployment.yaml" \
-      "snapdragon.systems/cassandra-access: dml" \
-      "snapdragon.systems/cassandra-access: schema-owner"
+      "hugmesh.net/cassandra-access: dml" \
+      "hugmesh.net/cassandra-access: schema-owner"
 '
 expect_catch "consumer declares no permission class at all" "[role]" '
   sub "$T/specs/cluster/manifests/admin-bff-api/deployment.yaml" \
-      "        snapdragon.systems/cassandra-access: dml
+      "        hugmesh.net/cassandra-access: dml
 " ""
 '
 expect_catch "gateway Application declares no permission class" "[role]" '
@@ -336,8 +336,8 @@ PY
 '
 expect_catch "chart stops publishing the declared class onto the pod" "[chart]" '
   sub "$T/specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml" \
-      "        snapdragon.systems/cassandra-access: {{ .Values.cassandra.access | quote }}" \
-      "        snapdragon.systems/cassandra-audited: \"yes\""
+      "        hugmesh.net/cassandra-access: {{ .Values.cassandra.access | quote }}" \
+      "        hugmesh.net/cassandra-audited: \"yes\""
 '
 expect_catch "chart lets an unclassified role render instead of failing" "[chart]" '
   python3 - "$T" <<PY

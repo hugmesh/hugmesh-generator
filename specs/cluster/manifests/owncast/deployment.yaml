@@ -1,6 +1,6 @@
 # Owncast + owncast-bff-api + owncast-ui — GPU-gated x86 optional service.
 # All three containers share one Deployment so the BFF and UI co-locate with
-# the Owncast process on the GPU node (amd64 + snapdragon.systems/compute=gpu).
+# the Owncast process on the GPU node (amd64 + hugmesh.net/compute=gpu).
 # owncast data directory is emptyDir for dev; swap to a PV for persistent state.
 apiVersion: apps/v1
 kind: Deployment
@@ -9,7 +9,7 @@ metadata:
   namespace: hugmesh-owncast
   labels:
     app: hugmesh-owncast
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-owncast } }
@@ -19,7 +19,7 @@ spec:
       # GPU-gated: require the x86_64 GPU worker (labelled by keys-provision).
       nodeSelector:
         kubernetes.io/arch: amd64
-        snapdragon.systems/compute: gpu
+        hugmesh.net/compute: gpu
       securityContext:
         seLinuxOptions:
           # c34 was a 3-way collision (casdoor-games-pg keeps c34); owncast->c39.
@@ -55,9 +55,9 @@ spec:
             # (casdoor runs in hugmesh-pki), and issuer-uri is not just a discovery
             # address — Spring Security "configure[s] the validation strategy to
             # validate each JWTs iss claim against" it, and casdoor's app.conf sets
-            # `origin = "https://id.hugmesh.systems"`, so that IS the iss every token
+            # `origin = "https://id.hugmesh.net"`, so that IS the iss every token
             # carries. Same value every other first-party BFF uses.
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
             - { name: SPRING_R2DBC_URL,
                 value: "r2dbc:postgresql://hugmesh-owncast-db.hugmesh-owncast.svc.cluster.local:5432/owncast_bff" }
             # Liquibase's JDBC handle, used once at startup. Its packaged default is

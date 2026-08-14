@@ -12,7 +12,7 @@
 #
 # DELIBERATELY NARROW (the fork-and-tokenize ban, MESH-TEMPLATING.md:159, applies
 # doubly to a repo this size): 'hugmesh-generator' the NAME, every `hugmesh`
-# in scripts/specs/src, the snapdragon.systems/* label keys and X-HugMesh-*
+# in scripts/specs/src, the hugmesh.net/* label keys and X-HugMesh-*
 # wire headers are upstream CODE/PROTOCOL identity and stay literal. Only the
 # README display brand, the CI include org/group, and the branding doc's per-org
 # FILENAME (the renames[] pilot) are tenant-scoped. The rendered tenant generator

@@ -16,7 +16,7 @@
 #      (the SAME reason the workload-console + appstore effectors don't write
 #      foreign state directly).
 #   2. ID MAPPING IS LOSSY ON THE CR. The Velero CR carries the label
-#      hugmesh.systems/backup-set-id = PerServiceIdentity.slug(set.id()) — a
+#      hugmesh.net/backup-set-id = PerServiceIdentity.slug(set.id()) — a
 #      LOSSY transform (lowercased, '.'→'-', non-alnum→'-', collapsed). markStatus
 #      keys on the RAW id. Only the admin-bff (which holds both the raw id and the
 #      slug) can map a terminal CR back to the right row safely.
@@ -26,7 +26,7 @@
 #     this platform created (label app.kubernetes.io/managed-by=hugmesh-admin-bff)
 #     that have reached a TERMINAL .status.phase (Completed / Failed / PartiallyFailed
 #     / FailedValidation), and MIRROR that terminal state onto the CR as the
-#     annotation hugmesh.systems/catalog-status = complete|failed (the EXACT key
+#     annotation hugmesh.net/catalog-status = complete|failed (the EXACT key
 #     Fabric8VeleroStatusReader.CATALOG_STATUS_ANNOTATION reads). This makes the
 #     terminal state cheaply queryable and is the side the cluster can own.
 #   * ADMIN-BFF (SHIPPED on admin-bff main — cloudbackup BackupStatusReconciler
@@ -35,7 +35,7 @@
 #     reads .status.phase DIRECTLY (this CronJob's mirror annotation is only its
 #     FALLBACK phase source — the reconciler works with or without this sweep
 #     deployed), maps each terminal CR back to the RAW backup_set id (the
-#     hugmesh.systems/backup-set-id annotation, else the same-named slug label)
+#     hugmesh.net/backup-set-id annotation, else the same-named slug label)
 #     and calls markStatus(id, complete|failed); plus a SUPERADMIN-only on-demand
 #     trigger at POST /bff/superadmin/cloud-backups/sweep. That is the ONLY
 #     writer of the catalog row. See docs/CLOUD-BACKUPS.md "Status sweep".
@@ -58,7 +58,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: sweep
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   # Inert until backups are deliberately enabled (see header).
   suspend: true
@@ -77,7 +77,7 @@ spec:
           labels:
             app.kubernetes.io/name: cloud-backups
             app.kubernetes.io/component: sweep
-            app.kubernetes.io/part-of: hugmesh.systems
+            app.kubernetes.io/part-of: hugmesh.net
         spec:
           serviceAccountName: backups-sweep
           automountServiceAccountToken: true
@@ -131,12 +131,12 @@ spec:
                         esac
                         # Idempotent mirror: stamp the terminal catalog-status under
                         # the key admin-bff's Fabric8VeleroStatusReader reads
-                        # (hugmesh.systems/…, NOT snapdragon.systems/…). A re-run
+                        # (the hugmesh.net/… label-key namespace). A re-run
                         # re-patches the same value (no-op). We do NOT touch
                         # .status (Velero owns it).
                         kubectl -n velero annotate "$KIND" "$NAME" \
-                          "hugmesh.systems/catalog-status=$CATALOG" \
-                          "hugmesh.systems/catalog-status-phase=$PHASE" \
+                          "hugmesh.net/catalog-status=$CATALOG" \
+                          "hugmesh.net/catalog-status-phase=$PHASE" \
                           --overwrite >/dev/null
                         echo "[sweep] $KIND/$NAME phase=$PHASE -> catalog-status=$CATALOG (mirrored; admin-bff reconciler writes the row)"
                       done

@@ -55,8 +55,8 @@ metadata:
   namespace: hugmesh-pki
   labels:
     app.kubernetes.io/name: cassandra
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: db-bootstrap
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: db-bootstrap
 data:
   bootstrap.sh: |
     #!/usr/bin/env bash

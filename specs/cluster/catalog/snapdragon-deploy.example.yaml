@@ -27,7 +27,7 @@
 # See specs/cluster/catalog/ci/repo.gitlab-ci.yml + tests/pentest/ci/README.md. This
 # is NOT a deployed runner — public images only, no `.github/workflows`.
 name: snapdragon-example-api          # Application name
-namespace: snapdragon-backend         # target k8s namespace (must be an existing tier ns)
+namespace: hugmesh-backend            # target k8s namespace (must be an existing tier ns)
 image: snapdragon-systems/example-api # image repo (tag pinned in deploy/ kustomize)
 port: 8080
 replicas: 1

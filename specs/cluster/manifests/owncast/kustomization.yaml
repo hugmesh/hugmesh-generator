@@ -7,5 +7,5 @@ resources:
 
 images:
   - { name: owncast/owncast, newName: owncast/owncast, newTag: latest }
-  - { name: snapdragon-systems/owncast-bff-api, newName: registry.hugmesh.systems/hugmesh/hugmesh-owncast-bff-api, newTag: main }
-  - { name: snapdragon-systems/owncast-ui, newName: registry.hugmesh.systems/hugmesh/hugmesh-owncast-ui, newTag: main }
+  - { name: snapdragon-systems/owncast-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-owncast-bff-api, newTag: main }
+  - { name: snapdragon-systems/owncast-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-owncast-ui, newTag: main }

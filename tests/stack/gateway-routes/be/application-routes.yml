@@ -10,22 +10,50 @@ spring:
       # spring.cloud.gateway.server.webflux.* (legacy prefix binds nothing under SCG 5.0).
       server:
         webflux:
+          # SCG >=4.1 strips X-Forwarded-* at proxy time unless the immediate
+          # client is a trusted proxy — including values a route's
+          # SetRequestHeader filter just set (verified live: the mastodon
+          # routes' X-Forwarded-Proto below arrived downstream as NO header at
+          # all). Trust the compose subnet + loopback so the TLS-terminating
+          # front's forwarded headers and the route filters below survive.
+          trusted-proxies: "172\\..*|127\\.0\\.0\\.1|0:0:0:0:0:0:0:1|::1"
           routes:
             # --- Mastodon (opt-in social tier) ---
+            # X-Forwarded-Proto: https on both routes: Mastodon's production
+            # force_ssl 301s any request it does not believe arrived over TLS
+            # to https://mastodon-web:3000/... — a host-unresolvable Location
+            # outside the compose network (spec 14's LIVE ALLOW probes died on
+            # getaddrinfo ENOTFOUND following it). The compose front terminates
+            # TLS, so asserting https here is the truth, same as any
+            # TLS-terminating reverse proxy.
             - id: mastodon-oauth
               uri: http://mastodon-web:3000
               predicates:
                 - Path=/oauth/**
+              filters:
+                - SetRequestHeader=X-Forwarded-Proto, https
             - id: mastodon-api
               uri: http://mastodon-web:3000
               predicates:
                 - Path=/api/v1/**
+              filters:
+                - SetRequestHeader=X-Forwarded-Proto, https
             # --- Matrix (opt-in social tier) ---
             - id: matrix-api
               uri: http://tuwunel:8008
               predicates:
                 - Path=/_matrix/**
             # --- hugmesh-federation-api (MORE specific than /api/** — declared first) ---
+            # edge-ai-tts — /v1/synthesize/** -> the Piper TTS wrapper (compose
+            # profile `edge-ai-tts`, off by default; `make stack-up TTS=1`).
+            # Translated from specs/cluster/apps/20-gateway-be.yaml (route id
+            # edge-ai-tts). route-access: the seeded hugmesh-be-gateway
+            # /v1/synthesize/** ROLE_USER row (route-access initdb 20-schema.sql).
+            # Like phpbb/social, resolves only when its profile is up.
+            - id: edge-ai-tts
+              uri: http://hugmesh-edge-ai-tts:8080
+              predicates:
+                - Path=/v1/synthesize/**
             - id: federation-api
               uri: http://hugmesh-federation-api:8080
               predicates:

@@ -13,4 +13,4 @@ resources:
   - deployment.yaml
 
 images:
-  - { name: snapdragon-systems/edge-ai-tts, newName: registry.hugmesh.systems/hugmesh/edge-ai-tts, newTag: main }
+  - { name: snapdragon-systems/edge-ai-tts, newName: registry.hugmesh.net/hugmesh/edge-ai-tts, newTag: main }

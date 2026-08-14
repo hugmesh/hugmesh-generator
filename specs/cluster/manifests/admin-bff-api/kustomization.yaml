@@ -13,7 +13,7 @@ resources:
   - hpa.yaml
   - pdb.yaml
 # First-party images now pull from the in-cluster Harbor container registry
-# (registry.hugmesh.systems = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
+# (registry.hugmesh.net = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
 # path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
@@ -23,19 +23,19 @@ resources:
 # LITERAL + raw-kustomize-buildable and is NOT Handlebars-templated: the per-tenant
 # brand substitution of THIS tree is the EXISTING build-x86-host-stage4.sh
 # rebrand_sysroot ISO-build sed pass, which rewrites the baked cluster tree
-# (hugmesh.systems -> CLUSTER_DOMAIN, hugmesh- -> BRAND-, snapdragon-systems/
+# (hugmesh.net -> CLUSTER_DOMAIN, hugmesh- -> BRAND-, snapdragon-systems/
 # -> org/, "HugMesh Systems" -> BRAND_TITLE). That pass already rebrands the
-# registry HOST (registry.hugmesh.systems -> registry.<domain>) + the repo NAME
+# registry HOST (registry.hugmesh.net -> registry.<domain>) + the repo NAME
 # (hugmesh-admin-bff-api -> <brand>-admin-bff-api) + the image name: prefix
 # (snapdragon-systems/ -> <org>/). Putting {{tokens}} here instead would break the
 # raw ArgoCD kustomize sync (YAML flow-map parse error on {{ }}) and double-brand.
 # KNOWN GAP (reported, not fixed here to avoid breaking sync): the standalone Harbor
 # PROJECT segment `/hugmesh/` matches no rebrand_sysroot rule (it is neither
-# `hugmesh.systems` nor `hugmesh-…`), so it does not rebrand to the tenant
+# `hugmesh.net` nor `hugmesh-…`), so it does not rebrand to the tenant
 # Harbor project — a rebrand_sysroot rule (or a first-class HARBOR_PROJECT seam) is
 # owed. namespace stays hugmesh-backend (frozen backend tier / frozen svc DNS).
 images:
-  - { name: snapdragon-systems/admin-bff-api, newName: registry.hugmesh.systems/hugmesh/hugmesh-admin-bff-api, newTag: main }
+  - { name: snapdragon-systems/admin-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-admin-bff-api, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

@@ -19,7 +19,7 @@ metadata:
   namespace: hugmesh-inference
   labels:
     app: hugmesh-edge-ai-analysis
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-edge-ai-analysis } }

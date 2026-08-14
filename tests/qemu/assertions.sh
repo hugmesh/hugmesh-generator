@@ -85,20 +85,28 @@ check "net.ipv4.conf.all.rp_filter=1 (reverse-path filtering)" \
 check "sshd PermitRootLogin disabled" \
     'sshd -T 2>/dev/null | grep -qi "^permitrootlogin no"'
 # firewalld: must be running and DefaultZone must be drop (prod) or trusted (test/dev).
-# GATED on the binary actually shipping: firewalld is DELIBERATELY excluded from the
-# cross-compiled ARM images since 2026-08-05 (specs-rpi5/portage/packages.list:25-41 —
-# the pygobject -> glib[introspection] bootstrap does not cross-compile). On those
-# images the host firewall is nftables driven by the hugmesh-firewall-reconcile
-# OpenRC service, so assert THAT replacement instead of failing four rows on a
-# package the product refuses to install. Same self-skip-when-tool-absent posture
-# as specs/usr/sbin/hugmesh-coturn-firewall.
-if command -v firewall-cmd >/dev/null 2>&1; then
+#
+# GATED on whether firewalld is the ACTIVE firewall on this image — NOT on whether its
+# binary happens to be installed. Two different images reach the same posture by
+# different routes:
+#   * ARM: firewalld is DELIBERATELY excluded from the cross-compiled images since
+#     2026-08-05 (specs-rpi5/portage/packages.list:25-41 — the pygobject -> glib
+#     [introspection] bootstrap does not cross-compile), so the binary is absent.
+#   * x86: firewalld IS shipped (binary + /etc/init.d/firewalld) but is never added to a
+#     runlevel; hugmesh-firewall-reconcile (nftables) owns the firewall exactly as on ARM.
+# A `command -v firewall-cmd` gate therefore passed on ARM and FAILED on x86 for an image
+# that was behaving as designed (2026-08-14: a freshly rebuilt x86 pki scored 30/32 on
+# nothing but this). Keying on the runlevel/running state describes the actual intent, so
+# a node that really is meant to run firewalld still gets asserted properly.
+if ls /etc/runlevels/*/firewalld >/dev/null 2>&1 \
+   || rc-service firewalld status >/dev/null 2>&1 \
+   || pgrep -x firewalld >/dev/null 2>&1; then
     check "firewalld running" \
         'rc-service firewalld status 2>/dev/null | grep -qi started || systemctl is-active firewalld 2>/dev/null | grep -q active || pgrep firewalld'
     check "firewalld default zone is drop or trusted" \
         'firewall-cmd --get-default-zone 2>/dev/null | grep -qE "^(drop|trusted)$"'
 else
-    ok "firewalld (skipped — deliberately not shipped on this image; nftables owns the host firewall)"
+    ok "firewalld (skipped — not enabled on this image; nftables owns the host firewall)"
     check "nftables present (firewalld replacement)" \
         'command -v nft'
     check "hugmesh-firewall-reconcile service started (nftables backstop reconciled)" \

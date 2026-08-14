@@ -1,6 +1,6 @@
 # hugmesh-character-forge-ui — the Character Forge (3D character maker) Angular
 # native-federation REMOTE. Its own nginx pod in the hugmesh-frontend namespace,
-# federated into the hugmesh.systems host: it serves a remoteEntry.json the
+# federated into the hugmesh.net host: it serves a remoteEntry.json the
 # host's loadRemoteModule consumes, mounted at /character-forge (ROLE_USER floor).
 # It embeds the Godot WASM 3D maker from its own same-origin assets and talks to
 # its OWN BFF via the same-origin /bff/character-forge/** fe-gateway route (plus
@@ -30,7 +30,7 @@ metadata:
   namespace: hugmesh-frontend
   labels:
     app: hugmesh-character-forge-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   replicas: 1
   selector:
@@ -39,7 +39,7 @@ spec:
     metadata:
       labels: { app: hugmesh-character-forge-ui }
     spec:
-      nodeSelector: { snapdragon.systems/frontend: "true" }
+      nodeSelector: { hugmesh.net/frontend: "true" }
       securityContext:
         seLinuxOptions:
           # Unique MCS level (docs/SECURITY.md §3 matrix); character-forge-ui -> c84
@@ -78,7 +78,7 @@ metadata:
   namespace: hugmesh-frontend
   labels:
     app: hugmesh-character-forge-ui
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   selector: { app: hugmesh-character-forge-ui }
   # The federation_modules remote_entry_url points at this Service on :8080

@@ -40,12 +40,18 @@ CI_JOB = "build:images"
 #     annotation namespace. It is wire identity, not brand: docs/BRANDING.md ("Never
 #     rebranded … label KEYS") and scripts/tooling/tokens.json
 #     ("label_key_namespaces": ["snapdragon.systems/"]), enforced fail-closed at render.
-#   * `github.com/Snapdragon-Systems/` — still the LIVE GitHub organisation path segment;
-#     only the REPOSITORIES were renamed to hugmesh-*, not the org.
 #   * `snapdragon-deploy.yaml` (and its `.example.` sibling) — the LEGACY service-catalog
 #     deploy-descriptor filename, which 6 of the 9 adopting repos still ship on disk and
 #     which both catalog generators deliberately still accept (#498).
 # Everything else bearing the old brand in this surface is a rebrand miss.
+#
+# RETIRED ALLOWLIST ENTRY — `github.com/Snapdragon-Systems/` (was entry (b)). Git hosting
+# has since moved: every repo's `origin` is `github.com/hugmesh/<repo>`, and no file in this
+# scanned surface carries the old org path any more. Snapdragon-Systems remains only as a
+# retained downstream FORK org, which is not a hugmesh source-of-truth path and must not be
+# written into hugmesh's own specs. Keeping the exemption would silently re-admit that org
+# segment anywhere under a `github.com/` host, so it is gone and such a path is now a
+# finding like any other.
 #
 # POSITION MATTERS, AND THE FIRST VERSION OF THIS CHECK IGNORED IT. It held the RAW
 # substrings ("snapdragon.systems/", "Snapdragon-Systems") and did
@@ -73,9 +79,6 @@ ALLOWLIST_RES = (
     #     smuggle a `host/project/repo` identifier past the check. A wider charset here would
     #     re-open the very hole this allowlist was rewritten to close (negative control 9i).
     re.compile(r"^[ \t-]*(?P<tok>snapdragon\.systems)/[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?:"),
-    # (b) the live GitHub organisation path segment, anchored to the github.com host so that
-    #     `git.snapdragon.systems/…` or a bare `Snapdragon-Systems` elsewhere is not exempt.
-    re.compile(r"(?<=github\.com/)(?P<tok>Snapdragon-Systems)(?=/)"),
     # (c) the LEGACY DEPLOY-DESCRIPTOR FILENAME, which is still live on disk in other repos.
     #     The rebrand renamed it to `hugmesh-deploy.yaml` in only 3 of the 9 adopting repos;
     #     the other 6 still ship `snapdragon-deploy.yaml`, and the service-catalog generators

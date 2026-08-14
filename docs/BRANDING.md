@@ -27,7 +27,7 @@ siblings) outright.
 
 * the repo name `hugmesh-generator` and every `hugmesh` in
   `scripts/**`, `specs/**`, builder entrypoints — code identity;
-* `snapdragon.systems/*` label KEYS, `X-HugMesh-Local` and the other wire
+* `hugmesh.net/*` label KEYS, `X-HugMesh-Local` and the other wire
   headers, the step-up subprotocol prefix — FROZEN protocol constants
   (`scripts/tooling/tokens.json`), enforced fail-closed at render;
 * `Makefile`, `tests/stack/compose.local.yaml` and the rest of the local-stack

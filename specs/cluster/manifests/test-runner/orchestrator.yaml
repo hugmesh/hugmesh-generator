@@ -20,8 +20,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 data:
   orchestrator.sh: |
     #!/usr/bin/env bash
@@ -131,8 +131,8 @@ metadata:
   namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/tier: test
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: test
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-test-runner } }
@@ -141,7 +141,7 @@ spec:
     metadata:
       labels:
         app: hugmesh-test-runner
-        snapdragon.systems/tier: test
+        hugmesh.net/tier: test
     spec:
       serviceAccountName: hugmesh-test-runner
       securityContext:

@@ -99,7 +99,7 @@ GRAPHENE_SIGNER_FP_PIN="SHA256:AhgHif0mei+9aNyKLfMZBh2yptHdw/aN7Tlh/j2eFwM"
 # applicationId is deliberately DIFFERENT from the stock GrapheneOS Auditor
 # (app.attestation.auditor) — avoids clobbering a stock install and keeps the
 # --auditor-signer-sha256 pin unambiguous. See docs/MDM.md for
-# the fork rationale (DOMAIN=attestation.hugmesh.systems, own release key).
+# the fork rationale (DOMAIN=attestation.hugmesh.net, own release key).
 AUDITOR_PACKAGE="systems.hugmesh.auditor"
 
 # ── Thin-desktop capability (quest class, §8b) ─────────────────────────

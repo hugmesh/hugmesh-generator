@@ -344,13 +344,13 @@ ensure_fragment_sync_client "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # "username:ROLES:passwordEnv" spec shape; appended exactly like
 # tests/pentest/seed-personas.sh appends its attacker/load pools.
 #
-# The ad-hoc identities below (admin@hugmesh.systems, alice../frank@gmail.com,
+# The ad-hoc identities below (admin@hugmesh.net, alice../frank@gmail.com,
 # dragoneer, rbac-plain@/rbac-login-user@/rbac-pending@/rbac-approved@gmail.com)
 # are the sequential, stateful specs/02,04,05,06,07,08,09,13,15,17 personas — per helpers.ts's
 # onboard()/registerOnly() doc comment, native login has no self-registration
 # surface, so each must exist as a pre-seeded native Casdoor account (username
 # = the literal handle these specs hardcode) sharing the common E2E_PASSWORD.
-# admin@hugmesh.systems is the sole admin among them (spec 02/08/09
+# admin@hugmesh.net is the sole admin among them (spec 02/08/09
 # exercise admin-only views); the rest are bare ROLE_USER (the
 # nav-matrix/nav-mastodon gate in menu.component.ts checks only
 # capabilities.installed() + session.fullyRegistered(), not a per-service
@@ -444,6 +444,8 @@ CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER}" \
 CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS}" \
 CASDOOR_ORG="${CASDOOR_ORG}" \
 PREMINT_DIR="${SEED_WORKDIR}/jwt-cache" \
+PREMINT_APP="${CASDOOR_APP_CLIENT_ID}" \
+PREMINT_CLIENT_SECRET="${CASDOOR_APP_SECRET}" \
   bash "${ROLES_DIR}/roles/apply-systems-roles.sh" \
   || die "apply-systems-roles.sh failed against ${CASDOOR_URL}"
 
@@ -572,7 +574,6 @@ onboard_persona() {  # <username>
   return "${rc}"
 }
 
-if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
 # Mastodon registrations must be OPEN before leg 1c, not after it.
 # These used to be defined down in LEG 3, ~230 lines BELOW their first consumer:
 # leg 1c provisions each persona's Mastodon account through the API, and with
@@ -580,6 +581,10 @@ if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
 # not mint and the seed ended with "4 persona(s) could not be fully onboarded"
 # on a FRESH stack. Leg 3 still calls it; the function checks the real setting
 # first, so the second call just logs "already open".
+# Defined ABOVE the SEED_COMPLETE_REGISTRATION guard: leg 3 runs regardless of
+# that flag, so defining these inside the guarded block made every default
+# (flag-off) seed die at leg 3 with "mastodon_open_registrations: command not
+# found".
 # registrations_mode is a DB Setting with no tootctl reader, so go through Rails.
 mastodon_registrations_mode() {
   docker exec "${MASTODON_CTR}" bin/rails runner 'print Setting.registrations_mode' 2>/dev/null \
@@ -612,6 +617,7 @@ mastodon_open_registrations() {
   fi
 }
 
+if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
   log "leg 1c: onboarding personas (registration stage 2 + platform provisioning)"
   mastodon_open_registrations
   reg_ok=0; reg_gated=0; reg_fail=0

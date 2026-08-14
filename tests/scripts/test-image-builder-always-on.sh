@@ -283,8 +283,11 @@ expect_catch "retired brand as the registry host in build:images DEST_REPO" "[pr
 '
 # (9f) the retired brand as the GIT HOST in the Application repoURL — the field that decides
 #      whether ArgoCD can sync the always-on app at all.
+#      The org segment is matched as a WILDCARD, not pinned: forks legitimately rehome this
+#      repoURL onto their own org (hugmesh, hugmesh-net, a tenant org), and pinning one
+#      spelling silently turns this control into a no-op on every other tree.
 expect_catch "retired brand as the git host in the Application repoURL" "[pre-rebrand]" '
-  sed -i "s|repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git|repoURL: https://git.snapdragon.systems/hugmesh/hugmesh-generator.git|" \
+  sed -i -E "s|repoURL: https://github.com/[^/]+/hugmesh-generator.git|repoURL: https://git.snapdragon.systems/hugmesh/hugmesh-generator.git|" \
       "$T/specs/cluster/apps/60-image-builder.yaml"
 '
 # (9g) THE ALLOWLIST'"'"'S OWN ANCHOR: the frozen label KEY is exempt because it sits in
@@ -295,10 +298,14 @@ expect_catch "frozen label-key namespace re-used as a host prefix" "[pre-rebrand
   sed -i "s|    snapdragon.systems/image-build:|    registry.snapdragon.systems/image-build:|g" \
       "$T/specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml"
 '
-# (9h) same anchor for the org segment: exempt only under the github.com host it names.
-expect_catch "live org segment moved off the github.com host" "[pre-rebrand]" '
-  sed -i "s|git://github.com/Snapdragon-Systems/|git://git.example.com/Snapdragon-Systems/|" \
-      "$T/.gitlab-ci.yml"
+# (9h) the RETIRED org segment: `github.com/Snapdragon-Systems/` used to be allowlisted as
+#      the live org path. Git hosting moved to github.com/hugmesh/, so that exemption is
+#      gone and the old org path must now be caught ANYWHERE — including under the very
+#      github.com host that used to make it exempt. This is the inverse of the old 9h:
+#      it pins the REMOVAL of the exemption, so restoring it would fail this control.
+expect_catch "retired org segment under the github.com host it used to be exempt under" "[pre-rebrand]" '
+  sed -i -E "s|repoURL: https://github.com/[^/]+/hugmesh-generator.git|repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git|" \
+      "$T/specs/cluster/apps/60-image-builder.yaml"
 '
 # (9i) THE ALLOWLIST BORROWED AS A PREFIX: a `host/project/repo` identifier written into
 #      mapping-KEY position, re-using the frozen spelling to inherit its exemption. A
@@ -318,19 +325,20 @@ expect_catch "legacy deploy-descriptor filename re-used as a registry host" "[pr
       "$T/.gitlab-ci.yml"
 '
 # (9d) POSITIVE CONTROL for the allowlist: the FROZEN snapdragon.systems/ label KEY (in
-#      mapping-key position) and the still-live github.com/Snapdragon-Systems/ org segment
-#      must NOT be flagged. Without this, check 9 could be "fixed" by rewriting protocol
-#      identity the renderer freezes. Together with 9g/9h this pins the exemption to the
-#      POSITION rather than to the spelling, in both directions.
+#      mapping-key position) must NOT be flagged. Without this, check 9 could be "fixed" by
+#      rewriting protocol identity the renderer freezes. Together with 9g this pins the
+#      exemption to the POSITION rather than to the spelling, in both directions.
+#      The org-segment half of this control was dropped with allowlist entry (b): the tree
+#      no longer carries github.com/Snapdragon-Systems/ anywhere, and 9h now asserts the
+#      opposite (that it IS caught), so asserting its presence here would contradict it.
 T="${WORK}/allowlist"; rm -rf "${T}"; mkdir -p "${T}/specs"
 cp "${REPO}/.gitlab-ci.yml" "${T}/.gitlab-ci.yml"
 cp -r "${REPO}/specs/cluster" "${T}/specs/cluster"
 if grep -q 'snapdragon.systems/image-build' "${T}/specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml" \
-   && grep -q 'Snapdragon-Systems' "${T}/specs/cluster/apps/60-image-builder.yaml" \
    && python3 "${CHECKER}" "${T}" >/dev/null 2>&1; then
-  neg_ok "frozen snapdragon.systems/ label key + live Snapdragon-Systems org segment are NOT flagged"
+  neg_ok "frozen snapdragon.systems/ label key in mapping-key position is NOT flagged"
 else
-  neg_bad "allowlist positive control: the frozen label key / org segment were absent or wrongly flagged"
+  neg_bad "allowlist positive control: the frozen label key was absent or wrongly flagged"
 fi
 
 echo

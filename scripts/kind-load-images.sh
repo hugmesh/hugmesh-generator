@@ -2,7 +2,7 @@
 # kind-load-images.sh — build the first-party images the KIND_PROFILE=sso slice
 # runs and load them into the kind node under the EXACT refs the rendered
 # manifests pull. The cluster manifests rewrite every first-party image to
-# registry.hugmesh.systems/hugmesh/<repo>:main (kustomize `images:` blocks; the
+# registry.hugmesh.net/hugmesh/<repo>:main (kustomize `images:` blocks; the
 # gateway chart pins :dev) and reference the in-cluster Harbor — which is empty
 # on a fresh kind cluster, so ArgoCD would sit in ImagePullBackOff forever.
 # `kind load` places each image directly into the node's containerd store where
@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STACK_SRC="${STACK_SRC:-${REPO_ROOT}/.stack-src}"
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
-REGISTRY="registry.hugmesh.systems/hugmesh"
+REGISTRY="registry.hugmesh.net/hugmesh"
 
 for bin in docker kind; do
   command -v "${bin}" >/dev/null 2>&1 || { echo "missing required tool: ${bin}" >&2; exit 1; }
@@ -49,7 +49,7 @@ IMAGES=(
   "hugmesh-gateway=${REGISTRY}/hugmesh-gateway:dev=java"
   "hugmesh-user-bff-api=${REGISTRY}/hugmesh-user-bff-api:main=java"
   "hugmesh-admin-bff-api=${REGISTRY}/hugmesh-admin-bff-api:main=java"
-  "hugmesh-host-shell=${REGISTRY}/hugmesh.systems:main="
+  "hugmesh-host-shell=${REGISTRY}/hugmesh.net:main="
   "hugmesh-login-ui=${REGISTRY}/hugmesh-login-ui:main="
   "hugmesh-matrix-ui=${REGISTRY}/hugmesh-matrix-ui:main="
   "hugmesh-mastodon-ui=${REGISTRY}/hugmesh-mastodon-ui:main="

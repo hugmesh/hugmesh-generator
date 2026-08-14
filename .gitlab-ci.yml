@@ -1286,7 +1286,7 @@ lint:make-phone-face:
 # headwind-admin and the dead HEADWIND_ADMIN_USERNAME/PASSWORD vars stay
 # removed, attestation probes stay tcpSocket (upstream serves NO GET routes),
 # the smtp seeder + its Secret are wired, and images follow the
-# registry.hugmesh.systems/hugmesh/... convention. Negative controls on
+# registry.hugmesh.net/hugmesh/... convention. Negative controls on
 # STAGED COPIES prove the render gate and the PROTOCOL invariant both bite.
 # Cheap; no cluster, no privileged runner needed.
 lint:mdm-manifests-render:
@@ -1857,7 +1857,7 @@ build:images:
     BUILD_NAMESPACE: "hugmesh-image-builds"
     # The per-app source repo + Dockerfile + destination image. Override per pipeline
     # (CI variables / matrix) to build each first-party app. Destination matches the app
-    # kustomizations' newName convention (registry.hugmesh.systems/hugmesh/<app>:<tag>).
+    # kustomizations' newName convention (registry.hugmesh.net/hugmesh/<app>:<tag>).
     # HARBOR MIGRATION: this hostname is now served by Harbor, not GitLab's bundled
     # registry (see specs/cluster/apps/03a-harbor.yaml) — the push credential the
     # build pod mounts (image-builder-registry, see the `script:` comment below) is
@@ -1872,7 +1872,7 @@ build:images:
     IMAGE_CONTEXT: "git://github.com/hugmesh/hugmesh-gateway.git#${IMAGE_REF}"
     IMAGE_DOCKERFILE: "Dockerfile"
     # Where the built image lands. <app> is IMAGE_APP; the tags are computed in `script`.
-    DEST_REPO: "registry.hugmesh.systems/hugmesh/hugmesh-gateway"
+    DEST_REPO: "registry.hugmesh.net/hugmesh/hugmesh-gateway"
   script:
     - |
       # TAG SCHEME — mirrors the canonical sibling `build:image` (gateway / forum-bff-api):
@@ -1890,7 +1890,7 @@ build:images:
       echo "building ${IMAGE_APP}: immutable=${DEST_IMAGE}  moving=${DEST_IMAGE_MOVING}"
       # Render the ships-dark Kaniko Job template with this build's parameters and apply it
       # into the in-cluster build namespace. The template lives in the GitOps repo; the build
-      # pod (rootless Kaniko) pushes to registry.hugmesh.systems using the ESO-materialized
+      # pod (rootless Kaniko) pushes to registry.hugmesh.net using the ESO-materialized
       # image-builder-registry dockerconfigjson. No secrets are passed from CI.
       BUILD_NAME="${IMAGE_APP}-${CI_COMMIT_SHORT_SHA}"
       # Use | as the sed delimiter (the git-ref CONTEXT contains '#', so '#' must not delimit).
@@ -2133,8 +2133,8 @@ load:main:
 # COULD EVER START against the cluster's own Cassandra: the bitnami image
 # defaults to PasswordAuthenticator and the payload passed no credentials to
 # anything (AuthenticationException at bean creation -> CrashLoopBackOff), and
-# nothing cluster-side created the keyspaces either (InvalidKeyspaceException:
-# Invalid keyspace snapdragon_gateway) — compose has had a cassandra-init service
+# nothing cluster-side created the keyspaces either (InvalidKeyspaceException on
+# the gateway's own keyspace) — compose has had a cassandra-init service
 # doing that for years, with a comment describing the bug, and the workaround was
 # never propagated. Both failure modes are silent in CI and loud only on a live
 # cluster, which is why they survived to a first bring-up.

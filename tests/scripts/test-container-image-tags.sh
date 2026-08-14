@@ -64,7 +64,7 @@ echo "== container image tags: ${ROOT} =="
 #   first-party    our OWN images. In the base manifests they appear as bare
 #                  `snapdragon-systems/<repo>:dev` / `hugmesh/<repo>` placeholders
 #                  which the overlays' kustomize `images:` transformers rewrite to
-#                  registry.hugmesh.systems/hugmesh/<repo>:main. They are built and
+#                  registry.hugmesh.net/hugmesh/<repo>:main. They are built and
 #                  pushed by our own CI and have never existed on Docker Hub, so
 #                  probing them there asks the wrong registry a question it cannot
 #                  answer (Docker Hub returns 401, not 404, for a repo an
@@ -77,7 +77,7 @@ images="$(grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]"]+' "${ROOT}" 2
           | grep -vE '\{\{|REPLACE_WITH_|@sha256:' \
           | grep -E '[:/]' \
           | grep -vE "${FIRST_PARTY_RE}" \
-          | grep -v 'registry\.hugmesh\.systems' \
+          | grep -v 'registry\.hugmesh\.net' \
           | sort -u || true)"
 images="$(printf '%s\n' "${images}" | grep -v '^$' || true)"
 

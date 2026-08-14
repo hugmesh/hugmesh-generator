@@ -44,7 +44,7 @@ spec:
   # The admin-mutable desired-state fields diverge from the git seed at runtime; let
   # them (selfHeal keeps the CRD/RBAC/slug converged, not the toggle).
   ignoreDifferences:
-    - group: platform.hugmesh.systems
+    - group: platform.hugmesh.net
       kind: OptionalService
       jsonPointers:
         - /spec/enabled

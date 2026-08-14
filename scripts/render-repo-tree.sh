@@ -407,7 +407,7 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       || _die "admitted snapshot stamp carries no valid tree-sha256 — cannot write base-origin marker (fail-closed)"
     cat > "${BRAND_OUT}/.hugmesh-base-origin.json" <<JSON
 {
-  "schema": "snapdragon.systems/base-origin/v1",
+  "schema": "hugmesh.net/base-origin/v1",
   "originMesh": "${FOREIGN_MESH}",
   "pinnedDigest": "${PINNED_DIGEST}",
   "treeSha256": "${_admit_tree}"

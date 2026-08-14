@@ -3,7 +3,7 @@
 Renders the Snapdragon **native-federation HOST shell** class. Exemplar member =
 the site shell that mounts every angular-mfe remote — published as
 `hugmesh-host-shell` (the same tree the site was historically clonable as
-`snapdragon.systems`). One-member class today, but a class by design: a
+`hugmesh.net`). One-member class today, but a class by design: a
 multi-domain tenant can grow sibling shells.
 
 ## Resolving the exemplar base

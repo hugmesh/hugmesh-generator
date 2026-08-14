@@ -191,13 +191,23 @@ if [[ "${IMG}" == *.img.xz ]]; then
     RAW="${WORK}/images/$(basename "${IMG}" .xz)"
     if [ ! -s "${RAW}" ]; then
         step "Decompressing $(basename "${IMG}") -> $(basename "${RAW}")"
-        # --memlimit-threading: unbounded -T0 ballooned to ~7.2GiB RSS on a
+        # --memlimit-mt-decompress: unbounded -T0 ballooned to ~7.2GiB RSS on a
         # high-core host and got SIGKILLed by the global OOM killer when two rows
         # decompressed concurrently (observed as x86_fe "decompress failed" with
         # an intact archive). Bounding the threaded decoder makes xz drop to
         # fewer threads instead of dying.
-        xz -dc -T0 --memlimit-threading=2GiB "${IMG}" > "${RAW}.part" \
-            || die "decompress failed"
+        #
+        # NB the flag name: xz 5.4 (Debian bookworm) spells this
+        # --memlimit-mt-decompress. There is no --memlimit-threading here, and an
+        # unknown option is a hard error, so this silently became a 100% failure
+        # for every compressed row until it was corrected.
+        # Clear any partial file from an earlier killed run: it is truncated garbage,
+        # and leaving it costs disk while telling the next run nothing (the guard
+        # above tests ${RAW}, not ${RAW}.part, so a stale .part is never reused —
+        # only leaked).
+        rm -f "${RAW}.part"
+        xz -dc -T0 --memlimit-mt-decompress=2GiB "${IMG}" > "${RAW}.part" \
+            || { rm -f "${RAW}.part"; die "decompress failed"; }
         mv "${RAW}.part" "${RAW}"
     else
         info "reusing cached decompressed image: $(basename "${RAW}")"

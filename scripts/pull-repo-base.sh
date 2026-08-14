@@ -19,7 +19,7 @@
 # Env knobs:
 #   GIT_BASE         (default https://github.com/hugmesh)  clone base URL.
 #                    Point at the internal mirror on the VPN, e.g.
-#                    GIT_BASE=https://gitlab.hugmesh.systems/hugmesh
+#                    GIT_BASE=https://gitlab.hugmesh.net/hugmesh
 #   GIT_REF          (default main)  branch/tag to check out.
 #   --ref TAG|SHA    explicit VERSIONED pin for the own-mesh pull (templating
 #                    re-render-at-a-version). Unlike the best-effort GIT_REF env

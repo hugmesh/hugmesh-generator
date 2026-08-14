@@ -100,7 +100,7 @@ DESKTOP_SET=false      # true once --desktop is given — role arms may default 
                        # ONLY when the operator said nothing (mirrors HOSTNAME_SET); an
                        # explicit flag is never silently overridden (it either wins, or
                        # a weight-pinning role name hard-errors on the contradiction)
-CLUSTER_DOMAIN="hugmesh.systems"
+CLUSTER_DOMAIN="hugmesh.net"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix that
 # every node joins. "" = builder default (legacy byte-identical: no marker, headscale keeps
 # its checked-in headnet.internal base_domain). The Studio emits --superdomain <effective>
@@ -113,12 +113,12 @@ BRAND_TITLE="HugMesh Systems"
 ORG="hugmesh"
 # Games portal domain. DEFAULT serves games as a SUBDOMAIN of the primary domain
 # (games.<CLUSTER_DOMAIN>) until the real .games TLD is obtained; flip to the TLD
-# later with GAMES_DOMAIN=<brand>.games. The default literal "games.hugmesh.systems"
-# composes with rebrand_sysroot (its hugmesh.systems->CLUSTER_DOMAIN rule turns
+# later with GAMES_DOMAIN=<brand>.games. The default literal "games.hugmesh.net"
+# composes with rebrand_sysroot (its hugmesh.net->CLUSTER_DOMAIN rule turns
 # it into games.<CLUSTER_DOMAIN>); a custom value is rebrand-neutral. Drives the
 # games host + OIDC issuer/redirects via parameterize_games_domain(). See
 # docs/OPTIONAL-SERVICES.md.
-GAMES_DOMAIN="games.hugmesh.systems"
+GAMES_DOMAIN="games.hugmesh.net"
 # ── DEFAULT-INCLUSION POLICY (user 2026-06-17) — mirrors build-rpi5-stage4.sh ──
 # USER_LEVEL_SERVICES is the SINGLE source-of-truth set of user-level OPTIONAL
 # slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
@@ -799,7 +799,7 @@ exit "${1:-0}"
 # all injection vectors. Reject anything outside a strict charset, fail-closed, at
 # the earliest boundary (arg/config parse). The escaping at each sink stays as a
 # second layer. Legit values (user 'snap', brand 'hugmesh', domain
-# 'hugmesh.systems', org 'hugmesh', title 'HugMesh Systems') pass.
+# 'hugmesh.net', org 'hugmesh', title 'HugMesh Systems') pass.
 _validate_username() {   # $1=field-name $2=value ; POSIX-ish login name
     case "$2" in
         '') return 0 ;;  # empty = "use the default" downstream; not user-injected
@@ -1237,24 +1237,24 @@ ROLE_CLIENT=false            # true for person-device desktop roles (laptop/chro
 case "${ROLE}" in
     pki)
         GPU=false; ROLE_HEADSCALE=true; ROLE_K8S="control-plane"
-        ROLE_LABELS="snapdragon.systems/pki=true (+ role=pki via provision.sh)"
+        ROLE_LABELS="hugmesh.net/pki=true (+ role=pki via provision.sh)"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-pki" ;;
     be)
         GPU=false; ROLE_K8S="worker"
-        ROLE_LABELS="snapdragon.systems/backend=true"
+        ROLE_LABELS="hugmesh.net/backend=true"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-be" ;;
     fe)
         GPU=false; ROLE_K8S="worker"
-        ROLE_LABELS="snapdragon.systems/frontend=true"
+        ROLE_LABELS="hugmesh.net/frontend=true"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-fe" ;;
     be+gpu)
         GPU=true; ROLE_K8S="worker"
-        ROLE_LABELS="snapdragon.systems/backend=true,snapdragon.systems/compute=gpu"
+        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu"
         # Keep the legacy 'host' hostname for back-compat with flashers/launchers.
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-host" ;;
     omnibus)
         GPU=true; ROLE_HEADSCALE=true; ROLE_K8S="single-node"
-        ROLE_LABELS="snapdragon.systems/pki=true,snapdragon.systems/backend=true,snapdragon.systems/frontend=true,snapdragon.systems/compute=gpu"
+        ROLE_LABELS="hugmesh.net/pki=true,hugmesh.net/backend=true,hugmesh.net/frontend=true,hugmesh.net/compute=gpu"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-omnibus" ;;
     # ── EDGE-AI (GPU inference) NODE — a be+gpu worker whose PURPOSE is serving an
     # AI model API to the mesh. Defaults the PROPRIETARY NVIDIA driver + CUDA, bakes
@@ -1265,7 +1265,7 @@ case "${ROLE}" in
     edge_ai|edge-ai)
         GPU=true; ROLE_K8S="worker"; EDGE_AI=true
         [ -z "${GPU_DRIVER}" ] && GPU_DRIVER="nvidia"   # inference wants the proprietary blob (CUDA)
-        ROLE_LABELS="snapdragon.systems/backend=true,snapdragon.systems/compute=gpu,snapdragon.systems/edge-ai=true"
+        ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/edge-ai=true"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-edge-ai" ;;
     # ── CLIENT (person-device) roles — see docs/CLIENT-IMAGES.md (ADR-16/FD-04..08).
     # These are DESKTOPS that join the tailnet + run the UI, NOT k8s nodes: no
@@ -2156,7 +2156,7 @@ GROWFS_EOF
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
 #           LAN wildcard-DNS app is kept ONLY for a `.test` domain, so it can
 #           never become authoritative for a real public domain (e.g. a default
-#           ENV=test build still on hugmesh.systems keeps neither edge).
+#           ENV=test build still on hugmesh.net keeps neither edge).
 # Pin first-party FLOATING image tags (`:dev`) to the pinned RELEASE_TAG for prod
 # so the prod-hygiene gate finds no floating tag, and PRUNE the ENV=test e2e
 # harness wave (the test-runner app + its test-only manifests) from the baked
@@ -2853,11 +2853,11 @@ gate_backing_services() {
 }
 
 # Parameterize the games-realm OIDC identity on GAMES_DOMAIN. rebrand_sysroot does
-# NOT touch the .games literals (its rules match hugmesh.systems / hugmesh-),
+# NOT touch the .games literals (its rules match hugmesh.net / hugmesh-),
 # so the games host + issuer + redirects would otherwise stay hugmesh.games and
 # break iss-strict JWT validation under the subdomain default. Runs UNCONDITIONALLY
 # (even for the default brand) and BEFORE rebrand_sysroot so the default literal
-# games.hugmesh.systems composes with the hugmesh.systems->CLUSTER_DOMAIN
+# games.hugmesh.net composes with the hugmesh.net->CLUSTER_DOMAIN
 # rule. A custom GAMES_DOMAIN (e.g. <brand>.games) is rebrand-neutral.
 parameterize_games_domain() {
     local tree="${SYSROOT}/var/lib/hugmesh/cluster"
@@ -2884,14 +2884,14 @@ parameterize_games_domain() {
     done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.sql' \) -print0 2>/dev/null)
     info "Games domain: parameterized games host URLs -> ${GAMES_DOMAIN} in ${n} file(s)"
     # The games PUBLIC host literal (gateway-be route host + ingress extraHost) is
-    # "games.hugmesh.systems" so it composes with the hugmesh.systems ->
+    # "games.hugmesh.net" so it composes with the hugmesh.net ->
     # CLUSTER_DOMAIN rebrand into games.<CLUSTER_DOMAIN> = the DEFAULT GAMES_DOMAIN.
     # If the operator set a CUSTOM GAMES_DOMAIN (e.g. the real <brand>.games TLD),
     # the host must follow it instead of the subdomain default — rewrite it here,
-    # BEFORE rebrand (which would otherwise only map the hugmesh.systems suffix).
-    if [ "${GAMES_DOMAIN}" != "games.hugmesh.systems" ]; then
+    # BEFORE rebrand (which would otherwise only map the hugmesh.net suffix).
+    if [ "${GAMES_DOMAIN}" != "games.hugmesh.net" ]; then
         local be="${tree}/apps/20-gateway-be.yaml"
-        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.systems#${gd_e}#g" "${be}"
+        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.net#${gd_e}#g" "${be}"
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }
@@ -3031,7 +3031,7 @@ bake_host_firewall() {
 
 # Rebrand the baked cluster tree (no-op for default hugmesh naming).
 rebrand_sysroot() {
-    if [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] \
+    if [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.net" ] \
        && [ "${ORG}" = "hugmesh" ] && [ "${BRAND_TITLE}" = "HugMesh Systems" ]; then
         info "Branding: default (hugmesh) — no rebrand"; return 0
     fi
@@ -3052,25 +3052,25 @@ rebrand_sysroot() {
     _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
-        # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
+        # FROZEN k8s label-KEY / API-group namespace `hugmesh.net/<suffix>` must NOT
         # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
         # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
         # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
         # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
         # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
-        # neither `hugmesh.systems` nor `hugmesh-`, so the middle rules skip it.
+        # neither `hugmesh.net` nor `hugmesh-`, so the middle rules skip it.
         sed -i \
-            -e "s|^hugmesh\.systems/|@@SDSYSKEY@@/|g" \
-            -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
+            -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
             -e "s|snapdragon-systems/|${_orglc}/|g" \
             -e "s|hugmesh|${_org}|g" \
             -e "s|//id\.hugmesh\.games|//id.${_games}|g" \
             -e "s|//hugmesh\.games|//${_games}|g" \
-            -e "s|hugmesh\.systems|${_domain}|g" \
+            -e "s|hugmesh\.net|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${_brand}-|g" \
-            -e "s|@@SDSYSKEY@@/|hugmesh.systems/|g" \
+            -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             "${f}"
     done < <(find "${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
 }
@@ -4170,7 +4170,7 @@ elif ${ROLE_CLIENT}; then
         info "Client device: superadmin variant — device password REQUIRED at first boot (hash from KEYS, not baked)"
     fi
     info "Client device: person-role=${PERSON_ROLE} domains='${DOMAINS:-<provision-time>}' desktop=${DESKTOP} (no k8s cluster payload)"
-    rebrand_sysroot       # still rebrand markers/desktop configs hugmesh.systems -> ${CLUSTER_DOMAIN}
+    rebrand_sysroot       # still rebrand markers/desktop configs hugmesh.net -> ${CLUSTER_DOMAIN}
     apply_idp_external    # I6.3: idp.conf + issuer/JWKS re-point on the /etc/hugmesh side (no cluster tree here); casdoor default = no-op
 else
     cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"
@@ -4183,7 +4183,7 @@ else
     bake_host_firewall        # Layer 3: host nftables backstop for RELEASE_STATE (independent of gate_env_apps' K8s-manifest layer)
     gate_optional_services    # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
     gate_backing_services     # MANAGED backing services: prune in-mesh datastore + repoint consumer at hosted endpoint (empty selection = no-op)
-    rebrand_sysroot           # rewrites hugmesh.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)
+    rebrand_sysroot           # rewrites hugmesh.net -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)
     apply_idp_external        # I6.3: AFTER rebrand — idp.conf bake + issuer/JWKS rewrite + Casdoor-app gating + README-IDP.md; casdoor default = no-op
 fi
 
@@ -5240,6 +5240,13 @@ kernel_cache_inputs() {
     {
         printf 'kernel-builtin=%s\n' "${KERNEL_BUILTIN}"
         printf 'uki-name=%s\n'       "${UKI_NAME}"
+        # The UKI cmdline PREFIX this builder injects (root=LABEL=... ro). It is NOT in
+        # /etc/default/grub — that file only carries the APPEND half (GRUB_CMDLINE_LINUX),
+        # which the grub-default= digest below already covers. Without this line a change
+        # to the prefix leaves the key identical, the cache HITS, and the build silently
+        # ships the PREVIOUS UKI — which is exactly how a missing root= could survive a
+        # rebuild that was performed to add it (2026-08-13).
+        printf 'uki-cmdline-prefix=%s\n' "root=LABEL=${ROOT_LABEL} ro"
         for d in "${SYSROOT}"/var/db/pkg/sys-kernel/dracut-* \
                  "${SYSROOT}"/var/db/pkg/sys-apps/systemd-utils-*; do
             [ -d "${d}" ] && printf 'pkg=%s\n' "$(basename -- "${d}")"
@@ -5575,7 +5582,28 @@ fi
 # swallow that and the SB chain would silently degrade to GRUB+vmlinuz
 # (live-proven on the real desktop sysroot: exact invocation failed without
 # the flag, produced a valid PE32+ UKI with it).
-CMDLINE="\$(. /etc/default/grub 2>/dev/null; printf '%s' "\${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
+# NB: this whole block lives inside an UNQUOTED <<CHROOT heredoc, so backticks are
+# COMMAND SUBSTITUTION even in a comment — the heredoc is expanded before any of it is
+# parsed as shell. Quoting a command name in backticks here runs it at build time and
+# splices its stdout into the script (a bare 'parted' printed "Using /dev/sda", which
+# then executed as a command and failed the build). Use 'single quotes' in comments.
+#
+# root= MUST be baked in here. GRUB's 'chainloader' hands a UKI NO external cmdline,
+# so unlike the GRUB 'linux' menuentry — which appends root=PARTUUID=... at build_img
+# time — the UKI is only bootable if it carries root= itself. GRUB_CMDLINE_LINUX is the
+# APPEND half by design and never contains one, so the UKI shipped without it: the
+# kernel started and dracut then died "FATAL: No or empty root= argument" and dropped to
+# a debug shell. That is every x86 image of the 2026-08-07 session (matrix triage
+# 2026-08-13); it was masked until now by a separate GRUB defect that stopped the UKI
+# entry from ever being reached.
+#
+# LABEL=, not PARTUUID=: the partition UUIDs are minted by 'parted' inside build_img()
+# and only read back afterwards (see mkpart/_fld root_uuid), which happens long AFTER
+# this UKI is built AND signed — so a PARTUUID is simply not knowable here, and
+# rewriting .cmdline post-signing would invalidate the signature. ${ROOT_LABEL} is a
+# build-time constant that build_img passes to 'mkfs.ext4 -L', so it is stable and
+# known now. dracut already carries the ext4 driver (--add-drivers below) to mount it.
+CMDLINE="root=LABEL=${ROOT_LABEL} ro \$(. /etc/default/grub 2>/dev/null; printf '%s' "\${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
 if command -v dracut >/dev/null && dracut --help 2>/dev/null | grep -q -- '--uefi'; then
     dracut --force --no-hostonly --uefi \
         --add crypt \
@@ -6632,10 +6660,10 @@ if ! ${UNAFFILIATED}; then
     echo "  Provision a KEYS stick for this node with:"
     case "${ROLE}" in
         pki)     echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # control-plane (kubeadm init)" ;;
-        be)      echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; label snapdragon.systems/backend=true" ;;
-        fe)      echo "    ./scripts/gen-provision-keys.sh -r frontend -o keys-${ROLE_TAG}   # worker; label snapdragon.systems/frontend=true" ;;
+        be)      echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; label hugmesh.net/backend=true" ;;
+        fe)      echo "    ./scripts/gen-provision-keys.sh -r frontend -o keys-${ROLE_TAG}   # worker; label hugmesh.net/frontend=true" ;;
         be+gpu)  echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; edit:";
-                 echo "    hugmesh.role=games, node_labels { snapdragon.systems/compute: gpu }" ;;
+                 echo "    hugmesh.role=games, node_labels { hugmesh.net/compute: gpu }" ;;
         omnibus) echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # single-node CP; all labels (pki/backend/frontend/compute=gpu)" ;;
     esac
 fi

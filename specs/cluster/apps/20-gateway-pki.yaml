@@ -60,9 +60,9 @@ spec:
           # casdoor THROUGH the backend gateway (routing tables, Phase 2).
           enabled: true
           className: nginx-internal
-          host: scale.hugmesh.systems
+          host: scale.hugmesh.net
         nodeSelector:
-          snapdragon.systems/pki: "true"
+          hugmesh.net/pki: "true"
         seLinux:
           level: "s0:c11"
         # Role->URL external-access rules: Postgres-backed (admin-api CRUD),
@@ -114,7 +114,7 @@ spec:
           # arrives via the pki node's internal ingress (LAN/VPN) or forwarded from
           # the backend gateway (external tailscale clients) — never pki-direct.
           - id: headscale
-            host: scale.hugmesh.systems
+            host: scale.hugmesh.net
             uri: http://headscale.hugmesh-pki.svc.cluster.local:8080
   destination:
     server: https://kubernetes.default.svc

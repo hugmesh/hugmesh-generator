@@ -29,7 +29,7 @@ generatorOptions:
 # The CI in the phpBB image repo pushes :<branch> + :<sha>; we track :main for dev.
 # Pulls need the harbor-registry imagePullSecret (ESO-materialized).
 images:
-  - { name: snapdragon-systems/phpbb, newName: registry.hugmesh.systems/hugmesh/hugmesh-phpbb, newTag: main }
+  - { name: snapdragon-systems/phpbb, newName: registry.hugmesh.net/hugmesh/hugmesh-phpbb, newTag: main }
 patches:
   # Add the harbor-registry pull secret to the phpbb workload (the python sync Job
   # pulls the public python:3.12-alpine, so scope the patch to the phpbb Deployment).

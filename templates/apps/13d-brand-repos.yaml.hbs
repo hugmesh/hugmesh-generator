@@ -29,8 +29,8 @@ metadata:
   name: {{BRAND}}-brand-repos
   namespace: devops
   labels:
-    app.kubernetes.io/part-of: hugmesh.systems
-    snapdragon.systems/brand: "{{BRAND}}"
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/brand: "{{BRAND}}"
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
@@ -66,9 +66,9 @@ spec:
     metadata:
       name: "{{ .repository }}"
       labels:
-        app.kubernetes.io/part-of: hugmesh.systems
-        snapdragon.systems/brand: "{{BRAND}}"
-        snapdragon.systems/catalog: "true"
+        app.kubernetes.io/part-of: hugmesh.net
+        hugmesh.net/brand: "{{BRAND}}"
+        hugmesh.net/catalog: "true"
     spec:
       # PER-TENANT ArgoCD project (decision #2) instead of `default`, for isolation.
       # The project must exist (provisioned alongside the tenant); ArgoCD refuses an

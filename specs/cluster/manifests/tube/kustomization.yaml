@@ -7,5 +7,5 @@ resources:
 
 images:
   - { name: nginx, newName: nginx, newTag: "1.27-alpine" }
-  - { name: snapdragon-systems/tube-bff-api, newName: registry.hugmesh.systems/hugmesh/hugmesh-tube-bff-api, newTag: main }
-  - { name: snapdragon-systems/tube-ui, newName: registry.hugmesh.systems/hugmesh/hugmesh-tube-ui, newTag: main }
+  - { name: snapdragon-systems/tube-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-tube-bff-api, newTag: main }
+  - { name: snapdragon-systems/tube-ui, newName: registry.hugmesh.net/hugmesh/hugmesh-tube-ui, newTag: main }

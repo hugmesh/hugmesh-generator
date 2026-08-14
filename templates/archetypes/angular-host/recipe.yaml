@@ -3,7 +3,7 @@
 # ============================================================================
 #
 # EXEMPLAR MEMBER = the native-federation HOST shell, published as
-# `hugmesh-host-shell` (historically clonable as `snapdragon.systems`; same
+# `hugmesh-host-shell` (historically clonable as `hugmesh.net`; same
 # tree). repos[].name must be a DNS LABEL and that published name is one, so the
 # manifest row `host-shell` resolves through pull-repo-base.sh's normal
 # hugmesh-<name> lookup. HOST_SHELL_BASE_DIR / --base remain available for

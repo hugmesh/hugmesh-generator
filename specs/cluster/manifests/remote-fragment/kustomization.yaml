@@ -18,13 +18,13 @@ generatorOptions:
   disableNameSuffixHash: true
 
 # First-party images now pull from the in-cluster Harbor container registry
-# (registry.hugmesh.systems = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
+# (registry.hugmesh.net = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
 # path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
 # the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets). ONLY the first-party sync
 # image is rewritten; the nginx container uses the public nginxinc/nginx-unprivileged.
 images:
-  - { name: snapdragon-systems/hugmesh-remote-fragment, newName: registry.hugmesh.systems/hugmesh/hugmesh-remote-fragment, newTag: main }
+  - { name: snapdragon-systems/hugmesh-remote-fragment, newName: registry.hugmesh.net/hugmesh/hugmesh-remote-fragment, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

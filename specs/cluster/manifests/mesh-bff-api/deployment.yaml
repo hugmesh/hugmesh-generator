@@ -20,14 +20,14 @@ kind: Deployment
 metadata:
   name: hugmesh-mesh-bff-api
   namespace: hugmesh-backend
-  labels: { app: hugmesh-mesh-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-mesh-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-mesh-bff-api } }
   template:
     metadata: { labels: { app: hugmesh-mesh-bff-api } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -117,7 +117,7 @@ spec:
             # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
             # client secret needed (pure resource server, like federation-api).
             - name: CASDOOR_ISSUER_URI
-              value: "https://id.hugmesh.systems"
+              value: "https://id.hugmesh.net"
             # ── user-bff registration mapping (the registered-device attribution
             # source). GATED default-off in application.yml; flipped ON in-cluster.
             # The WebClient presents this pod's mTLS client cert (the same /pki

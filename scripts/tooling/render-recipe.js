@@ -30,7 +30,7 @@
 //       optional: true            # (default true) missing target file => skip
 //       anchors:
 //         - id: oidc-issuer-host  # human label for logs / drift oracle
-//           find: "https://id.hugmesh.systems"          # rendered w/ ctx
+//           find: "https://id.hugmesh.net"          # rendered w/ ctx
 //           replace: "https://id.{{CLUSTER_DOMAIN}}"       # rendered w/ ctx
 //           required: false       # (default false) if true, MUST match >=1x
 //   renames:                      # applied AFTER all edits[] (edits address

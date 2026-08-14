@@ -64,21 +64,21 @@ RUN git clone https://github.com/GrapheneOS/Auditor.git . \
      fi
 
 # --- Patch 1 (patches.md §1): RemoteVerifyJob DOMAIN constant ---
-RUN sed -i 's/static final String DOMAIN = "attestation\.app";/static final String DOMAIN = "attestation.hugmesh.systems";/' \
+RUN sed -i 's/static final String DOMAIN = "attestation\.app";/static final String DOMAIN = "attestation.hugmesh.net";/' \
       app/src/main/java/app/attestation/auditor/RemoteVerifyJob.java \
-  && grep -q 'attestation.hugmesh.systems' app/src/main/java/app/attestation/auditor/RemoteVerifyJob.java
+  && grep -q 'attestation.hugmesh.net' app/src/main/java/app/attestation/auditor/RemoteVerifyJob.java
 
 # --- Patch 2 (patches.md §2): network_security_config.xml hostname ---
-RUN sed -i 's#<domain includeSubdomains="true">attestation\.app</domain>#<domain includeSubdomains="true">attestation.hugmesh.systems</domain>#' \
+RUN sed -i 's#<domain includeSubdomains="true">attestation\.app</domain>#<domain includeSubdomains="true">attestation.hugmesh.net</domain>#' \
       app/src/main/res/xml/network_security_config.xml \
-  && grep -q 'attestation.hugmesh.systems' app/src/main/res/xml/network_security_config.xml
+  && grep -q 'attestation.hugmesh.net' app/src/main/res/xml/network_security_config.xml
 # MANUAL STEP, NOT SCRIPTED HERE (CA-dependent — see patches.md §2): the
 # <pin digest="SHA-256">...</pin> entries at lines 7-25 of the same file are
 # STILL the inherited upstream Let's-Encrypt/ECDSA pins at this point in the
-# build. If attestation.hugmesh.systems's real certificate chain does not
+# build. If attestation.hugmesh.net's real certificate chain does not
 # match them, every TLS connection this app makes will HARD-FAIL. Regenerate
 # with (once, per real cert in the chain, BEFORE committing this patch set):
-#   openssl s_client -connect attestation.hugmesh.systems:443 -showcerts </dev/null \
+#   openssl s_client -connect attestation.hugmesh.net:443 -showcerts </dev/null \
 #     | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der \
 #     | openssl dgst -sha256 -binary | openssl enc -base64
 # then hand-edit network_security_config.xml's <pin> values in this source
@@ -86,8 +86,8 @@ RUN sed -i 's#<domain includeSubdomains="true">attestation\.app</domain>#<domain
 # this Dockerfile is trusted for a real release build.
 
 # --- Patch 3 (patches.md §3): cosmetic links (safe to batch) ---
-RUN sed -i 's#https://attestation\.app/about#https://attestation.hugmesh.systems/about#' README.md \
-  && sed -i 's#https://attestation\.app/donate#https://attestation.hugmesh.systems/donate#' .github/FUNDING.yml || true
+RUN sed -i 's#https://attestation\.app/about#https://attestation.hugmesh.net/about#' README.md \
+  && sed -i 's#https://attestation\.app/donate#https://attestation.hugmesh.net/donate#' .github/FUNDING.yml || true
 
 # --- Patch 4 (patches.md §4): applicationId (namespace left untouched) ---
 RUN sed -i 's/applicationId = "app\.attestation\.auditor"/applicationId = "systems.hugmesh.auditor"/' \

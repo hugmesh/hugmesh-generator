@@ -10,7 +10,7 @@ metadata:
   namespace: hugmesh-tube
   labels:
     app: hugmesh-tube
-    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/part-of: hugmesh.net
 spec:
   replicas: 1
   selector: { matchLabels: { app: hugmesh-tube } }
@@ -20,7 +20,7 @@ spec:
       # GPU-gated: require the x86_64 GPU worker (labelled by keys-provision).
       nodeSelector:
         kubernetes.io/arch: amd64
-        snapdragon.systems/compute: gpu
+        hugmesh.net/compute: gpu
       securityContext:
         seLinuxOptions:
           # c35 collided with casdoor-games; tube->c55 (free).
@@ -37,8 +37,8 @@ spec:
             # WAS http://casdoor.hugmesh-casdoor.svc.cluster.local:8000 — a namespace
             # that has never existed (casdoor runs in hugmesh-pki) AND the wrong iss:
             # Spring Security validates each JWT's iss claim against this exact value,
-            # and casdoor's app.conf sets origin = "https://id.hugmesh.systems".
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
+            # and casdoor's app.conf sets origin = "https://id.hugmesh.net".
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
             - { name: SPRING_R2DBC_URL,
                 value: "r2dbc:postgresql://hugmesh-tube-db.hugmesh-tube.svc.cluster.local:5432/tube_bff" }
             # Liquibase's JDBC handle, used once at startup. Its packaged default is

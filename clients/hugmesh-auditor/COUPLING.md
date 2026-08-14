@@ -8,7 +8,7 @@ a clear error pointing at the actual mismatch.
 
 | # | Client side (this fork) | Server side (AttestationServer) | Failure mode if mismatched |
 |---|---|---|---|
-| 1 | `RemoteVerifyJob.DOMAIN` = `attestation.hugmesh.systems` (`patches.md` §1) + `network_security_config.xml` hostname **and pin-set** (`patches.md` §2) | `AttestationServer.java`'s `DOMAIN` constant, sed'd via the `ATTESTATION_DOMAIN` build ARG in `specs/cluster/manifests/attestation-server/Dockerfile` (line 34: `ARG ATTESTATION_DOMAIN=attestation.hugmesh.systems`) — plus the server's actual TLS cert must chain to whatever roots the fork's pin-set trusts | TLS handshake failure / certificate-pinning rejection — the app cannot reach the server at all. This is the #1 way the fork "looks installed but does nothing." |
+| 1 | `RemoteVerifyJob.DOMAIN` = `attestation.hugmesh.net` (`patches.md` §1) + `network_security_config.xml` hostname **and pin-set** (`patches.md` §2) | `AttestationServer.java`'s `DOMAIN` constant, sed'd via the `ATTESTATION_DOMAIN` build ARG in `specs/cluster/manifests/attestation-server/Dockerfile` (line 34: `ARG ATTESTATION_DOMAIN=attestation.hugmesh.net`) — plus the server's actual TLS cert must chain to whatever roots the fork's pin-set trusts | TLS handshake failure / certificate-pinning rejection — the app cannot reach the server at all. This is the #1 way the fork "looks installed but does nothing." |
 | 2 | Release signing-cert SHA-256 digest, computed via `gen-auditor-signing-key.sh` (method a) and cross-checked via `sign-and-digest.sh` (method b) | `AttestationProtocol.java`'s `AUDITOR_APP_SIGNATURE_DIGEST_RELEASE`, sed'd via the `AUDITOR_SIGNER_DIGEST` build ARG in **`specs/cluster/manifests/attestation-server/Dockerfile` line 41** — currently the placeholder `ARG AUDITOR_SIGNER_DIGEST=SET-FROM-FORK-RELEASE-CERT` | Server rejects every attestation submission from this app as coming from an untrusted signer. This is a platform-level KeyMint `AttestationApplicationId` check the server independently validates — there is no partial-credit or fallback path. A stale/placeholder digest means 100% of attestations fail, with no obvious client-side symptom. |
 | 3 | `applicationId = "systems.hugmesh.auditor"` (`patches.md` §4) | `AttestationProtocol.java`'s `AUDITOR_APP_PACKAGE_NAME_RELEASE`, sed'd via the `AUDITOR_PACKAGE` build ARG in **`specs/cluster/manifests/attestation-server/Dockerfile` line 40** (`ARG AUDITOR_PACKAGE=systems.hugmesh.auditor`) | Server rejects attestations reporting a package name it does not recognize as valid. |
 
@@ -44,10 +44,10 @@ is the one value that does not exist until the signing key does. Sequence:
 
 Both the fork's `RemoteVerifyJob.DOMAIN` (`patches.md` §1) and the server's
 `ATTESTATION_DOMAIN` build ARG default to the literal string
-`attestation.hugmesh.systems` already — this row is satisfied by applying
+`attestation.hugmesh.net` already — this row is satisfied by applying
 the patch sets as documented, with ONE remaining manual step: the fork's
 `network_security_config.xml` pin-set (`patches.md` §2) must actually match
-`attestation.hugmesh.systems`'s real certificate chain. That is not a
+`attestation.hugmesh.net`'s real certificate chain. That is not a
 build-arg — it's a hand-edit gated on knowing the real cert chain, done once
 (and re-verified on every upstream rebase, since a Let's-Encrypt root
 rotation upstream can silently invalidate it).

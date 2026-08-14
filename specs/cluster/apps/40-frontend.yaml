@@ -1,4 +1,4 @@
-# hugmesh.systems Angular host — the gateway-forwarded front page.
+# hugmesh.net Angular host — the gateway-forwarded front page.
 # Frontend Pis.
 apiVersion: argoproj.io/v1alpha1
 kind: Application

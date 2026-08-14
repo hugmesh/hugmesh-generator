@@ -24,7 +24,7 @@ spring:
               filters:
                 - StripPrefix=2
             # forum-ui — a PATH remote at /social/forum (NOT a forum.<domain>
-            # subdomain, which the *.hugmesh.systems vanity wildcard would
+            # subdomain, which the *.hugmesh.net vanity wildcard would
             # swallow), congruent with matrix-ui/mastodon-ui above
             # (specs/cluster/apps/49-forum-ui.yaml). Its Dockerfile serves plain
             # nginx on :80, like matrix-ui/mastodon-ui (NOT the nginx-unprivileged
@@ -273,7 +273,7 @@ spring:
               uri: http://hugmesh-remote-fragment:8081
               predicates:
                 - Path=/_fragments/**
-            # snapdragon.systems/be/** -> the backend gateway (StripPrefix drops /be).
+            # hugmesh.net/be/** -> the backend gateway (StripPrefix drops /be).
             - id: be-default
               uri: http://hugmesh-be-gateway:8080
               predicates:

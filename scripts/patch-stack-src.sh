@@ -10,7 +10,7 @@
 #   * IDEMPOTENT — detect "already applied" and skip (the clone script
 #     `reset --hard`s each checkout on update, so patches re-apply every run).
 #   * CRLF-TOLERANT — several upstream files carry \r\n line endings (e.g.
-#     hugmesh.systems' Dockerfile); match/anchor in a way that survives a
+#     hugmesh.net' Dockerfile); match/anchor in a way that survives a
 #     trailing \r, never with fragile whole-line sed equality.
 #   * SCOPED — key off a positive marker in the target file, not off repo
 #     names, so upstream fixes make a patch a natural no-op.

@@ -10,7 +10,7 @@
 # perturbation service.
 #
 # SCHEDULING (clones the hugmesh-games contract verbatim): it requires the x86_64
-# GPU node (nodeSelector arch=amd64 + snapdragon.systems/compute=gpu) and gets the
+# GPU node (nodeSelector arch=amd64 + hugmesh.net/compute=gpu) and gets the
 # host DRI render nodes (/dev/dri hostPath) for vendor-agnostic GPU use — NO vendor
 # device plugin, so it runs on any amdgpu/i915/nouveau card. On a Pi5-only cluster
 # this pod stays Pending, the Service below has NO Ready endpoints, and the BFF's
@@ -25,7 +25,7 @@ kind: Deployment
 metadata:
   name: hugmesh-media-poisoner
   namespace: hugmesh-backend
-  labels: { app: hugmesh-media-poisoner, app.kubernetes.io/part-of: hugmesh.systems }
+  labels: { app: hugmesh-media-poisoner, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   # Single writer of the compute path. concurrency=1 is enforced in-process
   # (uvicorn --workers 1) so the CPU path can't starve the control/data plane; this
@@ -40,7 +40,7 @@ spec:
       # IDENTICAL to hugmesh-games. Absent that node => Pending => lean fallback.
       nodeSelector:
         kubernetes.io/arch: amd64
-        snapdragon.systems/compute: gpu
+        hugmesh.net/compute: gpu
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
