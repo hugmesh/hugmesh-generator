@@ -1293,11 +1293,17 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   hugmesh-user-ui:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   hugmesh-login-ui:
     <<: *amd64
@@ -1353,11 +1359,17 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-mastodon-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   hugmesh-matrix-ui:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-matrix-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   hugmesh-api-docs:
     <<: *amd64
@@ -1373,6 +1385,9 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   # wiki-ui / owncast-ui / tube-ui — federated remotes added for the full local
   # repo set (same rationale as mod-ui/user-ui above): the cluster serves them via
@@ -1383,16 +1398,25 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-wiki-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   hugmesh-owncast-ui:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-owncast-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   hugmesh-tube-ui:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-tube-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   # character-studio-ui — mounted at /character-studio/** (already a canonical
   # cluster route-access row, specs/cluster/manifests/route-access/initdb/20-schema.sql).
@@ -1404,6 +1428,9 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-studio-ui
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   # character-forge-ui — mounted at /character-forge/** (canonical cluster
   # route-access row + fe route, specs/cluster/apps/20-gateway-fe.yaml). UNLIKE
@@ -1424,6 +1451,9 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-forge-bff-api/frontend
+    environment:
+      # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   # ── hugmesh-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
   # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional
