@@ -22,6 +22,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
+from . import devops_tools
 from .local_services import federation_env
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
@@ -408,6 +409,13 @@ class LocalStackNode:
         env (sudo, systemd, a different HOME) would fabricate readiness, because
         the buildx CLI plugin is per-user (~/.docker/cli-plugins)."""
         env = os.environ.copy()
+        # User-local CLIs first (out/tools/bin — the DevOps lane's kind/kubectl
+        # when the operator installed them from the Studio). PREPENDED so a lane
+        # started right after that install works with no shell restart; harmless
+        # and byte-neutral for every other verb when the dir does not exist.
+        tools = devops_tools.tools_dir(self.generator_dir)
+        if os.path.isdir(tools):
+            env["PATH"] = tools + os.pathsep + env.get("PATH", "")
         env["ENV"] = self.env
         env["SOCIAL"] = "1" if self.social else ""
         # TOR=1 -> the Makefile's STACK_TOR_PROFILE adds `--profile tor` and the
@@ -761,16 +769,27 @@ class LocalStackNode:
     def devops_available(self) -> list[str]:
         """Why the DevOps lane cannot start right now (empty = it can). Checked
         BEFORE the long verb so the operator is told up front, in the same
-        register as e2e_ready()."""
+        register as e2e_ready().
+
+        Tools count as present when they are on PATH **or** in this repo's
+        user-local tools dir (out/tools/bin), which the Install prerequisites
+        verb fills and _build_env() prepends to PATH — so a lane started right
+        after that install works without a shell restart."""
         problems: list[str] = []
-        if shutil.which("kind") is None:
-            problems.append("`kind` is not installed — the DevOps lane needs it "
-                            "to create the local Kubernetes cluster "
-                            "(https://kind.sigs.k8s.io).")
-        if shutil.which("kubectl") is None:
-            problems.append("`kubectl` is not installed — the DevOps lane needs "
-                            "it to apply the cluster's app tree.")
+        for tool, why in (("kind", "create the local Kubernetes cluster"),
+                          ("kubectl", "apply the cluster's app tree")):
+            if devops_tools.which(tool, self.generator_dir) is None:
+                problems.append(f"`{tool}` is not installed — the DevOps lane "
+                                f"needs it to {why}. Use \"Install DevOps "
+                                f"prerequisites\" to fetch it (user-local, "
+                                f"checksum-verified, no sudo).")
         return problems
+
+    def devops_install_tools(self, on_line=None) -> tuple[bool, str]:
+        """Fetch the lane's missing CLIs into out/tools/bin (see
+        core/devops_tools: pinned versions, SHA-256 verified, no sudo, nothing
+        outside the repo's gitignored out/)."""
+        return devops_tools.install(self.generator_dir, on_line=on_line)
 
     def devops_up(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-up` — create the local Kubernetes cluster and bootstrap the
