@@ -126,10 +126,11 @@ DEV_SAVE_TO=""
 # is recreated BEFORE the block job starts, so a failure half way through leaves
 # neither the old copy nor a complete new one.
 DEV_SAVE_OVERWRITE=false
-# Wall clock for the whole blockdev-backup conversation, host side. The job
-# copies the guest's USED data (a 64M disk with ~1M written produced a 2.2M
-# qcow2 here), but the device overlays are 16G and TCG guests write slowly, so
-# the default is generous and --save-timeout overrides it verbatim.
+# Wall clock for the whole blockdev-backup conversation, host side. Generous on
+# purpose: `sync=full` copies everything the source reads as ALLOCATED, and the
+# real goldens are allocated in full (see the note beside SAVES_DIR), so a save is
+# a multi-GB copy at TCG speed rather than the small delta a sparse test image
+# suggests. --save-timeout overrides it verbatim.
 DEV_SAVE_TIMEOUT="3600"
 # The QMP name of the disk being saved. All three launchers spell the guest's
 # root disk `-drive file=...,if=none,id=hd0` — launch-pi.sh:254, launch-x86.sh:230,
@@ -326,8 +327,16 @@ set_device_paths() {
     # ${WORK} is the one host directory the device container has WRITE access to
     # (it is the /work bind mount; /src and /artifacts are :ro), and on this
     # machine it sits on /home — 667G free — while / is 84% full and has hit
-    # 100% before. A save is proportional to the guest's USED data, not to the
-    # 16G virtual size, but "small" is not "nothing".
+    # 100% before.
+    #
+    # AND A SAVE IS BIG. `blockdev-backup sync=full` copies everything the source
+    # reads as ALLOCATED, and every golden under ${WORK}/images is allocated in
+    # FULL: docker-entrypoint.sh decompresses with `xz -dc … > "${RAW}.part"`, and
+    # a plain redirect writes zeros rather than punching holes. Measured on this
+    # host: all 7 goldens are 100% allocated, 9.5G (rpi5) to 20.5G (x86 omnibus).
+    # So one save of x86/omnibus is ~20.5G and the default is a NEW file each time.
+    # A sparse synthetic image suggests otherwise and is misleading — do not repeat
+    # the "a save only costs what the guest used" claim from it.
     SAVES_DIR="${WORK}/saves"
 }
 
@@ -967,9 +976,40 @@ save_flush_guest() {
 
 # The newest save that already exists for a device, or empty. This is what
 # --overwrite means with no --save-to: "the existing copy in the session".
+# newest_save_for SAFE LABEL — the file "--overwrite" replaces.
+#
+# It MUST agree with --list-saves, or the operator overwrites something they were
+# never shown. It did not: this globbed names while cmd_list_saves filtered by the
+# sidecar's label, so a save made with `--save-to another-name.qcow2` was listed for
+# the device but invisible here — a repeat-overwrite workflow then accumulated files
+# while destroying an older copy silently. The name glob also crossed devices: the
+# pattern `<safe>-*` matches `x_y-z`'s saves when asked for `x_y`.
+#
+# So the sidecar is authoritative, exactly as it is for listing, and the name glob is
+# only the fallback for saves written before sidecars existed.
 newest_save_for() {
-    local safe="$1"
-    ls -1t "${SAVES_DIR}/${safe}"-*.qcow2 "${SAVES_DIR}/${safe}.qcow2" 2>/dev/null | head -1
+    local safe="$1" label="$2" f meta owner newest=""
+    for f in $(ls -1t "${SAVES_DIR}"/*.qcow2 2>/dev/null); do
+        meta="${f}.json"
+        if [ -f "${meta}" ]; then
+            owner="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("label",""))
+except Exception:
+    print("")' "${meta}" 2>/dev/null)"
+            [ "${owner}" = "${label}" ] || continue
+        else
+            # No sidecar: fall back to the name, but anchored so `x_y` cannot claim
+            # `x_y-z`'s files — the stamp suffix is digits/T/Z, never another label.
+            case "${f##*/}" in
+                "${safe}.qcow2") ;;
+                "${safe}"-[0-9]*) ;;
+                *) continue ;;
+            esac
+        fi
+        newest="${f}"; break
+    done
+    printf '%s\n' "${newest}"
 }
 
 # save_check_target PATH — die() unless PATH is a legal place to put a save.
@@ -1015,10 +1055,12 @@ save_check_target() {
     fi
 }
 
-# save_pick_target SAFE — resolve the target path, honouring --save-to and
+# save_pick_target SAFE LABEL — resolve the target path, honouring --save-to and
 # --overwrite, and refuse to clobber anything the operator did not ask to lose.
+# LABEL is needed as well as SAFE because --overwrite resolves through the saves'
+# sidecars, which record the real label, not the filesystem-safe spelling.
 save_pick_target() {
-    local safe="$1" target=""
+    local safe="$1" label="$2" target=""
     if [ -n "${DEV_SAVE_TO}" ]; then
         # A bare name is a convenience, not a special case: it lands in the same
         # ${SAVES_DIR} the defaults use, so `--save-to before-upgrade.qcow2`
@@ -1028,7 +1070,7 @@ save_pick_target() {
             *)  target="${SAVES_DIR}/${DEV_SAVE_TO}" ;;
         esac
     elif ${DEV_SAVE_OVERWRITE}; then
-        target="$(newest_save_for "${safe}")"
+        target="$(newest_save_for "${safe}" "${label}")"
         # >&2 is load-bearing: this function's STDOUT is the chosen path, read
         # through a command substitution. An info line on stdout would be
         # prepended to the path and the save would land somewhere absurd.
@@ -1039,7 +1081,11 @@ save_pick_target() {
     # timestamped copy. Defaulting to a fresh name is what keeps "save" from
     # being a destructive verb — repeated saves accumulate instead of eating one
     # another, and losing a copy always takes an explicit --overwrite.
-    [ -n "${target}" ] || target="${SAVES_DIR}/${safe}-$(date -u +%Y%m%d-%H%M%S).qcow2"
+    # %Y%m%dT%H%M%SZ, matching core/qemu_devices.SAVE_STAMP_FORMAT and the build
+    # artifacts' own stamp. The two spellings were allowed to differ once ('-' sorts
+    # before 'T'), so a saves/ dir holding both ordered wrongly by name — which is the
+    # single property the stamp was chosen for.
+    [ -n "${target}" ] || target="${SAVES_DIR}/${safe}-$(date -u +%Y%m%dT%H%M%SZ).qcow2"
     target="$(readlink -m "${target}")"
     save_check_target "${target}"
     if [ -e "${target}" ] && ! ${DEV_SAVE_OVERWRITE}; then
@@ -1068,6 +1114,7 @@ save_restore_state() {
 
 cmd_save_device() {
     local label="$1" rec sock csock name safe target ctarget prior size copied out rc
+    local save_free_bytes
 
     need_docker
     need_python
@@ -1089,7 +1136,7 @@ cmd_save_device() {
     # HOST-side, so the directory belongs to the operator before root ever writes
     # into it — the same ordering docker-entrypoint.sh uses for the registry dir.
     mkdir -p "${SAVES_DIR}" || die "cannot create ${SAVES_DIR}"
-    target="$(save_pick_target "${safe}")" || exit 1
+    target="$(save_pick_target "${safe}" "${label}")" || exit 1
     ctarget="$(container_path_for "${target}")"
 
     if [ -e "${target}" ]; then
@@ -1124,6 +1171,34 @@ cmd_save_device() {
         info "${label}: PAUSED for the copy (crash-consistent: the guest sees this as a pulled plug)"
     fi
 
+    # From here until the copy is detached, an interrupted run would leave the
+    # operator's device PAUSED with no indication why — the Studio's Save button has
+    # an explicit Cancel, so this is a first-class action, not a hypothetical. The
+    # script has no other traps, so this one is installed for exactly this window and
+    # removed at the end of it. It undoes the same three things the failure path does,
+    # in the same order, and then re-raises so the exit status still reports a signal.
+    save_on_signal() {
+        local sig="$1"
+        warn "${label}: interrupted by SIG${sig} mid-save — putting the device back"
+        qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" \
+            block-job-cancel "{\"device\":\"${SAVE_JOB}\"}" BLOCK_JOB_CANCELLED \
+            >/dev/null 2>&1 || true
+        qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" \
+            blockdev-del "{\"node-name\":\"${SAVE_NODE}\"}" - >/dev/null 2>&1 || true
+        # Rename before restoring: a half-written .qcow2 left under its final name is
+        # the worst outcome in the contract — --list-saves would offer it and it would
+        # open. The chown matters too, or the operator cannot even delete it.
+        docker exec -u 0 "${name}" sh -c \
+            'test -e "$1" && mv -f "$1" "$1.partial" && chown "$2" "$1.partial"' _ \
+            "${ctarget}" "$(id -u):$(id -g)" >/dev/null 2>&1 || true
+        save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+        warn "${label}: any partial copy is at ${target}.partial and must not be trusted"
+        trap - INT TERM
+        kill -s "${sig}" $$
+    }
+    trap 'save_on_signal TERM' TERM
+    trap 'save_on_signal INT'  INT
+
     # 4. The target has to exist, and at exactly the guest disk's size, before
     # blockdev-add can open it. qemu-img lives in the runner image
     # (docker/Dockerfile.qemu-runner:40) and runs INSIDE the container because
@@ -1140,8 +1215,22 @@ cmd_save_device() {
     fi
     info "${label}: guest disk is ${size} bytes ($((size / 1024 / 1024)) MiB) on drive '${SAVE_DRIVE}'"
 
+    # Refuse before pausing turns into a half-filled filesystem. A save is NOT the
+    # small delta a sparse test image suggests: sync=full copies every cluster the
+    # source reads as allocated and the goldens are allocated in full, so budget the
+    # whole virtual size. Running the host out of space mid-copy would leave a giant
+    # .partial AND take down anything else writing there — on this workstation that
+    # has meant the mesh's own volumes.
+    save_free_bytes="$(df -PB1 "${SAVES_DIR}" 2>/dev/null | awk 'NR==2{print $4}')"
+    if [[ "${save_free_bytes}" =~ ^[0-9]+$ ]] && [ "${save_free_bytes}" -lt "${size}" ]; then
+        save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+        trap - INT TERM
+        die "${label}: not enough space for this save. It needs up to ${size} bytes ($((size / 1024 / 1024 / 1024)) GiB — a save is the disk's FULL size, not just what the guest wrote) and $(df -h "${SAVES_DIR}" 2>/dev/null | awk 'NR==2{print $6}') has only $(df -h "${SAVES_DIR}" 2>/dev/null | awk 'NR==2{print $4}') free. Delete old saves (--list-saves ${label}) or pass --save-to on a bigger filesystem."
+    fi
+
     if ! docker exec -u 0 "${name}" qemu-img create -f qcow2 "${ctarget}" "${size}" >/dev/null; then
         save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+        trap - INT TERM
         die "${label}: could not create the save target ${target}"
     fi
 
@@ -1167,12 +1256,25 @@ cmd_save_device() {
     if [ "${rc}" -ne 0 ]; then
         # The target node and possibly a live job are still attached to a device
         # the operator will want to keep using, so tear them down before saying
-        # anything else. Both are best effort — they fail harmlessly when the
-        # step that would have created them never ran.
+        # anything else. They fail harmlessly when the step that would have created
+        # them never ran.
+        #
+        # WAIT FOR THE CANCEL. block-job-cancel returns the moment the request is
+        # accepted and the job unwinds asynchronously, so a blockdev-del fired
+        # straight after it runs while the node is still in use, fails, and — being
+        # silenced — leaves ${SAVE_NODE} attached. The NEXT save then dies on
+        # `Duplicate nodes with node-name='hugmesh-save-tgt'` while blaming a
+        # partial copy, and only the third attempt succeeds. Blocking on
+        # BLOCK_JOB_CANCELLED is what makes the delete meet a free node.
         qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" \
-            block-job-cancel "{\"device\":\"${SAVE_JOB}\"}" - >/dev/null 2>&1
-        qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" \
-            blockdev-del "{\"node-name\":\"${SAVE_NODE}\"}" - >/dev/null 2>&1
+            block-job-cancel "{\"device\":\"${SAVE_JOB}\"}" BLOCK_JOB_CANCELLED \
+            >/dev/null 2>&1
+        # Not silenced: if the node really is still attached the next save is the
+        # one that pays, so say it here where the cause is still on screen.
+        if ! qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" \
+                blockdev-del "{\"node-name\":\"${SAVE_NODE}\"}" - >/dev/null 2>&1; then
+            warn "${label}: could not detach the save node ${SAVE_NODE}. If the next save fails with \"Duplicate nodes\", stop and restart this device to clear it."
+        fi
         # A half-copied file that still ends in .qcow2 is the worst outcome of
         # all: --list-saves would offer it, and it would open. Rename it out of
         # the way, in the container, where it is still root-owned.
@@ -1187,6 +1289,9 @@ cmd_save_device() {
     # FIRST, before the bookkeeping below: every extra step here is time the
     # operator's device spends frozen for no remaining reason.
     save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+    # The guest is back; from here an interrupt costs bookkeeping, not a frozen
+    # device, so the window the trap guards is over.
+    trap - INT TERM
 
     # 7. Hand the file to the host operator. qemu created it as root inside the
     # container, and the Studio that will list and open it runs as the invoking
@@ -1200,7 +1305,11 @@ cmd_save_device() {
 
     info "${label}: SAVED ${copied} bytes of guest disk"
     info "  file        : ${target}"
-    info "  on disk     : $( { du -h "${target}" 2>/dev/null || echo '?'; } | cut -f1)  (a qcow2 costs the guest's USED data, not its ${size}-byte virtual size)"
+    # Report what it ACTUALLY cost, and never dress it up. `sync=full` copies every
+    # cluster the source reads as allocated, and the goldens are allocated in full,
+    # so this is normally GB-scale rather than the delta a sparse image implies.
+    info "  on disk     : $( { du -h "${target}" 2>/dev/null || echo '?'; } | cut -f1)  (of ${size} bytes virtual; saves are not sparse — see below)"
+    info "  free after  : $( { df -h "${SAVES_DIR}" 2>/dev/null | awk 'NR==2{print $4" on "$6}'; } || echo '?')"
     info "  consistency : crash-consistent"
     info "  standalone  : yes — no backing file; it holds the run overlay's changes merged over the golden image's data"
     info "  golden      : untouched"
@@ -1262,8 +1371,35 @@ except OSError:
     entries = []
 
 out = []
+# Orphaned partial copies are reported ALONGSIDE the saves, never as saves. A failed
+# or interrupted save renames its target to <name>.partial, and that file is the same
+# size as the save would have been — which on real images is 9.5-20.5 GB. Nothing
+# deletes them, so a listing that silently omitted them would leave the operator
+# looking at "3 saves" while the directory held six files. `partial: true` is how a
+# caller tells them apart; nothing here removes anything on its own, because deleting
+# an operator's data as a side effect of LISTING it would be its own defect.
+partials = []
 for name in entries:
-    if not name.endswith(".qcow2"):        # .partial and .json are not saves
+    if name.endswith(".qcow2.partial"):
+        ppath = os.path.join(saves_dir, name)
+        base = name[:-len(".partial")]
+        owns = base == safe + ".qcow2" or base.startswith(safe + "-")
+        try:
+            pst = os.stat(ppath)
+        except OSError:
+            continue
+        if owns:
+            partials.append({
+                "path": ppath,
+                "label": label,
+                "file_bytes": pst.st_size,
+                "modified_at": datetime.datetime.fromtimestamp(
+                    pst.st_mtime, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "partial": True,
+                "has_metadata": False,
+            })
+        continue
+    if not name.endswith(".qcow2"):        # .json sidecars are not saves
         continue
     path = os.path.join(saves_dir, name)
     side = {}
@@ -1295,6 +1431,9 @@ for name in entries:
     rec["has_metadata"] = bool(side)
     out.append(rec)
 
+for rec in out:
+    rec["partial"] = False
+out.extend(partials)
 out.sort(key=lambda r: str(r.get("modified_at") or ""), reverse=True)  # newest first
 json.dump(out, sys.stdout, indent=2)
 sys.stdout.write("\n")

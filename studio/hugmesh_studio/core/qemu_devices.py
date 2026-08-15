@@ -82,7 +82,8 @@ from hugmesh_studio.core.cloud_deploy import TERMINALS
 # disagree about which script they drive. SESSIONS_SUBDIR comes from the same place
 # for the same reason: the save refusal below has to know where golden build images
 # live, and a second spelling of "out/sessions" would rot the day the builders move.
-from hugmesh_studio.core.qemu_tests import RUNNER_SCRIPT, SESSIONS_SUBDIR
+from hugmesh_studio.core.qemu_tests import (DEFAULT_WORK_SUBDIR, RUNNER_SCRIPT,
+                                            SESSIONS_SUBDIR)
 
 #: Where docker-entrypoint.sh writes one JSON record per live device, under the
 #: runner's ``--work`` dir (the same dir that already holds runs/ and results/).
@@ -136,9 +137,16 @@ RUNS_SUBDIR = "runs"
 SAVE_SUFFIX = ".qcow2"
 
 #: ``YYYYmmddTHHMMSSZ`` — the same stamp shape build artifacts carry
-#: (qemu_tests.artifact_stamp), so a plain string sort over save names is
-#: chronological and a saves/ listing reads like the sessions listing next to it.
+#: (qemu_tests.artifact_stamp), so a saves/ listing reads like the sessions listing
+#: next to it. run-qemu-docker.sh's own default save name uses this same spelling;
+#: they were allowed to diverge once ('-' sorts before 'T', so a directory holding
+#: both orders wrongly by name) and ``saved_copies`` now orders by mtime so that a
+#: directory left over from that period still reads correctly.
 SAVE_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+
+#: The two things the operator asked for, and the only two spellings ``save_argv``
+#: accepts. "copy" is always safe; "overwrite" always replaces an existing save.
+SAVE_MODES = ("copy", "overwrite")
 
 
 @dataclass
@@ -368,6 +376,17 @@ def safe_label(label: str) -> str:
     return label.replace("/", "_").replace("+", "_")
 
 
+def default_work_dir(generator_dir: str) -> str:
+    """The ``--work`` dir the runner uses when none is passed.
+
+    Spelled from qemu_tests.DEFAULT_WORK_SUBDIR rather than repeated, because this
+    has to be the same directory ``runner_command`` puts after ``--work`` — a second
+    copy of "out/qemu-runs" here would send saves somewhere the runner never looks
+    the day that default moves.
+    """
+    return os.path.join(generator_dir, DEFAULT_WORK_SUBDIR)
+
+
 def saves_dir(work_dir: str) -> str:
     """The save directory inside a runner ``--work`` dir."""
     return os.path.join(work_dir, SAVES_SUBDIR)
@@ -379,13 +398,14 @@ def save_basename(label: str) -> str:
 
 
 def default_save_target(work_dir: str, dev: Device) -> str:
-    """The ONE path "overwrite the existing copy" overwrites, for this device.
+    """The timestamp-free ``<work>/saves/<label>.qcow2`` for this device.
 
-    Deliberately timestamp-free. Overwriting only means anything if the previous save
-    is findable, and it has to be findable by a rule rather than by remembering what
-    the GUI happened to name it in an earlier session — the Studio is restarted
-    between saves, and the runner is also driven straight from a shell. So: one
-    stable path per device label, in the same tree the registry itself lives in.
+    This is a NAME rule, not the answer to "which file does Overwrite replace" — see
+    ``saved_copies`` and ``save_argv`` for that. It stayed timestamp-free so a caller
+    that wants one canonical save per device (``--save-to <label>.qcow2`` from a
+    shell script, say) has a spelling for it, and so the runner's own listing —
+    which globs BOTH ``<label>-*.qcow2`` and ``<label>.qcow2`` — has something to
+    find under the second pattern.
 
     ``work_dir`` is the same ``--work`` the caller discovered the device from, so a
     caller that overrode the default work dir gets its saves in ITS tree.
@@ -393,8 +413,84 @@ def default_save_target(work_dir: str, dev: Device) -> str:
     return os.path.join(saves_dir(work_dir), save_basename(dev.label))
 
 
+def saved_copies(work_dir: str, dev: Device) -> list[str]:
+    """Every existing save for ``dev``, NEWEST FIRST.
+
+    This function is the single definition of "the existing copy", because three
+    different ones is what the first attempt shipped: the runner overwrote the newest
+    save, the GUI armed against the newest save, and the core handed back a fixed
+    timestamp-free name that nothing else ever wrote. After a few "Save a copy"
+    presses, "Overwrite the existing copy" therefore overwrote NONE of them — it
+    quietly maintained a private file of its own — and a save made from the shell
+    could never be overwritten from the GUI.
+
+    So the rule is the runner's rule, spelled once: the same two patterns
+    ``run-qemu-docker.sh``'s ``newest_save_for()`` globs, ordered the way its
+    ``ls -1t`` orders them.
+
+    Ordered by MTIME rather than by name on purpose. A name sort would be a second,
+    subtly different rule the moment a directory holds two stamp spellings (and it
+    did: '-' sorts before 'T', so every older-format name would sort ahead of every
+    newer one regardless of date). Modification time is what "newest" means to the
+    operator who just pressed Save.
+
+    Missing or unreadable directories are "no saves", not an error: this is read on
+    every refresh of the device table, and an unplugged disk must cost a greyed
+    button rather than a traceback out of a Qt slot.
+    """
+    root = saves_dir(work_dir)
+    base = safe_label(dev.label)
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+
+    def _owns(name: str) -> bool:
+        """Is this save this device's?
+
+        The SIDECAR decides, because the runner writes one beside every save and
+        ``--list-saves`` filters by it. A name rule alone cannot see a save made with
+        ``--save-to before-upgrade.qcow2``: it belongs to the device, it is listed for
+        the device, and it must therefore be overwritable as the device's — otherwise
+        the GUI and the CLI disagree about which file "the existing copy" is, which
+        is exactly how a repeat-overwrite ends up destroying a copy the operator was
+        never shown.
+
+        The name is only the fallback, for saves written before sidecars existed. It
+        is anchored on a digit so device ``x/y`` cannot claim ``x/y-z``'s files.
+        """
+        meta = os.path.join(root, name + ".json")
+        try:
+            with open(meta, encoding="utf-8") as fh:
+                return json.load(fh).get("label") == dev.label
+        except (OSError, ValueError):
+            pass
+        if name == base + SAVE_SUFFIX:
+            return True
+        rest = name[len(base) + 1:] if name.startswith(base + "-") else ""
+        return bool(rest) and rest[0].isdigit()
+
+    hits = [os.path.join(root, n) for n in names
+            if n.endswith(SAVE_SUFFIX) and _owns(n)]
+
+    def _mtime(p: str) -> float:
+        try:
+            return os.path.getmtime(p)
+        except OSError:      # vanished between listdir and stat
+            return 0.0
+
+    # Tie-broken by name so equal mtimes (a fast test, a copied tree) still give a
+    # stable order rather than whatever the filesystem happened to return.
+    return sorted(hits, key=lambda p: (-_mtime(p), os.path.basename(p)))
+
+
 def _utc_stamp() -> str:
-    return datetime.datetime.now(datetime.UTC).strftime(SAVE_STAMP_FORMAT)
+    # datetime.timezone.utc, NOT datetime.UTC: the latter is 3.11+, and the Studio
+    # supports 3.10 (hugmesh-studio.bat pins PYTHON_MIN=3.10 and the README documents
+    # 3.10+). Every other tz-aware call in the tree spells it this way for the same
+    # reason. On 3.10 the short spelling raises AttributeError at save time — i.e. the
+    # default "Save a copy" path would die on a supported interpreter.
+    return datetime.datetime.now(datetime.timezone.utc).strftime(SAVE_STAMP_FORMAT)
 
 
 def new_save_target(work_dir: str, dev: Device, *, stamp: str = "") -> str:
@@ -498,9 +594,15 @@ def save_target_refusal(target: str, *, generator_dir: str = "",
     The rule this exists for is the last one: a save must never land in the artifacts
     tree. The golden ``.img`` files there are the shared build output that every run,
     every session and every other checkout boots from, and the overlay chain exists
-    precisely so a running guest cannot touch them. A "save" that wrote into that
-    directory would either clobber a build artifact or leave something image-shaped
-    beside them that a later ``discover_rows`` would happily offer as a bootable row.
+    precisely so a running guest cannot touch them. A save written into that directory
+    would put a multi-GB file among them under a name no build produced, in the one
+    tree whose contents are supposed to be reproducible from a build.
+
+    Note what this is NOT protecting against, so nobody strengthens the wrong thing:
+    a stray save cannot be picked up as a bootable row. ``qemu_tests`` discovers only
+    ``.img``/``.img.xz`` and ``SAVE_SUFFIX`` forces ``.qcow2`` — dropping .qcow2 files
+    into an artifacts dir leaves ``discover_rows`` returning only the real image. This
+    is defence in depth around a shared directory, not a fix for a live path.
 
     Two directories are checked because there are two ways to name that tree: the
     ``out/sessions`` root, which is where the builders always write, and an explicit
@@ -533,9 +635,34 @@ def save_target_refusal(target: str, *, generator_dir: str = "",
         if _within(target, sessions_root):
             return (f"refusing to save into {sessions_root}: it holds the golden "
                     "images every run and every session boots from")
-    if work_dir and _within(target, os.path.join(work_dir, RUNS_SUBDIR)):
-        return (f"refusing to save into {os.path.join(work_dir, RUNS_SUBDIR)}: that "
-                "is the live overlay QEMU has open, which it holds a write lock on")
+    if work_dir:
+        # PARITY WITH THE RUNNER. run-qemu-docker.sh's save_check_target refuses all
+        # of these, and this module is what the GUI checks BEFORE spawning it — so
+        # anything missing here is a target the Studio offers and the runner then
+        # rejects, which reads to the operator as the feature being broken. Where the
+        # two lists ever differ, the stricter one is the correct one.
+        for sub, why in (
+            # The DECOMPRESSED goldens. /artifacts is mounted read-only so the obvious
+            # spelling is already impossible, but these are the same images on a
+            # writable mount, so the directory is named rather than trusted to a flag.
+            ("images", "holds the decompressed GOLDEN images, which every run and "
+                       "every session boots from"),
+            (RUNS_SUBDIR, "is the live overlay QEMU has open, which it holds a write "
+                          "lock on"),
+            # Not catastrophic, but a save landing here would be read back as harness
+            # state by something that has no idea it is looking at a disk image.
+            ("devices", "is the device registry the Studio reads"),
+            ("results", "holds the run verdicts"),
+        ):
+            root = os.path.join(work_dir, sub)
+            if _within(target, root):
+                return f"refusing to save into {root}: that directory {why}"
+        # The container can only write to its /work bind mount, so a target outside it
+        # cannot be created at all — and would fail as an opaque permission error deep
+        # inside a save that has already paused the operator's device.
+        if not _within(target, work_dir):
+            return (f"save target must be under the work dir {work_dir}: the device "
+                    "container can only write there")
     return ""
 
 
@@ -582,6 +709,49 @@ def device_save_argv(generator_dir: str, dev: Device, target: str,
     if overwrite:
         argv.append("--overwrite")
     return argv
+
+
+def save_argv(generator_dir: str, dev: Device, mode: str, *,
+              work_dir: str = "", artifacts_dir: str = "") -> list[str]:
+    """argv for one of the operator's two save options, by MODE.
+
+    ``device_save_argv`` above stays the primitive — it takes an explicit path and is
+    the one the target rules are tested through. This is the caller-facing spelling,
+    and it exists so that WHICH FILE a mode resolves to is decided here rather than in
+    the GUI. That is not a style preference: the first attempt let the GUI pick the
+    path, the runner pick a different one, and the core offer a third, so "overwrite
+    the existing copy" overwrote a file nothing else had ever written.
+
+      "copy"      -> a new timestamped file that does not exist yet. Never destructive.
+      "overwrite" -> the NEWEST existing save for this device (``saved_copies[0]``),
+                     whoever made it — the Studio in an earlier session, or the runner
+                     straight from a shell.
+
+    With no existing save, "overwrite" RAISES instead of inventing a name. Silently
+    creating a first copy would be "Save a copy" wearing a destructive label, and the
+    operator armed a control that promised to replace something.
+
+    ``work_dir`` defaults to the runner's own default work dir under
+    ``generator_dir``, which is where ``discover_devices`` reads the registry from, so
+    the common call needs only three arguments. A caller that ran with ``--work``
+    elsewhere passes it and gets its saves in ITS tree.
+    """
+    m = (mode or "").strip().lower()
+    if m not in SAVE_MODES:
+        raise ValueError(f"unknown save mode {mode!r}; expected one of "
+                         + "|".join(SAVE_MODES))
+    work = work_dir or default_work_dir(generator_dir)
+    if m == "copy":
+        return device_save_argv(generator_dir, dev, new_save_target(work, dev),
+                                overwrite=False, artifacts_dir=artifacts_dir,
+                                work_dir=work)
+    existing = saved_copies(work, dev)
+    if not existing:
+        raise ValueError(
+            f"{dev.label} has no saved copy yet, so there is nothing to overwrite — "
+            "take a copy first")
+    return device_save_argv(generator_dir, dev, existing[0], overwrite=True,
+                            artifacts_dir=artifacts_dir, work_dir=work)
 
 
 def available_logins(dev: Device, cfg_users: list) -> list[tuple[str, str]]:

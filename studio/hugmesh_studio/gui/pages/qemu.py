@@ -160,7 +160,7 @@ _QMP_TOOLTIPS = {
 
 #: The emulator's own run-state, lifted out of what ``--qmp LABEL status`` printed.
 #: The runner's QMP client prints QEMU's reply line VERBATIM (it ends in
-#: ``print $r``, tests/qemu/run-qemu-docker.sh:625), and query-status answers
+#: ``print $r``, tests/qemu/run-qemu-docker.sh:778), and query-status answers
 #: ``{"return": {"status": "running", "running": true}}`` — checked against qemu
 #: 10.2.3, which reported "running" on a fresh boot, "paused" after a QMP stop and
 #: "running" again after cont. Nothing is inferred when this does not match: an
@@ -191,7 +191,11 @@ _SAVE_COPY, _SAVE_OVERWRITE = "copy", "overwrite"
 #: tree whose core module predates them the two buttons are DISABLED and say so,
 #: which is honest, rather than this page inventing a second set of path rules that
 #: would disagree with the runner's and quietly arm Overwrite against the wrong file.
-_SAVE_API = ("save_argv", "saved_copies")
+#: ``can_save`` is in the list because ``_DeviceRow.can_save`` calls it. Every name
+#: this page reaches for has to be checked in the ONE place that decides whether the
+#: feature is offered — a name that is called but not checked turns a tree without it
+#: from "the buttons are greyed and say why" into an AttributeError out of a Qt slot.
+_SAVE_API = ("save_argv", "saved_copies", "can_save")
 
 
 def _save_supported() -> bool:
@@ -303,8 +307,20 @@ class _DeviceRow:
         overlay fails with `Failed to get shared "write" lock`, and so does
         ``qemu-img commit``). A save therefore happens INSIDE the running emulator as
         a QMP block job, and a stopped row has no emulator to ask.
+
+        "Running" is NOT the whole rule, though, and this deliberately defers the rest
+        to ``core.qemu_devices.can_save``. That predicate also demands a container name
+        and a QMP socket, because the runner reaches the emulator through
+        ``docker exec`` on the former and speaks the block job over the latter. A
+        record can carry ``state: running`` with either missing — a device started
+        without ``--qmp``, or one whose record was written before the container was
+        named — and a row that only checked "running" enabled Save on it, which then
+        died in the runner with "device has no qmp socket recorded". Two predicates
+        that disagree about the same question are how a button comes to promise
+        something the thing behind it refuses.
         """
-        return self.dev.is_running and _save_supported()
+        return (self.dev.is_running and _save_supported()
+                and qemu_devices.can_save(self.dev))
 
     @property
     def overwrite_target(self) -> str:
