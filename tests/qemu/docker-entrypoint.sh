@@ -50,6 +50,9 @@ STAGE4=""
 MEM="2048"
 SMP="2"
 TIMEOUT="2400"
+# Wall clock for the POST-boot phase. ${TIMEOUT} only covers the ssh-wait loop;
+# see the timeout(1) wrapper on the assertion ssh below for why this exists.
+ASSERT_TIMEOUT="900"
 SSH_PORT="2222"
 UI_PORT="8443"
 SSH_USER="tester"
@@ -78,6 +81,10 @@ Usage: docker run --rm --privileged --device /dev/kvm \\
   --mem MB         guest RAM. Default: ${MEM}
   --smp N          guest vCPUs. Default: ${SMP}
   --timeout SEC    seconds to wait for guest SSH. Default: ${TIMEOUT}
+  --assert-timeout SEC
+                   wall clock for the in-guest assertion ssh (SIGTERM, then
+                   SIGKILL 30s later). Used verbatim — never clamped.
+                   Default: ${ASSERT_TIMEOUT}
   --label NAME     result label (default: <platform>/<role>)
   --keep           keep the scratch run dir
   -h, --help
@@ -96,6 +103,7 @@ while [[ $# -gt 0 ]]; do
         --mem)      MEM="$2"; shift 2 ;;
         --smp)      SMP="$2"; shift 2 ;;
         --timeout)  TIMEOUT="$2"; shift 2 ;;
+        --assert-timeout) ASSERT_TIMEOUT="$2"; shift 2 ;;
         --label)    LABEL="$2"; shift 2 ;;
         --keep)     KEEP=true; shift ;;
         -h|--help)  usage 0 ;;
@@ -148,6 +156,18 @@ emit_result() {
 }
 EOF
 }
+
+# Both timeouts reach $((...)) arithmetic (the ssh-wait deadline) or timeout(1).
+# Under `set -u` a non-numeric value in arithmetic is a FATAL bash error, not a
+# catchable one: `--timeout abc` kills the process at the deadline line with
+# "abc: unbound variable", past every emit_result, so the row surfaces only as
+# run-qemu-docker.sh's "container wrote no result JSON" with no cause recorded.
+# Checked HERE — after emit_result is defined, since die() calls it — so a typo
+# is an ERROR row instead of a silent NO-RESULT.
+[[ "${TIMEOUT}" =~ ^[0-9]+$ ]] \
+    || die "--timeout must be a whole number of seconds, got '${TIMEOUT}'"
+[[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
+    || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
 
 # ── Resolve the image ───────────────────────────────────────────────────────
 # The builders name artifacts hugmesh-<platform>-<arch>-<role>-<env>-<ts>.img[.xz];
@@ -465,9 +485,29 @@ if ! ${up}; then
 fi
 info "SSH is up; running assertions"
 
-step "Running assertions.sh in the guest"
+step "Running assertions.sh in the guest (wall clock: ${ASSERT_TIMEOUT}s)"
+# THE ONLY wall clock over the post-boot phase. ${TIMEOUT} bounds the ssh-wait
+# loop above and stops the moment SSH answers; SSH_OPTS carries ConnectTimeout=5,
+# which bounds the TCP connect and NOTHING after the handshake. So a guest that
+# wedges mid-assertion (TCG livelock, a check that blocks on a dead service)
+# pins this container forever while holding one of the very few --jobs slots.
+#
+# -k 30 is not optional: plain `timeout` sends SIGTERM and then waits for the
+# child indefinitely, so if the ssh client is itself the thing that will not
+# die, the bound is defeated. After SIGTERM it gets 30s, then SIGKILL.
+#
+# Sizing (measured, this machine's out/qemu-runs/results/*.json): of the rows
+# that got as far as RUNNING assertions, duration_s was 90/93/93 for the three
+# that passed and 260 for the slowest, rpi5/pki. Those numbers cover the WHOLE
+# row — boot, ssh wait, assertions, diagnostics — so the assertion ssh alone is
+# strictly under them. (The 2426-2783s rows in that same directory are boot
+# timeouts; they never reached this phase, and ${TIMEOUT} already bounds them.)
+# 900s is ~3.5x the slowest whole row that ever asserted, which is the margin a
+# healthy but slow TCG/ARM row needs. --assert-timeout is used verbatim if an
+# operator disagrees: no floor, no clamp, in either direction.
 set +e
-ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
+timeout -k 30 "${ASSERT_TIMEOUT}" \
+    ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
     < "${QEMU_DIR}/assertions.sh" 2>&1 | tee "${RUN_DIR}/assertions.log"
 ARC=${PIPESTATUS[0]}
 set -e
@@ -495,22 +535,44 @@ FAILED="$(grep -oE '[0-9]+ failed'          "${RUN_DIR}/assertions.log" | grep -
 # keys-provision BEFORE headscale. Fixing that is an IMAGE-side change (only
 # matters after a rebuild) and is deliberately deferred until these captured
 # logs pin the exact startup error.
+#
+# Every ssh below is timeout-wrapped for the same reason as the assertion ssh:
+# ConnectTimeout=5 does not bound an established session, and these run in
+# EXACTLY the state where a hang is likely — a guest that just failed or timed
+# out. The bound can be tight here because each call already ends in `|| true`:
+# the cost of a spurious timeout is one missing diagnostic file, never the
+# verdict. Bounds the whole teardown at 4 x (60 + 5) here plus 65s for the
+# poweroff below, i.e. 325s, where it was previously unbounded.
 step "Collecting guest diagnostics into ${RUN_DIR}"
 for gf in /var/log/keys-provision.log /var/log/headscale.err /var/log/headscale.log; do
-    ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" "sudo cat ${gf}" \
+    timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" "sudo cat ${gf}" \
         > "${RUN_DIR}/guest$(echo "${gf}" | tr '/' '_')" 2>/dev/null || true
 done
-ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
     'sudo rc-service headscale status 2>&1; echo "--- rc-update ---"; sudo rc-update show default 2>&1' \
     > "${RUN_DIR}/guest_headscale-status.txt" 2>/dev/null || true
 
 step "Powering down guest"
-ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo poweroff' 2>/dev/null || true
+# `sudo poweroff` legitimately tears the channel down under ssh's feet, so this
+# call's own failure has always been ignored — but "ignored" is not "bounded",
+# and a guest that accepts the command and then never closes the socket left it
+# blocking forever. The qcow2 overlay is discarded by cleanup() either way.
+timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo poweroff' 2>/dev/null || true
 sleep 3
 
 if [ "${ARC}" -eq 0 ]; then
     info "${GREEN}${LABEL}: DEVICE TEST PASSED${RST} (${PASSED:-?} assertions)"
     emit_result PASS "all assertions passed" "${PASSED:-0}" "${FAILED:-0}"
+elif [ "${ARC}" -eq 124 ] || [ "${ARC}" -eq 137 ]; then
+    # timeout(1) reports 124 when SIGTERM was enough and 137 when it had to
+    # escalate to SIGKILL. Neither can come from the guest here: assertions.sh
+    # ends in `[ "${FAIL}" -eq 0 ]`, so its only exit codes are 0 and 1, and ssh
+    # reports its own transport failures as 255. A row that hits this is a HANG,
+    # not a failed assertion — say so, with whatever partial counts the log held,
+    # rather than filing it under the generic "assertions failed".
+    warn "${LABEL}: DEVICE TEST TIMED OUT after ${ASSERT_TIMEOUT}s (rc=${ARC})"
+    emit_result FAIL "assertion ssh exceeded its ${ASSERT_TIMEOUT}s wall clock; killed" \
+        "${PASSED:-0}" "${FAILED:-0}"
 else
     warn "${LABEL}: DEVICE TEST FAILED (${FAILED:-?} assertions failed)"
     emit_result FAIL "assertions failed" "${PASSED:-0}" "${FAILED:-0}"

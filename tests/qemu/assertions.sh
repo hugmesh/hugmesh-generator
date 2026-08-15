@@ -8,12 +8,33 @@ set -u
 PASS=0; FAIL=0
 ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
+# skip() counts as NOTHING. An assertion that does not apply to this node must not
+# inflate the PASS total the harness scrapes ("RESULT: N passed") into the grid.
+skip() { echo "  SKIP  $*"; }
 check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
 echo "== HugMesh RPi 5 image — boot/provision assertions =="
 echo "-- identity --"
-check "hostname provisioned (not default 'localhost')" \
-    '[ -n "$(hostname)" ] && [ "$(hostname)" != "localhost" ] && [ "$(hostname)" != "gentoo" ]'
+# THE BAKED HOSTNAME PASSES THE OLD TEST WITH NO PROVISIONING AT ALL.
+# The old form excluded only the literals 'localhost' and 'gentoo', but both builders
+# bake a role-derived name into the image before it ever boots: rpi5 sets
+# HOSTNAME=gentoo-${BOARD} / ${BRAND}-${ROLE} (build-rpi5-stage4.sh:1276-1277, written
+# at :3821) and x86 sets ${BRAND}-pki / -be / -fe / -host / -omnibus / ...
+# (build-x86-host-stage4.sh:1241-1310, written at :4221). Every one of those clears
+# both literals, so the check could not fail on any image this harness boots.
+# Assert the value provisioning actually APPLIED instead: provision_identity() logs
+# "Hostname set to <hn>" only after the manifest's .hostname passed RFC-1123
+# validation and was written (specs/etc/keys-provision/provision.sh:477-483).
+# Exactly two scripts feed this file to a guest — tests/qemu/run-qemu-test.sh:243 and
+# tests/qemu/docker-entrypoint.sh:488-511 (whole-repo grep for "assertions.sh",
+# 2026-08-14: every other hit is prose or matrix-assertions.sh; run-qemu-e2e.sh boots
+# guests but never runs this file) — and both always put .hostname in the manifest
+# (run-qemu-test.sh:169 "hugmesh-test", docker-entrypoint.sh:401
+# "hugmesh-${ROLE}-qemu"), so a missing log line here means provisioning did not apply
+# one. Deliberately strict: a manifest with no .hostname at all fails this too.
+_hn_applied="$(sed -n 's/^.*Hostname set to \(..*\)$/\1/p' /var/log/keys-provision.log 2>/dev/null | tail -1)"
+check "hostname is the one KEYS provisioning applied (log:'${_hn_applied:-<none logged>}' live:'$(hostname)')" \
+    '[ -n "${_hn_applied}" ] && [ "$(hostname)" = "${_hn_applied}" ]'
 check "/etc/hugmesh/role marker present"       '[ -f /etc/hugmesh/role ]'
 
 echo "-- KEYS provisioning --"
@@ -30,20 +51,82 @@ check "ssh host keys present"                      'ls /etc/ssh/ssh_host_*_key'
 
 echo "-- mesh VPN --"
 check "headscale binary present"                  'command -v headscale'
-# headscale service checks: only run if headscale was enabled in provision.json.
-# On the image the provision.json was consumed and removed, but the done marker and
-# the init symlink tell us whether headscale was started.
-_hs_enabled=false
-rc-service headscale status >/dev/null 2>&1 && _hs_enabled=true
-if [ -e /etc/runlevels/default/headscale ] || [ -e /etc/runlevels/sysinit/headscale ]; then
-    _hs_enabled=true
+# WHETHER THIS NODE WAS ASKED TO RUN HEADSCALE IS A MANIFEST QUESTION, NOT A
+# HEADSCALE QUESTION.
+#
+# The old gate gave headscale a vote on whether it was ever meant to exist:
+# `rc-service headscale status` OR the runlevel symlink. A node that was told to be a
+# control server and never got one answers "no" to both, fell into the else branch and
+# collected two ok() lines — two PASSes for exactly the failure they were written to
+# catch. INTENT is resolved below from what the MANIFEST asked, strongest source first:
+#
+#  1. provision.json on the KEYS media, which is still attached at assertion time:
+#     run-qemu-test.sh:215 and launch-pi.sh:258-261 / launch-arm.sh:309-313 /
+#     launch-x86.sh:234-237 keep the
+#     disk plugged in for the whole run, at the same label and layout provision.sh
+#     itself mounts at boot (specs/etc/keys-provision/provision.sh:207-241). This is
+#     the ONLY source that survives headscale being absent, because
+#     provision_headscale() bails at provision.sh:603 on `have headscale` BEFORE it
+#     ever reads .headscale.enabled — so on a binary-less node the log holds the
+#     OBSERVATION "headscale not installed" and no statement of intent whatsoever.
+#     That line is never read as intent here: a node asked for headscale and missing
+#     the binary reaches the checks below and FAILS them.
+#  2. Only if that media is unreadable (stick pulled, hand-run): the manifest DECISIONS
+#     provision.sh logged. "headscale disabled in manifest" (provision.sh:607) is the
+#     disabled branch; the other patterns are reachable only past that branch's
+#     `return 0` at provision.sh:610. The log is append-only (provision.sh:51), so the
+#     LAST decision wins and a re-provision that flipped the manifest reads the right
+#     way round. This tier is PARTIAL by construction: every enabled-branch log line is
+#     conditional (config staged, endpoint resolved, users/preauth keys declared), so
+#     an enabled node that logged none of them lands in "unknown", not in "wanted".
+#
+# Unknown emits neither a PASS nor a FAIL — it is not evidence in either direction.
+# Both payload generators are covered: run-qemu-test.sh:171 hardcodes enabled:true for
+# EVERY role, docker-entrypoint.sh:393-396 derives it per role (pki|generic|omnibus).
+_hs_want=unknown          # true = manifest asked for it | false = it did not | unknown
+_hs_src=""
+_hs_dev="$(blkid -L "${KEYS_LABEL:-KEYS}" 2>/dev/null || true)"
+if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
+    _hs_mnt="$(mktemp -d 2>/dev/null || echo '')"
+    if [ -n "${_hs_mnt}" ] && { mount -o ro,nosuid,nodev,noexec "${_hs_dev}" "${_hs_mnt}" 2>/dev/null \
+                                || mount -t vfat -o ro "${_hs_dev}" "${_hs_mnt}" 2>/dev/null; }; then
+        # Both KEYS/ layouts provision.sh accepts (provision.sh:235-238).
+        for _hs_m in "${_hs_mnt}/provision.json" "${_hs_mnt}/keys/provision.json"; do
+            [ -f "${_hs_m}" ] || continue
+            # tostring, not `// false`: jq's // folds a literal false into null, so the
+            # two spellings happen to agree HERE only because this case folds false and
+            # null into the same branch anyway. Keeping them distinct at the source means
+            # the "absent" and "explicitly off" cases stay separable if this ever needs to
+            # tell them apart. Either way null means "not wanted", matching
+            # provision.sh:605-606.
+            case "$(jq -r '.headscale.enabled | tostring' "${_hs_m}" 2>/dev/null)" in
+                true)       _hs_want=true;  _hs_src="KEYS manifest" ;;
+                false|null) _hs_want=false; _hs_src="KEYS manifest" ;;
+            esac
+            break
+        done
+        umount "${_hs_mnt}" 2>/dev/null || true
+    fi
+    [ -n "${_hs_mnt}" ] && rmdir "${_hs_mnt}" 2>/dev/null
 fi
-if ${_hs_enabled}; then
-    check "headscale service started"             'rc-service headscale status'
-    check "headscale listening on :8080"          'ss -ltn 2>/dev/null | grep -q ":8080"'
+if [ "${_hs_want}" = unknown ] && [ -f /var/log/keys-provision.log ]; then
+    _hs_line="$(grep -aE 'headscale disabled in manifest|Installed headscale config from|headscale server_url set to|headscale: staged Layer-A BOOTSTRAP policy|headscale failed to start|Created headscale (user|preauth key)|Loaded headscale ACL policy from' \
+                     /var/log/keys-provision.log 2>/dev/null | tail -1)"
+    case "${_hs_line}" in
+        "")                                 ;;
+        *"headscale disabled in manifest"*) _hs_want=false; _hs_src="provision-log manifest decision" ;;
+        *)                                  _hs_want=true;  _hs_src="provision-log manifest decision" ;;
+    esac
+fi
+if [ "${_hs_want}" = true ]; then
+    check "headscale service started (asked for by ${_hs_src})"       'rc-service headscale status'
+    check "headscale listening on :8080 (asked for by ${_hs_src})"    'ss -ltn 2>/dev/null | grep -q ":8080"'
+elif [ "${_hs_want}" = false ]; then
+    skip "headscale service — not wanted on this node (${_hs_src})"
+    skip "headscale port :8080 — not wanted on this node (${_hs_src})"
 else
-    ok "headscale service (skipped — not enabled in this provisioning)"
-    ok "headscale port :8080 (skipped — not enabled in this provisioning)"
+    skip "headscale service — INTENT UNVERIFIED: no readable KEYS manifest and no manifest decision in the provision log. NOT evidence that headscale is healthy or unwanted."
+    skip "headscale port :8080 — INTENT UNVERIFIED (see above)"
 fi
 
 echo "-- kubernetes stack --"
@@ -98,7 +181,9 @@ if [ -n "${_lockdown_req}" ]; then
         '[ -f /sys/kernel/security/lockdown ] && grep -qE "(^|\[)(integrity|confidentiality)" /sys/kernel/security/lockdown 2>/dev/null || \
          grep -qw lockdown /sys/kernel/security/lsm 2>/dev/null'
 else
-    ok "kernel lockdown (skipped — this image requests none; lockdown is x86 + rpi5 only)"
+    # skip(), not ok(): a check that does not apply to this node is not evidence that the
+    # node is healthy. Counting it as a PASS inflated every ARM-board row.
+    skip "kernel lockdown — this image requests none; lockdown is x86 + rpi5 only"
 fi
 # SELinux must be enforcing (provision_selinux sets it after first-boot relabel).
 # In test we accept permissive (SELinux not yet enforcing after relabel under QEMU).
@@ -140,7 +225,9 @@ if ls /etc/runlevels/*/firewalld >/dev/null 2>&1 \
     check "firewalld default zone is drop or trusted" \
         'firewall-cmd --get-default-zone 2>/dev/null | grep -qE "^(drop|trusted)$"'
 else
-    ok "firewalld (skipped — not enabled on this image; nftables owns the host firewall)"
+    # skip(), not ok(): same reason as the lockdown branch above. firewalld is disabled by
+    # design on essentially every image here, so this one inflated almost every row.
+    skip "firewalld — not enabled on this image; nftables owns the host firewall"
     check "nftables present (firewalld replacement)" \
         'command -v nft'
     check "hugmesh-firewall-reconcile service started (nftables backstop reconciled)" \
