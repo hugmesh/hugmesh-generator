@@ -301,9 +301,33 @@ class LocalStackNode:
         falls back to the generator checkout's filesystem when the data-root is
         not visible (e.g. a remote daemon)."""
         rc, root = self._probe(["docker", "info", "--format", "{{.DockerRootDir}}"])
-        path = root if rc == 0 and root and os.path.exists(root) else self.generator_dir
+        if rc == 0 and root:
+            # NOT os.path.exists(): the data-root is root-owned 0700, so an
+            # unprivileged Studio gets PermissionError walking to it and exists()
+            # answers False — indistinguishable from "not visible". That silently
+            # fell through to the generator checkout, which on this machine is a
+            # DIFFERENT filesystem: /home had 668 GiB free while docker's own
+            # partition had 331. Benign there, but on a box with a roomy /home and
+            # a nearly-full docker partition it greenlights a cold build that then
+            # fills the docker disk and dies — the exact failure that crashed this
+            # operator's 56-container mesh on 2026-08-14.
+            #
+            # Ask the filesystem instead of guessing, and on EACCES walk up to the
+            # nearest ancestor we can stat: /var/lib/containerd is still the right
+            # filesystem even when /var/lib/containerd/docker is unreadable.
+            probe = root
+            while probe:
+                try:
+                    return shutil.disk_usage(probe).free / (1024 ** 3)
+                except OSError:
+                    parent = os.path.dirname(probe)
+                    if parent == probe:      # reached / and still nothing
+                        break
+                    probe = parent
+        # Last resort only: no data-root reported (a remote daemon), so the local
+        # checkout's filesystem is the best available proxy.
         try:
-            return shutil.disk_usage(path).free / (1024 ** 3)
+            return shutil.disk_usage(self.generator_dir).free / (1024 ** 3)
         except OSError:
             return 0.0
 
