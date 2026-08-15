@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-from ..qt import QtWidgets
+from ..qt import QtCore, QtWidgets, Signal
 from ...core import keyzip
 from ._widgets import _file_picker, _row
 
@@ -27,17 +27,34 @@ from ._widgets import _file_picker, _row
 # ever reached, so a typo can't turn into a surprising protocol.
 _ALLOWED_LINK_SCHEMES = ("http", "https", "file")
 
+#: Socket timeout for the remote-config fetch, in seconds.
+#:
+#: urlopen() WITHOUT a timeout blocks on the default socket timeout, which is normally
+#: None — i.e. forever. A server that accepts the connection and then never answers (a
+#: half-open NAT, a wedged reverse proxy, a black-holed IP) therefore hung the fetch with
+#: no upper bound. That is bad enough on a worker thread; on the GUI thread, where this
+#: used to run, it hung the whole window with no Cancel and no way to close it.
+#:
+#: 60s is generous for a key-zip (capped at core.keyzip.MAX_TOTAL) over a slow link, and
+#: it is a per-socket-operation timeout, not a whole-transfer deadline: a slow but
+#: PROGRESSING download is never cut off, only a stalled one.
+_FETCH_TIMEOUT_S = 60
+
 
 def _fetch_to_zip(url: str, dest_path: str) -> str:
     """Download/copy an admin remote-config link to a local .zip and return its path.
 
     User-initiated ONLY (the Fetch button); nothing here runs on its own, so there is
     no background/cluster contact. The scheme is allowlisted BEFORE ``urlopen`` runs,
-    and the body is capped at :data:`core.keyzip.MAX_TOTAL` so a hostile link can't
-    fill the disk. The caller then hands the bytes to the SAME
+    the socket carries :data:`_FETCH_TIMEOUT_S` so a wedged server cannot block
+    forever, and the body is capped at :data:`core.keyzip.MAX_TOTAL` so a hostile link
+    can't fill the disk. The caller then hands the bytes to the SAME
     :func:`core.keyzip.extract` / :meth:`KeyZipContents.apply_to` path a browsed .zip
     takes. (No remote-config service ships today; when one lands, point this at it —
     the extract/apply seam below does not change.)
+
+    BLOCKING BY CONTRACT: this is network I/O, so it runs on :class:`_FetchWorker`, never
+    on the GUI thread.
     """
     scheme = urllib.parse.urlparse(url).scheme.lower()
     if scheme not in _ALLOWED_LINK_SCHEMES:
@@ -45,7 +62,8 @@ def _fetch_to_zip(url: str, dest_path: str) -> str:
             f"unsupported link scheme {scheme or '(none)'!r} — paste an "
             "http://, https:// or file:// link")
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    with urllib.request.urlopen(url) as resp:   # nosec B310 — scheme allowlisted above
+    with urllib.request.urlopen(               # nosec B310 — scheme allowlisted above
+            url, timeout=_FETCH_TIMEOUT_S) as resp:
         data = resp.read(keyzip.MAX_TOTAL + 1)
     if len(data) > keyzip.MAX_TOTAL:
         raise ValueError(f"linked key-zip is too large (> {keyzip.MAX_TOTAL} bytes)")
@@ -54,10 +72,39 @@ def _fetch_to_zip(url: str, dest_path: str) -> str:
     return dest_path
 
 
+class _FetchWorker(QtCore.QThread):
+    """Fetch ONE remote-config link off the GUI thread.
+
+    A timeout alone is not enough: even a bounded 60s wait is 60s of a frozen window with
+    a spinning cursor and no way to cancel or close, which is exactly the class of defect
+    the localmesh _StatusProbe exists to prevent (the same one-shot off-thread probe
+    shape, and this follows it deliberately rather than inventing a second pattern).
+
+    Emits (path, error) — exactly one of them non-empty. Never raises: every failure a
+    fetch can have is already an OSError or a ValueError, and an exception escaping
+    QThread.run would be lost anyway."""
+    done = Signal(str, str)
+
+    def __init__(self, url: str, dest: str, parent=None):
+        super().__init__(parent)
+        self._url = url
+        self._dest = dest
+
+    def run(self):                              # noqa: D102 — QThread contract
+        try:
+            self.done.emit(_fetch_to_zip(self._url, self._dest), "")
+        except (OSError, ValueError) as e:
+            self.done.emit("", str(e))
+        except Exception as e:                  # noqa: BLE001 — a probe must never die
+            self.done.emit("", f"{type(e).__name__}: {e}")
+
+
 class KeyZipPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        #: the in-flight remote-config fetch (None = idle) — see _fetch.
+        self._fetch_worker: _FetchWorker | None = None
         self.setTitle("Load your admin config (key-zip or link)")
         # initializePage() sets a path-aware subtitle; this is the fallback.
         self.setSubTitle(
@@ -167,16 +214,36 @@ class KeyZipPage(QtWidgets.QWizardPage):
         self._apply(p)
 
     def _fetch(self):
+        """Start the fetch OFF the GUI thread and return immediately.
+
+        This used to call _fetch_to_zip() inline, so the whole window froze for as long as
+        the server took to answer — and with no timeout on the socket, "as long as" had no
+        upper bound (see _FETCH_TIMEOUT_S). The button is disabled for the duration so the
+        click cannot be repeated into a second thread, and the status line says what is
+        happening instead of the window simply going dead."""
+        if self._fetch_worker is not None and self._fetch_worker.isRunning():
+            return
         url = self.link.text().strip()
         if not url:
             self.out.setText("Paste a remote-config link first.")
             return
         dest = os.path.join(os.path.expanduser("~"), ".hugmesh",
                             "keyzip-fetch", "admin-config.zip")
-        try:
-            zip_path = _fetch_to_zip(url, dest)
-        except (OSError, ValueError) as e:
-            self.out.setText(f"Fetch failed: {e}")
+        self.fetch_btn.setEnabled(False)
+        self.out.setText(f"Fetching {url} … (the window stays responsive; this gives up "
+                         f"after {_FETCH_TIMEOUT_S}s if the server never answers)")
+        # Held on the page, not in a local: a QThread whose last Python reference is
+        # dropped is garbage-collected mid-run and takes its thread with it.
+        self._fetch_worker = _FetchWorker(url, dest, parent=self)
+        self._fetch_worker.done.connect(self._fetched)
+        self._fetch_worker.start()
+
+    def _fetched(self, zip_path: str, error: str):
+        """The fetch finished (GUI thread). Applying is local work — extract + wire into
+        the config — so it belongs here, on the same path a BROWSED zip takes."""
+        self.fetch_btn.setEnabled(True)
+        if error or not zip_path:
+            self.out.setText(f"Fetch failed: {error or 'no file was written'}")
             return
         self.path.setText(zip_path)   # surface what was fetched (re-importable too)
         self._apply(zip_path)

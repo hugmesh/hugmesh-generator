@@ -158,16 +158,37 @@ def test_inputs_autofill_domain_from_the_bake(wiz, baked_domain):
 
 
 def test_inputs_page_blocks_next_without_a_domain(wiz, monkeypatch, tmp_path):
+    """Blocked, and blocked INLINE.
+
+    validatePage used to raise a QMessageBox here. A modal inside validatePage spins a
+    nested event loop that a headless run can neither see nor dismiss, so the suite hangs
+    until it is killed — the standing house rule, stated in-tree at build.py:359 for the
+    same override. The block must therefore be an inline label, readable as ordinary
+    widget state, and NO message box may be constructed at all."""
     from hugmesh_studio.gui.qt import QtWidgets
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(tmp_path / "missing"))
-    warned = []
-    monkeypatch.setattr(QtWidgets.QMessageBox, "warning",
-                        staticmethod(lambda *a, **k: warned.append(a)))
+    modals = []
+    for name in ("warning", "information", "critical", "question"):
+        monkeypatch.setattr(QtWidgets.QMessageBox, name,
+                            staticmethod(lambda *a, _n=name, **k: modals.append(_n)))
+    monkeypatch.setattr(QtWidgets.QMessageBox, "exec",
+                        lambda *a, **k: modals.append("exec"))
     inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
     assert inputs.domain.text() == ""
+    assert not inputs.problem.isVisible(), "nothing is wrong until Next is pressed"
     before = wiz.currentId()
     wiz.next()
-    assert wiz.currentId() == before and warned
+
+    assert wiz.currentId() == before, "Next must still be refused"
+    assert not modals, f"validatePage must open no modal; it used {modals}"
+    assert inputs.problem.isVisible()
+    assert "Domain required" in inputs.problem.text()
+
+    # …and satisfying it clears the block and lets Next through
+    inputs.domain.setText("example.org")
+    wiz.next()
+    assert wiz.currentId() != before
+    assert not inputs.problem.isVisible()
 
 
 def test_ddns_provider_shows_its_fields(wiz, baked_domain):

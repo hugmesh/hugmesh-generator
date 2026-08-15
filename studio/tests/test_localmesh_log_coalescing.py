@@ -125,3 +125,31 @@ def test_lines_with_no_run_still_surface(qapp):
     page._on_line("orphan line")
     page._drain_lines()
     assert "orphan line" in page.log.toPlainText()
+
+
+def test_the_live_pane_is_bounded_and_the_run_buffer_still_restores_it(qapp):
+    """Coalescing fixed the per-line COST; it did not bound the DOCUMENT. An hours-long
+    cold `make stack-up` is ~100k lines, every one of them appended and none ever dropped,
+    so the QTextDocument grew for the whole run and repaints got steadily slower.
+
+    The cap is safe only because the drill-down does not read the widget: clicking the run
+    row reloads the pane from _StageRun.buffer, itself a deque(maxlen=_RUN_LOG_MAXLEN), so
+    a line the cap drops is one the buffer had already dropped."""
+    page, run = _page(qapp)
+    cap = localmesh._LOG_MAX_BLOCKS
+    assert page.log.maximumBlockCount() == cap
+    assert cap >= run.buffer.maxlen, (
+        "the live cap must not be smaller than the buffer the drill-down restores, or "
+        "capping WOULD lose recoverable scrollback")
+
+    n = cap + 500
+    for i in range(n):
+        page._on_line(f"line {i}")
+    page._drain_lines()
+
+    assert page.log.blockCount() <= cap
+    assert f"line {n - 1}" in page.log.toPlainText(), "the newest output must survive"
+    # the drill-down is unaffected — it reloads from the ring buffer, whole
+    page._load_detail(0, None)
+    assert len(run.buffer) == run.buffer.maxlen
+    assert page.log.toPlainText().endswith(f"line {n - 1}")

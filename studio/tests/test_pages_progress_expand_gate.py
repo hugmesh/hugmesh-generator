@@ -47,6 +47,18 @@ from hugmesh_studio.gui.pages import progress as progress_mod           # noqa: 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
+# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
+# ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
+# tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
+# gui/pages/progress.py). A test that fed the slot and asserted straight away would be
+# asserting on the inbox, so every feed below goes through this one helper, which
+# delivers a line exactly as the drain timer does.
+def _deliver(page, i, line):
+    page._on_line(i, line)
+    page._drain_lines()
+
+
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
@@ -135,7 +147,7 @@ def _fresh_page(wiz, rows=(("acme-x86", "x86"),)):
 
 def _feed(page, i, lines):
     for ln in lines:
-        page._on_line(i, ln)
+        _deliver(page, i, ln)
 
 
 # ── 1. present, but disabled + greyed + explained, BEFORE emerge ───────────────────────
@@ -193,7 +205,7 @@ def test_enables_on_the_first_emerge_group_banner_x86(wiz):
     row = page._rows[0]
     _feed(page, 0, _X86_PRE_EMERGE + [_X86_EMERGE_BANNER])
     assert row.pkg_btn.isEnabled() is False        # the STAGE banner alone is not emerging
-    page._on_line(0, _X86_GROUP_BANNER)            # the builder announces the emerge group
+    _deliver(page, 0, _X86_GROUP_BANNER)            # the builder announces the emerge group
     assert row.pkg_expandable is True
     assert row.pkg_btn.isEnabled() is True
     assert row.pkg_btn.toolTip() == progress_mod._PKG_EXPAND_READY_HINT
@@ -205,11 +217,11 @@ def test_enables_on_the_first_emerge_group_banner_arm(wiz):
     row = page._rows[0]
     _feed(page, 0, _ARM_PRE_EMERGE + [_ARM_EMERGE_BANNER])
     assert row.pkg_btn.isEnabled() is False
-    page._on_line(0, _ARM_GROUP_BANNER)
+    _deliver(page, 0, _ARM_GROUP_BANNER)
     assert row.pkg_expandable is True
     assert row.pkg_btn.isEnabled() is True
     # and the packages really do arrive right behind it — the enable was not premature
-    page._on_line(0, f">>> Emerging (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo "
+    _deliver(page, 0, f">>> Emerging (1 of 149) dev-libs/xxhash-0.8.3-r2::gentoo "
                      f"for {_ARM_ROOT}")
     assert "dev-libs/xxhash-0.8.3-r2" in row.pkg_items
 
@@ -221,7 +233,7 @@ def test_enables_on_the_first_package_row_when_no_group_banner_was_printed(wiz):
     row = page._rows[0]
     _feed(page, 0, _X86_PRE_EMERGE + [_X86_EMERGE_BANNER])
     assert row.pkg_btn.isEnabled() is False
-    page._on_line(0, ">>> Emerging (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")
+    _deliver(page, 0, ">>> Emerging (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")
     assert row.pkg_expandable is True and row.pkg_btn.isEnabled() is True
     assert "" in row.group_items                   # honestly ungrouped, and still enabled
 
@@ -233,7 +245,7 @@ def test_enables_on_portages_own_scheduler_line(wiz):
     row = page._rows[0]
     _feed(page, 0, _ARM_PRE_EMERGE + [_ARM_EMERGE_BANNER])
     assert row.pkg_btn.isEnabled() is False
-    page._on_line(0, _jobs(0, 149, running=3))
+    _deliver(page, 0, _jobs(0, 149, running=3))
     assert row.pkg_parser.scheduler().seen is True
     assert row.pkg_expandable is True and row.pkg_btn.isEnabled() is True
 
@@ -252,7 +264,7 @@ def test_two_jobs_in_different_phases_have_independent_affordances(wiz):
     # the shared 1s tick). Neither may leak job 0's state onto it: this is what a
     # gate that asked "is ANY row emerging?" would get wrong.
     emerging.job_t_start = fetching.job_t_start = time.monotonic()
-    page._on_line(1, _banner("Installing spec files"))
+    _deliver(page, 1, _banner("Installing spec files"))
     page._on_tick()
     assert fetching.pkg_expandable is False
     assert fetching.pkg_btn.isEnabled() is False
@@ -360,13 +372,13 @@ def test_a_fault_in_the_enable_check_cannot_escape_the_line_slot(wiz):
         raise RuntimeError("wrapped C/C++ object has been deleted")
 
     page._emerge_started = _boom                      # the gate's own read, blown up
-    page._on_line(0, _X86_PRE_EMERGE[0])              # must not raise
+    _deliver(page, 0, _X86_PRE_EMERGE[0])              # must not raise
     page._on_tick()                                   # nor from the tick path
     assert row.pkg_expandable is False                # honest: still greyed
     del page._emerge_started
     # not latched off — the very next line re-evaluates and can still enable it
-    page._on_line(0, _X86_EMERGE_BANNER)
-    page._on_line(0, _X86_GROUP_BANNER)
+    _deliver(page, 0, _X86_EMERGE_BANNER)
+    _deliver(page, 0, _X86_GROUP_BANNER)
     assert row.pkg_expandable is True and row.pkg_btn.isEnabled() is True
 
 

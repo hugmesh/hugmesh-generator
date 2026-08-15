@@ -245,6 +245,17 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         self.domain_hint = QtWidgets.QLabel("")
         self.domain_hint.setStyleSheet("color: gray;")
         lay.addWidget(self.domain_hint)
+        # The blocking-problem line. INLINE, never a QMessageBox: validatePage is called
+        # by QWizard on Next, and a modal there spins a nested event loop that a headless
+        # test can neither see nor dismiss — the run hangs until it is killed (the house
+        # rule; build.py:359 states the same for its own validatePage). An inline red
+        # label says the same sentence, next to the field it is about, and is readable by
+        # a test as ordinary widget state.
+        self.problem = QtWidgets.QLabel("")
+        self.problem.setWordWrap(True)
+        self.problem.setStyleSheet("color: #c62828;")
+        self.problem.setVisible(False)
+        lay.addWidget(self.problem)
         self.ingress_ip = QtWidgets.QLineEdit()
         self.ingress_ip.setPlaceholderText("public A record value (e.g. 203.0.113.7)")
         self.ingress_row = _row("Ingress IP", self.ingress_ip)
@@ -295,6 +306,9 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
     def initializePage(self):
         o = self.wiz.opts
         p = self.wiz.driver.provider(o.provider)
+        # a stale block from a previous Next must not greet the operator on re-entry
+        self.problem.setVisible(False)
+        self.problem.setText("")
         if not self.domain.text().strip():
             baked = o.domain or self.wiz.driver.autofill_domain()
             self.domain.setText(baked)
@@ -325,11 +339,14 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         # domain for it; every other mechanism still needs one downstream.
         domain_required = not (p and p.mechanism in _NO_DOMAIN_MECHANISMS)
         if domain_required and not o.domain:
-            QtWidgets.QMessageBox.warning(
-                self, "Domain required",
-                "Every downstream step needs the public domain — no baked cluster "
-                "domain was found to autofill it, so enter it here.")
+            self.problem.setText(
+                "Domain required — every downstream step needs the public domain, and "
+                "no baked cluster domain was found to autofill it. Enter it above.")
+            self.problem.setVisible(True)
+            self.domain.setFocus()
             return False
+        self.problem.setVisible(False)          # the block is cleared
+        self.problem.setText("")
         o.ingress_ip = self.ingress_ip.text().strip()
         o.ingress_ipv6 = self.ingress_ipv6.text().strip()
         o.tunnel_cname = self.tunnel_cname.text().strip()

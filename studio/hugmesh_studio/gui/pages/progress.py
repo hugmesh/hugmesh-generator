@@ -169,6 +169,27 @@ _PKG_LOG_TAIL_BYTES = 2 * 1024 * 1024
 _TOOL_CELL_CHARS = 72
 _TOOL_TIP_CHARS = 300
 
+# ── LINE COALESCING: the drain clock ───────────────────────────────────────────────────
+# 50 ms (~20 Hz) is the same figure localmesh.py's drain uses and for the same reason: it
+# is below the ~100 ms threshold at which a UI starts to read as laggy, so the pane still
+# looks live, while the per-line cost of delivery collapses from O(lines) to O(ticks).
+_DRAIN_MS = 50
+
+#: LIVE log-pane block cap. A QPlainTextEdit's document grows without bound as long as
+#: something appends to it, and this page's stream is measured at 3.16M lines / 353 MB for
+#: ONE x86 build (core/emerge_packages.py:12) — an hours-long build therefore ended with a
+#: multi-hundred-MB document whose every repaint got slower.
+#:
+#: Capping the LIVE pane loses nothing that was recoverable anyway: the authoritative raw
+#: log of a job is _Row.buffer, itself a deque(maxlen=4000), and clicking the job row
+#: reloads the pane from THAT (see _load_detail). A stage slice is bounded at
+#: stage_tracker._STAGE_LOG_MAXLEN = 2000. 20,000 blocks is therefore 5x the largest
+#: drill-down the page can restore — the cap can only ever drop lines the drill-down had
+#: already dropped. The one view that is NOT bounded this way is a PACKAGE's own on-disk
+#: emerge log (_PKG_LOG_TAIL_BYTES, up to 2 MiB of file), so the cap is lifted for that
+#: pane and re-applied on any return to a stream view (_set_log_cap).
+_LOG_MAX_BLOCKS = 20000
+
 # ── the per-JOB package-list affordance ────────────────────────────────────────────────
 # Operator, 2026-07-29, after watching a live build with the per-package tree: "we can see
 # the packages now in the current builder and this is good leave this as a default with the
@@ -512,6 +533,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         # 0, not the default sizeHint floor: the log pane must be draggable/collapsible
         # all the way shut, leaving just the header row as the restore handle.
         self.log.setMinimumHeight(0)
+        # BOUNDED DOCUMENT — see _LOG_MAX_BLOCKS. Without this an hours-long build grows
+        # the QTextDocument to millions of blocks and every repaint pays for all of them.
+        self.log.setMaximumBlockCount(_LOG_MAX_BLOCKS)
         log_lay.addWidget(self.log, 1)
 
         # ── "watch it in a terminal" help (greyed, selectable, REAL path) ─────────────
@@ -606,6 +630,33 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._tick = QtCore.QTimer(self)
         self._tick.setInterval(1000)
         self._tick.timeout.connect(self._on_tick)
+
+        # ── LINE COALESCING — why the window used to freeze ───────────────────────────
+        # _WorklistWorker emits ONE queued signal PER OUTPUT LINE, and the old slot ran
+        # the whole pipeline inline for each: sanitise -> flag join -> raw buffer ->
+        # ProgressParser -> _apply_state (bar + phase label) -> StageTracker ->
+        # EmergePackageParser -> _render_package -> _render_scheduler -> _sync_pkg_expand
+        # -> _write_status -> _refresh_overall -> appendPlainText. Six of those touch a
+        # widget, so the GUI thread paid a repaint request PER LINE.
+        #
+        # That is the same defect localmesh.py's drain fixed, on a far bigger stream: the
+        # kind-up burst that froze the window there is "tens of thousands" of lines, while
+        # ONE real x86 build measured 3.16M lines / 353 MB (core/emerge_packages.py:12) —
+        # and this page drives every image build, the product's longest verb. The builds
+        # were ALWAYS off-thread; it was the DELIVERY that blocked.
+        #
+        # Now the worker's signal does one cheap thing — append to this deque — and a
+        # ~20 Hz drain runs the pipeline for the whole batch. The PARSING half still runs
+        # per line, in arrival order, so the per-package emerge ladder, the stage slices
+        # and the flag join are accounted EXACTLY as before; only the RENDERING is
+        # batched: one bar/phase write per row per tick, one package repaint per moved
+        # atom per tick, one status + overall refresh, one appendPlainText. Cost becomes
+        # O(ticks), not O(lines). Nothing is dropped — every line still reaches
+        # row.buffer, the parsers and the tracker.
+        self._line_inbox: deque[tuple[int, str]] = deque()
+        self._drain = QtCore.QTimer(self)
+        self._drain.setInterval(_DRAIN_MS)
+        self._drain.timeout.connect(self._drain_lines)
         # flash-to-a-device state (post-build)
         self.flash_worker: _FlashWorker | None = None
         # post-build QEMU emulated-device tests (BuildPage's qemu_e2e opt-in) — its own
@@ -841,6 +892,19 @@ class ProgressPage(QtWidgets.QWizardPage):
         if self._help_cmd:
             QtWidgets.QApplication.clipboard().setText(self._help_cmd)
 
+    def _set_log_cap(self, capped: bool) -> None:
+        """Bound the log document, or lift the bound for a FILE view.
+
+        Capped is the normal state (see _LOG_MAX_BLOCKS): the live stream is unbounded and
+        every drill-down it can restore is itself a bounded ring buffer, so the cap can
+        only drop lines the drill-down had already dropped. A PACKAGE's own emerge log is
+        the exception — that pane shows a real file, tail-read at up to
+        _PKG_LOG_TAIL_BYTES, and a cap would silently eat the HEAD of what was read. So
+        the bound is lifted for exactly that view and re-applied on any return to a stream
+        view. Nothing appends to the pane while a package is selected (_consume_line
+        returns None for a _selected_pkg), so the uncapped window cannot grow."""
+        self.log.setMaximumBlockCount(_LOG_MAX_BLOCKS if capped else 0)
+
     # ---- lifecycle --------------------------------------------------------------
     def initializePage(self) -> None:
         if self.worker is not None and self.worker.isRunning():
@@ -1024,6 +1088,10 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _reset(self) -> None:
         self._tick.stop()
+        # Drop any output still banked from a previous run BEFORE self._rows goes away —
+        # a stale (index, line) pair belongs to rows that no longer exist.
+        self._drain.stop()
+        self._line_inbox.clear()
         # re-dock FIRST, before anything clears: a page reset while the log is detached
         # must not leave the panel (and self.log, which it owns) parented to a window
         # this page no longer tracks. _redock_log is a no-op when already docked.
@@ -1146,6 +1214,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._refresh_log_help()
         self.completeChanged.emit()
         self._sync_back_button()
+        self._drain.start()      # stopped in _on_finished_all, after a final flush
         self.worker.start()
 
     def _supervisor_label(self) -> str:
@@ -1179,7 +1248,68 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._refresh_overall()
 
     def _on_line(self, i: int, line: str) -> None:
-        row = self._rows[i]
+        """Worker-signal slot. Deliberately does NOTHING but enqueue — see the coalescing
+        note where ``_drain`` is constructed. Anything real here runs once PER OUTPUT LINE
+        on the GUI thread, and this page's stream is millions of lines long."""
+        self._line_inbox.append((i, line))
+
+    def _drain_lines(self) -> None:
+        """Process every line banked since the last tick.
+
+        Two halves, deliberately split:
+
+        * PER LINE (unchanged, in arrival order) — sanitise, flag join, raw buffer,
+          ProgressParser, StageTracker, EmergePackageParser, and the get-or-create of a
+          package's tree item. All pure bookkeeping except the item creation, which is
+          one-time per atom and must stay per line: a group node nests under whichever
+          stage was RUNNING when its first package appeared, so deferring it to the end of
+          the batch could file a group under the wrong stage.
+        * ONCE PER BATCH (the repainting half) — the job bar + phase label, each moved
+          package's row, the parallel-emerge aggregate, the package-list affordance, the
+          tray status file, the overall bar, and ONE appendPlainText for the pane.
+        """
+        if not self._line_inbox:
+            return
+        # Snapshot and clear FIRST: the worker thread keeps emitting while this runs, and
+        # draining in place would livelock on a fast producer.
+        batch = [self._line_inbox.popleft() for _ in range(len(self._line_inbox))]
+        touched_rows: list[int] = []                       # ordered, de-duped
+        moved: dict[tuple[int, str], PackageProgress] = {}  # (row, atom) -> live row
+        visible: list[str] = []
+        for i, raw_line in batch:
+            # Defensive: _reset() can empty self._rows while the old worker is still
+            # emitting. This is a Qt slot's downstream, and on PyQt6 an IndexError
+            # escaping into Qt calls qFatal and ABORTS the Studio.
+            if not (0 <= i < len(self._rows)):
+                continue
+            row = self._rows[i]
+            if i not in touched_rows:
+                touched_rows.append(i)
+            line = self._consume_line(row, raw_line, moved)
+            if line is not None:
+                visible.append(line)
+        for (i, _atom), pkg in moved.items():
+            self._render_package(self._rows[i], pkg)
+        for i in touched_rows:
+            row = self._rows[i]
+            # state() is a fresh snapshot of the parser's CURRENT state, so painting it
+            # once at the end of the batch shows exactly what painting it per line would
+            # have left on screen.
+            self._apply_state(row, row.parser.state())
+            self._render_scheduler(row)
+            self._sync_pkg_expand(row)
+        if touched_rows:
+            self._write_status()
+            self._refresh_overall()
+        if visible:
+            self.log.appendPlainText("\n".join(visible))
+
+    def _consume_line(self, row: _Row, line: str,
+                      moved: dict[tuple[int, str], PackageProgress]) -> str | None:
+        """The PER-LINE half of the pipeline (see _drain_lines). Returns the sanitised
+        line when it belongs in the pane under the current selection, else None; records
+        any package the line moved in ``moved`` for the batch's single repaint."""
+        i = row.index
         # SANITISE ONCE, HERE. The builders colour their output unconditionally, so a
         # real line arrives as e.g. "\x1b[1;36m==> Rebranding\x1b[0m" — and the x86
         # emerge output also emits cursor moves ("\x1b[A", "\x1b[72C"). Qt has no glyph
@@ -1222,7 +1352,8 @@ class ProgressPage(QtWidgets.QWizardPage):
                 self._apply_flag_cells(row, cpv, row.pkg_items[cpv])
         row.buffer.append(line)
         state = row.parser.feed(line)
-        self._apply_state(row, state)
+        # NOT _apply_state here: the bar + phase label are painted ONCE for the whole
+        # batch, from row.parser.state(), at the end of the drain.
         # attribute the line to the currently-running stage + advance stage state on a
         # banner transition. O(1) per line; tree items are touched only on a transition.
         now = time.monotonic()
@@ -1238,29 +1369,36 @@ class ProgressPage(QtWidgets.QWizardPage):
         # parses identically to the raw one (same reasoning as the parser/tracker above).
         pkg = row.pkg_parser.feed(line)
         if pkg is not None:
-            self._render_package(row, pkg)
-        # PARALLEL emerge: portage's ">>> Jobs: N of M complete, R running" scheduler line
-        # names no package, so feed() correctly returns None for it — but it carries the
-        # aggregate the operator asked to see. Revision-gated, so this costs one integer
-        # compare on every other line.
-        self._render_scheduler(row)
-        # the per-job package-list affordance: greyed until THIS job's emerge phase really
-        # begins, then live for good. Placed AFTER the package/scheduler feed so the very
-        # line that proves emerging (group banner, first atom, or portage's own scheduler
-        # line) is the line that enables it. One bool test per line once latched.
-        self._sync_pkg_expand(row)
-        self._write_status()
-        self._refresh_overall()
+            # CREATE the row's tree item now (one-time per atom, and it must happen here:
+            # _group_item nests a group under whichever stage is RUNNING at this instant),
+            # but defer the PAINTING to the batch. 74,998 lines of a real build are ninja
+            # counters for the SAME atom, each of which used to repaint its label; the
+            # PackageProgress object is live and shared (the parser's documented
+            # contract), so painting it once per drain paints its final state.
+            self._render_package(row, pkg, paint=False)
+            moved[(i, pkg.atom)] = pkg
+        # PARALLEL emerge (_render_scheduler), the package-list affordance
+        # (_sync_pkg_expand), the tray status file and the overall bar are all repainting
+        # surfaces with no per-line semantics, so the drain runs them once for the batch.
+        #
         # live drill-down append: only when the arriving line's target matches the current
         # selection — the whole job (stage None) gets every line; a selected stage gets a
         # line only while it is the running stage of that job. A selected PACKAGE shows a
         # FILE (its portage log, tick-followed), never the stream — appending here would
-        # interleave whole-job lines into it.
+        # interleave whole-job lines into it. Evaluated PER LINE because tracker.cur can
+        # move partway through a batch.
         if i == self._selected and self._selected_pkg is None:
             if self._selected_stage is None or row.tracker.cur == self._selected_stage:
-                self.log.appendPlainText(line)
+                return line
+        return None
 
     def _on_entry_done(self, i: int, code) -> None:
+        # FLUSH BEFORE SETTLING. Up to one drain interval of this entry's output is still
+        # banked when its done signal arrives, and those are exactly the lines that say
+        # HOW it finished. Draining after tracker.finalize() would feed them to a tracker
+        # that has already settled — the failing stage would lose the very output that
+        # explains the failure.
+        self._drain_lines()
         row = self._rows[i]
         now = time.monotonic()
         if code is not None:
@@ -1337,6 +1475,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._refresh_footer()
 
     def _on_finished_all(self, code: int) -> None:
+        self._drain_lines()                    # final flush (see _on_entry_done)
+        self._drain.stop()                     # an idle page must own no delivery clock
         self._all_terminal = True
         self._tick.stop()                      # nothing running -> stop the elapsed ticker
         self.stop_all_btn.setEnabled(False)
@@ -1732,11 +1872,18 @@ class ProgressPage(QtWidgets.QWizardPage):
             lines.append(f"tool: {_elide(pkg.tool_info, _TOOL_TIP_CHARS)}")
         return "\n".join(lines)
 
-    def _render_package(self, row: _Row, pkg: PackageProgress) -> None:
+    def _render_package(self, row: _Row, pkg: PackageProgress,
+                        paint: bool = True) -> None:
         """Reflect ONE package's live parser row onto its tree item — called only when
         feed() reported that row moved, and every widget write below is guarded by the
         last-painted fingerprint, so the 74,998 ninja-counter lines of a real build cost
-        a tuple compare + a bar/label write each, and non-package lines cost nothing."""
+        a tuple compare + a bar/label write each, and non-package lines cost nothing.
+
+        ``paint=False`` does the get-or-create half ONLY. The drain calls it that way per
+        line so a group node still nests under the stage that was running when its first
+        package appeared, then calls it again (painting) once per moved atom per tick —
+        see _drain_lines. The state it paints is the same either way: PackageProgress is
+        the parser's live, shared row object, not a snapshot."""
         atom = pkg.atom
         item = row.pkg_items.get(atom)
         if item is None:
@@ -1763,6 +1910,8 @@ class ProgressPage(QtWidgets.QWizardPage):
             row.pkg_bars[atom] = bar
             row.pkg_tools[atom] = tool
             row.pkg_progress[atom] = pkg         # live shared object (parser contract)
+        if not paint:
+            return
         shown = (pkg.step, pkg.percent, pkg.failed, len(pkg.use_flags),
                  len(pkg.header), pkg.tool_info)
         last = row.pkg_shown.get(atom)
@@ -1876,6 +2025,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._selected = i
         self._selected_stage = stage_j
         self._selected_pkg = None            # back to the stream view
+        self._set_log_cap(True)              # …which is the bounded one
         if stage_j is None:
             self.log.setPlainText("\n".join(row.buffer))
             self.log_header.setText(f"Log — {row.label}")
@@ -1931,6 +2081,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._selected = i
         self._selected_stage = None
         self._selected_pkg = (i, atom)
+        # a FILE view, not the stream: lift the block cap so a tail-read log is shown
+        # whole rather than head-truncated (see _set_log_cap).
+        self._set_log_cap(False)
         pkg = row.pkg_progress.get(atom)
         group = (pkg.group if pkg is not None and pkg.group else "ungrouped")
         path = self._pkg_log_path(row, atom)
@@ -2149,6 +2302,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._redock_log()
         self._flash_timer.stop()
         self._tick.stop()
+        # The DRAIN deliberately keeps running. Unlike the elapsed ticker it is not
+        # cosmetic: it is the only thing that feeds row.buffer (the session record's error
+        # tails) and _write_status (the tray badge that reports a backgrounded build), and
+        # ASK 16 says a closed window must not stop the run. The supervisor pins the
+        # window's C++ objects alive, so the appends still have somewhere to land, and at
+        # ~20 Hz an unwatched page costs a batch append per tick.
         self._flash_queue = []
         if self.flash_worker is not None and self.flash_worker.isRunning():
             self.flash_worker.wait(3000)

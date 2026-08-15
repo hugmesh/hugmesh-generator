@@ -31,6 +31,18 @@ from hugmesh_studio.gui.pages import progress as progress_mod      # noqa: E402
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
+# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
+# ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
+# tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
+# gui/pages/progress.py). A test that fed the slot and asserted straight away would be
+# asserting on the inbox, so every feed below goes through this one helper, which
+# delivers a line exactly as the drain timer does.
+def _deliver(page, i, line):
+    page._on_line(i, line)
+    page._drain_lines()
+
+
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
@@ -195,7 +207,7 @@ def test_packages_nest_under_the_emerging_stage_grouped_by_group(wiz):
     page = _fresh_row(wiz)
     row = page._rows[0]
     for ln in _PKG_STREAM:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     # the group node is a child of the stage that was RUNNING when the packages appeared.
     # Under the canonical ladder the "Native emerge inside chroot" banner is compat for
     # x86 stage 10 ("Emerge @system") and the "Emerge group: image" banner advances to
@@ -218,13 +230,13 @@ def test_packages_nest_under_the_emerging_stage_grouped_by_group(wiz):
 def test_every_package_seen_is_listed_not_just_the_current_one(wiz):
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: image"))
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: image"))
     atoms = ["dev-lang/duktape-2.7.0-r3", "sys-libs/zlib-1.3.1-r1",
              "app-arch/xz-utils-5.6.4"]
     for n, atom in enumerate(atoms, start=1):
-        page._on_line(0, f">>> Emerging ({n} of 3) {atom}::gentoo")
-        page._on_line(0, f">>> Completed ({n} of 3) {atom}::gentoo")
+        _deliver(page, 0, f">>> Emerging ({n} of 3) {atom}::gentoo")
+        _deliver(page, 0, f">>> Completed ({n} of 3) {atom}::gentoo")
     assert set(row.pkg_items) == set(atoms)
     assert row.group_items["image"].childCount() == 3
     # completed rows KEEP their state (general progress with all packages): all green ✓
@@ -238,8 +250,8 @@ def test_pre_banner_packages_are_ungrouped_never_filed_under_image(wiz):
     is honestly unknown — the GUI must not invent an 'image' heading for it."""
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, ">>> Emerging (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")  # L96
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, ">>> Emerging (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")  # L96
     assert "" in row.group_items and "image" not in row.group_items
     assert row.group_items[""].text(progress_mod._COL_NAME) == "ungrouped"
 
@@ -251,9 +263,9 @@ def test_package_bar_is_an_embedded_widget_driven_by_the_ladder(wiz):
     — monotonically, reaching 100 only on the Completed line."""
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: system"))
-    page._on_line(0, ">>> Emerging (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: system"))
+    _deliver(page, 0, ">>> Emerging (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")
     atom = "sys-devel/gettext-0.22.5-r2"
     item = row.pkg_items[atom]
     cell = page.tree.itemWidget(item, progress_mod._COL_PROGRESS)
@@ -266,12 +278,12 @@ def test_package_bar_is_an_embedded_widget_driven_by_the_ladder(wiz):
                ">>> Test phase [not enabled]: sys-devel/gettext-0.22.5-r2",
                ">>> Install sys-devel/gettext-0.22.5-r2 into /var/tmp/portage/...",
                ">>> Completed installing sys-devel/gettext-0.22.5-r2 into ..."):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
         seen.append(row.pkg_bars[atom].value())
     assert seen == sorted(seen), f"package bar regressed: {seen}"
     assert seen[-1] < 100, "100 must be reserved for the Completed counter line"
     assert row.pkg_items[atom].foreground(0).color().name() == _BLUE  # running
-    page._on_line(0, ">>> Completed (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")
+    _deliver(page, 0, ">>> Completed (1 of 1) sys-devel/gettext-0.22.5-r2::gentoo")
     assert row.pkg_bars[atom].value() == 100
     assert row.pkg_items[atom].foreground(0).color().name() == _GREEN
 
@@ -282,12 +294,12 @@ def test_ninja_counter_shows_compact_tool_info_and_refines_the_bar(wiz):
     parser computes it (15 + (64*788)//1186 = 57, the inkscape live-proof value)."""
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: image"))
-    page._on_line(0, ">>> Emerging (1 of 8) media-gfx/inkscape-1.4.3::gentoo")
-    page._on_line(0, ">>> Compiling source in /var/tmp/portage/media-gfx/inkscape-1.4.3/work")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: image"))
+    _deliver(page, 0, ">>> Emerging (1 of 8) media-gfx/inkscape-1.4.3::gentoo")
+    _deliver(page, 0, ">>> Compiling source in /var/tmp/portage/media-gfx/inkscape-1.4.3/work")
     long_tail = "x" * 200                      # stands in for the 4 KB g++ argv
-    page._on_line(0, f"[788/1186] /usr/bin/x86_64-pc-linux-gnu-g++ {long_tail}")
+    _deliver(page, 0, f"[788/1186] /usr/bin/x86_64-pc-linux-gnu-g++ {long_tail}")
     atom = "media-gfx/inkscape-1.4.3"
     assert row.pkg_bars[atom].value() == 57
     label = row.pkg_tools[atom]
@@ -307,9 +319,9 @@ def test_flags_column_and_tooltip_come_from_the_real_elog_header(wiz, tmp_path):
         _FREETYPE_LOG, encoding="utf-8")
     page = _fresh_row(wiz, log_root=str(log_root))
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: dependencies"))
-    page._on_line(0, ">>> Emerging (1 of 258) media-libs/freetype-2.14.3::gentoo")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: dependencies"))
+    _deliver(page, 0, ">>> Emerging (1 of 258) media-libs/freetype-2.14.3::gentoo")
     atom = "media-libs/freetype-2.14.3"
     item = row.pkg_items[atom]
     flags = item.text(progress_mod._COL_FLAGS)
@@ -332,9 +344,9 @@ def test_clicking_a_package_opens_its_emerge_log_in_the_shared_pane(wiz, tmp_pat
     log_file.write_text(_FREETYPE_LOG + "checking for gcc... yes\n", encoding="utf-8")
     page = _fresh_row(wiz, log_root=str(log_root))
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: dependencies"))
-    page._on_line(0, ">>> Emerging (1 of 258) media-libs/freetype-2.14.3::gentoo")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: dependencies"))
+    _deliver(page, 0, ">>> Emerging (1 of 258) media-libs/freetype-2.14.3::gentoo")
     atom = "media-libs/freetype-2.14.3"
 
     page._on_item_clicked(row.pkg_items[atom])
@@ -348,7 +360,7 @@ def test_clicking_a_package_opens_its_emerge_log_in_the_shared_pane(wiz, tmp_pat
     assert str(log_file) in page.log_help.text()
     assert f"tail -F -n +1 {log_file}" in page.log_help.text()
     # while a package log is shown, arriving STREAM lines must not interleave into it
-    page._on_line(0, "  some unrelated stream line")
+    _deliver(page, 0, "  some unrelated stream line")
     assert "some unrelated stream line" not in page.log.toPlainText()
     # clicking back to the JOB restores the stream view
     page._on_item_clicked(row.job_item)
@@ -364,9 +376,9 @@ def test_clicking_a_package_with_no_log_yet_says_so_honestly(wiz, tmp_path):
     log_root.mkdir()
     page = _fresh_row(wiz, log_root=str(log_root))
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: image"))
-    page._on_line(0, ">>> Emerging (1 of 8) dev-lang/duktape-2.7.0-r3::gentoo")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: image"))
+    _deliver(page, 0, ">>> Emerging (1 of 8) dev-lang/duktape-2.7.0-r3::gentoo")
     atom = "dev-lang/duktape-2.7.0-r3"
 
     page._on_item_clicked(row.pkg_items[atom])
@@ -387,7 +399,7 @@ def test_clicking_a_group_header_falls_back_to_the_stage_slice(wiz):
     page = _fresh_row(wiz)
     row = page._rows[0]
     for ln in _PKG_STREAM:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     page._on_item_clicked(row.group_items["image"])
     # the group has no log of its own; the pane shows the OWNING stage's slice
     # (stage 11, "Emerge role payload" — the canonical stage the image group belongs to)
@@ -402,12 +414,12 @@ def test_failed_package_is_red_terminal_and_its_group_expands(wiz):
     the bar freezes short of 100, and the group node expands so the culprit is visible."""
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: world"))
-    page._on_line(0, ">>> Emerging (561 of 805) app-office/libreoffice-25.2.7.2-r1::gentoo")
-    page._on_line(0, ">>> Failed to emerge app-office/libreoffice-25.2.7.2-r1, Log file:")
-    page._on_line(0, "")
-    page._on_line(0, ">>>  '/var/log/portage/build/app-office:libreoffice-25.2.7.2-r1:"
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: world"))
+    _deliver(page, 0, ">>> Emerging (561 of 805) app-office/libreoffice-25.2.7.2-r1::gentoo")
+    _deliver(page, 0, ">>> Failed to emerge app-office/libreoffice-25.2.7.2-r1, Log file:")
+    _deliver(page, 0, "")
+    _deliver(page, 0, ">>>  '/var/log/portage/build/app-office:libreoffice-25.2.7.2-r1:"
                      "20260726-024143.log'")
     atom = "app-office/libreoffice-25.2.7.2-r1"
     item = row.pkg_items[atom]
@@ -421,12 +433,12 @@ def test_failed_package_is_red_terminal_and_its_group_expands(wiz):
 def test_group_node_shows_done_of_total_from_parser_totals(wiz):
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: system"))
-    page._on_line(0, ">>> Emerging (1 of 3) sys-apps/baselayout-2.17::gentoo")
-    page._on_line(0, ">>> Completed (1 of 3) sys-apps/baselayout-2.17::gentoo")
-    page._on_line(0, ">>> Emerging (2 of 3) sys-devel/gettext-0.22.5-r2::gentoo")
-    page._on_line(0, ">>> Completed (2 of 3) sys-devel/gettext-0.22.5-r2::gentoo")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: system"))
+    _deliver(page, 0, ">>> Emerging (1 of 3) sys-apps/baselayout-2.17::gentoo")
+    _deliver(page, 0, ">>> Completed (1 of 3) sys-apps/baselayout-2.17::gentoo")
+    _deliver(page, 0, ">>> Emerging (2 of 3) sys-devel/gettext-0.22.5-r2::gentoo")
+    _deliver(page, 0, ">>> Completed (2 of 3) sys-devel/gettext-0.22.5-r2::gentoo")
     assert row.group_items["system"].text(progress_mod._COL_PROGRESS) == "2 of 3 done"
 
 
@@ -435,20 +447,20 @@ def test_items_are_created_once_and_non_package_lines_touch_nothing(wiz):
     page = _fresh_row(wiz)
     row = page._rows[0]
     for ln in _PKG_STREAM:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     atom = "dev-lang/duktape-2.7.0-r3"
     item_before = row.pkg_items[atom]
     bar_before = row.pkg_bars[atom]
     group_before = row.group_items["image"]
     # a flood of non-package compiler noise: no new items, no replaced widgets
     for k in range(500):
-        page._on_line(0, f"  CC lib/foo_{k}.o")
+        _deliver(page, 0, f"  CC lib/foo_{k}.o")
     assert row.pkg_items[atom] is item_before
     assert row.pkg_bars[atom] is bar_before
     assert row.group_items["image"] is group_before
     assert group_before.childCount() == 1
     # and a further package line still lands on the SAME structures (no rebuild)
-    page._on_line(0, ">>> Emerging (2 of 258) sys-libs/zlib-1.3.1-r1::gentoo")
+    _deliver(page, 0, ">>> Emerging (2 of 258) sys-libs/zlib-1.3.1-r1::gentoo")
     assert row.pkg_items[atom] is item_before
     assert group_before.childCount() == 2
 
@@ -472,8 +484,8 @@ def test_package_rows_appear_for_every_build_platform(wiz, platform):
     deliberately ABSENT from every phase table."""
     page = _fresh_row(wiz, platform=platform)
     row = page._rows[0]
-    page._on_line(0, _banner("Emerge group: system"))
-    page._on_line(0, ">>> Emerging (1 of 2) sys-devel/gettext-0.22.5-r2::gentoo")
+    _deliver(page, 0, _banner("Emerge group: system"))
+    _deliver(page, 0, ">>> Emerging (1 of 2) sys-devel/gettext-0.22.5-r2::gentoo")
     atom = "sys-devel/gettext-0.22.5-r2"
     assert atom in row.pkg_items, f"platform {platform} lost its package rows"
     gitem = row.group_items["system"]
@@ -493,8 +505,8 @@ def test_group_seen_before_any_stage_nests_under_the_job(wiz):
     all, so the premise cannot rot the way the 'system' one did."""
     page = _fresh_row(wiz, platform="rpi5")
     row = page._rows[0]
-    page._on_line(0, _banner("Emerge group: dependencies"))
-    page._on_line(0, ">>> Emerging (1 of 2) sys-devel/gettext-0.22.5-r2::gentoo")
+    _deliver(page, 0, _banner("Emerge group: dependencies"))
+    _deliver(page, 0, ">>> Emerging (1 of 2) sys-devel/gettext-0.22.5-r2::gentoo")
     assert "sys-devel/gettext-0.22.5-r2" in row.pkg_items
     assert row.tracker.cur < 0, "premise broken: rpi5 now has a dependencies pattern"
     assert row.group_items["dependencies"].parent() is row.job_item

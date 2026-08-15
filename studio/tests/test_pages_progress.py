@@ -27,6 +27,18 @@ from hugmesh_studio.gui.pages.progress import _display_safe         # noqa: E402
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
+# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
+# ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
+# tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
+# gui/pages/progress.py). A test that fed the slot and asserted straight away would be
+# asserting on the inbox, so every feed below goes through this one helper, which
+# delivers a line exactly as the drain timer does.
+def _deliver(page, i, line):
+    page._on_line(i, line)
+    page._drain_lines()
+
+
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
@@ -302,7 +314,7 @@ def test_captured_stream_advances_bar_monotonically_to_100(wiz):
     page._build_row(0, "acme-x86", "x86")
     seen = []
     for ln in CAPTURED_X86_STREAM:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
         # only record determinate values; an indeterminate (busy) bar has maximum 0.
         if page._rows[0].bar.maximum() == 100:
             seen.append(page._rows[0].bar.value())
@@ -338,7 +350,7 @@ def test_failed_row_leaves_indeterminate_busy_mode(wiz):
     page = _progress_page(wiz)
     page._reset()
     page._build_row(0, "acme-x86", "x86")
-    page._on_line(0, "docker: error while creating mount source path")   # no banner
+    _deliver(page, 0, "docker: error while creating mount source path")   # no banner
     assert page._rows[0].bar.maximum() == 0          # honest indeterminate while running
     page._on_entry_done(0, 1)                        # exit 1 -> failed
     assert page._rows[0].bar.maximum() == 100        # taken OUT of busy mode
@@ -386,7 +398,7 @@ def test_total_bar_exists_and_tracks_aggregate_percent(wiz):
     page._reset()
     page._build_row(0, "acme-x86", "x86")
     for ln in CAPTURED_X86_STREAM:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
         if page.total_bar.maximum() == 100:      # determinate: must equal the aggregate
             assert page.total_bar.value() == page._aggregate_percent()
     page._on_entry_done(0, 0)                     # all ok -> overall 100, per-row 100
@@ -592,7 +604,7 @@ def test_stages_appear_under_job_from_phase_table_as_banners_cross(wiz):
     job = page._rows[0].job_item
     assert job.childCount() == len(platform_phases("x86"))     # all stages present, pending
     for ln in CAPTURED_X86_STREAM[:6]:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     states = [s.state for s in page._rows[0].tracker.stages]
     assert "done" in states and "running" in states            # crossed -> done, current -> running
     assert page._rows[0].stage_items[0].text(1) in ("done", "skipped", "running")
@@ -605,7 +617,7 @@ def test_clicking_a_stage_shows_that_stage_log_slice(wiz):
     page._reset()
     page._build_row(0, "acme-x86", "x86")
     for ln in CAPTURED_X86_STREAM:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     tracker = page._rows[0].tracker
     ej = next(j for j, s in enumerate(tracker.stages)
               if any("Emerging" in ln for ln in s.lines))       # the emerge stage
@@ -678,7 +690,7 @@ def test_pre_banner_failure_reds_job_with_no_failed_child_stage(wiz):
     page = _progress_page(wiz)
     page._reset()
     page._build_row(0, "acme-x86", "x86")
-    page._on_line(0, "docker: error while creating mount source path")   # no banner
+    _deliver(page, 0, "docker: error while creating mount source path")   # no banner
     page._on_entry_done(0, 1)
     row = page._rows[0]
     assert row.job_item.foreground(0).color().name() == _RED             # JOB is red
@@ -992,7 +1004,7 @@ def test_output_appended_while_collapsed_is_all_there_on_expand(qapp, wiz):
     assert not page.log.isVisible()
 
     for ln in CAPTURED_X86_STREAM:                 # a real build streaming while collapsed
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     page.log_collapse_btn.setChecked(False)
     for _ in range(10):
         qapp.processEvents()
@@ -1034,7 +1046,7 @@ def test_detach_while_collapsed_shows_the_log_body_not_an_empty_window(qapp, wiz
     # collapse is meaningless in a dedicated window — don't offer the trap
     assert not page.log_collapse_btn.isVisible()
     # and the stream still lands in the (now visible) detached body
-    page._on_line(0, "==> streamed after detach-while-collapsed")
+    _deliver(page, 0, "==> streamed after detach-while-collapsed")
     assert "==> streamed after detach-while-collapsed" in page.log.toPlainText()
 
 
@@ -1090,7 +1102,7 @@ def test_detached_log_keeps_receiving_the_stream(qapp, wiz):
     page._reset()
     page._build_row(0, "acme-x86", "x86")
     page._select_row(0)
-    page._on_line(0, CAPTURED_X86_STREAM[0])
+    _deliver(page, 0, CAPTURED_X86_STREAM[0])
     docked_tree = page.splitter.widget(0).height()
 
     page._toggle_detach()
@@ -1106,7 +1118,7 @@ def test_detached_log_keeps_receiving_the_stream(qapp, wiz):
     assert page.splitter.widget(0).height() > docked_tree      # and it really did grow
 
     for ln in CAPTURED_X86_STREAM[1:]:            # still streaming, now into the window
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     for ln in CAPTURED_X86_STREAM:
         assert _display_safe(ln) in page.log.toPlainText(), \
             f"line lost while detached: {ln!r}"
@@ -1132,7 +1144,7 @@ def test_closing_the_detached_window_redocks_and_the_stream_continues(qapp, wiz)
     assert page.log_panel.isVisible() and page.log.isVisible()
     # the stream survives the close — this is the assertion that catches the
     # reparent-then-destroy trap (a deleted C++ log under a live Python wrapper)
-    page._on_line(0, "==> after the window closed")
+    _deliver(page, 0, "==> after the window closed")
     assert "==> after the window closed" in page.log.toPlainText()
     # and Detach re-opens it
     page._toggle_detach()
@@ -1160,7 +1172,7 @@ def test_reset_while_detached_redocks_without_crashing(qapp, wiz):
     # self.log's C++ object is ALIVE: appending after teardown must not RuntimeError
     page._build_row(0, "acme-x86", "x86")
     page._select_row(0)
-    page._on_line(0, "==> second run line")
+    _deliver(page, 0, "==> second run line")
     assert "==> second run line" in page.log.toPlainText()
 
 
@@ -1182,7 +1194,7 @@ def test_wizard_close_while_detached_leaves_no_orphan_window(qapp, wiz):
     assert page._log_window is None
     assert page.splitter.indexOf(page.log_panel) == 1
     assert not win.isVisible(), "the detached window was orphaned on the wizard's close"
-    page._on_line(0, "==> alive after abort")      # no RuntimeError = the log survived
+    _deliver(page, 0, "==> alive after abort")      # no RuntimeError = the log survived
     assert "==> alive after abort" in page.log.toPlainText()
 
 
@@ -1288,8 +1300,8 @@ def test_ansi_escapes_never_reach_any_operator_visible_surface(
 
     # a REAL captured shape: an SGR-wrapped banner + a cursor-move status line.
     page._selected, page._selected_stage = 0, None
-    page._on_line(0, "\x1b[1;36m==> Rebranding baked config\x1b[0m")
-    page._on_line(0, "\x1b[A\x1b[72C \x1b[34;01m[ \x1b[31;01m!!\x1b[34;01m ]\x1b[0m")
+    _deliver(page, 0, "\x1b[1;36m==> Rebranding baked config\x1b[0m")
+    _deliver(page, 0, "\x1b[A\x1b[72C \x1b[34;01m[ \x1b[31;01m!!\x1b[34;01m ]\x1b[0m")
     qapp.processEvents()
 
     assert "\x1b" not in page.log.toPlainText()                 # 1. the log pane

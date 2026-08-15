@@ -39,6 +39,18 @@ from hugmesh_studio.gui.pages import progress as progress_mod      # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
+
+# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
+# ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
+# tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
+# gui/pages/progress.py). A test that fed the slot and asserted straight away would be
+# asserting on the inbox, so every feed below goes through this one helper, which
+# delivers a line exactly as the drain timer does.
+def _deliver(page, i, line):
+    page._on_line(i, line)
+    page._drain_lines()
+
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "fixtures", "package-flags")
 RESOLVER_FIXTURE = os.path.join(FIXTURES, "emerge-resolver-lines.x86-pki.txt")
@@ -471,9 +483,9 @@ def test_resolver_only_stream_shows_use_columns_and_leaves_vdb_columns_hidden(
     and LICENSE have NO source at all (§2.2) and must stay hidden."""
     page = _page(wiz)
     for ln in _resolver_lines():
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     for ln in _emerge_stream([TALLOC]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert not page.tree.isColumnHidden(_flag_col("USE"))
     assert not page.tree.isColumnHidden(_flag_col("USE_EXPAND"))
     assert page.tree.isColumnHidden(_flag_col("KEYWORDS"))
@@ -488,7 +500,7 @@ def test_a_package_with_no_license_leaves_the_license_column_hidden(
     log_root, _ = _make_sysroot(tmp_path, ["acct-group/audio-0-r3"])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream(["acct-group/audio-0-r3"]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert not page.tree.isColumnHidden(_flag_col("KEYWORDS"))
     assert page.tree.isColumnHidden(_flag_col("LICENSE"))
     item = page._rows[0].pkg_items["acct-group/audio-0-r3"]
@@ -503,7 +515,7 @@ def test_a_licensed_package_reveals_the_license_column_and_empty_cells_stay_empt
         tmp_path, ["acct-group/audio-0-r3", "dev-libs/elfutils-0.195"])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream(["acct-group/audio-0-r3", "dev-libs/elfutils-0.195"]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert not page.tree.isColumnHidden(_flag_col("LICENSE"))
     items = page._rows[0].pkg_items
     assert items["acct-group/audio-0-r3"].text(_flag_col("LICENSE")) == ""
@@ -517,7 +529,7 @@ def test_reset_hides_every_flag_column_again(wiz, tmp_path, fake_repo):
     log_root, _ = _make_sysroot(tmp_path, ["dev-libs/elfutils-0.195"])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream(["dev-libs/elfutils-0.195"]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert not page.tree.isColumnHidden(_flag_col("KEYWORDS"))
     page._reset()
     for key in fb.FLAG_COLUMNS:
@@ -532,7 +544,7 @@ def test_flag_columns_do_not_disturb_the_488_expand_gate(wiz, fake_repo):
     assert page.tree.itemWidget(row.job_item, progress_mod._COL_FLAGS) is row.pkg_btn
     assert row.pkg_btn.isEnabled() is False           # not emerging yet
     for ln in _emerge_stream([TALLOC]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert row.pkg_expandable and row.pkg_btn.isEnabled()
     assert page.tree.itemWidget(row.job_item, progress_mod._COL_FLAGS) is row.pkg_btn
 
@@ -546,9 +558,9 @@ def test_full_join_of_the_real_resolver_block_and_the_real_vdb(wiz, tmp_path, fa
     log_root, _ = _make_sysroot(tmp_path, [BOTH])
     page = _page(wiz, log_root=log_root)
     for ln in _resolver_lines():
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     for ln in _emerge_stream([BOTH, TALLOC]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
 
     item = page._rows[0].pkg_items[BOTH]
     # USE_EXPAND from the RESOLVER — with the '*' transition markers portage printed
@@ -573,7 +585,7 @@ def test_keyword_badges_separate_stable_testing_and_excluded(wiz, tmp_path, fake
     log_root, _ = _make_sysroot(tmp_path, [BOTH])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream([BOTH]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     by_kw = {b.verbatim: b for b in _badges(page._rows[0].pkg_items[BOTH], "KEYWORDS")}
     assert by_kw["amd64"].text.startswith("🟢") and by_kw["amd64"].colour == fb.TEAL
     assert by_kw["~alpha"].text.startswith("⚠️") and by_kw["~alpha"].colour == styles.WARN
@@ -590,7 +602,7 @@ def test_vdb_only_use_falls_back_to_the_unchanged_pair_and_says_so(
     log_root, _ = _make_sysroot(tmp_path, ["dev-libs/elfutils-0.195"])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream(["dev-libs/elfutils-0.195"]):     # NO resolver lines
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     item = page._rows[0].pkg_items["dev-libs/elfutils-0.195"]
     use = _badges(item, "USE")
     assert use, "the VDB fallback must still fill USE"
@@ -631,7 +643,7 @@ def test_use_expand_still_splits_on_a_machine_with_no_gentoo_tree(
     log_root, _ = _make_sysroot(tmp_path, ["dev-libs/elfutils-0.195"])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream(["dev-libs/elfutils-0.195"]):    # NO resolver lines
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     item = page._rows[0].pkg_items["dev-libs/elfutils-0.195"]
 
     assert not page.tree.isColumnHidden(_flag_col("USE_EXPAND"))
@@ -654,7 +666,7 @@ def test_the_snapshot_note_is_absent_when_a_real_group_list_was_read(
     log_root, _ = _make_sysroot(tmp_path, ["dev-libs/elfutils-0.195"])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream(["dev-libs/elfutils-0.195"]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     item = page._rows[0].pkg_items["dev-libs/elfutils-0.195"]
     assert fb.GROUPS_FALLBACK_NOTE not in _badges(item, "USE")[0].tooltip
     assert fb.VDB_NOTE in _badges(item, "USE")[0].tooltip
@@ -667,7 +679,7 @@ def test_the_vdb_read_is_retried_when_portage_writes_it_after_the_completed_line
     log_root, sysroot = _make_sysroot(tmp_path, [])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream([BOTH]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert page.tree.isColumnHidden(_flag_col("LICENSE"))      # not on disk yet
     _write_vdb(sysroot, BOTH, _vdb_sample()[BOTH])
     page._poll_packages(page._rows[0], 1.0)
@@ -687,9 +699,9 @@ def test_each_slot_of_a_multi_slot_package_shows_its_OWN_flags(wiz, fake_repo):
     }
     page = _page(wiz)
     for atom, (slot, use) in slots.items():
-        page._on_line(0, f'[ebuild  N     ] {atom}:{slot}::gentoo  {use}')
+        _deliver(page, 0, f'[ebuild  N     ] {atom}:{slot}::gentoo  {use}')
     for ln in _emerge_stream(list(slots)):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     items = page._rows[0].pkg_items
     for atom, (_slot, use) in slots.items():
         assert items[atom].text(_flag_col("USE")) == use, atom
@@ -708,10 +720,10 @@ def test_an_ambiguous_cat_pkg_falls_back_to_the_vdb_instead_of_the_wrong_slot(
     log_root, _ = _make_sysroot(tmp_path, [BOTH])
     page = _page(wiz, log_root=log_root)
     # two slots of some OTHER package share a cat/pkg; neither names our atom
-    page._on_line(0, '[ebuild  N     ] dev-lang/python-3.13.14  USE="ncurses"')
-    page._on_line(0, '[ebuild  N     ] dev-lang/python-3.14.6  USE="-ncurses"')
+    _deliver(page, 0, '[ebuild  N     ] dev-lang/python-3.13.14  USE="ncurses"')
+    _deliver(page, 0, '[ebuild  N     ] dev-lang/python-3.14.6  USE="-ncurses"')
     for ln in _emerge_stream([BOTH]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     item = page._rows[0].pkg_items[BOTH]
     # Read the CELL, not the visible badges: this fixture's flags are all disabled and
     # none is '+'-defaulted, so the noise filter (operator rule 2026-08-05) legitimately
@@ -730,9 +742,9 @@ def test_a_resolver_display_printed_after_the_row_exists_still_lands(wiz, fake_r
     already on screen. That display must not be silently dropped."""
     page = _page(wiz)
     for ln in _emerge_stream([TALLOC]):            # the row exists first…
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert page.tree.isColumnHidden(_flag_col("USE"))
-    page._on_line(0, _line_for(TALLOC))            # …and the merge list comes after
+    _deliver(page, 0, _line_for(TALLOC))            # …and the merge list comes after
     assert not page.tree.isColumnHidden(_flag_col("USE"))
     item = page._rows[0].pkg_items[TALLOC]
     assert item.text(_flag_col("USE")) == 'USE="python -compat -test -valgrind"'
@@ -743,7 +755,7 @@ def test_an_absent_sysroot_is_silent_not_an_error(wiz, fake_repo):
     page = _page(wiz, log_root="")
     assert page._rows[0].flag_join.sysroot == ""
     for ln in _emerge_stream([BOTH]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     page._poll_packages(page._rows[0], 1.0)
     assert page.tree.isColumnHidden(_flag_col("KEYWORDS"))
     assert page._rows[0].pkg_items[BOTH] is not None            # the row still exists
@@ -758,9 +770,9 @@ def test_copy_text_is_exactly_what_portage_printed(wiz, tmp_path, fake_repo):
     log_root, _ = _make_sysroot(tmp_path, [BOTH])
     page = _page(wiz, log_root=log_root)
     for ln in _resolver_lines():
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     for ln in _emerge_stream([BOTH, TALLOC, LZO]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     items = page._rows[0].pkg_items
 
     assert items[TALLOC].text(_flag_col("USE")) == \
@@ -778,9 +790,9 @@ def test_copy_text_for_a_row_joins_the_four_columns_in_order(wiz, tmp_path, fake
     log_root, _ = _make_sysroot(tmp_path, [BOTH])
     page = _page(wiz, log_root=log_root)
     for ln in _resolver_lines():
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     for ln in _emerge_stream([BOTH]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     text = page.flag_columns.copy_text_for(page._rows[0].pkg_items[BOTH])
     assert text.startswith('PYTHON_TARGETS="python3_12* -python3_13*')
     assert 'KEYWORDS="' in text and 'LICENSE="MPL-2.0"' in text
@@ -801,9 +813,9 @@ def test_no_badge_ever_becomes_a_child_widget(wiz, tmp_path, fake_repo):
 
     atoms = [BOTH, "dev-libs/elfutils-0.195", TALLOC, LZO]
     for ln in _resolver_lines():
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     for ln in _emerge_stream(atoms):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
 
     items = page._rows[0].pkg_items
     assert len(items) == len(atoms)
@@ -829,7 +841,7 @@ def test_the_stream_gate_ignores_ninja_counter_lines(wiz, fake_repo):
                                     "[uninstall")
     page = _page(wiz)
     for i in range(200):
-        page._on_line(0, f"[{i}/74998] Building CXX object src/foo.cc.o")
+        _deliver(page, 0, f"[{i}/74998] Building CXX object src/foo.cc.o")
     assert page._rows[0].flag_join.revision == 0
     for key in fb.FLAG_COLUMNS:
         assert page.tree.isColumnHidden(_flag_col(key)), key
@@ -844,7 +856,7 @@ def test_replaying_the_whole_x86_fixture_log_stays_bounded(wiz, tmp_path, fake_r
     lines = _resolver_lines()
     assert len(lines) >= 229
     for ln in lines:
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     join = page._rows[0].flag_join
     assert join.revision >= 229
 
@@ -854,7 +866,7 @@ def test_replaying_the_whole_x86_fixture_log_stays_bounded(wiz, tmp_path, fake_r
         if rr is not None and rr.cpv:
             atoms.append(rr.cpv)
     for ln in _emerge_stream(atoms):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     assert len(page._rows[0].pkg_items) == len(atoms)
     for item in page._rows[0].pkg_items.values():
         for key in fb.FLAG_COLUMNS:
@@ -868,9 +880,9 @@ def test_the_delegate_paints_and_hit_tests_every_badge(wiz, tmp_path, fake_repo)
     log_root, _ = _make_sysroot(tmp_path, [BOTH])
     page = _page(wiz, log_root=log_root)
     for ln in _resolver_lines():
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     for ln in _emerge_stream([BOTH]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     item = page._rows[0].pkg_items[BOTH]
     col = _flag_col("USE_EXPAND")
     delegate = page.flag_columns.delegate
@@ -905,7 +917,7 @@ def test_help_event_never_raises_out_of_a_qt_slot(wiz, tmp_path, fake_repo):
     log_root, _ = _make_sysroot(tmp_path, [BOTH])
     page = _page(wiz, log_root=log_root)
     for ln in _emerge_stream([BOTH]):
-        page._on_line(0, ln)
+        _deliver(page, 0, ln)
     delegate = page.flag_columns.delegate
     for col in (_flag_col("KEYWORDS"), _flag_col("USE_EXPAND"), progress_mod._COL_NAME):
         index = page.tree.indexFromItem(page._rows[0].pkg_items[BOTH], col)
@@ -928,7 +940,7 @@ def test_a_broken_cell_cannot_take_the_page_down(wiz, fake_repo, monkeypatch):
 
     monkeypatch.setattr(page._rows[0].flag_join, "cells_if_changed", _boom)
     for ln in _emerge_stream([TALLOC]):
-        page._on_line(0, ln)                       # must not raise
+        _deliver(page, 0, ln)                       # must not raise
     assert TALLOC in page._rows[0].pkg_items
 
 
@@ -1197,8 +1209,8 @@ def test_the_stream_slot_routes_a_plan_line_end_to_end(wiz):
     the raw-vs-sanitised choice and the row lookup all sit in that slot."""
     page = _page(wiz)
     for ln in _emerge_stream(["sys-libs/talloc-2.4.4"]):
-        page._on_line(0, ln)
-    page._on_line(0, f'{PLAN_PFX}image 1/1 sys-libs/talloc-2.4.4 USE="python"')
+        _deliver(page, 0, ln)
+    _deliver(page, 0, f'{PLAN_PFX}image 1/1 sys-libs/talloc-2.4.4 USE="python"')
     item = page._rows[0].pkg_items.get("sys-libs/talloc-2.4.4")
     assert item is not None, "package row was never created"
     cell = item.data(_flag_col("USE"), fb.CELL_ROLE)

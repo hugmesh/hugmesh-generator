@@ -35,6 +35,18 @@ from hugmesh_studio.gui.pages import progress as progress_mod           # noqa: 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
+# ── the coalescing seam, in ONE place ────────────────────────────────────────────────
+# ProgressPage._on_line is now the worker's ENQUEUE-ONLY slot: it banks the line and the
+# ~20 Hz _drain_lines() runs the parse/render/append pipeline for the whole batch (see
+# tests/test_progress_log_coalescing.py for the contract, and the coalescing note in
+# gui/pages/progress.py). A test that fed the slot and asserted straight away would be
+# asserting on the inbox, so every feed below goes through this one helper, which
+# delivers a line exactly as the drain timer does.
+def _deliver(page, i, line):
+    page._on_line(i, line)
+    page._drain_lines()
+
+
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
@@ -128,11 +140,11 @@ def _open_parallel(wiz, log_root, n=3):
     page = _fresh_row(wiz, log_root=log_root)
     row = page._rows[0]
     row.job_t_start = 0.0          # what _on_entry_start sets; the tick needs it
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: system"))
-    page._on_line(0, _jobs(0, n, running=n))
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: system"))
+    _deliver(page, 0, _jobs(0, n, running=n))
     for i, atom in enumerate(ATOMS[:n], start=1):
-        page._on_line(0, _emerging(i, n, atom))
+        _deliver(page, 0, _emerging(i, n, atom))
     return page, row
 
 
@@ -155,7 +167,7 @@ def test_group_header_shows_portages_parallel_aggregate(wiz, tmp_path):
     cell = row.group_items["system"].text(progress_mod._COL_PROGRESS)
     assert cell == "0 of 3 done  ·  3 running"
     # merge wait is reported too — it is a distinct real state (283 lines of the rpi5 log)
-    page._on_line(0, _jobs(1, 3, merge_wait=1))
+    _deliver(page, 0, _jobs(1, 3, merge_wait=1))
     assert row.group_items["system"].text(progress_mod._COL_PROGRESS) == \
         "0 of 3 done  ·  1 merge wait"
 
@@ -165,10 +177,10 @@ def test_serial_group_header_text_is_unchanged(wiz):
     it has always been."""
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: system"))
-    page._on_line(0, ">>> Emerging (1 of 3) dev-libs/pkg1-1.0::gentoo")
-    page._on_line(0, ">>> Completed (1 of 3) dev-libs/pkg1-1.0::gentoo")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: system"))
+    _deliver(page, 0, ">>> Emerging (1 of 3) dev-libs/pkg1-1.0::gentoo")
+    _deliver(page, 0, ">>> Completed (1 of 3) dev-libs/pkg1-1.0::gentoo")
     cell = row.group_items["system"].text(progress_mod._COL_PROGRESS)
     assert cell == "1 of 3 done"
     assert "·" not in cell
@@ -182,7 +194,7 @@ def test_repeated_identical_scheduler_lines_cost_no_repaint(wiz, tmp_path):
     page, row = _open_parallel(wiz, str(root))
     rev = row.sched_rev
     for _ in range(200):
-        page._on_line(0, _jobs(0, 3, running=3))
+        _deliver(page, 0, _jobs(0, 3, running=3))
     assert row.sched_rev == rev
 
 
@@ -192,11 +204,11 @@ def test_a_scheduler_line_before_any_package_is_painted_when_the_group_appears(w
     picks them up rather than dropping them."""
     page = _fresh_row(wiz)
     row = page._rows[0]
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: system"))
-    page._on_line(0, _jobs(0, 4, running=4))
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: system"))
+    _deliver(page, 0, _jobs(0, 4, running=4))
     assert row.group_items == {}
-    page._on_line(0, _emerging(1, 4, ATOMS[0]))
+    _deliver(page, 0, _emerging(1, 4, ATOMS[0]))
     assert "4 running" in row.group_items["system"].text(progress_mod._COL_PROGRESS)
 
 
@@ -211,7 +223,7 @@ def test_parallel_detection_opens_the_group_once(wiz, tmp_path):
     assert row.pkg_parallel_shown is True
     assert gitem.isExpanded()
     page.tree.collapseItem(gitem)
-    page._on_line(0, _jobs(1, 3, running=2))
+    _deliver(page, 0, _jobs(1, 3, running=2))
     assert not gitem.isExpanded()          # not re-opened behind the operator's back
 
 
@@ -274,7 +286,7 @@ def test_a_concurrent_row_is_settled_only_by_the_stream(wiz, tmp_path):
     assert row.pkg_bars[ATOMS[0]].value() == 85
     assert row.pkg_progress[ATOMS[0]].step == ep.STEP_INSTALL
 
-    page._on_line(0, _completed(1, 3, ATOMS[0]))
+    _deliver(page, 0, _completed(1, 3, ATOMS[0]))
     assert row.pkg_bars[ATOMS[0]].value() == 100
     assert row.pkg_progress[ATOMS[0]].step == ep.STEP_DONE
     assert [row.pkg_bars[a].value() for a in ATOMS[1:]] == [0, 0]
@@ -289,9 +301,9 @@ def test_a_serial_row_is_not_polled_at_all(wiz, tmp_path):
     page = _fresh_row(wiz, log_root=str(root))
     row = page._rows[0]
     row.job_t_start = 0.0
-    page._on_line(0, _banner("Native emerge inside chroot"))
-    page._on_line(0, _banner("Emerge group: system"))
-    page._on_line(0, ">>> Emerging (1 of 3) dev-libs/pkg1-1.0::gentoo")
+    _deliver(page, 0, _banner("Native emerge inside chroot"))
+    _deliver(page, 0, _banner("Emerge group: system"))
+    _deliver(page, 0, ">>> Emerging (1 of 3) dev-libs/pkg1-1.0::gentoo")
     _write(root, ATOMS[0], _HEADER + ">>> Compiling source in /w ...\n")
     page._on_tick()
     assert row.pkg_bars[ATOMS[0]].value() == 0

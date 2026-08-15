@@ -155,6 +155,34 @@ class _StatusProbe(QtCore.QThread):
             self.result.emit(False, f"{type(e).__name__}: {e}")
 
 
+class _E2EGateProbe(QtCore.QThread):
+    """Ask the RUNNING stack whether the e2e suite could run, off the GUI thread.
+
+    LocalStackNode.e2e_ready() is THREE blocking `subprocess.run(..., timeout=30)` calls
+    deep — `docker compose ps` (local_stack_node.py:872) and, when the stack is up,
+    running_env()'s `compose ps -q` + `docker inspect` (local_stack_node.py:690 and :697)
+    — plus a 5s urlopen probe of Casdoor. Run inline from initializePage (via
+    _refresh_status -> _sync_e2e_gate) that is a potential ~95s freeze on merely ENTERING
+    the page, on top of MeshNode.status()'s own 30s (mesh_node.py:135). A wedged docker
+    daemon blocks each of those for its full timeout, and none of that work needs the GUI
+    thread.
+
+    Emits the problems list (empty = ready). Never raises: e2e_ready() already folds every
+    probe failure into a human sentence, and an exception escaping run() would leave the
+    button stuck in its 'checking…' state forever."""
+    result = Signal(object)                     # list[str]
+
+    def __init__(self, node, parent=None):
+        super().__init__(parent)
+        self._node = node
+
+    def run(self):
+        try:
+            self.result.emit(list(self._node.e2e_ready()))
+        except Exception as e:                  # never kill the page over a probe
+            self.result.emit([f"the readiness probe failed: {type(e).__name__}: {e}"])
+
+
 class _MeshWorker(QtCore.QThread):
     """Runs ONE mesh verb off the GUI thread. Hold a reference on the page
     (self.worker) — a local would be GC'd mid-run and take the thread with it.
@@ -198,6 +226,16 @@ _ST_COL_NAME, _ST_COL_STATE, _ST_COL_TIME = 0, 1, 2
 #: image build's tree row keeps, and this page holds at most a handful of runs, so the
 #: buffer is deliberately larger than progress.py's.
 _RUN_LOG_MAXLEN = 20000
+
+#: LIVE log-pane block cap, pinned to _RUN_LOG_MAXLEN on purpose.
+#:
+#: The QTextDocument grew without bound while a verb streamed: an hours-long cold
+#: `make stack-up` is ~100k lines of compose/maven output, all of it appended and none of
+#: it ever dropped, so repaints got steadily slower over the run. The cap loses nothing
+#: recoverable — the drill-down reloads the pane from _StageRun.buffer (this same
+#: maxlen) or from a stage slice (stage_tracker._STAGE_LOG_MAXLEN = 2000), so a line the
+#: cap drops is one the buffer had already dropped.
+_LOG_MAX_BLOCKS = _RUN_LOG_MAXLEN
 
 
 class _StageRun:
@@ -312,6 +350,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(0)      # so the log pane can be dragged fully shut
+        # BOUNDED DOCUMENT — see _LOG_MAX_BLOCKS.
+        self.log.setMaximumBlockCount(_LOG_MAX_BLOCKS)
         log_lay.addWidget(self.log, 1)
 
         # 2:1 with only the LOG collapsible — the tree can never be dragged shut, which
@@ -1371,9 +1411,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._load_detail(i, stage_j)
 
     def _set_verbs_enabled(self, on: bool):
+        # e2e_btn is deliberately NOT in this list. Its enablement is a claim about the
+        # RUNNING stack (test env + up + seeded), not about whether a verb is busy, so a
+        # blanket setEnabled(True) here would arm it on evidence nobody gathered — a
+        # possibility only since the gate went off-thread and stopped answering
+        # instantly. _sync_e2e_gate below owns it in every state, busy included.
         for b in (self.start_btn, self.stop_btn, self.logs_btn, self.boot_down_btn,
-                  self.boot_clean_btn, self.preflight_btn, self.m2_btn,
-                  self.e2e_btn):
+                  self.boot_clean_btn, self.preflight_btn, self.m2_btn):
             b.setEnabled(on)
         # STATE-AWARE TEARDOWN. Stopping/cleaning a stack that is not up does
         # nothing but stream a confusing no-op, and the buttons being live implied
@@ -1392,14 +1436,34 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # the bootstrap start additionally requires the acknowledgement — and carries
         # the "why am I disabled?" tooltip, so route it through the one gate.
         self._sync_boot_gate()
+        self._sync_e2e_gate()
 
     # ── JOIN handlers ────────────────────────────────────────────────────────────
     def _refresh_status(self):
-        st = self.node.status()
-        self.status.setText(f"Status: {'running' if st.running else 'stopped'} ({st.detail})")
-        if not self._running:
-            self.stop_btn.setEnabled(st.running)
+        """Kick off the JOIN-tab node probe, off the GUI thread.
+
+        MeshNode.status() shells `docker compose ps` with a 30s timeout
+        (core/mesh_node.py:135) and a wedged daemon blocks for all of it. This ran INLINE
+        from initializePage, so entering the page could freeze the window for 30s before
+        it had even painted — the same defect the _StatusProbe docstring describes, on the
+        same class of call, so it uses the same probe (MeshStatus and StackStatus both
+        carry .running/.detail).
+
+        TRI-STATE, never a guess: until the answer arrives the line says "checking…" and
+        Stop is left exactly as it was. Rendering "stopped" while the probe is still out
+        would be a claim about the mesh that nothing has established."""
+        probe = getattr(self, "_node_probe", None)
+        if probe is None or not probe.isRunning():   # in flight = its answer is coming
+            self.status.setText("Status: checking…")
+            self._node_probe = _StatusProbe(self.node, parent=self)
+            self._node_probe.result.connect(self._on_node_status)
+            self._node_probe.start()
         self._sync_e2e_gate()
+
+    def _on_node_status(self, running: bool, detail: str):
+        self.status.setText(f"Status: {'running' if running else 'stopped'} ({detail})")
+        if not self._running:
+            self.stop_btn.setEnabled(running)
 
     def _start(self):
         self.node = LocalMeshNode(self.generator_dir, self.collect())
@@ -1600,8 +1664,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         the form's un-applied env cards). The tooltip always names the exact
         blockers (the _sync_boot_gate rule: a disabled button that explains
         nothing reads as 'the app is broken'). Runs from _refresh_status —
-        page entry + verb end, never on a timer: the probes shell docker, the
-        same blocking-probe precedent status() already set on this thread."""
+        page entry + verb end, never on a timer.
+
+        OFF-THREAD (see _E2EGateProbe): e2e_ready() is three 30s docker subprocesses plus
+        a 5s HTTP probe, and running it inline from initializePage could freeze the window
+        for ~95s on a wedged daemon. A probe already in flight is left alone rather than
+        stacking threads."""
         btn = getattr(self, "e2e_btn", None)
         if btn is None:
             return
@@ -1609,7 +1677,30 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             btn.setEnabled(False)
             btn.setToolTip("A verb is running — wait for it to finish.")
             return
-        problems = self.boot._stack_node().e2e_ready()
+        # TRI-STATE. "Unknown" is rendered as unknown, never as a blocker: the button
+        # cannot be armed for an action nothing has verified, but the tooltip says the
+        # answer is still coming instead of listing reasons that were never established.
+        # This runs BEFORE the in-flight guard on purpose — a caller that just blanket-
+        # enabled the verb buttons must not be able to leave this one armed by arriving
+        # while a probe happens to be out.
+        btn.setEnabled(False)
+        btn.setToolTip("Checking whether the running stack can host the e2e suite "
+                       "(docker probes — this can take a few seconds)…")
+        probe = getattr(self, "_e2e_probe", None)
+        if probe is not None and probe.isRunning():
+            return                       # its answer is already on the way
+        self._e2e_probe = _E2EGateProbe(self.boot._stack_node(), parent=self)
+        self._e2e_probe.result.connect(self._on_e2e_ready)
+        self._e2e_probe.start()
+
+    def _on_e2e_ready(self, problems):
+        """The gate's answer arrived (GUI thread). A verb that started while the probe was
+        out wins: _launch already disabled the button, and re-enabling it here would arm a
+        second run over a live one."""
+        btn = getattr(self, "e2e_btn", None)
+        if btn is None or self._running:
+            return
+        problems = list(problems or [])
         btn.setEnabled(not problems)
         btn.setToolTip(
             "Run the Playwright e2e suite (tests/e2e) against the running "

@@ -61,6 +61,21 @@ from ._widgets import _file_picker, _row
 STEP_PLATFORMS, STEP_ROLES, STEP_SHARED, STEP_REVIEW, STEP_RUN = range(5)
 _STEP_TITLES = ("Platforms", "Roles & boards", "Shared options", "Review", "Run")
 
+# ── the log drain (see FleetPage.__init__'s coalescing note) ──────────────────────────
+#: ~20 Hz, the same figure localmesh.py and progress.py use: below the ~100 ms threshold
+#: at which a UI reads as laggy, so the pane still looks live.
+_DRAIN_MS = 50
+
+#: LIVE log-pane block cap. Unlike progress.py, this page keeps NO in-memory ring buffer
+#: of the run — ``_tail`` holds only the last ERROR_TAIL_LINES for the session record's
+#: failure tail — so a cap here really would discard scrollback that nothing on screen can
+#: restore. The full stream IS durable: every line is teed to <workdir>/fleet.log, which
+#: the session record names, so nothing is LOST — but it is not one click away. Hence a
+#: deliberately generous cap: 100,000 lines is far more than anyone scrolls back through,
+#: while still bounding a fan-out run that would otherwise grow the document to millions
+#: of blocks over an all-roles build.
+_LOG_MAX_BLOCKS = 100000
+
 
 class _FleetWorker(QtCore.QThread):
     """Runs FleetDriver.run() off the GUI thread (mirrors build.py's _BuildWorker)."""
@@ -114,6 +129,25 @@ class FleetPage(QtWidgets.QWidget):
         self._log_fh = None
         self._tail: deque[str] = deque(maxlen=build_sessions.ERROR_TAIL_LINES)
         self._stop_requested = False
+
+        # ── LINE COALESCING — the GUI thread must not do per-line I/O ────────────────
+        # _FleetWorker emits ONE queued signal PER OUTPUT LINE, and the old slot did three
+        # things inline for each of them: appendPlainText (a document edit + repaint
+        # request), write(), and flush(). The flush is the worst of the three — a
+        # SYNCHRONOUS syscall to the filesystem on the GUI thread, once per line, over the
+        # same fan-out stream a single x86 build measures at 3.16M lines / 353 MB
+        # (core/emerge_packages.py:12) and a fleet run multiplies by every role. A slow or
+        # busy disk therefore blocked the event loop directly.
+        #
+        # Now the signal does one cheap thing — append to this deque — and a ~20 Hz drain
+        # does ONE appendPlainText and ONE write+flush for the whole batch (see
+        # _drain_lines). The tee is still line-exact and still flushed, so `tail -F` on
+        # <workdir>/fleet.log behaves as before; it is flushed 20x a second instead of
+        # 20,000x. Cost becomes O(ticks), not O(lines).
+        self._line_inbox: deque[str] = deque()
+        self._drain = QtCore.QTimer(self)
+        self._drain.setInterval(_DRAIN_MS)
+        self._drain.timeout.connect(self._drain_lines)
 
         outer = QtWidgets.QVBoxLayout(self)
         self.step_title = QtWidgets.QLabel()
@@ -328,6 +362,9 @@ class FleetPage(QtWidgets.QWidget):
         st_row = QtWidgets.QHBoxLayout(); st_row.addWidget(self.stop_btn); st_row.addStretch(1)
         l5.addLayout(st_row)
         self.log = QtWidgets.QPlainTextEdit(); self.log.setReadOnly(True)
+        # BOUNDED DOCUMENT — see _LOG_MAX_BLOCKS. An all-roles fan-out streams for hours
+        # and every appended block stays in the QTextDocument forever otherwise.
+        self.log.setMaximumBlockCount(_LOG_MAX_BLOCKS)
         l5.addWidget(self.log, 1)
         self.stack.addWidget(p5)
 
@@ -587,6 +624,7 @@ class FleetPage(QtWidgets.QWidget):
         self._session = s
         self._stop_requested = False
         self._tail = deque(maxlen=build_sessions.ERROR_TAIL_LINES)
+        self._line_inbox.clear()               # nothing from a previous run may leak in
         try:                                   # tee target for the streamed output
             os.makedirs(s.workdir, exist_ok=True)
             self._log_fh = open(s.log_path, "a", encoding="utf-8")
@@ -599,16 +637,33 @@ class FleetPage(QtWidgets.QWidget):
         self.worker = _FleetWorker(self.driver, cfg, self._backend())
         self.worker.line.connect(self._on_line)
         self.worker.done.connect(self._done)
+        self._drain.start()                    # stopped in _done, after a final flush
         self.worker.start()
         self._update_nav()
         return True
 
     def _on_line(self, line: str) -> None:
-        self.log.appendPlainText(line)
-        self._tail.append(line)
+        """Worker-signal slot. Deliberately does NOTHING but enqueue — see the coalescing
+        note in __init__. Any real work here (a widget append, a write, a flush) runs once
+        PER OUTPUT LINE on the GUI thread, which is what stalls the event loop."""
+        self._line_inbox.append(line)
+
+    def _drain_lines(self) -> None:
+        """Deliver every line banked since the last tick: ONE pane append, ONE tee
+        write + flush, and the error-tail ring updated per line (a pure deque append,
+        no I/O). Order is preserved and nothing is dropped — the tee is still
+        line-exact, so `tail -F` on <workdir>/fleet.log shows the same stream."""
+        if not self._line_inbox:
+            return
+        # Snapshot and clear FIRST: the worker thread keeps emitting while this runs, and
+        # draining in place would livelock on a fast producer.
+        batch = [self._line_inbox.popleft() for _ in range(len(self._line_inbox))]
+        blob = "\n".join(batch)
+        self.log.appendPlainText(blob)
+        self._tail.extend(batch)
         if self._log_fh is not None:
             try:
-                self._log_fh.write(line + "\n")
+                self._log_fh.write(blob + "\n")
                 self._log_fh.flush()
             except OSError:
                 pass
@@ -618,6 +673,12 @@ class FleetPage(QtWidgets.QWidget):
         self.driver.cancel()
 
     def _done(self, code):
+        # FLUSH BEFORE SETTLING: up to one drain interval of output is still banked when
+        # the run finishes, and those are exactly the lines that say HOW it finished —
+        # closing the tee first would drop them from fleet.log, and settling the record
+        # first would compute the error tail without them.
+        self._drain_lines()
+        self._drain.stop()          # an idle page owns no delivery clock
         self.stop_btn.setEnabled(False)
         self.log.appendPlainText(f"\n[fleet] exited with code {code}")
         if self._log_fh is not None:
