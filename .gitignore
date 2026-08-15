@@ -147,3 +147,9 @@ tests/scripts/__pycache__/
 # workflow-no-real-builds convention. Ignored so a sandbox run cannot commit them.
 .nobuild-bin/
 tests/stack/.uidist/_remotes/wasm-fragment/
+
+# Stack-test process handles: written by tests/stack/*.sh so a later run can stop what
+# an earlier one started. Runtime state of one machine, never shared — a committed pid
+# is a number that means nothing anywhere else and stops matching here the moment the
+# process exits.
+tests/stack/.run/
