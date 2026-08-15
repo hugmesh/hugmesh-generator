@@ -26,7 +26,7 @@ freeze lesson.
 from __future__ import annotations
 
 from ..qt import QtCore, QtWidgets, Signal
-from ...core import flash_targets
+from ...core import flash_targets, platform_info
 
 # role-combo data tokens
 ROLE_NONE = "none"
@@ -99,11 +99,23 @@ class DeviceTable(QtWidgets.QGroupBox):
         btn_row.addWidget(self.refresh_btn)
         btn_row.addStretch(1)
         lay.addLayout(btn_row)
+        # PLATFORM GATE — see _platform_blocked. Selectable so the operator can copy the
+        # usbipd commands straight out of it; hidden entirely when flashing is available,
+        # so the normal path gains no chrome.
+        self.platform_note = QtWidgets.QLabel("")
+        self.platform_note.setWordWrap(True)
+        self.platform_note.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.platform_note.setStyleSheet("color: #a05000;")
+        self.platform_note.setVisible(False)
+        lay.addWidget(self.platform_note)
+
         # read-only post-build plan summary (flash assignments are NOT build argv)
         self.plan_label = QtWidgets.QLabel("")
         self.plan_label.setWordWrap(True)
         self.plan_label.setStyleSheet("color: gray;")
         lay.addWidget(self.plan_label)
+        self._apply_platform_gate()
 
         # 250 ms single-shot debounce collapses refresh bursts into one scan; the last
         # result stays rendered while a fresh scan runs (button shows "Scanning…").
@@ -113,15 +125,44 @@ class DeviceTable(QtWidgets.QGroupBox):
         self._debounce.timeout.connect(self._start_scan)
         self._render_plan()
 
+    # ---- platform gate ---------------------------------------------------------------
+    def _apply_platform_gate(self) -> None:
+        """Refuse to enumerate flash targets where the answer could only mislead.
+
+        The scan is ``lsblk`` + ``/proc/mounts``, which BOTH still succeed inside a WSL2
+        VM — they just describe the VM. A WSL2 guest sees no USB device until Windows
+        hands one over with usbipd-win, so an ungated table there lists the VM's own
+        virtual disk and invites the operator to write a Pi image onto the root disk of
+        the machine they are sitting at. Silence is not an option either: "no devices
+        found" reads as "unplug/replug it", sending them round a loop that cannot
+        succeed. So the row says WHAT is wrong and HOW to fix it (HostInfo.flash_blocker
+        carries the exact usbipd invocation), and the Refresh button is disabled rather
+        than offering a rescan that is guaranteed to find nothing new.
+        """
+        host = platform_info.detect()
+        blocked = not host.can_flash_devices
+        self._platform_blocked = blocked
+        if blocked:
+            self.platform_note.setText(host.flash_blocker())
+        self.platform_note.setVisible(blocked)
+        self.refresh_btn.setEnabled(not blocked)
+        if blocked:
+            self.refresh_btn.setText("Unavailable here")
+            self.table.setRowCount(0)
+
     # ---- scanning (off-thread; read-only) ----------------------------------------
     def refresh(self) -> None:
         """Kick a debounced off-thread rescan; the cached table stays rendered."""
+        if getattr(self, "_platform_blocked", False):
+            return                      # nothing to find; the note already says why
         self._scan_gen += 1
         self.refresh_btn.setText("Scanning…")
         self.refresh_btn.setEnabled(False)
         self._debounce.start()
 
     def _start_scan(self) -> None:
+        if getattr(self, "_platform_blocked", False):
+            return
         if self._worker is not None and self._worker.isRunning():
             self._debounce.start()      # re-arm: never strand a pending refresh
             return

@@ -747,6 +747,48 @@ def _tip_label() -> QtWidgets.QLabel:
     return _TIP
 
 
+def show_tip(text: str, anchor, global_pos) -> None:
+    """Show the shared selectable tip at ``global_pos``, ANCHORED so Wayland can place it.
+
+    Under X11 a client may position any top-level, so ``move()`` alone was enough. Under
+    Wayland it is not: a parentless top-level surface has no placement protocol at all,
+    so ``move()`` is accepted and silently ignored, and the tip lands wherever the
+    compositor decides — usually the last place it was shown, which reads as "the wrong
+    tooltip is stuck on screen".
+
+    Giving the popup a TRANSIENT PARENT is what fixes it: an xdg_popup is positioned
+    RELATIVE to a parent surface, so once Qt knows which window this tip belongs to it
+    can translate the move into a positioner the compositor honours. On X11 the transient
+    parent is merely a hint and the behaviour is unchanged, which is why this is done
+    unconditionally rather than branched on the session — one code path, no
+    platform-specific drift.
+
+    We deliberately keep the custom QLabel rather than falling back to QToolTip on
+    Wayland: QToolTip positions itself correctly there, but its text cannot be SELECTED,
+    and being able to copy the §4.5 URLs out of the tip is the entire reason this widget
+    exists.
+    """
+    tip = _tip_label()
+    tip.setText(text)
+    tip.adjustSize()
+    try:
+        tip.createWinId()               # a windowHandle only exists once created
+        handle = tip.windowHandle()
+        parent_win = None
+        if anchor is not None:
+            win = anchor.window()
+            parent_win = win.windowHandle() if win is not None else None
+        if handle is not None and parent_win is not None \
+                and handle.transientParent() is not parent_win:
+            handle.setTransientParent(parent_win)
+    except (AttributeError, RuntimeError):
+        # Dead C++ wrapper or a platform with no window handle (offscreen): the tip is
+        # cosmetic, so degrade to an unanchored show rather than taking the page down.
+        pass
+    tip.move(global_pos)
+    tip.show()
+
+
 def hide_tip() -> None:
     """Hide the shared tip. Guarded: this is reached from page resets and teardown
     paths, where the underlying C++ widget may already be gone — and under PyQt6 a
@@ -937,11 +979,7 @@ class FlagBadgeDelegate(QtWidgets.QStyledItemDelegate):
             if badge is None:
                 hide_tip()
                 return False
-            tip = _tip_label()
-            tip.setText(badge.tooltip)
-            tip.adjustSize()
-            tip.move(event.globalPos() + QtCore.QPoint(12, 12))
-            tip.show()
+            show_tip(badge.tooltip, view, event.globalPos() + QtCore.QPoint(12, 12))
             return True
         except Exception:        # noqa: BLE001 — see paint()
             return False

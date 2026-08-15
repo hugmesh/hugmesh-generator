@@ -16,6 +16,7 @@ from .. import __version__
 from ..core.build_driver import BuildDriver
 from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
+from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
@@ -200,15 +201,25 @@ class StudioWizard(QtWidgets.QWizard):
         stops QDialog::adjustPosition (QWizard IS a QDialog) re-centring on later shows.
 
         Centres frameGeometry() rather than geometry() so the window MANAGER's frame is
-        included WHERE THE PLATFORM HAS ALREADY APPLIED ONE. On X11/Wayland it usually
-        has not by the first showEvent, so frameGeometry() == geometry() and this
-        degrades to client-area centring — off-centre by about half a title bar, which
-        is why the tests allow a few px of slack. Exact frame centring would need to be
-        deferred to the first resize/singleShot(0); not worth the flicker for ~15px."""
+        included WHERE THE PLATFORM HAS ALREADY APPLIED ONE. On X11 it usually has not by
+        the first showEvent, so frameGeometry() == geometry() and this degrades to
+        client-area centring — off-centre by about half a title bar, which is why the
+        tests allow a few px of slack. Exact frame centring would need to be deferred to
+        the first resize/singleShot(0); not worth the flicker for ~15px.
+
+        WAYLAND: the move() is skipped, deliberately. A Wayland client has no protocol to
+        position its own top-level window — the compositor owns placement — so the call
+        is accepted and silently discarded. Skipping it is not merely tidier: move() also
+        sets Qt's WA_Moved flag, and on Wayland that would suppress QDialog's own
+        adjustPosition for later shows while providing nothing in its place, i.e. the
+        no-op would actively make placement WORSE than leaving it to the compositor,
+        which centres a first-shown toplevel perfectly well on its own."""
         super().showEvent(event)
         if self._centred_once:
             return
         self._centred_once = True
+        if platform_info.detect_session() == platform_info.SESSION_WAYLAND:
+            return
         self.move(centred_top_left(self.frameGeometry(), _available_geometry()))
 
     def nextId(self):
