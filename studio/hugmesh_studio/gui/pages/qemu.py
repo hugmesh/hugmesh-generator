@@ -202,11 +202,31 @@ class QemuPage(QtWidgets.QWizardPage):
         self._reload_results()
 
     def validatePage(self) -> bool:
-        # Carry the chaining decision into the build flow. Setting it only on the
-        # build-first branch keeps a "test what exists" walk from silently arming a
-        # post-build hook on a config the operator then saves.
-        if self.build_first.isChecked():
-            self.wiz.cfg.qemu_e2e = True
+        """SEED the chaining flag — BuildPage owns it from the moment it is reached.
+
+        cfg.qemu_e2e has two writers: this page's radio and BuildPage's checkbox. That
+        is fine going forward and broken on the way back, because collect_all() re-runs
+        the validatePage of every VISITED page (wizard.py:262-268) — so every revisit of
+        BuildPage used to re-run this method and re-assert the radio over the operator's
+        own choice. The live sequence: build-first -> Next (arms) -> BuildPage -> untick
+        (clears) -> Back -> Next -> BuildPage.initializePage -> collect_all() -> this
+        method re-arms -> build.py:888 re-ticks the box from cfg. The post-build device
+        tests then ran after an explicit opt-out, with the checkbox visibly re-ticking
+        itself.
+
+        Once BuildPage has been reached its checkbox is the ONLY writer: it is the
+        control the operator can actually see, it carries the --env gate, and it is
+        strictly later in the flow. Before that it holds no opinion, so the radio seeds it.
+
+        The latch is a durable flag BuildPage sets on the wizard, NOT hasVisitedPage():
+        Qt's visited set is a history STACK, and back() pops the page straight back out
+        of it. Gating on it therefore looks right and does nothing — on the way forward
+        again BuildPage reads as unvisited, this method re-arms, and the bug survives
+        unchanged. (Measured: the trace still showed qemu.py validatePage as the writer.)
+        """
+        if getattr(self.wiz, "qemu_e2e_owned_by_build", False):
+            return True
+        self.wiz.cfg.qemu_e2e = self.build_first.isChecked()
         return True
 
     # ── population ──────────────────────────────────────────────────────────────
