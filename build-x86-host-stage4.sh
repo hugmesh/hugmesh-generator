@@ -3557,6 +3557,37 @@ fi
 
 # x86 GRUB cmdline (SELinux LSM + KSPP hardening). Disable os-prober so a
 # grub-mkconfig (installer / chroot) can never enumerate the host's other disks.
+#
+# ASSERT THE CMDLINE FIRST — it is a build INPUT with a silent degradation mode.
+# Three consumers read GRUB_CMDLINE_LINUX out of this one file: the signed UKI's
+# .cmdline section (build_uki), build_img's hand-written grub.cfg, and the live-ISO
+# menu. All three spell it `${GRUB_CMDLINE_LINUX:-<short fallback>}`, and that
+# fallback carries only lsm=/lockdown=/selinux=/audit=. So an empty or unreadable
+# file does not fail the build — it quietly ships a kernel with no vsyscall=none,
+# no cgroup_enable=*/cgroup_memory=1 (kubelet), no slab_nomerge / init_on_alloc /
+# page_alloc.shuffle / randomize_kstack_offset, and no console= at all, which also
+# blinds the serial boot-verify harness that reads the console. A PARTIALLY edited
+# file is worse: it is non-empty, so the fallback never fires and the truncation
+# ships verbatim. Nothing anywhere checked this (the only other reads are a `cp`
+# and a sha256 cache key), so check it here, once, before anything consumes it.
+_grub_defaults="${SPECS_DIR}/etc/default/grub"
+[ -s "${_grub_defaults}" ] || { err "${_grub_defaults} is missing or empty — every consumer would silently fall back to the SHORT cmdline and drop the KSPP/cgroup/console hardening"; exit 1; }
+# Sourced in a subshell, exactly as the three consumers do, so this asserts the
+# value they will actually get — not merely that some text matches in the file.
+_grub_cmdline="$(. "${_grub_defaults}"; printf '%s' "${GRUB_CMDLINE_LINUX:-}")"
+[ -n "${_grub_cmdline}" ] || { err "${_grub_defaults} defines no GRUB_CMDLINE_LINUX — the .img grub.cfg, the signed UKI and the live ISO would each fall back to the short literal"; exit 1; }
+for _p in lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1 \
+          vsyscall=none cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
+          slab_nomerge init_on_alloc=1 page_alloc.shuffle=1 \
+          randomize_kstack_offset=on console=tty0 console=ttyS0,115200; do
+    # Space-delimited whole-param match: a substring test would let
+    # `cgroup_enable=memoryX` or a truncated `console=tty` satisfy the guard.
+    case " ${_grub_cmdline} " in
+        *" ${_p} "*) ;;
+        *) err "${_grub_defaults}: GRUB_CMDLINE_LINUX is missing '${_p}'. This string IS the boot cmdline for the .img grub.cfg, the signed UKI and the live ISO — refusing to ship a silently de-hardened kernel."; exit 1 ;;
+    esac
+done
+info "grub cmdline asserted (LSM + lockdown + KSPP + cgroup + both console= params present)"
 mkdir -p "${SYSROOT}/etc/default"
 cp "${SPECS_DIR}/etc/default/grub"                    "${SYSROOT}/etc/default/grub"
 grep -q '^GRUB_DISABLE_OS_PROBER=' "${SYSROOT}/etc/default/grub" || \
@@ -5540,6 +5571,33 @@ fi
 # listed FIRST so it engages before any other LSM; a stray quote or wrong order here
 # would silently ship SELinux or lockdown DISABLED. Assert the exact intended value.
 grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
+# ...and every NAME in that string must have its module COMPILED IN. Asserting the
+# string alone is structurally blind to the failure that actually shipped: the
+# kernel does not diagnose an LSM name it cannot resolve, it initializes a SHORTER
+# stack and boots on. The 2026-08-14 pki image asked for
+#   lsm=lockdown,yama,selinux,bpf
+# and dmesg answered
+#   LSM: initializing lsm=lockdown,capability,selinux
+# because CONFIG_SECURITY_YAMA and CONFIG_BPF_LSM were never set — two LSMs that
+# were pure decoration in the config, the cmdline, the grub.cfg and the signed UKI.
+# So derive the required symbols FROM the string: adding a name to CONFIG_LSM
+# without its enabling symbol now fails the build instead of shipping a lie.
+for _l in \$(sed -n 's/^CONFIG_LSM="\(.*\)"\$/\1/p' .config | tr ',' ' '); do
+    case "\${_l}" in
+        capability) continue ;;                      # always built in with CONFIG_SECURITY
+        lockdown)   _sym=CONFIG_SECURITY_LOCKDOWN_LSM ;;
+        yama)       _sym=CONFIG_SECURITY_YAMA ;;
+        selinux)    _sym=CONFIG_SECURITY_SELINUX ;;
+        bpf)        _sym=CONFIG_BPF_LSM ;;
+        apparmor)   _sym=CONFIG_SECURITY_APPARMOR ;;
+        loadpin)    _sym=CONFIG_SECURITY_LOADPIN ;;
+        safesetid)  _sym=CONFIG_SECURITY_SAFESETID ;;
+        landlock)   _sym=CONFIG_SECURITY_LANDLOCK ;;
+        integrity)  _sym=CONFIG_INTEGRITY ;;
+        *) echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}', which this guard cannot verify — add its enabling CONFIG_* symbol to the case above"; exit 1 ;;
+    esac
+    grep -q "^\${_sym}=y\$" .config || { echo "[build-x86] ERROR: CONFIG_LSM names '\${_l}' but \${_sym} is not =y after olddefconfig — the kernel would SILENTLY DROP it from the LSM stack"; exit 1; }
+done
 make -j${JOBS} bzImage modules
 make modules_install
 # 'make install' copies bzImage/System.map/config to /boot FIRST, then falls

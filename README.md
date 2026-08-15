@@ -347,6 +347,12 @@ into [Current State](#current-state) — a default-off flag is a posture, not an
 unfinished feature. See also the Roadmap section of
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)._
 
+_Re-audited against the tree and the 2026-08-14 build/boot artifacts. Each bullet
+carries the evidence for its own state. Items whose remaining step is only
+provable on a running cluster are marked **(needs a live cluster)** — this
+workstation has the compose mesh up but no kind cluster (`kind get clusters` →
+none), and compose green is not evidence for the cluster._
+
 - **🚧 SSO kind-cluster e2e — harness shipped, proof NOT achieved.** The
   `KIND_PROFILE=sso` harness + `make kind-images|kind-up|kind-e2e|kind-down` are
   on `main`, and the first real run reached Casdoor and minted a session against
@@ -362,38 +368,135 @@ unfinished feature. See also the Roadmap section of
   `casdoor-init` never checking API responses, `CASDOOR_ORG` / client-id /
   redirect-uri / namespace pre-rebrand defaults across the BFFs, a hard-required
   `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase `GRANT` to a role
-  no initdb creates. Compose green is **not** evidence for the cluster. See
+  no initdb creates. Compose green is **not** evidence for the cluster — and there
+  is no cluster to re-run against right now (`kind get clusters` → none, while
+  `kubectl config current-context` still points at a dead `kind-hugmesh-local`).
+  `make kind-up` is the prerequisite for this and for every **(needs a live
+  cluster)** item below. See
   [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
-- **🔭 MFA privileged-floor — the live operator flip.** Seeds, gateway env
-  wiring, CI gates, e2e and runbook all shipped (see
-  [Current State](#current-state)); what is left is not code. On a real cluster an
-  operator must verify every privileged principal can produce a fresh
-  `mfa_satisfied` stamp, then flip `mfa.enabled` → `true`, then (separately —
-  `enforce-privileged-floor` is **not** a sub-flag of `enabled`)
-  `enforcePrivilegedFloor` → `true`, moving the posture-gate expectations in
-  lockstep. Order and lockout preconditions:
+- **🔭 MFA privileged-floor — the live operator flip. (needs a live cluster)**
+  Seeds, gateway env wiring, the `gateway_route_access.mfa_required` column and
+  its fail-closed enforcement, the per-feature step-up legs (SSH key issuance,
+  phone-fleet `FLEET_ADMIN`, superadmin lockout with `SUPERADMIN` **not** exempt),
+  CI gates, e2e and runbook all shipped and the route-access rows were verified
+  against the running compose mesh (see [Current State](#current-state)); what is
+  left is not code. On a real cluster an operator must verify every privileged
+  principal can produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` →
+  `true`, then (separately — `enforce-privileged-floor` is **not** a sub-flag of
+  `enabled`) `enforcePrivilegedFloor` → `true`, moving the posture-gate
+  expectations in lockstep. Order and lockout preconditions:
   [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md).
-- **🔭 SELinux enforcing.** Node-policy modules compile, install and load on
-  every image, but the fleet boots **permissive** and the enforce-gate ships
-  inert. Narrowing the `INFERRED-WIDE` rules needs AVC logs from a real protected
-  build + boot; going enforcing before that risks images that boot broken.
+- **🚧 SELinux — the modules bake and the loader is wired, but nothing actually
+  loads.** Corrected 2026-08-14; the previous wording ("modules compile, install
+  and load on every image") was true for two thirds of that sentence. Baking is
+  real: `scripts/_selinux-policy-lib.sh` compiles `specs/selinux/*.te` and all ten
+  builders call `slx_stage_node_policy` fail-closed, and the 2026-08-14 x86 build
+  installed 9 `.pp` into the image (`out/x86-pki-rebuild.log:1567340`). The loader
+  is real too — the manifest-driven `semodule -i` block is in the SHIPPED
+  `keys-provision` binary, not just the spec. **The load fails on every boot:** all
+  four 2026-08-14 QEMU runs logged `WARNING: hugmesh node-policy modules failed to
+  load; node keeps the base policy only`, so every shipped node runs base policy
+  only. It shipped green because `tests/qemu/assertions.sh` only ran `getenforce`,
+  which passes on base policy — the same boot reported "33 passed, 0 failed". Three
+  steps, in order: stop `provision.sh:2708` swallowing `semodule`'s stderr (the
+  failure is currently a bare WARNING with no reason; first suspect is the `.pp`
+  being compiled at 06:05 against a store built at 05:54), fix the load, then
+  assert every name in `/usr/share/hugmesh/selinux-modules.list` appears in
+  `semodule -s mcs -l`. Only after that does **enforcing** become the next
+  question — and it still needs AVC logs from a real protected build + boot to
+  narrow the `INFERRED-WIDE` rules, plus something to consume `/.autorelabel`,
+  which is written by `provision.sh:2746` and removed by nothing, so
+  `selinux-enforce-gate`'s `check_relabel_clean()` can never pass today.
+- **🔭 bpf-LSM enforcement, and lockdown beyond x86 + rpi5.** The LSM stack each
+  image advertises is now the one it runs — `yama` and `bpf` were named in
+  `CONFIG_LSM`, the cmdline, the generated `grub.cfg` and the signed UKI while the
+  kernel silently initialized only `lockdown,capability,selinux`; x86 + rpi5 now
+  build `CONFIG_SECURITY_YAMA` + `CONFIG_BPF_LSM`, the 8 ARM boards dropped the
+  `bpf` name they never built, and `tests/scripts/test-lsm-posture-honesty.sh`
+  fails the build if the two ever diverge again. Two things remain. **bpf-LSM can
+  register but not enforce:** attaching a `BPF_PROG_TYPE_LSM` program needs BTF,
+  which both arch fragments deliberately omit (it forces `CONFIG_DEBUG_INFO` and
+  needs `dev-util/pahole` in the kernel-build toolchain) — it arrives with the same
+  pahole-gated follow-up as cilium CO-RE. **Lockdown is a 2-of-10 posture, not a
+  fleet one:** only x86 and rpi5 build `CONFIG_SECURITY_LOCKDOWN_LSM` and pass
+  `lockdown=integrity`; the 8 ARM boards ship neither, which is now asserted in
+  both directions rather than papered over by the QEMU harness appending its own
+  `lockdown=integrity` to boards that never had it.
 - **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. Scalable group
   calls (MatrixRTC / Element Call / LiveKit) do not exist in any form.
+- **🔭 Desktop-governance go-live — three dark flags, zero dial rows, no image.**
+  All three governance flags still default off, and one of them is invisible:
+  `app.device-terminal.enabled` and `app.device-terminal.dial.enabled` are in the
+  admin-BFF `application.yml`, but `app.desktop.remote-install.enabled` exists
+  only as a `@ConditionalOnProperty(..., matchIfMissing = true)` bean condition
+  with no yaml entry at all. Nothing overrides any of them in any cluster manifest
+  or compose file. Flipping the dial flag additionally requires a mandatory
+  security re-review **and** `device_ssh_dial` rows — the table has zero rows on
+  the running mesh, and the pinned channel factory refuses without an ACTIVE row
+  carrying a matching `host_key_fp` (TOFU forbidden), so the flag is inert even
+  when true. And no laptop / chromebook / desktop image has ever been built: the
+  default `X86_ROLE_LIST` is `pki be fe be+gpu`, and 28 build sessions contain no
+  such artifact — so the desktop boot-verify (Qt6/KF6 Discover pull, the
+  `hugmesh-desktop` PKCE client, the desktop-sudo claim → polkit path) has never
+  run.
 - **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2)
   — without it the deposited-token path has no producer, so the SSO-sudo leg
-  stays inert even after the governance flags flip.
+  stays inert even after the governance flags above flip.
 - **🔭 Notifications external channels** — Matrix DM + Akkoma feed + phpBB +
   email adapters on top of the shipped in-app MVP + SSE push.
 - **🚧 Live ApplicationSet cut-over for optional services** — the build-time
   prune ships; the hardcoded `30-*/50-*` Applications still own the workloads.
-- **🔭 Headscale ACL BFF push leg** — the node-side Layer-A renderer is shipped
-  and baked by all builders; the admin-bff `HeadscaleAclCompiler` + reconcile loop
-  stay dark behind `app.registry.headscale-acl.enabled=false`, blocked on a
-  single-writer decision (headscale runs `policy: mode: file`, the node renderer
-  is the writer, while the BFF's `PUT /api/v1/policy` is DB-mode only).
-- **🔭 Live in-cluster image build** — the always-on Kaniko pipeline is
-  correct-by-construction and lint-gated but has never run a real build; it is
-  blocked behind bringing a cluster up on a kernel-fixed x86 image.
+- **🔭 Headscale ACL — the BFF push leg is dark, and the LIVE node applier is
+  broken.** The write seam itself landed (`HeadscalePolicyClient`, `GET`/`PUT
+  /api/v1/policy`, real impl + Noop default, leader-gated reconciler), so this is
+  no longer a read-only story; it stays dark behind
+  `app.registry.headscale-acl.enabled=false`, blocked on the single-writer
+  decision (headscale runs `policy: mode: file`, the node renderer is the writer,
+  while `PUT /api/v1/policy` is DB-mode only). Two open defects sit underneath.
+  **The guard against the silent no-op is not on org `main`:** the
+  `requireDbPolicyMode()` context-failure check exists only in `.stack-src`, so on
+  `main` today enabling the flag against the file-mode fleet boots clean and then
+  4xx-degrades every 60s forever behind one WARN line while an operator believes
+  push is live. **The node-side applier never reloads headscale:** commit
+  `e1743555` fixed exactly this in `provision.sh` (capture stderr, restart
+  headscale) but the RECURRING writer `specs/usr/sbin/gen-headscale-policy.sh`
+  still calls `headscale policy set` and ignores the same mode-`file` error — so
+  the pki node rewrites `policy.hujson` every 60s and the running headscale never
+  loads it, and Layer-A revocations do not propagate. The cross-repo parity gate
+  that would catch this cannot run either: it exits 3 ("COMPILE SIDE NOT CHECKED")
+  because it hardcodes the pre-rename `systems/hugmesh` package path against a
+  tree that is now `net/hugmesh`.
+- **🔭 Live in-cluster image build. (needs a live cluster)** The Kaniko manifests,
+  the namespace + NetworkPolicy, the ESO wiring, the always-on ArgoCD Application
+  (out of `apps-optional/`) and the `ROLE_IMAGE_BUILDER` seed + gateway route row
+  all landed; the pipeline is correct-by-construction and lint-gated but has never
+  run a real build, blocked behind bringing a cluster up. Two things are fixable
+  without one: the `service-catalog-builder-registry` push credential mounted by
+  `kaniko-build-job.template.yaml` has **no ExternalSecret** anywhere (its
+  image-builder twin does), and the three AddServiceEffector legs
+  (`APPSTORE_EFFECTOR_ENABLED`, `APPSTORE_BUILDER_ENABLED`,
+  `CASDOOR_ADMIN_ENABLED`) are still absent from the admin-BFF deployment, so the
+  "always-on flip" is wired but not thrown.
+- **🔭 DB-hardening flips. (needs a live cluster)** Merged dark, awaiting an
+  operator: PG in-cluster TLS is implemented but `PG_TLS_ENABLED` is `"false"` on
+  all 9 DB deployments (flip per DB only after each `<db>-mtls` ESO Secret
+  materializes); Cassandra **auth already ships ON** — only TLS stage 2 is open;
+  and the tier-egress default-deny NetworkPolicies are manual-sync with an overlay
+  whose `resources: []` renders **zero objects** by design, needing per-namespace
+  staged enablement with the devops namespace last (ArgoCD self-wedge risk).
+- **🔭 x86 auto-update poller is not baked.** `build-frite-stage4.sh` copies
+  `hugmesh-update` + its init script and adds it to both SVCS arrays;
+  `build-x86-host-stage4.sh` does neither, so `provision_update` falls to the else
+  branch and only writes `/etc/hugmesh/cron-update.staged` with a warning. Until
+  that protected edit lands, no x86 host and no x86 client image (laptop /
+  chromebook / desktop) can auto-update even if a superadmin flips `enabled: true`
+  — the per-node update schedule itself is shipped and ArgoCD-synced.
+- **🚧 `make matrix-check` is red over one stale counter.** It exits 1 on
+  `FAIL [SLX] assertion count - emitted 137 assertions, expected 136`;
+  `SLX_EXPECTED` is pinned at 136 in `tests/build-matrix/check.sh` while the
+  delegate now emits 137. Bump it deliberately (diff the emitted assertion NAMES
+  first, per the file's own rule) and re-run. Worth noting alongside it: the repo
+  gates on GitLab CI but merges on GitHub, so a red matrix never blocks a merge.
 - **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
   the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 
@@ -437,9 +540,12 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   gateway MFA privileged floor are all on `main` behind documented default-off
   flags. See [Current State](#current-state) for each flag and its caveats.
 - **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, **not green**),
-  the live MFA operator flip, SELinux enforcing, a group-call SFU, the
-  desktop-governance SSO greeter/PAM token producer, notifications external
-  channels, and the live optional-services ApplicationSet cut-over. See
+  SELinux node-policy modules that bake and wire but **fail to load on every
+  boot**, the live MFA operator flip, desktop-governance go-live (three dark
+  flags, no dial rows, no image ever built), the broken node-side headscale ACL
+  reload, the DB-hardening flips, a group-call SFU, the desktop-governance SSO
+  greeter/PAM token producer, notifications external channels, and the live
+  optional-services ApplicationSet cut-over. See
   [Roadmap](#roadmap) and the Roadmap section of
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
