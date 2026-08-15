@@ -61,7 +61,11 @@ dev-lang/go
 dev-lang/rust-bin
 
 # ── Utilities ──
-app-arch/p7zip
+# app-arch/7zip supersedes app-arch/p7zip, which was package.mask'd upstream
+# 2026-07-16 and REMOVED 2026-08-15 (bug #942397: outdated, unfixed severe
+# vulnerabilities). Upstream names 7zip as the replacement; it provides the
+# same 7z archive support file-roller shells out to.
+app-arch/7zip
 app-arch/unzip
 sys-process/htop
 sys-apps/flatpak

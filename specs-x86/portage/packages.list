@@ -29,7 +29,14 @@ net-firewall/nftables
 net-firewall/firewalld
 net-firewall/conntrack-tools
 net-misc/socat
-net-dns/bind-tools
+# net-dns/bind-tools — DROPPED: package.mask'd upstream 2026-07-16, REMOVED from
+# the tree 2026-08-15 (bug #977172). It has been a stub since Bind 9.18 and a
+# masked atom fails the WHOLE `image` emerge group at once, so leaving it here
+# merged nothing at all — grub-install/dracut/parted/jq/nmcli/kubelet/kubeadm/
+# containerd all went missing behind this one dead atom. Nothing we ship invokes
+# dig/host/nslookup, and the payload gate does not require them. To restore
+# dig-like tooling later prefer net-dns/ldns[drill] (same call the rpi5 list
+# makes) or net-dns/doggo — validate either before re-adding here.
 sys-apps/ethtool
 sys-apps/iproute2
 

@@ -197,6 +197,39 @@ else
   bad "ALLOW_MISSING_PACKAGES no longer defaults to false — a firewalld-less image could ship again"
 fi
 
+echo "-- D) atoms upstream REMOVED from the tree must never be requested again --"
+# The 2026-08-15 mesh incident: net-dns/bind-tools reached its announced removal
+# date while still listed in specs-x86/portage/packages.list. A package.mask'd
+# atom does not merely skip itself — it fails the resolution of the WHOLE emerge
+# group, so the entire x86 `image` payload merged NOTHING and the build died at
+# the completeness gate with grub-install/dracut/parted/jq/nmcli/kubelet/kubeadm/
+# containerd "missing", naming none of the actual cause. Every x86 role was dead;
+# rpi5 survived only because it had dropped the atom earlier for its own reasons.
+#
+# Section C's completeness gate is the runtime backstop, but it fires an hour
+# into a real build. This table moves the KNOWN removals to gate time. Unlike a
+# mask check, it needs no portage tree — it is a literal-text refusal, which is
+# what keeps this gate runnable in the CI python:3 containers (see the header).
+#
+# Add a row when upstream removes something we shipped: atom|replacement-or-empty|bug
+REMOVED_ATOMS=(
+  "net-dns/bind-tools||#977172 (stub since Bind 9.18; prefer net-dns/ldns[drill] or net-dns/doggo)"
+  "app-arch/p7zip|app-arch/7zip|#942397 (outdated, unfixed severe vulnerabilities)"
+)
+for row in "${REMOVED_ATOMS[@]}"; do
+  IFS='|' read -r atom repl bug <<<"${row}"
+  # A REQUEST is an uncommented list line naming the atom; the paper-trail
+  # comments that explain each drop are deliberately not matched.
+  hits="$(grep -rlE "^[[:space:]]*${atom}([[:space:]]|$)" "${REPO}"/specs*/portage/packages*.list 2>/dev/null || true)"
+  if [ -z "${hits}" ]; then
+    ok "${atom} is not requested by any platform (removed upstream — ${bug})"
+  else
+    bad "${atom} is REQUESTED but was REMOVED upstream (${bug}) — a masked atom fails its WHOLE emerge group, merging nothing:"
+    printf '       %s\n' ${hits}
+    [ -n "${repl}" ] && printf '       use %s instead\n' "${repl}"
+  fi
+done
+
 echo
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
