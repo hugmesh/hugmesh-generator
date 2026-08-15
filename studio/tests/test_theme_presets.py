@@ -20,7 +20,8 @@ HEX = re.compile(r"^#[0-9a-f]{6}$", re.IGNORECASE)
 def test_catalogue_shape_and_unique_ids():
     ids = [p.preset_id for p in tp.PRESETS]
     assert len(ids) == len(set(ids)), "duplicate preset ids"
-    assert tp.groups() == ["Core", "Colours", "Pride flags"]
+    # "Desktop" carries the familiar editor/terminal schemes (operator ask 2026-08-14).
+    assert tp.groups() == ["Core", "Colours", "Desktop", "Pride flags"]
     # the operator's ask, literally: light + dark cores, basic colours, flags
     assert "dark" in ids and "light" in ids
     assert sum(1 for p in tp.PRESETS if p.group == "Colours") >= 6
@@ -91,6 +92,15 @@ def test_flag_accents_are_drawn_from_the_flag_stripes():
     # stripes too). Prevents drive-by "brand colour + flag gradient" edits.
     for p in tp.PRESETS:
         if not p.stripes:
+            continue
+        # SCOPED TO FLAGS ON PURPOSE. This is a respectfulness rule — a flag's accents
+        # must be the flag's OWN colours, never an invented approximation. Desktop
+        # schemes also carry stripes (their accent ramp, which the extended palette
+        # turns into panes), but their primary/secondary are the scheme's canonical UI
+        # colours and need not appear in that ramp: nord's #81a1c1 is a real Nord colour
+        # that simply is not one of its accents. Applying the flag rule to them would
+        # force a wrong colour into one side or the other.
+        if p.group != "Pride flags":
             continue
         stripes = {s.lower() for s in p.stripes}
         assert p.primary.lower() in stripes, f"{p.preset_id}: primary not a stripe"

@@ -61,7 +61,63 @@ _LIGHT_NEUTRALS: Dict[str, str] = {
     "--sd-offwhite": "#141414",
 }
 
-MODES: Tuple[str, ...] = ("dark", "light")
+#: TIME-OF-DAY RAMPS. Operator ask 2026-08-14: "add more times of day".
+#:
+#: A ramp is the NEUTRAL surface only — background steps, text, border. It never touches
+#: the brand colours, so every ramp composes with every preset and every style, exactly
+#: like the style axis. "dark" and "light" are kept as the first two and are BYTE-
+#: IDENTICAL to what they were (dark = the base _NEUTRALS with no override), because
+#: cfg.login_theme_mode persists these names and every existing caller passes one.
+#:
+#: The progression is warm->cool->warm around the clock rather than a plain brightness
+#: ladder: dawn and dusk are dim but WARM, midday is bright and cool, midnight is the
+#: deepest and coolest. That is what makes them read as times rather than as five greys.
+#:
+#: Every ramp is swept in tests/test_theme_ramps.py for AA on text and muted text; a
+#: ramp whose own text failed would poison every preset rendered on it.
+RAMPS: Dict[str, Dict[str, str]] = {
+    # the shipped dark shell — NO override, so byte-identical to the original "dark".
+    "dark": {},
+    "light": _LIGHT_NEUTRALS,
+    # first light: dim, cool, faintly violet.
+    "dawn": {
+        "--sd-bg-0": "#14121f", "--sd-bg-1": "#1c1930", "--sd-bg-2": "#252140",
+        "--sd-border": "#2e2a4a", "--sd-text": "#e6e2f5", "--sd-text-muted": "#a9a3c6",
+    },
+    # full daylight: brightest and coolest of the light ramps.
+    "morning": {
+        "--sd-bg-0": "#fbfcff", "--sd-bg-1": "#f0f3fa", "--sd-bg-2": "#e3e8f4",
+        "--sd-border": "#c6cee0", "--sd-text": "#16192a", "--sd-text-muted": "#454c6b",
+        "--sd-surface": "#ffffff", "--sd-charcoal": "#f2f4f8",
+        "--sd-muted": "#5a5a5a", "--sd-light": "#3a3a3a", "--sd-offwhite": "#141414",
+        "--sd-mid": "#c4c4c4",
+    },
+    # warm afternoon light — paper rather than screen.
+    "afternoon": {
+        "--sd-bg-0": "#fdfaf4", "--sd-bg-1": "#f6f0e4", "--sd-bg-2": "#ece4d3",
+        "--sd-border": "#d8cdb6", "--sd-text": "#241d12", "--sd-text-muted": "#5a4c35",
+        "--sd-surface": "#fffdf8", "--sd-charcoal": "#f4efe4",
+        "--sd-muted": "#5a5245", "--sd-light": "#3a352c", "--sd-offwhite": "#141210",
+        "--sd-mid": "#c9bfa8",
+    },
+    # golden hour: dim and amber, the warmest dark ramp.
+    "dusk": {
+        "--sd-bg-0": "#1a1410", "--sd-bg-1": "#241b14", "--sd-bg-2": "#30241a",
+        "--sd-border": "#3d2e21", "--sd-text": "#f5e8db", "--sd-text-muted": "#c2a98f",
+    },
+    # after sundown: neutral-warm, darker than dusk.
+    "evening": {
+        "--sd-bg-0": "#12100f", "--sd-bg-1": "#1a1817", "--sd-bg-2": "#242120",
+        "--sd-border": "#2f2b29", "--sd-text": "#ece7e3", "--sd-text-muted": "#b0a8a2",
+    },
+    # deepest and coolest — near-black with a blue cast, for a dark room.
+    "midnight": {
+        "--sd-bg-0": "#05060c", "--sd-bg-1": "#0a0c16", "--sd-bg-2": "#111423",
+        "--sd-border": "#1a1e30", "--sd-text": "#dfe4f2", "--sd-text-muted": "#98a0bb",
+    },
+}
+
+MODES: Tuple[str, ...] = tuple(RAMPS)
 
 
 @dataclass(frozen=True)
@@ -99,6 +155,60 @@ PRESETS: Tuple[ThemePreset, ...] = (
     _p("teal",    "Teal",    "Colours", "#00796b", "#00838f"),
     _p("violet",  "Violet",  "Colours", "#6a1b9a", "#7c4dff"),
     _p("slate",   "Slate",   "Colours", "#546e7a", "#78909c"),
+
+    # ── DESKTOP SCHEMES ──────────────────────────────────────────────────────
+    # Operator ask 2026-08-14: "color themes covering usual desktop theme color
+    # combinations". These are the palettes people already have in their editor and
+    # terminal, so the mesh can be made to match the rest of a desk rather than
+    # standing out from it.
+    #
+    # Each carries its scheme's ACCENT RAMP as `stripes`, which the extended palette
+    # then turns into readable roles + panes + a background wash — the same machinery
+    # the flags use, and the reason these are richer than a primary/secondary pair.
+    # Values are each project's published palette; all are permissively licensed
+    # (Solarized/Nord/Dracula/Gruvbox/Catppuccin: MIT or equivalent) and a colour list
+    # is not the licensable part of any of them.
+    _p("solarized", "Solarized", "Desktop", "#268bd2", "#2aa198",
+       ("#b58900", "#cb4b16", "#dc322f", "#d33682", "#6c71c4", "#268bd2",
+        "#2aa198", "#859900"),
+       note="Ethan Schoonover's Solarized accent ramp. Pairs with any ramp."),
+    _p("nord", "Nord", "Desktop", "#88c0d0", "#81a1c1",
+       ("#bf616a", "#d08770", "#ebcb8b", "#a3be8c", "#b48ead", "#8fbcbb",
+        "#88c0d0", "#5e81ac"),
+       note="Arctic, bluish and low-saturation."),
+    _p("dracula", "Dracula", "Desktop", "#bd93f9", "#ff79c6",
+       ("#8be9fd", "#50fa7b", "#ffb86c", "#ff79c6", "#bd93f9", "#ff5555",
+        "#f1fa8c"),
+       note="High-contrast purples and pinks on near-black."),
+    _p("gruvbox", "Gruvbox", "Desktop", "#d79921", "#98971a",
+       ("#cc241d", "#98971a", "#d79921", "#458588", "#b16286", "#689d6a",
+        "#d65d0e"),
+       note="Warm, retro and deliberately low-blue."),
+    _p("monokai", "Monokai", "Desktop", "#a6e22e", "#f92672",
+       ("#f92672", "#a6e22e", "#fd971f", "#66d9ef", "#ae81ff", "#e6db74"),
+       note="The classic editor scheme — saturated on charcoal."),
+    _p("one-dark", "One Dark", "Desktop", "#61afef", "#c678dd",
+       ("#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2"),
+       note="Atom's One Dark; the most familiar modern editor palette."),
+    _p("tokyo-night", "Tokyo Night", "Desktop", "#7aa2f7", "#bb9af7",
+       ("#f7768e", "#e0af68", "#9ece6a", "#7dcfff", "#7aa2f7", "#bb9af7"),
+       note="Cool neon blues and violets."),
+    _p("catppuccin", "Catppuccin", "Desktop", "#cba6f7", "#89b4fa",
+       ("#f38ba8", "#fab387", "#a6e3a1", "#94e2d5", "#89b4fa", "#cba6f7",
+        "#f5c2e7"),
+       note="Soft pastels; the gentlest of the desktop sets."),
+    _p("everforest", "Everforest", "Desktop", "#a7c080", "#83c092",
+       ("#e67e80", "#dbbc7f", "#a7c080", "#83c092", "#7fbbb3", "#d699b6"),
+       note="Muted greens — easy on the eyes for long sessions."),
+    _p("rose-pine", "Rosé Pine", "Desktop", "#c4a7e7", "#ebbcba",
+       ("#eb6f92", "#f6c177", "#ebbcba", "#31748f", "#9ccfd8", "#c4a7e7"),
+       note="Muted rose and pine; soho-vibes."),
+    _p("sepia", "Sepia", "Desktop", "#8b5a2b", "#a0522d",
+       ("#8b5a2b", "#a0522d", "#6b4423", "#c19a6b", "#7a6a53"),
+       note="Paper-like warmth; best on the afternoon ramp."),
+    _p("high-contrast", "High contrast", "Desktop", "#ffff00", "#00ffff",
+       ("#ffff00", "#00ffff", "#ff00ff", "#ffffff", "#00ff00"),
+       note="Maximum separation for low-vision use."),
     _p("rose",    "Rose",    "Colours", "#d81b60", "#ec407a"),
 
     # Pride flags. Stripe order is top-to-bottom as flown.
@@ -160,6 +270,14 @@ def groups() -> List[str]:
     return seen
 
 
+def _is_light(bg: str) -> bool:
+    """Is this ramp's background LIGHT — i.e. does black read better on it than white?
+
+    The one property every ramp-dependent derivation actually turns on. Using this
+    rather than the ramp's NAME is what lets a new time-of-day be added as data."""
+    return theme.contrast_ratio("#000000", bg) > theme.contrast_ratio("#ffffff", bg)
+
+
 def _soft_for_text_on_light(accent_hex: str, bg: str, target: float = 4.5) -> str:
     """DARKEN ``accent_hex`` toward black until it clears ``target`` on a LIGHT
     ``bg``. :func:`theme.soft_for_text` deliberately only lightens (its bg is the
@@ -213,19 +331,28 @@ def compose_tokens(preset_id: str, mode: str = "dark") -> Dict[str, str]:
     # against the DARK shell's bg/text and then have the light neutrals land on top,
     # giving a light theme panes computed for a dark one.
     tokens = theme.derive(p.primary, p.secondary)
-    if mode == "light":
-        tokens.update(_LIGHT_NEUTRALS)
-        # --sd-accent-soft was derived to clear 4.5:1 on the DARK bg; re-target it
-        # against the light bg. Darken, don't reuse soft_for_text — that helper
-        # only lightens (correct for its fixed dark shell) and would fall through
-        # to #ffffff here, i.e. invisible accent text on a near-white page.
-        tokens["--sd-accent-soft"] = _soft_for_text_on_light(
-            p.secondary, _LIGHT_NEUTRALS["--sd-bg-0"])
+    ramp = RAMPS.get(mode) or {}
+    if ramp:
+        tokens.update(ramp)
+    # MEASURE the ramp instead of testing `mode == "light"`. With eight ramps and more
+    # to come, a name test would silently give every new LIGHT ramp the dark ramp's
+    # lighten-only derivation — i.e. white-on-white accent text. Luminance is the actual
+    # property the derivation depends on, so this is correct for any ramp ever added.
+    light_ramp = _is_light(tokens["--sd-bg-0"])
+    # RE-DERIVE THE ACCENT TEXT FOR **EVERY** RAMP, not just the light one.
+    # theme.derive() solves --sd-accent-soft against the fixed default shell (#0a0a12).
+    # Any ramp with a LIGHTER background than that — dusk, evening, dawn — leaves the
+    # pre-derived value short: measured crimson/dusk at 4.16:1, i.e. below AA, on a ramp
+    # that looks perfectly reasonable. Only "dark" is the bg it was solved against, so
+    # only "dark" may keep it unchanged.
+    tokens["--sd-accent-soft"] = (
+        _soft_for_text_on_light(p.secondary, tokens["--sd-bg-0"]) if light_ramp
+        else theme.soft_for_text(p.secondary, tokens["--sd-bg-0"]))
     if p.stripes:
         bg = tokens["--sd-bg-0"]
         tokens.update(theme.palette_tokens(
             p.stripes, bg=bg, text=tokens["--sd-text"]))
-        if mode == "light":
+        if light_ramp:
             # Same lighten-only trap as --sd-accent-soft, for every palette colour used
             # AS TEXT: on a near-white page each -soft would have run to #ffffff.
             for key in [k for k in tokens if k.startswith("--sd-palette-")
