@@ -199,6 +199,19 @@ def compose_tokens(preset_id: str, mode: str = "dark") -> Dict[str, str]:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     p = by_id(preset_id)
+    # THE FLAG IS ALREADY AN 8-COLOUR PALETTE. The operator asked for themes built on up
+    # to 8 base colours beyond primary/secondary; every flag preset here has carried 3-8
+    # of them since the presets landed, and until now they were used ONLY as a decorative
+    # stripe gradient. Feeding p.stripes in as the palette is what turns the colours a
+    # preset already declares into working surface/pane/gradient tokens — no new colour
+    # is invented, which is the same rule the stripe gradient follows (never approximate
+    # someone's flag).
+    #
+    # The palette is derived LAST, after the mode's neutrals are settled, because it is
+    # a function of BOTH the background and the body-text colour — and on the light ramp
+    # both change. Deriving it inside the base call would rank and tint every colour
+    # against the DARK shell's bg/text and then have the light neutrals land on top,
+    # giving a light theme panes computed for a dark one.
     tokens = theme.derive(p.primary, p.secondary)
     if mode == "light":
         tokens.update(_LIGHT_NEUTRALS)
@@ -209,6 +222,16 @@ def compose_tokens(preset_id: str, mode: str = "dark") -> Dict[str, str]:
         tokens["--sd-accent-soft"] = _soft_for_text_on_light(
             p.secondary, _LIGHT_NEUTRALS["--sd-bg-0"])
     if p.stripes:
+        bg = tokens["--sd-bg-0"]
+        tokens.update(theme.palette_tokens(
+            p.stripes, bg=bg, text=tokens["--sd-text"]))
+        if mode == "light":
+            # Same lighten-only trap as --sd-accent-soft, for every palette colour used
+            # AS TEXT: on a near-white page each -soft would have run to #ffffff.
+            for key in [k for k in tokens if k.startswith("--sd-palette-")
+                        and k.endswith("-soft")]:
+                tokens[key] = _soft_for_text_on_light(
+                    tokens[key.removesuffix("-soft")], bg)
         tokens["--sd-flag-stripes"] = _stripe_gradient(p.stripes)
         tokens["--sd-flag-name"] = f'"{p.label}"'
     return tokens

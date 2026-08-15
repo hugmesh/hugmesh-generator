@@ -41,6 +41,7 @@ decoratively (borders, backgrounds, glow); it is never the text colour.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 # The shell background the accent-as-text contrast is solved against. FIXED: derivation
 # is against the shipped DARK shell; a light-shell variant would need re-derivation.
@@ -197,6 +198,145 @@ def _rgb_triple(hex_str: str) -> str:
     return f"{r},{g},{b}"
 
 
+# ── the EXTENDED PALETTE (up to 8 colours beyond primary/secondary) ──────────────────
+#: Operator ask, 2026-08-14: "themes should support varieties of colors that use up to 8
+#: colors as the base in addition to primary and secondary", and then the shaping rule —
+#: "keep the first best colors for readability and work the other full spectrum of colors
+#: into gradients on backgrounds and having various backpanes of router outlets /
+#: encapsulated web components use those alternate colors instead in whole or combination
+#: as readability would be improved".
+#:
+#: That is two jobs for one list, and the split is made HERE rather than left to each UI:
+#: a colour either contrasts well enough against the surface to carry meaning as
+#: foreground, or it does not and belongs in a background wash. Sorting by measured
+#: contrast is what "the first best colors for readability" means operationally.
+MAX_PALETTE = 8
+
+#: Floor for a palette colour to be treated as FOREGROUND-capable as-is. 3:1 is the
+#: WCAG AA line for large text and UI components (not the 4.5:1 body-text line) because
+#: these drive borders, icons and headings; anything used as BODY text goes through
+#: soft_for_text() and is lifted to 4.5:1 regardless.
+_PALETTE_FG_MIN = 3.0
+
+#: Hard ceiling on a backpane's tint. Even when the maths says a heavier wash would keep
+#: body text legible, a pane that saturated stops reading as a surface and starts
+#: reading as a filled block, which fights the content it is meant to sit behind.
+_PANE_MAX_ALPHA = 0.22
+
+
+def _mix(fg: str, bg: str, alpha: float) -> str:
+    """Composite ``fg`` over ``bg`` at ``alpha`` — the same result the browser produces
+    for ``rgba(fg, alpha)`` on an opaque ``bg``. Computed here, and emitted as a LITERAL,
+    because css_root refuses non-literal tokens: the entrypoint interpolates token text
+    verbatim and does no colour maths."""
+    fr, fg_, fb = _parse(fg)
+    br, bg_, bb = _parse(bg)
+    return _fmt((br + (fr - br) * alpha,
+                 bg_ + (fg_ - bg_) * alpha,
+                 bb + (fb - bb) * alpha))
+
+
+def pane_surface(color: str, bg: str, text: str, *, target: float = 4.5,
+                 max_alpha: float = _PANE_MAX_ALPHA) -> str:
+    """The STRONGEST tint of ``color`` over ``bg`` that still keeps ``text`` legible.
+
+    This is the "readability would be improved" clause taken literally. A backpane exists
+    to tell one router outlet apart from another, so it wants as much colour as it can
+    carry — but the body text on top has to keep clearing ``target``. Rather than pick a
+    timid fixed alpha and hope, walk the alpha down from ``max_alpha`` and return the
+    first composite that still passes. Fails SAFE: if even the faintest tint would break
+    contrast, return ``bg`` unchanged, i.e. no pane tint rather than an illegible one.
+    """
+    steps = 22
+    for i in range(steps, -1, -1):
+        alpha = max_alpha * (i / steps)
+        cand = _mix(color, bg, alpha)
+        if contrast_ratio(text, cand) >= target:
+            return cand
+    return bg
+
+
+def rank_for_readability(colors: Sequence[str], bg: str) -> list[str]:
+    """``colors`` ordered best-contrast-first against ``bg``, duplicates dropped.
+
+    Ties keep declaration order, which matters for the flag presets: a flag's stripes
+    arrive top-to-bottom and two stripes can measure identically, so a stable sort keeps
+    the flag's own reading order instead of shuffling it arbitrarily."""
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for c in colors:
+        key = c.strip().lower()
+        if not key or key in seen:
+            continue
+        _parse(c)                      # raises on malformed, same contract as derive()
+        seen.add(key)
+        uniq.append(c.strip())
+    return sorted(uniq, key=lambda c: -contrast_ratio(c, bg))
+
+
+def palette_tokens(colors: Sequence[str], *, bg: str = SHELL_BG,
+                   text: str = "", prefix: str = "palette") -> dict[str, str]:
+    """Tokens for the extended palette: ranked colours, per-colour text-safe variants,
+    per-index BACKPANE surfaces, and one background gradient built from the leftovers.
+
+    Emitted per colour ``i`` (1-based, at most :data:`MAX_PALETTE`):
+      ``--sd-palette-i``        the colour verbatim
+      ``--sd-palette-i-on``     black/white for text sitting ON a filled swatch
+      ``--sd-palette-i-soft``   the colour lifted until it clears 4.5:1 AS text on ``bg``
+      ``--sd-palette-i-rgb``    channel triple, for consumers that need their own alpha
+      ``--sd-pane-i-bg``        a backpane surface (see :func:`pane_surface`)
+      ``--sd-pane-i-border``    a heavier tint of the same hue, for the pane's edge
+
+    Plus ``--sd-palette-count`` so a consumer can cycle panes without hardcoding 8, and
+    ``--sd-bg-gradient`` / ``--sd-bg-gradient-soft``.
+
+    THE GRADIENT USES THE LEFTOVERS ON PURPOSE. The operator asked for the best colours
+    to stay readable and "the other full spectrum" to go into background gradients, so
+    the wash is built from the colours that ranked BELOW :data:`_PALETTE_FG_MIN` — the
+    ones that would have made poor foregrounds anyway. When every colour ranks as
+    foreground-capable (a bright flag on a dark shell), the gradient falls back to the
+    full ranked list rather than emitting nothing, because an absent token would leave
+    consumers with a visible hole where a background should be.
+    """
+    text = text or _NEUTRALS.get("--sd-text", "#ffffff")
+    ranked = rank_for_readability(colors, bg)[:MAX_PALETTE]
+    tokens: dict[str, str] = {}
+    if not ranked:
+        return tokens
+
+    for i, color in enumerate(ranked, start=1):
+        tokens[f"--sd-{prefix}-{i}"] = color
+        tokens[f"--sd-{prefix}-{i}-on"] = on_color(color)
+        tokens[f"--sd-{prefix}-{i}-soft"] = soft_for_text(color, bg)
+        tokens[f"--sd-{prefix}-{i}-rgb"] = _rgb_triple(color)
+        tokens[f"--sd-pane-{i}-bg"] = pane_surface(color, bg, text)
+        # The border may sit heavier than the surface: nothing reads text ON a 1px edge,
+        # so it only needs to be distinguishable from the pane it outlines.
+        tokens[f"--sd-pane-{i}-border"] = _mix(color, bg, 0.42)
+    tokens[f"--sd-{prefix}-count"] = str(len(ranked))
+
+    decorative = [c for c in ranked if contrast_ratio(c, bg) < _PALETTE_FG_MIN]
+    wash = decorative or ranked
+    tokens["--sd-bg-gradient"] = _linear_gradient(
+        [_mix(c, bg, 0.30) for c in wash], bg)
+    tokens["--sd-bg-gradient-soft"] = _linear_gradient(
+        [_mix(c, bg, 0.12) for c in wash], bg)
+    return tokens
+
+
+def _linear_gradient(stops: Sequence[str], bg: str) -> str:
+    """A smooth 135° wash across ``stops``. One stop still has to be a gradient (a bare
+    colour would break any consumer that assigns this to ``background-image``), so it is
+    blended back to ``bg`` to stay a real two-stop ramp."""
+    if not stops:
+        return f"linear-gradient(135deg, {bg} 0%, {bg} 100%)"
+    if len(stops) == 1:
+        return f"linear-gradient(135deg, {stops[0]} 0%, {bg} 100%)"
+    span = len(stops) - 1
+    parts = [f"{c} {round(i * 100 / span)}%" for i, c in enumerate(stops)]
+    return f"linear-gradient(135deg, {', '.join(parts)})"
+
+
 def _color_distance(a: str, b: str) -> float:
     ra, ga, ba = _parse(a)
     rb, gb, bb = _parse(b)
@@ -219,13 +359,22 @@ def _brand_tokens(prefix: str, hex_str: str, *, dim_override: str | None = None,
     }
 
 
-def derive(primary: str, secondary: str = "") -> dict[str, str]:
-    """Full ``--sd-*`` token map for an operator's (primary, secondary) brand colours.
+def derive(primary: str, secondary: str = "",
+           palette: Sequence[str] = (), *, bg: str = "") -> dict[str, str]:
+    """Full ``--sd-*`` token map for an operator's (primary, secondary) brand colours,
+    plus an OPTIONAL extended ``palette`` of up to :data:`MAX_PALETTE` further colours.
 
     Raises ValueError on malformed input (the only BLOCK — reuses the #RRGGBB shape the
     root-sourced brand.conf already requires). Legibility is guaranteed by construction,
     so no colour is ever rejected for contrast. ``secondary`` defaults to the shipped
-    accent (#7c4dff) when blank, so a primary-only call is still complete."""
+    accent (#7c4dff) when blank, so a primary-only call is still complete.
+
+    ``palette`` is ADDITIVE and defaults to empty, so every existing caller keeps its
+    exact previous token map — the extended palette can only add tokens, never move an
+    existing one. ``bg`` overrides the surface the palette is ranked and tinted against;
+    it defaults to this map's own ``--sd-bg-0`` so a light ramp ranks against the light
+    surface rather than the dark shell (ranking against the wrong surface would invert
+    the whole readability order)."""
     primary = primary.strip()
     secondary = (secondary or _DEFAULT_SECONDARY).strip()
     _parse(primary)      # raises on malformed
@@ -239,6 +388,11 @@ def derive(primary: str, secondary: str = "") -> dict[str, str]:
     # them (design: secondary => links / focus / secondary actions / accent-soft).
     tokens["--sd-accent"] = secondary
     tokens["--sd-accent-soft"] = soft_for_text(secondary)
+    if palette:
+        tokens.update(palette_tokens(
+            palette,
+            bg=bg or tokens.get("--sd-bg-0", SHELL_BG),
+            text=tokens.get("--sd-text", "#ffffff")))
     return tokens
 
 
