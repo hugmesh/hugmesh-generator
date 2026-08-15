@@ -321,7 +321,7 @@ def move_after_catchall(rid):
 
 def repoint_to_shell(rid):
     def f(rs):
-        next(x for x in rs if x["id"] == rid)["uri"] = "http://snapdragon-systems-web:8080"
+        next(x for x in rs if x["id"] == rid)["uri"] = "http://hugmesh-host-shell:8080"
     return f
 
 

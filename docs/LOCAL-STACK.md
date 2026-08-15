@@ -411,7 +411,7 @@ not verify.
 | `hugmesh-character-forge-bff-api` | build `hugmesh-character-forge-bff-api` (spring-bff archetype sibling) | `manifests/character-forge-bff-api` |
 | `hugmesh-api` | build `hugmesh-actions` | `manifests/hugmesh-apis` |
 | `hugmesh-remote-fragment` | build `hugmesh-remote-fragment` (sync image) | `manifests/remote-fragment` |
-| `snapdragon-systems-web` (service name kept — the fe-gateway route target) | build `hugmesh-host-shell` | `manifests/frontend` |
+| `hugmesh-host-shell` (service name kept — the fe-gateway route target) | build `hugmesh-host-shell` | `manifests/frontend` |
 | `hugmesh-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
 | `hugmesh-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
 | `hugmesh-character-studio-ui` | build `hugmesh-character-studio-ui` | `manifests/character-studio` (no dedicated BFF — talks to the existing BFFs over `/bff/**`) |

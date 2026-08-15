@@ -589,7 +589,7 @@ services:
       cassandra-init: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
       hugmesh-admin-bff-api: { condition: service_started }
-      snapdragon-systems-web: { condition: service_started }
+      hugmesh-host-shell: { condition: service_started }
     healthcheck:
       # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
       # GAME-MASTER/ADMIN/SUPERADMIN), so an UNAUTHENTICATED probe ALWAYS gets 401 and
@@ -1335,10 +1335,10 @@ services:
 
   # hugmesh-host-shell — the Angular host (front page). The fe-gateway catch-all
   # route forwards /** here. specs/cluster/manifests/frontend/deployment.yaml.
-  # The SERVICE name stays snapdragon-systems-web on purpose: it is the compose
+  # The SERVICE name stays hugmesh-host-shell on purpose: it is the compose
   # DNS name the fe-gateway routes target (gateway-routes/fe/application-routes.yml),
   # not a build context — renaming it would need both sides changed together.
-  snapdragon-systems-web:
+  hugmesh-host-shell:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-host-shell

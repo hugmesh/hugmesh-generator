@@ -86,7 +86,7 @@ spring:
             # remote — it must keep serving its own HTML) and /api-docs (mounted
             # in the shell at the DIFFERENT path /admin/docs, so it never collides).
             - id: remote-deeplink-to-host-shell
-              uri: http://snapdragon-systems-web:8080
+              uri: http://hugmesh-host-shell:8080
               predicates:
                 - Path=/social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**
                 - Header=Accept, .*text/html.*
@@ -478,6 +478,6 @@ spring:
                 - StripPrefix=1
             # …then the Angular host catches everything else.
             - id: frontend-host
-              uri: http://snapdragon-systems-web:8080
+              uri: http://hugmesh-host-shell:8080
               predicates:
                 - Path=/**

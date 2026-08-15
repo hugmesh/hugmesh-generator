@@ -301,10 +301,14 @@ SERVICE_ALLOW_EXACT = {
     # casdoor's /api/signup + /api/login (manifests/signup-gate). Reached only via
     # those specific paths, never a public username first-label of its own.
     "signup-gate",
-    # the host-shell web Service KEPT its pre-rebrand name (the rebrand renamed the
-    # hugmesh-* family pattern below but not this Service) — reached only via the
-    # frontend-host /** catch-all, never a public first-label of its own.
-    "snapdragon-systems-web",
+    # NOTE: the host-shell web Service used to need an EXACT entry here — it kept its
+    # pre-rebrand name `snapdragon-systems-web` because it is the compose DNS name the
+    # fe-gateway routes target, so renaming it needed both sides moved together. Both
+    # sides live in THIS repo (tests/stack/compose.local.yaml and
+    # tests/stack/gateway-routes/fe/application-routes.yml), so it was renamed to
+    # `hugmesh-host-shell` — matching its build context and repo — and is now covered
+    # by the `^hugmesh-.*$` family pattern below, exactly as the character-forge pair
+    # was. (Its PUBLIC surface is unchanged: the frontend-host /** catch-all.)
     # NOTE: the two character-forge Services used to need EXACT entries here
     # (they were created pre-rebrand as snapdragon-character-forge-{bff-api,ui}).
     # The Snapdragon->HugMesh rebrand renamed them to
@@ -387,11 +391,11 @@ else:
 # hugmesh-actions/hugmesh-auth-core).
 CODE_COPIES = [
     ("federation-api", "hugmesh-federation-api",
-     "src/main/java/systems/hugmesh/federation/controller/ReservedNames.java"),
+     "src/main/java/net/hugmesh/federation/controller/ReservedNames.java"),
     ("actions", "hugmesh-actions",
-     "src/main/java/systems/hugmesh/actions/registration/ReservedNames.java"),
+     "src/main/java/net/hugmesh/actions/registration/ReservedNames.java"),
     ("auth-core", "hugmesh-auth-core",
-     "src/main/java/systems/hugmesh/authcore/reserved/ReservedNames.java"),
+     "src/main/java/net/hugmesh/authcore/reserved/ReservedNames.java"),
 ]
 
 # Pull the quoted string literals out of the `RESERVED[_LABELS] = Set.of( … );`
