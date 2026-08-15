@@ -176,3 +176,54 @@ def _tri_value(box):
     if s == Qt.CheckState.Unchecked:
         return "off"
     return False
+
+
+def own_probe(owner, attr: str, thread):
+    """Hold a background QThread on ``owner.<attr>`` so it is neither GC'd nor LEAKED.
+
+    Both halves matter, and getting one right without the other is how this went wrong:
+
+    * A QThread whose last PYTHON reference is dropped is garbage-collected mid-run and
+      takes its running thread with it — which is why these probes are held on the page
+      at all rather than in a local.
+    * But holding them with ``parent=page`` and then rebinding the attribute for the
+      next probe leaks every previous one: dropping the Python reference does NOT
+      destroy the C++ object, because Qt's parent owns it. Measured on the local-mesh
+      page: **50 QThread children accumulated after 50 verb cycles**, unbounded over a
+      session, since the e2e gate re-probes on every verb start, every verb end and
+      every page entry.
+
+      The leak's real cost is not memory. These probes are parented to the page, and a
+      probe still running when its page is destroyed takes the Studio down with a Qt
+      qFatal — so every stranded thread widens that window.
+
+    So: ``finished`` both schedules the C++ deletion and CLEARS the attribute. Clearing
+    is what keeps the ``isRunning()`` in-flight guards correct — a rebound-but-deleted
+    wrapper would raise RuntimeError from inside a Qt slot, which on PyQt6 aborts the
+    process rather than raising into Python.
+    """
+    setattr(owner, attr, thread)
+
+    def _release():
+        if getattr(owner, attr, None) is thread:
+            setattr(owner, attr, None)
+
+    thread.finished.connect(_release)
+    thread.finished.connect(thread.deleteLater)
+    return thread
+
+
+def probe_running(owner, attr: str) -> bool:
+    """Is the probe on ``owner.<attr>`` still in flight?
+
+    Guarded: ``own_probe`` clears the attribute on finish, but a page torn down between
+    the two can still leave a wrapper whose C++ object is gone, and ``isRunning()`` on
+    that raises RuntimeError — inside a Qt slot, that aborts the Studio.
+    """
+    probe = getattr(owner, attr, None)
+    if probe is None:
+        return False
+    try:
+        return bool(probe.isRunning())
+    except RuntimeError:
+        return False

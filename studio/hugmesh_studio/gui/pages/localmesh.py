@@ -85,7 +85,7 @@ from ._credentials_dialog import CredentialsDialog
 from ._add_user_dialog import AddUserDialog
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
-from ._widgets import _row, collapsible
+from ._widgets import _row, collapsible, own_probe, probe_running
 # The staged view is progress.py's, not a second one: importing its glyph palette and
 # its two formatters is what keeps a stage rendered here byte-identical to the same
 # stage rendered on the image-build screen. Re-declaring {"done": ("✓", "#188038"), …}
@@ -1452,12 +1452,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         TRI-STATE, never a guess: until the answer arrives the line says "checking…" and
         Stop is left exactly as it was. Rendering "stopped" while the probe is still out
         would be a claim about the mesh that nothing has established."""
-        probe = getattr(self, "_node_probe", None)
-        if probe is None or not probe.isRunning():   # in flight = its answer is coming
+        if not probe_running(self, "_node_probe"):   # in flight = its answer is coming
             self.status.setText("Status: checking…")
-            self._node_probe = _StatusProbe(self.node, parent=self)
-            self._node_probe.result.connect(self._on_node_status)
-            self._node_probe.start()
+            probe = own_probe(self, "_node_probe", _StatusProbe(self.node, parent=self))
+            probe.result.connect(self._on_node_status)
+            probe.start()
         self._sync_e2e_gate()
 
     def _on_node_status(self, running: bool, detail: str):
@@ -1529,11 +1528,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _probe_mesh_state(self):
         """Kick off the off-thread stack probe (see _StatusProbe). Re-entrant-safe:
         a probe already in flight is left alone rather than stacking threads."""
-        probe = getattr(self, "_probe", None)
-        if probe is not None and probe.isRunning():
+        if probe_running(self, "_probe"):
             return
         self._mesh_state_label.setText("Mesh state: checking…")
-        self._probe = _StatusProbe(self.boot._stack_node(), parent=self)
+        self._probe = own_probe(self, "_probe",
+                                _StatusProbe(self.boot._stack_node(), parent=self))
         self._probe.result.connect(self._on_mesh_state)
         self._probe.start()
 
@@ -1686,12 +1685,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         btn.setEnabled(False)
         btn.setToolTip("Checking whether the running stack can host the e2e suite "
                        "(docker probes — this can take a few seconds)…")
-        probe = getattr(self, "_e2e_probe", None)
-        if probe is not None and probe.isRunning():
+        if probe_running(self, "_e2e_probe"):
             return                       # its answer is already on the way
-        self._e2e_probe = _E2EGateProbe(self.boot._stack_node(), parent=self)
-        self._e2e_probe.result.connect(self._on_e2e_ready)
-        self._e2e_probe.start()
+        probe = own_probe(self, "_e2e_probe",
+                          _E2EGateProbe(self.boot._stack_node(), parent=self))
+        probe.result.connect(self._on_e2e_ready)
+        probe.start()
 
     def _on_e2e_ready(self, problems):
         """The gate's answer arrived (GUI thread). A verb that started while the probe was

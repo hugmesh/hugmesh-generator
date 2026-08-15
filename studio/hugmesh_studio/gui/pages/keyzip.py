@@ -18,7 +18,7 @@ import zipfile
 
 from ..qt import QtCore, QtWidgets, Signal
 from ...core import keyzip
-from ._widgets import _file_picker, _row
+from ._widgets import _file_picker, _row, own_probe
 
 # Schemes the "Fetch from link" button will follow. file:// is included ON PURPOSE so
 # the flow stays exercisable/offline-testable without any network — and, like the http
@@ -233,10 +233,12 @@ class KeyZipPage(QtWidgets.QWizardPage):
         self.out.setText(f"Fetching {url} … (the window stays responsive; this gives up "
                          f"after {_FETCH_TIMEOUT_S}s if the server never answers)")
         # Held on the page, not in a local: a QThread whose last Python reference is
-        # dropped is garbage-collected mid-run and takes its thread with it.
-        self._fetch_worker = _FetchWorker(url, dest, parent=self)
-        self._fetch_worker.done.connect(self._fetched)
-        self._fetch_worker.start()
+        # dropped is garbage-collected mid-run and takes its thread with it. own_probe
+        # also releases the PREVIOUS one — parenting alone keeps every finished fetch
+        # alive as a child of the page (see its docstring).
+        worker = own_probe(self, "_fetch_worker", _FetchWorker(url, dest, parent=self))
+        worker.done.connect(self._fetched)
+        worker.start()
 
     def _fetched(self, zip_path: str, error: str):
         """The fetch finished (GUI thread). Applying is local work — extract + wire into
