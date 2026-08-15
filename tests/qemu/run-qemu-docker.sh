@@ -36,6 +36,10 @@ JOBS="2"
 MEM="2048"
 SMP="2"
 TIMEOUT="2400"
+# Empty = let docker-entrypoint.sh's own default stand. Deliberately NOT mirrored
+# as a number here: this script only forwards what the operator actually asked
+# for, so the default lives in exactly one file and cannot drift between them.
+ASSERT_TIMEOUT=""
 LIST_ONLY=false
 FORCE_BUILD=false
 KEEP=false
@@ -63,6 +67,10 @@ Usage: $0 [OPTIONS]
   --mem MB          guest RAM per device. Default: ${MEM}
   --smp N           guest vCPUs per device. Default: ${SMP}
   -t, --timeout SEC guest SSH wait. Default: ${TIMEOUT}
+  --assert-timeout SEC
+                    wall clock for the in-guest assertion ssh, forwarded to the
+                    container. Used verbatim, never clamped. Unset = the
+                    entrypoint's own default.
   --list            enumerate the rows that WOULD run, then exit
   --build-image     (re)build the runner image before running
   --keep            keep per-run scratch dirs
@@ -84,6 +92,7 @@ while [[ $# -gt 0 ]]; do
         --mem)          MEM="$2"; shift 2 ;;
         --smp)          SMP="$2"; shift 2 ;;
         -t|--timeout)   TIMEOUT="$2"; shift 2 ;;
+        --assert-timeout) ASSERT_TIMEOUT="$2"; shift 2 ;;
         --list)         LIST_ONLY=true; shift ;;
         --build-image)  FORCE_BUILD=true; shift ;;
         --keep)         KEEP=true; shift ;;
@@ -91,6 +100,13 @@ while [[ $# -gt 0 ]]; do
         *)              echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
 done
+
+# Fail here rather than once per container. The entrypoint validates these too,
+# but only after the artifacts are mounted and one ERROR row per container has
+# been written; and a value containing whitespace would word-split on the way
+# into the argv below and come back as "Unknown arg" instead of the real cause.
+[ -z "${ASSERT_TIMEOUT}" ] || [[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
+    || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
 
 command -v docker >/dev/null || die "docker not found"
 docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (is your user in the 'docker' group?)"
@@ -241,6 +257,13 @@ run_row() {
 
     # --privileged: losetup -P inside. Container-local networking only, so the
     # guest's forwarded ports never collide with anything on the host.
+    #
+    # --assert-timeout is forwarded as a FLAG on purpose. This docker run passes
+    # exactly two -e (HOST_UID/HOST_GID) and docker inherits nothing else from
+    # the invoking shell, so a knob exposed only as an environment variable in
+    # docker-entrypoint.sh would be unreachable from every supported entry
+    # point: Makefile `qemu-docker` and the Studio (core/qemu_tests.py
+    # runner_command) both exec THIS script and can only ever add argv.
     docker run --rm --privileged "${KVM_ARGS[@]}" \
         --name "${name}" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
@@ -251,6 +274,7 @@ run_row() {
         --platform "${platform}" --role "${role}" --mode "${MODE}" \
         --img "/artifacts/$(basename "${img}")" \
         --mem "${MEM}" --smp "${SMP}" --timeout "${TIMEOUT}" \
+        ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
         --label "${label}" $( ${KEEP} && echo --keep ) \
         > "${log}" 2>&1
     local rc=$?
@@ -277,6 +301,39 @@ for r in "${ROWS[@]}"; do
     rm -f "$(row_result_json "${platform}/${role}")"
 done
 
+# ── Bound the decompressed-image cache ──────────────────────────────────────
+# docker-entrypoint.sh expands every .img.xz row to ${WORK}/images/<name>.img
+# and nothing has ever deleted one: the entrypoint only removes the .part of the
+# decompress it is itself about to redo, and neither this script nor the Studio
+# touches that directory at all. Measured here before this change:
+# `du -sh out/qemu-runs/images` = 118G — 7 raw images (9.5G for an rpi5 role,
+# 16.5-20.5G for the x86 ones) plus one orphaned 16.5G probe.part.
+#
+# It never shrinks, and an age-out would not shrink it either: every rebuild
+# emits a NEW timestamped artifact, so the next run decompresses a NEW entry and
+# strands the previous one the same minute — the stranded copy is days away from
+# being "old" while the disk is already gone.
+#
+# POLICY. Charge this run's own images to the budget first (they are exempt from
+# deletion — see below), then walk everything else newest-first and delete once
+# the running total passes the cap. Ordering key is decompress time, which is
+# the correct order here precisely because the superseded copy is always the
+# older one. After a sweep the cache holds at most max(cap, this run's images);
+# growth is therefore bounded by ONE run's working set instead of by every run
+# ever made against this ${WORK}. --cache-max-gb 0 restores the old behaviour.
+#
+# WHY THE SWEEP LIVES HERE AND NOT IN THE ENTRYPOINT: run_row fans containers
+# out ${JOBS} at a time over a shared ${WORK}, and a container can only know its
+# OWN image — a sibling's entry would be deletable in the window between that
+# sibling's cache-hit test and its boot. This sweep runs in the main process at
+# points where no container of this run is alive, with a spare-list covering
+# every row, so neither race exists. Two consequences, stated plainly: a bare
+# `docker run` of the entrypoint (documented in its usage) still reclaims
+# nothing, and two CONCURRENT invocations of this script against the same --work
+# can still delete each other's cached images — the loser re-decompresses, which
+# costs time, not correctness, since /artifacts is read-only and untouched.
+
+
 step "Running ${#ROWS[@]} row(s), ${JOBS} at a time"
 FAILED=0
 running=0
@@ -293,6 +350,13 @@ while [ "${running}" -gt 0 ]; do
     wait -n 2>/dev/null || FAILED=$((FAILED+1))
     running=$((running-1))
 done
+
+# Second sweep, now that every container has been waited for. The pre-run sweep
+# could not charge this run's fresh decompresses to the budget (they did not
+# exist yet), so without this the disk those newly-created entries pushed over
+# the cap is not handed back until the NEXT invocation, which may be days away —
+# i.e. the space is held for exactly as long as it is useless. This run's own
+# images are still spared, so an immediate re-run of the same rows stays cached.
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo
