@@ -212,3 +212,74 @@ class TestDialogDeleteArming:
         texts = [w.text() for w in d.vault_page.findChildren(QtWidgets.QLabel)]
         assert any("start the lane" in t for t in texts)
         assert not d.vault_page.findChildren(QtWidgets.QListWidget)
+
+
+class TestGetEntry:
+    """Reading a secret back out.
+
+    The whole point of this function is WHERE the value travels. It comes back on stdout
+    rather than argv, because argv is world-readable through /proc on a shared machine —
+    the same reasoning put_entry states for writes. These tests pin that, and pin that a
+    failure never carries the payload: echoing what came back is the obvious debugging aid
+    and is exactly how a token reaches a screenshot or a bug report.
+    """
+
+    def _available(self, monkeypatch):
+        monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
+        monkeypatch.setenv("VAULT_TOKEN", "root-token")
+        monkeypatch.setattr(vaults, "vault_capability",
+                            lambda project=vaults.DEFAULT_PROJECT: vaults.Capability(True))
+
+    def test_it_returns_the_value_from_stdout(self, monkeypatch):
+        self._available(monkeypatch)
+        fake = FakeRun({"kv get": (0, "s3cret-token\n", "")})
+        monkeypatch.setattr(vaults, "_run", fake)
+        value, cap = vaults.get_entry("secret/hugmesh/studio", "admin_token")
+        assert value == "s3cret-token"
+        assert cap.available
+
+    def test_the_secret_is_never_placed_in_argv(self, monkeypatch):
+        self._available(monkeypatch)
+        fake = FakeRun({"kv get": (0, "s3cret-token\n", "")})
+        monkeypatch.setattr(vaults, "_run", fake)
+        vaults.get_entry("secret/hugmesh/studio", "admin_token")
+        assert not any("s3cret-token" in " ".join(c) for c in fake.calls)
+
+    def test_it_asks_for_a_bare_field_so_nothing_has_to_parse_the_secret(self, monkeypatch):
+        self._available(monkeypatch)
+        fake = FakeRun({"kv get": (0, "t\n", "")})
+        monkeypatch.setattr(vaults, "_run", fake)
+        vaults.get_entry("secret/hugmesh/studio", "admin_token")
+        assert any("-field=admin_token" in " ".join(c) for c in fake.calls)
+
+    def test_a_missing_key_is_reported_with_a_remedy_not_an_empty_string(self, monkeypatch):
+        self._available(monkeypatch)
+        monkeypatch.setattr(vaults, "_run", FakeRun({"kv get": (0, "", "")}))
+        value, cap = vaults.get_entry("secret/hugmesh/studio", "admin_token")
+        assert value is None
+        assert not cap.available
+        assert "vault kv put" in cap.remedy
+
+    def test_a_failed_read_carries_the_reason_and_never_the_payload(self, monkeypatch):
+        self._available(monkeypatch)
+        monkeypatch.setattr(vaults, "_run",
+                            FakeRun({"kv get": (1, "s3cret-token", "permission denied")}))
+        value, cap = vaults.get_entry("secret/hugmesh/studio", "admin_token")
+        assert value is None
+        assert "permission denied" in cap.detail
+        assert "s3cret-token" not in cap.detail
+        assert "s3cret-token" not in cap.remedy
+
+    def test_an_unavailable_vault_short_circuits_without_running_anything(self, monkeypatch):
+        # The docker-lane case: no vault container. It must not shell out and must hand
+        # back vault_capability's own remedy rather than a bare failure.
+        monkeypatch.setattr(vaults, "vault_capability",
+                            lambda project=vaults.DEFAULT_PROJECT:
+                            vaults.Capability(False, detail="Vault is not running on this mesh.",
+                                              remedy="Start the DevOps lane."))
+        fake = FakeRun({})
+        monkeypatch.setattr(vaults, "_run", fake)
+        value, cap = vaults.get_entry("secret/hugmesh/studio", "admin_token")
+        assert value is None
+        assert fake.calls == []
+        assert "not running" in cap.detail

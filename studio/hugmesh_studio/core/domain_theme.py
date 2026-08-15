@@ -16,15 +16,22 @@ change a selection without being able to derive: the BFF then drops the stale re
 serves the shipped chrome until a Studio push re-fills it, which is un-themed rather than
 wrong.
 
-AUTHENTICATION IS THE CALLER'S JOB. This module takes a bearer token and never sources
-one, so it stays pure enough to test headless and carries no second copy of the login
-flow. A token that is absent or unprivileged surfaces as the BFF's own 401/403 rather
-than as a guess made here.
+AUTHENTICATION. A caller may hand in a bearer token; when it does not, :func:`resolve_token`
+finds one — Vault first, then the environment. It still carries no copy of the LOGIN flow:
+it reads a token someone else stored, never mints one, so there is nothing here to drift
+from the real sign-in. What the token is ALLOWED to do stays entirely the BFF's decision
+(``hasRole('ADMIN')``, then ``canManage(scope, target)``), so a domain admin's token can
+theme only their own domain no matter what this module asks for.
+
+Vault is preferred but deliberately not required: it is a DevOps/Kubernetes-lane service
+and a docker-compose mesh has no vault container, so requiring it would make this control
+permanently dead on the lane the operator actually runs. See :func:`resolve_token`.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,6 +52,88 @@ DEFAULT_SEGMENT = "_default"
 RENDERER_ID = "studio"
 
 _TIMEOUT_S = 15.0
+
+
+#: Where the mesh-admin token lives in Vault, and under which key. One path so the
+#: Vaults dialog, this resolver and any runbook all name the same place.
+TOKEN_VAULT_PATH = "secret/hugmesh/studio"
+TOKEN_VAULT_KEY = "admin_token"
+
+#: The environment fallback, mirroring how Vault's own token is handled here — read from
+#: the environment, never written to disk.
+TOKEN_ENV_VAR = "HUGMESH_ADMIN_TOKEN"
+
+
+@dataclass(frozen=True)
+class TokenSource:
+    """Where a token came from, or what to do when there is none.
+
+    Carries a remedy rather than a bare failure, matching ``vaults.Capability``: a push
+    that reports only "no token" sends the operator hunting for a fault that is not there.
+    """
+
+    token: str = ""
+    origin: str = ""
+    detail: str = ""
+    remedy: str = ""
+
+    @property
+    def available(self) -> bool:
+        return bool(self.token)
+
+
+def resolve_token(explicit: str = "", *, vault_path: str = TOKEN_VAULT_PATH,
+                  vault_key: str = TOKEN_VAULT_KEY, env_var: str = TOKEN_ENV_VAR,
+                  reader=None, environ=None) -> TokenSource:
+    """Find the mesh-admin token: explicit argument, then Vault, then the environment.
+
+    VAULT IS PREFERRED BUT CANNOT BE REQUIRED, and that is the whole reason this is an
+    ordered chain rather than a single lookup. ``vaults.vault_capability`` is explicit
+    that Vault is a DevOps/Kubernetes-lane service: a docker-compose mesh has no vault
+    container at all. Making Vault the only source would therefore ship a theme control
+    that is permanently dead on the lane the operator actually runs — the inert-control
+    trap this codebase has hit repeatedly, and the one that module's own docstring warns
+    about.
+
+    So Vault is used when it is there, the environment when it is not, and when neither
+    has it the failure names both options instead of saying "unauthorized".
+
+    THE TOKEN IS NEVER RETURNED IN A DETAIL STRING, only its origin. Details reach logs
+    and dialogs; the token must not.
+    """
+    if explicit and explicit.strip():
+        return TokenSource(token=explicit.strip(), origin="argument",
+                           detail="using the token supplied by the caller")
+
+    read = reader or _vault_reader
+    value, cap = read(vault_path, vault_key)
+    if value:
+        return TokenSource(token=value, origin="vault",
+                           detail=f"read {vault_key} from {vault_path}")
+
+    env = os.environ if environ is None else environ
+    from_env = (env.get(env_var) or "").strip()
+    if from_env:
+        return TokenSource(token=from_env, origin="environment",
+                           detail=f"using ${env_var}")
+
+    # Neither source had it. Report BOTH routes, and carry Vault's own reason when it had
+    # one — "vault is not on this lane" and "vault is up but the path is empty" need
+    # different actions from the operator.
+    why = f" Vault: {cap.detail}" if getattr(cap, "detail", "") else ""
+    return TokenSource(
+        detail=f"no mesh-admin token available.{why}",
+        remedy=(f"Store one in Vault at {vault_path} under '{vault_key}' (the Vaults "
+                f"dialog writes it on stdin, never argv), or export ${env_var} for this "
+                f"session. The token needs ROLE_ADMIN on the mesh; a domain admin's token "
+                f"can theme only their own domain."))
+
+
+def _vault_reader(path: str, key: str):
+    """Indirection so :func:`resolve_token` is testable without Vault, and so importing
+    this module does not drag the docker-dependent vault helpers in at import time."""
+    from . import vaults
+    return vaults.get_entry(path, key)
 
 
 class ThemePushError(RuntimeError):
@@ -147,15 +236,25 @@ def theme_url(base_url: str, domain: str) -> str:
     return f"{base_url.rstrip('/')}/bff/admin/themes/{urllib.parse.quote(seg, safe='')}"
 
 
-def push(base_url: str, domain: str, selection: ThemeSelection, token: str, *,
+def push(base_url: str, domain: str, selection: ThemeSelection, token: str = "", *,
          include_css: bool = True, timeout: float = _TIMEOUT_S,
-         opener=None) -> dict:
+         opener=None, token_source: TokenSource | None = None) -> dict:
     """Set one domain's theme. Returns the stored row; raises :class:`ThemePushError`.
+
+    ``token`` is optional: when it is empty the token is resolved via
+    :func:`resolve_token` (Vault, then the environment), so a GUI caller does not have to
+    source credentials itself. An absent token fails BEFORE any request is built, with the
+    remedy naming both places it could be stored — rather than sending an anonymous
+    request and reporting the mesh's 401 as though the mesh were at fault.
 
     ``opener`` exists so tests drive the real request-building code without a network:
     the URL, method, headers and body are what break, and a test that stubbed this whole
     function would verify none of them.
     """
+    src = token_source or (TokenSource(token=token.strip(), origin="argument")
+                           if token and token.strip() else resolve_token())
+    if not src.available:
+        raise ThemePushError(f"{src.detail} {src.remedy}".strip())
     payload = json.dumps(build_payload(selection, include_css=include_css)).encode("utf-8")
     req = urllib.request.Request(
         theme_url(base_url, domain), data=payload, method="PUT",
@@ -163,7 +262,7 @@ def push(base_url: str, domain: str, selection: ThemeSelection, token: str, *,
             "Content-Type": "application/json",
             # The BFF gates this on hasRole('ADMIN') and then on canManage(scope, target),
             # so which domains this token may touch is decided there, not here.
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {src.token}",
             "Accept": "application/json",
         })
     _open = opener or urllib.request.urlopen

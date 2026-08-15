@@ -201,3 +201,105 @@ class TestFailuresExplainWhatToDoAboutThem:
         with pytest.raises(dt.ThemePushError) as e:
             dt.push("http://mesh:9000", "brandx", sel(), "t", opener=_Recorder(b"<html>"))
         assert "non-JSON" in str(e.value)
+
+
+class _Cap:
+    """Stands in for vaults.Capability without importing the docker-dependent module."""
+
+    def __init__(self, detail=""):
+        self.detail = detail
+        self.available = False
+
+
+class TestTokenResolution:
+    """Where the mesh-admin token comes from, and what happens when it is nowhere.
+
+    The ORDER is the design: Vault is preferred, but it cannot be required. vaults.py is
+    explicit that Vault is a DevOps/Kubernetes-lane service and a docker-compose mesh has
+    no vault container at all — so a Vault-only lookup would ship a theme control that is
+    permanently dead on the lane the operator actually runs. That is the inert-control
+    trap this codebase has hit repeatedly.
+    """
+
+    def test_an_explicit_token_wins_and_vault_is_not_even_consulted(self):
+        calls = []
+        def reader(p, k):
+            calls.append((p, k))
+            return "vault-token", _Cap()
+        src = dt.resolve_token("explicit-token", reader=reader, environ={})
+        assert src.token == "explicit-token"
+        assert src.origin == "argument"
+        assert calls == [], "an explicit token must not trigger a Vault read"
+
+    def test_vault_is_preferred_over_the_environment(self):
+        src = dt.resolve_token(reader=lambda p, k: ("vault-token", _Cap()),
+                               environ={"HUGMESH_ADMIN_TOKEN": "env-token"})
+        assert src.token == "vault-token"
+        assert src.origin == "vault"
+
+    def test_it_reads_the_agreed_vault_path_and_key(self):
+        seen = {}
+        def reader(p, k):
+            seen["path"], seen["key"] = p, k
+            return "t", _Cap()
+        dt.resolve_token(reader=reader, environ={})
+        assert seen["path"] == dt.TOKEN_VAULT_PATH
+        assert seen["key"] == dt.TOKEN_VAULT_KEY
+
+    def test_the_environment_is_used_when_vault_has_nothing(self):
+        # The docker-lane case: no vault container, so the fallback is the whole point.
+        src = dt.resolve_token(reader=lambda p, k: (None, _Cap("Vault is not running on this mesh.")),
+                               environ={"HUGMESH_ADMIN_TOKEN": "env-token"})
+        assert src.token == "env-token"
+        assert src.origin == "environment"
+
+    def test_with_no_token_anywhere_it_names_BOTH_routes(self):
+        src = dt.resolve_token(reader=lambda p, k: (None, _Cap("Vault is not running on this mesh.")),
+                               environ={})
+        assert not src.available
+        assert dt.TOKEN_VAULT_PATH in src.remedy
+        assert dt.TOKEN_ENV_VAR in src.remedy
+
+    def test_it_carries_vaults_own_reason_forward(self):
+        # "vault is absent on this lane" and "vault is up but the path is empty" need
+        # different actions, so the reason must survive rather than collapse to "no token".
+        src = dt.resolve_token(reader=lambda p, k: (None, _Cap("secret/x has no value for 'admin_token'")),
+                               environ={})
+        assert "has no value" in src.detail
+
+    def test_a_blank_or_whitespace_token_is_not_a_token(self):
+        src = dt.resolve_token("   ", reader=lambda p, k: (None, _Cap()),
+                               environ={"HUGMESH_ADMIN_TOKEN": "  "})
+        assert not src.available
+
+    def test_the_token_never_appears_in_the_detail_or_remedy(self):
+        # Details reach logs and dialogs; the token must not.
+        src = dt.resolve_token(reader=lambda p, k: ("s3cret-token", _Cap()), environ={})
+        assert src.token == "s3cret-token"
+        assert "s3cret-token" not in src.detail
+        assert "s3cret-token" not in src.remedy
+
+
+class TestPushUsesTheResolvedToken:
+
+    def test_a_resolved_token_reaches_the_authorization_header(self):
+        rec = _Recorder()
+        src = dt.TokenSource(token="vault-token", origin="vault")
+        dt.push("http://mesh:9000", "brandx", sel(), token_source=src, opener=rec)
+        assert rec.req.headers["Authorization"] == "Bearer vault-token"
+
+    def test_no_token_fails_BEFORE_a_request_is_built(self):
+        # Sending an anonymous request and reporting the mesh's 401 would blame the mesh
+        # for a local misconfiguration.
+        rec = _Recorder()
+        src = dt.TokenSource(detail="no mesh-admin token available.", remedy="Store one in Vault…")
+        with pytest.raises(dt.ThemePushError) as e:
+            dt.push("http://mesh:9000", "brandx", sel(), token_source=src, opener=rec)
+        assert rec.req is None
+        assert "no mesh-admin token" in str(e.value)
+        assert "Vault" in str(e.value)
+
+    def test_an_explicit_token_argument_still_works_unchanged(self):
+        rec = _Recorder()
+        dt.push("http://mesh:9000", "brandx", sel(), "explicit", opener=rec)
+        assert rec.req.headers["Authorization"] == "Bearer explicit"

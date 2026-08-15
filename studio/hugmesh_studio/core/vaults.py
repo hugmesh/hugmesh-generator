@@ -309,6 +309,39 @@ def list_entries(mount: str = "secret", path: str = "") -> tuple[list[VaultEntry
     return [VaultEntry(path=f"{base}/{n}".rstrip("/")) for n in names], cap
 
 
+def get_entry(path: str, key: str) -> tuple[str | None, Capability]:
+    """Read ONE key's value. ``(value, capability)`` — value is ``None`` unless available.
+
+    The value comes back on STDOUT, which is the safe direction: unlike argv it is not
+    world-readable through ``/proc``, and unlike an env var it is not inherited by every
+    child this process later spawns.
+
+    ``-field=`` is what keeps it a bare value rather than a JSON envelope, so nothing has
+    to parse (and therefore nothing has to log) a structure that contains the secret.
+
+    NOTHING HERE EVER LOGS OR RETURNS THE VALUE IN AN ERROR. On failure the value is
+    dropped and only the reason survives, because the obvious debugging aid — echoing what
+    came back — is exactly how a token ends up in a screenshot or a bug report.
+    """
+    cap = vault_capability()
+    if not cap.available:
+        return None, cap
+    r = _run(["vault", "kv", "get", f"-field={key}", path],
+             env={"VAULT_TOKEN": os.environ.get("VAULT_TOKEN", "")})
+    if r.returncode != 0:
+        # stderr is the reason, never the payload; -field= prints only the value to stdout.
+        return None, Capability(
+            False, detail=(r.stderr or f"vault kv get {path} failed").strip()[:200],
+            remedy=f"Check that {path} exists and holds a '{key}' key, and that the "
+                   f"token's policy allows reads there.")
+    value = (r.stdout or "").strip()
+    if not value:
+        return None, Capability(
+            False, detail=f"{path} has no value for '{key}'",
+            remedy=f"Write it first (the Vaults dialog, or `vault kv put {path} {key}=-`).")
+    return value, Capability(True, detail=f"read {key} from {path}")
+
+
 def put_entry(path: str, key: str, value: str) -> Capability:
     """Write ONE key. The value goes in on STDIN, never argv.
 
