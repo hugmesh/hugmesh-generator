@@ -1,8 +1,10 @@
 """Which services a LOCAL Docker mesh can turn on, and HOW each one is applied.
 
 The node builders have ONE services axis (`--optional-services`: a slug is baked into
-the image or it is not). The local docker mesh has TWO, and they behave nothing alike —
-which is exactly why this module exists instead of a bare slug list:
+the image or it is not). The local mesh surface has THREE — two the docker lane can
+actually drive, plus one that belongs to a DIFFERENT lane entirely and is therefore
+shown but never offered as a toggle. They behave nothing alike, which is exactly why
+this module exists instead of a bare slug list:
 
   * COMPOSE-PROFILE services (``MECH_COMPOSE_PROFILE``). The slug maps to a compose
     ``profiles:`` tag, driven by an env var LocalStackNode exports and the Makefile
@@ -24,6 +26,14 @@ which is exactly why this module exists instead of a bare slug list:
     ship enabled=false (specs/cluster/optional-services.yaml's DEFAULT-OFF policy),
     which is the whole reason the operator could not reach them: they were running and
     invisible, with no UI to turn them on.
+
+  * DEVOPS-LANE services (``MECH_KIND``). Kubernetes controllers. The docker-compose
+    lane structurally cannot drive them, so they are catalogued as INFORMATIONAL rows,
+    not selectable ones: ``local_slugs()`` (the selectable set) excludes them,
+    ``catalogue_slugs()`` (the rows to render) includes them, and
+    ``validate_selection`` refuses one with the lane it actually needs. They exist in
+    the catalogue at all so the surface can say "this is real, here is where it lives"
+    instead of leaving the operator to conclude the mesh has no GitOps.
 
 Because the second mechanism is a DB row on an already-running stack, it is applied at
 SEED time, not at up time, and it is carried on the same env channel every other stack
@@ -61,7 +71,28 @@ MECH_FEDERATION = "federation"
 # installs real ArgoCD — so the Studio offers them as a SEPARATE lane rather
 # than pretending a compose profile exists (operator ask 2026-08-14: "ArgoCD and
 # all devops should be an option to enable with local mesh").
+#
+# A kind row is therefore INFORMATIONAL on the local-mesh surface — a row that
+# says where the service lives, with NO checkbox. Rendering a live checkbox for it
+# (as this page did until 2026-08-14) is the exact failure this module exists to
+# prevent, one layer up: the box ticked, and profile_flags/federation_env/plan()
+# all correctly ignored it, so the operator "enabled ArgoCD" and nothing anywhere
+# changed. The honest row is the same idiom UNAVAILABLE_LOCALLY uses; the only
+# difference is that this one points at a lane that WORKS rather than at a refusal.
 MECH_KIND = "kind"
+
+# The DevOps lane's entry points, spelled ONCE so the mechanism column, the
+# describe() line, the plan preview and the CLI refusal cannot drift into four
+# different names for one button.
+KIND_LANE_TARGET = "make kind-up"
+KIND_LANE_BUTTON = "Start DevOps lane (Kubernetes)"
+KIND_LANE_LABEL = f"DevOps lane ({KIND_LANE_TARGET})"
+# Worded to be true on BOTH surfaces it appears on — the greyed table row and the
+# CLI's refusal of `--services argocd` — so neither has to keep its own copy.
+KIND_LANE_HINT = (
+    f"NOT started by this bring-up: run `{KIND_LANE_TARGET}`, or press "
+    f"'{KIND_LANE_BUTTON}' on the local-mesh page — either one creates the local "
+    f"Kubernetes cluster and installs it for you.")
 
 # The compose profiles tests/stack/ defines, each turned into a `--profile` flag by
 # one Makefile variable off one env knob. Named so the GUI can say WHICH profile a
@@ -143,6 +174,24 @@ class LocalService:
 
     def is_kind(self) -> bool:
         return self.mechanism == MECH_KIND
+
+    def is_selectable(self) -> bool:
+        """Whether a CHECKBOX for this row would drive anything. False for the
+        DevOps lane: no compose profile and no registry row exist to flip, so a
+        box there could only ever be inert."""
+        return self.is_profile() or self.is_federation()
+
+    def mechanism_label(self) -> str:
+        """The "How it is applied" column, derived HERE rather than restated at the
+        surface. This exists because the surface's version was a TWO-way branch over
+        THREE mechanisms: `--profile x` if is_profile() else `federation: <module>`,
+        which labelled both kind rows "federation: " with an empty module. A
+        three-valued fact belongs in the module that owns the three values."""
+        if self.is_profile():
+            return f"--profile {self.profile}"
+        if self.is_federation():
+            return f"federation: {self.module}"
+        return KIND_LANE_LABEL
 
 
 # The catalogue. Every entry is backed by a mechanism that exists in THIS repo's
@@ -266,7 +315,7 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
     LocalService(
         slug="argocd", mechanism=MECH_KIND,
         default_on=False,
-        local_note="GitOps continuous delivery. Runs on the DevOps (Kubernetes) "
+        local_note="Runs on the DevOps (Kubernetes) "
                    "lane, not the docker lane: ArgoCD reconciles cluster objects, "
                    "so there is nothing for it to manage without Kubernetes. "
                    "Starting that lane installs the real upstream ArgoCD and "
@@ -311,8 +360,16 @@ UNAVAILABLE_LOCALLY: dict[str, str] = {}
 # has no entry outside OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES. Wiki exists
 # only as compose services + gateway_route_access rows + a federation module, i.e. it
 # is a LOCAL/federation fact, so its one line lives here — the one place that owns it.
+# `argocd` is absent from core.config's catalogues for the same reason: it is not a
+# node-image --optional-services slug (nothing is baked into a Pi/x86 image for it) —
+# it is a cluster-plane controller the DevOps lane installs. It had NO line at all
+# until 2026-08-14, so its row rendered with an EMPTY description column next to an
+# equally empty mechanism column.
 LOCAL_ONLY_DESCRIPTIONS: dict[str, str] = {
     "wiki": "Collaborative wiki — shared pages at /wiki, SSO-linked to mesh accounts.",
+    "argocd": "GitOps delivery — ArgoCD keeps the mesh's workloads matching what is "
+              "committed in git, and shows every app's sync/health state in its own "
+              "web UI.",
 }
 
 # Where a local-only slug lands in the SHARED grouping (core.config.SERVICE_GROUPS).
@@ -334,7 +391,19 @@ def by_slug(slug: str) -> LocalService | None:
 
 
 def local_slugs() -> tuple[str, ...]:
-    """Every slug the local mesh can genuinely toggle, in catalogue order."""
+    """Every slug the local mesh can genuinely TOGGLE, in catalogue order — i.e. the
+    set a selection may contain and the set that gets one checkbox each.
+
+    Deliberately NOT every catalogued row: the DevOps-lane rows are rendered
+    (``catalogue_slugs``) but not selectable, because no compose profile and no
+    registry row exists for them to flip. Keeping them out here is what makes the
+    surface's `service_boxes[slug]` sweep and the CLI's `--services` help list agree
+    with what actually happens."""
+    return tuple(s.slug for s in LOCAL_SERVICES if s.is_selectable())
+
+
+def catalogue_slugs() -> tuple[str, ...]:
+    """Every row the surface RENDERS, selectable or not, in catalogue order."""
     return tuple(s.slug for s in LOCAL_SERVICES)
 
 
@@ -346,6 +415,14 @@ def federation_slugs() -> tuple[str, ...]:
     return tuple(s.slug for s in LOCAL_SERVICES if s.is_federation())
 
 
+def kind_slugs() -> tuple[str, ...]:
+    """The DevOps-lane rows, in catalogue order. Informational everywhere the local
+    docker mesh is concerned — the plan preview lists them so the confirm-before-run
+    manifest is COMPLETE (it describes every row the operator was shown), marked as
+    the separate lane they are rather than silently omitted."""
+    return tuple(s.slug for s in LOCAL_SERVICES if s.is_kind())
+
+
 def default_selection() -> tuple[str, ...]:
     """What the SHIPPED local stack runs with no selection at all. The checkbox surface
     starts in exactly this state, and ``federation_env`` treats a selection equal to it
@@ -355,12 +432,19 @@ def default_selection() -> tuple[str, ...]:
 
 def describe(slug: str) -> str:
     """The one-line "what enabling it does", plus the local-stack note when the row has
-    one. The shared half is IMPORTED from core.config — never restated here."""
+    one. The shared half is IMPORTED from core.config — never restated here.
+
+    A DevOps-lane row additionally carries ``KIND_LANE_HINT``, because "what enabling
+    it does" has no answer on this page for those two: the honest line has to name the
+    button that DOES enable them, or a row with no checkbox reads as a dead end."""
     base = SERVICE_DESCRIPTIONS.get(slug) or LOCAL_ONLY_DESCRIPTIONS.get(slug, "")
     svc = by_slug(slug)
-    if svc is not None and svc.local_note:
-        return f"{base} {svc.local_note}".strip()
-    return base
+    if svc is None:
+        return base
+    parts = [base, svc.local_note]
+    if svc.is_kind():
+        parts.append(KIND_LANE_HINT)
+    return " ".join(p for p in parts if p).strip()
 
 
 def local_groups() -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -368,8 +452,11 @@ def local_groups() -> tuple[tuple[str, tuple[str, ...]], ...]:
     SERVICE_GROUPS order — every shared slug this module has an opinion about (runnable
     OR explicitly unavailable) plus the local-only ones. Groups with no rows are
     dropped, so one loop renders the whole surface and adding a slug to either table
-    above is the only edit a new service needs."""
-    known = set(local_slugs()) | set(UNAVAILABLE_LOCALLY)
+    above is the only edit a new service needs.
+
+    Built from ``catalogue_slugs`` (every row), NOT ``local_slugs`` (the selectable
+    ones): the DevOps-lane rows are shown, they just carry no checkbox."""
+    known = set(catalogue_slugs()) | set(UNAVAILABLE_LOCALLY)
     out: list[tuple[str, tuple[str, ...]]] = []
     for title, slugs in SERVICE_GROUPS:
         rows = [s for s in slugs if s in known]
@@ -383,12 +470,24 @@ def local_groups() -> tuple[tuple[str, tuple[str, ...]], ...]:
 def validate_selection(selection: Sequence[str] | None) -> list[str]:
     """Problems with an operator selection (empty list = OK). A slug the local stack
     cannot run is refused WITH ITS REASON rather than silently dropped — dropping it
-    would let a CLI caller believe they enabled something that never existed."""
+    would let a CLI caller believe they enabled something that never existed.
+
+    That is exactly why a DevOps-lane slug is refused here too. The GUI cannot
+    produce one (those rows have no checkbox), but `--services argocd` on the CLI
+    used to sail through validation and then vanish: profile_flags() ignored it,
+    federation_env() ignored it, plan() never mentioned it, and the bring-up ran
+    without a word. The refusal names the lane that DOES install it."""
     if selection is None:
         return []
     problems: list[str] = []
     for slug in selection:
-        if by_slug(slug) is not None:
+        svc = by_slug(slug)
+        if svc is not None and svc.is_selectable():
+            continue
+        if svc is not None:            # catalogued, but not on this lane
+            problems.append(
+                f"service '{slug}' is not part of the local docker mesh — it runs on "
+                f"the DevOps (Kubernetes) lane. {KIND_LANE_HINT}")
             continue
         why = UNAVAILABLE_LOCALLY.get(slug)
         if why:

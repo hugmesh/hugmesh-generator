@@ -31,7 +31,7 @@ from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod  # noqa: E402
 from hugmesh_studio.gui.pages import ModePage  # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
+from hugmesh_studio.gui.qt import QtCore, QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -289,6 +289,21 @@ def test_bootstrap_up_blocked_by_validation(qapp, monkeypatch):
     assert "cannot start" in dlg.status.text().lower()
 
 
+def _join_page_threads(dlg):
+    """Wait out every QThread the page owns before the dialog is collected.
+
+    The page starts probes on entry that shell out to docker (stack status, and the
+    e2e gate). On a machine with a REAL mesh running they are still in flight at
+    teardown, and Qt turns that into a FATAL — "QThread: Destroyed while thread is
+    still running" aborts the whole interpreter, taking every later test in the file
+    with it. Reproduces at HEAD with no changes of any kind, so it is the harness's
+    problem to work around here; the page not stopping its own probes on close is the
+    real fix and belongs to the page. Swept by type rather than by attribute name so
+    a probe added later is joined too."""
+    for _t in dlg.findChildren(QtCore.QThread):
+        _t.wait(60_000)
+
+
 # ---- the SERVICES picker (the local mesh's "which services" axis) ----
 
 def test_services_table_offers_every_locally_runnable_slug(qapp):
@@ -297,6 +312,8 @@ def test_services_table_offers_every_locally_runnable_slug(qapp):
     Reading the registry from core is the point: a slug added there must appear here
     with no GUI edit at all."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    # local_slugs() is the SELECTABLE set, so this is also the guard that a row with
+    # no runnable mechanism on this lane never grows a checkbox.
     assert set(dlg.service_boxes) == set(local_services.local_slugs())
     for slug in local_services.UNAVAILABLE_LOCALLY:
         assert slug not in dlg.service_boxes
@@ -305,16 +322,60 @@ def test_services_table_offers_every_locally_runnable_slug(qapp):
         assert item.text(localmesh_mod._LS_COL_MECH) == "disabled"
         assert item.text(localmesh_mod._LS_COL_DESC) == \
             f"Disabled — {local_services.UNAVAILABLE_LOCALLY[slug]}"
+    _join_page_threads(dlg)
 
 
 def test_services_rows_state_which_mechanism_applies_them(qapp):
     """The operator's real question is "does ticking this restart my mesh?" — so the
-    row says which back-end it drives rather than leaving the two indistinguishable."""
+    row says which back-end it drives rather than leaving the three indistinguishable."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     assert dlg.page._svc_items["tor"].text(localmesh_mod._LS_COL_MECH) == \
         "--profile tor"
     assert dlg.page._svc_items["wiki"].text(localmesh_mod._LS_COL_MECH) == \
         "federation: wiki"
+    # THREE mechanisms, so three answers. The column was built by a TWO-way branch,
+    # which fell through to the federation arm for the DevOps rows and printed
+    # "federation: " with an empty module beside a live checkbox.
+    assert dlg.page._svc_items["argocd"].text(localmesh_mod._LS_COL_MECH) == \
+        local_services.KIND_LANE_LABEL
+    assert "federation" not in \
+        dlg.page._svc_items["workloadConsole"].text(localmesh_mod._LS_COL_MECH)
+    _join_page_threads(dlg)
+
+
+def test_devops_lane_rows_are_informational_and_carry_no_checkbox(qapp):
+    """THE FIX. argocd/workloadConsole are Kubernetes controllers: the docker-compose
+    lane cannot drive them, so the row must not offer to. A checkbox here was inert by
+    construction — profile_flags(), federation_env() and plan() all (correctly) drop a
+    kind slug, so ticking it changed nothing anywhere.
+
+    The honest row is the one UNAVAILABLE_LOCALLY already uses — greyed, self-
+    explaining — except it points at the DevOps buttons on this same page instead of
+    at a refusal."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert local_services.kind_slugs()                      # the lane is non-empty
+    for slug in local_services.kind_slugs():
+        # (a) rendered — the operator still learns the service exists
+        item = dlg.page._svc_items[slug]
+        assert item is not None, slug
+        # (b) NO checkbox: neither in the registry nor as a widget in the On column
+        assert slug not in dlg.service_boxes, slug
+        assert dlg.page.services_table.itemWidget(
+            item, localmesh_mod._LS_COL_ON) is None, slug
+        # (c) greyed, like every other row that is not a live toggle
+        assert item.foreground(localmesh_mod._LS_COL_NAME).color().name() == "#888888"
+        # (d) the row says where it DOES live — the button on this page
+        desc = item.text(localmesh_mod._LS_COL_DESC)
+        assert local_services.KIND_LANE_BUTTON in desc, slug
+        assert local_services.KIND_LANE_TARGET in desc, slug
+        assert item.text(localmesh_mod._LS_COL_MECH) == \
+            local_services.KIND_LANE_LABEL, slug
+    # and that button is really on this page, with the target the row names
+    assert dlg.page.devops_up_btn.text() == local_services.KIND_LANE_BUTTON
+    # (e) a kind slug can therefore never reach the config the plan describes
+    assert not (set(local_services.kind_slugs())
+                & set(dlg.collect_bootstrap().services or ()))
+    _join_page_threads(dlg)
 
 
 def test_social_and_tor_rows_are_the_same_widgets_not_copies(qapp):

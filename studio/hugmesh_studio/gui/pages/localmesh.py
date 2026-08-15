@@ -589,13 +589,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         svc_box = QtWidgets.QGroupBox("Services to run on this local mesh")
         svl = QtWidgets.QVBoxLayout(svc_box)
         svl.addWidget(_grey_note(
-            "Two different mechanisms, one list. COMPOSE PROFILE rows start or stop "
-            "containers, so they take effect at bring-up and changing one later needs "
-            "a stop + start. FEDERATION rows do not start anything — those containers "
-            "are always up — they flip the service's federation_modules `enabled` row "
-            "at seed time, which is what makes it appear in (or vanish from) the mesh "
-            "menu. Rows the local docker stack has no mechanism for are greyed with "
-            "the reason instead of offered as a toggle that would change nothing."))
+            "Two mechanisms you can tick, one list. COMPOSE PROFILE rows start or "
+            "stop containers, so they take effect at bring-up and changing one later "
+            "needs a stop + start. FEDERATION rows do not start anything — those "
+            "containers are always up — they flip the service's federation_modules "
+            "`enabled` row at seed time, which is what makes it appear in (or vanish "
+            "from) the mesh menu. DEVOPS LANE rows are greyed and carry no checkbox: "
+            "they are Kubernetes controllers this docker mesh cannot run at all, so "
+            "they are listed for what they are and started by the DevOps buttons "
+            "below. Anything the local docker stack has no mechanism for is greyed "
+            "with the reason instead of offered as a toggle that would change "
+            "nothing."))
         self.services_table = QtWidgets.QTreeWidget()
         self.services_table.setColumnCount(len(_LS_HEADERS))
         self.services_table.setHeaderLabels(list(_LS_HEADERS))
@@ -647,12 +651,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                     for _c in (_LS_COL_NAME, _LS_COL_MECH, _LS_COL_DESC):
                         item.setForeground(_c, grey)
                     continue
-                item.setText(_LS_COL_MECH,
-                             f"--profile {svc.profile}" if svc.is_profile()
-                             else f"federation: {svc.module}")
+                # THREE mechanisms, so the label is derived by the module that owns
+                # them (LocalService.mechanism_label) — this used to be a TWO-way
+                # branch, which labelled both DevOps-lane rows "federation: " with an
+                # empty module and then gave them a live checkbox that drove nothing.
+                item.setText(_LS_COL_MECH, svc.mechanism_label())
                 desc = local_describe(_slug)
                 item.setText(_LS_COL_DESC, desc)
                 item.setToolTip(_LS_COL_DESC, desc)
+                if not svc.is_selectable():
+                    # DEVOPS-LANE row: INFORMATIONAL, never a checkbox — the same
+                    # honesty idiom as the unavailable rows above, except this one
+                    # points at a lane that WORKS (the DevOps buttons below, which
+                    # `describe` names). A checkbox here could only be inert: no
+                    # compose profile and no federation row exists to flip.
+                    grey = QtGui.QBrush(QtGui.QColor("#888888"))
+                    for _c in (_LS_COL_NAME, _LS_COL_MECH, _LS_COL_DESC):
+                        item.setForeground(_c, grey)
+                    continue
                 box = QtWidgets.QCheckBox()
                 box.setToolTip(desc)
                 # The SHIPPED state, not a guess: a box ticked for something the mesh

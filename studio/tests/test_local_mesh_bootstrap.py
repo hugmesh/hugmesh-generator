@@ -13,6 +13,7 @@ import os
 import pytest
 
 from hugmesh_studio.core import local_mesh_bootstrap as boot_mod
+from hugmesh_studio.core import local_services as ls
 from hugmesh_studio.core.local_mesh_bootstrap import (
     SEED_SUPERADMIN_PASSWORD_ENV, SEED_SUPERADMIN_USERNAME_ENV,
     LocalMeshBootstrap, LocalMeshBootstrapConfig, main,
@@ -106,6 +107,32 @@ def test_plan_flags_prod_blockers(tmp_path):
     assert "BLOCKERS" in p
     assert "cluster domain" in p.lower()
     assert "auth key" in p.lower()
+
+
+def test_plan_accounts_for_every_row_the_services_table_shows(tmp_path):
+    """The confirm-before-run manifest must describe the mesh the operator was SHOWN,
+    which means all three kinds of row. The DevOps-lane rows were omitted entirely
+    while the surface rendered live checkboxes for them, so an operator could tick
+    ArgoCD, read a plan that never mentioned it, and press Start."""
+    p = _boot(tmp_path, env="test", services=("tuwunel",)).plan()
+    assert "SERVICES (compose profiles" in p
+    assert "SERVICES (federation registry" in p
+    assert "SERVICES (DevOps lane" in p
+    for slug in ls.kind_slugs():
+        assert f"[-] {slug}" in p, slug          # listed, and NOT as a checkbox
+        assert f"[x] {slug}" not in p and f"[ ] {slug}" not in p, slug
+    assert ls.KIND_LANE_LABEL in p
+    assert "NOT started by this bring-up" in p
+    assert "Start DevOps lane" in p
+
+
+def test_a_devops_lane_slug_in_a_selection_is_a_blocker_not_a_silent_no_op(tmp_path):
+    """`--services argocd` used to validate clean and then evaporate: every consumer
+    (profile_flags/federation_env/plan) correctly ignored it and nothing said so."""
+    b = _boot(tmp_path, env="test", services=("argocd", "tuwunel"))
+    probs = b.validate()
+    assert any("argocd" in x and ls.KIND_LANE_TARGET in x for x in probs), probs
+    assert "BLOCKERS" in b.plan()
 
 
 # ── validate() ──────────────────────────────────────────────────────────────────

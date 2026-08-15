@@ -53,7 +53,7 @@ from .local_services import (
     PROFILE_SOCIAL, PROFILE_TOR,
     by_slug as by_local_slug, federation_env, federation_selection,
     federation_slugs, local_slugs, profile_flags, profile_slugs, validate_selection,
-    PROFILE_MEDIA_POISONER,
+    PROFILE_MEDIA_POISONER, KIND_LANE_LABEL, kind_slugs,
 )
 from .egress_conf import validate_egress_conf
 from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
@@ -714,6 +714,11 @@ class LocalMeshBootstrap:
         # SERVICES — spelled out per mechanism, because the operator's two questions
         # ("does it start containers?" and "when does it take effect?") have opposite
         # answers for the two halves, and a single flat list would hide that.
+        # THREE blocks, not two: the services table shows a third kind of row (the
+        # DevOps/Kubernetes lane), and a confirm-before-run manifest that silently
+        # omits rows the operator was just shown is describing a different mesh than
+        # the one on screen. The third block is marked NOT-RUN rather than checkboxed,
+        # which is the same thing the rows themselves say.
         fed = c.federation_services()
         fed_env = federation_env(c.services)
         if c.services is not None:
@@ -744,6 +749,18 @@ class LocalMeshBootstrap:
             else:
                 lines.append("        (matches what the registry ships — nothing to "
                              "flip, env unchanged)")
+            if kind_slugs():
+                lines.append("      SERVICES (DevOps lane — Kubernetes controllers;")
+                lines.append("                NOT started by this bring-up):")
+                for slug in kind_slugs():
+                    lines.append(f"        [-] {slug}  {KIND_LANE_LABEL}")
+                lines.append("        -> nothing here starts them and nothing here "
+                             "can: they need")
+                lines.append("           the local Kubernetes cluster. Use "
+                             "'Start DevOps lane' on this")
+                lines.append("           page — it is separate from, and changes "
+                             "nothing about, the")
+                lines.append("           docker mesh above.")
         lines.append("")
         lines.append("(3) MESH OVERLAY (hugmesh-mesh compose project, tailscale):")
         if overlay:

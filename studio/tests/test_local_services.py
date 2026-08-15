@@ -88,7 +88,62 @@ def test_every_offered_slug_has_a_real_local_mechanism():
             # DEVOPS lane (MECH_KIND): a Kubernetes controller. It names neither
             # a compose profile nor a federation module — `make kind-up` IS its
             # mechanism, so asserting either field would invent a mapping.
+            #
+            # THIS ASSERTION ALONE ONCE HID THE BUG IT LOOKS LIKE IT GUARDS. Empty
+            # profile + empty module is what the DATA should look like; it says
+            # nothing about whether the SURFACE offers a checkbox over that
+            # emptiness, which is exactly what it was doing (a live box labelled
+            # "federation: " with no module, driving nothing). So the emptiness is
+            # asserted together with the two facts that make it honest: the row is
+            # NOT selectable, and it still names a mechanism a human can act on.
             assert svc.is_kind() and not svc.profile and not svc.module
+            assert not svc.is_selectable(), svc.slug
+            assert svc.mechanism_label() == ls.KIND_LANE_LABEL
+            assert ls.KIND_LANE_TARGET in svc.mechanism_label()
+
+
+def test_kind_rows_are_informational_not_inert_checkboxes():
+    """The DEFECT this pins: `argocd` and `workloadConsole` rendered live checkboxes
+    that changed nothing — profile_flags() dropped them, federation_env() dropped
+    them, plan() never mentioned them, and validate_selection() waved them through.
+
+    An informational row has to survive four separate checks, because the old bug
+    passed three of them: it must be excluded from the selectable set, included in
+    the rendered set, carry a non-empty mechanism label AND a description that names
+    where the thing actually lives."""
+    assert set(ls.kind_slugs()) == {"argocd", "workloadConsole"}
+    for slug in ls.kind_slugs():
+        svc = ls.by_slug(slug)
+        # 1. not selectable — no checkbox may be built for it
+        assert slug not in ls.local_slugs(), slug
+        assert not svc.is_selectable(), slug
+        # 2. still rendered — an unreachable service the operator never hears about
+        #    is how "does this mesh even have GitOps?" gets asked in the first place
+        assert slug in ls.catalogue_slugs(), slug
+        rows = [s for _t, slugs in ls.local_groups() for s in slugs]
+        assert slug in rows, slug
+        # 3. the mechanism column is the LANE, never an empty "federation: "
+        label = svc.mechanism_label()
+        assert label == ls.KIND_LANE_LABEL and "federation" not in label
+        # 4. the description exists and points at the lane that installs it
+        desc = ls.describe(slug)
+        assert len(desc) > 60, slug              # a line, not a blank cell
+        assert ls.KIND_LANE_BUTTON in desc, slug
+        assert ls.KIND_LANE_TARGET in desc, slug
+
+
+def test_kind_slugs_are_refused_from_a_selection_with_the_lane_that_runs_them():
+    """The GUI can no longer produce a kind slug (no checkbox exists), but the CLI
+    can: `--services argocd` used to validate clean and then evaporate. A refusal
+    that names the lane is the only answer that is not a lie."""
+    problems = ls.validate_selection(("argocd",))
+    assert len(problems) == 1
+    assert "argocd" in problems[0]
+    assert ls.KIND_LANE_TARGET in problems[0]
+    assert ls.KIND_LANE_BUTTON in problems[0]
+    # …and it does not get mistaken for an unknown slug
+    assert "unknown" not in problems[0]
+    assert ls.validate_selection(ls.kind_slugs()) != []
 
 
 def test_kind_lane_rows_name_the_make_target_that_runs_them():
@@ -97,8 +152,10 @@ def test_kind_lane_rows_name_the_make_target_that_runs_them():
     mk = _read(MAKEFILE)
     assert "kind-up:" in mk and "bootstrap-kind.sh" in mk
     assert "kind-down:" in mk
-    kind_slugs = {s.slug for s in ls.LOCAL_SERVICES if s.is_kind()}
-    assert kind_slugs == {"argocd", "workloadConsole"}
+    assert set(ls.kind_slugs()) == {"argocd", "workloadConsole"}
+    # the mechanism column's text must be the target a human can actually run
+    assert ls.KIND_LANE_TARGET == "make kind-up"
+    assert "kind-up:" in mk
     # and the bootstrap really installs ArgoCD (not a placeholder)
     boot = _read(os.path.join(
         GENERATOR_DIR, "specs", "cluster", "bootstrap", "kind-local",
@@ -156,7 +213,7 @@ def test_federation_slugs_have_containers_in_the_local_stack():
 
 
 def test_unavailable_slugs_are_never_also_offered_and_always_say_why():
-    assert not (set(ls.UNAVAILABLE_LOCALLY) & set(ls.local_slugs()))
+    assert not (set(ls.UNAVAILABLE_LOCALLY) & set(ls.catalogue_slugs()))
     for slug, why in ls.UNAVAILABLE_LOCALLY.items():
         assert len(why) > 30, slug          # a reason, not a shrug
 
@@ -166,7 +223,7 @@ def test_every_shared_catalogue_slug_is_accounted_for():
     unavailable-with-a-reason. Silently dropping one is how `wiki` and friends became
     invisible in the first place."""
     shared = {slug for _t, slugs in SERVICE_GROUPS for slug in slugs}
-    known = set(ls.local_slugs()) | set(ls.UNAVAILABLE_LOCALLY)
+    known = set(ls.catalogue_slugs()) | set(ls.UNAVAILABLE_LOCALLY)
     assert shared - known == set()
 
 
@@ -196,21 +253,36 @@ def test_the_social_profile_default_deviates_from_the_registry_deliberately():
 
 
 def test_descriptions_are_reused_from_the_shared_catalogue():
-    for slug in ls.local_slugs():
+    for slug in ls.catalogue_slugs():
         shared = SERVICE_DESCRIPTIONS.get(slug)
         if shared:
             assert ls.describe(slug).startswith(shared)
-    # the one slug the shared catalogue does not carry still gets a line
-    assert "wiki" not in SERVICE_DESCRIPTIONS
-    assert ls.describe("wiki")
+    # the slugs the shared catalogue does not carry still get a line. `argocd` had
+    # NEITHER a SERVICE_DESCRIPTIONS nor a LOCAL_ONLY_DESCRIPTIONS entry until
+    # 2026-08-14, so its row rendered with an empty description column — swept under
+    # the rug by a loop that only walked slugs which happened to have one.
+    for slug in ("wiki", "argocd"):
+        assert slug not in SERVICE_DESCRIPTIONS, slug
+        assert slug in ls.LOCAL_ONLY_DESCRIPTIONS, slug
+
+
+def test_every_rendered_row_has_a_description():
+    """EVERY row the surface draws, not just the selectable ones — a blank
+    description column is how a row stops explaining itself."""
+    for slug in ls.catalogue_slugs():
+        assert len(ls.describe(slug)) > 40, slug
 
 
 def test_grouping_follows_the_shared_group_order():
     titles = [t for t, _ in ls.local_groups()]
     assert titles == [t for t, _ in SERVICE_GROUPS if t in titles]
     rows = [s for _t, slugs in ls.local_groups() for s in slugs]
-    assert set(rows) == set(ls.local_slugs()) | set(ls.UNAVAILABLE_LOCALLY)
+    assert set(rows) == set(ls.catalogue_slugs()) | set(ls.UNAVAILABLE_LOCALLY)
     assert len(rows) == len(set(rows))       # no slug rendered twice
+    # the selectable set is a strict subset of the rendered set: rendering is what
+    # the operator SEES, selecting is what the bring-up can DO, and conflating the
+    # two is what put a live checkbox on a Kubernetes controller.
+    assert set(ls.local_slugs()) < set(rows)
 
 
 # ── 3. defaults: an untouched picker changes nothing ────────────────────────────
@@ -283,14 +355,26 @@ def test_kind_rows_are_neither_compose_nor_federation():
     assert "argocd" not in ls.profile_flags(sel)
     assert "workloadConsole" not in ls.profile_flags(sel)
     assert ls.federation_selection(sel) == ("wiki",)
-    # …and selecting them is VALID (they have a real lane now)
-    assert ls.validate_selection(("argocd", "workloadConsole")) == []
+    # …and BECAUSE both back-ends drop them, a selection containing one must be
+    # refused rather than accepted-and-ignored. `== []` here was the assertion that
+    # blessed the inert checkbox: it certified "this selection is fine" for a
+    # selection every consumer then threw away.
+    problems = ls.validate_selection(sel)
+    assert len(problems) == 2
+    assert {"argocd", "workloadConsole"} == {
+        p.split("'")[1] for p in problems}
 
 
-def test_kind_lane_slugs_are_offered_and_default_off():
+def test_kind_lane_slugs_are_shown_and_never_default_on():
     for slug in ("argocd", "workloadConsole"):
         svc = ls.by_slug(slug)
         assert svc is not None and svc.is_kind()
         assert svc.default_on is False
         assert "Kubernetes" in svc.local_note
-    assert slug in ls.local_slugs()
+        # SHOWN (catalogue_slugs), not OFFERED (local_slugs). The old spelling of
+        # this line asserted `slug in ls.local_slugs()` — i.e. that the row was
+        # selectable — which is the defect, not the contract. It also only ever
+        # ran on the loop's last value, since it sat outside the loop body.
+        assert slug in ls.catalogue_slugs()
+        assert slug not in ls.local_slugs()
+        assert slug not in ls.default_selection()
