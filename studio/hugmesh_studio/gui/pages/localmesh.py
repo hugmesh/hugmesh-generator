@@ -68,6 +68,7 @@ from collections import deque
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
+from ...core import vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -930,6 +931,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.e2e_btn.setEnabled(False)
         self.e2e_btn.clicked.connect(self._run_e2e)
         brow.addWidget(self.e2e_btn)
+        # ── vaults + managed volumes (operator ask 2026-08-14) ──────────────
+        # Always enabled: unlike the verbs above, this opens a READ-FIRST view
+        # whose own tabs report honestly when there is nothing to manage (no
+        # docker daemon, or Vault absent because it is a DevOps-lane service).
+        # Greying it on "mesh not running" would be worse — the volumes OUTLIVE
+        # the containers, and a stopped mesh is exactly when an operator wants
+        # to inspect or reclaim them.
+        self.vaults_btn = QtWidgets.QPushButton("Vaults && volumes…")
+        self.vaults_btn.setToolTip(
+            "Manage this mesh's durable state: the compose project's managed "
+            "volumes (size, which container holds each, and a guarded delete) "
+            "and its Vault entries. Volumes are where the mesh's data actually "
+            "lives — every BFF's postgres, cassandra, the uploads — so deleting "
+            "one is permanent and no rebuild restores it. Vault runs on the "
+            "DevOps (Kubernetes) lane, so on a docker-only mesh that tab tells "
+            "you how to start it rather than showing an empty list.")
+        self.vaults_btn.clicked.connect(self._open_vaults)
+        brow.addWidget(self.vaults_btn)
         # ── the DEVOPS lane (Kubernetes) ────────────────────────────────────
         # ArgoCD + the workload console are k8s CONTROLLERS — no compose profile
         # can host them (core/local_services.MECH_KIND). These two buttons drive
@@ -1749,6 +1768,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      lambda on_line, cancel: node.devops_down(on_line=on_line,
                                                               cancel=cancel),
                      stream=True, cancellable=True, verb="devops-down")
+
+    def _open_vaults(self):
+        """Open the Vaults & managed-volumes manager.
+
+        A real modal (exec) is correct HERE and would not be in page logic: this is a
+        button click, not validatePage/itemChanged, so nothing headless is waiting on it
+        — and the dialog owns its own off-thread probe, so opening it cannot block this
+        page. Held on self so the wrapper is not collected while the dialog is up."""
+        from ..vaults_dialog import VaultsDialog
+        self._vaults_dialog = VaultsDialog(self, project=self._compose_project())
+        self._vaults_dialog.exec()
+
+    def _compose_project(self) -> str:
+        """The compose project this page's mesh runs under. Falls back to the shipped
+        default rather than guessing from the form, because the DIALOG describes what is
+        actually on the machine, not what the un-applied selection would create."""
+        node = getattr(self, "node", None)
+        return getattr(node, "compose_project", None) or vaults.DEFAULT_PROJECT
 
     def _run_e2e(self):
         """Run the e2e suite against the RUNNING stack. The gate is re-probed
