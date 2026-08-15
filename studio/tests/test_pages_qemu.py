@@ -59,6 +59,7 @@ import dataclasses
 import inspect
 import json
 import os
+import sys
 import time
 from types import SimpleNamespace
 
@@ -298,8 +299,9 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 #: The environment hooks let ONE test decide what a run does without a second stub:
 #: STUB_QMP_STATUS is the line a `--qmp LABEL status` prints (in production that is
 #: QEMU's own query-status reply, printed verbatim by the runner's QMP client),
-#: STUB_SAVE_FILE is the file a save actually creates, and STUB_SAVE_SLEEP makes the
-#: save the long-running kind.
+#: STUB_SAVE_FILE overrides the file a save creates (by default it honours the
+#: --save-to it was given, like the real runner), STUB_SAVE_NONE makes a save exit 0
+#: while writing nothing, and STUB_SAVE_SLEEP makes the save the long-running kind.
 _STUB_RUNNER = """#!/usr/bin/env bash
 echo "STUB-RUNNER $*"
 if [ "$1" = "--keep-alive" ] && [ "$2" = "--only" ]; then
@@ -309,9 +311,24 @@ if [ "$1" = "--qmp" ] && [ "$3" = "status" ] && [ -n "${STUB_QMP_STATUS:-}" ]; t
     echo "${STUB_QMP_STATUS}"
 fi
 if [ "$1" = "--save-device" ]; then
-    if [ -n "${STUB_SAVE_FILE:-}" ]; then
-        mkdir -p "$(dirname "${STUB_SAVE_FILE}")"
-        printf 'a stand-in for a qcow2 backup\\n' > "${STUB_SAVE_FILE}"
+    # Create the file --save-to NAMES, exactly as the real runner does. The target is
+    # chosen by core.qemu_devices and carries a current-time stamp, so a test cannot
+    # predict it; a stub that wrote somewhere else would make the page's own
+    # "success but no file appeared" check fire on every save. STUB_SAVE_FILE stays
+    # as the override for tests that need to point the write elsewhere (or nowhere).
+    _tgt=""
+    while [ $# -gt 0 ]; do
+        [ "$1" = "--save-to" ] && { _tgt="$2"; break; }
+        shift
+    done
+    [ -n "${STUB_SAVE_FILE:-}" ] && _tgt="${STUB_SAVE_FILE}"
+    # STUB_SAVE_NONE is how a test says "exit 0 but write NOTHING" — the case the
+    # page's on-disk verification exists for. It has to be its own switch now that
+    # the default is to honour --save-to.
+    [ -n "${STUB_SAVE_NONE:-}" ] && _tgt=""
+    if [ -n "${_tgt}" ]; then
+        mkdir -p "$(dirname "${_tgt}")"
+        printf 'a stand-in for a qcow2 backup\\n' > "${_tgt}"
     fi
     if [ -n "${STUB_SAVE_SLEEP:-}" ]; then
         sleep 120
@@ -1162,8 +1179,6 @@ def test_qemu_save_copy_writes_a_new_file_and_leaves_the_old_one_alone(
     dev = _device()
     registry(dev)
     old = existing_save(dev)
-    fresh = _save_path(work_dir, dev, stamp="20260814T220000Z")
-    monkeypatch.setenv("STUB_SAVE_FILE", fresh)
 
     page = _qemu_page(wiz)
     row = _find_row(page, "rpi5/pki")
@@ -1171,13 +1186,22 @@ def test_qemu_save_copy_writes_a_new_file_and_leaves_the_old_one_alone(
     row.save.click()
     _finish(page, qapp)
 
-    assert "STUB-RUNNER --save-device rpi5/pki" in _echoed(page)
-    assert not any("--overwrite" in line for line in _echoed(page))
-    assert os.path.exists(fresh)
+    # The real core stamps the target with the CURRENT time, so the name cannot be
+    # predicted here — asserting a guessed filename would only ever test the stub.
+    # What actually has to hold is read back out of the argv the child received:
+    # a copy goes to a NEW file in the saves dir, and carries no --overwrite.
+    line = "\n".join(_echoed(page))
+    assert "--save-device rpi5/pki" in line, line
+    assert "--save-to " in line, line
+    written = line.split("--save-to ", 1)[1].split()[0]
+    assert written.startswith(qemu_devices.saves_dir(work_dir) + os.sep), written
+    assert written.endswith(".qcow2"), written
+    assert written != old, "a copy must not reuse the existing save's path"
+    assert "--overwrite" not in line
     with open(old, "rb") as fh:
         assert fh.read() == b"an earlier save", "the previous save was not left alone"
     note = page.dev_note.text()
-    assert "Saved" in note and fresh in note
+    assert "Saved" in note and written in note
     assert "crash-consistent" in note                    # stated, not implied
     assert "crash-consistent" in page.log.toPlainText()
 
@@ -1230,7 +1254,12 @@ def test_qemu_overwrite_must_be_armed_inline_before_it_can_fire(
     assert row.overwrite.isEnabled()
     row.overwrite.click()
     _finish(page, qapp)
-    assert "STUB-RUNNER --save-device rpi5/pki --overwrite" in _echoed(page)
+    # Overwrite must name the EXISTING save it is replacing — the whole point of the
+    # arming step is that the operator was told which file is about to be lost, so a
+    # command that overwrote some other path would make that warning a lie.
+    line = "\n".join(_echoed(page))
+    assert "--save-device rpi5/pki" in line and f"--save-to {target}" in line, line
+    assert "--overwrite" in line
 
 
 def test_qemu_overwrite_disarms_itself_after_it_fires(
@@ -1329,11 +1358,12 @@ def test_qemu_save_runs_off_the_gui_thread_and_can_be_cancelled(
 
 
 def test_qemu_save_verifies_on_disk_instead_of_trusting_the_exit_code(
-        wiz, registry, qapp):
+        wiz, registry, qapp, monkeypatch):
     """"The runner exited 0" and "there is a copy you can restore from" are different
     statements, and a partial file that looks like a save is the worst outcome
     available here. The page re-reads the save directory and reports what it found."""
-    registry(_device())                                # no STUB_SAVE_FILE: creates none
+    monkeypatch.setenv("STUB_SAVE_NONE", "1")          # exits 0, writes nothing
+    registry(_device())
     page = _qemu_page(wiz)
     _find_row(page, "rpi5/pki").save.click()
     _finish(page, qapp)
@@ -1372,3 +1402,56 @@ def test_qemu_page_offers_no_modal_dialogs_at_all(wiz):
     src = inspect.getsource(qemu_page)
     assert "QMessageBox" not in src
     assert ".exec(" not in src and ".exec_(" not in src
+
+
+def test_the_real_core_module_satisfies_the_save_api_this_page_calls():
+    """The stub may stand in for BEHAVIOUR; it must never stand in for EXISTENCE.
+
+    This page gates saving on ``_save_supported()`` and disables both buttons when
+    core.qemu_devices cannot express a save — which is the right thing in a tree
+    where that module predates the feature, and was also exactly how the first
+    attempt shipped a dead feature with a green suite: the GUI called
+    ``save_argv``/``saved_copies``, the core published neither, and this file's
+    fixture back-filled the missing names so nothing went red.
+
+    So this test deliberately imports the REAL module and asks it directly, with no
+    fixture and no stub: every name the page calls must be there, ``save_argv`` must
+    take a MODE (not a path) as its third argument, and the modes must be the ones
+    the buttons send.
+    """
+    # Loaded into a FRESH namespace straight from the file, because the two obvious
+    # spellings both lie here:
+    #   * `import_module` hands back the cached object, which `_install_fake_save_api`
+    #     above may already have back-filled — so the stub would answer for the real
+    #     module and the test could never fail;
+    #   * `reload` re-executes into that SAME namespace and does not remove names that
+    #     disappeared from the source, so a back-filled `save_argv` survives it
+    #     (verified: renaming save_argv on disk left both spellings green).
+    # A private module object sidesteps both and disturbs nothing in sys.modules.
+    import importlib.util
+    src = importlib.import_module("hugmesh_studio.core.qemu_devices").__file__
+    name = "_real_qemu_devices_probe"
+    spec = importlib.util.spec_from_file_location(name, src)
+    real = importlib.util.module_from_spec(spec)
+    # Registered for the duration of exec_module and removed afterwards: @dataclass
+    # resolves its own class through sys.modules[cls.__module__], so a module executed
+    # while unregistered dies inside dataclasses with a bare AttributeError on None.
+    sys.modules[name] = real
+    try:
+        spec.loader.exec_module(real)
+    finally:
+        sys.modules.pop(name, None)
+
+    missing = [n for n in qemu_page._SAVE_API if not callable(getattr(real, n, None))]
+    assert not missing, (
+        f"core.qemu_devices is missing {missing}, so both save buttons would be "
+        "permanently disabled in a merged tree")
+
+    assert set(getattr(real, "SAVE_MODES", ())) == {"copy", "overwrite"}
+
+    # The signature, not just the name: a rename would not have fixed the original
+    # break, because the third positional was a mode on one side and a path on the
+    # other.
+    import inspect
+    params = list(inspect.signature(real.save_argv).parameters)
+    assert params[:3] == ["generator_dir", "dev", "mode"], params

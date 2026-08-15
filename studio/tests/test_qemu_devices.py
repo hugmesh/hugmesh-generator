@@ -555,3 +555,66 @@ def test_module_is_qt_free_and_side_effect_free_at_import():
         assert banned not in source, f"core/qemu_devices.py must not reach for {banned}"
     assert qd.discover_devices(WORK) == []       # a nonexistent work dir, no writes
     assert not os.path.exists(WORK)
+
+
+# ---- the guard has to be reachable, not merely present -----------------------------
+
+@pytest.mark.parametrize("bad, why", [
+    ("/gen/out/sessions/s1/hugmesh-rpi5-pki.qcow2", "the artifacts tree"),
+    ("/gen/out/qemu-runs/images/golden.qcow2",      "the decompressed goldens"),
+    ("/gen/out/qemu-runs/runs/rpi5_pki/live.qcow2", "the live overlay dir"),
+    ("/gen/out/qemu-runs/devices/rpi5_pki.qcow2",   "the device registry"),
+    ("/gen/out/qemu-runs/results/rpi5_pki.qcow2",   "the results dir"),
+    ("/somewhere/else/save.qcow2",                  "outside the work dir"),
+    ("relative/save.qcow2",                         "a relative path"),
+    ("/gen/out/qemu-runs/saves/rpi5_pki.img",       "a raw .img"),
+])
+def test_device_save_argv_enforces_the_refusal_it_documents(bad, why):
+    """The refusal must fire THROUGH the builder, not only when called directly.
+
+    Every refusal test used to call ``save_target_refusal`` itself, so deleting the
+    whole ``refusal = ...; if refusal: raise`` block from ``device_save_argv`` — and
+    separately, dropping the artifacts_dir/work_dir it forwards — left the suite
+    green. The GUI's safety depends on the builder refusing, not on the rule
+    existing somewhere nearby, so it is asserted at the builder.
+    """
+    dev = _dev(label="rpi5/pki", state="running", container="c", qmp="/w/q.sock")
+    with pytest.raises(ValueError):
+        qd.device_save_argv("/gen", dev, bad,
+                            artifacts_dir="/gen/out/sessions/s1",
+                            work_dir="/gen/out/qemu-runs")
+
+
+def test_save_argv_modes_are_the_two_the_operator_asked_for(tmp_path):
+    """copy -> a new file; overwrite -> the NEWEST existing save, whoever made it."""
+    gen = str(tmp_path / "gen")
+    work = qd.default_work_dir(gen)
+    os.makedirs(qd.saves_dir(work), exist_ok=True)
+    dev = _dev(label="rpi5/pki", state="running", container="c", qmp="/w/q.sock")
+
+    # With nothing saved, "overwrite" must REFUSE rather than quietly create the
+    # first copy — otherwise a control labelled destructive silently is not.
+    with pytest.raises(ValueError):
+        qd.save_argv(gen, dev, "overwrite")
+
+    first = qd.save_argv(gen, dev, "copy")
+    target = first[first.index("--save-to") + 1]
+    assert "--overwrite" not in first
+    open(target, "w").close()
+
+    # A save the RUNNER made from a shell, under its own name, newest of all.
+    cli = os.path.join(qd.saves_dir(work), "before-upgrade.qcow2")
+    open(cli, "w").close()
+    # The runner writes a sidecar beside every save; it is what makes a
+    # custom-named file recognisably THIS device's rather than a stray qcow2.
+    with open(cli + ".json", "w", encoding="utf-8") as fh:
+        json.dump({"label": dev.label}, fh)
+    os.utime(cli, (2 ** 31, 2 ** 31))            # unambiguously newest
+
+    ov = qd.save_argv(gen, dev, "overwrite")
+    assert ov[ov.index("--save-to") + 1] == cli, \
+        "overwrite must replace the newest existing save, including a CLI-made one"
+    assert "--overwrite" in ov
+
+    with pytest.raises(ValueError):
+        qd.save_argv(gen, dev, "clobber")        # not one of SAVE_MODES
