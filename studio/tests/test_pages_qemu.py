@@ -23,6 +23,20 @@ options on each running emulated device"): the per-device table, its shell butto
 its start/stop and QMP controls, and the --keep-alive tick that leaves the guests
 up for it.
 
+And PAUSE-AND-SAVE on top of that (the operator ask, verbatim: "makse sure that the
+studio user has options to pause and save everything to the existing disk in another
+copy or overwrite the existing copy in the session"):
+
+* a paused device READS as paused — the State column stops saying "running" and the
+  Shell button greys, because sshd in a frozen guest never answers;
+* "Save copy" writes a NEW file and leaves any earlier save alone (asserted on the
+  bytes of the earlier file, not only on the argv);
+* "Overwrite save" replaces that device's previous save, is greyed until a save
+  exists, and needs an INLINE tick armed first — armed per click, never a dialog;
+* both say CRASH-CONSISTENT on the widget, and neither can name the golden image;
+* a save runs in the cancellable off-thread lane, and its result is verified against
+  the FILESYSTEM rather than against the runner's exit status.
+
 WHAT IS REAL HERE, AND WHY IT MATTERS
 -------------------------------------
 Everything this layer owns is exercised unpatched:
@@ -42,6 +56,7 @@ Hermetic all the same: no docker daemon, no qemu, no images, and nothing is ever
 really launched into a desktop terminal.
 """
 import dataclasses
+import inspect
 import json
 import os
 import time
@@ -197,7 +212,62 @@ def _install_fake_qemu_devices():
     return mod
 
 
-qemu_devices = _install_fake_qemu_devices()               # noqa: E402
+#: The runner script's path inside a generator tree — the same relative path
+#: core.qemu_devices builds every other device argv from.
+RUNNER_REL = os.path.join("tests", "qemu", "run-qemu-docker.sh")
+
+
+def _install_fake_save_api(mod):
+    """Backfill the SAVE half of core.qemu_devices, ONLY where it is missing.
+
+    Same rule, and the same reason, as the module stand-in above — one level finer.
+    Saving is the newest slice of that layer's API, so a tree can perfectly well
+    have a real ``core.qemu_devices`` that predates it; without this the save tests
+    below would assert against buttons that are (correctly) greyed out because the
+    page found no ``save_argv``. Each name is filled in individually and only if
+    absent, so the REAL function wins the moment it lands and no stand-in can ever
+    shadow one.
+
+    What is stood in for is exactly what layer 2 publishes and this page consumes:
+
+    * ``SAVE_MODES`` — the vocabulary ("copy" leaves earlier saves alone,
+      "overwrite" re-saves onto the newest one);
+    * ``save_argv`` — the runner subcommand for one device and one mode;
+    * ``saved_copies`` — that device's existing saves on disk, NEWEST FIRST, which
+      is what the GUI arms Overwrite from and what it names as the file to be lost.
+
+    Nothing this layer owns is stood in for: the page, its arming rules, its
+    refusals and its on-disk verification are always the real code.
+    """
+    saves_subdir = getattr(mod, "SAVES_SUBDIR", "saves")
+
+    def saved_copies(work_dir, dev):
+        root = os.path.join(work_dir, saves_subdir)
+        safe = dev.label.replace("/", "_").replace("+", "_")
+        try:
+            names = os.listdir(root)
+        except OSError:
+            return []
+        hits = [os.path.join(root, n) for n in names
+                if n.startswith(safe + "-") and n.endswith(".qcow2")]
+        hits.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
+        return hits
+
+    def save_argv(generator_dir, dev, mode):
+        if mode not in mod.SAVE_MODES:
+            raise ValueError(f"unknown save mode {mode!r}")
+        argv = [os.path.join(generator_dir, RUNNER_REL), "--save-device", dev.label]
+        return argv + ["--overwrite"] if mode == "overwrite" else argv
+
+    defaults = {"SAVES_SUBDIR": saves_subdir, "SAVE_MODES": ("copy", "overwrite"),
+                "saved_copies": saved_copies, "save_argv": save_argv}
+    for attr, value in defaults.items():
+        if not hasattr(mod, attr):
+            setattr(mod, attr, value)
+    return mod
+
+
+qemu_devices = _install_fake_save_api(_install_fake_qemu_devices())   # noqa: E402
 
 from hugmesh_studio.core import qemu_tests               # noqa: E402
 from hugmesh_studio.core.config import User              # noqa: E402
@@ -216,15 +286,36 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 #: The stub runner. It echoes its own argv — that echo is what the device-console
-#: assertions read, so they are about the argv a CHILD received. The one branch that
-#: is not instant stands in for the device Start path (`--keep-alive --only LABEL`),
-#: which in production is a full emulated boot: the sleep gives Cancel a real process
-#: GROUP to terminate, and it is a child of this shell rather than this shell itself
-#: so that a cancel which fails to signal the group leaves the pipe open and hangs.
+#: assertions read, so they are about the argv a CHILD received. The branches that
+#: are not instant stand in for the two verbs that are slow in production:
+#:
+#: * the device Start path (`--keep-alive --only LABEL`) is a full emulated boot: the
+#:   sleep gives Cancel a real process GROUP to terminate, and it is a child of this
+#:   shell rather than this shell itself so that a cancel which fails to signal the
+#:   group leaves the pipe open and hangs;
+#: * `--save-device` copies a disk, which on a real device is minutes of block job.
+#:
+#: The environment hooks let ONE test decide what a run does without a second stub:
+#: STUB_QMP_STATUS is the line a `--qmp LABEL status` prints (in production that is
+#: QEMU's own query-status reply, printed verbatim by the runner's QMP client),
+#: STUB_SAVE_FILE is the file a save actually creates, and STUB_SAVE_SLEEP makes the
+#: save the long-running kind.
 _STUB_RUNNER = """#!/usr/bin/env bash
 echo "STUB-RUNNER $*"
 if [ "$1" = "--keep-alive" ] && [ "$2" = "--only" ]; then
     sleep 120
+fi
+if [ "$1" = "--qmp" ] && [ "$3" = "status" ] && [ -n "${STUB_QMP_STATUS:-}" ]; then
+    echo "${STUB_QMP_STATUS}"
+fi
+if [ "$1" = "--save-device" ]; then
+    if [ -n "${STUB_SAVE_FILE:-}" ]; then
+        mkdir -p "$(dirname "${STUB_SAVE_FILE}")"
+        printf 'a stand-in for a qcow2 backup\\n' > "${STUB_SAVE_FILE}"
+    fi
+    if [ -n "${STUB_SAVE_SLEEP:-}" ]; then
+        sleep 120
+    fi
 fi
 exit 0
 """
@@ -338,6 +429,41 @@ def registry(fake_generator):
     return register
 
 
+def _save_path(work_dir, dev, stamp="20260814T210000Z"):
+    """Where THIS SUITE puts a stand-in "previous save" for a device.
+
+    The page arms Overwrite from ``core.qemu_devices.saved_copies()`` and names the
+    file it is about to destroy from the same call, so a fake save has to land
+    somewhere that function will actually find it. That couples these tests to LAYER
+    2's path rule, so the coupling is written down once, here, and asserted head-on
+    in test_qemu_save_path_rule_matches_core — if layer 2 lands with a different rule
+    that one test fails loudly, instead of every arming test below quietly passing
+    against an Overwrite button that is greyed for the wrong reason.
+    """
+    saves = os.path.join(work_dir, getattr(qemu_devices, "SAVES_SUBDIR", "saves"))
+    safe = dev.label.replace("/", "_").replace("+", "_")
+    return os.path.join(saves, f"{safe}-{stamp}.qcow2")
+
+
+@pytest.fixture
+def work_dir(fake_generator):
+    """The runner work dir the page reads — registry and saves both live under it."""
+    gen, _sess = fake_generator
+    return os.path.join(str(gen), qemu_tests.DEFAULT_WORK_SUBDIR)
+
+
+@pytest.fixture
+def existing_save(work_dir):
+    """Put a stand-in EARLIER save on disk and hand back its path."""
+    def make(dev, stamp="20260814T210000Z", data=b"an earlier save"):
+        path = _save_path(work_dir, dev, stamp)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+    return make
+
+
 @pytest.fixture
 def terminal(monkeypatch):
     """A KNOWN terminal wrapper. The real terminal_argv answers what happens to be
@@ -375,6 +501,18 @@ def _echoed(page):
     """Every line the STUB RUNNER printed — i.e. the argv a child actually got."""
     return [ln for ln in page.log.toPlainText().splitlines()
             if ln.startswith("STUB-RUNNER")]
+
+
+def _finish(page, qapp, ms=15000):
+    """Let the verb now in flight run to completion and deliver its queued signals.
+
+    ``done`` is a QUEUED signal, so the page's own bookkeeping (its run-state latch,
+    its on-disk check of a save, the table rebuild) has not happened when the thread
+    ends — it happens on the next event-loop turn, which is what processEvents is.
+    """
+    assert page.worker is not None, "no verb was started"
+    assert page.worker.wait(ms), "the verb never finished"
+    qapp.processEvents()
 
 
 def _pump_until(qapp, page, needle, seconds=15):
@@ -905,3 +1043,332 @@ def test_qemu_build_first_hides_the_device_console(wiz, registry):
     assert page.devices_box.isVisible()
     page.build_first.setChecked(True)
     assert not page.devices_box.isVisible()
+
+
+# ---- pause, honestly ---------------------------------------------------------------
+
+def test_qemu_pause_makes_the_row_say_paused_instead_of_running(wiz, registry, qapp):
+    """A paused device must be tellable from a working one AT A GLANCE.
+
+    The registry's ``state`` answers "is the container up" and nothing else: pausing
+    is a QMP verb docker-entrypoint.sh never sees, so a guest frozen by the Pause
+    button on this very row keeps its record at "running" forever. A State column
+    that reports only the record therefore says "running" about a device whose CPUs
+    are stopped — and the Shell button beside it stays lit, offering an ssh that can
+    only hang, because sshd inside a frozen guest never gets scheduled.
+    """
+    registry(_device())
+    page = _qemu_page(wiz)
+    assert page.devices.item(0, qemu_page._DCOL_STATE).text() == "running"
+
+    _find_row(page, "rpi5/pki").qmp["pause"].click()
+    _finish(page, qapp)
+
+    cell = page.devices.item(0, qemu_page._DCOL_STATE)
+    assert cell.text() == "PAUSED"
+    assert "running" not in cell.text().lower()
+    assert "vCPUs are FROZEN" in cell.toolTip()
+
+    row = _find_row(page, "rpi5/pki")
+    assert not row.qmp["pause"].isEnabled()          # the verb that cannot apply
+    assert "already paused" in row.qmp["pause"].toolTip()
+    assert row.qmp["resume"].isEnabled()             # never greyed: belief can be stale
+    assert not row.shell.isEnabled()
+    assert "PAUSED" in row.shell.toolTip() and "hang" in row.shell.toolTip()
+
+    row.qmp["resume"].click()
+    _finish(page, qapp)
+    assert page.devices.item(0, qemu_page._DCOL_STATE).text() == "running"
+    assert _find_row(page, "rpi5/pki").shell.isEnabled()
+
+
+def test_qemu_status_resyncs_a_device_paused_outside_the_studio(
+        wiz, registry, qapp, monkeypatch):
+    """The one honest answer to "did someone else pause this?".
+
+    A device can be paused from a terminal, or by a Studio session that has since
+    been closed, and nothing tells this page. Status is the re-sync: the runner's QMP
+    client prints QEMU's query-status reply verbatim, so the reply is parsed off the
+    stream rather than assumed."""
+    registry(_device())
+    monkeypatch.setenv("STUB_QMP_STATUS",
+                       '{"return": {"status": "paused", "running": false}}')
+    page = _qemu_page(wiz)
+    assert page.devices.item(0, qemu_page._DCOL_STATE).text() == "running"
+
+    _find_row(page, "rpi5/pki").qmp["status"].click()
+    _finish(page, qapp)
+    assert page.devices.item(0, qemu_page._DCOL_STATE).text() == "PAUSED"
+
+
+def test_qemu_a_device_that_went_away_does_not_stay_paused(wiz, registry, qapp):
+    """A run-state belongs to a GUEST, and a label outlives its guests.
+
+    Stop keeps the row (the record is still on disk until the runner rewrites it),
+    so a latched "paused" would survive into a device that is not even the same
+    guest — and grey its Pause button after it boots again."""
+    registry(_device())
+    page = _qemu_page(wiz)
+    _find_row(page, "rpi5/pki").qmp["pause"].click()
+    _finish(page, qapp)
+    assert page.devices.item(0, qemu_page._DCOL_STATE).text() == "PAUSED"
+
+    _find_row(page, "rpi5/pki").stop.click()
+    _finish(page, qapp)
+    assert "STUB-RUNNER --stop-device rpi5/pki" in _echoed(page)
+    assert page.devices.item(0, qemu_page._DCOL_STATE).text() == "running", \
+        "the stale paused latch outlived the guest it described"
+
+
+# ---- save: the copy, and the overwrite behind a tick --------------------------------
+
+def test_qemu_save_column_holds_both_actions_and_their_arming(wiz, registry):
+    registry(_device())
+    page = _qemu_page(wiz)
+    headers = [page.devices.horizontalHeaderItem(c).text()
+               for c in range(page.devices.columnCount())]
+    assert headers[qemu_page._DCOL_SAVE] == "Save disk"
+    assert page.devices.cellWidget(0, qemu_page._DCOL_SAVE) is not None
+    row = _find_row(page, "rpi5/pki")
+    assert row.save.text() == "Save copy"
+    assert "Overwrite" in row.overwrite.text()
+    assert row.arm is not None and not row.arm.isChecked()   # destructive: OFF
+
+
+def test_qemu_save_path_rule_matches_core(wiz, registry, work_dir, existing_save):
+    """The GUI/core boundary this suite's save tests stand on.
+
+    The page arms Overwrite from core.qemu_devices.saved_copies() and names the file
+    it would destroy from the same call. If this suite writes its stand-in saves
+    somewhere that function does not look, every arming test below would pass against
+    a button greyed for the WRONG reason — so the agreement is asserted directly."""
+    dev = _device()
+    registry(dev)
+    path = existing_save(dev)
+    assert path in qemu_devices.saved_copies(work_dir, dev), (
+        f"core.qemu_devices.saved_copies() does not see {path}; _save_path() in this "
+        "suite and layer 2's save-path rule have diverged")
+    page = _qemu_page(wiz)
+    assert _find_row(page, "rpi5/pki").overwrite_target == path
+
+
+def test_qemu_save_copy_writes_a_new_file_and_leaves_the_old_one_alone(
+        wiz, registry, work_dir, existing_save, qapp, monkeypatch):
+    """The SAFE default, end to end: a new file, and the previous save untouched.
+
+    The argv asserted on is the one the stub runner echoed back — what a child really
+    received — and the absence of --overwrite on it is the whole difference between
+    the two modes."""
+    dev = _device()
+    registry(dev)
+    old = existing_save(dev)
+    fresh = _save_path(work_dir, dev, stamp="20260814T220000Z")
+    monkeypatch.setenv("STUB_SAVE_FILE", fresh)
+
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+    assert row.save.isEnabled()
+    row.save.click()
+    _finish(page, qapp)
+
+    assert "STUB-RUNNER --save-device rpi5/pki" in _echoed(page)
+    assert not any("--overwrite" in line for line in _echoed(page))
+    assert os.path.exists(fresh)
+    with open(old, "rb") as fh:
+        assert fh.read() == b"an earlier save", "the previous save was not left alone"
+    note = page.dev_note.text()
+    assert "Saved" in note and fresh in note
+    assert "crash-consistent" in note                    # stated, not implied
+    assert "crash-consistent" in page.log.toPlainText()
+
+
+def test_qemu_overwrite_is_disabled_until_there_is_a_save_to_overwrite(
+        wiz, registry, qapp):
+    """Overwrite only ever replaces a previous SAVE. With none on disk there is
+    nothing it could mean, and the one thing it must never fall back to is the image
+    the device was booted from."""
+    registry(_device())
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+
+    assert row.save.isEnabled()                       # the safe action is available
+    assert not row.overwrite.isEnabled()
+    assert not row.arm.isEnabled()
+    assert "no saved copy to overwrite" in row.overwrite.toolTip()
+    assert "never the image the device was built from" in row.overwrite.toolTip()
+
+    row.overwrite.click()                             # disabled: ignored
+    page._device_save(0, "overwrite")                 # and guarded underneath
+    assert page.worker is None and not _echoed(page)
+    assert "no saved copy to overwrite" in page.dev_note.text()
+
+
+def test_qemu_overwrite_must_be_armed_inline_before_it_can_fire(
+        wiz, registry, existing_save, qapp):
+    """The destructive action is armed by a TICK BESIDE IT — never a dialog.
+
+    A modal in page logic hangs the headless tests, so the confirmation lives where
+    the button lives: off by default, and the handler refuses even when called
+    directly, because the guard that matters is the one in front of the action."""
+    dev = _device()
+    registry(dev)
+    target = existing_save(dev)
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+
+    assert row.arm.isEnabled() and not row.arm.isChecked()
+    assert not row.overwrite.isEnabled()
+
+    page._device_save(0, "overwrite")                 # unarmed: refused, inline
+    assert page.worker is None and not _echoed(page)
+    note = page.dev_note.text()
+    assert "not armed" in note and target in note
+    assert "DELETE" in note                           # names what would be lost
+    assert "refused" in page.log.toPlainText()
+
+    row.arm.setChecked(True)
+    assert row.overwrite.isEnabled()
+    row.overwrite.click()
+    _finish(page, qapp)
+    assert "STUB-RUNNER --save-device rpi5/pki --overwrite" in _echoed(page)
+
+
+def test_qemu_overwrite_disarms_itself_after_it_fires(
+        wiz, registry, existing_save, qapp, monkeypatch):
+    """Arming is consent for ONE click. A row that stayed armed would turn the next
+    stray click on a destructive button into a second irreversible overwrite."""
+    dev = _device()
+    registry(dev)
+    target = existing_save(dev)
+    monkeypatch.setenv("STUB_SAVE_FILE", target)      # re-saved onto the SAME path
+
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+    row.arm.setChecked(True)
+    row.overwrite.click()
+    _finish(page, qapp)
+
+    after = _find_row(page, "rpi5/pki")
+    assert not after.arm.isChecked(), "the arming survived the click"
+    assert not after.overwrite.isEnabled()
+    with open(target, "rb") as fh:
+        assert fh.read() != b"an earlier save", "the previous save was not replaced"
+    note = page.dev_note.text()
+    assert "Overwrote" in note and target in note and "gone" in note
+
+
+def test_qemu_save_buttons_do_not_overclaim_what_a_save_is(
+        wiz, registry, existing_save):
+    """Both actions say CRASH-CONSISTENT on the widget, and the destructive one says
+    plainly what is lost. A copy quietly assumed to be application-consistent is
+    worse than no button: it is only ever discovered to be wrong at restore time."""
+    dev = _device()
+    registry(dev)
+    target = existing_save(dev)
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+
+    copy_tip = row.save.toolTip()
+    assert "CRASH-CONSISTENT" in copy_tip
+    assert "power lead" in copy_tip and "RAM" in copy_tip
+    assert "NOT a clean shutdown" in copy_tip
+    assert "NEW file" in copy_tip and "left exactly as it is" in copy_tip
+    assert "never written to" in copy_tip              # not the golden image
+
+    over_tip = row.overwrite.toolTip()
+    assert "DESTRUCTIVE" in over_tip
+    assert target in over_tip                          # the exact file, by name
+    assert "DELETED" in over_tip and "no undo" in over_tip
+    assert "CRASH-CONSISTENT" in over_tip
+    assert "arm" in over_tip
+
+
+def test_qemu_save_is_disabled_for_a_device_that_is_not_running(wiz, registry):
+    """A save happens INSIDE the running emulator, so a stopped row has nothing to
+    ask. (While QEMU holds a device's overlay it holds a write lock on it: an
+    external qemu-img on a live device fails outright, which is why there is no
+    "save a stopped device" path here either.)"""
+    registry(_device(label="x86/be", state="stopped", port=0))
+    page = _qemu_page(wiz)
+    row = _find_row(page, "x86/be")
+
+    assert not row.save.isEnabled() and not row.overwrite.isEnabled()
+    tip = row.save.toolTip()
+    assert "not running" in tip and "write LOCK" in tip   # the reason, not just "no"
+
+    page._device_save(0, "copy")                       # guarded underneath too
+    assert page.worker is None and not _echoed(page)
+    assert "not running" in page.dev_note.text()
+
+
+def test_qemu_save_runs_off_the_gui_thread_and_can_be_cancelled(
+        wiz, registry, qapp, monkeypatch):
+    """A save copies a disk — minutes on a real device — so it runs in the same
+    cancellable lane as Start: the page is locked while it runs, the row's own
+    controls grey out, and Cancel reaches its process GROUP. A cancelled save is
+    NOT a save, and the page says so rather than leaving a half-written file
+    looking like one."""
+    registry(_device())
+    monkeypatch.setenv("STUB_SAVE_SLEEP", "1")
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+    row.save.click()
+
+    assert not page.isComplete()                       # locked: cannot leave mid-save
+    assert not page.run_btn.isEnabled() and page.cancel_btn.isEnabled()
+    assert not row.save.isEnabled() and not row.qmp["pause"].isEnabled()
+    assert _pump_until(qapp, page, "STUB-RUNNER --save-device rpi5/pki"), \
+        "the save stand-in never started"
+
+    page.cancel_btn.click()
+    assert page.worker.wait(20000), "Cancel did not stop the save"
+    qapp.processEvents()
+    assert "== save (copy) rpi5/pki: cancelled ==" in page.log.toPlainText()
+    assert "cancelled" in page.dev_note.text()
+    assert page.isComplete() and page.run_btn.isEnabled()
+
+
+def test_qemu_save_verifies_on_disk_instead_of_trusting_the_exit_code(
+        wiz, registry, qapp):
+    """"The runner exited 0" and "there is a copy you can restore from" are different
+    statements, and a partial file that looks like a save is the worst outcome
+    available here. The page re-reads the save directory and reports what it found."""
+    registry(_device())                                # no STUB_SAVE_FILE: creates none
+    page = _qemu_page(wiz)
+    _find_row(page, "rpi5/pki").save.click()
+    _finish(page, qapp)
+
+    assert "== save (copy) rpi5/pki: done ==" in page.log.toPlainText()
+    note = page.dev_note.text()
+    assert "no new file appeared" in note
+    assert "Saved" not in note, "a save that produced nothing was reported as done"
+
+
+def test_qemu_save_greys_out_when_core_cannot_express_a_save(
+        wiz, registry, monkeypatch):
+    """This page must not carry its own copy of layer 2's save-path rules.
+
+    Where a target lands, what it is called and which file "overwrite" reuses belong
+    to core.qemu_devices. In a tree whose copy predates them the buttons are DISABLED
+    and name the missing function — an honest dead end, rather than a second set of
+    path rules that would disagree with the runner's and arm Overwrite against a file
+    of this page's own invention."""
+    registry(_device())
+    monkeypatch.delattr(qemu_devices, "save_argv", raising=False)
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+
+    assert not row.save.isEnabled() and not row.overwrite.isEnabled()
+    assert "save_argv" in row.save.toolTip()
+    page._device_save(0, "copy")
+    assert page.worker is None and not _echoed(page)
+    assert "not available" in page.dev_note.text()
+
+
+def test_qemu_page_offers_no_modal_dialogs_at_all(wiz):
+    """Confirmation is inline everywhere on this page, including for the destructive
+    save. A QMessageBox in page logic blocks on an event loop no headless test can
+    answer, so the whole suite hangs instead of failing."""
+    src = inspect.getsource(qemu_page)
+    assert "QMessageBox" not in src
+    assert ".exec(" not in src and ".exec_(" not in src

@@ -27,6 +27,31 @@ start a new build and then run these emulations after")
      that it has the same local mesh start and stop options with additional
      buttons to control the qemu options on each running emulated device").
 
+  4. PAUSE AND SAVE what a device has become (the operator ask, verbatim: "makse
+     sure that the studio user has options to pause and save everything to the
+     existing disk in another copy or overwrite the existing copy in the
+     session"). Each row gets "Save copy" — a NEW file, previous saves untouched
+     — and "Overwrite save", which re-saves onto that device's most recent save
+     and is therefore DESTRUCTIVE, so it is armed by a tick beside it and greyed
+     out entirely until a save exists to overwrite.
+
+WHAT A SAVE IS, AND WHAT IT IS NOT (both are on the buttons, not only here)
+--------------------------------------------------------------------------
+A save is CRASH-CONSISTENT: the guest's vCPUs are stopped, the DISK is copied,
+and the copy is what the device would hold if its power lead had been pulled at
+that instant. Guest RAM is not in it and no application is asked to quiesce, so a
+database caught mid-write is copied mid-write. The buttons say exactly that; a
+"snapshot" that is quietly assumed to be clean is worse than no button.
+
+Nothing here can write to the golden build image. The runner boots every device
+through a per-run qcow2 overlay precisely so the shared .img artifact stays
+pristine, and the one QMP verb that would fold an overlay back into it
+(block-commit) both mutates that artifact in place and drops the overlay from the
+chain — measured on qemu 10.2.3 — so every later guest write in the session would
+land on the image every other run and session boots from. It is offered by no
+control on this page, and "overwrite" means the device's own previous SAVE, never
+the image it was booted from.
+
 WHY THE TICK IS A REAL OPTION FIELD, NOT A LOCAL FLAG
 -----------------------------------------------------
 ``--keep-alive`` is the only thing that leaves a guest up and makes the entrypoint
@@ -47,8 +72,10 @@ WelcomePage extends when the host has no build backend).
 """
 from __future__ import annotations
 
+import datetime
 import html
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -71,9 +98,9 @@ _STATUS_COLOURS = {"PASS": "#2e7d32", "FAIL": "#c62828", "ERROR": "#c62828"}
 #: Device-table columns. Same symbolic rule as the results table above, and the
 #: headers live beside them so a column can never end up labelled as its neighbour.
 (_DCOL_LABEL, _DCOL_WHAT, _DCOL_STATE, _DCOL_SSH, _DCOL_CONTAINER, _DCOL_USER,
- _DCOL_SHELL, _DCOL_POWER, _DCOL_QMP) = range(9)
+ _DCOL_SHELL, _DCOL_POWER, _DCOL_QMP, _DCOL_SAVE) = range(10)
 _DEVICE_HEADERS = ("Device", "Platform/role", "State", "SSH", "Container", "User",
-                   "Shell", "Start/Stop", "QEMU")
+                   "Shell", "Start/Stop", "QEMU", "Save disk")
 
 #: What the SSH cell says for a device whose record carries ``ssh_host_port: 0``.
 #: That is a legitimate registry value — it means the container published nothing —
@@ -126,8 +153,85 @@ _QMP_TOOLTIPS = {
     "powerdown": "Press the guest's ACPI power button: an ORDERLY shutdown from "
                  "inside. The device ends — use Start to boot it again.",
     "status": "Ask the emulator what it thinks the guest is doing. Reads only; "
-              "changes nothing.",
+              "changes nothing — and it is how this table re-syncs its State "
+              "column with a device someone paused from a terminal.",
 }
+
+#: The emulator's own run-state, lifted out of what ``--qmp LABEL status`` printed.
+#: The runner's QMP client prints QEMU's reply line VERBATIM (it ends in
+#: ``print $r``, tests/qemu/run-qemu-docker.sh:625), and query-status answers
+#: ``{"return": {"status": "running", "running": true}}`` — checked against qemu
+#: 10.2.3, which reported "running" on a fresh boot, "paused" after a QMP stop and
+#: "running" again after cont. Nothing is inferred when this does not match: an
+#: unparsed line leaves the row's run-state UNKNOWN, which the State column then
+#: says rather than guessing "running".
+_QMP_STATUS_RE = re.compile(r'"status"\s*:\s*"([a-z-]+)"')
+
+#: Run-states this page distinguishes. Anything else QEMU can report (prelaunch,
+#: inmigrate, watchdog, guest-panicked …) is shown VERBATIM in the State cell
+#: instead of being flattened into one of these two.
+_RUN_PAUSED, _RUN_RUNNING = "paused", "running"
+
+#: The two save actions, and the only two.
+#:
+#: ``copy`` writes a NEW file and leaves every previous save of that device alone;
+#: ``overwrite`` re-saves onto the device's most recent save, which destroys it.
+#: That is what "overwrite the existing copy in the session" can safely mean here
+#: — see the module docstring for why folding an overlay back into the golden
+#: build image is not a third mode and not a button.
+_SAVE_COPY, _SAVE_OVERWRITE = "copy", "overwrite"
+
+#: What this page needs from core.qemu_devices before it can offer saving at all,
+#: checked in ONE place (``_save_supported``).
+#:
+#: The rules a save obeys — where a target file lands, how a new copy is named,
+#: which existing file "overwrite" reuses — belong to that module, which already
+#: owns every other argv this table builds. So nothing here reimplements them: in a
+#: tree whose core module predates them the two buttons are DISABLED and say so,
+#: which is honest, rather than this page inventing a second set of path rules that
+#: would disagree with the runner's and quietly arm Overwrite against the wrong file.
+_SAVE_API = ("save_argv", "saved_copies")
+
+
+def _save_supported() -> bool:
+    """Whether core.qemu_devices in THIS tree can express a save."""
+    return all(callable(getattr(qemu_devices, name, None)) for name in _SAVE_API)
+
+
+def _saved_copies(work_dir: str, dev: qemu_devices.Device) -> list[str]:
+    """That device's existing saves, newest first — [] when saving is unavailable.
+
+    Wrapped rather than called directly because it is read on every re-arm of the
+    table: it touches the filesystem, so a work dir that has gone away (an unplugged
+    external disk, a tmpdir a test tore down) must cost an empty list and a greyed
+    Overwrite, not a traceback out of a Qt slot.
+    """
+    if not _save_supported():
+        return []
+    try:
+        return [str(p) for p in qemu_devices.saved_copies(work_dir, dev)]
+    except OSError:
+        return []
+
+
+def _describe_file(path: str) -> str:
+    """"12.4 MB, saved 2026-08-14 21:09" — what an Overwrite is about to destroy.
+
+    The size and the timestamp are the only two things that let an operator tell
+    one save from another before agreeing to lose it, so the destructive button
+    names them instead of saying "the previous save".
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return "unreadable"
+    size = float(st.st_size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            break
+        size /= 1024
+    when = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+    return f"{size:.1f} {unit}, saved {when}"
 
 
 @dataclass
@@ -145,27 +249,66 @@ class _DeviceRow:
     start: QtWidgets.QPushButton
     stop: QtWidgets.QPushButton
     qmp: dict[str, QtWidgets.QPushButton] = field(default_factory=dict)
+    save: QtWidgets.QPushButton | None = None
+    overwrite: QtWidgets.QPushButton | None = None
+    #: The INLINE arming for Overwrite — a tick, never a dialog: a modal in page
+    #: logic hangs the headless tests, and the confirmation has to live where the
+    #: thing it guards is, so the operator can see what is armed without a click.
+    arm: QtWidgets.QCheckBox | None = None
+    #: This device's existing saves, newest first, as of the last table rebuild.
+    #: Cached rather than re-scanned inside ``_sync_device_buttons`` because that
+    #: runs on every re-arm (each verb start and finish) while the set of files can
+    #: only change when a save itself finishes — which reloads the table anyway.
+    saves: list[str] = field(default_factory=list)
+    #: What the EMULATOR last said it was doing ("paused"/"running"/a rarer QEMU
+    #: status), or "" for not known. Distinct from ``dev.state``: see ``_state_cell``.
+    run_state: str = ""
 
     @property
     def can_shell(self) -> bool:
         """Whether a login is even expressible for this row.
 
-        Three independent conditions, and ALL are load-bearing. A device that is not
+        Four independent conditions, and ALL are load-bearing. A device that is not
         running has no sshd behind the port; a device whose record says
         ``ssh_host_port: 0`` published no port at all, and core.qemu_devices.ssh_argv
         emits that 0 verbatim on purpose (there is no fallback to 22, because on this
         host 127.0.0.1:22 is the operator's OWN workstation sshd). Enabling the
         button in that state would spawn a terminal running ``ssh -p 0``.
 
-        The key is the third: a record can carry a published port and an empty
-        ``ssh_key`` — the entrypoint writes the record from several states, and only
-        a complete one is loginable. ``ssh -i ''`` does not fall back to the agent or
-        to ~/.ssh, it fails on an unreadable identity file, so the button would open
-        a terminal that only ever prints an error.
+        The third: a record can carry a published port and an empty ``ssh_key`` —
+        the entrypoint writes the record from several states, and only a complete one
+        is loginable. ``ssh -i ''`` does not fall back to the agent or to ~/.ssh, it
+        fails on an unreadable identity file, so the button would open a terminal
+        that only ever prints an error.
+
+        The fourth is the paused guest. Its container is up and its port is still
+        published, so every other check passes — but its vCPUs are frozen, so sshd
+        never answers and the terminal that opened would sit there until it timed
+        out. That reads as a broken device rather than as the pause the operator
+        asked for, so the button is greyed with a tooltip that says Resume first.
         """
         return (self.dev.is_running
+                and self.run_state != _RUN_PAUSED
                 and self.dev.ssh_host_port > 0
                 and bool(self.dev.ssh_key))
+
+    @property
+    def can_save(self) -> bool:
+        """Whether a save is expressible for this row.
+
+        The device has to be RUNNING, and that is not a UI nicety: while QEMU holds
+        the overlay it holds a write lock on it, so nothing outside that process can
+        read the disk (measured on qemu 10.2.3: ``qemu-img convert`` on a live
+        overlay fails with `Failed to get shared "write" lock`, and so does
+        ``qemu-img commit``). A save therefore happens INSIDE the running emulator as
+        a QMP block job, and a stopped row has no emulator to ask.
+        """
+        return self.dev.is_running and _save_supported()
+
+    @property
+    def overwrite_target(self) -> str:
+        """The save that Overwrite would destroy, or "" when there is none yet."""
+        return self.saves[0] if self.saves else ""
 
 
 def _button_strip(buttons: tuple[QtWidgets.QPushButton, ...]) -> QtWidgets.QWidget:
@@ -274,6 +417,18 @@ class QemuPage(QtWidgets.QWizardPage):
         self._device_job: _DeviceJob | None = None
         self._sessions: list[qemu_tests.BuildSession] = []
         self._device_rows: list[_DeviceRow] = []
+        # What the emulator last SAID, per device label — never what this page
+        # assumes. Written from a status reply and from a pause/resume that
+        # actually succeeded; dropped for a label whose guest went away, because a
+        # device that boots again is a new guest and inherits nothing.
+        self._run_state: dict[str, str] = {}
+        # The label whose `--qmp … status` output is being read right now, so a
+        # status line is attributed to the row that asked for it rather than to
+        # whichever row happens to be first.
+        self._status_watch: str = ""
+        # Called on the GUI thread when the verb in flight finishes, with
+        # (ok, cancelled). Lets a verb re-read what it changed — see _device_done.
+        self._verb_finished = None
 
         lay = scrollable(self)
 
@@ -425,7 +580,13 @@ class QemuPage(QtWidgets.QWizardPage):
             "the guest's sshd ships <tt>PermitRootLogin no</tt> and the assertions "
             "check that it still does. The QEMU buttons act on the EMULATOR — read "
             "each one's tooltip, because under <tt>-no-reboot</tt> a reset ends the "
-            "guest rather than restarting it.")
+            "guest rather than restarting it.<br><b>Save disk</b> pauses the guest, "
+            "copies its disk and puts the guest back the way it found it. The copy "
+            "is <b>crash-consistent</b> — what the device would hold if you pulled "
+            "its power lead, not a clean shutdown — and it never writes to the image "
+            "the device was built from. <b>Save copy</b> makes a new file; "
+            "<b>Overwrite save</b> replaces that device's previous save and is "
+            "greyed until you tick <b>arm</b> beside it.")
         dev_intro.setWordWrap(True)
         dev_intro.setTextFormat(Qt.TextFormat.RichText)
         dv.addWidget(dev_intro)
@@ -728,6 +889,22 @@ class QemuPage(QtWidgets.QWizardPage):
 
     def _on_line(self, line: str):
         self.log.appendPlainText(line)
+        self._note_run_state(line)
+
+    def _note_run_state(self, line: str):
+        """Learn a device's real run-state from a ``--qmp … status`` reply.
+
+        This is the only way the table can tell the truth about a device someone
+        paused OUTSIDE the Studio — from a terminal, or in an earlier Studio session
+        that has since been closed. Nothing is inferred when the line does not
+        parse: the row's run-state simply stays unknown, and the State column says
+        that rather than assuming the guest is running.
+        """
+        if not self._status_watch:
+            return
+        m = _QMP_STATUS_RE.search(line)
+        if m:
+            self._run_state[self._status_watch] = m.group(1)
 
     def _on_done(self, ok: bool, *, list_only: bool):
         self._set_running(False)
@@ -787,6 +964,11 @@ class QemuPage(QtWidgets.QWizardPage):
         buttons for a guest that has since gone.
         """
         devices = qemu_devices.discover_devices(self._work_dir())
+        # A run-state belongs to a GUEST, and a label outlives its guests. Forget the
+        # ones that are no longer registered, so a device that is booted again does
+        # not inherit "paused" from the run before it and grey its own Pause button.
+        live = {dev.label for dev in devices}
+        self._run_state = {k: v for k, v in self._run_state.items() if k in live}
         self._device_rows = []
         self.devices.setRowCount(len(devices))
         for r, dev in enumerate(devices):
@@ -798,16 +980,69 @@ class QemuPage(QtWidgets.QWizardPage):
             "appears here as soon as it answers SSH.</span>"))
         self._sync_device_buttons()
 
+    def _state_cell(self, dev: qemu_devices.Device) -> tuple[str, str, str]:
+        """(text, tooltip, colour) for the State column — registry AND emulator.
+
+        Two different questions hide behind one word here, and conflating them is
+        what makes a paused device indistinguishable from a working one:
+
+        * ``dev.state`` is the REGISTRY's answer to "is this device's container up"
+          (booting -> running -> assertions -> stopped, written by
+          docker-entrypoint.sh);
+        * the emulator's run-state answers "are the guest's vCPUs executing", and
+          pausing is a QMP verb the entrypoint never sees — so a guest frozen by the
+          Pause button on this very row keeps its record at "running" forever.
+
+        So a paused row does NOT say "running". It says PAUSED, in the warning
+        colour, and the tooltip explains that the container really is up. When the
+        emulator has not been asked (a page just opened on devices from an earlier
+        session), the run-state is unknown and the cell says only what the registry
+        knows — with a tooltip that says Status is how to find out, rather than
+        implying the CPUs were checked.
+        """
+        registry = dev.state or "unknown"
+        known = self._run_state.get(dev.label, "")
+        if not dev.is_running:
+            return (registry,
+                    "From the device registry: this device is not running.", "")
+        if not known:
+            return (registry,
+                    f"Registry state: {registry} — that is the CONTAINER, not the "
+                    "guest's CPUs. Nothing has asked this emulator whether it is "
+                    "paused; press Status to find out.", "")
+        if known == _RUN_RUNNING:
+            return (registry,
+                    f"Registry state: {registry}. The emulator last reported its "
+                    "vCPUs RUNNING.", "")
+        if known == _RUN_PAUSED:
+            return ("PAUSED",
+                    "The guest's vCPUs are FROZEN. Its container is up and its ssh "
+                    "port is still published (the registry record still says "
+                    f"“{registry}”, because pausing is a QMP verb the entrypoint "
+                    "never sees), but nothing inside the guest is executing — ssh "
+                    "will not answer until Resume continues it from exactly here.",
+                    WARN)
+        # Everything else QEMU can report — prelaunch, inmigrate, guest-panicked,
+        # io-error … — is shown verbatim rather than being rounded to running or
+        # paused, because rounding is how a wedged guest comes to read as a healthy one.
+        return (f"qemu: {known}",
+                f"Registry state: {registry}. The emulator reports run-state "
+                f"“{known}”, which is neither running nor paused.", WARN)
+
     def _build_device_row(self, r: int, dev: qemu_devices.Device):
         what = f"{dev.platform}/{dev.role}" if dev.role else dev.platform
         # The SSH cell is the operator-visible reason the Shell button on this row is
         # live or not: a record with ssh_host_port 0 published nothing.
         where = (f"{qemu_devices.SSH_HOST}:{dev.ssh_host_port}"
                  if dev.ssh_host_port > 0 else _NO_SSH_PORT)
+        state_text, state_tip, state_colour = self._state_cell(dev)
         for col, text in {_DCOL_LABEL: dev.label, _DCOL_WHAT: what,
-                          _DCOL_STATE: dev.state or "unknown", _DCOL_SSH: where,
+                          _DCOL_STATE: state_text, _DCOL_SSH: where,
                           _DCOL_CONTAINER: dev.container}.items():
             self.devices.setItem(r, col, QtWidgets.QTableWidgetItem(str(text)))
+        self.devices.item(r, _DCOL_STATE).setToolTip(state_tip)
+        if state_colour:
+            self.devices.item(r, _DCOL_STATE).setForeground(QtGui.QColor(state_colour))
         # The rest of the record, on the widget rather than in prose — these are the
         # HOST paths the operator needs to reach the guest from their own terminal.
         self.devices.item(r, _DCOL_LABEL).setToolTip(
@@ -856,8 +1091,26 @@ class QemuPage(QtWidgets.QWizardPage):
             qmp[command] = b
         self.devices.setCellWidget(r, _DCOL_QMP, _button_strip(tuple(qmp.values())))
 
-        self._device_rows.append(_DeviceRow(dev=dev, user=combo, shell=shell,
-                                            start=start, stop=stop, qmp=qmp))
+        # ── save: the safe copy, and the destructive one behind a tick ──────────
+        save = QtWidgets.QPushButton("Save copy")
+        overwrite = QtWidgets.QPushButton("Overwrite save")
+        overwrite.setStyleSheet(f"color: {WARN};")
+        # Default OFF, and it goes back to off after every save because the table is
+        # rebuilt: arming is per-click consent, not a mode the row stays in.
+        arm = QtWidgets.QCheckBox("arm")
+        arm.setChecked(False)
+        arm.toggled.connect(lambda *_: self._sync_device_buttons())
+        save.clicked.connect(lambda _=False, i=r: self._device_save(i, _SAVE_COPY))
+        overwrite.clicked.connect(
+            lambda _=False, i=r: self._device_save(i, _SAVE_OVERWRITE))
+        self.devices.setCellWidget(r, _DCOL_SAVE,
+                                   _button_strip((save, overwrite, arm)))
+
+        self._device_rows.append(_DeviceRow(
+            dev=dev, user=combo, shell=shell, start=start, stop=stop, qmp=qmp,
+            save=save, overwrite=overwrite, arm=arm,
+            saves=_saved_copies(self._work_dir(), dev),
+            run_state=self._run_state.get(dev.label, "")))
 
     def _sync_device_buttons(self):
         """Arm each row against what its device can actually do right now.
@@ -876,6 +1129,8 @@ class QemuPage(QtWidgets.QWizardPage):
             live = up and idle
             for w in (row.user, row.stop, *row.qmp.values()):
                 w.setEnabled(live)
+            self._arm_pause_buttons(row, live)
+            self._arm_save_buttons(row, idle)
             row.shell.setEnabled(row.can_shell and idle)
             row.start.setEnabled(not up and idle)
             row.start.setToolTip(
@@ -901,6 +1156,12 @@ class QemuPage(QtWidgets.QWizardPage):
                     f"Disabled: {row.dev.label}'s record names no ssh key, so there "
                     "is no identity to log in with. The key is written by the "
                     "keep-alive run that publishes the device.")
+            elif row.run_state == _RUN_PAUSED:
+                row.shell.setToolTip(
+                    f"Disabled: {row.dev.label} is PAUSED. The port is still "
+                    "published and the container is up, but the guest's CPUs are "
+                    "frozen, so sshd cannot answer and the terminal would hang "
+                    "until it timed out. Resume first.")
             else:
                 row.shell.setToolTip(
                     "Open the desktop terminal on this device as the login selected "
@@ -908,6 +1169,113 @@ class QemuPage(QtWidgets.QWizardPage):
         self.devices_refresh_btn.setEnabled(idle)
         self.devices_stop_all_btn.setEnabled(
             idle and any(row.dev.is_running for row in self._device_rows))
+
+    def _arm_pause_buttons(self, row: _DeviceRow, live: bool):
+        """Make Pause/Resume agree with what the emulator last said.
+
+        A row that has just been paused must not keep offering Pause as though
+        nothing happened — that is the same class of lie as a State column still
+        reading "running". So the verb that cannot apply is greyed and says why.
+
+        Only Pause is ever greyed by knowledge, never Resume, and that asymmetry is
+        deliberate: this page's belief can be STALE (someone can pause a device from
+        a terminal with ``run-qemu-docker.sh --qmp LABEL pause``, and nothing tells
+        the GUI). Greying Resume on a belief of "running" would leave the operator
+        with no way to un-freeze a guest from here at all, whereas a redundant
+        Resume on an already-running guest is a QMP ``cont`` that changes nothing.
+        Status re-syncs the belief either way, which is why its tooltip says so.
+        """
+        pause, resume = row.qmp.get("pause"), row.qmp.get("resume")
+        if not live or pause is None or resume is None:
+            return                       # the disabled-because-dead tooltips win
+        paused = row.run_state == _RUN_PAUSED
+        pause.setEnabled(not paused)
+        if paused:
+            pause.setToolTip(
+                f"Disabled: {row.dev.label} is already paused — its vCPUs are "
+                "frozen. Resume continues it from exactly here. (If you paused or "
+                "resumed it outside the Studio, press Status to re-read the "
+                "emulator.)")
+            resume.setToolTip("Continue this PAUSED guest from exactly where its "
+                              "vCPUs were frozen.")
+        else:
+            pause.setToolTip(_QMP_TOOLTIPS["pause"])
+            resume.setToolTip(_QMP_TOOLTIPS["resume"])
+
+    def _arm_save_buttons(self, row: _DeviceRow, idle: bool):
+        """Arm this row's Save copy / Overwrite save, and say what each would do.
+
+        Overwrite has THREE gates and each one is a separate sentence on the widget,
+        because a greyed button whose tooltip does not name its own reason reads as
+        broken: the device must be up (there is no emulator to ask otherwise), a
+        previous save must EXIST (there is nothing to overwrite on a first save), and
+        the tick beside it must be armed (this destroys that file, and the arming is
+        what makes the destruction a decision rather than a mis-click).
+
+        ``idle`` rather than the row's liveness, exactly as Shell is armed: a verb
+        already in flight owns this page's single worker, so nothing may start a
+        second one on top of it — including a save, which is the longest of them all.
+        """
+        save, overwrite, arm = row.save, row.overwrite, row.arm
+        if save is None or overwrite is None or arm is None:
+            return
+        target = row.overwrite_target
+        enabled = row.can_save and idle
+        save.setEnabled(enabled)
+        arm.setEnabled(enabled and bool(target))
+        overwrite.setEnabled(enabled and bool(target) and arm.isChecked())
+        arm.setToolTip(
+            "Arm the overwrite. Off by default, and off again after every save: "
+            "this is consent for ONE click, not a mode the row stays in."
+            if target else
+            f"Nothing to arm: {row.dev.label} has no saved copy yet.")
+
+        if not _save_supported():
+            why = ("Saving is not available in this Studio: its "
+                   "core.qemu_devices does not provide "
+                   + " and ".join(_SAVE_API)
+                   + ", which is where a save's target path and naming rules live. "
+                     "This page will not invent its own — they would disagree with "
+                     "the runner's and could arm Overwrite against the wrong file.")
+            save.setToolTip(why)
+            overwrite.setToolTip(why)
+            return
+        if not row.dev.is_running:
+            why = (f"Disabled: {row.dev.label} is not running. While QEMU holds a "
+                   "device's disk it holds a write LOCK on it, so the disk can only "
+                   "be copied from INSIDE the running emulator — a stopped row has "
+                   "no emulator to ask.")
+            save.setToolTip(why)
+            overwrite.setToolTip(why)
+            return
+
+        save.setToolTip(
+            f"Save {row.dev.label}'s disk to a NEW file. Any copy you saved before "
+            "is left exactly as it is.\n\n"
+            "The guest is paused for the copy and put back the way it was found "
+            "(a device you had paused yourself stays paused). The result is "
+            "CRASH-CONSISTENT — the disk as it would be if you pulled the power "
+            "lead, NOT a clean shutdown: guest RAM is not in it and no application "
+            "is asked to quiesce, so anything mid-write is copied mid-write.\n\n"
+            "It copies the data the guest has actually used, so a big disk takes a "
+            "while; the page is locked meanwhile and Cancel stops it. The image "
+            "this device was built from is never written to.")
+        if not target:
+            overwrite.setToolTip(
+                f"Disabled: {row.dev.label} has no saved copy to overwrite yet. "
+                "Use “Save copy” first — this button only ever replaces a previous "
+                "SAVE, never the image the device was built from.")
+        else:
+            overwrite.setToolTip(
+                "DESTRUCTIVE — re-saves this device onto its previous save:\n"
+                f"    {target}\n    ({_describe_file(target)})\n"
+                "That file's current contents are DELETED and replaced with the "
+                "disk as it is now. There is no undo and no second copy is kept; if "
+                "you want to keep it, press “Save copy” instead.\n\n"
+                "Same consistency as “Save copy”: CRASH-CONSISTENT, not a clean "
+                "shutdown. Tick “arm” beside this button to enable it."
+                + ("" if arm.isChecked() else
+                   "\n\nDisabled: “arm” is not ticked."))
 
     def _shell_target(self, row: _DeviceRow) -> tuple[str, bool]:
         """(login to ssh as, whether to sudo -i once in) for that row's dropdown."""
@@ -961,21 +1329,183 @@ class QemuPage(QtWidgets.QWizardPage):
             self.log.appendPlainText(
                 "[devices] a stopped device has no container to resume — this is a "
                 "full emulated boot; Cancel stops it.")
-        self._device_verb(f"{action} {row.dev.label}",
+        label = row.dev.label
+
+        def finished(ok, _cancelled, lbl=label):
+            # Whatever this did, the guest it referred to is not the one whose
+            # run-state was recorded: a stop ends it, a start boots a new one. Drop
+            # the belief rather than carrying "paused" across a reboot.
+            self._run_state.pop(lbl, None)
+
+        self._device_verb(f"{action} {label}",
                           qemu_devices.device_control_argv(
-                              self.wiz.generator_dir, row.dev, action))
+                              self.wiz.generator_dir, row.dev, action),
+                          finished=finished)
 
     def _device_qmp(self, index: int, command: str):
         row = self._device_rows[index]
-        self._device_verb(f"qmp {command} {row.dev.label}",
+        if self._running:
+            # _device_verb would drop this anyway; returning first keeps the status
+            # watch below from being armed for a verb that never starts, which would
+            # then attribute an unrelated line to this row.
+            return
+        label = row.dev.label
+        # A status reply is read off the STREAM, so the reader has to know whose it
+        # is before the first line arrives.
+        self._status_watch = label
+
+        def finished(ok, _cancelled, lbl=label, cmd=command):
+            self._status_watch = ""
+            if not ok:
+                return                       # a verb that failed changed nothing
+            if cmd == "pause":
+                self._run_state[lbl] = _RUN_PAUSED
+            elif cmd == "resume":
+                self._run_state[lbl] = _RUN_RUNNING
+            elif cmd in _QMP_ENDS_GUEST:
+                self._run_state.pop(lbl, None)   # that guest is gone
+
+        self._device_verb(f"qmp {command} {label}",
                           qemu_devices.qmp_argv(
-                              self.wiz.generator_dir, row.dev, command))
+                              self.wiz.generator_dir, row.dev, command),
+                          finished=finished)
 
     def _stop_all_devices(self):
-        self._device_verb("stop all devices",
-                          qemu_devices.stop_all_argv(self.wiz.generator_dir))
+        def finished(_ok, _cancelled):
+            self._run_state.clear()
 
-    def _device_verb(self, label: str, argv: list[str]):
+        self._device_verb("stop all devices",
+                          qemu_devices.stop_all_argv(self.wiz.generator_dir),
+                          finished=finished)
+
+    # ── save ────────────────────────────────────────────────────────────────────
+    def _device_save(self, index: int, mode: str):
+        """Save this device's disk — to a NEW file, or over its previous save.
+
+        Every refusal below is stated INLINE (dev_note + the log) and never as a
+        dialog: a modal in page logic hangs the headless tests, and each of these is
+        a fact to read rather than a question to answer.
+
+        The arming is re-checked here as well as being greyed in the table, for the
+        same reason ``_open_shell`` re-checks ``can_shell``: the guard that matters
+        is the one in front of the action, not the one in front of the pixels. It is
+        checked before the argv is built, so an unarmed overwrite never becomes a
+        command that exists.
+        """
+        row = self._device_rows[index]
+        dev = row.dev
+        if not _save_supported():
+            self.dev_note.setText(
+                f'<span style="color:{WARN}">Saving is not available in this '
+                "Studio.</span> Its <tt>core.qemu_devices</tt> provides no "
+                + " / ".join(_SAVE_API) + " — that module owns where a save lands "
+                "and what it is called, and this page will not guess.")
+            return
+        if not dev.is_running:
+            self.dev_note.setText(
+                f'<span style="color:{WARN}">{dev.label} is not running</span>, so '
+                "there is no emulator to copy its disk from — QEMU holds a write "
+                "lock on it while it is up, and the copy happens inside that process.")
+            return
+
+        target = row.overwrite_target
+        if mode == _SAVE_OVERWRITE:
+            if not target:
+                self.dev_note.setText(
+                    f'<span style="color:{WARN}">{dev.label} has no saved copy to '
+                    "overwrite.</span> Press “Save copy” first — overwrite only ever "
+                    "replaces a previous save, never the image the device was built "
+                    "from.")
+                return
+            if row.arm is None or not row.arm.isChecked():
+                # NOT a popup: the tick beside the button IS the confirmation, so
+                # saying "tick it" inline keeps the answer where the question is.
+                self.dev_note.setText(
+                    f'<span style="color:{WARN}">Overwrite is not armed.</span> It '
+                    f"would DELETE {target} ({_describe_file(target)}) and replace "
+                    "it with the disk as it is now. Tick “arm” beside the button to "
+                    "allow that, or press “Save copy” to keep both.")
+                self.log.appendPlainText(
+                    f"[devices] refused: overwrite of {target} is not armed")
+                return
+
+        try:
+            argv = qemu_devices.save_argv(self.wiz.generator_dir, dev, mode)
+        except (TypeError, ValueError) as exc:
+            # A mode or signature this tree's core module does not know is a WIRING
+            # fault between two layers, and it has to read as one — a save that
+            # "failed" would send the operator looking at the device.
+            self.dev_note.setText(
+                f'<span style="color:{WARN}">This Studio cannot build a “{mode}” '
+                f"save command: {exc}</span>")
+            self.log.appendPlainText(f"!! save_argv({mode!r}) rejected it: {exc}")
+            return
+
+        consistency = ("crash-consistent — the guest is paused for the copy, so the "
+                       "result is its disk as if the power lead had been pulled, not "
+                       "a clean shutdown")
+        if mode == _SAVE_OVERWRITE:
+            self.log.appendPlainText(
+                f"[devices] OVERWRITING {target} ({_describe_file(target)}) — that "
+                f"copy is gone from here on. The new one is {consistency}.")
+        else:
+            self.log.appendPlainText(
+                f"[devices] saving {dev.label} to a NEW file; existing saves are "
+                f"left alone. The copy is {consistency}.")
+        self.log.appendPlainText(
+            "[devices] a big disk takes a while — the page is locked until it "
+            "finishes, and Cancel stops it (a cancelled save leaves a PARTIAL file, "
+            "which is not a save).")
+
+        before = list(row.saves)
+        self._device_verb(
+            f"save ({mode}) {dev.label}", argv,
+            finished=lambda ok, cancelled, d=dev, m=mode, b=before, t=target:
+                self._save_finished(ok, cancelled, d, m, b, t))
+
+    def _save_finished(self, ok: bool, cancelled: bool, dev: qemu_devices.Device,
+                       mode: str, before: list[str], target: str) -> str:
+        """Report what is ON DISK now, not what the exit status claimed.
+
+        A backup that dies mid-job still leaves a target file behind, so "the runner
+        exited 0" and "there is a save you can restore from" are different
+        statements. This one re-reads the save directory and says which it got: a
+        partial file that looks like a save is the worst outcome available here.
+
+        Returns the note rather than setting it, because _device_done rebuilds the
+        table straight afterwards and that rebuild clears dev_note.
+        """
+        after = _saved_copies(self._work_dir(), dev)
+        if not ok:
+            why = "cancelled" if cancelled else "FAILED"
+            appeared = [p for p in after if p not in before]
+            leftover = (target if mode == _SAVE_OVERWRITE and target
+                        else (appeared[0] if appeared else ""))
+            extra = (f" <tt>{leftover}</tt> may be a PARTIAL copy — do not restore "
+                     "from it." if leftover else "")
+            return (f'<span style="color:{WARN}">Save {why} for {dev.label}.</span>'
+                    + extra)
+
+        if mode == _SAVE_OVERWRITE:
+            if not os.path.exists(target):
+                return (f'<span style="color:{WARN}">The overwrite of {target} '
+                        "reported success, but that file is not there now.</span> "
+                        f"Treat {dev.label} as NOT saved.")
+            return (f"Overwrote <tt>{target}</tt> ({_describe_file(target)}) with "
+                    f"{dev.label}'s disk — crash-consistent. The copy that was "
+                    "there is gone.")
+
+        new = [p for p in after if p not in before]
+        if not new:
+            return (f'<span style="color:{WARN}">The save of {dev.label} reported '
+                    "success, but no new file appeared where saves are listed."
+                    "</span> Do not treat this device as saved until you can see "
+                    "the file.")
+        return (f"Saved <tt>{dev.label}</tt> to <tt>{new[0]}</tt> "
+                f"({_describe_file(new[0])}) — crash-consistent, and any earlier "
+                "save was left untouched.")
+
+    def _device_verb(self, label: str, argv: list[str], *, finished=None):
         """Run ONE device subcommand off the GUI thread, streaming into the log.
 
         The same worker/streaming shape LocalMeshPage's Start/Stop use, and for the
@@ -984,12 +1514,19 @@ class QemuPage(QtWidgets.QWizardPage):
         _set_running already blocks a second launch on top of a verb still going,
         and the job is published to ``_device_job`` first so Cancel has something
         real to terminate from the moment the button lights up.
+
+        ``finished(ok, cancelled)`` runs on the GUI thread when it ends, and may
+        return a note to show beside the table. It exists so a verb can record what
+        it CHANGED (a pause that took, a save that landed) before the table is
+        rebuilt — one lane, so a long save is cancellable and locks the page exactly
+        as Start already does.
         """
         if self._running or not argv:
             return
         self.log.appendPlainText(f"$ {shlex.join(argv)}")
         job = _DeviceJob(argv, self.wiz.generator_dir)
         self._device_job = job
+        self._verb_finished = finished
         self._set_running(True)
 
         def verb(on_line, _cancel):
@@ -1003,11 +1540,20 @@ class QemuPage(QtWidgets.QWizardPage):
     def _device_done(self, ok: bool, label: str):
         cancelled = self._device_job is not None and self._device_job.cancelled
         self._device_job = None
+        finished, self._verb_finished = self._verb_finished, None
         self._set_running(False)
         outcome = "cancelled" if cancelled else ("done" if ok else "FAILED")
         self.log.appendPlainText(f"== {label}: {outcome} ==")
+        # BEFORE the reload: the callback is what the rebuilt rows read their
+        # run-state from, so it has to have run by the time they are built.
+        note = finished(ok, cancelled) if finished is not None else None
         # Re-read the registry rather than inferring the new state from the exit
         # code: a stop that half-worked still leaves a container behind, and the
         # row must show what IS, not what the verb intended. (LocalMeshPage
         # re-probes after every verb for the same reason.)
         self._reload_devices()
+        # AFTER it, because _reload_devices clears dev_note (an old "opened a
+        # terminal on …" must not outlive the table it referred to) — a verb's
+        # result would otherwise be wiped in the same turn it was written.
+        if note:
+            self.dev_note.setText(note)
