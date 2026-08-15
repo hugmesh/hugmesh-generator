@@ -44,6 +44,17 @@ MODE_GLAZE = "glaze"
 MODE_NIGHTSHADE = "nightshade"
 KNOWN_MODES = (MODE_NONE, MODE_LIGHT, MODE_GLAZE, MODE_NIGHTSHADE)
 
+# Normalised-correlation threshold above which the cloak counts as STILL PRESENT in a
+# re-fetched artifact (see detect_perturbation). Calibrated on the shipped lean
+# perturbation: a clean photograph scores near zero because it has no reason to carry
+# energy at the pattern's exact frequency AND phase, while even the weakest mode
+# ("light", budget 2/255) survives a JPEG round-trip well clear of this line. Set
+# deliberately BELOW the weakest mode's margin rather than midway, because the cost of
+# the two errors is asymmetric: a false negative only under-claims (the UI says
+# "degraded" for an image that is in fact cloaked), while a false positive would tell
+# a user they are protected when they are not.
+SURVIVAL_MIN_SCORE = 0.05
+
 
 @dataclass(frozen=True)
 class Backend:
@@ -103,6 +114,45 @@ def _normalize_sizes(sizes: list[int] | None) -> list[int]:
     return sorted({int(s) for s in sizes if int(s) > 0})
 
 
+# ── the perturbation's spatial signature ──────────────────────────────────────────
+# Period in pixels of the sinusoidal grid _lean_perturb adds. DEFINED ONCE and shared
+# by the generator (_lean_perturb) and the detector (detect_perturbation), because the
+# detector works by correlating against this exact basis: if the two ever held their
+# own copies of the frequency, the detector would silently stop detecting and the
+# survival gate would report "not present" for images that ARE cloaked — a false
+# negative that reads to the user as "protection degraded".
+_PATTERN_PERIOD_PX = 17.0
+
+
+def _pattern(height: int, width: int):
+    """The perturbation basis for an image of this size, in [-2, 2].
+
+    Low-frequency STRUCTURE (not per-pixel noise) on purpose: it is the kind of thing a
+    VAE encoder is sensitive to, and unlike white noise it survives a JPEG re-encode
+    well enough for the round-trip gate to measure it.
+    """
+
+    import numpy as np  # type: ignore
+
+    yy, xx = np.meshgrid(
+        np.arange(height, dtype=np.float32),
+        np.arange(width, dtype=np.float32),
+        indexing="ij",
+    )
+    freq = 2.0 * math.pi / _PATTERN_PERIOD_PX
+    return np.sin(xx * freq) + np.cos(yy * freq)
+
+
+def budget_for(mode: str) -> int:
+    """L-inf budget (0..255) for a mode. Unknown -> glaze-equivalent, never raises."""
+
+    return {
+        MODE_LIGHT: 2,
+        MODE_GLAZE: 6,
+        MODE_NIGHTSHADE: 10,
+    }.get(mode, 6)
+
+
 def perturb(image_bytes: bytes, mode: str, sizes: list[int] | None) -> bytes:
     """Apply a bounded perturbation and return re-encoded bytes.
 
@@ -121,13 +171,86 @@ def perturb(image_bytes: bytes, mode: str, sizes: list[int] | None) -> bytes:
     if mode == MODE_NONE:
         return image_bytes  # opt-out / non-image: forwarded unchanged by the BFF too.
 
-    budget = {
-        MODE_LIGHT: 2,
-        MODE_GLAZE: 6,
-        MODE_NIGHTSHADE: 10,
-    }.get(mode, 6)  # unknown mode -> glaze-equivalent default, never raise.
+    return _lean_perturb(image_bytes, budget=budget_for(mode), sizes=_normalize_sizes(sizes))
 
-    return _lean_perturb(image_bytes, budget=budget, sizes=_normalize_sizes(sizes))
+
+def detect_perturbation(image_bytes: bytes, mode: str) -> tuple[bool, float | None, str]:
+    """Is THIS image still carrying the cloak? -> (present, score, detail).
+
+    The BFF's round-trip survival gate re-fetches what the homeserver actually SERVES
+    (after its own re-encode/downscale) and asks this question per artifact. It is the
+    difference between "we applied a cloak" and "a cloak is still there", so it must be
+    a real measurement — a stub that answers True would turn the whole feature into the
+    theatre its own design doc warns against.
+
+    Method: high-pass the image (subtract a Gaussian blur at the pattern's own scale) to
+    strip natural low-frequency content, then take the normalised correlation against
+    the SAME ``_pattern`` basis the generator added. A clean photograph has no reason to
+    carry energy at that exact frequency AND phase, so it scores ~0; a cloaked one scores
+    positive. Fail-honest: anything we cannot measure (no Pillow/numpy, undecodable
+    bytes, ``mode=none``) returns present=False with the reason, never a hopeful True.
+
+    MEASURED BEHAVIOUR (2026-08-14, 640x480 photo-like source, threshold 0.05):
+
+        clean original            0.006     clean downscaled+reencoded   -0.043
+        light   fresh 0.082   JPEG q85 0.067   HALF-SIZE -0.045
+        glaze   fresh 0.226   JPEG q85 0.185   HALF-SIZE -0.041
+        nightshade    0.357   JPEG q85 0.297   HALF-SIZE -0.035
+
+    So the cloak survives a same-size re-encode comfortably in every mode, and survives
+    a 50% DOWNSCALE in NONE of them — a downscaled artifact scores exactly like a clean
+    one. That is a real property of the shipped lean perturbation, not a detector
+    artifact: ``_pattern`` is defined in PIXEL coordinates, so halving the image halves
+    the pattern's period and it no longer matches the basis at any scale.
+
+    Consequence, and it is load-bearing when reading a verdict: the homeserver's own
+    THUMBNAIL is effectively clean, so the BFF's gate (which requires EVERY served
+    artifact to pass) will report ``degraded`` rather than ``protected`` for a normal
+    upload. That verdict is CORRECT — poison.py's own module doc claims each served size
+    is "poisoned independently so the homeserver's own thumbnail cannot be regenerated
+    clean", and for the lean backend that claim does not hold: ``_lean_perturb``
+    explicitly discards ``sizes`` (``_ = sizes``). Closing that gap means either a
+    scale-invariant pattern or the real SD-VAE backend from the README roadmap; until
+    then the honest ``degraded`` is the point, and this detector is what makes the gap
+    visible instead of assumed away.
+    """
+
+    if mode == MODE_NONE:
+        return False, None, "mode=none: nothing was applied, so nothing can survive"
+
+    try:
+        import numpy as np  # type: ignore
+        from PIL import Image, ImageFilter  # type: ignore
+    except Exception:  # noqa: BLE001 — minimal image without Pillow/numpy.
+        return False, None, "Pillow/numpy unavailable: cannot measure"
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception:  # noqa: BLE001 — not a decodable image.
+        return False, None, "not a decodable image: cannot measure"
+
+    if img.width < 8 or img.height < 8:
+        return False, None, "image too small to measure"
+
+    grey = img.convert("L")
+    # Blur radius tied to the pattern's own period: big enough to flatten scene content,
+    # small enough to leave the pattern standing.
+    low = grey.filter(ImageFilter.GaussianBlur(radius=_PATTERN_PERIOD_PX / 2.0))
+    residual = np.asarray(grey, dtype=np.float32) - np.asarray(low, dtype=np.float32)
+
+    basis = _pattern(residual.shape[0], residual.shape[1])
+    a = residual - residual.mean()
+    b = basis - basis.mean()
+    denom = float(np.sqrt((a * a).sum()) * np.sqrt((b * b).sum()))
+    if denom <= 0.0:
+        return False, None, "flat image: no signal to correlate"
+
+    score = float((a * b).sum() / denom)
+    present = score >= SURVIVAL_MIN_SCORE
+    return present, score, (
+        f"normalised correlation {score:.4f} "
+        f"{'>=' if present else '<'} threshold {SURVIVAL_MIN_SCORE}"
+    )
 
 
 def _lean_perturb(image_bytes: bytes, budget: int, sizes: list[int]) -> bytes:
@@ -160,14 +283,9 @@ def _lean_perturb(image_bytes: bytes, budget: int, sizes: list[int]) -> bytes:
     # A low-frequency sinusoidal grid biases broad regions (the kind of structure
     # a VAE encoder is sensitive to) rather than per-pixel noise that a denoise/
     # re-encode trivially removes. Bounded to +/- budget so it stays subtle.
-    yy, xx = np.meshgrid(
-        np.arange(h, dtype=np.float32),
-        np.arange(w, dtype=np.float32),
-        indexing="ij",
-    )
-    freq = 2.0 * math.pi / 17.0
-    pattern = np.sin(xx * freq) + np.cos(yy * freq)  # in [-2, 2]
-    pattern = np.round(pattern / 2.0 * budget).astype(np.int16)  # in [-budget, budget]
+    # The basis comes from the SHARED _pattern() so detect_perturbation correlates
+    # against exactly what was added here (see _PATTERN_PERIOD_PX).
+    pattern = np.round(_pattern(h, w) / 2.0 * budget).astype(np.int16)  # +/- budget
 
     perturbed = np.clip(arr + pattern[:, :, None], 0, 255).astype(np.uint8)
     out = Image.fromarray(perturbed, mode="RGB")

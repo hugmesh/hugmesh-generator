@@ -5,15 +5,43 @@ The OPTIONAL x86/GPU heavy-tier worker that applies an AI-cloak/poison perturbat
 to image bytes BEFORE the homeserver ingests them. The hugmesh-user-bff-api
 media-proxy is the ONLY caller:
 
-  POST /poison   multipart/form-data: image=<file>, mode=<none|light|glaze|nightshade>,
-                 sizes=<comma-separated ints, optional>
-                 -> 200 image/jpeg  (perturbed bytes)         on success
-                 -> 200 image/<orig> (unchanged) when mode=none / non-image
-                 -> 415 when the upload is not a decodable image and mode != none
+  POST /poison   TWO accepted encodings, because the BFF and this worker were written
+                 against DIFFERENT contracts and neither side was ever exercised against
+                 the other (see "the seam" below):
+
+                 (a) application/octet-stream + X-Cloak-* headers — WHAT THE BFF SENDS.
+                     body = the original bytes; X-Cloak-Mode / X-Cloak-Filename /
+                     X-Cloak-Content-Type / X-Cloak-Thumbnail-Sizes.
+                     -> 200 application/json {ok, backend, poisonedOriginal(base64),
+                                              thumbnails[], detail}
+                     This is PoisonModels.PoisonResult on the Java side; Jackson decodes
+                     the byte[] field from base64, which is why the bytes travel as a
+                     base64 string rather than a second body.
+                 (b) multipart/form-data: image=<file>, mode=, sizes= — the previously
+                     documented shape, kept working so nothing that already speaks it
+                     breaks.
+                     -> 200 image/jpeg (perturbed bytes)
+                 Both: -> 200 unchanged when mode=none
+                       -> 415 when the upload is not a decodable image and mode != none
+  POST /survival application/octet-stream + X-Cloak-Mode / X-Cloak-Size. Body = the
+                 bytes the homeserver actually SERVES after its own re-encode/downscale.
+                 -> 200 {"present","score","detail"}  (PoisonModels.SurvivalVerdict)
+                 The BFF's round-trip gate calls this per served artifact; it is what
+                 separates "a cloak was applied" from "a cloak is still there".
   GET  /health   -> 200 {"status","backend","modes","available"}   liveness + capability
                     The BFF proxies "backend" into /bff/user/media/capability so the
                     UI renders an honest, hardware-derived expectation (cuda ~1 min,
                     cpu reduced-strength, none -> warn-before-post).
+
+THE SEAM (2026-08-14). This worker previously served ONLY (b) and had no /survival at
+all, while hugmesh-user-bff-api's PoisonWorkerClient only ever sent (a) and called
+/survival. Every real cloak attempt therefore died on a bare 422 and the gate 404'd —
+proven live against the running mesh, where the BFF logged
+"poison job failed (mode=glaze): 422 Unprocessable Content". /health was the ONLY
+endpoint both sides agreed on, which is exactly why the feature looked healthy: the
+BFF's capability probe went green while nothing downstream of it worked. The two
+halves are integration-tested against each other now (tests/test_bff_contract.py)
+rather than each against its own idea of the other.
 
 On a Pi5-only cluster this Deployment stays Pending (nodeSelector requires the
 amd64+gpu node), its Service has no Ready endpoints, and the BFF's capability probe
@@ -34,12 +62,13 @@ credentials and holds no durable copy of any image (in-memory, ephemeral).
 
 from __future__ import annotations
 
+import base64
 import logging
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from .poison import KNOWN_MODES, MODE_NONE, detect_backend, perturb
+from .poison import KNOWN_MODES, MODE_NONE, detect_backend, detect_perturbation, perturb
 from .serve import transport_mode
 
 logging.basicConfig(level=logging.INFO)
@@ -78,53 +107,124 @@ def health() -> JSONResponse:
     )
 
 
+# The BFF enumerates the homeserver's SERVED sizes as LABELS ("small" for akkoma,
+# "240x240" for Matrix — app.media.poisoning.thumbnail-sizes), not as integers. The
+# original int-only parser dropped every one of those on a ValueError and silently fell
+# through to the defaults, so the pinned sizes never reached the backend at all.
+_NAMED_SIZES = {"small": 400, "thumbnail": 400, "preview": 400, "medium": 640, "original": 0}
+
+
 def _parse_sizes(raw: str | None) -> list[int] | None:
+    """Parse the served-size list, accepting ints, ``WxH`` and the BFF's named sizes."""
+
     if not raw:
         return None
     out: list[int] = []
     for part in raw.split(","):
-        part = part.strip()
+        part = part.strip().lower()
         if not part:
             continue
+        if part in _NAMED_SIZES:
+            if _NAMED_SIZES[part]:
+                out.append(_NAMED_SIZES[part])
+            continue
+        if "x" in part:  # "240x240" -> the larger edge
+            dims = [d for d in part.split("x") if d.strip().isdigit()]
+            if dims:
+                out.append(max(int(d) for d in dims))
+                continue
         try:
             out.append(int(part))
         except ValueError:
-            continue  # ignore garbage; the worker has safe defaults.
+            log.warning("unparseable served size %r ignored", part)
     return out or None
 
 
-@app.post("/poison")
-async def poison(
-    image: UploadFile = File(...),
-    mode: str = Form("glaze"),
-    sizes: str | None = Form(None),
-) -> Response:
-    """Apply the perturbation for ``mode`` and return the re-encoded bytes.
-
-    The BFF holds the plaintext bytes only transiently; this worker does the same
-    (read into memory, perturb, return — no disk write). ``mode=none`` and
-    non-image uploads are returned unchanged so the BFF can use one code path.
-    """
-
+def _normalize_mode(mode: str | None) -> str:
     mode = (mode or "glaze").strip().lower()
     if mode not in KNOWN_MODES:
         # Unknown mode is coerced to a safe default inside perturb(); log it.
         log.warning("unknown mode %r coerced to default", mode)
+    return mode
 
-    data = await image.read()
+
+def _apply(data: bytes, mode: str, sizes: str | None) -> bytes:
+    """Shared body of both /poison encodings: bounds-check, apply, fail honestly."""
+
     if len(data) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="image too large")
-
     if mode == MODE_NONE:
-        # Opt-out: forward verbatim with the original content type.
-        return Response(content=data, media_type=image.content_type or "application/octet-stream")
-
+        return data  # opt-out: caller forwards verbatim.
     out = perturb(data, mode=mode, sizes=_parse_sizes(sizes))
-
     # perturb() returns the ORIGINAL bytes unchanged when the upload is not a
     # decodable image (or Pillow/numpy are missing). Signal that to the BFF as 415
     # so its round-trip gate doesn't mark un-perturbed bytes "protected".
-    if out is data and mode != MODE_NONE:
+    if out is data:
         raise HTTPException(status_code=415, detail="not a decodable image; nothing perturbed")
+    return out
 
-    return Response(content=out, media_type="image/jpeg")
+
+@app.post("/poison")
+async def poison(request: Request) -> Response:
+    """Apply the perturbation for ``mode``; see the module docstring for both encodings.
+
+    The BFF holds the plaintext bytes only transiently; this worker does the same
+    (read into memory, perturb, return — no disk write).
+    """
+
+    ctype = (request.headers.get("content-type") or "").lower()
+
+    if ctype.startswith("multipart/form-data"):
+        form = await request.form()
+        upload = form.get("image")
+        if not hasattr(upload, "read"):
+            raise HTTPException(status_code=422, detail="multipart field 'image' is required")
+        data = await upload.read()
+        mode = _normalize_mode(str(form.get("mode") or "glaze"))
+        out = _apply(data, mode, _form_str(form.get("sizes")))
+        if mode == MODE_NONE:
+            return Response(content=out,
+                            media_type=upload.content_type or "application/octet-stream")
+        return Response(content=out, media_type="image/jpeg")
+
+    # The BFF's encoding: raw body + X-Cloak-* headers -> the JSON PoisonResult it decodes.
+    data = await request.body()
+    mode = _normalize_mode(request.headers.get("X-Cloak-Mode"))
+    out = _apply(data, mode, request.headers.get("X-Cloak-Thumbnail-Sizes"))
+    unchanged = mode == MODE_NONE
+    return JSONResponse(
+        {
+            "ok": True,
+            "backend": BACKEND.kind,
+            "poisonedOriginal": base64.b64encode(out).decode("ascii"),
+            # The BFF declares a per-size derivative list but consumes ONLY
+            # poisonedOriginal (nothing reads PoisonResult.thumbnails), and the
+            # homeserver regenerates its own thumbnails from the original anyway — so
+            # the "no clean derivative" property comes from the perturbation surviving
+            # the downscale, not from shipping derivatives. Empty, not fabricated.
+            "thumbnails": [],
+            "detail": ("mode=none: forwarded unchanged" if unchanged
+                       else f"perturbed with mode={mode} on backend={BACKEND.kind}"),
+        }
+    )
+
+
+def _form_str(v) -> str | None:
+    return None if v is None else str(v)
+
+
+@app.post("/survival")
+async def survival(request: Request) -> JSONResponse:
+    """Is the cloak still present in these SERVED bytes? -> SurvivalVerdict.
+
+    Fail-honest by construction (see detect_perturbation): anything unmeasurable answers
+    present=false with the reason. A verdict we could not compute is NOT a survival —
+    over-claiming here would tell a user their work is protected when it is not.
+    """
+
+    data = await request.body()
+    mode = _normalize_mode(request.headers.get("X-Cloak-Mode"))
+    size = (request.headers.get("X-Cloak-Size") or "original").strip()
+    present, score, detail = detect_perturbation(data, mode)
+    log.info("[survival] size=%s mode=%s present=%s score=%s", size, mode, present, score)
+    return JSONResponse({"present": present, "score": score, "detail": f"[{size}] {detail}"})
