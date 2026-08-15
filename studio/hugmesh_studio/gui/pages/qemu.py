@@ -28,6 +28,7 @@ WelcomePage extends when the host has no build backend).
 """
 from __future__ import annotations
 
+import html
 import os
 import threading
 
@@ -64,7 +65,25 @@ class QemuPage(QtWidgets.QWizardPage):
         self.docker_note = QtWidgets.QLabel()
         self.docker_note.setWordWrap(True)
         self.docker_note.setTextFormat(Qt.TextFormat.RichText)
+        # Selectable: under WSL the remedy is a path through Docker Desktop's settings
+        # and a .wslconfig stanza — text the operator needs to copy, not retype.
+        self.docker_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction)
         lay.addWidget(self.docker_note)
+
+        # ── acceleration, stated up-front for the SAME reason ───────────────────
+        # A run without KVM is not a failure, so this must not block; but it is ~10x
+        # slower, and "slower" past a certain point is indistinguishable from a hang.
+        # Hidden entirely when KVM works — nothing to say, so nothing said. PLAIN text
+        # (the _device_table.platform_note precedent): the remedy is a .wslconfig
+        # stanza whose newlines and backslashes must survive verbatim to be copyable.
+        self.kvm_note = QtWidgets.QLabel("")
+        self.kvm_note.setWordWrap(True)
+        self.kvm_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.kvm_note.setStyleSheet("color: #a05000;")
+        self.kvm_note.setVisible(False)
+        lay.addWidget(self.kvm_note)
 
         # ── choice: existing images vs build-then-test ──────────────────────────
         self.source_group = QtWidgets.QGroupBox("What should the tests run against?")
@@ -197,6 +216,7 @@ class QemuPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         self._refresh_docker_note()
+        self._refresh_kvm_note()
         self._reload_sessions()
         self._source_changed()
         self._reload_results()
@@ -219,12 +239,32 @@ class QemuPage(QtWidgets.QWizardPage):
                 "root. Container root comes from your <tt>docker</tt> group membership, so "
                 "no sudo password is needed.")
         else:
+            # ESCAPED, and newlines turned into breaks: the WSL remedy is multi-line and
+            # contains `<distro>`, which RichText would otherwise eat as an unknown tag —
+            # deleting the one word that tells the operator what to substitute.
+            detail = "<br>".join(html.escape(line) for line in why.splitlines())
             self.docker_note.setText(
                 f'<b style="color:{WARN}">These tests cannot run on this machine yet.</b> '
-                f"{why}<br>The harness needs Docker because booting an image requires a "
+                f"{detail}<br>The harness needs Docker because booting an image requires a "
                 "root-only loop mount, which a GUI cannot obtain interactively.")
         for w in (self.run_btn, self.list_btn):
             w.setEnabled(ok)
+
+    def _refresh_kvm_note(self):
+        """State the acceleration situation — WARN, never block.
+
+        The runner already degrades correctly on its own (``run-qemu-docker.sh`` only
+        passes ``--device /dev/kvm`` when it is readable AND writable), so a KVM-less
+        host still produces correct results. What it does not do is finish in a
+        plausible time: an x86 row under TCG goes from minutes to hours, and an
+        operator watching a stalled boot log has no way to tell that from a hang. Under
+        WSL2 this is the DEFAULT state — nested virtualisation is off unless a
+        .wslconfig stanza turns it on — so saying nothing would strand every Windows
+        operator on the slowest possible path with no clue that a fix exists.
+        """
+        why = self.wiz.host.kvm_blocker()
+        self.kvm_note.setText(why)
+        self.kvm_note.setVisible(bool(why))
 
     def _reload_sessions(self):
         self._sessions = qemu_tests.discover_sessions(self.wiz.generator_dir)

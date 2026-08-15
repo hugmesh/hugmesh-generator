@@ -1,10 +1,24 @@
 """WelcomePage — intro blurb + load/save of the ImageConfig JSON + previous builds."""
 from __future__ import annotations
 
+import html
+
 from ... import advanced_mode
 from ..qt import Qt, QtWidgets
 from ..styles import WARN
 from .sessions_widget import PreviousBuildsWidget
+
+
+def _as_html(text: str) -> str:
+    """Plain remedy text -> RichText, escaped and line-broken.
+
+    Both remedies rendered here are multi-line shell/settings recipes containing `<`
+    (`wsl --set-version <distro> 2`, `git clone <repo-url> …`). Interpolated raw, Qt's
+    RichText engine swallows those as unknown tags — deleting the exact placeholder the
+    operator is supposed to substitute — and collapses the newlines that separate the
+    commands into one unreadable run-on line.
+    """
+    return "<br>".join(html.escape(line) for line in text.splitlines())
 
 
 class WelcomePage(QtWidgets.QWizardPage):
@@ -64,15 +78,37 @@ class WelcomePage(QtWidgets.QWizardPage):
             return (
                 "This studio assembles and runs a HugMesh image build.<br><br>"
                 f'<b style="color:{WARN}">This machine can\'t build images yet.</b> '
-                "Install Docker Desktop on Windows or macOS (and start it), or run "
-                "Studio on a Gentoo host to build natively. You can still configure and "
+                # Under WSL the generic "install Docker Desktop" line is not the fix —
+                # Docker Desktop is typically already installed and running on the
+                # Windows side, and simply not shared with THIS distro. docker_remedy()
+                # names that checkbox; without it the operator reinstalls a working app.
+                + (_as_html(host.docker_remedy()) if host.is_wsl else
+                   "Install Docker Desktop on Windows or macOS (and start it), or run "
+                   "Studio on a Gentoo host to build natively.")
+                + " You can still configure and "
                 "save an image now, then build it on a machine that can.<br><br>"
+                f"{self._slow_fs_html()}"
                 f"Detected: {host.summary()}")
         return (
             "This studio assembles and runs a HugMesh image build.<br><br>"
             f"Build backend: <b>{host.default_backend}</b> ({host.summary()})<br><br>"
+            f"{self._slow_fs_html()}"
             "On Gentoo it builds natively; everywhere else (including Windows) it drives "
             "the dockerized build.")
+
+    def _slow_fs_html(self) -> str:
+        """The /mnt/c trap, on the FIRST screen — or "" when the repo is on a local disk.
+
+        Said here as well as in the build preflight deliberately. By the time preflight
+        runs the operator has configured a whole image and is one click from a build
+        they will interpret as hung; the cheap fix (re-clone into ~) is one they will
+        only take before they have invested that time. Backend-independent, so it is not
+        folded into either branch above.
+        """
+        warning = self.wiz.host.slow_filesystem_warning(self.wiz.generator_dir)
+        if not warning:
+            return ""
+        return (f'<b style="color:{WARN}">{_as_html(warning)}</b><br><br>')
 
     def initializePage(self):
         # refresh every time the first screen is (re)shown — a finished/redone build

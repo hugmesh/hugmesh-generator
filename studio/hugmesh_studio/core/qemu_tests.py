@@ -35,6 +35,8 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from .platform_info import wsl_docker_remedy
+
 #: Where the builders drop per-session artifact dirs, relative to the generator repo.
 SESSIONS_SUBDIR = os.path.join("out", "sessions")
 #: The host-side runner this module drives.
@@ -366,15 +368,26 @@ def docker_available() -> tuple[bool, str]:
 
     The Studio must say so up-front rather than let the operator configure a run
     that dies at spawn — the same reasoning as WelcomePage's no-build-backend note.
+
+    Under WSL the generic reason is actively misleading: there is no daemon in the
+    distro to start and no 'docker' group to join, because Docker Desktop runs the
+    daemon on the Windows side and exposes it per distro through a checkbox. So the
+    WSL remedy REPLACES the generic advice rather than being appended to it — sending
+    the operator to `systemctl start docker` in a distro that has no such unit is how
+    an unhelpful message becomes a wrong one.
     """
     try:
         proc = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL,
                               stderr=subprocess.PIPE, text=True, timeout=15)
     except FileNotFoundError:
-        return False, "docker was not found on PATH."
+        wsl = wsl_docker_remedy()
+        return False, ("docker was not found on PATH." + (" " + wsl if wsl else ""))
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"could not run docker: {exc}"
     if proc.returncode != 0:
+        wsl = wsl_docker_remedy()
+        if wsl:
+            return False, "cannot talk to the docker daemon. " + wsl
         return False, ("cannot talk to the docker daemon — is it running, and is "
                        "your user in the 'docker' group?")
     return True, "docker is available."

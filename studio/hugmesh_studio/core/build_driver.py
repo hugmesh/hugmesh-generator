@@ -608,7 +608,12 @@ class BuildDriver:
                             + (" (Jetson support is EXPERIMENTAL — hardware validation pending)"
                                if cfg.platform == "jetson" else ""))
         if backend == "docker" and not self.host.has_docker:
-            problems.append("Docker selected but the Docker daemon is not reachable.")
+            # The remedy half is the WSL case's whole value: Docker Desktop keeps the
+            # daemon on the Windows side and exposes it per distro, so `docker info`
+            # fails with a bare connection error that names neither Docker Desktop nor
+            # the WSL-integration checkbox that actually caused it.
+            problems.append("Docker selected but the Docker daemon is not reachable. "
+                            + self.host.docker_remedy())
         elif backend == "docker" and not self._image_present():
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "
@@ -659,6 +664,14 @@ class BuildDriver:
         builder truth, not taste — see scope_violations()."""
         backend = backend or self.host.default_backend
         out: list[str] = []
+        # FIRST, because it is the one that costs hours and never announces itself: a
+        # generator dir on a Windows drive under WSL2 is reached over 9p/virtiofs, and a
+        # build there does not fail — it just stops appearing to progress. Backend-
+        # independent (both native and docker read the tree file by file), so it sits
+        # above the backend-specific notices.
+        slow_fs = self.host.slow_filesystem_warning(self.generator_dir)
+        if slow_fs:
+            out.append(slow_fs)
         # Elevation is an ADVISORY, not a blocker (#382): the driver prepends sudo/pkexec
         # itself (_elevation_prefix), so say an auth prompt is coming rather than
         # refusing the build — preflight() only blocks when NO helper exists at all.
