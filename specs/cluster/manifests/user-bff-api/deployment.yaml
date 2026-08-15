@@ -346,22 +346,33 @@ spec:
             # pre-rebrand *-proxy.snapdragon-backend hosts, i.e. the flag flip alone
             # would land on NXDOMAIN. Same two proxies the hs-token leg above dials.
             #
-            # ⚠ COUPLED TO MEDIA_POISONING_ENABLED ABOVE — DO NOT FLIP THAT ALONE.
+            # DERIVED FROM MEDIA_POISONING_ENABLED ABOVE — deliberately not a
+            # separate knob, because the separate knob is the defect.
             # app.media.poisoning.enabled only decides whether the cloak is OFFERED;
             # THIS pair is what actually performs the homeserver upload of the
             # cloaked bytes. Enabling poisoning while these stay false does not
             # degrade gracefully — HomeserverMediaClient.requireWired() throws and
             # POST /bff/user/media/upload 500s on EVERY attachment, while
-            # GET /bff/user/media/capability keeps answering available=true, so the
-            # composer never takes its uncloaked fallback branch
-            # (hugmesh-mastodon-ui compose-box.component.ts: the fallback is gated
-            # on the capability reporting UNAVAILABLE, not on the upload failing).
-            # Measured exactly that way on the compose lane 2026-08-14, where
-            # POISONER=1 set the poisoning flags and left these dark; the fix there
-            # was to DERIVE these from the cloak flag so the broken combination is
-            # unrepresentable (tests/stack/compose.local.yaml). Both are currently
-            # false here and MEDIA_POISONING_ENABLED is false too, so this cluster
-            # is consistent — the note is to keep it that way when the cloak lands.
+            # GET /bff/user/media/capability keeps answering available=true (its
+            # `available` is computed from the WORKER backend alone and never looks
+            # at this leg), so the composer never takes its uncloaked fallback
+            # branch (hugmesh-mastodon-ui compose-box.component.ts: `heavyTierAbsent`
+            # gates on the capability reporting UNAVAILABLE, not on the upload
+            # failing). Measured exactly that way on the compose lane 2026-08-14,
+            # where POISONER=1 set the poisoning flags and left these dark.
+            #
+            # A comment could only ASK the next operator not to flip one half. The
+            # egress leg is a strict DEPENDENCY of the cloak, so it is bound to the
+            # same value instead and the broken combination stops being expressible:
+            # k8s DEPENDENT ENV EXPANSION — $(NAME) in an env value is substituted by
+            # the kubelet from an env entry defined EARLIER in this same container's
+            # list (MEDIA_POISONING_ENABLED, above; same mechanism admin-bff-api's
+            # ROUTE_ACCESS_R2DBC_URL already uses). Flipping the cloak on therefore
+            # carries the egress with it, in one edit, with no second place to forget.
+            # Splitting them again means replacing $(…) with a literal, which
+            # tests/stack/test-front-door-client-surface.sh section (C) fails.
+            - { name: MEDIA_PROXY_MASTODON_ENABLED,  value: "$(MEDIA_POISONING_ENABLED)" }
+            - { name: MEDIA_PROXY_MATRIX_ENABLED,    value: "$(MEDIA_POISONING_ENABLED)" }
             - { name: MEDIA_PROXY_MASTODON_BASE_URL, value: "https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443" }
             - { name: MEDIA_PROXY_MATRIX_BASE_URL,   value: "https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443" }
             # ── on-prem vision moderation (edge-ai-analysis) ─────────────────────

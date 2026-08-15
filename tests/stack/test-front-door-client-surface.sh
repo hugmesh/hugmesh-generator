@@ -48,7 +48,12 @@
 # CAPABILITY reports unavailable, never when the upload fails — so every
 # attachment 500s. That is the operator's "file uploads on mastodon stopped
 # working". The fix DERIVES the egress flags from the cloak flag so the broken
-# combination is unrepresentable; this gate pins that derivation.
+# combination is unrepresentable; this gate pins that derivation ON BOTH LANES.
+# The cluster half is not optional and not satisfiable by a comment: the first
+# pass at this fix left specs/cluster/manifests/user-bff-api/deployment.yaml with
+# a 17-line warning and no functional change, so flipping MEDIA_POISONING_ENABLED
+# alone still reproduced the 500 there. Section (C2) is what makes prose-only
+# insufficient — it fails on the un-derived form.
 #
 # Every assertion below carries a NEGATIVE CONTROL: the check is re-run against a
 # mutated copy that re-introduces the bug, and the gate fails if the check still
@@ -63,6 +68,7 @@ COMPOSE_LOCAL="$REPO/tests/stack/compose.local.yaml"
 CLUSTER_TUWUNEL="$REPO/specs/cluster/manifests/tuwunel/tuwunel.yaml"
 CLUSTER_FE="$REPO/specs/cluster/apps/20-gateway-fe.yaml"
 CHART_CM="$REPO/specs/cluster/charts/hugmesh-gateway/templates/configmap.yaml"
+CLUSTER_UBFF="$REPO/specs/cluster/manifests/user-bff-api/deployment.yaml"
 
 pass=0; fail=0
 ok()   { printf '  PASS %s\n' "$1"; pass=$((pass+1)); }
@@ -70,7 +76,7 @@ bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 check(){ if [ "$1" = "0" ]; then ok "$2"; else bad "$2"; fi; }
 
 for f in "$FE_ROUTES" "$BE_ROUTES" "$COMPOSE_REAL" "$COMPOSE_LOCAL" \
-         "$CLUSTER_TUWUNEL" "$CLUSTER_FE" "$CHART_CM"; do
+         "$CLUSTER_TUWUNEL" "$CLUSTER_FE" "$CHART_CM" "$CLUSTER_UBFF"; do
   [ -f "$f" ] || { echo "FAIL-CLOSED: missing $f"; exit 1; }
 done
 
@@ -279,6 +285,112 @@ NEG="$(mktemp)"
 sed 's|MEDIA_PROXY_MASTODON_ENABLED: .*|MEDIA_PROXY_MASTODON_ENABLED: "false"|' "$COMPOSE_LOCAL" > "$NEG"
 if derives_from_cloak "$NEG" >/dev/null 2>&1; then neg=0; else neg=1; fi
 [ "$neg" -eq 1 ]; check $? "negative control: egress flag hardcoded false -> the derivation check goes red"
+rm -f "$NEG"
+
+# ── (C2) the SAME derivation on the cluster lane, in the k8s idiom ───────────
+# The first pass at (C) fixed compose and left the cluster Deployment with a
+# warning comment and zero functional change. A comment does not make anything
+# unrepresentable: on the cluster, flipping MEDIA_POISONING_ENABLED on while the
+# egress pair stayed at the image's dark default reproduced the identical 500.
+#
+# The cluster manifest has no shell interpolation, so the equivalent of compose's
+# `${MEDIA_PROXY_X_ENABLED:-${MEDIA_POISONING_ENABLED:-false}}` is Kubernetes
+# DEPENDENT ENV EXPANSION: `$(NAME)` inside an env `value:` is substituted by the
+# kubelet from an env entry defined EARLIER in the SAME container's list (the
+# mechanism admin-bff-api's ROUTE_ACCESS_R2DBC_URL already relies on). "Earlier"
+# is load-bearing — a forward reference is left as the LITERAL string
+# `$(MEDIA_POISONING_ENABLED)`, which is not a boolean, so the order is checked
+# too and not merely the spelling.
+echo "== (C2) the cluster lane DERIVES the egress flag, it does not just warn about it =="
+
+cluster_egress() {  # $1=file $2=present|derived|ordered -> 0 when the rule holds
+  python3 - "$1" "$2" <<'PY'
+import sys, yaml
+
+path, mode = sys.argv[1], sys.argv[2]
+CLOAK = 'MEDIA_POISONING_ENABLED'
+WANT = ('MEDIA_PROXY_MASTODON_ENABLED', 'MEDIA_PROXY_MATRIX_ENABLED')
+
+docs = [d for d in yaml.safe_load_all(open(path)) if d]
+seen = 0
+for d in docs:
+    if d.get('kind') != 'Deployment':
+        continue
+    spec = d['spec']['template']['spec']
+    for c in (spec.get('containers') or []) + (spec.get('initContainers') or []):
+        env = c.get('env') or []
+        names = [e['name'] for e in env]
+        if CLOAK not in names:
+            continue            # not the container that owns the cloak
+        seen += 1
+        idx = {n: i for i, n in enumerate(names)}
+        val = {e['name']: e.get('value') for e in env}
+
+        if mode == 'present':
+            missing = [k for k in WANT if k not in idx]
+            if missing:
+                sys.exit("%s sets %s but never sets %s — the egress leg silently "
+                         "inherits the image's dark default, so cloak-on + "
+                         "egress-dark is still expressible (that IS the 500)"
+                         % (c['name'], CLOAK, ', '.join(missing)))
+
+        elif mode == 'derived':
+            for k in WANT:
+                v = str(val.get(k))
+                if ('$(%s)' % CLOAK) not in v:
+                    sys.exit("%s=%r is a standalone knob, not derived from "
+                             "$(%s) — a second place to forget" % (k, v, CLOAK))
+
+        elif mode == 'ordered':
+            for k in WANT:
+                if k not in idx:
+                    sys.exit("%s absent" % k)
+                if idx[k] <= idx[CLOAK]:
+                    sys.exit("%s (index %d) is declared BEFORE %s (index %d); the "
+                             "kubelet only expands $(VAR) from entries defined "
+                             "EARLIER, so this stays the literal string"
+                             % (k, idx[k], CLOAK, idx[CLOAK]))
+
+if seen == 0:                   # vacuity guard: a rename must not silently pass
+    sys.exit("no container in %s declares %s — the check matched nothing"
+             % (path, CLOAK))
+PY
+}
+
+cluster_egress "$CLUSTER_UBFF" present
+check $? "cluster user-bff Deployment sets BOTH MEDIA_PROXY_*_ENABLED (not only the base URLs)"
+cluster_egress "$CLUSTER_UBFF" derived
+check $? "...and both are \$(MEDIA_POISONING_ENABLED), so the cloak flag carries its own egress"
+cluster_egress "$CLUSTER_UBFF" ordered
+check $? "...declared AFTER the cloak flag, which is what makes k8s actually expand them"
+
+# The base URLs must stay the in-cluster mTLS proxies (the compose lane overrides
+# them precisely because these do not resolve there — the substitution must not
+# leak back the other way).
+python3 - "$CLUSTER_UBFF" <<'PY'
+import sys, yaml
+d = [x for x in yaml.safe_load_all(open(sys.argv[1])) if x and x.get('kind') == 'Deployment'][0]
+env = {e['name']: e.get('value') for e in d['spec']['template']['spec']['containers'][0]['env']}
+for k, host in (('MEDIA_PROXY_MASTODON_BASE_URL', 'akkoma-proxy'),
+                ('MEDIA_PROXY_MATRIX_BASE_URL', 'tuwunel-proxy')):
+    v = str(env.get(k))
+    if host not in v or 'svc.cluster.local' not in v:
+        sys.exit("%s=%r is not the in-cluster %s" % (k, v, host))
+PY
+check $? "the cluster base URLs are still the in-cluster mTLS proxies"
+
+# NEGATIVE CONTROL 1 — the EXACT pre-fix state the adversarial verifier reported:
+# comment present, both MEDIA_PROXY_*_ENABLED lines absent.
+NEG="$(mktemp)"; grep -v 'MEDIA_PROXY_MASTODON_ENABLED\|MEDIA_PROXY_MATRIX_ENABLED' "$CLUSTER_UBFF" > "$NEG"
+if cluster_egress "$NEG" present >/dev/null 2>&1; then neg=0; else neg=1; fi
+[ "$neg" -eq 1 ]; check $? "negative control: comment-only cluster lane (flags deleted) -> the presence check goes red"
+rm -f "$NEG"
+
+# NEGATIVE CONTROL 2 — the flags exist but as their own knob (what a hand-flip
+# during a cloak rollout would produce, and what re-opens the trap).
+NEG="$(mktemp)"; sed 's|value: "\$(MEDIA_POISONING_ENABLED)"|value: "true"|' "$CLUSTER_UBFF" > "$NEG"
+if cluster_egress "$NEG" derived >/dev/null 2>&1; then neg=0; else neg=1; fi
+[ "$neg" -eq 1 ]; check $? "negative control: cluster flags hardcoded -> the derivation check goes red"
 rm -f "$NEG"
 
 echo
