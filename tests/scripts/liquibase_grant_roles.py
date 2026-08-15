@@ -99,7 +99,15 @@ except ModuleNotFoundError:  # hard-fail: a missing parser must never read as "n
     )
     raise SystemExit(2)
 
-IMAGE_PREFIX = "snapdragon-systems/"
+# The image REGISTRY/ORG prefix is deliberately NOT a constant to slice by length.
+# It used to be `IMAGE_PREFIX = "snapdragon-systems/"` consumed as
+# `image[len(IMAGE_PREFIX):]`, so when the rebrand shortened the prefix to
+# `hugmesh/` the slice kept eating 19 characters of the NAME: `hugmesh/admin-bff-api`
+# became `pi`, and the checker went looking for a repo called `hugmesh-pi`. It then
+# reported INCOMPLETE — "no tree carries every service's changelogs" — which reads as
+# a missing checkout rather than a parser fault, so the gate stayed dark instead of
+# failing loudly. Taking the basename is prefix-length independent and survives the
+# next registry move (`ghcr.io/hugmesh/...` included).
 CHANGELOG_REL = Path("src/main/resources/db")
 COMPOSE_REL = Path("tests/stack/compose.local.yaml")
 INITDB_MOUNT = "/docker-entrypoint-initdb.d"
@@ -252,7 +260,7 @@ class Service:
         self.name = name
         env = {e["name"]: e for e in (container.get("env") or []) if isinstance(e, dict)}
         self.image = container.get("image", "")
-        short = self.image[len(IMAGE_PREFIX):].split(":")[0]
+        short = self.image.rsplit("/", 1)[-1].split(":")[0]
         self.repo = short if short.startswith("hugmesh-") else f"hugmesh-{short}"
         self.liquibase_url = (env.get("SPRING_LIQUIBASE_URL") or {}).get("value", "")
         self.liquibase_user = (env.get("SPRING_LIQUIBASE_USER") or {}).get("value")
