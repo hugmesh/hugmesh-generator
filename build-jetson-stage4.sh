@@ -1138,6 +1138,37 @@ sys-libs/libselinux python
 sys-process/audit python
 HOSTPYUSE
     info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
+
+    # ── gettext-0.23.x empty-$(DOMAIN) .mo-collision dodge (HOST side) ──────────
+    # Full write-up in build-rpi5-stage4.sh's copy of this block; short form:
+    # gettext-0.23.2 miscomputes $(DOMAIN), so every autotools-NLS package installs
+    # a file literally named /usr/share/locale/<lang>/LC_MESSAGES/.mo. Two packages
+    # claiming one path is a file collision and collision-protect refuses the WHOLE
+    # merge, so gettext, sed and util-linux all fail — and as BDEPENDs of nearly
+    # everything they warn-skip every following atom, so the build grinds on for
+    # hours and dies at the requested-atom gate (a 2026-08-14 rpi5/pki run burned
+    # ~2h that way; build-x86-host-stage4.sh:2010 has carried the dodge since a
+    # 2026-07-08 build lost 143 packages to it). This builder never had a copy.
+    #
+    # HOST side is the whole fix: those are BDEPENDs portage merges to "/", so the
+    # collision happens on the BUILD CONTAINER's root, not the target sysroot — a
+    # mask added to specs-jetson/portage/make.conf.tmpl renders to
+    # ${SYSROOT}/etc/portage/make.conf (the render_template call below), masking the
+    # TARGET root instead. That half is real too and is covered separately by that
+    # file's own INSTALL_MASK line; it just cannot see THIS collision. It also has to be seeded HERE, in the unconditional
+    # host-mutation branch, and not next to the hugmesh-cross-host-selinux seed
+    # further down: that one is additionally gated on ROLE_K8S != none, so a
+    # non-k8s jetson build would never reach it and the dodge would be inert.
+    # Masking only the empty-basename catalogs keeps real ones (NetworkManager.mo
+    # etc.) intact; the marker makes a re-run a no-op, since this appends to a
+    # make.conf the container may reuse.
+    if ! grep -q 'hugmesh-mo-collision' /etc/portage/make.conf 2>/dev/null; then
+        {
+            printf '\n# hugmesh-mo-collision: gettext-0.23.x empty-$(DOMAIN) catalogs\n'
+            printf 'INSTALL_MASK="${INSTALL_MASK} /usr/share/locale/*/LC_MESSAGES/.mo"\n'
+        } >> /etc/portage/make.conf
+        info "Pre-seeded HOST INSTALL_MASK: gettext empty-\$(DOMAIN) .mo collision dodge"
+    fi
 elif [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
     # Native root on a real host: VERIFY read-only, never write. Proceeds when the
     # host already satisfies the config; else fails fast with a reviewable command.

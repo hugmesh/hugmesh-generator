@@ -93,3 +93,11 @@ ACCEPT_KEYWORDS="arm64 ~arm64"
 # reject unknown options and die. (Same rationale as the Frite/RPi5 builds.)
 
 PAX_MARKINGS="none"
+
+# gettext-0.23.x empty-$(DOMAIN) catalogs. The host-side twin of this mask lives in the
+# builder (see its "mo-collision dodge" block) and covers BDEPENDs merged to "/". This
+# line covers the OTHER half: packages cross-emerged into ${SYSROOT} collide there too,
+# which is the half build-x86-host-stage4.sh has always masked (it substitutes
+# @@INSTALL_MASK@@ into specs-x86 at :2058) and the half that took out grub/parted/dracut
+# in its 2026-07-08 build. Only the empty-basename catalogs are masked; real ones stay.
+INSTALL_MASK="/usr/share/locale/*/LC_MESSAGES/.mo"

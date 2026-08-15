@@ -1,89 +1,117 @@
-"""The gettext empty-$(DOMAIN) .mo-collision dodge must stay in the builders.
+"""The gettext empty-$(DOMAIN) .mo-collision dodge must stay in ALL builders, BOTH sides.
 
-gettext-0.23.2 miscomputes $(DOMAIN), so every autotools-NLS package installs a
-file literally named /usr/share/locale/<lang>/LC_MESSAGES/.mo. Two packages
-claiming one path is a file collision, and collision-protect refuses the WHOLE
-merge — so gettext/sed/util-linux fail, and since they are BDEPENDs of nearly
-everything, every following atom is warn-skipped too. The build then grinds on
-for hours and dies at the requested-atom completeness gate.
+gettext-0.23.2 miscomputes $(DOMAIN), so every autotools-NLS package installs a file
+literally named /usr/share/locale/<lang>/LC_MESSAGES/.mo. Two packages claiming one path
+is a file collision, and collision-protect refuses the WHOLE merge — so gettext/sed/
+util-linux fail, and since they are BDEPENDs of nearly everything, every following atom is
+warn-skipped too. The build then grinds on for hours and dies at the requested-atom gate.
 
-This is a REGRESSION test in the literal sense: the dodge existed in
-build-x86-host-stage4.sh (whose comment records a 2026-07-08 build that "lost 143
-packages to this") and was never carried into build-rpi5-stage4.sh, which cost a
-~2h rpi5/pki run on 2026-08-14. Cross-builder drift is the bug; this pins it shut.
+THERE ARE TWO INDEPENDENT COLLISIONS AND EACH NEEDS ITS OWN MASK. This is the part that
+was got wrong twice, in opposite directions, so it is pinned explicitly:
 
-KNOWN GAP, deliberately not asserted here: the eight other cross builders
-(frite, jetson, orangepi{,-zero2,-zero2w,-zero3,3-lts,4-lts,5}) share the same
-hostguard_mutation_allowed + cross_emerge structure and carry NO dodge, so they
-are expected to fail the same way. They are untested on this workstation and out
-of the scope that surfaced this, so widening the fix is the operator's call
-rather than a blind eight-file edit.
+  * HOST side — BDEPENDs are merged to "/", so they collide on the BUILD CONTAINER's root
+    against its own bash (observed 2026-08-14: 41 empty-stem catalogs there owned by
+    bash-5.3_p9-r2, which ships no bash.mo, while the sysroot vdb was clean). Masked by a
+    seed the builder appends to the container's /etc/portage/make.conf, inside the
+    hostguard_mutation_allowed branch. A mask in a spec template CANNOT fix this one.
+
+  * TARGET side — packages cross-emerged into ${SYSROOT} collide there as well. This is
+    the half build-x86-host-stage4.sh has always covered, by substituting @@INSTALL_MASK@@
+    into specs-x86/portage/make.conf.tmpl (build-x86-host-stage4.sh:2010/2019 and :2058);
+    its comment records grub/parted/dracut failing to merge and a 2026-07-08 build losing
+    143 packages. A host-side seed CANNOT fix this one.
+
+The rpi5 port initially carried only the host half and asserted in a comment that a
+template mask "would change nothing" — true of the host collision, false in general. Both
+halves are now present on every cross builder, and both are pinned below.
 """
 import os
+import re
 
 import pytest
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-#: The builders this harness actually exercises, and therefore pins.
-_PINNED = ["build-x86-host-stage4.sh", "build-rpi5-stage4.sh"]
+_MASK = "/usr/share/locale/*/LC_MESSAGES/.mo"
 
-#: Cross builders known to lack the dodge. Listed so the gap is discoverable from
-#: the test suite rather than only from a two-hour build failure.
-_KNOWN_GAP = [
+#: Every builder that cross-emerges and therefore needs the HOST-side seed.
+_HOST_SIDE = [
+    "build-x86-host-stage4.sh", "build-rpi5-stage4.sh",
     "build-frite-stage4.sh", "build-jetson-stage4.sh",
     "build-orangepi5-stage4.sh", "build-orangepi-zero2-stage4.sh",
     "build-orangepi-zero2w-stage4.sh", "build-orangepi-zero3-stage4.sh",
     "build-orangepi3-lts-stage4.sh", "build-orangepi4-lts-stage4.sh",
 ]
 
-_MASK_PATTERN = "/usr/share/locale/*/LC_MESSAGES/.mo"
+#: Spec trees whose make.conf.tmpl must mask the catalogs TARGET-side. specs-x86 is absent
+#: on purpose: it templates INSTALL_MASK as @@INSTALL_MASK@@ and the builder substitutes
+#: the real value, so its coverage is asserted against the builder instead.
+_TARGET_SIDE = [
+    "specs-rpi5", "specs-frite", "specs-jetson", "specs-orangepi5",
+    "specs-orangepi-zero2", "specs-orangepi-zero2w", "specs-orangepi-zero3",
+    "specs-orangepi3-lts", "specs-orangepi4-lts",
+]
 
 
-def _read(name: str) -> str:
-    with open(os.path.join(GENERATOR_DIR, name), encoding="utf-8") as fh:
+def _read(rel: str) -> str:
+    with open(os.path.join(GENERATOR_DIR, rel), encoding="utf-8") as fh:
         return fh.read()
 
 
-@pytest.mark.parametrize("builder", _PINNED)
-def test_builder_masks_empty_domain_mo_catalogs(builder):
-    assert _MASK_PATTERN in _read(builder), (
-        f"{builder} lost the gettext empty-$(DOMAIN) .mo INSTALL_MASK. Without it "
-        f"gettext/sed/util-linux fail to merge on file collisions and every "
-        f"dependent atom is warn-skipped, including sys-kernel/raspberrypi-sources "
-        f"— the build dies HOURS later at the requested-atom gate."
+@pytest.mark.parametrize("builder", _HOST_SIDE)
+def test_host_side_seed_present(builder):
+    """Every cross builder masks the catalogs on the container root."""
+    assert _MASK in _read(builder), (
+        f"{builder} lost the HOST-side gettext .mo mask. Without it gettext/sed/util-linux "
+        f"fail to merge on file collisions against the build container's own bash, and "
+        f"every dependent atom is warn-skipped — the build dies hours later at the "
+        f"requested-atom gate."
     )
 
 
-def test_rpi5_dodge_is_seeded_host_side_not_into_the_sysroot():
-    """Placement is the whole fix, so assert the placement — not just the string.
-
-    The colliding packages are BDEPENDs that portage merges to "/", so the
-    collision happens on the BUILD CONTAINER's root. specs-rpi5/portage/
-    make.conf.tmpl renders to ${SYSROOT}/etc/portage/make.conf — the wrong side —
-    so a mask that lands only there would read as fixed and change nothing.
-    """
-    src = _read("build-rpi5-stage4.sh")
-    idx = src.index(_MASK_PATTERN)
-    # The seed must sit in the host-mutation branch, i.e. after that guard opens.
-    guard = src.index("hostguard_mutation_allowed")
-    assert guard < idx, "the .mo mask must be seeded inside the host-mutation block"
-    # It writes to the CONTAINER's /etc/portage/make.conf, never the sysroot's.
-    window = src[idx - 600:idx + 400]
-    assert "/etc/portage/make.conf" in window
-    assert "SYSROOT" not in window.split(_MASK_PATTERN)[1][:200], (
-        "the mask must not be written into the sysroot make.conf")
-
-
-def test_known_gap_list_is_accurate():
-    """If someone fixes a gap builder, this test tells them to update the list.
-
-    A stale 'known gap' comment is worse than none: it would keep advertising a
-    defect that no longer exists, or hide one that spread.
-    """
-    still_missing = [b for b in _KNOWN_GAP if _MASK_PATTERN not in _read(b)]
-    assert still_missing == _KNOWN_GAP, (
-        "these builders gained the .mo dodge — move them into _PINNED so they are "
-        f"pinned against drift: {sorted(set(_KNOWN_GAP) - set(still_missing))}"
+@pytest.mark.parametrize("board", _TARGET_SIDE)
+def test_target_side_mask_present(board):
+    """Every spec tree masks the catalogs inside the sysroot as well."""
+    tmpl = _read(os.path.join(board, "portage", "make.conf.tmpl"))
+    assert _MASK in tmpl, (
+        f"{board}/portage/make.conf.tmpl lost the TARGET-side gettext .mo mask. The "
+        f"host-side seed does NOT cover this: it masks the build container's root, not "
+        f"${{SYSROOT}}. This is the half that took out grub/parted/dracut on x86."
     )
+    assert re.search(r'^INSTALL_MASK="[^"]*"$', tmpl, re.M), (
+        f"{board}: INSTALL_MASK must stay a single well-formed assignment"
+    )
+
+
+def test_x86_target_coverage_comes_through_the_substitution():
+    """specs-x86 templates INSTALL_MASK, so its target mask lives in the builder.
+
+    Pinned separately so nobody 'fixes' the specs-x86 template by hardcoding a value and
+    silently drops the ROLE_CLIENT-dependent mask the builder computes.
+    """
+    tmpl = _read(os.path.join("specs-x86", "portage", "make.conf.tmpl"))
+    assert "@@INSTALL_MASK@@" in tmpl
+    src = _read("build-x86-host-stage4.sh")
+    assert "@@INSTALL_MASK@@|${INSTALL_MASK}" in src, "the substitution that feeds it is gone"
+    assert _MASK in src
+
+
+def test_host_seed_is_inside_the_host_mutation_branch():
+    """Placement is the whole fix, so assert placement — not just the string.
+
+    A seed written after the hostguard_mutation_allowed branch closes, or into a sysroot
+    make.conf, reads as fixed and changes nothing. Checked on every host-side builder.
+    """
+    for builder in _HOST_SIDE:
+        src = _read(builder)
+        guard = src.find("hostguard_mutation_allowed")
+        seed = src.find("hugmesh-mo-collision")
+        if seed == -1:            # x86 predates the marker; covered by the string test
+            continue
+        assert guard != -1 and guard < seed, f"{builder}: seed precedes the host guard"
+        window = src[seed - 800:seed + 400]
+        assert "/etc/portage/make.conf" in window, f"{builder}: seed writes nowhere sane"
+        assert "SYSROOT" not in src[seed:seed + 400], (
+            f"{builder}: the host seed must not write into a sysroot make.conf"
+        )
