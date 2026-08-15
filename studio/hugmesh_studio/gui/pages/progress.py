@@ -53,6 +53,7 @@ import re
 import shlex
 import subprocess
 import time
+import traceback
 from collections import deque
 
 from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
@@ -238,12 +239,29 @@ class _WorklistWorker(QtCore.QThread):
         self.driver = driver
 
     def run(self) -> None:
-        code = self.driver.run_all(
-            on_entry_start=lambda i: self.entry_start.emit(i),
-            on_line=lambda i, ln: self.line.emit(i, ln),
-            on_entry_done=lambda i, c: self.entry_done.emit(i, c),
-            on_manifest=lambda p: self.manifest.emit(p),
-            on_keys=lambda i, p, ok: self.keys.emit(i, p, ok))
+        # NEVER let an exception escape this thread. run_all() can raise BEFORE the
+        # per-image loop starts — a mesh writes its manifest into the session workdir
+        # first, so an unwritable <out>/sessions/ (root-owned, e.g. left behind by an
+        # earlier NATIVE sudo build) raises PermissionError there. Escaping, the QThread
+        # died with finished_all NEVER emitted: every row stayed "pending", the overall
+        # bar sat at "queued - image 1 of N", the log pane stayed empty, and the GUI
+        # waited forever with no error anywhere. The sibling _FlashWorker below already
+        # guards its run() this way; this one did not.
+        try:
+            code = self.driver.run_all(
+                on_entry_start=lambda i: self.entry_start.emit(i),
+                on_line=lambda i, ln: self.line.emit(i, ln),
+                on_entry_done=lambda i, c: self.entry_done.emit(i, c),
+                on_manifest=lambda p: self.manifest.emit(p),
+                on_keys=lambda i, p, ok: self.keys.emit(i, p, ok))
+        except BaseException as e:  # noqa: BLE001 - a hung GUI is worse than any re-raise
+            # Surface it where the operator is already looking (the log pane), then end
+            # the run non-zero so the UI leaves "queued" and Finish/Back become usable.
+            self.line.emit(0, f"!! build run aborted before completion: {e}")
+            for ln in traceback.format_exc().rstrip().splitlines():
+                self.line.emit(0, f"   {ln}")
+            self.finished_all.emit(1)
+            return
         self.finished_all.emit(code)
 
 

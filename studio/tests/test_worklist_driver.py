@@ -271,3 +271,41 @@ def test_command_string_delegates(monkeypatch, tmp_path):
     drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host())
     _entry, cfg = drv.materialize()[0]
     assert drv.command_string(cfg) == f"cmd:{cfg.role}"
+
+
+# ── output-dir writability preflight (the "stuck at queued" regression) ───────────────
+# A NATIVE (sudo) build leaves <out>/sessions/ owned by root; the Studio runs as the
+# desktop user, so the NEXT GUI run cannot create its own session dir. A mesh hit this
+# hardest: run_all() writes the v2 manifest into the session workdir BEFORE the first
+# image starts, so the PermissionError escaped _WorklistWorker.run(), killed the QThread
+# with finished_all never emitted, and the GUI sat forever at "queued - image 1 of N"
+# with an empty log and no error anywhere. preflight() must catch it BEFORE dispatch.
+
+def test_preflight_flags_unwritable_output_dir(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    (out / "sessions").mkdir(parents=True)
+    workdir = out / "sessions" / "20260815-142447-5194e0"   # not created yet, as at dispatch
+
+    # Deny write on the nearest EXISTING ancestor (the sessions dir) — what root
+    # ownership does, without needing a real root-owned tree in the test.
+    real_access = os.access
+    monkeypatch.setattr(
+        wd.os, "access",
+        lambda p, m: False if os.path.abspath(p) == str(out / "sessions") else real_access(p, m))
+
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host(),
+                         workdir=str(workdir))
+    problems = drv.preflight()
+    hits = [p for p in problems if "not writable" in p]
+    assert len(hits) == 1, f"expected exactly one writability problem, got {problems}"
+    assert str(out / "sessions") in hits[0]      # names the ancestor actually at fault
+    assert "chown" in hits[0]                    # and the remedy
+
+
+def test_preflight_silent_when_output_dir_writable(tmp_path):
+    # Control: the same shape with a writable tree must NOT produce a writability
+    # problem (a check that fires on every run is worse than no check).
+    workdir = tmp_path / "out" / "sessions" / "20260815-142447-5194e0"
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host(),
+                         workdir=str(workdir))
+    assert not [p for p in drv.preflight() if "not writable" in p]
