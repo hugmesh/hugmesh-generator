@@ -366,6 +366,85 @@ spec:
           - id: remote-fragment
             uri: http://hugmesh-remote-fragment.hugmesh-frontend.svc.cluster.local:80
             path: /_fragments/**
+          # ── EXTERNAL CLIENT PROTOCOL SURFACES (Element / Tusky / Ivory) ────
+          # PARITY with tests/stack/gateway-routes/fe/application-routes.yml, where
+          # this gap was measured and fixed: with no /_matrix or /api/v1 route on
+          # the FRONT DOOR, both paths fell through to the `frontend-host` /**
+          # catch-all and the Angular shell answered its own index.html —
+          #   GET https://localhost:8488/_matrix/client/versions -> 200 text/html
+          # — so the client-connect banners (which PROVE the endpoint with a
+          # 2xx + JSON content-type + protocol-identity body check before showing
+          # any URL) correctly reported "unavailable".
+          #
+          # ORDERING: Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER, so these
+          # MUST precede `frontend-host` (path: /**) below — that catch-all is what
+          # was swallowing them. They do NOT collide with the FIRST route
+          # (`remote-deeplink-to-host-shell`), which is scoped to the shell-mounted
+          # prefixes only; /_matrix, /.well-known, /api/v1, /api/v2 and /oauth are
+          # none of those, so its Accept: text/html header predicate never applies
+          # to this traffic. A plain path route needs no predicate of its own.
+          #
+          # Declared BEFORE the host-only `vanity-subdomain` route below, which is
+          # the one deliberate precedence change: that route has NO path predicate,
+          # so it matches EVERY path on a <username>.hugmesh.net host and would
+          # otherwise SetPath a CS-API call to the vanity profile resolve. A
+          # /_matrix or /oauth request belongs to the homeserver whatever host it
+          # arrived on, so these must win. The apex + all path-scoped routes above
+          # are unaffected.
+          #
+          # ACCESS POSTURE: OPEN (anonymous-reachable) by design — see the
+          # "MATRIX/MASTODON CLIENT SURFACE" block in
+          # manifests/route-access/initdb/20-schema.sql. A native client
+          # authenticates to the HOMESERVER with its own access token and never
+          # holds a bff_ session cookie, so a session gate would 401 the login
+          # handshake itself. Not a new hole: the shared gateway image already
+          # permitAll's these prefixes on every tier
+          # (hugmesh-gateway SecurityConfig.HOMESERVER_PASSTHROUGH_PATHS).
+          #
+          # ⚠ CLUSTER-LANE DIFFERENCE FROM COMPOSE: the homeservers here are
+          # network-isolated (manifests/networkpolicy/homeserver-isolation.yaml) and
+          # reachable ONLY through the cluster-CA mTLS sidecars, so these target
+          # tuwunel-proxy:4443 / akkoma-proxy:4443 over https (the gateway presents
+          # its client cert — HUGMESH_GATEWAY_MTLS_ENABLED=true above), exactly as
+          # the be-gateway's matrix/mastodon routes do. Compose has no proxies and
+          # uses plain http tuwunel:8008 / mastodon-web:3000.
+          # This cluster lane is NOT live on this machine, so — like the deep-link
+          # route above — it is mirrored for parity, not independently live-verified.
+          - id: matrix-cs-api
+            uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
+            path: /_matrix/**
+          # Matrix autodiscovery, served BY the homeserver: Spring Cloud Gateway has
+          # no filter that returns a literal body, and tuwunel already emits both
+          # documents from its well_known_client / well_known_server settings, which
+          # this payload ALREADY configures (manifests/tuwunel/tuwunel.yaml:29-30,
+          # "https://matrix.hugmesh.net" / "matrix.hugmesh.net:443"). Those two
+          # exact paths only — the pki gateway owns /.well-known/** (OIDC/jwks), so
+          # a subtree grab here would be a much wider claim than discovery needs.
+          # NOTE: the BE gateway's own route misleadingly NAMED `matrix-wellknown`
+          # is really a host-agnostic /_matrix/** route; /.well-known/matrix/** had
+          # no route on ANY gateway before this, despite route-access already
+          # carrying rows for it. (Deliberately naming the ROUTE rather than the be
+          # spec's filename: this is documentation, not a deployment dependency —
+          # these routes target the homeserver proxies directly and never traverse
+          # the be gateway, and the app-closure gate reads a filename mention as a
+          # bootstrap edge.)
+          - id: matrix-wellknown
+            uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
+            path: /.well-known/matrix/client,/.well-known/matrix/server
+          # Mastodon needs exactly three prefixes for a client handshake:
+          # /api/v1/instance or /api/v2/instance -> POST /api/v1/apps -> GET
+          # /oauth/authorize -> POST /oauth/token -> authenticated /api/v1/**
+          # (incl. the /api/v1/streaming websocket). Mastodon has NO .well-known
+          # delegation, so a client derives every path from the ORIGIN — which is
+          # why these sit at the front-door root. /.well-known/nodeinfo +
+          # /nodeinfo/2.0 are deliberately NOT added: crawler/directory discovery,
+          # read by no client login step.
+          - id: mastodon-client-api
+            uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
+            path: /api/v1/**,/api/v2/**
+          - id: mastodon-oauth
+            uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
+            path: /oauth/**
           # Default cross-namespace scope: hugmesh.net/be/** -> the backend
           # gateway (StripPrefix drops /be so /be/api -> /api at the be-gateway).
           # Ships by default; once DB-driven route definitions land (Phase 2 core,

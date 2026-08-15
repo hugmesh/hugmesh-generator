@@ -315,6 +315,119 @@ spring:
               uri: http://hugmesh-remote-fragment:8081
               predicates:
                 - Path=/_fragments/**
+            # ── EXTERNAL CLIENT PROTOCOL SURFACES (Element / Tusky / Ivory) ───
+            # The routing gap behind the two client-connect banners. Both banners
+            # PROVE the endpoint before they will show the user a URL (2xx + a JSON
+            # content-type + a body carrying the protocol's own identity), and both
+            # were correctly reporting "unavailable": there was NO /_matrix or
+            # /api/v1 route here at all, so those paths fell through to the
+            # `frontend-host` catch-all and the Angular shell answered its own
+            # index.html. Measured on the live stack before this change:
+            #   GET https://localhost:8488/_matrix/client/versions -> 200 text/html
+            # i.e. HTTP 200 from the SPA, not the CS-API. The UIs were right; the
+            # routing was missing.
+            #
+            # ORDERING. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER, so
+            # these MUST precede `frontend-host` (Path=/**) below — that catch-all is
+            # exactly what was swallowing them. They do NOT collide with the FIRST
+            # route (`remote-deeplink-to-host-shell`): that one is scoped to the
+            # shell-mounted prefixes (/social/**, /wiki/**, /tube/**, /owncast/**,
+            # /character-studio/**, /character-forge/**) and /_matrix, /.well-known,
+            # /api/v1, /api/v2 and /oauth are none of them, so its Accept: text/html
+            # predicate is never even evaluated for this traffic. Nor do they collide
+            # with `federation-home-reads` (/api/federation/**, a different second
+            # segment) or with any /bff/** route. Declared here — after every
+            # platform route, immediately before the /be/** hop and the catch-all —
+            # so no existing match order changes at all.
+            #
+            # ACCESS POSTURE: OPEN (anonymous-reachable), deliberately. See the
+            # "MATRIX/MASTODON CLIENT SURFACE" block in
+            # specs/cluster/manifests/route-access/initdb/20-schema.sql for the full
+            # reasoning; in short, a native client authenticates to the HOMESERVER
+            # with its own access token and never holds a bff_ session cookie, so
+            # gating these on the session would 401 the login handshake itself and
+            # make external clients impossible. This is NOT a new hole: the shared
+            # gateway image already permitAll's /_matrix/**, /.well-known/**,
+            # /api/v1/**, /api/v2/** and /oauth/** on EVERY tier
+            # (hugmesh-gateway SecurityConfig.HOMESERVER_PASSTHROUGH_PATHS) for
+            # exactly this reason — which is why the probe above returned 200 (the
+            # SPA) and not 401. Only the ROUTE was missing.
+            #
+            # --- Matrix: the client-server API -------------------------------
+            # Plain http tuwunel:8008 locally (the cluster fronts the same server
+            # with the mTLS tuwunel-proxy:4443 — specs/cluster/apps/20-gateway-be.yaml).
+            # Resolves only when the social tier is up (`make stack-up SOCIAL=1`),
+            # exactly like the phpbb/mastodon routes above.
+            - id: matrix-cs-api
+              uri: http://tuwunel:8008
+              predicates:
+                - Path=/_matrix/**
+            # Matrix client/server AUTODISCOVERY (spec §Server Discovery). Lets a
+            # client be given the bare domain instead of a full base URL; the matrix
+            # banner reports it as `wellKnown` and tells the user to type the full
+            # URL when it is absent, so it is genuinely optional but genuinely used.
+            #
+            # Served BY THE HOMESERVER rather than synthesized here: Spring Cloud
+            # Gateway has no filter that can return a literal response body, and
+            # tuwunel already owns this document natively — it emits
+            #   /.well-known/matrix/client -> {"m.homeserver":{"base_url":...}}
+            #   /.well-known/matrix/server -> {"m.server":"host:port"}
+            # from its well_known_client / well_known_server config, which is how the
+            # cluster already configures it (specs/cluster/manifests/tuwunel/
+            # tuwunel.yaml). Those two keys were NOT set on the compose tuwunel, so
+            # it answered 404 M_NOT_FOUND (verified live against
+            # http://localhost:8008/.well-known/matrix/client); the matching
+            # TUWUNEL_WELL_KNOWN_CLIENT / TUWUNEL_WELL_KNOWN_SERVER env is added in
+            # compose.real.yaml so the body points at the PUBLIC base rather than at
+            # the in-network container address.
+            #
+            # The two exact paths, NOT /.well-known/** — the pki gateway owns the
+            # OIDC/jwks well-knowns and a subtree grab here would be a far wider
+            # claim than Matrix discovery needs.
+            - id: matrix-wellknown
+              uri: http://tuwunel:8008
+              predicates:
+                - Path=/.well-known/matrix/client,/.well-known/matrix/server
+            # --- Mastodon: what a client handshake ACTUALLY needs -------------
+            # Checked against a real client (Tusky/Ivory) bring-up rather than added
+            # wholesale. The handshake is: GET /api/v1/instance (the banner's own
+            # probe) or /api/v2/instance -> POST /api/v1/apps (dynamic app
+            # registration) -> GET /oauth/authorize in a browser -> POST /oauth/token
+            # -> then every authenticated call under /api/v1/** (incl. the
+            # /api/v1/streaming websocket). That is exactly three prefixes, and all
+            # three are required — drop /oauth/** and the client can register itself
+            # but can never obtain a token.
+            #
+            # Mastodon has NO .well-known delegation (unlike Matrix): a client is
+            # given the ORIGIN and derives every path from it, which is why these
+            # must live at the front-door root and why the banner probes
+            # `${location.origin}/api/v1/instance`.
+            #
+            # DELIBERATELY NOT ADDED: /.well-known/nodeinfo + /nodeinfo/2.0. Those
+            # are fediverse instance-discovery for crawlers and directory sites; no
+            # client login step reads them, so they are not part of this gap.
+            #
+            # X-Forwarded-Proto: https mirrors the be-gateway's live-debugged fix
+            # (tests/stack/gateway-routes/be/application-routes.yml): Mastodon's
+            # production force_ssl 301s any request it does not believe arrived over
+            # TLS to https://mastodon-web:3000/... — a Location that does not resolve
+            # outside the compose network. The tls-front terminates TLS, so asserting
+            # https here is the truth. Host-header note: SCG rewrites Host to the
+            # proxied authority, and `mastodon-web:3000` is already in the generated
+            # ALTERNATE_DOMAINS (tests/stack/gen-mastodon-env.sh), so Rails'
+            # HostAuthorization admits these exactly as it does the be-gateway's.
+            - id: mastodon-client-api
+              uri: http://mastodon-web:3000
+              predicates:
+                - Path=/api/v1/**,/api/v2/**
+              filters:
+                - SetRequestHeader=X-Forwarded-Proto, https
+            - id: mastodon-oauth
+              uri: http://mastodon-web:3000
+              predicates:
+                - Path=/oauth/**
+              filters:
+                - SetRequestHeader=X-Forwarded-Proto, https
             # hugmesh.net/be/** -> the backend gateway (StripPrefix drops /be).
             - id: be-default
               uri: http://hugmesh-be-gateway:8080

@@ -97,6 +97,24 @@ lint:cluster-manifest-integrity:
     # regex cannot tell what a fused `for entry in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
 
+# External Matrix/Mastodon CLIENT reachability gate. The fe route table ends in a
+# /** catch-all to the Angular shell, whose nginx serves index.html for anything
+# unrouted — so a MISSING protocol route does not 404, it returns 200 text/html
+# and passes any status-code-only check. This job simulates Spring Cloud Gateway's
+# first-match-wins ordering over both fe route tables and asserts every path a real
+# client handshake performs resolves to a HOMESERVER rather than the shell, plus
+# the route-access posture for the patterns that exposes. Six negative controls
+# (route deleted / moved below the catch-all / repointed at the shell) must each
+# trip it, so a green run cannot be vacuous. Offline, no cluster, no network.
+lint:client-connect-routes:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-client-connect-routes.sh
+
 # ExternalSecret TARGET-OWNERSHIP gate. The job above reads this repo's own
 # manifests; it cannot know what an UPSTREAM chart creates, and that is exactly
 # where this bug lived. specs/cluster declared an ExternalSecret targeting Secret

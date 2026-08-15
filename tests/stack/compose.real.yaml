@@ -103,6 +103,32 @@ services:
       TUWUNEL_REGISTRATION_SHARED_SECRET: ${MATRIX_REG_SECRET:-hugmesh-reg-secret}
       TUWUNEL_GRANT_ADMIN_TO_FIRST_USER: "false"
       TUWUNEL_ALLOW_FEDERATION: "false"
+      # ── Client/server AUTODISCOVERY (.well-known/matrix/*) ──────────────
+      # Makes tuwunel actually SERVE the two discovery documents the fe-gateway
+      # route `matrix-wellknown` proxies to it. Without these keys tuwunel does
+      # not synthesize them at all — verified live against this very container:
+      #   GET http://localhost:8008/.well-known/matrix/client
+      #   -> 404 {"errcode":"M_NOT_FOUND"}
+      # so routing the path alone would have moved the banner from "HTML, not the
+      # homeserver" to "404", not to working autodiscovery.
+      #
+      # The value must be the PUBLIC base a client can actually dial, NOT the
+      # in-network tuwunel:8008 — a client that reads base_url and then cannot
+      # resolve the host is worse off than one that was told nothing. Locally the
+      # public door is the tls-front (PUBLIC_HTTPS_PORT, default 8488), which
+      # proxies everything to the fe-gateway.
+      #
+      # Key spelling follows this file's existing flat TUWUNEL_<UPPERCASED-KEY>
+      # convention (SERVER_NAME -> server_name, DATABASE_PATH -> database_path,
+      # GRANT_ADMIN_TO_FIRST_USER -> grant_admin_to_first_user); the cluster
+      # spells the same two settings as the flat toml keys well_known_client /
+      # well_known_server (specs/cluster/manifests/tuwunel/tuwunel.yaml:29-30).
+      # ⚠ HONEST LIMIT: the env spelling is inferred from that mapping and is NOT
+      # live-verified here — confirming it needs a tuwunel restart, which this
+      # pass must not do. If a deploy shows the 404 persisting, the config keys
+      # are reachable the same way the cluster sets them (a mounted tuwunel.toml).
+      TUWUNEL_WELL_KNOWN_CLIENT: ${MATRIX_WELL_KNOWN_CLIENT:-https://localhost:8488}
+      TUWUNEL_WELL_KNOWN_SERVER: ${MATRIX_WELL_KNOWN_SERVER:-localhost:8488}
 
   # ── Platform datastore: Cassandra (gateway revocation list + URL registry) ──
   # The hugmesh services use Cassandra, NOT Redis. Redis appears below ONLY

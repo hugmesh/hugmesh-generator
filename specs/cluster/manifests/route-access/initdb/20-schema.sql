@@ -373,6 +373,87 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- SecurityConfig requires an authenticated caller and ManifestService
   -- role/visibility-filters the payload — the row mirrors that floor exactly.
   ('hugmesh-fe-gateway',  '/api/federation/manifest',     'ROLE_USER', true),  -- logged-in home page module manifest
+  -- ── MATRIX/MASTODON CLIENT SURFACE AT THE FRONT DOOR ──────────────────────
+  -- Companion of the fe-gateway routes matrix-cs-api / matrix-wellknown /
+  -- mastodon-client-api / mastodon-oauth (apps/20-gateway-fe.yaml +
+  -- tests/stack/gateway-routes/fe/application-routes.yml). Exposing the CS-API at
+  -- the front door is an ACCESS decision, so it is written down here rather than
+  -- left implicit in a route table.
+  --
+  -- DECISION: the client protocol paths are OPEN — anonymous traffic reaches the
+  -- homeserver, and authorization is the HOMESERVER's job, not the session's.
+  --
+  -- WHY NOT a bff_ session gate. A native client (Element/Tusky/Ivory) holds a
+  -- MATRIX access token or a Mastodon OAuth token and NEVER holds a bff_ session
+  -- cookie or a Casdoor JWT. Worse, the first two calls of the handshake —
+  -- GET /_matrix/client/versions and POST /_matrix/client/v3/login — are
+  -- pre-authentication BY DEFINITION: the client is asking how to log in. A
+  -- session gate would 401 exactly those calls, so "gate it on bff_" does not
+  -- mean "clients need to log in first", it means EXTERNAL CLIENTS CAN NEVER
+  -- LOG IN AT ALL. The requirement and the gate are mutually exclusive.
+  --
+  -- WHY THIS IS SAFE. These are not unauthenticated admin surfaces; they are
+  -- protocol endpoints that carry their own credential. tuwunel/Mastodon
+  -- authenticate and authorize every non-discovery request themselves, and the
+  -- only endpoints reachable without a token are the ones the spec REQUIRES to be
+  -- public (version negotiation, login-flow advertisement, discovery).
+  --
+  -- THIS IS NOT A NEW HOLE — the floor was already open, only the route was
+  -- missing. The shared gateway image permitAll's /_matrix/**, /.well-known/**,
+  -- /api/v1/**, /api/v2/** and /oauth/** on EVERY tier via
+  -- SecurityConfig.HOMESERVER_PASSTHROUGH_PATHS (hugmesh-gateway), documented
+  -- there as: homeserver traffic carries an opaque token, not a Casdoor JWT, so
+  -- requiring a JWT would 401 it before the real authz ever runs. Verified live
+  -- against the compose front door BEFORE this change:
+  --   GET https://localhost:8488/_matrix/client/versions       -> 200 text/html
+  --   GET https://localhost:8488/.well-known/matrix/client     -> 200 text/html
+  --   GET https://localhost:8488/be/_matrix/client/versions    -> 401
+  -- The first two are the SPA fallback answering (200, NOT 401) — proof the coarse
+  -- floor already admits these paths anonymously at the fe tier. The third 401s
+  -- because /be/** is outside the passthrough list. So this change adds ROUTING to
+  -- an already-open surface; it does not widen the security floor.
+  --
+  -- WHAT STILL GATES THIS SURFACE (defence in depth, all unchanged):
+  --   * HomeserverTokenRevocationFilter resolves the Matrix/Mastodon bearer and
+  --     denies revoked tokens — platform ban, per-credential revoke, and
+  --     external-client revoke (kind=personal) all land here.
+  --   * The rows BELOW: GatewayRouteAccessFilter forwards anonymous requests
+  --     untouched, but any request that DOES carry a Casdoor principal (our own
+  --     UIs proxied with the user's session) must hold the per-platform access
+  --     role. A platform ban is the ABSENCE of the role, so it still bites.
+  --   * The banners only advertise the URL to holders of the dedicated
+  --     ROLE_*_EXTERNAL_CLIENT grant, which mods/admins issue and revoke.
+  --
+  -- These rows MIRROR the be-gateway posture verbatim (same patterns, same roles,
+  -- ~40 lines above) — the fe front door is now a second ingress to the same
+  -- homeservers, so it must not be MORE permissive than the first. Deliberately
+  -- NO PUBLIC row: PUBLIC would also waive the role check for authenticated
+  -- callers, which is precisely the ban-enforcement we want to keep.
+  ('hugmesh-fe-gateway',  '/_matrix/**',               'ROLE_MATRIX',   true),  -- Matrix C-S API (front door)
+  ('hugmesh-fe-gateway',  '/_matrix/**',               'ROLE_MOD',      true),  -- (mod superset)
+  ('hugmesh-fe-gateway',  '/_matrix/**',               'ROLE_ADMIN',    true),  -- (admin superset)
+  ('hugmesh-fe-gateway',  '/.well-known/matrix/**',    'ROLE_MATRIX',   true),  -- Matrix client/server discovery
+  ('hugmesh-fe-gateway',  '/.well-known/matrix/**',    'ROLE_MOD',      true),  -- (mod superset)
+  ('hugmesh-fe-gateway',  '/.well-known/matrix/**',    'ROLE_ADMIN',    true),  -- (admin superset)
+  ('hugmesh-fe-gateway',  '/api/v1/**',                'ROLE_MASTODON', true),  -- Mastodon REST API v1 (front door)
+  ('hugmesh-fe-gateway',  '/api/v1/**',                'ROLE_MOD',      true),  -- (mod superset)
+  ('hugmesh-fe-gateway',  '/api/v1/**',                'ROLE_ADMIN',    true),  -- (admin superset)
+  ('hugmesh-fe-gateway',  '/api/v2/**',                'ROLE_MASTODON', true),  -- Mastodon REST API v2 (front door)
+  ('hugmesh-fe-gateway',  '/api/v2/**',                'ROLE_MOD',      true),  -- (mod superset)
+  ('hugmesh-fe-gateway',  '/api/v2/**',                'ROLE_ADMIN',    true),  -- (admin superset)
+  ('hugmesh-fe-gateway',  '/oauth/**',                 'ROLE_MASTODON', true),  -- Mastodon OAuth (front door)
+  ('hugmesh-fe-gateway',  '/oauth/**',                 'ROLE_MOD',      true),  -- (mod superset)
+  ('hugmesh-fe-gateway',  '/oauth/**',                 'ROLE_ADMIN',    true),  -- (admin superset)
+  -- External-client ISSUANCE rows, mirroring the be-gateway block above: the
+  -- dedicated ROLE_*_EXTERNAL_CLIENT grant is what a NATIVE client's token mint
+  -- needs, separate from the base use-via-our-UI roles. Same longest-pattern-match
+  -- reasoning as be (these patterns are longer than /_matrix/** and /oauth/**).
+  ('hugmesh-fe-gateway',  '/_matrix/client/v3/login',    'ROLE_MATRIX_EXTERNAL_CLIENT',    true),  -- Matrix login (v3) — external client
+  ('hugmesh-fe-gateway',  '/_matrix/client/r0/login',    'ROLE_MATRIX_EXTERNAL_CLIENT',    true),  -- Matrix login (r0) — external client
+  ('hugmesh-fe-gateway',  '/_matrix/client/v3/register', 'ROLE_MATRIX_EXTERNAL_CLIENT',    true),  -- Matrix register/device (v3) — external client
+  ('hugmesh-fe-gateway',  '/_matrix/client/r0/register', 'ROLE_MATRIX_EXTERNAL_CLIENT',    true),  -- Matrix register/device (r0) — external client
+  ('hugmesh-fe-gateway',  '/api/v1/apps',                'ROLE_MASTODON_EXTERNAL_CLIENT',  true),  -- Mastodon app registration — external client
+  ('hugmesh-fe-gateway',  '/oauth/**',                   'ROLE_MASTODON_EXTERNAL_CLIENT',  true),  -- Mastodon OAuth (token/authorize) — external client
   ('hugmesh-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('hugmesh-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
   -- phpBB forum micro-frontend UI (hugmesh-forum-ui at /social/forum/**),
