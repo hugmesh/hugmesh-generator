@@ -1081,7 +1081,11 @@ save_pick_target() {
     # timestamped copy. Defaulting to a fresh name is what keeps "save" from
     # being a destructive verb — repeated saves accumulate instead of eating one
     # another, and losing a copy always takes an explicit --overwrite.
-    [ -n "${target}" ] || target="${SAVES_DIR}/${safe}-$(date -u +%Y%m%d-%H%M%S).qcow2"
+    # %Y%m%dT%H%M%SZ, matching core/qemu_devices.SAVE_STAMP_FORMAT and the build
+    # artifacts' own stamp. The two spellings were allowed to differ once ('-' sorts
+    # before 'T'), so a saves/ dir holding both ordered wrongly by name — which is the
+    # single property the stamp was chosen for.
+    [ -n "${target}" ] || target="${SAVES_DIR}/${safe}-$(date -u +%Y%m%dT%H%M%SZ).qcow2"
     target="$(readlink -m "${target}")"
     save_check_target "${target}"
     if [ -e "${target}" ] && ! ${DEV_SAVE_OVERWRITE}; then
@@ -1367,8 +1371,35 @@ except OSError:
     entries = []
 
 out = []
+# Orphaned partial copies are reported ALONGSIDE the saves, never as saves. A failed
+# or interrupted save renames its target to <name>.partial, and that file is the same
+# size as the save would have been — which on real images is 9.5-20.5 GB. Nothing
+# deletes them, so a listing that silently omitted them would leave the operator
+# looking at "3 saves" while the directory held six files. `partial: true` is how a
+# caller tells them apart; nothing here removes anything on its own, because deleting
+# an operator's data as a side effect of LISTING it would be its own defect.
+partials = []
 for name in entries:
-    if not name.endswith(".qcow2"):        # .partial and .json are not saves
+    if name.endswith(".qcow2.partial"):
+        ppath = os.path.join(saves_dir, name)
+        base = name[:-len(".partial")]
+        owns = base == safe + ".qcow2" or base.startswith(safe + "-")
+        try:
+            pst = os.stat(ppath)
+        except OSError:
+            continue
+        if owns:
+            partials.append({
+                "path": ppath,
+                "label": label,
+                "file_bytes": pst.st_size,
+                "modified_at": datetime.datetime.fromtimestamp(
+                    pst.st_mtime, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "partial": True,
+                "has_metadata": False,
+            })
+        continue
+    if not name.endswith(".qcow2"):        # .json sidecars are not saves
         continue
     path = os.path.join(saves_dir, name)
     side = {}
@@ -1400,6 +1431,9 @@ for name in entries:
     rec["has_metadata"] = bool(side)
     out.append(rec)
 
+for rec in out:
+    rec["partial"] = False
+out.extend(partials)
 out.sort(key=lambda r: str(r.get("modified_at") or ""), reverse=True)  # newest first
 json.dump(out, sys.stdout, indent=2)
 sys.stdout.write("\n")

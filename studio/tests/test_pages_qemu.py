@@ -301,7 +301,9 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 #: QEMU's own query-status reply, printed verbatim by the runner's QMP client),
 #: STUB_SAVE_FILE overrides the file a save creates (by default it honours the
 #: --save-to it was given, like the real runner), STUB_SAVE_NONE makes a save exit 0
-#: while writing nothing, and STUB_SAVE_SLEEP makes the save the long-running kind.
+#: while writing nothing, STUB_SAVE_REMOVE makes it exit 0 having moved the target
+#: aside to <name>.partial (what the real runner does on a failed copy), and
+#: STUB_SAVE_SLEEP makes the save the long-running kind.
 _STUB_RUNNER = """#!/usr/bin/env bash
 echo "STUB-RUNNER $*"
 if [ "$1" = "--keep-alive" ] && [ "$2" = "--only" ]; then
@@ -326,6 +328,13 @@ if [ "$1" = "--save-device" ]; then
     # page's on-disk verification exists for. It has to be its own switch now that
     # the default is to honour --save-to.
     [ -n "${STUB_SAVE_NONE:-}" ] && _tgt=""
+    # STUB_SAVE_REMOVE reproduces what the REAL runner does when a save fails after
+    # the target was created: it renames the half-written file to <name>.partial, so
+    # the path the operator was told about is simply not there afterwards.
+    if [ -n "${STUB_SAVE_REMOVE:-}" ] && [ -n "${_tgt}" ]; then
+        mv -f "${_tgt}" "${_tgt}.partial" 2>/dev/null || rm -f "${_tgt}"
+        _tgt=""
+    fi
     if [ -n "${_tgt}" ]; then
         mkdir -p "$(dirname "${_tgt}")"
         printf 'a stand-in for a qcow2 backup\\n' > "${_tgt}"
@@ -1455,3 +1464,78 @@ def test_the_real_core_module_satisfies_the_save_api_this_page_calls():
     import inspect
     params = list(inspect.signature(real.save_argv).parameters)
     assert params[:3] == ["generator_dir", "dev", "mode"], params
+
+
+def test_qemu_save_copy_does_not_report_an_OLD_save_as_the_new_one(
+        wiz, registry, existing_save, qapp, monkeypatch):
+    """"No new file appeared" has to survive the device ALREADY having a save.
+
+    The existing on-disk check only ran against a device with an empty saves dir, so
+    ``after`` was empty whether or not the diff against ``before`` was computed —
+    replacing ``[p for p in after if p not in before]`` with ``list(after)`` kept the
+    suite green. On a device that already has one save, that mutant reports "Saved
+    <label> to <THE OLD FILE>" for a copy that wrote nothing: a green result naming a
+    file the operator could restore from and lose data by trusting.
+    """
+    dev = _device()
+    registry(dev)
+    old = existing_save(dev)
+    monkeypatch.setenv("STUB_SAVE_NONE", "1")          # exits 0, writes nothing
+
+    page = _qemu_page(wiz)
+    _find_row(page, "rpi5/pki").save.click()
+    _finish(page, qapp)
+
+    note = page.dev_note.text()
+    assert "no new file appeared" in note, note
+    assert old not in note, \
+        "the pre-existing save was reported as if this run had produced it"
+
+
+def test_qemu_overwrite_reports_a_target_that_is_no_longer_there(
+        wiz, registry, existing_save, qapp, monkeypatch):
+    """The overwrite arm verifies on disk too, and nothing proved it.
+
+    Replacing its ``if not os.path.exists(target)`` with ``if False`` left the suite
+    green, so an overwrite whose file had gone would still say "Overwrote ...". That
+    is the realistic failure, not a contrived one: when a save fails after creating
+    the target, the runner renames it to ``<name>.partial`` — so the exact path the
+    operator was told about is missing afterwards.
+    """
+    dev = _device()
+    registry(dev)
+    target = existing_save(dev)
+    monkeypatch.setenv("STUB_SAVE_REMOVE", "1")        # exits 0, moves it aside
+
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+    row.arm.setChecked(True)
+    row.overwrite.click()
+    _finish(page, qapp)
+
+    note = page.dev_note.text()
+    assert "not there now" in note, note
+    assert "NOT saved" in note
+    assert "Overwrote" not in note
+
+
+@pytest.mark.parametrize("missing", ["qmp", "container"])
+def test_qemu_save_is_disabled_when_the_record_cannot_support_one(
+        wiz, registry, qapp, missing):
+    """"Running" is not enough, and this row must not answer that question itself.
+
+    The runner reaches the emulator through ``docker exec`` on the container name and
+    speaks the block job over the QMP socket, so a record missing either cannot be
+    saved however healthy it looks. core.qemu_devices.can_save is the predicate that
+    knows this; a row that only checked ``is_running`` enabled Save on such a device
+    and the runner then died with "has no qmp socket recorded" — a button promising
+    what the thing behind it refuses.
+    """
+    registry(dataclasses.replace(_device(), **{missing: ""}))
+    page = _qemu_page(wiz)
+    row = _find_row(page, "rpi5/pki")
+
+    assert row.dev.is_running                       # up, and still not saveable
+    assert not row.can_save
+    assert not row.save.isEnabled()
+    assert not row.overwrite.isEnabled()
