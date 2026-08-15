@@ -591,6 +591,65 @@ def style_tokens(variant: str = DEFAULT_STYLE) -> dict[str, str]:
     return dict(STYLE_VARIANTS.get(variant, STYLE_VARIANTS[DEFAULT_STYLE]))
 
 
+# ── the DECOR axis (nav suffix) ────────────────────────────────────────────────────
+#: Decorative text appended to every nav link, in three states: base, hover, active.
+#:
+#: THIS USED TO BE HARD-CODED. hugmesh-host-shell's menu.component.scss appended ' UwU'
+#: to every nav link, ' UwO' on hover and ' OwO' when active, with no way to change or
+#: remove it. It is now a theme option, and the shipped default is OFF — a mesh that
+#: chooses nothing renders plain nav labels.
+#:
+#: ACCESSIBILITY IS WHY THIS CAN BE OFFERED AT ALL. Pseudo-element `content` is announced
+#: by screen readers, so the hard-coded version made every link read as "Home UwU". The
+#: consuming SCSS pairs these with CSS alt-text syntax (`content: var(...) / ''`), which
+#: marks the generated text as decorative so assistive tech skips it. Without that pairing
+#: this axis would be an accessibility regression dressed up as a feature.
+#:
+#: Values are CSS string literals (quotes included) because they are interpolated into a
+#: `content:` declaration verbatim. An empty string means "render nothing".
+DECOR_VARIANTS: dict[str, dict[str, str]] = {
+    # The shipped default: no decoration at all.
+    "none": {
+        "--sd-nav-suffix": "''",
+        "--sd-nav-suffix-hover": "''",
+        "--sd-nav-suffix-active": "''",
+    },
+    # The historical HugMesh chrome, preserved as an OPT-IN rather than deleted outright.
+    "uwu": {
+        "--sd-nav-suffix": "' UwU'",
+        "--sd-nav-suffix-hover": "' UwO'",
+        "--sd-nav-suffix-active": "' OwO'",
+    },
+    # Directional marker — reads as navigation rather than as a mood.
+    "arrows": {
+        "--sd-nav-suffix": "''",
+        "--sd-nav-suffix-hover": "' \\2192'",     # →
+        "--sd-nav-suffix-active": "' \\2022'",    # •
+    },
+    # Terminal-ish, pairs with the `sharp` style for a NOC/console look.
+    "terminal": {
+        "--sd-nav-suffix": "''",
+        "--sd-nav-suffix-hover": "' _'",
+        "--sd-nav-suffix-active": "' *'",
+    },
+    # Sparkle, for the operator who wanted the cute chrome but not the emoticons.
+    "sparkle": {
+        "--sd-nav-suffix": "''",
+        "--sd-nav-suffix-hover": "' \\2726'",     # ✦
+        "--sd-nav-suffix-active": "' \\2727'",    # ✧
+    },
+}
+
+DEFAULT_DECOR = "none"
+
+
+def decor_tokens(variant: str = DEFAULT_DECOR) -> dict[str, str]:
+    """Decorative tokens for one variant. Unknown names fall back to the shipped default
+    (i.e. NOTHING), on the same reasoning as :func:`style_tokens`: decoration is cosmetic,
+    and a typo should render plain chrome rather than refuse the whole theme."""
+    return dict(DECOR_VARIANTS.get(variant, DECOR_VARIANTS[DEFAULT_DECOR]))
+
+
 # ── the BOOTSTRAP bridge ───────────────────────────────────────────────────────────
 #: Bootstrap 5.3 reads its own `--bs-*` custom properties at RUNTIME, so overriding them
 #: in the same :root restyles every Bootstrap component the fleet already ships —

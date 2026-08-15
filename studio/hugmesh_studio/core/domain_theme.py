@@ -146,11 +146,14 @@ class ThemePushError(RuntimeError):
 
 @dataclass(frozen=True)
 class ThemeSelection:
-    """One domain's choice, on the three orthogonal axes the Studio exposes."""
+    """One domain's choice, on the orthogonal axes the Studio exposes."""
 
     preset: str
     ramp: str = theme_presets.MODES[0]
     style: str = theme.DEFAULT_STYLE
+    #: Decorative nav-link text. Defaults to NONE — the hard-coded ' UwU' chrome is now
+    #: an opt-in variant rather than something every mesh carries.
+    decor: str = theme.DEFAULT_DECOR
     primary_hex: str = ""
     secondary_hex: str = ""
 
@@ -178,6 +181,9 @@ class ThemeSelection:
         if self.style not in theme.STYLE_VARIANTS:
             raise ValueError(
                 f"style must be one of {', '.join(theme.STYLE_VARIANTS)}, got {self.style!r}")
+        if self.decor not in theme.DECOR_VARIANTS:
+            raise ValueError(
+                f"decor must be one of {', '.join(theme.DECOR_VARIANTS)}, got {self.decor!r}")
         for name, value in (("primary_hex", self.primary_hex),
                             ("secondary_hex", self.secondary_hex)):
             if value and not _is_hex(value):
@@ -201,6 +207,7 @@ def render_css(selection: ThemeSelection) -> str:
     selection.validate()
     tokens = theme_presets.compose_tokens(selection.preset, selection.ramp)
     tokens.update(theme.style_tokens(selection.style))
+    tokens.update(theme.decor_tokens(selection.decor))
     return theme.css_root(tokens)
 
 

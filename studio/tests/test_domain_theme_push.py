@@ -303,3 +303,60 @@ class TestPushUsesTheResolvedToken:
         rec = _Recorder()
         dt.push("http://mesh:9000", "brandx", sel(), "explicit", opener=rec)
         assert rec.req.headers["Authorization"] == "Bearer explicit"
+
+
+class TestTheDecorAxis:
+    """Decorative nav text — formerly hard-coded, now an operator choice.
+
+    hugmesh-host-shell's menu.component.scss appended ' UwU' to every nav link, ' UwO' on
+    hover and ' OwO' when active, with no way to change or remove it. Two things were
+    wrong with that on a platform whose appearance is otherwise fully themeable: it was
+    not the operator's choice, and pseudo-element `content` is ANNOUNCED BY SCREEN
+    READERS, so every link read as "Home UwU".
+
+    The default is therefore OFF, and the consuming SCSS pairs these tokens with CSS
+    alt-text syntax (`content: var(...) / ''`) so the text is decorative-only. Without
+    that pairing this axis would be an accessibility regression sold as a feature.
+    """
+
+    def test_the_default_is_off_so_a_plain_mesh_renders_plain_nav(self):
+        assert dt.ThemeSelection(preset="nord").decor == "none"
+        css = dt.render_css(dt.ThemeSelection(preset="nord"))
+        assert "--hug-nav-suffix: '';" in css
+
+    def test_the_historical_chrome_survives_as_an_opt_in(self):
+        # Removed as a default, kept as a choice — the operator asked for it to become an
+        # option, not to be deleted.
+        css = dt.render_css(dt.ThemeSelection(preset="nord", decor="uwu"))
+        assert "--hug-nav-suffix: ' UwU';" in css
+        assert "--hug-nav-suffix-hover: ' UwO';" in css
+        assert "--hug-nav-suffix-active: ' OwO';" in css
+
+    def test_every_variant_emits_all_three_states(self):
+        # A variant missing a state would inherit the previous theme's value at runtime.
+        for variant in theme.DECOR_VARIANTS:
+            css = dt.render_css(dt.ThemeSelection(preset="nord", decor=variant))
+            for token in ("--hug-nav-suffix", "--hug-nav-suffix-hover", "--hug-nav-suffix-active"):
+                assert f"{token}:" in css, f"{variant} is missing {token}"
+
+    def test_values_are_css_string_literals_ready_to_interpolate(self):
+        # They land verbatim inside a `content:` declaration, so an unquoted value would
+        # be a parse error that silently drops the whole rule.
+        for variant, tokens in theme.DECOR_VARIANTS.items():
+            for name, value in tokens.items():
+                assert value.startswith("'") and value.endswith("'"), f"{variant}/{name}"
+
+    def test_an_unknown_variant_is_rejected_before_the_network(self):
+        rec = _Recorder()
+        with pytest.raises(ValueError):
+            dt.push("http://mesh:9000", "brandx",
+                    dt.ThemeSelection(preset="nord", decor="nyan"), "t", opener=rec)
+        assert rec.req is None
+
+    def test_decor_tokens_falls_back_to_nothing_rather_than_raising(self):
+        # Cosmetic: a typo should render plain chrome, not refuse the whole theme.
+        assert theme.decor_tokens("nyan") == theme.decor_tokens(theme.DEFAULT_DECOR)
+
+    def test_it_changes_the_rendered_output_so_it_is_a_real_axis(self):
+        base = dt.render_css(dt.ThemeSelection(preset="nord"))
+        assert dt.render_css(dt.ThemeSelection(preset="nord", decor="uwu")) != base
