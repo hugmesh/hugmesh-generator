@@ -274,7 +274,29 @@ _start_registry() { # force-(re)create a fresh container from ${M2_REPO}
 # top-level .NetworkSettings.IPAddress key (map has no entry on docker 29).
 _registry_ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${REGISTRY_NAME}"; }
 # Self-check the EXACT URL shape the services' settings.xml will GET (5 quick tries).
-CHECK_PATH="groups/${GITLAB_GROUP_ID}/-/packages/maven/systems/hugmesh/hugmesh-parent/2.8.0/hugmesh-parent-2.8.0.pom"
+# DERIVED FROM THE PIN, not restated. The hardcoded path still said `systems/hugmesh`
+# after the Maven coordinates moved to `net/hugmesh` (the groupIds lagged the Java package
+# move), so this probed a path nothing publishes and the self-check could NEVER pass:
+# every cold bootstrap hit `exit 1` below -- and, when a healthy registry was being reused,
+# needlessly tore it down and recreated it first before failing anyway.
+#
+# The parent POM is the right subject: it is what every service resolves first. Reading its
+# coordinates out of PINS means a future rename moves the probe with it.
+_check_path_from_pins() {
+  local entry _repo _sha aid ver _pack gpath
+  for entry in "${PINS[@]}"; do
+    IFS='|' read -r _repo _sha aid ver _pack gpath <<<"${entry}"
+    [ "${aid}" = "hugmesh-parent" ] || continue
+    printf 'groups/%s/-/packages/maven/%s/%s/%s/%s-%s.pom' \
+      "${GITLAB_GROUP_ID}" "${gpath}" "${aid}" "${ver}" "${aid}" "${ver}"
+    return 0
+  done
+  return 1
+}
+CHECK_PATH="$(_check_path_from_pins)" || {
+  echo "ERROR: no hugmesh-parent entry in PINS — cannot build the registry self-check URL" >&2
+  exit 1
+}
 _registry_serves() { # $1 = base http://IP:PORT ; returns 0 iff the parent POM is served
   local _; for _ in 1 2 3 4 5; do curl -sf -o /dev/null "$1/${CHECK_PATH}" && return 0; sleep 1; done; return 1
 }
