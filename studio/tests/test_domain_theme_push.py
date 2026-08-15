@@ -89,6 +89,37 @@ class TestTheRenderedStylesheet:
         assert body["preset"] == "nord"
 
 
+class TestTheDecorAxisReachesTheBff:
+    """The axis that was rendered locally but never sent.
+
+    ``render_css`` has always baked decor into the stylesheet, so the Studio LOOKED
+    correct end to end. But ``build_payload`` sent only preset/ramp/style, so the BFF
+    stored ``decor='none'`` no matter what was chosen. Two things then broke: the admin UI
+    showed "None" for a mesh that visibly had decoration, and -- because the BFF decides
+    whether to drop a cached render by comparing selections -- switching a decoration off
+    compared EQUAL to leaving it on, so the decorated stylesheet survived the write meant
+    to clear it.
+    """
+
+    def test_the_payload_carries_the_decor(self):
+        assert dt.build_payload(sel(decor="uwu"))["decor"] == "uwu"
+
+    def test_none_is_sent_rather_than_omitted(self):
+        # The hexes are omitted when blank; decor must NOT follow that rule. "none" is the
+        # selection that turns decoration off, and an absent key cannot express it.
+        body = dt.build_payload(sel(decor="none"))
+        assert body["decor"] == "none"
+
+    def test_it_is_sent_even_when_the_css_is_not(self):
+        # A caller re-pointing a domain without re-rendering still has to move the axis,
+        # or the stored selection silently disagrees with the served stylesheet.
+        assert dt.build_payload(sel(decor="sparkle"), include_css=False)["decor"] == "sparkle"
+
+    def test_the_decor_axis_changes_the_rendered_output_too(self):
+        # Pins that the value sent and the bytes rendered come from the same selection.
+        assert dt.render_css(sel(decor="uwu")) != dt.render_css(sel(decor="none"))
+
+
 class TestTheMeshDefaultSegment:
 
     @pytest.mark.parametrize("domain", ["", "   ", None])

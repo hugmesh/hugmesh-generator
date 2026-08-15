@@ -225,6 +225,13 @@ def build_payload(selection: ThemeSelection, *, include_css: bool = True) -> dic
         "preset": selection.preset,
         "ramp": selection.ramp,
         "style": selection.style,
+        # Sent unconditionally, INCLUDING when it is the default "none". The BFF decides
+        # whether a write invalidates the cached render by comparing selections, so a
+        # decor axis that never arrives is one it can never see change: switching a
+        # decoration off would compare equal to leaving it on, and the decorated
+        # stylesheet would survive the write that was meant to clear it. Omitting this
+        # the way the hexes below are omitted would reintroduce exactly that bug.
+        "decor": selection.decor,
     }
     # Omit rather than send empty: the BFF treats blank as null anyway, and an absent key
     # is the honest encoding of "no override".
