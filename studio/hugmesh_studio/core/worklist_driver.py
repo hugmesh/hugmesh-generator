@@ -25,8 +25,10 @@ callbacks to signals; the headless tests drive it directly.
 """
 from __future__ import annotations
 
+import getpass
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import threading
@@ -186,11 +188,44 @@ class WorklistDriver:
         """Aggregate preflight problems (empty = OK) — the BLOCKING channel: this is
         what the Review page's problems pane renders and isComplete() keys on, and
         what ProgressPage refuses dispatch over."""
+        problems = self._output_dir_problems()
         per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
                         graphical=self.graphical, workdir=self.workdir)
                       .preflight(cfg, self.backend))
                      for entry, cfg in self.materialize()]
-        return self._aggregate_per_entry(per_entry)
+        return problems + self._aggregate_per_entry(per_entry)
+
+    def _output_dir_problems(self) -> list[str]:
+        """Can this run actually WRITE where it is about to write? (empty = yes)
+
+        Same rule BuildDriver.preflight() states for builder-hard-errors: catching a
+        guaranteed-fatal condition here turns a post-dispatch dead end into a message on
+        the Review page. This one is not hypothetical — a NATIVE (sudo) build creates
+        ``<out>/sessions/`` and ``<out>/shared/`` as ROOT, and the Studio itself runs as
+        the desktop user, so the next GUI run cannot create its own session dir. A mesh
+        hit it hardest: run_all() writes the v2 manifest into the session workdir BEFORE
+        the first image starts, so the whole run died at "queued" with an empty log.
+
+        Checked against the nearest EXISTING ancestor: the session dir usually does not
+        exist yet (we are about to make it), so the parent's writability is the real
+        question."""
+        out = self._output_dir()
+        probe = os.path.abspath(out)
+        while not os.path.exists(probe):
+            parent = os.path.dirname(probe)
+            if parent == probe:            # walked to the root without finding anything
+                return [f"Output directory is unreachable: {out}"]
+            probe = parent
+        if os.access(probe, os.W_OK | os.X_OK):
+            return []
+        try:
+            owner = pwd.getpwuid(os.stat(probe).st_uid).pw_name
+        except (KeyError, OSError):
+            owner = str(os.stat(probe).st_uid)
+        return [f"Output directory is not writable: {probe} is owned by '{owner}' and "
+                f"this Studio runs as '{getpass.getuser()}'. A native (sudo) build "
+                f"leaves root-owned dirs behind; fix with: "
+                f"sudo chown -R {getpass.getuser()} {probe}"]
 
     def preflight_warnings(self) -> list[str]:
         """Aggregate ADVISORY warnings (see BuildDriver.preflight_warnings) — the
