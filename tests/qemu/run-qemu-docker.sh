@@ -15,10 +15,43 @@
 # aarch64 has no KVM on an x86_64 host, so it is pure TCG emulation), then the
 # other ARM platforms, then x86 (which gets KVM and is comparatively quick).
 #
+# KEEP-ALIVE / DEVICE CONTROL PLANE
+# ---------------------------------
+# By default a row boots, asserts, powers the guest off and the container exits —
+# that is the test. With --keep-alive the devices are left RUNNING instead, their
+# ssh is published on loopback, and docker-entrypoint.sh writes one JSON record
+# per device under ${WORK}/devices/. That registry is the whole interface the
+# Studio needs to open a terminal on a device (studio/hugmesh_studio/core/
+# qemu_devices.py reads it), which is why the --devices/--stop-device/
+# --stop-all-devices/--qmp subcommands below boot nothing at all: they are a
+# control plane over containers a PREVIOUS invocation started.
+#
+# THE HOST PORT IS ALLOCATED HERE AND NOWHERE ELSE. Only this script can pick a
+# free host port, because only it talks to the host's docker; the entrypoint
+# inside the container cannot see the host's port space at all. So the chosen
+# port is BOTH published (-p 127.0.0.1:<port>:2222) AND handed to the entrypoint
+# (-e SSH_HOST_PORT=<port>) so it can write it into the record the Studio reads.
+# Same for the container name (-e CONTAINER_NAME): inside a container
+# /etc/hostname is the short container ID, which no `docker ps` name matches.
+#
+# --qmp reset IS DESTRUCTIVE and is labelled that way everywhere it appears.
+# tests/qemu/launch-{pi,arm,x86}.sh all boot qemu with -no-reboot, under which a
+# reset request makes QEMU EXIT instead of rebooting — so a QMP system_reset
+# kills the guest. Verified here against qemu-system-x86_64 10.2.3: with
+# -no-reboot the process was gone one second after system_reset answered
+# {"return": {}}; the same qemu without -no-reboot survived it. Dropping
+# -no-reboot is not this script's call — the launchers hardcode it and the
+# assertion path shares them — so the verb keeps QEMU's own name and the runner
+# says out loud what it does.
+#
 # Examples:
 #   ./tests/qemu/run-qemu-docker.sh --list
 #   ./tests/qemu/run-qemu-docker.sh --platform rpi5
 #   ./tests/qemu/run-qemu-docker.sh --session out/sessions/20260807-071119-5c1ccb --jobs 2
+#   ./tests/qemu/run-qemu-docker.sh --platform rpi5 --keep-alive --extra-user alice
+#   ./tests/qemu/run-qemu-docker.sh --devices
+#   ./tests/qemu/run-qemu-docker.sh --qmp rpi5/pki pause
+#   ./tests/qemu/run-qemu-docker.sh --stop-all-devices
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +76,35 @@ ASSERT_TIMEOUT=""
 LIST_ONLY=false
 FORCE_BUILD=false
 KEEP=false
+KEEP_ALIVE=false
+# Extra wheel logins to add to the guest payload. Empty by default so a run with
+# no --extra-user forwards nothing and the payload stays exactly what it is today.
+EXTRA_USERS=()
+# Device control-plane subcommand, if any. Set => boot nothing, act on the
+# containers a previous --keep-alive run left up, exit.
+DEV_ACTION=""
+DEV_LABEL=""
+DEV_QMP_CMD=""
+
+# Host ports published for keep-alive devices. Loopback ONLY, and a private range
+# with nothing else in it: the operator runs a live hugmesh stack on this machine
+# and the container header (docker/Dockerfile.qemu-runner "NETWORKING NOTE") is
+# explicit that the harness has always stayed off :8080/:8443. Publishing at all
+# is new, so the range is the guard rail that keeps that promise true.
+DEV_PORT_MIN=22300
+DEV_PORT_MAX=22399
+# The port the guest's :22 is forwarded to INSIDE the container: docker-entrypoint.sh
+# SSH_PORT, which it hands to launch-*.sh --ssh-port, which spells it
+# `hostfwd=tcp::<port>-:22`. That forward has no bind address, so it listens on all
+# of the container's interfaces — which is exactly why `-p 127.0.0.1:<host>:2222`
+# can reach it while the guest itself stays unreachable from outside this host.
+GUEST_SSH_PORT=2222
+# Keep-alive containers are named per ROW, not per PID like the test containers
+# below. --stop-device and --qmp run in a LATER invocation of this script and have
+# to find the container again; a name derived from $$ would be unfindable, and a
+# second --keep-alive run of the same row would silently start a rival container
+# fighting the first one for the same registry record and run dir.
+DEV_NAME_PREFIX="hugmesh-qemu-dev-"
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[qemu-docker]${RST} $*"; }
@@ -74,7 +136,29 @@ Usage: $0 [OPTIONS]
   --list            enumerate the rows that WOULD run, then exit
   --build-image     (re)build the runner image before running
   --keep            keep per-run scratch dirs
+  --keep-alive      leave every device RUNNING after its assertions instead of
+                    powering it off, publish its ssh on a free loopback port in
+                    ${DEV_PORT_MIN}-${DEV_PORT_MAX}, and write the device registry the
+                    Studio reads. Returns as soon as the containers are up — the
+                    guests are still booting — so -j/--jobs has nothing left to
+                    schedule and is ignored.
+  --extra-user NAME additional wheel login on the guest, repeatable. Forwarded to
+                    the container payload. Root ssh stays off (assertions.sh
+                    asserts PermitRootLogin no), so a superuser shell is one of
+                    these logins plus 'sudo -i'.
   -h, --help
+
+Device subcommands. These boot, build and decompress NOTHING, and are safe to
+run while a matrix or a set of devices is up:
+  --devices             print the device registry as one JSON array, then exit
+  --stop-device LABEL   stop one device ("rpi5/pki", or "rpi5_pki" as filed)
+  --stop-all-devices    stop every device container this harness started
+  --qmp LABEL CMD       drive a running device's QEMU monitor over its QMP
+                        socket, via 'docker exec' on that device's container.
+                        CMD: pause | resume | powerdown | status | reset
+                        reset is DESTRUCTIVE: the launchers boot with -no-reboot,
+                        under which QEMU EXITS on a reset instead of rebooting,
+                        so the guest goes down and has to be started again.
 EOF
 exit "${1:-0}"
 }
@@ -96,6 +180,18 @@ while [[ $# -gt 0 ]]; do
         --list)         LIST_ONLY=true; shift ;;
         --build-image)  FORCE_BUILD=true; shift ;;
         --keep)         KEEP=true; shift ;;
+        --keep-alive)   KEEP_ALIVE=true; shift ;;
+        # The new options check their operands before indexing: under `set -u` a
+        # missing "$2"/"$3" aborts with "unbound variable", which names the
+        # shell's problem rather than the operator's.
+        --extra-user)   [ $# -ge 2 ] || { echo "--extra-user needs a login name" >&2; usage 1; }
+                        EXTRA_USERS+=("$2"); shift 2 ;;
+        --devices)          DEV_ACTION="devices"; shift ;;
+        --stop-device)      [ $# -ge 2 ] || { echo "--stop-device needs a device label" >&2; usage 1; }
+                            DEV_ACTION="stop"; DEV_LABEL="$2"; shift 2 ;;
+        --stop-all-devices) DEV_ACTION="stop-all"; shift ;;
+        --qmp)          [ $# -ge 3 ] || { echo "--qmp needs LABEL and a command" >&2; usage 1; }
+                        DEV_ACTION="qmp"; DEV_LABEL="$2"; DEV_QMP_CMD="$3"; shift 3 ;;
         -h|--help)      usage 0 ;;
         *)              echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -107,6 +203,507 @@ done
 # into the argv below and come back as "Unknown arg" instead of the real cause.
 [ -z "${ASSERT_TIMEOUT}" ] || [[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
     || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
+
+# Same reasoning one step further: an --extra-user value is not just an argv item
+# here, it becomes a LOGIN NAME created on the guest. Reject anything useradd
+# would refuse (or that would word-split on the way into the container argv) at
+# the entry point, where the operator can still see which value was wrong.
+for _u in "${EXTRA_USERS[@]}"; do
+    [[ "${_u}" =~ ^[a-z_][a-z0-9_-]*$ ]] \
+        || die "--extra-user must be a valid unix login (^[a-z_][a-z0-9_-]*$), got '${_u}'"
+done
+unset _u
+
+# ══ Device control plane (registry, ssh publishing, QMP) ════════════════════
+# Everything down to the dispatch below works on ${WORK}/devices/<label>.json,
+# the per-device record docker-entrypoint.sh writes in --keep-alive mode. The
+# Studio reads those records directly (studio/hugmesh_studio/core/qemu_devices.py);
+# the subcommands here are the same control plane for the command line, and for
+# the Studio's stop/QMP buttons, which shell out to this script.
+
+safe_label() { printf '%s\n' "$1" | tr '/+' '__'; }   # same rule as RESULT_JSON
+
+# The two directories the control plane owns, derived from whichever ${WORK} the
+# caller ended up with. A2 fixes the registry as ${WORK}/devices/<safe>.json and
+# NOTHING else: consumers iterate that directory and open every entry, so a lock
+# dir in there is an IsADirectoryError for a reader that does not filter on
+# ".json". The port locks therefore live beside it, not inside it.
+set_device_paths() {
+    DEVICES_DIR="${WORK}/devices"
+    PORTLOCK_DIR="${WORK}/.portlocks"
+}
+
+need_docker() {
+    command -v docker >/dev/null || die "docker not found"
+    docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (is your user in the 'docker' group?)"
+}
+
+# python3 does the JSON work for the subcommands below, on the HOST. It is not a
+# new dependency in practice — the Studio that consumes this registry IS a python
+# app — and it reads and REWRITES records (state -> stopped) atomically, which is
+# more than the jq the summary already uses would do for us. The QMP client is a
+# separate question and a separate interpreter: it runs inside the container,
+# where there is no python3 at all (see QMP_PERL).
+need_python() {
+    command -v python3 >/dev/null || die "python3 not found (needed for the device subcommands)"
+}
+
+device_record_path() {
+    local label="$1" p
+    p="${DEVICES_DIR}/$(safe_label "${label}").json"
+    [ -f "${p}" ] && { printf '%s\n' "${p}"; return 0; }
+    # Accept the on-disk spelling too, for anyone who read the name off the
+    # directory listing ("rpi5_pki") instead of the label ("rpi5/pki").
+    p="${DEVICES_DIR}/${label}.json"
+    [ -f "${p}" ] && { printf '%s\n' "${p}"; return 0; }
+    return 1
+}
+
+# record_field FILE KEY -> value on stdout, empty if the record is unreadable.
+record_field() {
+    need_python
+    python3 - "$1" "$2" <<'PYFIELD'
+import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        rec = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+if not isinstance(rec, dict):
+    sys.exit(0)
+val = rec.get(sys.argv[2], "")
+sys.stdout.write("" if val is None else str(val))
+PYFIELD
+}
+
+registry_containers() {
+    [ -d "${DEVICES_DIR}" ] || return 0
+    need_python
+    python3 - "${DEVICES_DIR}" <<'PYNAMES'
+import json, os, sys
+for name in sorted(os.listdir(sys.argv[1])):
+    if not name.endswith(".json"):
+        continue
+    try:
+        with open(os.path.join(sys.argv[1], name), "r", encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        continue
+    if isinstance(rec, dict) and rec.get("container"):
+        print(rec["container"])
+PYNAMES
+}
+
+# Flip one record to state "stopped". Best effort on purpose: the record is
+# written from INSIDE the container, so its ownership on the host is the
+# entrypoint's business, not this script's; the replacement goes through a rename
+# in the registry DIRECTORY (created host-side by the keep-alive path below),
+# which is the part this script can rely on. Correctness does not depend on it
+# working — cmd_devices reconciles against `docker ps` on the way out regardless
+# — it just keeps the file honest for readers that do not, such as
+# core/qemu_devices.py discover_devices().
+mark_record_stopped() {
+    [ -f "$1" ] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    python3 - "$1" <<'PYSTOP'
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        rec = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+if not isinstance(rec, dict) or rec.get("state") == "stopped":
+    sys.exit(0)
+rec["state"] = "stopped"
+tmp = "%s.tmp.%d" % (path, os.getpid())   # pid-tagged: two stops can overlap
+try:
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, indent=2)
+        fh.write("\n")
+    # Atomic: --devices in another process may be reading this very file, and a
+    # truncated record there would be indistinguishable from a corrupt one.
+    os.replace(tmp, path)
+except OSError:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+PYSTOP
+}
+
+cmd_devices() {
+    need_python
+    local answered=0 names=""
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        names="$(docker ps --format '{{.Names}}' 2>/dev/null)"; answered=1
+    fi
+    DOCKER_ANSWERED="${answered}" RUNNING_NAMES="${names}" \
+    python3 - "${DEVICES_DIR}" <<'PYDEV'
+import json, os, sys
+
+devices_dir = sys.argv[1]
+answered = os.environ.get("DOCKER_ANSWERED") == "1"
+running = {n for n in os.environ.get("RUNNING_NAMES", "").splitlines() if n}
+
+out = []
+try:
+    entries = sorted(os.listdir(devices_dir))
+except OSError:
+    entries = []                       # no devices dir yet: an empty array, not an error
+for name in entries:
+    if not name.endswith(".json"):
+        continue
+    try:
+        with open(os.path.join(devices_dir, name), "r", encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        continue                       # torn or hand-mangled record: skip it, never abort
+    if not isinstance(rec, dict):
+        continue
+    # Reconcile against reality, downgrade only. A container that was killed
+    # (docker kill, OOM, daemon restart) never gets to rewrite its own record, so
+    # a stale "running" would have the Studio offer a shell into a device that is
+    # gone. Only trust this when the daemon actually answered.
+    if answered and rec.get("state") not in ("stopped", "") \
+            and rec.get("container") not in running:
+        rec["state"] = "stopped"
+    out.append(rec)
+out.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)   # newest first
+json.dump(out, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PYDEV
+}
+
+# ONE ownership test, applied to EVERY docker verb this script aims at a
+# container name that came out of a data file.
+#
+# The operator's live hugmesh stack runs on this same machine: a hand-edited,
+# truncated or stale record naming one of ITS containers must not be able to turn
+# --stop-all-devices into an outage — nor `--qmp` into a root `docker exec` on a
+# production container. Every container we start is named ${DEV_NAME_PREFIX}<row>,
+# so the prefix is a complete and cheap test, and it is cheap enough that there
+# is no excuse for applying it to only one of the two call sites.
+own_container() {
+    local name="$1" verb="$2" label="${3:-}"
+    case "${name}" in
+        "${DEV_NAME_PREFIX}"*) return 0 ;;
+    esac
+    warn "refusing to ${verb} '${name}'${label:+ (${label})}: not a ${DEV_NAME_PREFIX}* container started by this harness"
+    return 1
+}
+
+# Is this container up right now? One question, one place — asked by the device
+# start path, by --qmp before it execs, and again after a destructive reset.
+container_is_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]
+}
+
+# Stop exactly one container, refusing anything this harness did not start.
+stop_one_container() {
+    local name="$1" label="${2:-}"
+    own_container "${name}" "stop" "${label}" || return 1
+    docker stop "${name}" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+# ── Host-port allocation ────────────────────────────────────────────────────
+# A device's host ssh port is allocated HERE, and it has to be exclusive in two
+# directions at once:
+#
+#   * WITHIN one run. Rows are started one after another in this same process,
+#     and nothing observable changes between them fast enough to be a reliable
+#     signal — `docker run -d` returns before the guest exists, and a published
+#     port does not necessarily appear in `ss` at all (with the daemon started
+#     --userland-proxy=false, publishing is DNAT with no listening socket on the
+#     host). So this process remembers what it has handed out: DEV_PORTS_TAKEN.
+#   * ACROSS concurrent runs and across invocations. A second run of this script
+#     (or the Studio's per-device start button) must not pick a port that a
+#     device from another run is already using. That is what the claim
+#     directories under ${WORK}/.portlocks are for, plus docker's own published-
+#     port table, which is authoritative for every container the daemon runs.
+#
+# Docker refusing a duplicate bind is the LAST line, not the mechanism: it costs
+# a container create+remove per collision, and there are 33 rows in the matrix.
+DEV_PORTS_TAKEN=()
+
+# Every host port docker has published, straight from the daemon that owns them.
+# `{{.Ports}}` is e.g. "127.0.0.1:22300->2222/tcp, 0.0.0.0:8080->80/tcp"; the
+# last colon before "->" starts the host port. This covers the operator's live
+# stack as well as our own devices, and it works with or without the userland
+# proxy because it asks docker rather than the kernel.
+docker_published_ports() {
+    docker ps --format '{{.Ports}}' 2>/dev/null | tr ',' '\n' \
+        | sed -n 's/.*:\([0-9][0-9]*\)->.*/\1/p'
+}
+
+# A claim is a DIRECTORY: mkdir(2) either creates it or fails, with no window
+# between test and create, so two runs starting in the same second cannot both
+# believe they own a port. The claim then names its container, and is held for as
+# long as that container runs — not just for the instant of choosing — because
+# the port stays bound for exactly that long.
+claim_port() {
+    local p="$1" owner="$2"
+    local dir="${PORTLOCK_DIR}/${p}"
+    mkdir -p "${PORTLOCK_DIR}" 2>/dev/null || return 1
+    if mkdir "${dir}" 2>/dev/null; then
+        printf '%s\n' "${owner}" > "${dir}/owner" 2>/dev/null || true
+        return 0
+    fi
+    port_claim_is_stale "${p}" || return 1
+    # Stale: the container that held it is gone. Two racers can both reclaim
+    # here; that costs one rejected `docker run` and a retry, never a wrong bind,
+    # because a stale claim by definition guards a port nothing is bound to.
+    rm -f "${dir}/owner" 2>/dev/null || true
+    rmdir "${dir}" 2>/dev/null || true
+    mkdir "${dir}" 2>/dev/null || return 1
+    printf '%s\n' "${owner}" > "${dir}/owner" 2>/dev/null || true
+    return 0
+}
+
+# Held claims must not outlive their container, or a crashed run burns a port
+# until someone deletes ${WORK}. The holder is named in the claim's "owner" file,
+# and that name is checked against the daemon.
+port_claim_is_stale() {
+    local dir="${PORTLOCK_DIR}/$1" owner
+    owner="$(cat "${dir}/owner" 2>/dev/null || true)"
+    if [ -n "${owner}" ]; then
+        # Only the daemon can answer this, so when it does not answer at all the
+        # conservative reading is "still held" — never steal a claim blind.
+        docker info >/dev/null 2>&1 || return 1
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -qxF "${owner}" && return 1
+        return 0
+    fi
+    # No owner recorded: a claim caught between mkdir and `docker run`. Age it
+    # out so a run killed inside that window cannot hold the port forever.
+    [ -n "$(find "${dir}" -maxdepth 0 -mmin +5 2>/dev/null)" ]
+}
+
+# Drop a claim, but only one this device actually owns: a stale record naming
+# someone else's port must not be able to hand a LIVE port to the next run.
+release_port() {
+    local p="$1" owner="${2:-}" held
+    local dir="${PORTLOCK_DIR}/${p}"
+    [ -d "${dir}" ] || return 0
+    held="$(cat "${dir}/owner" 2>/dev/null || true)"
+    if [ -n "${owner}" ] && [ -n "${held}" ] && [ "${held}" != "${owner}" ]; then
+        return 0
+    fi
+    rm -f "${dir}/owner" 2>/dev/null || true
+    rmdir "${dir}" 2>/dev/null || true
+    return 0
+}
+
+# The claim belonging to a device record, released when that device is stopped.
+release_port_for_record() {
+    local rec="$1" port
+    port="$(record_field "${rec}" ssh_host_port)"
+    [[ "${port}" =~ ^[0-9]+$ ]] || return 0
+    [ "${port}" -gt 0 ] || return 0            # 0 = the device published nothing
+    release_port "${port}" "$(record_field "${rec}" container)"
+}
+
+# Mark every record whose container is no longer running. Used after a stop, so
+# the registry agrees with docker even for readers that never ask docker.
+reconcile_stopped_records() {
+    local running rec cname
+    running="$(docker ps --format '{{.Names}}' 2>/dev/null)"
+    for rec in "${DEVICES_DIR}"/*.json; do
+        [ -f "${rec}" ] || continue
+        cname="$(record_field "${rec}" container)"
+        [ -n "${cname}" ] || continue
+        grep -qxF "${cname}" <<< "${running}" && continue
+        mark_record_stopped "${rec}"
+        release_port_for_record "${rec}"
+    done
+}
+
+cmd_stop_device() {
+    local label="$1" rec name
+    need_docker
+    rec="$(device_record_path "${label}")" \
+        || die "no device record for '${label}' under ${DEVICES_DIR} (--devices to list what is there)"
+    name="$(record_field "${rec}" container)"
+    [ -n "${name}" ] || die "device record ${rec} names no container"
+    # `docker stop`, not `docker rm`: the exited container's `docker logs` is the
+    # only post-mortem a keep-alive device has (its console never reached a
+    # terminal, it was started detached). The next --keep-alive run of the same
+    # row clears it out of the way.
+    stop_one_container "${name}" "${label}" \
+        || die "could not stop container ${name} for ${label} (already gone? --devices to check)"
+    mark_record_stopped "${rec}"
+    release_port_for_record "${rec}"
+    info "stopped ${label} (container ${name})"
+}
+
+cmd_stop_all() {
+    need_docker
+    local names name stopped=0
+    # Union of the registry and a name-prefix scan. A device whose record never
+    # landed still has a container burning host CPU — the entrypoint only writes
+    # the record once the guest answers ssh, and TCG guests take minutes to get
+    # there — and "stop every device" has to mean every device.
+    names="$( { docker ps --format '{{.Names}}' --filter "name=^${DEV_NAME_PREFIX}" 2>/dev/null
+                registry_containers; } | sort -u )"
+    if [ -z "${names}" ]; then info "no device containers to stop"; return 0; fi
+    while IFS= read -r name; do
+        [ -n "${name}" ] || continue
+        stop_one_container "${name}" || continue
+        info "stopped container ${name}"
+        stopped=$((stopped+1))
+    done <<< "${names}"
+    reconcile_stopped_records
+    info "${stopped} device container(s) stopped"
+}
+
+# ── QMP ─────────────────────────────────────────────────────────────────────
+# The names the operator types are not the names QEMU answers to.
+qmp_command_for() {
+    case "$1" in
+        pause)     printf 'stop\n' ;;
+        resume)    printf 'cont\n' ;;
+        reset)     printf 'system_reset\n' ;;
+        powerdown) printf 'system_powerdown\n' ;;
+        status)    printf 'query-status\n' ;;
+        *)         return 1 ;;
+    esac
+}
+
+# The registry records HOST paths so the Studio can use them directly (the
+# entrypoint resolves them through HOST_WORK before writing), but a record
+# written without HOST_WORK carries the CONTAINER path instead. Either way the
+# bytes are the same file — /work IS ${WORK} — so mapping a host path back is
+# just a prefix swap, and a path that is already container-side passes through.
+container_path_for() {
+    case "$1" in
+        "${WORK}"/*) printf '%s\n' "/work/${1#${WORK}/}" ;;
+        *)           printf '%s\n' "$1" ;;
+    esac
+}
+
+# The QMP client, in perl, executed INSIDE the device container by `docker exec`.
+#
+# WHY NOT FROM THE HOST. qemu creates its QMP socket mode 0750 (checked here
+# against qemu-system-x86_64 10.2.3: srwxr-x---) owned by the user it runs as —
+# and in this harness that user is root inside the container. connect(2) on a
+# unix socket needs write permission, so the operator's uid is locked out of a
+# path it can otherwise see perfectly well through the /work bind mount.
+# `docker exec` runs as root in that container, which is the whole reason
+# core/qemu_devices.py's qmp_argv() shells out to this script instead of opening
+# the socket itself: this is the one place in the system that can talk to it.
+#
+# WHY PERL. docker/Dockerfile.qemu-runner installs no python3, no socat and no
+# netcat, and bash cannot open an AF_UNIX socket at all — but perl is Essential
+# in Debian, so the bookworm-slim base the image is built FROM already has it,
+# Socket module included. Checked by running this exact program inside
+# debian:bookworm-slim against a live qemu QMP socket: query-status answered
+# {"return": {"status": "prelaunch", "running": false}} and a bogus verb answered
+# {"error": {"class": "CommandNotFound", ...}} with exit 1.
+#
+# The program is passed as ONE argv element to `docker exec ... perl -e`, with
+# the socket path and the QMP verb as its own arguments — no `sh -c`, so nothing
+# from a record or a label is ever parsed as shell. ${cmd} is interpolated into
+# the JSON, and that is safe for one specific reason: it is never operator text,
+# only one of the five literals qmp_command_for() emits.
+QMP_PERL="$(cat <<'PERLQMP'
+use strict; use warnings; use Socket;
+my ($path, $cmd) = @ARGV;
+$SIG{ALRM} = sub { print STDERR "qmp: timed out talking to $path\n"; exit 4 };
+alarm 15;
+socket(my $S, AF_UNIX, SOCK_STREAM, 0) or do { print STDERR "qmp: socket(): $!\n"; exit 4 };
+connect($S, sockaddr_un($path)) or do { print STDERR "qmp: cannot connect to $path: $!\n"; exit 3 };
+select((select($S), $| = 1)[0]);
+# QMP is one JSON message per line, and it interleaves asynchronous EVENTS with
+# command replies, so read past anything that is not an answer: an event object
+# carries "event"/"data" and neither of the keys matched here.
+sub reply { while (my $l = <$S>) { return $l if $l =~ /"(?:return|error)"\s*:/ } return undef }
+print $S "{\"execute\":\"qmp_capabilities\"}\n";
+defined reply() or do { print STDERR "qmp: no reply to qmp_capabilities\n"; exit 4 };
+print $S "{\"execute\":\"$cmd\"}\n";
+my $r = reply();
+defined $r or do { print STDERR "qmp: no reply to $cmd\n"; exit 4 };
+print $r;
+exit($r =~ /"error"\s*:/ ? 1 : 0);
+PERLQMP
+)"
+
+# One QMP conversation. Exit status is the perl client's: 0 = QMP returned,
+# 1 = QMP error, 3 = could not connect, 4 = protocol/timeout. docker reports its
+# OWN failures in the 125-127 range (126/127 = it could not exec the command),
+# which cmd_qmp translates below rather than passing off as a QMP error.
+qmp_exec() {
+    local name="$1" csock="$2" cmd="$3"
+    docker exec -u 0 "${name}" perl -e "${QMP_PERL}" "${csock}" "${cmd}"
+}
+
+cmd_qmp() {
+    local label="$1" action="$2" qcmd rec sock csock name rc waited
+    qcmd="$(qmp_command_for "${action}")" \
+        || die "unknown --qmp command '${action}' (pause|resume|reset|powerdown|status)"
+    rec="$(device_record_path "${label}")" \
+        || die "no device record for '${label}' under ${DEVICES_DIR} (--devices to list what is there)"
+    sock="$(record_field "${rec}" qmp)"
+    [ -n "${sock}" ] || die "device '${label}' has no qmp socket recorded (started without --keep-alive?)"
+    name="$(record_field "${rec}" container)"
+    [ -n "${name}" ] || die "device record ${rec} names no container"
+    need_docker
+    # Same guard as stop_one_container, and for a sharper reason: this ends in a
+    # root `docker exec`, and the name came out of a file on disk.
+    own_container "${name}" "talk QMP to" "${label}" || return 1
+    container_is_running "${name}" \
+        || die "device '${label}' is not running (container ${name}); --devices to check, or start it again with --keep-alive --only '${label}'"
+    # The record advertises HOST paths, because everything else that reads it
+    # runs on the host. This is the one consumer that runs INSIDE the container.
+    csock="$(container_path_for "${sock}")"
+
+    if [ "${action}" = "reset" ]; then
+        warn "reset is DESTRUCTIVE: ${label} boots with -no-reboot, so QEMU EXITS on system_reset instead of rebooting. The guest goes DOWN."
+    fi
+    qmp_exec "${name}" "${csock}" "${qcmd}"; rc=$?
+    case "${rc}" in
+        12[567]) warn "docker exec could not run perl in ${name} (rc=${rc}); the runner image is expected to provide it" ;;
+    esac
+    if [ "${action}" != "reset" ] || [ "${rc}" -ne 0 ]; then
+        return "${rc}"
+    fi
+
+    # Report what the reset actually did rather than leaving a "running" record
+    # behind a dead guest. docker-entrypoint.sh's keep-alive hold ends when its
+    # qemu is gone, so the container normally follows within seconds; if it has
+    # not gone after 15s, say exactly that instead of guessing.
+    for (( waited=0; waited<15; waited++ )); do
+        container_is_running "${name}" || break
+        sleep 1
+    done
+    if container_is_running "${name}"; then
+        warn "${label}: system_reset issued, but container ${name} is still up after 15s — check '--devices'"
+    else
+        mark_record_stopped "${rec}"
+        release_port_for_record "${rec}"
+        info "${label} is DOWN: qemu exited on system_reset. Start it again with --keep-alive --only '${label}'"
+    fi
+    return 0
+}
+
+if [ -n "${DEV_ACTION}" ]; then
+    # These run BEFORE artifact resolution and before the docker-daemon probe on
+    # purpose. Artifact resolution die()s when the newest session holds no image,
+    # which has nothing to do with stopping a device that is already running; and
+    # --devices is a plain file read that must still work with docker stopped.
+    # readlink -m, not -f: --devices on a work dir that was never created should
+    # print [] rather than fail, and must not create the directory as a side
+    # effect of being asked a read-only question.
+    WORK="$(readlink -m "${WORK}")"
+    set_device_paths
+    case "${DEV_ACTION}" in
+        devices)  cmd_devices ;;
+        stop)     cmd_stop_device "${DEV_LABEL}" ;;
+        stop-all) cmd_stop_all ;;
+        qmp)      cmd_qmp "${DEV_LABEL}" "${DEV_QMP_CMD}" ;;
+        *)        die "internal: unknown device action '${DEV_ACTION}'" ;;
+    esac
+    exit $?
+fi
 
 command -v docker >/dev/null || die "docker not found"
 docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (is your user in the 'docker' group?)"
@@ -333,6 +930,204 @@ done
 # can still delete each other's cached images — the loser re-decompresses, which
 # costs time, not correctness, since /artifacts is read-only and untouched.
 
+
+# ── Keep-alive: start the devices and leave them up ─────────────────────────
+# A test run boots, asserts and powers the guest off; --keep-alive starts the
+# same container with the same arguments plus --keep-alive, publishes its ssh,
+# and returns. Nothing below waits: the guests are minutes from answering ssh
+# (aarch64 is pure TCG on this host) and the point of the mode is that the
+# operator gets the prompt back and drives the devices from the Studio.
+set_device_paths
+
+port_free() {
+    local p="$1"
+    # ss sees a listener on ANY address, which matters because the thing we must
+    # never collide with (the operator's live stack) binds 0.0.0.0, not loopback.
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -ltn "sport = :${p}" 2>/dev/null | grep -q . && return 1
+        return 0
+    fi
+    # No iproute2: a connect probe still catches anything actually accepting.
+    # bash's /dev/tcp is a builtin, so this adds no dependency of its own.
+    if (exec 3<>"/dev/tcp/127.0.0.1/${p}") 2>/dev/null; then return 1; fi
+    return 0
+}
+
+# The ports still worth trying, best first. Three independent exclusions, none
+# of which is sufficient alone (see the DEV_PORTS_TAKEN block above): what this
+# process has already handed out, what docker has published for ANY container,
+# and what something on the host is listening on.
+candidate_ports() {
+    local busy p
+    busy=" ${DEV_PORTS_TAKEN[*]-} $(docker_published_ports | tr '\n' ' ') "
+    for (( p=DEV_PORT_MIN; p<=DEV_PORT_MAX; p++ )); do
+        case "${busy}" in *" ${p} "*) continue ;; esac
+        port_free "${p}" || continue
+        printf '%s\n' "${p}"
+    done
+}
+
+# --extra-user has no environment spelling, so it has to be argv. That is safe
+# for the entrypoint that will actually run: docker/Dockerfile.qemu-runner's shim
+# prefers the bind-mounted /src copy, which is THIS checkout's, over the baked
+# one. Every name was validated against ^[a-z_][a-z0-9_-]*$ at parse time.
+EXTRA_USER_ARGS=()
+for _u in "${EXTRA_USERS[@]}"; do EXTRA_USER_ARGS+=(--extra-user "${_u}"); done
+unset _u
+
+start_device_row() {
+    local platform="$1" role="$2" img="$3"
+    local label="${platform}/${role}"
+    local safe; safe="$(safe_label "${label}")"
+    local name="${DEV_NAME_PREFIX}${safe}"
+    # `chosen` is set ONLY once docker has actually bound the port, so no exit
+    # from the loop below can be mistaken for a successful start.
+    local port err rc chosen=""
+
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qxF "${name}"; then
+        warn "${label} is already up as ${name} — leaving it alone (--stop-device '${label}' first to replace it)"
+        return 0
+    fi
+    # An exited container of this name is kept on purpose by --stop-device (its
+    # `docker logs` is the only post-mortem a detached device has). Now that the
+    # row is being started again, that copy is in the way of the name.
+    docker rm "${name}" >/dev/null 2>&1 || true
+
+    while IFS= read -r port; do
+        # Belt and braces. The candidate list is generated from the range, but
+        # this is the single line that decides what gets bound on the host, and
+        # the one promise that must never break is that it is neither :8080 nor
+        # :8443 nor anything else the live stack might want.
+        if [ "${port}" -lt "${DEV_PORT_MIN}" ] || [ "${port}" -gt "${DEV_PORT_MAX}" ]; then
+            warn "refusing to publish out-of-range port ${port}"; continue
+        fi
+        claim_port "${port}" "${name}" || continue
+
+        # THE PORT GOES IN TWICE, and both halves are load-bearing:
+        #   -p 127.0.0.1:<port>:2222  makes it reachable from the host, loopback
+        #                             only, so an emulated device is never exposed
+        #                             off this workstation;
+        #   -e SSH_HOST_PORT=<port>   tells the entrypoint which number to write
+        #                             into the device record. Nothing inside the
+        #                             container can work it out: the guest forward
+        #                             is on ${GUEST_SSH_PORT} in there, and the
+        #                             host side of a published port is invisible to
+        #                             it. Without this the record says 0, and
+        #                             core/qemu_devices.py ssh_argv() then builds
+        #                             `ssh -p 0` — a terminal button that cannot
+        #                             connect to anything.
+        # -e CONTAINER_NAME is the same shape of problem: /etc/hostname inside a
+        # container is the short container ID, and A2's "container" field has to
+        # be the NAME, or --stop-device and the `docker ps` reconciliation in
+        # cmd_devices can never match a record to its container.
+        # docker-entrypoint.sh takes HOST_UID, HOST_GID, HOST_WORK, SSH_HOST_PORT
+        # and CONTAINER_NAME from the environment; the last three also have flag
+        # spellings (--host-work/--ssh-host-port/--container). The env spelling is
+        # used wherever there is a choice because an unread variable costs
+        # nothing, while an option the entrypoint does not know is fatal to it —
+        # its argument loop ends in `echo "Unknown arg"; usage 1`. --keep-alive
+        # and --extra-user have no env spelling, so they must be argv; that is
+        # safe because Dockerfile.qemu-runner's shim prefers the /src copy
+        # mounted just below, which is THIS checkout's entrypoint.
+        #
+        # -d, and no --rm: the container has to outlive this script, and a
+        # stopped device keeps its logs. --keep because the run dir holds the ssh
+        # key the Studio logs in with and the qcow2 the guest is still writing to;
+        # the entrypoint's cleanup deletes that overlay without it.
+        err="$(docker run -d --privileged "${KVM_ARGS[@]}" \
+            --name "${name}" \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            -e HOST_WORK="${WORK}" \
+            -e SSH_HOST_PORT="${port}" \
+            -e CONTAINER_NAME="${name}" \
+            -p "127.0.0.1:${port}:${GUEST_SSH_PORT}" \
+            -v "${REPO_DIR}":/src:ro \
+            -v "${ARTIFACTS}":/artifacts:ro \
+            -v "${WORK}":/work \
+            "${IMAGE_TAG}" \
+            --platform "${platform}" --role "${role}" --mode "${MODE}" \
+            --img "/artifacts/$(basename "${img}")" \
+            --mem "${MEM}" --smp "${SMP}" --timeout "${TIMEOUT}" \
+            ${ASSERT_TIMEOUT:+--assert-timeout "${ASSERT_TIMEOUT}"} \
+            --label "${label}" --keep --keep-alive \
+            "${EXTRA_USER_ARGS[@]}" 2>&1)"
+        rc=$?
+        if [ "${rc}" -eq 0 ]; then
+            # The claim STAYS for as long as the container does — it is what
+            # keeps the next row, and a concurrent run, off this port. It is
+            # dropped by --stop-device/--stop-all-devices, or reclaimed by
+            # claim_port once the container it names is gone.
+            chosen="${port}"
+            DEV_PORTS_TAKEN+=("${port}")
+            break
+        fi
+        release_port "${port}" "${name}"
+
+        # A bind failure is the one outcome worth retrying: something took the
+        # port between the probe and the bind. Anything else is a real error and
+        # retrying it 100 times would only bury the message.
+        docker rm -f "${name}" >/dev/null 2>&1 || true
+        case "${err}" in
+            *"already allocated"*|*"address already in use"*|*"port is already"*|*"bind for"*)
+                warn "${label}: 127.0.0.1:${port} was taken between probe and bind; trying the next port"
+                continue ;;
+            *)
+                warn "${label}: docker run failed: ${err}"
+                return 1 ;;
+        esac
+    done < <(candidate_ports)
+
+    if [ -z "${chosen}" ]; then
+        warn "${label}: no free port in ${DEV_PORT_MIN}-${DEV_PORT_MAX} (all $((DEV_PORT_MAX - DEV_PORT_MIN + 1)) taken or claimed by a concurrent run)"
+        return 1
+    fi
+
+    # `docker run -d` returns as soon as the container STARTS, so an entrypoint
+    # that rejects its arguments exits a second later and the operator is left
+    # holding a container id and no explanation — the container's output went to
+    # `docker logs`, not to this terminal. Look again and quote it back.
+    sleep 1
+    if ! container_is_running "${name}"; then
+        warn "${label}: container ${name} exited immediately. Its last words:"
+        docker logs --tail 20 "${name}" 2>&1 | sed 's/^/    /' >&2
+        release_port "${chosen}" "${name}"
+        return 1
+    fi
+    printf '%-24s %-32s %s\n' "${label}" "${name}" "127.0.0.1:${chosen}"
+    return 0
+}
+
+if ${KEEP_ALIVE}; then
+    # Create the registry directory HOST-side, before any container can. Records
+    # are written from inside the container; a directory owned by the invoking
+    # user is what lets --stop-device replace one atomically (rename needs write
+    # permission on the DIRECTORY, not on the file), and it saves the operator a
+    # sudo to clean out ${WORK}.
+    mkdir -p "${DEVICES_DIR}"
+    step "Starting ${#ROWS[@]} device(s), ssh published on 127.0.0.1:${DEV_PORT_MIN}-${DEV_PORT_MAX}"
+    [ "${JOBS}" = "1" ] || info "--jobs is ignored in --keep-alive mode (nothing is waited on); filter rows with --only/--platform if ${#ROWS[@]} concurrent guests is too many"
+    printf '%-24s %-32s %s\n' "LABEL" "CONTAINER" "SSH"
+    STARTED=0; DEV_FAILED=0
+    for r in "${ROWS[@]}"; do
+        IFS='|' read -r _rank platform role env img <<< "${r}"
+        if start_device_row "${platform}" "${role}" "${img}"; then
+            STARTED=$((STARTED+1))
+        else
+            DEV_FAILED=$((DEV_FAILED+1))
+        fi
+    done
+    echo "----------------------------------------------------------------------"
+    echo "${STARTED} device(s) starting, ${DEV_FAILED} failed to start"
+    # Said plainly because it is the one surprise of this mode: the guests are
+    # still booting. The record for a device appears only once its guest answers
+    # ssh, so --devices is empty for a while and that is not a fault.
+    echo "Devices are BOOTING; each record appears in ${DEVICES_DIR} once its guest answers ssh."
+    echo "  $0 --work '${WORK}' --devices"
+    echo "  $0 --work '${WORK}' --qmp <label> status"
+    echo "  $0 --work '${WORK}' --stop-all-devices"
+    [ "${DEV_FAILED}" -eq 0 ]
+    exit $?
+fi
 
 step "Running ${#ROWS[@]} row(s), ${JOBS} at a time"
 FAILED=0

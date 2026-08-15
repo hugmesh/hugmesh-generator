@@ -63,6 +63,7 @@ KEEP=false                     # keep RUN_DIR (and overlay) on exit
 FOREGROUND=false               # -nographic in the foreground instead of -daemonize
 EXTRA_APPEND=""                # extra kernel cmdline appended verbatim
 KEYS_IMG=""                    # optional FAT32 "KEYS" disk (provisioning tests)
+QMP_SOCK=""                    # optional QMP unix socket (--qmp); empty keeps -monitor none
 
 usage() {
 cat <<EOF
@@ -99,6 +100,8 @@ Port forwards (host -> guest):
 Lifecycle:
   -t, --timeout SEC    Boot/SSH wait budget (info only here). Default: ${TIMEOUT}
       --keys-img FILE  Attach a FAT32 "KEYS" disk (provisioning tests).
+      --qmp PATH       Listen for QMP on the unix socket PATH (pause/resume/reset/
+                       powerdown of the running guest). Omitted => -monitor none.
       --foreground     Run -nographic attached to this terminal (no -daemonize).
       --keep           Don't delete the run dir / overlay on exit.
   -h, --help           Show this help.
@@ -133,6 +136,7 @@ while [[ $# -gt 0 ]]; do
         --hs-port)         HS_PORT="$2"; shift 2 ;;
         -t|--timeout)      TIMEOUT="$2"; shift 2 ;;
         --keys-img)        KEYS_IMG="$2"; shift 2 ;;
+        --qmp)             QMP_SOCK="$2"; shift 2 ;;
         --foreground)      FOREGROUND=true; shift ;;
         --keep)            KEEP=true; shift ;;
         -h|--help)         usage 0 ;;
@@ -260,6 +264,29 @@ if [ -n "${KEYS_IMG}" ]; then
     QEMU_ARGS+=(-drive "file=${KEYS_IMG},format=raw,if=none,id=keys,readonly=on"
                 -device virtio-blk-pci,drive=keys)
     info "keys   : ${KEYS_IMG} (attached as a virtio KEYS disk)"
+fi
+# Optional QMP control socket. Without --qmp nothing changes: the daemonized
+# launch below still passes -monitor none, so a booted guest cannot be steered at
+# all. With it, a controller gets an endpoint for stop / cont / system_reset /
+# system_powerdown on the SAME qemu the assertions ran against.
+# 'nowait' is load-bearing, not decoration: with `server` alone QEMU prints
+# "QEMU waiting for connection on: ..." and blocks before starting, so the
+# -daemonize below never returns (checked here against qemu-system-x86_64 10.2.3:
+# server,nowait daemonizes with the socket already bound; plain server hung until
+# it was killed). A leftover socket at PATH is harmless — QEMU replaces it on
+# bind and unlinks it again when the guest exits.
+if [ -n "${QMP_SOCK}" ]; then
+    # Daemonized as root inside the runner container, where only RUN_DIR is
+    # guaranteed to exist — create the parent rather than assume the caller did.
+    mkdir -p "$(dirname "${QMP_SOCK}")" || die "cannot create the --qmp socket dir for ${QMP_SOCK}"
+    # AF_UNIX sun_path is 108 bytes including the NUL, and QEMU rejects longer
+    # paths outright ("UNIX socket path '...' is too long / Path must be less
+    # than 108 bytes"). Daemonized, that error would only ever reach the launch
+    # log, so fail here where the caller still sees the offending path.
+    [ "${#QMP_SOCK}" -le 107 ] || die \
+        "--qmp path is ${#QMP_SOCK} bytes; AF_UNIX allows at most 107: ${QMP_SOCK}"
+    QEMU_ARGS+=(-qmp "unix:${QMP_SOCK},server,nowait")
+    info "qmp    : ${QMP_SOCK} (pause/resume/reset/powerdown)"
 fi
 
 step "Booting QEMU (machine=${QEMU_MACHINE}, cpu=${QEMU_CPU}, ${SMP} vCPU, ${MEM}M; TCG — slow)"
