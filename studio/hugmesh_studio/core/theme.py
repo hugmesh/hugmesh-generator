@@ -450,6 +450,13 @@ def css_root(tokens: dict[str, str], *, font_faces: str = "") -> str:
             twin = "--hug-" + name[len("--sd-"):]
             if twin not in tokens:
                 lines.append(f"  {twin}: {value};")
+    # BOOTSTRAP BRIDGE: emitted LAST so an explicit --bs-* already in the map wins.
+    # Bootstrap 5.3 reads these at runtime, so overriding them in this same :root
+    # restyles every Bootstrap component the fleet already ships — buttons, alerts,
+    # cards, form controls, tables — with no per-repo SCSS work at all.
+    for name, value in bootstrap_tokens(tokens).items():
+        if name not in tokens:
+            lines.append(f"  {name}: {value};")
     lines.append("}")
     body = "\n".join(lines) + "\n"
     if font_faces.strip():
@@ -513,4 +520,126 @@ def warnings(primary: str, secondary: str = "") -> list[str]:
     if _color_distance(soft, primary) > 120.0:
         out.append("primary is dark, so as TEXT it is lightened a lot to stay legible — "
                    "your accent-as-text (links/labels) will read paler than the swatch.")
+    return out
+
+
+# ── the STYLE axis: borders, radii and surfaces, ON TOP of any colour choice ────────
+#: Operator ask, 2026-08-14: "try to include more possible options and themes possible
+#: through bootstrap with different styles on top of different colors and borders etc".
+#:
+#: Deliberately ORTHOGONAL to colour. A style says how surfaces are SHAPED — corner
+#: radius, border weight, elevation — and never what colour they are, so any of these
+#: composes with any palette or preset instead of multiplying into a combinatorial list
+#: of "blue-rounded", "blue-square", "pink-rounded"... Six styles x 26 presets x 2 ramps
+#: is 312 themes from 34 declarations.
+#:
+#: Values are literals, not var() references, because css_root refuses non-literals —
+#: the entrypoint interpolates token text verbatim and does no CSS maths.
+STYLE_VARIANTS: dict[str, dict[str, str]] = {
+    # The shipped look: gently rounded, hairline border, subtle lift.
+    "soft": {
+        "--sd-radius": "0.5rem", "--sd-radius-sm": "0.3rem", "--sd-radius-lg": "0.85rem",
+        "--sd-border-width": "1px", "--sd-border-style": "solid",
+        "--sd-shadow-sm": "0 1px 2px rgba(0,0,0,.28)",
+        "--sd-shadow": "0 4px 14px rgba(0,0,0,.34)",
+    },
+    # No radius anywhere — the terminal/brutalist end. Reads as denser and more
+    # technical, and is what an operator running a NOC wall usually wants.
+    "sharp": {
+        "--sd-radius": "0", "--sd-radius-sm": "0", "--sd-radius-lg": "0",
+        "--sd-border-width": "1px", "--sd-border-style": "solid",
+        "--sd-shadow-sm": "none", "--sd-shadow": "none",
+    },
+    # Structure carried by BORDERS rather than shadow: the highest-contrast option for
+    # separating panes, and the one that survives a printout or a projector.
+    "outlined": {
+        "--sd-radius": "0.35rem", "--sd-radius-sm": "0.2rem", "--sd-radius-lg": "0.5rem",
+        "--sd-border-width": "2px", "--sd-border-style": "solid",
+        "--sd-shadow-sm": "none", "--sd-shadow": "none",
+    },
+    # Structure carried by ELEVATION, borders nearly gone. Material-ish.
+    "elevated": {
+        "--sd-radius": "0.75rem", "--sd-radius-sm": "0.45rem", "--sd-radius-lg": "1.1rem",
+        "--sd-border-width": "0", "--sd-border-style": "none",
+        "--sd-shadow-sm": "0 2px 6px rgba(0,0,0,.30)",
+        "--sd-shadow": "0 10px 28px rgba(0,0,0,.42)",
+    },
+    # Fully flat: no radius, no shadow, no border. Maximum density.
+    "flat": {
+        "--sd-radius": "0", "--sd-radius-sm": "0", "--sd-radius-lg": "0",
+        "--sd-border-width": "0", "--sd-border-style": "none",
+        "--sd-shadow-sm": "none", "--sd-shadow": "none",
+    },
+    # Translucent panes over the palette's background gradient. Pairs with the extended
+    # palette on purpose — it is the style that puts --sd-bg-gradient to work.
+    "glass": {
+        "--sd-radius": "0.9rem", "--sd-radius-sm": "0.55rem", "--sd-radius-lg": "1.25rem",
+        "--sd-border-width": "1px", "--sd-border-style": "solid",
+        "--sd-shadow-sm": "0 2px 10px rgba(0,0,0,.30)",
+        "--sd-shadow": "0 12px 40px rgba(0,0,0,.45)",
+        "--sd-surface-blur": "10px",
+    },
+}
+
+DEFAULT_STYLE = "soft"
+
+
+def style_tokens(variant: str = DEFAULT_STYLE) -> dict[str, str]:
+    """Shape tokens for one style. Unknown names fall back to the shipped style rather
+    than raising: a style is cosmetic, and refusing to render a theme over a typo in a
+    preset id would be a worse failure than quietly looking normal."""
+    return dict(STYLE_VARIANTS.get(variant, STYLE_VARIANTS[DEFAULT_STYLE]))
+
+
+# ── the BOOTSTRAP bridge ───────────────────────────────────────────────────────────
+#: Bootstrap 5.3 reads its own `--bs-*` custom properties at RUNTIME, so overriding them
+#: in the same :root restyles every Bootstrap component the fleet already ships —
+#: buttons, alerts, cards, form controls, tables — with no per-repo SCSS work at all.
+#: That is what makes "more themes possible through bootstrap" true rather than
+#: aspirational: the UIs are already full of `class="alert alert-warning"` and
+#: `class="container"`, and until now the theme could not touch any of it.
+#:
+#: (sd token, bs token). Only mappings whose SEMANTICS genuinely match are listed — a
+#: near-enough mapping would silently mis-colour a component, which is harder to notice
+#: and harder to undo than simply not theming it.
+_BS_COLOR_MAP: tuple[tuple[str, str], ...] = (
+    ("--sd-primary", "--bs-primary"),
+    ("--sd-secondary", "--bs-secondary"),
+    ("--sd-bg-0", "--bs-body-bg"),
+    ("--sd-text", "--bs-body-color"),
+    ("--sd-accent", "--bs-link-color"),
+    ("--sd-accent-soft", "--bs-link-hover-color"),
+    ("--sd-primary-rgb", "--bs-primary-rgb"),
+    ("--sd-secondary-rgb", "--bs-secondary-rgb"),
+)
+
+_BS_STYLE_MAP: tuple[tuple[str, str], ...] = (
+    ("--sd-radius", "--bs-border-radius"),
+    ("--sd-radius-sm", "--bs-border-radius-sm"),
+    ("--sd-radius-lg", "--bs-border-radius-lg"),
+    ("--sd-border-width", "--bs-border-width"),
+    ("--sd-border-style", "--bs-border-style"),
+    ("--sd-shadow", "--bs-box-shadow"),
+    ("--sd-shadow-sm", "--bs-box-shadow-sm"),
+)
+
+
+def bootstrap_tokens(tokens: dict[str, str]) -> dict[str, str]:
+    """The `--bs-*` overrides implied by a token map.
+
+    Derived rather than declared, so a palette or style change reaches Bootstrap
+    automatically and the two can never drift into disagreeing about the same colour.
+    Only emits a `--bs-*` the map can actually support; a missing source token is
+    skipped, leaving Bootstrap's own default in place.
+    """
+    out: dict[str, str] = {}
+    for src, dst in (*_BS_COLOR_MAP, *_BS_STYLE_MAP):
+        if src in tokens:
+            out[dst] = tokens[src]
+    # Bootstrap composes its border shorthand from these two, so a style with no border
+    # must also null the COLOR or a 0-width border still paints on some components.
+    if tokens.get("--sd-border-width") == "0":
+        out["--bs-border-color"] = "transparent"
+    elif "--sd-bg-2" in tokens:
+        out["--bs-border-color"] = tokens["--sd-bg-2"]
     return out
