@@ -239,3 +239,39 @@ def test_progress_skips_the_device_tests_without_the_opt_in(wiz):
     prog._session = SimpleNamespace(workdir="/nowhere")
     prog._maybe_qemu_tests()
     assert prog.qemu_worker is None
+
+
+def test_qemu_opt_out_on_buildpage_survives_a_page_revisit(real_wiz):
+    """Unticking the BuildPage checkbox must STAY unticked across a page revisit.
+
+    This is the operator-visible bug and it is the PRIMARY forward route, not an
+    exotic one. QemuPage.validatePage() only ever SETS cfg.qemu_e2e True, and
+    BuildPage.initializePage() calls wiz.collect_all(), which re-runs the
+    validatePage of every VISITED page. QemuPage is still visited on this route, so
+    it re-arms the flag the operator just cleared, and build.py:888 re-ticks the
+    checkbox from it — the post-build device tests then run after an explicit opt-out.
+
+    Driven through the UI only. A test that calls validatePage() directly pins the
+    mechanism and passes while this route stays broken.
+    """
+    qp = _qemu_page(real_wiz)
+    qp.build_first.setChecked(True)
+    real_wiz.next()
+    assert real_wiz.cfg.qemu_e2e is True, "build-first should arm the hook"
+
+    build = advance_to(real_wiz, wizard_mod.BuildPage)
+    build.env.setCurrentText("test")          # the checkbox is gated on --env test
+    build.qemu_e2e.setChecked(False)          # the operator opts OUT
+    build._preview()
+    assert real_wiz.cfg.qemu_e2e is False, "unticking must clear the flag"
+
+    real_wiz.back()                           # leave BuildPage...
+    real_wiz.next()                           # ...and walk straight back into it
+
+    page = real_wiz.currentPage()
+    assert isinstance(page, wizard_mod.BuildPage), \
+        f"expected to land back on BuildPage, got {type(page).__name__}"
+    assert real_wiz.cfg.qemu_e2e is False, (
+        "revisiting BuildPage re-armed qemu_e2e — the operator's opt-out was silently "
+        "reverted, so the post-build device tests would run anyway")
+    assert build.qemu_e2e.isChecked() is False, "the checkbox re-ticked itself"

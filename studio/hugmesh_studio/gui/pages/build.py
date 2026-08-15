@@ -887,6 +887,13 @@ class BuildPage(QtWidgets.QWizardPage):
         self.pentest.setChecked(c.pentest)
         self.qemu_e2e.setChecked(c.qemu_e2e)
         self._sync_qemu_e2e_gate()
+        # From here on this checkbox is the SOLE writer of cfg.qemu_e2e. QemuPage's radio
+        # seeds the field on the way in, but collect_all() re-runs the validatePage of
+        # every visited page, so without this latch a revisit of THIS page re-asserted the
+        # radio over an opt-out the operator had just made here — and line above then
+        # re-ticked the box from it. Latched on the wizard rather than read back from
+        # hasVisitedPage(), which back() pops and which therefore silently fails to hold.
+        self.wiz.qemu_e2e_owned_by_build = True
         self.extra_flags.setText(c.extra_flags)
         # mesh shows the per-image worklist summary + node-key opt-out; standalone/cloud
         # show the single-image Packages… button (each image's tri-tier package dialog).
