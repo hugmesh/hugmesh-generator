@@ -33,7 +33,20 @@
 #   /work       writable scratch  (decompressed .img, overlays, console, result)
 #
 # NETWORKING: the guest forwards stay container-local and are never published,
-# so a developer's live hugmesh-local stack keeps :8080/:8443 uncontested.
+# so a developer's live hugmesh-local stack keeps :8080/:8443 uncontested. The
+# ONE exception is --keep-alive, where run-qemu-docker.sh publishes THIS
+# container's ssh forward on a loopback-only host port from 22300-22399. The
+# guest's :8080/:8443 forwards are still never published, so the live stack
+# stays uncontested either way.
+#
+# --keep-alive: DEVICES YOU CAN LOG INTO
+# --------------------------------------
+# Default behaviour is unchanged — assert, power the guest off, exit, container
+# gone. With --keep-alive the guest is left RUNNING after the assertions and
+# this script blocks until the container is stopped, having published a device
+# record under ${WORK}/devices/ that tells the Studio everything it needs to
+# open a terminal on the device: the loopback ssh port, the HOST-side path to
+# the login key, which logins actually exist, and qemu's QMP socket.
 set -uo pipefail
 
 SRC="${SRC:-/src}"
@@ -58,6 +71,39 @@ UI_PORT="8443"
 SSH_USER="tester"
 KEEP=false
 LABEL=""
+
+KEEP_ALIVE=false
+# Extra wheel logins to create on the guest, one per --extra-user. The Studio's
+# per-device user dropdown can only offer accounts that really exist, so this
+# list and the record's "users" array are the same list by construction.
+EXTRA_USERS=()
+# QMP socket for the launcher (A5). Empty = the launcher keeps -monitor none,
+# exactly as today.
+QMP_SOCK=""
+# Host side of the /work bind mount. The device record must carry HOST paths:
+# the Studio runs on the host, where this container's /work does not exist, so
+# a /work/... ssh key path would be unusable to it. --host-work is the argv
+# spelling, HOST_WORK the environment one; both mean the same thing.
+HOST_WORK="${HOST_WORK:-}"
+# Loopback host port run-qemu-docker.sh published this container's ssh forward
+# on; 0 when nothing was published. Recorded here, never bound here — the port
+# is chosen and bound OUTSIDE, so this value can only ever arrive from the
+# caller. The two spellings are `-e SSH_HOST_PORT=<port>` alongside the matching
+# `-p 127.0.0.1:<port>:${SSH_PORT}`, and `--ssh-host-port <port>`. Nothing inside
+# this container can derive it: the guest forward is always ${SSH_PORT} in here,
+# and the published host port is not visible from within.
+SSH_HOST_PORT="${SSH_HOST_PORT:-0}"
+# This container's docker NAME, exactly as the runner passed it to `docker run
+# --name`. The Studio both stops the container by this string and matches live
+# devices against `docker ps --format '{{.Names}}'`, so it has to BE the name.
+#
+# There is deliberately no fallback to /etc/hostname: docker seeds a container's
+# hostname from the short container ID unless --hostname says otherwise, and an
+# ID never appears in a name listing. `docker stop` would still accept it, but
+# every name-matching consumer would conclude the device is gone. If nobody
+# tells us the name we record the empty string and warn — visibly wrong beats
+# plausibly wrong.
+CONTAINER_NAME="${CONTAINER_NAME:-}"
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[qemu-docker]${RST} $*"; }
@@ -88,6 +134,26 @@ Usage: docker run --rm --privileged --device /dev/kvm \\
   --label NAME     result label (default: <platform>/<role>)
   --keep           keep the scratch run dir
   -h, --help
+
+Interactive devices (golden mode only; everything below is off by default):
+  --keep-alive     do NOT power the guest off after the assertions. Leave qemu
+                   running, publish a device record under <work>/devices/, and
+                   block until this container is stopped.
+  --extra-user N   repeatable. Create wheel user N on the guest alongside
+                   '${SSH_USER}', with the same throwaway login key.
+  --host-work PATH host side of the /work bind mount, so the device record can
+                   name HOST paths the Studio can actually open.
+                   Env: HOST_WORK.
+  --ssh-host-port P
+                   loopback host port the guest's ssh was published on; goes
+                   into the device record verbatim. 0 = not published.
+                   Env: SSH_HOST_PORT.
+  --container NAME the name this container was started with (docker run --name),
+                   recorded verbatim so the Studio can match and stop it.
+                   Env: CONTAINER_NAME. Unset = recorded as "" (see the WARN).
+  --qmp PATH       qemu QMP unix socket, passed through to the launcher.
+                   Implied by --keep-alive; without either, qemu keeps
+                   -monitor none and the launcher argv is unchanged.
 EOF
 exit "${1:-0}"
 }
@@ -106,6 +172,12 @@ while [[ $# -gt 0 ]]; do
         --assert-timeout) ASSERT_TIMEOUT="$2"; shift 2 ;;
         --label)    LABEL="$2"; shift 2 ;;
         --keep)     KEEP=true; shift ;;
+        --keep-alive)    KEEP_ALIVE=true; shift ;;
+        --extra-user)    EXTRA_USERS+=("$2"); shift 2 ;;
+        --host-work)     HOST_WORK="$2"; shift 2 ;;
+        --ssh-host-port) SSH_HOST_PORT="$2"; shift 2 ;;
+        --container)     CONTAINER_NAME="$2"; shift 2 ;;
+        --qmp)           QMP_SOCK="$2"; shift 2 ;;
         -h|--help)  usage 0 ;;
         *)          echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -115,6 +187,12 @@ done
 RUN_DIR="${WORK}/runs/$(echo "${LABEL}" | tr '/+' '__')"
 RESULT_DIR="${WORK}/results"
 RESULT_JSON="${RESULT_DIR}/$(echo "${LABEL}" | tr '/+' '__').json"
+# Same safe-label rule as RESULT_JSON above, deliberately: the Studio pairs a
+# device with its result row by that filename.
+DEVICES_DIR="${WORK}/devices"
+DEVICE_JSON="${DEVICES_DIR}/$(echo "${LABEL}" | tr '/+' '__').json"
+# NB ${DEVICES_DIR} is NOT created here. Only --keep-alive has a record to put
+# in it, and a default run must leave exactly the same tree behind as before.
 mkdir -p "${RUN_DIR}" "${RESULT_DIR}" "${WORK}/images"
 
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -157,6 +235,114 @@ emit_result() {
 EOF
 }
 
+# ── The device registry (--keep-alive only) ─────────────────────────────────
+# emit_result says how a row FINISHED; this says a device is UP and how to get
+# into it. The Studio polls ${WORK}/devices/ and drives ssh/qemu from what it
+# finds, so every path in here has to be a HOST path: /work exists only inside
+# this container, and an ssh key path the Studio cannot open is worthless.
+host_path() {
+    local p="${1:-}"
+    # No HOST_WORK => emit the container path unchanged. It is wrong for the
+    # Studio, but it is honest and greppable, which beats a fabricated path.
+    [ -n "${HOST_WORK}" ] || { printf '%s\n' "${p}"; return 0; }
+    case "${p}" in
+        "${WORK}")   printf '%s\n' "${HOST_WORK}" ;;
+        "${WORK}"/*) printf '%s\n' "${HOST_WORK}/${p#"${WORK}"/}" ;;
+        *)           printf '%s\n' "${p}" ;;
+    esac
+}
+
+# Same escape ORDER as emit_result's detail (backslash first, then quote) but
+# done with bash substitution rather than sed, because an EMPTY value here is
+# routine, not hypothetical: "board" is "" for every platform except the
+# multi-board ARM ones, and "qmp" is "" whenever --qmp was not passed. Piping ""
+# into sed feeds it ZERO lines, so `s/^/"/` never runs and the field comes out
+# bare — `"board": ,` — which is not JSON, and the Studio drops records it
+# cannot parse. Substitution has no such edge and forks nothing.
+json_str() {
+    local s="${1:-}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '"%s"' "${s}"
+}
+
+# write_device_record STATE — booting|running|assertions|stopped
+write_device_record() {
+    local state="$1" users_json="" u
+    mkdir -p "${DEVICES_DIR}" 2>/dev/null || true
+    for u in "${GUEST_USERS[@]}"; do
+        users_json="${users_json:+${users_json}, }$(json_str "${u}")"
+    done
+    # Hand the KEY over BEFORE publishing the record, not after. The record is
+    # the announcement ("this device is running, here is the key"), so anything
+    # it points at has to be usable by the time a reader can see it. Doing it
+    # afterwards leaves a window — small, but the wrong way round — in which the
+    # Studio can read state=running and then fail to open a root-owned key. The
+    # record itself is chowned below, once it exists.
+    if [ -n "${HOST_UID}" ] && [ -f "${SSHKEY}" ]; then
+        chown "${HOST_UID}:${HOST_GID:-${HOST_UID}}" \
+            "${SSHKEY}" "${SSHKEY}.pub" 2>/dev/null || true
+        chmod 600 "${SSHKEY}" 2>/dev/null || true
+    fi
+    # `|| warn` is load-bearing, not decoration. The prologue is `set -uo
+    # pipefail` with no -e, so the call sites before the assertions run with
+    # errexit OFF — but golden mode switches it ON right after the assertion
+    # pipeline and never switches it back, and one call site sits in there,
+    # between the assertions and emit_result. If a failed write aborted this
+    # function at THAT one, the script would die at exactly the point the file
+    # already has a fix for, leaving the PREVIOUS run's verdict on disk to be
+    # reported as this one's.
+    cat > "${DEVICE_JSON}" <<EOF || warn "could not write device record ${DEVICE_JSON}"
+{
+  "label": $(json_str "${LABEL}"),
+  "platform": $(json_str "${PLATFORM}"),
+  "role": $(json_str "${ROLE}"),
+  "board": $(json_str "${BOARD}"),
+  "container": $(json_str "${CONTAINER_NAME}"),
+  "ssh_host_port": ${SSH_HOST_PORT},
+  "ssh_user": $(json_str "${SSH_USER}"),
+  "ssh_key": $(json_str "$(host_path "${SSHKEY}")"),
+  "users": [${users_json}],
+  "qmp": $(json_str "$(host_path "${QMP_SOCK}")"),
+  "state": $(json_str "${state}"),
+  "started_at": $(json_str "${STARTED_AT}")
+}
+EOF
+    # Everything this container writes into /work lands root-owned, and reown()
+    # only fixes that on the way OUT — which under --keep-alive is hours away,
+    # whenever the operator finally stops the device. Both the record and the
+    # things it POINTS AT are consumed while the container is still alive, so
+    # hand them over here — same HOST_UID convention, just earlier.
+    #
+    # The private key is the one that cannot wait — it is handed over ABOVE, before
+    # the record announcing it exists. "ssh_key" in that record is advertised as a
+    # HOST path and the Studio runs as the operator, so a root-owned key would be
+    # EACCES for the entire lifetime of a device this very record calls "running":
+    # the single-button ssh would fail from the first click to the last. chown does
+    # not change the mode, and ssh(1) rejects a private key any other account can
+    # read, so it stays 0600; the chmod states that rather than relying on
+    # ssh-keygen's creation mode from a distance.
+    #
+    # What is left here is the record itself (it has to exist before it can be
+    # chowned) plus the two directories BELOW the bind mount that root created on
+    # the way to the key: owning the key is not enough to open it. With ${WORK}
+    # itself already host-owned, that makes every component of the advertised path
+    # the operator's, whatever umask was in force.
+    #
+    # Spelled as `if`, NOT `[ -n ... ] && chown ...`: that list evaluates to
+    # false whenever HOST_UID is unset — the normal case for a bare `docker run`
+    # of this entrypoint, which the usage above documents as supported — and
+    # under errexit a false list aborts the function before `return 0`.
+    if [ -n "${HOST_UID}" ]; then
+        chown "${HOST_UID}:${HOST_GID:-${HOST_UID}}" \
+            "${DEVICES_DIR}" "${DEVICE_JSON}" \
+            "${WORK}/runs" "${RUN_DIR}" 2>/dev/null || true
+    fi
+    # Never let a bookkeeping failure take the run down: this is called from
+    # cleanup() and from stretches where errexit is ON.
+    return 0
+}
+
 # Both timeouts reach $((...)) arithmetic (the ssh-wait deadline) or timeout(1).
 # Under `set -u` a non-numeric value in arithmetic is a FATAL bash error, not a
 # catchable one: `--timeout abc` kills the process at the deadline line with
@@ -168,6 +354,77 @@ EOF
     || die "--timeout must be a whole number of seconds, got '${TIMEOUT}'"
 [[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
     || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
+
+# ssh_host_port is emitted as a BARE JSON number. Anything non-numeric makes the
+# whole record unparseable, and the Studio skips records it cannot parse — so a
+# typo here would silently cost the operator the device rather than the port.
+[[ "${SSH_HOST_PORT}" =~ ^[0-9]+$ ]] \
+    || die "--ssh-host-port must be a whole number, got '${SSH_HOST_PORT}'"
+# ...and "numeric" is not the same as "valid JSON". `022` satisfies the pattern
+# above but emits `"ssh_host_port": 022`, which json.loads rejects outright —
+# costing the whole record, exactly the failure the comment above warns about.
+# `10#` forces base 10 so a leading zero is stripped rather than read as octal
+# (a bare $((022)) would silently yield 18). The range check is the same guard
+# in the other direction: a port over 65535 can never have been bound, so a
+# record claiming one would send the Studio's terminal button at nothing.
+SSH_HOST_PORT=$((10#${SSH_HOST_PORT}))
+[ "${SSH_HOST_PORT}" -le 65535 ] \
+    || die "--ssh-host-port must be 0-65535, got '${SSH_HOST_PORT}'"
+
+# ── Which logins will exist on the guest ────────────────────────────────────
+# Checked here, next to the other argv checks, because an --extra-user name is
+# interpolated into THREE places at once: a JSON string in the KEYS payload,
+# useradd(8) in the guest, and the device record. A name carrying a quote or a
+# shell metacharacter would corrupt the payload instead of failing loudly, and
+# the failure would surface a boot later as "user missing". Restrict it to a
+# portable login name up front.
+GUEST_USERS=("${SSH_USER}")
+_extra_ok=()
+for _u in "${EXTRA_USERS[@]}"; do
+    [[ "${_u}" =~ ^[a-z_][a-z0-9_-]*$ ]] \
+        || die "--extra-user '${_u}' is not a valid login name (want [a-z_][a-z0-9_-]*)"
+    _dup=false
+    for _g in "${GUEST_USERS[@]}"; do
+        [ "${_g}" = "${_u}" ] && _dup=true
+    done
+    if ${_dup}; then
+        warn "--extra-user ${_u}: already on the guest, ignoring the duplicate"
+        continue
+    fi
+    _extra_ok+=("${_u}")
+    GUEST_USERS+=("${_u}")
+done
+EXTRA_USERS=("${_extra_ok[@]}")
+
+# Rejected HERE rather than in the stage4 block below, which only runs after the
+# image has been resolved and a compressed one decompressed — up to a 20GB xz
+# pass before telling the operator the flag combination can never work. stage4
+# hands its whole qemu to run-qemu-test.sh, which tears the guest down itself,
+# so there is no device left for this script to keep alive or advertise.
+if ${KEEP_ALIVE} && [ "${MODE}" = "stage4" ]; then
+    die "--keep-alive is golden-mode only (stage4 delegates its qemu to run-qemu-test.sh); re-run with --mode golden"
+fi
+
+# The three things only the CALLER can know. None is fatal — the record is still
+# written, and every field the caller did supply is still right — but each one
+# costs the operator a specific capability, so name the capability rather than
+# letting the Studio present a button that cannot work. A hand-run `docker run`
+# of this entrypoint is supported and will legitimately hit all three.
+if ${KEEP_ALIVE} && [ -z "${HOST_WORK}" ]; then
+    warn "--keep-alive without --host-work/HOST_WORK: ssh_key and qmp in the device record will be CONTAINER paths (${WORK}/...) and unusable from the host"
+fi
+
+if ${KEEP_ALIVE} && [ "${SSH_HOST_PORT}" -eq 0 ]; then
+    # The one that silently kills the whole point of --keep-alive: nothing
+    # published means nothing to ssh TO, and 0 is a legal recorded value, so the
+    # Studio's only correct response is to disable the terminal button. That is
+    # indistinguishable from a broken device unless we say so here.
+    warn "--keep-alive without --ssh-host-port/SSH_HOST_PORT: the record will say ssh_host_port 0, i.e. NO login is possible and the Studio's terminal button stays disabled. Publish the guest forward with 'docker run -p 127.0.0.1:<port>:${SSH_PORT}' and pass the same <port> here."
+fi
+
+if ${KEEP_ALIVE} && [ -z "${CONTAINER_NAME}" ]; then
+    warn "--keep-alive without --container/CONTAINER_NAME: the record's \"container\" will be empty, so the Studio cannot match this device against 'docker ps' and will treat it as stopped. Pass the same NAME that 'docker run --name' was given."
+fi
 
 # ── Resolve the image ───────────────────────────────────────────────────────
 # The builders name artifacts hugmesh-<platform>-<arch>-<role>-<env>-<ts>.img[.xz];
@@ -247,7 +504,7 @@ fi
 # ── Kernel: lift it out of the golden image (this is why we need root) ──────
 # A build SESSION dir ships only the artifacts — there is no sysroot/ or isoroot/
 # for the launchers to autodetect a kernel from, and launch-pi.sh's own
-# --kernel-from-img refuses to run unprivileged (launch-pi.sh:195). Inside this
+# --kernel-from-img refuses to run unprivileged (launch-pi.sh:199). Inside this
 # container we ARE root, so do the extraction here and hand the launcher an
 # explicit --kernel.
 KERNEL=""
@@ -364,6 +621,37 @@ KEYS_SRC="${RUN_DIR}/keys"; rm -rf "${KEYS_SRC}"; mkdir -p "${KEYS_SRC}/ssh" "${
 [ -f "${SRC}/specs/etc/headscale/config.yaml" ] \
     && cp "${SRC}/specs/etc/headscale/config.yaml" "${KEYS_SRC}/headscale/config.yaml"
 
+# --extra-user accounts, appended to the SAME users.json that already creates
+# ${SSH_USER}, because that is the file the guest will actually read:
+# provision_users() (specs/etc/keys-provision/provision.sh:272) takes its .users
+# array from ${BASE}/users.json, and drops back to the manifest — provision.json
+# — ONLY when users.json is absent (provision.sh:273-274). This script always
+# writes users.json, so users.json always wins that `[ -f ]` test and an account
+# added to provision.json instead would never be created on the guest.
+#
+# Each entry deliberately mirrors ${SSH_USER}'s, with two deliberate differences:
+#   * no "uid" — provision.sh passes -u to useradd only when uid is non-empty
+#     (provision.sh:326), so useradd allocates the next free one and nothing
+#     collides with ${SSH_USER}'s pinned 1000.
+#   * sudo_nopasswd stays true because these accounts get NO password at all.
+#     The superuser route is `ssh -t ... sudo -i`, and a password-prompting
+#     sudo rule would make that unusable rather than merely inconvenient.
+# Root ssh is NOT enabled for any of them: sshd sets PermitRootLogin no and
+# assertions.sh:204 asserts it.
+EXTRA_USERS_JSON=""
+for _u in "${EXTRA_USERS[@]}"; do
+    EXTRA_USERS_JSON+=",
+    {
+      \"name\": \"${_u}\",
+      \"comment\": \"QEMU containerized device test user (--extra-user)\",
+      \"groups\": [\"wheel\", \"audio\", \"video\", \"usb\"],
+      \"shell\": \"/bin/bash\",
+      \"sudo\": true,
+      \"sudo_nopasswd\": true,
+      \"ssh_authorized_keys\": [\"${PUBKEY}\"]
+    }"
+done
+
 cat > "${KEYS_SRC}/users.json" <<EOF
 {
   "users": [
@@ -376,7 +664,7 @@ cat > "${KEYS_SRC}/users.json" <<EOF
       "sudo": true,
       "sudo_nopasswd": true,
       "ssh_authorized_keys": ["${PUBKEY}"]
-    }
+    }${EXTRA_USERS_JSON}
   ],
   "root": { "ssh_authorized_keys": ["${PUBKEY}"] }
 }
@@ -418,6 +706,25 @@ PIDFILE="${LAUNCH_RUN_DIR}/qemu.pid"
 CONSOLE="${LAUNCH_RUN_DIR}/console.log"
 mkdir -p "${LAUNCH_RUN_DIR}"
 
+# A5: qemu gets a QMP socket only when one is asked for. --keep-alive implies it
+# — a device you cannot pause or power down is only half a device — but with
+# neither flag ${QMP_SOCK} stays empty, the launcher argv below is character-
+# for-character what it was, and qemu keeps running -monitor none.
+# The socket goes under the /work bind mount because the socket's PATH is what
+# the record advertises; a unix socket anywhere else in this container's
+# filesystem could not even be named to the host. Connecting to it is a
+# different matter and NOT something this script arranges: qemu creates it
+# root-owned, so callers reach it through `docker exec` on this container.
+#
+# This is a passthrough and nothing more. In particular it does not alter reset
+# semantics: launch-pi.sh, launch-arm.sh and launch-x86.sh each put -no-reboot in
+# their qemu argv unconditionally, and qemu documents -no-reboot as "exit instead
+# of rebooting", so what a QMP system_reset does to the guest is decided by the
+# launcher argv and by whoever sends the command, not here.
+if ${KEEP_ALIVE} && [ -z "${QMP_SOCK}" ]; then
+    QMP_SOCK="${LAUNCH_RUN_DIR}/qmp.sock"
+fi
+
 step "Booting ${PLATFORM}/${ROLE} (mem=${MEM}M smp=${SMP})"
 case "${PLATFORM}" in
     rpi5)
@@ -426,7 +733,7 @@ case "${PLATFORM}" in
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
-            --timeout "${TIMEOUT}" 2>&1 | tee "${RUN_DIR}/launch.log"
+            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     x86)
@@ -437,7 +744,7 @@ case "${PLATFORM}" in
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
-            --timeout "${TIMEOUT}" 2>&1 | tee "${RUN_DIR}/launch.log"
+            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     *)
@@ -447,7 +754,7 @@ case "${PLATFORM}" in
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
-            --timeout "${TIMEOUT}" 2>&1 | tee "${RUN_DIR}/launch.log"
+            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
 esac
@@ -456,6 +763,14 @@ esac
 # NB: this REPLACES the earlier `trap reown EXIT`, so it must call reown itself —
 # otherwise the run's artifacts stay root-owned on the host.
 cleanup() {
+    # Best effort, and deliberately FIRST: whatever brought us here — docker
+    # stop, a die() below, qemu dying on its own — the guest is about to go
+    # away, and the Studio reads any state but "stopped" as a device it can
+    # still ssh into. A stale "running" record would offer the operator a
+    # terminal button that connects to nothing.
+    if ${KEEP_ALIVE} && [ -f "${DEVICE_JSON}" ]; then
+        write_device_record stopped
+    fi
     [ -f "${PIDFILE}" ] && kill "$(cat "${PIDFILE}")" 2>/dev/null || true
     ${KEEP} || rm -f "${RUN_DIR}"/launch/run.qcow2 2>/dev/null || true
     reown
@@ -485,7 +800,23 @@ if ! ${up}; then
 fi
 info "SSH is up; running assertions"
 
+# A2: publish the device the moment it answers, BEFORE the assertions — they are
+# the long pole (minutes on TCG), and a device the operator cannot open a
+# terminal on until they finish is a device that looks broken for most of its
+# life. The record is rewritten as the state changes; it is not append-only.
+if ${KEEP_ALIVE}; then
+    write_device_record running
+    info "device record: ${DEVICE_JSON}"
+    info "  logins: ${GUEST_USERS[*]}"
+    if [ "${SSH_HOST_PORT}" -eq 0 ]; then
+        info "  ssh   : none — nothing was published (see the WARN above)"
+    else
+        info "  ssh   : -i $(host_path "${SSHKEY}") -p ${SSH_HOST_PORT} <login>@127.0.0.1"
+    fi
+fi
+
 step "Running assertions.sh in the guest (wall clock: ${ASSERT_TIMEOUT}s)"
+if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # THE ONLY wall clock over the post-boot phase. ${TIMEOUT} bounds the ssh-wait
 # loop above and stops the moment SSH answers; SSH_OPTS carries ConnectTimeout=5,
 # which bounds the TCP connect and NOTHING after the handshake. So a guest that
@@ -524,6 +855,13 @@ set -e
 PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1 || true)"
 FAILED="$(grep -oE '[0-9]+ failed'          "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1 || true)"
 
+# Assertions are over (passed, failed or killed — the device is up either way,
+# and a FAILED row is exactly the one an operator wants a terminal on).
+# write_device_record always returns 0, which matters: errexit is ON from here
+# to the end of the script, and this must never become another statement that
+# can abort the run before emit_result.
+if ${KEEP_ALIVE}; then write_device_record running; fi
+
 # ── Guest diagnostics: pin failures that die INSIDE the guest ───────────────
 # The rpi5/pki row really fails to start headscale, but the guest's log files
 # were unreadable from the host (root-owned ext4 inside the golden image), so
@@ -552,13 +890,17 @@ timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
     'sudo rc-service headscale status 2>&1; echo "--- rc-update ---"; sudo rc-update show default 2>&1' \
     > "${RUN_DIR}/guest_headscale-status.txt" 2>/dev/null || true
 
-step "Powering down guest"
-# `sudo poweroff` legitimately tears the channel down under ssh's feet, so this
-# call's own failure has always been ignored — but "ignored" is not "bounded",
-# and a guest that accepts the command and then never closes the socket left it
-# blocking forever. The qcow2 overlay is discarded by cleanup() either way.
-timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo poweroff' 2>/dev/null || true
-sleep 3
+if ${KEEP_ALIVE}; then
+    info "keep-alive: ${LABEL} stays up — not powering the guest down"
+else
+    step "Powering down guest"
+    # `sudo poweroff` legitimately tears the channel down under ssh's feet, so this
+    # call's own failure has always been ignored — but "ignored" is not "bounded",
+    # and a guest that accepts the command and then never closes the socket left it
+    # blocking forever. The qcow2 overlay is discarded by cleanup() either way.
+    timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo poweroff' 2>/dev/null || true
+    sleep 3
+fi
 
 if [ "${ARC}" -eq 0 ]; then
     info "${GREEN}${LABEL}: DEVICE TEST PASSED${RST} (${PASSED:-?} assertions)"
@@ -576,5 +918,46 @@ elif [ "${ARC}" -eq 124 ] || [ "${ARC}" -eq 137 ]; then
 else
     warn "${LABEL}: DEVICE TEST FAILED (${FAILED:-?} assertions failed)"
     emit_result FAIL "assertions failed" "${PASSED:-0}" "${FAILED:-0}"
+fi
+
+# ── keep-alive: hold the container open ─────────────────────────────────────
+# The verdict is already on disk above, so the matrix reports this row normally
+# whether or not anyone ever logs in. All that is left is to not exit: PID 1
+# returning is what ends the container, and with it qemu and the ssh port.
+KEEPALIVE_STOP=false
+keepalive_wait() {
+    local nap
+    # `docker stop` sends SIGTERM to PID 1 and SIGKILLs 10s later. bash defers a
+    # trap until the current FOREGROUND child returns, so a plain `sleep 30`
+    # here would swallow SIGTERM well past that grace window and the container
+    # would be killed outright — skipping cleanup(), leaving a record that still
+    # advertises a device which no longer exists. Sleeping in the BACKGROUND and
+    # waiting on the job lets the trap run the moment the signal lands.
+    trap 'KEEPALIVE_STOP=true' TERM INT
+    while ! ${KEEPALIVE_STOP}; do
+        # Also stop waiting if qemu died without us: a guest powered off from
+        # the inside, or an OOM kill. Holding the container open around a dead
+        # guest just burns a --jobs slot.
+        if [ -f "${PIDFILE}" ] && ! kill -0 "$(cat "${PIDFILE}")" 2>/dev/null; then
+            warn "qemu exited on its own — ending keep-alive"
+            break
+        fi
+        sleep 5 &
+        nap=$!
+        # wait(1) reports 128+signo when a trap interrupts it. That is the
+        # normal stop path, not a failure — and errexit is ON here.
+        wait "${nap}" 2>/dev/null || true
+    done
+    return 0
+}
+
+if ${KEEP_ALIVE}; then
+    if [ -n "${CONTAINER_NAME}" ]; then
+        step "keep-alive: ${LABEL} is up. Stop it with: docker stop ${CONTAINER_NAME}"
+    else
+        step "keep-alive: ${LABEL} is up. Stop it with: docker stop <this container>"
+    fi
+    keepalive_wait
+    info "keep-alive: stopping ${LABEL}"
 fi
 exit "${ARC}"

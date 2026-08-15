@@ -281,6 +281,14 @@ class QemuRunOptions:
     list_only: bool = False
     build_image: bool = False
     keep: bool = False
+    #: Leave the guests RUNNING once their assertions finish (``--keep-alive``)
+    #: instead of powering them off, and let the entrypoint register each one under
+    #: ``<work>/devices/``. This is what makes core/qemu_devices.py have anything to
+    #: read, so it is a FIELD rather than something a caller pins onto an instance:
+    #: ``runner_command`` below is the single argv author for both the Studio's
+    #: command preview and its spawn, and it can only emit what it knows about.
+    #: Distinct from ``keep`` above, which only preserves per-run scratch dirs.
+    keep_alive: bool = False
 
 
 def runner_command(generator_dir: str, opts: QemuRunOptions) -> list[str]:
@@ -311,6 +319,8 @@ def runner_command(generator_dir: str, opts: QemuRunOptions) -> list[str]:
         cmd.append("--build-image")
     if opts.keep:
         cmd.append("--keep")
+    if opts.keep_alive:
+        cmd.append("--keep-alive")
     return cmd
 
 

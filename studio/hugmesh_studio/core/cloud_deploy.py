@@ -82,6 +82,12 @@ _TERMINALS = (
     ("xterm", ("-e",)),
 )
 
+# Public alias: core/qemu_devices.py opens a terminal for a device login and must use
+# the SAME list, order and exec-arg convention rather than become a third copy of it
+# (the phone/go-live drivers were already the second). Values and behaviour unchanged
+# — _TERMINALS stays the name this module's own code reads.
+TERMINALS = _TERMINALS
+
 _REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
 
