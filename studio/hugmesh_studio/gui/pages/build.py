@@ -49,6 +49,7 @@ import os
 from dataclasses import MISSING
 
 from ..qt import Qt, QtCore, QtWidgets, Signal
+from .. import console
 from ._scroll import scrollable
 from ...core import build_sessions
 from ...core import cross_dracut
@@ -662,7 +663,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # Collapsible), so _preview()/validatePage and every test that reads cmd's text
         # are untouched, and the PROBLEMS pane below stays outside it: a preflight
         # failure must never be foldable.
-        self.cmd = QtWidgets.QPlainTextEdit(); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(120)
+        self.cmd = console.attach(QtWidgets.QPlainTextEdit()); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(120)
         cmd_box = QtWidgets.QGroupBox("")
         cb = QtWidgets.QVBoxLayout(cmd_box)
         cb.addWidget(self.cmd)
@@ -681,7 +682,7 @@ class BuildPage(QtWidgets.QWizardPage):
         bl = QtWidgets.QHBoxLayout(); bl.addWidget(self.preview_btn)
         bl.addWidget(self.build_image_btn); bl.addStretch(1)
         lay.addLayout(bl)
-        self.log = QtWidgets.QPlainTextEdit(); self.log.setReadOnly(True)
+        self.log = console.attach(QtWidgets.QPlainTextEdit()); self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
         self.image_worker = None
         # ── off-thread docker-probe plumbing (freeze fix) ──────────────────────────
@@ -1407,14 +1408,14 @@ class BuildPage(QtWidgets.QWizardPage):
         if self.image_worker and self.image_worker.isRunning():
             return
         self.build_image_btn.setEnabled(False)
-        self.log.appendPlainText("\n=== building the docker builder image ===")
+        console.write(self.log, "\n=== building the docker builder image ===")
         self.image_worker = _BuilderImageWorker(self.wiz.driver)
-        self.image_worker.line.connect(lambda s: self.log.appendPlainText(s))
+        self.image_worker.line.connect(lambda s: console.write(self.log, s))
         self.image_worker.done.connect(self._builder_image_finished)
         self.image_worker.start()
 
     def _builder_image_finished(self, code):
-        self.log.appendPlainText(f"=== builder image build exited {code} ===")
+        console.write(self.log, f"=== builder image build exited {code} ===")
         self.build_image_btn.setEnabled(True)
         self._preview()
 

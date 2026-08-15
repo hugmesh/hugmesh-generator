@@ -83,6 +83,7 @@ import threading
 from dataclasses import dataclass, field
 
 from ..qt import Qt, QtGui, QtWidgets
+from .. import console
 from ..styles import MUTED, WARN
 from ...core import qemu_devices, qemu_tests
 from ...core.qemu_tests import QemuRunOptions, QemuTestRunner
@@ -625,7 +626,7 @@ class QemuPage(QtWidgets.QWizardPage):
         lay.addWidget(self.devices_box)
 
         # ── streamed log ────────────────────────────────────────────────────────
-        self.log = QtWidgets.QPlainTextEdit()
+        self.log = console.attach(QtWidgets.QPlainTextEdit())
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(160)
         lay.addWidget(self.log)
@@ -864,12 +865,12 @@ class QemuPage(QtWidgets.QWizardPage):
         self._cancel_sent = True
         job = self._device_job
         if job is not None:
-            self.log.appendPlainText(
+            console.write(self.log, 
                 "!! re-sending — the device command has not exited yet" if again else
                 "!! cancelling — terminating the device command's process group")
             job.cancel()
             return
-        self.log.appendPlainText(
+        console.write(self.log, 
             "!! re-sending — the runner has not exited yet" if again else
             "!! cancelling — stopping the emulated devices")
         self.runner.cancel()
@@ -888,7 +889,7 @@ class QemuPage(QtWidgets.QWizardPage):
         self.completeChanged.emit()
 
     def _on_line(self, line: str):
-        self.log.appendPlainText(line)
+        console.write(self.log, line)
         self._note_run_state(line)
 
     def _note_run_state(self, line: str):
@@ -914,7 +915,7 @@ class QemuPage(QtWidgets.QWizardPage):
             # entrypoint writes a record per guest and updates its state), so
             # re-read the registry instead of leaving the previous table on screen.
             self._reload_devices()
-        self.log.appendPlainText(
+        console.write(self.log, 
             "== device tests passed ==" if ok else "== device tests reported failures ==")
 
     def _run_labels(self) -> list[str]:
@@ -1307,26 +1308,26 @@ class QemuPage(QtWidgets.QWizardPage):
             self.dev_note.setText(
                 f'<span style="color:{WARN}">No terminal emulator found on this '
                 f"desktop.</span> Run this yourself: <tt>{hint}</tt>")
-            self.log.appendPlainText(f"[devices] no terminal emulator — run: {hint}")
+            console.write(self.log, f"[devices] no terminal emulator — run: {hint}")
             return
         try:
             subprocess.Popen(cmd, start_new_session=True)
         except OSError as exc:
             self.dev_note.setText(
                 f'<span style="color:{WARN}">Could not open a terminal: {exc}</span>')
-            self.log.appendPlainText(f"!! could not open a terminal: {exc}")
+            console.write(self.log, f"!! could not open a terminal: {exc}")
             return
         who = f"{login} + sudo -i" if superuser else login
         self.dev_note.setText(f"Opened a terminal on <tt>{row.dev.label}</tt> as "
                               f"<tt>{who}</tt>.")
-        self.log.appendPlainText(f"[devices] {shlex.join(cmd)}")
+        console.write(self.log, f"[devices] {shlex.join(cmd)}")
 
     def _device_control(self, index: int, action: str):
         row = self._device_rows[index]
         if action == "start" and not self._running:
             # Said in the log, not only in a tooltip: this is the one control here
             # that boots an image, and the page is locked while it does.
-            self.log.appendPlainText(
+            console.write(self.log, 
                 "[devices] a stopped device has no container to resume — this is a "
                 "full emulated boot; Cancel stops it.")
         label = row.dev.label
@@ -1425,7 +1426,7 @@ class QemuPage(QtWidgets.QWizardPage):
                     f"would DELETE {target} ({_describe_file(target)}) and replace "
                     "it with the disk as it is now. Tick “arm” beside the button to "
                     "allow that, or press “Save copy” to keep both.")
-                self.log.appendPlainText(
+                console.write(self.log, 
                     f"[devices] refused: overwrite of {target} is not armed")
                 return
 
@@ -1438,21 +1439,21 @@ class QemuPage(QtWidgets.QWizardPage):
             self.dev_note.setText(
                 f'<span style="color:{WARN}">This Studio cannot build a “{mode}” '
                 f"save command: {exc}</span>")
-            self.log.appendPlainText(f"!! save_argv({mode!r}) rejected it: {exc}")
+            console.write(self.log, f"!! save_argv({mode!r}) rejected it: {exc}")
             return
 
         consistency = ("crash-consistent — the guest is paused for the copy, so the "
                        "result is its disk as if the power lead had been pulled, not "
                        "a clean shutdown")
         if mode == _SAVE_OVERWRITE:
-            self.log.appendPlainText(
+            console.write(self.log, 
                 f"[devices] OVERWRITING {target} ({_describe_file(target)}) — that "
                 f"copy is gone from here on. The new one is {consistency}.")
         else:
-            self.log.appendPlainText(
+            console.write(self.log, 
                 f"[devices] saving {dev.label} to a NEW file; existing saves are "
                 f"left alone. The copy is {consistency}.")
-        self.log.appendPlainText(
+        console.write(self.log, 
             "[devices] a big disk takes a while — the page is locked until it "
             "finishes, and Cancel stops it (a cancelled save leaves a PARTIAL file, "
             "which is not a save).")
@@ -1523,7 +1524,7 @@ class QemuPage(QtWidgets.QWizardPage):
         """
         if self._running or not argv:
             return
-        self.log.appendPlainText(f"$ {shlex.join(argv)}")
+        console.write(self.log, f"$ {shlex.join(argv)}")
         job = _DeviceJob(argv, self.wiz.generator_dir)
         self._device_job = job
         self._verb_finished = finished
@@ -1543,7 +1544,7 @@ class QemuPage(QtWidgets.QWizardPage):
         finished, self._verb_finished = self._verb_finished, None
         self._set_running(False)
         outcome = "cancelled" if cancelled else ("done" if ok else "FAILED")
-        self.log.appendPlainText(f"== {label}: {outcome} ==")
+        console.write(self.log, f"== {label}: {outcome} ==")
         # BEFORE the reload: the callback is what the rebuilt rows read their
         # run-state from, so it has to have run by the time they are built.
         note = finished(ok, cancelled) if finished is not None else None

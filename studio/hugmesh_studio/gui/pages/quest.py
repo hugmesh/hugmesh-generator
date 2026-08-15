@@ -38,10 +38,13 @@ PhoneDialog/LocalMeshDialog.
 """
 from __future__ import annotations
 
+import functools
+
 import threading
 import types
 
 from ..qt import QtWidgets
+from .. import console
 from ...core.phone_wizard import PhoneWizard, PhoneWizardConfig
 from ._scroll import scrollable
 from ._widgets import _row
@@ -261,7 +264,7 @@ class QuestPage(QtWidgets.QWizardPage):
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
 
-        self.log = QtWidgets.QPlainTextEdit()
+        self.log = console.attach(QtWidgets.QPlainTextEdit())
         self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
 
@@ -368,7 +371,7 @@ class QuestPage(QtWidgets.QWizardPage):
             self.status.setText(why)
             return
         self.pw = PhoneWizard(self.generator_dir, self.collect())
-        self.log.appendPlainText(f"[quest] {self.pw.command_string(verb)}")
+        console.write(self.log, f"[quest] {self.pw.command_string(verb)}")
         self._launch(label, verb)
 
     def _launch(self, label: str, verb: str):
@@ -383,7 +386,9 @@ class QuestPage(QtWidgets.QWizardPage):
         self.worker = _MeshWorker(
             lambda on_line, c: (pw.run(verb, on_line, c) == 0, []),
             parent=self, stream=True, cancel=cancel)
-        self.worker.line.connect(self.log.appendPlainText)
+        # functools.partial, not a lambda: the slot outlives this method and a
+        # lambda closing over self.log would keep re-resolving it.
+        self.worker.line.connect(functools.partial(console.write, self.log))
         self.worker.done.connect(self._verb_done)
         self.completeChanged.emit()
         self.worker.start()
@@ -413,7 +418,7 @@ class QuestPage(QtWidgets.QWizardPage):
             return
         self.pw = PhoneWizard(self.generator_dir, self.collect())
         ok, msg = self.pw.run_verb_in_terminal(verb)
-        self.log.appendPlainText(f"[quest] {msg}")
+        console.write(self.log, f"[quest] {msg}")
         self.status.setText(
             f"'{verb}' opened in a terminal — finish it there." if ok
             else f"'{verb}' needs a terminal (see log).")

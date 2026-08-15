@@ -32,6 +32,8 @@ import os
 import shlex
 import subprocess
 import threading
+
+from . import proc_text
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -429,7 +431,8 @@ class QemuTestRunner:
             # native sudo->bash->emerge tree.
             self._proc = subprocess.Popen(
                 cmd, cwd=self.generator_dir, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+                stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True,
+                **proc_text.TEXT_IO)
         except OSError as exc:
             if on_line:
                 on_line(f"!! could not start the runner: {exc}")

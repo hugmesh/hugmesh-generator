@@ -45,6 +45,7 @@ import os
 from collections import deque
 
 from ..qt import QtCore, QtWidgets, Signal
+from .. import console
 from ..branding_icon import brand_icon
 from ...core import build_sessions
 from ...core.config import (
@@ -345,13 +346,13 @@ class FleetPage(QtWidgets.QWidget):
         # ── step 4: REVIEW — the exact command (unchanged emission) + preflight ──
         p4 = QtWidgets.QWidget(); l4 = QtWidgets.QVBoxLayout(p4)
         l4.addWidget(QtWidgets.QLabel("Command:"))
-        self.cmd = QtWidgets.QPlainTextEdit(); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(100)
+        self.cmd = console.attach(QtWidgets.QPlainTextEdit()); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(100)
         l4.addWidget(self.cmd)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
         self.preview_btn.clicked.connect(self.refresh_preview)
         pb_row = QtWidgets.QHBoxLayout(); pb_row.addWidget(self.preview_btn); pb_row.addStretch(1)
         l4.addLayout(pb_row)
-        self.problems = QtWidgets.QPlainTextEdit(); self.problems.setReadOnly(True)
+        self.problems = console.attach(QtWidgets.QPlainTextEdit()); self.problems.setReadOnly(True)
         l4.addWidget(self.problems, 1)
         self.stack.addWidget(p4)
 
@@ -361,7 +362,7 @@ class FleetPage(QtWidgets.QWidget):
         self.stop_btn.clicked.connect(self._stop)
         st_row = QtWidgets.QHBoxLayout(); st_row.addWidget(self.stop_btn); st_row.addStretch(1)
         l5.addLayout(st_row)
-        self.log = QtWidgets.QPlainTextEdit(); self.log.setReadOnly(True)
+        self.log = console.attach(QtWidgets.QPlainTextEdit()); self.log.setReadOnly(True)
         # BOUNDED DOCUMENT — see _LOG_MAX_BLOCKS. An all-roles fan-out streams for hours
         # and every appended block stays in the QTextDocument forever otherwise.
         self.log.setMaximumBlockCount(_LOG_MAX_BLOCKS)
@@ -659,7 +660,7 @@ class FleetPage(QtWidgets.QWidget):
         # draining in place would livelock on a fast producer.
         batch = [self._line_inbox.popleft() for _ in range(len(self._line_inbox))]
         blob = "\n".join(batch)
-        self.log.appendPlainText(blob)
+        console.write(self.log, blob)
         self._tail.extend(batch)
         if self._log_fh is not None:
             try:
@@ -680,7 +681,7 @@ class FleetPage(QtWidgets.QWidget):
         self._drain_lines()
         self._drain.stop()          # an idle page owns no delivery clock
         self.stop_btn.setEnabled(False)
-        self.log.appendPlainText(f"\n[fleet] exited with code {code}")
+        console.write(self.log, f"\n[fleet] exited with code {code}")
         if self._log_fh is not None:
             try:
                 self._log_fh.close()

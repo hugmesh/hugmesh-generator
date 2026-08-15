@@ -33,6 +33,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+
+from . import proc_text
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -277,7 +279,7 @@ class GoLiveDriver:
         self._proc = subprocess.Popen(
             self.command(subcommand, opts), cwd=self.generator_dir,
             env=self._driver_env(), stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1)
+            stderr=subprocess.STDOUT, text=True, bufsize=1, **proc_text.TEXT_IO)
         assert self._proc.stdout is not None
         for line in self._proc.stdout:
             if on_line:

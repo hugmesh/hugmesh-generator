@@ -19,6 +19,7 @@ import os
 from datetime import datetime
 
 from ..qt import QtCore, QtGui, QtWidgets
+from .. import console
 from . import build_window
 from ...core import build_sessions
 from ...core import secret_files
@@ -142,7 +143,7 @@ class _SessionDetailDialog(QtWidgets.QDialog):
         head = QtWidgets.QLabel(f"<b>{row.label}</b> — {row.status_text()}")
         head.setTextFormat(QtCore.Qt.TextFormat.RichText)
         lay.addWidget(head)
-        text = QtWidgets.QPlainTextEdit()
+        text = console.attach(QtWidgets.QPlainTextEdit())
         text.setReadOnly(True)
         text.setPlainText(self._body(row))
         lay.addWidget(text, 1)

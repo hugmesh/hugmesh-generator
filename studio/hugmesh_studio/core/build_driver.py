@@ -24,7 +24,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
-from . import host_resources, secret_files
+from . import host_resources, proc_text, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
 from .platform_info import HostInfo, detect
 
@@ -423,7 +423,11 @@ class BuildDriver:
         spawn_env = self._elevation_env() if backend == "native" else None
         self._proc = subprocess.Popen(
             cmd, cwd=self.generator_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, start_new_session=(backend == "native"), env=spawn_env)
+            text=True, bufsize=1, start_new_session=(backend == "native"), env=spawn_env,
+            # NOT bare text=True — that decodes with the launcher's locale, which is
+            # routinely C/POSIX (i.e. ASCII) and then raises UnicodeDecodeError out of
+            # the read the moment emerge emits a GCC smart quote. See core/proc_text.
+            **proc_text.TEXT_IO)
         if backend == "native":
             # start_new_session makes the child a session/group leader → pgid == pid.
             self._pgid = self._proc.pid

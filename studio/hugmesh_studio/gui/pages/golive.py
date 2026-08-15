@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
+from .. import console
 from ..branding_icon import brand_icon
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from .. import choice_nav
@@ -113,7 +114,7 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
             "marker (driver `commit`) — rollback is deleting it.")
         info.setWordWrap(True)
         lay.addWidget(info)
-        self.status = QtWidgets.QPlainTextEdit()
+        self.status = console.attach(QtWidgets.QPlainTextEdit())
         self.status.setReadOnly(True)
         lay.addWidget(self.status, 1)
         btn = QtWidgets.QPushButton("Refresh status")
@@ -369,7 +370,7 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
                          "the autofilled record set / zone / checklist / DDNS updater into the "
                          "artifact dir, and stores the token in the keys layout.")
         lay = QtWidgets.QVBoxLayout(self)
-        self.cmd = QtWidgets.QPlainTextEdit()
+        self.cmd = console.attach(QtWidgets.QPlainTextEdit())
         self.cmd.setReadOnly(True)
         self.cmd.setMaximumHeight(90)
         lay.addWidget(QtWidgets.QLabel("Command:"))
@@ -399,7 +400,7 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         self.progress_label.setVisible(False)
         prow.addWidget(self.progress_label)
         lay.addLayout(prow)
-        self.log = QtWidgets.QPlainTextEdit()
+        self.log = console.attach(QtWidgets.QPlainTextEdit())
         self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
         self.worker = None
@@ -432,7 +433,7 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
             run_opts.token_file = d.stage_token(self.wiz.token_secret)
             self._staged.append(run_opts.token_file)
         self.generate_btn.setEnabled(False)
-        self.log.appendPlainText("\n=== generating go-live artifacts (plan) ===")
+        console.write(self.log, "\n=== generating go-live artifacts (plan) ===")
         self._parser = ProgressParser(phases=track_phases("golive-plan"))
         self._reset_progress()
         self.worker = _DriverWorker(d, "plan", run_opts)
@@ -458,7 +459,7 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
             self.progress_label.setText(state.phase_label)
 
     def _on_line(self, line: str) -> None:
-        self.log.appendPlainText(line)
+        console.write(self.log, line)
         if self._parser is not None:
             self._apply_progress_state(self._parser.feed(line))
 
@@ -469,13 +470,13 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
             except OSError:
                 pass
         self._staged = []
-        self.log.appendPlainText(f"=== plan exited {code} ===")
+        console.write(self.log, f"=== plan exited {code} ===")
         if self._parser is not None:
             self._apply_progress_state(self._parser.finalize(code))
             self.progress_label.setText("done" if code == 0 else "FAILED")
         if code == 0:
             out = self.wiz.opts.out_dir or self.wiz.driver.default_out_dir
-            self.log.appendPlainText(f"artifacts in {out} — 'Open artifacts folder' shows them")
+            console.write(self.log, f"artifacts in {out} — 'Open artifacts folder' shows them")
         self.generate_btn.setEnabled(True)
 
     def _open_folder(self):
@@ -491,14 +492,14 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
         self.setSubTitle("Confirm the public edge answers BEFORE flipping — the driver has no "
                          "verify subcommand, so this is an off-device checklist + a posture recheck.")
         lay = QtWidgets.QVBoxLayout(self)
-        self.checklist = QtWidgets.QPlainTextEdit()
+        self.checklist = console.attach(QtWidgets.QPlainTextEdit())
         self.checklist.setReadOnly(True)
         lay.addWidget(QtWidgets.QLabel("Verify from OFF this network (the wizard cannot see your WAN):"))
         lay.addWidget(self.checklist, 1)
         self.refresh_btn = QtWidgets.QPushButton("Recheck posture (driver status)")
         self.refresh_btn.clicked.connect(self._recheck)
         lay.addWidget(self.refresh_btn)
-        self.status = QtWidgets.QPlainTextEdit()
+        self.status = console.attach(QtWidgets.QPlainTextEdit())
         self.status.setReadOnly(True)
         self.status.setMaximumHeight(120)
         lay.addWidget(self.status)
@@ -553,7 +554,7 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
             "bypass. Rollback: `rollback` deletes the marker (button below).")
         info.setWordWrap(True)
         lay.addWidget(info)
-        self.status = QtWidgets.QPlainTextEdit()
+        self.status = console.attach(QtWidgets.QPlainTextEdit())
         self.status.setReadOnly(True)
         self.status.setMaximumHeight(110)
         lay.addWidget(self.status)

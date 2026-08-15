@@ -30,6 +30,8 @@ import os
 import shutil
 import subprocess
 import threading
+
+from . import proc_text
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
@@ -300,7 +302,8 @@ class WorklistDriver:
                "--out", keys_dir_, "--random"]
         try:
             proc = subprocess.Popen(cmd, cwd=self.generator_dir, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                    **proc_text.TEXT_IO)
             assert proc.stdout is not None
             for line in proc.stdout:
                 if on_line:

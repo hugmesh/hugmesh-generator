@@ -66,6 +66,7 @@ import types
 from collections import deque
 
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
+from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import vaults
@@ -348,7 +349,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.log_header = QtWidgets.QLabel("Log")
         self.log_header.setStyleSheet("font-weight: bold;")
         log_lay.addWidget(self.log_header)
-        self.log = QtWidgets.QPlainTextEdit()
+        self.log = console.attach(QtWidgets.QPlainTextEdit())
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(0)      # so the log pane can be dragged fully shut
         # BOUNDED DOCUMENT — see _LOG_MAX_BLOCKS.
@@ -818,7 +819,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
         # Plan preview (read-only) — the confirm-before-run surface.
         lay.addWidget(QtWidgets.QLabel("Plan preview (what will be generated + started):"))
-        self.plan_view = QtWidgets.QPlainTextEdit()
+        self.plan_view = console.attach(QtWidgets.QPlainTextEdit())
         self.plan_view.setReadOnly(True)
         self.plan_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
         f = self.plan_view.font()
@@ -1275,7 +1276,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         run's raw log would open by reporting a cancellation that is not part of it."""
         if queue:
             self._pending.append(text)
-        self.log.appendPlainText(text)
+        console.write(self.log, text)
 
     def _build_run_item(self, run: _StageRun) -> None:
         """One top-level row per run, one child per phase-table row — created UP FRONT
@@ -1351,7 +1352,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # progress bars carry CR; Qt paints a BOX for every escape byte it cannot
         # render.
         if not self._runs:                       # lines with no run (defensive)
-            self.log.appendPlainText("\n".join(_display_safe(ln) for ln in batch))
+            console.write(self.log, "\n".join(_display_safe(ln) for ln in batch))
             return
 
         i = len(self._runs) - 1
@@ -1379,7 +1380,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 self._render_stage(run, j, now)
             self._render_run(run, now)
         if visible:
-            self.log.appendPlainText("\n".join(visible))
+            console.write(self.log, "\n".join(visible))
 
     def _on_tick(self) -> None:
         """1 Hz: make the live run and its ONE running stage tick their elapsed time."""

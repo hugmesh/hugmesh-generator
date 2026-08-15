@@ -42,6 +42,7 @@ import threading
 import types
 
 from ..qt import QtCore, QtGui, QtWidgets
+from .. import console
 from ...core.cloud_deploy import CloudDeploy, CloudDeployOptions
 from ...core.progress_parse import ProgressParser, track_phases
 from ._scroll import scrollable
@@ -186,7 +187,7 @@ class DeployPage(QtWidgets.QWizardPage):
 
         # Plan preview (read-only, live) — the confirm-before-run surface.
         lay.addWidget(QtWidgets.QLabel("Plan preview (pure — nothing runs until you pick a verb):"))
-        self.plan_view = QtWidgets.QPlainTextEdit()
+        self.plan_view = console.attach(QtWidgets.QPlainTextEdit())
         self.plan_view.setReadOnly(True)
         self.plan_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
         f = self.plan_view.font()
@@ -259,7 +260,7 @@ class DeployPage(QtWidgets.QWizardPage):
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
 
-        self.log = QtWidgets.QPlainTextEdit()
+        self.log = console.attach(QtWidgets.QPlainTextEdit())
         self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
 
@@ -401,7 +402,7 @@ class DeployPage(QtWidgets.QWizardPage):
             self.status.setText(why)
             return
         self.cd = CloudDeploy(self.generator_dir, self.collect())
-        self.log.appendPlainText(f"[deploy] {self.cd.command_string(verb)}")
+        console.write(self.log, f"[deploy] {self.cd.command_string(verb)}")
         self._launch(label, verb)
 
     def _apply_clicked(self):
@@ -462,7 +463,7 @@ class DeployPage(QtWidgets.QWizardPage):
             self.progress_label.setText(state.phase_label)
 
     def _on_worker_line(self, line: str) -> None:
-        self.log.appendPlainText(line)
+        console.write(self.log, line)
         if self._parser is not None:
             self._apply_progress_state(self._parser.feed(line))
 
@@ -499,7 +500,7 @@ class DeployPage(QtWidgets.QWizardPage):
             return
         self.cd = CloudDeploy(self.generator_dir, self.collect())
         ok, msg = self.cd.run_verb_in_terminal(verb)
-        self.log.appendPlainText(f"[deploy] {msg}")
+        console.write(self.log, f"[deploy] {msg}")
         self.status.setText(
             f"'{verb}' opened in a terminal — finish it there." if ok
             else f"'{verb}' needs a terminal (see log).")

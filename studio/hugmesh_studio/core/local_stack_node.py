@@ -22,7 +22,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
-from . import devops_tools
+from . import devops_tools, proc_text
 from .local_services import federation_env
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
@@ -555,7 +555,10 @@ class LocalStackNode:
             proc = subprocess.Popen(
                 ["make", target], cwd=self.generator_dir, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                errors="replace", start_new_session=(os.name == "posix"))
+                # Had errors="replace" but no encoding, so it could not CRASH — it just
+                # decoded with the launcher's locale and mojibaked under C/POSIX. Pinning
+                # utf-8 is the other half of the same fix. See core/proc_text.
+                start_new_session=(os.name == "posix"), **proc_text.TEXT_IO)
         except OSError as e:
             return False, str(e)
         tail: collections.deque[str] = collections.deque(maxlen=400)

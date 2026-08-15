@@ -42,6 +42,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+
+from . import proc_text
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -301,7 +303,8 @@ class PhoneWizard:
         try:
             self._proc = subprocess.Popen(
                 args, cwd=self.generator_dir, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                **proc_text.TEXT_IO)
             assert self._proc.stdout is not None
             for line in self._proc.stdout:
                 if on_line:

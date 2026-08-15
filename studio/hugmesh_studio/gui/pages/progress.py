@@ -57,6 +57,7 @@ from collections import deque
 
 from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
 from .. import build_supervisor
+from .. import console
 from .. import flag_badges
 from ..tray import write_build_status
 from ...core import build_sessions
@@ -536,6 +537,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         # BOUNDED DOCUMENT — see _LOG_MAX_BLOCKS. Without this an hours-long build grows
         # the QTextDocument to millions of blocks and every repaint pays for all of them.
         self.log.setMaximumBlockCount(_LOG_MAX_BLOCKS)
+        # Monospace + no wrap. Portage aligns its USE-flag columns with spaces, and in a
+        # proportional face those columns do not line up at all; a wrapped 200-char
+        # compiler line destroys the same alignment, so a horizontal scrollbar is the
+        # honest trade. (attach() re-applies the block cap set just above.)
+        console.attach(self.log, _LOG_MAX_BLOCKS)
         log_lay.addWidget(self.log, 1)
 
         # ── "watch it in a terminal" help (greyed, selectable, REAL path) ─────────────
@@ -1276,6 +1282,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         touched_rows: list[int] = []                       # ordered, de-duped
         moved: dict[tuple[int, str], PackageProgress] = {}  # (row, atom) -> live row
         visible: list[str] = []
+        # The COLOURED originals, pane only. Every other consumer (row.buffer ->
+        # error_tail -> the session record, and the stage tracker) keeps taking the
+        # sanitised text: those are read back as text, and markup would corrupt them.
+        visible_raw: list[str] = []
         for i, raw_line in batch:
             # Defensive: _reset() can empty self._rows while the old worker is still
             # emitting. This is a Qt slot's downstream, and on PyQt6 an IndexError
@@ -1288,6 +1298,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             line = self._consume_line(row, raw_line, moved)
             if line is not None:
                 visible.append(line)
+                visible_raw.append(raw_line)
         for (i, _atom), pkg in moved.items():
             self._render_package(self._rows[i], pkg)
         for i in touched_rows:
@@ -1302,7 +1313,13 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._write_status()
             self._refresh_overall()
         if visible:
-            self.log.appendPlainText("\n".join(visible))
+            # RENDER the colour rather than discarding it. _display_safe() strips it
+            # because Qt paints a box for a bare ESC, but stripping also threw away the
+            # one signal the builders deliberately encode -- portage colours a failure
+            # red and a transition green, and the operator was left scanning monochrome
+            # text for them. console.write_batch keeps the single-append fast path for
+            # batches with no escapes, which is nearly all of them.
+            console.write_batch(self.log, visible_raw, visible)
 
     def _consume_line(self, row: _Row, line: str,
                       moved: dict[tuple[int, str], PackageProgress]) -> str | None:
