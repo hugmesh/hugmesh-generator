@@ -14,6 +14,7 @@ The two claims that MUST be tests, not comments (they die silently otherwise):
 import pytest
 
 from hugmesh_studio.core import theme
+from hugmesh_studio.core import theme_presets
 
 # ── golden pin: the shipped login-ui literals ───────────────────────────────────────
 # styles.scss :root (the consumed --sd-* contract)
@@ -181,3 +182,70 @@ def test_css_root_prepends_font_faces_before_the_root_block():
 def test_css_root_refuses_non_literal_tokens():
     with pytest.raises(ValueError):
         theme.css_root({"--sd-x": "var(--sd-y)"})
+
+
+class TestAccentOnAndRgbTwins:
+    """Two token families that were promised and never emitted.
+
+    Both are the same class of bug: a token the UIs need did not exist, so the UIs
+    improvised — and both improvisations are broken in ways nothing would report.
+    """
+
+    def test_accent_has_an_on_twin_like_primary_and_secondary(self):
+        # The module docstring promises a "*-on" twin that auto-picks #000/#fff by
+        # luminance. It delivered that for primary and secondary but not for --sd-accent,
+        # which is the token the UIs actually use as a BUTTON BACKGROUND.
+        t = theme.derive("#7c4dff")
+        assert "--sd-accent-on" in t
+        assert t["--sd-accent-on"] in ("#000000", "#ffffff")
+
+    def test_the_default_theme_has_it_too(self):
+        assert "--sd-accent-on" in theme.default_tokens()
+
+    def test_accent_on_clears_AA_for_every_shipped_preset_and_ramp(self):
+        # WHY THIS MATTERS: with no token to reach for, a dozen components hardcoded
+        # `color: #fff` on an accent background. Measured against the shipped presets that
+        # FAILS AA on 24 of 38 — white on the nonbinary flag's #fcf434 is 1.16:1.
+        failures = []
+        for preset in theme_presets.PRESETS:
+            for mode in theme_presets.MODES:
+                tokens = theme_presets.compose_tokens(preset.preset_id, mode)
+                accent, on = tokens.get("--sd-accent", ""), tokens.get("--sd-accent-on", "")
+                assert on, f"{preset.preset_id}/{mode} has no --sd-accent-on"
+                ratio = theme.contrast_ratio(on, accent)
+                if ratio < 4.5:
+                    failures.append((preset.preset_id, mode, round(ratio, 2)))
+        assert failures == [], f"accent text below AA: {failures}"
+
+    def test_it_reuses_the_existing_derivation_rather_than_a_second_one(self):
+        # --sd-accent IS secondary, so the correct value is the one already computed for
+        # --sd-secondary-on. Any drift between them means a second implementation crept in.
+        for hexv in ("#7c4dff", "#fcf434", "#00ffff", "#0a0a12", "#ffffff"):
+            t = theme.derive("#ffd700", hexv)
+            assert t["--sd-accent-on"] == t["--sd-secondary-on"]
+
+    def test_every_hex_neutral_has_a_channel_triple(self):
+        # `rgba(var(--x), a)` needs channels, not a hex — a hex makes the whole
+        # declaration invalid and the browser drops it SILENTLY. hugmesh-matrix-ui has
+        # five such declarations rendering with no border today.
+        t = theme.derive("#7c4dff")
+        for name, value in list(t.items()):
+            if name.endswith("-rgb") or not theme.HEX_RE.match(str(value)):
+                continue
+            if not name.startswith("--sd-"):
+                continue
+            # Only the fixed neutral ramp is guaranteed a twin; derived brand tokens
+            # already carry their own where consumers need them.
+            if name in theme._NEUTRALS:
+                assert f"{name}-rgb" in t, f"{name} has no channel triple"
+
+    @pytest.mark.parametrize("token", [
+        "--sd-success-rgb", "--sd-error-rgb", "--sd-text-rgb", "--sd-bg-0-rgb",
+    ])
+    def test_the_specific_twins_live_consumers_already_reference(self, token):
+        assert token in theme.derive("#7c4dff")
+
+    def test_triples_are_comma_separated_channels_not_hex(self):
+        t = theme.derive("#7c4dff")
+        assert t["--sd-success-rgb"] == "76,175,80"
+        assert "#" not in t["--sd-error-rgb"]

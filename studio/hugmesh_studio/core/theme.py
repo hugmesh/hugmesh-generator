@@ -100,6 +100,23 @@ def _fmt(rgb: tuple[float, float, float]) -> str:
     return "#" + "".join(f"{max(0, min(255, round(c))):02x}" for c in rgb)
 
 
+# ...and the SAME hazard for every other neutral, which was missed. The three triples
+# above were added for the mixins that compose neutrals inside rgba(); the SEMANTIC
+# colours never got theirs, and consumers wrote `rgba(var(--hug-success), .4)` anyway.
+# That is invalid CSS -- rgba() needs channels, not a hex -- so the browser DROPS the
+# whole declaration silently. Five live examples in hugmesh-matrix-ui alone
+# (composer.component.scss:74,207,213 and role-actions.component.scss:60,66) render with
+# no border at all today.
+#
+# Generated rather than hand-listed so a neutral added above cannot arrive without its
+# twin: the class of bug this fixes is precisely "the token existed but its -rgb did not".
+_NEUTRALS.update({
+    f"{name}-rgb": ",".join(str(c) for c in _parse(value))
+    for name, value in list(_NEUTRALS.items())
+    if HEX_RE.match(value) and f"{name}-rgb" not in _NEUTRALS
+})
+
+
 def _rgb_to_hsl(r: int, g: int, b: int) -> tuple[float, float, float]:
     rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
     mx, mn = max(rf, gf, bf), min(rf, gf, bf)
@@ -388,6 +405,19 @@ def derive(primary: str, secondary: str = "",
     # them (design: secondary => links / focus / secondary actions / accent-soft).
     tokens["--sd-accent"] = secondary
     tokens["--sd-accent-soft"] = soft_for_text(secondary)
+    # TEXT ON A FILLED ACCENT, which was missing and is why the UIs all hardcode white.
+    #
+    # This module's own contract promises that a "*-on" twin auto-picks #000/#fff by
+    # luminance so AA is guaranteed for every sRGB colour -- and it delivered that for
+    # --sd-primary-on and --sd-secondary-on while never emitting one for --sd-accent, the
+    # token the UIs actually use as a button background. With no token to reach for, a
+    # dozen components hardcoded `color: #fff`, and MEASURED against the shipped presets
+    # that fails AA on 24 of 38: white on the nonbinary flag's #fcf434 is 1.16:1, on
+    # high-contrast's #00ffff 1.25:1 -- effectively invisible.
+    #
+    # No new maths: --sd-accent IS secondary, so the correct value is the one already
+    # computed for --sd-secondary-on. This only stops throwing it away.
+    tokens["--sd-accent-on"] = on_color(secondary)
     if palette:
         tokens.update(palette_tokens(
             palette,
@@ -409,6 +439,7 @@ def default_tokens() -> dict[str, str]:
         "secondary", _DEFAULT_SECONDARY, soft_override=_DEFAULT_SECONDARY_SOFT))
     tokens["--sd-accent"] = _DEFAULT_SECONDARY
     tokens["--sd-accent-soft"] = _DEFAULT_SECONDARY_SOFT
+    tokens["--sd-accent-on"] = on_color(_DEFAULT_SECONDARY)
     return tokens
 
 
