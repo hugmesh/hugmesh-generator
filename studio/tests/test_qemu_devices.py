@@ -6,14 +6,22 @@ tmp_path and every argv is asserted as a list — which is also the only way to 
 the two rules that would otherwise only be discovered in front of an operator: that a
 half-written record costs one row instead of the whole list, and that a device with no
 published port never silently aims ssh at 127.0.0.1:22 (the operator's own machine).
+
+The pause-and-save block at the bottom is the same idea applied to a destructive
+action: where a save may land, when the button is offered at all, and which
+``--overwrite`` reaches the runner are all paths and argv, so they are asserted
+literally rather than described.
 """
+import datetime
 import json
 import os
+import re
 
 import pytest
 
 from hugmesh_studio.core import cloud_deploy
 from hugmesh_studio.core import qemu_devices as qd
+from hugmesh_studio.core import qemu_tests as qt
 from hugmesh_studio.core.config import User
 
 WORK = "/work/on/host"          # any path; only the devices/ subdir is ever read
@@ -225,6 +233,257 @@ def test_device_control_argv():
 def test_device_control_argv_rejects_unknown_action():
     with pytest.raises(ValueError):
         qd.device_control_argv("/gen", _dev(), "restart")
+
+
+# ── pause and save ───────────────────────────────────────────────────────────────
+# The device's disk is a per-run qcow2 overlay backed by the golden build image. QEMU
+# holds that overlay for the life of the guest — a host-side tool cannot even read it
+# consistently — and write-locks the golden underneath it as soon as the disk is
+# attached to a guest device. So the only save that exists is "the runner copies it
+# out through the running QEMU", and the rules worth testing are the ones deciding
+# WHERE that copy goes and WHEN the button is offered at all — each of them a path or
+# an argv, i.e. assertable exactly.
+
+def test_default_save_target_is_a_stable_qcow2_under_the_work_dir():
+    """The overwrite target has to be findable by RULE, not by memory.
+
+    The Studio is restarted between saves and the runner is also driven from a shell,
+    so "the existing copy" can only mean "the path this rule produces". It is
+    therefore timestamp-free, one per device label, and lands beside runs/ and
+    devices/ in the same --work tree the registry was read from.
+    """
+    assert qd.default_save_target("/gen/out/qemu-runs", _dev()) == \
+        "/gen/out/qemu-runs/saves/rpi5_pki.qcow2"
+    # Same device, later call: the same path, or "overwrite" has nothing to aim at.
+    assert qd.default_save_target("/gen/out/qemu-runs", _dev()) == \
+        qd.default_save_target("/gen/out/qemu-runs", _dev())
+    # A '+' label is filed the way the runner files it, not left in the filename.
+    assert qd.default_save_target("/w", _dev(label="rpi5/backend+pki")) == \
+        "/w/saves/rpi5_backend_pki.qcow2"
+
+
+def test_save_names_use_the_runners_on_disk_spelling():
+    """A save must be pairable with the run dir and the result row of the same device.
+
+    Cross-checked against qemu_tests.result_filename rather than restated: that is the
+    same ``tr '/+' '__'`` rule as safe_label() in run-qemu-docker.sh and the registry
+    filename in docker-entrypoint.sh, so drift in either direction fails here.
+    """
+    for label in ("rpi5/pki", "x86/standalone-thin", "rpi5/backend+pki"):
+        stem = qt.result_filename(label)[: -len(".json")]
+        assert qd.safe_label(label) == stem
+        assert qd.save_basename(label) == stem + ".qcow2"
+
+
+def test_new_save_target_never_clobbers_an_existing_copy(tmp_path):
+    """"Another copy" means another FILE. A stamp alone would not guarantee that.
+
+    Two saves in the same second, an explicit stamp reused, or a clock that stepped
+    backwards would all silently replace a copy the operator asked to keep — so a
+    taken name grows a discriminator instead of being handed back.
+    """
+    work = str(tmp_path)
+    dev = _dev()
+    first = qd.new_save_target(work, dev, stamp="20260814T120000Z")
+    assert first == os.path.join(work, "saves", "rpi5_pki-20260814T120000Z.qcow2")
+
+    os.makedirs(qd.saves_dir(work), exist_ok=True)
+    open(first, "w").close()
+    second = qd.new_save_target(work, dev, stamp="20260814T120000Z")
+    assert second == os.path.join(work, "saves", "rpi5_pki-20260814T120000Z-2.qcow2")
+
+    open(second, "w").close()
+    third = qd.new_save_target(work, dev, stamp="20260814T120000Z")
+    assert third == os.path.join(work, "saves", "rpi5_pki-20260814T120000Z-3.qcow2")
+
+    # And none of them is the overwrite target: "another copy" never touches it.
+    stable = qd.default_save_target(work, dev)
+    assert stable == os.path.join(work, "saves", "rpi5_pki.qcow2")
+    assert stable not in (first, second, third)
+
+
+def test_new_save_target_default_stamp_is_a_utc_artifact_stamp():
+    """Unstamped copies are named like build artifacts: fixed-width UTC, so a plain
+    listing of saves/ is in chronological order."""
+    name = os.path.basename(qd.new_save_target("/no/such/work", _dev()))
+    match = re.fullmatch(r"rpi5_pki-(\d{8}T\d{6}Z)\.qcow2", name)
+    assert match, name
+    stamp = match.group(1)
+    assert len(stamp) == 16                                   # fixed width, so sortable
+    parsed = datetime.datetime.strptime(stamp, qd.SAVE_STAMP_FORMAT) \
+                              .replace(tzinfo=datetime.UTC)
+    assert abs((datetime.datetime.now(datetime.UTC) - parsed).total_seconds()) < 300
+
+
+def test_save_targets_are_qcow2_never_raw():
+    """A raw save IS the device's whole 16G virtual size; a qcow2 costs the data.
+
+    Measured on this host with qemu 10.2.3: a 64M device holding 2M of data backs up
+    to a 3.3M qcow2 — and unlike a sparse raw file it keeps that size through any
+    later copy.
+    """
+    assert qd.SAVE_SUFFIX == ".qcow2"
+    for target in (qd.default_save_target("/w", _dev()),
+                   qd.new_save_target("/w", _dev(), stamp="20260814T120000Z")):
+        assert target.endswith(".qcow2")
+    for bad in ("/w/saves/rpi5_pki.img", "/w/saves/rpi5_pki.raw", "/w/saves/rpi5_pki"):
+        reason = qd.save_target_refusal(bad)
+        assert ".qcow2" in reason and "raw" in reason
+
+
+@pytest.mark.parametrize("overrides,ok", [
+    ({}, True),
+    ({"state": "booting"}, True),                 # a booting guest already has a QEMU
+    ({"state": "stopped"}, False),                # nothing to pause, no live overlay
+    ({"state": ""}, False),                       # never-updated record
+    ({"qmp": ""}, False),                         # started without --qmp: no channel
+    ({"container": ""}, False),                   # nowhere to run the QMP client
+])
+def test_can_save_needs_running_plus_container_plus_qmp(overrides, ok):
+    assert qd.can_save(_dev(**overrides)) is ok
+    assert bool(qd.save_blocker(_dev(**overrides))) is (not ok)
+
+
+def test_can_save_does_not_depend_on_ssh():
+    """Flushing the guest over ssh before the pause makes a cleaner copy, but its
+    absence only costs cleanliness — the copy is crash-consistent either way — so a
+    device that published no port keeps its save button."""
+    dev = _dev(ssh_host_port=0, ssh_key="", ssh_user="", users=[])
+    assert qd.can_save(dev) is True
+    assert qd.save_blocker(dev) == ""
+
+
+def test_save_blocker_says_which_prerequisite_is_missing():
+    """The GUI shows this text on a disabled button, so it has to name the fix."""
+    assert "not running" in qd.save_blocker(_dev(state="stopped"))
+    assert "--qmp" in qd.save_blocker(_dev(qmp=""))
+    assert "container" in qd.save_blocker(_dev(container=""))
+
+
+def test_device_save_argv_copy_and_overwrite():
+    dev = _dev()
+    copy_to = "/gen/out/qemu-runs/saves/rpi5_pki-20260814T120000Z.qcow2"
+    assert qd.device_save_argv("/gen", dev, copy_to) == [
+        "/gen/tests/qemu/run-qemu-docker.sh",
+        "--save-device", "rpi5/pki", "--save-to", copy_to]
+
+    stable = "/gen/out/qemu-runs/saves/rpi5_pki.qcow2"
+    assert qd.device_save_argv("/gen", dev, stable, overwrite=True) == [
+        "/gen/tests/qemu/run-qemu-docker.sh",
+        "--save-device", "rpi5/pki", "--save-to", stable, "--overwrite"]
+
+
+def test_device_save_argv_never_arms_overwrite_by_itself():
+    """Replacing a saved copy is destructive, so the flag only ever comes from an
+    explicit request — exactly like the runner's other non-default knobs."""
+    argv = qd.device_save_argv("/gen", _dev(), "/gen/out/qemu-runs/saves/a.qcow2")
+    assert "--overwrite" not in argv
+    assert qd.device_save_argv("/gen", _dev(), "/gen/out/qemu-runs/saves/a.qcow2",
+                               overwrite=False) == argv
+
+
+def test_device_save_argv_refuses_a_device_that_cannot_be_saved():
+    for dev in (_dev(state="stopped"), _dev(qmp=""), _dev(container="")):
+        with pytest.raises(ValueError):
+            qd.device_save_argv("/gen", dev, "/gen/out/qemu-runs/saves/a.qcow2")
+
+
+def test_device_save_argv_refuses_an_unarmed_clobber(tmp_path):
+    """An existing copy at the target is only replaced when overwrite was asked for.
+
+    Advisory — the runner re-checks the path it is about to write — but it is what
+    lets the GUI arm a confirmation instead of surfacing a shell error afterwards.
+    """
+    work = str(tmp_path)
+    dev = _dev()
+    stable = qd.default_save_target(work, dev)
+
+    # No previous save yet: both spellings are fine, and neither is a clobber.
+    assert qd.save_would_overwrite(stable) is False
+    assert qd.device_save_argv("/gen", dev, stable, work_dir=work)[-1] == stable
+    assert qd.device_save_argv("/gen", dev, stable, overwrite=True,
+                               work_dir=work)[-1] == "--overwrite"
+
+    os.makedirs(qd.saves_dir(work), exist_ok=True)
+    open(stable, "w").close()
+    assert qd.save_would_overwrite(stable) is True
+    with pytest.raises(ValueError, match="overwriting"):
+        qd.device_save_argv("/gen", dev, stable, work_dir=work)
+    assert qd.device_save_argv("/gen", dev, stable, overwrite=True,
+                               work_dir=work)[-1] == "--overwrite"
+
+
+def test_save_target_refusal_accepts_the_targets_this_module_builds():
+    work = "/gen/out/qemu-runs"
+    for target in (qd.default_save_target(work, _dev()),
+                   qd.new_save_target(work, _dev(), stamp="20260814T120000Z")):
+        assert qd.save_target_refusal(target, generator_dir="/gen", work_dir=work,
+                                      artifacts_dir="/gen/out/sessions/s1") == ""
+
+
+def test_save_target_refusal_protects_the_golden_images():
+    """The artifacts tree is the shared build output every run and session boots from.
+
+    Both spellings are refused — the out/sessions root the builders always use, and
+    an explicit --artifacts dir that can be anywhere — and the check survives a
+    ``..`` walk, because a refusal you can path-traverse around is not a refusal.
+    """
+    sessions = qd.save_target_refusal("/gen/out/sessions/s1/rpi5.qcow2",
+                                      generator_dir="/gen")
+    assert "golden" in sessions and "/gen/out/sessions" in sessions
+
+    elsewhere = qd.save_target_refusal("/mnt/build/artifacts/rpi5.qcow2",
+                                       artifacts_dir="/mnt/build/artifacts")
+    assert "golden" in elsewhere
+
+    traversal = qd.save_target_refusal(
+        "/gen/out/qemu-runs/saves/../../sessions/s1/rpi5.qcow2", generator_dir="/gen")
+    assert "golden" in traversal
+
+
+def test_save_target_refusal_is_containment_not_a_string_prefix():
+    """out/sessions-archive is NOT inside out/sessions; startswith cannot tell."""
+    assert qd.save_target_refusal("/gen/out/sessions-archive/keep.qcow2",
+                                  generator_dir="/gen") == ""
+    assert qd.save_target_refusal("/mnt/build/artifacts-old/keep.qcow2",
+                                  artifacts_dir="/mnt/build/artifacts") == ""
+
+
+def test_save_target_refusal_protects_the_live_overlay():
+    """<work>/runs/<label>/ holds the overlay QEMU has open and write-locked, so a
+    target in there is a save that could never be created."""
+    reason = qd.save_target_refusal("/gen/out/qemu-runs/runs/rpi5_pki/run.qcow2",
+                                    work_dir="/gen/out/qemu-runs")
+    assert "live overlay" in reason and "write lock" in reason
+
+
+def test_save_target_refusal_rejects_unusable_paths(tmp_path):
+    assert qd.save_target_refusal("") == "no save target given"
+    assert "absolute" in qd.save_target_refusal("saves/rpi5_pki.qcow2")
+    a_dir = tmp_path / "rpi5_pki.qcow2"
+    a_dir.mkdir()
+    assert "is a directory" in qd.save_target_refusal(str(a_dir))
+
+
+def test_no_argv_this_module_builds_can_commit_into_the_golden_image():
+    """The one action that must never reach a button.
+
+    Committing the overlay down into its backing file rewrites the golden build
+    artifact in place and drops the overlay out of the chain, so every later guest
+    write lands on the artifact every other run boots from. It is not expressible
+    here: the GUI builds its monitor buttons from QMP_COMMANDS, and the save argv
+    names the runner and a target path — nothing else.
+    """
+    argvs = [qd.device_save_argv("/gen", _dev(), "/gen/out/qemu-runs/saves/a.qcow2"),
+             qd.device_save_argv("/gen", _dev(), "/gen/out/qemu-runs/saves/a.qcow2",
+                                 overwrite=True)]
+    argvs += [qd.qmp_argv("/gen", _dev(), cmd) for cmd in qd.QMP_COMMANDS]
+    for argv in argvs:
+        for word in ("commit", "qemu-img", "qemu-nbd", "blockdev-add"):
+            assert not any(word in arg for arg in argv), argv
+    assert "commit" not in qd.QMP_COMMANDS
+    # C5's pause/restore needs all three: read the state, pause, put it back.
+    assert {"pause", "resume", "status"} <= set(qd.QMP_COMMANDS)
 
 
 # ── login dropdown ───────────────────────────────────────────────────────────────

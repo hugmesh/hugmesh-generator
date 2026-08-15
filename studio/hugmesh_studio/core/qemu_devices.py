@@ -33,9 +33,41 @@ The guest's sshd sets ``PermitRootLogin no`` and tests/qemu/assertions.sh assert
 that. Handing the operator a root ssh would mean weakening the very thing the harness
 tests. "Superuser" is therefore a wheel login plus ``sudo -i`` — which is also what
 the operator would do on real hardware, so the button teaches the right habit.
+
+PAUSE-AND-SAVE: WHICH SAVE IS EVEN EXPRESSIBLE
+----------------------------------------------
+A live device's disk is a per-run qcow2 overlay whose backing file is the golden
+build image (tests/qemu/launch-pi.sh:193 ``OVERLAY="${RUN_DIR}/run.qcow2"``, resized
+to ``OVERLAY_SIZE`` = 16G at launch-pi.sh:49). That shape rules out most of the
+obvious designs, so the save rules below are narrow ON PURPOSE:
+
+* A host-side image tool cannot copy a live device AT ALL: QEMU holds the overlay,
+  and an attempt to read or rewrite it fails on the image lock (measured on qemu
+  10.2.3 — ``Failed to get "write" lock`` / ``Failed to get shared "write" lock``).
+  The golden backing file is write-locked too for as long as a guest device is
+  attached to the chain. So "pause the guest, then run a tool over its disk" is not
+  a design that exists; every save goes through the RUNNING QEMU — pause, block job,
+  restore the prior run state — which is why this module never names an image tool
+  in an argv and only asks the runner, which owns the QMP socket, to do it.
+* Committing the overlay DOWN into its backing file would rewrite the golden build
+  artifact that every other run and every other session boots from, and drop the
+  overlay out of the chain so later guest writes land on that artifact directly.
+  There is deliberately no function here that can express it, and ``QMP_COMMANDS``
+  (the tuple the GUI builds its buttons from) contains no commit verb.
+* So a save is a COPY: a standalone qcow2 holding the overlay's delta merged over
+  the golden's data. "Another copy" is a fresh path (``new_save_target``);
+  "overwrite the existing copy" is the stable per-device path
+  (``default_save_target``) written again — the previously SAVED copy is what gets
+  replaced, never the golden image, which ``save_target_refusal`` refuses outright.
+
+``new_save_target`` and ``save_would_overwrite`` stat the filesystem, exactly as
+``discover_devices`` reads it; that is still hermetic in the sense this module cares
+about (no docker, no qemu, no sockets, no subprocess) and it is what makes "without
+clobbering" a guarantee rather than a hope.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -47,8 +79,10 @@ from dataclasses import dataclass, field
 # A second copy would drift the day someone adds a terminal to only one of them.
 from hugmesh_studio.core.cloud_deploy import TERMINALS
 # The runner path lives in qemu_tests so the two device-facing modules can never
-# disagree about which script they drive.
-from hugmesh_studio.core.qemu_tests import RUNNER_SCRIPT
+# disagree about which script they drive. SESSIONS_SUBDIR comes from the same place
+# for the same reason: the save refusal below has to know where golden build images
+# live, and a second spelling of "out/sessions" would rot the day the builders move.
+from hugmesh_studio.core.qemu_tests import RUNNER_SCRIPT, SESSIONS_SUBDIR
 
 #: Where docker-entrypoint.sh writes one JSON record per live device, under the
 #: runner's ``--work`` dir (the same dir that already holds runs/ and results/).
@@ -80,6 +114,31 @@ DEVICE_ACTIONS = ("start", "stop")
 #: "" is included because a truncated/never-updated record must not be offered as a
 #: live login target.
 _DEAD_STATES = ("stopped", "")
+
+#: Where a saved copy of a device's disk lands, under the runner's ``--work`` dir —
+#: i.e. beside runs/, results/ and devices/, in the tree the harness already fills
+#: with multi-GB images. That tree is on the operator's big filesystem by
+#: construction (qemu_tests.DEFAULT_WORK_SUBDIR = ``out/qemu-runs`` inside the
+#: generator checkout); the root filesystem on this workstation has hit 100% before,
+#: and a 16G-virtual-disk save is not the thing to point at it.
+SAVES_SUBDIR = "saves"
+
+#: The live per-device run dir, i.e. the qcow2 overlay QEMU currently has OPEN
+#: (docker-entrypoint.sh:187 ``RUN_DIR="${WORK}/runs/<safe label>"``). Named here for
+#: exactly one purpose: refusing a save target that points into it.
+RUNS_SUBDIR = "runs"
+
+#: A save is always qcow2, never raw. A qcow2 costs what the guest actually
+#: allocated and keeps costing that through any later copy of the file. A raw save of
+#: the same disk IS the full virtual size — 16G per device (launch-pi.sh:49) — in
+#: every listing, and stays smaller than that only for as long as the filesystem
+#: holds it sparse and no tool that touches it forgets to.
+SAVE_SUFFIX = ".qcow2"
+
+#: ``YYYYmmddTHHMMSSZ`` — the same stamp shape build artifacts carry
+#: (qemu_tests.artifact_stamp), so a plain string sort over save names is
+#: chronological and a saves/ listing reads like the sessions listing next to it.
+SAVE_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
 @dataclass
@@ -291,6 +350,238 @@ def device_control_argv(generator_dir: str, dev: Device, action: str) -> list[st
 def stop_all_argv(generator_dir: str) -> list[str]:
     """argv for the fleet-wide stop button."""
     return [_runner(generator_dir), "--stop-all-devices"]
+
+
+# ── Pause and save ───────────────────────────────────────────────────────────────
+
+def safe_label(label: str) -> str:
+    """``rpi5/pki`` -> ``rpi5_pki``: a label as it is spelled on disk.
+
+    One rule, three implementations that must agree: ``safe_label()`` in
+    tests/qemu/run-qemu-docker.sh:224, the ``tr '/+' '__'`` that names the registry
+    record in tests/qemu/docker-entrypoint.sh:193, and ``result_filename()`` in
+    core/qemu_tests.py:329. A save file named by a fourth rule would still work, but
+    an operator (and a `ls`) could no longer pair a save with the device, the run dir
+    and the result row it belongs to — so the rule is mirrored, and
+    test_qemu_devices.py asserts it against qemu_tests's copy.
+    """
+    return label.replace("/", "_").replace("+", "_")
+
+
+def saves_dir(work_dir: str) -> str:
+    """The save directory inside a runner ``--work`` dir."""
+    return os.path.join(work_dir, SAVES_SUBDIR)
+
+
+def save_basename(label: str) -> str:
+    """``rpi5/pki`` -> ``rpi5_pki.qcow2`` — the stable, timestamp-free save name."""
+    return safe_label(label) + SAVE_SUFFIX
+
+
+def default_save_target(work_dir: str, dev: Device) -> str:
+    """The ONE path "overwrite the existing copy" overwrites, for this device.
+
+    Deliberately timestamp-free. Overwriting only means anything if the previous save
+    is findable, and it has to be findable by a rule rather than by remembering what
+    the GUI happened to name it in an earlier session — the Studio is restarted
+    between saves, and the runner is also driven straight from a shell. So: one
+    stable path per device label, in the same tree the registry itself lives in.
+
+    ``work_dir`` is the same ``--work`` the caller discovered the device from, so a
+    caller that overrode the default work dir gets its saves in ITS tree.
+    """
+    return os.path.join(saves_dir(work_dir), save_basename(dev.label))
+
+
+def _utc_stamp() -> str:
+    return datetime.datetime.now(datetime.UTC).strftime(SAVE_STAMP_FORMAT)
+
+
+def new_save_target(work_dir: str, dev: Device, *, stamp: str = "") -> str:
+    """A save path for "another copy" — one that does not exist yet.
+
+    The stamp makes the name meaningful; the EXISTENCE CHECK is what makes the
+    promise. A timestamp alone is not a no-clobber guarantee: two saves inside the
+    same second, a re-run with an explicit ``stamp``, or a clock that stepped
+    backwards would all silently overwrite a copy the operator asked to keep. So a
+    taken name grows a ``-2``, ``-3`` … discriminator instead.
+
+    ``stamp`` is injectable so callers (and tests) can name a copy deterministically;
+    empty means "now", in UTC, matching the artifact stamps.
+    """
+    base = safe_label(dev.label)
+    root = saves_dir(work_dir)
+    stamp = (stamp or "").strip() or _utc_stamp()
+    candidate = os.path.join(root, f"{base}-{stamp}{SAVE_SUFFIX}")
+    if not os.path.exists(candidate):
+        return candidate
+    for n in range(2, 1000):
+        candidate = os.path.join(root, f"{base}-{stamp}-{n}{SAVE_SUFFIX}")
+        if not os.path.exists(candidate):
+            return candidate
+    # Unreachable in practice, and a loud failure is the only safe end: returning the
+    # 999th name anyway would be handing back a path we KNOW is someone else's save.
+    raise ValueError(f"no free save name for {dev.label!r} under {root} at {stamp}")
+
+
+def save_would_overwrite(target: str) -> bool:
+    """Is there already a file at ``target``?
+
+    The GUI's arming condition: a save that replaces an existing copy is destructive
+    and has to be confirmed inline, while the first save of a device is not.
+    """
+    return bool(target) and os.path.exists(target)
+
+
+def save_blocker(dev: Device) -> str:
+    """Why ``dev`` cannot be saved right now, or "" when it can.
+
+    Three conditions, because a save is "pause it, copy its disk through its own
+    QEMU, put it back the way it was" and each of them is a hard prerequisite:
+
+    * the device is RUNNING — a stopped device has no QEMU to pause and no live
+      overlay to copy (its disk is whatever the last run left behind);
+    * the record names a CONTAINER — that is where the runner's QMP client runs
+      (the socket is root-owned inside the container, so the host never opens it);
+    * the record names a QMP SOCKET — a device started without ``--qmp`` has no
+      control channel at all, so it can be logged into but not paused.
+
+    Notably NOT required: a published ssh port or a key. Flushing the guest's page
+    cache over ssh before the pause makes a saved copy cleaner, but its absence only
+    costs cleanliness — the copy is crash-consistent either way — and a device that
+    published no port must not lose its save button over it.
+
+    A reason STRING rather than a bool because the GUI has to say why a button is
+    disabled; ``can_save`` is the bool wrapper.
+    """
+    if not dev.is_running:
+        return (f"{dev.label} is not running (state {dev.state or 'unknown'}); "
+                "start it again with --keep-alive before saving")
+    if not dev.container:
+        return f"the record for {dev.label} names no container to run the save in"
+    if not dev.qmp:
+        return (f"{dev.label} has no QMP socket recorded (started without --qmp), "
+                "so it cannot be paused or copied")
+    return ""
+
+
+def can_save(dev: Device) -> bool:
+    """Is a save expressible for this device at all? The GUI's button predicate."""
+    return not save_blocker(dev)
+
+
+def _within(path: str, root: str) -> bool:
+    """Is ``path`` inside ``root`` (or ``root`` itself)?
+
+    ``realpath`` both sides first: a target reached through ``..`` or a symlinked
+    work dir is the same file as the one spelled directly, and a refusal that a
+    ``../..`` walks around is not a refusal. ``commonpath`` rather than
+    ``startswith``, because ``out/sessions-archive`` is not inside ``out/sessions``
+    and a string prefix cannot tell the difference.
+    """
+    if not path or not root:
+        return False
+    p = os.path.realpath(path)
+    r = os.path.realpath(root)
+    if p == r:
+        return True
+    try:
+        return os.path.commonpath([p, r]) == r
+    except ValueError:      # different roots entirely (no common path at all)
+        return False
+
+
+def save_target_refusal(target: str, *, generator_dir: str = "",
+                        artifacts_dir: str = "", work_dir: str = "") -> str:
+    """Why ``target`` must not be written to, or "" when it is an acceptable save.
+
+    The rule this exists for is the last one: a save must never land in the artifacts
+    tree. The golden ``.img`` files there are the shared build output that every run,
+    every session and every other checkout boots from, and the overlay chain exists
+    precisely so a running guest cannot touch them. A "save" that wrote into that
+    directory would either clobber a build artifact or leave something image-shaped
+    beside them that a later ``discover_rows`` would happily offer as a bootable row.
+
+    Two directories are checked because there are two ways to name that tree: the
+    ``out/sessions`` root, which is where the builders always write, and an explicit
+    ``--artifacts DIR`` the run may have been started with, which can be anywhere.
+    Pass whichever the caller knows; both are optional and independent.
+
+    ``work_dir`` adds the other direction: ``<work>/runs/`` holds the overlay QEMU has
+    OPEN right now, and QEMU holds a write lock on it for the life of the guest, so a
+    target in there is a save that cannot even be created — better refused by name,
+    here, than reported as an opaque image-lock error later.
+
+    Returned as text, not a bool, so the GUI can show the reason and the tests can
+    assert on which rule fired.
+    """
+    if not target:
+        return "no save target given"
+    if not os.path.isabs(target):
+        return (f"save target must be an absolute path, got {target!r} "
+                "(the runner resolves it in its own working directory, not yours)")
+    if not target.endswith(SAVE_SUFFIX):
+        return (f"save target must be a {SAVE_SUFFIX} file, got {target!r}: a raw "
+                "save is the device's whole virtual size, not the data in it")
+    if os.path.isdir(target):
+        return f"save target {target} is a directory"
+    if artifacts_dir and _within(target, artifacts_dir):
+        return (f"refusing to save into the artifacts directory {artifacts_dir}: it "
+                "holds the golden images every run and every session boots from")
+    if generator_dir:
+        sessions_root = os.path.join(generator_dir, SESSIONS_SUBDIR)
+        if _within(target, sessions_root):
+            return (f"refusing to save into {sessions_root}: it holds the golden "
+                    "images every run and every session boots from")
+    if work_dir and _within(target, os.path.join(work_dir, RUNS_SUBDIR)):
+        return (f"refusing to save into {os.path.join(work_dir, RUNS_SUBDIR)}: that "
+                "is the live overlay QEMU has open, which it holds a write lock on")
+    return ""
+
+
+def device_save_argv(generator_dir: str, dev: Device, target: str,
+                     overwrite: bool = False, *, artifacts_dir: str = "",
+                     work_dir: str = "") -> list[str]:
+    """argv for ``run-qemu-docker.sh --save-device LABEL --save-to PATH [--overwrite]``.
+
+    The Studio never copies a disk itself, for the same reason it never speaks QMP
+    itself (see ``qmp_argv``): the socket is root-owned inside the container and the
+    runner already owns talking to it. Here that split is not just tidiness — the
+    save has to pause the guest, run a block job to completion and put the run state
+    back, and doing that from two places would eventually mean two different answers
+    to "did it finish?".
+
+    ``--overwrite`` is emitted ONLY when asked for, like every other non-default knob
+    in ``qemu_tests.runner_command``. It is what turns a save into a destructive
+    action — the previously saved copy at ``target`` is replaced — so it must arrive
+    from an explicitly armed control, never from a default.
+
+    No ``--work`` is passed, matching ``device_control_argv`` and ``qmp_argv``: the
+    runner finds the device record in its own default work dir, and hardcoding a path
+    here would fight a caller who overrode it. ``work_dir``/``artifacts_dir`` are used
+    only to CHECK the target, and only when the caller knows them.
+
+    Raises ValueError rather than emitting a doomed command, in the three cases the
+    GUI can and should have prevented: a device that cannot be saved at all, a
+    refused target, and an existing target with ``overwrite`` off. The last one is
+    advisory — the runner is the authority on a path it is about to write, and it
+    re-checks — but catching it here is what lets the GUI arm a confirmation instead
+    of surfacing a shell error after the fact.
+    """
+    blocker = save_blocker(dev)
+    if blocker:
+        raise ValueError(blocker)
+    refusal = save_target_refusal(target, generator_dir=generator_dir,
+                                  artifacts_dir=artifacts_dir, work_dir=work_dir)
+    if refusal:
+        raise ValueError(refusal)
+    if not overwrite and save_would_overwrite(target):
+        raise ValueError(f"{target} already holds a saved copy; saving there means "
+                         "overwriting it, which has to be asked for explicitly")
+    argv = [_runner(generator_dir), "--save-device", dev.label, "--save-to", target]
+    if overwrite:
+        argv.append("--overwrite")
+    return argv
 
 
 def available_logins(dev: Device, cfg_users: list) -> list[tuple[str, str]]:

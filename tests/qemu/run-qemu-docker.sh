@@ -44,6 +44,35 @@
 # assertion path shares them — so the verb keeps QEMU's own name and the runner
 # says out loud what it does.
 #
+# PAUSE AND SAVE (--save-device)
+# ------------------------------
+# Pause a running device and copy its whole disk to a standalone qcow2 the
+# operator keeps. Three things about it are not obvious and are load-bearing:
+#
+#   * IT CANNOT BE DONE WITH qemu-img. While the device is up QEMU holds a write
+#     lock on the run overlay AND on the golden .img behind it, so an external
+#     `qemu-img convert`/`commit` fails outright with `Failed to get "write"
+#     lock` — 100% of the time, not intermittently. The copy therefore goes
+#     through QEMU itself: blockdev-add the target, blockdev-backup sync=full,
+#     wait for the job's completion EVENT. Measured on qemu 10.2.3 against a
+#     qcow2-over-raw chain, which is exactly the chain the launchers build.
+#   * THE RESULT IS STANDALONE AND MERGED: no backing file, carrying the
+#     overlay's delta on top of the golden's data. That is what makes it a copy
+#     of "everything" rather than a diff that is useless without the artifact.
+#   * block-commit IS NOT OFFERED, by design. It writes the overlay INTO the
+#     golden build artifact and then drops the overlay from the chain, so every
+#     later guest write in that session lands on the shared artifact — verified
+#     (0xaa became 0xbb in the golden, and query-block reported the backing file
+#     as the golden with no overlay left). It is irreversible and it poisons
+#     every future run of that image, so there is no flag and no code path for
+#     it here. --overwrite NEVER means that: it means replacing a previous SAVE.
+#
+# The copy is CRASH-CONSISTENT and the runner says so rather than claiming more:
+# the guest is flushed over ssh when it is reachable, then paused with QMP
+# `stop`, which is a pulled plug as far as the guest is concerned. Afterwards
+# the device is returned to the run state it was ALREADY in — a device the
+# operator had paused by hand stays paused.
+#
 # Examples:
 #   ./tests/qemu/run-qemu-docker.sh --list
 #   ./tests/qemu/run-qemu-docker.sh --platform rpi5
@@ -51,6 +80,9 @@
 #   ./tests/qemu/run-qemu-docker.sh --platform rpi5 --keep-alive --extra-user alice
 #   ./tests/qemu/run-qemu-docker.sh --devices
 #   ./tests/qemu/run-qemu-docker.sh --qmp rpi5/pki pause
+#   ./tests/qemu/run-qemu-docker.sh --save-device rpi5/pki
+#   ./tests/qemu/run-qemu-docker.sh --save-device rpi5/pki --overwrite
+#   ./tests/qemu/run-qemu-docker.sh --list-saves rpi5/pki
 #   ./tests/qemu/run-qemu-docker.sh --stop-all-devices
 set -uo pipefail
 
@@ -85,6 +117,34 @@ EXTRA_USERS=()
 DEV_ACTION=""
 DEV_LABEL=""
 DEV_QMP_CMD=""
+
+# ── Pause-and-save knobs ────────────────────────────────────────────────────
+# Empty = pick a NEW timestamped copy under ${WORK}/saves (see save_pick_target).
+DEV_SAVE_TO=""
+# OFF by default and armed only by an explicit --overwrite, because the flag's
+# whole job is to permit destroying a copy the operator already has: the target
+# is recreated BEFORE the block job starts, so a failure half way through leaves
+# neither the old copy nor a complete new one.
+DEV_SAVE_OVERWRITE=false
+# Wall clock for the whole blockdev-backup conversation, host side. The job
+# copies the guest's USED data (a 64M disk with ~1M written produced a 2.2M
+# qcow2 here), but the device overlays are 16G and TCG guests write slowly, so
+# the default is generous and --save-timeout overrides it verbatim.
+DEV_SAVE_TIMEOUT="3600"
+# The QMP name of the disk being saved. All three launchers spell the guest's
+# root disk `-drive file=...,if=none,id=hd0` — launch-pi.sh:254, launch-x86.sh:230,
+# launch-arm.sh:307 — and blockdev-backup accepts that BlockBackend name as its
+# `device`. It is deliberately NOT the KEYS disk (id=keys), which is a synthetic
+# read-only provisioning payload this harness fabricates per run.
+SAVE_DRIVE="hd0"
+# The transient target node and job. Both are fixed strings, never operator text:
+# they end up inside the QMP arguments object, and node-names are constrained to
+# [A-Za-z0-9-._] by QEMU anyway.
+SAVE_NODE="hugmesh-save-tgt"
+SAVE_JOB="hugmesh-save"
+# The alarm the five-verb --qmp path has always run under, now named because the
+# save path needs a much longer one for the same client.
+QMP_TIMEOUT=15
 
 # Host ports published for keep-alive devices. Loopback ONLY, and a private range
 # with nothing else in it: the operator runs a live hugmesh stack on this machine
@@ -159,6 +219,21 @@ run while a matrix or a set of devices is up:
                         reset is DESTRUCTIVE: the launchers boot with -no-reboot,
                         under which QEMU EXITS on a reset instead of rebooting,
                         so the guest goes down and has to be started again.
+
+Pause and save. The device is flushed, PAUSED, copied through QEMU's own block
+layer and then returned to the run state it was already in. The copy is
+crash-consistent, standalone (no backing file) and merged (the run overlay's
+delta on top of the golden's data). The golden build artifact is NEVER written:
+  --save-device LABEL   save LABEL's disk. Default target is a NEW timestamped
+                        copy, so repeated saves never destroy an earlier one.
+  --save-to PATH        explicit target. A bare name lands in <work>/saves/;
+                        must stay under --work and must end in .qcow2.
+  --overwrite           permit REPLACING an existing copy. Off unless asked for.
+                        With no --save-to it targets this device's newest
+                        existing save — "the existing copy in the session".
+                        It never means writing into the golden image.
+  --save-timeout SEC    wall clock for the copy. Default: ${DEV_SAVE_TIMEOUT}
+  --list-saves LABEL    print the saves that exist for LABEL, as a JSON array
 EOF
 exit "${1:-0}"
 }
@@ -192,6 +267,15 @@ while [[ $# -gt 0 ]]; do
         --stop-all-devices) DEV_ACTION="stop-all"; shift ;;
         --qmp)          [ $# -ge 3 ] || { echo "--qmp needs LABEL and a command" >&2; usage 1; }
                         DEV_ACTION="qmp"; DEV_LABEL="$2"; DEV_QMP_CMD="$3"; shift 3 ;;
+        --save-device)  [ $# -ge 2 ] || { echo "--save-device needs a device label" >&2; usage 1; }
+                        DEV_ACTION="save"; DEV_LABEL="$2"; shift 2 ;;
+        --list-saves)   [ $# -ge 2 ] || { echo "--list-saves needs a device label" >&2; usage 1; }
+                        DEV_ACTION="list-saves"; DEV_LABEL="$2"; shift 2 ;;
+        --save-to)      [ $# -ge 2 ] || { echo "--save-to needs a path" >&2; usage 1; }
+                        DEV_SAVE_TO="$2"; shift 2 ;;
+        --save-timeout) [ $# -ge 2 ] || { echo "--save-timeout needs a number of seconds" >&2; usage 1; }
+                        DEV_SAVE_TIMEOUT="$2"; shift 2 ;;
+        --overwrite)    DEV_SAVE_OVERWRITE=true; shift ;;
         -h|--help)      usage 0 ;;
         *)              echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -203,6 +287,13 @@ done
 # into the argv below and come back as "Unknown arg" instead of the real cause.
 [ -z "${ASSERT_TIMEOUT}" ] || [[ "${ASSERT_TIMEOUT}" =~ ^[0-9]+$ ]] \
     || die "--assert-timeout must be a whole number of seconds, got '${ASSERT_TIMEOUT}'"
+
+# Same class of check, and the same reason: this one reaches the perl client's
+# `alarm`, where a non-numeric value would be read as 0 — i.e. no alarm at all,
+# so a wedged block job would hang the Studio's save button forever instead of
+# failing.
+[[ "${DEV_SAVE_TIMEOUT}" =~ ^[0-9]+$ ]] && [ "${DEV_SAVE_TIMEOUT}" -gt 0 ] \
+    || die "--save-timeout must be a positive whole number of seconds, got '${DEV_SAVE_TIMEOUT}'"
 
 # Same reasoning one step further: an --extra-user value is not just an argv item
 # here, it becomes a LOGIN NAME created on the guest. Reject anything useradd
@@ -231,6 +322,25 @@ safe_label() { printf '%s\n' "$1" | tr '/+' '__'; }   # same rule as RESULT_JSON
 set_device_paths() {
     DEVICES_DIR="${WORK}/devices"
     PORTLOCK_DIR="${WORK}/.portlocks"
+    # Saves live under ${WORK} for two independent reasons, both measured:
+    # ${WORK} is the one host directory the device container has WRITE access to
+    # (it is the /work bind mount; /src and /artifacts are :ro), and on this
+    # machine it sits on /home — 667G free — while / is 84% full and has hit
+    # 100% before. A save is proportional to the guest's USED data, not to the
+    # 16G virtual size, but "small" is not "nothing".
+    SAVES_DIR="${WORK}/saves"
+}
+
+# A JSON string literal. Used for values that go into a QMP arguments object —
+# in practice a save target's filename, which is operator input via --save-to.
+# Same escape ORDER as docker-entrypoint.sh json_str (backslash first, then
+# quote), and for the same reason: doing it the other way round double-escapes
+# the backslashes it just inserted.
+json_str() {
+    local s="${1:-}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '"%s"' "${s}"
 }
 
 need_docker() {
@@ -601,15 +711,38 @@ container_path_for() {
 # {"error": {"class": "CommandNotFound", ...}} with exit 1.
 #
 # The program is passed as ONE argv element to `docker exec ... perl -e`, with
-# the socket path and the QMP verb as its own arguments — no `sh -c`, so nothing
+# the socket path and the QMP steps as its own arguments — no `sh -c`, so nothing
 # from a record or a label is ever parsed as shell. ${cmd} is interpolated into
 # the JSON, and that is safe for one specific reason: it is never operator text,
-# only one of the five literals qmp_command_for() emits.
+# only one of the five literals qmp_command_for() emits or one of the fixed
+# block-layer verbs cmd_save_device() spells out.
+#
+# TWO THINGS A SAVE NEEDS THAT A PAUSE DOES NOT, and why the client grew rather
+# than being duplicated:
+#   * ARGUMENTS. blockdev-add has to be told the target's filename and driver;
+#     `{"execute":"blockdev-add"}` on its own is a parameter error.
+#   * EVENT WAITING. blockdev-backup answers {"return": {}} the instant the job
+#     is QUEUED and copies afterwards, so a client that stops at the reply
+#     reports a completed save that has copied nothing. The outcome arrives
+#     later, asynchronously, as BLOCK_JOB_COMPLETED.
+# A step is therefore three argv elements — CMD, ARGUMENTS-JSON (or "-"), EVENTS
+# (or "-") — and several steps run down ONE connection. That last part is not a
+# convenience: QEMU delivers an event to the monitors connected AT THE TIME, so
+# issuing blockdev-backup, disconnecting and reconnecting to listen would miss
+# BLOCK_JOB_COMPLETED entirely and then sit until the alarm.
+#
+# The five-verb path is the same program called with one argument-less,
+# event-less step, so pause/resume/reset/powerdown/status keep byte-identical
+# output and exit codes and there is no second copy of the protocol to drift.
 QMP_PERL="$(cat <<'PERLQMP'
 use strict; use warnings; use Socket;
-my ($path, $cmd) = @ARGV;
+# argv: SOCKET TIMEOUT_SECONDS then N x (CMD ARGUMENTS_JSON|- EVENT[,EVENT]|-)
+my $path = shift @ARGV;
+my $tmo  = shift @ARGV;
 $SIG{ALRM} = sub { print STDERR "qmp: timed out talking to $path\n"; exit 4 };
-alarm 15;
+# ONE alarm over the whole conversation, event waits included: a block job that
+# never completes must not be able to pin the caller forever.
+alarm $tmo;
 socket(my $S, AF_UNIX, SOCK_STREAM, 0) or do { print STDERR "qmp: socket(): $!\n"; exit 4 };
 connect($S, sockaddr_un($path)) or do { print STDERR "qmp: cannot connect to $path: $!\n"; exit 3 };
 select((select($S), $| = 1)[0]);
@@ -617,23 +750,46 @@ select((select($S), $| = 1)[0]);
 # command replies, so read past anything that is not an answer: an event object
 # carries "event"/"data" and neither of the keys matched here.
 sub reply { while (my $l = <$S>) { return $l if $l =~ /"(?:return|error)"\s*:/ } return undef }
+# The mirror image: read past replies and unrelated events until one of the
+# named events shows up. JOB_STATUS_CHANGE fires several times per block job and
+# is exactly what has to be stepped over here.
+sub await_event {
+    my ($alt) = @_;
+    while (my $l = <$S>) { return $l if $l =~ /"event"\s*:\s*"(?:$alt)"/ }
+    return undef;
+}
 print $S "{\"execute\":\"qmp_capabilities\"}\n";
 defined reply() or do { print STDERR "qmp: no reply to qmp_capabilities\n"; exit 4 };
-print $S "{\"execute\":\"$cmd\"}\n";
-my $r = reply();
-defined $r or do { print STDERR "qmp: no reply to $cmd\n"; exit 4 };
-print $r;
-exit($r =~ /"error"\s*:/ ? 1 : 0);
+while (@ARGV >= 3) {
+    my ($cmd, $args, $ev) = splice(@ARGV, 0, 3);
+    print $S ($args eq '-' ? "{\"execute\":\"$cmd\"}\n"
+                           : "{\"execute\":\"$cmd\",\"arguments\":$args}\n");
+    my $r = reply();
+    defined $r or do { print STDERR "qmp: no reply to $cmd\n"; exit 4 };
+    print $r;
+    # Stop at the first error rather than firing the rest of the sequence at a
+    # monitor that has already refused a step: with blockdev-add failed there is
+    # no target node for blockdev-backup to write into.
+    exit 1 if $r =~ /"error"\s*:/;
+    next if $ev eq '-';
+    my $e = await_event(join('|', map { quotemeta } split(/,/, $ev)));
+    defined $e or do { print STDERR "qmp: no $ev event after $cmd\n"; exit 4 };
+    print $e;
+}
+exit 0;
 PERLQMP
 )"
 
-# One QMP conversation. Exit status is the perl client's: 0 = QMP returned,
-# 1 = QMP error, 3 = could not connect, 4 = protocol/timeout. docker reports its
-# OWN failures in the 125-127 range (126/127 = it could not exec the command),
-# which cmd_qmp translates below rather than passing off as a QMP error.
+# One QMP conversation of one or more steps. Exit status is the perl client's:
+# 0 = QMP returned, 1 = QMP error, 3 = could not connect, 4 = protocol/timeout.
+# docker reports its OWN failures in the 125-127 range (126/127 = it could not
+# exec the command), which cmd_qmp translates below rather than passing off as a
+# QMP error.
+# qmp_exec NAME CONTAINER_SOCKET TIMEOUT  CMD ARGS EVENTS  [CMD ARGS EVENTS ...]
 qmp_exec() {
-    local name="$1" csock="$2" cmd="$3"
-    docker exec -u 0 "${name}" perl -e "${QMP_PERL}" "${csock}" "${cmd}"
+    local name="$1" csock="$2" tmo="$3"
+    shift 3
+    docker exec -u 0 "${name}" perl -e "${QMP_PERL}" "${csock}" "${tmo}" "$@"
 }
 
 cmd_qmp() {
@@ -659,7 +815,10 @@ cmd_qmp() {
     if [ "${action}" = "reset" ]; then
         warn "reset is DESTRUCTIVE: ${label} boots with -no-reboot, so QEMU EXITS on system_reset instead of rebooting. The guest goes DOWN."
     fi
-    qmp_exec "${name}" "${csock}" "${qcmd}"; rc=$?
+    # One step, no arguments, no event to wait for — the shape the five verbs
+    # have always had, and ${QMP_TIMEOUT} is the 15s alarm they have always run
+    # under.
+    qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" "${qcmd}" - -; rc=$?
     case "${rc}" in
         12[567]) warn "docker exec could not run perl in ${name} (rc=${rc}); the runner image is expected to provide it" ;;
     esac
@@ -685,6 +844,463 @@ cmd_qmp() {
     return 0
 }
 
+# ── Pause and save ──────────────────────────────────────────────────────────
+# See the PAUSE AND SAVE block in the header for WHY this is a QMP block job and
+# not a qemu-img call, and for why block-commit is absent.
+
+# qmp_parse MODE — reads a qmp_exec transcript on stdin (one JSON object per
+# line) and answers one question about it. Parsing happens HOST-side in python3,
+# which the device subcommands already require, because the alternative is
+# grepping numbers out of single-line JSON: `qemu-img info --output=json` was
+# checked here and its FIRST "virtual-size" is the file's 393216-byte physical
+# size, not the 67108864-byte guest disk — precisely the kind of near-miss that
+# would size a save target too small and truncate the copy.
+#
+# `python3 -c "${VAR}"`, NOT the `python3 - <<'EOF'` spelling the rest of this
+# file uses, and the difference is not cosmetic: a heredoc IS the process's
+# stdin, so a program fed that way cannot also read the piped transcript. Every
+# other python helper here takes its input from argv or a file and never noticed.
+QMP_PARSE_PY="$(cat <<'PYQMP'
+import json, sys
+
+mode, drive = sys.argv[1], sys.argv[2]
+
+def objects():
+    for line in sys.stdin.read().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except ValueError:
+            continue                      # a warning or a torn line: never fatal
+
+if mode == "status":
+    # query-status' .return.status — "running", "paused", "prelaunch", ...
+    for obj in objects():
+        ret = obj.get("return")
+        if isinstance(ret, dict) and "status" in ret:
+            sys.stdout.write(str(ret["status"]))
+            sys.exit(0)
+    sys.exit(1)
+
+if mode == "size":
+    # The GUEST-visible size of the drive being saved. blockdev-backup refuses a
+    # target smaller than the source, and a target LARGER would silently produce
+    # an image whose geometry no longer matches the device.
+    for obj in objects():
+        ret = obj.get("return")
+        if not isinstance(ret, list):
+            continue
+        for blk in ret:
+            if not isinstance(blk, dict) or blk.get("device") != drive:
+                continue
+            size = ((blk.get("inserted") or {}).get("image") or {}).get("virtual-size")
+            if isinstance(size, int) and size > 0:
+                sys.stdout.write(str(size))
+                sys.exit(0)
+    sys.exit(1)
+
+if mode == "job":
+    # The three ways a finished block job can still mean "no usable save" (C9).
+    for obj in objects():
+        if obj.get("event") != "BLOCK_JOB_COMPLETED":
+            continue
+        data = obj.get("data") or {}
+        if data.get("error"):
+            sys.stderr.write("block job reported an error: %s\n" % data["error"])
+            sys.exit(1)
+        off, ln = data.get("offset"), data.get("len")
+        if off != ln:
+            sys.stderr.write("PARTIAL COPY: %s of %s bytes were copied\n" % (off, ln))
+            sys.exit(1)
+        sys.stdout.write(str(ln))
+        sys.exit(0)
+    sys.stderr.write("no BLOCK_JOB_COMPLETED event in the QMP transcript\n")
+    sys.exit(1)
+
+sys.exit(2)
+PYQMP
+)"
+
+qmp_parse() {
+    need_python
+    python3 -c "${QMP_PARSE_PY}" "$1" "${SAVE_DRIVE}"
+}
+
+# Flush the guest before it is paused. QMP `stop` alone gives a CRASH-consistent
+# image — a pulled plug — so anything still in the guest's page cache is lost.
+# The device already has ssh (that is what the keep-alive registry is for), so
+# ask it to sync first. Deliberately BEST EFFORT and never fatal: a device that
+# failed its assertions, or one started without a published port, is exactly the
+# device an operator most wants a copy of. When it cannot be done, say so
+# instead of quietly downgrading what the save is worth.
+save_flush_guest() {
+    local rec="$1" label="$2" port user key
+    port="$(record_field "${rec}" ssh_host_port)"
+    user="$(record_field "${rec}" ssh_user)"
+    key="$(record_field  "${rec}" ssh_key)"
+    if ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -eq 0 ] \
+       || [ -z "${user}" ] || [ ! -f "${key}" ]; then
+        warn "${label}: no usable ssh in the device record — NOT flushing the guest; the copy is crash-consistent only"
+        return 0
+    fi
+    command -v ssh >/dev/null 2>&1 || {
+        warn "${label}: no ssh on this host — NOT flushing the guest; the copy is crash-consistent only"
+        return 0
+    }
+    # Same options as the Studio's own device shell (studio/hugmesh_studio/core/
+    # qemu_devices.py SSH_OPTIONS, :65) plus BatchMode, because this one runs
+    # unattended and must never stop on a prompt. Plain `sync`, not `sudo sync`:
+    # sync(2) flushes ALL filesystems and needs no privilege, so this stays clear
+    # of sudo and of the pty that would come with it.
+    if timeout -k 5 30 ssh -i "${key}" -p "${port}" \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR \
+            "${user}@127.0.0.1" 'sync' >/dev/null 2>&1; then
+        info "${label}: guest filesystems flushed (sync) before the pause"
+    else
+        warn "${label}: the guest did not answer 'sync' — the copy is crash-consistent only"
+    fi
+    return 0
+}
+
+# The newest save that already exists for a device, or empty. This is what
+# --overwrite means with no --save-to: "the existing copy in the session".
+newest_save_for() {
+    local safe="$1"
+    ls -1t "${SAVES_DIR}/${safe}"-*.qcow2 "${SAVES_DIR}/${safe}.qcow2" 2>/dev/null | head -1
+}
+
+# save_check_target PATH — die() unless PATH is a legal place to put a save.
+#
+# The single most important rule in this whole feature: THE GOLDEN BUILD
+# ARTIFACT IS NEVER A TARGET. It is shared by every run, every session and every
+# other device, and overwriting it would be both irreversible and invisible
+# until some later run booted garbage. The /artifacts mount is read-only, which
+# stops the obvious spelling, but ${WORK}/images holds the DECOMPRESSED copies
+# of those same artifacts on a writable mount — so that directory is named here
+# explicitly rather than trusted to a mount flag.
+save_check_target() {
+    local target="$1" arts
+    case "${target}" in
+        *[[:cntrl:]]*) die "--save-to must not contain control characters" ;;
+    esac
+    [[ "${target}" == *.qcow2 ]] \
+        || die "--save-to must name a .qcow2 file (the save is a qcow2, and the suffix keeps this from landing on a log, a record or an .img): '${target}'"
+    # Under ${WORK} is not a preference: /work is the only writable mount the
+    # device container has, and it is qemu INSIDE that container that creates
+    # and writes the file. A path outside it cannot be written at all.
+    case "${target}/" in
+        "${WORK}"/*) : ;;
+        *) die "--save-to must be under the work dir (${WORK}); the device container can only write there. Got: ${target}" ;;
+    esac
+    case "${target}/" in
+        "${WORK}"/images/*)
+            die "REFUSING to save onto ${target}: ${WORK}/images holds the decompressed GOLDEN images, which every run and every session boots from" ;;
+        "${WORK}"/runs/*)
+            die "REFUSING to save onto ${target}: ${WORK}/runs holds the LIVE run overlays — that is the disk being copied, and the device is still writing to it" ;;
+        "${WORK}"/devices/*|"${WORK}"/results/*|"${WORK}"/.portlocks/*)
+            die "REFUSING to save onto ${target}: that directory is harness bookkeeping, not storage" ;;
+    esac
+    # --artifacts/--session are not resolved on this path (the device
+    # subcommands deliberately run before artifact resolution), so this only
+    # fires when the operator named one explicitly on the same command line.
+    # It costs nothing and covers an artifacts dir that lives under ${WORK}.
+    if [ -n "${ARTIFACTS}" ]; then
+        arts="$(readlink -m "${ARTIFACTS}")"
+        case "${target}/" in
+            "${arts}"/*) die "REFUSING to save into the artifacts dir ${arts}: that is where the golden build images live" ;;
+        esac
+    fi
+}
+
+# save_pick_target SAFE — resolve the target path, honouring --save-to and
+# --overwrite, and refuse to clobber anything the operator did not ask to lose.
+save_pick_target() {
+    local safe="$1" target=""
+    if [ -n "${DEV_SAVE_TO}" ]; then
+        # A bare name is a convenience, not a special case: it lands in the same
+        # ${SAVES_DIR} the defaults use, so `--save-to before-upgrade.qcow2`
+        # behaves the way it reads.
+        case "${DEV_SAVE_TO}" in
+            /*) target="${DEV_SAVE_TO}" ;;
+            *)  target="${SAVES_DIR}/${DEV_SAVE_TO}" ;;
+        esac
+    elif ${DEV_SAVE_OVERWRITE}; then
+        target="$(newest_save_for "${safe}")"
+        # >&2 is load-bearing: this function's STDOUT is the chosen path, read
+        # through a command substitution. An info line on stdout would be
+        # prepended to the path and the save would land somewhere absurd.
+        [ -n "${target}" ] \
+            || info "--overwrite: ${safe} has no earlier save to replace — writing a new one" >&2
+    fi
+    # Default, and the fallback for --overwrite with nothing to overwrite: a NEW
+    # timestamped copy. Defaulting to a fresh name is what keeps "save" from
+    # being a destructive verb — repeated saves accumulate instead of eating one
+    # another, and losing a copy always takes an explicit --overwrite.
+    [ -n "${target}" ] || target="${SAVES_DIR}/${safe}-$(date -u +%Y%m%d-%H%M%S).qcow2"
+    target="$(readlink -m "${target}")"
+    save_check_target "${target}"
+    if [ -e "${target}" ] && ! ${DEV_SAVE_OVERWRITE}; then
+        die "a save already exists at ${target}; pass --overwrite to replace it, or --save-to a different name"
+    fi
+    printf '%s\n' "${target}"
+}
+
+# Restore the run state the device was in BEFORE the save. Never an unconditional
+# `cont`: an operator who had paused a device by hand and then took a copy of it
+# must not find it running again afterwards.
+save_restore_state() {
+    local name="$1" csock="$2" prior="$3" label="$4"
+    if [ "${prior}" = "running" ]; then
+        if qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" cont - - >/dev/null; then
+            info "${label}: resumed (it was running before the save)"
+        else
+            warn "${label}: could NOT resume the device after the save — it is still PAUSED. Resume it with: $0 --work '${WORK}' --qmp '${label}' resume"
+        fi
+    else
+        # Covers "paused" and every other not-running state QEMU reports
+        # ("prelaunch", "suspended", ...), which is why it does not say "paused".
+        info "${label}: left exactly as it was — the device was not running before the save (${prior:-unknown})"
+    fi
+}
+
+cmd_save_device() {
+    local label="$1" rec sock csock name safe target ctarget prior size copied out rc
+
+    need_docker
+    need_python
+    rec="$(device_record_path "${label}")" \
+        || die "no device record for '${label}' under ${DEVICES_DIR} (--devices to list what is there)"
+    sock="$(record_field "${rec}" qmp)"
+    [ -n "${sock}" ] || die "device '${label}' has no qmp socket recorded (started without --keep-alive?)"
+    name="$(record_field "${rec}" container)"
+    [ -n "${name}" ] || die "device record ${rec} names no container"
+    # Identical guard, and identical reason, to cmd_qmp: everything below ends in
+    # a root `docker exec` on a name that came out of a file on disk, and the
+    # operator's live hugmesh stack runs on this same machine.
+    own_container "${name}" "save the disk of" "${label}" || return 1
+    container_is_running "${name}" \
+        || die "device '${label}' is not running (container ${name}) — there is no live disk to copy; --devices to check"
+    csock="$(container_path_for "${sock}")"
+
+    safe="$(safe_label "${label}")"
+    # HOST-side, so the directory belongs to the operator before root ever writes
+    # into it — the same ordering docker-entrypoint.sh uses for the registry dir.
+    mkdir -p "${SAVES_DIR}" || die "cannot create ${SAVES_DIR}"
+    target="$(save_pick_target "${safe}")" || exit 1
+    ctarget="$(container_path_for "${target}")"
+
+    if [ -e "${target}" ]; then
+        # Said before anything is touched, because it is already true by then:
+        # the target is recreated before the copy starts, so from here on the
+        # old copy is gone whether or not the new one finishes.
+        warn "${label}: OVERWRITING the existing save ${target} — the previous copy is discarded as soon as the copy begins"
+    fi
+    step "Saving ${label} -> ${target}"
+
+    # 1. Flush, 2. read the state we must restore, 3. pause. In that order: the
+    # sync has to reach a guest that is still running.
+    save_flush_guest "${rec}" "${label}"
+
+    out="$(qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" query-status - -)"; rc=$?
+    case "${rc}" in
+        12[567]) die "docker exec could not run perl in ${name} (rc=${rc}); the runner image is expected to provide it" ;;
+    esac
+    [ "${rc}" -eq 0 ] || die "${label}: could not read the device's run state (rc=${rc}); nothing was changed"
+    prior="$(printf '%s\n' "${out}" | qmp_parse status)"
+    # Not a formality. Every later decision hangs off this word: an unreadable
+    # state would skip the `stop` below — copying a disk the guest is still
+    # writing to — and then report a save that looks exactly like a good one.
+    # Nothing has been touched yet, so refusing here costs nothing.
+    [ -n "${prior}" ] \
+        || die "${label}: could not read the device's run state from query-status; refusing to copy a disk that may still be being written. Nothing was changed."
+    info "${label}: run state before the save: ${prior}"
+
+    if [ "${prior}" = "running" ]; then
+        qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" stop - - >/dev/null \
+            || die "${label}: QMP stop failed; the device was NOT paused and nothing was copied"
+        info "${label}: PAUSED for the copy (crash-consistent: the guest sees this as a pulled plug)"
+    fi
+
+    # 4. The target has to exist, and at exactly the guest disk's size, before
+    # blockdev-add can open it. qemu-img lives in the runner image
+    # (docker/Dockerfile.qemu-runner:40) and runs INSIDE the container because
+    # that is where the writable /work mount and the tool both are.
+    out="$(qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" query-block - -)"; rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+        die "${label}: query-block failed (rc=${rc}); nothing was copied"
+    fi
+    size="$(printf '%s\n' "${out}" | qmp_parse size)"
+    if ! [[ "${size}" =~ ^[0-9]+$ ]]; then
+        save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+        die "${label}: could not determine the size of drive '${SAVE_DRIVE}' from query-block; nothing was copied"
+    fi
+    info "${label}: guest disk is ${size} bytes ($((size / 1024 / 1024)) MiB) on drive '${SAVE_DRIVE}'"
+
+    if ! docker exec -u 0 "${name}" qemu-img create -f qcow2 "${ctarget}" "${size}" >/dev/null; then
+        save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+        die "${label}: could not create the save target ${target}"
+    fi
+
+    # 5. THE COPY. One connection, because BLOCK_JOB_COMPLETED is delivered to
+    # whoever is connected when the job ends (see the QMP_PERL header). sync=full
+    # is what makes the result standalone and merged rather than a diff against
+    # the golden: the source's whole visible content is written to the target,
+    # and the target has no backing file of its own.
+    out="$(qmp_exec "${name}" "${csock}" "${DEV_SAVE_TIMEOUT}" \
+        blockdev-add "{\"driver\":\"qcow2\",\"node-name\":\"${SAVE_NODE}\",\"file\":{\"driver\":\"file\",\"filename\":$(json_str "${ctarget}")}}" - \
+        blockdev-backup "{\"device\":\"${SAVE_DRIVE}\",\"target\":\"${SAVE_NODE}\",\"sync\":\"full\",\"job-id\":\"${SAVE_JOB}\"}" BLOCK_JOB_COMPLETED \
+        blockdev-del "{\"node-name\":\"${SAVE_NODE}\"}" -)"
+    rc=$?
+    # Quote the whole conversation back. This is the one step with no other
+    # witness — the block job runs inside QEMU and leaves nothing in a log.
+    [ -z "${out}" ] || printf '%s\n' "${out}" | sed 's/^/    qmp: /'
+
+    copied=""
+    if [ "${rc}" -eq 0 ]; then
+        copied="$(printf '%s\n' "${out}" | qmp_parse job)" || rc=9
+    fi
+
+    if [ "${rc}" -ne 0 ]; then
+        # The target node and possibly a live job are still attached to a device
+        # the operator will want to keep using, so tear them down before saying
+        # anything else. Both are best effort — they fail harmlessly when the
+        # step that would have created them never ran.
+        qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" \
+            block-job-cancel "{\"device\":\"${SAVE_JOB}\"}" - >/dev/null 2>&1
+        qmp_exec "${name}" "${csock}" "${QMP_TIMEOUT}" \
+            blockdev-del "{\"node-name\":\"${SAVE_NODE}\"}" - >/dev/null 2>&1
+        # A half-copied file that still ends in .qcow2 is the worst outcome of
+        # all: --list-saves would offer it, and it would open. Rename it out of
+        # the way, in the container, where it is still root-owned.
+        docker exec -u 0 "${name}" sh -c \
+            'test -e "$1" && mv -f "$1" "$1.partial" && chown "$2" "$1.partial"' _ \
+            "${ctarget}" "$(id -u):$(id -g)" >/dev/null 2>&1 || true
+        save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+        die "${label}: THE SAVE FAILED (rc=${rc}). Any partial copy was renamed to ${target}.partial and must not be trusted."
+    fi
+
+    # 6. The copy is complete and detached, so the device can run again. Do this
+    # FIRST, before the bookkeeping below: every extra step here is time the
+    # operator's device spends frozen for no remaining reason.
+    save_restore_state "${name}" "${csock}" "${prior}" "${label}"
+
+    # 7. Hand the file to the host operator. qemu created it as root inside the
+    # container, and the Studio that will list and open it runs as the invoking
+    # user on the host — the same defect class the ssh key already has a fix for
+    # in docker-entrypoint.sh write_device_record (:282-286). Doing it here, not
+    # at container exit, because under --keep-alive that exit is hours away.
+    docker exec -u 0 "${name}" chown "$(id -u):$(id -g)" "${ctarget}" >/dev/null 2>&1 \
+        || warn "${label}: the save could not be chowned to the host user; you may need sudo to read ${target}"
+
+    save_write_sidecar "${target}" "${label}" "${size}" "${copied}" "${prior}"
+
+    info "${label}: SAVED ${copied} bytes of guest disk"
+    info "  file        : ${target}"
+    info "  on disk     : $( { du -h "${target}" 2>/dev/null || echo '?'; } | cut -f1)  (a qcow2 costs the guest's USED data, not its ${size}-byte virtual size)"
+    info "  consistency : crash-consistent"
+    info "  standalone  : yes — no backing file; it holds the run overlay's changes merged over the golden image's data"
+    info "  golden      : untouched"
+    return 0
+}
+
+# A sidecar next to each save, so a later --list-saves (and the Studio behind it)
+# can say what a file IS without opening it: which device it came from, when,
+# and how consistent it is. Written host-side after the chown, in python3 for
+# the escaping — a label contains a '/' and a path can contain anything.
+save_write_sidecar() {
+    local target="$1" label="$2" size="$3" copied="$4" prior="$5"
+    need_python
+    SAVE_LABEL="${label}" SAVE_SIZE="${size}" SAVE_COPIED="${copied}" \
+    SAVE_PRIOR="${prior}" SAVE_DRIVE_NAME="${SAVE_DRIVE}" \
+    python3 - "${target}" <<'PYSIDE' || warn "could not write the save sidecar for $1"
+import datetime, json, os, sys
+
+target = sys.argv[1]
+rec = {
+    "label": os.environ.get("SAVE_LABEL", ""),
+    "target": target,
+    "drive": os.environ.get("SAVE_DRIVE_NAME", ""),
+    "virtual_size": int(os.environ.get("SAVE_SIZE") or 0),
+    "bytes_copied": int(os.environ.get("SAVE_COPIED") or 0),
+    "device_state_before": os.environ.get("SAVE_PRIOR", ""),
+    # Stated in the file itself so nobody has to remember it later: QMP `stop`
+    # is a pulled plug from the guest's point of view.
+    "consistency": "crash-consistent",
+    "method": "qmp blockdev-backup sync=full",
+    "standalone": True,
+    "created_at": datetime.datetime.now(datetime.timezone.utc)
+                          .strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+tmp = "%s.tmp.%d" % (target + ".json", os.getpid())
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(rec, fh, indent=2)
+    fh.write("\n")
+os.replace(tmp, target + ".json")          # atomic: --list-saves may be reading
+PYSIDE
+}
+
+cmd_list_saves() {
+    local label="$1" safe
+    need_python
+    safe="$(safe_label "${label}")"
+    # An empty array for a device that has never been saved, never an error:
+    # this is the question the Studio asks before it has anything to show.
+    SAVE_LABEL="${label}" SAVE_SAFE="${safe}" python3 - "${SAVES_DIR}" <<'PYLIST'
+import datetime, json, os, sys
+
+saves_dir = sys.argv[1]
+label = os.environ.get("SAVE_LABEL", "")
+safe = os.environ.get("SAVE_SAFE", "")
+
+try:
+    entries = sorted(os.listdir(saves_dir))
+except OSError:
+    entries = []
+
+out = []
+for name in entries:
+    if not name.endswith(".qcow2"):        # .partial and .json are not saves
+        continue
+    path = os.path.join(saves_dir, name)
+    side = {}
+    try:
+        with open(path + ".json", "r", encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        if isinstance(loaded, dict):
+            side = loaded
+    except (OSError, ValueError):
+        side = {}
+    # The sidecar is authoritative about which device a save came from, because
+    # --save-to lets an operator name a file anything at all. The filename rule
+    # is only the fallback for a save whose sidecar is missing or unreadable.
+    if side:
+        if side.get("label") != label:
+            continue
+    elif not (name == safe + ".qcow2" or name.startswith(safe + "-")):
+        continue
+    try:
+        st = os.stat(path)
+    except OSError:
+        continue
+    rec = dict(side)
+    rec["path"] = path
+    rec["file_bytes"] = st.st_size
+    rec["modified_at"] = datetime.datetime.fromtimestamp(
+        st.st_mtime, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rec["label"] = side.get("label", label)
+    rec["has_metadata"] = bool(side)
+    out.append(rec)
+
+out.sort(key=lambda r: str(r.get("modified_at") or ""), reverse=True)  # newest first
+json.dump(out, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PYLIST
+}
+
 if [ -n "${DEV_ACTION}" ]; then
     # These run BEFORE artifact resolution and before the docker-daemon probe on
     # purpose. Artifact resolution die()s when the newest session holds no image,
@@ -695,12 +1311,21 @@ if [ -n "${DEV_ACTION}" ]; then
     # effect of being asked a read-only question.
     WORK="$(readlink -m "${WORK}")"
     set_device_paths
+    # --overwrite and --save-to only mean anything to --save-device. Silently
+    # ignoring them is how an operator ends up believing a copy was replaced
+    # when it never was, so say it out loud instead.
+    if [ "${DEV_ACTION}" != "save" ]; then
+        ${DEV_SAVE_OVERWRITE} && warn "--overwrite only applies to --save-device; ignoring it"
+        [ -z "${DEV_SAVE_TO}" ] || warn "--save-to only applies to --save-device; ignoring it"
+    fi
     case "${DEV_ACTION}" in
-        devices)  cmd_devices ;;
-        stop)     cmd_stop_device "${DEV_LABEL}" ;;
-        stop-all) cmd_stop_all ;;
-        qmp)      cmd_qmp "${DEV_LABEL}" "${DEV_QMP_CMD}" ;;
-        *)        die "internal: unknown device action '${DEV_ACTION}'" ;;
+        devices)    cmd_devices ;;
+        stop)       cmd_stop_device "${DEV_LABEL}" ;;
+        stop-all)   cmd_stop_all ;;
+        qmp)        cmd_qmp "${DEV_LABEL}" "${DEV_QMP_CMD}" ;;
+        save)       cmd_save_device "${DEV_LABEL}" ;;
+        list-saves) cmd_list_saves "${DEV_LABEL}" ;;
+        *)          die "internal: unknown device action '${DEV_ACTION}'" ;;
     esac
     exit $?
 fi
