@@ -138,3 +138,17 @@ services:
       args:
         CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  # Joined the set when its repo started resolving net.hugmesh:hugmesh-commons for
+  # real. It previously declared the PRE-RENAME systems.snapdragon:snapdragon-commons,
+  # which is published nowhere — so patch-stack-src.sh DELETED the dependency outright
+  # and the build needed no registry at all. Once the checkout tracked main again the
+  # dependency became live and resolvable, and the missing entry here surfaced as
+  #   Could not transfer ... from/to gitlab-maven (/groups//-/packages/maven)
+  # — the empty interpolations of the two args this file exists to supply.
+  hugmesh-remote-fragment:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-remote-fragment
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
