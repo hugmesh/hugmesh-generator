@@ -977,12 +977,49 @@ services:
       # POISONER=1 these resolve to enabled=false, so the controller is mounted
       # but inert and the user-preferences "AI media cloak" control renders
       # unavailable. `make stack-up POISONER=1` sets all four (Makefile
-      # STACK_POISONER_ENV) AND starts the worker — BOTH halves are required, and
-      # having only one is exactly what left the control permanently greyed.
+      # STACK_POISONER_ENV) AND starts the worker — having only one of those is
+      # exactly what left the control permanently greyed. See the media-proxy
+      # block immediately below for the THIRD required piece, whose absence is
+      # worse than a greyed control: it 500s every cloaked upload.
       MEDIA_POISONING_ENABLED: ${MEDIA_POISONING_ENABLED:-false}
       MEDIA_POISONING_WORKER_URL: ${MEDIA_POISONING_WORKER_URL:-http://hugmesh-media-poisoner:8080}
       MEDIA_POISONING_DEFAULT_MODE: ${MEDIA_POISONING_DEFAULT_MODE:-glaze}
       MEDIA_POISONING_FALLBACK_MODE: ${MEDIA_POISONING_FALLBACK_MODE:-skip}
+      # ── THE THIRD HALF: the media-proxy EGRESS leg ─────────────────────────
+      # The comment above says "BOTH halves are required". It was wrong — there
+      # are THREE, and the missing one is an OUTAGE, not a greyed-out control.
+      #
+      # app.media.poisoning.* only decides whether the cloak is OFFERED. The
+      # actual homeserver upload of the cloaked bytes is a SEPARATE, separately
+      # gated client (app.media.proxy.<platform>.enabled, user-bff-api
+      # MediaWebClientConfig), which also ships dark and whose base-url defaults
+      # to the CLUSTER proxies — hosts that do not resolve in compose. Left off,
+      # HomeserverMediaClient.requireWired() throws and every cloaked upload 500s.
+      #
+      # REPRODUCED on the running mesh (POISONER=1, logged-in e2e-mastodon):
+      #   GET  /bff/user/media/capability -> 200 {"available":true,
+      #        "featureEnabled":true,"defaultMode":"glaze","backend":"cpu"}
+      #   POST /bff/user/media/upload     -> 500 Internal Server Error
+      #   user-bff-api log: java.lang.IllegalStateException: homeserver media
+      #     proxy for 'mastodon' is not wired (app.media.proxy.mastodon.enabled=false)
+      # while the UNCLOAKED path through the hsproxy was fine:
+      #   POST /bff/user/mastodon/api/v2/media -> 200, a real MediaAttachment.
+      # That combination is the operator's "file uploads on mastodon stopped
+      # working": compose-box.component.ts only falls back to the working
+      # uploadMedia() when the capability says UNAVAILABLE (heavyTierAbsent). A
+      # capability that says AVAILABLE routes every attachment to the 500.
+      #
+      # DERIVED FROM THE CLOAK FLAG ON PURPOSE — not a fourth knob to forget.
+      # The proxy leg is a strict dependency of the cloak, so binding it to the
+      # same variable makes the broken combination (cloak offered, egress dark)
+      # unrepresentable. Still individually overridable if a lane needs to split
+      # them. Base URLs are the compose homeservers, not the cluster's
+      # akkoma-proxy/tuwunel-proxy defaults, which are NXDOMAIN here — the same
+      # substitution APP_HS_TOKEN_*_URL below already makes for the hsproxy.
+      MEDIA_PROXY_MASTODON_ENABLED: ${MEDIA_PROXY_MASTODON_ENABLED:-${MEDIA_POISONING_ENABLED:-false}}
+      MEDIA_PROXY_MASTODON_BASE_URL: ${MEDIA_PROXY_MASTODON_BASE_URL:-http://mastodon-web:3000}
+      MEDIA_PROXY_MATRIX_ENABLED: ${MEDIA_PROXY_MATRIX_ENABLED:-${MEDIA_POISONING_ENABLED:-false}}
+      MEDIA_PROXY_MATRIX_BASE_URL: ${MEDIA_PROXY_MATRIX_BASE_URL:-http://tuwunel:8008}
       ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://hugmesh-admin-bff-api:8080}
       # Homeserver-token custody for the hsproxy (/bff/user/{matrix,mastodon}/**): app.hs-token.key
       # encrypts the brokered Matrix/Mastodon access tokens AT REST. Without a key the HsTokenCipher

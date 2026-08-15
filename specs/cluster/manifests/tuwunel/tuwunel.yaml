@@ -24,10 +24,9 @@ data:
     database_backend = "rocksdb"
     allow_registration = false
     allow_federation = true
-    # The client/server .well-known is served by the gateway host
-    # matrix.hugmesh.net (be-gateway route matrix-wellknown).
-    well_known_client = "https://matrix.hugmesh.net"
-    well_known_server = "matrix.hugmesh.net:443"
+    # The client/server .well-known settings MOVED to the [global.well_known]
+    # table at the BOTTOM of this block — see the comment there for why the flat
+    # spelling that used to sit here was silently doing nothing.
     trusted_servers = ["matrix.org"]
     # --- Matrix authority: ROLE_ADMIN = server-admin / ROLE_MOD = room-moderator ---
     # Conduit-family (tuwunel) has NO Synapse-style /_synapse/admin REST API, no
@@ -75,6 +74,39 @@ data:
     turn_uris = ["turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=udp", "turn:coturn.hugmesh-backend.svc.cluster.local:3478?transport=tcp"]
     turn_secret = ""    # DARK: filled at runtime by TUWUNEL_TURN_SECRET only when coturn is up
     turn_ttl = 86400
+
+    # ── Client/server AUTODISCOVERY (.well-known/matrix/client|server) ──────────
+    # MUST BE THE LAST THING IN THIS FILE. TOML sub-tables swallow every bare key
+    # that follows them, so any `foo = …` written below this header would land in
+    # [global.well_known] instead of [global] and be rejected as unknown.
+    #
+    # These are NOT flat [global] keys. They live in tuwunel's nested
+    # `struct WellKnownConfig` (client / server / support_email / support_page /
+    # support_mxid / rtc_transports). This block previously spelled them
+    # `well_known_client` / `well_known_server` directly under [global], which is
+    # a Conduit-era flat name tuwunel has REMOVED — and removal is silent, not
+    # fatal. Measured against the identical image on the compose lane, where the
+    # same mistake was made in env form:
+    #   WARN tuwunel_core::config::check: Config parameter "well_known_client"
+    #        is deprecated, ignoring.
+    #   WARN tuwunel_core::config::check: Config parameter "well_known_server"
+    #        is unknown to tuwunel, ignoring.
+    #   GET /.well-known/matrix/client -> 404 {"errcode":"M_NOT_FOUND"}
+    # i.e. the discovery documents the fe/be gateways' `matrix-wellknown` routes
+    # proxy here were never being served at all, despite this file looking set.
+    #
+    # VERIFIED by running the ghcr.io/matrix-construct/tuwunel:v1.7.0 binary with
+    # each spelling: the nested form serves 200 application/json with zero config
+    # warnings, the flat form 404s. The env equivalent (used by the compose lane
+    # in tests/stack/compose.real.yaml) is the `__` nesting split —
+    # TUWUNEL_WELL_KNOWN__CLIENT / TUWUNEL_WELL_KNOWN__SERVER.
+    #
+    # The values are the PUBLIC names an external client can actually dial, never
+    # the in-cluster Service DNS: a client that reads base_url and then cannot
+    # resolve the host is worse off than one that was told nothing.
+    [global.well_known]
+    client = "https://matrix.hugmesh.net"
+    server = "matrix.hugmesh.net:443"
 ---
 # tuwunel mTLS PROXY (nginx) sidecar config. Terminates a cluster-CA client cert on
 # :4443 (ssl_verify_client on) and forwards plaintext to tuwunel on localhost:8008.

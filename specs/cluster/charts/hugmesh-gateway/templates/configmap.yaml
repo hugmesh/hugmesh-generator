@@ -17,6 +17,22 @@ data:
           # under server.webflux to be honoured.
           server:
             webflux:
+              {{- /* Optional. SCG >=4.1 only honours inbound X-Forwarded-* when
+                     the IMMEDIATE peer is a trusted proxy; with this unset
+                     NOTHING is trusted, so XForwardedHeadersFilter discards the
+                     ingress controller's X-Forwarded-Proto/Host AND anything a
+                     route's own SetRequestHeader filter set, then rewrites them
+                     from the raw pod-to-pod connection. Downstreams that build
+                     absolute URLs from those headers (Mastodon/Rails force_ssl)
+                     then emit CLUSTER-INTERNAL Locations no external client can
+                     resolve — measured on the compose front door as
+                     `301 https://mastodon-web:3000/api/v1/instance`.
+                     Purely additive: when `trustedProxies` is unset this renders
+                     nothing and the ConfigMap is byte-identical to before, so the
+                     be/pki instances that do not set it are untouched. */}}
+              {{- with .Values.trustedProxies }}
+              trusted-proxies: {{ . | quote }}
+              {{- end }}
               routes:
               {{- range .Values.routes }}
                 - id: {{ .id }}

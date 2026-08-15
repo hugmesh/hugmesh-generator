@@ -153,6 +153,17 @@ cassandra:
   # refuses to render it.
   access: ""
 
+# Peers whose X-Forwarded-* headers this gateway may believe, as a Java regex
+# over the immediate peer's address. EMPTY BY DEFAULT = trust nothing, which is
+# SCG's own default and the right posture for an instance that is not behind a
+# TLS-terminating proxy. Set it ONLY on the tier that actually is one (the front
+# door, behind the ingress controller): with it unset SCG discards every inbound
+# X-Forwarded-Proto/Host — including values a route's SetRequestHeader filter
+# just set — and downstreams that build absolute URLs from them advertise
+# cluster-internal hosts to external clients. Keep the regex as tight as the
+# real peer set; anything it matches can assert its own scheme/host.
+trustedProxies: ""
+
 # Downstream routes rendered into an application-routes.yml ConfigMap and
 # loaded via SPRING_CONFIG_ADDITIONAL_LOCATION. id/uri/path per route.
 routes:

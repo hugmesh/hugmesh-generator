@@ -10,6 +10,43 @@ spring:
       # spring.cloud.gateway.server.webflux.* (legacy prefix binds nothing under SCG 5.0).
       server:
         webflux:
+          # THE FRONT DOOR IS BEHIND A TLS TERMINATOR — say so, or every
+          # X-Forwarded-* header that crosses this gateway is thrown away.
+          #
+          # SCG >=4.1 only honours X-Forwarded-* when the IMMEDIATE peer is a
+          # trusted proxy; with no `trusted-proxies` set, NOTHING is trusted, so
+          # XForwardedHeadersFilter discards the inbound values and rewrites them
+          # from the raw connection (plain http, gateway-internal authority). That
+          # silently discards BOTH sources of the truth at once:
+          #   * tls-front/default.conf's `proxy_set_header X-Forwarded-Proto https`
+          #     (the terminator telling us the client spoke TLS), and
+          #   * any value a route's own SetRequestHeader filter just set.
+          #
+          # MEASURED, before this key existed (the front door is TLS on :8488):
+          #   curl -sk -o /dev/null -w '%{http_code} %{redirect_url}' \
+          #        https://localhost:8488/api/v1/instance
+          #   -> 301 https://mastodon-web:3000/api/v1/instance
+          # i.e. Mastodon's production force_ssl decided the request had NOT
+          # arrived over TLS and 301'd to its own https URL — built from the
+          # proxied authority, so the Location named the COMPOSE-INTERNAL host. No
+          # external Mastodon client can resolve `mastodon-web`, so the very first
+          # step of the client handshake died on a DNS failure. The route below
+          # already carried `SetRequestHeader=X-Forwarded-Proto, https`; it was
+          # being stripped before it ever reached Rails. Proven against
+          # mastodon-web from inside the compose network:
+          #   (no header)                -> 301 https://mastodon-web:3000/...
+          #   X-Forwarded-Proto: https   -> 200
+          #   X-Forwarded-Proto: http    -> 301 https://mastodon-web:3000/...
+          #
+          # This is the SAME key, for the same live-debugged reason, that
+          # gateway-routes/be/application-routes.yml already carries — the fe table
+          # was simply never given it. Trust the compose bridge subnet + loopback:
+          # the only peers that can reach this gateway are hugmesh-https-front
+          # (172.x) and the published host port. Spoofing is not widened by it —
+          # nginx OVERWRITES X-Forwarded-Proto/Host with its own values rather than
+          # passing the client's through (tls-front/default.conf), and X-Forwarded-For
+          # is appended-to via $proxy_add_x_forwarded_for, exactly as on the be tier.
+          trusted-proxies: "172\\..*|127\\.0\\.0\\.1|0:0:0:0:0:0:0:1|::1"
           routes:
             # ── SPA DEEP-LINK FALLBACK — MUST BE THE FIRST ROUTE ──────────────
             # Every remote below is mounted in the Angular host shell at the SAME
@@ -372,14 +409,18 @@ spring:
             # tuwunel already owns this document natively — it emits
             #   /.well-known/matrix/client -> {"m.homeserver":{"base_url":...}}
             #   /.well-known/matrix/server -> {"m.server":"host:port"}
-            # from its well_known_client / well_known_server config, which is how the
-            # cluster already configures it (specs/cluster/manifests/tuwunel/
-            # tuwunel.yaml). Those two keys were NOT set on the compose tuwunel, so
-            # it answered 404 M_NOT_FOUND (verified live against
-            # http://localhost:8008/.well-known/matrix/client); the matching
-            # TUWUNEL_WELL_KNOWN_CLIENT / TUWUNEL_WELL_KNOWN_SERVER env is added in
-            # compose.real.yaml so the body points at the PUBLIC base rather than at
-            # the in-network container address.
+            # from its [global.well_known] client/server config — the SAME table the
+            # cluster payload configures (specs/cluster/manifests/tuwunel/
+            # tuwunel.yaml). Unset, tuwunel answers 404 M_NOT_FOUND rather than
+            # synthesizing anything, so THIS ROUTE IS ONLY HALF THE FIX: it is
+            # correct and it reaches the homeserver (that 404 body is tuwunel's own
+            # JSON, proving the hop), but the homeserver must also be told what to
+            # say. compose.real.yaml carries the matching env —
+            # TUWUNEL_WELL_KNOWN__CLIENT / TUWUNEL_WELL_KNOWN__SERVER, DOUBLE
+            # underscore, because those are nested table keys and the flat
+            # single-underscore spelling is a removed Conduit-era name that tuwunel
+            # silently ignores. Env is baked at container-create time, so that env
+            # lands only on a RECREATE of the tuwunel service, never on a restart.
             #
             # The two exact paths, NOT /.well-known/** — the pki gateway owns the
             # OIDC/jwks well-knowns and a subtree grab here would be a far wider

@@ -345,6 +345,23 @@ spec:
             # (MEDIA_PROXY_*_ENABLED default false) but its defaults are the
             # pre-rebrand *-proxy.snapdragon-backend hosts, i.e. the flag flip alone
             # would land on NXDOMAIN. Same two proxies the hs-token leg above dials.
+            #
+            # ⚠ COUPLED TO MEDIA_POISONING_ENABLED ABOVE — DO NOT FLIP THAT ALONE.
+            # app.media.poisoning.enabled only decides whether the cloak is OFFERED;
+            # THIS pair is what actually performs the homeserver upload of the
+            # cloaked bytes. Enabling poisoning while these stay false does not
+            # degrade gracefully — HomeserverMediaClient.requireWired() throws and
+            # POST /bff/user/media/upload 500s on EVERY attachment, while
+            # GET /bff/user/media/capability keeps answering available=true, so the
+            # composer never takes its uncloaked fallback branch
+            # (hugmesh-mastodon-ui compose-box.component.ts: the fallback is gated
+            # on the capability reporting UNAVAILABLE, not on the upload failing).
+            # Measured exactly that way on the compose lane 2026-08-14, where
+            # POISONER=1 set the poisoning flags and left these dark; the fix there
+            # was to DERIVE these from the cloak flag so the broken combination is
+            # unrepresentable (tests/stack/compose.local.yaml). Both are currently
+            # false here and MEDIA_POISONING_ENABLED is false too, so this cluster
+            # is consistent — the note is to keep it that way when the cloak lands.
             - { name: MEDIA_PROXY_MASTODON_BASE_URL, value: "https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443" }
             - { name: MEDIA_PROXY_MATRIX_BASE_URL,   value: "https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443" }
             # ── on-prem vision moderation (edge-ai-analysis) ─────────────────────

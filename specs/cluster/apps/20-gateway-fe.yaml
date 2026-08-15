@@ -113,6 +113,34 @@ spec:
                 name: bff-internal-token
                 key: token
                 optional: true
+        # ── THIS TIER IS THE ONE BEHIND A TLS TERMINATOR ─────────────────────
+        # The fe-gateway is the PUBLIC front door: every request reaches it from
+        # the ingress controller (and, in prod, cloudflared in front of that),
+        # which terminates TLS and reports the real scheme/host in X-Forwarded-*.
+        # SCG >=4.1 only honours those headers when the IMMEDIATE peer is a
+        # trusted proxy, and with no `trusted-proxies` set NOTHING is trusted —
+        # so XForwardedHeadersFilter throws away the ingress's X-Forwarded-Proto
+        # AND any value a route's own SetRequestHeader filter set, then rewrites
+        # both from the raw pod-to-pod connection (plain http, in-cluster
+        # authority). Downstreams that build absolute URLs from those headers
+        # then hand external clients an address only the cluster can resolve.
+        #
+        # MEASURED on the compose lane, which had the identical omission
+        # (tests/stack/gateway-routes/fe/application-routes.yml now carries the
+        # same key for the same reason):
+        #   GET https://localhost:8488/api/v1/instance
+        #   -> 301 https://mastodon-web:3000/api/v1/instance   (before)
+        #   -> 200 application/json, no redirect                (after)
+        # The Mastodon route there already set X-Forwarded-Proto: https; it was
+        # being stripped before it reached the homeserver.
+        #
+        # 10.244.0.0/16 is this cluster's pod CIDR (specs/etc/kubernetes/
+        # kubeadm-config.yaml podSubnet, the same value the NetworkPolicies use),
+        # so the regex admits exactly the in-cluster peers plus loopback. Kept
+        # tight on purpose: anything this matches may assert its own scheme/host.
+        # ⚠ Like the rest of this file's cluster lane, mirrored for parity from a
+        # live-verified compose fix — NOT independently verified on a cluster.
+        trustedProxies: "10\\.244\\..*|127\\.0\\.0\\.1|0:0:0:0:0:0:0:1|::1"
         routes:
           # Each federated micro-frontend on its own nginx remote (specific
           # paths first)…
@@ -415,9 +443,12 @@ spec:
             path: /_matrix/**
           # Matrix autodiscovery, served BY the homeserver: Spring Cloud Gateway has
           # no filter that returns a literal body, and tuwunel already emits both
-          # documents from its well_known_client / well_known_server settings, which
-          # this payload ALREADY configures (manifests/tuwunel/tuwunel.yaml:29-30,
-          # "https://matrix.hugmesh.net" / "matrix.hugmesh.net:443"). Those two
+          # documents from its [global.well_known] client/server settings, which
+          # this payload configures (manifests/tuwunel/tuwunel.yaml,
+          # "https://matrix.hugmesh.net" / "matrix.hugmesh.net:443" — note that
+          # table was flat `well_known_client`/`well_known_server` until it was
+          # found to be a removed Conduit-era spelling tuwunel silently ignores,
+          # which made the homeserver 404 this very path). Those two
           # exact paths only — the pki gateway owns /.well-known/** (OIDC/jwks), so
           # a subtree grab here would be a much wider claim than discovery needs.
           # NOTE: the BE gateway's own route misleadingly NAMED `matrix-wellknown`

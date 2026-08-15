@@ -118,17 +118,44 @@ services:
       # public door is the tls-front (PUBLIC_HTTPS_PORT, default 8488), which
       # proxies everything to the fe-gateway.
       #
-      # Key spelling follows this file's existing flat TUWUNEL_<UPPERCASED-KEY>
-      # convention (SERVER_NAME -> server_name, DATABASE_PATH -> database_path,
-      # GRANT_ADMIN_TO_FIRST_USER -> grant_admin_to_first_user); the cluster
-      # spells the same two settings as the flat toml keys well_known_client /
-      # well_known_server (specs/cluster/manifests/tuwunel/tuwunel.yaml:29-30).
-      # ⚠ HONEST LIMIT: the env spelling is inferred from that mapping and is NOT
-      # live-verified here — confirming it needs a tuwunel restart, which this
-      # pass must not do. If a deploy shows the 404 persisting, the config keys
-      # are reachable the same way the cluster sets them (a mounted tuwunel.toml).
-      TUWUNEL_WELL_KNOWN_CLIENT: ${MATRIX_WELL_KNOWN_CLIENT:-https://localhost:8488}
-      TUWUNEL_WELL_KNOWN_SERVER: ${MATRIX_WELL_KNOWN_SERVER:-localhost:8488}
+      # ⚠ DOUBLE UNDERSCORE, and it is not cosmetic. These two settings are NOT
+      # flat `[global]` keys — they live in the NESTED `[global.well_known]`
+      # table (tuwunel's own `struct WellKnownConfig`, alongside support_email /
+      # support_page / support_mxid / rtc_transports). tuwunel maps env to config
+      # with figment's `__` split, so the nested path well_known.client is spelled
+      # TUWUNEL_WELL_KNOWN__CLIENT. The single-underscore spelling this file
+      # carried first collapses to the FLAT key `well_known_client`, which is a
+      # Conduit-era name tuwunel has since removed — and it does not fail loudly,
+      # it is silently dropped. Measured on the running container:
+      #   docker logs hugmesh-local-tuwunel-1
+      #   WARN tuwunel_core::config::check: Config parameter "well_known_client"
+      #        is deprecated, ignoring.
+      #   WARN tuwunel_core::config::check: Config parameter "well_known_client"
+      #        is unknown to tuwunel, ignoring.
+      #   WARN tuwunel_core::config::check: Config parameter "well_known_server"
+      #        is unknown to tuwunel, ignoring.
+      # which is exactly why https://localhost:8488/.well-known/matrix/client kept
+      # answering 404 {"errcode":"M_NOT_FOUND"} with the env apparently "set".
+      #
+      # VERIFIED, not inferred this time — the ghcr.io/matrix-construct/tuwunel:v1.7.0
+      # binary was run directly with each spelling and probed:
+      #   TUWUNEL_WELL_KNOWN_CLIENT=…   -> 404, + the three warnings above
+      #   TUWUNEL_WELL_KNOWN__CLIENT=…  -> 200 application/json, zero warnings,
+      #       {"m.homeserver":{"base_url":"https://localhost:8488/"}}
+      #       {"m.server":"localhost:8488"}
+      #
+      # The value must be the PUBLIC base a client can actually dial, NOT the
+      # in-network tuwunel:8008 — a client that reads base_url and then cannot
+      # resolve the host is worse off than one that was told nothing. Locally the
+      # public door is the tls-front (PUBLIC_HTTPS_PORT, default 8488), which
+      # proxies everything to the fe-gateway.
+      #
+      # ⚠ ENV IS FIXED AT CONTAINER-CREATE TIME: `docker restart tuwunel` will NOT
+      # pick this up — the container must be RECREATED (`make stack-up SOCIAL=1`,
+      # or `docker compose ... up -d tuwunel`). The data volume is untouched by
+      # that, so no accounts or rooms are lost.
+      TUWUNEL_WELL_KNOWN__CLIENT: ${MATRIX_WELL_KNOWN_CLIENT:-https://localhost:8488}
+      TUWUNEL_WELL_KNOWN__SERVER: ${MATRIX_WELL_KNOWN_SERVER:-localhost:8488}
 
   # ── Platform datastore: Cassandra (gateway revocation list + URL registry) ──
   # The hugmesh services use Cassandra, NOT Redis. Redis appears below ONLY
