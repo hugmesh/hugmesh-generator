@@ -300,7 +300,7 @@ export async function registerOnly(page: Page, username: string, password = LOGI
  * That is 4-5 serial network legs plus a full page load, and the provisioning
  * legs mint tokens against the real homeserver (tuwunel)/Mastodon — login-ui's
  * own comment on completeRegistration() says the broker "can be slow against
- * the real Synapse" and provisions BEFORE navigating deliberately, to avoid an
+ * the real tuwunel" and provisions BEFORE navigating deliberately, to avoid an
  * hsproxy token race.
  * The playwright.config global `expect.timeout` of 15s is a UI-interaction
  * default and cannot reliably cover this chain — that mismatch is what makes the
