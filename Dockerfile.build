@@ -43,10 +43,49 @@ ARG CROSSDEV=1
 # the mirror (latest pointer:
 #   https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-openrc.txt).
 FROM alpine:3 AS stage3-fetch
-ARG STAGE3_URL=https://distfiles.gentoo.org/releases/amd64/autobuilds/20260621T164603Z/stage3-amd64-openrc-20260621T164603Z.tar.xz
+# ALWAYS FETCH THE LATEST STAGE3 (changed 2026-08-15, operator request).
+#
+# This used to hardcode a dated snapshot. Gentoo garbage-collects dated autobuilds after
+# roughly a couple of months, so the pin rotted: 20260621T164603Z vanished from the mirror
+# and every build died on a bare `curl: (22) ... 404` naming nothing. A pin that expires
+# silently is worse than a floating one, because it fails long after anyone remembers why.
+#
+# So the snapshot is now RESOLVED AT BUILD TIME from Gentoo's own pointer file, which names
+# the current autobuild:
+#   https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-openrc.txt
+#
+# TRADE-OFF, stated plainly: the toolchain now FLOATS. Two builds weeks apart can start from
+# different stage3s. In practice BuildKit caches this layer, so it is re-resolved only when
+# the cache is busted (--no-cache, a change above this line, or an evicted cache) rather than
+# on every build. When you need a build to be reproducible, pin it explicitly for that build:
+#   docker build -f Dockerfile.build --build-arg STAGE3_URL=<full url> -t hugmesh-builder .
+# STAGE3_URL set => used verbatim; empty (the default) => resolve the latest.
+ARG STAGE3_BASE=https://distfiles.gentoo.org/releases/amd64/autobuilds
+ARG STAGE3_URL=
 RUN apk add --no-cache curl tar xz \
  && mkdir /rootfs \
- && curl -fSL "$STAGE3_URL" -o /tmp/stage3.tar.xz \
+ && if [ -n "$STAGE3_URL" ]; then \
+      echo "==> stage3: PINNED via --build-arg STAGE3_URL"; \
+      echo "==> stage3: $STAGE3_URL"; \
+      curl -fSL "$STAGE3_URL" -o /tmp/stage3.tar.xz; \
+    else \
+      echo "==> stage3: resolving the CURRENT snapshot from latest-stage3-amd64-openrc.txt"; \
+      curl -fsSL "$STAGE3_BASE/latest-stage3-amd64-openrc.txt" \
+        | grep -o '^[0-9]\{8\}T[0-9]\{6\}Z/stage3-amd64-openrc-[^ ]*\.tar\.xz' \
+        | head -1 > /tmp/stage3.path; \
+      if [ ! -s /tmp/stage3.path ]; then \
+        echo "" >&2; \
+        echo "ERROR: could not resolve the current stage3 from the Gentoo pointer file." >&2; \
+        echo "  pointer: $STAGE3_BASE/latest-stage3-amd64-openrc.txt" >&2; \
+        echo "  Either the mirror is unreachable or its format changed. Work around it with:" >&2; \
+        echo "    docker build -f Dockerfile.build --build-arg STAGE3_URL=<full url> -t hugmesh-builder ." >&2; \
+        echo "" >&2; \
+        exit 1; \
+      fi; \
+      echo "==> stage3: $(cat /tmp/stage3.path)"; \
+      curl -fSL "$STAGE3_BASE/$(cat /tmp/stage3.path)" -o /tmp/stage3.tar.xz; \
+      rm -f /tmp/stage3.path; \
+    fi \
  && tar --numeric-owner -xpJf /tmp/stage3.tar.xz -C /rootfs \
  && rm /tmp/stage3.tar.xz
 
