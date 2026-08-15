@@ -280,14 +280,55 @@ top_level_federation_version() { # <lock-file> -> version, or ""
   ' "$1"
 }
 
+# The version an EXISTING injected pin holds, or "" when the Dockerfile has none.
+current_federation_pin() { # <dockerfile> -> version, or ""
+  sed -n "s/^RUN npm pkg set 'overrides\.@softarc\/native-federation'=\(.*\)\$/\1/p" "$1" | head -1
+}
+
+# Remove a previously injected pin (its comment block plus the RUN line). The block is
+# only dropped when it IMMEDIATELY precedes the pin, so an unrelated comment carrying
+# the same marker survives.
+strip_federation_pin() { # <dockerfile>
+  awk '
+    /^# ── injected by scripts\/patch-stack-src\.sh \(LOCAL stack build\)/ { buf=$0; n=1; next }
+    n && /^#/                                                   { buf=buf ORS $0; n++; next }
+    n && /^RUN npm pkg set .overrides\.@softarc\/native-federation./ { n=0; next }
+    n                                                           { print buf; n=0; print; next }
+                                                                { print }
+    END { if (n) print buf }
+  ' "$1" > "$1.patch-tmp" && mv "$1.patch-tmp" "$1"
+}
+
 pin_federation_to_one_copy() { # <repo-checkout-dir>
   local d="$1" df="$1/Dockerfile" lock="$1/package-lock.json"
   [ -f "${df}" ] && [ -f "${lock}" ]                     || return 0
   [ -f "$1/package.json" ]                               || return 0
-  grep -q 'overrides.@softarc/native-federation' "${df}" && return 0   # already patched
-  local nested top
+  local nested top existing
   nested="$(nested_federation_version "${lock}")"
   top="$(top_level_federation_version "${lock}")"
+  existing="$(current_federation_pin "${df}")"
+
+  # An EXISTING pin is not proof this checkout is patched — the injected line was once
+  # committed upstream, and the old "already patched, return 0" guard then made the pin
+  # permanently un-derivable. It went stale downward (held 4.3.2 while
+  # @angular-architects/native-federation began requiring ^4.4.0) and silently
+  # OVERWROTE the lockfile's own resolution at build time, breaking the bundle with
+  # "does not provide an export named 'isUnderAnyDir'". So a pin that disagrees with
+  # the lock is CORRECTED, and a pin the lock no longer needs is REMOVED.
+  if [ -n "${existing}" ]; then
+    if [ -z "${nested}" ] || [ "${nested}" = "${top}" ]; then
+      strip_federation_pin "${df}"
+      echo "  ~ $(basename "${d}")/Dockerfile: stale @softarc/native-federation pin ${existing} REMOVED (lock already resolves one copy${top:+ at ${top}})"
+      patched=$((patched+1))
+      return 0
+    fi
+    if [ "${existing}" = "${nested}" ]; then
+      return 0                                           # pin already agrees with the lock
+    fi
+    strip_federation_pin "${df}"
+    echo "  ~ $(basename "${d}")/Dockerfile: stale @softarc/native-federation pin ${existing} -> re-deriving ${nested}"
+  fi
+
   [ -n "${nested}" ] && [ -n "${top}" ]                  || return 0   # no two copies
   [ "${nested}" != "${top}" ]                            || return 0   # already one version
   grep -qE '^RUN npm (install|ci)' "${df}"               || {
