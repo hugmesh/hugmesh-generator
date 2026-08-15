@@ -147,3 +147,65 @@ def test_cli_brand_yaml_block_drives_the_same_derivation(tmp_path):
     got = _cli("--brand-yaml", str(by))
     assert got.returncode == 0
     assert got.stdout == theme.compose_login_css("#336699", font_preset="Monospace")
+
+
+class TestTheCliPresetPath:
+    """The other three axes, which were unreachable from tooling.
+
+    theme.py has carried preset/ramp/style (and now decor) for some time and the Studio
+    pushes all four, but this CLI could only render the primary/secondary path — so an
+    operator scripting a rebrand could not reproduce the theme their own Studio previews.
+
+    The rendering goes through domain_theme.render_css, the SAME function that fills the
+    per-domain stylesheet cache, rather than re-assembling the tokens here. That is the
+    single-implementation rule applied to tooling: two assemblies of the same tokens is
+    how a CLI and a Studio start disagreeing.
+    """
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, _CLI, *args],
+                              capture_output=True, text=True, timeout=120)
+
+    def test_a_preset_renders_a_full_sheet(self):
+        r = self._run("--preset", "nord")
+        assert r.returncode == 0, r.stderr
+        assert ":root:root" in r.stdout
+        assert "--hug-accent" in r.stdout
+
+    def test_each_axis_changes_the_output(self):
+        base = self._run("--preset", "nord").stdout
+        assert self._run("--preset", "nord", "--ramp", "light").stdout != base
+        assert self._run("--preset", "nord", "--style", "sharp").stdout != base
+        assert self._run("--preset", "nord", "--decor", "uwu").stdout != base
+
+    def test_decor_reaches_the_nav_suffix_tokens(self):
+        out = self._run("--preset", "nord", "--decor", "uwu").stdout
+        assert "--hug-nav-suffix: ' UwU';" in out
+
+    def test_the_default_decor_emits_nothing_decorative(self):
+        assert "--hug-nav-suffix: '';" in self._run("--preset", "nord").stdout
+
+    def test_mixing_the_two_colour_PATHS_is_refused_rather_than_silently_resolved(self):
+        # A preset BRINGS its colours; combining would discard one side without saying so.
+        r = self._run("--preset", "nord", "--primary", "#ffd700")
+        assert r.returncode != 0
+        assert "different paths" in r.stderr
+
+    def test_an_out_of_vocabulary_axis_is_refused_with_the_vocabulary(self):
+        r = self._run("--preset", "nord", "--decor", "nyan")
+        assert r.returncode != 0
+        assert "none, uwu" in r.stderr
+
+    def test_an_unknown_preset_is_refused(self):
+        r = self._run("--preset", "no-such-preset-anywhere")
+        assert r.returncode != 0
+
+    def test_the_primary_secondary_path_still_works_unchanged(self):
+        # The preset path is additive; the existing contract must not shift.
+        r = self._run("--primary", "#ffd700", "--secondary", "#7c4dff")
+        assert r.returncode == 0
+        assert ":root:root" in r.stdout
+
+    def test_accent_on_is_present_so_filled_buttons_have_a_legible_text_colour(self):
+        # The token whose absence made 24/38 presets fail AA.
+        assert "--hug-accent-on" in self._run("--preset", "nonbinary").stdout

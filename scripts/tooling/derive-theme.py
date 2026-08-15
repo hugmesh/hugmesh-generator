@@ -41,7 +41,7 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_ROOT, "studio"))
 
-from hugmesh_studio.core import fonts, theme  # noqa: E402
+from hugmesh_studio.core import domain_theme, fonts, theme, theme_presets  # noqa: E402
 
 DEFAULT_CONFIGMAP_NAME = "login-theme"
 DEFAULT_NAMESPACE = "hugmesh-frontend"
@@ -100,6 +100,20 @@ def main(argv: list[str] | None = None) -> int:
                    "(recorded in the css header)")
     p.add_argument("--font-source", default="", help="vendor/URL the face came from "
                    "(recorded in the css header)")
+    # ── the PRESET path: the other three axes, which were unreachable from tooling ──
+    # theme.py has carried preset/ramp/style (and now decor) for some time, and the Studio
+    # pushes all four, but this CLI could only ever render the primary/secondary path. So
+    # an operator scripting a rebrand could not produce the theme their own Studio shows.
+    p.add_argument("--preset", default="", help="theme preset id (e.g. nord, pride, "
+                   "dark). Mutually exclusive with --primary/--secondary, which are the "
+                   "hand-picked-colour path")
+    p.add_argument("--ramp", default=theme_presets.MODES[0],
+                   help="time-of-day neutral ramp, one of: " + ", ".join(theme_presets.MODES))
+    p.add_argument("--style", default=theme.DEFAULT_STYLE,
+                   help="shape axis, one of: " + ", ".join(theme.STYLE_VARIANTS))
+    p.add_argument("--decor", default=theme.DEFAULT_DECOR,
+                   help="decorative nav text, one of: " + ", ".join(theme.DECOR_VARIANTS)
+                        + " (default none)")
     p.add_argument("--configmap", action="store_true",
                    help="emit a v1 ConfigMap manifest instead of raw css")
     p.add_argument("--name", default=DEFAULT_CONFIGMAP_NAME,
@@ -150,13 +164,30 @@ def main(argv: list[str] | None = None) -> int:
                   f"{font_family} sha256:{fonts.font_sha256(font_bytes)} "
                   f"licence: {licence.strip()} source: {source.strip()} */\n")
 
+    if args.preset and (primary or secondary):
+        return _fail("--preset and --primary/--secondary are different paths: a preset "
+                     "BRINGS its colours, so combining them would silently discard one "
+                     "or the other. Pick one.")
+
     try:
-        css = theme.compose_login_css(primary, secondary, font_preset=font_preset,
-                                      font_family=font_family, font_bytes=font_bytes)
+        if args.preset:
+            # THE SAME RENDER THE STUDIO PUSHES, not a second assembly of the same
+            # tokens. domain_theme.render_css is what fills the per-domain stylesheet
+            # cache, so routing this through it means a theme rendered here and a theme
+            # rendered by the Studio cannot drift -- which is the whole reason the colour
+            # maths has exactly one implementation.
+            css = domain_theme.render_css(domain_theme.ThemeSelection(
+                preset=args.preset, ramp=args.ramp, style=args.style, decor=args.decor))
+        else:
+            css = theme.compose_login_css(primary, secondary, font_preset=font_preset,
+                                          font_family=font_family, font_bytes=font_bytes)
     except ValueError as exc:
         return _fail(str(exc))
 
-    if css:
+    if css and not args.preset:
+        # The colour warnings are about an operator's HAND-PICKED pair; a preset's colours
+        # are already contrast-solved by the derivation, so running them here would emit
+        # advice about colours nobody chose.
         for w in theme.warnings(primary or theme._DEFAULT_PRIMARY, secondary):
             print(f"derive-theme: WARNING: {w}", file=sys.stderr)
         css = header + css
