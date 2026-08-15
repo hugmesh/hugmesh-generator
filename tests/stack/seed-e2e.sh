@@ -711,6 +711,67 @@ else
   if [ "${SEED_STRICT}" = "1" ]; then die "${MSG}"; else warn "${MSG}"; fi
 fi
 
+# ── leg 4: the FEDERATION REGISTRY (optional; gated on the Studio's env pair) ──
+# Deliberately ABOVE the SEED_CASDOOR_ONLY early-exit below: this leg flips DB
+# rows in federation-db and has nothing to do with the Matrix/Mastodon social
+# tier, so a Casdoor-only seed (what `make stack-seed` runs without SOCIAL=1)
+# must still honour the operator's service selection.
+# WHY THIS EXISTS. The Studio offers a checkbox per MECH_FEDERATION service and
+# exports the operator's choice as HUGMESH_FEDERATION_ENABLE / _DISABLE
+# (studio/hugmesh_studio/core/local_services.py). Nothing consumed them: this
+# script had ZERO references to either name, so all five of those checkboxes were
+# INERT — ticking one changed nothing, and the Studio's own plan preview printed a
+# "PENDING: seed-e2e.sh does not consume these yet" line to admit it.
+#
+# The cost was not theoretical. On a freshly seeded mesh the registry ships
+# owncast=false, tube=false and character-forge=false, so those services run as
+# containers and are INVISIBLE in the host shell's menu — running-but-unreachable,
+# which is precisely the failure the Studio catalogue was written to prevent, with
+# the one control that could fix it doing nothing.
+#
+# CONTRACT (both vars, or neither): space-separated federation_modules.slug values.
+# The slugs are MODULE slugs, NOT catalogue slugs — phpbb's module is `forum` — so
+# they are used VERBATIM and never re-derived here.
+#
+# Idempotent like every other leg, and a no-op when the operator's selection
+# matches what the registry already ships (the Studio only exports these when the
+# selection DIFFERS), so an untouched bring-up runs byte-identically to before.
+if [ -n "${HUGMESH_FEDERATION_ENABLE:-}" ] || [ -n "${HUGMESH_FEDERATION_DISABLE:-}" ]; then
+  fed_ctr="$(find_ctr federation-db || true)"
+  if [ -z "${fed_ctr}" ]; then
+    log "leg 4 SKIPPED: no running federation-db container (is the stack up?)"
+  else
+    fed_sql() { docker exec -i "${fed_ctr}" psql -U federation -d federation -tAc "$1"; }
+    fed_changed=0
+    for slug in ${HUGMESH_FEDERATION_ENABLE:-}; do
+      # Quote the slug for SQL by doubling any single quote; slugs are [a-z-] in
+      # practice, but a registry row is not a place to trust that blindly.
+      q="${slug//\'/\'\'}"
+      if [ "$(fed_sql "select count(*) from federation_modules where slug = '${q}'")" = "0" ]; then
+        log "leg 4 WARN: no federation_modules row for slug '${slug}' — skipped"
+        continue
+      fi
+      fed_sql "update federation_modules set enabled = true where slug = '${q}'" >/dev/null
+      log "leg 4: enabled  ${slug}"
+      fed_changed=$((fed_changed + 1))
+    done
+    for slug in ${HUGMESH_FEDERATION_DISABLE:-}; do
+      q="${slug//\'/\'\'}"
+      if [ "$(fed_sql "select count(*) from federation_modules where slug = '${q}'")" = "0" ]; then
+        log "leg 4 WARN: no federation_modules row for slug '${slug}' — skipped"
+        continue
+      fi
+      fed_sql "update federation_modules set enabled = false where slug = '${q}'" >/dev/null
+      log "leg 4: disabled ${slug}"
+      fed_changed=$((fed_changed + 1))
+    done
+    # Read the registry BACK rather than trusting the UPDATEs — the host shell
+    # resolves its remotes from these rows, so a silent no-op here is a menu entry
+    # that never appears.
+    log "leg 4 OK: ${fed_changed} row(s) set; registry now: $(fed_sql "select string_agg(slug || '=' || enabled, ' ' order by slug) from federation_modules")"
+  fi
+fi
+
 if [ "${SEED_CASDOOR_ONLY}" = "1" ]; then
   log "SEED_CASDOOR_ONLY=1 — Casdoor identity seeded (org + roles + app-user-bff + personas); skipping the Matrix/Mastodon social legs. Real SSO web login is ready."
   exit 0

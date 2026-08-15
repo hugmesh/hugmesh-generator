@@ -733,14 +733,14 @@ class LocalMeshBootstrap:
                              f"{fed_env[FEDERATION_ENABLE_ENV] or '(none)'}")
                 lines.append(f"           {FEDERATION_DISABLE_ENV}="
                              f"{fed_env[FEDERATION_DISABLE_ENV] or '(none)'}")
-                # HONEST LIMIT, same register as the IdP note: the vars are exported
-                # for `make stack-seed`, but tests/stack/seed-e2e.sh does not read
-                # them yet, so the row flip is PENDING that seeder hunk. Saying it
-                # here beats a picker that appears to work and changes nothing.
-                lines.append("           PENDING: seed-e2e.sh does not consume these "
-                             "yet — until it does,")
-                lines.append("           the federation rows keep whatever the "
-                             "registry shipped.")
+                # No longer PENDING: seed-e2e.sh grew a leg-4 that consumes both
+                # vars verbatim against the compose federation-db and reads the
+                # registry back. The disclaimer that used to live here was true for
+                # as long as the checkboxes were inert; deleting it in the SAME
+                # change that made them real is what keeps the surface and the
+                # seeder from disagreeing again.
+                lines.append("           (applied by `make stack-seed` — leg 4 sets "
+                             "these rows and reads the registry back)")
             else:
                 lines.append("        (matches what the registry ships — nothing to "
                              "flip, env unchanged)")

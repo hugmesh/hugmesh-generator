@@ -95,9 +95,11 @@ PROFILE_MEDIA_POISONER = "media-poisoner"
 PROFILE_EGRESS_VPN = "egress-vpn"
 
 # ── the seeder contract for the federation half ─────────────────────────────────
-# TODO(tests/stack/seed-e2e.sh): the seeder does not read these yet — another agent
-# owns that file this pass, so this side ships the values and the contract, and the
-# GUI/plan say the flip is PENDING rather than claiming it happened.
+# CONSUMED by tests/stack/seed-e2e.sh leg 4 (added 2026-08-14) — it reads both vars
+# verbatim, UPDATEs federation_modules in the compose federation-db, and reads the
+# registry back. Until that leg existed these five checkboxes were INERT: the vars
+# were exported and nothing consumed them, so ticking one changed nothing while
+# owncast/tube/character-forge sat enabled=false, running but absent from the menu.
 #
 # CONTRACT (both vars, or neither):
 #   HUGMESH_FEDERATION_ENABLE  — space-separated federation_modules.slug values to
