@@ -3122,8 +3122,9 @@ HOSTPYUSE
     # WHOLE merge — so gettext, sed and util-linux all fail, and because they are
     # BDEPENDs of nearly everything, every subsequent atom is warn-skipped too.
     #
-    # This MUST be seeded host-side, not in specs-rpi5/portage/make.conf.tmpl:
-    # that template renders to ${SYSROOT}/etc/portage/make.conf, and these are
+    # This half MUST be seeded host-side. The target half is masked separately in
+    # specs-rpi5/portage/make.conf.tmpl, which renders to
+    # ${SYSROOT}/etc/portage/make.conf and cannot see this collision: these are
     # BDEPENDs that portage merges to "/" — the collision happens on the BUILD
     # CONTAINER's root, against its own bash-5.3_p9-r2 which already owns 41 such
     # empty-stem catalogs (and ships no bash.mo).

@@ -1222,6 +1222,28 @@ sys-libs/libselinux python
 sys-process/audit python
 HOSTPYUSE
     info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
+    # ── gettext-0.23.x empty-$(DOMAIN) .mo-collision dodge (HOST side) ──────────
+    # gettext-0.23.2 miscomputes $(DOMAIN), so autotools-NLS packages each install
+    # a file literally named /usr/share/locale/<lang>/LC_MESSAGES/.mo; collision-
+    # protect refuses the WHOLE merge, so gettext, sed and util-linux fail, and as
+    # BDEPENDs of nearly everything they warn-skip every atom after them (a
+    # 2026-08-14 rpi5/pki run burned ~2h before the requested-atom gate fired).
+    #
+    # MUST be seeded HOST-side: these are BDEPENDs portage merges to "/", so the
+    # collision lands on the BUILD CONTAINER's root, not the target sysroot — a
+    # mask in specs-orangepi-zero2/portage/make.conf.tmpl renders to
+    # ${SYSROOT}/etc/portage/make.conf does not help HERE (that file masks the TARGET root, which is
+    # masked separately; see its own INSTALL_MASK line). Masking only the
+    # empty-basename catalogs keeps real ones (NetworkManager.mo etc.) intact.
+    # Full incident writeup: the same-marked block in build-rpi5-stage4.sh.
+    # Idempotent: the marker makes a re-run a no-op on a reused make.conf.
+    if ! grep -q 'hugmesh-mo-collision' /etc/portage/make.conf 2>/dev/null; then
+        {
+            printf '\n# hugmesh-mo-collision: gettext-0.23.x empty-$(DOMAIN) catalogs\n'
+            printf 'INSTALL_MASK="${INSTALL_MASK} /usr/share/locale/*/LC_MESSAGES/.mo"\n'
+        } >> /etc/portage/make.conf
+        info "Pre-seeded HOST INSTALL_MASK: gettext empty-\$(DOMAIN) .mo collision dodge"
+    fi
 elif [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
     # Native root on a real host: VERIFY read-only, never write. Proceeds when the
     # host already satisfies the config; else fails fast with a reviewable command.
