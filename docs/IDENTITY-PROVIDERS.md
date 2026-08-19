@@ -83,9 +83,23 @@ via `IMAGE_SPEC_JSON`; the legacy `docker/build-image.sh` env channel forwards
 ## Local mesh (test stack)
 
 The local-mesh bootstrap threads an external issuer into the stack env
-(`OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_JWKS_URI`, consumed via the Makefile
-seam when present). Note the local compose stack uses a two-issuer split
-(browser-facing vs in-DNS), so external IdP in the **test** environment is
-validation-only configuration — it does not stand up a real external login. Use
-it to verify the config threads correctly; a real external-IdP login is a
-production-cluster concern.
+(`OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_JWKS_URI`), and the Makefile consumes
+all three, mapping them onto the frozen cross-repo compose names:
+
+| Studio / `make` var | Compose name it rides | Reaches |
+|---|---|---|
+| `OIDC_ISSUER` | `CASDOOR_ISSUER_URI` | every service's issuer (`iss`) validation |
+| `OIDC_CLIENT_ID` | `CASDOOR_APP_CLIENT_ID` | admin-bff/user-bff `APP_BFF_OIDC_CLIENT_ID` |
+| `OIDC_JWKS_URI` | `CASDOOR_JWKS_URI` | gateway + resource-server signing-key fetch |
+
+Set alongside each other (`make stack-up OIDC_ISSUER=… OIDC_CLIENT_ID=…
+OIDC_JWKS_URI=…` — no per-provider JWKS derivation happens in the Makefile; the
+Studio derives and exports it), the local stack's gateways and BFFs genuinely
+**validate tokens against the external issuer and JWKS**. Unset, every default
+is byte-identical to the Casdoor-only stack.
+
+The honest limit that remains: the coupled legs in the table above (native
+`/bff/login`, MFA step-up, role claims) stay Casdoor-only, and `make
+stack-seed` still seeds the in-stack Casdoor — so the **test** environment
+validates external tokens but does not stand up a full external login
+round-trip. That remains a production-cluster concern.

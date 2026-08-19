@@ -246,12 +246,16 @@ class LocalMeshBootstrapConfig:
     # "casdoor" (the DEFAULT) threads NOTHING: the stack env stays byte-identical
     # to before these fields existed (the #1 invariant). An external provider
     # threads OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI into the `make stack-*`
-    # env (env vars ONLY — the Makefile seam that consumes them is Lane B's hunk;
-    # until it lands the vars ride the env inert). HONEST LIMIT: the local compose
-    # stack pins a two-issuer split (browser localhost:8000 / in-DNS casdoor:8000)
-    # and always the in-cluster JWKS, so an external IdP in the TEST env is
-    # VALIDATION-ONLY CONFIG — the running local stack keeps its Casdoor. plan()
-    # says so out loud instead of overclaiming.
+    # env (env vars ONLY), and the Makefile CONSUMES all three (the Lane-B seam,
+    # landed): OIDC_ISSUER -> CASDOOR_ISSUER_URI, OIDC_CLIENT_ID ->
+    # CASDOOR_APP_CLIENT_ID (the BFF login/exchange client id), OIDC_JWKS_URI ->
+    # CASDOOR_JWKS_URI (gateway + resource-server key fetch). So the running
+    # local stack really does VALIDATE tokens against the external issuer/JWKS.
+    # HONEST LIMIT, narrowed but real: validation is the only leg that moves —
+    # native /bff/login, MFA step-up and role claims stay Casdoor-coupled
+    # (docs/IDENTITY-PROVIDERS.md "Honest limits"), and stack-seed still seeds
+    # the in-stack Casdoor, so there is no full external login ROUND-TRIP in the
+    # test stack. plan() says so out loud instead of overclaiming.
     idp: str = "casdoor"               # IDP_CHOICES: casdoor | entra | aws | oidc
     idp_issuer: str = ""               # external OIDC issuer (https://…)
     idp_client_id: str = ""            # external OIDC client id (public, not a secret)
@@ -649,19 +653,22 @@ class LocalMeshBootstrap:
         lines.append(f"Domain:     {c.resolved_domain()}"
                      + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
         lines.append(f"Issuer:     {c.issuer()}")
-        # I6.6: disclose the chosen IdP — and the honest external-mode limit (the
-        # local compose stack's two-issuer split means an external IdP here is
-        # validation-only config; the running local stack keeps its Casdoor).
+        # I6.6: disclose the chosen IdP — and the honest external-mode limit
+        # (the Makefile seam consumes all three vars, so token VALIDATION really
+        # re-points at the external issuer/JWKS; the coupled login/MFA/role legs
+        # do not move — docs/IDENTITY-PROVIDERS.md "Honest limits").
         lines.append(f"IdP:        {IDP_LABELS.get(c.idp, c.idp)}")
         if c.idp_external():
             lines.append(f"            issuer: {c.idp_issuer.strip()}")
             lines.append(f"            client: {c.idp_client_id.strip()}")
             lines.append(f"            jwks:   {c.effective_idp_jwks()}")
-            lines.append("            LIMIT: in the LOCAL TEST stack this is VALIDATION-ONLY")
-            lines.append("            config (threaded as OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_JWKS_URI")
-            lines.append("            env; the compose stack keeps its two-issuer Casdoor split, and")
-            lines.append("            native login/MFA/roles stay Casdoor-only — see")
-            lines.append("            docs/IDENTITY-PROVIDERS.md).")
+            lines.append("            Threaded as OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_JWKS_URI env;")
+            lines.append("            the Makefile maps them onto CASDOOR_ISSUER_URI/")
+            lines.append("            CASDOOR_APP_CLIENT_ID/CASDOOR_JWKS_URI, so gateway + BFF")
+            lines.append("            token VALIDATION runs against this external issuer/JWKS.")
+            lines.append("            LIMIT: native login, MFA step-up and role claims stay")
+            lines.append("            Casdoor-coupled (no full external login round-trip in the")
+            lines.append("            test stack) — see docs/IDENTITY-PROVIDERS.md.")
         lines.append("Web login:  "
                      + (", ".join(c.web_locales) + " (+ English source)" if c.web_locales
                         else "English only (no translation catalogs shipped)"))
@@ -695,7 +702,10 @@ class LocalMeshBootstrap:
                      + f", TOR={'on' if c.effective_with_tor() else 'off'}"
                      + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "")
                      + (", SNAP_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
-                     + (f", OIDC_ISSUER={c.idp_issuer.strip()}" if c.idp_external() else "")
+                     + (f", OIDC_ISSUER={c.idp_issuer.strip()}"
+                        f", OIDC_CLIENT_ID={c.idp_client_id.strip()}"
+                        f", OIDC_JWKS_URI={c.effective_idp_jwks()}"
+                        if c.idp_external() else "")
                      + ")")
         if c.effective_with_tor():
             lines.append("          -> also starts hugmesh-tor (the `tor` profile):")
@@ -1191,9 +1201,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="identity provider (I6.6): casdoor (DEFAULT — the built-in "
                         "IdP; threads NOTHING, byte-identical env) | entra | aws | "
                         "oidc. External providers thread OIDC_ISSUER/OIDC_CLIENT_ID/"
-                        "OIDC_JWKS_URI into the stack env. HONEST LIMIT: the local "
-                        "test stack keeps its two-issuer Casdoor split, so this is "
-                        "validation-only config there (docs/IDENTITY-PROVIDERS.md).")
+                        "OIDC_JWKS_URI into the stack env; the Makefile maps them "
+                        "onto CASDOOR_ISSUER_URI/CASDOOR_APP_CLIENT_ID/"
+                        "CASDOOR_JWKS_URI, so gateway + BFF token VALIDATION runs "
+                        "against the external issuer/JWKS. HONEST LIMIT: native "
+                        "login/MFA/role claims stay Casdoor-coupled — no full "
+                        "external login round-trip in the local test stack "
+                        "(docs/IDENTITY-PROVIDERS.md).")
     p.add_argument("--idp-issuer", default="",
                    help="external OIDC issuer URL (https://…; required unless "
                         "--idp casdoor).")

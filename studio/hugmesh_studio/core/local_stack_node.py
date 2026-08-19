@@ -202,12 +202,13 @@ class LocalStackNode:
         # ── identity provider (I6.6) — env-var threading ONLY. idp="casdoor" (the
         # default) sets NOTHING: the stack env stays byte-identical to before these
         # params existed. An EXTERNAL provider exports the provider-neutral
-        # OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI vars for `make stack-*`.
-        # The Makefile hunk that CONSUMES them is Lane B's seam (this lane must not
-        # edit the Makefile); until that seam lands the vars ride the env inert —
-        # documented, not overclaimed. The local compose stack additionally keeps
-        # its two-issuer Casdoor split, so an external IdP in the TEST env remains
-        # validation-only config either way (docs/IDENTITY-PROVIDERS.md).
+        # OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI vars for `make stack-*`,
+        # and the Makefile CONSUMES all three (the Lane-B seam, landed): they map
+        # onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI, so
+        # gateway + BFF token VALIDATION runs against the external issuer/JWKS.
+        # The coupled legs (native login, MFA step-up, role claims) stay
+        # Casdoor-only, so an external IdP in the TEST env still has no full
+        # login round-trip (docs/IDENTITY-PROVIDERS.md "Honest limits").
         # The operator's full local-services selection (core/local_services.py slugs),
         # or None when no picker was used. Only its FEDERATION half is consumed here:
         # those services' containers are unconditional in compose.local.yaml, so what
@@ -509,9 +510,10 @@ class LocalStackNode:
                 pass
         # External IdP (I6.6): exported ONLY for an external provider WITH an issuer,
         # so the casdoor default (and a half-configured external) leaves the env
-        # byte-identical. Consumed by the Lane-B Makefile OIDC seam when it lands;
-        # inert-but-present until then (documented in __init__). Values are public
-        # endpoints/identifiers — never secrets.
+        # byte-identical. Consumed by the Makefile's OIDC seam (landed): the vars
+        # map onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI
+        # for gateway + BFF token validation (documented in __init__). Values are
+        # public endpoints/identifiers — never secrets.
         if self.idp != "casdoor" and self.idp_issuer.strip():
             env["OIDC_ISSUER"] = self.idp_issuer.strip()
             if self.idp_client_id.strip():
