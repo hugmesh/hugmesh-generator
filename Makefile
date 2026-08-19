@@ -1256,6 +1256,31 @@ OIDC_ISSUER ?=
 ifneq ($(strip $(OIDC_ISSUER)),)
 CASDOOR_ISSUER := $(OIDC_ISSUER)
 endif
+# The OTHER HALF of the same seam (the Studio's local-mesh bootstrap exports all
+# three vars together — studio core/local_stack_node.py): the external client id
+# and JWKS URL, threaded on the SAME frozen CASDOOR_* compose names (cross-repo
+# bindings — extend, never rename, exactly like CASDOOR_ISSUER_URI above):
+#   OIDC_CLIENT_ID -> CASDOOR_APP_CLIENT_ID  (the BFF login/exchange client id
+#                     admin-bff/user-bff read via APP_BFF_OIDC_CLIENT_ID)
+#   OIDC_JWKS_URI  -> CASDOOR_JWKS_URI       (where every gateway + resource
+#                     server fetches signing keys for JWT validation)
+# EMPTY (the default) expands to NOTHING — not to an empty assignment — so the
+# compose-side `${CASDOOR_APP_CLIENT_ID:-app-user-bff}` /
+# `${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}` defaults apply
+# byte-identically AND an operator's own exported override still reaches the
+# containers (the STACK_MFA_FLOOR_ENV rule). No JWKS derivation happens here:
+# set OIDC_JWKS_URI alongside OIDC_ISSUER (providers differ — Entra serves
+# /discovery/v2.0/keys, not /.well-known/jwks; the Studio always derives and
+# exports it). NOTE the seam re-points token VALIDATION only: native
+# /bff/login, MFA step-up and role claims stay Casdoor-coupled
+# (docs/IDENTITY-PROVIDERS.md "Honest limits"), and `make stack-seed` still
+# seeds the in-stack Casdoor with its own app-user-bff client, untouched by
+# these vars.
+#   make stack-up OIDC_ISSUER=https://login.microsoftonline.com/<t>/v2.0 \
+#     OIDC_CLIENT_ID=app-mesh OIDC_JWKS_URI=https://login.microsoftonline.com/<t>/discovery/v2.0/keys
+OIDC_CLIENT_ID ?=
+OIDC_JWKS_URI ?=
+STACK_OIDC_ENV := $(if $(strip $(OIDC_CLIENT_ID)),CASDOOR_APP_CLIENT_ID='$(OIDC_CLIENT_ID)' ,)$(if $(strip $(OIDC_JWKS_URI)),CASDOOR_JWKS_URI='$(OIDC_JWKS_URI)' ,)
 # Env exported into every compose invocation (build contexts + service env).
 # DOCKER_BUILDKIT=1 belt-and-braces: several service Dockerfiles use BuildKit
 # syntax (`# syntax=docker/dockerfile:1.7` + RUN --mount=type=secret), which a
@@ -1322,7 +1347,7 @@ STACK_BRAND_B_ENV := $(if $(strip $(BRAND_B)),APP_TENANCY_ISSUERS='$(CASDOOR_ISS
 # a `:=` immediate assignment, so a variable referenced there but defined later
 # expands to EMPTY and the knob silently does nothing.
 STACK_POISONER_ENV := $(if $(strip $(POISONER)),MEDIA_POISONING_ENABLED='true' MEDIA_POISONING_WORKER_URL='http://hugmesh-media-poisoner:8080' MEDIA_POISONING_DEFAULT_MODE='$(POISON_MODE)' MEDIA_POISONING_FALLBACK_MODE='$(POISON_FALLBACK)' ,)
-STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_THEME_ENV) \
+STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \

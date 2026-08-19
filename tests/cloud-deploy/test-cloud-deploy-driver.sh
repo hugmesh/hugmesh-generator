@@ -27,8 +27,12 @@
 #   (g) apply with CD_ASSUME_YES=1 + stubs drives the documented argv shapes
 #       and records state hints; status prints them WITHOUT any cloud call;
 #       destroy drives the teardown argv and clears the hints.
-#   (h) the Makefile OIDC_ISSUER seam overrides the derived CASDOOR_ISSUER in
-#       STACK_ENV (make -n proof) and empty/unset leaves today's behavior.
+#   (h) the Makefile OIDC_* seam: OIDC_ISSUER overrides the derived
+#       CASDOOR_ISSUER in STACK_ENV, OIDC_CLIENT_ID/OIDC_JWKS_URI thread as
+#       CASDOOR_APP_CLIENT_ID/CASDOOR_JWKS_URI (make -n proof), empty/unset
+#       leaves today's behavior byte-for-byte (empty EXPANDS TO NOTHING), and
+#       compose.local.yaml's gateways/BFFs read the threaded names in
+#       ${VAR:-default} style.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -183,6 +187,9 @@ grep -q 'mfa_satisfied' "${AZOUT}/entra/claims-mapping.md" && grep -qi 'redirect
     && ok "claims-mapping blocker 3: mfa stamping + native login are Casdoor-coupled" || bad "claims-mapping missing blocker 3"
 grep -q 'CanonicalIdentityResolver' "${AZOUT}/entra/claims-mapping.md" && ok "claims-mapping names the required service-repo change" || bad "claims-mapping doesn't name CanonicalIdentityResolver"
 grep -q 'OIDC_ISSUER=' "${AZOUT}/entra/env/stack.env" && ok "entra stack.env documents the Makefile OIDC_ISSUER seam" || bad "stack.env missing the OIDC_ISSUER seam"
+grep -q '^OIDC_JWKS_URI=.*discovery/v2.0/keys$' "${AZOUT}/entra/env/stack.env" && grep -q 'OIDC_CLIENT_ID=' "${AZOUT}/entra/env/stack.env" \
+    && ok "entra stack.env carries the seam's JWKS half + documents OIDC_CLIENT_ID (issuer-only pairs Entra iss with Casdoor keys)" \
+    || bad "stack.env missing OIDC_JWKS_URI/OIDC_CLIENT_ID — the Makefile does no per-provider JWKS derivation"
 # NO-SECRETS sweep over the entra emit (keys/tokens/secret-material shapes).
 if grep -rEq -- '-----BEGIN|AKIA[0-9A-Z]{16}|(client_secret|client-secret|password)[=:][A-Za-z0-9]' "${AZOUT}/entra"; then
     bad "entra/ artifacts contain secret-shaped material"; grep -rE -- '-----BEGIN|AKIA[0-9A-Z]{16}|(client_secret|client-secret|password)[=:][A-Za-z0-9]' "${AZOUT}/entra"
@@ -296,20 +303,59 @@ cdd plan --provider not-a-provider --out-dir "${WORK}/x" >/dev/null 2>&1 && bad 
 out="$(cdy apply --provider aws-ec2 --out-dir "${WORK}/never-planned" --creds-file "${CREDS}")"; rc=$?
 [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "run 'plan" && ok "apply without a prior plan refuses with guidance" || bad "apply without plan wrong (rc=${rc})"
 
-# (i) Makefile OIDC_ISSUER seam (make -n proof; stack-ps has no prereqs) ---------
+# (i) Makefile OIDC_* seam (make -n proof; stack-ps has no prereqs) --------------
+# THREE vars, one seam: OIDC_ISSUER overrides the derived issuer on the frozen
+# CASDOOR_ISSUER_URI threading; OIDC_CLIENT_ID / OIDC_JWKS_URI (the Lane-B half)
+# ride the equally-frozen CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI names. The
+# two Lane-B vars must EXPAND TO NOTHING when empty — not to an empty
+# assignment — so the compose `${VAR:-default}` fallbacks stay byte-identical
+# AND an operator's own exported CASDOOR_* still reaches the containers.
 if command -v make >/dev/null 2>&1; then
-    def="$(make -s -n -C "${REPO}" stack-ps 2>/dev/null | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
+    def_out="$(make -s -n -C "${REPO}" stack-ps 2>/dev/null)"
+    def="$(printf '%s' "${def_out}" | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
     [ "${def}" = "CASDOOR_ISSUER_URI='http://localhost:8000'" ] \
         && ok "Makefile default: STACK_ENV threads the derived Casdoor issuer" || bad "Makefile default issuer wrong: ${def}"
+    printf '%s' "${def_out}" | grep -q "CASDOOR_APP_CLIENT_ID=\|CASDOOR_JWKS_URI=" \
+        && bad "Makefile default STACK_ENV names CASDOOR_APP_CLIENT_ID/CASDOOR_JWKS_URI — empty must expand to NOTHING (compose fallbacks + operator env both depend on it)" \
+        || ok "Makefile default: no client-id/JWKS assignment rides STACK_ENV (compose defaults untouched)"
     ovr="$(make -s -n -C "${REPO}" stack-ps OIDC_ISSUER=https://login.microsoftonline.com/tid/v2.0 2>/dev/null | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
     [ "${ovr}" = "CASDOOR_ISSUER_URI='https://login.microsoftonline.com/tid/v2.0'" ] \
         && ok "Makefile OIDC_ISSUER overrides the derived issuer in STACK_ENV" || bad "OIDC_ISSUER override failed: ${ovr}"
-    emp="$(make -s -n -C "${REPO}" stack-ps OIDC_ISSUER= 2>/dev/null | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
+    lb_out="$(make -s -n -C "${REPO}" stack-ps \
+        OIDC_ISSUER=https://login.microsoftonline.com/tid/v2.0 \
+        OIDC_CLIENT_ID=app-mesh \
+        OIDC_JWKS_URI=https://login.microsoftonline.com/tid/discovery/v2.0/keys 2>/dev/null)"
+    cid="$(printf '%s' "${lb_out}" | grep -o "CASDOOR_APP_CLIENT_ID='[^']*'" | head -1)"
+    [ "${cid}" = "CASDOOR_APP_CLIENT_ID='app-mesh'" ] \
+        && ok "Makefile OIDC_CLIENT_ID threads as CASDOOR_APP_CLIENT_ID (BFF client id)" || bad "OIDC_CLIENT_ID threading failed: ${cid}"
+    jwks="$(printf '%s' "${lb_out}" | grep -o "CASDOOR_JWKS_URI='[^']*'" | head -1)"
+    [ "${jwks}" = "CASDOOR_JWKS_URI='https://login.microsoftonline.com/tid/discovery/v2.0/keys'" ] \
+        && ok "Makefile OIDC_JWKS_URI threads as CASDOOR_JWKS_URI (gateway/resource-server key fetch)" || bad "OIDC_JWKS_URI threading failed: ${jwks}"
+    emp_out="$(make -s -n -C "${REPO}" stack-ps OIDC_ISSUER= OIDC_CLIENT_ID= OIDC_JWKS_URI= 2>/dev/null)"
+    emp="$(printf '%s' "${emp_out}" | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
     [ "${emp}" = "CASDOOR_ISSUER_URI='http://localhost:8000'" ] \
         && ok "Makefile empty OIDC_ISSUER leaves today's behavior byte-for-byte" || bad "empty OIDC_ISSUER changed behavior: ${emp}"
+    printf '%s' "${emp_out}" | grep -q "CASDOOR_APP_CLIENT_ID=\|CASDOOR_JWKS_URI=" \
+        && bad "explicitly-empty OIDC_CLIENT_ID/OIDC_JWKS_URI still emit an assignment (must expand to NOTHING)" \
+        || ok "Makefile explicitly-empty OIDC_CLIENT_ID/OIDC_JWKS_URI expand to NOTHING"
 else
-    ok "make absent — OIDC_ISSUER seam proof skipped (covered on CI images with make)"
+    ok "make absent — OIDC_* seam proof skipped (covered on CI images with make)"
 fi
+# …and the compose side of the same seam (static greps — no make needed): the
+# three gateways' JWT key fetch and hugmesh-api's JWKSETURI must READ the
+# threaded name in the house ${VAR:-default} style (a hardcoded value silently
+# strands the seam), and both login BFFs must read the threaded client id.
+n_jwks="$(grep -c 'CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}' "${REPO}/tests/stack/compose.local.yaml")"
+[ "${n_jwks}" -ge 12 ] \
+    && ok "compose.local.yaml: ${n_jwks} services (gateways included) read CASDOOR_JWKS_URI passthrough" \
+    || bad "compose.local.yaml JWKS passthrough count dropped to ${n_jwks} (expected >=12 — a gateway went back to a hardcoded JWKS?)"
+grep -q 'SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}' "${REPO}/tests/stack/compose.local.yaml" \
+    && ok "compose.local.yaml: hugmesh-api key fetch follows the same passthrough" \
+    || bad "hugmesh-api JWKSETURI no longer reads CASDOOR_JWKS_URI"
+n_cid="$(grep -c 'APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}' "${REPO}/tests/stack/compose.local.yaml")"
+[ "${n_cid}" -ge 2 ] \
+    && ok "compose.local.yaml: admin-bff + user-bff read CASDOOR_APP_CLIENT_ID passthrough" \
+    || bad "BFF client-id passthrough count dropped to ${n_cid} (expected >=2)"
 
 # (j) I7 IdP passthrough ---------------------------------------------------------
 # Default (casdoor): NO idp/ dir — the plan tree is byte-identical to pre-I7.

@@ -349,7 +349,10 @@ services:
       # active, which is also why unrelated /api/** paths 500'd.
       SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
-      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      # Passthrough (external-IdP seam): `make stack-up OIDC_JWKS_URI=…` threads
+      # CASDOOR_JWKS_URI here so gateway JWT validation fetches the EXTERNAL
+      # provider's keys; unset, the in-DNS Casdoor default is byte-identical.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: datacenter1
@@ -465,7 +468,10 @@ services:
       # active, which is also why unrelated /api/** paths 500'd.
       SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
-      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      # Passthrough (external-IdP seam): `make stack-up OIDC_JWKS_URI=…` threads
+      # CASDOOR_JWKS_URI here so gateway JWT validation fetches the EXTERNAL
+      # provider's keys; unset, the in-DNS Casdoor default is byte-identical.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: datacenter1
@@ -553,7 +559,10 @@ services:
       # active, which is also why unrelated /api/** paths 500'd.
       SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
-      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      # Passthrough (external-IdP seam): `make stack-up OIDC_JWKS_URI=…` threads
+      # CASDOOR_JWKS_URI here so gateway JWT validation fetches the EXTERNAL
+      # provider's keys; unset, the in-DNS Casdoor default is byte-identical.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: datacenter1
@@ -1093,7 +1102,10 @@ services:
       # the host-facing issuer, fetch keys in-DNS — the same split every sibling
       # service's CASDOOR_ISSUER_URI/CASDOOR_JWKS_URI pair encodes.
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: "http://casdoor:8000/.well-known/jwks"
+      # Same passthrough as the gateways above: the issuer half already threads
+      # CASDOOR_ISSUER_URI, so the key-fetch half must follow the same seam or an
+      # external-IdP run validates the external iss against the WRONG keys.
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       CASDOOR_PLATFORM_ORG: hugmesh
       CASDOOR_PLATFORM_CLIENT_ID: dev-systems-client
       CASDOOR_PLATFORM_CLIENT_SECRET: dev-systems-secret

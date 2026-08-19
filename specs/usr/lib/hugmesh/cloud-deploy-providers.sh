@@ -605,8 +605,14 @@ EOF
     # construction; client credentials live in the keys layout, never here.
     {
         printf '# stack.env — generator-level Entra override (local stack / Makefile seam)\n'
-        printf '# Usage: make stack-up OIDC_ISSUER=%s\n' "${entra_issuer}"
+        printf '# Usage: make stack-up OIDC_ISSUER=%s \\\n' "${entra_issuer}"
+        printf '#            OIDC_JWKS_URI=%s \\\n' "${entra_jwks}"
+        printf '#            OIDC_CLIENT_ID=<the user-bff app registration appId (a GUID)>\n'
+        printf '# Set OIDC_JWKS_URI ALONGSIDE the issuer: Entra serves keys at\n'
+        printf '# /discovery/v2.0/keys and the Makefile does no per-provider derivation —\n'
+        printf '# issuer-only would validate the Entra iss against the in-stack Casdoor keys.\n'
         printf 'OIDC_ISSUER=%s\n' "${entra_issuer}"
+        printf 'OIDC_JWKS_URI=%s\n' "${entra_jwks}"
     } > "${out}/entra/env/stack.env"
     {
         printf '# gateway.env — pki/be/fe gateway resource-server leg under Entra.\n'
