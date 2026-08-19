@@ -170,9 +170,13 @@ rm -rf "${SELINUX_BUILD}"
 No change to `provision.sh` is required — the existing
 `semodule -s "${type}" -i /usr/share/selinux/"${type}"/*.pp` at
 `provision.sh:2563` then loads them at first boot, and the `setfiles /
-restorecon -RF /` at `provision.sh:2566-2572` applies the `.fc` contexts (and
-the existing `touch /.autorelabel` at `provision.sh:2573` covers a runtime
-relabel).
+restorecon -RF /` at `provision.sh:2566-2572` applies the `.fc` contexts.
+(`/.autorelabel` carries the standard request-flag semantics: nothing on these
+OpenRC images consumes it at boot, so `provision_selinux()` — which performs
+the relabel itself — CLEARS it after a successful relabel and only leaves it
+raised when the relabel failed, which `selinux-enforce-gate`'s
+`check_relabel_clean()` then refuses on. An earlier revision touched the flag
+unconditionally AFTER its own relabel, so the gate could never pass.)
 
 ### (d) Cross-built Pi caveat — build the `.pp` on the BUILD host, not first-boot
 

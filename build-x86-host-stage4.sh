@@ -5536,11 +5536,16 @@ for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_
     grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: hardened kernel option \${must} not enabled after olddefconfig"; exit 1; }
 done
 # BOOT-CRITICAL (live ISO + SELinux enforcing): SQUASHFS_XATTR must survive olddefconfig.
-# The live squashfs root carries the SELinux security.selinux labels as xattrs; without
-# this the kernel drops them ("squashfs: Xattrs in filesystem, these will be ignored"),
-# the live root is UNLABELED, and the enforcing boot DEADLOCKS at OpenRC init-early
-# (proven via QEMU: enforcing hangs, enforcing=0 reaches agetty). SQUASHFS_XATTR depends
-# on SQUASHFS, so a pruned dep would silently re-strip the labels — fail closed here.
+# The live squashfs pack PRESERVES security.selinux xattrs (mksquashfs by default, the
+# tar2sqfs fallback via tar --xattrs) — but note the sysroot is UNLABELED at pack time
+# today: nothing runs setfiles into it, so the packed image carries only whatever
+# labels happen to exist, and real labeling happens at FIRST BOOT when
+# provision_selinux() relabels onto the live overlay. SQUASHFS_XATTR is still required:
+# without it the kernel drops any labels that ARE present ("squashfs: Xattrs in
+# filesystem, these will be ignored") — and on a labeled squashfs that unlabels the
+# live root and the enforcing boot DEADLOCKS at OpenRC init-early (proven via QEMU:
+# enforcing hangs, enforcing=0 reaches agetty). SQUASHFS_XATTR depends on SQUASHFS,
+# so a pruned dep would silently re-strip the labels — fail closed here.
 grep -q "^CONFIG_SQUASHFS_XATTR=y" .config || { echo "[build-x86] ERROR: CONFIG_SQUASHFS_XATTR not enabled after olddefconfig — live SELinux-enforcing boot would hang (unlabeled squashfs root)"; exit 1; }
 # BOOT-CRITICAL: refuse to ship a kernel whose k8s Service-networking surface
 # silently lost a netfilter/NAT/eBPF symbol. The x86 fragment used to be a
@@ -6368,8 +6373,13 @@ CHROOT
                 || { err "mksquashfs failed — cannot build a bootable live ISO"; exit 1; }
         else
             # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
+            # --xattrs: mksquashfs (above) preserves xattrs by DEFAULT, but GNU tar
+            # stores none unless told to — without these flags this fallback silently
+            # shipped a squashfs with every xattr (security.selinux included) stripped,
+            # while the mksquashfs path, the stage4 tar and fs.tar all kept them.
+            # tar2sqfs itself keeps whatever xattrs it finds in the archive.
             info "Squashing rootfs with tar2sqfs -c xz (this can take a while)..."
-            tar -C "${SYSROOT}" --numeric-owner \
+            tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner \
                 --exclude='./proc' --exclude='./sys' --exclude='./dev' \
                 --exclude='./run' --exclude='./var/cache/distfiles' --exclude='./home/magus' \
                 -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img" \

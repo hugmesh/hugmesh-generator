@@ -2169,7 +2169,12 @@ PY
 # surfaced it: this repo gates on GitLab CI and merges on GitHub, so a red result never blocks
 # a merge. Verified by diffing the emitted assertion NAMES across #550 (10 added, 0 removed),
 # not by trusting the delta.
-SLX_EXPECTED=136
+# 142 = 136 + the 6 assertions the issue-#45 first-boot fixes added (deliberate bump):
+# 1 C-leg (selinux-built marker written next to the manifest), 1 D-run gate_blocks
+# (check_provision_ok refuses on the selinux-load-failed marker), and 4 E-legs
+# (autorelabel consumption, the selinux_policy_loaded postcondition, and the two
+# matched-pair marker checks provision.sh <-> enforce-gate / build-lib <-> provision.sh).
+SLX_EXPECTED=142
 SLX_PASS=0; SLX_FAIL=0
 run_selinux_policy_checks() {
     local out="${TMP_DIR}/selinux-policy.out"
@@ -2228,7 +2233,12 @@ run_portage_config_sync_checks() {
 # time. Static curated-chain check (see that script's header for why static, not
 # host-side resolution). Same fail-closed delegate shape as SLX: a missing
 # script is charged in full, a short assertion tally is charged as failures.
-RAR_EXPECTED=17
+# 25 = 17 + the 8 assertions the delegate gained after RAR_EXPECTED=17 was set
+# (the x86 profile-binding fix a592ac88/#44 added the hardened/selinux profile
+# legs without bumping this counter — the same #550 class the SLX comment above
+# documents). Deliberate bump; verified by running the delegate standalone:
+# it emits 25 assertions, 0 failed.
+RAR_EXPECTED=25
 RAR_PASS=0; RAR_FAIL=0
 run_requested_atoms_checks() {
     local out="${TMP_DIR}/reqatoms.out"

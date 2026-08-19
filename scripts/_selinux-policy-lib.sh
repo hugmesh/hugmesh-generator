@@ -238,6 +238,38 @@ slx_compile_module() {
         "${name}.pp"
 }
 
+# ── slx_mark_selinux_built <sysroot> [<detail>] ──────────────────────────────
+# BUILD-TIME MARKER: /usr/share/hugmesh/selinux-built states "this image was
+# built with selinux-aware userland — first boot MUST end with a loaded
+# policy". provision_selinux() keys its hard postcondition off this file (with
+# base.pp presence as the fallback for images that predate it): on a marked
+# image the old fail-open seams ('[ -d /etc/selinux ] || return 0',
+# '2>/dev/null || warn') no longer let a broken SELinux userland provision
+# "normally" — they record /var/lib/keys-provision/selinux-load-failed, which
+# /etc/init.d/selinux-enforce-gate refuses on. Written ONLY when the sysroot
+# really carries a base policy to load (base.pp), so a deliberately
+# non-SELinux image is never held to a postcondition it cannot meet.
+# Content is DETERMINISTIC (no timestamps): re-runs must be byte-identical.
+slx_mark_selinux_built() {
+    local sysroot="${1:?slx_mark_selinux_built: sysroot required}" detail="${2:-}" type
+    type="$(slx_policy_type "${sysroot}")"
+    if [ ! -f "${sysroot}/usr/share/selinux/${type}/base.pp" ]; then
+        _slx_say "NOT marking selinux-built: no ${type}/base.pp in the sysroot — not a selinux-aware image, first boot stays fail-open"
+        return 0
+    fi
+    install -d -m 0755 "${sysroot}/usr/share/hugmesh" || { _slx_fail "cannot create ${sysroot}/usr/share/hugmesh"; return 1; }
+    {
+        echo "# This image was built with selinux-aware userland (base.pp present at build time)."
+        echo "# Written by scripts/_selinux-policy-lib.sh. provision_selinux() (keys-provision)"
+        echo "# treats a first boot that ends WITHOUT a loaded policy as a FAILURE on this image:"
+        echo "# it records /var/lib/keys-provision/selinux-load-failed, and"
+        echo "# /etc/init.d/selinux-enforce-gate refuses to flip to enforcing while that exists."
+        echo "type=${type}"
+        [ -n "${detail}" ] && echo "${detail}"
+    } > "${sysroot}/usr/share/hugmesh/selinux-built"
+    chmod 0644 "${sysroot}/usr/share/hugmesh/selinux-built"
+}
+
 # ── slx_stage_node_policy <sysroot> <shared_specs> ───────────────────────────
 # THE ONE CALL SITE. Compiles every specs/selinux module the sysroot can support,
 # installs the .pp into the policy store provision_selinux() already loads,
@@ -253,6 +285,9 @@ slx_stage_node_policy() {
     if [ "${HUGMESH_SELINUX_MODULES:-1}" = "0" ]; then
         _slx_say "SKIPPED by HUGMESH_SELINUX_MODULES=0 — this image ships NO hugmesh node policy."
         _slx_say "  The node still boots permissive with only the distro base policy loaded."
+        # Still selinux-aware when base.pp exists: the DISTRO policy must load
+        # at first boot even with the hugmesh modules deliberately omitted.
+        slx_mark_selinux_built "${sysroot}" "node_modules=0 (HUGMESH_SELINUX_MODULES=0)"
         return 0
     fi
 
@@ -398,6 +433,7 @@ slx_stage_node_policy() {
     _slx_say "first boot loads them via provision_selinux()'s 'hugmesh node-policy load' block -> semodule -s ${type} -i <each module from the manifest> (PERMISSIVE)"
 
     rm -rf "${work}"
+    slx_mark_selinux_built "${sysroot}" "node_modules=${#built[@]}" || return 1
     slx_ship_enforce_gate "${sysroot}" "${shared_specs}"
 }
 

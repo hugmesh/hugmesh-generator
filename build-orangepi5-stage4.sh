@@ -2363,7 +2363,10 @@ build_live_iso() {
             || mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" -noappend
     else
         # squashfs-tools-ng fallback: tar stream with the same boot/dtb exclude.
-        tar -C "${SYSROOT}" --numeric-owner --exclude='./boot/dtb' -cpf - . \
+        # --xattrs: mksquashfs keeps xattrs (security.selinux) by default, GNU tar
+        # stores NONE unless told to — same flags at both fallback sites (live +
+        # installer), matching the stage4/fs.tar packs.
+        tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner --exclude='./boot/dtb' -cpf - . \
             | tar2sqfs -q -c xz -j "${JOBS}" "${live_root}/LiveOS/squashfs.img"
     fi
 
@@ -2436,7 +2439,7 @@ build_installer_iso() {
             -noappend -comp xz -e boot/dtb 2>/dev/null \
             || mksquashfs "${SYSROOT}" "${inst_root}/LiveOS/squashfs.img" -noappend
     else
-        tar -C "${SYSROOT}" --numeric-owner --exclude='./boot/dtb' -cpf - . \
+        tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner --exclude='./boot/dtb' -cpf - . \
             | tar2sqfs -q -c xz -j "${JOBS}" "${inst_root}/LiveOS/squashfs.img"
     fi
     [ -s "${inst_root}/LiveOS/squashfs.img" ] || { err "INSTALLER medium: squashfs.img was not produced — aborting."; exit 1; }

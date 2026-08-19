@@ -315,6 +315,13 @@ if [ -f "${MAN}" ]; then
 else
     bad "manifest ${MAN} not written"; bad "manifest skip-reason (no manifest)"
 fi
+# The build-time awareness marker: written next to the manifest whenever the
+# sysroot carries a base.pp (this fixture does), so provision_selinux() can
+# tell "built selinux-aware" from "never had SELinux" and hold the former to
+# its policy-loaded postcondition.
+[ -f "${S}/usr/share/hugmesh/selinux-built" ] \
+    && ok "selinux-built marker written next to the manifest (base.pp present)" \
+    || bad "selinux-built marker NOT written — provision_selinux() cannot detect a selinux-aware image"
 
 # ── C-gentoo) THE REGRESSION FOR THE FEDORA-PATH BUG ─────────────────────────
 # The fixture above must BE the Gentoo shape, and the lib must resolve to the
@@ -787,6 +794,7 @@ gate_run() {
       MARKER="${G}/marker"; CONFIG="${G}/config"; TYPE=mcs
       MODULE_MANIFEST="${G}/manifest"; AUTORELABEL="${G}/autorelabel"
       CONTAINERD_INITD="${G}/containerd-initd"   # absent unless a case creates it
+      PROVISION_FAILED="${G}/selinux-load-failed"   # absent unless a case creates it
       start ) 2>&1
 }
 
@@ -795,7 +803,7 @@ gate_fixture() {
     local G="$1"; mkdir -p "${G}"
     printf 'SELINUX=permissive\nSELINUXTYPE=mcs\n' > "${G}/config"
     printf '# manifest\nhugmesh_authkeys\nhugmesh_vpn\n' > "${G}/manifest"
-    rm -f "${G}/marker" "${G}/autorelabel" "${G}/containerd-initd"
+    rm -f "${G}/marker" "${G}/autorelabel" "${G}/containerd-initd" "${G}/selinux-load-failed"
     # `semodule -l` output shape: one "name<TAB>version" line per loaded module.
     export FX_SEMODULE_L=$'base\t1.0.0\nhugmesh_authkeys\t1.0.0\nhugmesh_vpn\t1.0.0\n'
     export FX_SEMODULE_RC=0 FX_GETENFORCE=Permissive FX_SELINUX_ENABLED_RC=0
@@ -864,6 +872,9 @@ fx_selinux_off()   { export FX_SELINUX_ENABLED_RC=1; }
 # A container image additionally requires the `container` module — which the
 # manifest never lists, because sec-policy/selinux-container provides it.
 fx_container_node() { printf '#!/sbin/openrc-run\n' > "$1/containerd-initd"; chmod +x "$1/containerd-initd"; }
+# provision_selinux()'s hard postcondition failed on a selinux-aware image: it
+# left /var/lib/keys-provision/selinux-load-failed behind. The gate must refuse.
+fx_provision_failed() { echo "2026-08-19T00:00:00Z no policy loaded after provisioning (fixture)" > "$1/selinux-load-failed"; }
 gate_blocks "check_modules: no build manifest"            fx_no_manifest
 gate_blocks "check_modules: a manifest module not loaded" fx_module_absent
 gate_blocks "check_modules: semodule -l fails"            fx_semodule_fail
@@ -873,6 +884,7 @@ gate_blocks "check_avc_clean: an AVC on a hugmesh domain" fx_avc
 gate_blocks "check_mode_sane: already Enforcing"          fx_already_enf
 gate_blocks "check_mode_sane: SELinux disabled"           fx_selinux_off
 gate_blocks "check_modules: container node without the container module" fx_container_node
+gate_blocks "check_provision_ok: first-boot policy load failed (marker present)" fx_provision_failed
 
 # ── E) the first-boot loader half in provision.sh ────────────────────────────
 # The .pp land in the directory provision_selinux() knows about, but its
@@ -897,8 +909,34 @@ if [ -f "${PROV}" ]; then
     sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep -qE 'semodule .*-i ' \
         && ok "the explicit load uses semodule -i (installs into the store)" \
         || bad "the explicit load does not call semodule -i"
+    # ── the first-boot postcondition + autorelabel semantics (issue #45 a/c) ──
+    # /.autorelabel REQUESTS a relabel and is removed by whoever completes one.
+    # provision_selinux() is the relabeler here, so it must CONSUME the flag on
+    # success (it used to `touch` it unconditionally AFTER its own relabel, so
+    # check_relabel_clean() could never pass on any provisioned node).
+    grep -q 'rm -f /.autorelabel' "${PROV}" \
+        && ok "a successful relabel CONSUMES /.autorelabel (standard request-flag semantics)" \
+        || bad "provision.sh never clears /.autorelabel — check_relabel_clean() can never pass"
+    # The hard postcondition: on a selinux-aware image, provisioning must end
+    # with a policy actually loaded — defined AND called, not just defined.
+    [ "$(grep -c 'selinux_policy_loaded' "${PROV}")" -ge 2 ] \
+        && ok "provision.sh checks the policy-loaded postcondition (selinux_policy_loaded defined + called)" \
+        || bad "provision.sh lost the selinux_policy_loaded postcondition"
+    # The failure marker is a matched pair: provision.sh writes it, the
+    # enforce-gate refuses on it. Either half alone is a silent regression.
+    { grep -q 'selinux-load-failed' "${PROV}" && grep -q 'selinux-load-failed' "${SVC}"; } \
+        && ok "selinux-load-failed marker is a matched pair (provision.sh writes, enforce-gate refuses)" \
+        || bad "selinux-load-failed marker halves diverged (provision=$(grep -c 'selinux-load-failed' "${PROV}"), gate=$(grep -c 'selinux-load-failed' "${SVC}"))"
+    # The build-time awareness marker is a matched pair too: the shared lib
+    # writes /usr/share/hugmesh/selinux-built, provision_selinux() keys its
+    # fail-open-vs-fail-visible split off it.
+    { grep -q 'selinux-built' "${LIB}" && grep -q 'selinux-built' "${PROV}"; } \
+        && ok "selinux-built marker is a matched pair (build lib writes, provision.sh detects)" \
+        || bad "selinux-built marker halves diverged (lib=$(grep -c 'selinux-built' "${LIB}"), provision=$(grep -c 'selinux-built' "${PROV}"))"
 else
     bad "provision.sh missing"; bad "(order)"; bad "(manifest-driven)"; bad "(semodule -i)"
+    bad "(autorelabel consumption)"; bad "(policy-loaded postcondition)"
+    bad "(selinux-load-failed pair)"; bad "(selinux-built pair)"
 fi
 
 echo "== selinux-policy-install: ${P} passed, ${F} failed =="
