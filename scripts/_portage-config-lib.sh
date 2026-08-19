@@ -22,6 +22,55 @@
 #   board-flip edit of package.use/rpi5) are unaffected: they exist in specs
 #   too, so they are never pruned, and their rewrite happens after this step
 #   exactly as it always did.
+# Where this lib (and its sibling patcher script) lives — resolved at source
+# time so pcs_quiet_sendfile_noise works no matter what the caller's cwd is.
+_PCS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# pcs_quiet_sendfile_noise SYSROOT
+#   Quiet portage's per-file sendfile WARNING-traceback spam (~300k lines per
+#   stage4 build — measured 308386 in out/build-snap-build-x86.log) by
+#   applying scripts/patch-portage-file-copy.py (root cause, upstream refs and
+#   the exact patch live THERE) to:
+#     * SYSROOT       — the freshly extracted stage3's portage, the one that
+#                       runs the x86 chroot payload emerges; and
+#     * the container root "/" — the builder's own portage, which the ARM
+#                       lanes' cross-emerge --root=SYSROOT merges run under.
+#                       Only when the host-guard proves this root disposable
+#                       (never a real host), and redundant with the
+#                       Dockerfile.build twin — belt-and-braces for builder
+#                       images older than that layer, same pattern as the
+#                       host-side keyword/USE seeds.
+#   The underlying failure is sendfile(2) -> EINVAL for EVERY file merged onto
+#   a filesystem with no .splice_write (the eCryptfs-backed /out work dir);
+#   the copy itself always succeeded via portage's shutil fallback, so this is
+#   PURELY log noise. Hence: NEVER fatal — on any failure it warns and returns
+#   0. An hours-long build must not die over log cosmetics.
+pcs_quiet_sendfile_noise() {
+    local sysroot="${1:?pcs_quiet_sendfile_noise: sysroot required}"
+    local patcher="${_PCS_LIB_DIR}/patch-portage-file-copy.py" r rc
+    if [ ! -f "${patcher}" ]; then
+        echo "[portage-config] WARN: ${patcher} missing — per-file sendfile tracebacks will spam this build's log" >&2
+        return 0
+    fi
+    for r in "${sysroot}" /; do
+        if [ "${r}" = / ]; then
+            # Host-guard gate (fail closed if the guard lib is not sourced):
+            # patching / is a host mutation, allowed only on a disposable root.
+            command -v hostguard_mutation_allowed >/dev/null 2>&1 || continue
+            hostguard_mutation_allowed || continue
+        fi
+        rc=0
+        python3 "${patcher}" "${r}" || rc=$?
+        case "${rc}" in
+            0) ;;
+            2) echo "[portage-config] WARN: no portage under ${r} — sendfile-noise patch skipped" >&2 ;;
+            3) echo "[portage-config] WARN: portage under ${r} changed since 3.0.81.2 — sendfile-noise patch anchor missing; RE-EVALUATE the pin (see scripts/patch-portage-file-copy.py). Tracebacks will be back until then." >&2 ;;
+            *) echo "[portage-config] WARN: sendfile-noise patch failed under ${r} (rc=${rc}) — continuing; tracebacks will be back" >&2 ;;
+        esac
+    done
+    return 0
+}
+
 pcs_sync_dir() {
     local src="${1:?pcs_sync_dir: src required}" dest="${2:?pcs_sync_dir: dest required}" f base
     [ -d "${src}" ] || { echo "[portage-config] ERROR: spec dir missing: ${src}" >&2; return 1; }
