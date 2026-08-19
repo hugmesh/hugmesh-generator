@@ -107,8 +107,11 @@ real hardware) — none of these were exercised before:
    `ARGOCD_REPO_TOKEN`, and `bootstrap.sh` creates the
    `hugmesh-generator-repo` repository Secret **before** applying the
    app-of-apps (failing closed with a clear error if no token is available).
-   For a local kind cluster there is no KEYS USB, so the same manual
-   `ARGOCD_REPO_TOKEN` export remains a prerequisite here.
+   For a local kind cluster there is no KEYS USB — and no token is needed
+   either: the **tokenless local sync path** (see "Repo access" below) mounts
+   this checkout read-only into the kind node and serves it to ArgoCD from an
+   in-cluster read-only `git daemon`. `ARGOCD_REPO_TOKEN` remains the
+   override for pointing a kind cluster at GitHub instead.
 2. **`vault-tls-init`'s image has no `openssl` binary.** The init container
    that generates Vault's listener TLS material ran `hashicorp/vault:1.21.4`
    and called `openssl` in both of `gen-tls.sh`'s branches (cluster-CA-signed
@@ -179,42 +182,71 @@ Env overrides (all optional):
 | Var | Default | Purpose |
 |---|---|---|
 | `KIND_CLUSTER_NAME` | `hugmesh-local` | kind cluster name |
-| `HUGMESH_GITOPS_REPO` | `https://github.com/hugmesh/hugmesh-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`) |
-| `HUGMESH_GITOPS_REV` | `main` | targetRevision rewritten into every non-Harbor Application |
+| `HUGMESH_GITOPS_REPO` | `https://github.com/hugmesh/hugmesh-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`). **Left at the default with no token, it is replaced by the tokenless local sync URL** (see "Repo access" below). |
+| `HUGMESH_GITOPS_REV` | `main` (`HEAD` on the local sync path) | targetRevision rewritten into every non-Harbor Application. On the tokenless local sync path an unset value defaults to `HEAD` — the branch this checkout has checked out — so ArgoCD syncs what you are actually running. |
 | `HARBOR_BRANCH` | `feat/harbor-registry-migration` | branch the two Harbor Applications (+ `03b`'s manifests) are fetched from |
 | `VAULT_BRANCH` | `feat/kind-local-bringup` | branch `02-vault.yaml` (and, live, `manifests/vault`) is fetched from — carries the `vault-tls-init` openssl fix (bug #2 above) until it merges to `main`; drop it (or set to `main`) once merged |
 | `SKIP_VAULT_BOOTSTRAP` | `0` | set `1` to stop after applying the curated Applications, before the Vault init/unseal/PKI step |
 | `KIND_KV_RESEED` | `0` | `KIND_PROFILE=sso` only. Set `1` to re-mint **every** cluster secret even though Vault KV is already seeded. **DESTRUCTIVE**: existing Postgres/Cassandra volumes keep the old passwords and will reject the new ones — correct only against a fresh cluster or wiped PVCs. |
-| `ARGOCD_REPO_TOKEN` | *(unset)* | **required** for the git-path Applications (Vault, vault-pki, ESO config, Casdoor, harbor-provision) to actually sync — see below |
+| `ARGOCD_REPO_TOKEN` | *(unset)* | **override**: point ArgoCD at GitHub with this credential instead of the default tokenless local sync — see below |
 
-### Repo credentials (`ARGOCD_REPO_TOKEN`)
+### Repo access — tokenless local sync (default) or `ARGOCD_REPO_TOKEN` (override)
 
-`hugmesh-generator` is a **private** GitHub repo. ArgoCD's repo-server has
-no credential for it out of the box, so every git-path `Application` in the
-curated set fails to sync with `authentication required: Repository not
-found` until one is registered. The real cluster registers this on its own
-bootstrap path (`../bootstrap.sh`), with the token sourced out-of-band from the
-offline KEYS USB (`KEYS/gitops/repo-token`) by `keys-provision` (exported as
-`ARGOCD_REPO_TOKEN`); there's no such side-channel for a local kind cluster, so
-this script is **strictly opt-in** here — it never runs `gh` or anything else
-to fetch a token on its own, because silently materializing a live personal
-credential into cluster storage as a side effect of "just run the script"
-is exactly the kind of thing that should require an explicit, deliberate
-choice. Export a token yourself before running it:
+`hugmesh-generator` is a **private** GitHub repo, and ArgoCD's repo-server
+has no credential for it out of the box — without repo access every git-path
+`Application` in the curated set sits at `ComparisonError: authentication
+required`, `vault-0` is never created, and the bring-up is dead on arrival
+(issue #48 was exactly this, reported as success by the old warn-and-continue
+paths).
+
+**The default is the tokenless local sync path — a local mesh needs no GitHub
+credential at all.** At cluster-create time `bootstrap-kind.sh` appends a kind
+`extraMounts` entry that mounts this checkout **read-only** into the kind node
+at `/hugmesh/hugmesh-generator`; step 5b then deploys
+`gitops-repo-server.yaml` — a pinned `git daemon` (upload-pack only, no
+receive-pack, read-only mount) — and rewrites every Application's `repoURL` to
+
+```
+git://gitops-repo-server.devops.svc.cluster.local/hugmesh-generator
+```
+
+with `targetRevision: HEAD` (the branch this checkout has checked out) unless
+`HUGMESH_GITOPS_REV` pins one. ArgoCD syncs **the tree you are actually
+running**, entirely offline. Two properties worth knowing:
+
+- `git daemon` serves **committed objects only** — a dirty or mid-build
+  working tree serves its last commit: stale-but-consistent HEAD, exactly what
+  a GitOps controller should see. Commit, and ArgoCD picks it up on its next
+  poll; nothing ever reads your uncommitted edits.
+- The mount can only be added when the cluster is **created**. A cluster
+  created before this path existed doesn't have it — the script tells you so
+  and names the fix (`kind delete cluster --name hugmesh-local` and re-run, or
+  supply a token). Linked git worktrees can't be served either (their `.git`
+  is a file pointing outside the mount) — run from a full clone.
+
+**The override is `ARGOCD_REPO_TOKEN`** — for teams pointing a kind cluster at
+GitHub, and the same variable the real cluster's `../bootstrap.sh` gets from
+the offline KEYS USB (`KEYS/gitops/repo-token`) via `keys-provision`. It is
+**strictly opt-in**: the script never runs `gh` or anything else to fetch a
+token on its own, because silently materializing a live personal credential
+into cluster storage as a side effect of "just run the script" should require
+an explicit, deliberate choice:
 
 ```bash
 export ARGOCD_REPO_TOKEN="$(GH_TOKEN= gh auth token)"   # or any PAT with read access to the repo
 ./bootstrap-kind.sh
 ```
 
-Without it, the script still completes (ArgoCD installs, the curated
-Applications get created, local storage/namespaces/Vault-init all work), but
-`vault`, `vault-pki`, `external-secrets-config`, `casdoor`, and
-`harbor-provision` will sit at sync status `Unknown` with a
-`ComparisonError` until a token is supplied and those Applications are
-resynced (ArgoCD retries automatically once the credential exists — no need
-to re-run this script, just export the var and re-run, or add the Secret by
-hand per the ArgoCD docs).
+**Fail-closed under `KIND_PROFILE=sso`:** if neither path is available (no
+token, and the local sync can't serve — missing mount or worktree checkout),
+the script **exits non-zero naming exactly what is missing** instead of
+bringing up a cluster that cannot converge. `KIND_PROFILE=core` keeps the old
+warn-and-continue for that case only (ArgoCD retries on its own once a
+credential exists — export the var and re-run, or add the Secret by hand per
+the ArgoCD docs). The `vault-0` wait is fail-closed on **both** profiles: if
+the pod never runs, the script exits non-zero with the ArgoCD `vault`
+Application's condition message (the missing-repo-access signature is named
+explicitly) rather than warning and reporting success over a broken cluster.
 
 The script is **idempotent**: re-running it against the same cluster skips
 cluster creation, re-applies everything else (`kubectl apply` is a no-op on
@@ -255,9 +287,11 @@ hook could therefore run the entire seed anonymously — empty cookie jar, every
 
 ### What it does, in order
 
-1. Create the kind cluster from `kind-local.yaml` (single control-plane node;
-   this is a validation tool, not a hardware topology simulation) — skipped
-   if it already exists.
+1. Create the kind cluster from `kind-local.yaml` plus a runtime-rendered
+   `extraMounts` entry (this checkout, read-only, at
+   `/hugmesh/hugmesh-generator` — the tokenless local sync path's object
+   store; single control-plane node; this is a validation tool, not a
+   hardware topology simulation) — skipped if the cluster already exists.
 2. Label the node `hugmesh.net/pki=true` +
    `hugmesh.net/local-path=true` (the only two capability labels the
    curated manifests actually select on — checked by grepping every
@@ -269,11 +303,19 @@ hook could therefore run the entire seed anonymously — empty cookie jar, every
 4. Install ArgoCD into namespace `devops`, pinned to
    `kubernetes.io/arch=amd64` — reusing `../bootstrap.sh`'s exact
    install/re-namespace/pin logic (NOT its root app-of-apps step).
-5. Apply the curated `Application` subset described above directly with
+5. Give ArgoCD repo access ("Repo access" above): register the
+   `ARGOCD_REPO_TOKEN` credential if the operator exported one, otherwise
+   deploy the in-cluster read-only `git daemon` and rewrite every
+   Application's `repoURL` at it (failing closed under `KIND_PROFILE=sso` if
+   neither path is available).
+6. Apply the curated `Application` subset described above directly with
    `kubectl` (not the root app-of-apps).
-6. Wait (best-effort, 5 minute budget) for those Applications to reach
+7. Wait (best-effort, 5 minute budget) for those Applications to reach
    `Synced`/`Healthy`, printing a status table either way.
-7. **LOCAL-DEV-ONLY**: run the one-time `vault operator init -key-shares=1
+8. **LOCAL-DEV-ONLY**: wait for `vault-0` to be Running — **fail-closed**: a
+   timeout exits non-zero with the `vault` Application's condition message
+   (the old warn-and-`exit 0` here is how issue #48's broken cluster got
+   reported as a success) — then run the one-time `vault operator init -key-shares=1
    -key-threshold=1` + `vault operator unseal` sequence by hand (replicating
    `keys-template/vault/README.md`'s documented real-world operator steps),
    seed the `vault-unseal` / `vault-bootstrap` / `vault-token` Secrets the

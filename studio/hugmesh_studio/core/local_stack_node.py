@@ -77,6 +77,12 @@ E2E_TIMEOUT_S = 2 * 3600
 # The DevOps (kind) lane: cluster create + image pulls + rollouts. Same
 # order as a cold compose bring-up, so it gets the same generous ceiling.
 DEVOPS_UP_TIMEOUT_S = 3600
+# Where bootstrap-kind.sh mounts the checkout (read-only) into the kind node
+# at CLUSTER CREATE time, for the tokenless local sync path — an in-cluster
+# read-only git daemon serves it to ArgoCD so a local mesh needs no GitHub
+# credential (issue #48). An EXISTING cluster created before that path can
+# never gain the mount; the preflight below detects exactly that.
+KIND_REPO_MOUNT = "/hugmesh/hugmesh-generator"
 # Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
 # creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
 # WITHOUT auth — data.name == "e2e-admin" when seeded, data: null when not.
@@ -827,6 +833,50 @@ class LocalStackNode:
         outside the repo's gitignored out/)."""
         return devops_tools.install(self.generator_dir, on_line=on_line)
 
+    def devops_repo_access(self) -> list[str]:
+        """Preflight ArgoCD's repo-access condition (issue #48), in the same
+        register as devops_available()/e2e_ready(): SHORT actionable lines,
+        empty = ready. Surfaced BEFORE `make kind-up` so the operator reads the
+        one-line remedy now, not after the bootstrap's 8-minute vault-0 wait —
+        the shipped #48 shape was every git-path Application in
+        'ComparisonError: authentication required' behind a silent 8 minutes.
+
+        Mirrors bootstrap-kind.sh's ensure_repo_access(): ARGOCD_REPO_TOKEN
+        always works; otherwise the DEFAULT tokenless local sync needs (a) this
+        checkout to be a full clone (.git directory — a linked worktree's .git
+        is a file pointing at an object store the kind mount can't carry) and
+        (b) any EXISTING kind cluster to carry the read-only repo mount, which
+        can only be added at CREATE time. A fresh cluster needs nothing —
+        bootstrap-kind.sh mounts and serves the checkout automatically."""
+        if os.environ.get("ARGOCD_REPO_TOKEN"):
+            return []
+        git_path = os.path.join(self.generator_dir, ".git")
+        if not os.path.isdir(git_path):
+            return [f"tokenless local sync unavailable: {git_path} is not a "
+                    f"directory (a linked git worktree, or not a clone), so the "
+                    f"kind mount would carry no git object store for ArgoCD to "
+                    f"fetch — run the Studio against a full clone, or export "
+                    f"ARGOCD_REPO_TOKEN=<token with read access to "
+                    f"hugmesh-generator> and retry."]
+        cluster = os.environ.get("KIND_CLUSTER_NAME", "hugmesh-local")
+        kind = devops_tools.which("kind", self.generator_dir)
+        if not kind:
+            return []  # devops_available() already reports the missing tool
+        rc, out = self._probe([kind, "get", "clusters"])
+        if rc != 0 or cluster not in out.split():
+            return []  # no existing cluster: a fresh one gets the mount automatically
+        rc, _ = self._probe(["docker", "exec", f"{cluster}-control-plane",
+                             "test", "-d", f"{KIND_REPO_MOUNT}/.git"])
+        if rc != 0:
+            return [f"existing kind cluster '{cluster}' lacks the read-only repo "
+                    f"mount ({KIND_REPO_MOUNT}) that the tokenless local sync "
+                    f"serves ArgoCD from, and the mount can only be added at "
+                    f"CREATE time — `kind delete cluster --name {cluster}` and "
+                    f"start this lane again (a fresh cluster mounts it "
+                    f"automatically), or export ARGOCD_REPO_TOKEN=<token with "
+                    f"read access to hugmesh-generator>."]
+        return []
+
     def devops_up(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-up` — create the local Kubernetes cluster and bootstrap the
         SSO slice: real upstream ArgoCD, the app tree, Vault KV and the identity
@@ -839,6 +889,23 @@ class LocalStackNode:
         problems = self.devops_available()
         if problems:
             return False, "\n".join(problems)
+        # Repo-access preflight (issue #48) BEFORE the long verb: bootstrap-kind.sh
+        # itself now fails closed on this condition, but only after cluster-create
+        # + the ArgoCD install; the operator deserves the one-line remedy up front
+        # instead of at the far end of an 8-minute wait.
+        repo_problems = self.devops_repo_access()
+        if repo_problems:
+            if on_line:
+                for p in repo_problems:
+                    on_line(f"[devops] {p}")
+            return False, "\n".join(repo_problems)
+        if on_line:
+            on_line("[devops] repo access preflight OK: "
+                    + ("ARGOCD_REPO_TOKEN is set — ArgoCD will sync from GitHub."
+                       if os.environ.get("ARGOCD_REPO_TOKEN") else
+                       "tokenless local sync — ArgoCD will sync this checkout's "
+                       "last commit (committed objects only; a dirty tree serves "
+                       "stale-but-consistent HEAD)."))
         return self._make("kind-up", timeout=DEVOPS_UP_TIMEOUT_S,
                           on_line=on_line, cancel=cancel)
 

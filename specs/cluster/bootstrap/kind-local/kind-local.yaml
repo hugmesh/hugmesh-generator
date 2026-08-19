@@ -27,8 +27,14 @@ nodes:
       - containerPort: 443
         hostPort: 8443
         protocol: TCP
-    # No extraMounts: the hugmesh-local StorageClass (rancher.io/local-path)
-    # just mkdir -p's /mnt/data/local-path + /mnt/usb/local-path INSIDE the kind
-    # node container's own filesystem once the node carries
+    # No extraMounts COMMITTED HERE — but bootstrap-kind.sh APPENDS one at
+    # cluster-create time: the operator's checkout, read-only, at
+    # /hugmesh/hugmesh-generator, for the tokenless local sync path
+    # (gitops-repo-server.yaml serves it to ArgoCD so no GitHub credential is
+    # needed). It cannot live in this file because the hostPath is the
+    # machine-specific repo root, only known at runtime. Storage needs no
+    # mount at all: the hugmesh-local StorageClass (rancher.io/local-path)
+    # just mkdir -p's /mnt/data/local-path + /mnt/usb/local-path INSIDE the
+    # kind node container's own filesystem once the node carries
     # hugmesh.net/local-path=true — there is no real block device to
     # bind-mount for this validation pass (see bootstrap-kind.sh).
