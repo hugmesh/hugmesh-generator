@@ -568,6 +568,12 @@ class WorklistPage(QtWidgets.QWizardPage):
             return False
         self._desktop_people[rid] = (dlg.user(), dlg.person_role())
         self._refresh_people_table()
+        # Issue #50: naming the person is the moment isComplete() can flip True — the
+        # placeholder that disabled Next lives in _desktop_people, and this is the only
+        # write that fills it in. Without this emit only the CANCEL path and the row
+        # toggles told the wizard to re-read isComplete(), so a fully valid selection
+        # left Next disabled until some unrelated node row was toggled off->on.
+        self.completeChanged.emit()
         return True
 
     def _edit_person(self, table_row: int, _col: int) -> None:
