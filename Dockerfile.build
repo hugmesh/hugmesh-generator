@@ -318,6 +318,26 @@ RUN printf '%s\n' \
       'hugmesh builder container — build-*-stage4.sh may mutate THIS root'"'"'s /etc/portage.' \
       > /etc/hugmesh-builder-container
 LABEL org.hugmesh.builder-container="1"
+# ── Portage sendfile-noise workaround (PINNED) ───────────────────────────────
+# Merging onto a filesystem with no .splice_write file op makes portage's
+# sendfile fast path EINVAL on EVERY file (Linux v5.10+, kernel commit
+# 36e2c7421f02 "fs: don't allow splice read/write without explicit ops");
+# eCryptfs — where the operator's /out work dir lives — is such a filesystem.
+# portage-3.0.81.2 then logs a full-traceback WARNING per file (~300k lines per
+# stage4 build, measured) before falling back to a WORKING shutil copy, and
+# ships no knob to quiet it. Patch the expected errnos to fall through
+# silently; unexpected sendfile errors still log the full traceback. This
+# covers THIS root's portage (the ARM lanes' cross-emerge --root=SYSROOT
+# merges); the stage4 scripts patch each extracted sysroot's portage — and,
+# belt-and-braces for images built before this layer, re-patch this root — at
+# run time via pcs_quiet_sendfile_noise (scripts/_portage-config-lib.sh).
+# DELIBERATELY FATAL on anchor drift: a newer stage3's portage that rewrote
+# file_copy.py fails this RUN loudly at image-build time — re-evaluate the pin
+# then (upstream may have silenced the noise itself; if so drop this layer, the
+# runtime twin and scripts/patch-portage-file-copy.py). Placed LAST so the
+# hours-long cached toolchain/crossdev layers are untouched.
+COPY scripts/patch-portage-file-copy.py /usr/local/lib/hugmesh/patch-portage-file-copy.py
+RUN python3 /usr/local/lib/hugmesh/patch-portage-file-copy.py /
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path
