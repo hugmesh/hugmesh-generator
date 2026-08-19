@@ -177,6 +177,32 @@ welcome page):
 python -m hugmesh_studio --fleet
 ```
 
+## Terminal UI (parity lane, issue #51)
+
+A host-side TUI over the same Qt-free `core/` the wizard drives — the Python twin of
+the on-device whiptail menu (`scripts/build-menu.sh`), including its degradation
+pattern: **urwid is optional**. With `NO_TUI=1`, no interactive TTY, `TERM=dumb`, or
+urwid not installed, every flow degrades to plain numbered prompts instead of
+crashing (the menu's `NO_TUI` rule, reused verbatim).
+
+```sh
+python -m hugmesh_studio.tui                       # sessions review (build history):
+                                                   #   status · artifacts · delete-with-confirm
+python -m hugmesh_studio.tui --worklist SESSION_ID # read-only worklist table for one session
+NO_TUI=1 python -m hugmesh_studio.tui              # force the plain-prompt fallback
+```
+
+urwid is deliberately **not** in `requirements.txt` (it must never become a hard
+studio dependency — the test suite runs with it absent). To get the rich UI on
+Gentoo, where `dev-python/urwid` is ~arch-keyworded, accept it with one line:
+
+```sh
+echo "dev-python/urwid ~amd64" >> /etc/portage/package.accept_keywords/hugmesh-studio
+emerge --ask dev-python/urwid
+```
+
+(everywhere else: `pip install urwid`.)
+
 ## Package a Windows .exe
 
 ```sh
@@ -192,6 +218,7 @@ hugmesh_studio/
   core/        config (flag mapping) · build_driver (native/docker) · hw_scan ·
                profiles · keyzip · mesh_node · platform_info     <- headless, unit-testable
   gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray
+  tui/         terminal UI (urwid, OPTIONAL — degrades to plain prompts)  <- headless, unit-testable
   app.py       entry point
 tests/         pytest suite (headless, Qt-free)
 pytest.ini

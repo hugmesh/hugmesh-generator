@@ -1400,6 +1400,14 @@ cp "${SPECS_DIR}/portage/profile/use.mask"          "${SYSROOT}/etc/portage/prof
 pcs_sync_dir "${SPECS_DIR}/portage/package.accept_keywords" "${SYSROOT}/etc/portage/package.accept_keywords"
 pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
 pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
+# Quiet portage's per-file sendfile WARNING-traceback spam before the first
+# merge into this sysroot (sendfile(2) EINVALs for EVERY file merged onto the
+# eCryptfs-backed work dir; the copy always succeeded via portage's shutil
+# fallback — pure log noise, ~300k traceback lines per build). Also re-patches
+# the container's own portage (host-guard gated) for builder images older than
+# the Dockerfile.build twin. Never fatal. Root cause, refs and the patch:
+# scripts/patch-portage-file-copy.py.
+pcs_quiet_sendfile_noise "${SYSROOT}"
 cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 # Derive PYTHON_TARGETS/PYTHON_SINGLE_TARGET from the seed's own installed

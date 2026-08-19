@@ -3582,6 +3582,14 @@ if [ -f "${SPECS_DIR}/portage/package.env" ]; then
 else
     rm -f "${SYSROOT}/etc/portage/package.env"
 fi
+# Quiet portage's per-file sendfile WARNING-traceback spam before the first
+# merge into this sysroot (sendfile(2) EINVALs for EVERY file merged onto the
+# eCryptfs-backed work dir; the copy always succeeded via portage's shutil
+# fallback — pure log noise, ~300k traceback lines per build). Also re-patches
+# the container's own portage (host-guard gated) for builder images older than
+# the Dockerfile.build twin. Never fatal. Root cause, refs and the patch:
+# scripts/patch-portage-file-copy.py.
+pcs_quiet_sendfile_noise "${SYSROOT}"
 
 # x86 GRUB cmdline (SELinux LSM + KSPP hardening). Disable os-prober so a
 # grub-mkconfig (installer / chroot) can never enumerate the host's other disks.
