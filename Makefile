@@ -1121,6 +1121,26 @@ qemu-docker: ## containerized device tests, Pi rows first (SESSION=out/sessions/
 qemu-docker-list: ## enumerate the device rows a session's artifacts can boot (nothing runs)
 	tests/qemu/run-qemu-docker.sh $(if $(SESSION),--session "$(SESSION)",) --list
 
+# Whole-mesh save (#50 item 10): every LIVE emulated device's disk + its KEYS
+# stick payload into ONE flashable save-set under out/qemu-runs/saves/. Drives
+# the SAME Qt-free core the Studio uses (core/emulation_save.py), which in turn
+# drives the landed run-qemu-docker.sh --save-device per device — no new copy
+# mechanism. `-plan` previews (nothing pauses); `save` acts. Knobs:
+# SAVE_SESSION=name, SAVE_ONLY=rpi5 (label substring), SAVE_OVERWRITE=1,
+# QEMU_WORK=dir (the runner --work the mesh is running in).
+.PHONY: qemu-save-mesh qemu-save-mesh-plan
+_EMU_SAVE_ARGS = $(if $(QEMU_WORK),--work "$(QEMU_WORK)") \
+  $(if $(SAVE_SESSION),--session "$(SAVE_SESSION)") \
+  $(if $(SAVE_ONLY),--only "$(SAVE_ONLY)") \
+  $(if $(filter 1,$(SAVE_OVERWRITE)),--overwrite) \
+  --generator-dir .
+
+qemu-save-mesh-plan: ## preview saving the WHOLE emulated mesh (disk budget + KEYS sticks; nothing runs)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation_save plan $(_EMU_SAVE_ARGS)
+
+qemu-save-mesh: ## save EVERY live emulated device's disk + KEYS stick to a flashable set (SAVE_ONLY=… SAVE_SESSION=…)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation_save save $(_EMU_SAVE_ARGS)
+
 # ── kind SSO e2e — the same native-login proof the compose stack runs
 # (tests/e2e/specs/27-native-login.spec.ts), against a REAL kind cluster
 # running the GitOps payload (ArgoCD + Vault/ESO/Casdoor + fe-gateway + BFFs).
