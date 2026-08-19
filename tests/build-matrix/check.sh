@@ -2233,7 +2233,12 @@ run_portage_config_sync_checks() {
 # time. Static curated-chain check (see that script's header for why static, not
 # host-side resolution). Same fail-closed delegate shape as SLX: a missing
 # script is charged in full, a short assertion tally is charged as failures.
-RAR_EXPECTED=17
+# 25 = 17 + the 8 assertions the delegate gained after RAR_EXPECTED=17 was set
+# (the x86 profile-binding fix a592ac88/#44 added the hardened/selinux profile
+# legs without bumping this counter — the same #550 class the SLX comment above
+# documents). Deliberate bump; verified by running the delegate standalone:
+# it emits 25 assertions, 0 failed.
+RAR_EXPECTED=25
 RAR_PASS=0; RAR_FAIL=0
 run_requested_atoms_checks() {
     local out="${TMP_DIR}/reqatoms.out"
