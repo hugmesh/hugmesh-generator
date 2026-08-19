@@ -3443,7 +3443,35 @@ if ${STEAM_NATIVE}; then
     printf '\n# Native Steam (32-bit runtime) — see package.use/steam\nABI_X86="64 32"\n' >> "${SYSROOT}/etc/portage/make.conf"
     info "Native Steam: ABI_X86=\"64 32\" (multilib) added to make.conf"
 fi
-cp "${SPECS_DIR}/portage/profile/parent"              "${SYSROOT}/etc/portage/profile/parent"
+# Select the profile via an ABSOLUTE make.profile symlink derived from
+# profile/parent (strip the "gentoo:" repo prefix) — the same mechanism the
+# ARM builders use (build-rpi5-stage4.sh's "Select the profile" block).
+#
+# The bare `cp profile/parent -> /etc/portage/profile/parent` that stood here
+# was a silent NO-OP for profile selection: portage appends /etc/portage/profile
+# to the profile stack as a plain override node and IGNORES a `parent` file in
+# it (verified against portage 3.0.81.2 — portage.settings.profiles lists no
+# hardened/selinux node with only the copy in place). Every x86 image therefore
+# built under the stage3 seed's plain `hardened` profile: USE=selinux stayed
+# profile-masked, all 24 IUSE=selinux payload packages built `(-selinux)`
+# (dbus, sudo, firewalld, containerd, NetworkManager, ...), and the final
+# summary banner — which cat'd the copied file — claimed hardened/selinux
+# anyway. The sec-policy/* store merged fine (policy sources need no selinux
+# USE), which completed the illusion: policy on disk, userland unable to use it.
+#
+# The gentoo tree is bind-mounted at /var/db/repos/gentoo inside the chroot
+# (same path as this container — see the chroot-enter block), so one absolute
+# target resolves on both sides of the chroot boundary AND on the shipped
+# image, where the stage3's own relative symlink pointed at the identical path.
+# The @world pass below runs --newuse, so flipping the profile rebuilds every
+# IUSE=selinux package (pam, openrc, util-linux, coreutils, dbus, sudo, ...)
+# with SELinux support — the documented Gentoo profile-conversion path. On a
+# --resume'd pre-fix sysroot the same --newuse pass performs the conversion.
+PROFILE_PATH="$(sed 's/^gentoo://' "${SPECS_DIR}/portage/profile/parent" | tr -d '[:space:]')"
+[ -d "/var/db/repos/gentoo/profiles/${PROFILE_PATH}" ] \
+    || { err "profile not found in tree: /var/db/repos/gentoo/profiles/${PROFILE_PATH}"; exit 1; }
+ln -sfn "/var/db/repos/gentoo/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.profile"
+info "Profile: ${PROFILE_PATH} (absolute make.profile symlink; @world --newuse converts the seed)"
 # Copy every file in these portage config dirs (so added spec files always land).
 # The 'desktop' files (LXDE ~amd64 keywords / GTK+netsurf USE) are client-only — a
 # k8s NODE image stays stable-keyworded and never references desktop USE flags. The
@@ -6685,7 +6713,7 @@ if ${UNAFFILIATED}; then
 else
     echo -e "\n${CYAN}${BOLD}=== ${BRAND_TITLE} x86_64 (hardened k8s, role=${ROLE}) ===${RST}"
 fi
-echo "  Profile:    $(cat "${SYSROOT}/etc/portage/profile/parent")"
+echo "  Profile:    $(readlink "${SYSROOT}/etc/portage/make.profile" | sed 's|.*/profiles/||')  (effective: read from the make.profile symlink, not from a spec copy)"
 echo "  Kernel:     $(${SKIP_KERNEL} && echo 'skipped' || echo 'Gentoo hardened (gentoo-sources + hardened profile + KSPP/SELinux config)')"
 if ${UNAFFILIATED}; then
     echo "  Role:       ${ROLE}   (no cluster affiliation)"

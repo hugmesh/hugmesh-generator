@@ -230,6 +230,45 @@ for row in "${REMOVED_ATOMS[@]}"; do
   fi
 done
 
+echo "-- E) the spec's declared profile must actually BIND in every builder --"
+# The 2026-08-19 finding: specs-x86 declared hardened/selinux in
+# portage/profile/parent, but build-x86-host-stage4.sh only COPIED that file
+# into the chroot's /etc/portage/profile/ — where portage silently ignores a
+# `parent` file (the user-override node takes use.mask etc., never a profile
+# selector). Every x86 image built under the stage3's plain `hardened` profile:
+# USE=selinux stayed masked, all 24 IUSE=selinux payload packages built
+# `(-selinux)`, while the sec-policy store merged fine and the summary banner
+# (cat of the copied file) claimed hardened/selinux. Policy on disk, userland
+# unable to use it — invisible in every log line except the plan preview's
+# parenthesized USE column. The ARM builder had the correct mechanism (an
+# ABSOLUTE make.profile symlink derived from the same spec file) the whole time.
+#
+# The binding is what this section pins: each builder must DERIVE make.profile
+# from the spec's profile/parent. A bare copy of the file is not a binding.
+for b in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
+  if grep -qE 'ln -sfn .*profiles/\$\{PROFILE_PATH\}.*make\.profile' "${REPO}/${b}" \
+     && grep -qE 'PROFILE_PATH=.*profile/parent' "${REPO}/${b}"; then
+    ok "${b} derives make.profile from the spec's profile/parent (ln -sfn, absolute)"
+  else
+    bad "${b} no longer derives make.profile from profile/parent — the spec's declared profile (hardened/selinux) silently stops binding"
+  fi
+  if grep -qE '^cp .*profile/parent.*etc/portage/profile/parent' "${REPO}/${b}"; then
+    bad "${b} copies profile/parent into /etc/portage/profile/ — portage ignores a parent file there; this is the exact no-op that shipped selinux-less x86 images"
+  else
+    ok "${b} does not resurrect the profile/parent copy no-op"
+  fi
+done
+# And the declarations themselves must still be selinux profiles — a quiet edit
+# of a spec's parent away from hardened/selinux would pass the binding check
+# while shipping unconfined images.
+for spec in specs-x86 specs-rpi5; do
+  if grep -q 'hardened/selinux' "${REPO}/${spec}/portage/profile/parent"; then
+    ok "${spec} declares a hardened/selinux profile"
+  else
+    bad "${spec}/portage/profile/parent no longer declares hardened/selinux: $(cat "${REPO}/${spec}/portage/profile/parent")"
+  fi
+done
+
 echo
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
