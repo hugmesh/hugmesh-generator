@@ -213,3 +213,33 @@ the `(1 + 512 + ROOT_MiB + 1)` size formula, the `img_size=`-from-`--print-plan`
 the `ram_mb` ceiling accessor, and the driver's `--dry-run` (118 rows) — all runs every
 pass with the gate unset. The pure Python view of the enumeration + maths is
 `studio/hugmesh_studio/core/build_matrix.py`.
+
+## Saving the whole emulated mesh (`make qemu-save-mesh` — #50 item 10)
+
+Everything done inside a running `--keep-alive` mesh — every device's disk **plus**
+the KEYS provisioning stick it booted from — saved as **one flashable set** under
+`out/qemu-runs/saves/mesh-<stamp>/`, so it can be written to real hardware:
+
+```bash
+make qemu-save-mesh-plan                  # preview: devices, disk budget, KEYS pieces
+make qemu-save-mesh                       # save every live device
+make qemu-save-mesh SAVE_ONLY=rpi5        # label substring, like the runner's --only
+PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation_save save --only rpi5/pki
+```
+
+Per device the set holds `<label>.qcow2` (the disk, via the landed
+`run-qemu-docker.sh --save-device` — standalone, merged over the golden,
+crash-consistent; the golden stays untouched), `<label>.keys/` + `<label>.keys.img`
+(the run's **exact** KEYS payload, copied back — regenerating would mint a login key
+the saved disk was never provisioned with), `<label>.id_ed25519[.pub]` (the key that
+logs into the saved system), and a `mesh-save.json` manifest. To reach real hardware:
+`qemu-img convert -O raw <label>.qcow2 <label>.img` then flash it like any built
+image, and `sudo scripts/make-keys-usb.sh /dev/sdX <label>.keys` for the stick.
+
+Real saves are **9.5–20.5 GB each** (`sync=full` over fully-allocated goldens), so
+the orchestrator budgets each disk's FULL virtual size (16 GiB, 32 GiB for x86) and
+refuses the whole save — naming the shortfall — **before pausing anything**. One
+device failing (its partial is quarantined as `*.partial` by the runner) never
+touches another device's save. Core + tests:
+`studio/hugmesh_studio/core/emulation_save.py`,
+`studio/tests/test_emulation_save.py`.
