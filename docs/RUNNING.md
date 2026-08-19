@@ -272,6 +272,28 @@ No whiptail (e.g. inside the minimal Docker builder image, or a dumb terminal)?
 It automatically falls back to a plain numbered-prompt menu (force it with
 `NO_TUI=1`). Your last choices are remembered between runs.
 
+### 3·cli. Headless Studio faces — hardware scan + build-session history
+
+Two Qt-free `python -m hugmesh_studio` faces close the last GUI-only gaps
+(issue #49: everything the GUI can do must be a documented command). Each has a
+`make` front (listed in `make help`); no display, no Qt binding needed:
+
+```bash
+make scan-hardware [JSON=1]      # = python -m hugmesh_studio --scan-hardware [--json]
+    # probe THIS machine (CPU/GPUs/Wi-Fi/Bluetooth) and print the recommended
+    # build settings — the same core scan the wizard's Hardware page runs
+make sessions-list [JSON=1]      # = --list-sessions: one line per recorded build
+    # session — id, date, roles, status, artifact count (newest first)
+make sessions-show ID=… [JSON=1]        # = --show-session ID (full record)
+make sessions-artifacts ID=… [JSON=1]   # = --session-artifacts ID
+make sessions-delete ID=… YES=1 [ARTIFACTS=1]
+    # = --delete-session ID --yes [--delete-artifacts] — REFUSES without YES=1,
+    # never deletes an in-progress build, artifacts only on explicit ARTIFACTS=1
+```
+
+Full contract (exit codes, `--json` schemas): `studio/README.md` → "Two more
+Qt-free headless faces".
+
 ### 3a. The roles
 
 | Arch | Roles | Builder |

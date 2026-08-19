@@ -6,6 +6,14 @@
   python -m hugmesh_studio --go-live     # superadmin go-live wizard (hugmesh-go-live front-end)
   python -m hugmesh_studio --fleet       # fleet build dialog (scripts/build-all-roles.sh front-end)
   python -m hugmesh_studio --login-agent # headless: run the passwordless local-login loopback agent
+  python -m hugmesh_studio --scan-hardware [--json]
+      # headless: the wizard HardwarePage's probe (CPU/GPU/Wi-Fi/Bluetooth +
+      # recommended build settings) as a terminal table, or --json for automation
+  python -m hugmesh_studio --list-sessions [--json]
+  python -m hugmesh_studio --show-session ID [--json]
+  python -m hugmesh_studio --session-artifacts ID [--json]
+  python -m hugmesh_studio --delete-session ID --yes [--delete-artifacts]
+      # headless: the wizard Welcome page's build-session history (core/build_sessions)
   python -m hugmesh_studio --generator-dir /path/to/hugmesh-generator
   python -m hugmesh_studio --remember-roles-for-passwordless-login
       # OPT-IN, default OFF: KeyZipPage imports also mirror human-loginable KEYS
@@ -105,6 +113,38 @@ def main(argv=None) -> int:
     ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
+    ap.add_argument("--scan-hardware", action="store_true",
+                    help="headless: probe THIS machine (CPU / GPUs / Wi-Fi / Bluetooth) and "
+                         "print the recommended build settings — the exact core scan the "
+                         "wizard's Hardware page runs (core/hw_scan.py). Human table by "
+                         "default; --json for the stable machine-readable form.")
+    ap.add_argument("--list-sessions", action="store_true",
+                    help="headless: the recorded build-session history, one line per "
+                         "session (id, date, roles, status, artifact count), newest "
+                         "first — the wizard Welcome page's Previous-builds list "
+                         "(core/build_sessions.py). --json for the stable row schema.")
+    ap.add_argument("--show-session", metavar="ID",
+                    help="headless: one session's full record (per-image outcomes, "
+                         "workdir, log path). --json prints the persisted record plus "
+                         "the derived stale/artifact_count hints.")
+    ap.add_argument("--session-artifacts", metavar="ID",
+                    help="headless: the artifact files under one session's workdir "
+                         "(absolute paths, one per line; --json = workdir + relative "
+                         "names).")
+    ap.add_argument("--delete-session", metavar="ID",
+                    help="headless: delete a session RECORD. REFUSES without --yes, "
+                         "refuses an in-progress build, and never touches the artifact "
+                         "tree unless --delete-artifacts is also given — the same "
+                         "three-way guard as the GUI's delete affordance.")
+    ap.add_argument("--yes", action="store_true",
+                    help="with --delete-session: the required explicit confirmation.")
+    ap.add_argument("--delete-artifacts", action="store_true",
+                    help="with --delete-session: ALSO remove the session's "
+                         "<out>/sessions/<id>/ artifact tree (guarded by the same "
+                         "workdir shape-check as the GUI).")
+    ap.add_argument("--json", action="store_true",
+                    help="with --scan-hardware/--list-sessions/--show-session/"
+                         "--session-artifacts: machine-readable JSON on stdout.")
     args = ap.parse_args(argv)
 
     if args.login_agent:
@@ -226,6 +266,73 @@ def main(argv=None) -> int:
             # a FileNotFoundError/TypeError escape as a traceback + exit 1.
             print(f"error: {exc}", file=sys.stderr)
             return 2
+        return 0
+
+    if args.scan_hardware:
+        # Qt-free path: the exact core probe the wizard's Hardware page runs
+        # (core/hw_scan.py — subprocess/regex only), exposed so "generate an image
+        # tuned to this machine" is scriptable, not GUI-only (#49).
+        import json
+        from .core import hw_scan
+        s = hw_scan.scan()
+        print(json.dumps(hw_scan.to_dict(s), sort_keys=True) if args.json
+              else hw_scan.format_table(s))
+        return 0
+
+    if args.list_sessions or args.show_session or args.session_artifacts \
+            or args.delete_session:
+        # Qt-free path: the build-session history (core/build_sessions.py — the same
+        # records/guards the wizard Welcome page renders and the TUI drives; all the
+        # listing/formatting lives in core so every front-end shows the same truth).
+        import json
+        from .core import build_sessions
+
+        if args.list_sessions:
+            sessions = build_sessions.load_all()
+            if args.json:
+                print(json.dumps([build_sessions.session_row(s) for s in sessions],
+                                 sort_keys=True))
+            else:
+                for s in sessions:
+                    print(build_sessions.format_session_line(s))
+            return 0
+
+        sid = args.show_session or args.session_artifacts or args.delete_session
+        s = build_sessions.find(sid)
+        if s is None:
+            print(f"error: no build session {sid!r} under "
+                  f"{build_sessions.sessions_dir()}", file=sys.stderr)
+            return 2
+
+        if args.show_session:
+            print(json.dumps(build_sessions.session_detail(s), sort_keys=True)
+                  if args.json else build_sessions.format_session_detail(s))
+            return 0
+
+        if args.session_artifacts:
+            rel = build_sessions.artifact_paths(s)
+            if args.json:
+                print(json.dumps({"id": s.id, "workdir": s.workdir, "artifacts": rel},
+                                 sort_keys=True))
+            else:
+                for r in rel:
+                    print(os.path.join(s.workdir, r))
+            return 0
+
+        # --delete-session: refuse without the explicit --yes (a destructive verb must
+        # never fire from a bare invocation), and let core's is_active guard refuse a
+        # live build — exactly the GUI delete affordance's three-way guard.
+        if not args.yes:
+            print(f"error: --delete-session {s.id} refused: pass --yes to confirm "
+                  "(add --delete-artifacts to also remove its artifact tree)",
+                  file=sys.stderr)
+            return 2
+        if not build_sessions.delete(s, remove_artifacts=args.delete_artifacts):
+            print(f"error: session {s.id} is a build in progress — not deleted",
+                  file=sys.stderr)
+            return 1
+        print(f"deleted session {s.id}"
+              + (" (artifacts removed)" if args.delete_artifacts else " (record only)"))
         return 0
 
     if args.askpass:

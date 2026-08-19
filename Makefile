@@ -384,7 +384,8 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
-        kind-images kind-up kind-e2e kind-down kind-honesty
+        kind-images kind-up kind-e2e kind-down kind-honesty \
+        scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -455,6 +456,24 @@ mesh-node-status: ## show whether the Local Docker mesh node is running
 
 mesh-node-logs: ## tail the Local Docker mesh node's container logs
 	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh logs --generator-dir .
+
+# ── Studio headless faces (Qt-free — the GUI is a thin face over these) ─────────
+# The wizard HardwarePage's probe and the Welcome page's build-session history,
+# via the same `python -m hugmesh_studio` flag channel as --print-command (#49).
+scan-hardware: ## probe THIS machine (CPU/GPU/Wi-Fi/BT) + recommended build settings (JSON=1)
+	@PYTHONPATH=studio python3 -m hugmesh_studio --scan-hardware $(if $(JSON),--json)
+
+sessions-list: ## recorded build sessions, one line each: id, date, roles, status, artifacts (JSON=1)
+	@PYTHONPATH=studio python3 -m hugmesh_studio --list-sessions $(if $(JSON),--json)
+
+sessions-show: ## one build session's full record (ID=… [JSON=1])
+	@PYTHONPATH=studio python3 -m hugmesh_studio --show-session "$(ID)" $(if $(JSON),--json)
+
+sessions-artifacts: ## one build session's artifact files (ID=… [JSON=1])
+	@PYTHONPATH=studio python3 -m hugmesh_studio --session-artifacts "$(ID)" $(if $(JSON),--json)
+
+sessions-delete: ## delete a session record — refuses without YES=1 (ID=… YES=1 [ARTIFACTS=1])
+	@PYTHONPATH=studio python3 -m hugmesh_studio --delete-session "$(ID)" $(if $(YES),--yes) $(if $(ARTIFACTS),--delete-artifacts)
 
 # ── Local Docker mesh FROM SCRATCH (generate creds + start a superadmin mesh) ────
 # The "generate & start a NEW local mesh from scratch" path: mint ALL credentials

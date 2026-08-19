@@ -609,3 +609,86 @@ def matches(haystack: str, query: str) -> bool:
     """Case-insensitive substring match: every whitespace-separated term of ``query``
     must appear in the haystack."""
     return all(tok in haystack for tok in query.lower().split())
+
+
+# ── shared presentation (consumed by the headless CLI flags AND the TUI — keep
+#    every formatting/listing decision HERE, never in a front-end layer) ─────────────────
+def find(session_id: str) -> "BuildSession | None":
+    """Load one record by id (the ``<id>.json`` under :func:`sessions_dir`);
+    None when it does not exist or does not parse."""
+    try:
+        return load(os.path.join(sessions_dir(), f"{session_id}.json"))
+    except (OSError, ValueError):
+        return None
+
+
+def artifact_paths(s: BuildSession) -> list[str]:
+    """Every FILE under the session's artifact workdir, workdir-relative and sorted;
+    [] when the workdir is missing/unreadable (best-effort, never raises)."""
+    if not s.workdir or not os.path.isdir(s.workdir):
+        return []
+    out: list[str] = []
+    for root, _dirs, files in os.walk(s.workdir):
+        for name in files:
+            out.append(os.path.relpath(os.path.join(root, name), s.workdir))
+    return sorted(out)
+
+
+def session_row(s: BuildSession) -> dict[str, Any]:
+    """The STABLE machine-readable summary row (the ``--list-sessions --json``
+    schema). Explicit keys, not ``to_dict()``: adding a dataclass field later is a
+    deliberate schema change here, never a silent one."""
+    return {
+        "id": s.id,
+        "created": s.created,
+        "started": s.started,
+        "finished": s.finished,
+        "kind": s.kind,
+        "label": s.label,
+        "status": s.status,
+        "stale": is_stale(s),
+        "roles": [str(img.get("role", "")) for img in s.images],
+        "platforms": [str(img.get("platform", "")) for img in s.images],
+        "workdir": s.workdir,
+        "artifact_count": len(artifact_paths(s)),
+    }
+
+
+def session_detail(s: BuildSession) -> dict[str, Any]:
+    """The full record for ``--show-session --json``: the persisted record verbatim
+    plus the two derived render hints (stale, artifact_count)."""
+    d = s.to_dict()
+    d["stale"] = is_stale(s)
+    d["artifact_count"] = len(artifact_paths(s))
+    return d
+
+
+def format_session_line(s: BuildSession) -> str:
+    """One human line per session: id, date, roles, status, artifact count."""
+    date = s.started or s.created or "-"
+    roles = ",".join(dict.fromkeys(
+        str(img.get("role", "")) or "?" for img in s.images)) or "-"
+    status = s.status + (" (process gone)" if is_stale(s) else "")
+    n = len(artifact_paths(s))
+    return f"{s.id}  {date}  {roles}  {status}  {n} artifact(s)"
+
+
+def format_session_detail(s: BuildSession) -> str:
+    """The human ``--show-session`` rendering: the summary line, per-image rows,
+    and the workdir/log pointers."""
+    lines = [format_session_line(s),
+             f"  label:    {s.label or '-'}",
+             f"  kind:     {s.kind}",
+             f"  created:  {s.created or '-'}",
+             f"  finished: {s.finished or '-'}",
+             f"  workdir:  {s.workdir or '-'}",
+             f"  log:      {s.log_path or '-'}"]
+    if s.restarts:
+        lines.append(f"  restarts: {s.restarts}")
+    for img in s.images:
+        exit_code = img.get("exit_code")
+        suffix = "" if exit_code in (None, 0) else f" (exit {exit_code})"
+        lines.append(f"  image {img.get('id', '?')}: {img.get('role', '?')}"
+                     f" · {img.get('platform') or 'x86'}"
+                     f" · {img.get('status', '?')}{suffix}")
+    return "\n".join(lines)
