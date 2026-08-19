@@ -108,6 +108,36 @@ This headless path is what the build-matrix harness (`make matrix-check` at
 the repo root) drives to prove the GUI channel agrees with the
 CLI/make/menu/job channels on every matrix cell.
 
+Two more **Qt-free** headless faces ride the same flag channel (#49 — everything
+the GUI can do must be a documented command; repo-root `make` fronts:
+`scan-hardware`, `sessions-list/-show/-artifacts/-delete`):
+
+- **Hardware scan** — the wizard HardwarePage's probe (`core/hw_scan.py`:
+  CPU / GPUs / Wi-Fi / Bluetooth + the recommended `--gpu-driver` /
+  `--enable-wifi` / `--enable-bluetooth` / hw-profile settings):
+
+  ```sh
+  python -m hugmesh_studio --scan-hardware          # human two-column table
+  python -m hugmesh_studio --scan-hardware --json   # stable machine-readable schema
+  ```
+
+- **Build-session history** — the Welcome page's Previous-builds list
+  (`core/build_sessions.py` records; same records, same guards):
+
+  ```sh
+  python -m hugmesh_studio --list-sessions [--json]        # one line per session:
+                                                           # id, date, roles, status, artifact count
+  python -m hugmesh_studio --show-session ID [--json]      # full record + per-image outcomes
+  python -m hugmesh_studio --session-artifacts ID [--json] # files under <out>/sessions/<ID>/
+  python -m hugmesh_studio --delete-session ID --yes       # record only; REFUSES without --yes
+  python -m hugmesh_studio --delete-session ID --yes --delete-artifacts
+                                                           # ...also remove its artifact tree
+  ```
+
+  Deletion keeps the GUI's three-way guard: no `--yes` = refused (exit 2), an
+  in-progress build is never deleted (exit 1), and the artifact tree is only
+  removed on explicit `--delete-artifacts` (workdir shape-checked in core).
+
 ## Memory guard (2026-07-15 host-freeze incident)
 
 A dockerized build runs under a **container memory cap** by default

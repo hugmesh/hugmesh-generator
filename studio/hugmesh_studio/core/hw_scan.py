@@ -149,3 +149,54 @@ def scan() -> HwScan:
     if sysname.startswith("win"):
         return _scan_windows()
     return _scan_linux()
+
+
+# ── presentation (shared by the headless CLI, the GUI pages and the TUI) ──────
+# Explicit key list (not dataclasses.asdict) so the --json schema is a stated
+# contract: adding a dataclass field later is a deliberate schema change here,
+# never a silent one. test_cli_parity pins the exact key set.
+def to_dict(s: HwScan) -> dict:
+    """The STABLE machine-readable scan (the ``--scan-hardware --json`` schema)."""
+    return {
+        "os": s.os,
+        "cpu": s.cpu,
+        "cpu_vendor": s.cpu_vendor,
+        "gpus": [{"vendor": g.vendor, "name": g.name, "pci_id": g.pci_id}
+                 for g in s.gpus],
+        "wifi": s.wifi,
+        "bluetooth": s.bluetooth,
+        "recommended_gpu_driver": s.recommended_gpu_driver,
+        "recommend_wifi": s.recommend_wifi,
+        "recommend_bluetooth": s.recommend_bluetooth,
+        "hw_profile_guess": s.hw_profile_guess,
+        "notes": list(s.notes),
+    }
+
+
+def format_table(s: HwScan) -> str:
+    """A human two-column table of the scan + the recommendations it derives —
+    the same facts the wizard's HardwarePage renders, for the terminal."""
+    rows: list[tuple[str, str]] = [
+        ("os", s.os),
+        ("cpu", s.cpu or "(not detected)"),
+        ("cpu vendor", s.cpu_vendor or "(not detected)"),
+    ]
+    if s.gpus:
+        for i, g in enumerate(s.gpus):
+            label = "gpu" if len(s.gpus) == 1 else f"gpu {i + 1}"
+            pci = f" [{g.pci_id}]" if g.pci_id else ""
+            rows.append((label, f"{g.name} ({g.vendor}){pci}"))
+    else:
+        rows.append(("gpu", "(none detected)"))
+    rows += [
+        ("wifi", s.wifi or "(none detected)"),
+        ("bluetooth", s.bluetooth or "(none detected)"),
+        ("recommended --gpu-driver", s.recommended_gpu_driver),
+        ("recommend --enable-wifi", "yes" if s.recommend_wifi else "no"),
+        ("recommend --enable-bluetooth", "yes" if s.recommend_bluetooth else "no"),
+        ("hw profile guess", s.hw_profile_guess or "(none)"),
+    ]
+    width = max(len(k) for k, _v in rows)
+    lines = [f"{k.ljust(width)}  {v}" for k, v in rows]
+    lines += [f"note: {n}" for n in s.notes]
+    return "\n".join(lines)
