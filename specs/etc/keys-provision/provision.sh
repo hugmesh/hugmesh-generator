@@ -2674,9 +2674,66 @@ provision_truststore() {
 }
 
 # ── SELinux first-boot setup (load policy on the Pi; relabel; set mode) ──
+#
+# FAIL-OPEN ONLY FOR IMAGES THAT WERE NEVER BUILT SELINUX-AWARE. An image that
+# WAS built selinux-aware — /usr/share/hugmesh/selinux-built, written at build
+# time by scripts/_selinux-policy-lib.sh (a base.pp in /usr/share/selinux/* is
+# the fallback for images predating that marker) — must end this function with
+# a policy actually LOADED in the kernel. When it does not, the failure is
+# made VISIBLE instead of "normal": selinux_provision_failed() records the
+# reason in ${SELINUX_FAIL_MARKER} and /etc/init.d/selinux-enforce-gate
+# refuses to flip the node enforcing while that marker stands. First boot
+# itself must still NEVER brick the node, so every path out of
+# provision_selinux() returns 0 — degrade loudly, not fatally.
+SELINUX_FAIL_MARKER="${STATE_DIR}/selinux-load-failed"
+
+selinux_image_aware() {
+    [ -f /usr/share/hugmesh/selinux-built ] && return 0
+    ls /usr/share/selinux/*/base.pp >/dev/null 2>&1
+}
+
+# The postcondition: is a policy actually loaded in the KERNEL? True when
+# selinuxfs exposes a readable policy blob, or getenforce reports a real mode.
+# ("Disabled", an unmounted selinuxfs, or no getenforce at all = nothing loaded.)
+selinux_policy_loaded() {
+    [ -r /sys/fs/selinux/policy ] && return 0
+    case "$(getenforce 2>/dev/null)" in
+        Enforcing|Permissive) return 0 ;;
+    esac
+    return 1
+}
+
+# selinux_provision_failed <reason> — the only failure exit on an aware image:
+# warn loudly + persist the reason where the enforce-gate looks for it.
+selinux_provision_failed() {
+    warn "SELinux: $*"
+    warn "SELinux: this image was BUILT selinux-aware but first boot ends WITHOUT a working policy load."
+    warn "SELinux: recording ${SELINUX_FAIL_MARKER}; /etc/init.d/selinux-enforce-gate refuses to flip while it exists."
+    warn "SELinux: fix the load, then re-provision (KEYS_FORCE=1 or .provision-force) to clear it."
+    echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >> "${SELINUX_FAIL_MARKER}"
+}
+
 provision_selinux() {
-    [ -d /etc/selinux ] || { log "SELinux not installed — skipping"; return 0; }
-    have semodule || { log "semodule absent — skipping SELinux setup"; return 0; }
+    local aware=0
+    selinux_image_aware && aware=1
+    # A re-provision starts from a clean slate; every failure below re-records.
+    rm -f "${SELINUX_FAIL_MARKER}"
+    if [ ! -d /etc/selinux ]; then
+        if [ "${aware}" = 1 ]; then
+            selinux_provision_failed "/etc/selinux missing on a selinux-aware image (policycoreutils/selinux-base broken?)"
+        else
+            log "SELinux not installed — skipping"
+        fi
+        return 0
+    fi
+    if ! have semodule; then
+        if [ "${aware}" = 1 ]; then
+            selinux_provision_failed "semodule absent on a selinux-aware image — no policy can be loaded"
+        else
+            log "semodule absent — skipping SELinux setup"
+        fi
+        return 0
+    fi
     local type mode
     type="$(jqm '.selinux.type // "mcs"')";  [ -n "${type}" ] && [ "${type}" != "null" ] || type=mcs
     mode="$(jqm '.selinux.mode // "permissive"')"; [ -n "${mode}" ] && [ "${mode}" != "null" ] || mode=permissive
@@ -2737,13 +2794,36 @@ EOF
     fi
     # ── END hugmesh node-policy load ──
     log "Relabelling filesystem (this can take a while)"
+    local relabel_ok=1
     if have setfiles && [ -f "/etc/selinux/${type}/contexts/files/file_contexts" ]; then
         setfiles -F "/etc/selinux/${type}/contexts/files/file_contexts" / 2>/dev/null || \
-        restorecon -RF / 2>/dev/null || warn "relabel incomplete"
+        restorecon -RF / 2>/dev/null || { relabel_ok=0; warn "relabel incomplete"; }
     else
-        restorecon -RF / 2>/dev/null || warn "restorecon unavailable"
+        restorecon -RF / 2>/dev/null || { relabel_ok=0; warn "restorecon unavailable"; }
     fi
-    touch /.autorelabel
+    # /.autorelabel carries the STANDARD semantics: it REQUESTS a relabel and is
+    # removed by whatever completes one. On these images provision_selinux() IS
+    # the relabeler — no rc script ever consumes the flag — so a successful
+    # relabel must CONSUME it. (It used to be touched unconditionally right
+    # here, AFTER the relabel, which meant selinux-enforce-gate's
+    # check_relabel_clean() could never pass on any provisioned node.) After a
+    # FAILED relabel, raise it instead: the labels on disk cannot be trusted,
+    # and the still-present flag is exactly the "a relabel is still owed"
+    # signal the enforce-gate refuses on.
+    if [ "${relabel_ok}" = 1 ]; then
+        rm -f /.autorelabel
+    else
+        touch /.autorelabel
+        warn "leaving /.autorelabel set — the enforce-gate refuses to flip until a relabel completes"
+    fi
+    # ── HARD POSTCONDITION (selinux-aware images only) ──
+    # Every load path above degrades softly (`2>/dev/null || warn`) so a broken
+    # SELinux userland can never brick first boot — but on an image BUILT
+    # selinux-aware a soft-failed load must not provision "normally" either.
+    if [ "${aware}" = 1 ] && ! selinux_policy_loaded; then
+        selinux_provision_failed "no policy loaded after provisioning (selinuxfs exposes no readable policy and getenforce does not report Enforcing/Permissive)"
+        return 0
+    fi
     log "SELinux configured (${mode}). Switch to enforcing after verifying: setenforce 1 + SELINUX=enforcing"
 }
 

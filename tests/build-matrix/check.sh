@@ -2169,7 +2169,12 @@ PY
 # surfaced it: this repo gates on GitLab CI and merges on GitHub, so a red result never blocks
 # a merge. Verified by diffing the emitted assertion NAMES across #550 (10 added, 0 removed),
 # not by trusting the delta.
-SLX_EXPECTED=136
+# 142 = 136 + the 6 assertions the issue-#45 first-boot fixes added (deliberate bump):
+# 1 C-leg (selinux-built marker written next to the manifest), 1 D-run gate_blocks
+# (check_provision_ok refuses on the selinux-load-failed marker), and 4 E-legs
+# (autorelabel consumption, the selinux_policy_loaded postcondition, and the two
+# matched-pair marker checks provision.sh <-> enforce-gate / build-lib <-> provision.sh).
+SLX_EXPECTED=142
 SLX_PASS=0; SLX_FAIL=0
 run_selinux_policy_checks() {
     local out="${TMP_DIR}/selinux-policy.out"

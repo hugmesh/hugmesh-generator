@@ -404,9 +404,16 @@ none), and compose green is not evidence for the cluster._
   assert every name in `/usr/share/hugmesh/selinux-modules.list` appears in
   `semodule -s mcs -l`. Only after that does **enforcing** become the next
   question — and it still needs AVC logs from a real protected build + boot to
-  narrow the `INFERRED-WIDE` rules, plus something to consume `/.autorelabel`,
-  which is written by `provision.sh:2746` and removed by nothing, so
-  `selinux-enforce-gate`'s `check_relabel_clean()` can never pass today.
+  narrow the `INFERRED-WIDE` rules. (The `/.autorelabel` consumption gap is
+  fixed: `provision_selinux()` now CLEARS the flag after its own successful
+  relabel — standard request-flag semantics — and only leaves it raised when
+  the relabel failed, so `check_relabel_clean()` can actually pass. The
+  fail-open provisioning seam is also closed: on an image built selinux-aware
+  — `/usr/share/hugmesh/selinux-built`, or a `base.pp` for older images — a
+  first boot that ends without a loaded policy records
+  `/var/lib/keys-provision/selinux-load-failed` instead of provisioning
+  "normally", and the enforce-gate refuses to flip while that marker stands.
+  First boot still never fails outright: degrade loudly, never brick.)
 - **🔭 bpf-LSM enforcement, and lockdown beyond x86 + rpi5.** The LSM stack each
   image advertises is now the one it runs — `yama` and `bpf` were named in
   `CONFIG_LSM`, the cmdline, the generated `grub.cfg` and the signed UKI while the
