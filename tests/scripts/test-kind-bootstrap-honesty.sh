@@ -992,8 +992,266 @@ GSTUB
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+echo "-- [repo-access] ArgoCD must be given a repo it can fetch, or the run must say so --"
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY. Issue #48: the bootstrap was run without ARGOCD_REPO_TOKEN, step 5b only
+# WARNED, all 11+ git-path Applications sat in 'ComparisonError: authentication
+# required', vault-0 was never created — and the run still exited 0, so make and
+# the Studio reported success over a dead cluster. The fix is two-sided:
+#   (a) the DEFAULT is a tokenless local sync — the kind node mounts this
+#       checkout read-only and an in-cluster read-only git daemon
+#       (gitops-repo-server.yaml) serves it, so a LOCAL mesh needs no GitHub
+#       credential at all (ARGOCD_REPO_TOKEN stays as the GitHub override);
+#   (b) under KIND_PROFILE=sso, a run with NEITHER path exits non-zero naming
+#       exactly what is missing.
+# This runs the REAL ensure_repo_access() out of the real script against
+# kubectl/docker stubs, with the REAL gitops-repo-server.yaml on disk.
+RA_FN="$(awk '/^ensure_repo_access\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+if [ -z "${RA_FN}" ]; then
+  bad "bootstrap-kind.sh has no ensure_repo_access() — the #48 fail-closed/local-sync logic is missing or moved"
+else
+  RA="${TMP}/repoaccess"; mkdir -p "${RA}/bin"
+  cat > "${RA}/bin/kubectl" <<'RSTUB'
+#!/usr/bin/env bash
+args="$*"
+case "${args}" in
+  *"create secret generic hugmesh-generator-repo"*)
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: hugmesh-generator-repo\n'; exit 0 ;;
+  *"label --local"*)
+    cat; printf '  labels: {argocd.argoproj.io/secret-type: repository}\n'; exit 0 ;;
+  *"rollout status"*)
+    exit "${STUB_ROLLOUT_RC:-0}" ;;
+  *"apply -f -"*)
+    cat >> "${STUB_LOG}"; printf '\n---APPLIED---\n' >> "${STUB_LOG}"; exit 0 ;;
+esac
+cat >/dev/null 2>&1
+exit 0
+RSTUB
+  cat > "${RA}/bin/docker" <<'DSTUB'
+#!/usr/bin/env bash
+case "$*" in
+  "exec "*" test -d "*) exit "${STUB_MOUNT_RC:-0}" ;;
+esac
+exit 0
+DSTUB
+  chmod +x "${RA}/bin/kubectl" "${RA}/bin/docker"
+
+  # A fake operator checkout: full clone (real .git DIRECTORY) vs linked
+  # worktree (.git FILE) are both modeled.
+  CLONE_ROOT="${RA}/clone"; mkdir -p "${CLONE_ROOT}/.git"
+  WT_ROOT="${RA}/worktree"; mkdir -p "${WT_ROOT}"
+  printf 'gitdir: /somewhere/else/.git/worktrees/x\n' > "${WT_ROOT}/.git"
+
+  run_repo_access() { # <repo-root> <profile> [env...] — writes rc + RESULT line
+    local root="$1" profile="$2"; shift 2
+    : > "${RA}/log"
+    ( export PATH="${RA}/bin:${PATH}" STUB_LOG="${RA}/log"
+      for kv in "$@"; do export "${kv?}"; done
+      T_REPO_ROOT="${root}" T_PROFILE="${profile}" T_SCRIPT_DIR="${KIND_DIR}" \
+      bash -c 'set -euo pipefail
+        log() { echo "==> $*"; }
+        warn() { echo "    WARN: $*" >&2; }
+        GITOPS_REPO_DEFAULT="https://github.com/hugmesh/hugmesh-generator.git"
+        REPO="${T_REPO:-${GITOPS_REPO_DEFAULT}}"
+        REV="${T_REV:-main}"; REV_EXPLICIT="${T_REV:+1}"
+        VAULT_BRANCH=main; HARBOR_BRANCH=main
+        CLUSTER_NAME=hugmesh-local; ARGOCD_NS=devops
+        KIND_PROFILE="${T_PROFILE}"
+        REPO_ROOT="${T_REPO_ROOT}"
+        SCRIPT_DIR="${T_SCRIPT_DIR}"
+        LOCAL_GITOPS_MOUNT=/hugmesh/hugmesh-generator
+        LOCAL_GITOPS_URL="git://gitops-repo-server.devops.svc.cluster.local/hugmesh-generator"
+        '"${RA_FN}"'
+        ensure_repo_access
+        echo "RESULT REPO=${REPO} REV=${REV} VB=${VAULT_BRANCH} HB=${HARBOR_BRANCH}"'
+    ) > "${RA}/out" 2> "${RA}/err"
+  }
+
+  # (p1) POSITIVE / the default path: no token, full clone, mount present ->
+  # the REAL gitops-repo-server.yaml is applied and every later Application
+  # will be rewritten at the in-cluster daemon, targetRevision HEAD.
+  if run_repo_access "${CLONE_ROOT}" sso; then
+    if grep -q 'RESULT REPO=git://gitops-repo-server.devops.svc.cluster.local/hugmesh-generator REV=HEAD VB=HEAD HB=HEAD' "${RA}/out" \
+       && grep -q 'name: gitops-repo-server' "${RA}/log" \
+       && grep -q 'kind: Deployment' "${RA}/log"; then
+      ok "tokenless local sync is the DEFAULT: no token deploys the read-only git daemon and repoints repoURL/targetRevision at this checkout's HEAD"
+    else
+      bad "the tokenless path ran but did not deploy the daemon + repoint REPO/REV — $(tail -2 "${RA}/out" | tr '\n' ' ')"
+    fi
+    # Fetch-only, by construction: no ARG line may enable receive-pack (the
+    # manifest's comments are allowed to mention it), and the repo volume must
+    # be mounted read-only.
+    if grep -Eq '^ *- +--enable=receive-pack' "${RA}/log"; then
+      bad "the applied daemon manifest ENABLES receive-pack — the cluster could write into the operator's checkout"
+    elif ! grep -q 'readOnly: true' "${RA}/log"; then
+      bad "the applied daemon manifest does not mount the repo read-only"
+    else
+      ok "the applied daemon manifest is fetch-only (no receive-pack arg) and mounts the checkout read-only"
+    fi
+  else
+    bad "the default tokenless path FAILED on a healthy clone+mount — $(tail -3 "${RA}/err" | tr '\n' ' ')"
+  fi
+
+  # (p2) the ARGOCD_REPO_TOKEN override still works and never deploys the daemon.
+  if run_repo_access "${CLONE_ROOT}" sso "ARGOCD_REPO_TOKEN=tok-abc"; then
+    if grep -q 'RESULT REPO=https://github.com/hugmesh/hugmesh-generator.git REV=main' "${RA}/out" \
+       && grep -q 'hugmesh-generator-repo' "${RA}/log" \
+       && ! grep -q 'gitops-repo-server' "${RA}/log"; then
+      ok "ARGOCD_REPO_TOKEN override: registers the repository Secret, keeps the GitHub repoURL, deploys no daemon"
+    else
+      bad "the token override misbehaved — $(tail -2 "${RA}/out" | tr '\n' ' ')"
+    fi
+  else
+    bad "the token override FAILED outright — $(tail -3 "${RA}/err" | tr '\n' ' ')"
+  fi
+
+  # (n1) THE #48 SHAPE, fail-closed: sso + no token + a pre-local-sync cluster
+  # (node mount missing) must EXIT NON-ZERO and name both remedies.
+  if run_repo_access "${CLONE_ROOT}" sso "STUB_MOUNT_RC=1"; then
+    bad "THE #48 SHAPE: KIND_PROFILE=sso with no repo access still exited 0 — make/Studio would again report success over a cluster that can never converge"
+  else
+    if grep -q 'kind delete cluster' "${RA}/err" && grep -q 'ARGOCD_REPO_TOKEN' "${RA}/err"; then
+      ok "sso + no token + missing node mount -> non-zero exit naming BOTH remedies (recreate cluster / export ARGOCD_REPO_TOKEN)"
+    else
+      bad "sso fail-closed fired but did not name the remedies — $(tail -3 "${RA}/err" | tr '\n' ' ')"
+    fi
+  fi
+
+  # (n2) a linked worktree cannot be served (its .git is a file pointing at an
+  # object store outside the mount) — same fail-closed under sso.
+  if run_repo_access "${WT_ROOT}" sso; then
+    bad "a linked-worktree checkout (unservable .git file) was accepted for the local sync path"
+  else
+    grep -qi 'worktree' "${RA}/err" \
+      && ok "a linked-worktree checkout -> non-zero exit that says WHY (unservable .git file)" \
+      || bad "worktree fail-closed fired without naming the cause — $(tail -2 "${RA}/err" | tr '\n' ' ')"
+  fi
+
+  # (n3) core keeps the old warn-and-continue for the no-access case (README
+  # documents supplying the token later; ArgoCD retries on its own).
+  if run_repo_access "${CLONE_ROOT}" core "STUB_MOUNT_RC=1"; then
+    grep -q 'WARN' "${RA}/err" \
+      && ok "KIND_PROFILE=core + no repo access still warns-and-continues (documented late-token flow)" \
+      || bad "core continued but printed no warning at all"
+  else
+    bad "KIND_PROFILE=core now hard-fails on missing repo access — the documented supply-the-token-later flow is broken"
+  fi
+
+  # (n4) an EXPLICIT non-default HUGMESH_GITOPS_REPO is respected verbatim
+  # (an anonymously readable fork needs neither token nor daemon).
+  if run_repo_access "${CLONE_ROOT}" sso "T_REPO=https://example.com/fork.git"; then
+    if grep -q 'RESULT REPO=https://example.com/fork.git' "${RA}/out" \
+       && ! grep -q 'gitops-repo-server' "${RA}/log"; then
+      ok "an explicit HUGMESH_GITOPS_REPO override is left alone (no daemon, no token demand)"
+    else
+      bad "an explicit repo override was second-guessed — $(tail -2 "${RA}/out" | tr '\n' ' ')"
+    fi
+  else
+    bad "an explicit repo override FAILED — $(tail -3 "${RA}/err" | tr '\n' ' ')"
+  fi
+
+  # (n5) an explicitly pinned HUGMESH_GITOPS_REV survives the local path
+  # (only the DEFAULT retargets to HEAD).
+  if run_repo_access "${CLONE_ROOT}" sso "T_REV=fix/my-branch"; then
+    grep -q 'REV=fix/my-branch' "${RA}/out" \
+      && ok "a pinned HUGMESH_GITOPS_REV wins over the local path's HEAD default" \
+      || bad "the local path clobbered an explicitly pinned revision — $(tail -2 "${RA}/out" | tr '\n' ' ')"
+  else
+    bad "a pinned-revision local run FAILED — $(tail -3 "${RA}/err" | tr '\n' ' ')"
+  fi
+
+  # (n6) the daemon never becoming ready is a FAILURE, not a shrug — ArgoCD
+  # would have nothing to fetch and every app would sit in ComparisonError.
+  if run_repo_access "${CLONE_ROOT}" sso "STUB_ROLLOUT_RC=1"; then
+    bad "gitops-repo-server never became ready and the bootstrap continued anyway"
+  else
+    ok "an unready gitops-repo-server fails the bring-up instead of proceeding credential-less"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- [vault-wait] a vault-0 that never runs must fail the run, not exit 0 --"
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY. The old wait loop warned and exited 0 when vault-0 never reached Running
+# — the exact exit behind issue #48's 'make kind-up reported success on a broken
+# cluster'. The script itself declares the Vault bootstrap mandatory (it refuses
+# SKIP_VAULT_BOOTSTRAP=1 under sso), so a missing vault-0 is a failed bring-up.
+VW_FN="$(awk '/^wait_for_vault_pod\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+if [ -z "${VW_FN}" ]; then
+  bad "bootstrap-kind.sh has no wait_for_vault_pod() — the vault-0 wait is not extractable/testable and may still be the warn+exit-0 shape"
+else
+  VW="${TMP}/vaultwait"; mkdir -p "${VW}/bin"
+  cat > "${VW}/bin/kubectl" <<'VWSTUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"get pod vault-0"*)          printf '%s' "${STUB_VAULT_PHASE:-}"; exit 0 ;;
+  *"get application vault"*)    printf '%s' "${STUB_APP_COND:-}"; exit 0 ;;
+esac
+exit 0
+VWSTUB
+  chmod +x "${VW}/bin/kubectl"
+  run_vault_wait() { # [env...]
+    ( export PATH="${VW}/bin:${PATH}" VAULT_POD_WAIT_TRIES=2 VAULT_POD_WAIT_SLEEP=0
+      for kv in "$@"; do export "${kv?}"; done
+      bash -c 'set -uo pipefail
+        log() { echo "==> $*"; }
+        ARGOCD_NS=devops
+        '"${VW_FN}"'
+        wait_for_vault_pod'
+    ) > "${VW}/out" 2> "${VW}/err"
+  }
+
+  if run_vault_wait "STUB_VAULT_PHASE=Running"; then
+    ok "vacuity: a Running vault-0 passes the wait"
+  else
+    bad "a Running vault-0 FAILED the wait — every healthy bring-up would abort"
+  fi
+
+  if run_vault_wait "STUB_VAULT_PHASE=" "STUB_APP_COND=rpc error: authentication required: Repository not found"; then
+    bad "THE #48 EXIT: vault-0 never created and the wait still returned success"
+  else
+    if grep -q 'issue #48' "${VW}/err" && grep -q 'authentication required' "${VW}/err"; then
+      ok "vault-0 never created -> non-zero, and the missing-repo-access signature is named (issue #48)"
+    else
+      bad "the wait failed but did not surface the ArgoCD condition/remedy — $(tail -3 "${VW}/err" | tr '\n' ' ')"
+    fi
+  fi
+
+  if run_vault_wait "STUB_VAULT_PHASE=Pending"; then
+    bad "a vault-0 stuck Pending was reported as a successful wait"
+  else
+    ok "a vault-0 stuck Pending -> non-zero (storage/scheduling failures no longer masquerade as success)"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 echo "-- [wiring] the fixes must be on the path the harness actually runs --"
 # ─────────────────────────────────────────────────────────────────────────────
+if grep -q '^ensure_repo_access$' "${BOOTSTRAP}"; then
+  ok "bootstrap-kind.sh invokes ensure_repo_access (repo access is decided, not assumed)"
+else
+  bad "ensure_repo_access is defined but never invoked — every Application would again sync from nothing"
+fi
+if grep -q 'wait_for_vault_pod || exit 1' "${BOOTSTRAP}"; then
+  ok "the vault-0 wait is invoked fail-closed (|| exit 1)"
+else
+  bad "wait_for_vault_pod is not invoked fail-closed — a missing vault-0 can again exit 0"
+fi
+if grep -q 'skipping Vault init/unseal/PKI bootstrap' "${BOOTSTRAP}"; then
+  bad "the old warn-and-exit-0 vault-0 message is still in the script — the #48 success-over-broken exit may still be reachable"
+else
+  ok "the old warn-and-exit-0 vault-0 path is gone"
+fi
+if [ -f "${KIND_DIR}/gitops-repo-server.yaml" ]; then
+  ok "gitops-repo-server.yaml (the tokenless local sync daemon) exists next to the bootstrap"
+else
+  bad "gitops-repo-server.yaml is missing — the default local sync path has nothing to apply"
+fi
+if grep -q 'tokenless local sync' "${KIND_README}"; then
+  ok "README documents the tokenless local sync default"
+else
+  bad "README does not document the tokenless local sync path — operators will keep minting GitHub tokens for local clusters"
+fi
 if grep -q 'seed-vault-kv.sh' "${BOOTSTRAP}"; then
   ok "bootstrap-kind.sh seeds Vault KV through seed-vault-kv.sh"
 else

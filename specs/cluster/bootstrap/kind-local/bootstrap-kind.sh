@@ -40,8 +40,21 @@ REPO_ROOT="$(cd "${CLUSTER_DIR}/../.." && pwd)"        # repo root (for `git sho
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
 ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
-REPO="${HUGMESH_GITOPS_REPO:-https://github.com/hugmesh/hugmesh-generator.git}"
+GITOPS_REPO_DEFAULT="https://github.com/hugmesh/hugmesh-generator.git"
+REPO="${HUGMESH_GITOPS_REPO:-${GITOPS_REPO_DEFAULT}}"
 REV="${HUGMESH_GITOPS_REV:-main}"
+# Set iff the caller pinned a revision explicitly. The tokenless local sync
+# path (step 5b) otherwise retargets REV at HEAD — the branch THIS checkout
+# has checked out — because "sync what the operator is running" is the whole
+# point of serving the local tree.
+REV_EXPLICIT="${HUGMESH_GITOPS_REV:+1}"
+# Tokenless local sync (step 5b): the kind node mounts this checkout read-only
+# at LOCAL_GITOPS_MOUNT (appended to the kind config at CREATE time — the host
+# path is only known at runtime), and an in-cluster read-only `git daemon`
+# (gitops-repo-server.yaml) serves it to ArgoCD at LOCAL_GITOPS_URL. No GitHub
+# credential and no GitHub reachability needed for a local mesh.
+LOCAL_GITOPS_MOUNT="/hugmesh/hugmesh-generator"
+LOCAL_GITOPS_URL="git://gitops-repo-server.${ARGOCD_NS}.svc.cluster.local/hugmesh-generator"
 # Both former branch overrides (the Harbor migration and the vault-tls-init
 # openssl fix) have since MERGED to main — apps/03a+03b and the fixed
 # manifests/vault/deployment.yaml are read straight from $REV like everything
@@ -97,8 +110,24 @@ done
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"; then
   log "kind cluster '${CLUSTER_NAME}' already exists — reusing it"
 else
-  log "Creating kind cluster '${CLUSTER_NAME}'"
-  kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/kind-local.yaml"
+  log "Creating kind cluster '${CLUSTER_NAME}' (this checkout mounted read-only for the tokenless local sync path)"
+  # The repo mount can only exist if it is declared at CREATE time, and its
+  # hostPath is this machine's checkout — unknowable to the committed
+  # kind-local.yaml — so the config is rendered here: the committed file plus
+  # one extraMounts block. READ-ONLY: nothing in the cluster may ever write
+  # into the operator's working tree (a mesh image build reads it live).
+  KIND_CFG="$(mktemp)"
+  cat "${SCRIPT_DIR}/kind-local.yaml" > "${KIND_CFG}"
+  cat >> "${KIND_CFG}" <<EOF
+    # Appended by bootstrap-kind.sh (step 1): the tokenless local sync path.
+    # gitops-repo-server.yaml serves this mount to ArgoCD via git daemon.
+    extraMounts:
+      - hostPath: ${REPO_ROOT}
+        containerPath: ${LOCAL_GITOPS_MOUNT}
+        readOnly: true
+EOF
+  kind create cluster --name "${CLUSTER_NAME}" --config "${KIND_CFG}"
+  rm -f "${KIND_CFG}"
 fi
 kind export kubeconfig --name "${CLUSTER_NAME}" >/dev/null
 kubectl config use-context "kind-${CLUSTER_NAME}" >/dev/null
@@ -229,39 +258,104 @@ kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-repo-server --timeout=300
 kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-applicationset-controller --timeout=180s || true
 
 # ─────────────────────────────────────────────────────────────────────────
-# 5b) Repo credentials. hugmesh-generator is a PRIVATE GitHub repo — every
+# 5b) Repo access. hugmesh-generator is a PRIVATE GitHub repo — every
 #     git-path Application below (Vault, vault-pki, ESO config, Casdoor,
-#     harbor-provision) fails to sync with "authentication required:
-#     Repository not found" unless ArgoCD's repo-server has a credential for
-#     it. The real cluster registers this same credential on its OWN bootstrap
-#     path (../bootstrap.sh), with the token sourced out-of-band from the
-#     offline KEYS USB (KEYS/gitops/repo-token) by keys-provision, which exports
-#     it as ARGOCD_REPO_TOKEN — keys-provision does NOT materialize the Secret
-#     itself. For local dev there's no such side-channel, so this is STRICTLY
-#     OPT-IN:
-#     this script never invokes `gh` (or anything else) to obtain a token on
-#     its own — it only acts if the caller explicitly exports
-#     ARGOCD_REPO_TOKEN. That keeps "run this script" from silently
-#     materializing a live personal credential into cluster storage as a
-#     side effect; the operator has to deliberately choose to hand one over.
+#     harbor-provision, the whole SSO slice) fails to sync with
+#     "authentication required: Repository not found" unless ArgoCD's
+#     repo-server has SOMETHING it can fetch. Two paths, tried in order:
+#
+#     DEFAULT — TOKENLESS LOCAL SYNC (issue #48's local-first fix). Step 1
+#     mounted this checkout read-only into the kind node at
+#     ${LOCAL_GITOPS_MOUNT}; gitops-repo-server.yaml runs a read-only
+#     `git daemon` (upload-pack only — receive-pack is off by default, and
+#     the mount is read-only twice over) serving it at ${LOCAL_GITOPS_URL},
+#     and every Application's repoURL is rewritten there. No GitHub
+#     credential, no GitHub reachability: the local mesh syncs the tree the
+#     operator is actually running. git daemon serves COMMITTED objects
+#     only, so a dirty or mid-build working tree serves its last commit —
+#     stale-but-consistent HEAD, which is exactly what a GitOps controller
+#     should see. targetRevision defaults to HEAD here (this checkout's
+#     current branch) unless HUGMESH_GITOPS_REV pins one.
+#
+#     OVERRIDE — ARGOCD_REPO_TOKEN (teams pointing at GitHub / the real
+#     cluster's flow). The real cluster registers this same credential on
+#     its OWN bootstrap path (../bootstrap.sh), token sourced out-of-band
+#     from the offline KEYS USB (KEYS/gitops/repo-token) by keys-provision.
+#     STRICTLY OPT-IN here: this script never invokes `gh` (or anything
+#     else) to obtain a token on its own — silently materializing a live
+#     personal credential into cluster storage must stay a deliberate act.
 #       export ARGOCD_REPO_TOKEN="$(GH_TOKEN= gh auth token)"   # e.g.
 #     A fine-grained PAT with read-only access to just this repo is
 #     preferable to a personal `gh` token for anything longer-lived than a
 #     throwaway kind cluster.
+#
+#     FAIL CLOSED under KIND_PROFILE=sso: a cluster with NEITHER path is not
+#     a bring-up, it is the #48 outage — every git-path Application sits in
+#     ComparisonError, vault-0 is never created, and the old warn-and-continue
+#     let make/Studio report success over it. KIND_PROFILE=core keeps the old
+#     warn (README documents supplying a token later; ArgoCD retries on its
+#     own once the credential exists).
 # ─────────────────────────────────────────────────────────────────────────
-if [ -n "${ARGOCD_REPO_TOKEN:-}" ]; then
-  log "Registering ArgoCD repo credential for ${REPO} (from \$ARGOCD_REPO_TOKEN, never printed)"
-  kubectl -n "${ARGOCD_NS}" create secret generic hugmesh-generator-repo \
-    --from-literal=type=git \
-    --from-literal=url="${REPO}" \
-    --from-literal=username=x-access-token \
-    --from-literal=password="${ARGOCD_REPO_TOKEN}" \
-    --dry-run=client -o yaml \
-    | kubectl label --local -f - "argocd.argoproj.io/secret-type=repository" --dry-run=client -o yaml \
+ensure_repo_access() {
+  if [ -n "${ARGOCD_REPO_TOKEN:-}" ]; then
+    log "Registering ArgoCD repo credential for ${REPO} (from \$ARGOCD_REPO_TOKEN, never printed)"
+    kubectl -n "${ARGOCD_NS}" create secret generic hugmesh-generator-repo \
+      --from-literal=type=git \
+      --from-literal=url="${REPO}" \
+      --from-literal=username=x-access-token \
+      --from-literal=password="${ARGOCD_REPO_TOKEN}" \
+      --dry-run=client -o yaml \
+      | kubectl label --local -f - "argocd.argoproj.io/secret-type=repository" --dry-run=client -o yaml \
+      | kubectl apply -f - >/dev/null
+    return 0
+  fi
+  if [ "${REPO}" != "${GITOPS_REPO_DEFAULT}" ]; then
+    # The caller pointed HUGMESH_GITOPS_REPO somewhere else on purpose (a
+    # fork/mirror). Anonymously-readable ones sync fine with no credential;
+    # a private one needs ARGOCD_REPO_TOKEN — say so, do not second-guess.
+    log "HUGMESH_GITOPS_REPO=${REPO} with no \$ARGOCD_REPO_TOKEN — leaving it as-is (an anonymously readable repo syncs fine; a private one needs the token)"
+    return 0
+  fi
+  # ── TOKENLESS LOCAL SYNC (the default) ──────────────────────────────────
+  local missing=""
+  if [ ! -e "${REPO_ROOT}/.git" ]; then
+    missing="${REPO_ROOT} is not a git checkout (no .git) — there is nothing to serve"
+  elif [ ! -d "${REPO_ROOT}/.git" ]; then
+    # A linked worktree's .git is a FILE pointing at an object store OUTSIDE
+    # this tree; the single read-only mount carries no objects to serve.
+    missing="${REPO_ROOT}/.git is a file (a linked git worktree) — the kind mount carries no git object store; run from a full clone, or export ARGOCD_REPO_TOKEN"
+  elif ! docker exec "${CLUSTER_NAME}-control-plane" test -d "${LOCAL_GITOPS_MOUNT}/.git" >/dev/null 2>&1; then
+    missing="the kind node has no ${LOCAL_GITOPS_MOUNT} mount — cluster '${CLUSTER_NAME}' predates the tokenless local sync path and a mount can only be added at CREATE time; \`kind delete cluster --name ${CLUSTER_NAME}\` and re-run (a fresh cluster mounts it automatically), or export ARGOCD_REPO_TOKEN"
+  fi
+  if [ -n "${missing}" ]; then
+    if [ "${KIND_PROFILE}" = "sso" ]; then
+      echo "FATAL: ArgoCD has no way to fetch the GitOps repo, and KIND_PROFILE=sso cannot converge without one (issue #48: every git-path Application sits in 'authentication required', vault-0 is never created, and everything after the app applies is dead on arrival)." >&2
+      echo "  missing: ${missing}" >&2
+      echo "  remedies: fix the tokenless local sync as named above, or export ARGOCD_REPO_TOKEN=<token with read access to ${GITOPS_REPO_DEFAULT}> and re-run." >&2
+      exit 1
+    fi
+    warn "${missing} — and \$ARGOCD_REPO_TOKEN is not set either, so every git-path Application below will fail to sync with 'authentication required' until one of the two paths is provided (see README.md). Continuing only because KIND_PROFILE=core tolerates supplying a credential later (ArgoCD retries on its own)."
+    return 0
+  fi
+  log "Tokenless local sync: serving this checkout to ArgoCD via an in-cluster read-only git daemon"
+  sed "s/namespace: devops/namespace: ${ARGOCD_NS}/g" "${SCRIPT_DIR}/gitops-repo-server.yaml" \
     | kubectl apply -f - >/dev/null
-else
-  warn "\$ARGOCD_REPO_TOKEN not set — every git-path Application below will fail to sync against the private hugmesh-generator repo with 'authentication required'. Re-run with ARGOCD_REPO_TOKEN=<a token with read access to this repo> to fix (see README.md)."
-fi
+  kubectl -n "${ARGOCD_NS}" rollout status deploy/gitops-repo-server --timeout=180s >/dev/null \
+    || { echo "gitops-repo-server never became ready — ArgoCD has nothing to fetch from. Diagnose: kubectl -n ${ARGOCD_NS} describe deploy/gitops-repo-server" >&2; exit 1; }
+  REPO="${LOCAL_GITOPS_URL}"
+  if [ -z "${REV_EXPLICIT}" ]; then
+    REV="HEAD"   # this checkout's current branch, as of its last commit
+    # The branch-override machinery must follow, or the vault/harbor apps
+    # would track the LOCAL main while everything else tracks HEAD — two
+    # different trees whenever the operator works on a branch. Only the
+    # defaults are retargeted; an explicit override still wins.
+    [ "${VAULT_BRANCH}" = "main" ] && VAULT_BRANCH="HEAD"
+    [ "${HARBOR_BRANCH}" = "main" ] && HARBOR_BRANCH="HEAD"
+  fi
+  log "  repoURL -> ${REPO}"
+  log "  targetRevision -> ${REV} (git daemon serves committed objects only: a dirty/mid-build tree syncs its last COMMIT — stale but consistent)"
+}
+ensure_repo_access
 
 # ─────────────────────────────────────────────────────────────────────────
 # 6) The curated Application subset — applied directly with kubectl, NOT via
@@ -469,15 +563,34 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 log "Waiting for vault-0 pod to be Running"
 kubectl -n vault wait --for=condition=PodScheduled pod/vault-0 --timeout=180s >/dev/null 2>&1 || true
-for i in $(seq 1 60); do
-  phase="$(kubectl -n vault get pod vault-0 -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-  [ "${phase}" = "Running" ] && break
-  sleep 5
-done
-if [ "${phase:-}" != "Running" ]; then
-  warn "vault-0 never reached Running (phase='${phase:-unknown}') — skipping Vault init/unseal/PKI bootstrap. Re-run this script once it comes up."
-  exit 0
-fi
+# FAIL CLOSED (issue #48). This used to warn and `exit 0`, so `make kind-up`
+# and the Studio reported SUCCESS over a cluster whose Vault pod was never
+# even created — the live #48 outage sat behind exactly this exit. The Vault
+# bootstrap below is not optional decoration: the script itself refuses
+# SKIP_VAULT_BOOTSTRAP=1 under sso as mandatory, and nothing after this point
+# (PKI, KV seed, identity seed, the mTLS post-condition) can happen without
+# vault-0. A bring-up that cannot produce vault-0 is a FAILED bring-up.
+wait_for_vault_pod() {
+  local i phase="" cond
+  for i in $(seq 1 "${VAULT_POD_WAIT_TRIES:-60}"); do
+    phase="$(kubectl -n vault get pod vault-0 -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    [ "${phase}" = "Running" ] && return 0
+    sleep "${VAULT_POD_WAIT_SLEEP:-5}"
+  done
+  echo "FATAL: vault-0 never reached Running (phase='${phase:-not created}'). The Vault init/unseal/PKI bootstrap is mandatory — refusing to report a successful bring-up without it." >&2
+  # Name the likeliest cause instead of leaving a dead cluster to spelunk: on
+  # the #48 cluster vault-0 was 'not created' because the vault Application
+  # had never synced — ArgoCD had no repo access.
+  cond="$(kubectl -n "${ARGOCD_NS}" get application vault -o jsonpath='{.status.conditions[*].message}' 2>/dev/null || true)"
+  [ -n "${cond}" ] && echo "  Application vault condition: ${cond}" >&2
+  case "${cond}" in
+    *"authentication required"*|*"Repository not found"*)
+      echo "  That is the missing-repo-access signature (issue #48): re-run this script — the default tokenless local sync serves this checkout to ArgoCD — or export ARGOCD_REPO_TOKEN=<read token> first." >&2 ;;
+  esac
+  echo "  Diagnose: kubectl -n ${ARGOCD_NS} get applications; kubectl -n vault get events --sort-by=.lastTimestamp | tail -20" >&2
+  return 1
+}
+wait_for_vault_pod || exit 1
 
 VEXEC=(kubectl -n vault exec vault-0 -c vault --)
 

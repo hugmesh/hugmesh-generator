@@ -1,0 +1,112 @@
+# gitops-repo-server — the TOKENLESS LOCAL SYNC path (issue #48).
+#
+# ArgoCD needs to `git fetch` the hugmesh-generator GitOps tree, and that repo
+# is PRIVATE on GitHub — so a local kind cluster used to require a personal
+# ARGOCD_REPO_TOKEN or every git-path Application sat in
+# "authentication required" forever (the #48 outage). A LOCAL mesh should not
+# need a GitHub credential at all: bootstrap-kind.sh mounts the operator's own
+# checkout READ-ONLY into the kind node at /hugmesh/hugmesh-generator (kind
+# extraMounts, appended at cluster-create time because the host path is only
+# known then), and this Deployment serves that mount to the cluster over the
+# git protocol:
+#
+#   git://gitops-repo-server.devops.svc.cluster.local/hugmesh-generator
+#
+# Properties that make this the right shape and not a shortcut:
+#   * READ-ONLY twice over: the kind extraMount is readOnly, the volumeMount is
+#     readOnly, and `git daemon` only enables upload-pack (clone/fetch) —
+#     receive-pack (push) is off by default and nothing turns it on. The
+#     cluster can never write into the operator's working tree.
+#   * COMMITTED OBJECTS ONLY: git daemon serves the object store + refs, never
+#     the working tree. A dirty or mid-build checkout serves its last commit —
+#     stale-but-consistent HEAD, which is exactly what a GitOps controller
+#     should see.
+#   * OFFLINE: no GitHub reachability, no token custody, no credential
+#     rotation. ARGOCD_REPO_TOKEN remains the documented override for teams
+#     pointing ArgoCD at GitHub (bootstrap-kind.sh step 5b).
+#
+# Applied by bootstrap-kind.sh (which rewrites `namespace: devops` if
+# ARGOCD_NS is overridden, same idiom as its ArgoCD install) — NOT part of the
+# GitOps app tree itself: this is local-kind bootstrap plumbing, exactly like
+# the throwaway cluster CA, and must exist BEFORE any Application can sync.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitops-repo-server
+  namespace: devops
+  labels:
+    app: gitops-repo-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitops-repo-server
+  template:
+    metadata:
+      labels:
+        app: gitops-repo-server
+    spec:
+      containers:
+        - name: git-daemon
+          # alpine/git = the git CLI on alpine. Small, no registry login, and
+          # the only binary this needs is `git daemon` itself. Pinned by
+          # DIGEST (the multi-arch manifest list for v2.45.2), same practice
+          # as the vault-tls-init alpine/openssl pin.
+          image: alpine/git:v2.45.2@sha256:16ad8e788e1d3b0c30f18da8dde5c0ace3b187445a62d8af893b003ca1e70592
+          # --export-all: serve every repo under --base-path without requiring
+          #   a git-daemon-export-ok marker file — the base path contains ONLY
+          #   the single read-only kind mount, so the blast radius is exactly
+          #   the one repo this exists to serve.
+          # --informative-errors: a wrong path answers with the reason instead
+          #   of a silent hangup — ArgoCD's ComparisonError then names it.
+          # NO --enable=receive-pack anywhere: fetch-only, by construction.
+          args:
+            - daemon
+            - --export-all
+            - --base-path=/hugmesh
+            - --reuseaddr
+            - --informative-errors
+            - --verbose
+          ports:
+            - name: git
+              containerPort: 9418
+          readinessProbe:
+            tcpSocket:
+              port: 9418
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: repo
+              mountPath: /hugmesh/hugmesh-generator
+              readOnly: true
+      volumes:
+        - name: repo
+          hostPath:
+            # The kind extraMount bootstrap-kind.sh appends at cluster-create
+            # time (LOCAL_GITOPS_MOUNT). type Directory: if the mount is
+            # absent (a cluster created before this path existed), the pod
+            # FAILS to schedule its volume instead of serving an empty dir —
+            # and bootstrap-kind.sh has already failed closed naming the fix.
+            path: /hugmesh/hugmesh-generator
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitops-repo-server
+  namespace: devops
+  labels:
+    app: gitops-repo-server
+spec:
+  selector:
+    app: gitops-repo-server
+  ports:
+    - name: git
+      port: 9418
+      targetPort: git
