@@ -5963,13 +5963,17 @@ STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar
 # tree (.o/.cmd objects) is pure cruft in the image — and baking it in overflowed
 # the fixed ROOT_MiB ext4 root partition ("No space left on device" mid-.img
 # population). The rpi5 builder already strips it (rm /usr/src/* + --exclude); match it.
+# --exclude=./home/${DEFAULT_USER}: the LOCAL USER's home (DEFAULT_USER already
+# carries any --local-user override, :1621) is created by firstboot, so any
+# build-time content under it is host leakage — was hard-coded './home/magus',
+# which only worked when the operator WAS magus.
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude='./home/magus' -cpf - . 2>/dev/null \
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . 2>/dev/null \
     | xz -T0 -6 > "${STAGE4}" \
   || tar -C "${SYSROOT}" --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude='./home/magus' -cpf - . | xz -T0 -6 > "${STAGE4}"
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . | xz -T0 -6 > "${STAGE4}"
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────
@@ -6377,7 +6381,7 @@ CHROOT
             rm -rf "${_sqp}" /tmp/.sqprobe.sqfs
             info "Squashing rootfs with -comp ${sq_comp} (this can take a while)..."
             mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
-                -comp "${sq_comp}" -e proc sys dev run var/cache/distfiles home/magus >/dev/null \
+                -comp "${sq_comp}" -e proc sys dev run var/cache/distfiles "home/${DEFAULT_USER}" >/dev/null \
                 || { err "mksquashfs failed — cannot build a bootable live ISO"; exit 1; }
         else
             # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
@@ -6389,7 +6393,7 @@ CHROOT
             info "Squashing rootfs with tar2sqfs -c xz (this can take a while)..."
             tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner \
                 --exclude='./proc' --exclude='./sys' --exclude='./dev' \
-                --exclude='./run' --exclude='./var/cache/distfiles' --exclude='./home/magus' \
+                --exclude='./run' --exclude='./var/cache/distfiles' --exclude="./home/${DEFAULT_USER}" \
                 -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img" \
                 || { err "tar2sqfs failed — cannot build a bootable live ISO"; exit 1; }
         fi

@@ -4,6 +4,7 @@ The Studio's all-options-in-all-menus contract: each documented role builds thro
 the right builder script with exactly the flags that builder parses. Pure-core tests —
 no Qt required.
 """
+import getpass
 import json
 
 import pytest
@@ -58,6 +59,13 @@ X86_TAIL = ["--snort", "--installer-ui", "all", "--cached", "--live-toram", "--b
 # not x86-only, so every platform's golden argv now ends with them. Emitted LAST by
 # to_cli_args on every builder (_x86_args tail and _arm_common_args tail alike).
 ALL_TAIL = ["--compress", "--resume"]
+
+# The default --local-user every x86 argv carries: the INVOKING user, derived here
+# INDEPENDENTLY of config.default_local_user() (same getpass call, different site) so
+# the golden lists still pin the emission rather than echo the implementation. Was the
+# literal "magus" — an operator name baked into the goldens, incidental to what these
+# tests assert.
+DEFAULT_LOCAL_USER = getpass.getuser()
 
 
 def pairs(args):
@@ -151,7 +159,7 @@ def test_unknown_platform_rejected():
 @pytest.mark.parametrize("role", ["standalone-thin", "standalone-thick"])
 def test_x86_standalone_roles_golden(role):
     args = ImageConfig(mode="standalone", role=role, platform="x86").to_cli_args()
-    assert args == ["--role", role, "--env", "test", "--local-user", "magus",
+    assert args == ["--role", role, "--env", "test", "--local-user", DEFAULT_LOCAL_USER,
                     "--no-tailscale", "--no-sso", *X86_TAIL, *ALL_TAIL]
 
 
@@ -164,7 +172,7 @@ def test_x86_standalone_unaffiliated_golden():
     args = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
                        bundle_source=False).to_cli_args()
     assert args == ["--role", "standalone-unaffiliated", "--env", "test",
-                    "--local-user", "magus",
+                    "--local-user", DEFAULT_LOCAL_USER,
                     "--snort", "--installer-ui", "all", "--cached", "--live-toram",
                     *ALL_TAIL]
 
@@ -255,7 +263,7 @@ def test_unaffiliated_role_constant_matches_catalog():
 def test_x86_client_roles_golden(role):
     args = ImageConfig(mode="cloud", role=role, platform="x86",
                        tailscale=True, sso=True).to_cli_args()
-    assert args == ["--role", role, "--env", "test", "--local-user", "magus",
+    assert args == ["--role", role, "--env", "test", "--local-user", DEFAULT_LOCAL_USER,
                     "--with-tailscale", "--with-sso", "--person-role", "user", *X86_TAIL, *ALL_TAIL]
 
 
@@ -288,7 +296,7 @@ def test_x86_chromebook_standalone_golden():
     builder accepts --role chromebook with --no-tailscale/--no-sso (verified against
     build-x86-host-stage4.sh --print-plan in the build-matrix GUI channel)."""
     args = ImageConfig(mode="standalone", role="chromebook", platform="x86").to_cli_args()
-    assert args == ["--role", "chromebook", "--env", "test", "--local-user", "magus",
+    assert args == ["--role", "chromebook", "--env", "test", "--local-user", DEFAULT_LOCAL_USER,
                     "--no-tailscale", "--no-sso", *X86_TAIL, *ALL_TAIL]
 
 
@@ -381,7 +389,7 @@ def test_x86_mesh_roles_golden(role):
                        tailscale=True, sso=True).to_cli_args()
     # WS-SUPER-B: every mesh image records its orchestration plane (derived
     # <brand>.internal). --superdomain rides the cluster/mesh identity block.
-    assert args == ["--role", role, "--env", "test", "--local-user", "magus",
+    assert args == ["--role", role, "--env", "test", "--local-user", DEFAULT_LOCAL_USER,
                     "--with-tailscale", "--with-sso",
                     "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
     assert "--person-role" not in args
@@ -2000,7 +2008,7 @@ def test_enter_mesh_defaults_adds_exactly_encrypt_root_to_the_mesh_x86_golden():
     # *ALL_TAIL as well as *X86_TAIL: ask 13 added --compress/--resume to every image's
     # argv after this baseline was first written, so pinning only X86_TAIL made the
     # "baseline itself drifted" guard fire on a correct tree.
-    old_golden = ["--role", "omnibus", "--env", "test", "--local-user", "magus",
+    old_golden = ["--role", "omnibus", "--env", "test", "--local-user", DEFAULT_LOCAL_USER,
                   "--with-tailscale", "--with-sso",
                   "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
     plain = ImageConfig(mode="mesh", role="omnibus", platform="x86")
@@ -2017,7 +2025,7 @@ def test_enter_mesh_defaults_adds_exactly_encrypt_root_to_the_mesh_x86_golden():
     # Built from X86_TAIL/ALL_TAIL rather than a literal: ask 13 moved that tail
     # (--uncached -> --cached, and --compress/--resume arrived), which is exactly the
     # kind of drift a hand-written golden absorbs silently.
-    expected = ["--role", "omnibus", "--env", "test", "--local-user", "magus",
+    expected = ["--role", "omnibus", "--env", "test", "--local-user", DEFAULT_LOCAL_USER,
                 "--with-tailscale", "--with-sso",
                 "--superdomain", "hugmesh.internal", *X86_TAIL, *ALL_TAIL]
     expected.insert(expected.index("--snort") + 1, "--encrypt-root")
