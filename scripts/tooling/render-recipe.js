@@ -69,6 +69,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const Handlebars = require('handlebars');
 const engine = require('./render-handlebars'); // buildContext + assertTemplateSafe
+const classifier = require('./token-classifier'); // isRenameContractFile (tokens.json)
 
 function die(msg) {
   process.stderr.write(`[render-recipe] FATAL: ${msg}\n`);
@@ -132,6 +133,25 @@ const RENAME_CONTRACT_DENYLIST = new Set([
   '.snapdragon-mesh-admitted',
 ]);
 
+// DECLARED contracts, from any scripts/tooling/tokens.json block carrying a
+// `rename_denylist` array — currently the theme delivery chain. Declared there
+// rather than pinned here because its OTHER half (the SNAP_THEME_CSS /
+// SNAP_THEME_OUT / SNAP_WEB_LOCALES env keys and the --hug-*/--sd-* custom
+// properties)
+// is enforced on the TOKEN side by render-handlebars.assertTemplateSafe(), and
+// one contract split across two hardcoded lists is a contract that drifts.
+//
+// Kept a SEPARATE lookup from the Set literal above on purpose:
+// scripts/validate-catalog-discovery.sh STATICALLY PARSES that literal (a regex
+// over this file's source) to prove every catalog-ACCEPTED descriptor spelling
+// is rename-protected. Spreading the declared names into the literal would feed
+// that parser names no generator will ever accept, and — worse — a spread the
+// regex cannot evaluate would make the gate's view of the Set silently disagree
+// with the engine's. Two lookups, one refusal.
+function isRenameContractName(base) {
+  return RENAME_CONTRACT_DENYLIST.has(base) || classifier.isRenameContractFile(base);
+}
+
 // Shape-validate ONE side of a rename (already Handlebars-rendered). Returns the
 // resolved absolute path; die()s on any fail-closed violation. `side` labels the
 // error ("from"/"to"); `id` is the rename's human label.
@@ -150,8 +170,8 @@ function resolveRenameSide(targetDir, rel, side, id) {
   if (rel.split(/[\\/]/).includes('..')) {
     die(`rename '${id}': ${side} '${rel}' contains a '..' segment — refusing (tree-escape guard)`);
   }
-  if (RENAME_CONTRACT_DENYLIST.has(path.basename(rel))) {
-    die(`rename '${id}': ${side} '${rel}' names a CONTRACT file (${path.basename(rel)}) — the 13d discovery filter / provenance manifest / publish admission stamps hardcode it; refusing (fail-closed)`);
+  if (isRenameContractName(path.basename(rel))) {
+    die(`rename '${id}': ${side} '${rel}' names a CONTRACT file (${path.basename(rel)}) — the 13d discovery filter / provenance manifest / publish admission stamps / theme delivery chain hardcode it; refusing (fail-closed)`);
   }
   const abs = path.resolve(targetDir, rel);
   if (abs === targetDir || !abs.startsWith(targetDir + path.sep)) {

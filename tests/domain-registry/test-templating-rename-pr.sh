@@ -13,7 +13,8 @@
 # Sections:
 #   [A] renames[] unit tests — happy path, edits-before-renames ordering, and
 #       EVERY refusal class: required-missing, absolute (both sides), '..'
-#       (both sides), contract denylist (the 3 pinned names, both sides),
+#       (both sides), contract denylist (the pinned descriptor/provenance/stamp
+#       names AND the theme delivery chain, both sides),
 #       destination-clobber, directory rename, symlinked-parent tree escape,
 #       denylisted/unknown token in a rename path.
 #   [B] generator archetype over the fixture base — anchors land (README brand,
@@ -163,6 +164,91 @@ run_recipe A9d 'edits: []
 renames:
   - { from: snapdragon-deploy.yaml, to: "docs/d.yaml" }' "$T"
 [ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9d.err" && ok "A9d contract denylist FROM=snapdragon-deploy.yaml refused" || bad "A9d legacy deploy-descriptor rename-away accepted"
+
+# THE THEME CONTRACT (scripts/tooling/tokens.json `theme_contract_constants`).
+# Unlike the deploy descriptor, a moved theme link fails SILENTLY: the emitted repo
+# still builds, the container still boots, nginx still serves 200 — the page is just
+# unthemed, because the SNAP_THEME_CSS env var -> 50-snap-theme.sh hook ->
+# snap-theme.css file -> index.html <link href> -> --sd-* custom property chain is
+# joined by NAME ALONE across five processes in different repos. Nothing else in the
+# tree would notice, so these four cases are the entire behavioural guard. A9e/A9f
+# cover the file half on BOTH sides (A9f also proves the BASENAME match survives a
+# subdirectory, the laundering shape A12 pins for the stamps); A9g/A9h cover the
+# identifier half through the SAME classifier gate the anchors ride.
+run_recipe A9e 'edits: []
+renames:
+  - { from: docs/BRANDING.md, to: "snap-theme.css" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9e.err" && ok "A9e theme contract TO=snap-theme.css refused" || bad "A9e theme css rename accepted"
+
+run_recipe A9f 'edits: []
+renames:
+  - { from: docs/BRANDING.md, to: "sub/50-snap-theme.sh" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9f.err" && ok "A9f theme contract TO=sub/50-snap-theme.sh refused (basename match)" || bad "A9f theme entrypoint-hook rename accepted"
+
+# The persistence end of the chain. The Makefile finds this by a `wildcard` on the
+# EXACT path (STACK_THEME_FILE), so a rename does not error — the wildcard simply
+# misses, STACK_THEME_ENV expands empty, and every later `make stack-up` quietly
+# serves the shipped brand instead of the operator's theme.
+run_recipe A9i 'edits: []
+renames:
+  - { from: docs/BRANDING.md, to: ".theme.css" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9i.err" && ok "A9i theme contract TO=.theme.css refused (Makefile STACK_THEME_FILE wildcard)" || bad "A9i theme persistence file rename accepted"
+
+# FROM side: renaming the contract AWAY breaks the same handshake as renaming
+# something onto it, and the refusal must leave the source where it was.
+# Its own tree (a real snap-theme.css to move), in a SEPARATE variable: $T is the
+# shared A5 tree that cases A6-A12b all reuse, and clobbering it here would
+# silently retarget every later case.
+TJ="${WORK}/A9j"; mktree "$TJ"; printf '/* theme */\n' > "${TJ}/snap-theme.css"
+run_recipe A9j 'edits: []
+renames:
+  - { from: snap-theme.css, to: "docs/theme.css" }' "$TJ"
+if [ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9j.err" && [ -f "${TJ}/snap-theme.css" ]; then
+  ok "A9j theme contract FROM=snap-theme.css refused (source intact)"
+else bad "A9j theme stylesheet rename-away accepted"; fi
+
+# The env/ARG key the css text travels under. Already fail-closed as an UNKNOWN
+# token before it was registered, so assert the CONTRACT wording — that is the only
+# thing that distinguishes "pinned on purpose" from "nobody has allowlisted it yet".
+run_recipe A9g 'edits:
+  - file: docs/BRANDING.md
+    anchors:
+      - { id: env, find: "{{SNAP_THEME_CSS}}", replace: "x" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9g.err" && ok "A9g theme contract identifier {{SNAP_THEME_CSS}} refused" || bad "A9g theme env key templated"
+
+# The custom-property half is NOT a Handlebars identifier (leading dashes), so
+# TOKEN_RE never captured it and the identifier loop's fail-closed allowlist check
+# was unreachable: this recipe used to exit 0 and render `var()`, silently DELETING
+# the property it named. Only the raw-mustache scan catches it.
+#
+# BOTH prefixes get a case, and A9k is the one that matters most. --hug-* is the
+# LIVE palette (measured 2026-08-20: 3119 reads across the built fleet remotes vs 9
+# for --sd-*); --sd-* is the retired spelling the angular archetypes scaffolded onto
+# until PR #104. A guard registered against only the dying prefix would pass its own
+# test while leaving the contract that is actually load-bearing wide open, so the
+# case for the live one is not redundant with the case for the legacy one.
+run_recipe A9h 'edits:
+  - file: docs/BRANDING.md
+    anchors:
+      - { id: sd, find: "OLDLINE", replace: "var({{--sd-accent}})" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9h.err" && ok "A9h theme contract raw body {{--sd-accent}} refused (retired prefix)" || bad "A9h --sd-* custom property templated"
+
+run_recipe A9k 'edits:
+  - file: docs/BRANDING.md
+    anchors:
+      - { id: hug, find: "OLDLINE", replace: "var({{--hug-accent}})" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9k.err" && ok "A9k theme contract raw body {{--hug-accent}} refused (LIVE prefix)" || bad "A9k --hug-* custom property templated"
+
+# Not a blanket refusal of leading-dash mustaches: an unrelated one must still fall
+# through to the ordinary fail-closed path, so A9h/A9k prove the PREFIX matched and
+# not merely that render-recipe.js dislikes dashes.
+run_recipe A9l 'edits:
+  - file: docs/BRANDING.md
+    anchors:
+      - { id: other, find: "OLDLINE", replace: "var({{--mui-accent}})" }' "$T"
+if [ $RC -eq 0 ] && ! grep -q "CONTRACT" "${WORK}/recipe-A9l.err"; then
+  ok "A9l control: an unrelated --mui-* custom property is NOT theme-contract refused"
+else bad "A9l theme-contract guard over-fires on unrelated --* properties (rc=$RC)"; fi
 
 run_recipe A10 'edits: []
 renames:
