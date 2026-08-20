@@ -226,13 +226,70 @@ def test_role_uboot_clears_on_platform_switch(wiz):
     assert not any(a.startswith("--uboot") for a in wiz.cfg.to_cli_args())
 
 
-# NOTE: the jetson --kernel-flavor RolePage tests were REMOVED with the redesign. The
-# jetson roles (full/gpu-host/jetson-desktop/edge_ai) are mesh-only, and mesh now SKIPS
-# RolePage (MODE_SKIPPED_PAGES) in favour of the WorklistPage role x platform multi-select
-# — so the old pick_mode("mesh") -> RolePage -> jetson path no longer exists in the GUI.
-# The jetson-mesh materialize behaviour (encrypt_root exemption, per-image axes) is covered
-# by WS-MODEL's test_worklist.py materialize() unit tests (design 6). The kernel_flavor combo
-# stays on RolePage for any non-mesh jetson support and is exercised via test_wizard.py.
+# ---- RolePage: jetson --kernel-flavor (G36) after the worklist redesign ----------
+#
+# 7b8f6118 ("mesh worklist wizard redesign", #312) deleted test_role_jetson_kernel_flavor
+# and test_role_kernel_flavor_clears_off_jetson and left a note here whose closing
+# sentence read, verbatim:
+#
+#     "The kernel_flavor combo stays on RolePage for any non-mesh jetson support and is
+#      exercised via test_wizard.py."
+#
+# BOTH halves of that sentence are false on this tree, and a wrong justification is worse
+# than none — it is what stops the next reader looking. What is actually true:
+#
+#   * There is no non-mesh jetson support for the combo to be kept for. ROLE_CHOICES lists
+#     edge_ai/full/gpu-host/jetson-desktop under "mesh" ONLY, so
+#     device_catalog.roles_for(<orin device>, "standalone"|"cloud") == () and RolePage
+#     renders the four Orin rows with no ItemIsSelectable flag — pinned by
+#     test_pages_role.py::test_pickable_devices_span_the_mode_platform_union. mesh in turn
+#     never VISITS RolePage (MODE_SKIPPED_PAGES["mesh"] == ("role", "hardware")) — pinned
+#     by test_wizard.py::test_cloud_and_mesh_flows_keep_their_admin_pages. So validatePage's
+#     `elif c.platform == "jetson"` arm, the ONLY writer of that combo into
+#     cfg.kernel_flavor, is unreachable in every mode today; that is why the SET half of
+#     the removed pair is not restored below.
+#   * test_wizard.py does not contain the string "kernel_flavor" and never did — it never
+#     exercised it. The argv half of G36 IS covered, by
+#     test_cli_args.py::test_g36_jetson_kernel_flavor (jetson emits --kernel-flavor, rpi5
+#     never does), not by test_wizard.py.
+#
+# The note's other claims hold: the jetson roles are mesh-only, mesh skips RolePage for the
+# WorklistPage role x platform multi-select, and the jetson-mesh materialize behaviour is
+# covered by test_worklist.py::test_materialize_jetson_encrypt_root_forced_off.
+#
+# What it hid is that the SECOND removed test pinned something still live and reachable:
+# the per-platform default-clear (`c.kernel_flavor = ""`) every RolePage commit runs before
+# the platform branch. Nothing guarded it between #312 and the test below — deleting that
+# line from RolePage.validatePage moved no result across the config/GUI files this wizard
+# is tested through (test_pages_build / test_pages_role / test_wizard / test_cli_args /
+# test_worklist / test_field_scope / test_scope_violations / test_cli_parity /
+# test_tui_gui_parity / test_pages_fleet: 1975 passed, and only the failures the unmutated
+# checkout already produced).
+
+
+@pytest.mark.parametrize("mode,role,platform", [
+    ("standalone", "standalone-thick", "x86"),
+    ("standalone", "generic", "rpi5"),
+    ("cloud", "frite", "frite"),
+])
+def test_role_kernel_flavor_cannot_linger_off_jetson(wiz, mode, role, platform):
+    """G36, the half that is still live: a kernel_flavor carried in the config — a saved
+    jetson config reopened, or a Back-navigation restore — must not survive a RolePage
+    commit onto a non-jetson platform. Same lingering-value rule as
+    test_role_uboot_clears_on_platform_switch above, and RolePage is the only thing that
+    enforces it: ModePage clears no such field, and to_cli_args() can only hide a stale
+    value (--kernel-flavor lives in _jetson_args), never remove it from the config that
+    gets saved, re-emitted and round-tripped."""
+    wiz.cfg.kernel_flavor = "l4t"          # e.g. loaded from a saved jetson config
+    pick_mode(wiz, mode)
+    page = pick_role(wiz, role)
+    assert page.kernel_flavor.currentData() == "l4t"   # restored onto the combo...
+    assert not page.jetson_box.isVisible()             # ...which is never shown here
+    advance_to(wiz, wizard_mod.HardwarePage)
+    assert wiz.cfg.platform == platform
+    assert wiz.cfg.kernel_flavor == "", \
+        f"a stale kernel_flavor survived a RolePage commit onto {platform}"
+    assert "--kernel-flavor" not in wiz.cfg.to_cli_args()
 
 
 # ---- HardwarePage: --nvidia-cuda (G33), ARM overrides (G37), preset label (G41) --
