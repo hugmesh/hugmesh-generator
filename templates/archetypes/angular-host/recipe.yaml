@@ -42,6 +42,6 @@ edits:
     optional: false
     anchors:
       - id: ci-include-org
-        find: "Snapdragon-Systems/snapdragon-generator"
+        find: "hugmesh/hugmesh-generator"
         replace: "{{GENERATOR_ORG_GROUP}}"
         required: true

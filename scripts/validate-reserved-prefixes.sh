@@ -301,17 +301,20 @@ SERVICE_ALLOW_EXACT = {
     # casdoor's /api/signup + /api/login (manifests/signup-gate). Reached only via
     # those specific paths, never a public username first-label of its own.
     "signup-gate",
-    # NOTE: the host-shell web Service used to need an EXACT entry here — it kept its
-    # pre-rebrand name `snapdragon-systems-web` because it is the compose DNS name the
-    # fe-gateway routes target, so renaming it needed both sides moved together. Both
-    # sides live in THIS repo (tests/stack/compose.local.yaml and
+    # NOTE: the host-shell web Service used to need an EXACT entry here — it kept a
+    # pre-rebrand name because it is the compose DNS name the fe-gateway routes
+    # target, so renaming it needed both sides moved together. Both sides live in
+    # THIS repo (tests/stack/compose.local.yaml and
     # tests/stack/gateway-routes/fe/application-routes.yml), so it was renamed to
     # `hugmesh-host-shell` — matching its build context and repo — and is now covered
     # by the `^hugmesh-.*$` family pattern below, exactly as the character-forge pair
     # was. (Its PUBLIC surface is unchanged: the frontend-host /** catch-all.)
+    # NOT YET the specs/cluster side: the k8s Service/Deployment/Application there is
+    # still `hugmesh-systems-web`, a half-renamed hybrid. Moving it means moving an
+    # ArgoCD Application NAME as well as a Service DNS name, so it needs its own PR.
     # NOTE: the two character-forge Services used to need EXACT entries here
-    # (they were created pre-rebrand as snapdragon-character-forge-{bff-api,ui}).
-    # The Snapdragon->HugMesh rebrand renamed them to
+    # (they were created under the pre-rebrand brand prefix).
+    # The HugMesh rebrand renamed them to
     # hugmesh-character-forge-{bff-api,ui}, so they are now covered by the
     # `^hugmesh-.*$` family pattern below and the exact entries were removed.
     # (Their PUBLIC surface — the reserved `/character-forge/**` +

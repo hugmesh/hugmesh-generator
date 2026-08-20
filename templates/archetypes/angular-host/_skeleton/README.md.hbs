@@ -17,7 +17,7 @@ tree, port 4201 — where the static floor points) and the menu entry mounts it.
 
 | Piece | File | Shape |
 |---|---|---|
-| Federation | `federation.config.js` + `federation-base.js` | `snapdragonHost({ name: '{{HOST_NAME}}' })` — consumer only, no `exposes`; ONE shared-deps surface (singleton, strictVersion) |
+| Federation | `federation.config.js` + `federation-base.js` | `hugmeshHost({ name: '{{HOST_NAME}}' })` — consumer only, no `exposes`; ONE shared-deps surface (singleton, strictVersion) |
 | Static floor | `src/assets/federation.manifest.json` | `{ "{{APP_SLUG}}": dev remoteEntry URL }` — the build-time remote FLOOR |
 | Bootstrap | `src/main.ts` + `src/app/federation/federation-bootstrap.ts` | DYNAMIC `/api/federation/manifest` UNION over the static floor; static-URL fallback so the shell always boots (exemplar pattern, carried whole) |
 | Routes | `src/app/app.routes.ts` | the `REMOTE_ROUTES` spec table -> `loadRemoteModule` lazy loaders; one row wired to the example remote (`./routes` -> `ROUTES`) |

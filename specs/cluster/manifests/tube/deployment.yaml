@@ -42,7 +42,7 @@ spec:
             - { name: SPRING_R2DBC_URL,
                 value: "r2dbc:postgresql://hugmesh-tube-db.hugmesh-tube.svc.cluster.local:5432/tube_bff" }
             # Liquibase's JDBC handle, used once at startup. Its packaged default is
-            # tube-bff-db in the DELETED snapdragon-backend namespace; only the R2DBC
+            # tube-bff-db in the DELETED hugmesh-backend namespace; only the R2DBC
             # half had ever been overridden here.
             - { name: SPRING_LIQUIBASE_URL,
                 value: "jdbc:postgresql://hugmesh-tube-db.hugmesh-tube.svc.cluster.local:5432/tube_bff" }

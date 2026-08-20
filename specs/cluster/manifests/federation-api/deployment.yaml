@@ -169,7 +169,7 @@ spec:
             - name: MANIFEST_CACHE_CASSANDRA
               value: "cassandra.hugmesh-pki.svc.cluster.local:9042"
             - name: MANIFEST_CACHE_KEYSPACE
-              value: "snapdragon_federation"
+              value: "hugmesh_federation"
             # datacenter1, not dc1. apps/00-cassandra.yaml runs the chart-default
             # SimpleSnitch, which ignores cassandra-rackdc.properties and always
             # advertises datacenter1 — so the chart's `datacenter` value never
@@ -182,7 +182,7 @@ spec:
             # PasswordAuthenticator by image default. Wired now (inert while
             # MANIFEST_CACHE_ENABLED is false, since no session is ever built) so
             # enabling the cache is ONE flag rather than a rediscovery of this
-            # whole class. federation_cass is DML-only on snapdragon_federation;
+            # whole class. federation_cass is DML-only on hugmesh_federation;
             # its federation_manifest table is created by the cassandra-init
             # bootstrap, because federation-api has no schema runner of its own.
             - { name: MANIFEST_CACHE_CASSANDRA_AUTH_ENABLED, value: "true" }

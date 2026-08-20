@@ -4,7 +4,7 @@
 # ============================================================================
 #
 #  >>> BUILD-HOST ONLY (invoked by scripts/publish-tenant-set.sh). Emits a       <<<
-#  >>> `.snapdragon-provenance.json` + detached `.snapdragon-provenance.json.sig`<<<
+#  >>> `.hugmesh-provenance.json` + detached `.hugmesh-provenance.json.sig`<<<
 #  >>> at the root of each rendered tenant repo, capturing WHAT was rendered     <<<
 #  >>> (base commit, archetype recipe, generator identity) so the pushed tree    <<<
 #  >>> is attributable. Signature = Ed25519 (same family as the baked            <<<
@@ -41,8 +41,16 @@
 # The MANIFEST NAME is fixed so the appset/consumers can find it deterministically.
 set -euo pipefail
 
-MANIFEST=".snapdragon-provenance.json"
-SIG=".snapdragon-provenance.json.sig"
+MANIFEST=".hugmesh-provenance.json"
+SIG=".hugmesh-provenance.json.sig"
+# ── LEGACY_COMPAT — the pre-rebrand envelope names ──────────────────────────
+# `write`/`sign` emit the NEW names only. `verify` must still READ the old ones:
+# trees signed before the HugMesh rebrand are already on other meshes' disks and
+# their detached signature covers those exact bytes, so renaming is not something
+# this side can do for them. Dropping the fallback makes every pre-rebrand base
+# read as unsigned. Retire only when no fleet mesh can still ship one.
+MANIFEST_LEGACY_COMPAT=".snapdragon-provenance.json"
+SIG_LEGACY_COMPAT=".snapdragon-provenance.json.sig"
 
 _die() { echo "[provenance] FATAL: $*" >&2; exit 1; }
 _log() { echo "[provenance] $*" >&2; }
@@ -182,14 +190,24 @@ case "$cmd" in
     ;;
 
   verify)
-    [[ -f "${REPO_DIR}/${MANIFEST}" ]] || _die "no manifest at ${REPO_DIR}/${MANIFEST}"
-    [[ -f "${REPO_DIR}/${SIG}" ]] || _die "no signature at ${REPO_DIR}/${SIG}"
+    # LEGACY_COMPAT dual-read: NEW envelope first, pre-rebrand envelope as the
+    # fallback. Resolved as a PAIR — a tree mixing a new manifest with a legacy
+    # .sig (or the reverse) is a mismatched envelope and must fail, not be
+    # half-verified against the wrong file.
+    V_MANIFEST="" V_SIG=""
+    if [[ -f "${REPO_DIR}/${MANIFEST}" ]]; then
+      V_MANIFEST="${REPO_DIR}/${MANIFEST}"; V_SIG="${REPO_DIR}/${SIG}"
+    elif [[ -f "${REPO_DIR}/${MANIFEST_LEGACY_COMPAT}" ]]; then
+      V_MANIFEST="${REPO_DIR}/${MANIFEST_LEGACY_COMPAT}"; V_SIG="${REPO_DIR}/${SIG_LEGACY_COMPAT}"
+    fi
+    [[ -n "$V_MANIFEST" ]] || _die "no manifest at ${REPO_DIR}/${MANIFEST}"
+    [[ -f "$V_SIG" ]] || _die "no signature at ${V_SIG}"
     [[ -n "$PUB" && -f "$PUB" ]] || _die "verify needs --pub ED25519_PUB.pem"
     if openssl pkeyutl -verify -pubin -inkey "$PUB" -rawin \
-        -in "${REPO_DIR}/${MANIFEST}" -sigfile "${REPO_DIR}/${SIG}" >/dev/null 2>&1; then
-      _log "OK: signature verifies for ${REPO_DIR}/${MANIFEST}"
+        -in "$V_MANIFEST" -sigfile "$V_SIG" >/dev/null 2>&1; then
+      _log "OK: signature verifies for ${V_MANIFEST}"
     else
-      _die "signature verification FAILED for ${REPO_DIR}/${MANIFEST}"
+      _die "signature verification FAILED for ${V_MANIFEST}"
     fi
     ;;
 

@@ -117,23 +117,23 @@ spec:
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION logins resolve against. casdoor-init +
             # init_data.json create org `hugmesh`; this app's application.yml still
-            # defaults to the pre-rebrand `snapdragon`, so an unset value makes every
-            # native login fail with "The user: snapdragon/<name> doesn't exist"
+            # defaults to the pre-rebrand org slug, so an unset value makes every
+            # native login fail with "The user: hugmesh/<name> doesn't exist"
             # (kind 2026-08-05, docs/KIND-SSO-E2E-FINDINGS.md #11 — same defect
             # compose.local.yaml documents and overrides for all three BFFs).
             # tests/scripts/test-service-env-contract.sh fails the build if this ever
             # stops matching what casdoor-init registers.
             - { name: CASDOOR_ORG, value: "hugmesh" }
             # casdoor.gateway-base — the pki-tier gateway this BFF reaches Casdoor
-            # through. App default is the pre-rebrand snapdragon-pki-gateway.
-            # snapdragon-pki host (NXDOMAIN); the deployed Service is
+            # through. App default is the pre-rebrand pki-gateway host.
+            # hugmesh-pki host (NXDOMAIN); the deployed Service is
             # hugmesh-pki-gateway in hugmesh-pki, plain HTTP on 8080.
             - { name: PKI_GATEWAY_BASE, value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
             # WebClient to the federation-api module-federation registry (the
             # mod BFF drives moderation_requests there, forwarding the caller JWT).
             # NAME IS LOAD-BEARING: the client reads federation-api.base-url, i.e.
             # env FEDERATION_API_BASE_URL. The old FEDERATION_API_URL here bound
-            # NOTHING, so this BFF silently used its packaged snapdragon-backend
+            # NOTHING, so this BFF silently used its packaged hugmesh-backend
             # default and every /bff/mod/** federation call resolved to NXDOMAIN —
             # the same env-name misnomer compose called out and fixed in #314.
             # https:// because federation-api serves TLS with client-auth=need (the
@@ -144,7 +144,7 @@ spec:
             # admin-bff base for BOTH the native-login session bridge
             # (BffCookieAuthenticationWebFilter → GET /bff/internal/session/introspect)
             # AND the ban / domain-lock desired-state writes. The app default is the
-            # pre-rebrand snapdragon-admin-bff-api.snapdragon-backend host (finding
+            # pre-rebrand admin-bff host (finding
             # #14): unset, every /bff/mod/** request carrying a native-login bff_
             # cookie fails CLOSED and no mod write ever reaches admin-bff. compose
             # sets ADMIN_BFF_BASE_URL for exactly this; the cluster never did.
@@ -154,7 +154,7 @@ spec:
             # external.matrix / external.mastodon base-urls — the moderation surfaces'
             # read side (timeline/room fetches behind /bff/mod/**). Same finding-#14
             # class as ADMIN_BFF_BASE_URL above: the packaged defaults name
-            # tuwunel/akkoma in the DELETED snapdragon-backend namespace, so the hosts
+            # tuwunel/akkoma in the DELETED hugmesh-backend namespace, so the hosts
             # exist and the namespace does not. The deployed pair is
             # tuwunel:8008 / akkoma:4000 in hugmesh-backend — the SAME two Services
             # admin-bff's broker is pointed at (SYNAPSE_URL / MASTODON_URL there), and

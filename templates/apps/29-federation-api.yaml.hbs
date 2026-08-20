@@ -14,7 +14,7 @@ spec:
     kustomize:
       namespace: {{BRAND}}-backend
       images:
-        - name: snapdragon-systems/federation-api
+        - name: hugmesh/federation-api
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-federation-api
           newTag: main
   destination:

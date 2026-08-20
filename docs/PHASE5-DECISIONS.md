@@ -14,7 +14,7 @@ out-of-band and never committed.
 - `specs/cluster/manifests/harbor/harbor-provision-job.yaml.hbs` — the
   **per-tenant Harbor** provisioning template ({{HARBOR_PROJECT}} / {{BRAND}}).
 - `scripts/provenance.sh` — **signed provenance** manifest writer/signer/verifier
-  (Ed25519); the publish tail emits `.snapdragon-provenance.json` (+ `.sig`) per tree.
+  (Ed25519); the publish tail emits `.hugmesh-provenance.json` (+ `.sig`) per tree.
 - `specs/usr/sbin/hugmesh-domain-reconcile` — the **writeback** (`ack_generation`)
   is now wired into `main()` (enablement-gated behind `DOMAIN_ACK_URL`).
 

@@ -3,9 +3,10 @@
 # scripts/validate-catalog-discovery.sh.
 #
 # WHY THIS EXISTS. The defect the gate exists to catch was SILENT: the catalog
-# ApplicationSets filtered `pathsExist: ["snapdragon-deploy.yaml", "deploy"]` while
-# 3 of the 9 adopting repos had renamed that file to `hugmesh-deploy.yaml` during
-# the HugMesh rebrand. An scmProvider filter that matches no repo is not an error —
+# ApplicationSets filtered on ONE descriptor filename while the HugMesh rebrand was
+# renaming that file to `hugmesh-deploy.yaml` repo by repo, leaving the pre-rebrand
+# `snapdragon-deploy.yaml` live in the ones that had not moved yet. An scmProvider
+# filter that matches no repo is not an error —
 # the ApplicationSet simply generates nothing. No event, no degraded Application,
 # no log line, and the three repos' own descriptors kept asserting they were
 # "discovered by the catalog ApplicationSet". A gate against that failure mode is
@@ -16,9 +17,10 @@
 # MUST NOT PRODUCE A GREEN RUN.
 #
 #   (a) tree as shipped              -> exit 0, clean `RESULT: PASS`
-#   (b) drop the hugmesh- filter     -> exit 1, [adopter-visibility] naming
-#       (the exact pre-fix state)       be-gateway / mod-bff-api / remote-fragment
-#   (c) drop the snapdragon- filter  -> exit 1, naming the six legacy adopters
+#   (b) drop the hugmesh- filter     -> exit 1, [adopter-visibility] naming every
+#       (the exact pre-fix state)       adopter that has completed the rename
+#   (c) drop the LEGACY_COMPAT filter-> exit 1, naming every adopter still on the
+#                                       pre-rebrand descriptor name
 #   (d) only ONE generator fixed     -> exit 1, [appset-lockstep] (a tenant catalog
 #                                       that accepts fewer names re-creates the bug
 #                                       once per tenant)
@@ -126,7 +128,7 @@ def write(repo, desc, with_deploy=True):
     os.makedirs(root, exist_ok=True)
     with open(os.path.join(root, desc), "w", encoding="utf-8") as fh:
         fh.write("# synthetic deploy descriptor for the catalog-discovery gate test\n"
-                 "name: %s\nnamespace: hugmesh-backend\nimage: hugmesh-systems/%s\n"
+                 "name: %s\nnamespace: hugmesh-backend\nimage: hugmesh/%s\n"
                  "port: 8080\nreplicas: 1\n" % (repo, repo))
     if with_deploy:
         os.makedirs(os.path.join(root, "deploy"), exist_ok=True)
@@ -144,8 +146,23 @@ for a in spec.get("adopters") or []:
         desc = OTHER.get(desc, desc)
     write(repo, desc, with_deploy=(repo != nodeploy))
 if extra:
-    write(extra, "snapdragon-deploy.yaml")
+    write(extra, "hugmesh-deploy.yaml")
 PY
+}
+
+# registry_repos_with <tree> <descriptor> -> the repos adopters.yaml says ship it.
+# DERIVED, never hard-coded: the adoption state moves repo by repo as each rebrand
+# lands, and a hard-coded list turns these negative controls vacuous the moment it
+# drifts (they would still "pass" while asserting about repos nobody registers).
+registry_repos_with() {
+  python3 - "$1/specs/cluster/catalog/adopters.yaml" "$2" <<'PYREG'
+import sys, yaml
+reg, want = sys.argv[1], sys.argv[2]
+spec = (yaml.safe_load(open(reg, encoding="utf-8")) or {}).get("spec") or {}
+for a in spec.get("adopters") or []:
+    if str(a.get("descriptor")) == want:
+        print(a["repo"])
+PYREG
 }
 
 # run_gate <tree> <sibling-dir> [env assignments…] -> RC in $RC, output in ${W}/out
@@ -202,9 +219,12 @@ grep -qF "[FAIL] [" "${W}/out" \
   || ok "clean run emits no '[FAIL] [' line at all — the anchor discriminates"
 
 # ── (b) NEGATIVE CONTROL: the exact pre-fix state ────────────────────────────
-# Point the generators at the legacy filename only — what main shipped — and the
-# three rebranded repos must be named as invisible. Without this case, (a) proves
-# nothing: a visibility check that always passes is green too.
+# Point the generators at the LEGACY filename only — what main shipped — and every
+# adopter that has completed the rename must be named as invisible. Without this
+# case, (a) proves nothing: a visibility check that always passes is green too.
+# The repo set and both counts are DERIVED from adopters.yaml, never hard-coded, so
+# this case tracks the adoption state instead of going stale — and silently
+# vacuous — the next time a repo renames its descriptor.
 echo "-- (b) negative control: drop the hugmesh-deploy.yaml filter (the shipped bug) --"
 T="$(stage nohug)"
 drop_filter "${T}" specs/cluster/apps/13-service-catalog.yaml hugmesh-deploy.yaml \
@@ -223,21 +243,25 @@ grep -qF "[FAIL] [adopter-visibility]" "${W}/out" \
 # the repo name matches stage 5's "[OK] [reality] <repo> …" line for the very same
 # repo, so it passed even with the visibility check disabled.
 miss=""
-for r in hugmesh-be-gateway hugmesh-mod-bff-api hugmesh-remote-fragment; do
+NEWNAMED="$(registry_repos_with "${REPO}" hugmesh-deploy.yaml)"
+NEWCOUNT="$(printf '%s\n' ${NEWNAMED} | grep -c .)"
+for r in ${NEWNAMED}; do
   grep -qF -- "- ${r} ships hugmesh-deploy.yaml; generators accept" "${W}/out" \
     || miss="${miss} ${r}"
 done
-[ -z "${miss}" ] \
-  && ok "the FAIL names every invisible repo (be-gateway, mod-bff-api, remote-fragment)" \
-  || bad "the FAIL does not name:${miss} — an operator cannot act on an unnamed repo"
-grep -q "3 adopting repo(s) are INVISIBLE" "${W}/out" \
-  && ok "the FAIL counts exactly the 3 invisible repos" \
-  || bad "the FAIL does not count the invisible repos correctly"
+{ [ -z "${miss}" ] && [ "${NEWCOUNT}" -gt 0 ]; } \
+  && ok "the FAIL names every invisible repo (${NEWCOUNT} on the rebranded descriptor)" \
+  || bad "the FAIL does not name:${miss} (count=${NEWCOUNT}) — an operator cannot act on an unnamed repo"
+grep -q "${NEWCOUNT} adopting repo(s) are INVISIBLE" "${W}/out" \
+  && ok "the FAIL counts exactly the ${NEWCOUNT} invisible repos" \
+  || bad "the FAIL does not count the invisible repos correctly: $(grep INVISIBLE "${W}/out")"
 
 # ── (c) NEGATIVE CONTROL: the mirror image — legacy repos must not be dropped ─
-# Proves the fix is a disjunction, not a rename: removing the OLD name breaks the
-# five repos that still carry it.
-echo "-- (c) negative control: drop the snapdragon-deploy.yaml filter --"
+# Proves the LEGACY_COMPAT filter entry is load-bearing, not decoration: removing
+# the pre-rebrand name breaks every adopter still carrying it on disk. This case
+# must keep passing until adopters.yaml registers none — at which point the legacy
+# filter entry, and this case with it, can go.
+echo "-- (c) negative control: drop the LEGACY_COMPAT snapdragon-deploy.yaml filter --"
 T="$(stage nosnap)"
 drop_filter "${T}" specs/cluster/apps/13-service-catalog.yaml snapdragon-deploy.yaml \
   && drop_filter "${T}" templates/apps/13d-brand-repos.yaml.hbs snapdragon-deploy.yaml \
@@ -250,9 +274,10 @@ run_gate "${T}" "${W}/sib-nosnap"
 grep -qF "[FAIL] [adopter-visibility]" "${W}/out" \
   && ok "(c) the FAIL is reported under [adopter-visibility]" \
   || bad "(c) the FAIL is not reported under [adopter-visibility]"
-grep -q "6 adopting repo(s) are INVISIBLE" "${W}/out" \
-  && ok "the FAIL counts exactly the 6 legacy adopters" \
-  || bad "the FAIL does not count the 6 legacy adopters: $(grep INVISIBLE "${W}/out")"
+LEGACYCOUNT="$(registry_repos_with "${REPO}" snapdragon-deploy.yaml | grep -c .)"
+{ grep -q "${LEGACYCOUNT} adopting repo(s) are INVISIBLE" "${W}/out" && [ "${LEGACYCOUNT}" -gt 0 ]; } \
+  && ok "the FAIL counts exactly the ${LEGACYCOUNT} LEGACY_COMPAT adopter(s)" \
+  || bad "the FAIL does not count the legacy adopters (count=${LEGACYCOUNT}): $(grep INVISIBLE "${W}/out")"
 
 # ── (d) only ONE generator fixed: the tenant catalog would still be broken ────
 echo "-- (d) generators out of lockstep (13d left on one name) --"
@@ -282,11 +307,13 @@ import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
 old = ('          - repositoryMatch: "^hugmesh-"\n'
-       '            pathsExist: ["snapdragon-deploy.yaml", "deploy"]\n'
+       '            pathsExist: ["hugmesh-deploy.yaml", "deploy"]\n'
+       '          # LEGACY_COMPAT — pre-rebrand descriptor spelling, still shipped by\n'
+       '          # adopter repos this tree does not own. See catalog/adopters.yaml.\n'
        '          - repositoryMatch: "^hugmesh-"\n'
-       '            pathsExist: ["hugmesh-deploy.yaml", "deploy"]\n')
+       '            pathsExist: ["snapdragon-deploy.yaml", "deploy"]\n')
 new = ('          - repositoryMatch: "^hugmesh-"\n'
-       '            pathsExist: ["snapdragon-deploy.yaml", "hugmesh-deploy.yaml", "deploy"]\n')
+       '            pathsExist: ["hugmesh-deploy.yaml", "snapdragon-deploy.yaml", "deploy"]\n')
 if old not in s:
     sys.exit("injection failed: filter block not found verbatim")
 open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
@@ -309,7 +336,7 @@ run_gate "${T}" "${W}/sib-drift"
   && ok "a drifted registry entry exits 1 (FAIL)" \
   || bad "a drifted registry entry exited ${RC} — the registry could go stale unnoticed"
 grep -qF "[FAIL] [registry-drift] hugmesh-user-bff-api:" "${W}/out" \
-   && grep -qF "actually ships ['hugmesh-deploy.yaml']" "${W}/out" \
+   && grep -qF "actually ships ['snapdragon-deploy.yaml']" "${W}/out" \
   && ok "the FAIL names the drifted repo and both filenames" \
   || bad "the FAIL does not name the drifted repo"
 
@@ -434,7 +461,7 @@ fi
 # ── (m) a registry built from a PARTIAL sweep that claims to be complete ──────
 # The real regression: the first cut of adopters.yaml was swept over the operator's
 # 33 local checkouts while the org had 38 repos, and it silently missed
-# hugmesh-character-forge-bff-api — an adopter with a `snapdragon-deploy.yaml` and a
+# hugmesh-character-forge-bff-api — an adopter with a deploy descriptor and a
 # `deploy/` tree on main, absent from the registry, absent from the CI clone list,
 # and therefore checked by nothing. Every other stage of this gate reads FROM the
 # registry, so an incomplete registry makes the whole gate incomplete without a

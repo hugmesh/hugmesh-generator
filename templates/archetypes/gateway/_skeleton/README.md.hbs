@@ -6,6 +6,6 @@
 > "Never refuses" holds; "bootable" does not.
 
 `render-tenant-set.sh` renders this placeholder only so it never *refuses* when
-the Tier-2 base cannot be pulled. The read-only base (`snapdragon-{{REPO_NAME}}`)
+the Tier-2 base cannot be pulled. The read-only base (`hugmesh-{{REPO_NAME}}`)
 is REQUIRED for a real tree; the archetype then anchor-edits the CI include and
 emits the brand deploy/ overlay (configmap + ingress).

@@ -5,8 +5,8 @@
 # for multi-tenant scoping. Rendered per brand into <BRAND>-gitops/apps/ by
 # generate-brand-repos.sh (sed token path). ArgoCD's ApplicationSet controller
 # scans the tenant's Forgejo org and generates one Application per pushed brand
-# repo that carries a deploy descriptor — `snapdragon-deploy.yaml` OR
-# `hugmesh-deploy.yaml` — plus a `deploy/` dir (the discovery contract
+# repo that carries a deploy descriptor — `hugmesh-deploy.yaml`, or the
+# LEGACY_COMPAT `snapdragon-deploy.yaml` — plus a `deploy/` dir (the discovery contract
 # publish-tenant-set.sh guarantees on every pushed tree).
 #
 # SCOPING DECISION (Phase-5 spec, decision #1 — recorded here + in
@@ -56,12 +56,14 @@ spec:
           # `pathsExist` is itself an AND-list, so "either descriptor name" is not
           # expressible in a single entry; a second entry is the generator's own
           # mechanism. A tree carrying both names still yields ONE Application.
-          # Both names are live in the org after the HugMesh rebrand renamed the
-          # descriptor in some repos and not others; see catalog/adopters.yaml.
-          - repositoryMatch: "^{{BRAND}}-"
-            pathsExist: ["snapdragon-deploy.yaml", "deploy"]
+          # `hugmesh-deploy.yaml` is the name every emitter writes; the legacy
+          # spelling is LEGACY_COMPAT for adopter repos that have not renamed it.
+          # See catalog/adopters.yaml. NEW FIRST.
           - repositoryMatch: "^{{BRAND}}-"
             pathsExist: ["hugmesh-deploy.yaml", "deploy"]
+          # LEGACY_COMPAT — pre-rebrand descriptor spelling.
+          - repositoryMatch: "^{{BRAND}}-"
+            pathsExist: ["snapdragon-deploy.yaml", "deploy"]
   template:
     metadata:
       name: "{{ .repository }}"

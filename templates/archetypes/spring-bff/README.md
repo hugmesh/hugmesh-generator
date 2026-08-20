@@ -1,6 +1,6 @@
 # spring-bff archetype
 
-Renders any Snapdragon **Spring Boot 4 / Java BFF** from ONE recipe, parameterized
+Renders any HugMesh **Spring Boot 4 / Java BFF** from ONE recipe, parameterized
 by the per-repo `repos[].identity` row in the structured brand YAML. Seeded from
 the Phase-3 `admin-bff-api` exemplar; proven on `user-bff-api` with only manifest
 identity (no new hand overlay).

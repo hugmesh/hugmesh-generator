@@ -153,9 +153,9 @@ spec:
             # The Casdoor ORGANIZATION every login resolves against. casdoor-init
             # (manifests/casdoor/init-job.yaml) and init_data.json create org
             # `hugmesh`; this app's application.yml still defaults to the
-            # pre-rebrand `snapdragon`, so with this unset a fresh cluster answers
+            # pre-rebrand org slug, so with this unset a fresh cluster answers
             # every native login with
-            #   "The user: snapdragon/e2e-user doesn't exist"
+            #   "The user: hugmesh/e2e-user doesn't exist"
             # — the seed verified the persona, the login still failed. Hit LIVE on
             # kind 2026-08-05 (docs/KIND-SSO-E2E-FINDINGS.md #11). compose.local.yaml
             # has carried this override, with this same explanation, for months.
@@ -164,7 +164,7 @@ spec:
             - { name: CASDOOR_ORG, value: "hugmesh" }
             # casdoor.gateway-base — the pki-tier gateway this BFF reaches Casdoor
             # through for ordinary (JWT) traffic. The app default is the pre-rebrand
-            # `snapdragon-pki-gateway.snapdragon-pki` (NXDOMAIN on a real cluster);
+            # `hugmesh-pki-gateway.hugmesh-pki` (NXDOMAIN on a real cluster);
             # the deployed Service is hugmesh-pki-gateway in hugmesh-pki, plain HTTP
             # on 8080 (the gateway chart's keystore.serverTls is false here).
             - { name: PKI_GATEWAY_BASE, value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
@@ -219,7 +219,7 @@ spec:
             # NAME IS LOAD-BEARING: the client reads federation.api.base-url, i.e.
             # env FEDERATION_API_BASE_URL. The old FEDERATION_API_URL here bound
             # NOTHING (it maps to federation.api.url, which no property declares), so
-            # this BFF silently used its packaged snapdragon-backend default and every
+            # this BFF silently used its packaged hugmesh-backend default and every
             # federation-backed /bff/user/** call resolved to NXDOMAIN. Same
             # env-name-misnomer class compose fixed in #314 (see its comment on
             # FEDERATION_BASE_URL) and never propagated here.
@@ -354,7 +354,7 @@ spec:
             # (the self-block + directory-hide seams, both default-OFF); the mint +
             # inject path reads app.hs-token.matrix-url / .mastodon-url, i.e.
             # APP_HS_TOKEN_MATRIX_URL / APP_HS_TOKEN_MASTODON_URL. Those defaults are
-            # the pre-rebrand *-proxy.snapdragon-backend hosts, so the LIVE proxy leg
+            # the pre-rebrand *-proxy backend hosts, so the LIVE proxy leg
             # (APP_HS_TOKEN_ENABLED=true above) was pointed at NXDOMAIN while the two
             # vars set here only configured dark features. compose sets the
             # APP_HS_TOKEN_* pair explicitly for exactly this reason.
@@ -372,8 +372,8 @@ spec:
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
             # app.hs-token.registry.base-url — where the broker publishes/reads the
             # homeserver URL registry. Its packaged default is a NESTED placeholder,
-            # ${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://snapdragon-gateway
-            # .snapdragon-backend…}}, so BOTH names have to be absent for the stale
+            # ${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://hugmesh-gateway
+            # .hugmesh-backend…}}, so BOTH names have to be absent for the stale
             # host to win — which is exactly what was happening. The deployed backend
             # front door is the be-gateway Service (apps/20-gateway-be.yaml:
             # instance.name hugmesh-be-gateway, destination namespace hugmesh-backend,
@@ -383,7 +383,7 @@ spec:
             # ── media-proxy egress (app.media.proxy.*) ───────────────────────────
             # The REAL homeserver upload / served-byte re-fetch leg. Ships dark
             # (MEDIA_PROXY_*_ENABLED default false) but its defaults are the
-            # pre-rebrand *-proxy.snapdragon-backend hosts, i.e. the flag flip alone
+            # pre-rebrand *-proxy backend hosts, i.e. the flag flip alone
             # would land on NXDOMAIN. Same two proxies the hs-token leg above dials.
             #
             # DERIVED FROM MEDIA_POISONING_ENABLED ABOVE — deliberately not a
@@ -419,7 +419,7 @@ spec:
             # TWO independent properties read the same scanner —
             # moderation.image.base-url (avatar publish gate) and
             # app.vision.moderation.base-url (pre-publish profile-image gate) — and
-            # BOTH defaulted to snapdragon-edge-ai-analysis.snapdragon-inference, a
+            # BOTH defaulted to hugmesh-edge-ai-analysis.hugmesh-inference, a
             # host whose SERVICE and NAMESPACE were both renamed. The deployed pair is
             # hugmesh-edge-ai-analysis in hugmesh-inference (manifests/edge-ai-analysis).
             # Both features ship dark; both are FAIL-CLOSED when enabled, so a wrong
@@ -462,7 +462,7 @@ spec:
             # TWO internal-Casdoor legs, TWO distinct properties — both must target
             # the in-cluster Casdoor Service, NEVER the browser-facing issuer:
             #   • APP_BFF_OIDC_LOGIN_BASE — the /api/login credential POST. Its app
-            #     default is casdoor.snapdragon-pki… (NXDOMAIN, finding #14).
+            #     default is casdoor.hugmesh-pki… (NXDOMAIN, finding #14).
             #   • APP_BFF_OIDC_ISSUER    — the authorization_code→token exchange.
             # Deliberately NOT the pki-gateway: that gateway routes /api/auth/**,
             # /login/** and /.well-known/** only, and the exchange path
@@ -496,7 +496,7 @@ spec:
                   optional: true
             # admin-bff's INTERNAL surface — where the OIDC callback provisions the
             # account + session + custody stamp. The app default is the pre-rebrand
-            # snapdragon-admin-bff-api.snapdragon-backend host, which is NXDOMAIN on a
+            # hugmesh-admin-bff-api.hugmesh-backend host, which is NXDOMAIN on a
             # real cluster (finding #14): the login reached Casdoor, minted a real
             # token, and then had nowhere to persist the session. compose sets
             # ADMIN_BFF_INTERNAL_BASE_URL for exactly this reason; the cluster never did.

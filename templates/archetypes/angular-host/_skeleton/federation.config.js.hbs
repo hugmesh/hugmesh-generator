@@ -7,8 +7,8 @@
 //
 // The shared-deps surface + RxJS skip list live in ./federation-base.js so a
 // change to the federation contract lands in one file, consistent with every
-// Snapdragon remote (games convention). Remotes MUST match this host's Angular
+// HugMesh remote (games convention). Remotes MUST match this host's Angular
 // major — shared singletons are strictVersion (see federation-base.js).
-const { snapdragonHost } = require('./federation-base');
+const { hugmeshHost } = require('./federation-base');
 
-module.exports = snapdragonHost({ name: '{{HOST_NAME}}' });
+module.exports = hugmeshHost({ name: '{{HOST_NAME}}' });

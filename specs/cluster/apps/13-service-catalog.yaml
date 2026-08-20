@@ -1,9 +1,9 @@
 # Service catalog (Phase 6) — turns "a deploy descriptor in each repo" into
 # deployable ArgoCD Applications. An ApplicationSet scans the in-cluster Forgejo
 # org and generates one Application per repo that opts in by carrying a deploy
-# descriptor — EITHER `snapdragon-deploy.yaml` (legacy) OR `hugmesh-deploy.yaml`
-# (post-rebrand); both are live in the org — plus a `deploy/` kustomize dir (see
-# catalog/snapdragon-deploy.example.yaml). Admins spin up / update instances by
+# descriptor — `hugmesh-deploy.yaml`, or the LEGACY_COMPAT `snapdragon-deploy.yaml`
+# an adopter has not renamed yet; both are live in the org — plus a `deploy/`
+# kustomize dir (see catalog/hugmesh-deploy.example.yaml). Admins spin up / update instances by
 # editing the descriptor + deploy/ and pushing — no hand-written Application per
 # service. The registered adoption state is catalog/adopters.yaml.
 #
@@ -43,22 +43,25 @@ spec:
         # exactly ONE Application (the repo/branch list is deduped before the
         # template is rendered, not once per matching filter).
         #
-        # WHY BOTH NAMES. The HugMesh rebrand renamed the descriptor to
-        # `hugmesh-deploy.yaml` in 3 of the 9 adopting repos (be-gateway,
-        # mod-bff-api, remote-fragment) while 5 kept `snapdragon-deploy.yaml`
-        # (admin-bff-api, federation-api, forum-bff-api, forum-ui, user-bff-api).
-        # A single-name filter makes one of those groups INVISIBLE to the catalog
+        # WHY BOTH NAMES. `hugmesh-deploy.yaml` is the name every emitter in this
+        # tree writes and 8 of the 9 adopting repos now ship. LEGACY_COMPAT: the
+        # pre-rebrand `snapdragon-deploy.yaml` is STILL on disk in adopter repos
+        # this GitOps tree does not own (hugmesh-forum-bff-api at the time of
+        # writing). A single-name filter makes that group INVISIBLE to the catalog
         # — silently: an scmProvider that matches nothing is not an error, it just
         # generates no Application. Renaming the file inside a repo this GitOps
-        # tree does not own is not an option either, so BOTH names are contract.
-        # The live adoption state is registered in catalog/adopters.yaml and
-        # scripts/validate-catalog-discovery.sh FAILS if any registered adopter's
-        # descriptor is not matched by an entry here.
+        # tree does not own is not an option either, so BOTH names are contract,
+        # NEW FIRST. The live adoption state is registered in catalog/adopters.yaml
+        # and scripts/validate-catalog-discovery.sh FAILS if any registered
+        # adopter's descriptor is not matched by an entry here. Drop the legacy
+        # entry only once adopters.yaml registers no repo shipping that name.
         filters:
           - repositoryMatch: "^hugmesh-"
-            pathsExist: ["snapdragon-deploy.yaml", "deploy"]
-          - repositoryMatch: "^hugmesh-"
             pathsExist: ["hugmesh-deploy.yaml", "deploy"]
+          # LEGACY_COMPAT — pre-rebrand descriptor spelling, still shipped by
+          # adopter repos this tree does not own. See catalog/adopters.yaml.
+          - repositoryMatch: "^hugmesh-"
+            pathsExist: ["snapdragon-deploy.yaml", "deploy"]
   template:
     metadata:
       name: "{{ .repository }}"

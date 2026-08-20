@@ -100,7 +100,7 @@ except ModuleNotFoundError:  # hard-fail: a missing parser must never read as "n
     raise SystemExit(2)
 
 # The image REGISTRY/ORG prefix is deliberately NOT a constant to slice by length.
-# It used to be `IMAGE_PREFIX = "snapdragon-systems/"` consumed as
+# It used to be a fixed 19-character org prefix consumed as
 # `image[len(IMAGE_PREFIX):]`, so when the rebrand shortened the prefix to
 # `hugmesh/` the slice kept eating 19 characters of the NAME: `hugmesh/admin-bff-api`
 # became `pi`, and the checker went looking for a repo called `hugmesh-pi`. It then

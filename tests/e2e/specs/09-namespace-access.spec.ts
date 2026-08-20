@@ -15,7 +15,7 @@ import { onboard, shot } from './helpers';
 // KNOWN-RED — PRODUCT BUG, NOT A SPEC BUG (root-caused 2026-08-12).
 //
 // The grant below fails because admin-bff's namespace vocabulary DISAGREES WITH
-// ITS OWN DATABASE. The snapdragon -> hugmesh rename updated the Java constant
+// ITS OWN DATABASE. The hugmesh -> hugmesh rename updated the Java constant
 // but NOT the Liquibase CHECK constraint that mirrors it:
 //
 //   AccountStore.NAMESPACES (served verbatim by GET /bff/admin/namespace-access,
@@ -25,7 +25,7 @@ import { onboard, shot } from './helpers';
 //   ck_namespace_grant_namespace, admin-bff-api changeset
 //   007-data-constraints.xml "007-namespace-grant-namespace-check" — whose own
 //   comment claims it "mirrors AccountStore.NAMESPACES / isValidNamespace":
-//     snapdragon-pki, snapdragon-backend, snapdragon-frontend, snapdragon-games,
+//     hugmesh-pki, hugmesh-backend, hugmesh-frontend, hugmesh-games,
 //     observability
 //
 // So AdminController.grant() passes its store.isValidNamespace() check, issues
@@ -46,7 +46,7 @@ import { onboard, shot } from './helpers';
 // FIX (owned by hugmesh-admin-bff-api, requires a rebuild — deliberately NOT
 // worked around here): add a changeset that drops and re-adds
 // ck_namespace_grant_namespace over the hugmesh-* names, migrating any surviving
-// snapdragon-* rows. Two secondary defects worth fixing in the same change: the
+// hugmesh-* rows. Two secondary defects worth fixing in the same change: the
 // 23514 should surface as a 4xx/5xx the UI can render rather than a bare 500,
 // and a constraint that claims to mirror a Java constant should be generated
 // from it (or covered by a test that fails when they diverge).

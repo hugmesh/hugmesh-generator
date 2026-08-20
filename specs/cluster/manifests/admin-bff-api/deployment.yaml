@@ -133,9 +133,9 @@ spec:
             # ── Casdoor identity contract (must AGREE with casdoor-init) ────────
             # The Casdoor ORGANIZATION every login / admin write resolves against.
             # casdoor-init + init_data.json create org `hugmesh`; this app's
-            # application.yml still defaults to the pre-rebrand `snapdragon`, so an
+            # application.yml still defaults to the pre-rebrand org slug, so an
             # unset value makes every native login fail with
-            # "The user: snapdragon/<name> doesn't exist" against an IdP that has the
+            # "The user: <pre-rebrand-org>/<name> doesn't exist" against an IdP that has the
             # persona (kind 2026-08-05, docs/KIND-SSO-E2E-FINDINGS.md #11).
             # compose.local.yaml has carried this override, with this exact
             # explanation, for all three BFFs. tests/scripts/test-service-env-contract.sh
@@ -144,13 +144,13 @@ spec:
             # casdoor.gateway-base — the pki-tier gateway this BFF reaches Casdoor
             # through for ordinary JWT traffic, and broker.gateway-url — the base
             # GatewayRevocationClient POSTs coarse ban keys to. BOTH default to the
-            # pre-rebrand snapdragon-pki-gateway.snapdragon-pki host (NXDOMAIN); the
+            # pre-rebrand pki-gateway host (NXDOMAIN); the
             # deployed Service is hugmesh-pki-gateway in hugmesh-pki, plain HTTP 8080.
             - { name: PKI_GATEWAY_BASE,   value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
             - { name: BROKER_GATEWAY_URL, value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
             # casdoor.admin.base-url — the Casdoor ADMIN write API (add-user /
             # update-role). Ships dark (casdoor.admin.enabled=false) but its default is
-            # the same pre-rebrand casdoor.snapdragon-pki host, and it is ALSO the
+            # the same pre-rebrand casdoor host, and it is ALSO the
             # fallback for app.local-login.casdoor-base-url — so pin it rather than
             # leave a dud that only surfaces the day either flag flips.
             - { name: CASDOOR_ADMIN_BASE_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
@@ -196,7 +196,7 @@ spec:
             #   503 {"error":"session_backend_unavailable"}
             # — a login that succeeds and then has nowhere to resolve. Hit LIVE on kind
             # 2026-08-06 while chasing spec 29; the pod logged the wrong host at boot
-            # ("[bff-exchange] self-loopback WebClient -> https://snapdragon-...") and
+            # ("[bff-exchange] self-loopback WebClient -> https://hugmesh-...") and
             # nothing treated that as an error. Same finding-#14 class as CASDOOR_ORG
             # and ADMIN_BFF_INTERNAL_BASE_URL: the app's packaged default is
             # pre-rebrand and the generator overrode every sibling but this one.
@@ -273,7 +273,7 @@ spec:
             # its own CqlSession from app.mirror.cassandra.*, whose contact-point
             # placeholder is ${ROUTE_MIRROR_CASSANDRA} — so the env this manifest
             # emitted matched no placeholder and the mirror fell back to its baked
-            # default, the PRE-REBRAND cassandra.snapdragon-pki… (NXDOMAIN). The
+            # default, the PRE-REBRAND cassandra host… (NXDOMAIN). The
             # route mirror defaults ENABLED and swallows every failure, so the
             # gateways' gateway_route_access + url_registry rows were simply never
             # written and nothing said so. The upstream repo's own deploy manifest
@@ -281,12 +281,12 @@ spec:
             # CASSANDRA_CONTACT_POINTS env matched NO placeholder (dead/no-op)").
             - name: ROUTE_MIRROR_CASSANDRA
               value: "cassandra.hugmesh-pki.svc.cluster.local:9042"
-            # The KEYSPACE is deliberately left on its `snapdragon_gateway` default —
+            # The KEYSPACE is deliberately left on its `hugmesh_gateway` default —
             # that is the LIVE keyspace name (charts/hugmesh-gateway/values.yaml and
             # cassandra-hardening/bootstrap-roles-configmap.yaml grant it by that name);
             # renaming it is the separate infra-migration wave, not a manifest edit.
             - name: ROUTE_MIRROR_KEYSPACE
-              value: "snapdragon_gateway"
+              value: "hugmesh_gateway"
             # datacenter1, not dc1: apps/00-cassandra.yaml runs the chart-default
             # SimpleSnitch, which always advertises datacenter1 regardless of the
             # chart's `datacenter` value. The app default is dc1 → every dial would
@@ -295,7 +295,7 @@ spec:
               value: "datacenter1"
             # Cassandra runs PasswordAuthenticator (bitnami image default), so
             # these are REQUIRED, not hardening: admin-bff dials as its own
-            # DML-only role admin_bff_cass (SELECT+MODIFY on snapdragon_gateway,
+            # DML-only role admin_bff_cass (SELECT+MODIFY on hugmesh_gateway,
             # no DDL — the gateway owns the schema). Role + password come from
             # apps/00b-cassandra-init.yaml and the cassandra-app-creds ESO Secret.
             - { name: CASSANDRA_AUTH_ENABLED, value: "true" }
@@ -382,7 +382,7 @@ spec:
             # safe on the always-deployed admin-bff for non-forum brands too.
             - { name: EXTERNAL_FORUM_ENABLED, value: "true" }
             # …and the address that leg calls. external.forum.base-url defaults to the
-            # pre-rebrand snapdragon-forum-bff-api.snapdragon-backend host, so with the
+            # pre-rebrand forum-bff host, so with the
             # gate ON above and this unset the console's every forum call resolved to
             # NXDOMAIN (it degrades instead of hard-failing, which is exactly why it
             # went unnoticed). https:// — forum-bff serves TLS with client-auth=need,
@@ -407,7 +407,7 @@ spec:
             # setting one never covered the other.
             - { name: EXTERNAL_MASTODON_BASE_URL, value: "http://akkoma.hugmesh-backend.svc.cluster.local:4000" }
             # inference.edge-ai.base-url — the Ollama-protocol edge-AI endpoint. The
-            # default named `edge-ai` in snapdragon-backend; the deployed Service is
+            # default named `edge-ai` in hugmesh-backend; the deployed Service is
             # hugmesh-edge-ai on :11434 in hugmesh-inference (manifests/edge-ai).
             - { name: INFERENCE_EDGE_AI_BASE_URL, value: "http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434" }
             # federation-api, reached under TWO unrelated properties — the username
@@ -421,8 +421,17 @@ spec:
             # service is handed. Its default `headscale.headscale` is NOT a pre-rebrand
             # name at all: there has never been a `headscale` namespace here. headscale
             # runs in hugmesh-pki (manifests/headscale), which is why a gate that looked
-            # for the string `snapdragon` could not see this one.
+            # for the string `hugmesh` could not see this one.
             - { name: APPSTORE_SCAFFOLD_HEADSCALE_URL, value: "http://headscale.hugmesh-pki.svc.cluster.local:8080" }
+            # app.registry.headscale-acl.base-url — the SECOND key with the identical
+            # defect, and the one [env-derived] surfaced the moment the gate stopped
+            # exiting INCOMPLETE (its container-matching prefix had gone stale in the
+            # rebrand, so it had been scanning zero BFFs). Same non-existent `headscale`
+            # namespace in the packaged default, same real Service in hugmesh-pki. The
+            # ACL push leg ships DARK (APP_REGISTRY_HEADSCALE_ACL_ENABLED=false), so an
+            # unpinned base-url is a dud that would only surface the day that flag flips
+            # — pin it now, exactly as APPSTORE_SCAFFOLD_HEADSCALE_URL above.
+            - { name: APP_REGISTRY_HEADSCALE_ACL_BASE_URL, value: "http://headscale.hugmesh-pki.svc.cluster.local:8080" }
             # (ROUTE_MIRROR_CASSANDRA — app.mirror.cassandra.contact-point — is set ONCE,
             # in the Cassandra block above. #543 added a second, identical entry here;
             # two entries of the same name in one container are not a redundancy, they
@@ -576,7 +585,7 @@ spec:
                   name: user-bff-hs-token
                   key: svc-password
             # …and the homeservers that broker actually provisions against. The app
-            # defaults are matrix-synapse / mastodon-web in snapdragon-backend — the
+            # defaults are matrix-synapse / mastodon-web in hugmesh-backend — the
             # wrong SERVICE NAMES *and* the wrong namespace (finding #14). This
             # platform ships tuwunel (Matrix CS-API, :8008) and akkoma (Mastodon API,
             # :4000) in hugmesh-backend; compose repoints the same two vars at its own

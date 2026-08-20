@@ -14,7 +14,7 @@ spec:
     kustomize:
       namespace: {{BRAND}}-backend
       images:
-        - name: snapdragon-systems/mod-bff-api
+        - name: hugmesh/mod-bff-api
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-mod-bff-api
           newTag: main
   destination:

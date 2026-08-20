@@ -23,10 +23,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 STACK_SRC="${STACK_SRC:-${REPO_ROOT}/.stack-src}"
-# TODO(org-move): still the LEGACY GitHub org. The content rebrand is done;
-# the ORG rename is not. See docs/ORG-MOVE-TODO.md for the full inventory (268
-# occurrences / 154 files), the ordering that avoids breaking a live cluster, and
-# the undecided target name ("hugmesh.net" is not a legal GitHub org login).
+# The GitHub org move LANDED; see docs/ORG-MOVE-TODO.md.
 GIT_BASE="${GIT_BASE:-https://github.com/hugmesh}"
 GIT_REF="${GIT_REF:-main}"
 USE_GH="${USE_GH:-auto}"
@@ -52,9 +49,9 @@ REPOS=(
   # ── Static fragment fleet (sync image; the nginx image is public upstream) ──
   hugmesh-remote-fragment
   # ── Angular host + federated remotes (each Dockerfile -> nginx) ──
-  # NOTE: the host shell's repo is hugmesh-host-shell — it did NOT follow the
-  # mechanical snapdragon-* -> hugmesh-* rename (it was `snapdragon.systems`, a
-  # domain-shaped name, and there is no `hugmesh.systems` repo).
+  # NOTE: the host shell's repo is hugmesh-host-shell — its pre-rename name was
+  # domain-shaped rather than `<brand>-<service>`, so it did not follow the
+  # mechanical prefix rename. legacy_name() below carries the mapping.
   hugmesh-host-shell
   hugmesh-admin-ui
   hugmesh-mod-ui
@@ -81,9 +78,9 @@ REPOS=(
   # character-forge is ONE multi-surface repo (Spring BFF at the root + godot/ +
   # frontend/): the compose stack builds the BFF image from the repo root and the
   # UI image from its frontend/ subdir — no separate -ui repo to clone. The repo
-  # was CREATED after the org-wide sweep as snapdragon-character-forge-bff-api and
-  # was renamed to hugmesh-character-forge-bff-api by the follow-up rebrand, so the
-  # name IS mechanical now (docs/XR-CHAT.md).
+  # was created after the org-wide sweep under the pre-rebrand prefix and renamed
+  # to hugmesh-character-forge-bff-api by the follow-up rebrand, so the name IS
+  # mechanical now (docs/XR-CHAT.md).
   hugmesh-character-forge-bff-api
 )
 
@@ -108,15 +105,21 @@ clone_url() { # repo -> full clone URL (token-injected if a token is present)
   fi
 }
 
-# ── pre-rename checkout migration ─────────────────────────────────────────────
-# The org renamed every service repo snapdragon-* -> hugmesh-* (and
-# snapdragon.systems -> hugmesh-host-shell). A ./.stack-src populated before that
-# holds the old DIRECTORY names, which compose no longer resolves. Rename in
-# place rather than re-clone: same git objects, no multi-GB re-download, and the
-# stale dirs don't linger as dead weight. Only ever renames INTO a free name, so
-# a tree that already has both is left untouched.
+# ── pre-rename checkout migration (LEGACY_COMPAT) ────────────────────────────
+# The org renamed every service repo to hugmesh-* during the HugMesh rebrand. A
+# ./.stack-src populated before that holds the old DIRECTORY names, which compose
+# no longer resolves. Rename in place rather than re-clone: same git objects, no
+# multi-GB re-download, and the stale dirs don't linger as dead weight. Only ever
+# renames INTO a free name, so a tree that already has both is left untouched.
+#
+# The pre-rename spellings below are LEGACY_COMPAT READ-ONLY inputs — the only
+# thing that can identify an existing multi-GB checkout on the operator's disk.
+# They are never written and never emitted; deleting them does not migrate those
+# directories, it just makes the migration silently stop finding them. Retire when
+# no ./.stack-src can predate the rebrand.
 legacy_name() { # canonical name -> pre-rename name ("" if there is none)
   case "$1" in
+    # The host shell's pre-rename repo was domain-shaped, not <brand>-<service>.
     hugmesh-host-shell) printf 'snapdragon.systems' ;;
     hugmesh-*)          printf 'snapdragon-%s' "${1#hugmesh-}" ;;
     *)                  printf '' ;;

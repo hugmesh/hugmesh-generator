@@ -44,7 +44,7 @@ edits:
       # Handlebars gluing the token's `}}` to the env-default's `}` into a `}}}`
       # triple-mustache lex error (same trick as the Phase-3 whole-file exemplar).
       - id: mfa-totp-issuer
-        find: "${APP_MFA_TOTP_ISSUER:Snapdragon}"
+        find: "${APP_MFA_TOTP_ISSUER:HugMesh}"
         replace: "${APP_MFA_TOTP_ISSUER:{{BRAND_TITLE}}{{!}}}"
       # Platform admin-notification address default (admin-bff only -> no-op elsewhere).
       - id: admin-emails-host
@@ -61,6 +61,6 @@ edits:
       # include org/group. The rest of each repo's CI legitimately differs
       # (stages, mvnw verb) and is NOT overlaid — only this include line is edited.
       - id: ci-include-org
-        find: "Snapdragon-Systems/snapdragon-generator"
+        find: "hugmesh/hugmesh-generator"
         replace: "{{GENERATOR_ORG_GROUP}}"
         required: true

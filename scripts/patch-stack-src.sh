@@ -62,8 +62,11 @@ unblock_http_registry() { # <repo-checkout-dir>
 }
 
 # ── patch: drop the UNRESOLVABLE pre-rename private dependency ────────────────
-# A checkout can still declare `systems.snapdragon:snapdragon-commons` — the
-# pre-HugMesh coordinate. Nothing publishes it any more: the artifact is
+# LEGACY_COMPAT READ: a stale checkout can still declare the pre-HugMesh
+# coordinate `systems.snapdragon:snapdragon-commons`. That spelling is matched
+# here ONLY to recognise and remove it — it is never written, and dropping the
+# matcher does not fix such a checkout, it just lets the image build die on it
+# again. Nothing publishes the old coordinate any more: the artifact is
 # `systems.hugmesh:hugmesh-commons` now, which is what m2-bootstrap.sh builds and
 # serves, so the old coordinate resolves nowhere and the image build dies with
 #   Could not find artifact systems.snapdragon:snapdragon-commons:jar:2.0.0 in central

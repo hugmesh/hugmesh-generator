@@ -64,10 +64,10 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 # repo | commit SHA | artifactId | version | expected files (pom|jar|jar+tests)
 #
 # Version pins mirror what the SERVICES' current main poms require (all four BFFs
-# resolve systems.hugmesh:hugmesh-parent:2.8.0 after the Snapdragon->HugMesh rebrand;
+# resolve systems.hugmesh:hugmesh-parent:2.8.0 after the HugMesh rebrand;
 # these SHAs are each sibling repo's current main, whose pom declares exactly the
 # systems.hugmesh:* coordinate+version below — the pre-rebrand pins built
-# systems.snapdragon:*@2.7.0 which no longer matches have_artifact's hugmesh path):
+# the retired coordinate at @2.7.0, which no longer matches have_artifact's hugmesh path):
 #   hugmesh-build-config 0.5.0 — parent's PMD/spotbugs ruleset plugin dep. It has NO
 #                                 <parent> of its own, so it BUILDS FIRST (standalone).
 #   hugmesh-parent    2.8.0  — every Java service's <parent>; its own build resolves
@@ -147,8 +147,8 @@ ensure_src_at() { # repo sha -> checkout ${SRC_DIR}/<repo> at <sha> (detached)
     git -C "${dir}" remote add origin "${GIT_BASE}/$1.git"
   fi
   # RECONCILE the remote on EVERY call, not just at clone time. The cache is
-  # long-lived and GIT_BASE moved (github.com/Snapdragon-Systems ->
-  # github.com/hugmesh); a clone created under the old base kept pointing there
+  # long-lived and GIT_BASE moved to github.com/hugmesh during the org move;
+  # a clone created under the old base kept pointing there
   # forever, so pins from the NEW org could never be fetched and the failure read
   # as "not our ref <sha>" — a sha the new org's main was literally at. That took
   # down every Java image build, i.e. the local mesh could not build at all

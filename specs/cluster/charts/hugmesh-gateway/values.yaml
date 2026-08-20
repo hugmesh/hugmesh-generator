@@ -67,7 +67,7 @@ casdoor:
 # Cassandra backs the gateway's revocation list + URL registry (shared).
 cassandra:
   contactPoints: cassandra.hugmesh-pki.svc.cluster.local:9042
-  keyspace: snapdragon_gateway
+  keyspace: hugmesh_gateway
   # The official Cassandra image's SimpleSnitch default datacenter is
   # "datacenter1" (nodetool status), not "dc1" — confirmed live against a bare
   # `cassandra:5` container with this same env (see compose.local.yaml's

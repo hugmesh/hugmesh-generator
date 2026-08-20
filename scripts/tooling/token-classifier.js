@@ -34,9 +34,31 @@ function isAllowed(token) {
 }
 
 const FROZEN = spec.frozen_protocol_constants;
-const FROZEN_LABEL_NS = FROZEN.label_key_namespaces || [];
-const FROZEN_HEADERS = (FROZEN.wire_headers || []).map((h) => h.toLowerCase());
-const FROZEN_SUBPROTO = FROZEN.subprotocol_prefixes || [];
+// THE BAN SIDE — protocol identity the rebrand RETIRED (tokens.json
+// `retired_protocol_constants`). Folded into the SAME fail-closed match as the live
+// constants: a retired spelling in a template/profile/emitted repo is drift, and
+// refusing it at emit is the only place the templating path can still catch it.
+// Kept as its own spec block (and its own isRetired()) so callers that must tell
+// "our live identity" from "a dead spelling" — ingest-foreign-base.sh's
+// impersonation scan reads frozen_protocol_constants ONLY — are not misled.
+const RETIRED = spec.retired_protocol_constants || {};
+const FROZEN_LABEL_NS = [...(FROZEN.label_key_namespaces || []), ...(RETIRED.label_key_namespaces || [])];
+const FROZEN_HEADERS = [...(FROZEN.wire_headers || []), ...(RETIRED.wire_headers || [])].map((h) => h.toLowerCase());
+const FROZEN_SUBPROTO = [...(FROZEN.subprotocol_prefixes || []), ...(RETIRED.subprotocol_prefixes || [])];
+const RETIRED_TERMS = [
+  ...(RETIRED.label_key_namespaces || []),
+  ...(RETIRED.wire_headers || []),
+  ...(RETIRED.subprotocol_prefixes || []),
+];
+
+/** A token whose render TARGET is a RETIRED protocol constant — a spelling the
+ *  rebrand killed. isFrozen() already refuses these; this narrower predicate tells
+ *  a caller WHY, and lets the impersonation scan keep asking only about live ones. */
+function isRetired(token) {
+  const t = String(token);
+  const tl = t.toLowerCase();
+  return RETIRED_TERMS.some((term) => t.includes(term) || tl === term.toLowerCase());
+}
 
 /** A token whose render TARGET is a frozen protocol constant — a k8s label-KEY
  *  namespace (hugmesh.net/…), a wire header name, or a Sec-WebSocket
@@ -57,4 +79,4 @@ function isFrozen(token) {
   return false;
 }
 
-module.exports = { isDenied, isAllowed, isFrozen, ALLOW, DENY_KEYS, DENY_NAME_RE, FROZEN, spec };
+module.exports = { isDenied, isAllowed, isFrozen, isRetired, ALLOW, DENY_KEYS, DENY_NAME_RE, FROZEN, RETIRED, spec };

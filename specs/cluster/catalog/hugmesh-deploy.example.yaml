@@ -1,4 +1,4 @@
-# snapdragon-deploy.yaml — the per-repo deploy descriptor (Phase 6 catalog).
+# hugmesh-deploy.yaml — the per-repo deploy descriptor (Phase 6 catalog).
 #
 # Drop this file at the ROOT of any service repo to make its image deployable on
 # demand through ArgoCD. The catalog ApplicationSet (apps/13-service-catalog.yaml)
@@ -8,13 +8,15 @@
 # via ConfigMaps + ESO; Spring Cloud Kubernetes (added in each service) picks up
 # those ConfigMaps/Secrets.
 #
-# FILENAME. Two spellings are contract and both are matched by a generator filter:
-# `snapdragon-deploy.yaml` (this example, and what 5 adopting repos ship) and
-# `hugmesh-deploy.yaml` (what the 3 repos whose rebrand renamed it ship). Prefer
-# this one for a NEW adopter — it is the name templates/archetypes/generator/
-# recipe.yaml records as frozen and the one publish-tenant-set.sh synthesises.
-# Ship exactly ONE of the two, and register the repo + the name it ships in
-# catalog/adopters.yaml, or scripts/validate-catalog-discovery.sh fails the build.
+# FILENAME. `hugmesh-deploy.yaml` (this example) is THE name: it is what
+# publish-tenant-set.sh synthesises and what templates/archetypes/generator/
+# recipe.yaml records as frozen. The pre-rebrand spelling
+# `snapdragon-deploy.yaml` stays matched by a generator filter as LEGACY_COMPAT
+# — adopter repos this GitOps tree does not own still ship it on disk, and
+# dropping the filter makes them silently invisible to the catalog. Ship exactly
+# ONE of the two (new adopters: this one), and register the repo + the name it
+# ships in catalog/adopters.yaml, or scripts/validate-catalog-discovery.sh fails
+# the build.
 #
 # This file is the human-facing contract; the actual manifests live in the repo's
 # deploy/ kustomize (image tag, ports, replicas, namespace, route). An admin
@@ -26,13 +28,13 @@
 # the reusable tests/pentest/ci/pentest-stage.gitlab-ci.yml — the `sca`+`dast` jobs).
 # See specs/cluster/catalog/ci/repo.gitlab-ci.yml + tests/pentest/ci/README.md. This
 # is NOT a deployed runner — public images only, no `.github/workflows`.
-name: snapdragon-example-api          # Application name
+name: hugmesh-example-api          # Application name
 namespace: hugmesh-backend            # target k8s namespace (must be an existing tier ns)
 image: hugmesh/example-api # image repo (tag pinned in deploy/ kustomize)
 port: 8080
 replicas: 1
 # Optional gateway route the admin/BFF will seed into the routing DB (Phase 2 core):
 route:
-  gateway: snapdragon-be-gateway
+  gateway: hugmesh-be-gateway
   path: /api/example/**
   stripPrefix: 0
