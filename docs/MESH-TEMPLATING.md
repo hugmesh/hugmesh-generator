@@ -185,7 +185,7 @@ proves the **overlay-primary, skeleton-fallback** model on a real app repo:
 
   Deliberately **left untemplated** (grounding): `nginx.conf` (brand-neutral),
   `docker-entrypoint.d/*` (runtime env-injected), the `X-HugMesh-Local` wire
-  header (frozen protocol constant), the `snap-login-root` element, and every
+  header (frozen protocol constant), the `hug-login-root` element, and every
   `hugmesh` in `src/**` / comments / groupId — that is **upstream code
   identity**, not tenant brand. Tier-1 is deliberately narrow.
 
