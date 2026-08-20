@@ -187,7 +187,7 @@ class LocalStackNode:
         self.source_mode = source_mode
         self.source_dir = source_dir
         # Translation catalogs the login-ui image is BUILT with (comma-joined into
-        # SNAP_WEB_LOCALES for `make stack-up` -> compose build arg -> the login-ui
+        # HUG_WEB_LOCALES for `make stack-up` -> compose build arg -> the login-ui
         # Dockerfile). EMPTY (the default) = English-only: the image ships zero
         # catalog files and the browser issues zero catalog requests. English is the
         # login-ui's SOURCE language — compiled into the bundle — so it needs no
@@ -511,11 +511,24 @@ class LocalStackNode:
             env["STACK_NO_CLONE"] = "1"
         # Only export when non-empty so the default path stays byte-identical to
         # every existing caller (and to a plain `make stack-up`), exactly like DOMAIN.
-        # The Makefile's own SNAP_WEB_LOCALES default is empty, so an unset value and
-        # an empty value mean the same thing: English-only.
+        # The Makefile's own web-locales default is empty, so an unset value and an
+        # empty value mean the same thing: English-only.
+        #
+        # RENAME PHASE 3c — DUAL WRITE. HUG_WEB_LOCALES is the live name; the retired
+        # SNAP_WEB_LOCALES is written alongside it with the SAME value. This Studio is
+        # installed separately from the generator tree it drives (generator_dir is a
+        # constructor argument, not this package's own root), so the Makefile on the
+        # far end of `make stack-up` can be OLDER than this code and read only the old
+        # name. Writing just the new one would leave that Makefile seeing "unset",
+        # building an English-only image, and exiting 0 with nothing printed — the
+        # operator's chosen locales silently dropped. Both names cost two bytes of env
+        # and remove that entire direction of skew; phase 4 deletes the mirror once no
+        # Makefile in the field reads it.
         if self.web_locales:
-            env["SNAP_WEB_LOCALES"] = ",".join(self.web_locales)
-        # Same only-when-set discipline: compose's theme passthrough defaults empty,
+            _web_locales = ",".join(self.web_locales)
+            env["HUG_WEB_LOCALES"] = _web_locales
+            env["SNAP_WEB_LOCALES"] = _web_locales
+        # Same only-when-set discipline: compose's ${SNAP_THEME_CSS:-} defaults empty,
         # so unset and empty both mean "shipped default brand" and the unthemed env
         # stays byte-identical to every existing caller.
         if self.login_theme_css.strip():

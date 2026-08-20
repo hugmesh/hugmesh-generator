@@ -232,6 +232,27 @@ run_recipe A9m 'edits:
       - { id: env, find: "{{HUG_THEME_CSS}}", replace: "x" }' "$T"
 [ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9m.err" && ok "A9m theme contract identifier {{HUG_THEME_CSS}} refused (LIVE env key)" || bad "A9m live theme env key templated"
 
+# The LIVE spelling of the locale-set key, and the same argument A9k makes for
+# --hug-*: rename phase 3c moved every producer (Makefile STACK_WEB_LOCALES,
+# LocalStackNode._build_env, the compose build arg) onto HUG_WEB_LOCALES, so that
+# is now the name that decides which translation catalogs the login-ui image
+# ships. A guard registered against only the retired SNAP_ spelling would pass its
+# own test while leaving the load-bearing name open to the next rebrand sweep —
+# and the failure is silent: the chain still builds, still boots, still exits 0,
+# and serves a UI with no translations. Both spellings stay pinned until phase 4
+# proves nothing reads the old one (the login-ui Dockerfile still does).
+run_recipe A9n 'edits:
+  - file: docs/BRANDING.md
+    anchors:
+      - { id: env, find: "{{HUG_WEB_LOCALES}}", replace: "x" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9n.err" && ok "A9n theme contract identifier {{HUG_WEB_LOCALES}} refused (LIVE locale key)" || bad "A9n live web-locales env key templated"
+
+run_recipe A9o 'edits:
+  - file: docs/BRANDING.md
+    anchors:
+      - { id: env, find: "{{SNAP_WEB_LOCALES}}", replace: "x" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9o.err" && ok "A9o theme contract identifier {{SNAP_WEB_LOCALES}} refused (retired locale key still read)" || bad "A9o retired web-locales env key templated"
+
 # The custom-property half is NOT a Handlebars identifier (leading dashes), so
 # TOKEN_RE never captured it and the identifier loop's fail-closed allowlist check
 # was unreachable: this recipe used to exit 0 and render `var()`, silently DELETING

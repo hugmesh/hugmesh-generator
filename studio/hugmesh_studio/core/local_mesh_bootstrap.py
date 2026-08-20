@@ -723,7 +723,7 @@ class LocalMeshBootstrap:
         lines.append(f"      make stack-up   (ENV={c.env}, "
                      f"SOCIAL={'on' if c.effective_social() else 'off'}"
                      + f", TOR={'on' if c.effective_with_tor() else 'off'}"
-                     + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "")
+                     + (f", HUG_WEB_LOCALES={_wl}" if _wl else "")
                      + (", HUG_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
                      + (f", OIDC_ISSUER={c.idp_issuer.strip()}"
                         f", OIDC_CLIENT_ID={c.idp_client_id.strip()}"

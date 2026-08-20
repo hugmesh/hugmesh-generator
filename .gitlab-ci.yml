@@ -790,6 +790,33 @@ lint:mfa-flip-wiring:
   script:
     - bash tests/stack/test-mfa-flip-wiring.sh
 
+# WEB-LOCALES wiring gate, and the regression gate for rename phase 3c. Same
+# inert-knob shape as the job above, one link further out: the operator's chosen
+# translation catalogs cross Studio -> `make stack-up` env -> compose build arg ->
+# the login-ui Dockerfile ARG by NAME ALONE. Break any link on one side and the
+# chain still builds, still boots, still exits 0 and ships a UI with no
+# translations — "no locales requested" is also the legitimate default, so there
+# is nothing to log. The rename made that live: producers now emit
+# HUG_WEB_LOCALES and mirror the retired SNAP_WEB_LOCALES, because the Studio is
+# installed separately from the generator tree it drives and the login-ui build
+# context is a pinned-branch checkout, so BOTH directions of version skew are
+# real. Lane A evaluates the REAL Makefile (hence `make` in before_script), lane B
+# re-derives the build args from the compose YAML, lane C EXECUTES the Studio env
+# builder. Lane D composes A+B through `docker compose config`; that CLI is not in
+# this image, so it SKIPs and the deliberate opt-out keeps the job green while the
+# verdict line still prints INCOMPLETE — never a clean PASS it did not earn.
+lint:web-locales-wiring:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  variables:
+    WEB_LOCALES_ALLOW_INCOMPLETE: "1"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends make
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/stack/test-web-locales-wiring.sh
+
 # Probe AUTH-SURFACE gate: no kubelet probe may target a path the service itself
 # role-gates unless the probe tolerates the 401 that gating produces. The first
 # real kind run found NO gateway could ever become Ready on Kubernetes — the

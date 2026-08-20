@@ -1,12 +1,20 @@
 """The web-login LOCALE-SET knob (the operator's 'include or exclude language
 support'), threaded Studio -> LocalStackNode -> `make stack-up` env ->
-compose build arg -> the login-ui Dockerfile's ARG SNAP_WEB_LOCALES.
+compose build arg -> the login-ui Dockerfile's ARG HUG_WEB_LOCALES.
 
 This is the anti-dead-knob coverage for THIS feature. The session's hardest-won
 rule is 'never ship a knob wired to nothing', so the load-bearing assertions here
 are: (1) the DEFAULT emits NOTHING (byte-identical to a plain stack-up) and (2) a
 non-empty value reaches the SAME env var `make stack-up` forwards to compose.
 Everything is Qt-free and never starts a container.
+
+RENAME PHASE 3c. HUG_WEB_LOCALES is the live name and SNAP_WEB_LOCALES is the
+retired one, and this file asserts BOTH are written with the SAME value. That is
+not belt-and-braces padding: this Studio is installed separately from the
+generator tree it drives, so `make stack-up` may land on an older Makefile that
+reads only the old name. Dropping the mirror would make that combination build an
+English-only image and exit 0 — the operator's locales silently gone, no error to
+notice. The default still has to emit NEITHER name.
 """
 import os
 
@@ -25,24 +33,40 @@ GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 def test_default_emits_no_web_locales_env():
     """web_locales=() must add ZERO bytes to the stack-up environment — the
     English-only default has to be byte-identical to every existing caller, or it
-    is not really a no-op default."""
+    is not really a no-op default. NEITHER spelling may appear."""
     env = LocalStackNode(GENERATOR_DIR)._build_env()
+    assert "HUG_WEB_LOCALES" not in env
     assert "SNAP_WEB_LOCALES" not in env
 
 
 def test_selected_locales_reach_the_stackup_env():
     env = LocalStackNode(GENERATOR_DIR, web_locales=("de", "fr"))._build_env()
-    assert env["SNAP_WEB_LOCALES"] == "de,fr"
+    assert env["HUG_WEB_LOCALES"] == "de,fr"
 
 
 def test_single_locale_reaches_the_env():
     env = LocalStackNode(GENERATOR_DIR, web_locales=("en-XA",))._build_env()
-    assert env["SNAP_WEB_LOCALES"] == "en-XA"
+    assert env["HUG_WEB_LOCALES"] == "en-XA"
 
 
 def test_empty_tuple_is_treated_as_unset():
     env = LocalStackNode(GENERATOR_DIR, web_locales=())._build_env()
+    assert "HUG_WEB_LOCALES" not in env
     assert "SNAP_WEB_LOCALES" not in env
+
+
+# ── the rename mirror: an OLDER Makefile must still receive the value ─────────
+
+def test_legacy_spelling_is_mirrored_with_the_same_value():
+    """Phase 3c writes the retired name alongside the live one. An installed
+    Studio can be pointed at a generator checkout whose Makefile predates the
+    rename and reads only SNAP_WEB_LOCALES; without this mirror that combination
+    ships English-only and exits 0, which is the silent-drop this rename ladder
+    exists to prevent. Same value in both, or the two ends disagree about which
+    catalogs were asked for."""
+    env = LocalStackNode(GENERATOR_DIR, web_locales=("de", "fr"))._build_env()
+    assert env["SNAP_WEB_LOCALES"] == "de,fr"
+    assert env["SNAP_WEB_LOCALES"] == env["HUG_WEB_LOCALES"]
 
 
 # ── the config -> node wiring (the GUI/CLI both build this config) ─────────────
@@ -51,13 +75,14 @@ def test_bootstrap_threads_web_locales_into_the_stack_node():
     cfg = LocalMeshBootstrapConfig(web_locales=("de",))
     node = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()
     assert node.web_locales == ("de",)
-    assert node._build_env()["SNAP_WEB_LOCALES"] == "de"
+    assert node._build_env()["HUG_WEB_LOCALES"] == "de"
 
 
 def test_default_config_ships_english_only():
     cfg = LocalMeshBootstrapConfig()
     assert cfg.web_locales == ()
     node = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()
+    assert "HUG_WEB_LOCALES" not in node._build_env()
     assert "SNAP_WEB_LOCALES" not in node._build_env()
 
 
@@ -66,14 +91,18 @@ def test_default_config_ships_english_only():
 def test_plan_states_english_only_by_default():
     plan = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig()).plan()
     assert "English only" in plan
-    assert "SNAP_WEB_LOCALES" not in plan  # nothing forwarded => don't imply it is
+    # nothing forwarded => don't imply it is (neither spelling)
+    assert "WEB_LOCALES" not in plan
 
 
 def test_plan_names_selected_catalogs():
     cfg = LocalMeshBootstrapConfig(web_locales=("de", "fr"))
     plan = LocalMeshBootstrap(GENERATOR_DIR, cfg).plan()
     assert "de, fr" in plan
-    assert "SNAP_WEB_LOCALES=de,fr" in plan
+    # The plan is the operator-facing preview of the make command, so it names the
+    # LIVE knob only — the legacy mirror is skew plumbing, not something to type.
+    assert "HUG_WEB_LOCALES=de,fr" in plan
+    assert "SNAP_WEB_LOCALES" not in plan
     assert "i18n/{de,fr}.json" in plan
 
 
