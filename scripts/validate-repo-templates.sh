@@ -12,6 +12,10 @@
 #   * recipe anchors: find@upstream still present in base + replace@upstream==find
 #     (round-trip no-op);
 #   * class-A .hbs (angular-mfe/federation-base.js): render@upstream byte-identical.
+#   * _skeleton twin parity: a template carried in BOTH the overlay root and
+#     _skeleton/ must be byte-identical in the two trees (the overlay path and the
+#     base-absent birth path are mutually exclusive, so a divergence silently
+#     hands new repos a stale file while every other check stays green).
 #
 # The UPSTREAM-IDENTITY token values come from templates/archetypes/<archetype>/
 # _identity.env (the drift oracle; whatever KEY=VALUEs it declares are the token

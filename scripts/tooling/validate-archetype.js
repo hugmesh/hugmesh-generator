@@ -18,6 +18,11 @@
 //     (3) render@upstream is byte-identical to the base file. Additive class-A
 //         files with NO corresponding base file (gateway deploy/*) have no base
 //         drift oracle and are reported as ADDITIVE (not failed).
+//   _SKELETON TWIN parity (base-independent):
+//     (4) a template carried in BOTH the overlay root and _skeleton/ (today only
+//         angular-mfe/federation-base.js.hbs) must be byte-identical in the two
+//         trees. The two render paths are mutually exclusive, so a divergence
+//         hands base-absent births a stale file with (1)-(3) still all green.
 //
 // GREEN on a fresh, in-sync base; RED on any injected drift.
 //
@@ -51,6 +56,14 @@ function render(str, ctx, label) {
   return Handlebars.compile(String(str), { noEscape: true, strict: false })(ctx);
 }
 
+// Every .hbs in the archetype overlay EXCEPT the _skeleton/ tree. The skip is
+// deliberate and mirrors render-repo-tree.sh's own overlay staging
+// (`find "$OVERLAY_DIR" -name '*.hbs' -not -path '*/_skeleton/*'`): _skeleton is
+// the base-ABSENT birth tree, rendered ONLY when no base pulls, so its
+// hello-world stubs have no base counterpart and byte-comparing them against a
+// real repo would report drift on literally every file. A drift oracle should
+// validate exactly what the emitter emits — hence the same exclusion.
+// See checkSkeletonTwins() for the blind spot this leaves, and its guard.
 function listHbs(dir) {
   const acc = [];
   (function walk(d) {
@@ -60,6 +73,35 @@ function listHbs(dir) {
     }
   })(dir);
   return acc.sort();
+}
+
+// ── _skeleton TWIN PARITY ───────────────────────────────────────────────────
+// listHbs()'s _skeleton skip is right for the base compare but leaves a blind
+// spot: a template carried in BOTH trees (today: angular-mfe/federation-base.js)
+// is a SECOND copy that no oracle can see. The two render paths are mutually
+// EXCLUSIVE — render-repo-tree.sh overlays the class-A copy when a base pulls and
+// renders the _skeleton copy when one does not — so a divergence silently gives
+// newly-born repos a stale file while overlaid repos get the current one, and the
+// drift check stays green through the whole thing. Assert the twins are identical
+// AS TEMPLATES (pre-render), which needs no base and cannot false-positive on the
+// skeleton-only stubs. Nothing to pair == nothing checked.
+function checkSkeletonTwins(archDir, out) {
+  const skelDir = path.join(archDir, '_skeleton');
+  let failed = 0, checks = 0;
+  if (!fs.existsSync(skelDir)) return { failed, checks };
+  for (const hbs of listHbs(archDir)) {
+    const rel = path.relative(archDir, hbs);
+    const twin = path.join(skelDir, rel);
+    if (!fs.existsSync(twin)) continue;
+    checks++;
+    if (fs.readFileSync(twin, 'utf8') === fs.readFileSync(hbs, 'utf8')) {
+      out.push(`  [OK]       _skeleton/${rel} — twin of the class-A template, byte-identical`);
+    } else {
+      failed++;
+      out.push(`  [DRIFT]    _skeleton/${rel} — skeleton twin differs from the class-A template (a base-absent birth would emit the stale copy)`);
+    }
+  }
+  return { failed, checks };
 }
 
 function main() {
@@ -116,6 +158,11 @@ function main() {
     if (fs.readFileSync(baseFile, 'utf8') === rendered) out.push(`  [OK]       ${rel} — class-A byte-identical to base`);
     else { failed++; out.push(`  [DRIFT]    ${rel} — class-A render differs from base (whole-file drift)`); }
   }
+
+  // ── (C) _skeleton twin parity (base-independent) ────────────────────────
+  const twins = checkSkeletonTwins(archDir, out);
+  failed += twins.failed;
+  checks += twins.checks;
 
   out.push('');
   out.push(failed === 0
