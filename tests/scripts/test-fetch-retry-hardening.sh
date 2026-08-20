@@ -16,6 +16,11 @@
 #     failure: while the resolver itself is down the loop STALLS (bounded by
 #     DLV_DNS_STALL_MAX) WITHOUT consuming attempts, so a transient DNS outage
 #     stalls-and-retries instead of aborting the build;
+#   * DLV_FETCH_FATAL_CODES — the mirror image: an artifact the server ANSWERED
+#     "404/410" for is genuinely missing, so the loop fails FAST instead of
+#     spending 12 minutes to reach the same conclusion (and burying the real
+#     error: a mistyped --headscale-version, a rotated stage3 pin, or the
+#     best-effort ".DIGESTS.asc" probe whose 404 is the normal answer);
 # and every artifact/distfile fetch path routes through it: the builders'
 # headscale/tailscale/u-boot/stage3-index curls, dlv_fetch (checksums/DIGESTS
 # sidecars) and _shared-assets-lib.sh's sa_fetch_default (the stage3 seed).
@@ -51,20 +56,36 @@ cat > "${STUB}/curl" <<'EOS'
 #!/usr/bin/env bash
 c="${FETCH_TEST_CTRL:?}"
 echo x >> "${c}/curl.calls"
-out=""; prev=""
-for a in "$@"; do [ "${prev}" = "-o" ] && out="${a}"; prev="${a}"; done
+out=""; prev=""; wants_code=""
+for a in "$@"; do
+    [ "${prev}" = "-o" ] && out="${a}"
+    [ "${a}" = '%{http_code}' ] && wants_code=1
+    prev="${a}"
+done
+# real curl writes -w output on FAILURE too (verified: rc=22 still prints 404),
+# and reports 000 when the transfer never got an HTTP reply at all.
+emit() { [ -n "${wants_code}" ] && printf '%s' "$1"; }
 if [ -f "${c}/net-down" ]; then
     [ -n "${out}" ] && printf 'PARTIAL' > "${out}"   # truncated transfer
     echo "curl: (6) Could not resolve host: github.com" >&2
+    emit 000
     exit 6
+fi
+# a permanent HTTP status the server really answered with (404/410/…)
+if [ -f "${c}/http-code" ]; then
+    [ -n "${out}" ] && printf 'PARTIAL' > "${out}"
+    emit "$(cat "${c}/http-code")"
+    exit 22
 fi
 fails=0; [ -f "${c}/fail-times" ] && fails="$(cat "${c}/fail-times")"
 calls="$(wc -l < "${c}/curl.calls")"
 if [ "${calls}" -le "${fails}" ]; then
     [ -n "${out}" ] && printf 'PARTIAL' > "${out}"
+    emit 503   # server-transient: worth every second of the backoff budget
     exit 22
 fi
 [ -n "${out}" ] && cat "${c}/payload" > "${out}"
+emit 200
 exit 0
 EOS
 
@@ -95,7 +116,7 @@ sleep_log()   { [ -f "${CTRL}/sleep.log" ] && tr '\n' ' ' < "${CTRL}/sleep.log" 
 
 # Source the lib with a clean tunable slate, then drive it through the stubs.
 unset DLV_FETCH_ATTEMPTS DLV_FETCH_BACKOFF DLV_FETCH_BACKOFF_CAP DLV_FETCH_INNER_RETRY \
-      DLV_DNS_STALL_INTERVAL DLV_DNS_STALL_MAX DLV_DNS_PROBE_NAMES 2>/dev/null || true
+      DLV_DNS_STALL_INTERVAL DLV_DNS_STALL_MAX DLV_DNS_PROBE_NAMES DLV_FETCH_FATAL_CODES 2>/dev/null || true
 # shellcheck source=/dev/null
 DLV_QUIET=1 source "${LIB}"
 export FETCH_TEST_CTRL="${CTRL}"
@@ -208,6 +229,70 @@ dlv_dns_ok && ok "dlv_dns_ok: 0 while the resolver answers" || bad "dlv_dns_ok s
 dlv_dns_ok && bad "dlv_dns_ok should FAIL during a resolver outage" || ok "dlv_dns_ok: non-zero during a resolver outage"
 rm -f "${CTRL}/net-down"
 
+# ── 8b. THE OTHER HALF: a genuinely MISSING artifact must fail FAST ──────────
+# A 404 means the server resolved AND replied. Backoff cannot conjure the file;
+# spending the 12-minute budget on it only buries the real error (a mistyped
+# --headscale-version, a rotated-away stage3 pin, or dlv_verify_stage3's
+# best-effort "<DIGESTS>.asc" probe whose 404 is the NORMAL answer).
+reset_ctrl; echo 404 > "${CTRL}/http-code"
+if dlv_fetch_retry "https://x.test/gone" "${WORK}/gone" 2>"${WORK}/gone.err"; then
+    bad "a 404 must not report success"
+else
+    if [ "$(curl_calls)" -eq 1 ] && [ -z "$(sleep_log)" ]; then
+        ok "HTTP 404: exactly 1 attempt, ZERO backoff sleeps — fails fast instead of burning ~12 min"
+    else
+        bad "404 still spends the retry budget ($(curl_calls) attempts, sleeps '$(sleep_log)')"
+    fi
+    grep -q '404' "${WORK}/gone.err" && grep -qi 'not retrying' "${WORK}/gone.err" \
+        && ok "404 death names the status and says it is not retrying (operator sees the real cause)" \
+        || bad "404 death message hides the status: $(head -c200 "${WORK}/gone.err")"
+    [ ! -f "${WORK}/gone" ] \
+        && ok "404: no truncated dest left behind" \
+        || bad "404 left a truncated dest behind"
+fi
+
+# 410 Gone is the same class (an upstream that REMOVED a release).
+reset_ctrl; echo 410 > "${CTRL}/http-code"
+dlv_fetch_retry "https://x.test/g410" "${WORK}/g410" 2>/dev/null
+[ "$(curl_calls)" -eq 1 ] \
+    && ok "HTTP 410 (upstream removal) also fails fast — 1 attempt" \
+    || bad "410 spent $(curl_calls) attempts"
+
+# The fail-fast set must be a TUNABLE, not a hardcode: emptying it restores the
+# full retry budget for a 404 (proves the guard is driven by DLV_FETCH_FATAL_CODES).
+reset_ctrl; echo 404 > "${CTRL}/http-code"
+DLV_FETCH_FATAL_CODES="" DLV_FETCH_ATTEMPTS=3 dlv_fetch_retry "https://x.test/t" "${WORK}/t" 2>/dev/null
+[ "$(curl_calls)" -eq 3 ] \
+    && ok "DLV_FETCH_FATAL_CODES is a real tunable (emptied → 404 gets the full 3 attempts back)" \
+    || bad "fail-fast is hardcoded, not driven by DLV_FETCH_FATAL_CODES (got $(curl_calls) attempts)"
+
+# ── 8c. fail-fast must NOT over-fire: transient classes keep the full budget ──
+# 503 = server-transient. This is the regression guard on 8b: a fail-fast that
+# swallows 5xx would re-break exactly what item 6 fixed.
+reset_ctrl; echo 503 > "${CTRL}/http-code"
+DLV_FETCH_ATTEMPTS=3 dlv_fetch_retry "https://x.test/s" "${WORK}/s" 2>"${WORK}/s.err"
+if [ "$(curl_calls)" -eq 3 ] && grep -q "after 3 attempts" "${WORK}/s.err"; then
+    ok "HTTP 503 (server-transient) still consumes the full attempt budget — fail-fast does not over-fire"
+else
+    bad "503 should keep retrying (got $(curl_calls) attempts)"
+fi
+# 000 = no HTTP reply at all (DNS/connect death) — must reach the resolver probe,
+# never the fatal-status path, or the 08-19 outage class returns.
+reset_ctrl; : > "${CTRL}/net-down"; echo 2 > "${CTRL}/outage-ends-after"
+if DLV_FETCH_ATTEMPTS=1 dlv_fetch_retry "https://x.test/u" "${WORK}/u" 2>/dev/null \
+   && [ "$(cat "${WORK}/u")" = "the-artifact-bytes" ]; then
+    ok "code 000 (resolver outage, no HTTP reply) still stalls-and-recovers — not misread as fatal"
+else
+    bad "a 000/resolver outage must not hit the fail-fast path"
+fi
+
+# stdout mode ('-') must not leak the partial body of a 404 into the pipeline.
+reset_ctrl; echo 404 > "${CTRL}/http-code"
+gonebytes="$(dlv_fetch_retry "https://x.test/gone2" - 2>/dev/null)"; rc=$?
+[ "${rc}" -ne 0 ] && [ -z "${gonebytes}" ] \
+    && ok "404 in stdout mode: non-zero rc and NOT one byte of the error body on stdout" \
+    || bad "404 in stdout mode leaked '${gonebytes}' (rc=${rc})"
+
 echo "── static: every artifact fetch path is wired through the hardened loop ──"
 
 # Detector: the pre-hardening call-site classes. Any of these reappearing in a
@@ -260,6 +345,12 @@ done
 grep -q 'dlv_fetch_retry "\${url}" "\${dest}"' "${LIB}" \
     && ok "_download-lib.sh: dlv_fetch (checksums/DIGESTS sidecars) routes through dlv_fetch_retry" \
     || bad "_download-lib.sh: dlv_fetch no longer routes through dlv_fetch_retry"
+grep -q "\-w '%{http_code}'" "${LIB}" \
+    && ok "_download-lib.sh: the loop asks curl for %{http_code} (fail-fast has something to read)" \
+    || bad "_download-lib.sh: no -w '%{http_code}' — the fail-fast status check is blind"
+grep -q 'DLV_FETCH_FATAL_CODES:-404 410' "${LIB}" \
+    && ok "_download-lib.sh: DLV_FETCH_FATAL_CODES defaults to 404 410" \
+    || bad "_download-lib.sh: DLV_FETCH_FATAL_CODES default changed/lost"
 grep -q 'getent hosts' "${LIB}" \
     && ok "_download-lib.sh: resolver probe uses getent hosts" \
     || bad "_download-lib.sh: dlv_dns_ok lost its getent probe"
