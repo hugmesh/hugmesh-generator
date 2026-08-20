@@ -260,6 +260,15 @@ class LocalMeshBootstrapConfig:
     idp_issuer: str = ""               # external OIDC issuer (https://…)
     idp_client_id: str = ""            # external OIDC client id (public, not a secret)
     idp_jwks: str = ""                 # external JWKS URL ("" = per-provider derivation)
+    # ── per-domain OWN Casdoor (issue #47) — names of the domains whose
+    # Domains-table row picked idp='own' (ImageConfig.own_idp_domains()), in
+    # table order. EMPTY (the default — and every pre-#47 caller, this field is
+    # appended so positional construction is unchanged) threads NOTHING: the
+    # stack env and compose model stay byte-identical. Non-empty, LocalStackNode
+    # stands up one Casdoor (+ postgres) per name the way compose.brand-b.yaml
+    # proves (host ports 8001+, issuer http://casdoor-<slug>.localtest.me:<port>)
+    # and threads the gateways' multi-issuer registry — see core/own_casdoor.py.
+    own_idp_domains: tuple[str, ...] = ()
 
     def is_prod(self) -> bool:
         return self.env == "prod"
@@ -441,7 +450,8 @@ class LocalMeshBootstrap:
                               idp=self.cfg.idp,
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),
-                              idp_jwks=self.cfg.effective_idp_jwks())
+                              idp_jwks=self.cfg.effective_idp_jwks(),
+                              own_idp_domains=self.cfg.own_idp_domains)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(

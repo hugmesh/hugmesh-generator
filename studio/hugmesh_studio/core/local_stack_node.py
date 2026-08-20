@@ -22,7 +22,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
-from . import devops_tools, proc_text
+from . import devops_tools, own_casdoor, proc_text
 from .local_services import federation_env
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
@@ -124,7 +124,8 @@ class LocalStackNode:
                  with_egress_vpn: bool = False, egress_vpn_conf: str = "",
                  idp: str = "casdoor",
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
-                 services=None):
+                 services=None,
+                 own_idp_domains: tuple[str, ...] = ()):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -229,6 +230,14 @@ class LocalStackNode:
         self.idp_issuer = idp_issuer
         self.idp_client_id = idp_client_id
         self.idp_jwks = idp_jwks
+        # Domains whose sign-in says 'own' (config.Domain.idp, issue #47), in
+        # Domains-table order. EMPTY (the default) threads NOTHING new and the
+        # stack env stays byte-identical — the same opt-in shape as every knob
+        # above. Non-empty: _build_env writes the per-domain Casdoor compose
+        # overlay (core/own_casdoor.py — the compose.brand-b.yaml wiring, host
+        # ports 8001+), flips OWN_CASDOOR=1 (the Makefile's `own-casdoor`
+        # profile) and exports the multi-issuer APP_TENANCY_* registry.
+        self.own_idp_domains = tuple(own_idp_domains or ())
 
     @property
     def web_url(self) -> str:
@@ -440,6 +449,16 @@ class LocalStackNode:
                     f"org-private artifacts from source and serves them to the build.")
         return problems
 
+    def _central_issuer(self) -> str:
+        """The CENTRAL Casdoor issuer, mirrored from the Makefile's ENV->issuer
+        derivation (prod: https://id.<DOMAIN or hugmesh.net>; test: localhost:8000)
+        — the `default` tenant of the multi-issuer registry own_casdoor.tenancy_env
+        builds. Mirror-only, like LocalMeshBootstrapConfig.issuer(): the Makefile
+        remains the authority for what the stack actually runs with."""
+        if self.env == "prod":
+            return f"https://id.{self.domain or 'hugmesh.net'}"
+        return "http://localhost:8000"
+
     def _build_env(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
         """The EXACT env every `make stack-*` subprocess runs with. The preflight
         checks run against this same dict — a BuildKit/buildx probe in any other
@@ -526,6 +545,30 @@ class LocalStackNode:
                 env["OIDC_CLIENT_ID"] = self.idp_client_id.strip()
             if self.idp_jwks.strip():
                 env["OIDC_JWKS_URI"] = self.idp_jwks.strip()
+        # ── per-domain OWN Casdoor (issue #47) — the local translation of a
+        # Domains-table row whose sign-in says 'own'. OWN_CASDOOR is set
+        # EXPLICITLY (""=off) like SOCIAL/TOR, so an inherited OWN_CASDOOR=1 in
+        # the operator's shell cannot flip a stack the config said nothing
+        # about; empty leaves the Makefile's `$(strip …)` profile arm off and
+        # everything else untouched (byte-identical default,
+        # test_domain_idp_schema.py pins it). Non-empty: export the gateways'
+        # multi-issuer registry (the BRAND_B=1 seam, scaled per domain — the
+        # central issuer stays tenant `default`) and write the compose overlay
+        # the Makefile wildcard-includes. The write is best-effort like
+        # .theme.css (never block a bring-up from here); a failed write leaves
+        # the wildcard -f empty and the stack comes up single-Casdoor, honest
+        # in `docker compose ps` rather than half-wired.
+        env["OWN_CASDOOR"] = "1" if self.own_idp_domains else ""
+        if self.own_idp_domains:
+            env.update(own_casdoor.tenancy_env(
+                self.own_idp_domains, self._central_issuer()))
+            try:
+                path = own_casdoor.overlay_path(self.generator_dir)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(own_casdoor.compose_overlay(self.own_idp_domains))
+            except OSError:
+                pass
         # FEDERATION services: the enable/disable slug pair `make stack-seed` needs to
         # flip federation_modules.enabled. Rides the SAME env channel as every other
         # stack knob (never a new file format), and federation_env() returns {} both

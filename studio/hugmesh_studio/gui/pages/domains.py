@@ -12,16 +12,53 @@ Row order is load-bearing: the first attached domain is the PRIMARY one (the fir
 with the cluster domain on a fresh cloud/mesh flow so a superadmin starts from a valid
 primary domain (spec 4). The orchestration superdomain (spec 5) is shown read-only in
 the header — every mesh node joins it, it is never a table row and never attachable.
+
+The mesh-only 'Sign-in' column (issue #47) is each row's ``Domain.idp``: superdomain
+(the mesh's central Casdoor — the default, today's behavior) vs own (this domain runs
+its OWN Casdoor instance). It reaches provisioning via the mesh manifest and the local
+compose lane via core/own_casdoor.py; an untouched/hidden combo always collects the
+superdomain default, so pre-#47 flows and manifests are byte-identical.
 """
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
-from ...core.config import Domain, image_class, superadmin_plane_applies
+from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
+                            image_class, superadmin_plane_applies)
 
 _COL_NAME, _COL_TITLE, _COL_SERVICES, _COL_APPLIES = range(4)
+# The per-domain sign-in column (issue #47) is APPENDED so the four pre-existing
+# indices stay stable for every test/caller that pins them.
+_COL_IDP = 4
 # node-role images take no --domains — the attachment is manifest/provisioning data
 # only, so the menu never implies argv it cannot emit.
 _NODE_NOTE = "  (manifest only — nodes take no --domains)"
+
+# (schema value, combo label, per-item tooltip) for the Sign-in column. The DATA
+# role carries the schema value — labels are free to change, tests read the data.
+_IDP_ITEMS = (
+    (DOMAIN_IDP_SUPERDOMAIN, "Superdomain Casdoor (default)",
+     "Sign-in via the mesh's central Casdoor on the superdomain — today's "
+     "behavior, nothing extra to run."),
+    (DOMAIN_IDP_OWN, "Own Casdoor",
+     "This domain runs its OWN Casdoor instance, provisioned just for it "
+     "(its users sign in against that instance, not the mesh's central one)."),
+)
+
+
+class _IdpCombo(QtWidgets.QComboBox):
+    """Per-row sign-in picker (issue #47): which Casdoor serves this domain.
+    Tests read/write the choice through :meth:`selected_idp` / the data role."""
+
+    def __init__(self, selected=DOMAIN_IDP_SUPERDOMAIN):
+        super().__init__()
+        for i, (value, label, tip) in enumerate(_IDP_ITEMS):
+            self.addItem(label, value)
+            self.setItemData(i, tip, Qt.ItemDataRole.ToolTipRole)
+        idx = self.findData(selected or DOMAIN_IDP_SUPERDOMAIN)
+        self.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def selected_idp(self) -> str:
+        return self.currentData() or DOMAIN_IDP_SUPERDOMAIN
 
 
 class _AppliesToButton(QtWidgets.QToolButton):
@@ -81,7 +118,10 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.table_help = QtWidgets.QLabel(
             "‘Optional services’ = the per-domain service slugs this domain provides "
             "(space/comma-separated; empty = the cluster-wide set applies). ‘Applies to’ "
-            "= which built node images the domain attaches to.")
+            "= which built node images the domain attaches to. ‘Sign-in’ = which "
+            "Casdoor serves this domain's login: Superdomain (its users sign in via "
+            "the mesh's central Casdoor — the default) or Own (this domain runs its "
+            "own Casdoor instance, provisioned just for it).")
         self.table_help.setWordWrap(True)
         self.table_help.setStyleSheet("color: gray;")
         lay.addWidget(self.table_help)
@@ -90,13 +130,20 @@ class DomainsPage(QtWidgets.QWizardPage):
         # (space/comma-separated; empty = the cluster-wide set applies). 'Applies to'
         # fills Domain.images (mesh only; hidden in cloud where the single image
         # attaches implicitly).
-        self.table = QtWidgets.QTableWidget(0, 4)
+        self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            ["Domain", "Title", "Optional services", "Applies to"])
+            ["Domain", "Title", "Optional services", "Applies to", "Sign-in"])
         hdr = self.table.horizontalHeaderItem(_COL_APPLIES)
         hdr.setToolTip("Which worklist images this domain attaches to (empty = all "
                        "eligible). Node-role images take no --domains — the attachment "
                        "is manifest/provisioning data only.")
+        idp_hdr = self.table.horizontalHeaderItem(_COL_IDP)
+        idp_hdr.setToolTip(
+            "Which Casdoor serves this domain's sign-in (issue #47). Superdomain = "
+            "the mesh's one central Casdoor (default — today's behavior). Own = a "
+            "Casdoor instance provisioned for this domain alone; reaches cluster "
+            "provisioning via the mesh manifest, and the local compose lane stands "
+            "it up next to the central one.")
         self.table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self.table)
         btns = QtWidgets.QHBoxLayout()
@@ -121,7 +168,8 @@ class DomainsPage(QtWidgets.QWizardPage):
         wl = getattr(self.wiz, "worklist", None)
         return list(wl.entries) if wl is not None else []
 
-    def _add(self, name="", title="", services="", images=None):
+    def _add(self, name="", title="", services="", images=None,
+             idp=DOMAIN_IDP_SUPERDOMAIN):
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, _COL_NAME, QtWidgets.QTableWidgetItem(name))
@@ -129,6 +177,7 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.table.setItem(r, _COL_SERVICES, QtWidgets.QTableWidgetItem(services))
         self.table.setCellWidget(r, _COL_APPLIES,
                                  _AppliesToButton(self._entries(), images or []))
+        self.table.setCellWidget(r, _COL_IDP, _IdpCombo(idp))
 
     def _remove(self):
         for idx in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
@@ -166,9 +215,15 @@ class DomainsPage(QtWidgets.QWizardPage):
         # the applies-to picker is a worklist-of-images concept — meaningful only in
         # mesh; cloud attaches its single image implicitly, so hide the column there.
         self.table.setColumnHidden(_COL_APPLIES, c.mode != "mesh")
+        # the sign-in choice is a MESH provisioning concept too (the superdomain's
+        # central Casdoor vs a per-domain one — cloud writes no manifest and hosts
+        # no Casdoor), so it hides in cloud the same way; a hidden combo still
+        # collects its untouched superdomain default, never anything else.
+        self.table.setColumnHidden(_COL_IDP, c.mode != "mesh")
         if self.table.rowCount() == 0:
             for d in c.domains:
-                self._add(d.name, d.title, " ".join(d.optional_services), d.images)
+                self._add(d.name, d.title, " ".join(d.optional_services), d.images,
+                          d.idp)
             # default prefill (spec 4): seed row 0 with the cluster domain so a fresh
             # cloud superadmin starts from a valid PRIMARY domain (table position =
             # first --domains element). Scoped to CLOUD: mesh prefill is spec-4 too, but
@@ -193,7 +248,10 @@ class DomainsPage(QtWidgets.QWizardPage):
             services = svc_item.text().replace(",", " ").split() if svc_item else []
             btn = self.table.cellWidget(r, _COL_APPLIES)
             images = btn.selected_ids() if isinstance(btn, _AppliesToButton) else []
+            combo = self.table.cellWidget(r, _COL_IDP)
+            idp = (combo.selected_idp() if isinstance(combo, _IdpCombo)
+                   else DOMAIN_IDP_SUPERDOMAIN)
             out.append(Domain(name=name, title=title or name,
-                              optional_services=services, images=images))
+                              optional_services=services, images=images, idp=idp))
         self.wiz.cfg.domains = out
         return True
