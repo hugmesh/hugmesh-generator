@@ -107,9 +107,12 @@ SUPERUSER_COMMAND = "sudo -i"
 #: one-line change in one place.
 QMP_COMMANDS = ("pause", "resume", "reset", "powerdown", "status")
 
-#: Lifecycle actions ``device_control_argv`` can express — the same start/stop pair
-#: the local-mesh page already offers, so the two device surfaces read alike.
-DEVICE_ACTIONS = ("start", "stop")
+#: Lifecycle actions ``device_control_argv`` can express. "start" was REMOVED (T2):
+#: a per-device start must pin --artifacts and --work and address its row with
+#: --only-exact, and the single author of that argv is core.emulation.
+#: start_device_argv — the old spelling here booted whatever session the runner
+#: guessed newest, filtered by substring.
+DEVICE_ACTIONS = ("stop",)
 
 #: A record whose state is one of these describes a device that is no longer there.
 #: "" is included because a truncated/never-updated record must not be offered as a
@@ -169,6 +172,14 @@ class Device:
     qmp: str = ""                                    # HOST path to the QMP socket
     state: str = ""                                  # booting|running|assertions|stopped
     started_at: str = ""                             # UTC ISO-8601, "…Z"
+    #: The per-device START contract (records written since 2026-08-19): together
+    #: with ``label`` these are everything a restarter needs —
+    #: ``run-qemu-docker.sh --artifacts <artifacts> --only-exact <label>``.
+    #: Both read TOLERANTLY: an older record simply has neither, and a restart
+    #: from it must then be given a session explicitly (emulation.start_device_argv
+    #: refuses to fall back to the runner's newest-session guess).
+    artifacts: str = ""                              # HOST path to the artifacts dir
+    image: str = ""                                  # basename of the booted image
 
     @property
     def is_running(self) -> bool:
@@ -212,7 +223,17 @@ def _device_from_record(raw: object) -> Device | None:
         qmp=str(raw.get("qmp") or ""),
         state=str(raw.get("state") or ""),
         started_at=str(raw.get("started_at") or ""),
+        artifacts=str(raw.get("artifacts") or ""),
+        image=str(raw.get("image") or ""),
     )
+
+
+def device_from_record(raw: object) -> Device | None:
+    """Public spelling of the record->Device rule, for readers that obtained the
+    JSON some other way — core.emulation feeds it the runner's ``--devices``
+    output, which is these same records reconciled against docker ps. One parsing
+    rule, whoever fetched the bytes."""
+    return _device_from_record(raw)
 
 
 def discover_devices(work_dir: str) -> list[Device]:
@@ -333,26 +354,30 @@ def qmp_argv(generator_dir: str, dev: Device, command: str) -> list[str]:
 
 
 def device_control_argv(generator_dir: str, dev: Device, action: str) -> list[str]:
-    """argv to start or stop ONE device — the local-mesh start/stop pair, per device.
+    """argv to stop ONE device — the runner's own ``--stop-device LABEL`` (it knows
+    the container name; the registry's ``container`` field is for display, not for
+    the GUI to issue docker commands of its own).
 
-    ``stop`` is the runner's own ``--stop-device LABEL`` (it knows the container
-    name; the registry's ``container`` field is for display, not for the GUI to
-    issue docker commands of its own).
-
-    ``start`` re-enters the normal boot path filtered to this one row
-    (``--keep-alive --only LABEL``), because a stopped device has no container to
-    resume — the image must be booted again. ``--only`` is a substring filter on
-    ``<platform>/<role>``, which IS the label. No ``--work`` is passed: the runner's
-    default work dir is the same ``out/qemu-runs`` the registry was read from, and
-    hardcoding a path here would fight a caller who overrode it.
+    ``start`` is GONE from this module (T2), and the branch below is a deliberate
+    shim: the old spelling (``--keep-alive --only LABEL``) let the runner guess its
+    newest session for the artifacts and matched the label by SUBSTRING — so a
+    restart of ``x86/be`` could boot a different build than the device came from,
+    and drag be+gpu/be-ha along with it. The single author of a per-device start is
+    now ``hugmesh_studio.core.emulation.start_device_argv``, which pins
+    ``--artifacts``/``--work`` (from the plan or the record's ``artifacts`` field)
+    and addresses the row with ``--only-exact``. The shim goes away with its last
+    caller (gui/pages/qemu.py's console) in T3.
     """
     act = (action or "").strip().lower()
+    if act == "start":
+        raise ValueError(
+            "device_control_argv no longer authors 'start': a per-device start must "
+            "pin --artifacts/--work and address its row with --only-exact — use "
+            "hugmesh_studio.core.emulation.start_device_argv instead")
     if act not in DEVICE_ACTIONS:
         raise ValueError(f"unknown device action {action!r}; expected one of "
                          + "|".join(DEVICE_ACTIONS))
-    if act == "stop":
-        return [_runner(generator_dir), "--stop-device", dev.label]
-    return [_runner(generator_dir), "--keep-alive", "--only", dev.label]
+    return [_runner(generator_dir), "--stop-device", dev.label]
 
 
 def stop_all_argv(generator_dir: str) -> list[str]:

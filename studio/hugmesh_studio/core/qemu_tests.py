@@ -46,6 +46,17 @@ RUNNER_SCRIPT = os.path.join("tests", "qemu", "run-qemu-docker.sh")
 #: Default scratch root (decompressed images, overlays, per-row result JSON).
 DEFAULT_WORK_SUBDIR = os.path.join("out", "qemu-runs")
 
+#: The mesh manifest the wizard writes into a session dir. Spelled locally rather
+#: than imported from core/worklist_driver (its MANIFEST_NAME) because that module
+#: pulls config/build_driver and this one stays import-light; test_qemu_tests.py
+#: cross-checks the two spellings so they cannot drift.
+MESH_MANIFEST_NAME = "hugmesh-mesh-manifest.json"
+#: The builders' shared session log and the per-image log rule — the same names
+#: core/build_sessions.py owns (LOG_NAME / image_log_name), cross-checked by test.
+SHARED_BUILD_LOG = "build.log"
+IMAGE_LOG_PREFIX = "build-"
+IMAGE_LOG_SUFFIX = ".log"
+
 #: Image extensions a device row can be built from, longest-first so ".img.xz"
 #: is stripped before ".img" ever matches.
 _IMAGE_SUFFIXES = (".img.xz", ".img")
@@ -105,10 +116,33 @@ class BuildSession:
     name: str
     rows: list[DeviceRow] = field(default_factory=list)
     mtime: float = 0.0
+    #: How many images the build that minted this session INTENDED (see
+    #: ``expected_image_count``). 0 = unknowable, which reads as complete: a
+    #: session with no build logs and no manifest cannot be accused of missing
+    #: anything.
+    expected_images: int = 0
 
     @property
     def has_images(self) -> bool:
         return bool(self.rows)
+
+    @property
+    def is_partial(self) -> bool:
+        """Did the build intend more images than the dir holds bootable rows for?
+
+        True for a session whose build ABORTED mid-fleet — e.g.
+        out/sessions/20260819-125930-89bb8e, which holds 4 per-image build logs
+        and exactly 1 bootable image. Booting "the whole mesh" from such a
+        session silently emulates a fraction of it, so pickers badge these and
+        ``default_session`` skips them.
+        """
+        return self.expected_images > len(self.rows)
+
+    def completeness_badge(self) -> str:
+        """"PARTIAL — 1 of 4 image(s)" for an aborted build, "" when complete."""
+        if not self.is_partial:
+            return ""
+        return f"PARTIAL — {len(self.rows)} of {self.expected_images} image(s)"
 
     @property
     def platforms(self) -> list[str]:
@@ -122,7 +156,9 @@ class BuildSession:
         for r in sorted(self.rows, key=lambda r: (platform_rank(r.platform), r.role)):
             by_platform.setdefault(r.platform, []).append(r.role)
         parts = [f"{p} ({', '.join(roles)})" for p, roles in by_platform.items()]
-        return f"{self.name} — {len(self.rows)} image(s): " + "; ".join(parts)
+        badge = self.completeness_badge()
+        return (f"{self.name} — {len(self.rows)} image(s): " + "; ".join(parts)
+                + (f" [{badge}]" if badge else ""))
 
 
 def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
@@ -227,6 +263,43 @@ def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
     return sorted(best.values(), key=lambda r: (platform_rank(r.platform), r.platform, r.role))
 
 
+def expected_image_count(session_path: str) -> int:
+    """How many images the build that minted ``session_path`` INTENDED. 0 = unknown.
+
+    Two witnesses, most-faithful first:
+
+    * per-image build logs (``build-<id>.log``, core/build_sessions.image_log_name):
+      one is created when an image's build STARTS, so their count is what the run
+      actually attempted — a manifest can name images the operator deselected, but
+      a log only exists for a build that began;
+    * the mesh manifest's ``images`` list (``hugmesh-mesh-manifest.json``): the
+      fallback for a session whose builder died before minting a single per-image
+      log, or that predates per-image logs.
+
+    Comparing this against ``len(rows)`` is deliberately a COUNT comparison, not a
+    label match: manifest ids spell roles differently from artifact names on some
+    platforms (``be.rpi5`` builds ``hugmesh-rpi5-arm64-backend-…``), so a name-based
+    pairing would false-positive on exactly the sessions it matters for.
+    """
+    try:
+        names = os.listdir(session_path)
+    except OSError:
+        return 0
+    logs = [n for n in names
+            if n.startswith(IMAGE_LOG_PREFIX) and n.endswith(IMAGE_LOG_SUFFIX)
+            and n != SHARED_BUILD_LOG]
+    if logs:
+        return len(logs)
+    manifest = os.path.join(session_path, MESH_MANIFEST_NAME)
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            record = json.load(fh)
+    except (OSError, ValueError):
+        return 0
+    images = record.get("images") if isinstance(record, dict) else None
+    return len(images) if isinstance(images, list) else 0
+
+
 def discover_sessions(generator_dir: str, *, only_with_images: bool = True) -> list[BuildSession]:
     """Build sessions under ``out/sessions/``, newest first.
 
@@ -252,7 +325,8 @@ def discover_sessions(generator_dir: str, *, only_with_images: bool = True) -> l
             mtime = os.path.getmtime(path)
         except OSError:
             mtime = 0.0
-        session = BuildSession(path=path, name=name, rows=discover_rows(path), mtime=mtime)
+        session = BuildSession(path=path, name=name, rows=discover_rows(path), mtime=mtime,
+                               expected_images=expected_image_count(path))
         if only_with_images and not session.has_images:
             continue
         sessions.append(session)
@@ -267,6 +341,22 @@ def newest_session(generator_dir: str) -> BuildSession | None:
     return sessions[0] if sessions else None
 
 
+def default_session(generator_dir: str) -> BuildSession | None:
+    """The session a picker should preselect: the newest COMPLETE one.
+
+    A partial session (a build that aborted mid-fleet) still LISTS — its images are
+    real and individually runnable — but defaulting to it silently hands the
+    operator a 1-of-4 mesh whose "whole mesh" actions emulate a fraction of what
+    was configured. When every session with images is partial, the newest of them
+    is still the answer: runnable-with-a-badge beats nothing.
+    """
+    sessions = discover_sessions(generator_dir, only_with_images=True)
+    for session in sessions:
+        if not session.is_partial:
+            return session
+    return sessions[0] if sessions else None
+
+
 @dataclass
 class QemuRunOptions:
     """Everything the runner needs for one fan-out."""
@@ -275,14 +365,27 @@ class QemuRunOptions:
     platform: str = ""               # filter: only this platform
     role: str = ""                   # filter: only this role
     only: str = ""                   # substring filter on "<platform>/<role>"
+    #: EXACT "<platform>/<role>" equality — the runner's --only-exact. This is the
+    #: spelling a per-device Start uses: --only is a substring filter, so
+    #: "x86/be" would also drag in be+gpu and be-ha rows.
+    only_exact: str = ""
     mode: str = "golden"             # golden | stage4
     jobs: int = 2
     mem_mb: int = 2048
     smp: int = 2
     timeout_s: int = 2400
+    #: Wall clock for the in-guest assertion ssh (--assert-timeout); 0 = the
+    #: entrypoint's own default, and like every other default here it is then
+    #: NOT emitted.
+    assert_timeout_s: int = 0
+    #: Additional wheel logins created on every guest (--extra-user, repeatable).
+    extra_users: tuple[str, ...] = ()
     list_only: bool = False
     build_image: bool = False
     keep: bool = False
+    #: Cap (GiB) on the decompressed-image cache under <work>/images
+    #: (--cache-max-gb); 0 = unbounded, the runner's own default.
+    cache_max_gb: int = 0
     #: Leave the guests RUNNING once their assertions finish (``--keep-alive``)
     #: instead of powering them off, and let the entrypoint register each one under
     #: ``<work>/devices/``. This is what makes core/qemu_devices.py have anything to
@@ -309,12 +412,20 @@ def runner_command(generator_dir: str, opts: QemuRunOptions) -> list[str]:
         cmd += ["--role", opts.role]
     if opts.only:
         cmd += ["--only", opts.only]
+    if opts.only_exact:
+        cmd += ["--only-exact", opts.only_exact]
     if opts.mode and opts.mode != "golden":
         cmd += ["--mode", opts.mode]
     cmd += ["--jobs", str(opts.jobs),
             "--mem", str(opts.mem_mb),
             "--smp", str(opts.smp),
             "--timeout", str(opts.timeout_s)]
+    if opts.assert_timeout_s > 0:
+        cmd += ["--assert-timeout", str(opts.assert_timeout_s)]
+    if opts.cache_max_gb > 0:
+        cmd += ["--cache-max-gb", str(opts.cache_max_gb)]
+    for user in opts.extra_users:
+        cmd += ["--extra-user", user]
     if opts.list_only:
         cmd.append("--list")
     if opts.build_image:
@@ -375,7 +486,14 @@ def results_summary(results: list[dict]) -> tuple[int, int, int]:
     return passed, total - passed, total
 
 
-def docker_available() -> tuple[bool, str]:
+#: Default wall clock for the NON-BLOCKING docker probe below. Deliberately much
+#: shorter than the synchronous default: the async caller is a wizard page's
+#: initializePage, where a hung docker daemon must cost a few seconds of "checking…"
+#: badge, never a frozen window.
+DOCKER_PROBE_TIMEOUT_S = 4.0
+
+
+def docker_available(timeout_s: float = 15.0) -> tuple[bool, str]:
     """Whether this host can run the containerized harness at all.
 
     The Studio must say so up-front rather than let the operator configure a run
@@ -390,7 +508,7 @@ def docker_available() -> tuple[bool, str]:
     """
     try:
         proc = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL,
-                              stderr=subprocess.PIPE, text=True, timeout=15)
+                              stderr=subprocess.PIPE, text=True, timeout=timeout_s)
     except FileNotFoundError:
         wsl = wsl_docker_remedy()
         return False, ("docker was not found on PATH." + (" " + wsl if wsl else ""))
@@ -403,6 +521,34 @@ def docker_available() -> tuple[bool, str]:
         return False, ("cannot talk to the docker daemon — is it running, and is "
                        "your user in the 'docker' group?")
     return True, "docker is available."
+
+
+def docker_available_async(on_result: Callable[[bool, str], None], *,
+                           timeout_s: float = DOCKER_PROBE_TIMEOUT_S) -> threading.Thread:
+    """``docker_available`` without the page freeze: probe on a daemon thread.
+
+    ``docker info`` against a wedged daemon takes the FULL timeout to answer, and
+    both device pages used to run it synchronously inside initializePage — 15
+    seconds of a frozen window before the page even painted. This variant returns
+    immediately and calls ``on_result(ok, reason)`` FROM THE WORKER THREAD once the
+    probe answers; Qt callers marshal that back to the GUI thread themselves (a
+    queued signal), exactly as they do for every other worker in the app.
+
+    The started thread is returned so callers (and tests) can join it; it is a
+    daemon thread, so a probe still hanging at app exit cannot hold the process
+    hostage. A probe that raises delivers the failure through ``on_result`` rather
+    than dying silently on a thread nobody watches.
+    """
+    def _probe() -> None:
+        try:
+            ok, why = docker_available(timeout_s=timeout_s)
+        except Exception as exc:  # noqa: BLE001 — a probe thread must never die mute
+            ok, why = False, f"docker probe failed: {exc}"
+        on_result(ok, why)
+
+    thread = threading.Thread(target=_probe, name="qemu-docker-probe", daemon=True)
+    thread.start()
+    return thread
 
 
 class QemuTestRunner:

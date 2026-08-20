@@ -58,9 +58,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import signal
-import subprocess
-import threading
+import threading  # noqa: F401 — spawn()'s signature names threading.Event
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -252,23 +250,53 @@ def start_device_argv(generator_dir: str, plan: MeshPlan,
                       planned: PlannedDevice, *, jobs: int = 1,
                       mem_mb: int = 2048, timeout_s: int = 2400) -> list[str]:
     """argv that boots ONE planned device (``--keep-alive --only <label>``) —
-    the same re-entry the device-test page's per-row Start uses."""
+    the same re-entry the device-test page's per-row Start uses.
+
+    NOTE (T2): ``--only`` is a SUBSTRING filter, so ``x86/be`` also drags in
+    be+gpu/be-ha rows. The caller-facing author that fixes this is
+    core.emulation.start_device_argv, which addresses the row with T1's
+    ``--only-exact`` (and can also start from a live record's ``artifacts``
+    field); this spelling stays until the GUI/TUI move onto the facade (T3/T4),
+    whose tests pin the current argv.
+    """
     return runner_command(generator_dir, QemuRunOptions(
         artifacts_dir=plan.session_path, work_dir=plan.work_dir,
         only=planned.label, jobs=jobs, mem_mb=mem_mb, timeout_s=timeout_s,
         keep_alive=True))
 
 
-def stop_device_argv(generator_dir: str, planned: PlannedDevice) -> list[str]:
+def stop_device_argv(generator_dir: str, planned, *, work_dir: str = "") -> list[str]:
     """argv that stops ONE device — the runner's ``--stop-device LABEL`` (it owns
-    the container name; same verb qemu_devices.device_control_argv emits)."""
-    return [os.path.join(generator_dir, RUNNER_SCRIPT),
-            "--stop-device", planned.label]
+    the container name; same verb qemu_devices.device_control_argv emits).
+
+    ``work_dir`` fixes the start/stop asymmetry this module shipped with: every
+    START argv pinned ``--work`` to the plan's work dir, while the stops let the
+    runner default — so a mesh running in a custom ``--work`` booted there and then
+    "stopped" against the default registry, which held no such device. Callers that
+    know the work dir (core.emulation always does) pass it; the parameter stays
+    optional so the TUI's existing calls keep working until T4.
+
+    ``planned`` may be a planned device, a live registry record, or a bare label
+    string — only ``.label`` is read, and a stop only needs the name.
+    """
+    argv = [os.path.join(generator_dir, RUNNER_SCRIPT)]
+    if work_dir:
+        argv += ["--work", work_dir]
+    label = getattr(planned, "label", planned)
+    return argv + ["--stop-device", str(label)]
 
 
-def stop_mesh_argv(generator_dir: str) -> list[str]:
-    """argv for the fleet-wide stop — the runner's ``--stop-all-devices``."""
-    return [os.path.join(generator_dir, RUNNER_SCRIPT), "--stop-all-devices"]
+def stop_mesh_argv(generator_dir: str, *, work_dir: str = "") -> list[str]:
+    """argv for the fleet-wide stop — the runner's ``--stop-all-devices``.
+
+    ``work_dir`` for the same asymmetry fix as ``stop_device_argv``: the sweep
+    reads the registry under the runner's ``--work``, so a custom-work mesh needs
+    the stop aimed at ITS registry.
+    """
+    argv = [os.path.join(generator_dir, RUNNER_SCRIPT)]
+    if work_dir:
+        argv += ["--work", work_dir]
+    return argv + ["--stop-all-devices"]
 
 
 def web_tunnel_argv(dev, planned: PlannedDevice) -> list[str]:
@@ -385,53 +413,14 @@ def section_statuses(planned: PlannedDevice, dev, result: dict | None, *,
 def spawn(argv: list[str], cwd: str,
           on_line: Callable[[str], None] | None = None,
           cancel: "threading.Event | None" = None) -> int:
-    """THE single function through which this module's plans become processes.
+    """Alias for :func:`hugmesh_studio.core.emulation.spawn` — see there.
 
-    Interface (the contract tests mock, and the only thing the GUI calls):
-
-    * ``argv``     — one of this module's argv builders' outputs, verbatim;
-    * ``cwd``      — the generator checkout (the runner resolves itself from it);
-    * ``on_line``  — called once per merged stdout/stderr line, newline-stripped;
-    * ``cancel``   — an optional threading.Event; once set, the process GROUP gets
-      SIGTERM (the runner spawns docker children, so signalling only the shell
-      would orphan them — the same reason QemuTestRunner kills by group);
-    * returns the exit code (127 when the process could not start at all).
-
-    BLOCKS until the process exits, so callers run it off the GUI thread (the
-    page uses the same worker the device-test page does). Everything else in
-    this module is pure planning; keeping the one impure step this narrow is
-    what lets the whole mesh screen be tested with no qemu, no docker and no ssh
-    — tests replace THIS function and assert on the argv it received.
+    The implementation was PROMOTED to core/emulation.py (T2): the facade is THE
+    single process boundary for every emulation surface, and two spellings of "run
+    a plan's argv" is exactly the drift this refactor exists to close. This alias
+    stays so tui/meshemu.py (and anything else that spells ``mesh_emulation.spawn``)
+    keeps working until T4 retires it; the import is lazy to keep the module graph
+    acyclic (emulation imports THIS module at top level).
     """
-    try:
-        proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                start_new_session=True)
-    except OSError as exc:
-        if on_line:
-            on_line(f"!! could not run {argv[0]}: {exc}")
-        return 127
-
-    stopper = None
-    if cancel is not None:
-        def _watch():
-            cancel.wait()
-            if proc.poll() is None:
-                try:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                except OSError:
-                    try:
-                        proc.terminate()
-                    except OSError:
-                        pass
-        stopper = threading.Thread(target=_watch, daemon=True)
-        stopper.start()
-
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        if on_line:
-            on_line(line.rstrip("\n"))
-    rc = proc.wait()
-    if cancel is not None:
-        cancel.set()        # release the watcher; a second set() is a no-op
-    return rc
+    from .emulation import spawn as _spawn
+    return _spawn(argv, cwd, on_line=on_line, cancel=cancel)
