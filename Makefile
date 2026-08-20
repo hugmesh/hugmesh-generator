@@ -1222,8 +1222,15 @@ mesh-emu-down: ## stop every emulated device the harness started (sweeps stale p
 # kind-e2e resolver-maps hugmesh.net -> 127.0.0.1 (kind-local.yaml maps
 # the internal ingress out on :8443) and runs spec 27. No /etc/hosts edits,
 # no sudo. See specs/cluster/bootstrap/kind-local/README.md.
-kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice first-party images (needs the kind cluster to exist)
-	bash scripts/kind-load-images.sh
+# ONLY=<repo>[,<repo>...] rebuilds a SUBSET rather than all eight images — the
+# difference between a one-image UI iteration and a full rebuild that includes
+# three unrelated Java builds. Unknown names FAIL rather than filtering to
+# nothing, because a typo that loads no image while exiting 0 leaves the cluster
+# serving the old code and looks exactly like "my fix did not work":
+#   make kind-images ONLY=hugmesh-host-shell
+#   make kind-images ONLY=hugmesh-host-shell,hugmesh-login-ui
+kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice first-party images (ONLY=repo[,repo] for a subset)
+	ONLY='$(ONLY)' bash scripts/kind-load-images.sh
 
 kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled)
 	KIND_PROFILE=sso MFA='$(MFA)' bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh

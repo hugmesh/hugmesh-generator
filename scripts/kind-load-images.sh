@@ -56,6 +56,45 @@ IMAGES=(
   "hugmesh-admin-ui=${REGISTRY}/hugmesh-admin-ui:main="
 )
 
+# ONLY=<repo>[,<repo>...] — rebuild a SUBSET instead of all eight.
+#
+# Why this exists: iterating on one UI defect meant rebuilding every image,
+# including the three Java ones, which dominates the loop and has nothing to do
+# with the change. `make kind-images ONLY=hugmesh-host-shell` rebuilds and
+# reloads just that one.
+#
+# FAIL-CLOSED on an unknown name. The tempting implementation — filter and carry
+# on — turns a typo into a build that loads NOTHING and still exits 0, so the
+# cluster keeps serving the old image while the operator believes they just
+# shipped a fix. That failure is silent and expensive; an error is neither.
+if [ -n "${ONLY:-}" ]; then
+  known=()
+  for triple in "${IMAGES[@]}"; do known+=("${triple%%=*}"); done
+  selected=()
+  IFS=',' read -r -a wanted <<< "${ONLY}"
+  for want in "${wanted[@]}"; do
+    want="$(echo "${want}" | tr -d '[:space:]')"
+    [ -n "${want}" ] || continue
+    hit=""
+    for triple in "${IMAGES[@]}"; do
+      [ "${triple%%=*}" = "${want}" ] && { selected+=("${triple}"); hit=1; break; }
+    done
+    [ -n "${hit}" ] || {
+      echo "ONLY: unknown image '${want}'. Known: ${known[*]}" >&2; exit 2; }
+  done
+  [ "${#selected[@]}" -gt 0 ] || { echo "ONLY was set but selected nothing" >&2; exit 2; }
+  IMAGES=("${selected[@]}")
+  # Say what is NOT being rebuilt: a partial build that reads like a full one is
+  # how a stale sibling image gets blamed on the change under test.
+  echo "==> ONLY=${ONLY}: building ${#IMAGES[@]} of ${#known[@]} image(s)."
+  echo "    NOT rebuilt (the cluster keeps whatever it already has):"
+  for k in "${known[@]}"; do
+    skip=1
+    for triple in "${IMAGES[@]}"; do [ "${triple%%=*}" = "${k}" ] && skip=""; done
+    [ -n "${skip}" ] && echo "      ${k}"
+  done
+fi
+
 for triple in "${IMAGES[@]}"; do
   repo="${triple%%=*}"
   rest="${triple#*=}"
