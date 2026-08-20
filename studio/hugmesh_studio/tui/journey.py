@@ -94,14 +94,20 @@ MODE_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("mesh", "Mesh node",
      "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
      "edge-AI — that run a mesh on dedicated hardware."),
+    # MIRROR of gui/pages/mode.py (T3): the two emulation cards say EPHEMERAL vs
+    # PERSISTENT before the click, because that — not "one image vs several" — is
+    # the difference an operator has to choose on. test_tui_gui_parity pins these
+    # descriptions word for word, so the two faces are edited together or not at all.
     ("qemu", "QEMU device tests",
-     "Boot built images as emulated devices in Docker and assert they "
-     "provisioned correctly — Pi roles first, then x86. Test images from an "
-     "earlier build session, or build new ones and test them after."),
+     "Test built images: ephemeral asserted boots. Boot a build session's "
+     "images as emulated devices, check they provisioned correctly and "
+     "power them off — Pi roles first, then x86. Or build new images and "
+     "test them after."),
     ("meshemu", "Mesh emulation",
-     "Emulate a WHOLE built mesh locally: pick a prior build session and "
-     "boot every image it holds as emulated devices — per-device status, "
-     "ssh logins, USB provisioning keys and the mesh's web front door."),
+     "Emulate the mesh you are readying for deployment: persistent devices, "
+     "console, save-back. Boot every image of a prior build session and keep "
+     "the guests up — per-device status, ssh logins, the QEMU console, disk "
+     "saves, USB provisioning keys and the mesh's web front door."),
     ("deploy", "Cloud deploy",
      "Publish an already-built, cloud-packaged x86 image to a cloud provider "
      "(AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are "
