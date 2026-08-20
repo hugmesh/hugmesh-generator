@@ -1093,6 +1093,27 @@ lint:tls-front:
   script:
     - bash tests/stack/test-tls-front.sh
 
+# Stale-after-logout HEADER POSTURE gate (tests/stack/test-no-store-posture.sh):
+# the wave-5 fix (hugmesh-gateway#11 forces no-store on /bff/** JSON;
+# hugmesh-user-bff-api#8 no-stores the owner-scoped media serves) is
+# unconditional CODE upstream, so this repo's regression surfaces are the layers
+# it owns: the tls-front terminator must stay cache-transparent (no cache-header
+# hide/add/expires/proxy_cache at the door), no cache-named env knob may appear
+# on the compose gateway/user-bff services undeclared, patch-stack-src.sh must
+# not rewrite the posture at build time, and — where a .stack-src clone tree is
+# present — the built sources must still carry both fixes (no CI clone here, so
+# that leg SKIPs; run with REQUIRE_STACK_SRC=1 after clone-all-repos.sh to make
+# it load-bearing). Every assertion has a staged-copy negative control, and the
+# tally carries a MIN_CHECKS floor. python3 + PyYAML + coreutils only.
+lint:no-store-posture:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/stack/test-no-store-posture.sh
+
 # Cold local-mesh prerequisite (tests/stack/test-m2-bootstrap.sh): build_one must
 # run maven INSIDE the container, plus a repo-wide lint for the bug class that
 # broke it — a comment inside a backslash continuation, which truncates the
