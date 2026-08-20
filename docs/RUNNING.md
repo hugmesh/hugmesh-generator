@@ -279,7 +279,10 @@ It automatically falls back to a plain numbered-prompt menu (force it with
 `NO_TUI=1`). Your last choices are remembered between runs.
 
 A host-side Python twin, `python -m hugmesh_studio.tui` (the Studio parity TUI:
-build-session review + worklist table), follows the same `NO_TUI` degradation rule;
+the guided journey — welcome screen, mode menu, Themes, create-nodes-for-local-cloud,
+whole-mesh emulation, domains with per-domain Sign-in — plus `--sessions`
+build-session review, `--worklist` table and `--meshemu` whole-mesh status
+list), follows the same `NO_TUI` degradation rule;
 its rich renderer is `dev-python/urwid` — ~arch on Gentoo, accepted with one line
 (`echo "dev-python/urwid ~amd64" >> /etc/portage/package.accept_keywords/hugmesh-studio`)
 — and entirely optional (see `studio/README.md`).

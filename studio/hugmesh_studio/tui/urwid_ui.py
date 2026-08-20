@@ -10,9 +10,11 @@ from __future__ import annotations
 import urwid
 
 from ..core import build_sessions
+from . import journey as journey_mod
 from . import model
 
-__all__ = ["SessionsReview", "run_sessions_review", "run_worklist"]
+__all__ = ["JourneyApp", "SessionsReview", "run_journey", "run_sessions_review",
+           "run_worklist"]
 
 _LIST_HELP = "enter=inspect  d=delete  w=worklist  r=refresh  q=quit"
 _SUB_HELP = "q/esc=back"
@@ -159,6 +161,81 @@ class SessionsReview:
             row = self._focused_row()
             if row is not None:
                 self.show_worklist(row)
+
+
+class JourneyApp:
+    """The JOURNEY (urwid face): a thin renderer over :class:`~.journey.Journey`.
+
+    One screen shape for every journey page: the shared state machine's lines as
+    the body, its prompt as an :class:`urwid.Edit` command line in the footer —
+    Enter feeds the exact same strings the plain face would, so the two faces
+    cannot diverge. The "sessions" entry point swaps in the existing
+    :class:`SessionsReview` widget and returns here when it exits.
+    """
+
+    def __init__(self, generator_dir: str = ".") -> None:
+        self.journey = journey_mod.Journey(generator_dir)
+        self.input = urwid.Edit("> ")
+        self.header = urwid.Text(("bold", ""))
+        self.frame = urwid.Frame(
+            body=urwid.ListBox(urwid.SimpleListWalker([])),
+            header=self.header,
+            footer=urwid.AttrMap(self.input, None, focus_map="reversed"),
+            focus_part="footer")           # every keystroke lands in the Edit
+        self.root = urwid.WidgetPlaceholder(self.frame)
+        self.sessions: SessionsReview | None = None
+        self.sync()
+
+    def sync(self) -> None:
+        """Re-render the current journey screen (lines + prompt) into the frame."""
+        j = self.journey
+        self.header.set_text(("bold", f"HugMesh Studio — {j.title()}"))
+        # lines()[0] repeats the title for the plain face; the frame header
+        # already carries it here, so the body starts after it.
+        self.frame.body = _text_lines(j.lines()[1:])
+        self.input.set_caption(j.prompt())
+        self.input.set_edit_text("")
+
+    def _open_sessions(self) -> None:
+        self.sessions = SessionsReview()
+        self.root.original_widget = self.sessions.frame
+
+    def _close_sessions(self) -> None:
+        self.sessions = None
+        self.root.original_widget = self.frame
+        self.sync()
+
+    def feed(self, line: str) -> None:
+        """Feed one command line into the journey and re-render — the exact
+        entry point the Enter key uses (tests drive it directly)."""
+        self.journey.feed(line)
+        if self.journey.done:
+            raise urwid.ExitMainLoop()
+        if self.journey.effect == "sessions":
+            self._open_sessions()
+            return
+        self.sync()
+
+    def unhandled(self, key: str) -> None:
+        if not isinstance(key, str):
+            return
+        if self.sessions is not None:
+            # delegate to the review; its list-screen q raises ExitMainLoop,
+            # which HERE means "back to the journey", not "quit the app".
+            try:
+                self.sessions.unhandled(key)
+            except urwid.ExitMainLoop:
+                self._close_sessions()
+            return
+        if key == "enter":
+            self.feed(self.input.edit_text)
+
+
+def run_journey(generator_dir: str = ".") -> int:
+    app = JourneyApp(generator_dir)
+    urwid.MainLoop(app.root, palette=_PALETTE,
+                   unhandled_input=app.unhandled).run()
+    return 0
 
 
 _PALETTE = [("bold", "bold", ""), ("reversed", "standout", "")]

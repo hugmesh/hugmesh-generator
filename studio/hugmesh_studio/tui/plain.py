@@ -15,9 +15,11 @@ import sys
 from typing import IO
 
 from ..core import build_sessions
+from . import journey as journey_mod
 from . import model
 
-__all__ = ["run_sessions_review", "print_worklist", "prompt_yes_no"]
+__all__ = ["run_journey", "run_sessions_review", "print_worklist",
+           "print_meshemu", "prompt_yes_no"]
 
 
 def _say(out: IO[str], text: str = "") -> None:
@@ -88,6 +90,54 @@ def _delete_flow(inp: IO[str], out: IO[str], row: model.SessionRow) -> None:
     else:
         # delete() re-checks activity itself; honour its refusal verbatim.
         _say(out, "not deleted: the session became active again.")
+
+
+def print_meshemu(out: IO[str], generator_dir: str, session_name: str) -> bool:
+    """The whole-mesh emulation status list for ONE session, headlessly (#69):
+    plan summary + the per-device section-status table. False when no session of
+    that name holds bootable images (the caller words the error)."""
+    from ..core import mesh_emulation as me
+    from ..core import qemu_devices, qemu_tests
+    from . import meshemu
+    for sess in qemu_tests.discover_sessions(generator_dir,
+                                             only_with_images=True):
+        if sess.name == session_name:
+            plan = me.plan_mesh(sess, generator_dir)
+            for line in meshemu.plan_summary_lines(plan):
+                _say(out, line)
+            headers, rows = meshemu.device_table(
+                plan, qemu_devices.discover_devices(plan.work_dir))
+            for line in model.format_table(headers, rows):
+                _say(out, line)
+            return True
+    return False
+
+
+def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
+                generator_dir: str = ".") -> int:
+    """The JOURNEY loop (plain face): welcome -> the canonical page walk.
+
+    One screen per iteration — render the current screen's lines, prompt, feed
+    the answer back into the shared :class:`~.journey.Journey` state machine.
+    The "sessions" entry point drops into the existing sessions-review loop and
+    resumes the journey when it quits (the GUI's welcome -> sessions -> back
+    shape). EOF quits, as everywhere in this face."""
+    inp = inp if inp is not None else sys.stdin
+    out = out if out is not None else sys.stdout
+    j = journey_mod.Journey(generator_dir)
+    while not j.done:
+        _say(out)
+        for line in j.lines():
+            _say(out, line)
+        answer = _prompt(inp, out, j.prompt())
+        if answer is None:
+            return 0
+        j.feed(answer)
+        if j.effect == "sessions":
+            # the review owns the terminal until it quits; then the journey
+            # resumes right where it was (the welcome screen).
+            run_sessions_review(inp=inp, out=out)
+    return 0
 
 
 def print_worklist(out: IO[str], s: build_sessions.BuildSession) -> None:

@@ -186,11 +186,24 @@ urwid not installed, every flow degrades to plain numbered prompts instead of
 crashing (the menu's `NO_TUI` rule, reused verbatim).
 
 ```sh
-python -m hugmesh_studio.tui                       # sessions review (build history):
+python -m hugmesh_studio.tui                       # the guided journey (welcome screen
+                                                   #   first — the GUI wizard's page order)
+python -m hugmesh_studio.tui --sessions            # sessions review (build history):
                                                    #   status · artifacts · delete-with-confirm
 python -m hugmesh_studio.tui --worklist SESSION_ID # read-only worklist table for one session
+python -m hugmesh_studio.tui --meshemu SESSION     # whole-mesh emulation status list
 NO_TUI=1 python -m hugmesh_studio.tui              # force the plain-prompt fallback
 ```
+
+The journey mirrors the GUI's flow (`hugmesh_studio/tui/journey.py` consumes
+`config.WIZARD_PAGE_SLUGS` — one source, both faces): the three-card welcome
+screen and journey-ordered mode menu, the Themes screen (web login theme:
+colours, header/footer, background effect), the create-nodes-for-local-cloud
+abbreviated wizard (k8s gate + identity import + laptop/node-only worklist),
+the whole-mesh emulation per-device status list (ssh/web access as copy-ready
+command hints), and the per-domain Sign-in choice on the domains step. Steps
+not ported yet say so and keep the config's defaults; the walk ends in a config
+you can save and build from the GUI or `--print-commands`.
 
 urwid is deliberately **not** in `requirements.txt` (it must never become a hard
 studio dependency — the test suite runs with it absent). To get the rich UI on

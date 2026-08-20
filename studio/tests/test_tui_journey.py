@@ -1,0 +1,253 @@
+"""tui — the JOURNEY: welcome flow (#67), canonical page order, mode commits.
+
+Headless and Qt-free (the journey state machine is the model both faces render;
+the plain face is driven with scripted streams exactly like test_tui_sessions).
+The GUI-vs-TUI surface parity pins live in test_tui_gui_parity.py (Qt-present);
+HERE the pins are against core.config's canonical contracts, which the GUI
+asserts against too — the shared single source.
+"""
+import io
+import json
+import os
+
+import pytest
+
+from hugmesh_studio.core.config import (
+    MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS, ImageConfig, User,
+)
+from hugmesh_studio.core.worklist import load_any
+from hugmesh_studio.tui import app as tui_app
+from hugmesh_studio.tui import journey, plain
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+
+
+def _run_plain(script: str, generator_dir: str = ".") -> str:
+    out = io.StringIO()
+    rc = plain.run_journey(inp=io.StringIO(script), out=out,
+                           generator_dir=generator_dir)
+    assert rc == 0
+    return out.getvalue()
+
+
+def _walk(*feeds: str, generator_dir: str = ".") -> journey.Journey:
+    j = journey.Journey(generator_dir)
+    for line in feeds:
+        j.feed(line)
+    return j
+
+
+# ── the canonical page order — the GUI's, consumed not copied ──────────────────────
+def test_page_order_is_the_gui_slug_tuple_itself():
+    # identity, not equality: a copy could drift, THE tuple cannot.
+    assert journey.PAGE_ORDER is WIZARD_PAGE_SLUGS
+
+
+def test_every_canonical_slug_has_a_journey_screen():
+    j = journey.Journey(".")
+    for slug in WIZARD_PAGE_SLUGS:
+        assert j.screen_for(slug) is not None
+
+
+def test_a_fresh_start_lands_on_welcome():
+    # the #67 contract: first slug, and nothing else sets a start id.
+    j = journey.Journey(".")
+    assert j.slug == WIZARD_PAGE_SLUGS[0] == "welcome"
+
+
+# ── welcome: the three journey entry points (#67) ──────────────────────────────────
+def test_welcome_offers_the_three_entry_points_with_the_gui_ids():
+    assert [cid for cid, _, _ in journey.WELCOME_CHOICES] == [
+        "build", "localmesh", "sessions"]
+    assert journey.WELCOME_TARGET == {
+        "build": "mode", "localmesh": "localmesh", "sessions": "sessions"}
+
+
+def test_welcome_default_enter_keeps_the_historical_welcome_to_mode_flow():
+    j = _walk("")
+    assert j.slug == "mode"
+    assert j.flags.get("localmesh_selected") is False
+
+
+def test_welcome_localmesh_entry_raises_the_transient_flag():
+    j = _walk("2")
+    assert j.slug == "localmesh"
+    assert j.flags["localmesh_selected"] is True
+    # the flag is transient, never persisted into cfg (cfg.mode stays an image mode)
+    assert j.cfg.mode == "standalone"
+
+
+def test_welcome_sessions_entry_asks_the_face_for_the_review():
+    j = _walk("3")
+    assert j.effect == "sessions"
+    assert j.slug == "welcome"          # the journey resumes where it was
+
+
+def test_plain_face_embeds_the_sessions_review_and_resumes():
+    text = _run_plain("3\nq\nq\n")      # welcome -> sessions review -> back -> quit
+    assert "previous builds (newest first):" in text
+    # after the review quits, the welcome screen renders again
+    assert text.count("HugMesh Image Studio") >= 2
+
+
+def test_welcome_explainer_names_the_getting_started_guide():
+    j = journey.Journey(".")
+    assert any(journey.README_GETTING_STARTED in ln for ln in j.lines())
+
+
+# ── mode: the journey-ordered menu (#67, with the #65/#69 cards) ───────────────────
+def test_mode_menu_ids_in_the_operator_journey_order():
+    assert [mid for mid, _, _ in journey.MODE_CHOICES] == [
+        "localmesh", "localcloud", "mesh", "qemu", "meshemu",
+        "deploy", "phone", "quest", "cloud", "standalone"]
+
+
+def test_mode_default_is_standalone_by_id():
+    assert journey.MODE_DEFAULT_CHOICE == "standalone"
+    j = _walk("", "")                   # plain Enter on welcome, then on mode
+    assert j.cfg.mode == "standalone"
+    assert j.slug == "role"
+
+
+def test_each_side_flow_card_routes_to_its_slug_and_commits_no_mode():
+    for number, slug in (("1", "localmesh"), ("4", "qemu"), ("5", "meshemu"),
+                         ("6", "deploy"), ("7", "phone"), ("8", "quest")):
+        j = _walk("", number)
+        assert j.slug == slug, (number, slug, j.slug)
+        assert j.cfg.mode == "standalone"       # side-flows never touch cfg.mode
+        assert j.flags[f"{slug}_selected"] is True
+
+
+def test_pending_side_flows_are_honest_and_return_to_the_menu():
+    j = _walk("", "7")                  # MDM phone: not ported yet
+    assert "not yet ported to the TUI" in "\n".join(j.lines())
+    j.feed("")
+    assert j.slug == "mode"
+
+
+def test_mode_commit_mesh_enters_the_mesh_chain_at_idp():
+    j = _walk("", "3")
+    assert j.cfg.mode == "mesh"
+    assert j.slug == "idp"
+    assert j.cfg.role == "omnibus"      # the mesh default role, reset by id
+
+
+def test_mode_commit_standalone_clears_a_mesh_detours_admin_plane():
+    j = _walk("", "3")                  # into mesh
+    j.cfg.users.append(  # simulate an admin-plane leftover
+        User(username="alice", domain="d.example.org"))
+    j.goto("mode")
+    j.feed("10")                        # standalone
+    assert j.cfg.mode == "standalone"
+    assert j.cfg.users == [] and j.cfg.domains == []
+    assert j.cfg.additional_domains is False and j.cfg.configure_users is False
+    assert j.cfg.tailscale is False and j.cfg.sso is False
+
+
+# ── the positional walk honours the GUI's skip rules ───────────────────────────────
+def _visited(j: journey.Journey, feeds: list[str]) -> list[str]:
+    seen = [j.slug]
+    for line in feeds:
+        j.feed(line)
+        seen.append(j.slug)
+    return seen
+
+
+def test_standalone_walk_skips_every_admin_plane_page():
+    j = journey.Journey(".")
+    seen = _visited(j, ["", ""] + [""] * 10)
+    assert j.done
+    for slug in MODE_SKIPPED_PAGES["standalone"]:
+        assert slug not in seen
+    assert "sessions" not in seen                # entered only from welcome
+    for slug in journey.SIDE_FLOW_SLUGS:
+        assert slug not in seen                  # entered only via their card
+    assert seen[-2] == "build"                   # the TUI walk terminates here
+
+
+def test_mesh_walk_reaches_worklist_and_gates_the_tables():
+    j = journey.Journey(".")
+    j.feed("")            # -> mode
+    j.feed("3")           # mesh -> idp
+    j.feed("")            # idp keeps casdoor -> worklist
+    assert j.slug == "worklist"
+    j.feed("")            # continue without a row: refused inline
+    assert j.slug == "worklist" and "at least one" in j.status
+    j.feed("1")
+    j.feed("")            # -> branding (role/hardware are MODE_SKIPPED_PAGES)
+    assert j.slug == "branding"
+    j.feed("")            # -> network
+    j.feed("")            # -> keyzip
+    j.feed("")            # -> domains_choice
+    assert j.slug == "domains_choice"
+    j.feed("n")           # no extra domains -> the domains table is skipped
+    assert j.slug == "users_choice"
+    j.feed("n")           # users table skipped too
+    assert j.slug == "system"
+
+
+def test_external_idp_is_listed_but_refused_with_the_reason():
+    j = _walk("", "3")
+    j.feed("2")                          # Azure Entra ID
+    assert j.slug == "idp"               # not advanced
+    assert "not yet ported" in j.status
+    assert j.cfg.idp == "casdoor"        # state unchanged — fail closed
+
+
+# ── the walk ends in a config the GUI/CLI can build ────────────────────────────────
+def test_standalone_walk_saves_a_loadable_config(tmp_path):
+    path = tmp_path / "standalone.json"
+    script = "\n".join(["", "", "", "", "", "", "", "", f"s {path}", "q"]) + "\n"
+    text = _run_plain(script)
+    assert f"saved to {path}" in text
+    cfg = ImageConfig.load(str(path))
+    assert cfg.mode == "standalone" and cfg.role == "standalone-thick"
+
+
+def test_mesh_walk_saves_a_worklist_envelope(tmp_path):
+    path = tmp_path / "mesh.json"
+    j = _walk("", "3", "", "1", "")      # mesh, casdoor, one worklist row
+    for _ in range(len(WIZARD_PAGE_SLUGS)):   # branding..home pending steps
+        if j.slug == "build":
+            break
+        j.feed("n" if j.slug.endswith("_choice") else "")
+    assert j.slug == "build"
+    j.feed(f"s {path}")
+    assert "saved to" in j.status
+    base, wl = load_any(str(path))
+    assert base.mode == "mesh"
+    assert [e.id for e in wl.entries] == ["pki.x86"]
+
+
+def test_build_screen_is_honest_about_not_building():
+    j = _walk("", "")
+    while not j.done and j.slug != "build":
+        j.feed("")
+    assert "does not run builds yet" in "\n".join(j.lines())
+
+
+# ── entry point wiring ─────────────────────────────────────────────────────────────
+def test_main_default_opens_the_welcome_journey(capsys):
+    out = io.StringIO()
+    rc = tui_app.main([], inp=io.StringIO("q\n"), out=out)
+    assert rc == 0
+    text = out.getvalue()
+    assert "HugMesh Image Studio" in text
+    assert "Start building" in text and "Review prior sessions" in text
+
+
+def test_main_sessions_flag_opens_the_review_directly():
+    out = io.StringIO()
+    rc = tui_app.main(["--sessions"], inp=io.StringIO("q\n"), out=out)
+    assert rc == 0
+    assert "previous builds (newest first):" in out.getvalue()
+
+
+def test_unknown_input_gets_an_inline_message_never_a_crash():
+    j = journey.Journey(".")
+    j.feed("banana")
+    assert "unrecognised" in j.status
+    assert j.slug == "welcome" and not j.done

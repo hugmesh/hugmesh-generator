@@ -85,6 +85,12 @@ def test_importing_the_tui_imports_neither_urwid_nor_qt():
         "import hugmesh_studio.tui.app\n"
         "import hugmesh_studio.tui.model\n"
         "import hugmesh_studio.tui.plain\n"
+        "import hugmesh_studio.tui.journey\n"
+        "import hugmesh_studio.tui.themes\n"
+        "import hugmesh_studio.tui.localcloud\n"
+        "import hugmesh_studio.tui.meshemu\n"
+        "import hugmesh_studio.tui.domains_step\n"
+        "hugmesh_studio.tui.journey.Journey('.')\n"   # the lazy screen imports too
         "bad = [m for m in sys.modules\n"
         "       if m == 'urwid' or m.startswith(('urwid.', 'PySide6', 'PyQt6'))]\n"
         "assert not bad, bad\n")
@@ -97,9 +103,19 @@ def test_main_degrades_to_plain_prompts_with_the_menu_notice(capsys):
     out = io.StringIO()
     rc = tui_app.main([], inp=io.StringIO("q\n"), out=out)
     assert rc == 0
-    assert "previous builds" in out.getvalue()
+    # the default flow is the JOURNEY now (#67 parity: welcome screen first);
+    # the sessions review stays one entry point (and --sessions) away.
+    assert "HugMesh Image Studio" in out.getvalue()
     err = capsys.readouterr().err
     assert "NO_TUI" in err and "dev-python/urwid" in err
+
+
+def test_main_sessions_flag_keeps_the_old_default_reachable(capsys):
+    out = io.StringIO()
+    rc = tui_app.main(["--sessions"], inp=io.StringIO("q\n"), out=out)
+    assert rc == 0
+    assert "previous builds" in out.getvalue()
+    assert "NO_TUI" in capsys.readouterr().err
 
 
 def test_main_plain_flag_forces_the_fallback(capsys):

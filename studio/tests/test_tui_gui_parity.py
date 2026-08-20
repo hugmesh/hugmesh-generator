@@ -1,0 +1,126 @@
+"""GUI <-> TUI surface parity (#51 phase 2) — the two faces of one Studio.
+
+Runs the REAL Qt pages offscreen (importorskip, like every GUI suite) and pins
+the TUI's journey surfaces against them item for item: choice ids, JOURNEY
+order, routing targets, labels and derived allow-sets. Where the shared truth
+already lives in core (WIZARD_PAGE_SLUGS, DOMAIN_IDP_CHOICES, theme.BG_EFFECTS)
+the TUI consumes it directly and the pin is structural; where the GUI page owns
+the literal (card lists, labels), THESE tests are what keeps the mirror honest.
+"""
+import os
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+pytest.importorskip("hugmesh_studio.gui.qt",
+                    reason="no Qt binding (PySide6/PyQt6) installed")
+
+from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS               # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
+from hugmesh_studio.gui.pages import _theme_editor                     # noqa: E402
+from hugmesh_studio.gui.pages import domains as gui_domains            # noqa: E402
+from hugmesh_studio.gui.pages import localcloud_nodes as gui_lc        # noqa: E402
+from hugmesh_studio.gui.pages import welcome as gui_welcome            # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E402
+from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
+from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
+
+from _helpers import advance_to                                        # noqa: E402
+
+STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
+
+# a canned host so wizard construction never probes the machine (docker info &c.)
+HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
+
+
+@pytest.fixture(autouse=True)
+def _pinned_host(monkeypatch):
+    monkeypatch.setattr(wizard_mod, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    return (QtWidgets.QApplication.instance()
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
+
+
+@pytest.fixture
+def wiz(qapp):
+    w = wizard_mod.StudioWizard(GENERATOR_DIR)
+    w.show()          # offscreen: gives the wizard a current page to walk from
+    yield w
+    w.close()
+
+
+# ── the canonical page order: one source, both faces ────────────────────────────────
+def test_tui_page_order_is_the_wizard_slug_tuple():
+    assert journey.PAGE_ORDER is WIZARD_PAGE_SLUGS
+
+
+# ── welcome (#67): ids, titles, journey order, routing targets ──────────────────────
+def test_welcome_cards_match_the_gui_page(wiz):
+    page = advance_to(wiz, wizard_mod.WelcomePage)
+    assert [(cid, label) for cid, label, _ in page.choices] == \
+        [(cid, label) for cid, label, _ in journey.WELCOME_CHOICES]
+    # the full card blurbs too — the TUI renders the same descriptions
+    assert [desc for _, _, desc in page.choices] == \
+        [desc for _, _, desc in journey.WELCOME_CHOICES]
+
+
+def test_welcome_targets_match_the_gui_address_book():
+    assert journey.WELCOME_TARGET == gui_welcome._CHOICE_TARGET
+
+
+def test_welcome_default_is_build_on_both_faces(wiz):
+    page = advance_to(wiz, wizard_mod.WelcomePage)
+    assert page._selected_choice() == "build"
+    j = journey.Journey(GENERATOR_DIR)
+    j.feed("")                            # a plain Enter
+    assert j.slug == "mode"               # the historical welcome -> mode flow
+
+
+# ── mode (#67 + the #65/#69 cards): ids, journey order, default by id ───────────────
+def test_mode_menu_matches_the_gui_page_id_for_id(wiz):
+    page = advance_to(wiz, wizard_mod.ModePage)
+    assert [(mid, label) for mid, label, _ in page.modes] == \
+        [(mid, label) for mid, label, _ in journey.MODE_CHOICES]
+    assert [desc for _, _, desc in page.modes] == \
+        [desc for _, _, desc in journey.MODE_CHOICES]
+
+
+def test_mode_default_is_standalone_by_id_on_both_faces(wiz):
+    page = advance_to(wiz, wizard_mod.ModePage)
+    assert page._selected_mode() == "standalone" == journey.MODE_DEFAULT_CHOICE
+
+
+# ── localcloud (#65): the derived allow-set and the identity reader ─────────────────
+def test_localcloud_allowed_roles_match_the_gui_derivation():
+    assert tui_lc.ALLOWED_ROLES == gui_lc.LOCALCLOUD_ALLOWED_ROLES
+
+
+def test_localcloud_identity_readers_agree(tmp_path):
+    # both read the same on-disk seams (bootstrap config, secrets bundle,
+    # seeder roster); an empty generator dir must yield the same brand-default
+    # answer from either face.
+    assert tui_lc.local_mesh_identity(str(tmp_path)) == \
+        gui_lc.local_mesh_identity(str(tmp_path))
+
+
+# ── domains (#71): the Sign-in vocabulary and labels ────────────────────────────────
+def test_domain_signin_labels_match_the_gui_combo():
+    gui_labels = {value: label for value, label, _tip in gui_domains._IDP_ITEMS}
+    assert domains_step.IDP_LABELS == gui_labels
+
+
+# ── themes (#63): effect labels and the vanta dependency note ───────────────────────
+def test_effect_labels_match_the_gui_editor():
+    assert themes.EFFECT_LABELS == _theme_editor._EFFECT_LABELS
+
+
+def test_vanta_dependency_note_matches_the_gui_editor():
+    assert themes.VANTA_DEPENDENCY_NOTE == _theme_editor.VANTA_DEPENDENCY_NOTE
