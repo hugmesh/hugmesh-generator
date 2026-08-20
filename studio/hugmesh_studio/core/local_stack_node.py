@@ -14,6 +14,7 @@ from __future__ import annotations
 import collections
 import json
 import os
+import re
 import select
 import shutil
 import signal
@@ -39,13 +40,24 @@ _TOR_ONION_HOSTNAME_FILE = os.path.join("tests", "stack", "tor-onion", "hostname
 # this (gitignored) env file; the Makefile auto-includes the m2 compose override
 # whenever the file exists.
 _M2_ENV_FILE = os.path.join("tests", "stack", ".m2-registry.env")
+_M2_BOOTSTRAP_SCRIPT = os.path.join("tests", "stack", "m2-bootstrap.sh")
 M2_REGISTRY_CONTAINER = "hugmesh-m2-registry"
 M2_BOOTSTRAP_HINT = "run `make stack-m2-bootstrap` first"
 # The registry-readiness probe fetches a REAL artifact through the exact URL
 # shape the services' settings.xml (and the compose build args) will use — the
 # same artifact m2-bootstrap.sh self-checks after standing the registry up.
-_M2_CHECK_ARTIFACT = ("systems/hugmesh/hugmesh-parent/2.8.0/"
-                      "hugmesh-parent-2.8.0.pom")
+# Its coordinate is DERIVED FROM THAT SCRIPT'S PINS, never restated here. It
+# WAS restated, and still said `systems/hugmesh` after the Maven groupIds moved
+# to `net/hugmesh` (the groupIds lagged the Java package move) — so this half of
+# the probe asked a healthy registry for a path nothing publishes. It only ever
+# passed on hosts whose m2 cache still held a pre-rename tree. m2-bootstrap.sh
+# derives its own self-check path from the same PIN for the same reason; reading
+# the coordinate out of PINS means a future rename moves BOTH probes with it.
+_M2_PARENT_ARTIFACT = "hugmesh-parent"
+# PINS entries are `repo|sha|artifactId|version|kind|groupPath`, one quoted
+# string per line inside a `PINS=( ... )` array (interleaved with comments).
+_M2_PINS_BLOCK_RE = re.compile(r"^PINS=\((.*?)^\)", re.S | re.M)
+_M2_PIN_ENTRY_RE = re.compile(r'^"([^"]+)"')
 _M2_PROBE_TIMEOUT_S = 3.0
 # compose.local.yaml sets `name: hugmesh-local`, so built images are named
 # <project>-<service>. These four services resolve PRIVATE maven artifacts at
@@ -84,12 +96,21 @@ DEVOPS_UP_TIMEOUT_S = 3600
 # credential (issue #48). An EXISTING cluster created before that path can
 # never gain the mount; the preflight below detects exactly that.
 KIND_REPO_MOUNT = "/hugmesh/hugmesh-generator"
+#: The kind cluster bootstrap-kind.sh creates, and the name every probe below asks
+#: about. ONE reader of the override so a probe can never disagree with the verb.
+KIND_CLUSTER_DEFAULT = "hugmesh-local"
 # Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
 # creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
 # WITHOUT auth — data.name == "e2e-admin" when seeded, data: null when not.
 # (CASDOOR_ORG is seed-e2e.sh's default; an operator override would defeat
 # this probe, which then honestly reports 'not seeded' and blocks the run.)
 E2E_SEED_PROBE_URL = "http://localhost:8000/api/get-user?id=hugmesh/e2e-admin"
+
+
+def _kind_cluster_name() -> str:
+    """The kind cluster this repo's lane drives — bootstrap-kind.sh reads the same
+    KIND_CLUSTER_NAME override, so the probes and the verb always mean one cluster."""
+    return os.environ.get("KIND_CLUSTER_NAME", "") or KIND_CLUSTER_DEFAULT
 
 
 def _compose_base() -> list[str]:
@@ -368,6 +389,36 @@ class LocalStackNode:
             pass
         return vals
 
+    def _m2_check_artifact(self) -> tuple[str, str]:
+        """The parent-POM repository path the readiness probe GETs, read out of
+        m2-bootstrap.sh's PINS — the ONE place that coordinate is declared.
+        Returns ("", why) when the script cannot be read or carries no
+        hugmesh-parent pin; the caller default-fails on that, like every other
+        probe here, rather than guessing a coordinate.
+
+        The parent POM is the right subject: it is what every service resolves
+        first, and it is what the script's own self-check serves."""
+        script = os.path.join(self.generator_dir, _M2_BOOTSTRAP_SCRIPT)
+        try:
+            with open(script, encoding="utf-8") as f:
+                src = f.read()
+        except OSError as e:
+            return "", f"cannot read {_M2_BOOTSTRAP_SCRIPT} ({e})"
+        block = _M2_PINS_BLOCK_RE.search(src)
+        if not block:
+            return "", f"no PINS array in {_M2_BOOTSTRAP_SCRIPT} (shape drift?)"
+        for line in block.group(1).splitlines():
+            entry = _M2_PIN_ENTRY_RE.match(line.strip())
+            if not entry:                      # comments and blank lines
+                continue
+            fields = entry.group(1).split("|")
+            if len(fields) < 6 or fields[2] != _M2_PARENT_ARTIFACT:
+                continue
+            aid, ver, group = fields[2], fields[3], fields[5]
+            return f"{group}/{aid}/{ver}/{aid}-{ver}.pom", ""
+        return "", (f"no {_M2_PARENT_ARTIFACT} entry in {_M2_BOOTSTRAP_SCRIPT}'s "
+                    f"PINS — cannot build the check-artifact URL")
+
     def _url_ok(self, url: str, timeout: float = _M2_PROBE_TIMEOUT_S) -> tuple[bool, str]:
         """GET ``url``; (True, "") only on a 2xx. Default-fail: any error —
         unreachable IP, connection refused, 404, timeout, garbage URL — reports
@@ -399,7 +450,10 @@ class LocalStackNode:
         if not base:
             return False, f"{_M2_ENV_FILE} has no CI_API_V4_URL"
         group = vals.get("GITLAB_GROUP_ID", "1")
-        url = f"{base}/groups/{group}/-/packages/maven/{_M2_CHECK_ARTIFACT}"
+        artifact, why = self._m2_check_artifact()
+        if not artifact:
+            return False, why
+        url = f"{base}/groups/{group}/-/packages/maven/{artifact}"
         ok, why = self._url_ok(url)
         if not ok:
             return False, (f"registry {M2_REGISTRY_CONTAINER} did not serve the "
@@ -936,7 +990,7 @@ class LocalStackNode:
                     f"fetch — run the Studio against a full clone, or export "
                     f"ARGOCD_REPO_TOKEN=<token with read access to "
                     f"hugmesh-generator> and retry."]
-        cluster = os.environ.get("KIND_CLUSTER_NAME", "hugmesh-local")
+        cluster = _kind_cluster_name()
         kind = devops_tools.which("kind", self.generator_dir)
         if not kind:
             return []  # devops_available() already reports the missing tool
@@ -986,6 +1040,23 @@ class LocalStackNode:
                        "stale-but-consistent HEAD)."))
         return self._make("kind-up", timeout=DEVOPS_UP_TIMEOUT_S,
                           on_line=on_line, cancel=cancel)
+
+    def devops_running(self) -> bool:
+        """Does this mesh's kind cluster exist RIGHT NOW? Read-only (`kind get
+        clusters`, the same question devops_repo_access() already asks) so a caller
+        can tell "the lane is already down" from "it has to come down first" without
+        firing the destructive verb blind.
+
+        False whenever the answer cannot be established — kind not installed, the
+        probe failing — because a cluster this lane created cannot exist without the
+        binary that creates it, and an unestablished reason must never be reported as
+        a running cluster (the same tri-state rule the e2e gate follows: unknown is
+        rendered as unknown, never as a blocker)."""
+        kind = devops_tools.which("kind", self.generator_dir)
+        if not kind:
+            return False
+        rc, out = self._probe([kind, "get", "clusters"])
+        return rc == 0 and _kind_cluster_name() in out.split()
 
     def devops_down(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-down` — delete the local Kubernetes cluster. Destructive for

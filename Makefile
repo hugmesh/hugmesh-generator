@@ -370,7 +370,7 @@ ORANGEPI4LTS_FLAVOR ?= both
 ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check inventory-check image-inventory pentest pentest-seed rebuild \
+.PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check inventory-check template-drift-check image-inventory pentest pentest-seed rebuild \
         rpi x86 omnibus prebuild-binaries frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         orangepizero2w orangepizero2w-live orangepizero2w-installer \
@@ -1072,6 +1072,20 @@ inventory-check: ## prove docs/IMAGE-INVENTORY.md still matches all six build ch
 	@test -f tests/build-matrix/inventory-check.sh \
 	  || { echo "tests/build-matrix/inventory-check.sh not found — the inventory gate is not in this checkout yet."; exit 1; }
 	bash tests/build-matrix/inventory-check.sh
+
+# TEMPLATE-DRIFT gate over EVERY archetype (scripts/validate-repo-templates-all.sh).
+# scripts/validate-repo-templates.sh grades ONE archetype per run and was wired into
+# no pipeline at all — its only automated caller was case B8 of tests/domain-registry/
+# test-templating-rename-pr.sh, `--archetype generator`. Three of the six overlays
+# rotted behind that. These are class-A templates (the generator overwrites them
+# wholesale in every rendered tenant), so a stale one strips content from every tenant
+# on the next render. Needs node + scripts/tooling/node_modules (npm ci) and a base per
+# archetype: exemplar clones come from pull-repo-base.sh, or point <NAME>_BASE_DIR at a
+# local read-only clone to run it offline. Build host only, no root.
+template-drift-check: ## prove every archetype template still matches its exemplar repo (scripts/validate-repo-templates-all.sh)
+	@test -f scripts/validate-repo-templates-all.sh \
+	  || { echo "scripts/validate-repo-templates-all.sh not found — the archetype drift gate is not in this checkout yet."; exit 1; }
+	bash scripts/validate-repo-templates-all.sh
 
 image-inventory: ## regenerate docs/catalog/image-inventory.json + docs/IMAGE-INVENTORY.md from the live channels
 	python3 scripts/emit-image-inventory.py

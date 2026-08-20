@@ -25,9 +25,14 @@ edits:
       # The host's own federation name. Remotes never dial it by name at runtime
       # (the host is a consumer), but the fleet keeps it brand-true for logs +
       # the federation-base default.
+      # Anchored on the `name:` PROPERTY, not the whole hugmeshHost(...) call:
+      # the exemplar's call grew a second option (extraSkip for three/vanta) and
+      # went multi-line, which broke a call-shaped anchor. The property line is
+      # the narrowest literal that still names what this anchor rebrands, and it
+      # survives the base adding further options or reformatting.
       - id: host-federation-name
-        find: "hugmeshHost({ name: 'hugmesh-host' })"
-        replace: "hugmeshHost({ name: '{{HOST_NAME}}' })"
+        find: "name: 'hugmesh-host'"
+        replace: "name: '{{HOST_NAME}}'"
         required: true
   - file: src/index.html
     optional: false

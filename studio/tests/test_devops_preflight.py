@@ -173,3 +173,38 @@ def test_devops_up_token_mode_is_named(monkeypatch, tmp_path):
     assert any("GitHub" in ln for ln in lines)
     # the token VALUE must never reach the log
     assert not any("ARGOCD_REPO_TOKEN=tok" in ln for ln in lines)
+
+
+# ── devops_running: the read-only "is the lane up?" probe (issue #50 item 4) ─
+# The "create nodes for local cloud" gate holds Next on this answer before it
+# will configure node images against a live cluster, so it is pinned BOTH ways
+# here, next to the probes it shares.
+
+def test_devops_running_sees_this_repo_s_cluster(monkeypatch, tmp_path):
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    _probes(monkeypatch, clusters="kind\nhugmesh-local\n")
+    assert LocalStackNode(_clone(tmp_path)).devops_running() is True
+
+
+def test_devops_running_ignores_a_foreign_cluster(monkeypatch, tmp_path):
+    # Someone else's kind cluster is not this lane and must never be reported as
+    # one — the gate would then demand a teardown that deletes nothing.
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    _probes(monkeypatch, clusters="some-other-cluster\n")
+    assert LocalStackNode(_clone(tmp_path)).devops_running() is False
+
+
+def test_devops_running_respects_the_cluster_name_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("KIND_CLUSTER_NAME", "other-cluster")
+    _probes(monkeypatch, clusters="other-cluster\n")
+    assert LocalStackNode(_clone(tmp_path)).devops_running() is True
+
+
+def test_devops_running_is_false_without_kind(monkeypatch, tmp_path):
+    # No binary that could have created a cluster -> no cluster. Must not crash
+    # probing with nothing to probe with, and must not report "up" from an answer
+    # nothing established: that would strand the gate on a page whose Next can
+    # never enable.
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    _probes(monkeypatch, kind_installed=False)
+    assert LocalStackNode(_clone(tmp_path)).devops_running() is False

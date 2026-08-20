@@ -7,6 +7,9 @@
 #
 # Verified 2026-08-20 against origin/main with no Qt binding installed:
 #   13 failed, 3840 passed, 81 skipped
+# 12 remain: the m2 check-artifact drift guard was REPAIRED and delisted rather than
+# re-pinned — the preflight now derives the coordinate from m2-bootstrap.sh's PINS
+# instead of restating it, so the guard gates again.
 # Every entry below reproduces on a clean checkout of main. Delete a line the moment
 # its test starts passing — that is the point of the re-run step.
 #
@@ -18,8 +21,6 @@ tests/test_worklist.py::test_envelope_conforms_to_frozen_schema
 # The Makefile's compose down-path profile flags drifted from what the test pins.
 tests/test_local_services.py::test_profile_slugs_name_a_profile_compose_actually_declares
 
-# tests/stack/m2-bootstrap.sh's CHECK_PATH no longer matches the pinned artifact.
-tests/test_local_stack_preflight.py::test_check_artifact_matches_the_m2_bootstrap_script
 
 # Banner count/order drift between build-x86-host-stage4.sh and the phase table
 # (29 banners vs the 28 the table describes).

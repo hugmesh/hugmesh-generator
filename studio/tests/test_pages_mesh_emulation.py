@@ -17,6 +17,18 @@ arm-tick and the ON-DISK verification. Two of those tests were red on main by de
 ``core.qemu_devices`` now refuses to author — and they are green here against
 ``emulation.start_device_argv``'s ``--only-exact`` contract.
 
+TWO GUARDS THAT DID NOT MOVE WITH IT
+------------------------------------
+The port kept both of the save reporting's ON-DISK verifications but not the tests
+that pinned them, so from PR #90 until now the code was right and nothing said so.
+Commit 3c241381 had added them to test_pages_qemu.py for exactly the reason they are
+easy to lose: each was written against a surviving MUTANT, and each stayed green in
+the whole file until the device under test already HAD a save. They are restored
+below as test_save_copy_does_not_report_an_OLD_save_as_the_new_one and
+test_overwrite_reports_a_target_that_is_no_longer_there, with that commit's
+``existing_save`` fixture and its ``STUB_SAVE_REMOVE`` arm (now ``mocked_spawn``'s
+``move_save_aside``, since the shell stub runner did not come to this page).
+
 New with it:
 
 * THE WHOLE-MESH SAVE, previewed before it runs — always. A save is 9.5-20.5 GB PER
@@ -208,6 +220,34 @@ def results(work_dir):
     return write
 
 
+@pytest.fixture
+def existing_save(work_dir):
+    """Put a stand-in EARLIER save on disk for a device and hand back its path.
+
+    A device that ALREADY has a save is the state both on-disk verifications below
+    need and that no other test here reaches: the page's own Save button can only
+    produce one by running, and a save produced by the run under test cannot stand in
+    for one that predates it.
+
+    The path comes from ``qemu_devices.new_save_target`` rather than being spelled
+    here, because the page arms Overwrite from ``qemu_devices.saved_copies`` and names
+    the file it is about to destroy from the same call — a fake save has to land
+    somewhere that function will actually find it, and a second, private copy of the
+    naming rule in this file would drift out from under these tests silently.
+
+    No sidecar is written: this is deliberately the pre-sidecar shape, which
+    ``saved_copies`` still claims by name, so the fixture depends on the smaller of
+    the two ownership rules.
+    """
+    def make(dev, stamp="20260814T210000Z", data=b"an earlier save"):
+        path = qemu_devices.new_save_target(work_dir, dev, stamp=stamp)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+    return make
+
+
 class _Spawns(list):
     """Captured (argv, cwd) pairs, plus the lines the fake spawn should echo."""
 
@@ -215,6 +255,10 @@ class _Spawns(list):
         super().__init__()
         self.lines: list[str] = []
         self.write_saves = True
+        #: Successor to the old shell stub's ``STUB_SAVE_REMOVE`` arm: exit 0 having
+        #: MOVED the target aside, which is what the real runner does to a save that
+        #: died after creating its file. See ``mocked_spawn``.
+        self.move_save_aside = False
         self.rc = 0
 
     @property
@@ -231,6 +275,16 @@ def mocked_spawn(monkeypatch):
     told to write — because the page's save reporting deliberately checks the
     FILESYSTEM rather than the exit status, and a stub that wrote nothing would make
     that check fire on every save.
+
+    Two arms turn that honesty off, and each one reproduces a REAL runner outcome
+    that still exits 0:
+
+    * ``write_saves = False`` — a save that wrote nothing at all;
+    * ``move_save_aside = True`` — a save that died AFTER creating its target, which
+      the runner then renames to ``<name>.partial``. The path the operator was just
+      told about is therefore missing afterwards, and only the filesystem can say so.
+      This is the shell stub's old ``STUB_SAVE_REMOVE`` (commit 3c241381), carried
+      over to this fixture when the save UI moved pages.
     """
     spawns = _Spawns()
 
@@ -241,11 +295,15 @@ def mocked_spawn(monkeypatch):
             on_line(f"MOCK-SPAWN {' '.join(argv)}")
             for line in spawns.lines:
                 on_line(line)
-        if "--save-to" in argv and spawns.write_saves:
+        if "--save-to" in argv:
             target = argv[argv.index("--save-to") + 1]
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "wb") as fh:
-                fh.write(b"a stand-in for a qcow2 backup\n")
+            if spawns.move_save_aside:
+                if os.path.exists(target):
+                    os.replace(target, target + ".partial")
+            elif spawns.write_saves:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "wb") as fh:
+                    fh.write(b"a stand-in for a qcow2 backup\n")
         return spawns.rc
 
     monkeypatch.setattr(emulation, "spawn", fake_spawn)
@@ -675,6 +733,38 @@ def test_a_save_that_wrote_nothing_is_reported_as_not_saved(wiz, qapp, registry,
     assert "Do not treat this device as saved" in note
 
 
+def test_save_copy_does_not_report_an_OLD_save_as_the_new_one(
+        wiz, qapp, registry, mocked_spawn, existing_save):
+    """"No new file appeared" has to survive the device ALREADY having a save.
+
+    The test above it runs against an empty saves dir, so ``after`` is empty whether
+    or not the diff against ``before`` is computed — which is why replacing
+    ``[p for p in after if p not in before]`` with ``list(after)`` keeps this whole
+    file green. On a device that already has one save, that mutant reports "Saved
+    <label> to <THE OLD FILE>" for a copy that wrote nothing: a green result naming a
+    file the operator could restore from and lose data by trusting.
+
+    Restored from commit 3c241381, which added it to test_pages_qemu.py; PR #90 moved
+    the save UI to this page and dropped the guard without replacing it.
+    """
+    page = _page(wiz)
+    dev = _device("rpi5/pki")
+    registry(dev)
+    old = existing_save(dev)
+    mocked_spawn.write_saves = False               # exits 0, writes nothing
+    page._refresh_reality()
+
+    assert _row(page, "rpi5/pki").saves == [old], "the earlier save was not found"
+    _row(page, "rpi5/pki").save.click()
+    _finish(page, qapp)
+
+    note = page.note.text()
+    assert "no new file appeared" in note, note
+    assert "Do not treat this device as saved" in note
+    assert old not in note, \
+        "the pre-existing save was reported as if this run had produced it"
+
+
 def test_overwrite_must_be_armed_inline_before_it_can_fire(wiz, qapp, registry,
                                                            mocked_spawn):
     page = _page(wiz)
@@ -706,6 +796,42 @@ def test_overwrite_must_be_armed_inline_before_it_can_fire(wiz, qapp, registry,
     assert "Overwrote" in page.note.text()
     # ...and the tick disarmed itself for the next click
     assert not _row(page, "rpi5/pki").arm_save.isChecked()
+
+
+def test_overwrite_reports_a_target_that_is_no_longer_there(
+        wiz, qapp, registry, mocked_spawn, existing_save):
+    """The overwrite arm verifies on disk too, and nothing here proved it.
+
+    Replacing its ``if not os.path.exists(target)`` with ``if False`` leaves this
+    file green, so an overwrite whose file had gone would still say "Overwrote ...".
+    That is the realistic failure, not a contrived one: when a save fails after
+    creating its target, the runner renames it to ``<name>.partial`` — so the exact
+    path the operator was just told about is missing afterwards, while the exit
+    status still reads 0.
+
+    Restored from commit 3c241381, which added it to test_pages_qemu.py; PR #90 moved
+    the save UI to this page and dropped the guard without replacing it.
+    """
+    page = _page(wiz)
+    dev = _device("rpi5/pki")
+    registry(dev)
+    target = existing_save(dev)
+    mocked_spawn.move_save_aside = True            # exits 0, moves it aside
+    page._refresh_reality()
+
+    row = _row(page, "rpi5/pki")
+    assert row.overwrite_target == target
+    row.arm_save.setChecked(True)
+    row.overwrite.click()
+    _finish(page, qapp)
+
+    note = page.note.text()
+    assert "not there now" in note, note
+    assert "NOT saved" in note
+    assert "Overwrote" not in note
+    # ...and the file really did go where a failed save leaves it
+    assert not os.path.exists(target)
+    assert os.path.exists(target + ".partial")
 
 
 def test_save_is_disabled_for_a_device_that_is_not_running(wiz, registry):
