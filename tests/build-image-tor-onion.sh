@@ -133,7 +133,10 @@ src_has() {  # LABEL PATTERN
   fi
 }
 src_has tor-with-flag  'set -- "$@" --with-tor'
-src_has tor-dispatch   'dispatch_builder ./build-x86-host-stage4.sh "$@"'
+# dispatch_node_builder, not dispatch_builder: the x86 node builder is dispatched
+# through the POSIX-sh IdP-appending wrapper (the bash-array IDP_EXTRA_ARGS fix —
+# see tests/posix-sh-no-arrays.sh); --with-tor still rides the same "$@".
+src_has tor-dispatch   'dispatch_node_builder ./build-x86-host-stage4.sh "$@"'
 src_has tor-gate-x86   "TOR_ONION=true is only supported for x86 node builds"
 src_has tor-gate-client "TOR_ONION=true is invalid for imageType=client"
 

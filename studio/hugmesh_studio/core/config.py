@@ -26,6 +26,7 @@ see specs-orangepi3-lts/README.md).
 from __future__ import annotations
 
 import copy
+import getpass
 import json
 import os
 import re
@@ -1115,8 +1116,9 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
     (it overrides DEFAULT_USER, :1598), so narrowing the FIELD would invent a builder
     constraint that does not exist. This is a WIZARD-surface rule of the same family as
     ``home_options_allowed``: it hides a group, and emission stays byte-identical because
-    ``local_user`` keeps its dataclass default ("magus", still emitted as --local-user
-    magus) while ``local_pass`` is empty by default — see HomePage.validatePage, which
+    ``local_user`` keeps its dataclass default (``default_local_user()``, the invoking
+    user, still emitted as --local-user on every x86 build)
+    while ``local_pass`` is empty by default — see HomePage.validatePage, which
     collects the secret only while the surface applies."""
     return (image_class(cfg.mode, cfg.role) == "desktop"
             or field_in_scope("standalone", cfg))
@@ -1340,6 +1342,27 @@ _BUILDER_DEFAULT_USER = {
 }
 
 
+def default_local_user() -> str:
+    """The Studio default for ``local_user``: the INVOKING user, per call.
+
+    Was the literal ``"magus"`` — the original operator's account baked into every
+    default x86 argv (``--local-user magus``) on any machine the Studio ran on.
+    ``getpass.getuser()`` honours LOGNAME/USER before falling back to the uid's
+    passwd entry; the except arm covers the (bare-container) case where neither
+    exists. Every predicate that asks "was the account name customized off the
+    Studio default?" must compare against THIS, not a literal — the two emission
+    predicates (``derive_default_user`` / ``_arm_common_args``) both do.
+
+    NOT consulted on the worker spec channel in practice: ``to_dict``/``save`` pin
+    every field via ``asdict``, so a materialized IMAGE_SPEC_JSON always carries
+    ``local_user`` explicitly and ``from_dict`` assigns it verbatim.
+    """
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "user"
+
+
 def derive_hostname(cfg: "ImageConfig") -> str:
     """The hostname this image would get with NO ``-H`` — i.e. what the builder's own
     role switch assigns. Pure; never raises.
@@ -1392,7 +1415,7 @@ def derive_default_user(cfg: "ImageConfig") -> str:
     local = (cfg.local_user or "").strip()
     if plat == "x86":
         return local or _BUILDER_DEFAULT_USER["x86"]
-    if local and (cfg.standalone or local != "magus" or cfg.local_pass):
+    if local and (cfg.standalone or local != default_local_user() or cfg.local_pass):
         return local
     return _BUILDER_DEFAULT_USER.get(plat, local or "")
 
@@ -1941,7 +1964,7 @@ class ImageConfig:
     hostname: str = ""                 # -H/--hostname baked host identity (all)
     timezone: str = ""                 # -T/--timezone baked host identity (all)
     user: str = ""                     # -u/--user baked default account name (all; distinct from --local-user)
-    local_user: str = "magus"
+    local_user: str = field(default_factory=default_local_user)  # the INVOKING user, not a baked operator name
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
     user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
     root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
@@ -2787,7 +2810,7 @@ class ImageConfig:
         # builders accept them independently to rename/hash the default account. Emit
         # when standalone, OR when the account name was customized off the Studio
         # default, OR when a password was supplied.
-        if self.standalone or self.local_user != "magus" or self.local_pass:
+        if self.standalone or self.local_user != default_local_user() or self.local_pass:
             a += ["--local-user", self.local_user]
             if self.local_pass:
                 a += ["--local-pass", self.local_pass]
