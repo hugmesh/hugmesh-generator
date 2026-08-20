@@ -125,3 +125,42 @@ def test_css_emits_the_hug_runtime_contract():
                  ("--sd-accent-soft", "--hug-accent-soft"),
                  ("--sd-flag-stripes", "--hug-flag-stripes")):
         assert pair[0] in css and pair[1] in css, pair
+
+
+# ── the optional background-effect declaration (--sd-bg-effect) ─────────────────────
+def test_shipped_presets_declare_no_effect_and_emit_no_effect_token():
+    # OMIT-WHEN-DEFAULT: the shipped catalogue declares nothing, so every preset
+    # composes byte-identically to what it emitted before the field existed and
+    # consumers keep their shipped gradient (login-ui PR #6's default clause).
+    for p in tp.PRESETS:
+        assert p.effect == "", f"{p.preset_id} grew an effect — that changes " \
+            "the bytes every existing theme file composes"
+        assert "--sd-bg-effect" not in tp.compose_css(p.preset_id, "dark")
+        assert "--sd-bg-effect" not in tp.delta_css(p.preset_id, "dark")
+
+
+def test_a_preset_may_declare_an_effect_and_it_rides_the_delta(monkeypatch):
+    aurora = tp.ThemePreset("aurora-test", "Aurora", "Colours",
+                            "#1976d2", "#0097a7", effect="vanta-fog")
+    plain = tp.ThemePreset("plain-test", "Plain", "Colours",
+                           "#1976d2", "#0097a7", effect="gradient")
+    monkeypatch.setattr(tp, "PRESETS", tp.PRESETS + (aurora, plain))
+    tokens = tp.compose_tokens("aurora-test")
+    assert tokens["--sd-bg-effect"] == "vanta-fog"
+    css = tp.compose_css("aurora-test")
+    assert "--sd-bg-effect: vanta-fog;" in css
+    assert "--hug-bg-effect: vanta-fog;" in css     # the runtime-contract twin
+    # the delta block is how cfg.login_theme_css / the GUI deliver a preset, so
+    # the declaration must survive the diff against the plain base derivation
+    assert "--sd-bg-effect: vanta-fog;" in tp.delta_css("aurora-test")
+    # an EXPLICIT default declaration is still the default: nothing is emitted
+    assert "--sd-bg-effect" not in tp.compose_css("plain-test")
+    assert "--sd-bg-effect" not in tp.delta_css("plain-test")
+
+
+def test_an_unknown_preset_effect_fails_closed(monkeypatch):
+    bad = tp.ThemePreset("bad-test", "Bad", "Colours",
+                         "#1976d2", "#0097a7", effect="vanta-spaghetti")
+    monkeypatch.setattr(tp, "PRESETS", tp.PRESETS + (bad,))
+    with pytest.raises(ValueError):
+        tp.compose_tokens("bad-test")

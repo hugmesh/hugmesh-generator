@@ -16,27 +16,20 @@ DESIGN RULES, in order:
   ``chrome`` dict that ``load``/``commit``/``compose_css`` already round-trip.
   Closing the dialog therefore loses nothing, and a host that never opens it commits
   exactly what it loaded.
-* **Vanta effects are listed but DISABLED.** The background-effect vocabulary
-  (``theme.BG_EFFECTS``) carries the vanta catalog host-shell PR #20 deferred; the
-  model persists those values (the generator-side anchor PR #20 asked for), but the
-  UI refuses to select what no shipped shell can render — a disabled row with the
-  dependency named beats an option that silently does nothing (the inert-control
-  trap).
+* **All six background effects are selectable.** The vocabulary
+  (``theme.BG_EFFECTS``) is the ``--sd-bg-effect`` contract login-ui PR #6 renders
+  (self-hosted three.js + vanta chunks, CSP-clean) and the host shell consumes;
+  an unknown or unbundled value degrades to the themed gradient by that contract,
+  so no selection here can ever produce a dead page. The picker is a
+  :class:`NoWheelComboBox` (PR #72's pattern): a stray hover-scroll must never
+  silently flip the mesh's background — the worklist board-combo corruption class.
 """
 from __future__ import annotations
 
 from ..qt import QtCore, QtWidgets
 from ...core import theme
 from ._logintheme import LoginThemeGroup, populate_preset_combo
-from ._widgets import _row
-
-#: Why the vanta rows cannot be picked yet — named on each disabled item AND in the
-#: visible note under the combo (a tooltip alone is invisible until hovered).
-VANTA_DEPENDENCY_NOTE = (
-    "Vanta effects need the three.js + vanta effect loader that today ships only in "
-    "hugmesh-login-ui; porting it to the host shell was deferred by "
-    "hugmesh-host-shell PR #20. The choice is already persisted by the theme model, "
-    "and these rows unlock once the login-ui loader lands in the shell.")
+from ._widgets import NoWheelComboBox, _row
 
 _EFFECT_LABELS = {
     "gradient": "Moving gradient (shipped default — colours follow the theme)",
@@ -195,26 +188,32 @@ class ThemeEditorDialog(QtWidgets.QDialog):
             "hidden": hidden, "size": size, "bg": bg, "text": content}
         return box
 
-    # ── background effect (host-shell PR #20's anchor) ────────────────────────────
+    # ── background effect (--sd-bg-effect; rendered by login-ui PR #6 + the shell) ──
     def _background_group(self) -> QtWidgets.QGroupBox:
         g = self.group
         box = QtWidgets.QGroupBox("Page background")
         v = QtWidgets.QVBoxLayout(box)
-        self.bg_effect = QtWidgets.QComboBox()
+        # NoWheelComboBox, not QComboBox (PR #72): the group this dialog edits lives
+        # on scrolling pages, and this picker sits below enough rows that a dialog
+        # gaining a scroll area would put it mid-scroll-path — an unfocused wheel
+        # must scroll past it, never silently swap the mesh's page background.
+        self.bg_effect = NoWheelComboBox()
         for effect in theme.BG_EFFECTS:
             self.bg_effect.addItem(_EFFECT_LABELS.get(effect, effect), effect)
-            if effect in theme.VANTA_EFFECTS:
-                idx = self.bg_effect.count() - 1
-                item = self.bg_effect.model().item(idx)
-                item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEnabled)
-                self.bg_effect.setItemData(
-                    idx, VANTA_DEPENDENCY_NOTE, QtCore.Qt.ItemDataRole.ToolTipRole)
+        self.bg_effect.setToolTip(
+            "Emitted as --sd-bg-effect (omitted for the default gradient). The vanta "
+            "effects animate with the theme's own colours; consumers degrade any "
+            "value they cannot render to the themed gradient, and honour "
+            "prefers-reduced-motion by never starting an animation.")
         self.bg_effect.currentIndexChanged.connect(
             lambda _i: g.set_chrome(
                 "bg_effect", self.bg_effect.currentData() or theme.BG_EFFECT_DEFAULT))
         v.addWidget(_row("Background effect", self.bg_effect))
-        note = QtWidgets.QLabel("Vanta rows are visible but locked: " +
-                                VANTA_DEPENDENCY_NOTE)
+        note = QtWidgets.QLabel(
+            "Vanta effects are animated WebGL (self-hosted three.js — no CDN, "
+            "CSP-clean), coloured live from this theme's own tokens. Visitors who "
+            "set prefers-reduced-motion never see an animation, and a consumer "
+            "that cannot render a value falls back to the themed gradient.")
         note.setWordWrap(True)
         note.setStyleSheet("color: gray;")
         v.addWidget(note)

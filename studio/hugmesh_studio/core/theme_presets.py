@@ -122,7 +122,16 @@ MODES: Tuple[str, ...] = tuple(RAMPS)
 
 @dataclass(frozen=True)
 class ThemePreset:
-    """One selectable theme. ``stripes`` empty => a plain colour preset."""
+    """One selectable theme. ``stripes`` empty => a plain colour preset.
+
+    ``effect`` — an OPTIONAL background effect from :data:`theme.BG_EFFECTS`
+    (the ``--sd-bg-effect`` contract login-ui PR #6 renders and the host shell
+    consumes). ``""`` means the preset declares nothing: no token is emitted and
+    consumers fall back to their shipped default (``gradient``) — the same
+    omit-when-default rule the chrome options follow, which is what keeps every
+    pre-effect theme file composing byte-identical css. A declared ``gradient``
+    also emits nothing (it IS the default). Unknown values fail closed in
+    :func:`compose_tokens`, like an unknown preset id or mode."""
     preset_id: str
     label: str
     group: str                      # "Core" | "Colours" | "Pride flags"
@@ -130,10 +139,12 @@ class ThemePreset:
     secondary: str
     stripes: Tuple[str, ...] = ()   # the flag, top-to-bottom, verbatim
     note: str = ""                  # one-liner shown under the card label
+    effect: str = ""                # optional theme.BG_EFFECTS value; "" = undeclared
 
 
-def _p(pid, label, group, primary, secondary, stripes=(), note=""):
-    return ThemePreset(pid, label, group, primary, secondary, tuple(stripes), note)
+def _p(pid, label, group, primary, secondary, stripes=(), note="", effect=""):
+    return ThemePreset(pid, label, group, primary, secondary, tuple(stripes), note,
+                       effect)
 
 
 # ── the catalogue ────────────────────────────────────────────────────────────
@@ -361,6 +372,19 @@ def compose_tokens(preset_id: str, mode: str = "dark") -> Dict[str, str]:
                     tokens[key.removesuffix("-soft")], bg)
         tokens["--sd-flag-stripes"] = _stripe_gradient(p.stripes)
         tokens["--sd-flag-name"] = f'"{p.label}"'
+    # A preset MAY declare a background effect (see ThemePreset.effect). Emitted
+    # omit-when-default: an undeclared or explicit-default effect adds NO token, so
+    # a preset without one composes byte-identically to what it always emitted and
+    # consumers keep their shipped gradient. Fail-closed on unknown values — the
+    # same ValueError contract as an unknown preset/mode, and cfg.login_theme_css /
+    # the GUI's compose_css already surface it (slots never raise).
+    if p.effect:
+        if p.effect not in theme.BG_EFFECTS:
+            raise ValueError(
+                f"preset {p.preset_id!r} declares an unknown background effect "
+                f"{p.effect!r} — known: {', '.join(theme.BG_EFFECTS)}")
+        if p.effect != theme.BG_EFFECT_DEFAULT:
+            tokens["--sd-bg-effect"] = p.effect
     return tokens
 
 
