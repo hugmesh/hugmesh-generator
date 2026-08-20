@@ -150,7 +150,7 @@ spring:
             # StripPrefix=1 drops the /login segment so those map to the container
             # webroot (/main.js, /snap-config.js) nginx serves. Without BOTH the
             # base-href and this strip, the login page's bundles resolve to the
-            # systems-web host at the origin root and 404 (Angular never boots).
+            # host-shell host at the origin root and 404 (Angular never boots).
             - id: login-ui
               uri: http://hugmesh-login-ui:80
               predicates:

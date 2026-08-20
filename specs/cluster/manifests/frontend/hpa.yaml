@@ -1,4 +1,4 @@
-# HorizontalPodAutoscaler for hugmesh-systems-web. Modelled byte-for-byte on
+# HorizontalPodAutoscaler for hugmesh-host-shell. Modelled byte-for-byte on
 # manifests/remote-fragment/hpa.yaml (the first HPA in the cluster): plain
 # autoscaling/v2, Resource metrics only. The host shell is a stateless static nginx server, so it scales out cleanly under load.
 #
@@ -11,14 +11,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: hugmesh-systems-web
+  name: hugmesh-host-shell
   namespace: hugmesh-frontend
-  labels: { app: hugmesh-systems-web, app.kubernetes.io/part-of: hugmesh.net }
+  labels: { app: hugmesh-host-shell, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: hugmesh-systems-web
+    name: hugmesh-host-shell
   minReplicas: 2
   maxReplicas: 6
   metrics:

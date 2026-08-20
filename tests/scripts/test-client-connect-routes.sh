@@ -188,7 +188,14 @@ HOMESERVER_HINT = {
     "mastodon": ("mastodon-web", "akkoma"),
 }
 # The Angular shell — the thing that was silently answering these paths.
-SHELL_HINT = ("systems-web",)
+# BOTH spellings on purpose. The shell's workload/DNS name was renamed
+# `*-systems-web` -> `hugmesh-host-shell`, and the compose lane moved first: for a
+# while this tuple named ONLY the retired spelling, so the substring arm of the
+# check below silently matched nothing on the compose table and the gate leaned
+# entirely on its `paths == ["/**"]` arm. Keeping the historical spelling means a
+# resurrected old name is still caught; keeping the current one means the
+# substring arm actually fires again. Add, never replace, on the next rename.
+SHELL_HINT = ("host-shell", "systems-web")
 
 
 def check_table(name, routes):

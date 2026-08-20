@@ -2618,7 +2618,7 @@ rebrand_sysroot() {
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             "${f}"
     done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
-    info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
+    info "Rebrand complete (compound names like '${BRAND}-host-shell' may want review)."
 }
 
 # ── Mesh-node IdP external mode (I6.3) — the baked-tree passes ────────────────

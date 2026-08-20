@@ -152,7 +152,7 @@ spec:
             filters:
               - SetPath=/api/federation/vanity
           - id: frontend-host
-            uri: http://{{BRAND}}-systems-web.{{BRAND}}-frontend.svc.cluster.local:80
+            uri: http://{{BRAND}}-host-shell.{{BRAND}}-frontend.svc.cluster.local:80
             path: /**
   destination:
     server: https://kubernetes.default.svc
