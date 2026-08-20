@@ -43,13 +43,18 @@ WHAT A PLAN'S NUMBERS MEAN (and which are live today)
   what exists today. The range starts at 9443 (the launchers' own documented
   alternate UI port) — deliberately OFF :8443 and :8080, which the operator's
   live local mesh and headscale occupy.
-* ``mac`` / ``ip`` are the mesh-identity plan for the SHARED-NETWORK lane: today
-  each guest sits alone behind its own QEMU user-net (slirp gives every guest
-  10.0.2.15 and no cross-device link), so these are not consumed by the current
-  launchers — they are minted here, deterministically and collision-free, so the
-  runner's future shared-network mode has one source of identities and the GUI
-  can already show which address each device WILL own. Deterministic: replanning
-  the same session yields the same identities, so nothing in the UI reshuffles.
+* ``mac`` / ``ip`` / ``mesh_net`` are the mesh identity of the SHARED-NETWORK
+  lane, and they are now CONSUMED, not merely previewed: :func:`identities_json`
+  serialises them into the identity file that ``tests/qemu/run-qemu-docker.sh
+  --mesh-net`` and ``tests/qemu/mesh-cluster.sh --identities`` read, which is how
+  a MAC/IP shown in the UI is the same MAC/IP the guest's NIC and its
+  ``KEYS/network/mesh0.nmconnection`` end up carrying. Minted here,
+  deterministically and collision-free, so there is exactly ONE source of
+  identities: replanning the same session yields the same identities, so nothing
+  in the UI reshuffles and a re-boot of one row rejoins the same L2 at the same
+  address. Without a mesh spec each guest still sits alone behind its own QEMU
+  user-net (slirp gives every guest 10.0.2.15 and no cross-device link) — the
+  shared L2 is opt-in on every layer.
 * ``keys_image`` is the entrypoint's own spelling (``<work>/runs/<safe>/keys.img``)
   so the row can point the operator at the emulated USB stick the existing tools
   build — this module never builds one itself.
@@ -57,6 +62,7 @@ WHAT A PLAN'S NUMBERS MEAN (and which are live today)
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import threading  # noqa: F401 — spawn()'s signature names threading.Event
 from collections.abc import Callable
@@ -99,6 +105,27 @@ MAC_PREFIX = "52:54:00"
 MESH_SUBNET = "10.77.0"
 _IP_FIRST = 11
 
+#: The mesh addresses' prefix length. The plan is one flat /24 per session, so
+#: this is the number that ends up in the guest's nmconnection (``address1=
+#: <ip>/24``) — emitted as data rather than hard-coded in the shell consumers,
+#: which is the whole point of the identity file.
+MESH_PREFIX_LEN = 24
+
+#: The shared L2 itself, as a QEMU socket-netdev multicast SPEC (``ADDR:PORT``,
+#: what ``launch-*.sh --mesh-net`` takes). 239.0.0.0/8 is the administratively
+#: scoped IPv4 multicast block — it never leaves the local network — and
+#: 239.118.72.0/24 is the /24 the landed mesh-cluster.sh driver already picked,
+#: kept so both lanes stay inside one recognisable range.
+#:
+#: The GROUP and PORT are derived from the session, not fixed: two meshes
+#: emulated from two different sessions on one workstation must not share a
+#: broadcast domain, or node1 of session A would see node1 of session B's ARP
+#: and both clusters would be minting nodes on the same wire.
+MESH_MCAST_PREFIX = "239.118.72"
+_MCAST_GROUP_FIRST, _MCAST_GROUP_LAST = 1, 254
+MESH_PORT_MIN = 47300
+MESH_PORT_MAX = 47399
+
 #: The per-device sections the GUI badges. Order is presentation order.
 SECTIONS = ("boot", "ssh", "provision", "web")
 
@@ -138,6 +165,10 @@ class MeshPlan:
     work_dir: str
     devices: list[PlannedDevice] = field(default_factory=list)
     gateway_label: str = ""
+    #: The session's shared-L2 SPEC (``ADDR:PORT``), the same string every one of
+    #: this plan's devices passes to ``launch-*.sh --mesh-net``. Defaulted rather
+    #: than required so a hand-built plan (tests, older callers) still constructs.
+    mesh_net: str = ""
 
     @property
     def gateway(self) -> PlannedDevice | None:
@@ -180,6 +211,23 @@ def _mesh_mac(session_name: str, index: int) -> str:
     return f"{MAC_PREFIX}:{digest[0]:02x}:{digest[1]:02x}:{index:02x}"
 
 
+def mesh_net_spec(session_name: str) -> str:
+    """This session's shared-L2 SPEC — ``<mcast group>:<port>``, deterministic.
+
+    The SPEC every device of ONE plan passes to ``launch-*.sh --mesh-net``: the
+    UDP-multicast form needs no listener ordering, so all N nodes simply join the
+    group and no node has to boot before another. Group and port both come from
+    the session digest (bytes 2 and 3 — the MAC takes 0 and 1, so the two
+    derivations cannot correlate), which keeps two concurrently emulated sessions
+    on two different wires while replanning one session always returns to its own.
+    """
+    digest = hashlib.sha256(session_name.encode("utf-8")).digest()
+    span = _MCAST_GROUP_LAST - _MCAST_GROUP_FIRST + 1
+    group = _MCAST_GROUP_FIRST + digest[2] % span
+    port = MESH_PORT_MIN + digest[3] % (MESH_PORT_MAX - MESH_PORT_MIN + 1)
+    return f"{MESH_MCAST_PREFIX}.{group}:{port}"
+
+
 def plan_mesh(session: BuildSession, generator_dir: str, *,
               work_dir: str = "") -> MeshPlan:
     """The mesh plan for one build session — pure arithmetic, boots nothing.
@@ -215,7 +263,8 @@ def plan_mesh(session: BuildSession, generator_dir: str, *,
 
     return MeshPlan(session_path=session.path, session_name=session.name,
                     work_dir=work, devices=devices,
-                    gateway_label=gateway_label(rows))
+                    gateway_label=gateway_label(rows),
+                    mesh_net=mesh_net_spec(session.name))
 
 
 def front_door_url(plan: MeshPlan) -> str:
@@ -227,6 +276,76 @@ def front_door_url(plan: MeshPlan) -> str:
     """
     gw = plan.gateway
     return f"https://{SSH_HOST}:{gw.ui_port}/" if gw else ""
+
+
+# ── the identity file: ONE source of MACs/IPs/L2, for the shell lanes ─────────────
+
+def _as_mesh_plan(plan) -> MeshPlan:
+    """Accept a :class:`MeshPlan` or anything carrying one as ``.mesh``.
+
+    ``core.emulation.EmulationPlan`` embeds this planner's output as ``.mesh``, so
+    every caller that already holds a facade plan can emit identities from it
+    without unwrapping (and without this module importing the facade, which
+    imports this one). A TEST-lane plan has ``mesh=None`` and raises here rather
+    than silently emitting an empty identity file — a mesh with no identities is
+    a mesh whose nodes cannot address each other.
+
+    Structural, not ``isinstance``, and that is load-bearing rather than lax:
+    ``python -m hugmesh_studio.core.mesh_emulation`` loads THIS file twice — once
+    as ``__main__`` and once, under its package name, by the facade it imports —
+    so the plan handed back carries the OTHER copy's ``MeshPlan`` class and an
+    identity check would reject a perfectly good plan.
+    """
+    mesh = plan if hasattr(plan, "devices") else getattr(plan, "mesh", None)
+    if mesh is None or not hasattr(mesh, "devices"):
+        raise ValueError("no mesh plan to take identities from — plan the session "
+                         "in the DEPLOY lane (a TEST plan mints no mesh identities)")
+    return mesh
+
+
+def identities(plan) -> list[dict]:
+    """The plan's mesh identities as plain data, one entry per planned device.
+
+    ``[{label, mac, ip, prefix_len, subnet, mesh_net}]``, in boot order. THE
+    machine-readable contract between this planner and the shell lanes that boot
+    guests: ``run-qemu-docker.sh --mesh-net auto --identities FILE`` hands each
+    row's ``mac``/``ip`` to its launcher and to the KEYS payload, and
+    ``mesh-cluster.sh --identities FILE`` takes its three nodes' identities from
+    the same file. Every field is a string except ``prefix_len`` so a consumer
+    can spell ``address1=<ip>/<prefix_len>`` without re-deriving anything.
+
+    ``mesh_net`` is repeated on every entry deliberately: a consumer that reads
+    one row must not have to look elsewhere for the wire that row is on, and a
+    file whose rows disagree is then visibly wrong rather than quietly partial.
+    """
+    mesh = _as_mesh_plan(plan)
+    subnet = f"{MESH_SUBNET}.0/{MESH_PREFIX_LEN}"
+    net = mesh.mesh_net or mesh_net_spec(mesh.session_name)
+    return [{"label": d.label, "mac": d.mac, "ip": d.ip,
+             "prefix_len": MESH_PREFIX_LEN, "subnet": subnet, "mesh_net": net}
+            for d in mesh.devices]
+
+
+def identities_json(plan, *, indent: int = 2) -> str:
+    """:func:`identities` as JSON text (newline-terminated) — the file itself."""
+    return json.dumps(identities(plan), indent=indent) + "\n"
+
+
+def write_identities(plan, path: str) -> str:
+    """Write the identity file to ``path`` (creating its directory) and return it.
+
+    Written whole and then renamed: the consumers are shell scripts that may read
+    the file while a second plan is being written next to it, and half an identity
+    file is a mesh with half its addresses.
+    """
+    directory = os.path.dirname(os.path.abspath(path))
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(identities_json(plan))
+    os.replace(tmp, path)
+    return path
 
 
 # ── argv builders (all through the existing runner — no new process shapes) ───────
@@ -424,3 +543,72 @@ def spawn(argv: list[str], cwd: str,
     """
     from .emulation import spawn as _spawn
     return _spawn(argv, cwd, on_line=on_line, cancel=cancel)
+
+
+# ── CLI: mint the identity file the shell lanes consume ────────────────────────────
+# Deliberately one subcommand and nothing else. The rich CLI is the facade's
+# (``python -m hugmesh_studio.core.emulation plan|up|status|…``); this face exists
+# because the identity FILE is a build product two bash drivers read, and asking an
+# operator to pipe a plan through jq to produce it would be a second identity
+# source in all but name.
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse                 # CLI-only imports: `import mesh_emulation`
+    import sys                      # stays as thin as the planner it wraps
+
+    from . import qemu_tests as qt
+
+    p = argparse.ArgumentParser(
+        prog="python -m hugmesh_studio.core.mesh_emulation",
+        description=("Emit ONE build session's mesh identities — the "
+                     "{label, mac, ip, prefix_len, subnet, mesh_net} file that "
+                     "tests/qemu/run-qemu-docker.sh --identities and "
+                     "tests/qemu/mesh-cluster.sh --identities consume, so every "
+                     "layer addresses a device by the same MAC and IP."))
+    p.add_argument("subcommand", choices=("identities",))
+    p.add_argument("--generator-dir", default=_REPO_ROOT,
+                   help="the hugmesh-generator checkout (default: this one)")
+    p.add_argument("--session", default="",
+                   help="build session: a name under out/sessions or a path "
+                        "(default: the newest COMPLETE session)")
+    p.add_argument("--work", default="",
+                   help="runner --work dir (default: <generator>/out/qemu-runs)")
+    p.add_argument("--out", default="",
+                   help="write the file here instead of stdout (atomically)")
+    args = p.parse_args(argv)
+
+    # Lazy, and only here: core.emulation imports THIS module at top level, so a
+    # module-level import back would be a cycle. The planning itself goes through
+    # the facade on purpose — one lane resolving sessions differently from the
+    # other is the drift the facade exists to prevent.
+    from .emulation import EmulationMode, plan as plan_session
+
+    session = args.session or qt.default_session(args.generator_dir)
+    if session is None:
+        print("no build session with images under out/sessions — build images "
+              "first, or pass --session", file=sys.stderr)
+        return 1
+    try:
+        pl = plan_session(args.generator_dir, session, EmulationMode.DEPLOY,
+                          work_dir=args.work, epoch="")
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if not pl.rows:
+        print(f"session {pl.session_name} holds no runnable images — nothing to "
+              "mint identities for", file=sys.stderr)
+        return 1
+    if args.out:
+        print(write_identities(pl, args.out))
+    else:
+        sys.stdout.write(identities_json(pl))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(main())

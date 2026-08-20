@@ -64,9 +64,16 @@ runner polls until `--timeout`. Console output is captured to
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
 | `launch-pi.sh` | Boot a Pi **golden `.img`** under `-M virt` with a KEYS disk (`--kernel` loaded directly — QEMU has no BCM2712 model; it takes no `--stage4`, that is `run-qemu-test.sh`'s input). |
 | `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts/orangepi4-lts) under `-M virt` (kernel+DTB direct). |
+
+All three launchers carry the same default-off mesh flags — `--mesh-net SPEC`,
+`--mesh-mac MAC`, `--mesh-id N` — spelled from one identical block, so a
+mixed-arch mesh is a launcher choice rather than a missing feature. Without
+`--mesh-net` the QEMU argv is byte-identical to a copy of the launcher with the
+mesh code cut out (pinned that way in `mesh-cluster_test.sh`).
 | `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
-| `mesh-cluster.sh` | Opt-in 3-node k8s cluster: CP `kubeadm init` + two pinned-token joins over a shared QEMU mcast L2 (issue #48). |
-| `mesh-cluster_test.sh` | Static gate + hermetic tests for the mesh-cluster lane (nothing boots; also run by `check.sh`'s smokes + CI `lint:qemu-mesh-cluster`). |
+| `mesh-cluster.sh` | Opt-in 3-node k8s cluster: CP `kubeadm init` + two pinned-token joins over a shared QEMU mcast L2 (issue #48). `--identities FILE` takes the nodes' MAC/IP/L2 from the planner. |
+| `mesh-identities.sh` | **Sourced, not run.** The one reader of the planner's identity file, shared by `mesh-cluster.sh` and `run-qemu-docker.sh` (parse + per-row sanity; each lane keeps its own policy). |
+| `mesh-cluster_test.sh` | Static gate + hermetic tests for the whole mesh lane — all three launchers, the driver, the shared identity reader and the runner's shared-L2 plumbing (nothing boots; also run by `check.sh`'s smokes + CI `lint:qemu-mesh-cluster`). |
 | `matrix-assertions.sh` | `assert_size` / `assert_build_load` / `assert_runtime_load` helpers (limits read from the code). |
 | `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |
 | `assertions.sh` | The node checks, executed inside the guest over SSH. |
@@ -109,6 +116,54 @@ HUGMESH_QEMU_MESH=1 tests/qemu/mesh-cluster.sh --img <golden.img>
 Headscale/tailscale stay **off** here (phase 2, LAN cluster). The
 mesh-faithful variant (headscale + MagicDNS + a `reusable:true` preauth key)
 is phase 3 on the same plumbing.
+
+## ONE identity source + the containerized mesh lane (issue #48 phase 4)
+
+Two lanes now boot multi-node meshes — this driver (three launches on the host)
+and the containerized fleet (`run-qemu-docker.sh --keep-alive`, which registers
+devices the Studio can see). They take their **MACs, IPs and L2 from the same
+place**: the planner in `studio/hugmesh_studio/core/mesh_emulation.py`, whose
+identities are deterministic per build session (MAC `52:54:00:<sha(session)>:<idx>`,
+address `10.77.0.11+`, and a session-derived multicast group in
+`239.118.72.0/24`). Mint the file, then hand it to whichever lane you are using:
+
+```bash
+PYTHONPATH=studio python3 -m hugmesh_studio.core.mesh_emulation \
+    identities --out out/qemu-runs/identities.json          # the file
+tests/qemu/mesh-cluster.sh --dry-run --identities out/qemu-runs/identities.json
+tests/qemu/run-qemu-docker.sh --keep-alive --mesh-net auto \
+    --identities out/qemu-runs/identities.json              # the whole fleet
+```
+
+Nothing downstream invents an identity: `run-qemu-docker.sh` refuses `--mesh-net`
+without `--identities`, refuses to start a row the file does not cover, and
+`docker-entrypoint.sh` refuses a half identity (a NIC with no address, or an
+address with no NIC). Both flags are **off by default** — a run without them
+produces exactly the `docker run` and QEMU argv it always did.
+
+How the containerized fleet actually gets an L2: the runner creates ONE docker
+**bridge network per session** (`hugmesh-qemu-mesh-<8 hex of the session hash>`,
+created idempotently) and attaches every device container to it. Containers on
+one bridge share a broadcast domain, which is what lets each guest's second
+virtio NIC — a QEMU `socket,mcast=` netdev — reach the other guests. Per device
+the entrypoint writes `KEYS/network/mesh0.nmconnection`, binding the static
+address to that device's mesh MAC with `never-default=true`: the shared L2 has no
+DHCP, and the slirp NIC must keep the default route or the published ssh/UI
+forwards would break. The identity also lands in the device record
+(`mesh_net`/`mesh_mac`/`mesh_ip`), which is the only place a reader can learn
+where a device is reachable **from its peers** — the registry's `ssh_host_port`
+is a loopback forward on the workstation and means nothing to another guest.
+`--stop-all-devices` removes a mesh bridge once its last member is gone, and
+never a network this harness did not create.
+
+Status: every layer above is gated hermetically (`mesh-cluster_test.sh`: launcher
+argv byte-identity, identity parsing and its fail-closed legs, the driver
+end-to-end through the file, the bridge lifecycle against a fake docker, and the
+planner→driver contract). The **live** multi-container boot has NOT been run
+here: it needs ≥25 G free on `/` and this workstation has ~17 G. When it is run,
+the thing to watch is multicast delivery across the bridge — if the host bridge
+filters it, the same guests work with the point-to-point `listen=`/`connect=`
+SPEC, which the launchers already accept.
 
 ## SELinux AVC workout (`avc-workout.sh`, issue #45)
 
