@@ -58,6 +58,11 @@ case "$ENGINE" in
 esac
 
 # ── Load brand config ─────────────────────────────────────────────────────────
+# Security-posture knobs must come from the BRAND PROFILE, never from ambient
+# environment: this script also runs on the mesh-node root-cron reconcile path,
+# where an exported MFA=1 leaking into a render would flip gateway MFA
+# enforcement for a tenant whose profile never asked for it. Reset before source.
+MFA=""
 # shellcheck source=/dev/null
 source "$BRAND_CONF"
 
@@ -160,6 +165,19 @@ NS_PREFIX="${NS_PREFIX:-$BRAND}"
 [[ "$NS_PREFIX" =~ $_DNS_LABEL ]] \
   || _die "invalid NS_PREFIX '${NS_PREFIX}' (must be a DNS label: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\$)"
 
+# ── PER-DOMAIN gateway MFA flip (issue #47): brands/<brand>.conf `MFA=1` ───────
+# Renders {{MFA_ENABLED}} into THIS brand's gateway Applications (mfa.enabled on
+# the shared hugmesh-gateway chart), scoping enforcement to one CLUSTER_DOMAIN.
+# Default OFF; only app.mfa.enabled is templated — the freshness window keeps the
+# chart default and the privileged floor is NEVER templated (docs/MFA-ROLLOUT.md
+# §3 step 7 stays a hand-executed operator step). Fail closed on any spelling
+# outside the allowlist so a typo cannot silently mean "off".
+case "${MFA}" in
+  ""|0|false|off) MFA_ENABLED="false" ;;
+  1|true|on)      MFA_ENABLED="true" ;;
+  *) _die "invalid MFA '${MFA}' in the brand profile (use MFA=1 to enable; unset/0/false/off = disabled)" ;;
+esac
+
 echo "[generate-brand-repos] Brand:         ${BRAND}"
 echo "[generate-brand-repos] Title:         ${BRAND_TITLE}"
 echo "[generate-brand-repos] Org:           ${ORG}"
@@ -169,6 +187,7 @@ echo "[generate-brand-repos] Harbor project: ${HARBOR_PROJECT}"
 echo "[generate-brand-repos] NS prefix:      ${NS_PREFIX}"
 echo "[generate-brand-repos] Headscale:     ${HEADSCALE_URL}"
 echo "[generate-brand-repos] Mesh tag:      ${MESH_TAG}"
+echo "[generate-brand-repos] Gateway MFA:   ${MFA_ENABLED}"
 echo ""
 
 # Escape a string for the REPLACEMENT side of `sed s|...|...|` (mirrors the
@@ -195,6 +214,7 @@ render_template() {
     -e "s|{{CLUSTER_DOMAIN}}|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
     -e "s|{{HEADSCALE_URL}}|$(_sed_rep_escape "${HEADSCALE_URL}")|g" \
     -e "s|{{HARBOR_PROJECT}}|$(_sed_rep_escape "${HARBOR_PROJECT}")|g" \
+    -e "s|{{MFA_ENABLED}}|$(_sed_rep_escape "${MFA_ENABLED}")|g" \
     -e "s|{{MESH_TAG}}|$(_sed_rep_escape "${MESH_TAG}")|g" \
     -e "s|{{NS_PREFIX}}|$(_sed_rep_escape "${NS_PREFIX}")|g" \
     -e "s|{{BRAND}}|$(_sed_rep_escape "${BRAND}")|g" \

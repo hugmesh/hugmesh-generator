@@ -61,6 +61,11 @@ def _welcome(wiz):
     return next(p for p in wiz._pages if isinstance(p, wizard_mod.WelcomePage))
 
 
+def _sessions(wiz):
+    # Load/Save + Fleet + the builds manager moved here (issue #50 welcome flow)
+    return next(p for p in wiz._pages if isinstance(p, wizard_mod.SessionsPage))
+
+
 def _page(wiz, cls):
     return next(p for p in wiz._pages if isinstance(p, cls))
 
@@ -114,8 +119,8 @@ def test_welcome_drops_generator_flags_jargon(qapp):
 
 
 # ── P2-A: the whole-release Fleet tool is gated behind expert mode ────────────────────
-def _fleet_button(welcome):
-    return next((b for b in welcome.findChildren(QtWidgets.QPushButton)
+def _fleet_button(page):
+    return next((b for b in page.findChildren(QtWidgets.QPushButton)
                  if b.text() == "Fleet build…"), None)
 
 
@@ -123,7 +128,7 @@ def test_fleet_button_hidden_by_default(qapp, monkeypatch):
     monkeypatch.delenv(hugmesh_studio.ADVANCED_ENV, raising=False)
     assert advanced_mode() is False
     wiz = _make_wizard(qapp)
-    assert _fleet_button(_welcome(wiz)) is None      # off the public first screen
+    assert _fleet_button(_sessions(wiz)) is None     # off the public screens
     wiz.deleteLater()
 
 
@@ -131,7 +136,7 @@ def test_fleet_button_shown_in_advanced_mode(qapp, monkeypatch):
     monkeypatch.setenv(hugmesh_studio.ADVANCED_ENV, "1")
     assert advanced_mode() is True
     wiz = _make_wizard(qapp)
-    assert _fleet_button(_welcome(wiz)) is not None
+    assert _fleet_button(_sessions(wiz)) is not None
     wiz.deleteLater()
 
 
@@ -139,7 +144,7 @@ def test_fleet_entry_still_reachable_via_method_when_gated(qapp, monkeypatch):
     # gating hides the BUTTON, never removes the capability: _fleet() (and --fleet) work
     monkeypatch.delenv(hugmesh_studio.ADVANCED_ENV, raising=False)
     wiz = _make_wizard(qapp)
-    _welcome(wiz)._fleet()
+    _sessions(wiz)._fleet()
     assert getattr(wiz, "fleet_window", None) is not None and wiz.fleet_window.isVisible()
     wiz.fleet_window.deleteLater()
     wiz.deleteLater()

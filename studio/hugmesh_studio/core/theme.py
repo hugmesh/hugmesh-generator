@@ -681,6 +681,107 @@ def decor_tokens(variant: str = DEFAULT_DECOR) -> dict[str, str]:
     return dict(DECOR_VARIANTS.get(variant, DECOR_VARIANTS[DEFAULT_DECOR]))
 
 
+# ── the WEB CHROME axis: header/footer existence, size, backgrounds, content ────────
+#: Operator ask (#50 item 2): the Themes editor covers "much more than bootstrap color:
+#: header/footer size, existence, backgrounds, content". Same doctrine as every other
+#: axis: the generator emits LITERAL tokens, the consuming UI does the rendering, and a
+#: token that is not emitted means "the shipped page, byte-identical" — so an old theme
+#: (no chrome choices) composes exactly the css it always did.
+#:
+#: Named sizes rather than free-form CSS lengths: the value flows into SNAP_THEME_CSS
+#: token text, and a closed set is the same fail-closed rule login_font follows (a typo'd
+#: free-form length would silently mis-render at runtime with nothing to catch it).
+CHROME_SIZES: dict[str, str] = {
+    "compact": "2.5rem",
+    "comfortable": "4rem",
+    "tall": "6rem",
+}
+
+#: The page BACKGROUND EFFECT — the persistence anchor for hugmesh-host-shell PR #20's
+#: deferred vanta catalog. "gradient" is the shipped default (host-shell's theme-driven
+#: moving CSS gradient — PR #20's tier chain), so it emits NO token; "none" asks the
+#: shell to render a flat themed background; "vanta-<effect>" names an animated WebGL
+#: effect from the proven catalog (the four Vanta effects that render against the
+#: three.js 0.185 login-ui already ships). The vanta values are PLACEHOLDERS today:
+#: the loader lives only in hugmesh-login-ui and porting it to the host shell was
+#: deferred by PR #20 — the Studio therefore persists them but keeps them unselectable
+#: until the shell can render them. Emitted as ``--sd-bg-effect`` (PR #20's named
+#: contract: "emit the selection as a literal token (e.g. --sd-bg-effect: fog)").
+BG_EFFECT_DEFAULT = "gradient"
+VANTA_EFFECTS: tuple[str, ...] = ("vanta-fog", "vanta-waves", "vanta-net", "vanta-globe")
+BG_EFFECTS: tuple[str, ...] = (BG_EFFECT_DEFAULT, "none") + VANTA_EFFECTS
+
+
+def css_string(text: str) -> str:
+    """``text`` as a CSS single-quoted string literal, for ``content:`` consumers.
+
+    Same interpolation contract as DECOR_VARIANTS: the value lands verbatim in a
+    ``content:`` declaration, so quotes/backslashes must be escaped and newlines become
+    the CSS ``\\A`` escape — an unescaped quote would end the string early and drop the
+    whole declaration silently (the rgba() hazard, in string form)."""
+    escaped = text.replace("\\", "\\\\").replace("'", "\\'")
+    escaped = escaped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\A ")
+    return f"'{escaped}'"
+
+
+def chrome_tokens(*, header_hidden: bool = False, header_size: str = "",
+                  header_bg: str = "", header_text: str = "",
+                  footer_hidden: bool = False, footer_size: str = "",
+                  footer_bg: str = "", footer_text: str = "",
+                  bg_effect: str = BG_EFFECT_DEFAULT) -> dict[str, str]:
+    """Tokens for the web-chrome options — ONLY the deviations from the shipped page.
+
+    Emitted per surface (header/footer), each only when chosen:
+      ``--sd-<s>-display: none``   the surface is hidden outright
+      ``--sd-<s>-height``          a :data:`CHROME_SIZES` length
+      ``--sd-<s>-bg``              a flat background colour, with ``--sd-<s>-on`` as its
+                                   auto black/white text twin (legibility by construction,
+                                   the same on_color rule every accent gets)
+      ``--sd-<s>-content``         replacement text as a CSS string literal — consumers
+                                   must pair it with alt-text syntax (``content: var(..) / ''``
+                                   or real markup), the DECOR_VARIANTS accessibility rule
+    plus ``--sd-bg-effect`` when the effect is not the shipped gradient.
+
+    An all-defaults call returns ``{}`` — the conservative-schema guarantee: a config
+    saved before these options existed composes byte-identical css. Raises ValueError on
+    malformed input (bad hex, unknown size/effect), the same fail-closed contract as
+    :func:`derive`."""
+    tokens: dict[str, str] = {}
+    for surface, hidden, size, bg, text in (
+            ("header", header_hidden, header_size, header_bg, header_text),
+            ("footer", footer_hidden, footer_size, footer_bg, footer_text)):
+        if hidden:
+            tokens[f"--sd-{surface}-display"] = "none"
+        if size:
+            if size not in CHROME_SIZES:
+                raise ValueError(
+                    f"{surface} size must be one of {', '.join(CHROME_SIZES)} "
+                    f"(or empty for the shipped size), got {size!r}")
+            tokens[f"--sd-{surface}-height"] = CHROME_SIZES[size]
+        if bg:
+            _parse(bg)   # raises on malformed, before anything is emitted
+            tokens[f"--sd-{surface}-bg"] = bg
+            tokens[f"--sd-{surface}-on"] = on_color(bg)
+        if text:
+            tokens[f"--sd-{surface}-content"] = css_string(text)
+    effect = (bg_effect or BG_EFFECT_DEFAULT).strip()
+    if effect not in BG_EFFECTS:
+        raise ValueError(
+            f"background effect must be one of {', '.join(BG_EFFECTS)}, got {bg_effect!r}")
+    if effect != BG_EFFECT_DEFAULT:
+        tokens["--sd-bg-effect"] = effect
+    return tokens
+
+
+def chrome_css(**options) -> str:
+    """The appendable ``:root:root`` block for :func:`chrome_tokens`; "" when nothing
+    deviates from the shipped page. Rides the same later-block-wins mechanism as
+    theme_presets.delta_css, so it lands after the colour base without forking the
+    composition pipeline."""
+    tokens = chrome_tokens(**options)
+    return css_root(tokens) if tokens else ""
+
+
 # ── the BOOTSTRAP bridge ───────────────────────────────────────────────────────────
 #: Bootstrap 5.3 reads its own `--bs-*` custom properties at RUNTIME, so overriding them
 #: in the same :root restyles every Bootstrap component the fleet already ships —

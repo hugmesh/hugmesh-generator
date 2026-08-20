@@ -981,6 +981,30 @@ services:
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
       APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://hugmesh-user-bff-api:8080/bff/auth/callback}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      # ── Self-service Casdoor account writes (change password / change email) ──
+      # user-bff's /bff/user/profile/{password,email} relay to Casdoor's
+      # /api/set-password and /api/update-user. The BFF ships this surface DARK
+      # (casdoor.account.enabled=false => a documented no-op stub that acks
+      # "queued"/"stubbed" and writes NOTHING), and this compose never flipped it —
+      # so the profile page's change-password form was a silent no-op on the local
+      # mesh (operator report 2026-08-19: "change password doesn't work"). All
+      # four knobs on, wired exactly like the OIDC login legs above:
+      #   • base-url  — the in-DNS container Casdoor (http://casdoor:8000), NEVER a
+      #     browser-reachable URL, same rule as APP_BFF_OIDC_LOGIN_BASE/ISSUER (the
+      #     BFF default is the cluster-DNS casdoor.hugmesh-pki host, NXDOMAIN here);
+      #   • client id/secret — Casdoor authenticates its REST API with HTTP Basic
+      #     <clientId>:<clientSecret> of a registered APPLICATION, so these MUST
+      #     byte-match the seeded app-user-bff (seed-e2e.sh ensure_app) — reuse the
+      #     SAME variables as the OIDC block above so they can never drift apart.
+      # Requires the user-bff fix that sends the token's preferred_username (not
+      # the JWT sub) to Casdoor and propagates Casdoor's status:"error" refusals —
+      # hugmesh-user-bff-api PR "change-password Casdoor identity". Casdoor still
+      # verifies oldPassword server-side even for this Basic client credential, so
+      # the service credential is not a cross-user escalation on this path.
+      CASDOOR_ACCOUNT_ENABLED: ${CASDOOR_ACCOUNT_ENABLED:-true}
+      CASDOOR_ACCOUNT_BASE_URL: ${CASDOOR_ACCOUNT_BASE_URL:-http://casdoor:8000}
+      CASDOOR_ACCOUNT_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
+      CASDOOR_ACCOUNT_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
       # ── AI media cloak (poison-before-ingest) ──────────────────────────────
       # Ships DARK, matching the BFF's own application.yml default: with no
       # POISONER=1 these resolve to enabled=false, so the controller is mounted

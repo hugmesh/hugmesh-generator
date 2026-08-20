@@ -136,7 +136,8 @@ class LaunchPage(QtWidgets.QWizardPage):
     def _main_menu(self) -> None:
         """Back to the first screen. restart() re-runs each page's initializePage from
         the (unchanged) config, which is exactly what a "main menu" means here — the
-        Welcome page is where Load/Save config and the previous-builds manager live."""
+        Welcome screen routes to everything, including the sessions screen where
+        Load/Save config and the previous-builds manager live."""
         try:
             self.wiz.restart()
         except Exception:                     # noqa: BLE001 — see module docstring

@@ -512,7 +512,7 @@ def discover_unmanaged(out_dir: str) -> list[UnmanagedBuild]:
     return found
 
 
-# ── deletion / cleanup (best-effort, three-way guarded — the Welcome delete affordance) ─
+# ── deletion / cleanup (best-effort, three-way guarded — the Sessions delete affordance) ─
 def is_active(s: BuildSession) -> bool:
     """True when a record is a build in progress RIGHT NOW — status ``running`` and NOT
     stale (its pid is alive on this host, or it is a running record from another host we

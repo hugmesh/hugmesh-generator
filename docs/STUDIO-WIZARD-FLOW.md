@@ -20,9 +20,18 @@ the page registry + mode-gated flow are in
 
 ## Screen 0 — Welcome
 
-[`welcome.py`](../studio/hugmesh_studio/gui/pages/welcome.py) — the intro blurb,
-config Load/Save, and the Fleet-build entry. Its subtitle names all four paths so the
-first thing the user reads matches the choice screen that follows.
+[`welcome.py`](../studio/hugmesh_studio/gui/pages/welcome.py) — the hugmesh explainer
+(with the README getting-started link) plus THREE large icon buttons (issue #50):
+**Start building** (→ the mode menu below, journey-ordered), **Start a local mesh**
+(→ the local-stack flow directly), and **Review prior sessions** (→ Screen 0b).
+
+## Screen 0b — Prior sessions
+
+[`sessions.py`](../studio/hugmesh_studio/gui/pages/sessions.py) — the screen the
+Studio used to open on: config Load/Save, the Fleet-build entry (expert mode), and
+the Previous-builds manager
+([`sessions_widget.py`](../studio/hugmesh_studio/gui/pages/sessions_widget.py)).
+Reached only via the Welcome card; its own Next continues into the mode menu.
 
 ## STEP 1 — What do you want to build? (the four choices)
 

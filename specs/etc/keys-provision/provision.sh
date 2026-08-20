@@ -2769,20 +2769,80 @@ EOF
     # setfiles then applies). Manifest-driven, never a blind glob: a stale .pp
     # left in the store by an older build must not be resurrected here.
     # Idempotent — `semodule -i` re-installs an already-installed module.
+    #
+    # PER-MODULE VISIBILITY (#45). The original form was ONE batched
+    # `semodule -i a.pp b.pp ... 2>/dev/null || warn`, so a module that failed
+    # to load VANISHED three times over: semodule's own reason went to
+    # /dev/null, no per-module verdict existed anywhere, and the boot still
+    # scored green (all four 2026-08-14 QEMU runs shipped base-policy-only
+    # nodes behind exactly this warn — the README's acknowledged defect).
+    # Now:
+    #   * the batch is tried first (a semodule transaction is all-or-nothing,
+    #     and ONE policy rebuild instead of N is what a TCG first boot can
+    #     afford) with stderr CAPTURED into this log;
+    #   * on batch failure, each module is retried ALONE, stderr captured per
+    #     module, so the exact offender and semodule's own words land here;
+    #   * either way the per-module POSTCONDITION is read back from the STORE
+    #     (`semodule -l`), not from exit codes, and recorded machine-readably
+    #     in ${STATE_DIR}/selinux-modules.status — one "<module> <verdict>"
+    #     line each, verdict in: loaded | failed | missing-pp. That file is
+    #     the contract tests/qemu/assertions.sh asserts on;
+    #   * any non-loaded manifest module records the selinux-load-failed
+    #     marker via selinux_provision_failed(), so the enforce-gate refuses
+    #     to flip on a node whose policy set is not the one it was built with
+    #     (the per-module layer under PR #53's whole-policy postcondition).
     if [ -f /usr/share/hugmesh/selinux-modules.list ]; then
-        local hm_mods="" hm_m hm_pp
+        local hm_mods="" hm_m hm_pp hm_err hm_loaded hm_failed=""
         while read -r hm_m; do
             case "${hm_m}" in ''|'#'*) continue ;; esac
             hm_pp="/usr/share/selinux/${type}/${hm_m}.pp"
             [ -f "${hm_pp}" ] && hm_mods="${hm_mods} ${hm_pp}"
         done < /usr/share/hugmesh/selinux-modules.list
+        hm_err="${STATE_DIR}/.semodule.stderr"
         if [ -n "${hm_mods}" ]; then
             log "Loading hugmesh SELinux node-policy modules:${hm_mods}"
             # shellcheck disable=SC2086
-            semodule -s "${type}" -i ${hm_mods} 2>/dev/null \
-                || warn "hugmesh node-policy modules failed to load; node keeps the base policy only"
+            if ! semodule -s "${type}" -i ${hm_mods} 2>"${hm_err}"; then
+                warn "batched hugmesh node-policy load failed: $(tr '\n' ' ' < "${hm_err}")"
+                warn "retrying per module to isolate the offender(s)"
+                for hm_pp in ${hm_mods}; do
+                    hm_m="${hm_pp##*/}"; hm_m="${hm_m%.pp}"
+                    if semodule -s "${type}" -i "${hm_pp}" 2>"${hm_err}"; then
+                        log "  ${hm_m}: loaded"
+                    else
+                        warn "  ${hm_m}: FAILED to load: $(tr '\n' ' ' < "${hm_err}")"
+                    fi
+                done
+            fi
         else
             warn "selinux-modules.list present but none of its .pp are in /usr/share/selinux/${type} — no hugmesh policy loaded"
+        fi
+        rm -f "${hm_err}"
+        # Per-module postcondition, from the store — the machine-readable
+        # marker the QEMU assertions consume. Written on EVERY provision run
+        # (a re-provision overwrites), success included: "loaded" lines are
+        # what lets an assertion distinguish "all good" from "file predates
+        # this layer".
+        hm_loaded="$(semodule -s "${type}" -l 2>/dev/null || true)"
+        {
+            echo "# hugmesh SELinux node-policy per-module load status."
+            echo "# Written by provision_selinux() (keys-provision) at every provision run,"
+            echo "# derived from 'semodule -s ${type} -l' AFTER the manifest-driven load."
+            echo "# Read by tests/qemu/assertions.sh. One '<module> <verdict>' line per"
+            echo "# manifest module; verdict: loaded | failed | missing-pp."
+            while read -r hm_m; do
+                case "${hm_m}" in ''|'#'*) continue ;; esac
+                if [ ! -f "/usr/share/selinux/${type}/${hm_m}.pp" ]; then
+                    echo "${hm_m} missing-pp"; hm_failed="${hm_failed} ${hm_m}(missing-pp)"
+                elif printf '%s\n' "${hm_loaded}" | grep -q "^${hm_m}\b"; then
+                    echo "${hm_m} loaded"
+                else
+                    echo "${hm_m} failed"; hm_failed="${hm_failed} ${hm_m}"
+                fi
+            done < /usr/share/hugmesh/selinux-modules.list
+        } > "${STATE_DIR}/selinux-modules.status"
+        if [ -n "${hm_failed}" ]; then
+            selinux_provision_failed "hugmesh node-policy module(s) not in the ${type} store after the manifest load:${hm_failed} — see ${STATE_DIR}/selinux-modules.status and the semodule stderr above"
         fi
         # The modules ship with rules still tagged '# INFERRED-WIDE' in
         # specs/selinux/*.te; they are meant to run PERMISSIVE until a real

@@ -407,7 +407,6 @@ IDP="${IDP:-casdoor}"
 IDP_ISSUER="${IDP_ISSUER:-}"
 IDP_CLIENT_ID="${IDP_CLIENT_ID:-}"
 IDP_JWKS="${IDP_JWKS:-}"
-IDP_EXTRA_ARGS=()
 INGEST_URL="${INGEST_URL:-}"
 INTERNAL_TOKEN="${INTERNAL_TOKEN:-}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-}"
@@ -629,7 +628,7 @@ esac
 
 # IDP validation. casdoor (default) = no-op; external needs an https issuer + a
 # client id (secrets are never env/flags). Validated unconditionally: only the
-# legacy channel forwards IDP_* onto the builder (compute_idp_flags), and the
+# legacy channel forwards IDP_* onto the builder (dispatch_node_builder), and the
 # spec channel never sets IDP (defaults to casdoor), so validating here is
 # correct for both — a nonsensical IDP=entra with a spec build is rejected, not
 # silently ignored.
@@ -1148,21 +1147,27 @@ run_x86_build() {
   if [ "$BUILD_MODE" = "legacy" ] && [ "$TOR_ONION" = "true" ] && [ "$IMAGE_TYPE" != "client" ]; then
     set -- "$@" --with-tor
   fi
-  compute_idp_flags
-  dispatch_builder ./build-x86-host-stage4.sh "$@" "${IDP_EXTRA_ARGS[@]}"
+  dispatch_node_builder ./build-x86-host-stage4.sh "$@"
 }
 
-# compute_idp_flags — populate the global IDP_EXTRA_ARGS array with the external-
-# IdP flags (a function can't mutate the caller's $@, so callers append the array
-# after their own positional build-up). casdoor/spec-mode = empty array => argv
-# byte-identical. Shared by both node builders, which each take
-# --idp/--idp-issuer/--idp-client-id[--idp-jwks].
-compute_idp_flags() {
-  IDP_EXTRA_ARGS=()
-  [ "$BUILD_MODE" = "legacy" ] || return 0
-  [ "$IDP" = "casdoor" ] && return 0
-  IDP_EXTRA_ARGS=("--idp" "$IDP" "--idp-issuer" "$IDP_ISSUER" "--idp-client-id" "$IDP_CLIENT_ID")
-  [ -n "$IDP_JWKS" ] && IDP_EXTRA_ARGS+=("--idp-jwks" "$IDP_JWKS")
+# dispatch_node_builder BUILDER ARG... — dispatch_builder plus the external-IdP
+# flags. This file runs under /bin/sh (the k8s Job invokes it as
+# `/bin/sh /builder/build-image.sh`), and POSIX sh has no arrays — a global
+# IDP_EXTRA_ARGS array here was a hard parse error on dash/ash, masked only by
+# hosts that link /bin/sh -> bash (tests/posix-sh-no-arrays.sh now gates this).
+# A function can't mutate its CALLER's $@ either, so instead of an argv array
+# both node builders route through this helper, which appends the IdP flags
+# onto its OWN positional params (`set --`) before dispatching. casdoor/
+# spec-mode appends nothing => argv byte-identical. Both node builders take
+# --idp/--idp-issuer/--idp-client-id [--idp-jwks].
+dispatch_node_builder() {
+  if [ "$BUILD_MODE" = "legacy" ] && [ "$IDP" != "casdoor" ]; then
+    set -- "$@" --idp "$IDP" --idp-issuer "$IDP_ISSUER" --idp-client-id "$IDP_CLIENT_ID"
+    if [ -n "$IDP_JWKS" ]; then
+      set -- "$@" --idp-jwks "$IDP_JWKS"
+    fi
+  fi
+  dispatch_builder "$@"
 }
 
 run_rpi5_build() {
@@ -1173,8 +1178,7 @@ run_rpi5_build() {
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
-  compute_idp_flags
-  dispatch_builder ./build-rpi5-stage4.sh "$@" "${IDP_EXTRA_ARGS[@]}"
+  dispatch_node_builder ./build-rpi5-stage4.sh "$@"
 }
 
 run_frite_build() {

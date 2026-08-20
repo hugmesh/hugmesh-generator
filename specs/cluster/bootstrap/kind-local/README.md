@@ -188,6 +188,7 @@ Env overrides (all optional):
 | `VAULT_BRANCH` | `feat/kind-local-bringup` | branch `02-vault.yaml` (and, live, `manifests/vault`) is fetched from — carries the `vault-tls-init` openssl fix (bug #2 above) until it merges to `main`; drop it (or set to `main`) once merged |
 | `SKIP_VAULT_BOOTSTRAP` | `0` | set `1` to stop after applying the curated Applications, before the Vault init/unseal/PKI step |
 | `KIND_KV_RESEED` | `0` | `KIND_PROFILE=sso` only. Set `1` to re-mint **every** cluster secret even though Vault KV is already seeded. **DESTRUCTIVE**: existing Postgres/Cassandra volumes keep the old passwords and will reject the new ones — correct only against a fresh cluster or wiped PVCs. |
+| `MFA` | *(unset — off)* | `KIND_PROFILE=sso` only (`make kind-up MFA=1`); refuses `core` loudly. The MFA operational flip (issue #47): appends a `mfa.enabled=true` **helm parameter** to every gateway Application this bootstrap applies, so the kind cluster runs live route-level MFA enforcement while the committed chart/apps stay default-OFF. Flips **only** `app.mfa.enabled` — the privileged floor is not reachable from here. Accepts `1/true/on`; anything else but `0/false/off/empty` fails closed. See `docs/MFA-ROLLOUT.md` §8; wiring gated by `tests/stack/test-mfa-flip-wiring.sh`. |
 | `ARGOCD_REPO_TOKEN` | *(unset)* | **override**: point ArgoCD at GitHub with this credential instead of the default tokenless local sync — see below |
 
 ### Repo access — tokenless local sync (default) or `ARGOCD_REPO_TOKEN` (override)

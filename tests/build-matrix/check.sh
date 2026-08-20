@@ -2174,7 +2174,13 @@ PY
 # (check_provision_ok refuses on the selinux-load-failed marker), and 4 E-legs
 # (autorelabel consumption, the selinux_policy_loaded postcondition, and the two
 # matched-pair marker checks provision.sh <-> enforce-gate / build-lib <-> provision.sh).
-SLX_EXPECTED=142
+# 147 = 142 + the 5 E-legs the issue-#45 PER-MODULE load-visibility layer added
+# (deliberate bump; verified by running the delegate standalone: 147 emitted, 0 failed):
+# semodule stderr captured (no 2>/dev/null on the manifest load), the per-module
+# retry that isolates a failing module, the machine-readable selinux-modules.status
+# derived from `semodule -l`, the selinux-load-failed marker on any non-loaded
+# module, and the provision.sh <-> tests/qemu/assertions.sh status matched pair.
+SLX_EXPECTED=147
 SLX_PASS=0; SLX_FAIL=0
 run_selinux_policy_checks() {
     local out="${TMP_DIR}/selinux-policy.out"
@@ -2276,6 +2282,7 @@ run_nongating_smokes() {
                 "image-idp:${REPO_DIR}/tests/build-image-idp.sh" \
                 "idp-builder-functions:${REPO_DIR}/tests/scripts/test-idp-builder-functions.sh" \
                 "qemu-matrix-assertions:${REPO_DIR}/tests/qemu/assertions_test.sh" \
+                "qemu-avc-workout:${REPO_DIR}/tests/qemu/avc-workout_test.sh" \
                 "platform-key-spelling:${REPO_DIR}/tests/scripts/test-platform-key-spelling.sh" \
                 "host-accept-keywords:${REPO_DIR}/tests/scripts/test-host-accept-keywords.sh" \
                 "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh" \
