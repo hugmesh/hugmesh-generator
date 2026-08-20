@@ -46,8 +46,8 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import timezones          # noqa: E402
 from hugmesh_studio.core.config import (           # noqa: E402
     PERSON_ROLE_CHOICES, Domain, ImageConfig, User, clear_role_class_fields,
-    derive_default_user, derive_hostname, encrypt_root_always, person_role_applies,
-    superadmin_plane_applies, users_table_applies,
+    default_local_user, derive_default_user, derive_hostname, encrypt_root_always,
+    person_role_applies, superadmin_plane_applies, users_table_applies,
 )
 from hugmesh_studio.core.platform_info import HostInfo   # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod      # noqa: E402
@@ -542,17 +542,18 @@ def test_ask9_single_row_mesh_worklist_does_prefill(wiz):
 def test_ask9_mesh_worklist_does_not_bake_the_x86_account_onto_every_arm_node(wiz):
     """The hostname field's honesty arm, applied to the field that was missing it.
 
-    ``derive_default_user`` is PLATFORM-keyed: x86 resolves to --local-user ('magus'),
-    every ARM board to its own builder DEFAULT_USER ('pi' on rpi5). The page seeded off
-    the BASE config, which the WorklistPage pins to x86 — so a mixed worklist prefilled
-    'magus' and then emitted `-u magus` on the rpi5 row, which had emitted nothing
-    before and whose builder would have used 'pi'. Baking a default account onto a
-    board that never asked for one is exactly what the hostname guard exists to stop."""
+    ``derive_default_user`` is PLATFORM-keyed: x86 resolves to --local-user (the Studio
+    default account, i.e. the invoking user), every ARM board to its own builder
+    DEFAULT_USER ('pi' on rpi5). The page seeded off the BASE config, which the
+    WorklistPage pins to x86 — so a mixed worklist prefilled the x86 account and then
+    emitted `-u <x86 account>` on the rpi5 row, which had emitted nothing before and
+    whose builder would have used 'pi'. Baking a default account onto a board that
+    never asked for one is exactly what the hostname guard exists to stop."""
     mesh_flow(wiz, "pki.x86", "be.rpi5")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.user.text() == ""
     assert sysp.user_note.isVisible()
-    for name in ("magus", "pi"):
+    for name in (default_local_user(), "pi"):
         assert name in sysp.user_note.text()
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert "--user" not in wiz.cfg.to_cli_args()

@@ -19,6 +19,17 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# First-run bootstrap (issue #49): idempotent (one `cat` once stamped), advisory
+# by contract (always returns 0, prints only to stderr — safe under set -e).
+# --redo-first-run is launcher-local: honour it, then STRIP it before forwarding
+# (local_mesh's argparse does not know it).
+# shellcheck source=scripts/_first-run-lib.sh
+. "${SCRIPT_DIR}/_first-run-lib.sh"
+first_run_bootstrap "${REPO_DIR}" "$(first_run_wants_redo "$@")"
+fwd=()
+for a in "$@"; do [ "${a}" = "--redo-first-run" ] || fwd+=("${a}"); done
+set -- ${fwd[@]+"${fwd[@]}"}
+
 # Default --generator-dir to this checkout unless the caller overrides it.
 case " $* " in
     *" --generator-dir "*) gen=() ;;

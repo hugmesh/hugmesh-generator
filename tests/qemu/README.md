@@ -69,6 +69,38 @@ runner polls until `--timeout`. Console output is captured to
 | `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |
 | `assertions.sh` | The node checks, executed inside the guest over SSH. |
 | `seed-accounts.sh` | Renders/pushes the E2E account + Casdoor-role fixtures. |
+| `avc-workout.sh` | SELinux AVC workout driver: boot ONE image, drive confined workloads, harvest AVCs, emit the narrowing report (issue #45). |
+| `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
+| `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
+| `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `check.sh`'s smokes). |
+
+## SELinux AVC workout (`avc-workout.sh`, issue #45)
+
+The `specs/selinux/*.te` modules carry rules tagged `# INFERRED-WIDE: narrow
+after QEMU enforcing AVC pass`. This driver produces that pass, one image type
+per run: it boots the image (per-run qcow2 overlay — the golden artifact is
+never written), drives every confined workload (ssh logins through sshd's
+AuthorizedKeysCommand, the reconcile-agent service starts, device-registry sync,
+tor/vpn starts, `kubeadm init --dry-run`), harvests
+`ausearch -m AVC,USER_AVC -ts boot` (dmesg fallback), and emits
+`report.txt` grouping denials by source type → the `.te` file that owns it, so
+narrowing is mechanical. Gates: every module in
+`/usr/share/hugmesh/selinux-modules.list` must be in `semodule -l`, the
+per-module `selinux-modules.status` must be clean, and `getenforce` must match
+the expected mode.
+
+```bash
+# permissive pass (the narrowing input), once per image type:
+make avc-workout PLATFORM=x86  ROLE=pki WORK_DIR=out/sessions/<id>/artifacts
+make avc-workout PLATFORM=rpi5 ROLE=pki WORK_DIR=out/sessions/<id>/artifacts
+
+# enforcing campaign (after narrowing): setenforce 1 before the workload
+make avc-workout PLATFORM=x86 ROLE=pki ENFORCING=1 WORK_DIR=...
+```
+
+Artifacts land in `out/qemu-runs/avc/<platform>_<role>_<ts>/` (`report.txt`,
+`avc-raw.txt`, `probes.log`, `semodule-l.txt`, `selinux-modules.status`,
+`keys-provision.log`, `launch/console.log`).
 
 ## Client desktop images (`verify-client.sh`)
 

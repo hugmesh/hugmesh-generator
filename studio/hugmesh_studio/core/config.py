@@ -26,6 +26,7 @@ see specs-orangepi3-lts/README.md).
 from __future__ import annotations
 
 import copy
+import getpass
 import json
 import os
 import re
@@ -116,8 +117,27 @@ MODE_DEFAULT_ROLE = {
 # ASK 22 splits the terminal pair in three: "build" is the REVIEW screen (what will be
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
-WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "quest", "deploy",
-                     "qemu",
+#
+# Issue #50 (welcome flow): "welcome" is the three-card first screen (start building /
+# start a local mesh / review prior sessions) and "sessions" is the demoted old first
+# screen (Load/Save config + the Previous-builds manager). "sessions" sits IMMEDIATELY
+# after "welcome": only WelcomePage.nextId() ever routes INTO it (a plain Next flows
+# welcome -> mode), and its own positional next is "mode" — reviewing what you built
+# continues naturally into building. A fresh start shows "welcome" (first slug, and
+# nothing sets a start id); prior-session RESTART still enters at "progress" via
+# StudioWizard.start_build_from_session.
+#
+# "meshemu" is the whole-mesh-emulation side-flow page: it sits IMMEDIATELY after
+# "qemu" (the journey reads QEMU device tests -> whole-mesh emulation), dynamically
+# skipped (applies_to) unless its ModePage card was picked.
+#
+# "localcloud" (issue #50) is the create-nodes-for-local-cloud GATE page: the last
+# side-flow slot before "idp", dynamically skipped (applies_to) unless its ModePage
+# card was picked; unlike its terminal siblings it REJOINS the image flow as an
+# abbreviated mesh wizard (it commits cfg.mode="mesh" itself on Next).
+WIZARD_PAGE_SLUGS = ("welcome", "sessions",
+                     "mode", "localmesh", "phone", "quest", "deploy",
+                     "qemu", "meshemu", "localcloud",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "users_choice", "users",
@@ -727,6 +747,13 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_primary_color", "login_secondary_color", "login_font",
                    "login_font_file", "login_font_licence", "login_font_source",
                    "login_theme_preset", "login_theme_mode",
+                   # the Themes editor's web-chrome half (#50 item 2): same channel as
+                   # the login_* colours — SNAP_THEME_CSS token text, never argv.
+                   "login_header_hidden", "login_header_size", "login_header_bg",
+                   "login_header_text",
+                   "login_footer_hidden", "login_footer_size", "login_footer_bg",
+                   "login_footer_text",
+                   "login_bg_effect",
                    "additional_domains", "configure_users", "qemu_e2e")
 
 
@@ -1115,8 +1142,9 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
     (it overrides DEFAULT_USER, :1598), so narrowing the FIELD would invent a builder
     constraint that does not exist. This is a WIZARD-surface rule of the same family as
     ``home_options_allowed``: it hides a group, and emission stays byte-identical because
-    ``local_user`` keeps its dataclass default ("magus", still emitted as --local-user
-    magus) while ``local_pass`` is empty by default — see HomePage.validatePage, which
+    ``local_user`` keeps its dataclass default (``default_local_user()``, the invoking
+    user, still emitted as --local-user on every x86 build)
+    while ``local_pass`` is empty by default — see HomePage.validatePage, which
     collects the secret only while the surface applies."""
     return (image_class(cfg.mode, cfg.role) == "desktop"
             or field_in_scope("standalone", cfg))
@@ -1340,6 +1368,27 @@ _BUILDER_DEFAULT_USER = {
 }
 
 
+def default_local_user() -> str:
+    """The Studio default for ``local_user``: the INVOKING user, per call.
+
+    Was the literal ``"magus"`` — the original operator's account baked into every
+    default x86 argv (``--local-user magus``) on any machine the Studio ran on.
+    ``getpass.getuser()`` honours LOGNAME/USER before falling back to the uid's
+    passwd entry; the except arm covers the (bare-container) case where neither
+    exists. Every predicate that asks "was the account name customized off the
+    Studio default?" must compare against THIS, not a literal — the two emission
+    predicates (``derive_default_user`` / ``_arm_common_args``) both do.
+
+    NOT consulted on the worker spec channel in practice: ``to_dict``/``save`` pin
+    every field via ``asdict``, so a materialized IMAGE_SPEC_JSON always carries
+    ``local_user`` explicitly and ``from_dict`` assigns it verbatim.
+    """
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "user"
+
+
 def derive_hostname(cfg: "ImageConfig") -> str:
     """The hostname this image would get with NO ``-H`` — i.e. what the builder's own
     role switch assigns. Pure; never raises.
@@ -1392,7 +1441,7 @@ def derive_default_user(cfg: "ImageConfig") -> str:
     local = (cfg.local_user or "").strip()
     if plat == "x86":
         return local or _BUILDER_DEFAULT_USER["x86"]
-    if local and (cfg.standalone or local != "magus" or cfg.local_pass):
+    if local and (cfg.standalone or local != default_local_user() or cfg.local_pass):
         return local
     return _BUILDER_DEFAULT_USER.get(plat, local or "")
 
@@ -1963,7 +2012,7 @@ class ImageConfig:
     hostname: str = ""                 # -H/--hostname baked host identity (all)
     timezone: str = ""                 # -T/--timezone baked host identity (all)
     user: str = ""                     # -u/--user baked default account name (all; distinct from --local-user)
-    local_user: str = "magus"
+    local_user: str = field(default_factory=default_local_user)  # the INVOKING user, not a baked operator name
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
     user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
     root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
@@ -2044,6 +2093,27 @@ class ImageConfig:
     # compose_login_css output, so fonts + derivation stay single-sourced.
     login_theme_preset: str = ""       # theme_presets.PRESETS id; "" = custom colours
     login_theme_mode: str = "dark"     # "dark" | "light" neutral ramp
+    # ── web chrome (the Themes editor: header/footer existence, size, background,
+    # content, plus the page background effect — #50 item 2). Same plane and same
+    # channel as the login_* colours above: NON-argv, delivered as literal
+    # --sd-header-*/--sd-footer-*/--sd-bg-effect tokens inside SNAP_THEME_CSS
+    # (theme.chrome_tokens). Every default is the SHIPPED page exactly, so an old
+    # saved config — whose JSON has none of these keys and therefore loads the
+    # dataclass defaults — composes byte-identical css.
+    login_header_hidden: bool = False  # True emits --sd-header-display: none
+    login_header_size: str = ""        # "" = shipped | a theme.CHROME_SIZES name
+    login_header_bg: str = ""          # "#RRGGBB" | "" = shipped (emits -on twin too)
+    login_header_text: str = ""        # replacement header content; "" = shipped
+    login_footer_hidden: bool = False
+    login_footer_size: str = ""
+    login_footer_bg: str = ""
+    login_footer_text: str = ""
+    # Background effect — the generator-side persistence anchor for host-shell
+    # PR #20's deferred vanta catalog. "gradient" (the shipped theme-driven moving
+    # gradient) is the default and emits no token; "none" flattens the backdrop;
+    # "vanta-<effect>" (theme.VANTA_EFFECTS) is persisted but not yet selectable in
+    # the UI — the effect loader ships only in hugmesh-login-ui today.
+    login_bg_effect: str = "gradient"  # theme.BG_EFFECTS
     # ── egress VPN ──
     egress_vpn: str = ""               # --egress-vpn FILE
     egress_vpn_locked: bool = False
@@ -2332,6 +2402,22 @@ class ImageConfig:
             # Later :root:root block wins at equal specificity — the delta lands
             # after the base tokens without touching the shared composer.
             css = (css + "\n" if css else "") + delta
+        # Web chrome (Themes editor) rides the SAME later-block-wins mechanism.
+        # All-defaults composes "" here, so a pre-chrome config's css is untouched;
+        # chrome-only theming (e.g. just hiding the footer) still emits its block
+        # even when no colour/font was chosen.
+        chrome = _theme.chrome_css(
+            header_hidden=self.login_header_hidden,
+            header_size=self.login_header_size,
+            header_bg=self.login_header_bg,
+            header_text=self.login_header_text,
+            footer_hidden=self.login_footer_hidden,
+            footer_size=self.login_footer_size,
+            footer_bg=self.login_footer_bg,
+            footer_text=self.login_footer_text,
+            bg_effect=self.login_bg_effect)
+        if chrome:
+            css = (css + "\n" if css else "") + chrome
         return css
 
     def validate_identity(self) -> None:
@@ -2409,6 +2495,29 @@ class ImageConfig:
                         f"{fld} is required (printable, non-empty) when uploading a "
                         "font — embedding a face we cannot attribute is the licensing "
                         "landmine the upload path exists to make explicit")
+        # web chrome (Themes editor, #50 item 2): the same fail-closed rules the other
+        # login_* fields follow — strict hex-or-empty for colours, closed vocabularies
+        # for the size names and the background effect (they flow into SNAP_THEME_CSS
+        # token text; a typo would silently mis-render at runtime), printable-only for
+        # the content strings (they become CSS string literals).
+        validate_login_color("login_header_bg", self.login_header_bg)
+        validate_login_color("login_footer_bg", self.login_footer_bg)
+        from .theme import BG_EFFECTS, CHROME_SIZES  # local import: config stays lean
+        for fld in ("login_header_size", "login_footer_size"):
+            v = getattr(self, fld)
+            if v and v not in CHROME_SIZES:
+                raise IdentityValidationError(
+                    f"unknown {fld}: {v!r} — known: {', '.join(CHROME_SIZES)} "
+                    "(or \"\" for the shipped size)")
+        if self.login_bg_effect and self.login_bg_effect not in BG_EFFECTS:
+            raise IdentityValidationError(
+                f"unknown login_bg_effect: {self.login_bg_effect!r} — known: "
+                f"{', '.join(BG_EFFECTS)}")
+        for fld in ("login_header_text", "login_footer_text"):
+            v = getattr(self, fld)
+            if v and not v.isprintable():
+                raise IdentityValidationError(
+                    f"{fld} must be printable text (it becomes a CSS string literal)")
         # cluster_domain + per-domain names flow into --domains / the mesh manifest
         validate_domain_name(self.cluster_domain)
         if self.games_domain:
@@ -2818,7 +2927,7 @@ class ImageConfig:
         # builders accept them independently to rename/hash the default account. Emit
         # when standalone, OR when the account name was customized off the Studio
         # default, OR when a password was supplied.
-        if self.standalone or self.local_user != "magus" or self.local_pass:
+        if self.standalone or self.local_user != default_local_user() or self.local_pass:
             a += ["--local-user", self.local_user]
             if self.local_pass:
                 a += ["--local-pass", self.local_pass]

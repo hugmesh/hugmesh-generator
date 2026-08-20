@@ -1,15 +1,23 @@
-"""ModePage — STEP 1: pick ONE of seven clearly-distinct things to build.
+"""ModePage — the menu of choices: pick ONE of nine clearly-distinct things to build.
 
-The first-screen choices map onto the EXISTING three emission modes plus four
-non-image side-flows (design step1Taxonomy):
+The choices map onto the EXISTING three emission modes plus six non-image
+side-flows, PRESENTED in the operator's mesh-building journey order (issue #50):
+local mesh first, then the production mesh build, then QEMU emulation of the built
+images, then whole-mesh emulation, then the publish/flash side-flows, then the two
+single-image desktop builds:
 
-  - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
   - LOCAL DOCKER MESH    -> NO cfg.mode            (side-flow: run a dockerized mesh HERE)
-  - MESH DESKTOP CLIENT  -> cfg.mode="cloud"       (branded tailnet + SSO client)
-  - STANDALONE GENTOO    -> cfg.mode="standalone"  (hardened/unaffiliated personal desktop)
+  - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
+  - QEMU DEVICE TESTS    -> NO cfg.mode            (side-flow: boot built images emulated)
+  - MESH EMULATION       -> NO cfg.mode            (side-flow: boot a WHOLE built mesh locally)
+  - CLOUD DEPLOY         -> NO cfg.mode            (side-flow: publish a packaged image to a cloud)
   - MDM PHONE            -> NO cfg.mode            (side-flow: flash+enroll a Pixel HERE)
   - MDM QUEST HEADSET    -> NO cfg.mode            (side-flow: enroll a Meta Quest 3/3S HERE)
-  - CLOUD DEPLOY         -> NO cfg.mode            (side-flow: publish a packaged image to a cloud)
+  - CREATE NODES FOR LOCAL CLOUD -> NO cfg.mode HERE (issue #50: the gate page imports
+    the local mesh's identity, then commits cfg.mode="mesh" ITSELF and rejoins the
+    image flow as an abbreviated mesh wizard)
+  - MESH DESKTOP CLIENT  -> cfg.mode="cloud"       (branded tailnet + SSO client)
+  - STANDALONE GENTOO    -> cfg.mode="standalone"  (hardened/unaffiliated personal desktop)
 
 cfg.mode stays exactly {"standalone","cloud","mesh"} — unchanged — so to_cli_args() /
 materialize() / the mesh manifest stay byte-identical for equivalent selections. The
@@ -41,6 +49,9 @@ _MODE_ICONS = {
     "quest": "quest",               # a VR headset under a cloud
     "deploy": "cloud-deploy",       # three-way arrow up to AWS / AZURE / CF marks
     "qemu": "mesh",                 # reuses the boards-under-a-cloud mark: emulated devices
+    "meshemu": "mesh",              # same mark: the whole mesh, emulated locally
+    "localcloud": "localmesh",      # reuses the desktop-under-a-cloud mark: the same
+                                    # local stack, now becoming node images (issue #50)
 }
 
 _GENTOO_URL = "https://www.gentoo.org/"
@@ -55,30 +66,47 @@ class ModePage(QtWidgets.QWizardPage):
             "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
             "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
             "QUEST HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
-            "already-packaged image to a cloud provider, and QEMU DEVICE TESTS boots "
-            "built images as emulated devices.")
-        # eight cards are taller than eight radios were: scroll, never clip
+            "already-packaged image to a cloud provider, QEMU DEVICE TESTS boots "
+            "built images as emulated devices, MESH EMULATION boots a whole "
+            "built mesh locally, and CREATE NODES FOR LOCAL CLOUD "
+            "turns the local mesh into buildable node images.")
+        # nine cards are taller than nine radios were: scroll, never clip
         lay = scrollable(self)
         self.group = ChoiceCardGroup(self)
-        # EIGHT clearly-distinct choices, in the spec's STEP-1 order. Each carries
+        # NINE clearly-distinct choices, in the operator's mesh-building JOURNEY
+        # order (issue #50): local mesh -> prod mesh build -> QEMU emulation ->
+        # whole-mesh emulation -> publish/flash side-flows -> the single-image
+        # desktop builds. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
         # exactly as before; "localmesh", "phone", "quest", "deploy" and "qemu" are
         # transient side-flows that never touch cfg.mode. The DEFAULT is chosen by id
         # (standalone) below, NOT by index, so a visual reorder can't change which
         # choice the no-pick default flow exercises.
         self.modes = [
-            ("mesh", "Mesh node",
-             "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
-             "edge-AI — that run a mesh on dedicated hardware."),
             ("localmesh", "Local Docker mesh",
              "Run a mesh on THIS machine in Docker — no separate server hardware. "
              "Configure it and launch the dockerized node right here."),
-            ("cloud", "Mesh desktop client",
-             "Build a branded desktop that JOINS an existing mesh (tailnet + SSO). "
-             "Load your admin-provided key-zip or configuration link."),
-            ("standalone", "Standalone Gentoo desktop",
-             "A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo "
-             "desktop with zero HugMesh branding/tooling. No mesh, no SSO."),
+            ("localcloud", "Create nodes for local cloud",
+             "Turn the local Docker mesh you already run HERE into real device "
+             "images: an abbreviated mesh wizard that reuses its domain and "
+             "accounts and offers ONLY the laptop and node image types. The local "
+             "k8s (DevOps) stack must stop first — the next screen asks you to "
+             "confirm that."),
+            ("mesh", "Mesh node",
+             "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
+             "edge-AI — that run a mesh on dedicated hardware."),
+            ("qemu", "QEMU device tests",
+             "Boot built images as emulated devices in Docker and assert they "
+             "provisioned correctly — Pi roles first, then x86. Test images from an "
+             "earlier build session, or build new ones and test them after."),
+            ("meshemu", "Mesh emulation",
+             "Emulate a WHOLE built mesh locally: pick a prior build session and "
+             "boot every image it holds as emulated devices — per-device status, "
+             "ssh logins, USB provisioning keys and the mesh's web front door."),
+            ("deploy", "Cloud deploy",
+             "Publish an already-built, cloud-packaged x86 image to a cloud provider "
+             "(AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are "
+             "rendered offline; apply is confirmed by the driver."),
             ("phone", "MDM phone",
              "Flash a USB Pixel with VERIFIED GrapheneOS and enroll it in the mesh — "
              "no image build. Runs the same driver right here."),
@@ -86,14 +114,12 @@ class ModePage(QtWidgets.QWizardPage):
              "Enroll a USB Meta Quest 3/3S as an MDM-managed mesh device (Headwind + "
              "tailnet + XR-chat URL) — no image build, no flash. Same driver, quest "
              "device class."),
-            ("deploy", "Cloud deploy",
-             "Publish an already-built, cloud-packaged x86 image to a cloud provider "
-             "(AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are "
-             "rendered offline; apply is confirmed by the driver."),
-            ("qemu", "QEMU device tests",
-             "Boot built images as emulated devices in Docker and assert they "
-             "provisioned correctly — Pi roles first, then x86. Test images from an "
-             "earlier build session, or build new ones and test them after."),
+            ("cloud", "Mesh desktop client",
+             "Build a branded desktop that JOINS an existing mesh (tailnet + SSO). "
+             "Load your admin-provided key-zip or configuration link."),
+            ("standalone", "Standalone Gentoo desktop",
+             "A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo "
+             "desktop with zero HugMesh branding/tooling. No mesh, no SSO."),
         ]
         self._buttons = {}
         for i, (mid, label, desc) in enumerate(self.modes):
@@ -174,7 +200,21 @@ class ModePage(QtWidgets.QWizardPage):
         # can rejoin the image flow — "build new images first, then test them" — which
         # QemuPage expresses through its own nextId(), not through cfg.mode.
         self.wiz.qemu_selected = (mid == "qemu")
-        if mid in ("localmesh", "phone", "quest", "deploy", "qemu"):
+        # MESH EMULATION is the fifth side-flow: it boots a WHOLE prior session's
+        # images as one emulated mesh and commits nothing to cfg.mode. Terminal —
+        # unlike QEMU DEVICE TESTS it never rejoins the image flow (it exists only
+        # AFTER a build, so "build first" is the mesh flow itself).
+        self.wiz.meshemu_selected = (mid == "meshemu")
+        # CREATE NODES FOR LOCAL CLOUD (issue #50) is the sixth side-flow ENTRY: the
+        # gate page imports the local mesh's identity, then REJOINS the image flow as
+        # an abbreviated mesh wizard (LocalCloudNodesPage commits cfg.mode itself).
+        self.wiz.localcloud_selected = (mid == "localcloud")
+        if mid != "localcloud":
+            # any other committed choice lifts the abbreviated-worklist restriction
+            # the localcloud gate installs (see LocalCloudNodesPage.validatePage).
+            self.wiz.worklist_role_allow = None
+        if mid in ("localmesh", "phone", "quest", "deploy", "qemu", "meshemu",
+                   "localcloud"):
             return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid

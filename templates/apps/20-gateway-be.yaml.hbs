@@ -30,6 +30,17 @@ spec:
           - name: harbor-registry
         instance:
           name: {{BRAND}}-be-gateway
+        # ── Gateway MFA enforcement (issue #47) — the PER-DOMAIN flip. Rendered
+        # from the brand profile's MFA knob (brands/<brand>.conf MFA=1 -> true;
+        # absent/0/false/off -> false), so enforcement scopes to THIS brand's
+        # CLUSTER_DOMAIN only. Only app.mfa.enabled is templated: freshnessWindow
+        # keeps the chart default (600000; helm merges maps) and
+        # enforcePrivilegedFloor is NEVER templated — it is live enforcement on
+        # its own even with enabled=false and locks un-enrolled SUPERADMINs out
+        # (docs/MFA-ROLLOUT.md §2 / §3 step 7). Enroll BEFORE you enforce applies
+        # to a tenant flip too. Wiring gated by tests/stack/test-mfa-flip-wiring.sh.
+        mfa:
+          enabled: {{MFA_ENABLED}}
         keystore:
           enabled: true
         ingress:

@@ -52,7 +52,7 @@ pool_fingerprint_of() {
     pool_fingerprint_string "${chost}" "${common}" "${cflags}" "${cxxflags}" "${prof}" "${salt}"
 }
 
-# pool_fingerprint_guard PKGDIR FP -> preflight over an existing pool.
+# pool_fingerprint_guard PKGDIR FP [MIGRATE_FROM_FP] -> preflight over an existing pool.
 #   FP empty                      -> return 0 (unknown fingerprint; nothing to compare).
 #   no stamp + EMPTY pool         -> write FP fresh, return 0 (normal fresh-pool path).
 #   no stamp + pool HAS binpkgs   -> write FP fresh but WARN LOUDLY, return 0. An
@@ -64,7 +64,18 @@ pool_fingerprint_of() {
 #       risk is made VISIBLE (with the flush command) without nuking valid caches. The
 #       PRIMARY defense remains the per-board directory split (each board its own pkgdir).
 #   stamp == FP                   -> return 0 (safe to reuse).
-#   stamp != FP                   -> print a LOUD message to stderr, return 1 (caller aborts).
+#   stamp == MIGRATE_FROM_FP      -> RESTAMP to FP, log LOUDLY, return 0. The ONE-TIME
+#       stamp-key migration (PR #44's deferral): x86 pools were stamped with an EMPTY
+#       PROFILE component before the profile joined the x86 fingerprint. The caller
+#       (pool_fingerprint_preflight) computes MIGRATE_FROM_FP as THIS build's own
+#       fingerprint with ONLY the profile emptied — same make.conf, same salt — so the
+#       migration can match exactly one stamp: the empty->non-empty profile respelling
+#       of an ABI-identical pool. Any REAL CHOST/CFLAGS/-mcpu/salt difference changes
+#       MIGRATE_FROM_FP in lockstep with FP and can never match a stale foreign stamp;
+#       a profile-to-DIFFERENT-profile change never matches either (the from-side is
+#       always the EMPTY spelling). After the restamp, stamp == FP, so the migration
+#       arm is unreachable on every later run ("exactly once" by construction).
+#   stamp != FP (and != MIGRATE)  -> print a LOUD message to stderr, return 1 (caller aborts).
 # The stamp file is `${PKGDIR}/.hugmesh-pool-fingerprint`.
 # _pool_has_binpkgs PKGDIR -> 0 if the pool already holds binary packages (Packages
 # index or any gpkg/tbz2/xpak), else 1. Used to decide adopt-silently vs adopt-with-warning.
@@ -80,13 +91,31 @@ _pool_has_binpkgs() {
     return 1
 }
 pool_fingerprint_guard() {
-    local pkgdir="$1" fp="${2:-}" fpfile
+    local pkgdir="$1" fp="${2:-}" migrate_from="${3:-}" fpfile
     fpfile="${pkgdir%/}/.hugmesh-pool-fingerprint"
     [ -n "${fp}" ] || return 0
     mkdir -p "${pkgdir}" 2>/dev/null || true
     if [ -f "${fpfile}" ]; then
         local existing; existing="$(cat "${fpfile}" 2>/dev/null || true)"
         if [ "${existing}" = "${fp}" ]; then
+            return 0
+        fi
+        # ONE-TIME stamp migration (see the contract above): the existing stamp is
+        # exactly this build's own fingerprint with an empty PROFILE component — an
+        # ABI-identical pool whose stamp merely pre-dates profile keying. Restamp it
+        # LOUDLY (this is a guard-key rewrite, never a silent pass) and allow reuse.
+        # NOT a weakening: --binpkg-respect-use=y still refuses, per-package, any
+        # binpkg whose USE the (now profile-bound) config rejects.
+        if [ -n "${migrate_from}" ] && [ "${existing}" = "${migrate_from}" ]; then
+            {
+                echo "NOTICE: MIGRATING binpkg pool stamp at ${pkgdir}"
+                echo "  old stamp: ${existing} (fingerprint WITHOUT a profile component — pre-#44 keying)"
+                echo "  new stamp: ${fp} (same CHOST/CFLAGS/salt + this build's spec profile)"
+                echo "  The pool's binaries are ABI-identical under both spellings; only the stamp"
+                echo "  key gained the profile. This migration runs EXACTLY ONCE per pool — any"
+                echo "  future mismatch (CHOST/CFLAGS/-mcpu/profile/salt) still hard-refuses reuse."
+            } >&2
+            printf '%s\n' "${fp}" > "${fpfile}" 2>/dev/null || true
             return 0
         fi
         {
@@ -124,8 +153,16 @@ pool_fingerprint_guard() {
 # compute the current build's fingerprint from the rendered make.conf and guard the
 # pool. Returns non-zero (with the loud message already printed) on an ABI mismatch;
 # the builder wraps this with `|| { err ...; exit 1; }`.
+#
+# When PROFILE is non-empty, ALSO hand the guard the empty-profile spelling of the
+# SAME fingerprint (same make.conf, same salt) as the one-shot migration key: a pool
+# stamped before the profile joined the fingerprint (x86 pre-#44) is restamped —
+# loudly — instead of refused, and ONLY when every other component already matches.
 pool_fingerprint_preflight() {
-    local pkgdir="$1" mc="$2" prof="${3:-}" salt="${4:-}" fp
+    local pkgdir="$1" mc="$2" prof="${3:-}" salt="${4:-}" fp legacy_fp=""
     fp="$(pool_fingerprint_of "${mc}" "${prof}" "${salt}")"
-    pool_fingerprint_guard "${pkgdir}" "${fp}"
+    if [ -n "${prof}" ]; then
+        legacy_fp="$(pool_fingerprint_of "${mc}" "" "${salt}")"
+    fi
+    pool_fingerprint_guard "${pkgdir}" "${fp}" "${legacy_fp}"
 }

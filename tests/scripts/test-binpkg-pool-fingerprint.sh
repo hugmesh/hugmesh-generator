@@ -126,6 +126,75 @@ FP_SALT="$(pool_fingerprint_of "${MC_A76}" "" "gettext-mo-fix-2026-07-08")"
     && ok "correctness SALT change flips the fingerprint (forces a pool flush)" \
     || bad "SALT did not change the fingerprint"
 
+# (6) STAMP MIGRATION (the PR #44 deferral): a pool stamped BEFORE the profile
+# joined the fingerprint (empty PROFILE component — every pre-#44 x86 pool) is
+# RESTAMPED, loudly and exactly once, when the SAME make.conf (same CHOST/CFLAGS/
+# salt) gains a profile — never refused, never silent.
+PROF="default/linux/amd64/23.0/hardened/selinux"
+POOL_M="${TMP}/pool-migrate"; mkdir -p "${POOL_M}"
+pool_fingerprint_preflight "${POOL_M}" "${MC_X86}" 2>/dev/null \
+    || bad "migration fixture: could not stamp the legacy (no-profile) pool"
+FP_X86_PROF="$(pool_fingerprint_of "${MC_X86}" "${PROF}")"
+m1="${TMP}/m1.txt"
+if pool_fingerprint_preflight "${POOL_M}" "${MC_X86}" "${PROF}" 2>"${m1}"; then
+    grep -q 'MIGRATING' "${m1}" \
+        && ok "empty->non-empty profile respelling RESTAMPS the pool (loud NOTICE)" \
+        || bad "migration passed but was SILENT (a guard-key rewrite must be loud): $(cat "${m1}")"
+    [ "$(cat "${POOL_M}/.hugmesh-pool-fingerprint")" = "${FP_X86_PROF}" ] \
+        && ok "migrated stamp is the profile-keyed fingerprint" \
+        || bad "migrated stamp wrong: $(cat "${POOL_M}/.hugmesh-pool-fingerprint")"
+else
+    bad "empty->non-empty profile respelling was REFUSED — the migration path is dead"
+fi
+# ... and exactly once: the second profile-keyed run matches the stamp silently.
+m2="${TMP}/m2.txt"
+if pool_fingerprint_preflight "${POOL_M}" "${MC_X86}" "${PROF}" 2>"${m2}"; then
+    grep -q 'MIGRATING' "${m2}" \
+        && bad "migration fired TWICE (must be unreachable once restamped)" \
+        || ok "second run passes silently (migration is one-shot by construction)"
+else
+    bad "post-migration run wrongly refused the freshly restamped pool"
+fi
+
+# (7) MUTATION — the migration must never launder a REAL mismatch.
+# (7a) foreign-board stamp + profile-keyed build: an a72 pool must still REFUSE an
+#      a76 build even though the a76 build now supplies a profile (the migration
+#      key is the a76 conf's OWN empty-profile spelling, which never equals the
+#      a72 stamp — CFLAGS differ).
+POOL_X="${TMP}/pool-mutation-a72"; mkdir -p "${POOL_X}"
+pool_fingerprint_preflight "${POOL_X}" "${MC_A72}" 2>/dev/null   # legacy a72 stamp
+mx="${TMP}/mx.txt"
+if pool_fingerprint_preflight "${POOL_X}" "${MC_A76}" "arm64/23.0/hardened/selinux" 2>"${mx}"; then
+    bad "MUTATION ESCAPED: a76+profile build ADOPTED an a72-stamped pool via migration (SIGILL hazard)"
+else
+    grep -q 'ABI MISMATCH' "${mx}" \
+        && ok "a72-stamped pool still REFUSES an a76+profile build (migration cannot launder -mcpu)" \
+        || { bad "refused but message unclear:"; cat "${mx}"; }
+fi
+[ "$(cat "${POOL_X}/.hugmesh-pool-fingerprint")" = "$(pool_fingerprint_of "${MC_A72}")" ] \
+    && ok "refused mutation left the a72 stamp intact" \
+    || bad "mutation corrupted the a72 stamp"
+# (7b) profile-to-DIFFERENT-profile is NOT a migration: a pool stamped WITH profile
+#      P1 must refuse a P2 build (the from-side of the migration is always the
+#      EMPTY spelling, never another profile).
+POOL_P="${TMP}/pool-mutation-prof"; mkdir -p "${POOL_P}"
+pool_fingerprint_preflight "${POOL_P}" "${MC_X86}" "${PROF}" 2>/dev/null
+mp="${TMP}/mp.txt"
+if pool_fingerprint_preflight "${POOL_P}" "${MC_X86}" "default/linux/amd64/23.0/hardened" 2>"${mp}"; then
+    bad "MUTATION ESCAPED: profile P1 pool adopted under profile P2 (profile change must refuse)"
+else
+    ok "profile-to-different-profile still REFUSES (migration only covers empty->non-empty)"
+fi
+# (7c) a salt mismatch is not laundered either: legacy no-salt stamp, salted+profiled
+#      build — the migration key carries the NEW salt, so it cannot match.
+POOL_S="${TMP}/pool-mutation-salt"; mkdir -p "${POOL_S}"
+pool_fingerprint_preflight "${POOL_S}" "${MC_X86}" 2>/dev/null   # no profile, no salt
+if pool_fingerprint_preflight "${POOL_S}" "${MC_X86}" "${PROF}" "gettext-mo-fix-2026-07-08" 2>/dev/null; then
+    bad "MUTATION ESCAPED: salt change laundered through the profile migration"
+else
+    ok "profile migration does not launder a SALT change (correctness pins still flush)"
+fi
+
 # (0) empty fingerprint (no make.conf yet) is a no-op guard (never blocks a fresh tree)
 POOL2="${TMP}/pool-empty"; mkdir -p "${POOL2}"
 if pool_fingerprint_preflight "${POOL2}" "${TMP}/does-not-exist/make.conf"; then

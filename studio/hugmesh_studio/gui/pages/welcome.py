@@ -1,12 +1,52 @@
-"""WelcomePage — intro blurb + load/save of the ImageConfig JSON + previous builds."""
+"""WelcomePage — the Studio's first screen: what HugMesh is, plus three ways in.
+
+Issue #50's guided flow starts HERE: an explainer of what this studio builds (with
+the GitHub README's getting-started guide one explicit click away) and THREE large
+icon buttons — the ChoiceCard idiom ModePage established:
+
+  - START BUILDING        -> ModePage (the full menu of choices, journey-ordered)
+  - START A LOCAL MESH    -> LocalMeshPage (the existing local-stack flow: flesh out
+                             users/domains locally, start k8s, configure branded
+                             repositories)
+  - REVIEW PRIOR SESSIONS -> SessionsPage (the previous default first screen: the
+                             Previous-builds manager + Load/Save config)
+
+The Load/Save/Fleet buttons and the Previous-builds manager this page used to host
+moved wholesale to gui/pages/sessions.py (SessionsPage — the "sessions" slug); the
+host-capability intro (:meth:`WelcomePage._intro_html`) stays here because both of
+its warnings — no build backend, /mnt/c slow filesystem — are only worth anything
+on the FIRST screen (their docstrings say why).
+
+Navigation contract: a fresh start lands here (first WIZARD_PAGE_SLUGS entry, and
+nothing else sets a start id), and :meth:`nextId` routes by the selected card. The
+default card is START BUILDING, so a plain Next() — every existing wizard-walk
+test, and an operator who just presses Enter — flows welcome -> mode exactly as it
+always has. Prior-session auto-resume is untouched: RESTART still enters through
+``StudioWizard.start_build_from_session``, which jumps straight to "progress".
+"""
 from __future__ import annotations
 
 import html
 
-from ... import advanced_mode
+from ..choice_cards import ChoiceCard, ChoiceCardGroup
+from .. import choice_nav
 from ..qt import Qt, QtWidgets
 from ..styles import WARN
-from .sessions_widget import PreviousBuildsWidget
+from ._scroll import scrollable
+
+#: The README's getting-started section ("Quick start"), linked from the explainer.
+#: Rendered as a real anchor with ``openExternalLinks=True`` — the click hands the
+#: URL to the desktop browser; the Studio itself fetches nothing.
+README_GETTING_STARTED = "https://github.com/hugmesh/hugmesh-generator#quick-start"
+
+#: welcome choice id -> the WIZARD_PAGE_SLUGS entry it routes to. The ids are the
+#: page's test surface (property("choice")); the slugs are nextId()'s address book.
+_CHOICE_TARGET = {"build": "mode", "localmesh": "localmesh", "sessions": "sessions"}
+
+#: choice id -> choice_icons registry name (presentation only). "main-menu" is the
+#: same mark LaunchPage's "Back to the main menu" card wears — it IS the same menu.
+_CHOICE_ICONS = {"build": "main-menu", "localmesh": "localmesh",
+                 "sessions": "sessions"}
 
 
 def _as_html(text: str) -> str:
@@ -27,43 +67,73 @@ class WelcomePage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("HugMesh Image Studio")
         self.setSubTitle(
-            "Build a mesh server node, run a local Docker mesh, build a mesh desktop "
-            "client, or build a standalone Gentoo desktop — you'll pick which on the next screen.")
-        lay = QtWidgets.QVBoxLayout(self)
+            "Welcome. Start building, run a local mesh on this machine, or review "
+            "what you've built before.")
+        # three cards + two paragraphs can outgrow a small window: scroll, never clip
+        lay = scrollable(self)
+
+        # the hugmesh explainer, with the README getting-started guide one click away
+        self.explainer = QtWidgets.QLabel(self._explainer_html())
+        self.explainer.setWordWrap(True)
+        self.explainer.setTextFormat(Qt.TextFormat.RichText)
+        # the anchor hands off to the desktop browser on an EXPLICIT click — the
+        # Studio itself fetches nothing (choice_cards.set_link's contract, restated)
+        self.explainer.setOpenExternalLinks(True)
+        lay.addWidget(self.explainer)
+
         info = QtWidgets.QLabel(self._intro_html())
         info.setWordWrap(True)
         info.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(info)
-        btns = QtWidgets.QHBoxLayout()
-        load = QtWidgets.QPushButton("Load config…")
-        load.setToolTip("Reopen a previously saved image configuration (or worklist).")
-        save = QtWidgets.QPushButton("Save config…")
-        save.setToolTip("Save the current settings to a JSON file to build later or share.")
-        load.clicked.connect(self._load)
-        save.clicked.connect(self._save)
-        btns.addWidget(load)
-        btns.addWidget(save)
-        btns.addStretch(1)
-        # Fleet build is a power tool — it builds EVERY role for a whole release, not the
-        # single image this wizard configures. Keep it off the public first screen unless
-        # expert mode is on ($HUGMESH_STUDIO_ADVANCED); `hugmesh_studio --fleet`
-        # stays available regardless, so no power user loses access.
-        if advanced_mode():
-            fleet = QtWidgets.QPushButton("Fleet build…")
-            fleet.setToolTip(
-                "Build EVERY role for the selected platforms in one run — the GUI "
-                "front-end to scripts/build-all-roles.sh, for when you want a whole "
-                "release worth of images instead of the single image this wizard "
-                "configures. Also reachable as `hugmesh_studio --fleet`.")
-            fleet.clicked.connect(self._fleet)
-            btns.addWidget(fleet)
-        lay.addLayout(btns)
-        # "Previous builds" — the first-class session manager (hides itself when there
-        # are no sessions/unmanaged builds, so a first run renders exactly as before).
-        self.previous_builds = PreviousBuildsWidget(wiz)
-        self.previous_builds.setVisible(False)
-        lay.addWidget(self.previous_builds)
+
+        # THREE large icon buttons (issue #50 item 1) — one clickable CARD each,
+        # the exact ModePage idiom: title + muted description left, drawn-in-code
+        # icon right, click == choose == proceed (choice_nav).
+        self.group = ChoiceCardGroup(self)
+        self.choices = [
+            ("build", "Start building",
+             "Open the menu of choices — build a mesh node, run a local Docker "
+             "mesh, build a desktop image, enroll MDM devices, publish to a cloud, "
+             "or boot built images as emulated QEMU devices."),
+            ("localmesh", "Start a local mesh",
+             "Flesh out users and domains locally, start the Kubernetes stack, and "
+             "configure branded repositories — a whole mesh on THIS machine in "
+             "Docker, no server hardware."),
+            ("sessions", "Review prior sessions",
+             "Previous builds and saved configurations: restart or redo a session, "
+             "open its artifacts, read its logs — or load/save a config file."),
+        ]
+        self._buttons = {}
+        for i, (cid, label, desc) in enumerate(self.choices):
+            card = ChoiceCard(label, desc, icon_name=_CHOICE_ICONS.get(cid, ""))
+            card.setProperty("choice", cid)
+            self.group.add_card(card, i)          # button id == index in self.choices
+            self._buttons[cid] = card
+            lay.addWidget(card)
+        # DEFAULT is "build" BY ID: a plain Next (or Enter) keeps the historical
+        # welcome -> mode flow, so every established walk-through keeps its path.
+        self._buttons["build"].setChecked(True)
+        self.group.buttonToggled.connect(lambda *_: self.completeChanged.emit())
+        # ASK 14 (ModePage precedent): a CLICK on a card commits this page and moves
+        # on — wired to buttonClicked, never buttonToggled, so a setChecked from a
+        # test or Back-navigation restore can never navigate on its own.
+        choice_nav.advance_on_choice(self, self.group)
         lay.addStretch(1)
+
+    # ── the explainer ────────────────────────────────────────────────────────────
+    def _explainer_html(self) -> str:
+        """What HugMesh is, in one paragraph, with the getting-started link.
+
+        Pure method (returns HTML, touches no widget) so a headless test can assert
+        the link target without rendering."""
+        return (
+            "<b>HugMesh</b> is a self-hosted mesh: a small cluster of nodes "
+            "(Raspberry Pi and x86) that serves chat, social, storage and "
+            "single-sign-on for your people, plus branded desktop clients that join "
+            "it. This studio assembles every piece — from a local trial mesh in "
+            "Docker to production node images you flash onto real hardware.<br>"
+            f'New here? Read the <a href="{README_GETTING_STARTED}">getting-started '
+            "guide</a> (the GitHub README).")
 
     def _intro_html(self) -> str:
         """The intro paragraph, keyed on whether this machine can actually build.
@@ -110,33 +180,32 @@ class WelcomePage(QtWidgets.QWizardPage):
             return ""
         return (f'<b style="color:{WARN}">{_as_html(warning)}</b><br><br>')
 
-    def initializePage(self):
-        # refresh every time the first screen is (re)shown — a finished/redone build
-        # must appear without restarting the Studio.
-        self.previous_builds.refresh()
+    # ── selection / flow ─────────────────────────────────────────────────────────
+    def _selected_choice(self):
+        btn = self.group.checkedButton()
+        return btn.property("choice") if btn is not None else None
 
-    def _load(self):
-        p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load config", "", "JSON (*.json)")
-        if p:
-            # Load EITHER a flat config OR a worklist envelope through the one loader both
-            # UIs share (StudioWizard.load_config -> worklist.load_any); restart() so each
-            # page's initializePage() re-reads the freshly loaded config.
-            self.wiz.load_config(p)
-            QtWidgets.QMessageBox.information(self, "Loaded", f"Loaded {p}")
+    def isComplete(self):
+        # "build" is pre-checked, so a fresh page is complete — Next never greys out
+        # on the first screen; the guard only matters if a subclass unchecks all.
+        return self._selected_choice() is not None
 
-    def _save(self):
-        p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save config", "hugmesh-image.json", "JSON (*.json)")
-        if p:
-            # writes the worklist envelope when a worklist exists, else flat JSON (I1)
-            warnings = self.wiz.save_config(p)
-            if warnings:  # plaintext secrets are blanked on save — tell the user
-                QtWidgets.QMessageBox.warning(self, "Passwords not saved", "\n".join(warnings))
+    def validatePage(self):
+        # Entering the local-stack flow DIRECTLY (without walking ModePage):
+        # LocalMeshPage.applies_to reads this transient wizard flag, exactly as it
+        # does for ModePage's "Local Docker mesh" card — never persisted into cfg
+        # (cfg.mode stays an image mode; ModePage.initializePage documents why).
+        # ModePage.validatePage re-derives the flag on its own commit, so a Back
+        # here followed by a different path can never strand a stale True.
+        self.wiz.localmesh_selected = (self._selected_choice() == "localmesh")
+        return True
 
-    def _fleet(self):
-        # deferred import: the fleet window is self-contained (golive.py precedent)
-        # and only needed if the operator actually opens it. open_fleet_window owns
-        # the ONE non-modal instance (show(), never exec()) — this page, the
-        # Previous-builds manager and the whole wizard stay interactive while the
-        # fleet window is open and while a fleet run streams.
-        from . import fleet
-        fleet.open_fleet_window(self.wiz)
+    def nextId(self):
+        """Route by the selected card: build -> mode, localmesh -> the local-stack
+        flow, sessions -> the Previous-builds screen. Falls back to the positional
+        next page until the wizard's slug->id map exists (construction order)."""
+        ids = getattr(self.wiz, "_page_ids", None)
+        if not ids:
+            return super().nextId()
+        slug = _CHOICE_TARGET.get(self._selected_choice() or "build", "mode")
+        return ids[slug]

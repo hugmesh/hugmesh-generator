@@ -182,7 +182,7 @@ def running_builds() -> list:
     Driven off the session records rather than a second status file, deliberately: the
     aggregate ``build-status.json`` carries one ``{state, percent}`` for the whole
     process and cannot name individual builds, while ``build_sessions`` already models
-    exactly one record per dispatch — the same records the Welcome list reads, so the
+    exactly one record per dispatch — the same records the Sessions list reads, so the
     tray and the list can never tell different stories.
 
     ``is_active`` is the honesty gate: a record left at "running" by a SIGKILL'd Studio

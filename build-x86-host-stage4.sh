@@ -375,11 +375,19 @@ HOME_SEED_CODE_FROM=""
 DISTDIR_SRC=""
 # --shared-assets DIR / --no-shared-assets (env: HUGMESH_SHARED_ASSETS): the fleet's
 # SHARED build-asset root. On x86 it supplies the stage3 SEED cache (one amd64
-# tarball for every build instead of one per BUILD_SUBDIR) and a read-only view of
-# the fleet distfiles the cross builders populate. The x86 binpkg POOL is NOT shared:
-# it lives INSIDE the sysroot (PKGDIR=/var/cache/binpkgs), so sharing it would need a
-# bind-mount plus a carve-out in the --uncached binpkgs cleanup — deliberately out of
-# scope here rather than faked (see docs/SHARED-BINPKG.md "Honest limits").
+# tarball for every build instead of one per BUILD_SUBDIR), a read-only view of
+# the fleet distfiles the cross builders populate, AND — issue #46 — the shared
+# per-arch binpkg POOL (<root>/pkgdir/snap-build-x86). The chroot's PKGDIR is
+# /var/cache/binpkgs (make.conf.tmpl); mount_chroot BIND-MOUNTS the shared pool
+# there so every amd64 role reads/writes ONE pool (wave-1 measured 0% x86 reuse
+# and 2,042 duplicate compiles because each wl-<id> sysroot held its own pool and
+# was discarded). The two carve-outs that sharing needed are implemented, not
+# waived: the Phase-8 clean re-checks the bind is DETACHED before touching
+# var/cache/binpkgs (an rm -rf through it would empty the fleet's pool), and a
+# --cached image COPIES the pool back in after the unmount so the embedded-cache
+# promise still holds. Safety: same-arch sharing is fingerprint-guarded
+# (sa_pool_guard: CHOST+CFLAGS+profile) and USE differences between roles are
+# pruned per-package by --binpkg-respect-use=y (see docs/SHARED-BINPKG.md).
 # Empty ⇒ "${WORK_DIR}/shared", already covered by the Makefile's -v $(WORK_DIR):/out.
 SHARED_ASSETS_DIR="${HUGMESH_SHARED_ASSETS:-}"
 SHARED_ASSETS_ENABLED=true
@@ -1867,9 +1875,22 @@ if [ -n "${SHARED_ROOT}" ]; then
     SHARED_DISTDIR="$(sa_distfiles_dir "${SHARED_ROOT}")"
     SHARED_SEED_DIR="$(sa_seed_dir "${SHARED_ROOT}" "amd64")" \
         || { echo "ERROR: cannot resolve the shared stage3 seed dir" >&2; exit 1; }
+    # Shared x86 binpkg pool (issue #46): ONE per-arch pool for EVERY amd64 role.
+    # The key is the arch constant snap-build-x86, NEVER ${BUILD_SUBDIR} — the Studio
+    # passes --build-subdir wl-<entry-id> per worklist entry, and keying the pool on
+    # the subdir is exactly what gave every x86 image a fresh empty pool (wave 1:
+    # 0% reuse, 590 atoms recompiled in 2+ images at identical versions). All roles
+    # share it deliberately: the wave-1 measurement proved compile sets are
+    # byte-identical within role groups (pki=be=fe 230/230, laptop=chromebook
+    # 590/590), and where roles DO diverge --binpkg-respect-use=y rejects the
+    # mismatched binpkg per-package. Cross-ABI reuse stays impossible: the pool is
+    # stamped/guarded by sa_pool_guard (CHOST + CFLAGS + profile) below.
+    X86_POOL_DIR="$(sa_pool_dir "${SHARED_ROOT}" "${BOARD_POOL_KEY}")" \
+        || { echo "ERROR: cannot resolve a shared binpkg pool for '${BOARD_POOL_KEY}'" >&2; exit 1; }
 else
     SHARED_DISTDIR=""
     SHARED_SEED_DIR=""
+    X86_POOL_DIR=""   # --no-shared-assets: legacy chroot-internal pool (see mount_chroot)
 fi
 # Signed-kernel artifact cache root. Empty (⇒ every lookup MISSES, nothing is stored)
 # when --no-kernel-cache, HUGMESH_KERNEL_CACHE=off, or the shared root itself is off.
@@ -1908,11 +1929,12 @@ if ${PRINT_PLAN}; then
     _plan ARTIFACT_PREFIX    "${BRAND}-x86-amd64-${_PLAN_ROLE_TAG}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR:-$(pwd)/out}"
     # Shared build assets. Additive PLAN_ keys (grep -qx consumers unaffected).
-    # SHARED_POOL is deliberately "no" here: x86's PKGDIR is chroot-internal.
+    # SHARED_POOL names the per-arch pool mount_chroot bind-mounts over the chroot's
+    # /var/cache/binpkgs (issue #46); with sharing off the pool stays chroot-internal.
     _plan SHARED_ASSETS      "${SHARED_ROOT:-off}"
     _plan SHARED_SEED_DIR    "${SHARED_SEED_DIR:-${WORK_DIR:-$(pwd)/out}/${BUILD_SUBDIR}}"
     _plan SHARED_DISTDIR     "${SHARED_DISTDIR:-none}"
-    _plan SHARED_POOL        "no (x86 PKGDIR is chroot-internal /var/cache/binpkgs)"
+    _plan SHARED_POOL        "${X86_POOL_DIR:-no (private chroot-internal /var/cache/binpkgs)}"
     _plan KERNEL_CACHE       "${KERNEL_CACHE_ROOT:-off}"
     # Prebuild mode (shared-binpkg): 1 ⇒ populate PKGDIR then exit before image
     # assembly. Additive PLAN_ key (grep -qx consumers unaffected).
@@ -3272,11 +3294,23 @@ fi
 # ── 1. Directories ─────────────────────────────────────────────────
 banner "Preparing build directories"
 mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir} "${SYSROOT}" "${ISO_DIR}"
-# Shared asset root: the seed cache + the fleet distfiles dir (no pool leg on x86).
+# Shared asset root: seed cache + fleet distfiles + the per-arch binpkg pool
+# (issue #46). The pool takes sa_pool_hold's LONG-LIVED single-writer lock before
+# anything can populate it: the tree has no binpkg-multi-instance, so two
+# concurrent writers into one pkgdir overwrite each other's package instances
+# (docs/SHARED-BINPKG.md invalidation rule #3) — and one arch-wide x86 pool makes
+# that reachable from ANY two concurrent x86 builds, not just same-role ones.
+# A held lock fails FAST with the holder named (same semantics as the ARM lane);
+# --no-shared-assets remains the private-pool escape hatch.
 if [ -n "${SHARED_ROOT}" ]; then
     mkdir -p "${SHARED_SEED_DIR}" "${SHARED_DISTDIR}" \
         || { err "cannot create the shared asset root ${SHARED_ROOT}"; exit 1; }
-    info "$(sa_describe "${SHARED_ROOT}" "amd64" "<x86 pool is chroot-internal>")"
+    if [ -n "${X86_POOL_DIR}" ]; then
+        mkdir -p "${X86_POOL_DIR}" \
+            || { err "cannot create the shared binpkg pool ${X86_POOL_DIR}"; exit 1; }
+        sa_pool_hold "${X86_POOL_DIR}" || { err "shared binpkg pool busy (see above) — aborting."; exit 1; }
+    fi
+    info "$(sa_describe "${SHARED_ROOT}" "amd64" "${X86_POOL_DIR}")"
 else
     SHARED_SEED_DIR="${BUILD_ROOT}"
 fi
@@ -3426,16 +3460,6 @@ chmod 440 "${SYSROOT}/etc/sudoers.d/build-notty"
 banner "Installing spec files into sysroot (hardened profile)"
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.license,package.mask,profile,env}
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
-# ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
-# Before the chroot payload emerge consumes ${SYSROOT}/var/cache/binpkgs via
-# --usepkg (EMERGE_DEFAULT_OPTS), verify the pool's fingerprint (CHOST + exact
-# CFLAGS + profile, read from the just-rendered make.conf) matches THIS build.
-# portage's --binpkg-respect-use checks USE only, never CFLAGS, so this is the only
-# CFLAGS-level check before reuse. A fresh pool is stamped; a mismatch aborts.
-# (x86 is a single amd64 pool, but this still catches a stray reuse across a
-# profile/CFLAGS/ABI change — the same class the aarch64 -mcpu split guards against.)
-pool_fingerprint_preflight "${SYSROOT}/var/cache/binpkgs" "${SYSROOT}/etc/portage/make.conf" "" \
-    || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
 # Native Steam is a 32-bit app: enable the multilib ABI so its deps build with
 # ABI_X86_32 (the amd64-hardened stage3 seed is multilib-capable). Scoped to the
 # native-Steam gaming desktops; every other image stays pure 64-bit.
@@ -3472,6 +3496,28 @@ PROFILE_PATH="$(sed 's/^gentoo://' "${SPECS_DIR}/portage/profile/parent" | tr -d
     || { err "profile not found in tree: /var/db/repos/gentoo/profiles/${PROFILE_PATH}"; exit 1; }
 ln -sfn "/var/db/repos/gentoo/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.profile"
 info "Profile: ${PROFILE_PATH} (absolute make.profile symlink; @world --newuse converts the seed)"
+# ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
+# Before the chroot payload emerge consumes the pool via --usepkg
+# (EMERGE_DEFAULT_OPTS), verify the pool's fingerprint (CHOST + exact CFLAGS +
+# CXXFLAGS + PROFILE, read from the just-rendered make.conf) matches THIS build.
+# portage's --binpkg-respect-use checks USE only, never CFLAGS, so this is the only
+# CFLAGS-level check before reuse. A fresh pool is stamped; a mismatch aborts.
+# Sits AFTER the profile derivation above because the spec-derived PROFILE_PATH is
+# now part of the x86 fingerprint (the PR #44 deferral, keyed like the ARM lane).
+# Pools stamped BEFORE profile keying (empty PROFILE component) are RESTAMPED once
+# by pool_fingerprint_preflight's migration path — loudly, and only when CHOST/
+# CFLAGS/salt already match; any REAL ABI difference still hard-refuses reuse.
+if [ -n "${X86_POOL_DIR}" ]; then
+    # The SHARED per-arch pool that mount_chroot bind-mounts at /var/cache/binpkgs.
+    # sa_pool_guard = the same preflight run under the pool's stamp lock, so two
+    # builds can never race the stamp file. The guard itself is never bypassed.
+    sa_pool_guard "${X86_POOL_DIR}" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH}" \
+        || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
+else
+    # --no-shared-assets: the legacy chroot-internal pool, same guard + same key.
+    pool_fingerprint_preflight "${SYSROOT}/var/cache/binpkgs" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH}" \
+        || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
+fi
 # Copy every file in these portage config dirs (so added spec files always land).
 # The 'desktop' files (LXDE ~amd64 keywords / GTK+netsurf USE) are client-only — a
 # k8s NODE image stays stable-keyworded and never references desktop USE flags. The
@@ -4571,6 +4617,24 @@ mount_chroot() {
     else
         HOST_REPO_MOUNTED=false
     fi
+    # Shared binpkg pool (issue #46): bind the per-arch pool over the chroot's
+    # PKGDIR (/var/cache/binpkgs, make.conf.tmpl) so every amd64 role reads and
+    # writes ONE pool instead of a discarded per-wl-<id> one — the wave-1 fix for
+    # 0% x86 binpkg reuse. Same pattern as the repo/distfiles binds above: mounted
+    # here, detached in umount_chroot, and the Phase-8 clean re-verifies the
+    # detach with mountpoint -q before touching anything under the path (an rm -rf
+    # through a live bind would empty the FLEET's pool). The pool was fingerprint-
+    # guarded (sa_pool_guard) before this point; a mismatched pool never mounts.
+    # NOTE: no fail-soft fallback — under `set -e` a failed bind aborts the build,
+    # exactly like the repo bind (an unguarded silent fallback pool would be worse).
+    if [ -n "${X86_POOL_DIR}" ] && [ -d "${X86_POOL_DIR}" ]; then
+        mkdir -p "${SYSROOT}/var/cache/binpkgs"
+        mount --bind "${X86_POOL_DIR}" "${SYSROOT}/var/cache/binpkgs"
+        X86_POOL_MOUNTED=true
+        info "Binpkg pool: shared ${X86_POOL_DIR} -> /var/cache/binpkgs (--usepkg reuse across all amd64 roles; --binpkg-respect-use=y prunes USE mismatches per-package)"
+    else
+        X86_POOL_MOUNTED=false
+    fi
     # Package build scratch on a NON-eCryptfs filesystem. The work dir often lives
     # on eCryptfs (/home/.Private), whose ~143-char filename limit makes Go builds
     # (kubelet/runc/cni-plugins/containerd — long vendored/cache paths) die with
@@ -4642,6 +4706,7 @@ mount_chroot() {
 umount_chroot() {
     ${PORTAGE_SCRATCH_MOUNTED:-false} && umount -l "${SYSROOT}/var/tmp/portage" 2>/dev/null || true
     ${HOST_REPO_MOUNTED:-false} && umount -l "${SYSROOT}/var/db/repos/gentoo" 2>/dev/null || true
+    ${X86_POOL_MOUNTED:-false} && umount -l "${SYSROOT}/var/cache/binpkgs" 2>/dev/null || true
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
 }
 trap umount_chroot EXIT
@@ -5194,17 +5259,23 @@ fi
 CHROOT
 
 # ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
-# The chroot emerge above populated PKGDIR (${SYSROOT}/var/cache/binpkgs) under
-# FEATURES=buildpkg. In --packages-only mode we exit NOW — before Phase 6 (mesh),
-# the kernel, and image/ISO/squashfs assembly — so the ONLY output is the binpkg
-# pool a later per-role image build reuses via --usepkg (--resume into this same
-# sysroot). We never reach the Phase-8 clean that strips the cache (x86 keeps its
-# binpkgs simply by never getting there — same effect as the --cached keep-branch),
-# and we emit NOTHING image-shaped.
+# The chroot emerge above populated PKGDIR under FEATURES=buildpkg — the SHARED
+# per-arch pool (${X86_POOL_DIR}, bind-mounted at /var/cache/binpkgs) when sharing
+# is on, the chroot-internal ${SYSROOT}/var/cache/binpkgs with --no-shared-assets.
+# In --packages-only mode we exit NOW — before Phase 6 (mesh), the kernel, and
+# image/ISO/squashfs assembly — so the ONLY output is the binpkg pool a later
+# per-role image build reuses via --usepkg. With the shared pool that pool lives
+# OUTSIDE the sysroot and survives everything (the EXIT trap detaches the bind);
+# only the legacy private pool still needs the --resume caveat below. We never
+# reach the Phase-8 clean that strips the cache, and we emit NOTHING image-shaped.
 if ${PACKAGES_ONLY}; then
     ISO_CACHED=true   # belt-and-suspenders: the strip is downstream of this exit anyway
-    info "--packages-only: binpkg pool prebuilt at ${SYSROOT}/var/cache/binpkgs — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
-    info "No kernel, no mesh, no img/iso/tar emitted; reuse via a later --role build with --usepkg (--resume)."
+    info "--packages-only: binpkg pool prebuilt at ${X86_POOL_DIR:-${SYSROOT}/var/cache/binpkgs} — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
+    if [ -n "${X86_POOL_DIR}" ]; then
+        info "No kernel, no mesh, no img/iso/tar emitted; every later amd64 build reuses the shared pool via --usepkg automatically."
+    else
+        info "No kernel, no mesh, no img/iso/tar emitted; reuse via a later --role build with --usepkg (--resume)."
+    fi
     exit 0
 fi
 
@@ -5825,6 +5896,33 @@ fi
 
 # ── 8. Clean ───────────────────────────────────────────────────────
 umount_chroot; trap - EXIT
+# Guard (shared-binpkg): the shared-pool bind must be DETACHED before ANYTHING
+# below touches var/cache/binpkgs — the uncached clean's rm -rf through a live
+# bind would empty the FLEET's pool, and the --cached embed below would copy the
+# pool into itself. umount_chroot detaches with `umount -l ... || true`, a SILENT
+# best-effort (same class as the var/tmp/portage guard inside the clean); verify.
+if mountpoint -q "${SYSROOT}/var/cache/binpkgs" 2>/dev/null; then
+    err "${SYSROOT}/var/cache/binpkgs is STILL a mountpoint after umount_chroot —"
+    err "refusing to touch it: it is the SHARED binpkg pool every amd64 image"
+    err "reuses (${X86_POOL_DIR:-<unset>}). Unmount first:  umount -R '${SYSROOT}'  — then re-run."
+    exit 1
+fi
+# --cached carve-out (shared-binpkg): a CACHED image PROMISES an embedded binpkg
+# cache (+ distfiles) so the installed system can rebuild/extend OFFLINE. With the
+# shared pool the chroot's /var/cache/binpkgs was a bind — detached above — so the
+# sysroot-side dir is now empty (or stale, on a pre-share --resume sysroot). COPY
+# the pool in to honor the promise. Runs regardless of --skip-clean: the embed is
+# image CONTENT, not cleanup. The pool stamp is a build-host key, not an image
+# artifact, so it is dropped from the copy.
+if ${ISO_CACHED:-false} && [ -n "${X86_POOL_DIR}" ]; then
+    banner "CACHED image: embedding the shared binpkg pool"
+    rm -rf "${SYSROOT}/var/cache/binpkgs"
+    mkdir -p "${SYSROOT}/var/cache/binpkgs"
+    cp -a "${X86_POOL_DIR}/." "${SYSROOT}/var/cache/binpkgs/" \
+        || { err "could not embed the shared binpkg pool ${X86_POOL_DIR} into the CACHED image"; exit 1; }
+    rm -f "${SYSROOT}/var/cache/binpkgs/.hugmesh-pool-fingerprint"
+    info "embedded $(du -sh "${SYSROOT}/var/cache/binpkgs" 2>/dev/null | cut -f1) of binpkgs (whole per-arch pool incl. Packages index) from ${X86_POOL_DIR}"
+fi
 if ! ${SKIP_CLEAN}; then
     banner "Cleaning sysroot"
     # Remove build-only sudoers patches (added to allow portage pkg_postinst to run
@@ -5963,13 +6061,17 @@ STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar
 # tree (.o/.cmd objects) is pure cruft in the image — and baking it in overflowed
 # the fixed ROOT_MiB ext4 root partition ("No space left on device" mid-.img
 # population). The rpi5 builder already strips it (rm /usr/src/* + --exclude); match it.
+# --exclude=./home/${DEFAULT_USER}: the LOCAL USER's home (DEFAULT_USER already
+# carries any --local-user override, :1621) is created by firstboot, so any
+# build-time content under it is host leakage — was hard-coded './home/magus',
+# which only worked when the operator WAS magus.
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude='./home/magus' -cpf - . 2>/dev/null \
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . 2>/dev/null \
     | xz -T0 -6 > "${STAGE4}" \
   || tar -C "${SYSROOT}" --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude='./home/magus' -cpf - . | xz -T0 -6 > "${STAGE4}"
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude="./home/${DEFAULT_USER}" -cpf - . | xz -T0 -6 > "${STAGE4}"
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────
@@ -6377,7 +6479,7 @@ CHROOT
             rm -rf "${_sqp}" /tmp/.sqprobe.sqfs
             info "Squashing rootfs with -comp ${sq_comp} (this can take a while)..."
             mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
-                -comp "${sq_comp}" -e proc sys dev run var/cache/distfiles home/magus >/dev/null \
+                -comp "${sq_comp}" -e proc sys dev run var/cache/distfiles "home/${DEFAULT_USER}" >/dev/null \
                 || { err "mksquashfs failed — cannot build a bootable live ISO"; exit 1; }
         else
             # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
@@ -6389,7 +6491,7 @@ CHROOT
             info "Squashing rootfs with tar2sqfs -c xz (this can take a while)..."
             tar -C "${SYSROOT}" --xattrs --xattrs-include='*.*' --numeric-owner \
                 --exclude='./proc' --exclude='./sys' --exclude='./dev' \
-                --exclude='./run' --exclude='./var/cache/distfiles' --exclude='./home/magus' \
+                --exclude='./run' --exclude='./var/cache/distfiles' --exclude="./home/${DEFAULT_USER}" \
                 -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img" \
                 || { err "tar2sqfs failed — cannot build a bootable live ISO"; exit 1; }
         fi

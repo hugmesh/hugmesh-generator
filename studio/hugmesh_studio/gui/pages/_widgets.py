@@ -9,6 +9,39 @@ from __future__ import annotations
 from ..qt import Qt, QtWidgets
 
 
+class NoWheelComboBox(QtWidgets.QComboBox):
+    """A QComboBox that IGNORES wheel events unless it has focus — mandatory for any
+    combo embedded in a scrollable view (setItemWidget in a tree/table, a combo
+    inside a scroll area).
+
+    Qt's default combo (focusPolicy=WheelFocus) EATS wheel events and changes the
+    selection whenever the cursor passes over it mid-scroll. In a scrolling table of
+    embedded combos that is silent data corruption: wave-1 forensics on issue #46
+    found the only board=rpi4 image ever recorded (rpi5-desktop.rpi5, session
+    20260815-154029-05f5d2) in a fleet with no Pi 4 hardware, every sibling row at
+    its default — rpi4 is exactly ONE wheel notch below the rpi5 default in the
+    worklist board combo, and the flip re-keyed that image's binpkg pool to
+    snap-build-pi4 (0% reuse from the populated pi5 pool). The same silent flip on
+    the encrypt_root combo would toggle a node's disk encryption.
+
+    A DELIBERATE wheel edit still works: click the combo (focusing it), then
+    scroll. An unfocused combo ignores the event, so the container scrolls instead
+    — the standard fix for the combo-in-scroll-area trap.
+    """
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        # StrongFocus = click/tab focus WITHOUT wheel-grabs-focus (the default
+        # WheelFocus lets the first stray scroll both focus AND edit the combo).
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()   # propagate: the scroll belongs to the view, not the value
+
+
 class Collapsible(QtWidgets.QWidget):
     """A titled section whose CONTENT can be collapsed to just its header row.
 

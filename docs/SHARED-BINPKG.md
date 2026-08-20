@@ -67,8 +67,12 @@ A pool is the `pkgdir` under a build's per-board `BUILD_SUBDIR`:
 - **cross builders:** `PKGDIR="@@WORK_DIR@@/pkgdir"` → `${BUILD_ROOT}/pkgdir`,
   where `BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"`. Lives **outside** the
   sysroot, so it survives sysroot wipes and persists across roles of that board.
-- **x86:** `PKGDIR="/var/cache/binpkgs"` (chroot-internal, inside the shared
-  sysroot); the 4 x86 roles reuse one pool via a shared sysroot (`--resume`).
+- **x86 (issue #46):** the chroot's `PKGDIR` stays `/var/cache/binpkgs`
+  (make.conf), but with the shared root on, `mount_chroot` **bind-mounts the
+  shared per-arch pool** `<root>/pkgdir/snap-build-x86` at that path — every
+  amd64 role of every worklist entry reads/writes ONE pool that survives the
+  per-entry `wl-<id>` sysroot. With `--no-shared-assets` the pool is the legacy
+  chroot-internal one (reuse then needs a shared sysroot via `--resume`).
 
 `BUILD_SUBDIR` defaults are per-board:
 
@@ -280,25 +284,24 @@ all ten builders carry the wiring. Studio side:
 ```sh
 # 1. compile a platform's role-UNION binpkg pool ONCE (per board), no image:
 make prebuild-binaries ARCH=rpi5 BOARD=rpi4        # -> out/shared/pkgdir/snap-build-pi4
-make prebuild-binaries ARCH=x86                    # -> snap-build-x86 sysroot pool
+make prebuild-binaries ARCH=x86                    # -> out/shared/pkgdir/snap-build-x86
 
-# (with --no-shared-assets the ARM pool is the legacy out/snap-build-pi4/pkgdir;
-#  x86's pool is chroot-internal either way — see "Honest limits" below.)
+# (with --no-shared-assets the ARM pool is the legacy out/snap-build-pi4/pkgdir
+#  and the x86 pool falls back to chroot-internal — see the caveat below.)
 
 # 2. later per-role image builds reuse the pool via --usepkg (already wired):
 make rpi RPI_BOARD=rpi4                             # backend/frontend/… reuse pi4 pool
-make x86 RESUME=--resume                            # x86: MUST pass --resume (see below)
+make x86                                            # x86: shared pool, no --resume needed
 ```
 
-> **x86 caveat — pass `RESUME=--resume` to consume an x86 prebuild.** The x86 pool
-> lives *inside* the sysroot (`/var/cache/binpkgs`), unlike the ARM pools which sit
-> outside it (`<root>/pkgdir/<board-key>` with the shared root on, `${BUILD_ROOT}/pkgdir`
-> with `--no-shared-assets`). A non-`--resume` x86 build wipes
-> the sysroot (the wipe-on-non-resume guard) and therefore the prebuilt pool with
-> it — so `make prebuild-binaries ARCH=x86` then a plain `make x86` recompiles from
-> scratch. Always thread `RESUME=--resume` into the consuming x86 build. The ARM
-> boards have no such caveat (their pool survives a sysroot wipe, and with the shared
-> root it now also survives a whole new `BUILD_SUBDIR` — that is G2).
+> **x86 caveat — `--no-shared-assets` only.** With the shared root ON (the
+> default), the x86 pool lives at `<root>/pkgdir/snap-build-x86`, OUTSIDE the
+> sysroot — it survives sysroot wipes and fresh `wl-<id>` subdirs exactly like the
+> ARM pools, and a plain `make x86` after `make prebuild-binaries ARCH=x86` reuses
+> it (issue #46). Only under `--no-shared-assets` does the x86 pool revert to
+> chroot-internal `/var/cache/binpkgs`; a non-`--resume` build then wipes the
+> sysroot (the wipe-on-non-resume guard) and the pool with it, so thread
+> `RESUME=--resume` into the consuming build in that legacy mode.
 
 - **Union feed:** `python3 -m hugmesh_studio.core.prebuild_union <platform>`
   prints the sorted role-union atom list — `set().union` over the EXISTING
@@ -482,12 +485,19 @@ reports `PLAN_KERNEL_CACHE=<root>|off`.
   - that a shared, writable `DISTDIR` across two genuinely concurrent cross builds is
     contention-free in practice. Portage's per-file fetch lock is the mechanism; no
     real concurrent fleet build has exercised it here.
-- **x86's binpkg pool is still NOT shared, by decision.** It lives *inside* the sysroot
-  (`PKGDIR=/var/cache/binpkgs`), so sharing it needs a bind-mount into the chroot **plus**
-  a carve-out in the `--uncached` cleanup that does
-  `rm -rf "${SYSROOT}"/var/cache/binpkgs/*` — which would otherwise delete the shared
-  pool. That was judged too dangerous to land unproven, so it is stated here rather than
-  faked. x86 DOES get the shared seed cache and read access to the fleet distfiles.
+- **x86's binpkg pool IS now shared (issue #46)** — the wave-1 measurement (0% x86
+  reuse, 2,042 duplicate compiles across 17 images) reversed the earlier "too
+  dangerous unproven" call, and the two hazards that made it dangerous are now
+  guarded rather than avoided: `mount_chroot` bind-mounts
+  `<root>/pkgdir/snap-build-x86` over the chroot's `/var/cache/binpkgs`, the
+  Phase-8 clean **verifies the bind is detached** (`mountpoint -q`, hard abort)
+  before its `rm -rf "${SYSROOT}"/var/cache/binpkgs/*`, and `--cached` images copy
+  the pool back into the sysroot after the unmount so the embedded-cache promise
+  holds. The pool is fingerprint-guarded with the spec-derived PROFILE included
+  (the PR #44 deferral); pre-profile stamps are migrated once, loudly, by
+  `pool_fingerprint_preflight` — a real CHOST/CFLAGS change still refuses reuse.
+  Like every claim in this section, the reuse RATE on a real queue is owed proof
+  from the next full mesh build's plan-preview `[binary]` counts.
 - **Signed-kernel cache (G4) — what is NOT done and NOT proven.**
   - **Only two builders are wired: `build-x86-host-stage4.sh` and
     `build-rpi5-stage4.sh`** (the latter covering `--board rpi5|rpi4|rpi3`). The other
