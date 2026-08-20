@@ -84,12 +84,21 @@ DEVOPS_UP_TIMEOUT_S = 3600
 # credential (issue #48). An EXISTING cluster created before that path can
 # never gain the mount; the preflight below detects exactly that.
 KIND_REPO_MOUNT = "/hugmesh/hugmesh-generator"
+#: The kind cluster bootstrap-kind.sh creates, and the name every probe below asks
+#: about. ONE reader of the override so a probe can never disagree with the verb.
+KIND_CLUSTER_DEFAULT = "hugmesh-local"
 # Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
 # creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
 # WITHOUT auth — data.name == "e2e-admin" when seeded, data: null when not.
 # (CASDOOR_ORG is seed-e2e.sh's default; an operator override would defeat
 # this probe, which then honestly reports 'not seeded' and blocks the run.)
 E2E_SEED_PROBE_URL = "http://localhost:8000/api/get-user?id=hugmesh/e2e-admin"
+
+
+def _kind_cluster_name() -> str:
+    """The kind cluster this repo's lane drives — bootstrap-kind.sh reads the same
+    KIND_CLUSTER_NAME override, so the probes and the verb always mean one cluster."""
+    return os.environ.get("KIND_CLUSTER_NAME", "") or KIND_CLUSTER_DEFAULT
 
 
 def _compose_base() -> list[str]:
@@ -936,7 +945,7 @@ class LocalStackNode:
                     f"fetch — run the Studio against a full clone, or export "
                     f"ARGOCD_REPO_TOKEN=<token with read access to "
                     f"hugmesh-generator> and retry."]
-        cluster = os.environ.get("KIND_CLUSTER_NAME", "hugmesh-local")
+        cluster = _kind_cluster_name()
         kind = devops_tools.which("kind", self.generator_dir)
         if not kind:
             return []  # devops_available() already reports the missing tool
@@ -986,6 +995,23 @@ class LocalStackNode:
                        "stale-but-consistent HEAD)."))
         return self._make("kind-up", timeout=DEVOPS_UP_TIMEOUT_S,
                           on_line=on_line, cancel=cancel)
+
+    def devops_running(self) -> bool:
+        """Does this mesh's kind cluster exist RIGHT NOW? Read-only (`kind get
+        clusters`, the same question devops_repo_access() already asks) so a caller
+        can tell "the lane is already down" from "it has to come down first" without
+        firing the destructive verb blind.
+
+        False whenever the answer cannot be established — kind not installed, the
+        probe failing — because a cluster this lane created cannot exist without the
+        binary that creates it, and an unestablished reason must never be reported as
+        a running cluster (the same tri-state rule the e2e gate follows: unknown is
+        rendered as unknown, never as a blocker)."""
+        kind = devops_tools.which("kind", self.generator_dir)
+        if not kind:
+            return False
+        rc, out = self._probe([kind, "get", "clusters"])
+        return rc == 0 and _kind_cluster_name() in out.split()
 
     def devops_down(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-down` — delete the local Kubernetes cluster. Destructive for

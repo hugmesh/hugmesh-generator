@@ -150,10 +150,11 @@ class LocalCloudScreen:
             "identity tier and keep working; they are simply not listed above.",
             "",
             "K8S GATE: the local Kubernetes (DevOps) stack must come down "
-            "before these node images are configured and built. The Studio "
-            "does not take it down for you yet: bring it down from the Local "
-            "Docker Mesh flow's DevOps controls or with `make kind-down` (the "
-            "docker mesh and its volumes are untouched).",
+            "before these node images are configured and built. THIS terminal "
+            "flow does not take it down for you — the GUI's gate page runs the "
+            "teardown itself; here, bring it down with `make kind-down` or from "
+            "the Local Docker Mesh flow's DevOps controls (the docker mesh and "
+            "its volumes are untouched).",
         ]
 
     def prompt(self, j) -> str:  # noqa: ARG002
