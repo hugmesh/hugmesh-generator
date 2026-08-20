@@ -114,32 +114,76 @@ if [ -d /usr/libexec/cni ] && [ -z "$(ls -A /opt/cni/bin 2>/dev/null)" ]; then
 fi
 
 # ── nullmailer ownership re-fix (cross-build postinst casualty, issue #60) ────
-# mail-mta/nullmailer's pkg_postinst runs `chown nullmail:nullmail …` BY NAME.
-# On the CROSS builders (rpi5/jetson/orangepi*/frite: ROOT=<sysroot> merges,
-# crossdev wrapper appends --root-deps=rdeps and cross_emerge passes
-# --with-bdeps=n) that chown executes on the x86 BUILD HOST and resolves the
-# name against the HOST's passwd — where acct-user/nullmail never merges — so
-# it dies "chown: invalid user: 'nullmail'" (2026-08-19 mesh run). The package's
-# FILES still land, but the log/spool dirs ship root-owned and the trigger fifo
-# may be missing. The clean fix is upstream-shaped (a ROOT-aware postinst in the
-# ebuild / portage-side name mapping), so re-run the postinst's idempotent tail
-# HERE, at first boot on the REAL system, where acct-user/nullmail IS in
-# /etc/passwd (it merges into the sysroot fine — only the host-side name lookup
-# broke). No-op when nullmailer isn't installed or ownership is already right;
-# native x86 builds were never affected (their chroot IS the sysroot).
+# mail-mta/nullmailer's pkg_postinst runs `chown nullmail:nullmail … || die` BY
+# NAME. On the CROSS builders (rpi5/jetson/orangepi*/frite: ROOT=<sysroot>
+# merges, crossdev wrapper appends --root-deps=rdeps and cross_emerge passes
+# --with-bdeps=n, so the ebuild's own `BDEPEND="acct-user/nullmail"` never
+# merges to /) that chown executes on the x86 BUILD HOST and resolves the name
+# against the HOST's passwd — so it dies "chown: invalid user: 'nullmail'"
+# (2026-08-19 mesh run). Portage treats a postinst die as NON-critical: the vdb
+# entry and the package FILES stay, emerge just exits non-zero. The damage,
+# measured in the real 08-15 cross sysroots, is exactly:
+#     /var/log/nullmailer               root:root (mode 770 — fperms had run)
+#     /var/spool/nullmailer/{tmp,queue,failed}  root:root 755 (chmod never ran)
+#     /var/spool/nullmailer/trigger     root:root 660 (mkfifo ran BEFORE the die)
+# i.e. the fifo IS created; it is only ever the ownership + the spool modes that
+# are lost, because the die aborts pkg_postinst at its first chown.
+#
+# The clean fix is upstream-shaped (a ROOT-aware postinst in the ebuild — the
+# `egetent group X | cut -d: -f3` numeric-id idiom sys-apps/shadow, sys-libs/pam
+# and acct-group/shadow already use for precisely this hazard) or a host-side
+# pre-seed of acct-{user,group}/nullmail. Until then, re-run the postinst's
+# idempotent tail HERE, at first boot on the REAL system, where acct-user/
+# nullmail IS in /etc/passwd (uid 88 — it merges into the sysroot fine; only the
+# host-side name lookup broke). No-op when nullmailer isn't installed or
+# ownership is already right; native x86 builds were never affected (their
+# chroot IS the sysroot, so the name resolves).
 if getent passwd nullmail >/dev/null 2>&1 && [ -d /var/spool/nullmailer ]; then
-    [ -p /var/spool/nullmailer/trigger ] || mkfifo --mode=0660 /var/spool/nullmailer/trigger || true
-    chown nullmail:nullmail /var/log/nullmailer \
-        /var/spool/nullmailer/tmp /var/spool/nullmailer/queue \
-        /var/spool/nullmailer/failed /var/spool/nullmailer/trigger 2>/dev/null || true
-    chmod 770 /var/log/nullmailer /var/spool/nullmailer/tmp \
-        /var/spool/nullmailer/queue /var/spool/nullmailer/failed 2>/dev/null || true
-    chmod 660 /var/spool/nullmailer/trigger 2>/dev/null || true
-    if [ -f /etc/nullmailer/remotes ]; then
-        chown root:nullmail /etc/nullmailer/remotes 2>/dev/null || true
-        chmod 0640 /etc/nullmailer/remotes 2>/dev/null || true
+    # Every step is CHECKED and counted. The previous revision suppressed all
+    # stderr and `|| true`'d each command, then printed its success line
+    # unconditionally — so a re-fix that repaired NOTHING still reported
+    # "re-applied". A silent no-op here ships a spool the nullmail daemon cannot
+    # write to, which is the whole defect this block exists to undo.
+    _nm_fail=0
+    if [ ! -p /var/spool/nullmailer/trigger ]; then
+        mkfifo --mode=0660 /var/spool/nullmailer/trigger || _nm_fail=$((_nm_fail + 1))
     fi
-    echo "nullmailer: re-applied postinst ownership (cross-build sysroot fix — see the builder's ROOT= merge note)"
+    for _nm_p in /var/log/nullmailer /var/spool/nullmailer/tmp \
+                 /var/spool/nullmailer/queue /var/spool/nullmailer/failed; do
+        if [ ! -d "${_nm_p}" ]; then
+            echo "nullmailer: MISSING ${_nm_p} — package merge is incomplete" >&2
+            _nm_fail=$((_nm_fail + 1)); continue
+        fi
+        chown nullmail:nullmail "${_nm_p}" || _nm_fail=$((_nm_fail + 1))
+        chmod 770 "${_nm_p}"               || _nm_fail=$((_nm_fail + 1))
+    done
+    if [ -p /var/spool/nullmailer/trigger ]; then
+        chown nullmail:nullmail /var/spool/nullmailer/trigger || _nm_fail=$((_nm_fail + 1))
+        chmod 660 /var/spool/nullmailer/trigger               || _nm_fail=$((_nm_fail + 1))
+    else
+        echo "nullmailer: MISSING /var/spool/nullmailer/trigger — mkfifo failed" >&2
+        _nm_fail=$((_nm_fail + 1))
+    fi
+    if [ -f /etc/nullmailer/remotes ]; then
+        # Holds relay passwords: root:nullmail 0640, same as the postinst tail.
+        chown root:nullmail /etc/nullmailer/remotes || _nm_fail=$((_nm_fail + 1))
+        chmod 0640 /etc/nullmailer/remotes          || _nm_fail=$((_nm_fail + 1))
+    fi
+    if [ "${_nm_fail}" -eq 0 ]; then
+        echo "nullmailer: re-applied postinst ownership (cross-build sysroot fix — see the builder's ROOT= merge note)"
+    else
+        echo "nullmailer: WARNING — ownership re-fix INCOMPLETE (${_nm_fail} step(s) failed)." >&2
+        echo "nullmailer:   The mail spool/log may still be root-owned and nullmailer-send will not" >&2
+        echo "nullmailer:   be able to write to it. Recover with: emerge --config mail-mta/nullmailer" >&2
+    fi
+    unset _nm_fail _nm_p
+elif [ -d /var/spool/nullmailer ]; then
+    # The whole re-fix is premised on acct-user/nullmail having merged into the
+    # IMAGE (it did on every cross sysroot measured: nullmail:x:88:88). If that
+    # premise ever breaks, the guard above would simply vanish without a word and
+    # the spool would ship root-owned with nothing in the log to say why.
+    echo "nullmailer: WARNING — /var/spool/nullmailer exists but user 'nullmail' is absent;" >&2
+    echo "nullmailer:   ownership NOT re-applied (acct-user/nullmail did not merge into the image)." >&2
 fi
 
 if [ -b /dev/nvme0n1 ]; then

@@ -2306,7 +2306,8 @@ run_nongating_smokes() {
                 "arm-payload-gates:${REPO_DIR}/tests/build-arm-payload-gates.sh" \
                 "spec-use-parity:${REPO_DIR}/tests/scripts/test-spec-use-parity.sh" \
                 "edge-ai-cuda-host-compiler:${REPO_DIR}/tests/scripts/test-edge-ai-cuda-host-compiler.sh" \
-                "x86-artifact-integrity:${REPO_DIR}/tests/scripts/test-x86-artifact-integrity.sh"; do
+                "x86-artifact-integrity:${REPO_DIR}/tests/scripts/test-x86-artifact-integrity.sh" \
+                "nullmailer-cross-postinst:${REPO_DIR}/tests/scripts/test-nullmailer-cross-postinst.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then
             SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue
