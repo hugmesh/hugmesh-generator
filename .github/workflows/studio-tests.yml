@@ -25,6 +25,12 @@ on:
       # ONLY in this file, so without this path the very gate that exists to catch
       # a one-sided theme rename would not run on the change that causes one.
       - 'tests/stack/compose.local.yaml'
+      # Same reason, different contract. studio/tests/test_local_stack_preflight.py's
+      # drift guard runs THIS script's own `_check_path_from_pins` against the Python
+      # preflight's derivation of the same maven coordinate. A rename that lands only
+      # here (`systems/hugmesh` -> `net/hugmesh` did exactly that) touches no studio
+      # path, so without this line the guard would not run on the change it exists for.
+      - 'tests/stack/m2-bootstrap.sh'
   workflow_dispatch: {}
 
 permissions:

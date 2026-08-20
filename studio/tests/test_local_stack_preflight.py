@@ -14,6 +14,8 @@ and nothing asserts readiness the host doesn't have (probes default-fail).
 """
 import os
 import re
+import shutil
+import subprocess
 
 from hugmesh_studio.core import local_stack_node as lsn
 from hugmesh_studio.core.local_stack_node import (
@@ -183,47 +185,91 @@ def test_probe_env_is_the_make_env(monkeypatch):
 # restart hands the registry a new bridge IP while the env file stays frozen
 # (proven live: preflight said green while curl of the frozen URL failed rc=7).
 
-# DERIVED from the module constant — never a second hardcoded copy. A duplicated
-# literal here is exactly why the 2.7.0 -> 2.8.0 drift went unnoticed: the test
-# asserted the stale value it had copied, so it stayed green while the real probe
-# 404'd. test_check_artifact_matches_the_m2_bootstrap_script below pins the constant
-# to the SHELL side (the only other place the coordinate lives).
-_CHECK_TAIL = f"/groups/7/-/packages/maven/{lsn._M2_CHECK_ARTIFACT}"
+# DERIVED, at both ends — never a hardcoded copy. A duplicated literal here is
+# exactly why the coordinate drifts went unnoticed: the test asserted the stale
+# value it had copied, so it stayed green while the real probe 404'd. That bit
+# twice — 2.7.0 -> 2.8.0, then `systems/hugmesh` -> `net/hugmesh` — so BOTH sides
+# now read the coordinate out of m2-bootstrap.sh's PINS, and
+# test_check_artifact_matches_the_m2_bootstrap_script runs the two derivations
+# against each other.
+_M2_SCRIPT = os.path.join(GENERATOR_DIR, "tests", "stack", "m2-bootstrap.sh")
+_CHECK_ARTIFACT, _CHECK_WHY = LocalStackNode(GENERATOR_DIR)._m2_check_artifact()
+_CHECK_TAIL = f"/groups/7/-/packages/maven/{_CHECK_ARTIFACT}"
+
+
+def _shell_check_path(group_id="7"):
+    """m2-bootstrap.sh's OWN self-check path, produced by running the script's
+    real `_check_path_from_pins` over its real PINS — lifted out and run in bash
+    rather than re-implemented here (a re-implementation is just a third copy to
+    drift). The script itself cannot be sourced: its top level clones, builds and
+    talks to docker."""
+    src = open(_M2_SCRIPT, encoding="utf-8").read()
+    pins = re.search(r"^PINS=\((.*?)^\)", src, re.S | re.M)
+    fn = re.search(r"^_check_path_from_pins\(\)\s*\{.*?^\}", src, re.S | re.M)
+    assert pins, "PINS array not found in m2-bootstrap.sh (shape drift?)"
+    assert fn, "_check_path_from_pins() not found in m2-bootstrap.sh (shape drift?)"
+    prog = "\n".join(["set -eu", f"GITLAB_GROUP_ID={group_id}",
+                      f"PINS=({pins.group(1)})", fn.group(0), "_check_path_from_pins"])
+    out = subprocess.run(["bash", "-c", prog], capture_output=True, text=True)
+    assert out.returncode == 0, f"m2-bootstrap.sh self-check derivation failed: {out.stderr}"
+    return out.stdout.strip()
 
 
 def test_check_artifact_matches_the_m2_bootstrap_script():
     """DRIFT GUARD: the preflight's check artifact and tests/stack/m2-bootstrap.sh's
-    own self-check + parent PIN must name the SAME hugmesh-parent coordinate.
+    own self-check must resolve to the SAME hugmesh-parent coordinate.
 
-    They are two hardcoded copies on opposite sides of the language boundary, and
-    when the rebrand bumped the shell side to hugmesh-parent 2.8.0 but left this
-    Python constant at 2.7.0, preflight 404'd forever -> "cold build required but
-    the registry is not up" -> the GUI's local-mesh bring-up refused. Nothing else
-    compares them, so this test is the only thing standing between that recurring."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    gen = os.path.dirname(os.path.dirname(here))
-    script = os.path.join(gen, "tests", "stack", "m2-bootstrap.sh")
-    src = open(script, encoding="utf-8").read()
+    Both sides derive it from the one PINS array, but they derive it in two
+    languages, so the SHAPE can still drift (a moved path segment, a renamed
+    field). This runs both derivations for real and compares the full URL tails —
+    red in either direction: a Python side that stops following the pin (how
+    `systems/hugmesh` survived the rename to `net/hugmesh`, probing a path nothing
+    publishes against a perfectly healthy registry), or a shell side that moves
+    the served path without the preflight. Nothing else compares them."""
+    assert _CHECK_ARTIFACT, _CHECK_WHY
+    assert _shell_check_path() == _CHECK_TAIL.lstrip("/"), (
+        f"preflight probes /{_CHECK_TAIL.lstrip('/')} but m2-bootstrap.sh "
+        f"serves/self-checks /{_shell_check_path()} — they must name the same artifact")
 
-    m = re.search(r'CHECK_PATH="[^"]*?/packages/maven/(\S+?\.pom)"', src)
-    assert m, "CHECK_PATH not found in m2-bootstrap.sh (shape drift?)"
-    assert m.group(1) == lsn._M2_CHECK_ARTIFACT, (
-        f"preflight probes {lsn._M2_CHECK_ARTIFACT} but m2-bootstrap.sh serves/"
-        f"self-checks {m.group(1)} — they must name the same artifact")
 
-    # ...and that coordinate must be the version the PINS actually build+install.
-    pin = re.search(r'"hugmesh-parent\|[0-9a-f]{40}\|hugmesh-parent\|([^|]+)\|', src)
-    assert pin, "hugmesh-parent PIN not found in m2-bootstrap.sh"
-    assert f"hugmesh-parent/{pin.group(1)}/hugmesh-parent-{pin.group(1)}.pom" \
-        == lsn._M2_CHECK_ARTIFACT.split("systems/hugmesh/", 1)[-1], (
-        f"PINS build hugmesh-parent {pin.group(1)} but preflight probes "
-        f"{lsn._M2_CHECK_ARTIFACT}")
+def test_check_artifact_follows_a_renamed_pin(tmp_path):
+    """...and the Python side really is DERIVED, not restated: rewrite the pin's
+    group path + version in a throwaway checkout and the probe must move with it.
+    A re-hardcoded constant passes the test above (until the next rename) but
+    fails here immediately."""
+    script = tmp_path / "tests" / "stack" / "m2-bootstrap.sh"
+    script.parent.mkdir(parents=True)
+    sha = "0" * 40
+    script.write_text(
+        "PINS=(\n"
+        f'  "hugmesh-build-config|{sha}|hugmesh-build-config|0.5.0|jar|net/hugmesh"\n'
+        "  # a comment line, as in the real script\n"
+        f'  "hugmesh-parent|{sha}|hugmesh-parent|9.9.9|pom|org/example"\n'
+        ")\n")
+    assert LocalStackNode(str(tmp_path))._m2_check_artifact() == (
+        "org/example/hugmesh-parent/9.9.9/hugmesh-parent-9.9.9.pom", "")
+
+
+def test_check_artifact_default_fails_without_a_parent_pin(tmp_path):
+    """No script / no parent pin -> no probe URL to guess. Default-fail with a
+    reason, like every other probe here."""
+    node = LocalStackNode(str(tmp_path))
+    path, why = node._m2_check_artifact()
+    assert path == "" and "m2-bootstrap.sh" in why
+    script = tmp_path / "tests" / "stack" / "m2-bootstrap.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text('PINS=(\n  "hugmesh-commons|x|hugmesh-commons|2.1.0|jar|net/hugmesh"\n)\n')
+    path, why = node._m2_check_artifact()
+    assert path == "" and "hugmesh-parent" in why
 
 
 def _write_env(tmp_path, body):
+    """Env file + the m2-bootstrap.sh the check-artifact path is derived from
+    (the REAL one — a stub would let a wrong coordinate pass these tests)."""
     envf = tmp_path / "tests" / "stack" / ".m2-registry.env"
     envf.parent.mkdir(parents=True, exist_ok=True)
     envf.write_text(body)
+    shutil.copy(_M2_SCRIPT, envf.parent / "m2-bootstrap.sh")
     return envf
 
 
