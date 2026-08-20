@@ -772,6 +772,35 @@ def trust_warning(state_dir: str) -> str:
 
 # ── the proxy ─────────────────────────────────────────────────────────────────
 
+class NoFollowRedirects(urllib.request.HTTPRedirectHandler):
+    """Hand a 3xx back to the BROWSER instead of chasing it inside the proxy.
+
+    `urllib.request.urlopen` installs an HTTPRedirectHandler by default, so the
+    proxy used to follow the upstream's redirects ITSELF — and that default is
+    catastrophic here for the reason this whole tool exists. The `Location:` an
+    SSO bounce sends back names a real domain (`https://hugmesh.net/login/`),
+    and problem 2 in the header of this file is that those names DO NOT RESOLVE
+    on this workstation. The follow therefore died inside `_relay` with
+    `[Errno -5] No address associated with hostname`, the door answered 502, and
+    it happened mid-login where it reads as a broken app rather than as a proxy
+    that just tried to walk out to the internet on the user's behalf.
+
+    It also made the `Location:` rewrite in `_relay` DEAD CODE: a redirect that
+    has already been followed has no Location left to rewrite, so the one header
+    the rewrite exists for was the one header it never saw.
+
+    Returning None makes the redirect fall through to `http_error_default`,
+    which raises HTTPError — already caught below with its headers and body
+    intact — so the 3xx reaches the rewrite and then the browser. The browser is
+    the RIGHT thing to follow it: it re-resolves against the rewritten loopback
+    authority, which is exactly the SSO bounce this tool promises to keep on
+    127.0.0.1.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def make_handler(entry: Entry, upstream: str, hostmap: dict[str, str],
                  reverse: dict[str, str], verbose: bool):
     """One handler class per door. Closure, not globals: the tool serves several
@@ -815,10 +844,15 @@ def make_handler(entry: Entry, upstream: str, hostmap: dict[str, str],
             req = urllib.request.Request(url, data=body,
                                          headers=self._headers_up(),
                                          method=self.command)
+            # build_opener, NOT urlopen: urlopen's default opener follows
+            # redirects inside the proxy, which cannot work here and hid the
+            # Location rewrite below. See NoFollowRedirects.
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=ctx), NoFollowRedirects)
             try:
-                resp = urllib.request.urlopen(req, context=ctx, timeout=60)
+                resp = opener.open(req, timeout=60)
                 status, hdrs, payload = resp.status, resp.headers, resp.read()
-            except urllib.error.HTTPError as exc:      # 4xx/5xx carry bodies too
+            except urllib.error.HTTPError as exc:      # 3xx/4xx/5xx: bodies too
                 status, hdrs, payload = exc.code, exc.headers, exc.read()
             except Exception as exc:                   # upstream down / TLS fail
                 self._fail(f"hugmesh-view [{entry.name}]: upstream {url} "
