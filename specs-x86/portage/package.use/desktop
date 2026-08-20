@@ -16,6 +16,21 @@
 #                        no qt USE override is needed here.)
 media-libs/freetype harfbuzz
 net-libs/libdom xml
+# libdbusmenu[gtk3] — xfce-base/xfce4-panel[dbusmenu] (via xfce4-meta, the
+# 'full'/XFCE desktop weight) hard-requires >=dev-libs/libdbusmenu-16.04.0[gtk3].
+# This entry previously lived ONLY in package.use/capable, which the builder
+# copies solely for the CAPABLE (Plasma) set — so the plain XFCE desktop role
+# walled at resolution (2026-08-15 fleet run, build-desktop.x86.log; issue #60
+# item 1). It belongs here: 'desktop' is copied for EVERY client role, and an
+# entry for a package a given weight doesn't pull is simply ignored by portage.
+dev-libs/libdbusmenu gtk3
+# Same move (capable -> desktop), same chain class: xfce4-meta -> thunar-volman
+# hard-requires thunar[udisks] -> gvfs[udisks] on the plain XFCE weight too
+# (proved by replaying the payload resolution against the failed 08-15 sysroot
+# in hugmesh-builder — rc=0 only with these three; udisks is not in the global
+# desktop USE, so they must be per-package).
+xfce-base/thunar udisks
+gnome-base/gvfs udisks
 net-firewall/nftables python json xtables
 x11-libs/libdrm video_cards_radeon
 kde-plasma/discover flatpak

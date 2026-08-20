@@ -1,0 +1,29 @@
+# CLIENT desktop (--role desktop) ONLY — copied into the sysroot by
+# build-rpi5-stage4.sh solely for ROLE_CLIENT (headless k8s node roles never
+# reference desktop USE). The TARGET-side per-package USE closure the LXDE
+# desktop payload needs, from the walls the 2026-08-15 fleet run hit
+# (build-rpi5-desktop.rpi5.log; issue #60 item 2), re-proven by replaying the
+# builder's exact cross pretend resolution against that failed sysroot in
+# hugmesh-builder until rc=0:
+#
+#   libdom[xml]        — www-client/netsurf[svgtiny,svg] -> libsvgtiny ->
+#                        libdom[xml] ("for /out/.../sysroot/" in the log = target)
+#   freetype[harfbuzz] — x11-libs/pango (openbox/lxpanel/lightdm-gtk-greeter
+#                        GTK3 stack) requires >=media-libs/freetype-2.5.0.1:2[harfbuzz]
+#   cairo[X]           — defensive pin: gtk+:3 hard-requires cairo[X?] with its
+#                        X on; @@CLIENT_USE@@ already carries the global X, so
+#                        this only guards against a make.conf USE reshuffle
+#                        (package.use outranks make.conf in USE_ORDER).
+#
+# NOTE the log's headline cairo wall (the one with NO "for <sysroot>" suffix)
+# was the HOST side of this same failure — adwaita-icon-theme BDEPENDs
+# x11-libs/gtk+:3 for gtk-encode-symbolic-svg, resolved against the BUILD
+# CONTAINER's config — and is fixed by build-rpi5-stage4.sh's
+# hugmesh-cross-host-desktop-gtk HOST pre-seed, not by this file. Both halves
+# are load-bearing; either alone still walls.
+#
+# Mirrors specs-x86/portage/package.use/desktop (same libdom/freetype entries,
+# same chains). Entries for packages a role doesn't pull are ignored by portage.
+x11-libs/cairo X
+net-libs/libdom xml
+media-libs/freetype harfbuzz

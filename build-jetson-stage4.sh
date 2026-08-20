@@ -1317,7 +1317,7 @@ else
 fi
 
 banner "Installing spec files into sysroot (hardened profile)"
-mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,repos.conf}
+mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,patches,repos.conf}
 GENTOO_REPO="$(portageq get_repo_path / gentoo 2>/dev/null || echo /var/db/repos/gentoo)"
 cat > "${SYSROOT}/etc/portage/repos.conf/gentoo.conf" <<EOF
 [DEFAULT]
@@ -1332,7 +1332,21 @@ cp "${SPECS_DIR}/portage/profile/use.mask"          "${SYSROOT}/etc/portage/prof
 [ -f "${SPECS_DIR}/portage/profile/package.provided" ] && \
     cp "${SPECS_DIR}/portage/profile/package.provided" "${SYSROOT}/etc/portage/profile/package.provided"
 pcs_sync_dir "${SPECS_DIR}/portage/package.accept_keywords" "${SYSROOT}/etc/portage/package.accept_keywords"
-pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+# package.use: role-independent files always; 'desktop' (the client X/GTK USE
+# closure — issue #60 item 5) ONLY for --role desktop (ROLE_CLIENT). Staged into
+# a temp dir then pcs_sync_dir'd so a resumed HEADLESS sysroot PRUNES a stale
+# desktop file instead of keeping it (mirrors build-x86-host-stage4.sh's
+# role-conditional package.use copies; see scripts/_portage-config-lib.sh).
+PCS_STAGE_PU="$(mktemp -d)"
+for puf in "${SPECS_DIR}/portage/package.use/"*; do
+    [ -e "${puf}" ] || continue
+    case "$(basename "${puf}")" in
+        desktop) ${ROLE_CLIENT} || continue ;;
+    esac
+    cp "${puf}" "${PCS_STAGE_PU}/"
+done
+pcs_sync_dir "${PCS_STAGE_PU}" "${SYSROOT}/etc/portage/package.use"
+rm -rf "${PCS_STAGE_PU}"
 pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
 # Quiet portage's per-file sendfile WARNING-traceback spam before the first
 # merge into this sysroot (sendfile(2) EINVALs for EVERY file merged onto the
@@ -1343,6 +1357,17 @@ pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.
 # scripts/patch-portage-file-copy.py.
 pcs_quiet_sendfile_noise "${SYSROOT}"
 cp "${SPECS_DIR}/portage/env/"*.conf                "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
+# Per-package user patches auto-applied by eapply_user (called from each ebuild's
+# default src_prepare). cross_emerge runs with PORTAGE_CONFIGROOT=${SYSROOT}, so
+# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/. Currently
+# holds net-misc/networkmanager's cross jansson-SONAME fix (meson readelf's the
+# ON-TARGET /usr/lib64/libjansson.so path on the x86 build host -> empty SONAME
+# -> "Unable to determine Jansson SONAME" assert killed NetworkManager on all
+# four jetson images, 2026-08-15 fleet run; issue #60 item 4). Ported from
+# build-rpi5-stage4.sh's identical block + specs-rpi5's patch (see the .patch).
+if [ -d "${SPECS_DIR}/portage/patches" ]; then
+    cp -a "${SPECS_DIR}/portage/patches/."             "${SYSROOT}/etc/portage/patches/"
+fi
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 # ── PYTHON_TARGETS: derived from the STAGE3 SEED, never a literal ─────────────
 # make.conf.tmpl deliberately ships no PYTHON_TARGETS/PYTHON_SINGLE_TARGET

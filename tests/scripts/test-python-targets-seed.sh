@@ -262,14 +262,19 @@ else
 fi
 
 # ── 5. STRUCTURE THAT IS STILL LOAD-BEARING (version-free) ───────────────────
-# Every ARM builder must copy the spec's package.use/* into the sysroot with no
-# filtering; the seed's package.use twin rides that copy.
+# Every ARM builder must land the spec's ROLE-INDEPENDENT package.use files in
+# the sysroot; the seed's package.use twin rides that copy.
 #
-# TWO ACCEPTED SHAPES, because the copy was refactored and this check was not:
-#   (old) cp "${SPECS_DIR}/portage/package.use/"*  "${SYSROOT}/…"
-#   (new) pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
-# scripts/_portage-config-lib.sh's pcs_sync_dir takes a whole SOURCE DIRECTORY,
-# so it is unfiltered by construction — the property this check exists to hold.
+# THREE ACCEPTED SHAPES, because the copy was refactored and this check was not:
+#   (old)    cp "${SPECS_DIR}/portage/package.use/"*  "${SYSROOT}/…"
+#   (middle) pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+#   (new)    the x86-style STAGED role-conditional loop (rpi5/jetson since
+#            issue #60: a desktop-only USE-closure file must not reach headless
+#            sysroots) — for puf in …/package.use/* with a case filter, staged
+#            to ${PCS_STAGE_PU}, then pcs_sync_dir "${PCS_STAGE_PU}" …
+# For the staged shape the property this check exists to hold — the seed's
+# python-targets twin lands for EVERY role — is asserted the same way it already
+# is for build-x86 below: python-targets must NOT appear as a case filter arm.
 # Matching only the retired literal made this suite unable to PASS on any ARM
 # builder; it was CI-orphaned, so nothing noticed. A guard that cannot pass stops
 # being run, and then it cannot fail either.
@@ -279,6 +284,13 @@ for s in "${ARM_BUILDERS[@]}"; do
     if grep -qE 'cp "\$\{SPECS_DIR\}/portage/package\.use/"\*' "${f}" \
        || grep -qE '^[[:space:]]*pcs_sync_dir "\$\{SPECS_DIR\}/portage/package\.use" "\$\{SYSROOT\}/etc/portage/package\.use"' "${f}"; then
         ok "${s}: copies package.use/* into the sysroot unconditionally"
+    elif grep -qE 'for puf in "\$\{SPECS_DIR\}/portage/package\.use/"\*' "${f}" \
+         && grep -qE '^[[:space:]]*pcs_sync_dir "\$\{PCS_STAGE_PU\}" "\$\{SYSROOT\}/etc/portage/package\.use"' "${f}"; then
+        if grep -qE '^\s*python-targets\)' "${f}"; then
+            bad "${s}: python-targets must NOT be role-filtered in the package.use copy loop"
+        else
+            ok "${s}: staged package.use copy present; python-targets falls through unfiltered"
+        fi
     else
         bad "${s}: unconditional package.use/* sysroot copy not found"
     fi
