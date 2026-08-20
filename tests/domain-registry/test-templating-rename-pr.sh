@@ -216,6 +216,22 @@ run_recipe A9g 'edits:
       - { id: env, find: "{{SNAP_THEME_CSS}}", replace: "x" }' "$T"
 [ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9g.err" && ok "A9g theme contract identifier {{SNAP_THEME_CSS}} refused" || bad "A9g theme env key templated"
 
+# The env key's LIVE spelling, and it earns its own case for exactly the reason
+# A9k does one prefix down. On 2026-08-20 the producers flipped: compose.local.yaml,
+# the Makefile's STACK_THEME_ENV, the Studio's _build_env and the login-theme
+# ConfigMap now travel under HUG_THEME_CSS, and SNAP_THEME_CSS became the legacy
+# twin the entrypoint hooks still fall back to. A9g alone would from that day on
+# have been guarding only the DYING name while the load-bearing one went
+# unregistered — a guard that passes its own test and protects nothing, which is
+# the failure A9k was added to prevent for --hug-* vs --sd-*. Both names stay
+# pinned: the legacy one is still read by every 50-snap-theme.sh in the fleet, so
+# templating it breaks the hand-off just as silently.
+run_recipe A9m 'edits:
+  - file: docs/BRANDING.md
+    anchors:
+      - { id: env, find: "{{HUG_THEME_CSS}}", replace: "x" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A9m.err" && ok "A9m theme contract identifier {{HUG_THEME_CSS}} refused (LIVE env key)" || bad "A9m live theme env key templated"
+
 # The custom-property half is NOT a Handlebars identifier (leading dashes), so
 # TOKEN_RE never captured it and the identifier loop's fail-closed allowlist check
 # was unreachable: this recipe used to exit 0 and render `var()`, silently DELETING

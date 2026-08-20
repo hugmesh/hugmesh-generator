@@ -24,11 +24,14 @@ or:
                          font_source; paths relative to the yaml). Needs PyYAML.
 
 Output (stdout, or --out FILE):
-  default      the raw snap-theme.css text -> feed to SNAP_THEME_CSS (compose) or
-               the login-ui entrypoint directly
-  --configmap  a v1 ConfigMap manifest (data key SNAP_THEME_CSS) the login-ui
+  default      the raw snap-theme.css text -> feed to HUG_THEME_CSS (compose) or
+               the login-ui entrypoint directly. The fleet's 50-snap-theme.sh also
+               still accepts the legacy SNAP_THEME_CSS spelling.
+  --configmap  a v1 ConfigMap manifest (data key HUG_THEME_CSS) the login-ui
                Deployment consumes via an OPTIONAL configMapKeyRef — apply it and
                restart the pod to rebrand; delete it to return to the shipped brand.
+               A ConfigMap produced BEFORE the key was renamed (data key
+               SNAP_THEME_CSS) still resolves: the Deployment declares both refs.
 
 Exit codes: 0 ok (including "nothing chosen" -> empty output), 2 blocked input.
 """
@@ -70,6 +73,22 @@ def _load_brand_yaml(path: str) -> dict:
 def _configmap(css: str, name: str, namespace: str) -> str:
     # Emitted without a yaml dependency: the css rides a literal block scalar, which
     # takes any printable text verbatim once indented under the key.
+    #
+    # EXACTLY ONE data key, and it is the NEW spelling. The tempting belt-and-braces
+    # move — emit SNAP_THEME_CSS as well so an older deployment.yaml still resolves —
+    # is refused HERE specifically, and the asymmetry with compose (which does keep a
+    # legacy fallback) is the point:
+    #   * a ConfigMap is a STANDING, hand-editable object. Two keys holding the same
+    #     css is two keys a human can edit ONE of; since the Deployment prefers
+    #     HUG_THEME_CSS, editing only the SNAP copy would change nothing, with no
+    #     error — a drift hazard that does not exist for a shell variable computed
+    #     fresh on every bring-up.
+    #   * the compat it would buy is bought instead on the CONSUMER side, where it
+    #     cannot drift: specs/cluster/manifests/social-ui/deployment.yaml declares
+    #     BOTH env refs, each `optional: true`, so a ConfigMap of EITHER vintage
+    #     resolves — a pre-existing SNAP-only one the operator saved and re-applies,
+    #     or this new HUG-only one. Producers emit one canonical name, consumers
+    #     accept both: the same discipline the entrypoint hooks already run on.
     indented = "\n".join(f"    {line}" if line else "" for line in css.split("\n"))
     return (
         "apiVersion: v1\n"
@@ -79,7 +98,7 @@ def _configmap(css: str, name: str, namespace: str) -> str:
         f"  namespace: {namespace}\n"
         "  labels: { app.kubernetes.io/part-of: hugmesh, app.kubernetes.io/component: login-theme }\n"
         "data:\n"
-        "  SNAP_THEME_CSS: |\n"
+        "  HUG_THEME_CSS: |\n"
         f"{indented}\n"
     )
 

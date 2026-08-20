@@ -1,12 +1,17 @@
-"""The login-theme DELIVERY pipeline — compose_login_css() -> SNAP_THEME_CSS ->
+"""The login-theme DELIVERY pipeline — compose_login_css() -> HUG_THEME_CSS ->
 compose/ConfigMap — plus the derive-theme.py CLI (subprocess, like a CI box).
+
+The env var was SNAP_THEME_CSS until the 2026-08-20 producer flip; the legacy
+spelling is still accepted at every consumer (the fleet's 50-snap-theme.sh dual-
+reads it, compose falls back to it, the cluster Deployment keeps an optional ref
+for it), so the pins below track BOTH names on purpose rather than sweeping one.
 
 Pins:
   1. ZERO REGRESSION: an unthemed config adds NO env var and composes "" (the
      entrypoint then writes an empty snap-theme.css and the shipped brand renders).
   2. ONE COMPOSITION POINT: GUI/CLI/bootstrap all ride theme.compose_login_css —
      asserted here by comparing the CLI's stdout to the library call byte-for-byte.
-  3. The compose file actually passes SNAP_THEME_CSS through to the login-ui
+  3. The compose file actually passes HUG_THEME_CSS through to the login-ui
      service (textual pin, like the Makefile STACK_NO_CLONE gate) — without it the
      whole chain is a knob wired to nothing.
   4. Upload provenance is fail-closed in the CLI: font file without licence+source
@@ -31,7 +36,11 @@ def _env_of(cfg: LocalMeshBootstrapConfig) -> dict:
 
 
 def test_unthemed_bootstrap_env_is_byte_identical_no_theme_var():
-    assert "SNAP_THEME_CSS" not in _env_of(LocalMeshBootstrapConfig())
+    env = _env_of(LocalMeshBootstrapConfig())
+    # NEITHER spelling: "no theme chosen" must add no env var at all, so the
+    # unthemed bring-up stays byte-identical to a plain `make stack-up`.
+    assert "HUG_THEME_CSS" not in env
+    assert "SNAP_THEME_CSS" not in env
     assert theme.compose_login_css() == ""
     assert theme.compose_login_css("", "", font_preset="") == ""
 
@@ -39,8 +48,22 @@ def test_unthemed_bootstrap_env_is_byte_identical_no_theme_var():
 def test_themed_bootstrap_env_carries_the_exact_derived_css():
     css = theme.compose_login_css("#336699", "#996633", font_preset="System UI")
     env = _env_of(LocalMeshBootstrapConfig(login_theme_css=css))
-    assert env["SNAP_THEME_CSS"] == css
+    assert env["HUG_THEME_CSS"] == css
     assert ":root:root {" in css and "--sd-font-sans: system-ui" in css
+
+
+def test_studio_env_also_carries_the_legacy_spelling_for_an_older_checkout():
+    """The Studio ships as an INSTALLED app (MSI/Flatpak) and is pointed at a
+    generator checkout by path, so — alone among the theme producers — it can be a
+    newer build driving an OLDER tree whose compose still declares only
+    SNAP_THEME_CSS. It therefore exports BOTH names, with the identical bytes.
+
+    Pinned because the whole value of that second export is invisible in this repo:
+    every in-tree consumer reads the new name, so deleting the line would look like
+    harmless cleanup and would break only the version-skewed pairing, silently."""
+    css = theme.compose_login_css("#336699")
+    env = _env_of(LocalMeshBootstrapConfig(login_theme_css=css))
+    assert env["SNAP_THEME_CSS"] == css == env["HUG_THEME_CSS"]
 
 
 def test_font_only_theme_still_emits_a_complete_selfcontained_css():
@@ -60,19 +83,36 @@ def test_compose_file_passes_the_theme_env_to_the_login_ui_service():
     compose = open(os.path.join(_REPO, "tests", "stack", "compose.local.yaml"),
                    encoding="utf-8").read()
     svc = compose.split("hugmesh-login-ui:", 1)[1].split("hugmesh-mastodon-ui:")[0]
-    assert "SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}" in svc, (
+    assert "HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}" in svc, (
         "the compose passthrough is the delivery leg — without it the Studio knob "
         "derives css that reaches no container")
+    # The NESTED default is load-bearing, not decoration: the producers in this repo
+    # export HUG_THEME_CSS, but an operator shell that still exports the legacy name
+    # must keep working. Dropping the fallback takes their theme away with no error,
+    # which is unobservable from inside this repo — hence a pin on the exact form.
+    assert "${SNAP_THEME_CSS:-}" in svc, (
+        "the legacy host-env spelling lost its fallback: an operator or script that "
+        "still exports SNAP_THEME_CSS now silently gets the shipped brand")
 
 
 def test_cluster_deployment_env_ref_is_optional_so_unbranded_clusters_deploy():
     dep = open(os.path.join(_REPO, "specs", "cluster", "manifests", "social-ui",
                             "deployment.yaml"), encoding="utf-8").read()
-    idx = dep.find("SNAP_THEME_CSS")
-    assert idx != -1
-    assert "optional: true" in dep[idx:idx + 400], (
-        "a REQUIRED configMapKeyRef would wedge every unbranded cluster's login-ui "
-        "rollout on a ConfigMap that intentionally does not exist")
+    for key in ("HUG_THEME_CSS", "SNAP_THEME_CSS"):
+        idx = dep.find(key)
+        assert idx != -1, f"{key} configMapKeyRef missing from the login-ui Deployment"
+        assert "optional: true" in dep[idx:idx + 400], (
+            f"{key}: a REQUIRED configMapKeyRef would wedge every unbranded "
+            "cluster's login-ui rollout on a ConfigMap that intentionally does "
+            "not exist")
+    # BOTH refs, because `optional: true` swallows a MISSING KEY as well as a missing
+    # ConfigMap. derive-theme.py emits only HUG_THEME_CSS now; a login-theme
+    # ConfigMap saved from before that rename carries only SNAP_THEME_CSS, and with
+    # a single ref it would resolve to nothing — the pod comes up clean and the
+    # entrypoint writes a zero-byte stylesheet. Themed yesterday, unthemed today,
+    # no event and no log. Drop the legacy ref only when no pre-rename ConfigMap
+    # can still be applied.
+    assert dep.count("key: HUG_THEME_CSS") == dep.count("key: SNAP_THEME_CSS") == 1
 
 
 def test_plan_mentions_theme_only_when_set_and_never_duplicates_stack_up():
@@ -132,11 +172,21 @@ def test_cli_configmap_wraps_the_same_css_in_a_block_scalar():
     got = _cli("--primary", "#336699", "--configmap")
     assert got.returncode == 0
     assert got.stdout.startswith("apiVersion: v1\nkind: ConfigMap\n")
-    assert "  SNAP_THEME_CSS: |" in got.stdout
+    assert "  HUG_THEME_CSS: |" in got.stdout
     yaml = pytest.importorskip("yaml")
     doc = yaml.safe_load(got.stdout)
     assert doc["metadata"]["name"] == "login-theme"
-    assert doc["data"]["SNAP_THEME_CSS"] == theme.compose_login_css("#336699")
+    assert doc["data"]["HUG_THEME_CSS"] == theme.compose_login_css("#336699")
+    # EXACTLY one data key. This pin is the reason the test was updated rather than
+    # deleted when the key was renamed: it exists to catch this key drifting from
+    # the one the Deployment's configMapKeyRef reads, and the Deployment reads
+    # HUG_THEME_CSS. Emitting the legacy key as well is deliberately NOT done — a
+    # standing, hand-editable object holding the same css twice is a copy a human
+    # can update one half of, and since the pod prefers HUG_THEME_CSS, editing the
+    # SNAP copy would change nothing with no error. The backward compatibility is
+    # carried on the CONSUMER side instead (the Deployment's second optional ref),
+    # where there is no second copy of the value to drift.
+    assert list(doc["data"]) == ["HUG_THEME_CSS"]
 
 
 def test_cli_brand_yaml_block_drives_the_same_derivation(tmp_path):

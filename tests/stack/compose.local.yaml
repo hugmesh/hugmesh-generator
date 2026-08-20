@@ -1386,7 +1386,20 @@ services:
       # entrypoint hook writes the env verbatim to /tmp/snap-theme.css
       # (SNAP_THEME_OUT — the docroot is NOT writable for uid 101 on
       # nginx-unprivileged) and nginx serves it via an exact-match alias.
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      #
+      # WHY THE VALUE HAS A NESTED FALLBACK. The key is the NEW spelling and the
+      # container only ever sees HUG_THEME_CSS — one name per service, so
+      # test_theme_boundary.py's "all themed services agree on one spelling"
+      # invariant still holds. The `${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}` value
+      # covers the HOST side of the same rename: the producers in this repo
+      # (Makefile STACK_THEME_ENV, Studio LocalStackNode._build_env) now export
+      # HUG_THEME_CSS, but an operator shell, a saved script or a peer's notes may
+      # still `export SNAP_THEME_CSS=...`, and dropping that spelling here would
+      # take their theme away with no error and no log — the exact silent-unthemed
+      # failure this chain is guarded against. Costs one interpolation; buys the
+      # legacy host spelling. Both unset still interpolates to "" (byte-identical
+      # to the pre-flip default: shipped brand).
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
       CASDOOR_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       MATRIX_URL: ${MATRIX_URL:-http://localhost:8008}
       MASTODON_URL: ${MASTODON_URL:-http://localhost:3000}
@@ -1397,14 +1410,15 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-ui
     environment:
-      # Runtime THEME: already-derived --sd-* token text (studio core/theme.py
-      # css_root(); same contract and threading as login-ui's SNAP_THEME_CSS
-      # above). The entrypoint hook (50-snap-theme.sh) writes it verbatim to
+      # Runtime THEME: already-derived token text (studio core/theme.py
+      # css_root(); same contract and threading as login-ui's HUG_THEME_CSS
+      # above, including the legacy-host-spelling fallback in the value). The
+      # entrypoint hook (50-snap-theme.sh) writes it verbatim to
       # /tmp/snap-theme.css (SNAP_THEME_OUT in the image) and nginx serves it
       # via the exact-match /snap-theme.css alias. An ENV VAR, not a build arg,
       # and that distinction is the point: a rebrand is compose up with a new
       # value, NO image rebuild. Empty (the default) => shipped default brand.
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-mod-ui:
     <<: *amd64
@@ -1412,7 +1426,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-user-ui:
     <<: *amd64
@@ -1420,7 +1434,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-login-ui:
     <<: *amd64
@@ -1470,7 +1484,7 @@ services:
       # (50-snap-theme.sh) writes it verbatim to snap-theme.css — an ENV VAR, not a
       # build arg, and that distinction is the point: a rebrand is compose up with a
       # new value, NO image rebuild. Empty (the default) => shipped default brand.
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-mastodon-ui:
     <<: *amd64
@@ -1478,7 +1492,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-mastodon-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-matrix-ui:
     <<: *amd64
@@ -1486,7 +1500,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-matrix-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-api-docs:
     <<: *amd64
@@ -1504,7 +1518,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   # wiki-ui / owncast-ui / tube-ui — federated remotes added for the full local
   # repo set (same rationale as mod-ui/user-ui above): the cluster serves them via
@@ -1517,7 +1531,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-wiki-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-owncast-ui:
     <<: *amd64
@@ -1525,7 +1539,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-owncast-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   hugmesh-tube-ui:
     <<: *amd64
@@ -1533,7 +1547,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-tube-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   # character-studio-ui — mounted at /character-studio/** (already a canonical
   # cluster route-access row, specs/cluster/manifests/route-access/initdb/20-schema.sql).
@@ -1547,7 +1561,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-studio-ui
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   # character-forge-ui — mounted at /character-forge/** (canonical cluster
   # route-access row + fe route, specs/cluster/apps/20-gateway-fe.yaml). UNLIKE
@@ -1570,7 +1584,7 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-forge-bff-api/frontend
     environment:
       # Runtime theme (fleet 50-snap-theme.sh hook; see login-ui above).
-      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
+      HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   # ── hugmesh-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
   # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional

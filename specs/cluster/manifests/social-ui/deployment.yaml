@@ -83,7 +83,7 @@ spec:
           # this same var). Never independently verified against a real cluster.
           env:
             - { name: SNAP_OIDC_ENABLED, value: "true" }
-            # Runtime login theme: already-derived --sd-* css text the entrypoint
+            # Runtime login theme: already-derived css text the entrypoint
             # (50-snap-theme.sh) writes to snap-theme.css at container start.
             # OPTIONAL by design — no `login-theme` ConfigMap (the unbranded
             # default) means the env is simply absent and the image's compiled
@@ -91,6 +91,24 @@ spec:
             #   scripts/tooling/derive-theme.py --brand-yaml brands/<b>.yaml --configmap
             # then apply + restart to rebrand; delete + restart to revert. Never a
             # rebuild: rebrand-without-rebuild is the point of the env channel.
+            #
+            # TWO refs, one value. derive-theme.py now emits the data key
+            # HUG_THEME_CSS; a ConfigMap produced before that rename carries
+            # SNAP_THEME_CSS. `optional: true` means a MISSING KEY is skipped, not
+            # an error — so a stale ConfigMap would otherwise resolve NEITHER ref,
+            # the pod would start clean, and the hook would write a zero-byte
+            # stylesheet: themed yesterday, unthemed today, no event, no log. Both
+            # refs together make either vintage work. The hook prefers
+            # $HUG_THEME_CSS and falls back to $SNAP_THEME_CSS, so when a
+            # hand-made ConfigMap somehow carries both, the new key wins.
+            # DELETE the legacy ref once no pre-rename login-theme ConfigMap can
+            # still be applied anywhere.
+            - name: HUG_THEME_CSS
+              valueFrom:
+                configMapKeyRef:
+                  name: login-theme
+                  key: HUG_THEME_CSS
+                  optional: true
             - name: SNAP_THEME_CSS
               valueFrom:
                 configMapKeyRef:
