@@ -23,7 +23,7 @@
   "$defs": {
     "worklistEntry": {
       "type": "object",
-      "description": "A single image: a role x platform pair plus its per-image axes. `id` is the STABLE identity `f\"{role}.{platform}\"` used for domain attachment (Domain.images) and the derived per-image build_subdir `wl-<id>` (build_subdir is NOT stored on the wire).",
+      "description": "A single image: a role x platform pair plus its per-image axes. `id` is the STABLE identity `f\"{role}.{platform}\"` used for domain attachment (Domain.images) and the derived per-image build_subdir `wl-<id>` (build_subdir is NOT stored on the wire). additionalProperties is FALSE on purpose: every key WorklistEntry.to_dict writes must be declared here, so a new per-image axis cannot reach the wire without this contract being updated with it — that is what studio/tests/test_worklist.py::test_envelope_conforms_to_frozen_schema gates.",
       "required": ["role", "platform"],
       "additionalProperties": false,
       "properties": {
@@ -54,6 +54,23 @@
           "type": "string",
           "description": "Space-separated Portage atoms removed from this image's default set (honoring the mandatory-payload floor). Same per-atom charset as packages_add.",
           "default": ""
+        },
+        "infra_services": {
+          "type": "array",
+          "description": "Per-node scope:node infra services (core/worklist.py WORKLIST_INFRA_SERVICES), ADDITIVE to the mesh-wide Network-page default. materialize() folds each onto the image through that platform's REAL builder mechanism (x86 tor -> --with-tor; rpi5 tor/egress-vpn -> --optional-services) and drops a slug the platform cannot express, so a per-node toggle never becomes a flag the builder ignores. The vocabulary is closed: WORKLIST_INFRA_SERVICES is the enum below.",
+          "items": { "type": "string", "enum": ["tor", "egress-vpn"] },
+          "default": []
+        },
+        "desktop_user": {
+          "type": "string",
+          "description": "The PERSON on a desktop-class entry. materialize() stamps desktop_user_role as --person-role on this entry's own image and derives a manifest User on the internal orchestration superdomain. Node entries always leave this blank.",
+          "default": ""
+        },
+        "desktop_user_role": {
+          "type": "string",
+          "description": "That person's role (config.py PERSON_ROLE_CHOICES). Meaningful only alongside a non-blank desktop_user.",
+          "enum": ["user", "mod", "admin", "superadmin"],
+          "default": "user"
         }
       }
     },

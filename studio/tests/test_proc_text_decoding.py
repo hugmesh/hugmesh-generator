@@ -147,6 +147,18 @@ class TestTheEmulationPagesHaveOnlyOneSpawnLane:
     PAGES = ["qemu", "mesh_emulation", "_emulation_common"]
 
     def _source(self, page):
+        # These three assertions read the SOURCE of a gui/pages module, but they have
+        # to import it to find its path, and gui/pages/__init__.py imports the Qt
+        # shim — so with no binding installed every one of them raises
+        # ModuleNotFoundError. All seven node ids sat on tests/known-failures.txt as
+        # code failures ("the audit still names pre-unification modules"), which was
+        # never true: qemu.py, mesh_emulation.py and _emulation_common.py are all
+        # present and the assertions pass wherever Qt exists. Skip on the missing
+        # optional dependency — the convention every other Qt-touching test in this
+        # suite already follows — so the audit runs in the PySide6 job instead of
+        # being permanently deselected in both.
+        pytest.importorskip("hugmesh_studio.gui.qt",
+                            reason="no Qt binding (PySide6/PyQt6) installed")
         import importlib
         src = importlib.import_module(f"hugmesh_studio.gui.pages.{page}").__file__
         with open(src, encoding="utf-8") as fh:

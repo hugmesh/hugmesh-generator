@@ -5,38 +5,50 @@
 # separate, non-blocking step and reports the result to the job summary, so their
 # status stays visible and a fix is noticed rather than silently absorbed.
 #
-# Verified 2026-08-20 against origin/main with no Qt binding installed:
-#   13 failed, 3840 passed, 81 skipped
-# 12 remain: the m2 check-artifact drift guard was REPAIRED and delisted rather than
-# re-pinned — the preflight now derives the coordinate from m2-bootstrap.sh's PINS
-# instead of restating it, so the guard gates again.
-# Every entry below reproduces on a clean checkout of main. Delete a line the moment
-# its test starts passing — that is the point of the re-run step.
+# THE LIST IS EMPTY. Audited 2026-08-20 against origin/main: all 12 remaining entries
+# were re-run individually and NONE of them was a live production failure that
+# deselecting was the right answer to. What they actually were:
+#
+#   * 8 of 12 (tests/test_field_scope.py::test_gating_scope_allows_delegates_to_core
+#     and the seven tests/test_proc_text_decoding.py spawn-lane audit ids) only ever
+#     failed because THIS WORKFLOW INSTALLS NO Qt BINDING. Both files are otherwise
+#     pure-core, so neither is on the --ignore list, and the import of gui.pages that
+#     these few assertions need raises ModuleNotFoundError. The reasons recorded here
+#     for them ("a gating-scope delegate the core no longer exposes", "the audit still
+#     names pre-unification modules") were both wrong: `_gating.scope_allows` exists,
+#     qemu/mesh_emulation/_emulation_common all exist, and all 8 pass under PySide6
+#     and PyQt6 alike. They now `pytest.importorskip("hugmesh_studio.gui.qt")` like
+#     every other Qt-touching assertion in this suite, so they SKIP here and RUN in
+#     GitLab's `test:studio-suite` job instead of being deselected in both.
+#   * test_worklist.py::test_envelope_conforms_to_frozen_schema was a REAL drift and
+#     the frozen schema was the stale half: WorklistEntry.to_dict has written
+#     infra_services / desktop_user / desktop_user_role for some time and
+#     docs/schemas/worklist.v1.schema.json declared none of them under
+#     additionalProperties:false. The schema now declares all three (SURVEY.md §10.6
+#     called for exactly this). Note it took BOTH mutes to hide: this job deselected
+#     the node, and GitLab ran it but installed no `jsonschema`, so its
+#     `importorskip` skipped silently. GitLab now installs jsonschema.
+#   * test_local_services.py::test_profile_slugs_… was a stale pin, not a broken
+#     Makefile: the reap invariant it exists for still holds, but it pinned one
+#     contiguous byte string that $(STACK_OWN_CASDOOR_DOWN_FLAGS) split in two. It
+#     now asserts the invariant per down-target.
+#   * the two x86 banner probes were the ONE case where the muted test was simply
+#     right — build-x86-host-stage4.sh gained `banner "CACHED image: embedding the
+#     shared binpkg pool"` (the shared per-arch binpkg pool, #46) and nobody added
+#     the phase-table row. Muting them left the x86 drift probe — the guard that
+#     catches EVERY future banner add/remove/rename on the most-used builder —
+#     switched off. The table now carries the pattern and the probes gate again.
+#
+# BEFORE ADDING A LINE HERE, check which of those four things you have. A missing
+# optional dependency is a skipif/importorskip in the test. A stale pin is a fix to
+# the pin. A live drift is a fix to the drifted artifact. Only a genuine
+# production defect that this pull request did not cause belongs on this list, and
+# it belongs with the issue number that tracks it.
+#
+# Delete a line the moment its test starts passing — that is the point of the re-run
+# step. Note the re-run reports ONE aggregate exit code over every id below, so a
+# single permanently-failing entry hides a fix in all the others: that is how the 8
+# environment failures above kept the summary red for two months and made "still
+# failing, as expected" mean nothing.
 #
 # Format: one pytest node id per line, `#` comments and blank lines ignored.
-
-# The frozen worklist JSON-schema no longer matches the envelope the code emits.
-tests/test_worklist.py::test_envelope_conforms_to_frozen_schema
-
-# The Makefile's compose down-path profile flags drifted from what the test pins.
-tests/test_local_services.py::test_profile_slugs_name_a_profile_compose_actually_declares
-
-
-# Banner count/order drift between build-x86-host-stage4.sh and the phase table
-# (29 banners vs the 28 the table describes).
-tests/test_progress_parse.py::test_banner_drift_probe[x86-build-x86-host-stage4.sh]
-tests/test_progress_uniformity.py::test_banner_execution_order_is_monotonic_over_the_phase_table[x86]
-
-# A gating-scope delegate the core no longer exposes under the name the test expects.
-tests/test_field_scope.py::test_gating_scope_allows_delegates_to_core
-
-# The emulation-page spawn-lane audit still names pre-unification modules. The
-# emulation GUI/core unification (PRs #87, #90) moved these lanes, and the audit was
-# not moved with them.
-tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_no_page_reads_a_pipe_of_its_own[qemu]
-tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_no_page_reads_a_pipe_of_its_own[mesh_emulation]
-tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_no_page_reads_a_pipe_of_its_own[_emulation_common]
-tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_every_runner_invocation_goes_through_the_facade[qemu]
-tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_every_runner_invocation_goes_through_the_facade[mesh_emulation]
-tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_a_detached_launch_is_detached_and_unread[qemu]
-tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_a_detached_launch_is_detached_and_unread[mesh_emulation]

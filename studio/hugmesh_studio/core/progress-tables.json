@@ -121,7 +121,7 @@
   },
   "platforms": {
     "x86": {
-      "banner_callsites": 28,
+      "banner_callsites": 29,
       "not_applicable": {
               "bootloader": "GRUB-EFI is installed inside the raw .img stage (UEFI GPT ESP), not as a separate bootloader stage",
               "boot-tree": "the raw .img / ISO stages write the boot tree directly; there is no separate staged boot tree"
@@ -162,7 +162,7 @@
         {"id": "emerge-payload", "label": "Emerge role payload", "any": ["Emerging role payload", "Emerge group: image"]},
         {"id": "mesh-vpn", "label": "Install mesh VPN", "any": ["Installing mesh VPN", "SKIPPED mesh VPN"], "compat": ["Mesh VPN SKIPPED"]},
         {"id": "kernel", "label": "Build kernel", "any": ["Building hardened kernel", "SKIPPED kernel", "Emerge group: dependencies"], "compat": ["Building Gentoo hardened kernel", "Kernel SKIPPED"]},
-        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean"]},
+        {"id": "clean-sysroot", "label": "Clean sysroot", "any": ["Cleaning sysroot", "SKIPPED sysroot clean", "CACHED image: embedding the shared binpkg pool"]},
         {"id": "package-stage4", "label": "Package stage4", "any": ["Packaging stage4 tarball"]},
         {"id": "image-raw", "label": "Build raw .img", "any": ["Building raw .img", "SKIPPED raw .img"], "compat": ["SKIPPED .img (--no-img)"]},
         {"id": "image-live", "label": "Build LIVE image", "any": ["Building LIVE image"], "compat": ["Building bootable LIVE ISO"]},

@@ -77,10 +77,17 @@ jobs:
         #   this job is the fast pre-merge subset and says so rather than pretending
         #   to be complete.
         #
-        # --deselect: the 13 tests in tests/known-failures.txt that already fail on
-        #   main. A brand-new gate that is red on day one gets ignored within a week,
-        #   so it grades the change under review, not the backlog. They are NOT
-        #   hidden: the next step re-runs exactly those and reports them.
+        # --deselect: whatever tests/known-failures.txt lists — tests that already
+        #   fail on main. A brand-new gate that is red on day one gets ignored within
+        #   a week, so it grades the change under review, not the backlog. They are
+        #   NOT hidden: the next step re-runs exactly those and reports them.
+        #
+        #   THE LIST IS CURRENTLY EMPTY, and the loop below is written to stay
+        #   correct that way: `deselect` stays "" and pytest gets no extra flags.
+        #   The 12 entries it used to carry were audited on 2026-08-20 and every one
+        #   of them was either a missing-Qt-binding failure that belonged in an
+        #   importorskip, a stale pin, or a live drift with a fix — see the file's
+        #   own header for which was which.
         run: |
           deselect=""
           while read -r line; do
@@ -109,6 +116,25 @@ jobs:
           nodes=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' tests/known-failures.txt)
           echo "## Known failures (pre-existing on main)" >> "$GITHUB_STEP_SUMMARY"
           echo >> "$GITHUB_STEP_SUMMARY"
+
+          # EMPTY LIST IS THE GOOD CASE, and it MUST short-circuit. `pytest $nodes`
+          # with $nodes empty is not "run nothing" — studio/pytest.ini sets
+          # `testpaths = tests`, so it runs the WHOLE suite, unfiltered by the
+          # --ignore list the blocking step above applies. That collection errors on
+          # the six GUI files (no Qt binding here), pytest exits non-zero, and this
+          # step writes "Still failing, as expected" — a sentence with no failing
+          # known entry behind it. The file's own instruction is to delete a line the
+          # moment its test passes, so emptying the list is the intended end state and
+          # walking into that message is the trap it leads to.
+          if [ -z "$nodes" ]; then
+            {
+              echo 'None. `studio/tests/known-failures.txt` lists no deselected tests,'
+              echo 'so the blocking step above ran the whole Qt-free suite with nothing'
+              echo 'muted. Keep it that way.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           if python -m pytest -q --no-header $nodes > known.txt 2>&1; then
             {
               echo '**These now PASS.** Delete them from `studio/tests/known-failures.txt`'
@@ -117,6 +143,11 @@ jobs:
           else
             {
               echo 'Still failing, as expected. Not caused by this pull request.'
+              echo
+              echo 'NB this is ONE aggregate exit code over every id in the file: a single'
+              echo 'permanently-failing entry (a missing binding, say) keeps this red and'
+              echo 'hides a fix in all the others. If you are reading this, check the list'
+              echo 'itself before believing it.'
               echo
               echo '```'
               grep -E '^(FAILED|ERROR)|passed|failed' known.txt | tail -20

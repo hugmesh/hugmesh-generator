@@ -42,6 +42,28 @@ def _read(path):
         return fh.read()
 
 
+def _compose_down_line(mk, target):
+    """The single `$(COMPOSE_CMD) … down…` recipe line of a Makefile target.
+
+    Returned stripped of its leading tab and trailing whitespace so a caller can
+    assert on the VERB it ends with and on the flags it carries, without pinning
+    where an unrelated variable happens to sit in between."""
+    recipe, seen = [], False
+    for ln in mk.splitlines():
+        if ln.startswith(f"{target}:"):
+            seen = True
+            continue
+        if seen:
+            if ln.startswith("\t"):
+                recipe.append(ln[1:].rstrip())
+            elif ln.strip() and not ln.startswith("#"):
+                break                       # next target: recipe is over
+    assert seen, f"Makefile has no `{target}:` target"
+    hits = [ln for ln in recipe if "$(COMPOSE_CMD)" in ln and " down" in ln]
+    assert len(hits) == 1, f"{target}: expected exactly one compose down line, got {hits}"
+    return hits[0]
+
+
 def _registry():
     """slug -> {"default_on": bool, "module": str|None} parsed out of the ONE registry
     that declares the platform's optional services. Deliberately a small regex walk
@@ -194,10 +216,27 @@ def test_profile_slugs_name_a_profile_compose_actually_declares():
     assert "social" in social and "profiles:" in social
     assert 'profiles: ["phpbb"]' in alt and 'profiles: ["akkoma"]' in alt
     # `down`/`clean` must reap these even when the knob that started them is not
-    # repeated, so both profiles are listed UNCONDITIONALLY on the down path.
-    assert ("--profile anubis --profile phpbb --profile akkoma --profile games "
-            "--profile brandb --profile edge-ai-tts --profile media-poisoner "
-            "--profile egress-vpn down -v" in mk)
+    # repeated, so EVERY profile is listed on the down path as a LITERAL
+    # `--profile <slug>` — never behind the $(if $(strip $(KNOB)),…) guard the up
+    # path uses, or `make stack-down` leaves containers the previous `up` started
+    # orphaned while reporting success.
+    #
+    # Asserted per down-target instead of as one contiguous string. The previous
+    # form was a single `"--profile anubis … --profile egress-vpn down -v" in mk`
+    # literal; the per-domain Casdoor lane (85d2a605) spliced
+    # $(STACK_OWN_CASDOOR_DOWN_FLAGS) between the last profile and the verb, so the
+    # INVARIANT still held and only the byte order moved — and the test then sat on
+    # tests/known-failures.txt gating nothing while it was the reap rule, not the
+    # spelling, that mattered. Pin the rule.
+    for target, verb in (("stack-halt", "down"),
+                         ("stack-down", "down -v"),
+                         ("stack-clean", "down -v --rmi local --remove-orphans")):
+        line = _compose_down_line(mk, target)
+        assert line.endswith(verb), f"{target}: expected the recipe to end `{verb}`: {line!r}"
+        for slug in ("social", "tor", "anubis", "phpbb", "akkoma", "games",
+                     "brandb", "edge-ai-tts", "media-poisoner", "egress-vpn"):
+            assert f"--profile {slug}" in line, \
+                f"{target} does not unconditionally reap --profile {slug}: {line!r}"
 
 
 def test_federation_slugs_have_containers_in_the_local_stack():
