@@ -85,6 +85,11 @@ check "headscale binary present"                  'command -v headscale'
 # EVERY role, docker-entrypoint.sh:393-396 derives it per role (pki|generic|omnibus).
 _hs_want=unknown          # true = manifest asked for it | false = it did not | unknown
 _hs_src=""
+# Second consumer of the same mount: the SELinux mode the manifest ASKED for
+# (used by the kernel-hardening section below). Captured here because this is
+# the only place the KEYS media is mounted.
+_slx_mode_want=""
+_slx_mode_src=""
 _hs_dev="$(blkid -L "${KEYS_LABEL:-KEYS}" 2>/dev/null || true)"
 if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
     _hs_mnt="$(mktemp -d 2>/dev/null || echo '')"
@@ -103,6 +108,12 @@ if [ -n "${_hs_dev}" ] && command -v jq >/dev/null 2>&1; then
                 true)       _hs_want=true;  _hs_src="KEYS manifest" ;;
                 false|null) _hs_want=false; _hs_src="KEYS manifest" ;;
             esac
+            # provision_selinux() folds an absent/null .selinux.mode to
+            # permissive (specs/etc/keys-provision/provision.sh:2739) — mirror
+            # that default so a manifest that never mentions SELinux still
+            # yields the mode provisioning actually applied.
+            _slx_mode_want="$(jq -r '.selinux.mode // "permissive"' "${_hs_m}" 2>/dev/null)"
+            [ -n "${_slx_mode_want}" ] && [ "${_slx_mode_want}" != "null" ] && _slx_mode_src="KEYS manifest"
             break
         done
         umount "${_hs_mnt}" 2>/dev/null || true
@@ -185,10 +196,35 @@ else
     # node is healthy. Counting it as a PASS inflated every ARM-board row.
     skip "kernel lockdown — this image requests none; lockdown is x86 + rpi5 only"
 fi
-# SELinux must be enforcing (provision_selinux sets it after first-boot relabel).
-# In test we accept permissive (SELinux not yet enforcing after relabel under QEMU).
+# SELinux: a policy must be LOADED, and the RUNNING mode must be the one that
+# was ASKED for — not merely "some real mode". The old check accepted either
+# mode unconditionally, which is one of the two seams that let the 2026-08-14
+# images ship base-policy-only and still score 33/33 (issue #45; the other seam
+# — never looking at the module store — is closed in the node-policy section
+# below).
 check "SELinux loaded (enforcing or permissive)" \
     'command -v getenforce >/dev/null && getenforce | grep -qiE "enforcing|permissive"'
+# Expected mode, strongest source first (same INTENT ladder as headscale above):
+#  1. SELINUX_EXPECTED_MODE from the caller — tests/qemu/avc-workout.sh passes
+#     "enforcing" when it has run `setenforce 1` itself;
+#  2. the KEYS manifest's .selinux.mode (read in the mount block above);
+#  3. /etc/selinux/config's SELINUX= — weaker (the image's own persisted claim)
+#     but still a real cross-check of the kernel's mode against what the config
+#     says the node should be running.
+_slx_mode_exp="${SELINUX_EXPECTED_MODE:-}"; _slx_mode_from="caller env"
+if [ -z "${_slx_mode_exp}" ] && [ -n "${_slx_mode_want}" ]; then
+    _slx_mode_exp="${_slx_mode_want}"; _slx_mode_from="${_slx_mode_src}"
+fi
+if [ -z "${_slx_mode_exp}" ]; then
+    _slx_mode_exp="$(sed -n 's/^SELINUX=//p' "${SELINUX_CONFIG:-/etc/selinux/config}" 2>/dev/null | tail -1)"
+    _slx_mode_from="/etc/selinux/config"
+fi
+if [ -n "${_slx_mode_exp}" ]; then
+    check "getenforce matches the expected mode '${_slx_mode_exp}' (from ${_slx_mode_from}; live:$(getenforce 2>/dev/null || echo '<none>'))" \
+        '[ "$(getenforce 2>/dev/null | tr "[:upper:]" "[:lower:]")" = "$(printf "%s" "${_slx_mode_exp}" | tr "[:upper:]" "[:lower:]")" ]'
+else
+    skip "SELinux expected mode — no caller env, no readable KEYS manifest, no /etc/selinux/config"
+fi
 # sysctl hardening: panic_on_oops, randomize_va_space, tcp_rfc1337.
 check "kernel.panic_on_oops=1" \
     '[ "$(sysctl -n kernel.panic_on_oops 2>/dev/null)" = "1" ]'
@@ -233,6 +269,85 @@ else
     check "hugmesh-firewall-reconcile service started (nftables backstop reconciled)" \
         'rc-service hugmesh-firewall-reconcile status 2>/dev/null | grep -qi started'
 fi
+
+echo "-- SELinux node policy (build manifest -> kernel module store) --"
+# THE MANIFEST IS THE CONTRACT (scripts/_selinux-policy-lib.sh): every module
+# the build recorded in /usr/share/hugmesh/selinux-modules.list must be IN the
+# store `semodule -l` reports, or first boot shipped a node running a policy
+# set it was not built with. This is exactly the check whose absence let the
+# 2026-08-14 runs go green while every hugmesh module failed to load (the
+# provision log said so — "hugmesh node-policy modules failed to load" — and
+# nothing here read it).
+# Paths overridable via env — the same seam the enforce-gate carries so
+# tests/qemu/avc-workout_test.sh can execute this section for real against
+# fixtures (with getenforce/semodule stubbed on PATH) instead of merely
+# grepping it. In the guest the defaults are always what runs.
+_slx_manifest="${SELINUX_MODULES_LIST:-/usr/share/hugmesh/selinux-modules.list}"
+if [ -f "${_slx_manifest}" ]; then
+    _slx_type="$(sed -n 's/^SELINUXTYPE=//p' "${SELINUX_CONFIG:-/etc/selinux/config}" 2>/dev/null | tail -1)"
+    [ -n "${_slx_type}" ] || _slx_type=mcs
+    _slx_l="$(semodule -s "${_slx_type}" -l 2>/dev/null || true)"
+    while read -r _slx_m; do
+        case "${_slx_m}" in ''|'#'*) continue ;; esac
+        check "node-policy module '${_slx_m}' loaded (semodule -s ${_slx_type} -l)" \
+            'printf "%s\n" "${_slx_l}" | grep -q "^${_slx_m}\b"'
+    done < "${_slx_manifest}"
+    # provision_selinux()'s own per-module verdict must agree: the status file
+    # is written on every provision run since the #45 per-module layer, one
+    # '<module> loaded|failed|missing-pp' line per manifest module.
+    _slx_status="${SELINUX_MODULES_STATUS:-/var/lib/keys-provision/selinux-modules.status}"
+    if [ -f "${_slx_status}" ]; then
+        check "provision recorded every manifest module as loaded (${_slx_status})" \
+            '! grep -qE " (failed|missing-pp)$" "${_slx_status}"'
+    else
+        skip "selinux-modules.status — image predates the per-module load verdicts (#45)"
+    fi
+    # The whole-policy postcondition marker (PR #53): a selinux-aware image
+    # whose first boot ended without a working policy load records
+    # selinux-load-failed, and the enforce-gate refuses on it. It must not
+    # be standing on a healthy node.
+    _slx_built="${SELINUX_BUILT_MARKER:-/usr/share/hugmesh/selinux-built}"
+    _slx_loadfail="${SELINUX_LOAD_FAILED_MARKER:-/var/lib/keys-provision/selinux-load-failed}"
+    if [ -f "${_slx_built}" ]; then
+        check "no selinux-load-failed marker (first-boot policy-load postcondition held)" \
+            '[ ! -e "${_slx_loadfail}" ]'
+    else
+        skip "selinux-load-failed marker — image not marked selinux-built"
+    fi
+else
+    skip "SELinux node-policy modules — no ${_slx_manifest} (image predates the policy-module install step)"
+fi
+
+echo "-- AVC harvest (data, not verdicts) --"
+# HARVEST, never assert: on a permissive node every denial is logged and
+# nothing breaks — those lines are exactly the input the rules tagged
+# '# INFERRED-WIDE: narrow after QEMU enforcing AVC pass' in specs/selinux/*.te
+# are waiting on. The full harvest is written to ${AVC_REPORT_GUEST} (pulled
+# off the guest by tests/qemu/avc-workout.sh and fed to avc-report.sh) and
+# echoed inline between the BEGIN/END markers below so it also lands verbatim
+# in the assertions.log artifact both harness drivers already tee per run.
+# ausearch is preferred (structured, survives ring-buffer wrap); dmesg is the
+# fallback when ausearch/auditd is absent or holds no audit log.
+AVC_REPORT_GUEST="${AVC_REPORT_GUEST:-/var/log/hugmesh-avc-report.txt}"
+_avc_src=""; _avc_raw=""
+if command -v ausearch >/dev/null 2>&1 && _avc_raw="$(ausearch -m AVC,USER_AVC -ts boot 2>/dev/null)"; then
+    _avc_src="ausearch -m AVC,USER_AVC -ts boot"
+else
+    _avc_raw="$(dmesg 2>/dev/null | grep -E 'type=1400|type=1107|avc: *denied' || true)"
+    _avc_src="dmesg grep (ausearch/auditd absent, or no audit log to search)"
+fi
+{
+    echo "# AVC harvest $(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) getenforce=$(getenforce 2>/dev/null || echo unknown)"
+    echo "# source: ${_avc_src}"
+    printf '%s\n' "${_avc_raw}"
+} > "${AVC_REPORT_GUEST}" 2>/dev/null || true
+_avc_n="$(printf '%s\n' "${_avc_raw}" | grep -cE 'avc: *denied|type=1400' || true)"
+echo "  INFO  AVC harvest: ${_avc_n:-0} denial line(s) via ${_avc_src} -> ${AVC_REPORT_GUEST}"
+echo "-- AVC HARVEST BEGIN --"
+printf '%s\n' "${_avc_raw}" | sed -n '1,400p'
+[ "$(printf '%s\n' "${_avc_raw}" | wc -l)" -gt 400 ] && \
+    echo "... truncated inline at 400 lines; the full harvest is in ${AVC_REPORT_GUEST} on the guest"
+echo "-- AVC HARVEST END --"
 
 echo
 echo "== RESULT: ${PASS} passed, ${FAIL} failed =="
