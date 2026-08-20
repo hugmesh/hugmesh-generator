@@ -14,6 +14,7 @@ from __future__ import annotations
 import collections
 import json
 import os
+import re
 import select
 import shutil
 import signal
@@ -39,13 +40,24 @@ _TOR_ONION_HOSTNAME_FILE = os.path.join("tests", "stack", "tor-onion", "hostname
 # this (gitignored) env file; the Makefile auto-includes the m2 compose override
 # whenever the file exists.
 _M2_ENV_FILE = os.path.join("tests", "stack", ".m2-registry.env")
+_M2_BOOTSTRAP_SCRIPT = os.path.join("tests", "stack", "m2-bootstrap.sh")
 M2_REGISTRY_CONTAINER = "hugmesh-m2-registry"
 M2_BOOTSTRAP_HINT = "run `make stack-m2-bootstrap` first"
 # The registry-readiness probe fetches a REAL artifact through the exact URL
 # shape the services' settings.xml (and the compose build args) will use — the
 # same artifact m2-bootstrap.sh self-checks after standing the registry up.
-_M2_CHECK_ARTIFACT = ("systems/hugmesh/hugmesh-parent/2.8.0/"
-                      "hugmesh-parent-2.8.0.pom")
+# Its coordinate is DERIVED FROM THAT SCRIPT'S PINS, never restated here. It
+# WAS restated, and still said `systems/hugmesh` after the Maven groupIds moved
+# to `net/hugmesh` (the groupIds lagged the Java package move) — so this half of
+# the probe asked a healthy registry for a path nothing publishes. It only ever
+# passed on hosts whose m2 cache still held a pre-rename tree. m2-bootstrap.sh
+# derives its own self-check path from the same PIN for the same reason; reading
+# the coordinate out of PINS means a future rename moves BOTH probes with it.
+_M2_PARENT_ARTIFACT = "hugmesh-parent"
+# PINS entries are `repo|sha|artifactId|version|kind|groupPath`, one quoted
+# string per line inside a `PINS=( ... )` array (interleaved with comments).
+_M2_PINS_BLOCK_RE = re.compile(r"^PINS=\((.*?)^\)", re.S | re.M)
+_M2_PIN_ENTRY_RE = re.compile(r'^"([^"]+)"')
 _M2_PROBE_TIMEOUT_S = 3.0
 # compose.local.yaml sets `name: hugmesh-local`, so built images are named
 # <project>-<service>. These four services resolve PRIVATE maven artifacts at
@@ -377,6 +389,36 @@ class LocalStackNode:
             pass
         return vals
 
+    def _m2_check_artifact(self) -> tuple[str, str]:
+        """The parent-POM repository path the readiness probe GETs, read out of
+        m2-bootstrap.sh's PINS — the ONE place that coordinate is declared.
+        Returns ("", why) when the script cannot be read or carries no
+        hugmesh-parent pin; the caller default-fails on that, like every other
+        probe here, rather than guessing a coordinate.
+
+        The parent POM is the right subject: it is what every service resolves
+        first, and it is what the script's own self-check serves."""
+        script = os.path.join(self.generator_dir, _M2_BOOTSTRAP_SCRIPT)
+        try:
+            with open(script, encoding="utf-8") as f:
+                src = f.read()
+        except OSError as e:
+            return "", f"cannot read {_M2_BOOTSTRAP_SCRIPT} ({e})"
+        block = _M2_PINS_BLOCK_RE.search(src)
+        if not block:
+            return "", f"no PINS array in {_M2_BOOTSTRAP_SCRIPT} (shape drift?)"
+        for line in block.group(1).splitlines():
+            entry = _M2_PIN_ENTRY_RE.match(line.strip())
+            if not entry:                      # comments and blank lines
+                continue
+            fields = entry.group(1).split("|")
+            if len(fields) < 6 or fields[2] != _M2_PARENT_ARTIFACT:
+                continue
+            aid, ver, group = fields[2], fields[3], fields[5]
+            return f"{group}/{aid}/{ver}/{aid}-{ver}.pom", ""
+        return "", (f"no {_M2_PARENT_ARTIFACT} entry in {_M2_BOOTSTRAP_SCRIPT}'s "
+                    f"PINS — cannot build the check-artifact URL")
+
     def _url_ok(self, url: str, timeout: float = _M2_PROBE_TIMEOUT_S) -> tuple[bool, str]:
         """GET ``url``; (True, "") only on a 2xx. Default-fail: any error —
         unreachable IP, connection refused, 404, timeout, garbage URL — reports
@@ -408,7 +450,10 @@ class LocalStackNode:
         if not base:
             return False, f"{_M2_ENV_FILE} has no CI_API_V4_URL"
         group = vals.get("GITLAB_GROUP_ID", "1")
-        url = f"{base}/groups/{group}/-/packages/maven/{_M2_CHECK_ARTIFACT}"
+        artifact, why = self._m2_check_artifact()
+        if not artifact:
+            return False, why
+        url = f"{base}/groups/{group}/-/packages/maven/{artifact}"
         ok, why = self._url_ok(url)
         if not ok:
             return False, (f"registry {M2_REGISTRY_CONTAINER} did not serve the "
