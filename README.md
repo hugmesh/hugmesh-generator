@@ -386,34 +386,44 @@ none), and compose green is not evidence for the cluster._
   `enabled`) `enforcePrivilegedFloor` → `true`, moving the posture-gate
   expectations in lockstep. Order and lockout preconditions:
   [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md).
-- **🚧 SELinux — the modules bake and the loader is wired, but nothing actually
-  loads.** Corrected 2026-08-14; the previous wording ("modules compile, install
-  and load on every image") was true for two thirds of that sentence. Baking is
-  real: `scripts/_selinux-policy-lib.sh` compiles `specs/selinux/*.te` and all ten
-  builders call `slx_stage_node_policy` fail-closed, and the 2026-08-14 x86 build
-  installed 9 `.pp` into the image (`out/x86-pki-rebuild.log:1567340`). The loader
-  is real too — the manifest-driven `semodule -i` block is in the SHIPPED
-  `keys-provision` binary, not just the spec. **The load fails on every boot:** all
-  four 2026-08-14 QEMU runs logged `WARNING: hugmesh node-policy modules failed to
-  load; node keeps the base policy only`, so every shipped node runs base policy
-  only. It shipped green because `tests/qemu/assertions.sh` only ran `getenforce`,
-  which passes on base policy — the same boot reported "33 passed, 0 failed". Three
-  steps, in order: stop `provision.sh:2708` swallowing `semodule`'s stderr (the
-  failure is currently a bare WARNING with no reason; first suspect is the `.pp`
-  being compiled at 06:05 against a store built at 05:54), fix the load, then
-  assert every name in `/usr/share/hugmesh/selinux-modules.list` appears in
-  `semodule -s mcs -l`. Only after that does **enforcing** become the next
-  question — and it still needs AVC logs from a real protected build + boot to
-  narrow the `INFERRED-WIDE` rules. (The `/.autorelabel` consumption gap is
-  fixed: `provision_selinux()` now CLEARS the flag after its own successful
-  relabel — standard request-flag semantics — and only leaves it raised when
-  the relabel failed, so `check_relabel_clean()` can actually pass. The
-  fail-open provisioning seam is also closed: on an image built selinux-aware
-  — `/usr/share/hugmesh/selinux-built`, or a `base.pp` for older images — a
-  first boot that ends without a loaded policy records
-  `/var/lib/keys-provision/selinux-load-failed` instead of provisioning
-  "normally", and the enforce-gate refuses to flip while that marker stands.
-  First boot still never fails outright: degrade loudly, never brick.)
+- **🚧 SELinux — both acknowledged load defects are FIXED; enforcing now waits
+  on an AVC workout that has not run yet.** Updated 2026-08-19; this section
+  previously acknowledged that the modules bake and the loader is wired "but
+  nothing actually loads". Both root causes are closed. **The silent load
+  failure (fixed, PR #68):** the manifest-driven loader ran one batched
+  `semodule -i … 2>/dev/null || warn`, so all four 2026-08-14 QEMU runs shipped
+  green ("33 passed, 0 failed") while every node kept base policy only.
+  `provision.sh` now captures `semodule`'s stderr into the provision log,
+  retries per module on batch failure (per-module stderr too), and derives
+  per-module verdicts from the store (`semodule -l`, not exit codes) into
+  `/var/lib/keys-provision/selinux-modules.status`; any manifest module that
+  ends up not loaded records the `/var/lib/keys-provision/selinux-load-failed`
+  marker, and the enforce-gate refuses to flip while it stands.
+  `tests/qemu/assertions.sh` no longer stops at `getenforce`: it asserts every
+  name in `/usr/share/hugmesh/selinux-modules.list` appears in the store, the
+  status file is clean, the marker is down, and the mode matches the *expected*
+  mode — and it harvests AVCs into every `assertions.log`. **The x86
+  profile-binding no-op (fixed, PR #44):** `build-x86-host-stage4.sh` *copied*
+  `specs-x86/portage/profile/parent` into `/etc/portage/profile/`, a placement
+  portage silently ignores, so every x86 image built against plain `hardened`
+  and shipped SELinux-inert userland (no policy loader in PID 1,
+  selinux-unaware pam/sudo/dbus) while the summary banner claimed
+  `hardened/selinux`. The builder now derives an absolute `make.profile`
+  symlink from the spec's `profile/parent` — the pattern the ARM builders had
+  all along — gated by `tests/requested-atoms-resolvable.sh` section E, and
+  confirmed live: the first post-fix x86 image completed with
+  `Profile: default/linux/amd64/23.0/hardened/selinux`. (Two earlier seams stay
+  closed: `provision_selinux()` clears `/.autorelabel` after its own successful
+  relabel so `check_relabel_clean()` can pass, and first boot still never fails
+  outright — degrade loudly, never brick.) **What honestly remains** is the
+  issue #45 roadmap: the AVC workout harness shipped with PR #68
+  (`make avc-workout` boots an image behind a qcow2 overlay, drives the
+  workloads the nine `specs/selinux/*.te` modules confine, and groups denials
+  by owning `.te` file) but has **not yet been run** against the rebuilt
+  images; until it has, the `INFERRED-WIDE` rules in `specs/selinux/*.te` stay
+  unnarrowed; and the enforce-gate flip (`HUGMESH_SELINUX_ENFORCE_GATE=1`)
+  stays pending until an **enforcing** workout pass comes back AVC-clean —
+  nodes still boot **PERMISSIVE** with the gate inert.
 - **🔭 bpf-LSM enforcement, and lockdown beyond x86 + rpi5.** The LSM stack each
   image advertises is now the one it runs — `yama` and `bpf` were named in
   `CONFIG_LSM`, the cmdline, the generated `grub.cfg` and the signed UKI while the
