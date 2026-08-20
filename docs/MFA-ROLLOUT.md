@@ -112,12 +112,21 @@ UPDATE gateway_route_access
    AND (url_pattern = '/bff/admin'
      OR url_pattern LIKE '/bff/admin/%'
      OR url_pattern = '/bff/superadmin'
-     OR url_pattern LIKE '/bff/superadmin/%')
+     OR url_pattern LIKE '/bff/superadmin/%'
+     OR (COALESCE(NULLIF(lower(trim(domain)), 'default'), '') <> ''
+         AND url_pattern IN ('')))
    AND mfa_required IS DISTINCT FROM true;
 ```
 
 (That block is not retyped prose: the gate compares it byte-for-byte against the
 statement in `20-schema.sql`, so it cannot drift.)
+
+The final `OR` is the **per-domain arm** (issue #47 × the casdoor-choice
+schema): list a `url_pattern` in its `IN (…)` and every **domain-scoped** row
+carrying it gets the same re-apply convergence the two blanket prefixes get.
+It is **empty today** — the empty-string element matches no pattern, so the
+flip set is exactly the 9 rows below — and §1.2a explains when (and when not)
+to widen it.
 
 That flips **9 rows** (as of this writing) across three gateways:
 
@@ -172,6 +181,50 @@ enumerates admin-ish surfaces *independently* of the `UPDATE`'s own prefixes and
 cross-checks them against exactly this list, so a **seventh** admin-ish `/bff/` row
 appearing later fails the build until someone decides consciously (and a stale entry
 in the list fails it too).
+
+#### Per-domain MFA scope (several local domains behind the same gateways — issue #47)
+
+`gateway_route_access` rows carry a per-row `domain`, and the casdoor-choice
+schema (PR #71, `Domain.idp`) makes multiple local domains behind one set of
+gateways a first-class shape. What a domain-scoped row can and cannot express
+for MFA is fixed by `GatewayRouteAccessService.decide()` in `hugmesh-gateway`
+— **verified against the source, not assumed**: among the rows at the longest
+matching `url_pattern`, `decide()` ORs `mfa_required` across *every* row that
+grants the principal and domain-applies, and an **unscoped** row
+(`NULL`/blank/`default`, case-insensitive, trimmed) domain-applies to **every**
+domain. Hence this scope table:
+
+| you want | expressible? | how / why not |
+|---|---|---|
+| the blanket (two prefixes) on every domain, **including** rows someone scoped to one domain under them | **yes — enforced** | the seed `UPDATE` is **domain-blind**, deliberately, like it is gateway-blind. A scoped `mfa_required=false` row under the prefixes is a **phantom exemption**: the unscoped canonical row still applies to that domain and still pulls the MFA floor up, so the false row exempts nothing — the seed re-flips it to make the table say what the gateway does. And a scoped-**only** allow row (a per-domain admin surface with no unscoped twin) must not ship un-MFA'd inside the blanket |
+| require a second factor on **one domain only**, on a surface outside the blanket (per-domain **tightening**) | **yes** | insert a domain-scoped sibling row — same `gateway`/`url_pattern`/`role`, its own `domain`, `allow=true`, `mfa_required=true`. `domainApplies()` keeps it off every other domain. To give it the same re-apply convergence the blanket has, also list its `url_pattern` in the `UPDATE`'s per-domain arm (§1.2) **and** in the gate's `PER_DOMAIN_SCOPE` set — the gate cross-checks the two in both directions |
+| **exempt** one domain from the blanket | **no** | not by a row (see the phantom-exemption note — `decide()` is a sticky OR), and not by the predicate (the blanket rows are **unscoped**, and unscoped rows apply to every domain). A real per-domain exemption means splitting the canonical rows per domain — a new scope decision with the full §3 step-7 blast-radius conversation attached |
+| an **own-IdP domain** (`Domain.idp: own`, PR #71) satisfying MFA | **no (today)** | its principals authenticate against the domain-local Casdoor and can never carry `MFA_SATISFIED` — `mfa_satisfied_at` is a user Property in the **superdomain's** Casdoor (§2.4). On a shared-gateway mesh, treat that whole population like the §2.4 machine callers: enumerate own-IdP domains **before** §3 step 6, or their non-privileged holders (e.g. a pure `ROLE_FLEET_ADMIN`) are 403'd on every `mfa_required` surface with no way to enroll |
+
+The uniqueness key makes the sibling-row idiom safe: `uq_route_access_row`
+keys its domain leg on the **gateway's own scope equivalence**
+(`COALESCE(NULLIF(lower(trim(domain)), 'default'), '')`), so a `'Default'` or
+case/whitespace alias **collides** with the row it aliases instead of
+duplicating it, while a genuinely scoped sibling keys differently and lands.
+The tightening row shape, concretely — and this block is **executed** by the
+gate against the replayed seed (inserted, then the whole seed re-applied over
+it) to prove the row survives with `mfa_required=true` while its unscoped twin
+stays `false`:
+
+<!-- gate:doc-sql name=tightening expect=per-domain-tightening -->
+
+```sql
+INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain, mfa_required)
+VALUES ('hugmesh-fe-gateway', '/bff/wiki/admin/**', 'ROLE_ADMIN', true, 'brand-x.example', true)
+ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NULLIF(lower(trim(domain)), 'default'), '')) DO NOTHING;
+```
+
+Such rows are **provisioning/CRUD data, not canonical seed rows** — the
+canonical seed stays domain-free because the reference mesh defines no extra
+local domains. `brand-x.example` above is a placeholder; a real tightening row
+carries the real domain and goes in through the admin-bff CRUD or a per-mesh
+provisioning step, with the `url_pattern` listed in the per-domain arm in the
+same change.
 
 **These rows do nothing until a gateway flag is on.**
 `GatewayRouteAccessService.decide()` consults `mfa_required` only when
@@ -709,10 +762,14 @@ exemptions:
   directions, so prose and predicate cannot drift apart.
 - Adding a **parallel** row that differs only in `mfa_required` does nothing:
   `mfa_required` is not part of `uq_route_access_row`
-  `(gateway, url_pattern, role, COALESCE(casdoor_user,''), COALESCE(domain,''))`,
+  `(gateway, url_pattern, role, COALESCE(casdoor_user,''),
+  COALESCE(NULLIF(lower(trim(domain)),'default'),''))`,
   so the row collides and `ON CONFLICT DO NOTHING` silently drops it. This is the
   single easiest way to *think* you have enabled MFA on a surface while enabling
-  nothing.
+  nothing. Note the domain leg is the **gateway's scope equivalence**, not the
+  raw text — a `'Default'` or case/whitespace re-spelling of an existing row's
+  domain collides too. A row that differs in `domain` **for real** is the one
+  legal sibling shape: per-domain tightening, §1.2a.
 
 ### 5.1 Known gap: MFA is not enforced during a dual-datastore outage
 
@@ -822,11 +879,14 @@ rehearsal (compose), the integration proof (kind), and the tenant rollout
 (brands); it never silently changes the posture a cluster ships with.
 
 **Per-domain WITHIN one mesh** (several local domains behind the same gateways)
-is NOT expressible yet: `gateway_route_access.mfa_required` rows are
-domain-blind in the seed today, and choosing a per-domain Casdoor org is the
-casdoor-choice schema work. When that schema lands, the join point is the
-`domain` column already present in `uq_route_access_row` (§5) plus the seed's
-`UPDATE` predicate — extend both together, with the §1.2a scope table.
+**is now expressible** — the casdoor-choice schema landed (PR #71) and the join
+point named here was implemented: `uq_route_access_row`'s domain leg is keyed
+on the gateway's own scope equivalence, the seed's `UPDATE` carries a
+per-domain arm (empty today), and §1.2a's scope table says exactly what a
+domain-scoped row can express (per-domain **tightening**), cannot express
+(per-domain **exemption** — `decide()` is a sticky OR and the blanket rows are
+unscoped), and what an **own-IdP** domain means for a `MFA=1` flip (its
+principals cannot enroll — enumerate them before §3 step 6).
 
 Wiring proof: `tests/stack/test-mfa-flip-wiring.sh` (CI `lint:mfa-flip-wiring`)
 re-derives every consumer of the trio per lane from the artifacts themselves and

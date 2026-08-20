@@ -111,3 +111,52 @@ def test_q_on_a_subscreen_goes_back_not_out(tmp_path):
     app.show_detail(app.rows[0])
     app.unhandled("q")                                 # back to the list, no exit
     assert app.mode == "list"
+
+
+# ── the journey (urwid face): the same state machine, rendered to a canvas ──────────
+def _typed(app, text: str) -> None:
+    """Type a command line into the footer Edit and press Enter — the exact
+    input path a terminal operator uses."""
+    app.input.set_edit_text(text)
+    app.unhandled("enter")
+
+
+def test_journey_opens_on_the_welcome_screen(tmp_path):
+    app = urwid_ui.JourneyApp(str(tmp_path))
+    text = _screen_text(app.root)
+    assert "HugMesh Studio — HugMesh Image Studio" in text
+    assert "Start building" in text and "Review prior sessions" in text
+
+
+def test_journey_enter_feeds_the_edit_line_into_the_state_machine(tmp_path):
+    app = urwid_ui.JourneyApp(str(tmp_path))
+    _typed(app, "")                                    # default: -> mode
+    assert app.journey.slug == "mode"
+    text = _screen_text(app.root)
+    assert "What do you want to build?" in text
+    assert "Mesh emulation" in text                    # the #69 card renders
+    assert app.input.edit_text == ""                   # the line was consumed
+
+
+def test_journey_sessions_entry_swaps_in_the_review_and_back(tmp_path):
+    _finished(tmp_path, session_id="20260106-000001-ffffff")
+    app = urwid_ui.JourneyApp(str(tmp_path))
+    _typed(app, "3")                                   # Review prior sessions
+    assert app.sessions is not None
+    assert "previous builds" in _screen_text(app.root)
+    assert "20260106-000001-ffffff" in _screen_text(app.root)
+    app.unhandled("q")                                 # the review's list-q: back
+    assert app.sessions is None
+    assert "Start building" in _screen_text(app.root)  # the journey resumed
+
+
+def test_journey_q_exits_the_main_loop(tmp_path):
+    app = urwid_ui.JourneyApp(str(tmp_path))
+    with pytest.raises(urwid.ExitMainLoop):
+        _typed(app, "q")
+
+
+def test_journey_inline_status_renders_never_a_modal(tmp_path):
+    app = urwid_ui.JourneyApp(str(tmp_path))
+    _typed(app, "banana")
+    assert "unrecognised" in _screen_text(app.root)

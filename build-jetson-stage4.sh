@@ -673,10 +673,17 @@ if [ -n "${SHARED_ROOT}" ]; then
     SHARED_DISTDIR="$(sa_distfiles_dir "${SHARED_ROOT}")"
     SHARED_SEED_DIR="$(sa_seed_dir "${SHARED_ROOT}" "arm64")" \
         || { echo "ERROR: cannot resolve the shared stage3 seed dir" >&2; exit 1; }
+    # Host-side BDEPEND pool leg (#72 §4): ONE leg shared by EVERY arm board —
+    # host bdeps are amd64 tools run by the builder itself, so the target's
+    # -mcpu is irrelevant to them (the fingerprint is the HOST's, never the
+    # board's). Resolved here so --print-plan can state it; ACTIVATED only
+    # inside the disposable builder container (host-mutation site below).
+    HOST_BDEP_POOL_DIR="$(sa_host_bdep_pool_dir "${SHARED_ROOT}")" || HOST_BDEP_POOL_DIR=""
 else
     POOL_DIR="${BUILD_ROOT}/pkgdir"   # legacy private pool (--no-shared-assets)
     SHARED_DISTDIR=""
     SHARED_SEED_DIR="${BUILD_ROOT}"
+    HOST_BDEP_POOL_DIR=""             # host bdeps stay in the host's own default PKGDIR
 fi
 SYSROOT="${BUILD_ROOT}/sysroot"
 STAGE_DIR="${BUILD_ROOT}/staging"
@@ -765,6 +772,10 @@ if ${PRINT_PLAN}; then
     _plan SHARED_SEED_DIR    "${SHARED_SEED_DIR}"
     _plan SHARED_DISTDIR     "${SHARED_DISTDIR:-none}"
     _plan POOL_KEY           "${BOARD_POOL_KEY}"
+    # Host-side BDEPEND pool (#72 §4): the amd64 build tools the cross emerge
+    # merges "to /", pooled across ALL arm boards (keyed by HOST identity, not
+    # the board). Additive PLAN_ key; wired only inside the builder container.
+    _plan HOST_BDEP_POOL     "${HOST_BDEP_POOL_DIR:-no (host bdeps not pooled)}"
     _plan PACKAGES_ONLY      "$(${PACKAGES_ONLY} && echo 1 || echo 0)"
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
@@ -1177,6 +1188,27 @@ else
     info "Not root / no /etc/portage — HOST portage seed skipped (the cross emerge will use the existing config)."
 fi
 
+# ── ARM host-side BDEPEND binpkg pool (#72 §4) ────────────────────────────────
+# Full write-up in build-rpi5-stage4.sh's copy of this block; short form: the
+# cross emerge merges every BDEPEND "to /" (this container's root, crossdev's
+# --root-deps=rdeps) and wave 1 (#46) measured 33–49 such host tools recompiled
+# per arm image because the container's default PKGDIR dies with it. Wire the
+# HOST config at the shared host-amd64-bdep leg (HOST make.conf ONLY — the
+# sysroot's rendered make.conf keeps its per-board POOL_DIR, so target binpkgs
+# never mix into the host leg). Gated like every other host-mutation site; on
+# any unavailability the build proceeds UNPOOLED, loudly, never aborts.
+if [ -n "${HOST_BDEP_POOL_DIR}" ] && hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; then
+    if sa_host_bdep_pool_wire "${HOST_BDEP_POOL_DIR}" /etc/portage/make.conf; then
+        info "Host bdep binpkg pool: ${HOST_BDEP_POOL_DIR} (HOST PKGDIR + FEATURES=buildpkg binpkg-multi-instance; shared by all arm boards)"
+    else
+        warn "host bdep pool unavailable (see above) — host-side BDEPENDs will build unpooled"
+        HOST_BDEP_POOL_DIR=""
+    fi
+elif [ -n "${HOST_BDEP_POOL_DIR}" ]; then
+    info "Host bdep pool resolved (${HOST_BDEP_POOL_DIR}) but NOT wired — host mutation not allowed on this root (container-only feature)"
+    HOST_BDEP_POOL_DIR=""
+fi
+
 # Host SELinux policy build tools (same rationale as the Pi5/Frite builders).
 HOST_POLICY_TOOLS=()
 command -v checkpolicy      &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
@@ -1201,7 +1233,11 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
         # 'system'. Conditional (only when a tool is missing AND we may mutate the
         # host), which the Studio's forward-only phase matcher steps over cleanly.
         banner "Emerge group: tools"
-        emerge --noreplace --quiet "${HOST_POLICY_TOOLS[@]}" \
+        # --usepkg=y --binpkg-respect-use=y: reuse the shared host-bdep leg when
+        # wired (HOST make.conf PKGDIR above); respect-use still rejects any
+        # USE-mismatched binpkg per-package. Unwired: the host's own (empty)
+        # default PKGDIR — a no-op, byte-identical install behavior.
+        emerge --noreplace --quiet --usepkg=y --binpkg-respect-use=y "${HOST_POLICY_TOOLS[@]}" \
             || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; exit 1; }
     else
         err "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]}"
@@ -1282,7 +1318,7 @@ info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
 echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND} role=${ROLE} env=${ENV} ===="
 
 banner "Fetching stage3 seed (arm64 glibc — CUDA needs glibc)"
-STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(dlv_fetch_retry "${SEED_STAGE3_URL}" - -s | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
 # Stage3 seed: ONE per-arch cache under the shared root instead of a fresh ~250 MB
@@ -1851,7 +1887,7 @@ else
     HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
     HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
-    if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${HS_BIN}" "${HS_URL}"; then
+    if ! dlv_fetch_retry "${HS_URL}" "${HS_BIN}"; then
         err "headscale ${HEADSCALE_VERSION} fetch failed (${HS_URL}) — the image bakes the mesh; aborting (use --skip-mesh to opt out)."; exit 1
     fi
     HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
@@ -1868,7 +1904,7 @@ else
     else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
-        if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${TS_TGZ}" "${TS_URL}"; then
+        if ! dlv_fetch_retry "${TS_URL}" "${TS_TGZ}"; then
             err "tailscale ${TAILSCALE_VERSION} fetch failed (${TS_URL}) — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)."; exit 1
         fi
         TS_SHA="${TS_TGZ}.sha256"

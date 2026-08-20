@@ -1502,10 +1502,17 @@ if [ -n "${SHARED_ROOT}" ]; then
     SHARED_DISTDIR="$(sa_distfiles_dir "${SHARED_ROOT}")"
     SHARED_SEED_DIR="$(sa_seed_dir "${SHARED_ROOT}" "arm64")" \
         || { echo "ERROR: cannot resolve the shared stage3 seed dir" >&2; exit 1; }
+    # Host-side BDEPEND pool leg (#72 §4): ONE leg shared by EVERY arm board —
+    # host bdeps are amd64 tools run by the builder itself, so the target's
+    # -mcpu is irrelevant to them (the fingerprint is the HOST's, never the
+    # board's). Resolved here so --print-plan can state it; ACTIVATED only
+    # inside the disposable builder container (host-mutation site below).
+    HOST_BDEP_POOL_DIR="$(sa_host_bdep_pool_dir "${SHARED_ROOT}")" || HOST_BDEP_POOL_DIR=""
 else
     POOL_DIR="${BUILD_ROOT}/pkgdir"   # legacy private pool (--no-shared-assets)
     SHARED_DISTDIR=""
     SHARED_SEED_DIR="${BUILD_ROOT}"
+    HOST_BDEP_POOL_DIR=""             # host bdeps stay in the host's own default PKGDIR
 fi
 # Signed-kernel artifact cache root. Empty (⇒ every lookup MISSES, nothing stored) when
 # --no-kernel-cache, HUGMESH_KERNEL_CACHE=off, or the shared root itself is off.
@@ -2792,6 +2799,10 @@ if ${PRINT_PLAN}; then
     _plan SHARED_SEED_DIR    "${SHARED_SEED_DIR}"
     _plan SHARED_DISTDIR     "${SHARED_DISTDIR:-none}"
     _plan POOL_KEY           "${BOARD_POOL_KEY}"
+    # Host-side BDEPEND pool (#72 §4): the amd64 build tools the cross emerge
+    # merges "to /", pooled across ALL arm boards (keyed by HOST identity, not
+    # the board). Additive PLAN_ key; wired only inside the builder container.
+    _plan HOST_BDEP_POOL     "${HOST_BDEP_POOL_DIR:-no (host bdeps not pooled)}"
     _plan KERNEL_CACHE       "${KERNEL_CACHE_ROOT:-off}"
     # Prebuild mode (shared-binpkg): 1 ⇒ populate PKGDIR then exit before image
     # assembly. Additive PLAN_ key.
@@ -3151,6 +3162,33 @@ else
     info "Not root / no /etc/portage — HOST portage seed skipped (the cross emerge will use the existing config)."
 fi
 
+# ── ARM host-side BDEPEND binpkg pool (#72 §4) ────────────────────────────────
+# Wave 1 (#46) measured 33–49 host-side BDEPEND tools source-compiled per arm
+# image with no pool at all: the cross emerge merges BDEPENDs "to /" (this
+# container's root) under the crossdev wrapper's --root-deps=rdeps, and that
+# root's default PKGDIR dies with the container. Wire the HOST config at the
+# shared host-amd64-bdep leg so those tools are packed once (FEATURES=buildpkg)
+# and reused (--usepkg=y, already global on cross_emerge; --binpkg-respect-use=y
+# still prunes any USE mismatch per-package) by every arm build. HOST make.conf
+# ONLY — the sysroot's rendered make.conf keeps its per-board POOL_DIR, so a
+# target binpkg can never land in (or be taken from) the host leg. Gated exactly
+# like every other host-mutation site (a real machine is never rewired), and the
+# build proceeds UNPOOLED — legacy behavior, loudly — rather than aborting when
+# the leg is unavailable: sa_host_bdep_pool_wire flushes-and-restamps the leg on
+# a builder-identity change instead of refusing (a stale HOST tool is a
+# build-time hazard on the builder, not a shipped-image SIGILL).
+if [ -n "${HOST_BDEP_POOL_DIR}" ] && hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; then
+    if sa_host_bdep_pool_wire "${HOST_BDEP_POOL_DIR}" /etc/portage/make.conf; then
+        info "Host bdep binpkg pool: ${HOST_BDEP_POOL_DIR} (HOST PKGDIR + FEATURES=buildpkg binpkg-multi-instance; shared by all arm boards)"
+    else
+        warn "host bdep pool unavailable (see above) — host-side BDEPENDs will build unpooled"
+        HOST_BDEP_POOL_DIR=""
+    fi
+elif [ -n "${HOST_BDEP_POOL_DIR}" ]; then
+    info "Host bdep pool resolved (${HOST_BDEP_POOL_DIR}) but NOT wired — host mutation not allowed on this root (container-only feature)"
+    HOST_BDEP_POOL_DIR=""
+fi
+
 # ── Host SELinux policy build tools ────────────────────────────────
 # sec-policy/selinux-base's src_compile runs refpolicy's `emake base`, which
 # assembles base.pp with the HOST binaries checkpolicy/checkmodule (sys-apps/
@@ -3240,7 +3278,11 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
         # 'system'. Conditional (only when a tool is missing AND we may mutate the
         # host), which the Studio's forward-only phase matcher steps over cleanly.
         banner "Emerge group: tools"
-        emerge --noreplace --quiet "${HOST_POLICY_TOOLS[@]}" \
+        # --usepkg=y --binpkg-respect-use=y: reuse the shared host-bdep leg when
+        # wired (HOST make.conf PKGDIR above); respect-use still rejects any
+        # USE-mismatched binpkg per-package. Unwired: the host's own (empty)
+        # default PKGDIR — a no-op, byte-identical install behavior.
+        emerge --noreplace --quiet --usepkg=y --binpkg-respect-use=y "${HOST_POLICY_TOOLS[@]}" \
             || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; \
                  err "selinux-base src_compile (emake base) needs host checkpolicy + semodule_package."; exit 1; }
     else
@@ -3298,7 +3340,7 @@ echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND
 banner "Fetching stage3 seed (arm64)"
 
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
-STAGE3_FILE=$(curl -sL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(dlv_fetch_retry "${SEED_STAGE3_URL}" - -s | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_BASE_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds"
 STAGE3_FULL_URL="${STAGE3_BASE_URL}/${STAGE3_FILE}"
@@ -4237,7 +4279,7 @@ else
     HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
     info "Fetching headscale ${HEADSCALE_VERSION}..."
-    if curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${HS_BIN}" "${HS_URL}"; then
+    if dlv_fetch_retry "${HS_URL}" "${HS_BIN}"; then
         # Verify sha256 against the release checksums.txt BEFORE trusting it.
         HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
         if ! dlv_fetch "${HS_REL}/checksums.txt" "${HS_SUMS}" \
@@ -4267,7 +4309,7 @@ else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         info "Fetching tailscale ${TAILSCALE_VERSION}..."
-        if curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${TS_TGZ}" "${TS_URL}"; then
+        if dlv_fetch_retry "${TS_URL}" "${TS_TGZ}"; then
             # Verify sha256 against the published <tgz>.sha256 sidecar BEFORE extracting.
             TS_SHA="${TS_TGZ}.sha256"
             if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \

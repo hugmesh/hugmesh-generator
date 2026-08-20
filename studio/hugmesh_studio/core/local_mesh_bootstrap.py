@@ -43,7 +43,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from . import theme
+from . import own_casdoor, theme
 from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
@@ -598,6 +598,19 @@ class LocalMeshBootstrap:
             if jwks and not _IDP_URL_RE.fullmatch(jwks):
                 problems.append(f"idp_jwks must be an https:// URL (got '{jwks}') — "
                                 "leave empty to derive the provider default.")
+        # ── per-domain OWN Casdoor (issue #47) — in the GUI these names come off
+        # the validated Domains table, but the CLI/menu hand them in raw. Block
+        # (with the reason) any name that is not a DNS name: own_casdoor.py would
+        # otherwise derive a broken casdoor-<slug> service/issuer from it, and a
+        # silent drop is the exact failure mode this axis exists to kill.
+        for name in self.cfg.own_idp_domains:
+            if not name.strip() or not all(
+                    _BRAND_DNS_LABEL.match(lbl)
+                    for lbl in name.strip().lower().split(".")):
+                problems.append(
+                    f"own-Casdoor domain '{name}' is not a DNS name (dot-"
+                    f"separated [a-z0-9-] labels) — no casdoor-<slug> "
+                    f"service/issuer can be derived from it.")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -716,6 +729,7 @@ class LocalMeshBootstrap:
                         f", OIDC_CLIENT_ID={c.idp_client_id.strip()}"
                         f", OIDC_JWKS_URI={c.effective_idp_jwks()}"
                         if c.idp_external() else "")
+                     + (", OWN_CASDOOR=1" if c.own_idp_domains else "")
                      + ")")
         if c.effective_with_tor():
             lines.append("          -> also starts hugmesh-tor (the `tor` profile):")
@@ -729,6 +743,23 @@ class LocalMeshBootstrap:
                          f"({len(c.login_theme_css)} chars of derived --sd-* css,")
             lines.append("             written to snap-theme.css at container start — "
                          "rebrand needs no rebuild)")
+        # Per-domain OWN Casdoor (issue #47): disclose EXACTLY what the compose
+        # lane derives — the same ports/issuers own_casdoor.py allocates and
+        # LocalStackNode threads into APP_TENANCY_ISSUERS — so the plan and the
+        # running stack cannot disagree. Empty (the default) renders NOTHING:
+        # the superdomain-only plan stays byte-identical.
+        if c.own_idp_domains:
+            lines.append("          -> OWN-Casdoor domains (issue #47): each runs its "
+                         "own Casdoor")
+            lines.append("             (+ postgres) behind the `own-casdoor` profile; "
+                         "every other")
+            lines.append(f"             domain signs in via the superdomain Casdoor "
+                         f"({c.issuer()}")
+            lines.append("             = tenant `default`):")
+            for i, name in enumerate(c.own_idp_domains):
+                lines.append(f"             * {name}: host port "
+                             f"{own_casdoor.port_for(i)}, issuer "
+                             f"{own_casdoor.issuer_for(name, i)}")
         lines.append("      make stack-seed (provisions ROLE_SUPERADMIN with the minted")
         lines.append("                       password, bridged via env only)")
         # SERVICES — spelled out per mechanism, because the operator's two questions
@@ -1105,6 +1136,19 @@ def _parse_web_locales(raw: str) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _parse_own_casdoor_domains(raw: list[str] | None) -> tuple[str, ...]:
+    """The repeatable --own-casdoor-domain values -> the config tuple: stripped,
+    order-preserving (the port sequence 8001+ is allocated from it — the
+    Domains-table-order rule), duplicates collapsed to the first occurrence.
+    None/empty => () => the pre-#47 byte-identical default."""
+    seen: list[str] = []
+    for name in raw or []:
+        name = name.strip()
+        if name and name not in seen:
+            seen.append(name)
+    return tuple(seen)
+
+
 def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
     # Compose the theme HERE (raising on a malformed colour / unknown preset before
     # anything starts) so the config carries only the derived text and every
@@ -1131,7 +1175,8 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
         web_locales=_parse_web_locales(args.web_locales),
         login_theme_css=login_theme_css,
         idp=args.idp, idp_issuer=args.idp_issuer,
-        idp_client_id=args.idp_client_id, idp_jwks=args.idp_jwks)
+        idp_client_id=args.idp_client_id, idp_jwks=args.idp_jwks,
+        own_idp_domains=_parse_own_casdoor_domains(args.own_casdoor_domain))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1227,6 +1272,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--idp-jwks", default="",
                    help="external JWKS URL override (empty = the provider's "
                         "documented default derived from the issuer).")
+    # Per-domain OWN Casdoor (issue #47) — the Domains-table 'Sign-in' choice
+    # (core.config.Domain.idp) on the CLI: one repeatable flag per domain whose
+    # row says 'own'. Omitted entirely (every domain keeps the DEFAULT —
+    # superdomain Casdoor), the config/env/plan stay byte-identical, the same
+    # omit-when-default rule the manifest emitters follow.
+    p.add_argument("--own-casdoor-domain", action="append", default=None,
+                   metavar="NAME",
+                   help="a domain whose sign-in runs its OWN Casdoor instance "
+                        "instead of the superdomain's central Casdoor (issue "
+                        "#47 — the per-domain Domains-table choice; REPEAT the "
+                        "flag per domain). Each named domain gets its own "
+                        "Casdoor (+ postgres) behind the `own-casdoor` compose "
+                        "profile, host ports 8001+ in the order given, issuer "
+                        "http://casdoor-<slug>.localtest.me:<port>. Domains "
+                        "NOT named keep the default superdomain sign-in.")
     key = p.add_mutually_exclusive_group()
     key.add_argument("--authkey-file", default="",
                      help="path to a file holding the tailnet/headscale auth key "

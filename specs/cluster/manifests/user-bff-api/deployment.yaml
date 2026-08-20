@@ -168,11 +168,51 @@ spec:
             # the deployed Service is hugmesh-pki-gateway in hugmesh-pki, plain HTTP
             # on 8080 (the gateway chart's keystore.serverTls is false here).
             - { name: PKI_GATEWAY_BASE, value: "http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080" }
-            # casdoor.account.base-url — the self-service password/email surface.
-            # Ships dark (casdoor.account.enabled=false) but its default is the same
-            # pre-rebrand casdoor.snapdragon-pki host, so pin it too rather than leave
-            # a dud that only surfaces the day the flag flips.
+            # ── Self-service Casdoor account writes (change password / email) — LIVE ─
+            # casdoor.account.* — user-bff's /bff/user/profile/{password,email} relay
+            # to Casdoor's /api/set-password / /api/update-user. This manifest shipped
+            # the surface DARK (casdoor.account.enabled defaults false ⇒ a documented
+            # no-op stub that acks "queued"/"stubbed" and writes NOTHING to the IdP)
+            # because the client credential had no custody path yet; the compose lane
+            # went live first (operator report 2026-08-19 "change password doesn't
+            # work" — generator PR #62 + hugmesh-user-bff-api PR #7, which also made
+            # the BFF send the token's preferred_username rather than the JWT sub and
+            # PROPAGATE Casdoor's status:"error" refusals instead of acking success).
+            # With the client secret sourced from the user-bff-oidc ESO Secret below,
+            # the reason to stay dark is gone — live here matches the compose posture.
+            # IDENTITY: the org half of Casdoor's <org>/<userName> addressing comes
+            # from casdoor.organization (CASDOOR_ORG above, `hugmesh`).
+            - { name: CASDOOR_ACCOUNT_ENABLED, value: "true" }
+            # casdoor.account.base-url — the in-cluster Casdoor Service, NEVER the
+            # browser-facing issuer and NOT the pki-gateway: this is a server-to-
+            # server REST leg (/api/set-password, /api/update-user) and the gateway
+            # routes /api/auth/**, /login/** and /.well-known/** only — same rule and
+            # same target as APP_BFF_OIDC_LOGIN_BASE / APP_BFF_OIDC_ISSUER below.
             - { name: CASDOOR_ACCOUNT_BASE_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            # Casdoor authenticates its REST API with HTTP Basic <clientId>:<secret>
+            # of a registered APPLICATION — the SAME app-user-bff object the OIDC
+            # login leg uses (casdoor-init's reconcile_app registers `app-<name>`),
+            # so the id is pinned to the same byte string as APP_BFF_OIDC_CLIENT_ID
+            # below and the secret mounts the SAME user-bff-oidc ESO Secret
+            # (Vault: secret/<brand>/casdoor-apps, property user-bff — see
+            # manifests/external-secrets/sso-externalsecrets.yaml). ONE Casdoor
+            # application carries ONE clientSecret field, so a second ESO Secret
+            # could never rotate independently of this one anyway; reusing the
+            # existing Secret is the same "one OIDC client, N consumers" custody
+            # call admin-bff's APP_BFF_OIDC_CLIENT_SECRET already made, and it means
+            # the login and account legs can never drift apart (compose binds both
+            # to the same ${CASDOOR_APP_SECRET} variable for exactly this reason).
+            # optional: the pod boots without the Secret; Casdoor then rejects the
+            # blank Basic credential and (post user-bff-api#7) that refusal surfaces
+            # to the user as a 400 carrying Casdoor's message — fail-closed, never
+            # the pre-fix silent success ack.
+            - { name: CASDOOR_ACCOUNT_CLIENT_ID, value: "app-user-bff" }
+            - name: CASDOOR_ACCOUNT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-oidc
+                  key: client-secret
+                  optional: true
             # WebClient to the federation-api module-federation registry (the
             # user BFF reads the user's federated module/profile data there,
             # forwarding the caller JWT).

@@ -876,8 +876,47 @@ grep -q -- '--social' "${MESH_ARGV_CAP}" \
 _local_mesh_bootstrap_run plan test superadmin "" "" "" ""   # tor unset -> no --with-tor
 grep -q -- '--with-tor' "${MESH_ARGV_CAP}" \
     && { FAIL=$((FAIL+1)); printf 'FAIL mesh-bootstrap tor off: unexpected --with-tor\n' >&2; } || _ok
+
+# ── mesh-bootstrap: per-domain own-Casdoor choice (#47) threads repeatable flags ──
+# The optional 8th positional (space-separated own-Casdoor domain names) becomes one
+# --own-casdoor-domain per name IN ORDER (the port sequence 8001+ is allocated from
+# that order); empty/absent threads NOTHING — the superdomain default stays
+# byte-identical (the tor calls above pass 7 args and double as the compat pin).
+_local_mesh_bootstrap_run plan test superadmin "" "" "" "" "team.example shop.example"
+assert_eq "mesh-bootstrap own-casdoor: one repeatable flag per domain, in order" \
+    "$(grep -x -A1 -- '--own-casdoor-domain' "${MESH_ARGV_CAP}" | grep -v -- '^--own-casdoor-domain$' | grep -v -- '^--$')" \
+    "$(printf '%s\n' team.example shop.example)"
+_local_mesh_bootstrap_run plan test superadmin "" "" "" "" ""
+grep -q -- '--own-casdoor-domain' "${MESH_ARGV_CAP}" \
+    && _fail "mesh-bootstrap own-casdoor off: unexpected --own-casdoor-domain" || _ok
 unset -f python3 ui_msg
 rm -f "${MESH_ARGV_CAP}"
+
+# ── local_mesh_bootstrap_screen(): drive the owncas per-domain question ─────────
+# The phone/quest walk's sibling: stub _local_mesh_bootstrap_run (capture argv) and
+# refill the ui_* FIFO queues, then walk the FROM-SCRATCH screen through the #47
+# two-choice question exactly where a domain is named — own twice, then re-answer
+# superdomain for one of them (must REMOVE it — the default threads nothing), then
+# plan -> back. Proves the owncas case block mutates the right local and that it
+# lands in _local_mesh_bootstrap_run's 8th positional slot.
+MESH_SCREEN_ARGV="${SNAP_MENU_STATE}/mesh-bootstrap-screen-argv"
+_local_mesh_bootstrap_run() { printf '%s\n' "$@" >"${MESH_SCREEN_ARGV}"; }
+printf '%s\n' owncas own owncas own owncas superdomain plan back >"${_UI_MENU_Q}"
+printf '%s\n' team.example shop.example shop.example >"${_UI_INPUT_Q}"
+
+local_mesh_bootstrap_screen
+
+expected_mesh_boot_argv="$(printf '%s\n' plan test superadmin "" "" "" "" team.example)"
+assert_eq "local_mesh_bootstrap_screen: own domains collect, superdomain re-answer removes" \
+    "$(cat "${MESH_SCREEN_ARGV}" 2>/dev/null)" "${expected_mesh_boot_argv}"
+[ -s "${_UI_MENU_Q}" ]  && _bad "local_mesh_bootstrap_screen: ui_menu queue not fully consumed: $(cat "${_UI_MENU_Q}")"  || _ok
+[ -s "${_UI_INPUT_Q}" ] && _bad "local_mesh_bootstrap_screen: ui_input queue not fully consumed: $(cat "${_UI_INPUT_Q}")" || _ok
+
+# static pin: the two-choice question offers BOTH schema words, in plain language
+# (the QT Sign-in column's exact labels — superdomain is marked the default).
+assert_grep "mesh-bootstrap owncas: row present"        '^[[:space:]]*owncas[[:space:]]+"Own-Casdoor domains' "${MENU_SH}"
+assert_grep "mesh-bootstrap owncas: superdomain choice" 'superdomain "Superdomain Casdoor \(default\)'       "${MENU_SH}"
+assert_grep "mesh-bootstrap owncas: own choice"         'own[[:space:]]+"Own Casdoor'                        "${MENU_SH}"
 
 # ── Cloud deploy screen (deploy_screen/_deploy_run) — mirrors the phone block ──
 # The deploy track is a NON-BUILD choice (like localmesh/phone): it must never

@@ -483,10 +483,13 @@ sessions-delete: ## delete a session record — refuses without YES=1 (ID=… YE
 # (core/local_mesh_bootstrap.py) — it composes the gen scripts + LocalStackNode +
 # LocalMeshNode and adds NO new compose invocation. Builds NO image. NON-destructive:
 # `plan` only previews; `up` is the explicit action (prod TTY-confirms, no bypass).
-# Knobs: ENV=test|prod, SOCIAL=1, SUPERADMIN=…, CLUSTER_DOMAIN=…, AUTHKEY_FILE=… .
+# Knobs: ENV=test|prod, SOCIAL=1, SUPERADMIN=…, CLUSTER_DOMAIN=…, AUTHKEY_FILE=…,
+# OWN_CASDOOR_DOMAINS="team.example shop.example" (#47 — each named domain runs its
+# OWN Casdoor; unnamed domains keep the superdomain default, nothing threads).
 _MESH_BOOTSTRAP_ARGS = --env "$(ENV)" $(if $(strip $(SOCIAL)),--social) \
   $(if $(SUPERADMIN),--superadmin-username "$(SUPERADMIN)") \
   $(if $(CLUSTER_DOMAIN),--cluster-domain "$(CLUSTER_DOMAIN)") \
+  $(foreach d,$(OWN_CASDOOR_DOMAINS),--own-casdoor-domain "$(d)") \
   $(if $(OUT_DIR),--out "$(OUT_DIR)") \
   $(if $(AUTHKEY_FILE),--authkey-file "$(AUTHKEY_FILE)") \
   $(if $(NODE_NAME),--node-name "$(NODE_NAME)") \

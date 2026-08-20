@@ -11,9 +11,12 @@ Pins:
      group + editor.
   4. OLD THEMES LOAD: a config JSON saved before the chrome fields existed loads
      to the shipped defaults and composes BYTE-IDENTICAL css.
-  5. VANTA ANCHOR: the background-effect vocabulary persists host-shell PR #20's
-     deferred vanta catalog (the generator-side anchor), while the UI lists those
-     rows DISABLED with the login-ui dependency named — never an inert control.
+  5. EFFECT PICKER: all six --sd-bg-effect contract values (login-ui PR #6 renders
+     them; the host shell consumes the same channel) are SELECTABLE, default
+     gradient, on a NoWheelComboBox (PR #72 — an unfocused hover-scroll must never
+     silently swap the mesh's page background); presets MAY declare an effect and
+     fill the picker like they fill the hex fields, presets without one emit
+     nothing (omit-when-default keeps old theme files byte-identical).
 """
 import json
 import os
@@ -28,10 +31,10 @@ from hugmesh_studio.core.config import ImageConfig                  # noqa: E402
 from hugmesh_studio.core.validate import IdentityValidationError    # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                 # noqa: E402
 from hugmesh_studio.gui.pages._logintheme import LoginThemeGroup    # noqa: E402
-from hugmesh_studio.gui.pages._theme_editor import (                # noqa: E402
-    VANTA_DEPENDENCY_NOTE, ThemeEditorDialog)
-from hugmesh_studio.gui.pages._widgets import Collapsible           # noqa: E402
-from hugmesh_studio.gui.qt import QtCore, QtWidgets                 # noqa: E402
+from hugmesh_studio.gui.pages._theme_editor import ThemeEditorDialog  # noqa: E402
+from hugmesh_studio.gui.pages._widgets import (                     # noqa: E402
+    Collapsible, NoWheelComboBox)
+from hugmesh_studio.gui.qt import QtCore, QtGui, QtWidgets          # noqa: E402
 
 GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -186,25 +189,76 @@ def test_old_theme_files_load_to_shipped_defaults_and_compose_identically(qapp, 
     assert cfg2.login_theme_css() == expected
 
 
-# ── 5. the background-effect anchor (host-shell PR #20) ──────────────────────────────
-def test_vanta_rows_are_listed_but_disabled_and_name_the_login_ui_dependency(qapp):
+# ── 5. the background-effect picker (--sd-bg-effect, login-ui PR #6's contract) ──────
+def test_all_six_contract_effects_are_selectable_and_default_to_gradient(qapp):
     g, ed = _opened_editor(qapp)
+    # exactly the contract vocabulary, in contract order, defaulting to gradient
+    assert [ed.bg_effect.itemData(i) for i in range(ed.bg_effect.count())] \
+        == list(theme.BG_EFFECTS)
+    assert ed.bg_effect.currentData() == theme.BG_EFFECT_DEFAULT == "gradient"
     model = ed.bg_effect.model()
-    for effect in theme.VANTA_EFFECTS:
-        idx = ed.bg_effect.findData(effect)
-        assert idx >= 0, f"{effect} missing from the combo"
-        assert not (model.item(idx).flags() & QtCore.Qt.ItemFlag.ItemIsEnabled), \
-            f"{effect} must stay unselectable until the shell can render it"
-        tip = ed.bg_effect.itemData(idx, QtCore.Qt.ItemDataRole.ToolTipRole)
-        assert tip and "login-ui" in tip        # the dependency, named
-    assert "login-ui" in VANTA_DEPENDENCY_NOTE
-    for effect in ("gradient", "none"):         # the exposed pair stays live
-        idx = ed.bg_effect.findData(effect)
-        assert model.item(idx).flags() & QtCore.Qt.ItemFlag.ItemIsEnabled
+    for i in range(ed.bg_effect.count()):
+        assert model.item(i).flags() & QtCore.Qt.ItemFlag.ItemIsEnabled, \
+            f"{ed.bg_effect.itemData(i)} must be selectable — login-ui PR #6 " \
+            "renders the full catalog, and unknown values degrade to gradient"
+    # a vanta pick round-trips picker -> cfg -> css like any other theme option
+    ed.bg_effect.setCurrentIndex(ed.bg_effect.findData("vanta-globe"))
+    cfg = ImageConfig()
+    g.commit(cfg)
+    assert cfg.login_bg_effect == "vanta-globe"
+    cfg.validate_identity()                     # a selectable value is a valid one
+    css = cfg.login_theme_css()
+    assert "--sd-bg-effect: vanta-globe;" in css
+    assert "--hug-bg-effect: vanta-globe;" in css   # the runtime-contract twin
+
+
+def test_effect_picker_ignores_an_unfocused_wheel(qapp):
+    """PR #72's NoWheelComboBox pattern: a hover-scroll on the way past the picker
+    must scroll the container, never silently swap the mesh's page background —
+    the worklist board-combo corruption class. The ignored event propagates
+    (accepted=False) so a containing scroll area still gets the scroll."""
+    g, ed = _opened_editor(qapp)
+    assert isinstance(ed.bg_effect, NoWheelComboBox)
+    ed.bg_effect.clearFocus()
+    before = ed.bg_effect.currentData()
+    ev = QtGui.QWheelEvent(
+        QtCore.QPointF(5, 5), QtCore.QPointF(5, 5),
+        QtCore.QPoint(0, 0), QtCore.QPoint(0, -120),
+        QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier,
+        QtCore.Qt.ScrollPhase.NoScrollPhase, False)
+    QtWidgets.QApplication.sendEvent(ed.bg_effect, ev)
+    assert ed.bg_effect.currentData() == before, \
+        "wheel over the UNFOCUSED effect picker edited it"
+    assert not ev.isAccepted(), \
+        "the ignored wheel must propagate so the page can scroll past the picker"
+
+
+def test_preset_declared_effect_fills_the_picker_and_undeclared_leaves_it(qapp, monkeypatch):
+    # A preset MAY declare an effect (ThemePreset.effect). Choosing it fills the
+    # picker exactly like the hex fill-in, so the editor never shows a value the
+    # preset's delta block would override — and the write-through means cfg +
+    # css agree with what the picker shows.
+    aurora = theme_presets.ThemePreset(
+        "aurora-test", "Aurora", "Colours", "#1976d2", "#0097a7", effect="vanta-fog")
+    monkeypatch.setattr(theme_presets, "PRESETS", theme_presets.PRESETS + (aurora,))
+    g = LoginThemeGroup()
+    g.open_editor()
+    ed = g.editor
+    ed.theme_preset.setCurrentIndex(ed.theme_preset.findData("aurora-test"))
+    assert g.chrome["bg_effect"] == "vanta-fog"
+    assert ed.bg_effect.currentData() == "vanta-fog"    # the open editor follows
+    cfg = ImageConfig()
+    g.commit(cfg)
+    assert cfg.login_bg_effect == "vanta-fog"
+    assert "--sd-bg-effect: vanta-fog;" in cfg.login_theme_css()
+    # a preset WITHOUT a declared effect leaves the operator's pick alone
+    ed.theme_preset.setCurrentIndex(ed.theme_preset.findData("ocean"))
+    assert g.chrome["bg_effect"] == "vanta-fog"
+    assert ed.bg_effect.currentData() == "vanta-fog"
 
 
 def test_vanta_values_are_valid_persisted_state_and_emit_their_token(qapp):
-    # The MODEL accepts what the UI defers — that is what "persistence anchor" means.
+    # The MODEL path stands alone: a hand-written config needs no GUI round-trip.
     cfg = ImageConfig(login_bg_effect="vanta-fog")
     cfg.validate_identity()                     # must not raise
     assert "--sd-bg-effect: vanta-fog;" in cfg.login_theme_css()

@@ -234,6 +234,148 @@ sa_pool_guard() {
     sa_lock_run "${pool}.stamp.lock" pool_fingerprint_preflight "${pool}" "${mc}" "${prof}" "${salt}"
 }
 
+# ── ARM host-side BDEPEND binpkg pool (PR #72 §4 design) ──────────────────────
+# Cross builds merge every BDEPEND "to /" — the BUILD CONTAINER's own root — under
+# the crossdev wrapper's --root-deps=rdeps, and wave 1 (#46) measured 33–49 such
+# host tools source-compiled per arm image with no pool at all (the container's
+# default PKGDIR dies with the container). Those tools are amd64 binaries EXECUTED
+# BY THE BUILDER; the target board's -mcpu is irrelevant to them, so ONE leg
+# serves every arm board:
+#
+#     <root>/pkgdir/host-amd64-bdep
+#
+# keyed by the HOST's identity (host make.conf ABI values + host profile + the
+# builder-toolchain salt), NEVER the target's. The wiring is HOST-side only:
+# PKGDIR + FEATURES are appended to the HOST /etc/portage/make.conf (behind
+# hostguard_mutation_allowed, like every other host-mutation site), never to the
+# target make.conf — the target config root (PORTAGE_CONFIGROOT=${SYSROOT}) keeps
+# its own per-board PKGDIR, so a target binpkg can never land in (or be taken
+# from) the host leg.
+#
+# LOCKING — why this leg uses binpkg-multi-instance INSTEAD of sa_pool_hold:
+# host bdeps merge to / DURING the hours-long target cross-emerge (the "to /"
+# batch), so the leg's write window IS the target emerge. Holding the
+# single-writer lock across it would serialize all arm builds of DIFFERENT
+# boards end-to-end on one lock (the exact failure #72's design forbids), and
+# releasing it before the target emerge would leave the actual writes unguarded.
+# FEATURES=binpkg-multi-instance — on the HOST config only, the design's stated
+# alternative — makes concurrent writers safe: each build packs its own build-id
+# instance and portage serializes the Packages-index update under its own index
+# lock. The stamp file is still raced-guarded by the sa_lock_run stamp lock.
+SA_HOST_BDEP_POOL_KEY="host-amd64-bdep"
+
+# sa_host_bdep_pool_dir <root> -> <root>/pkgdir/host-amd64-bdep ('' when sharing off)
+sa_host_bdep_pool_dir() {
+    [ -n "${1:-}" ] || { printf ''; return 1; }
+    sa_pool_dir "$1" "${SA_HOST_BDEP_POOL_KEY}"
+}
+
+# sa_host_profile [configroot] -> the HOST's resolved profile path ('' if none).
+# This is the profile component of the host-leg fingerprint — the BUILDER's own
+# /etc/portage/make.profile, NOT the spec-derived target PROFILE_PATH.
+sa_host_profile() {
+    readlink -f "${1:-/etc/portage}/make.profile" 2>/dev/null || printf ''
+}
+
+# sa_host_bdep_pool_salt -> the builder-identity salt for the host-leg fingerprint.
+# #72's design keys the leg on the builder-image digest so a rebuilt/upgraded
+# builder flushes the leg instead of mixing gcc/libc ABIs. The image digest is not
+# observable from inside a container, so the operator/CI channel for the exact
+# digest is HUGMESH_HOST_BDEP_SALT (set it on EVERY launch channel or on none —
+# mixed spellings flush the leg on every alternation). The default derives the
+# identity from the ABI carriers themselves — the HOST gcc and glibc versions —
+# which is precisely what an image rebuild changes when it matters, and does NOT
+# change on a rebuild that keeps the toolchain (no spurious flush).
+sa_host_bdep_pool_salt() {
+    if [ -n "${HUGMESH_HOST_BDEP_SALT:-}" ]; then
+        printf '%s' "${HUGMESH_HOST_BDEP_SALT}"
+        return 0
+    fi
+    local gccv glibcv
+    gccv="$( { gcc -dumpfullversion 2>/dev/null || gcc -dumpversion 2>/dev/null; } | head -1)"
+    glibcv="$(ldd --version 2>/dev/null | head -1)"
+    printf 'builder-toolchain:gcc=%s:glibc=%s' "${gccv:-unknown}" "${glibcv:-unknown}"
+}
+
+# _sa_host_bdep_flush_restamp <pool> <makeconf> <profile> <salt> — empty the leg
+# (stale-ABI host binpkgs AND the old stamp) and restamp it with this build's
+# fingerprint. Runs UNDER the stamp lock (caller wraps in sa_lock_run).
+_sa_host_bdep_flush_restamp() {
+    local pool="${1:?}"
+    find "${pool}" -mindepth 1 -delete 2>/dev/null || return 1
+    pool_fingerprint_preflight "${pool}" "${2:-}" "${3:-}" "${4:-}"
+}
+
+# sa_host_bdep_pool_guard <pool> <host-makeconf> <profile> <salt> — the same
+# pool_fingerprint_preflight (so the #44-style stamp MIGRATION mechanics apply
+# unchanged: an empty→non-empty profile respelling of an ABI-identical leg is
+# restamped loudly, exactly once), but with FLUSH-on-mismatch semantics instead
+# of refuse-on-mismatch: a stale HOST tool is a build-time hazard on the builder
+# itself, not a shipped-image SIGILL, and a mismatch here means "the builder
+# identity changed" — the old binpkgs are garbage by definition, so the leg is
+# emptied and restamped (loudly) rather than bricking every arm build until an
+# operator hand-flushes a shared directory.
+sa_host_bdep_pool_guard() {
+    local pool="${1%/}" mc="${2:-}" prof="${3:-}" salt="${4:-}" out
+    command -v pool_fingerprint_preflight >/dev/null 2>&1 || {
+        sa_err "pool_fingerprint_preflight not sourced — refusing to touch the host bdep pool"
+        return 1
+    }
+    [ -n "${pool}" ] || { sa_err "sa_host_bdep_pool_guard: no pool dir"; return 1; }
+    mkdir -p "${pool}" 2>/dev/null || { sa_err "cannot create host bdep pool ${pool}"; return 1; }
+    out="$(mktemp)" || return 1
+    if sa_lock_run "${pool}.stamp.lock" pool_fingerprint_preflight "${pool}" "${mc}" "${prof}" "${salt}" 2>"${out}"; then
+        cat "${out}" >&2         # surface MIGRATING / unstamped-adoption notices unchanged
+        rm -f "${out}"
+        return 0
+    fi
+    {
+        echo "[shared-assets] NOTICE: FLUSHING the host-side bdep binpkg pool ${pool}"
+        echo "  Its stamp no longer matches this builder's host identity (rebuilt/upgraded"
+        echo "  builder image, changed host profile, or changed host make.conf flags)."
+        echo "  Host bdeps are amd64 tools EXECUTED BY THE BUILDER — stale ones must not be"
+        echo "  mixed across gcc/libc ABIs, but unlike a target pool this is not a"
+        echo "  shipped-image SIGILL hazard, so the leg is emptied and restamped instead of"
+        echo "  refusing the build. Preflight said:"
+        sed 's/^/    | /' "${out}"
+    } >&2
+    rm -f "${out}"
+    sa_lock_run "${pool}.stamp.lock" _sa_host_bdep_flush_restamp "${pool}" "${mc}" "${prof}" "${salt}" \
+        || { sa_err "could not flush/restamp the host bdep pool ${pool}"; return 1; }
+    return 0
+}
+
+# sa_host_bdep_pool_wire <pool> <host-makeconf> [profile] [salt] — guard the leg
+# (flush-on-mismatch, above) and wire the HOST make.conf at it, idempotently and
+# VALUE-AWARE: the check is "is the LAST PKGDIR assignment already this leg?",
+# not a marker grep — a container reused with a DIFFERENT shared root must get a
+# fresh block, and make.conf is last-assignment-wins, so appending again IS the
+# correct update. profile/salt default to the real host's (sa_host_profile /
+# sa_host_bdep_pool_salt); tests inject fixtures.
+# Returns non-zero (leg unusable — caller builds unpooled) without ever having
+# wired a make.conf at an unguarded pool.
+sa_host_bdep_pool_wire() {
+    local pool="${1%/}" mc="${2:-/etc/portage/make.conf}" prof salt
+    prof="${3-$(sa_host_profile)}"
+    salt="${4-$(sa_host_bdep_pool_salt)}"
+    [ -n "${pool}" ] || { sa_err "sa_host_bdep_pool_wire: no pool dir"; return 1; }
+    [ -f "${mc}" ]   || { sa_err "sa_host_bdep_pool_wire: host make.conf missing: ${mc}"; return 1; }
+    sa_host_bdep_pool_guard "${pool}" "${mc}" "${prof}" "${salt}" || return 1
+    if [ "$(_bpl_mc_get PKGDIR "${mc}")" != "${pool}" ]; then
+        {
+            printf '\n# hugmesh-host-bdep-pool: host-side BDEPEND binpkg pool (ARM cross builds).\n'
+            printf '# BDEPENDs merge "to /" (--root-deps=rdeps): amd64 tools run by THIS builder,\n'
+            printf '# so one pool serves every arm board. HOST make.conf ONLY — the target\n'
+            printf '# make.conf keeps its own per-board PKGDIR (SIGILL isolation). buildpkg packs\n'
+            printf '# every host bdep; binpkg-multi-instance keeps concurrent arm builds safe\n'
+            printf '# (portage serializes the Packages index under its own lock).\n'
+            printf 'PKGDIR="%s"\n' "${pool}"
+            printf 'FEATURES="${FEATURES} buildpkg binpkg-multi-instance"\n'
+        } >> "${mc}" || { sa_err "cannot wire ${mc} at the host bdep pool"; return 1; }
+    fi
+    return 0
+}
+
 # ── stage3 seed cache (G1) ────────────────────────────────────────────────────
 # sa_seed_basename_matches_arch <arch> <basename> — the ARCH KEYING assertion.
 # The directory already keys per-arch; this makes a MISFILED seed (an amd64 tarball
@@ -248,10 +390,18 @@ sa_seed_basename_matches_arch() {
     return 1
 }
 
-# The default fetcher — the same curl invocation (and retry hardening) the builders
-# used inline before this library. Overridable via SA_FETCH_CMD (the hermetic tests
-# inject a fixture copier; a build never reaches the network in the sandbox).
+# The default fetcher. Routes through _download-lib.sh's hardened shared loop
+# (dlv_fetch_retry: exponential backoff + the resolver-outage stall of issue #60
+# item 6) — every builder sources both libs, so the stage3 seed download rides
+# out a transient DNS blip instead of declaring fetch death (the 08-19 be.x86
+# failure). The inline curl is only a fallback for a standalone source of this
+# file; overridable via SA_FETCH_CMD (the hermetic tests inject a fixture
+# copier; a build never reaches the network in the sandbox).
 sa_fetch_default() { # <url> <dest>
+    if declare -F dlv_fetch_retry >/dev/null 2>&1; then
+        dlv_fetch_retry "$1" "$2"
+        return $?
+    fi
     command -v curl >/dev/null 2>&1 || { sa_err "curl not found"; return 1; }
     curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 \
          --retry-connrefused --retry-all-errors -o "$2" "$1"
