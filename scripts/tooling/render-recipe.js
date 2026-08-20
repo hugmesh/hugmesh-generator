@@ -136,7 +136,8 @@ const RENAME_CONTRACT_DENYLIST = new Set([
 // DECLARED contracts, from any scripts/tooling/tokens.json block carrying a
 // `rename_denylist` array — currently the theme delivery chain. Declared there
 // rather than pinned here because its OTHER half (the SNAP_THEME_CSS /
-// SNAP_THEME_OUT / SNAP_WEB_LOCALES env keys and the --hug-*/--sd-* custom
+// SNAP_THEME_OUT env keys, the web-locales key in both its live HUG_WEB_LOCALES
+// and retired SNAP_WEB_LOCALES spellings, and the --hug-*/--sd-* custom
 // properties)
 // is enforced on the TOKEN side by render-handlebars.assertTemplateSafe(), and
 // one contract split across two hardcoded lists is a contract that drifts.

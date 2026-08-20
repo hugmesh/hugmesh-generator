@@ -255,7 +255,7 @@ def test_bootstrap_web_locales_widget_collects_and_shows_in_plan(qapp):
     assert dlg.collect_bootstrap().web_locales == ("de", "fr")
     plan = dlg.plan_view.toPlainText()
     assert "de, fr" in plan
-    assert "SNAP_WEB_LOCALES=de,fr" in plan
+    assert "HUG_WEB_LOCALES=de,fr" in plan
 
 
 def test_bootstrap_up_carries_web_locales(qapp, monkeypatch):

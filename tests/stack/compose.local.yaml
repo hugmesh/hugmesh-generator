@@ -1442,8 +1442,21 @@ services:
         #
         # Threaded from the Studio: LocalMeshBootstrapConfig.web_locales ->
         # LocalStackNode._build_env() -> `make stack-up` (STACK_ENV) -> here ->
-        # the login-ui Dockerfile's ARG SNAP_WEB_LOCALES. Provable:
+        # the login-ui Dockerfile's ARG HUG_WEB_LOCALES. Provable:
         #   docker run --rm <image> ls -R /usr/share/nginx/html/i18n
+        #
+        # RENAME PHASE 3c — BOTH spellings are passed, carrying the SAME value
+        # (the Makefile collapses them to one effective value in STACK_WEB_LOCALES).
+        # This is the one link in the chain that leaves the repo: the build context
+        # is ${STACK_SRC}/hugmesh-login-ui, a checkout cloned at a pinned branch,
+        # so the Dockerfile on the other side may or may not yet declare the new
+        # ARG. Passing both makes the mismatch LOUD (docker: "build-args were not
+        # consumed") in the one direction and silent-correct in the other; passing
+        # only the new name against an older checkout would build clean, boot
+        # clean, exit 0 and ship a UI with no translations. Both names are also
+        # interpolated, never literal — a hardcoded value here disconnects the
+        # whole Studio -> make -> compose chain while still looking wired.
+        HUG_WEB_LOCALES: ${HUG_WEB_LOCALES:-}
         SNAP_WEB_LOCALES: ${SNAP_WEB_LOCALES:-}
     # Runtime globals the login-ui nginx entrypoint writes into snap-config.js so its
     # (already-built) NATIVE login form turns ON. The browser NEVER learns a Casdoor URL:

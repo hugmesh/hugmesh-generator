@@ -1461,9 +1461,42 @@ STACK_OIDC_ENV := $(if $(strip $(OIDC_CLIENT_ID)),CASDOOR_APP_CLIENT_ID='$(OIDC_
 # requests in the browser. English is the login-ui's source language, so it needs
 # no catalog and the default is the smallest artifact. Threaded into the compose
 # build arg (tests/stack/compose.local.yaml -> the login-ui Dockerfile's
-# ARG SNAP_WEB_LOCALES); the Studio sets it via LocalMeshBootstrapConfig.web_locales.
-#   make stack-up SNAP_WEB_LOCALES=de,fr
+# ARG HUG_WEB_LOCALES); the Studio sets it via LocalMeshBootstrapConfig.web_locales.
+#   make stack-up HUG_WEB_LOCALES=de,fr
+#
+# RENAME PHASE 3c — DUAL WRITE, new name primary. HUG_WEB_LOCALES is the live
+# spelling; SNAP_WEB_LOCALES is the retired one, still ACCEPTED here and still
+# EMITTED below. Both halves of that are load-bearing and neither is decoration:
+#
+#   accepted (input): the Studio that invokes `make stack-up` is a SEPARATELY
+#     INSTALLED app pointed at whatever generator checkout the operator has
+#     (LocalStackNode.generator_dir), so an older Studio — and every operator
+#     habit, script and shell history that says `make stack-up SNAP_WEB_LOCALES=`
+#     — can hand this Makefile the old name. A Makefile that read only the new
+#     one would take that as "unset", ship English-only, and exit 0. Nothing
+#     would print. That silent-empty is the exact failure this rename ladder
+#     exists to avoid, so the old name keeps working until phase 4 removes it.
+#
+#   emitted (output): the value crosses into ANOTHER REPO's image build (the
+#     login-ui Dockerfile). That Dockerfile dual-reads today (ARG HUG_WEB_LOCALES
+#     + ARG SNAP_WEB_LOCALES, tools/i18n/emit-shipped-locales.mjs prefers the new
+#     name when NON-EMPTY), but STACK_SRC is cloned from pinned branches, so the
+#     checkout being built is not necessarily new enough to declare the new ARG.
+#     Emitting both means the worst case is docker's VISIBLE "build-args were not
+#     consumed" warning instead of a silently un-translated UI.
+#
+# Precedence is NON-EMPTY-wins, not `?=`-style defined-wins, and it has to be:
+# the Studio and the Makefile both materialise the new name unconditionally, so
+# "defined" carries no information — only emptiness does. Same rule the consumer
+# applies (tools/i18n/emit-shipped-locales.mjs webLocalesEnv()); the two ends
+# disagreeing about what counts as "set" would put the locale list back in play.
+HUG_WEB_LOCALES  ?=
 SNAP_WEB_LOCALES ?=
+# The one effective value both names carry downstream. `:=` (immediate) and
+# defined ABOVE STACK_ENV on purpose — STACK_ENV is itself `:=`, so a variable
+# referenced there but assigned later expands to EMPTY and the knob goes dark,
+# the same trap STACK_POISONER_ENV's comment pins.
+STACK_WEB_LOCALES := $(if $(strip $(HUG_WEB_LOCALES)),$(HUG_WEB_LOCALES),$(SNAP_WEB_LOCALES))
 # MANAGED backing services (local-stack validation of managed mode; see
 # specs/cluster/backing-services.yaml + docs/MANAGED-SERVICES.md). EMPTY by default
 # so compose falls back to the in-stack containers BYTE-IDENTICALLY (the compose
@@ -1545,7 +1578,8 @@ STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_T
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
-             SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \
+             HUG_WEB_LOCALES='$(STACK_WEB_LOCALES)' \
+             SNAP_WEB_LOCALES='$(STACK_WEB_LOCALES)' \
              MANAGED_ADMIN_BFF_R2DBC_URL='$(MANAGED_ADMIN_BFF_R2DBC_URL)' \
              MANAGED_ADMIN_BFF_LIQUIBASE_URL='$(MANAGED_ADMIN_BFF_LIQUIBASE_URL)' \
              MANAGED_FORUM_BFF_R2DBC_URL='$(MANAGED_FORUM_BFF_R2DBC_URL)' \

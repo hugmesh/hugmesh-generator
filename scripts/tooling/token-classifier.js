@@ -118,7 +118,10 @@ function isRenameContractFile(name) {
 }
 
 /** A token whose render TARGET is a theme-contract IDENTIFIER — the env/ARG key
- *  the css text travels under (SNAP_THEME_CSS, SNAP_THEME_OUT, SNAP_WEB_LOCALES)
+ *  the css text travels under (SNAP_THEME_CSS, SNAP_THEME_OUT) or the locale-set
+ *  key in BOTH its live and retired spellings (HUG_WEB_LOCALES — what the
+ *  producers emit since rename phase 3c — and SNAP_WEB_LOCALES, still written as
+ *  a skew mirror and still read by the login-ui image),
  *  or a custom property under either pinned palette prefix — the live one
  *  (--hug-…) and the retired one it replaced (--sd-…), both still read somewhere
  *  in the fleet. Both ends of each are pinned literals in DIFFERENT repos, so
