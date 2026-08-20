@@ -1282,7 +1282,7 @@ info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
 echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND} role=${ROLE} env=${ENV} ===="
 
 banner "Fetching stage3 seed (arm64 glibc — CUDA needs glibc)"
-STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(dlv_fetch_retry "${SEED_STAGE3_URL}" - -s | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
 # Stage3 seed: ONE per-arch cache under the shared root instead of a fresh ~250 MB
@@ -1851,7 +1851,7 @@ else
     HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
     HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
-    if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${HS_BIN}" "${HS_URL}"; then
+    if ! dlv_fetch_retry "${HS_URL}" "${HS_BIN}"; then
         err "headscale ${HEADSCALE_VERSION} fetch failed (${HS_URL}) — the image bakes the mesh; aborting (use --skip-mesh to opt out)."; exit 1
     fi
     HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
@@ -1868,7 +1868,7 @@ else
     else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
-        if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${TS_TGZ}" "${TS_URL}"; then
+        if ! dlv_fetch_retry "${TS_URL}" "${TS_TGZ}"; then
             err "tailscale ${TAILSCALE_VERSION} fetch failed (${TS_URL}) — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)."; exit 1
         fi
         TS_SHA="${TS_TGZ}.sha256"
