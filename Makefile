@@ -1451,6 +1451,21 @@ STACK_BRAND_B_PROFILE := $(if $(strip $(BRAND_B)),--profile brandb,) $(if $(stri
 # cloned by stack-clone. Threaded everywhere STACK_PROFILE is (see the
 # STACK_ALT_PROFILE note above for why a missed `down` strands containers).
 STACK_GAMES_PROFILE := $(if $(strip $(GAMES)),--profile games,)
+# Per-domain OWN Casdoor (issue #47): the Studio writes the (gitignored)
+# $(STACK_OWN_CASDOOR_COMPOSE) overlay — one Casdoor (+ postgres) per Domains-table
+# row whose sign-in says 'own', mirroring the proven compose.brand-b.yaml wiring on
+# host ports 8001+ — and threads OWN_CASDOOR=1 plus the multi-issuer APP_TENANCY_*
+# registry env (studio core/own_casdoor.py + core/local_stack_node.py). The -f is
+# wildcard-gated (the .theme.css persistence rule: a terminal `make stack-up` keeps
+# honouring what the Studio wrote; absent on every untouched checkout), and every
+# generated service sits behind the `own-casdoor` profile, so a stale overlay with
+# OWN_CASDOOR unset changes nothing. Down/halt/clean carry the -f + profile via
+# $(STACK_OWN_CASDOOR_DOWN_FLAGS) (the reap rule — the profile is listed there
+# unconditionally like every other profile; --profile with no matching service is
+# harmless).
+STACK_OWN_CASDOOR_COMPOSE := tests/stack/.compose.own-domains.yaml
+STACK_OWN_CASDOOR_FLAGS := $(if $(wildcard $(STACK_OWN_CASDOOR_COMPOSE)),-f $(STACK_OWN_CASDOOR_COMPOSE),) $(if $(strip $(OWN_CASDOOR)),--profile own-casdoor,)
+STACK_OWN_CASDOOR_DOWN_FLAGS := $(if $(wildcard $(STACK_OWN_CASDOOR_COMPOSE)),-f $(STACK_OWN_CASDOOR_COMPOSE),) --profile own-casdoor
 # Egress-VPN overlay: a conditional -f (NOT just a profile) because the overlay also
 # sets network_mode: service:hugmesh-egress-vpn on mastodon-sidekiq, which must not
 # be in the model at all unless EGRESS_VPN=1. The down targets pass the -f + profile
@@ -1554,12 +1569,12 @@ stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (ide
 	fi
 
 stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_EGRESS_FLAGS) build
 
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_EGRESS_FLAGS) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_EGRESS_FLAGS) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
@@ -1583,14 +1598,14 @@ stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts
 	# whole mesh, so restarting left them unable to log in, post, or open the
 	# forum until a full re-seed. Containers and images still go; only the data
 	# survives, so `make stack-up` brings the same mesh back.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn down
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down
 
 stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/rooms/accounts — use stack-halt to keep them)
 	# Every profile is listed UNCONDITIONALLY (not via the PHPBB=1/AKKOMA=1
 	# knobs): `down` must reap containers started by an EARLIER `up` whose knobs
 	# this invocation does not repeat, or `make stack-down` leaves the phpbb/
 	# akkoma containers and volumes orphaned while reporting success.
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v
 
 # stack-down PLUS the disk: the ~28 images this stack BUILT (`--rmi local` — only
 # images with no registry name, i.e. ours; never the pulled postgres/cassandra/
@@ -1602,7 +1617,7 @@ stack-down: ## stop the local stack and DROP ITS VOLUMES (destroys identity/room
 stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
 	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
 	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn down -v --rmi local --remove-orphans
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) -f $(STACK_EGRESS_COMPOSE) --profile social --profile tor --profile anubis --profile phpbb --profile akkoma --profile games --profile brandb --profile edge-ai-tts --profile media-poisoner --profile egress-vpn $(STACK_OWN_CASDOOR_DOWN_FLAGS) down -v --rmi local --remove-orphans
 	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
 	@rm -f $(STACK_M2_ENV)
 	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
@@ -1622,7 +1637,7 @@ stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (need
 	  npx playwright test -c playwright.config.ts
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_EGRESS_FLAGS) ps

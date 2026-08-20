@@ -1923,6 +1923,21 @@ def strip_platform_unsupported(cfg: "ImageConfig") -> list[str]:
     return cleared
 
 
+# ── per-domain identity-provider choice (issue #47) ──────────────────────────────
+# WHERE a domain's sign-in lives: "superdomain" (THE DEFAULT — its users sign in via
+# the mesh's central Casdoor; today's behavior byte-for-byte) or "own" (this domain
+# runs its OWN Casdoor instance, stood up per domain the way the local stack's
+# tests/stack/compose.brand-b.yaml second-Casdoor proof does — see
+# core/own_casdoor.py for the compose-lane translation). DISTINCT from the
+# node-level IDP_CHOICES axis above, which picks the MESH's central provider; this
+# is a per-row column of the superadmin Domains table. Manifest emission is
+# OMIT-WHEN-DEFAULT (absent == superdomain by definition), so a pre-#47 manifest
+# and a superdomain-only config both keep provisioning byte-identically.
+DOMAIN_IDP_SUPERDOMAIN = "superdomain"
+DOMAIN_IDP_OWN = "own"
+DOMAIN_IDP_CHOICES = (DOMAIN_IDP_SUPERDOMAIN, DOMAIN_IDP_OWN)
+
+
 @dataclass
 class Domain:
     name: str = ""
@@ -1933,6 +1948,13 @@ class Domain:
     # argv, so zero emission change; intent preserved, never silently dropped).
     images: list[str] = field(default_factory=list)
     optional_services: list[str] = field(default_factory=list)  # akkoma/tuwunel/phpbb/owncast/tor...
+    # Which Casdoor serves this domain's sign-in (DOMAIN_IDP_CHOICES, issue #47).
+    # The default rides the superdomain's central Casdoor; "own" asks cluster
+    # provisioning (via the mesh manifest) / the local compose lane
+    # (core/own_casdoor.py) to stand up a per-domain Casdoor. Absent in an old
+    # saved config/manifest == superdomain (_domain_from_dict normalizes), and
+    # both manifest emitters OMIT the default so pre-#47 bytes never change.
+    idp: str = DOMAIN_IDP_SUPERDOMAIN
 
 
 @dataclass
@@ -2266,6 +2288,15 @@ class ImageConfig:
             if "games" not in svcs:
                 svcs.append("games")
             kw["optional_services"] = svcs
+        # per-domain idp (issue #47): absent/empty — every pre-#47 config — is the
+        # superdomain default; junk fails loudly at load like the tri-states do,
+        # never silently coerced into either real choice.
+        v = kw.get("idp") or DOMAIN_IDP_SUPERDOMAIN
+        if v not in DOMAIN_IDP_CHOICES:
+            raise ValueError(
+                f"domain {kw.get('name', '')!r}: idp must be one of "
+                f"{'|'.join(DOMAIN_IDP_CHOICES)}, got {v!r}")
+        kw["idp"] = v
         return Domain(**kw)
 
     @classmethod
@@ -3522,6 +3553,13 @@ class ImageConfig:
         return "./%s -w OUT -j %d %s" % (
             self.builder_script, self.jobs, " ".join(shlex.quote(x) for x in self.to_cli_args()))
 
+    def own_idp_domains(self) -> tuple[str, ...]:
+        """Names of the domains that chose to HOST THEIR OWN Casdoor (Domain.idp ==
+        "own", issue #47), in Domains-table order — the order the compose lane's
+        port allocation (core/own_casdoor.py: 8001, 8002, …) is derived from, and
+        the k8s/ArgoCD lane's input once it lands. Empty on every pre-#47 config."""
+        return tuple(d.name for d in self.domains if d.idp == DOMAIN_IDP_OWN)
+
     # ---- superadmin mesh manifest -----------------------------------------
     def mesh_manifest(self) -> dict[str, Any]:
         """The domains + users a superadmin defined, as a portable manifest, now carrying
@@ -3529,12 +3567,20 @@ class ImageConfig:
         the SINGLE-image path; the full manifest v2 envelope ({"format":2,...,"images":[…]})
         is written once-per-worklist by the driver (WS-ENGINE). Consumed by cluster
         provisioning (Casdoor seed + per-domain config) — separate from the image
-        build, which is why it is emitted as its own artifact rather than CLI flags."""
+        build, which is why it is emitted as its own artifact rather than CLI flags.
+
+        The per-domain ``idp`` key (issue #47) is OMIT-WHEN-DEFAULT: a domain riding
+        the superdomain Casdoor emits no key at all, so a superdomain-only manifest is
+        byte-identical to before the field existed and absent == superdomain stays the
+        one backward-compatible reading for every consumer (old manifests provision
+        identically; test_domain_idp_schema.py pins the exact golden bytes)."""
         return {
             "brand": self.brand, "brand_title": self.brand_title, "org": self.org,
             "cluster_domain": self.cluster_domain,
             "superdomain": self.effective_superdomain(),
-            "domains": [asdict(d) for d in self.domains],
+            "domains": [{k: v for k, v in asdict(d).items()
+                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)}
+                        for d in self.domains],
             "users": [asdict(u) for u in self.users],
         }
 

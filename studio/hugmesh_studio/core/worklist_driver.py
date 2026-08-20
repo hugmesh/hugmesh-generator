@@ -38,7 +38,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 from .build_driver import BuildDriver
-from .config import ImageConfig, image_class
+from .config import DOMAIN_IDP_SUPERDOMAIN, ImageConfig, image_class
 from .platform_info import HostInfo, detect
 from .worklist import WorklistConfig, WorklistEntry
 
@@ -250,9 +250,15 @@ class WorklistDriver:
             "brand": base.brand, "brand_title": base.brand_title, "org": base.org,
             "cluster_domain": base.cluster_domain,
             "superdomain": base.effective_superdomain(),
+            # per-domain idp (issue #47) is OMIT-WHEN-DEFAULT, exactly like the v1
+            # shim (config.mesh_manifest): absent == superdomain for every consumer,
+            # so a superdomain-only envelope keeps its pre-#47 bytes.
             "domains": [{"name": d.name, "title": d.title,
                          "optional_services": list(d.optional_services),
-                         "images": list(d.images)} for d in base.domains],
+                         "images": list(d.images),
+                         **({"idp": d.idp}
+                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {})}
+                        for d in base.domains],
             "users": [asdict(u) for u in base.users],
             "images": images,
         }

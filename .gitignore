@@ -41,6 +41,9 @@ tests/stack/.m2-registry.env
 # Composed web-login theme CSS (Studio writes it; Makefile threads it as
 # SNAP_THEME_CSS so terminal stack-ups keep the operator's theme).
 tests/stack/.theme.css
+# Per-domain OWN-Casdoor compose overlay (issue #47; Studio core/own_casdoor.py
+# writes it, the Makefile wildcard-includes it behind the `own-casdoor` profile).
+tests/stack/.compose.own-domains.yaml
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
 # pre-minted per-persona JWTs. Runtime-only; never commit.
 tests/stack/.seed-e2e/
