@@ -380,7 +380,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         phone-plan phone-detect phone-fetch phone-flash phone-mdm-enroll phone-attest phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
-        flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
+        flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
@@ -1119,6 +1119,21 @@ qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=
 
 qemu-matrix-enumerate: ## dry-run enumerate every matrix row + its launcher/size/RAM (no boot, no build)
 	tests/qemu/run-matrix-e2e.sh --dry-run $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
+
+# 3-node emulated k8s cluster (issue #48 PR B): control-plane kubeadm init +
+# two pinned-token joins over a shared QEMU mcast L2 (launch-x86.sh --mesh-net),
+# every node behind its own per-run qcow2 overlay — the golden images are NEVER
+# written (and overlays are never committed back: `qemu-img commit` against a
+# live device silently rewrites the golden artifact). Opt-in like qemu-matrix.
+qemu-mesh: ## boot a 3-node emulated k8s cluster (opt-in; HUGMESH_QEMU_MESH=1; CP_ROLE=pki WORKER_ROLE=be IMG=…)
+	HUGMESH_QEMU_MESH=$(if $(HUGMESH_QEMU_MESH),$(HUGMESH_QEMU_MESH),1) \
+	  $(SUDO) tests/qemu/mesh-cluster.sh -w "$(WORK_DIR)" \
+	  $(if $(CP_ROLE),--cp-role $(CP_ROLE),) $(if $(WORKER_ROLE),--worker-role $(WORKER_ROLE),) \
+	  $(if $(IMG),--img "$(IMG)",)
+
+qemu-mesh-enumerate: ## plan the 3-node emulated cluster (L2 spec, MACs/IPs, ports, launcher argv; nothing boots)
+	tests/qemu/mesh-cluster.sh --dry-run \
+	  $(if $(CP_ROLE),--cp-role $(CP_ROLE),) $(if $(WORKER_ROLE),--worker-role $(WORKER_ROLE),)
 
 # SELinux AVC workout (issue #45): boot ONE image, drive the workloads
 # specs/selinux/*.te confine, harvest AVCs, and emit the narrowing report

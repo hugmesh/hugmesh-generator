@@ -2283,6 +2283,7 @@ run_nongating_smokes() {
                 "idp-builder-functions:${REPO_DIR}/tests/scripts/test-idp-builder-functions.sh" \
                 "qemu-matrix-assertions:${REPO_DIR}/tests/qemu/assertions_test.sh" \
                 "qemu-avc-workout:${REPO_DIR}/tests/qemu/avc-workout_test.sh" \
+                "qemu-mesh-cluster:${REPO_DIR}/tests/qemu/mesh-cluster_test.sh" \
                 "platform-key-spelling:${REPO_DIR}/tests/scripts/test-platform-key-spelling.sh" \
                 "host-accept-keywords:${REPO_DIR}/tests/scripts/test-host-accept-keywords.sh" \
                 "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh" \

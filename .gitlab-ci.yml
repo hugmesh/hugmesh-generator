@@ -463,6 +463,26 @@ lint:kubelet-join-bootstrap:
   script:
     - bash tests/boot/test-kubelet-join-bootstrap.sh
 
+# QEMU 3-node mesh-cluster lane (issue #48 PR B, the orchestration half on top of
+# the kubelet join fix above). NOTHING boots: qemu-system/qemu-img are PATH stubs
+# recording their argv and the orchestrator runs behind its MESH_*_CMD seams. Pins
+# launch-x86.sh's default-off --mesh-net/--mesh-mac/--mesh-id shared-L2 NIC (argv
+# effect + fail-closed validation), proves mesh-cluster.sh's wiring (CP boots
+# first, offline-minted pinned token/ca-hash consistent across all three KEYS
+# payloads, distinct MACs/forwards, SKIP + --dry-run gating, join/registration
+# failures fail the run), pins that no live line ever runs `qemu-img commit` (an
+# overlay committed back silently rewrites the GOLDEN image), and carries staged
+# regressions that must each turn a leg red. openssl mints/verifies the throwaway
+# cluster CA; openssh supplies ssh-keygen for the login-key payload.
+lint:qemu-mesh-cluster:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash openssl openssh
+  script:
+    - bash tests/qemu/mesh-cluster_test.sh
+
 # ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
 # image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE
 # SITS IN: the root app-of-apps recurses specs/cluster/apps, so moving
