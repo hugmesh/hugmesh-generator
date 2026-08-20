@@ -1366,7 +1366,6 @@ PUBLIC_HTTPS_PORT ?= 8488
 # stack-certs` (gen-certs.sh), gitignored. NOT tests/stack/certs: those are
 # committed mock-stack fixtures whose CA key is public in the repo.
 STACK_TLS_DIR   := tests/stack/.tls-front
-# TODO(org-move): legacy GitHub org — see docs/ORG-MOVE-TODO.md.
 GIT_BASE        ?= https://github.com/hugmesh
 GIT_REF         ?= main
 SOCIAL          ?=
