@@ -3670,9 +3670,16 @@ if ! ${ROLE_CLIENT}; then
         chmod +x "${SYSROOT}/etc/init.d/${svc}"
     done
 fi
-# firewalld installs /etc/init.d/firewalld; alias 'firewall' so the `after firewall`
-# deps in tailscaled/kubelet/headscale/containerd/egress-vpn still resolve.
-ln -sfn firewalld "${SYSROOT}/etc/init.d/firewall"
+# NO 'firewall' alias for firewalld. 'firewall' is an OpenRC VIRTUAL; a real
+# /etc/init.d/firewall symlink on top of it made first boot print "Error:
+# firewall is the name of a real and virtual service." and corrupted
+# dependency-cache generation (see build-x86-host-stage4.sh for the full story).
+# On THIS builder the old alias was additionally DANGLING: net-firewall/firewalld
+# is a deliberate exclusion on ARM (tests/requested-atoms-resolvable.sh) — the
+# nftables backstop (hugmesh-firewall-reconcile) owns the host firewall. The
+# `after firewall` deps in the specs init scripts target the virtual and are
+# soft edges, so they need no alias. Never symlink a real service onto a
+# virtual name (gate: tests/no-openrc-virtual-shadow.sh).
 # Bake ENV-appropriate firewalld config: prod = hardened (DefaultZone=drop, tailscale0-only
 # via trusted.xml), test = permissive (DefaultZone=trusted) so CI harnesses can connect
 # without a tailnet.
@@ -3929,7 +3936,10 @@ fi
 mkdir -p "${SYSROOT}/etc/runlevels/default"
 # growroot expands the root fs to fill the medium on first boot; it orders itself
 # before keys-provision so provisioning sees the full disk (no-op in containers).
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall auditd local)
+# NOTE: no 'firewall' entry — that name is an OpenRC virtual and firewalld is a
+# deliberate ARM exclusion anyway (the old unconditional entry was DANGLING);
+# hugmesh-firewall-reconcile (nftables, cluster roles below) owns the firewall.
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local)
 if ! ${ROLE_CLIENT}; then
     # hugmesh-firewall-reconcile's files are only ever baked for cluster-node
     # roles (bake_host_firewall() is called from inside the `! ROLE_CLIENT &&
@@ -4228,7 +4238,8 @@ info "Stage4 payload verified (${_payload_bins[*]})"
 # net-firewall/firewalld" (a glib[introspection] USE conflict), the very next
 # assert printed "Stage4 payload verified (...)" (pki log line 3817), and all
 # three .img.xz artifacts shipped with NO firewall plus a dangling 'firewall'
-# runlevel entry (DEFAULT_SVCS below enables it unconditionally). So: every
+# runlevel entry (DEFAULT_SVCS enabled that alias unconditionally back then;
+# the alias itself is gone now — it shadowed the OpenRC virtual). So: every
 # atom we asked for must be in the TARGET sysroot's vdb — cross_emerge() merges
 # with ROOT="${SYSROOT}", so that is the vdb the gate queries (never the
 # host's). The kernel tier (sys-kernel/raspberrypi-sources) fails the build
