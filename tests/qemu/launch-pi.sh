@@ -64,6 +64,17 @@ FOREGROUND=false               # -nographic in the foreground instead of -daemon
 EXTRA_APPEND=""                # extra kernel cmdline appended verbatim
 KEYS_IMG=""                    # optional FAT32 "KEYS" disk (provisioning tests)
 QMP_SOCK=""                    # optional QMP unix socket (--qmp); empty keeps -monitor none
+# ── Mesh (multi-node) L2 — issue #48, parity with launch-x86.sh, all default-off ─
+# --mesh-net attaches a SECOND virtio NIC on a shared QEMU socket L2 so several
+# emulated nodes see each other (kubeadm init + joins); the slirp user NIC above
+# is untouched. Without --mesh-net the QEMU argv stays byte-identical. Spelled
+# character-for-character as launch-x86.sh's landed block on purpose: one flag
+# name, one SPEC grammar and one MAC rule across all three launchers, so
+# mesh-cluster.sh and run-qemu-docker.sh can drive a mixed-arch mesh without
+# knowing which launcher a row lands on.
+MESH_NET=""                    # ADDR:PORT (mcast) | mcast=A:P | listen=H:P | connect=H:P
+MESH_MAC=""                    # explicit MAC for the mesh NIC (unique per node on the L2)
+MESH_ID=""                     # small node index 1..255 deriving the default MAC
 
 usage() {
 cat <<EOF
@@ -89,6 +100,17 @@ QEMU / guest:
       --append STR     Extra kernel cmdline (appended verbatim).
       --overlay-size SZ  qcow2 overlay size (qemu-img resize). Default: ${OVERLAY_SIZE}
       --run-dir DIR    Scratch dir for overlay/pidfile/console. Default: <work>/qemu-run-pi
+
+Mesh (multi-node) networking — issue #48; all default-off:
+      --mesh-net SPEC  Attach a SECOND virtio NIC on a shared QEMU socket L2 so
+                       emulated nodes see each other. SPEC: ADDR:PORT (UDP
+                       multicast, the n-node form — same SPEC on every node),
+                       or an explicit mcast=A:P / listen=H:P / connect=H:P
+                       (2-node point-to-point socket). The slirp user NIC and
+                       its hostfwds are untouched.
+      --mesh-mac MAC   MAC for the mesh NIC (must be unique per node on the L2).
+      --mesh-id N      Node index 1..255 deriving the default MAC
+                       52:54:00:6d:65:NN. Give --mesh-mac OR --mesh-id, not both.
 
 Port forwards (host -> guest):
       --ssh-port PORT  host -> guest 22.   Default: ${SSH_PORT}
@@ -136,6 +158,9 @@ while [[ $# -gt 0 ]]; do
         --hs-port)         HS_PORT="$2"; shift 2 ;;
         -t|--timeout)      TIMEOUT="$2"; shift 2 ;;
         --keys-img)        KEYS_IMG="$2"; shift 2 ;;
+        --mesh-net)        MESH_NET="$2"; shift 2 ;;
+        --mesh-mac)        MESH_MAC="$2"; shift 2 ;;
+        --mesh-id)         MESH_ID="$2"; shift 2 ;;
         --qmp)             QMP_SOCK="$2"; shift 2 ;;
         --foreground)      FOREGROUND=true; shift ;;
         --keep)            KEEP=true; shift ;;
@@ -264,6 +289,47 @@ if [ -n "${KEYS_IMG}" ]; then
     QEMU_ARGS+=(-drive "file=${KEYS_IMG},format=raw,if=none,id=keys,readonly=on"
                 -device virtio-blk-pci,drive=keys)
     info "keys   : ${KEYS_IMG} (attached as a virtio KEYS disk)"
+fi
+# Optional shared mesh L2 (issue #48) — a SECOND virtio NIC on a QEMU socket
+# netdev so several emulated nodes form one broadcast domain (kubeadm init on one
+# node, kubeadm join from the others; tests/qemu/mesh-cluster.sh is the 3-node
+# driver and run-qemu-docker.sh --mesh-net the containerized fleet lane). The
+# UDP-multicast form needs NO listener ordering: every node passes the SAME
+# ADDR:PORT and joins the group; listen=/connect= is the 2-node point-to-point
+# socket alternative. The slirp NIC keeps its hostfwds, so per-node SSH/API
+# forwards keep working unchanged. Default-off: without --mesh-net the QEMU argv
+# is byte-identical to before these flags existed. Identical to launch-x86.sh's
+# block — mixed-arch meshes need the arches to agree flag for flag.
+if [ -z "${MESH_NET}" ]; then
+    [ -z "${MESH_MAC}" ] && [ -z "${MESH_ID}" ] \
+        || die "--mesh-mac/--mesh-id make no sense without --mesh-net"
+else
+    case "${MESH_NET}" in
+        mcast=*:*|listen=*:*|connect=*:*) MESH_NETDEV="socket,id=mesh0,${MESH_NET}" ;;
+        *=*) die "--mesh-net mode must be mcast=/listen=/connect= (got: ${MESH_NET})" ;;
+        *:*) MESH_NETDEV="socket,id=mesh0,mcast=${MESH_NET}" ;;
+        *)   die "--mesh-net wants ADDR:PORT (mcast) or mcast=A:P/listen=H:P/connect=H:P (got: ${MESH_NET})" ;;
+    esac
+    [ -n "${MESH_MAC}" ] && [ -n "${MESH_ID}" ] \
+        && die "give --mesh-mac OR --mesh-id, not both"
+    if [ -z "${MESH_MAC}" ]; then
+        # Derive a stable locally-administered unicast MAC from the node index
+        # (52:54:00 is the QEMU OUI; 6d:65 = "me" for mesh). Two nodes sharing a
+        # MAC on the same L2 silently black-hole each other's frames, so the
+        # driver hands every node a distinct --mesh-id.
+        _mid="${MESH_ID:-1}"
+        [[ "${_mid}" =~ ^[0-9]+$ ]] && [ "${_mid}" -ge 1 ] && [ "${_mid}" -le 255 ] \
+            || die "--mesh-id must be an integer 1..255 (got: ${MESH_ID})"
+        MESH_MAC="$(printf '52:54:00:6d:65:%02x' "${_mid}")"
+    fi
+    [[ "${MESH_MAC}" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] \
+        || die "--mesh-mac is not a MAC address: ${MESH_MAC}"
+    # A multicast/broadcast MAC (odd first octet) is not a valid NIC address.
+    [ $(( 0x${MESH_MAC%%:*} & 1 )) -eq 0 ] \
+        || die "--mesh-mac ${MESH_MAC} is a multicast MAC (first octet must be even)"
+    QEMU_ARGS+=(-netdev "${MESH_NETDEV}"
+                -device "virtio-net-pci,netdev=mesh0,mac=${MESH_MAC}")
+    info "mesh   : ${MESH_NETDEV} mac=${MESH_MAC} (shared L2 — emulated nodes see each other)"
 fi
 # Optional QMP control socket. Without --qmp nothing changes: the daemonized
 # launch below still passes -monitor none, so a booted guest cannot be steered at

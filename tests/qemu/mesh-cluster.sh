@@ -41,8 +41,13 @@
 # Phases (issue #48 design comment): this driver is execution phase 2 — a LAN
 # cluster over the shared L2 with a pinned-token join, headscale/tailscale OFF.
 # Phase 3 (mesh-faithful: headscale + MagicDNS + reusable preauth key) layers a
-# different KEYS payload on the same launch plumbing. x86-only for now; the Pi/
-# ARM launchers gain --mesh-net when the campaign needs mixed-arch clusters.
+# different KEYS payload on the same launch plumbing. This driver boots x86 rows;
+# launch-pi.sh and launch-arm.sh now carry the SAME --mesh-net/--mesh-mac flags
+# (byte-for-byte the same block), so a mixed-arch cluster is a launcher choice
+# rather than a missing feature. The containerized fleet lane —
+# run-qemu-docker.sh --keep-alive --mesh-net — puts the same L2 under registry-
+# visible devices; both take their addresses from the SAME planner identity file
+# (--identities, below).
 #
 # Hermetic-test seams (mirrors avc-workout.sh's AVC_*_CMD):
 #   MESH_LAUNCH_CMD  replaces `bash launch-x86.sh` (argv appended verbatim)
@@ -70,6 +75,17 @@ MEM=""                         # empty = launcher default
 SMP=""
 MESH_NET="239.118.72.1:47301"  # shared UDP-mcast L2 every node joins (--mesh-net SPEC)
 SUBNET_PREFIX="10.87.72"       # static /24 for the mesh NICs; nodes get .11/.12/.13
+PREFIX_LEN="24"                # /N for the nmconnection addresses
+# ── The identity file (optional; the planner is the ONE source) ──────────────
+# With --identities, MACs / IPs / the L2 SPEC come from
+# studio/hugmesh_studio/core/mesh_emulation.py's plan instead of the built-in
+# table below, so a node this driver boots carries the SAME address the Studio,
+# the device registry and run-qemu-docker.sh's fleet lane show for it. WITHOUT
+# the flag nothing here changes: the defaults above stand and `make qemu-mesh`
+# behaves exactly as it did before the flag existed (pinned in mesh-cluster_test.sh).
+IDENTITIES=""
+MESH_NET_SET=false             # did the OPERATOR spell --mesh-net? (then it wins)
+SUBNET_PREFIX_SET=false
 SSH_USER="tester"
 TIMEOUT="2700"                 # per-node boot -> console-marker budget (TCG is slow)
 JOIN_TIMEOUT="900"             # kubectl node-registration budget after all joins
@@ -97,6 +113,13 @@ Usage: $0 [OPTIONS]
   -m, --mem MB / --smp N   forwarded to the launcher when set
       --mesh-net SPEC  shared L2 spec (launch-x86.sh --mesh-net). Default: ${MESH_NET}
       --subnet-prefix P  /24 prefix for the static mesh IPs. Default: ${SUBNET_PREFIX}
+      --identities FILE  take the nodes' MAC/IP/L2 from the planner's identity
+                       file (the ONE identity source) instead of the built-in
+                       table. Mint one with:
+                         PYTHONPATH=studio python3 -m \\
+                           hugmesh_studio.core.mesh_emulation identities --out FILE
+                       An explicit --mesh-net/--subnet-prefix still wins over it.
+                       Omitted: every default above stands, unchanged.
       --ssh-user U   login the KEYS payloads create. Default: ${SSH_USER}
   -t, --timeout SEC  per-node boot->marker budget. Default: ${TIMEOUT}
       --join-timeout SEC  kubectl registration budget. Default: ${JOIN_TIMEOUT}
@@ -118,8 +141,9 @@ while [[ $# -gt 0 ]]; do
         --run-dir)        RUN_DIR="$2"; shift 2 ;;
         -m|--mem)         MEM="$2"; shift 2 ;;
         --smp)            SMP="$2"; shift 2 ;;
-        --mesh-net)       MESH_NET="$2"; shift 2 ;;
-        --subnet-prefix)  SUBNET_PREFIX="$2"; shift 2 ;;
+        --mesh-net)       MESH_NET="$2"; MESH_NET_SET=true; shift 2 ;;
+        --subnet-prefix)  SUBNET_PREFIX="$2"; SUBNET_PREFIX_SET=true; shift 2 ;;
+        --identities)     IDENTITIES="$2"; shift 2 ;;
         --ssh-user)       SSH_USER="$2"; shift 2 ;;
         -t|--timeout)     TIMEOUT="$2"; shift 2 ;;
         --join-timeout)   JOIN_TIMEOUT="$2"; shift 2 ;;
@@ -143,20 +167,81 @@ die()  { echo "${RED}[mesh-cluster] ERROR:${RST} $*" >&2; exit 1; }
 NODE_KIND=(cp worker worker)
 node_role()     { [ "$1" -eq 1 ] && echo "${CP_ROLE}" || echo "${WORKER_ROLE}"; }
 node_img()      { if [ "$1" -eq 1 ]; then echo "${CP_IMG:-${IMG}}"; else echo "${WORKER_IMG:-${IMG}}"; fi; }
-node_mac()      { printf '52:54:00:6d:65:%02x' "$1"; }
-node_ip()       { echo "${SUBNET_PREFIX}.$((10 + $1))"; }
 node_hostname() { if [ "$1" -eq 1 ]; then echo "hugmesh-mesh-cp"; else echo "hugmesh-mesh-w$1"; fi; }
 node_dir()      { echo "${RUN_DIR}/node$1-${NODE_KIND[$(( $1 - 1 ))]}"; }
 node_ssh_port() { echo "$((SSH_BASE + $1))"; }
+
+# ── Identities: the planner's file when given, this table otherwise ──────────
+# IDENT_* are EMPTY unless --identities loaded them, and node_mac/node_ip fall
+# straight back to the built-in derivation when they are — that fallback is what
+# keeps a flagless run byte-identical to the landed driver.
+IDENT_LABEL=(); IDENT_MAC=(); IDENT_IP=()
+node_mac()      { if [ -n "${IDENT_MAC[$1]:-}" ]; then printf '%s' "${IDENT_MAC[$1]}"
+                  else printf '52:54:00:6d:65:%02x' "$1"; fi; }
+node_ip()       { if [ -n "${IDENT_IP[$1]:-}" ]; then printf '%s' "${IDENT_IP[$1]}"
+                  else echo "${SUBNET_PREFIX}.$((10 + $1))"; fi; }
+node_label()    { printf '%s' "${IDENT_LABEL[$1]:-node$1}"; }
+
+# Read the planner's identity file into IDENT_*, through the reader BOTH mesh
+# lanes share (tests/qemu/mesh-identities.sh — it also documents the file's
+# shape and the two spellings it accepts). What stays here is this driver's own
+# policy: exactly three nodes, all on one wire, all with one mask.
+# Spelled as an `if`, not `[ -f ] && . || die`: that list would also fire the die
+# when the sourced file's LAST command returned non-zero, i.e. blame a missing
+# file for something else entirely.
+if [ -f "${SCRIPT_DIR}/mesh-identities.sh" ]; then
+    # shellcheck source=tests/qemu/mesh-identities.sh
+    . "${SCRIPT_DIR}/mesh-identities.sh"
+else
+    die "missing ${SCRIPT_DIR}/mesh-identities.sh (the identity-file reader)"
+fi
+
+load_identities() { # <file>
+    local f="$1" i=0 label mac ip plen net first_net="" first_plen="" why lines
+    # Read the whole file before believing any of it, and NOT through a pipe:
+    # a pipe would hide the reader's exit status and run this loop in a subshell,
+    # where every IDENT_* assignment would vanish.
+    lines="$(mesh_identity_lines "${f}")" \
+        || die "--identities ${f} is not usable (see the reason above)"
+    [ -n "${lines}" ] || die "--identities ${f}: no usable rows"
+    while IFS='|' read -r label mac ip plen net; do
+        [ -n "${label}${mac}" ] || continue
+        i=$((i + 1))
+        why="$(mesh_identity_check_row "${label}" "${mac}" "${ip}" "${plen}")" \
+            || die "identities row ${i}: ${why}"
+        [ -n "${first_net}" ]  || first_net="${net}"
+        [ -n "${first_plen}" ] || first_plen="${plen}"
+        [ "${net}" = "${first_net}" ] \
+            || die "identities row ${i} (${label}): mesh_net '${net}' differs from '${first_net}' — the nodes would not share one L2"
+        [ "${plen}" = "${first_plen}" ] \
+            || die "identities row ${i} (${label}): prefix_len ${plen} differs from ${first_plen} — one subnet, one mask"
+        IDENT_LABEL[${i}]="${label}"; IDENT_MAC[${i}]="${mac}"; IDENT_IP[${i}]="${ip}"
+        [ "${i}" -ge 3 ] && break      # this driver is a 3-node cluster
+    done <<< "${lines}"
+    [ "${i}" -ge 3 ] || die "--identities ${f} describes ${i} device(s); this driver boots 3"
+    # The file's L2 and prefix win over the built-in defaults, but never over an
+    # operator who spelled the flag on THIS command line.
+    if ! ${MESH_NET_SET} && [ -n "${first_net}" ]; then MESH_NET="${first_net}"; fi
+    PREFIX_LEN="${first_plen}"
+    if ! ${SUBNET_PREFIX_SET}; then SUBNET_PREFIX="${IDENT_IP[1]%.*}"; fi
+    info "identities: ${f} — $(node_label 1), $(node_label 2), $(node_label 3) on ${MESH_NET}"
+}
+[ -z "${IDENTITIES}" ] || load_identities "${IDENTITIES}"
+
 CP_IP=""        # resolved below once (node_ip 1)
 CP_IP="$(node_ip 1)"
 
 # ── Dry-run: the ALWAYS-green plan (no root, no boot, no keys, no secrets) ───
 if ${DRY_RUN}; then
-    echo "mesh-cluster PLAN (3 nodes, shared L2 ${MESH_NET}, subnet ${SUBNET_PREFIX}.0/24) — no boot, no build, no keys"
+    echo "mesh-cluster PLAN (3 nodes, shared L2 ${MESH_NET}, subnet ${SUBNET_PREFIX}.0/${PREFIX_LEN}) — no boot, no build, no keys"
+    if [ -n "${IDENTITIES}" ]; then
+        echo "identities: ${IDENTITIES} (the planner's file — one identity source)"
+    else
+        echo "identities: built-in table (pass --identities FILE for the planner's)"
+    fi
     for i in 1 2 3; do
         kind="${NODE_KIND[$((i - 1))]}"
-        printf 'NODE %d %-6s role=%-8s hostname=%-16s mac=%s ip=%s/24 ssh=%s ui=%s http=%s api=%s hs=%s\n' \
+        printf 'NODE %d %-6s role=%-8s hostname=%-16s mac=%s ip=%s/'"${PREFIX_LEN}"' ssh=%s ui=%s http=%s api=%s hs=%s\n' \
             "${i}" "${kind}" "$(node_role "${i}")" "$(node_hostname "${i}")" \
             "$(node_mac "${i}")" "$(node_ip "${i}")" \
             "$(node_ssh_port "${i}")" "$((UI_BASE + i))" "$((HTTP_BASE + i))" \
@@ -187,7 +272,7 @@ command -v openssl >/dev/null 2>&1 || die "missing openssl (needed to mint the o
 [ -n "${RUN_DIR}" ] || RUN_DIR="${REPO_DIR}/out/qemu-runs/mesh/$(date -u '+%Y%m%dT%H%M%SZ')"
 mkdir -p "${RUN_DIR}" || die "cannot create run dir ${RUN_DIR}"
 info "run dir : ${RUN_DIR}"
-info "mesh L2 : ${MESH_NET} (subnet ${SUBNET_PREFIX}.0/24; cp=${CP_IP})"
+info "mesh L2 : ${MESH_NET} (subnet ${SUBNET_PREFIX}.0/${PREFIX_LEN}; cp=${CP_IP})"
 
 # ── 1. Offline cluster secrets: CA + pinned token + ca-cert hash ─────────────
 # The CA is installed on the CP via KEYS/kubernetes/pki (provision.sh copies it
@@ -256,7 +341,7 @@ mac-address=$2
 
 [ipv4]
 method=manual
-address1=$3/24
+address1=$3/${PREFIX_LEN}
 never-default=true
 
 [ipv6]

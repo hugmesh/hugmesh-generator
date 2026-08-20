@@ -109,6 +109,23 @@ SSH_HOST_PORT="${SSH_HOST_PORT:-0}"
 # tells us the name we record the empty string and warn — visibly wrong beats
 # plausibly wrong.
 CONTAINER_NAME="${CONTAINER_NAME:-}"
+# ── Mesh identity (issue #48 phase 4) — the shared-L2 lane, default-off ──────
+# run-qemu-docker.sh --mesh-net hands these down one row at a time from the
+# PLANNER's identity file (studio/hugmesh_studio/core/mesh_emulation.py
+# identities): MESH_NET is the L2 SPEC every device of one session shares, and
+# MESH_MAC/MESH_IP are THIS device's identity on it. Set => a second virtio NIC
+# on that L2 (launch-*.sh --mesh-net/--mesh-mac) plus a KEYS network profile
+# binding the address to that MAC, exactly as mesh-cluster.sh does it. Unset =>
+# not one byte of the launcher argv or the KEYS payload changes.
+#
+# Nothing is DERIVED here on purpose. An identity invented in this container
+# would be a second source of MACs, and two devices minting the same MAC on one
+# wire black-hole each other's frames — so an incomplete identity is refused
+# below rather than completed with a guess.
+MESH_NET="${MESH_NET:-}"
+MESH_MAC="${MESH_MAC:-}"
+MESH_IP="${MESH_IP:-}"
+MESH_PREFIX_LEN="${MESH_PREFIX_LEN:-24}"
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; RST=$'\033[0m'
 info() { echo "${GREEN}[qemu-docker]${RST} $*"; }
@@ -163,6 +180,18 @@ Interactive devices (golden mode only; everything below is off by default):
   --qmp PATH       qemu QMP unix socket, passed through to the launcher.
                    Implied by --keep-alive; without either, qemu keeps
                    -monitor none and the launcher argv is unchanged.
+
+Mesh L2 (issue #48 phase 4; all default-off, all from the planner's identity
+file — this container never invents an identity):
+  --mesh-net SPEC  shared L2 for a SECOND virtio NIC (launch-*.sh --mesh-net):
+                   ADDR:PORT (UDP multicast) or mcast=/listen=/connect=.
+                   Env: MESH_NET. Requires --mesh-mac AND --mesh-ip.
+  --mesh-mac MAC   this device's MAC on that L2. Env: MESH_MAC.
+  --mesh-ip ADDR   this device's static IPv4 on that L2 — written into
+                   KEYS/network/mesh0.nmconnection bound to the MAC above
+                   (the L2 has no DHCP). Env: MESH_IP.
+  --mesh-prefix-len N   prefix length for that address. Default: ${MESH_PREFIX_LEN}.
+                   Env: MESH_PREFIX_LEN.
 EOF
 exit "${1:-0}"
 }
@@ -188,6 +217,10 @@ while [[ $# -gt 0 ]]; do
         --ssh-host-port) SSH_HOST_PORT="$2"; shift 2 ;;
         --container)     CONTAINER_NAME="$2"; shift 2 ;;
         --qmp)           QMP_SOCK="$2"; shift 2 ;;
+        --mesh-net)      MESH_NET="$2"; shift 2 ;;
+        --mesh-mac)      MESH_MAC="$2"; shift 2 ;;
+        --mesh-ip)       MESH_IP="$2"; shift 2 ;;
+        --mesh-prefix-len) MESH_PREFIX_LEN="$2"; shift 2 ;;
         -h|--help)  usage 0 ;;
         *)          echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -288,6 +321,18 @@ json_str() {
 
 # write_device_record STATE — booting|running|assertions|stopped
 #
+# "mesh_net"/"mesh_mac"/"mesh_ip" are this device's ADDRESS on the shared L2, and
+# they are always present — empty strings on a device with no mesh, so a reader
+# never has to tell "this writer is too old to know" from "this device is not on
+# a mesh". They are what lets the registry answer "where is this device
+# reachable from its peers", which the ssh_host_port cannot: that port is a
+# loopback forward on the workstation, invisible to the other guests. Recorded
+# verbatim from the planner's identity file; nothing here derives them. Spelled
+# with :- because this function is EXTRACTED and driven on its own by
+# tests/qemu/verdict_test.sh under `set -u`, where only the fields that harness
+# names exist — a bare ${MESH_NET} there aborts mid-heredoc and the record it
+# writes is truncated JSON, i.e. no record at all.
+#
 # "artifacts" and "image" are the per-device START contract: together with
 # "label" they are everything a restarter needs to boot this row again —
 # `run-qemu-docker.sh --artifacts <artifacts> --only-exact <label>`. "image" is
@@ -336,6 +381,9 @@ write_device_record() {
   "qmp": $(json_str "$(host_path "${QMP_SOCK}")"),
   "artifacts": $(json_str "$(host_path "${ARTIFACTS}")"),
   "image": $(json_str "$(basename "${IMG}")"),
+  "mesh_net": $(json_str "${MESH_NET:-}"),
+  "mesh_mac": $(json_str "${MESH_MAC:-}"),
+  "mesh_ip": $(json_str "${MESH_IP:-}"),
   "state": $(json_str "${state}"),
   "started_at": $(json_str "${STARTED_AT}")
 }
@@ -402,6 +450,32 @@ EOF
 SSH_HOST_PORT=$((10#${SSH_HOST_PORT}))
 [ "${SSH_HOST_PORT}" -le 65535 ] \
     || die "--ssh-host-port must be 0-65535, got '${SSH_HOST_PORT}'"
+
+# ── Mesh identity: all three parts, or none ─────────────────────────────────
+# Validated HERE, before anything is built or booted, and fail-closed in both
+# directions. A half-identity is the dangerous case: a mesh NIC with no static
+# address sits mute on a wire with no DHCP (the guest looks up but is
+# unreachable), and an address with no NIC is a profile bound to a MAC that
+# never appears. Refusing costs one ERROR row; guessing costs a mesh that is
+# silently half-connected.
+if [ -z "${MESH_NET}" ]; then
+    [ -z "${MESH_MAC}" ] && [ -z "${MESH_IP}" ] \
+        || die "--mesh-mac/--mesh-ip make no sense without --mesh-net"
+else
+    [ -n "${MESH_MAC}" ] && [ -n "${MESH_IP}" ] \
+        || die "--mesh-net needs BOTH --mesh-mac and --mesh-ip (the planner's identity file carries them together); got mac='${MESH_MAC}' ip='${MESH_IP}'"
+    [[ "${MESH_MAC}" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] \
+        || die "--mesh-mac is not a MAC address: ${MESH_MAC}"
+    # Odd first octet = a multicast MAC, which is not a valid NIC address (same
+    # rule the launchers apply, applied before the launcher is even reached).
+    [ $(( 0x${MESH_MAC%%:*} & 1 )) -eq 0 ] \
+        || die "--mesh-mac ${MESH_MAC} is a multicast MAC (first octet must be even)"
+    [[ "${MESH_IP}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] \
+        || die "--mesh-ip is not an IPv4 address: ${MESH_IP}"
+    [[ "${MESH_PREFIX_LEN}" =~ ^[0-9]+$ ]] \
+        && [ "${MESH_PREFIX_LEN}" -ge 8 ] && [ "${MESH_PREFIX_LEN}" -le 30 ] \
+        || die "--mesh-prefix-len must be 8..30, got '${MESH_PREFIX_LEN}'"
+fi
 
 # ── Which logins will exist on the guest ────────────────────────────────────
 # Checked here, next to the other argv checks, because an --extra-user name is
@@ -728,6 +802,44 @@ cat > "${KEYS_SRC}/provision.json" <<EOF
 }
 EOF
 
+# The mesh NIC's static address, as a NetworkManager keyfile on the KEYS stick.
+# provision_network() copies KEYS/network/*.nmconnection verbatim, so this is the
+# same technique mesh-cluster.sh proved on the 3-node lane, and every line of it
+# is load-bearing:
+#   * the shared L2 carries NO DHCP — nothing on that wire answers — so the
+#     address has to be manual, or the NIC comes up with none at all;
+#   * the profile is bound to the mesh MAC rather than to an interface NAME:
+#     which of the two virtio NICs enumerates first is a PCI-order accident, and
+#     binding by MAC means the address lands on the mesh NIC either way;
+#   * never-default=true keeps the SLIRP NIC's default route. That is what
+#     protects this container's published ssh (and the UI forward): the guest
+#     answers hostfwd traffic over the user-net, and a mesh NIC that stole the
+#     default route would send those replies onto a wire the host is not on.
+# Written only when a mesh identity was given: without one the payload directory
+# has no network/ subdir at all, exactly as before.
+if [ -n "${MESH_NET}" ]; then
+    mkdir -p "${KEYS_SRC}/network"
+    cat > "${KEYS_SRC}/network/mesh0.nmconnection" <<EOF
+[connection]
+id=mesh0
+type=ethernet
+autoconnect=true
+autoconnect-priority=20
+
+[802-3-ethernet]
+mac-address=${MESH_MAC}
+
+[ipv4]
+method=manual
+address1=${MESH_IP}/${MESH_PREFIX_LEN}
+never-default=true
+
+[ipv6]
+method=disabled
+EOF
+    info "mesh   : ${MESH_NET} mac=${MESH_MAC} ip=${MESH_IP}/${MESH_PREFIX_LEN} (static profile on the KEYS stick)"
+fi
+
 KEYS_IMG="${RUN_DIR}/keys.img"
 bash "${QEMU_DIR}/make-test-keys.sh" "${KEYS_SRC}" "${KEYS_IMG}" 64 \
     || die "make-test-keys.sh failed"
@@ -765,7 +877,8 @@ case "${PLATFORM}" in
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
-            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     x86)
@@ -776,7 +889,8 @@ case "${PLATFORM}" in
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
-            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
     *)
@@ -786,7 +900,8 @@ case "${PLATFORM}" in
             --run-dir "${LAUNCH_RUN_DIR}" --keep \
             --mem "${MEM}" --smp "${SMP}" \
             --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" \
-            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} 2>&1 | tee "${RUN_DIR}/launch.log"
+            --timeout "${TIMEOUT}" ${QMP_SOCK:+--qmp "${QMP_SOCK}"} \
+            ${MESH_NET:+--mesh-net "${MESH_NET}"} ${MESH_MAC:+--mesh-mac "${MESH_MAC}"} 2>&1 | tee "${RUN_DIR}/launch.log"
         lrc=${PIPESTATUS[0]}
         ;;
 esac

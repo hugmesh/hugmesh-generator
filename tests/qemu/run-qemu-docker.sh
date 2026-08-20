@@ -120,6 +120,27 @@ LIST_ONLY=false
 FORCE_BUILD=false
 KEEP=false
 KEEP_ALIVE=false
+# ── Shared-L2 mesh lane (issue #48 phase 4) — --keep-alive only, default-off ──
+# A fleet of keep-alive devices is a fleet of ISLANDS today: each guest sits
+# behind its own slirp user-net, every one of them believing it is 10.0.2.15,
+# with no path to any other. --mesh-net gives the fleet a second NIC on ONE
+# broadcast domain, so the emulated mesh can actually form a cluster.
+#
+# Two things are needed and neither is invented here:
+#   * the L2 itself — a per-session docker BRIDGE network every device
+#     container joins. Containers on one bridge share an L2, which is what makes
+#     QEMU's UDP-multicast socket netdev reach the other guests at all;
+#   * the identities — MAC and static IP per row, from the PLANNER's identity
+#     file (studio/hugmesh_studio/core/mesh_emulation.py identities). One source
+#     of identities, so the address the Studio shows is the address the guest
+#     configures.
+MESH_NET=""                    # SPEC (ADDR:PORT|mcast=|listen=|connect=) or "auto"
+IDENTITIES=""                  # the planner's identity file
+# Per-session bridge name. Prefixed like the containers, and for the same
+# reason: it is the ONLY test that decides whether this script may delete a
+# docker network, and the operator's live stack has networks of its own.
+MESH_NAME_PREFIX="hugmesh-qemu-mesh-"
+MESH_NET_NAME=""               # resolved from the session hash at start time
 # Extra wheel logins to add to the guest payload. Empty by default so a run with
 # no --extra-user forwards nothing and the payload stays exactly what it is today.
 EXTRA_USERS=()
@@ -230,6 +251,22 @@ Usage: $0 [OPTIONS]
                     these logins plus 'sudo -i'.
   -h, --help
 
+Shared-L2 mesh (--keep-alive only; both flags off by default, and a run without
+them starts exactly the containers it always did):
+  --mesh-net SPEC   put every device on ONE shared L2 so the guests can reach
+                    each other: a per-session docker bridge network joins the
+                    containers, and each guest gets a second virtio NIC on a
+                    QEMU socket netdev over it. SPEC is the launchers' own
+                    grammar (ADDR:PORT multicast, or mcast=/listen=/connect=),
+                    or 'auto' to take the SPEC from the identity file. The
+                    bridge is created idempotently and removed by
+                    --stop-all-devices once its last member is gone.
+  --identities FILE the planner's identity file — the ONE source of the fleet's
+                    MACs and IPs. Required by --mesh-net (this script never
+                    mints an identity of its own). Mint it with:
+                      PYTHONPATH=studio python3 -m \\
+                        hugmesh_studio.core.mesh_emulation identities --out FILE
+
 Device subcommands. These boot, build and decompress NOTHING, and are safe to
 run while a matrix or a set of devices is up:
   --devices             print the device registry as one JSON array, then exit
@@ -287,6 +324,10 @@ while [[ $# -gt 0 ]]; do
         # shell's problem rather than the operator's.
         --extra-user)   [ $# -ge 2 ] || { echo "--extra-user needs a login name" >&2; usage 1; }
                         EXTRA_USERS+=("$2"); shift 2 ;;
+        --mesh-net)     [ $# -ge 2 ] || { echo "--mesh-net needs a SPEC (ADDR:PORT, mcast=/listen=/connect=, or 'auto')" >&2; usage 1; }
+                        MESH_NET="$2"; shift 2 ;;
+        --identities)   [ $# -ge 2 ] || { echo "--identities needs a path to the planner's identity file" >&2; usage 1; }
+                        IDENTITIES="$2"; shift 2 ;;
         --devices)          DEV_ACTION="devices"; shift ;;
         --stop-device)      [ $# -ge 2 ] || { echo "--stop-device needs a device label" >&2; usage 1; }
                             DEV_ACTION="stop"; DEV_LABEL="$2"; shift 2 ;;
@@ -337,6 +378,84 @@ for _u in "${EXTRA_USERS[@]}"; do
         || die "--extra-user must be a valid unix login (^[a-z_][a-z0-9_-]*$), got '${_u}'"
 done
 unset _u
+
+# ── The mesh lane's own preconditions, all fail-closed ──────────────────────
+# Checked here, before docker is touched, so a mistyped mesh flag costs an error
+# message rather than a half-attached fleet: the failure mode of getting this
+# wrong is a device on a wire with no address (or worse, two devices sharing
+# one), and neither announces itself — the guest simply cannot be reached by its
+# peers while looking perfectly healthy over its loopback ssh.
+if [ -n "${MESH_NET}" ]; then
+    ${KEEP_ALIVE} || die "--mesh-net is a --keep-alive lane: the test lane powers every guest off after its assertions, so there is no standing fleet to put on a shared L2"
+    [ -n "${IDENTITIES}" ] || die \
+        "--mesh-net needs --identities FILE: the MACs and IPs come from the planner, never from here. Mint one with: PYTHONPATH=studio python3 -m hugmesh_studio.core.mesh_emulation identities --out FILE"
+    # Same grammar as launch-*.sh --mesh-net, checked here as well because this
+    # SPEC reaches THREE launchers and a rejection deep inside one container is
+    # a line in `docker logs`, not on the operator's terminal.
+    case "${MESH_NET}" in
+        auto) ;;
+        mcast=*:*|listen=*:*|connect=*:*) ;;
+        *=*) die "--mesh-net mode must be mcast=/listen=/connect= (got: ${MESH_NET})" ;;
+        *:*) ;;
+        *)   die "--mesh-net wants ADDR:PORT (mcast), mcast=A:P/listen=H:P/connect=H:P, or 'auto' (got: ${MESH_NET})" ;;
+    esac
+elif [ -n "${IDENTITIES}" ]; then
+    die "--identities does nothing without --mesh-net (it is that lane's identity source)"
+fi
+
+# ── The planner's identity file, read ONCE into per-label lookups ────────────
+# label -> mac / ip / prefix, plus the file's own L2 SPEC. Associative arrays
+# because rows are addressed by label everywhere else in this script, and a
+# device whose label is missing from the file is a device this lane refuses to
+# start rather than one it starts unaddressed.
+declare -A MESH_MAC_FOR=() MESH_IP_FOR=() MESH_PLEN_FOR=()
+MESH_FILE_NET=""
+
+# The parse and the per-row sanity check live in tests/qemu/mesh-identities.sh,
+# sourced by BOTH lanes that read this file — the 3-node driver and this fleet
+# runner. Two readers of one identity file is one file with two meanings.
+# Spelled as an `if`, not `[ -f ] && . || die`: that list would also fire the die
+# when the sourced file's LAST command returned non-zero, i.e. blame a missing
+# file for something else entirely.
+if [ -f "${SCRIPT_DIR}/mesh-identities.sh" ]; then
+    # shellcheck source=tests/qemu/mesh-identities.sh
+    . "${SCRIPT_DIR}/mesh-identities.sh"
+else
+    die "missing ${SCRIPT_DIR}/mesh-identities.sh (the identity-file reader)"
+fi
+
+load_mesh_identities() { # <file>
+    local f="$1" label mac ip plen net rows=0 why lines
+    # Read the WHOLE file before believing any of it: the reader fails as a unit
+    # (a row it cannot vouch for is not emitted), and consuming its output
+    # through a pipe would both hide that exit status and fill these arrays in a
+    # subshell, where they would vanish at the next line.
+    lines="$(mesh_identity_lines "${f}")" \
+        || die "--identities ${f} is not usable (see the reason above)"
+    [ -n "${lines}" ] || die "--identities ${f}: no usable rows"
+    while IFS='|' read -r label mac ip plen net; do
+        [ -n "${label}${mac}" ] || continue
+        why="$(mesh_identity_check_row "${label}" "${mac}" "${ip}" "${plen}")" \
+            || die "identities ${f}: ${why}"
+        [ -z "${MESH_MAC_FOR[${label}]:-}" ] \
+            || die "identities ${f}: two rows both claim to be '${label}'"
+        MESH_MAC_FOR["${label}"]="${mac}"
+        MESH_IP_FOR["${label}"]="${ip}"
+        MESH_PLEN_FOR["${label}"]="${plen}"
+        [ -n "${MESH_FILE_NET}" ] || MESH_FILE_NET="${net}"
+        [ "${net}" = "${MESH_FILE_NET}" ] \
+            || die "identities ${f} (${label}): mesh_net '${net}' differs from '${MESH_FILE_NET}' — these rows are not on one L2"
+        rows=$((rows + 1))
+    done <<< "${lines}"
+    [ "${rows}" -gt 0 ] || die "identities ${f}: no usable rows"
+    if [ "${MESH_NET}" = "auto" ]; then
+        [ -n "${MESH_FILE_NET}" ] || die \
+            "--mesh-net auto, but ${f} names no mesh_net to take the L2 SPEC from"
+        MESH_NET="${MESH_FILE_NET}"
+    fi
+    info "mesh identities: ${rows} row(s) from ${f}; shared L2 ${MESH_NET}"
+}
+[ -z "${MESH_NET}" ] || load_mesh_identities "${IDENTITIES}"
 
 # ══ Device control plane (registry, ssh publishing, QMP) ════════════════════
 # Everything down to the dispatch below works on ${WORK}/devices/<label>.json,
@@ -558,6 +677,83 @@ stop_one_container() {
     return 0
 }
 
+# ── The mesh L2: ONE docker bridge network per session ──────────────────────
+# Why a docker network at all, when the guests talk over QEMU's own socket
+# netdev? Because that netdev is UDP multicast between the CONTAINERS: each
+# qemu joins the group from inside its container, and two containers only share
+# a broadcast domain if they share a bridge. On the default bridge they would
+# also see every unrelated container on this workstation — including the
+# operator's live stack — so the fleet gets its own.
+#
+# One per SESSION, named from a hash of the session so two sessions emulated at
+# once are two separate wires (their identity plans use different subnets and L2
+# SPECs; sharing a bridge would still put both sets of ARP on one segment).
+MESH_NET_LABEL="hugmesh-qemu-mesh=1"
+
+mesh_network_name() { # <session name> -> the bridge name for that session
+    local s="$1" h=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        h="$(printf '%s' "${s}" | sha256sum 2>/dev/null | cut -c1-8)"
+    fi
+    if [ -z "${h}" ] && command -v python3 >/dev/null 2>&1; then
+        h="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest()[:8])' "${s}" 2>/dev/null)"
+    fi
+    [ -n "${h}" ] || return 1
+    printf '%s%s\n' "${MESH_NAME_PREFIX}" "${h}"
+}
+
+# The same ownership test own_container applies to containers, applied to
+# networks — and for a sharper reason: removing the wrong docker network
+# disconnects whatever is on it, and the operator's live hugmesh stack has
+# networks of its own on this machine.
+own_network() {
+    local name="$1" verb="$2"
+    case "${name}" in
+        "${MESH_NAME_PREFIX}"*) return 0 ;;
+    esac
+    warn "refusing to ${verb} network '${name}': not a ${MESH_NAME_PREFIX}* network created by this harness"
+    return 1
+}
+
+# Idempotent by construction: inspect, create, and if the create lost a race with
+# a concurrent run, inspect again. Never `rm` first — the network may already
+# have this fleet's other devices attached.
+mesh_network_ensure() { # <name>
+    local name="$1"
+    docker network inspect "${name}" >/dev/null 2>&1 && return 0
+    own_network "${name}" "create" || return 1
+    docker network create --driver bridge --label "${MESH_NET_LABEL}" \
+        "${name}" >/dev/null 2>&1 && return 0
+    docker network inspect "${name}" >/dev/null 2>&1
+}
+
+# How many containers are attached RIGHT NOW. docker releases a container's
+# endpoint when it stops, so this is 0 for a fleet that has been stopped even
+# though the containers themselves are kept around for their logs.
+mesh_network_members() { # <name> -> count, empty when the network is unknown
+    docker network inspect -f '{{len .Containers}}' "$1" 2>/dev/null
+}
+
+# Remove every mesh bridge whose last member is gone. Called from
+# --stop-all-devices ("leave nothing of the fleet behind") — a bridge with
+# members is LEFT ALONE, so stopping one session's fleet never cuts another's.
+sweep_mesh_networks() {
+    local name n
+    command -v docker >/dev/null 2>&1 || return 0
+    docker info >/dev/null 2>&1 || return 0        # daemon silent: never guess
+    while IFS= read -r name; do
+        [ -n "${name}" ] || continue
+        own_network "${name}" "remove" || continue
+        n="$(mesh_network_members "${name}")"
+        [[ "${n}" =~ ^[0-9]+$ ]] || continue
+        [ "${n}" -eq 0 ] || continue
+        docker network rm "${name}" >/dev/null 2>&1 \
+            && info "removed the mesh network ${name} (its last device is gone)"
+    done < <(docker network ls --filter "label=${MESH_NET_LABEL}" \
+                 --format '{{.Name}}' 2>/dev/null)
+    return 0
+}
+
 # ── Host-port allocation ────────────────────────────────────────────────────
 # A device's host ssh port is allocated HERE, and it has to be exclusive in two
 # directions at once:
@@ -726,6 +922,9 @@ cmd_stop_all() {
         # Nothing running is EXACTLY when leaked claims are all that is left —
         # tonight's 22303/22309 outlived rows that never even registered.
         sweep_stale_portlocks
+        # ...and the same is true of an empty mesh bridge: the fleet it was
+        # created for is gone, so the wire goes with it.
+        sweep_mesh_networks
         return 0
     fi
     while IFS= read -r name; do
@@ -738,6 +937,11 @@ cmd_stop_all() {
     # Claims from rows killed before their record ever landed have no record to
     # release through; sweep them by asking docker directly.
     sweep_stale_portlocks
+    # The mesh bridges last exactly as long as the fleet on them. Stopping the
+    # containers releases their endpoints, so any bridge that is now empty is
+    # this run's leftover; one that still has members belongs to a fleet this
+    # sweep did not stop and is left standing.
+    sweep_mesh_networks
     info "${stopped} device container(s) stopped"
 }
 
@@ -1933,6 +2137,11 @@ start_device_row() {
     # `chosen` is set ONLY once docker has actually bound the port, so no exit
     # from the loop below can be mistaken for a successful start.
     local port err rc chosen=""
+    local mesh_mac="" mesh_ip="" mesh_plen=""
+    # The mesh lane's per-row additions to `docker run`, in ONE array expanded at
+    # ONE place below. Empty unless --mesh-net was given, which is what keeps a
+    # normal run's docker argv byte-for-byte what it has always been.
+    local mesh_args=()
 
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qxF "${name}"; then
         warn "${label} is already up as ${name} — leaving it alone (--stop-device '${label}' first to replace it)"
@@ -1947,6 +2156,26 @@ start_device_row() {
     # row's record appeared" as boot progress — so clear the old one now,
     # before it can impersonate the record the new container will write.
     rm -f "${DEVICES_DIR}/${safe}.json" 2>/dev/null || true
+
+    # This row's identity on the shared L2, looked up ONCE. A row the identity
+    # file does not cover cannot be given an address, and a device on a shared L2
+    # with no address is not a mesh member — it is a guest that comes up and
+    # answers nobody. Refuse the row and name it, rather than starting a fleet
+    # that is quietly one node short of the cluster it is meant to form.
+    if [ -n "${MESH_NET}" ]; then
+        mesh_mac="${MESH_MAC_FOR[${label}]:-}"
+        mesh_ip="${MESH_IP_FOR[${label}]:-}"
+        mesh_plen="${MESH_PLEN_FOR[${label}]:-24}"
+        if [ -z "${mesh_mac}" ] || [ -z "${mesh_ip}" ]; then
+            warn "${label}: the identity file names no mac/ip for this row, so it has no address on the shared L2 — replan the session so the file covers every row (not starting it)"
+            return 1
+        fi
+        mesh_args=(--network "${MESH_NET_NAME}"
+                   -e MESH_NET="${MESH_NET}"
+                   -e MESH_MAC="${mesh_mac}"
+                   -e MESH_IP="${mesh_ip}"
+                   -e MESH_PREFIX_LEN="${mesh_plen}")
+    fi
 
     while IFS= read -r port; do
         # Belt and braces. The candidate list is generated from the range, but
@@ -1999,6 +2228,7 @@ start_device_row() {
             -e HOST_ARTIFACTS="${ARTIFACTS}" \
             -e SSH_HOST_PORT="${port}" \
             -e CONTAINER_NAME="${name}" \
+            "${mesh_args[@]}" \
             -p "127.0.0.1:${port}:${GUEST_SSH_PORT}" \
             -v "${REPO_DIR}":/src:ro \
             -v "${ARTIFACTS}":/artifacts:ro \
@@ -2052,7 +2282,12 @@ start_device_row() {
         release_port "${chosen}" "${name}"
         return 1
     fi
-    printf '%-24s %-32s %s\n' "${label}" "${name}" "127.0.0.1:${chosen}"
+    if [ -n "${MESH_NET}" ]; then
+        printf '%-24s %-32s %-22s %s\n' "${label}" "${name}" \
+            "127.0.0.1:${chosen}" "${mesh_ip}/${mesh_plen} ${mesh_mac}"
+    else
+        printf '%-24s %-32s %s\n' "${label}" "${name}" "127.0.0.1:${chosen}"
+    fi
     return 0
 }
 
@@ -2101,12 +2336,26 @@ if ${KEEP_ALIVE}; then
     # sudo to clean out ${WORK}.
     mkdir -p "${DEVICES_DIR}"
     step "Starting ${#ROWS[@]} device(s), ssh published on 127.0.0.1:${DEV_PORT_MIN}-${DEV_PORT_MAX}"
+    # The shared L2 has to exist before the first container joins it: docker
+    # would refuse `--network` for a network that is not there, and a fleet
+    # half of which fell back to the default bridge is a fleet with two wires.
+    if [ -n "${MESH_NET}" ]; then
+        MESH_NET_NAME="$(mesh_network_name "$(basename "${ARTIFACTS}")")" \
+            || die "cannot derive a mesh network name (no sha256sum and no python3 to hash the session with)"
+        mesh_network_ensure "${MESH_NET_NAME}" \
+            || die "could not create the shared mesh network ${MESH_NET_NAME} — the devices would have no L2 to meet on"
+        info "mesh L2: docker bridge ${MESH_NET_NAME} carrying qemu socket netdev ${MESH_NET}; identities from ${IDENTITIES}"
+    fi
     if [ "${JOBS}" -gt 0 ]; then
         info "boot admission: at most ${JOBS} device(s) mid-boot at once — a row admits the next when its registry record appears, or after ${ADMIT_STAGGER}s (--jobs 0 for the old ungated all-at-once fan-out)"
     else
         info "--jobs 0: starting all ${#ROWS[@]} devices at once, ungated"
     fi
-    printf '%-24s %-32s %s\n' "LABEL" "CONTAINER" "SSH"
+    if [ -n "${MESH_NET}" ]; then
+        printf '%-24s %-32s %-22s %s\n' "LABEL" "CONTAINER" "SSH" "MESH"
+    else
+        printf '%-24s %-32s %s\n' "LABEL" "CONTAINER" "SSH"
+    fi
     STARTED=0; DEV_FAILED=0
     for r in "${ROWS[@]}"; do
         IFS='|' read -r _rank platform role env img <<< "${r}"
