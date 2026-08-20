@@ -420,14 +420,40 @@ def wait_for_port(port: int, deadline: float, proc=None) -> bool:
 
 # ── rewriting: the part that makes the round trip stay on loopback ────────────
 
-def build_hostmap(entries: list[Entry]) -> dict[str, str]:
+def build_hostmap(entries: list[Entry],
+                  owner: Entry | None = None) -> dict[str, str]:
     """hostname -> loopback authority, across ALL running rows.
 
-    Cross-row on purpose: the app's SSO bounce to a second domain is exactly the
+    Cross-row on purpose: the app's SSO bounce to a second DOMAIN is exactly the
     redirect that escapes the tool, and it can only be caught by a map that
     knows the OTHER door's port.
+
+    `owner` is the row this map will serve, and it wins for its OWN host. Two
+    rows may legitimately share a host: the shipped catalog puts four rows on
+    `hugmesh.net` (kind, compose-app, compose-tls, device), because the same mesh
+    domain is reached by a different transport per lane — and `compose` runs a
+    plaintext door and a TLS door on that host at once, on purpose. A plain
+    `{e.host: ...}` comprehension collapses those to one entry and the LAST row
+    parsed wins, so a door rewrote the links, `Location:` and CSP host-sources in
+    its OWN responses to a DIFFERENT door's port: the browser got a page from
+    door A whose every onward URL pointed at door B. Observed live — a body
+    served from :9090 containing `href="https://127.0.0.1:9091/"`.
+
+    Refusing to start on a duplicate host would fail loudly, but it would reject
+    the catalog this tool ships with, so instead the door's own port simply wins
+    for its own responses — the rule `make_redirect_handler` already follows via
+    `entry.port`. Only a host that is NOT this door's own still resolves
+    cross-row, which is the case the map exists for. Among other rows sharing a
+    host the FIRST in catalog order wins, so the choice stays deterministic and
+    reads off the file top-down instead of depending on parse order.
     """
-    return {e.host: f"{LOOPBACK}:{e.port}" for e in entries if e.host}
+    out: dict[str, str] = {}
+    for e in entries:
+        if e.host and e.host not in out:
+            out[e.host] = f"{LOOPBACK}:{e.port}"
+    if owner is not None and owner.host:
+        out[owner.host] = f"{LOOPBACK}:{owner.port}"
+    return out
 
 
 def build_reverse(entries: list[Entry]) -> dict[str, str]:
@@ -1347,7 +1373,6 @@ def cmd_up(args, entries: list[Entry], env, out=sys.stdout) -> int:
         return _spawn_background(args, out)
 
     servers, children, procs = [], [], []
-    hostmap = build_hostmap(chosen)
     reverse = build_reverse(chosen)
     ctx = ssl_context(args.state, out)
 
@@ -1371,7 +1396,10 @@ def cmd_up(args, entries: list[Entry], env, out=sys.stdout) -> int:
                 children.append(child)
             if proc:
                 procs.append(proc)
-            handler = make_handler(entry, upstream, hostmap, reverse,
+            # Per-door, not once for the whole lane: a row that shares its host
+            # with another row must rewrite its own responses to its OWN port.
+            handler = make_handler(entry, upstream,
+                                   build_hostmap(chosen, entry), reverse,
                                    args.verbose)
             srv = TLSServer((LOOPBACK, entry.port), handler, ctx,
                             make_redirect_handler(entry), args.verbose)
