@@ -11,6 +11,8 @@ The doc set for the image/infra layer. State key used throughout:
 - [`SERVE-YOUR-MESH.md`](SERVE-YOUR-MESH.md) — the end-to-end path from nothing to a reachable login page: generate a whole platform, serve it **locally**, then optionally expose it **publicly** over a Tor `.onion`, a Dynamic-DNS host, or a tunnel.
 - [`NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) — launching the Studio wizard + ncurses menu on NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora: the additive Nix flake (`flake.nix`/`shell.nix`) + the portable POSIX launcher (`scripts/studio-launch.sh`) for hosts without `python3`/`make`/FHS (✅).
 - [`LOCAL-TESTING.md`](LOCAL-TESTING.md) — LAN `.test` fleet testing.
+- [`STUDIO-INSTALLERS.md`](STUDIO-INSTALLERS.md) — the Studio's **Windows MSI** and **Linux Flatpak**: what they package, what they still need from the host, and how a release is cut (✅).
+- [`RESOURCE-LIMITS.md`](RESOURCE-LIMITS.md) — capping the **CPU / memory / GPU** that builds, the local stack, emulated meshes and kind nodes may use, so the machine stays usable while HugMesh runs (✅).
 - [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream tuwunel/Mastodon for dev only).
 - [`ADMIN-CONSOLES.md`](ADMIN-CONSOLES.md) — **every admin/moderation console: URL, the role that opens it, and its HONEST state** (probed live). Which panels are dark and why; what Matrix/Mastodon/forum administration can and cannot do on this mesh; how to sign in with an account that holds the roles.
 - [`DEVOPS.md`](DEVOPS.md) — GitLab CI, runner, binhost, build distribution.

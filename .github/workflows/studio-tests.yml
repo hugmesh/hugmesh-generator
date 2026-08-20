@@ -1,0 +1,128 @@
+# HugMesh Image Studio — pre-merge test gate.
+#
+# THIS IS THIS REPOSITORY'S FIRST GITHUB WORKFLOW, and the README used to say not to
+# add one ("Actions is billing-blocked org-wide"). That claim is stale and is corrected
+# in the same change that adds this file: `gh api repos/hugmesh/<repo>/actions/permissions`
+# returns {"enabled":true,"allowed_actions":"all"}, and sibling repos have run
+# ubuntu-latest jobs successfully. Real CI is still GitLab (.gitlab-ci.yml, 83 jobs on
+# the in-cluster runner); this is an additive convenience so a studio/ change gets a
+# fast answer on a pull request without waiting for the cluster.
+#
+# RUNNER: ubuntu-latest, NEVER [self-hosted, hugmesh-x86]. Zero self-hosted runners are
+# registered against this org, so every job that has ever requested that label queued
+# for 24 hours and was cancelled. A gate that can never go green is worse than no gate.
+name: Studio tests
+
+on:
+  pull_request:
+    paths:
+      - 'studio/**'
+      - '.github/workflows/studio-tests.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    # No workflow in this fleet sets a timeout, which is exactly why 54 runs sat in a
+    # queue for a day. 20 minutes is ~25x the suite's real runtime.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        # FULL checkout, not a sparse studio/ one: the suite parses the nine
+        # build-*-stage4.sh scripts, the Makefile, Dockerfile.build, scripts/*.sh and
+        # tests/stack/compose.local.yaml to assert the GUI and the CLI agree.
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install test dependencies
+        # NO Qt binding is installed on purpose. The GUI tests are excluded below, and
+        # importing a real Qt in a headless container is what makes the full suite
+        # abort rather than fail — see the exclusion list.
+        run: python -m pip install --upgrade pip pytest PyYAML jsonschema
+
+      - name: Run the Qt-free suite
+        working-directory: studio
+        # TWO exclusions, for two different reasons — both stated rather than folded
+        # into one silent flag list.
+        #
+        # --ignore: six GUI test files. With a Qt binding installed a full
+        #   single-process run ABORTS partway through (SIGABRT/SIGSEGV inside Qt's
+        #   event-loop teardown) on every Python/binding combination tried, and
+        #   neither pytest-xdist nor pytest-forked rescues it. GitLab runs the fuller
+        #   `test:studio-suite` job against PySide6 with QT_QPA_PLATFORM=offscreen;
+        #   this job is the fast pre-merge subset and says so rather than pretending
+        #   to be complete.
+        #
+        # --deselect: the 13 tests in tests/known-failures.txt that already fail on
+        #   main. A brand-new gate that is red on day one gets ignored within a week,
+        #   so it grades the change under review, not the backlog. They are NOT
+        #   hidden: the next step re-runs exactly those and reports them.
+        run: |
+          deselect=""
+          while read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            deselect="$deselect --deselect $line"
+          done < tests/known-failures.txt
+
+          # shellcheck disable=SC2086
+          python -m pytest -q tests \
+            --ignore=tests/test_local_mesh_bringup.py \
+            --ignore=tests/test_localmesh_log_coalescing.py \
+            --ignore=tests/test_login_theme_gui.py \
+            --ignore=tests/test_probe_lifecycle.py \
+            --ignore=tests/test_theme_editor_gui.py \
+            --ignore=tests/test_use_flag_filter.py \
+            $deselect
+
+      - name: Report the known failures
+        working-directory: studio
+        # Non-blocking BY DESIGN, and the whole reason deselecting is honest here: the
+        # backlog stays visible on every run, and the moment one of these starts
+        # passing the summary says so and the line can be deleted.
+        if: always()
+        continue-on-error: true
+        run: |
+          nodes=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' tests/known-failures.txt)
+          echo "## Known failures (pre-existing on main)" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          if python -m pytest -q --no-header $nodes > known.txt 2>&1; then
+            {
+              echo '**These now PASS.** Delete them from `studio/tests/known-failures.txt`'
+              echo 'so they start gating again.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo 'Still failing, as expected. Not caused by this pull request.'
+              echo
+              echo '```'
+              grep -E '^(FAILED|ERROR)|passed|failed' known.txt | tail -20
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check the packaging metadata is loadable
+        working-directory: studio
+        # Cheap, and it catches the class of mistake that only shows up when a release
+        # is being cut: a pyproject that does not parse, or a version that moved in
+        # __init__.py without the packaging following it.
+        run: |
+          python -c "
+          import tomllib, pathlib, re
+          meta = tomllib.load(open('pyproject.toml','rb'))
+          src = pathlib.Path('hugmesh_studio/__init__.py').read_text()
+          version = re.search(r'__version__ = \"([^\"]+)\"', src).group(1)
+          assert meta['project']['name'] == 'hugmesh-image-studio', meta['project']['name']
+          assert meta['tool']['setuptools']['dynamic']['version']['attr'] == 'hugmesh_studio.__version__'
+          print('pyproject OK; version', version)
+          "

@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=HugMesh Image Studio
+GenericName=Mesh image builder
+Comment=Build HugMesh images with a wizard, and run a mesh from your system tray
+Exec=hugmesh-studio
+Icon=org.hugmesh.ImageStudio
+Terminal=false
+# ONE main category (Development) plus additional ones. Listing Development AND
+# System — both main categories — makes the app appear twice in the menu, which
+# desktop-file-validate warns about.
+Categories=Development;Building;
+Keywords=hugmesh;gentoo;image;kubernetes;qemu;mesh;self-hosted;
+# Matches the Qt application name set in app.py, so the shell associates the running
+# window with this launcher instead of showing a second, generic entry.
+StartupWMClass=hugmesh-studio
+StartupNotify=true

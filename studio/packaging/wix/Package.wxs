@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX v6 source for the HugMesh Image Studio MSI.
+
+  Built as:
+      wix build -arch x64 -define Version=$VERSION -define SourceDir=<pyinstaller onedir> \
+                -out hugmesh-studio-$VERSION-x64.msi Package.wxs Files.wxs
+
+  Files.wxs is HARVESTED, not hand-written: a PyInstaller onedir output is ~2000
+  files across a deep tree, and any hand-maintained component list would be stale by
+  the next PySide6 bump. The workflow generates it with `wix harvest`.
+
+  PER-USER INSTALL. InstallFolder sits under LocalAppDataFolder and the package is
+  marked perUser, so installing needs no administrator rights and shows no UAC
+  prompt. That is the right default for a developer tool: an operator evaluating the
+  Studio should not have to be a machine admin, and the app writes only to the user's
+  own profile anyway.
+
+  UPGRADE CODE IS PERMANENT. The GUID below identifies "this product" across every
+  future version, and MajorUpgrade uses it to replace an older install rather than
+  leaving two entries in Add/Remove Programs. Changing it later would strand every
+  already-installed copy. Mint once, never touch.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="HugMesh Image Studio"
+           Manufacturer="HugMesh"
+           Version="$(var.Version)"
+           UpgradeCode="7a3b6f18-2c94-4f0d-9a51-6d8e2b4c7f31"
+           Scope="perUser"
+           Compressed="yes"
+           Language="1033">
+
+    <SummaryInformation Description="Build HugMesh images and run a mesh from your tray"
+                        Manufacturer="HugMesh" />
+
+    <!-- AllowSameVersionUpgrades=no: reinstalling the SAME version should be a
+         repair, not a second side-by-side install. DowngradeErrorMessage stops a
+         newer install being silently replaced by an older MSI. -->
+    <MajorUpgrade AllowSameVersionUpgrades="no"
+                  DowngradeErrorMessage="A newer version of HugMesh Image Studio is already installed. Uninstall it first if you need to go back." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- The app is one PyInstaller onedir tree plus two shortcuts. -->
+    <Feature Id="Main" Title="HugMesh Image Studio" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="ApplicationShortcuts" />
+    </Feature>
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="CompanyFolder" Name="HugMesh">
+        <Directory Id="INSTALLFOLDER" Name="Image Studio" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="HugMesh" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ShortcutGroup" Directory="AppMenuFolder">
+      <Component Id="ApplicationShortcuts" Guid="*">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="HugMesh Image Studio"
+                  Description="Build HugMesh images and run a mesh from your tray"
+                  Target="[INSTALLFOLDER]hugmesh-studio.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon" />
+        <!-- A per-user package writes no HKLM keys, so the component needs a
+             per-user KeyPath of its own or the shortcut has nothing to be keyed to
+             and ICE38 fails the build. -->
+        <RegistryValue Root="HKCU"
+                       Key="Software\HugMesh\ImageStudio"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+        <RemoveFolder Id="RemoveAppMenuFolder" Directory="AppMenuFolder" On="uninstall" />
+      </Component>
+    </ComponentGroup>
+
+    <Icon Id="AppIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://hugmesh.net/studio" />
+    <!-- No repair entry: a per-user file-copy install has nothing meaningful to
+         repair, and the button in Add/Remove Programs only invites confusion. -->
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseFile)" />
+
+    <!-- LAUNCH CONDITION, deliberately absent.
+         The Studio does NOT require Docker to install or to start: it opens, scans
+         the machine, previews build commands and edits configuration without it, and
+         its own preflight explains what is missing when a build is dispatched. A
+         launch condition here would refuse to install on a machine the app works
+         perfectly well on, and installers that lie about their prerequisites are how
+         people end up disabling checks. -->
+  </Package>
+</Wix>

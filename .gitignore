@@ -44,6 +44,11 @@ tests/stack/.theme.css
 # Per-domain OWN-Casdoor compose overlay (issue #47; Studio core/own_casdoor.py
 # writes it, the Makefile wildcard-includes it behind the `own-casdoor` profile).
 tests/stack/.compose.own-domains.yaml
+
+# Generated per stack bring-up from the Studio's resource-limit setting
+# (hugmesh_studio/core/stack_limits.py). Machine-specific by definition —
+# a committed core count would throttle every other operator and CI.
+tests/stack/.compose.limits.yaml
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
 # pre-minted per-persona JWTs. Runtime-only; never commit.
 tests/stack/.seed-e2e/

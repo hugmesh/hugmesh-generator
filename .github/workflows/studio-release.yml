@@ -1,0 +1,331 @@
+# HugMesh Image Studio — installer build and release (Windows MSI + Linux Flatpak).
+#
+# THIS IS A NEW PATTERN FOR THIS ORG, deliberately. Every other release.yml in the
+# fleet means "build a container image and push it to GHCR"; there are no GitHub
+# Releases, no tags and no uploaded artifacts anywhere. This workflow publishes real
+# downloadable installers, because that is what a Downloads page on a public docs site
+# needs and a container image cannot be one.
+#
+# WHY THE SITE READS A STATIC FILE, NOT THE GITHUB API: hugmesh-generator is PRIVATE.
+# An anonymous visitor to hugmesh.net cannot read its releases, so the Downloads page
+# renders from a committed `src/assets/releases.json`. The publish job below emits that
+# file, in the exact shape of `src/assets/releases.json.example` in the site repo.
+#
+# TRIGGER: workflow_dispatch, plus a `studio-v*` tag. The fleet convention is
+# dispatch-only and exists so nobody accidentally pushes an image; a tag that a human
+# deliberately created and pushed IS the explicit decision that convention protects,
+# so honouring it here does not weaken it.
+name: Studio release (MSI + Flatpak)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Create a GitHub Release from the built installers'
+        type: boolean
+        default: false
+  push:
+    tags: ['studio-v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-release-${{ github.ref }}
+  # NOT cancel-in-progress: a half-cancelled release can leave a tag with some assets
+  # attached and others missing, which is worse than a duplicate run.
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: read
+        name: Read the version from the source of truth
+        # __init__.py's __version__ is the ONE version. The installer filenames, the
+        # About box and the release tag all derive from it, so they cannot disagree.
+        run: |
+          version=$(python3 -c "import re,pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('studio/hugmesh_studio/__init__.py').read_text()).group(1))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Studio version: $version"
+
+      - name: Tag must match the version it claims to release
+        if: startsWith(github.ref, 'refs/tags/studio-v')
+        run: |
+          tag="${GITHUB_REF_NAME#studio-v}"
+          if [ "$tag" != "${{ steps.read.outputs.version }}" ]; then
+            echo "::error::tag studio-v$tag does not match __version__ ${{ steps.read.outputs.version }}"
+            exit 1
+          fi
+
+  msi:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install build dependencies
+        # tzdata: Windows ships no system timezone database, so core/timezones.py
+        # silently collapses to its short fallback list without it.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "./studio[win]" pyinstaller pillow
+
+      - name: Render the application icon
+        working-directory: studio
+        run: python packaging/gen_icons.py --out build/icons
+
+      - name: Freeze with PyInstaller
+        working-directory: studio
+        env:
+          HUGMESH_STUDIO_ICON: build/icons/hugmesh-studio.ico
+        run: pyinstaller --noconfirm --clean packaging/hugmesh-studio.spec
+
+      - name: Smoke-test the frozen binary
+        working-directory: studio
+        # --print-specs is the app's Qt-FREE path, so this proves the bundle's Python
+        # side is complete without needing a display. A bundle missing
+        # core/progress-tables.json fails right here, at import time, which is exactly
+        # where it should fail rather than on a user's desktop.
+        run: |
+          dist\hugmesh-studio\hugmesh-studio.exe --print-specs > specs.json
+          if ((Get-Item specs.json).Length -eq 0) { throw "no output from --print-specs" }
+          Get-Content specs.json -TotalCount 3
+        shell: pwsh
+
+      - name: Build the licence page
+        working-directory: studio
+        run: python packaging/wix/make_license_rtf.py --in ../LICENSE --out build/License.rtf
+
+      - name: Install WiX
+        run: dotnet tool install --global wix
+
+      - name: Harvest the frozen tree
+        working-directory: studio
+        # Generated, never committed: a PyInstaller onedir is ~2000 files and a
+        # hand-written component list would be stale at the next PySide6 bump — with a
+        # silent failure mode, since a missing DLL only shows up at launch.
+        run: |
+          wix extension add -g WixToolset.Util.wixext
+          wix harvest files -o packaging/wix/Files.wxs `
+            -bindpath dist/hugmesh-studio `
+            -cg AppFiles -dr INSTALLFOLDER `
+            dist/hugmesh-studio
+        shell: pwsh
+
+      - name: Build the MSI
+        working-directory: studio
+        run: |
+          wix build -arch x64 `
+            -define Version=$env:VERSION `
+            -define IconFile=build/icons/hugmesh-studio.ico `
+            -define LicenseFile=build/License.rtf `
+            -bindpath dist/hugmesh-studio `
+            -ext WixToolset.UI.wixext `
+            -out "hugmesh-studio-$env:VERSION-x64.msi" `
+            packaging/wix/Package.wxs packaging/wix/Files.wxs
+        shell: pwsh
+
+      - name: Checksum
+        working-directory: studio
+        run: |
+          $file = "hugmesh-studio-$env:VERSION-x64.msi"
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+          "$hash  $file" | Out-File -Encoding ascii "$file.sha256"
+          Write-Host "$hash  $file"
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi
+          path: |
+            studio/hugmesh-studio-*.msi
+            studio/hugmesh-studio-*.msi.sha256
+          if-no-files-found: error
+
+  flatpak:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Validate the desktop entry and AppStream metadata
+        working-directory: studio/packaging/flatpak
+        # --no-net: the only remaining validator complaints are URL-reachability
+        # checks against hugmesh.net (not yet deployed) and a PRIVATE repository.
+        # Failing a build because a documentation URL is not public yet would be
+        # noise, while every structural check still runs.
+        run: |
+          desktop-file-validate org.hugmesh.ImageStudio.desktop
+          appstreamcli validate --no-net org.hugmesh.ImageStudio.metainfo.xml
+
+      - name: Install the runtime
+        run: |
+          flatpak install --user -y flathub org.kde.Platform//6.8 org.kde.Sdk//6.8
+
+      - name: Build the Flatpak
+        working-directory: studio/packaging/flatpak
+        run: |
+          flatpak-builder --user --disable-rofiles-fuse --force-clean \
+            --repo=repo build-dir org.hugmesh.ImageStudio.yml
+
+      - name: Export a single-file bundle
+        working-directory: studio/packaging/flatpak
+        # A .flatpak BUNDLE rather than a Flathub submission: HugMesh's own governed
+        # desktops actively remove the flathub remote
+        # (keys-template/desktop-governance/flatpak/flathub-disable.conf), so Flathub
+        # is not a delivery path for the machines most likely to want this.
+        run: |
+          flatpak build-bundle repo "hugmesh-studio-${VERSION}-x86_64.flatpak" org.hugmesh.ImageStudio
+          sha256sum "hugmesh-studio-${VERSION}-x86_64.flatpak" | tee "hugmesh-studio-${VERSION}-x86_64.flatpak.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: |
+            studio/packaging/flatpak/hugmesh-studio-*.flatpak
+            studio/packaging/flatpak/hugmesh-studio-*.flatpak.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: [version, msi, flatpak]
+    if: ${{ inputs.publish || startsWith(github.ref, 'refs/tags/studio-v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # contents: write lives ONLY on this job. The build jobs above stay read-only, so
+    # a compromised build step cannot create a release.
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect the installers
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.msi' -o -name '*.flatpak' \) -exec cp {} release/ \;
+          cd release
+          sha256sum ./* > SHA256SUMS
+          ls -la
+          cat SHA256SUMS
+
+      - name: Generate releases.json for the documentation site
+        # Emitted as a release asset AND printed to the job summary. It is not pushed
+        # to hugmesh/hugmesh.github.io from here: GITHUB_TOKEN cannot reach another
+        # repository, and adding a cross-repo PAT for a once-per-release file would be
+        # the first PAT in this org. A maintainer copies it into the site repo, which
+        # is also the moment the release notes get written.
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, datetime
+          version = os.environ["VERSION"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = f"studio-v{version}"
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+
+          def entry(path, platform, kind, label, notes):
+              data = path.read_bytes()
+              size = len(data)
+              return {
+                  "platform": platform,
+                  "kind": kind,
+                  "label": label,
+                  "file": path.name,
+                  "url": f"{base}/{path.name}",
+                  "size": f"{size / (1024 * 1024):.0f} MB",
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "notes": notes,
+              }
+
+          installers = []
+          for path in sorted(pathlib.Path("release").iterdir()):
+              if path.suffix == ".msi":
+                  installers.append(entry(
+                      path, "windows", "msi", "Windows installer (x64)",
+                      "Per-user install — no administrator rights required. Not code-signed, "
+                      "so Windows SmartScreen will warn on first run; verify the checksum below. "
+                      "Building images additionally needs Docker Desktop."))
+              elif path.suffix == ".flatpak":
+                  installers.append(entry(
+                      path, "linux", "flatpak", "Flatpak bundle (x86_64)",
+                      "Install with: flatpak install --user ./" + path.name + " — needs the "
+                      "org.kde.Platform 6.8 runtime. Point it at a hugmesh-generator checkout "
+                      "on first run; building images needs Docker on the host."))
+
+          out = {
+              "version": version,
+              "published": datetime.datetime.now(datetime.timezone.utc).date().isoformat(),
+              "notesUrl": f"https://github.com/{repo}/releases/tag/{tag}",
+              "installers": installers,
+          }
+          pathlib.Path("release/releases.json").write_text(json.dumps(out, indent=2) + "\n")
+          print(json.dumps(out, indent=2))
+          PY
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: studio-v${{ env.VERSION }}
+          name: HugMesh Image Studio ${{ env.VERSION }}
+          draft: false
+          files: |
+            release/*.msi
+            release/*.flatpak
+            release/SHA256SUMS
+            release/releases.json
+          body: |
+            HugMesh Image Studio ${{ env.VERSION }}.
+
+            **Windows** — download the `.msi`. It installs per-user, so no administrator
+            rights are needed. It is not code-signed; SmartScreen will warn on first run.
+
+            **Linux** — download the `.flatpak` and install it with
+            `flatpak install --user ./hugmesh-studio-${{ env.VERSION }}-x86_64.flatpak`.
+
+            Verify what you downloaded against `SHA256SUMS` before running it.
+
+            Both installers package the same application. The Studio drives host tooling
+            (Docker, QEMU, kubectl) rather than replacing it, and needs a
+            `hugmesh-generator` checkout to read build scripts and cluster specs from —
+            point it at one on first run.
+
+            `releases.json` is attached for the documentation site's Downloads page.
+
+      - name: Summarise
+        run: |
+          {
+            echo '## Studio '"$VERSION"' published'
+            echo
+            echo 'Copy `releases.json` into `hugmesh.github.io` at `src/assets/releases.json` to update the Downloads page:'
+            echo
+            echo '```json'
+            cat release/releases.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

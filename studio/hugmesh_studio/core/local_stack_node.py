@@ -23,6 +23,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from . import devops_tools, own_casdoor, proc_group, proc_text
+from . import resource_limits, stack_limits
 from .local_services import federation_env
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
@@ -533,6 +534,25 @@ class LocalStackNode:
                     fh.write(self.login_theme_css)
             except OSError:
                 pass
+        # RESOURCE LIMITS (CPU / memory). Delivered as a generated compose overlay
+        # rather than as a flag, because compose expresses limits per service inside
+        # the file and there is no `docker compose --cpus`. Written on EVERY
+        # bring-up, and REMOVED when limits are off — a stale overlay from a previous
+        # run would silently keep throttling a stack the operator has since
+        # un-limited. Same mechanism, same gitignored dot-file convention and the
+        # same Makefile $(wildcard) include as the own-casdoor overlay above, so a
+        # terminal `make stack-up` honours it too.
+        #
+        # Best-effort: an unwritable overlay must never block a bring-up. The stack
+        # then runs unbounded, which is exactly what it did before this feature.
+        try:
+            limits = resource_limits.effective()
+            services = stack_limits.compose_services(
+                os.path.join(self.generator_dir, _COMPOSE_FILE))
+            stack_limits.write_overlay(self.generator_dir, limits, services)
+        except OSError:
+            pass
+
         # External IdP (I6.6): exported ONLY for an external provider WITH an issuer,
         # so the casdoor default (and a half-configured external) leaves the env
         # byte-identical. Consumed by the Makefile's OIDC seam (landed): the vars
