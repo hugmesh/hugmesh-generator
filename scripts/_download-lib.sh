@@ -23,8 +23,27 @@
 #       — die unless every named tool is on PATH (curl, gpg, sha256sum, …).
 #
 #   dlv_fetch <url> <dest>
-#       — curl -fL the URL to <dest>; die on any HTTP/transport error. Removes a
-#         truncated partial file on failure so a retry/cache check is clean.
+#       — curl -fL the URL to <dest> (https-pinned) through dlv_fetch_retry; die
+#         on any HTTP/transport error. Removes a truncated partial file on
+#         failure so a retry/cache check is clean.
+#
+#   dlv_fetch_retry <url> <dest> [extra curl args...]
+#       — the ONE hardened fetch loop every artifact/distfile download path
+#         shares (issue #60 item 6). Outer exponential backoff
+#         (DLV_FETCH_ATTEMPTS attempts, delay doubling from DLV_FETCH_BACKOFF up
+#         to DLV_FETCH_BACKOFF_CAP) around a short-inner-retry curl, PLUS a
+#         resolver sanity probe (dlv_dns_ok) consulted on every failure: while
+#         the probe fails the loop STALLS (DLV_DNS_STALL_INTERVAL at a time, up
+#         to DLV_DNS_STALL_MAX total) WITHOUT consuming attempts, so a transient
+#         DNS outage stalls-and-retries instead of declaring fetch death.
+#         <dest> "-" streams the body to stdout (buffered through a temp file so
+#         a failed attempt can never leak partial bytes into a pipeline).
+#         Removes a truncated <dest> after every failed attempt.
+#
+#   dlv_dns_ok
+#       — resolver sanity probe: 0 when ANY name in DLV_DNS_PROBE_NAMES resolves
+#         via `getent hosts` (or when getent is unavailable — fail-open to the
+#         normal attempt-counting path), 1 when none does (resolver outage).
 #
 #   dlv_verify_sha256 <file> <expected_hex>
 #       — recompute sha256 of <file>; die (non-zero) on mismatch, log OK on match.
@@ -67,6 +86,14 @@
 #
 # Tunables (env, set by the caller before sourcing or before a call):
 #   DLV_QUIET=1                 suppress dlv_info chatter (errors still show)
+#   DLV_FETCH_ATTEMPTS=<n>      outer fetch attempts before fetch death (default 8)
+#   DLV_FETCH_BACKOFF=<s>       first backoff sleep, doubles per attempt (default 8)
+#   DLV_FETCH_BACKOFF_CAP=<s>   backoff ceiling per sleep (default 240)
+#   DLV_FETCH_INNER_RETRY=<n>   curl's own --retry per attempt (default 3)
+#   DLV_DNS_STALL_INTERVAL=<s>  stall step while the resolver is down (default 30)
+#   DLV_DNS_STALL_MAX=<s>       max total resolver-outage stall (default 1800)
+#   DLV_DNS_PROBE_NAMES="a b"   names dlv_dns_ok resolves (default: the exact
+#                               hosts the builders fetch artifacts from)
 #   DLV_GENTOO_KEY=<fpr>        override the Gentoo release-eng key fingerprint
 #   DLV_KEYSERVER=<url>         override the keyserver used for fingerprint pulls
 #   DLV_OFFLINE_KEYRING=<file>  ASCII-armored key bundle to import instead of a
@@ -115,21 +142,104 @@ dlv_require_tools() {
 }
 
 # ── Fetch ──────────────────────────────────────────────────────────
-# curl -fL <url> -o <dest>; -f makes a 4xx/5xx a non-zero exit, -L follows
-# redirects. On failure remove the (possibly truncated) <dest> so a later
-# `[ -f dest ]` cache check does not treat garbage as a good cached file.
+# Retry hardening (issue #60 item 6). The 08-19 mesh run died because a
+# ~5-minute host DNS outage outlived the old FIXED-delay curl retry spans
+# (5×5s here, 8×8s inline in the builders — `curl: (6) Could not resolve host`
+# burned every attempt in about a minute and the build declared fetch death).
+# Two fixes, factored HERE so every artifact/distfile fetch path shares them:
+#
+#   * dlv_dns_ok — a resolver sanity probe (`getent hosts` against the exact
+#     hosts the builders fetch from). Distinguishes "the resolver is down"
+#     (transient, ride it out) from "this artifact/mirror is bad" (real).
+#   * dlv_fetch_retry — an OUTER exponential-backoff loop (default span
+#     8+16+32+64+128+240+240 ≈ 12 min across 8 attempts, vs the old ~64 s)
+#     around a short-inner-retry curl. A failed attempt whose resolver probe
+#     ALSO fails is a DNS outage: the loop stalls (bounded by
+#     DLV_DNS_STALL_MAX) WITHOUT consuming attempts instead of aborting.
+#
+# Pinned by tests/scripts/test-fetch-retry-hardening.sh (stall semantics,
+# backoff shape, budget floor, and the builders' call-site wiring).
+DLV_FETCH_ATTEMPTS="${DLV_FETCH_ATTEMPTS:-8}"
+DLV_FETCH_BACKOFF="${DLV_FETCH_BACKOFF:-8}"
+DLV_FETCH_BACKOFF_CAP="${DLV_FETCH_BACKOFF_CAP:-240}"
+DLV_FETCH_INNER_RETRY="${DLV_FETCH_INNER_RETRY:-3}"
+DLV_DNS_STALL_INTERVAL="${DLV_DNS_STALL_INTERVAL:-30}"
+DLV_DNS_STALL_MAX="${DLV_DNS_STALL_MAX:-1800}"
+DLV_DNS_PROBE_NAMES="${DLV_DNS_PROBE_NAMES:-distfiles.gentoo.org github.com pkgs.tailscale.com}"
+
+# dlv_dns_ok — 0 when ANY probe name resolves (resolver alive), 1 when none does.
+# getent uses NSS, so /etc/hosts pins count as "alive" — that is fine: the point
+# is only to tell a resolver outage apart from a bad artifact/mirror. Without
+# getent we cannot tell, so fail OPEN to the normal attempt-counting path.
+dlv_dns_ok() {
+    command -v getent >/dev/null 2>&1 || return 0
+    local n
+    for n in ${DLV_DNS_PROBE_NAMES}; do
+        if getent hosts "${n}" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# dlv_fetch_retry <url> <dest> [extra curl args...]
+# The shared hardened fetch loop (contract in the header). <dest> "-" buffers
+# through a temp file and cats it on success, so a failed attempt can never
+# leak partial bytes into a caller's pipeline. On failure the truncated <dest>
+# is removed so a later `[ -f dest ]` cache check does not trust garbage.
+dlv_fetch_retry() {
+    local url="$1" dest="$2"; shift 2
+    dlv_require_tools curl || return 1
+    local attempt=1 delay="${DLV_FETCH_BACKOFF}" stalled=0 out="${dest}" tmp=""
+    if [ "${dest}" = "-" ]; then
+        tmp="$(mktemp "${TMPDIR:-/tmp}/dlv-fetch.XXXXXX")" \
+            || { dlv_die "mktemp failed for stdout fetch"; return 1; }
+        out="${tmp}"
+    fi
+    while :; do
+        if curl -fL --retry "${DLV_FETCH_INNER_RETRY}" \
+                --retry-connrefused --retry-all-errors \
+                "$@" -o "${out}" "${url}"; then
+            if [ -n "${tmp}" ]; then
+                cat "${tmp}"
+                rm -f "${tmp}"
+            fi
+            return 0
+        fi
+        rm -f "${out}"   # never leave a truncated file that looks cached
+        if ! dlv_dns_ok; then
+            # Resolver outage — NOT this artifact's fault. Stall without
+            # consuming an attempt; only a persistent outage is fetch death.
+            if [ "${stalled}" -ge "${DLV_DNS_STALL_MAX}" ]; then
+                dlv_die "resolver still down after ${stalled}s of stalling — fetch death: ${url}"
+                return 1
+            fi
+            dlv_warn "DNS probe failed (transient resolver outage?) — stalling ${DLV_DNS_STALL_INTERVAL}s instead of declaring fetch death (${stalled}s/${DLV_DNS_STALL_MAX}s): ${url}"
+            sleep "${DLV_DNS_STALL_INTERVAL}"
+            stalled=$((stalled + DLV_DNS_STALL_INTERVAL))
+            continue
+        fi
+        if [ "${attempt}" -ge "${DLV_FETCH_ATTEMPTS}" ]; then
+            dlv_die "download failed after ${attempt} attempts: ${url}"
+            return 1
+        fi
+        dlv_warn "fetch attempt ${attempt}/${DLV_FETCH_ATTEMPTS} failed (resolver OK) — backing off ${delay}s: ${url}"
+        sleep "${delay}"
+        attempt=$((attempt + 1))
+        delay=$((delay * 2))
+        if [ "${delay}" -gt "${DLV_FETCH_BACKOFF_CAP}" ]; then
+            delay="${DLV_FETCH_BACKOFF_CAP}"
+        fi
+    done
+}
+
+# dlv_fetch <url> <dest> — the https-pinned verification-artifact fetch
+# (checksums.txt / .sha256 sidecars / DIGESTS). Same hardened loop as every
+# other artifact path; keeps the --proto/--tlsv1.2 pins this API always had.
 dlv_fetch() {
     local url="$1" dest="$2"
-    dlv_require_tools curl || return 1
     dlv_info "fetching ${url}"
-    # --retry hardens against the transient-blip class: a single hiccup fetching a
-    # small checksum/DIGESTS/sidecar (Phase 2.5 / stage3 verify) otherwise aborts a
-    # whole role build that had already passed @system + payload. Mirrors the
-    # retry flags the binary (headscale/tailscale) downloads already use.
-    if ! curl -fL --proto '=https' --tlsv1.2 \
-              --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors \
-              -o "${dest}" "${url}"; then
-        rm -f "${dest}"
+    if ! dlv_fetch_retry "${url}" "${dest}" --proto '=https' --tlsv1.2; then
         dlv_die "download failed: ${url}"
         return 1
     fi

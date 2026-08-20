@@ -1340,7 +1340,7 @@ info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
 echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND} role=${ROLE} env=${ENV} ===="
 
 banner "Fetching stage3 seed (arm64)"
-STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(dlv_fetch_retry "${SEED_STAGE3_URL}" - -s | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
 # Stage3 seed: ONE per-arch cache under the shared root instead of a fresh ~250 MB
@@ -1922,7 +1922,7 @@ else
     # plumbing and this is the only place the binary is staged — a network
     # blip must NOT silently ship a mesh-less image. Opt out explicitly with
     # --skip-mesh.
-    if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${HS_BIN}" "${HS_URL}"; then
+    if ! dlv_fetch_retry "${HS_URL}" "${HS_BIN}"; then
         err "headscale ${HEADSCALE_VERSION} fetch failed (${HS_URL}) — the image bakes the mesh; aborting (use --skip-mesh to opt out)."; exit 1
     fi
     HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
@@ -1942,7 +1942,7 @@ else
         # Fetch failure is FATAL: tailscaled is enabled in the default runlevel, so a
         # missing binary = a dead service on a mesh-less node. Opt out with
         # --skip-tailscale (or --skip-mesh).
-        if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${TS_TGZ}" "${TS_URL}"; then
+        if ! dlv_fetch_retry "${TS_URL}" "${TS_TGZ}"; then
             err "tailscale ${TAILSCALE_VERSION} fetch failed (${TS_URL}) — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)."; exit 1
         fi
         TS_SHA="${TS_TGZ}.sha256"
@@ -2087,7 +2087,7 @@ else
     banner "Staging bootloader (u-boot ${OPIZ2_UBOOT_DEFCONFIG})"
     mkdir -p "${STAGE_DIR}/uboot"
     if [ -n "${OPIZ2_UBOOT_URL}" ]; then
-        if curl -fL -o "${STAGE_DIR}/uboot/u-boot.bin" "${OPIZ2_UBOOT_URL}"; then
+        if dlv_fetch_retry "${OPIZ2_UBOOT_URL}" "${STAGE_DIR}/uboot/u-boot.bin"; then
             info "u-boot staged from ${OPIZ2_UBOOT_URL} -> ${STAGE_DIR}/uboot/u-boot.bin"
         else
             warn "Could not fetch u-boot from ${OPIZ2_UBOOT_URL}; image will have no bootloader staged."

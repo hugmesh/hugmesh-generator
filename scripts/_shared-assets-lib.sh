@@ -248,10 +248,18 @@ sa_seed_basename_matches_arch() {
     return 1
 }
 
-# The default fetcher — the same curl invocation (and retry hardening) the builders
-# used inline before this library. Overridable via SA_FETCH_CMD (the hermetic tests
-# inject a fixture copier; a build never reaches the network in the sandbox).
+# The default fetcher. Routes through _download-lib.sh's hardened shared loop
+# (dlv_fetch_retry: exponential backoff + the resolver-outage stall of issue #60
+# item 6) — every builder sources both libs, so the stage3 seed download rides
+# out a transient DNS blip instead of declaring fetch death (the 08-19 be.x86
+# failure). The inline curl is only a fallback for a standalone source of this
+# file; overridable via SA_FETCH_CMD (the hermetic tests inject a fixture
+# copier; a build never reaches the network in the sandbox).
 sa_fetch_default() { # <url> <dest>
+    if declare -F dlv_fetch_retry >/dev/null 2>&1; then
+        dlv_fetch_retry "$1" "$2"
+        return $?
+    fi
     command -v curl >/dev/null 2>&1 || { sa_err "curl not found"; return 1; }
     curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 \
          --retry-connrefused --retry-all-errors -o "$2" "$1"

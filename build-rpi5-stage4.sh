@@ -3298,7 +3298,7 @@ echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND
 banner "Fetching stage3 seed (arm64)"
 
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
-STAGE3_FILE=$(curl -sL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(dlv_fetch_retry "${SEED_STAGE3_URL}" - -s | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_BASE_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds"
 STAGE3_FULL_URL="${STAGE3_BASE_URL}/${STAGE3_FILE}"
@@ -4237,7 +4237,7 @@ else
     HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
     info "Fetching headscale ${HEADSCALE_VERSION}..."
-    if curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${HS_BIN}" "${HS_URL}"; then
+    if dlv_fetch_retry "${HS_URL}" "${HS_BIN}"; then
         # Verify sha256 against the release checksums.txt BEFORE trusting it.
         HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
         if ! dlv_fetch "${HS_REL}/checksums.txt" "${HS_SUMS}" \
@@ -4267,7 +4267,7 @@ else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         info "Fetching tailscale ${TAILSCALE_VERSION}..."
-        if curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${TS_TGZ}" "${TS_URL}"; then
+        if dlv_fetch_retry "${TS_URL}" "${TS_TGZ}"; then
             # Verify sha256 against the published <tgz>.sha256 sidecar BEFORE extracting.
             TS_SHA="${TS_TGZ}.sha256"
             if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \

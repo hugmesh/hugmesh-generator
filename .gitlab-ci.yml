@@ -1130,6 +1130,20 @@ lint:download-verify:
   script:
     - bash tests/scripts/test-download-verify.sh
 
+# Fetch-retry hardening gate (#60 item 6 — the 08-19 DNS-outage fetch deaths).
+# Behaviorally proves scripts/_download-lib.sh's dlv_fetch_retry rides out a
+# transient resolver outage (stall + retry via the getent probe, NO attempt
+# consumed) and backs off exponentially past the 5-minute outage class, then
+# grep-asserts every stage4 builder's artifact/distfile fetch (stage3 index,
+# headscale, tailscale, u-boot) routes through it — with a detector self-test
+# so the greps cannot rot. curl/getent/sleep are PATH stubs; no network; cheap.
+lint:fetch-retry:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-fetch-retry-hardening.sh
+
 # Cloud image packaging gate (scripts/cloud-package.sh, the operator-facing
 # raw->qcow2/vhd-fixed/raw re-packager). Hermetic: tiny truncate-made sparse
 # inputs + a recording qemu-img stub on the SNAP_QEMU_IMG seam — proves the
