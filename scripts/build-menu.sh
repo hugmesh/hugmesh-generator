@@ -41,6 +41,11 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# First-run bootstrap (issue #49): sourcing only defines functions; the call sits
+# in main() so `source`-ing this file for tests stays side-effect-free.
+# shellcheck source=scripts/_first-run-lib.sh
+. "${SCRIPT_DIR}/_first-run-lib.sh"
+
 # ── Colours (only when stderr is a TTY, matching scripts/_download-lib.sh) ──────
 if [ -t 2 ]; then
     C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
@@ -2740,6 +2745,9 @@ confirm_quit() {
 # ── Entry point ─────────────────────────────────────────────────────────────────
 main() {
     [ -f "${REPO_DIR}/Makefile" ] || die "must run inside the hugmesh-generator repo (no Makefile at ${REPO_DIR})"
+    # First-run bootstrap: a no-op (one `cat`) once stamped; advisory by contract,
+    # so it can never keep the menu from opening. --redo-first-run forces it.
+    first_run_bootstrap "${REPO_DIR}" "$(first_run_wants_redo "$@")"
     if [ "${HAVE_TUI}" != 1 ]; then
         warn "whiptail/TTY not available — using the plain text menu (set NO_TUI= to re-enable; install dev-libs/newt for the rich UI)."
     fi

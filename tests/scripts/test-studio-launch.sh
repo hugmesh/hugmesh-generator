@@ -21,6 +21,18 @@ LAUNCH="${REPO_DIR}/scripts/studio-launch.sh"
 VENV_DIR="${REPO_DIR}/studio/.venv-studio"
 BASH_BIN="$(command -v bash)"
 
+# Hermetic first-run state (issue #49): the launcher's guided/--menu paths now run the
+# first-run bootstrap, which writes ~/.local/bin symlinks + ~/.hugmesh/studio state. This
+# suite tests the LAUNCHER, not the bootstrap (tests/scripts/test-first-run-lib.sh does
+# that), so point the state dir at a tmpdir and pre-stamp it CURRENT — the bootstrap
+# short-circuits to one `cat` and never touches the developer's real $HOME.
+FR_STATE="$(mktemp -d)"
+export HUGMESH_STUDIO_STATE_DIR="${FR_STATE}"
+export HUGMESH_BIN_DIR="${FR_STATE}/bin"
+# shellcheck source=/dev/null
+. "${REPO_DIR}/scripts/_first-run-lib.sh"
+printf '%s\n' "${FIRST_RUN_LIB_VERSION}" > "${FR_STATE}/first-run.stamp"
+
 PASS=0; FAIL=0
 _ok()  { PASS=$((PASS+1)); }
 _bad() { FAIL=$((FAIL+1)); printf 'FAIL %s\n' "$1" >&2; }
@@ -41,7 +53,7 @@ fi
 # From here VENV_DIR did NOT exist at start, so the EXIT trap can only ever be removing
 # a venv the TEST itself caused to appear — a real consent-bypass regression. Fail loudly
 # and clean it up so a re-run isn't poisoned.
-trap '[ -e "${VENV_DIR}" ] && { printf "ERROR: tests created %s — a launcher path installed without consent\n" "${VENV_DIR}" >&2; rm -rf "${VENV_DIR}"; }' EXIT
+trap 'rm -rf "${FR_STATE}"; [ -e "${VENV_DIR}" ] && { printf "ERROR: tests created %s — a launcher path installed without consent\n" "${VENV_DIR}" >&2; rm -rf "${VENV_DIR}"; }' EXIT
 
 # ── 1. static: syntax + the load-bearing PYTHONPATH export ──────────────────────────────
 "${BASH_BIN}" -n "${LAUNCH}" && _ok || _bad "bash -n: syntax error"
