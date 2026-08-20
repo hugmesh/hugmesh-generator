@@ -9,6 +9,12 @@ import { totpCode, totpCodeForStep } from './totp';
 // privileged-floor block) — the seed rows landed in #495, the gateway env wiring in
 // the companion change, and nothing ever exercised the pair together.
 //
+//   • OFF POSTURE — cluster DEFAULT (APP_MFA_ENABLED=false). The EXACT COMPLEMENT of
+//     the per-row block: it runs when that one skips, so a stack always gets stack
+//     coverage of whichever posture it holds. Proves the seeded mfa_required rows are
+//     INERT (a pure ROLE_FLEET_ADMIN is not gateway-denied on them) while the ROLE
+//     wall on the same rows is NOT (a plain user still gets the gateway's 403), and
+//     that an un-enrolled admin is never asked for a second factor.
 //   • PER-ROW GATE — compose DEFAULT (APP_MFA_ENABLED=true, floor off). Of the 9
 //     mfa_required rows specs/cluster/manifests/route-access/initdb/20-schema.sql
 //     seeds, the only principal decide() can gate is a PURE ROLE_FLEET_ADMIN on
@@ -33,8 +39,10 @@ import { totpCode, totpCodeForStep } from './totp';
 //
 // HONESTY — no fake-green paths. Every precondition (persona not seeded, wrong roles
 // on the session, MFA surface dark, route-access volume predating the mfa_required
-// seed) FAILS loudly with the real reason. The ONLY skip in this file is the
-// MFA_FLOOR env gate, mirroring spec 14's LIVE_GATEWAY gate.
+// seed) FAILS loudly with the real reason. The ONLY skip that can leave a stack with
+// NO coverage is the MFA_FLOOR env gate, mirroring spec 14's LIVE_GATEWAY gate: the
+// APP_MFA_ENABLED gate no longer can, because the two blocks it selects between are
+// complements rather than one block and nothing.
 
 const FLOOR = process.env.MFA_FLOOR === '1';
 
@@ -47,6 +55,12 @@ const FLOOR = process.env.MFA_FLOOR === '1';
  * other way would let a forgotten export silently skip the only e2e coverage the
  * per-row gate has, which is the "guard that never guards" failure this repo keeps
  * shipping.
+ *
+ * It SELECTS a block rather than gating one. `false` runs the OFF-posture block
+ * above; anything else runs the per-row block below. A wrong value therefore fails
+ * the wrong block loudly instead of skipping everything — and against a real cluster
+ * the value need not be guessed at all: `make kind-e2e-mfa` reads it back off the
+ * running gateway pod's own env rather than trusting the caller's shell.
  *
  * The cluster deliberately ships it OFF and that is NOT a defect to fix here:
  * tests/stack/compose.local.yaml documents the asymmetry — "enabling the floor
@@ -207,6 +221,146 @@ test.describe('TOTP generator: RFC 6238 Appendix B (stack-free)', () => {
     // A garbled `mfa-secret` read off the page must fail HERE, not produce a
     // plausible-looking 6 digits the server then rejects for the wrong reason.
     expect(() => totpCode('not base32!')).toThrow(/base32/i);
+  });
+});
+
+// ── the CLUSTER-DEFAULT OFF posture (enabled=false) — the complement ─────────────
+//
+// WHY THIS BLOCK EXISTS. `MFA_ENFORCEMENT` used to gate the ONLY stack coverage in
+// this file, so on a stack running the posture every cluster the generator produces
+// actually ships — APP_MFA_ENABLED=false, pinned in BOTH directions by
+// tests/stack/test-gateway-mfa-env.sh assertion (4) — all five stack cases skipped
+// and nothing was asserted at all. Confirmed live on kind 2026-08-20: spec 29 against
+// the running SSO slice reported "2 passed, 5 skipped", and the two that passed were
+// the stack-free TOTP vectors. The shipped posture had no e2e coverage whatsoever.
+//
+// That is the repo's own "guard that never guards" failure in mirror image. Turning a
+// guard OFF has two ways to go wrong and neither was observable:
+//   · the flag does not actually reach the gateway, so the stack silently ENFORCES
+//     while every manifest and every gate says it does not (an operator lockout that
+//     looks like a broken BFF), or
+//   · turning MFA off also drops the ROLE wall on the same rows, so the privileged
+//     plane opens to anyone (`decide()` reads `mfa_required` and `allow` off the SAME
+//     row, and `mfaEnabled` gates one of them).
+//
+// So this block is the EXACT COMPLEMENT of the per-row block below: `test.skip` on
+// `MFA_ENFORCEMENT` here, on `!MFA_ENFORCEMENT` there. Exactly one of the two runs on
+// any stack, whichever posture it holds, and neither can be silently skipped by a
+// forgotten export. Everything asserted here was verified by hand against the live
+// kind lane first (fe-gateway APP_MFA_ENABLED=false, 9 mfa_required rows seeded).
+
+test.describe('MFA OFF posture: the mfa_required rows are inert and the role wall is not', () => {
+  test.skip(
+    MFA_ENFORCEMENT,
+    'APP_MFA_ENABLED is not false on this stack — the gateway MFA leg is ON, so the ' +
+      'per-row block below is the one that applies. This block asserts the CLUSTER ' +
+      'posture (enabled=false), which is what specs/cluster and every kind bring-up ' +
+      'without `MFA=1` actually run.',
+  );
+
+  test('the mfa_required column is INERT: a pure ROLE_FLEET_ADMIN is not gateway-denied on /bff/admin/phone-fleet/**', async ({ baseURL }) => {
+    const fleet = await apiContext(baseURL);
+    await loginAs(fleet, 'e2e-fleet');
+
+    // Same anti-fake-green preconditions as the ON leg: this persona is the ONE
+    // principal among the 9 seeded rows that `decide()` can MFA-gate at all, so if it
+    // is mis-seeded (no fleet role, or an accidental ROLE_ADMIN that short-circuits
+    // before decide()) the assertion below is vacuous in the passing direction.
+    const { roles } = await sessionOf(fleet, 'e2e-fleet');
+    expect(
+      roles.some((r) => /fleet/i.test(r)),
+      `e2e-fleet session roles ${JSON.stringify(roles)} carry no fleet role — re-seed ` +
+        '(tests/e2e-extra-personas.sh, sourced by BOTH lanes). Without the granting row ' +
+        'this case could not distinguish "MFA is inert" from "the role never granted".',
+    ).toBe(true);
+    expect(
+      roles.some((r) => /^(role_)?admin$/i.test(r)),
+      `e2e-fleet must NOT hold ROLE_ADMIN (got ${JSON.stringify(roles)}) — an admin ` +
+        'bypasses decide() entirely and would reach the row for the wrong reason',
+    ).toBe(false);
+
+    // THE CLAIM. The route-access row for this path carries mfa_required=true (the
+    // seed's UPDATE, 20-schema.sql) and this session carries NO second factor. With
+    // APP_MFA_ENABLED=false, GatewayRouteAccessService.decide() must not consult the
+    // column: the request is GRANTED at the gateway and whatever answers is upstream.
+    // Asserted as "the GATEWAY did not reject", not as 200 — admin-bff's own
+    // entitlement wall may still 403 this probe device, and that is a verdict from a
+    // different layer, distinguishable because only the gateway sets X-Route-Denied.
+    const r = await primedGet(fleet, FLEET_MFA_ROUTE);
+    expect(
+      r.headers()['x-route-denied'],
+      `fleet GET ${FLEET_MFA_ROUTE} -> ${why(r)}. An X-Route-Denied here means the ` +
+        'gateway DID consult mfa_required — this stack is enforcing MFA while ' +
+        'APP_MFA_ENABLED reads false, so the declared posture and the live posture ' +
+        'disagree (check the gateway pod env, not the chart values)',
+    ).toBeUndefined();
+    expect(verdict(r), `fleet GET ${FLEET_MFA_ROUTE} -> ${why(r)}`).not.toBe('DENIED');
+    expect(verdict(r), 'the session itself must be authenticated').not.toBe('UNAUTHENTICATED');
+    await fleet.dispose();
+  });
+
+  test('MFA off does NOT open the privileged plane: a plain user is still role-denied on /bff/admin/**', async ({ baseURL }) => {
+    // The other direction, and the one that matters most. `decide()` reads `allow`
+    // and `mfa_required` off the same rows and gates only the second on `mfaEnabled`;
+    // a change that gated the first as well would turn the cluster default into an
+    // open admin plane, and every existing case in this file would still skip.
+    const user = await apiContext(baseURL);
+    await loginAs(user, 'e2e-user');
+    const { roles } = await sessionOf(user, 'e2e-user');
+    expect(
+      roles.some((r) => /^(role_)?(admin|superadmin|game.master)$/i.test(r)),
+      `e2e-user must be non-privileged (got ${JSON.stringify(roles)})`,
+    ).toBe(false);
+
+    const denied = await primedGet(user, ADMIN_MFA_ROUTE);
+    expect(
+      verdict(denied),
+      `plain user GET ${ADMIN_MFA_ROUTE} with MFA off -> ${why(denied)}. A PASSED ` +
+        'verdict means turning MFA off also dropped the ROLE gate on these rows',
+    ).toBe('DENIED');
+    expect(
+      denied.headers()['x-route-denied'],
+      'the deny is the gateway route-access reject, not an upstream entitlement wall',
+    ).toBe(`${FE_GATEWAY}:${ADMIN_MFA_ROUTE}`);
+    expect((await denied.text()).length, 'the gateway reject carries no body').toBe(0);
+    await user.dispose();
+  });
+
+  test('an ADMIN reaches the mfa_required blanket with no factor and no challenge', async ({ baseURL }) => {
+    // §3.1's "quiet cluster" sentence, asserted for the OFF posture: an operator who
+    // has never enrolled anything still works normally. This is the property the
+    // enroll-before-you-enforce precondition (§2) exists to protect, so it is worth
+    // an assertion rather than an assumption.
+    //
+    // ⚠ Its live negative control is the FLOOR block, not a mutation. Below the floor
+    // there is NO route on which the gateway denies an admin — the SUPERADMIN / ADMIN
+    // / GAME-MASTER bypass runs before decide(), so even /bff/superadmin/** answers
+    // 403 from admin-bff's entitlement wall WITHOUT X-Route-Denied (verified live,
+    // 2026-08-20). That is exactly why this reads as 'PASSED' rather than 200: the
+    // verdict is scoped to the GATEWAY's decision, and only a floor/enforcement
+    // regression can move it.
+    const admin = await apiContext(baseURL);
+    await loginAs(admin, 'e2e-admin');
+    const { roles } = await sessionOf(admin, 'e2e-admin');
+    expect(
+      roles.some((r) => /^(role_)?admin$/i.test(r)),
+      `e2e-admin session roles ${JSON.stringify(roles)} lack admin — nothing here is about MFA`,
+    ).toBe(true);
+
+    const r = await primedGet(admin, ADMIN_MFA_ROUTE);
+    expect(
+      verdict(r),
+      `un-stamped admin GET ${ADMIN_MFA_ROUTE} with MFA off -> ${why(r)}`,
+    ).toBe('PASSED');
+    // And nothing anywhere in the chain asks for a second factor: the gateway has no
+    // challenge response (its only rejects are 403 + X-Route-Denied and the floor's
+    // 503 + Retry-After), so a redirect at the MFA pages would mean some OTHER layer
+    // started demanding one — the failure mode §2's precondition warns about.
+    expect(
+      r.headers()['location'] ?? '',
+      'no layer redirected an un-enrolled admin to the MFA challenge',
+    ).not.toMatch(/\/login\/mfa/);
+    await admin.dispose();
   });
 });
 

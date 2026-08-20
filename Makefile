@@ -384,7 +384,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
-        kind-images kind-up kind-e2e kind-down kind-honesty \
+        kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
         view view-list view-stop view-trust view-untrust view-honesty \
         scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
 
@@ -1233,6 +1233,33 @@ kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind
 	  SNAP_BASE_URL='https://hugmesh.net:8443' \
 	  SNAP_HOST_RESOLVER='MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1' \
 	  npx playwright test specs/27-native-login.spec.ts
+
+# ── kind MFA e2e — spec 29 against the REAL kind cluster, at whatever posture that
+# cluster is ACTUALLY holding.
+#
+# `make kind-up MFA=1` exists so the kind lane can carry live route-level MFA
+# enforcement (§8 of docs/MFA-ROLLOUT.md), but until this target there was no way to
+# RUN the MFA spec against either kind lane: kind-e2e runs spec 27 only. The two lanes
+# needed different coverage and got none.
+#
+# The posture is READ BACK off the running gateway pod (scripts/kind-mfa-posture.sh),
+# never taken from the caller's shell and never inferred from the repo. It cannot be
+# inferred from the repo: kind-up flips MFA through an ArgoCD helm PARAMETER, so the
+# committed chart says `mfa.enabled: false` on a cluster that is enforcing. Spec 29
+# SELECTS between its OFF-posture block and its per-row enforcement block on that
+# value, so reading it live means either lane is self-describing and neither can run
+# the wrong block. The helper is fail-closed: no cluster, no reading, no run.
+kind-e2e-mfa: playwright-deps ## run the MFA e2e (spec 29) against the kind cluster at its LIVE posture
+	@posture="$$(bash scripts/kind-mfa-posture.sh --value)" || exit 1; \
+	  echo "==> kind gateway APP_MFA_ENABLED=$${posture} (read from the running pod; flip with 'make kind-up MFA=1')"; \
+	  cd tests/e2e && \
+	    SNAP_BASE_URL='https://hugmesh.net:8443' \
+	    SNAP_HOST_RESOLVER='MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1' \
+	    APP_MFA_ENABLED="$${posture}" \
+	    npx playwright test specs/29-mfa-privileged-floor.spec.ts
+
+kind-mfa-posture: ## print the kind gateway's LIVE APP_MFA_ENABLED (fail-closed; never guesses)
+	@bash scripts/kind-mfa-posture.sh
 
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
