@@ -36,6 +36,9 @@
 #         the probe fails the loop STALLS (DLV_DNS_STALL_INTERVAL at a time, up
 #         to DLV_DNS_STALL_MAX total) WITHOUT consuming attempts, so a transient
 #         DNS outage stalls-and-retries instead of declaring fetch death.
+#         Conversely a permanent HTTP status (DLV_FETCH_FATAL_CODES, default
+#         404/410) fails FAST on the first attempt: the server resolved and
+#         answered "gone", so backoff cannot help and only hides the error.
 #         <dest> "-" streams the body to stdout (buffered through a temp file so
 #         a failed attempt can never leak partial bytes into a pipeline).
 #         Removes a truncated <dest> after every failed attempt.
@@ -90,6 +93,7 @@
 #   DLV_FETCH_BACKOFF=<s>       first backoff sleep, doubles per attempt (default 8)
 #   DLV_FETCH_BACKOFF_CAP=<s>   backoff ceiling per sleep (default 240)
 #   DLV_FETCH_INNER_RETRY=<n>   curl's own --retry per attempt (default 3)
+#   DLV_FETCH_FATAL_CODES="404 410"  HTTP statuses that fail fast (no retry)
 #   DLV_DNS_STALL_INTERVAL=<s>  stall step while the resolver is down (default 30)
 #   DLV_DNS_STALL_MAX=<s>       max total resolver-outage stall (default 1800)
 #   DLV_DNS_PROBE_NAMES="a b"   names dlv_dns_ok resolves (default: the exact
@@ -157,8 +161,25 @@ dlv_require_tools() {
 #     ALSO fails is a DNS outage: the loop stalls (bounded by
 #     DLV_DNS_STALL_MAX) WITHOUT consuming attempts instead of aborting.
 #
+# …and the other side of the same coin: patience must NOT be spent on an
+# artifact that is genuinely GONE. The server answering "404 Not Found" has,
+# by definition, resolved and replied — no amount of backoff will conjure the
+# file, and the wait actively hurts:
+#
+#   * a mistyped --headscale-version/--tailscale-version, or a pinned stage3
+#     that the mirror has since rotated away, used to surface its real error
+#     message ("check --headscale-version") only after ~12 min per builder;
+#   * dlv_verify_stage3 probes "<DIGESTS>.asc" BEST-EFFORT — its 404 is the
+#     NORMAL answer on a mirror that ships a clearsigned .DIGESTS, so every
+#     such build paid the full backoff budget for an expected miss;
+#   * on a fleet queue that cost is per-image, and it buries the diagnosis.
+#
+# So dlv_fetch_retry fails FAST on the permanent HTTP statuses in
+# DLV_FETCH_FATAL_CODES (404/410) and keeps the full budget for everything
+# else — the resolver outage, the 5xx, the reset mid-transfer.
+#
 # Pinned by tests/scripts/test-fetch-retry-hardening.sh (stall semantics,
-# backoff shape, budget floor, and the builders' call-site wiring).
+# backoff shape, budget floor, fail-fast statuses, and the call-site wiring).
 DLV_FETCH_ATTEMPTS="${DLV_FETCH_ATTEMPTS:-8}"
 DLV_FETCH_BACKOFF="${DLV_FETCH_BACKOFF:-8}"
 DLV_FETCH_BACKOFF_CAP="${DLV_FETCH_BACKOFF_CAP:-240}"
@@ -166,6 +187,11 @@ DLV_FETCH_INNER_RETRY="${DLV_FETCH_INNER_RETRY:-3}"
 DLV_DNS_STALL_INTERVAL="${DLV_DNS_STALL_INTERVAL:-30}"
 DLV_DNS_STALL_MAX="${DLV_DNS_STALL_MAX:-1800}"
 DLV_DNS_PROBE_NAMES="${DLV_DNS_PROBE_NAMES:-distfiles.gentoo.org github.com pkgs.tailscale.com}"
+# HTTP statuses that mean "this artifact is genuinely missing", not "try again
+# later": retrying them only delays the real error message. 404 Not Found and
+# 410 Gone only. Deliberately NOT 403 (GitHub rate-limits with 403 and it
+# clears), NOT 401 (a token can be refreshed), NOT 5xx (server-transient).
+DLV_FETCH_FATAL_CODES="${DLV_FETCH_FATAL_CODES:-404 410}"
 
 # dlv_dns_ok — 0 when ANY probe name resolves (resolver alive), 1 when none does.
 # getent uses NSS, so /etc/hosts pins count as "alive" — that is fine: the point
@@ -196,10 +222,15 @@ dlv_fetch_retry() {
             || { dlv_die "mktemp failed for stdout fetch"; return 1; }
         out="${tmp}"
     fi
+    local code=""
     while :; do
-        if curl -fL --retry "${DLV_FETCH_INNER_RETRY}" \
+        # -w '%{http_code}' rides on curl's STDOUT (the body always goes to a
+        # file via -o, even in "-" mode), so capturing it here cannot collide
+        # with the caller's pipeline. "000" when the transfer never got an HTTP
+        # reply at all — a DNS/connect failure, which is exactly not fatal.
+        if code="$(curl -fL --retry "${DLV_FETCH_INNER_RETRY}" \
                 --retry-connrefused --retry-all-errors \
-                "$@" -o "${out}" "${url}"; then
+                -w '%{http_code}' "$@" -o "${out}" "${url}")"; then
             if [ -n "${tmp}" ]; then
                 cat "${tmp}"
                 rm -f "${tmp}"
@@ -207,6 +238,15 @@ dlv_fetch_retry() {
             return 0
         fi
         rm -f "${out}"   # never leave a truncated file that looks cached
+        # Permanent "it is not there" — the server resolved AND answered, so
+        # neither the backoff nor the resolver stall below can change the
+        # outcome. Fail now, with the status in the message.
+        case " ${DLV_FETCH_FATAL_CODES} " in
+            *" ${code} "*)
+                dlv_die "HTTP ${code} — artifact is genuinely missing, not a transient fault; not retrying: ${url}"
+                return 1
+                ;;
+        esac
         if ! dlv_dns_ok; then
             # Resolver outage — NOT this artifact's fault. Stall without
             # consuming an attempt; only a persistent outage is fetch death.
