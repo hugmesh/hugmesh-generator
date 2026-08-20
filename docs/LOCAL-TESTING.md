@@ -99,6 +99,76 @@ IP on port 53. Then every LAN device resolves `*.<domain>` to the cluster.
 That's it — no `/etc/hosts` edits per host, no public DNS, no Cloudflare. The
 e2e runner can target the real brand subdomains once its resolver points here.
 
+## Browsing the mesh from THIS machine
+
+The section above needs a resolver you control. On a workstation with no admin
+password you have neither that nor `/etc/hosts`, and four separate things break
+at once:
+
+1. every front door routes by **Host header**, so `http://localhost:8443/` 404s
+   — the request arrives with the wrong Host, not with no route;
+2. the names do not resolve, and the usual fix is a root-only file;
+3. the https door pairs a **self-signed certificate** with
+   `Strict-Transport-Security`, which Chrome will not let you click through and
+   then remembers for a year — including for later, legitimate use of that name;
+4. several UIs (argocd-server, casdoor, vault, harbor-portal) have no Ingress at
+   all, so there is no door to aim a Host header at.
+
+`make view` solves all four. It serves the doors as **HTTPS on 127.0.0.1** under
+a CA it mints locally, and speaks HTTPS upstream with the correct Host header,
+rewriting redirects, cookies and CSP host sources so an SSO round trip cannot
+escape to a name the browser cannot resolve. Nothing in it needs root.
+
+```bash
+make view-trust        # once per workstation, then restart the browser
+make view              # serve the host shell; `make view-stop` when done
+make view-list         # the domain -> loopback-port map
+```
+
+`make view` is **one door: the host shell**, on `https://127.0.0.1:9080/`.
+That is deliberate. Every user-facing surface is a federated Angular remote
+loaded *through* the shell, so a row of side ports that let you open each
+service directly is exactly how a broken federated route stays invisible until
+production. When you are debugging the platform rather than using it:
+
+```bash
+make view LANE=kind-svc        # ArgoCD, Vault, Casdoor, Harbor
+make view VIEW_ARGS='--only harbor-portal'
+```
+
+### Why it is https and not plain http
+
+Serving plaintext on loopback is the obvious way to dodge problem 3, and it is
+the wrong trade. A plain-http page is a **non-secure context**, so service
+workers, WebCrypto, `Secure` cookies and `SameSite=None` all behave differently
+than they will in the cluster — the exact class of bug local browsing exists to
+catch is the one it would hide. `make view-trust` fixes problem 3 properly.
+
+The CA it installs is **name-constrained** to `localhost`, `127.0.0.0/8` and
+`::1`. This is the part worth understanding before you run it: an unconstrained
+local CA in a browser trust store can vouch for *any* site on the internet, so
+its private key sitting in `out/hugmesh-view/tls/` would be a standing risk to
+every domain you browse. Constrained, the worst it can forge is loopback. It
+goes into this user's own NSS stores (`~/.pki/nssdb`, each Firefox profile) —
+never the system bundle — and `make view-untrust` removes it.
+
+One header is still stripped on the way down: **HSTS**. That is not vestigial.
+HSTS is scoped per *host*, not per port, so a single pinned response on
+127.0.0.1 would force every other plain-http service on this workstation's
+loopback to https for a year. It is the same trap as problem 3, aimed at
+localhost.
+
+### Adding a domain
+
+Append a row to `scripts/hugmesh-view.tsv` — six tab-separated columns
+(`name  lane  host  upstream  local_port  path`). Nothing else: `make view-list`
+will show it, `make view` will serve it, and any *other* door's redirect to that
+hostname is rewritten to its loopback port automatically. A port collision is
+one env var (`HUGMESH_VIEW_PORT_<NAME>`), never an edit to the file.
+
+`make view-honesty` is the offline gate for all of the above (no cluster, no
+network, no root).
+
 ## Going live later (`ENV=prod`)
 
 `make prod` (or `--env prod`) bakes the real domain and **keeps** the cloudflared

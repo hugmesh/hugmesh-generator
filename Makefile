@@ -1244,6 +1244,48 @@ kind-down: ## delete the kind cluster
 kind-honesty: ## offline: prove the kind SSO harness cannot report an unperformed seed
 	bash tests/scripts/test-kind-bootstrap-honesty.sh
 
+# ── local browsing — put ANY front door in THIS machine's browser
+# Sits here because the kind lane is its first consumer, but it covers all
+# local lanes (LANE=kind|kind-svc|compose|device). The problem it solves is that
+# every front door routes by HOST HEADER, the names do not resolve without an
+# /etc/hosts entry (root), and the https door pairs a self-signed cert with
+# HSTS — which Chrome refuses to let you click through and then remembers for a
+# year. hugmesh-view serves the doors as HTTPS on 127.0.0.1 under a
+# loopback-only CA and speaks the right Host upstream. NO root, NO /etc/hosts
+# edit, and — after one `make view-trust` — no cert prompt either. The domain ->
+# port mapping is scripts/hugmesh-view.tsv; every row's port has an env override
+# (HUGMESH_VIEW_PORT_<NAME>) so a collision is a one-line fix.
+#
+# LANE=kind (the default) is ONE door: the host shell. Everything a user
+# reaches, they reach THROUGH it as a federated remote, so exposing each service
+# on its own side port is how a broken federated route stays invisible.
+# LANE=kind-svc opts into the platform's own UIs when you are debugging it.
+# See docs/LOCAL-TESTING.md "Browsing the mesh from THIS machine".
+view: ## serve the local front doors in the browser (LANE=kind|kind-svc|compose|device; OPEN=1 launches it)
+	python3 scripts/hugmesh-view.py up --lane '$(or $(LANE),kind)' --background \
+	  $(if $(OPEN),--open,) $(VIEW_ARGS)
+
+# One-time, per workstation. Installs the loopback-only CA into THIS user's own
+# NSS stores (~/.pki/nssdb for Chrome, each Firefox profile) — user-writable, no
+# root. The CA is name-constrained to localhost/127.0.0.0/8/::1, so it cannot
+# vouch for anything but the loopback doors; `make view-untrust` removes it.
+view-trust: ## trust the local CA so the doors open with no warning (once per machine)
+	python3 scripts/hugmesh-view.py trust $(VIEW_ARGS)
+
+view-untrust: ## remove the local CA from this user's browser trust stores
+	python3 scripts/hugmesh-view.py untrust $(VIEW_ARGS)
+
+view-list: ## show the domain -> loopback-port map (no side effects)
+	python3 scripts/hugmesh-view.py list $(VIEW_ARGS)
+
+view-stop: ## stop the background view session (and sweep any stale port-forwards)
+	python3 scripts/hugmesh-view.py stop $(VIEW_ARGS)
+
+# Offline gate for the above: fake kubectl/ssh on PATH, a loopback stand-in for
+# the upstream, and a negative control per behaviour. No cluster, no network.
+view-honesty: ## offline: prove the view tool's rewrites, collisions and cleanup
+	bash tests/scripts/test-hugmesh-view.sh
+
 playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \
 	  && npx playwright install --with-deps chromium

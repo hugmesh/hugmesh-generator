@@ -443,6 +443,42 @@ lint:kind-bootstrap-honesty:
   script:
     - bash tests/scripts/test-kind-bootstrap-honesty.sh
 
+# Local-browsing gate (scripts/hugmesh-view.py + scripts/hugmesh-view.tsv). The
+# tool exists because every front door routes by HOST HEADER, the names need an
+# /etc/hosts entry nobody has root for, and the https door pairs a self-signed
+# cert with HSTS — a combination Chrome will not let you click through and then
+# remembers for a year. EVERY way that tool can fail is silent: a Host header
+# that does not arrive reads as a broken app; an un-rewritten Location sends the
+# browser mid-SSO to a name that does not resolve; a cookie left carrying
+# `Domain=` is DISCARDED, so the user lands back on the login form with no error
+# anywhere; an un-stripped HSTS header pins 127.0.0.1 itself — HSTS is per HOST,
+# not per port — and forces every OTHER plain-http service on this workstation's
+# loopback to https for a year; and a `kubectl port-forward` that outlives its
+# parent keeps holding the port, so the NEXT run's door quietly serves the
+# PREVIOUS run's service. So the
+# suite drives the real rewrite/collision/cleanup rules and pins each one with a
+# NEGATIVE CONTROL — an arrangement where the same assertion must go red — plus
+# a live proxy leg against a loopback stand-in upstream, a FAKE kubectl that
+# prints the real `Forwarding from 127.0.0.1:<port>` line and then serves, and a
+# temp emulated-device registry. Offline: python3 + bash, no cluster, no kind,
+# no docker, no network, no root.
+lint:hugmesh-view:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    # openssl is REQUIRED, not incidental: the tool mints its own name-constrained
+    # loopback CA with it, and the suite both verifies its own leaf AND proves the
+    # constraint bites by signing a www.example.com cert that must FAIL to verify.
+    # The suite exits 2 rather than skipping when openssl is missing, so a job
+    # image without it would be red for an environmental reason — a broken image,
+    # not a finding. certutil is deliberately NOT installed: the trust leg drives a
+    # FAKE one on PATH, because a gate that can reach a real NSS store is a gate
+    # that can damage an operator's browser.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl
+  script:
+    - bash tests/scripts/test-hugmesh-view.sh
+
 # kubelet join/TLS-bootstrap gate (issue #48). specs/etc/init.d/kubelet hardcoded
 # command_args with no --bootstrap-kubeconfig and never read
 # /var/lib/kubelet/kubeadm-flags.env, so `kubeadm join`'s TLS bootstrap could never
