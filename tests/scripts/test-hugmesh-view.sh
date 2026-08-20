@@ -373,6 +373,17 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(b)))
             self.end_headers(); self.wfile.write(b); return
+        if self.path == "/bounce":
+            # A REAL 3xx, which nothing else in this file emits: every other
+            # Location above rides on a 200, and no HTTP client follows one of
+            # those. So those assertions pass just as happily against a proxy
+            # that chased the redirect ITSELF — the exact bug this path exists
+            # to catch. The target deliberately names a host that does not
+            # resolve here, because that is what the real SSO bounce sends.
+            self.send_response(302)
+            self.send_header("Location", "https://hugmesh.net/login/")
+            self.send_header("Content-Length", "0")
+            self.end_headers(); return
         SEEN_LAST.clear()
         SEEN_LAST.update({k.lower(): v for k, v in self.headers.items()})
         b = b'<a href="https://hugmesh.net/next">next</a>'
@@ -445,6 +456,38 @@ has "${seen}" '"host": "hugmesh.net"' "the UPSTREAM sees Host: hugmesh.net — t
 has "${seen}" '"x-forwarded-proto": "https"' "X-Forwarded-Proto is https so the app builds https URLs"
 has "${seen}" '"accept-encoding": "identity"' \
     "Accept-Encoding is forced to identity (a br/zstd body would silently defeat the rewrite)"
+
+# ── the 3xx every assertion above is blind to ────────────────────────────────
+# The Location checks above ride on a 200, and no client follows one of those,
+# so they stayed green while the proxy was FOLLOWING upstream redirects itself —
+# which is urlopen's default and cannot work here: the Location names a host
+# that does not resolve on this machine (problem 2), so the follow died inside
+# the proxy and the door answered 502 `[Errno -5] No address associated with
+# hostname`. That is the SSO bounce, the one response shape this tool exists
+# for, and it 502'd. The BROWSER must follow it, against the rewritten
+# authority. `--no-follow`-style probe, so the 3xx itself is what is asserted.
+nofollow() {
+    python3 - "$1" "${2:-}" <<'PY'
+import ssl, sys, urllib.error, urllib.request
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k): return None
+handlers = [NoRedirect]
+if sys.argv[2]:
+    handlers.append(urllib.request.HTTPSHandler(
+        context=ssl.create_default_context(cafile=sys.argv[2])))
+op = urllib.request.build_opener(*handlers)
+try:
+    r = op.open(sys.argv[1], timeout=15); print(r.status, r.headers.get("Location"))
+except urllib.error.HTTPError as e: print(e.code, e.headers.get("Location"))
+except Exception as e: print("ERROR", e)
+PY
+}
+eq "$(nofollow "https://127.0.0.1:${DOOR_PORT}/bounce" "${CA}")" \
+   "302 https://127.0.0.1:${DOOR_PORT}/login/" \
+   "a REAL 302 reaches the browser with its Location rewritten, not followed inside the proxy"
+eq "$(nofollow "http://127.0.0.1:${UP_PORT}/bounce")" \
+   "302 https://hugmesh.net/login/" \
+   "control: the upstream really does 302 to a host that does not resolve here"
 
 # An old http:// bookmark must still land, on the SAME port.
 redir="$(python3 - "http://127.0.0.1:${DOOR_PORT}/login/" <<'PY'
