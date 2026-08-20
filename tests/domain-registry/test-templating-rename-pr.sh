@@ -21,7 +21,9 @@
 #       CI include), the renames[] demo lands (docs/BRANDING-<org-slug>.md),
 #       STACK-CRITICAL files (Makefile, tests/stack/compose.local.yaml) are
 #       BYTE-UNTOUCHED, zero residual {{TOKEN}}s; render-tenant-set.js admits
-#       archetype 'generator' and its residual sweep stays green.
+#       archetype 'generator' and its residual sweep stays green; plus the
+#       ALL-archetype drift sweep (validate-repo-templates-all.sh) grading every
+#       archetype on disk and failing closed on a base it cannot resolve.
 #   [C] --ref plumbing — pull-repo-base.sh --ref (fresh clone at a tag, cached
 #       re-pin, fail-closed bogus ref, --foreign refusal), render-repo-tree.sh
 #       --ref (tag content rendered, .hugmesh-base-ref marker written).
@@ -31,8 +33,25 @@
 #       --pr-without-version refusal; default (no --pr) mode still pushes main
 #       ff-only with no /pulls call.
 #
-# SKIPs (exit 0) only if a required tool is genuinely absent.
+# A MISSING TOOL IS INCOMPLETE (exit 3), NEVER A GREEN SKIP. This suite used to
+# print one SKIP line and exit 0 when node/jq/handlebars were absent, so an
+# unprovisioned host reported success for a run that checked NOTHING — and
+# handlebars is not installed by anything in a fresh checkout, so a "61 passed"
+# sweep could be a skip nobody read. Same disease, same cure as
+# scripts/validate-reserved-prefixes.sh's INCOMPLETE exit: fail loudly, and make
+# the opt-out explicit. ALLOW_SKIP=1 downgrades it to exit 0 for a developer who
+# knowingly lacks the toolchain. NEVER set that in CI — templating-rename-verify
+# installs handlebars precisely so the suite runs.
 set -uo pipefail
+
+ALLOW_SKIP="${ALLOW_SKIP:-0}"
+_skip() {
+  echo "SKIP: $*"
+  [ "${ALLOW_SKIP}" = "1" ] && exit 0
+  echo "INCOMPLETE: this suite checked nothing — install the missing tool, or re-run" >&2
+  echo "with ALLOW_SKIP=1 to accept an unchecked run. Refusing to exit 0." >&2
+  exit 3
+}
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RECIPE_JS="${REPO}/scripts/tooling/render-recipe.js"
@@ -42,10 +61,10 @@ PUB="${REPO}/scripts/publish-tenant-set.sh"
 RTS_JS="${REPO}/scripts/tooling/render-tenant-set.js"
 
 for t in node jq git tar realpath sha256sum; do
-  command -v "$t" >/dev/null || { echo "SKIP: need $t"; exit 0; }
+  command -v "$t" >/dev/null || _skip "need $t"
 done
 [ -d "${REPO}/scripts/tooling/node_modules/handlebars" ] \
-  || { echo "SKIP: handlebars not installed (cd scripts/tooling && npm install)"; exit 0; }
+  || _skip "handlebars not installed (cd scripts/tooling && npm install)"
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -436,6 +455,33 @@ if ( cd "$REPO" && bash scripts/validate-repo-templates.sh --archetype generator
      >"${WORK}/B8.out" 2>"${WORK}/B8.err"; then
   ok "B8 drift oracle GREEN on the real generator base (validate-repo-templates)"
 else bad "B8 drift oracle: $(grep DRIFT "${WORK}/B8.out" | head -n2 | tr '\n' ' ')"; fi
+
+# B9 guards the SWEEP the B8 gate is wired into. B8 grades ONE archetype and was, for
+# most of this gate's life, its ONLY automated caller — the other five overlays rotted
+# behind it, three of them carrying a drift no pipeline could see. scripts/validate-
+# repo-templates-all.sh ENUMERATES templates/archetypes/*, so this asserts (a) every
+# archetype directory on disk shows up in the summary — a hardcoded list is how the
+# coverage hole happened in the first place — and (b) an archetype whose base cannot
+# be resolved is reported ERROR and FAILS the sweep, because an unrunnable gate is the
+# same vacuous green as a missing one. Hermetic: OFFLINE=1 over an EMPTY base cache, so
+# the five exemplar members are deliberately unreachable and only `generator` (whose
+# base is this checkout) can grade.
+ALL_ARCH="$(for d in "${REPO}"/templates/archetypes/*/; do basename "$d"; done | sort)"
+if ( cd "$REPO" && OFFLINE=1 REPO_BASE_CACHE="${WORK}/empty-base-cache" \
+      bash scripts/validate-repo-templates-all.sh ) >"${WORK}/B9.out" 2>"${WORK}/B9.err"; then
+  bad "B9 archetype sweep exited 0 with every exemplar base unreachable — vacuous green"
+else
+  SEEN="$(sed -n 's/^  \(PASS\|DRIFT\|ERROR\)  *\([a-z0-9-]*\).*/\2/p' "${WORK}/B9.out" | sort)"
+  [ "$SEEN" = "$ALL_ARCH" ] \
+    && ok "B9 archetype sweep grades EVERY archetype on disk ($(echo $ALL_ARCH | tr '\n' ' '))" \
+    || bad "B9 sweep covered [$(echo $SEEN | tr '\n' ' ')] of [$(echo $ALL_ARCH | tr '\n' ' ')]"
+  grep -q "^  ERROR " "${WORK}/B9.out" \
+    && ok "B9b an unresolvable base is reported ERROR and fails the sweep (not skipped green)" \
+    || bad "B9b unreachable bases did not surface as ERROR"
+  grep -qE "^  PASS  +generator( |$)" "${WORK}/B9.out" \
+    && ok "B9c the sweep still grades 'generator' against this checkout (B8's base, offline)" \
+    || bad "B9c generator archetype was not graded against this checkout"
+fi
 
 # ── [C] --ref plumbing against a LOCAL file:// upstream ────────────────────────
 echo "-- [C] --ref versioned pull (local file:// upstream, no network) --"

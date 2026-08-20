@@ -2686,6 +2686,52 @@ templating-rename-verify:
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
+# ARCHETYPE TEMPLATE-DRIFT gate, ALL archetypes (scripts/validate-repo-templates-all.sh).
+# docs/MESH-TEMPLATING.md asked for this in Phase 2 — "wire it into CI beside the
+# reserved-prefix guard" — and nobody ever did: the ONLY automated caller of
+# scripts/validate-repo-templates.sh was case B8 of test-templating-rename-pr.sh, which
+# grades `--archetype generator` alone. Three of the six overlays (spring-bff,
+# angular-host, remote-fragment) were carrying a drift each, undetected, because no
+# pipeline had ever looked at them — a repair that took the tree to "0 drift" was scoped
+# to `--archetype angular-mfe`. This job grades EVERY archetype and fails the build on
+# any drift in any of them.
+#
+# THE EXEMPLAR CLONES ARE THE GATE, NOT A CONVENIENCE — same lesson as
+# lint:reserved-prefixes above. The overlays are asserted against the RUNNING sibling
+# repos, so pull-repo-base.sh is pointed at THIS pipeline's own forge (job token, no
+# PAT) rather than the public GitHub default. A base it cannot reach exits 2, which the
+# sweep reports as ERROR and fails on: an unrunnable gate is the same vacuous green as
+# a missing one.
+#
+# Runs on the default branch as well as on MRs on purpose. Most of this file's drift
+# arrives from the OTHER side — a sibling repo edits the anchored region — so a
+# changes:-only rule would never fire on the commit that actually causes the drift.
+template-drift-verify:
+  stage: verify
+  image: node:20-alpine
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash git jq coreutils grep sed gawk findutils
+    - (cd scripts/tooling && npm ci --no-audit --no-fund)
+    # The clone base for the exemplar members. dirname of CI_REPOSITORY_URL keeps the
+    # embedded job-token credential, exactly as lint:reserved-prefixes does it.
+    - export GIT_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+  script:
+    # Fail-closed on a silent no-op install: handlebars absent means the drift oracle
+    # cannot render, and the gate would exit 2 for an environmental reason.
+    - test -d scripts/tooling/node_modules/handlebars
+    - bash scripts/validate-repo-templates-all.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - templates/archetypes/**/*
+        - scripts/validate-repo-templates.sh
+        - scripts/validate-repo-templates-all.sh
+        - scripts/pull-repo-base.sh
+        - scripts/tooling/**/*
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
 # THE GUARD OVER THE GUARDS (tests/scripts/test-guard-integrity.sh). Three
 # distinct "this guard cannot fail" defects shipped on main and each was found by
 # hand, after the fact:
