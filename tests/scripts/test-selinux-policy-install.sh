@@ -909,6 +909,41 @@ if [ -f "${PROV}" ]; then
     sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep -qE 'semodule .*-i ' \
         && ok "the explicit load uses semodule -i (installs into the store)" \
         || bad "the explicit load does not call semodule -i"
+    # ── the per-module visibility layer (issue #45) ───────────────────────────
+    # The original block ran ONE batched `semodule -i ... 2>/dev/null || warn`,
+    # so a failing module vanished: no reason, no per-module verdict, green run.
+    # All four 2026-08-14 QEMU rows shipped base-policy-only nodes behind
+    # exactly that warn. These assertions pin the layer that fixed it.
+    blk="$(sed -n "${ld_ln},${rl_ln}p" "${PROV}")"
+    # Comments are excluded: the block's own rationale QUOTES the old defective
+    # spelling ("semodule -i ... 2>/dev/null || warn") and must not trip this.
+    if printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -E 'semodule .*-i ' | grep -q '2>/dev/null'; then
+        bad "a semodule -i in the load block still discards stderr to /dev/null — a failing module is invisible again"
+    else
+        printf '%s\n' "${blk}" | grep -qE 'semodule -s "\$\{type\}" -i \$\{hm_mods\} 2>"' \
+            && ok "the manifest load CAPTURES semodule stderr (per-batch, into the provision log)" \
+            || bad "the manifest load no longer captures semodule stderr"
+    fi
+    printf '%s\n' "${blk}" | grep -qE 'for hm_pp in \$\{hm_mods\}' \
+        && ok "batch failure falls back to a per-module retry (isolates the offender, stderr per module)" \
+        || bad "no per-module retry loop — a batch failure cannot name the offending module"
+    # The WRITE itself (the > redirect), not any line that merely mentions the
+    # file name — a warn string naming the path must not keep this green.
+    { printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -qE '> "\$\{STATE_DIR\}/selinux-modules.status"' \
+      && printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -qE 'semodule -s "\$\{type\}" -l'; } \
+        && ok "per-module verdicts are derived from the STORE (semodule -l) and written machine-readably (selinux-modules.status)" \
+        || bad "the machine-readable per-module status (selinux-modules.status, derived from semodule -l) is gone"
+    # Non-comment lines only: the block's rationale comment NAMES the function,
+    # and a grep that matches prose would survive the call being deleted.
+    printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -q 'selinux_provision_failed' \
+        && ok "a non-loaded manifest module records the selinux-load-failed marker (enforce-gate refuses on it)" \
+        || bad "module-load failure no longer records the selinux-load-failed marker"
+    # Matched pair: provision.sh writes selinux-modules.status, the QEMU
+    # assertions read it. Either half alone is a silent regression.
+    QASRT="${GEN}/tests/qemu/assertions.sh"
+    { grep -q 'selinux-modules.status' "${PROV}" && grep -q 'selinux-modules.status' "${QASRT}" 2>/dev/null; } \
+        && ok "selinux-modules.status is a matched pair (provision.sh writes, tests/qemu/assertions.sh asserts)" \
+        || bad "selinux-modules.status halves diverged (provision=$(grep -c 'selinux-modules.status' "${PROV}"), assertions=$(grep -c 'selinux-modules.status' "${QASRT}" 2>/dev/null || echo 0))"
     # ── the first-boot postcondition + autorelabel semantics (issue #45 a/c) ──
     # /.autorelabel REQUESTS a relabel and is removed by whoever completes one.
     # provision_selinux() is the relabeler here, so it must CONSUME the flag on
@@ -935,6 +970,8 @@ if [ -f "${PROV}" ]; then
         || bad "selinux-built marker halves diverged (lib=$(grep -c 'selinux-built' "${LIB}"), provision=$(grep -c 'selinux-built' "${PROV}"))"
 else
     bad "provision.sh missing"; bad "(order)"; bad "(manifest-driven)"; bad "(semodule -i)"
+    bad "(stderr capture)"; bad "(per-module retry)"; bad "(per-module status)"
+    bad "(failure marker on non-loaded module)"; bad "(status matched pair)"
     bad "(autorelabel consumption)"; bad "(policy-loaded postcondition)"
     bad "(selinux-load-failed pair)"; bad "(selinux-built pair)"
 fi

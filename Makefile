@@ -1120,6 +1120,18 @@ qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=
 qemu-matrix-enumerate: ## dry-run enumerate every matrix row + its launcher/size/RAM (no boot, no build)
 	tests/qemu/run-matrix-e2e.sh --dry-run $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
 
+# SELinux AVC workout (issue #45): boot ONE image, drive the workloads
+# specs/selinux/*.te confine, harvest AVCs, and emit the narrowing report
+# (denials grouped by source type -> owning .te). Run once per image type.
+# ENFORCING=1 runs the workload under `setenforce 1` (the enforcing campaign);
+# the boot itself always provisions permissive, like the enforce-gate posture.
+.PHONY: avc-workout
+PLATFORM ?= x86
+avc-workout: ## SELinux AVC workout for ONE image: make avc-workout PLATFORM=x86 ROLE=pki [IMG=…] [ENFORCING=1]
+	$(SUDO) tests/qemu/avc-workout.sh --platform $(PLATFORM) --role $(ROLE) -w "$(WORK_DIR)" \
+	  $(if $(IMG),--img "$(IMG)",) $(if $(BOARD),--board "$(BOARD)",) \
+	  $(if $(KERNEL),--kernel "$(KERNEL)",) $(if $(filter 1,$(ENFORCING)),--enforcing,)
+
 # Containerized emulated-device tests (tests/qemu/run-qemu-docker.sh): one
 # --privileged container per platform/role row, against a build session's
 # artifacts. NO $(SUDO) on purpose — the whole point of the container is that
