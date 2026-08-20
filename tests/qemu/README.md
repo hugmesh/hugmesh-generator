@@ -65,6 +65,8 @@ runner polls until `--timeout`. Console output is captured to
 | `launch-pi.sh` | Boot a Pi kernel+stage4 under `-M virt` with a KEYS disk. |
 | `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts/orangepi4-lts) under `-M virt` (kernel+DTB direct). |
 | `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
+| `mesh-cluster.sh` | Opt-in 3-node k8s cluster: CP `kubeadm init` + two pinned-token joins over a shared QEMU mcast L2 (issue #48). |
+| `mesh-cluster_test.sh` | Static gate + hermetic tests for the mesh-cluster lane (nothing boots; also run by `check.sh`'s smokes + CI `lint:qemu-mesh-cluster`). |
 | `matrix-assertions.sh` | `assert_size` / `assert_build_load` / `assert_runtime_load` helpers (limits read from the code). |
 | `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |
 | `assertions.sh` | The node checks, executed inside the guest over SSH. |
@@ -73,6 +75,40 @@ runner polls until `--timeout`. Console output is captured to
 | `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
 | `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
 | `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `check.sh`'s smokes). |
+
+## 3-node emulated k8s cluster (`mesh-cluster.sh`, issue #48)
+
+Multi-node needs two things the single-node lane never exercised: the kubelet
+join fix (PR A, `specs/etc/init.d/kubelet`) and a shared L2 so the emulated
+nodes see each other. `launch-x86.sh --mesh-net ADDR:PORT` (default-off)
+attaches a **second** virtio NIC on a QEMU UDP-multicast socket netdev — every
+node passing the same SPEC lands on one broadcast domain, while the slirp NIC
+keeps its per-node SSH/API hostfwds. `--mesh-mac` / `--mesh-id N` give each
+node a distinct MAC (`52:54:00:6d:65:NN`).
+
+`mesh-cluster.sh` drives three launches behind qcow2 overlays (the golden
+images are never written, and overlays are **never** committed back — a
+`qemu-img commit` against a live device silently rewrites the golden artifact).
+All join material is minted **offline**: a throwaway cluster CA goes onto the
+CP's KEYS stick (`kubernetes/pki`), the bootstrap token is pinned in its
+kubeadm-config, and the workers' KEYS carry the matching
+`.kubernetes.join.{api_server,token,ca_cert_hash}` — so no serial scraping.
+Static IPs ride `KEYS/network/mesh0.nmconnection` bound to each mesh MAC
+(the shared L2 has no DHCP). Gates: the CP's `Running kubeadm init` →
+`First control plane initialised` → `=== keys-provision complete ===` console
+markers, `Joined cluster (` on both workers, and `kubectl get nodes` listing 3
+registered nodes (Ready needs a CNI — that is the post-build campaign's phase,
+reported not gated).
+
+```bash
+make qemu-mesh-enumerate                          # the plan; nothing boots
+make qemu-mesh WORK_DIR=out/sessions/<id>/artifacts   # opt-in real 3-node boot
+HUGMESH_QEMU_MESH=1 tests/qemu/mesh-cluster.sh --img <golden.img>
+```
+
+Headscale/tailscale stay **off** here (phase 2, LAN cluster). The
+mesh-faithful variant (headscale + MagicDNS + a `reusable:true` preauth key)
+is phase 3 on the same plumbing.
 
 ## SELinux AVC workout (`avc-workout.sh`, issue #45)
 
