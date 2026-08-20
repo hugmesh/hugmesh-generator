@@ -321,9 +321,37 @@ for b in "${BUILDERS[@]}"; do
     grep -q 'STAGE3_LOCAL="\${BUILD_ROOT}' "${p}"            && miss+=" legacy-seed-path"
     [ -z "${miss}" ] && ok "K ${b}: full shared-assets wiring" || bad "K ${b}: missing:${miss}"
 done
+# x86 (issue #46): the pool is the SHARED per-arch dir (snap-build-x86) BIND-MOUNTED
+# over the chroot's PKGDIR (/var/cache/binpkgs) — its own seams, distinct from the
+# cross builders' make.conf PKGDIR rewrite. Each probe is one required link in the
+# chain; losing any single one silently reverts wave-1's 0% reuse or, worse, lets
+# the Phase-8 rm -rf reach THROUGH a still-attached bind into the fleet's pool.
+p="${REPO}/build-x86-host-stage4.sh"
+miss=""
+grep -q 'X86_POOL_DIR="$(sa_pool_dir "${SHARED_ROOT}" "${BOARD_POOL_KEY}")"' "${p}" \
+                                                              || miss+=" pool-dir-resolution"
+grep -q 'sa_pool_hold "${X86_POOL_DIR}"' "${p}"               || miss+=" sa_pool_hold"
+grep -q 'sa_pool_guard "${X86_POOL_DIR}" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH}"' "${p}" \
+                                                              || miss+=" profile-keyed-shared-guard"
+grep -q 'pool_fingerprint_preflight "${SYSROOT}/var/cache/binpkgs" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH}"' "${p}" \
+                                                              || miss+=" profile-keyed-private-guard"
+grep -q 'mount --bind "${X86_POOL_DIR}" "${SYSROOT}/var/cache/binpkgs"' "${p}" \
+                                                              || miss+=" bind-mount"
+grep -qE 'X86_POOL_MOUNTED.*umount -l "\$\{SYSROOT\}/var/cache/binpkgs"' "${p}" \
+                                                              || miss+=" umount-on-exit"
+grep -q 'mountpoint -q "${SYSROOT}/var/cache/binpkgs"' "${p}" || miss+=" post-umount-guard"
+grep -q '_plan SHARED_POOL        "${X86_POOL_DIR' "${p}"     || miss+=" PLAN_SHARED_POOL"
+[ -z "${miss}" ] && ok "K build-x86-host-stage4.sh: shared POOL wiring (bind + guard + writer lock + detach guards)" \
+                 || bad "K build-x86-host-stage4.sh: missing:${miss}"
+# ... and the OLD profile-less preflight spelling must never come back (PR #44
+# deferral: an empty PROFILE component was exactly the un-keyed stamp being migrated).
+grep -qE 'pool_fingerprint_preflight "\$\{SYSROOT\}/var/cache/binpkgs" "\$\{SYSROOT\}/etc/portage/make.conf" ""' "${p}" \
+    && bad "K build-x86-host-stage4.sh: profile-LESS preflight resurrected (empty PROFILE component)" \
+    || ok "K build-x86-host-stage4.sh: no profile-less preflight remains"
+
 # The nine CROSS builders additionally route their POOL through the shared root.
 for b in "${BUILDERS[@]}"; do
-    [ "${b}" = "build-x86-host-stage4.sh" ] && continue    # chroot-internal pool by design
+    [ "${b}" = "build-x86-host-stage4.sh" ] && continue    # x86 pool seams asserted above
     p="${REPO}/${b}"
     miss=""
     grep -q 'sa_pool_guard "\${POOL_DIR}"' "${p}"            || miss+=" sa_pool_guard"

@@ -60,7 +60,7 @@ def _infra_service_options(platform: str) -> list[tuple[str, tuple[str, ...]]]:
     if len(expr) > 1:                                   # a "both" option (rpi5)
         opts.append((" + ".join(labels[s] for s in expr), tuple(expr)))
     return opts
-from ._widgets import status_badge
+from ._widgets import NoWheelComboBox, status_badge
 
 # The GPU-bearing mesh roles (Notes-column callout); mirrors the builder's GPU roles.
 _GPU_ROLES = ("be+gpu", "edge_ai", "gpu-host")
@@ -406,13 +406,20 @@ class WorklistPage(QtWidgets.QWizardPage):
         # rpi5/rpi4 only — rpi3 is desktop-only (1GB RAM can't host the node stack), so
         # offering it here would let a superadmin queue a build that hard-errors. Every
         # other platform's board list is role-independent (_BOARD_CHOICES).
+        #
+        # ALL combos embedded in this tree are NoWheelComboBox — a plain QComboBox
+        # eats wheel events while the operator scrolls the 17-row table and silently
+        # flips the value under the cursor. That is how the wave-1 rpi5-desktop.rpi5
+        # entry became board=rpi4 (one notch below the rpi5 default) and re-keyed its
+        # binpkg pool to the cold snap-build-pi4 (issue #46); the same flip on the
+        # encrypt combo would silently toggle a node's disk encryption.
         boards = rpi_boards_for_role(role) if platform == "rpi5" else _BOARD_CHOICES.get(platform)
         if boards:
-            board_combo = QtWidgets.QComboBox()
+            board_combo = NoWheelComboBox()
             board_combo.addItems(list(boards))
             self.tree.setItemWidget(item, _COL_BOARD, board_combo)
         if _FLAVOR_CHOICES.get(platform):
-            flavor_combo = QtWidgets.QComboBox()
+            flavor_combo = NoWheelComboBox()
             flavor_combo.addItems(list(_FLAVOR_CHOICES[platform]))
             self.tree.setItemWidget(item, _COL_FLAVOR, flavor_combo)
 
@@ -422,12 +429,12 @@ class WorklistPage(QtWidgets.QWizardPage):
         # the Home-step choice) — additive + byte-identical for existing worklists.
         enc_combo = None
         if platform == "jetson":
-            disp = QtWidgets.QComboBox()
+            disp = NoWheelComboBox()
             disp.addItem("off — jetson cannot encrypt")
             disp.setEnabled(False)
             self.tree.setItemWidget(item, _COL_ENC, disp)
         else:
-            enc_combo = QtWidgets.QComboBox()
+            enc_combo = NoWheelComboBox()
             enc_combo.addItems(list(_ENC_CHOICES))
             self.tree.setItemWidget(item, _COL_ENC, enc_combo)
 
@@ -437,7 +444,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         services_combo = None
         infra_opts = _infra_service_options(platform)
         if infra_opts:
-            services_combo = QtWidgets.QComboBox()
+            services_combo = NoWheelComboBox()
             for label, tup in infra_opts:
                 services_combo.addItem(label, tup)
             self.tree.setItemWidget(item, _COL_SERVICES, services_combo)
