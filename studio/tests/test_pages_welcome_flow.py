@@ -176,11 +176,15 @@ def test_plain_next_from_sessions_continues_into_the_menu(wiz):
 # ── (e) ModePage journey order ────────────────────────────────────────────────────────
 
 def test_mode_page_order_matches_the_operators_journey(wiz):
+    # the #67 journey order, grown in place by the cards #65 (localcloud) and
+    # #69 (meshemu) added — this pin lagged both merges (it failed on main).
     page = wiz.page(wiz._page_ids["mode"])
     assert [m for m, _, _ in page.modes] == [
         "localmesh",     # local mesh first…
+        "localcloud",    # …turning that local mesh into node images (#65)
         "mesh",          # …then the production mesh (node images)
         "qemu",          # …then QEMU emulation of the built images
+        "meshemu",       # …then whole-mesh emulation (#69)
         "deploy", "phone", "quest",   # publish / flash+enroll side-flows
         "cloud", "standalone",        # the single-image desktop builds
     ]
