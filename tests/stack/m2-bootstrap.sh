@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# m2-bootstrap.sh — build the PRIVATE systems.hugmesh Maven artifacts FROM
+# m2-bootstrap.sh — build the PRIVATE net.hugmesh Maven artifacts FROM
 # SOURCE and serve them to `docker compose build` as a GitLab-shaped static
 # Maven registry container. This is the COLD-BUILD prerequisite for the four
 # Java services whose Dockerfiles resolve org-private artifacts
 # (hugmesh-admin-bff-api, hugmesh-user-bff-api, hugmesh-mod-bff-api,
 # hugmesh-federation-api): their committed settings.xml resolves
-# systems.hugmesh:* from
+# net.hugmesh:* from
 #   ${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven
 # which exists only in the org's GitLab. On a dev box with no GitLab access
 # (or after a docker data-root wipe purged all images), `make stack-up` must
@@ -64,9 +64,9 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 # repo | commit SHA | artifactId | version | expected files (pom|jar|jar+tests)
 #
 # Version pins mirror what the SERVICES' current main poms require (all four BFFs
-# resolve systems.hugmesh:hugmesh-parent:2.8.0 after the HugMesh rebrand;
+# resolve net.hugmesh:hugmesh-parent:2.8.0 after the HugMesh rebrand;
 # these SHAs are each sibling repo's current main, whose pom declares exactly the
-# systems.hugmesh:* coordinate+version below — the pre-rebrand pins built
+# net.hugmesh:* coordinate+version below — the pre-rebrand pins built
 # the retired coordinate at @2.7.0, which no longer matches have_artifact's hugmesh path):
 #   hugmesh-build-config 0.5.0 — parent's PMD/spotbugs ruleset plugin dep. It has NO
 #                                 <parent> of its own, so it BUILDS FIRST (standalone).
@@ -81,7 +81,7 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 #                                 drifted twice the same way (2.4.0 -> 2.4.1 ->
 #                                 2.4.2): the consumers bump, the cold build dies at
 #                                 user-bff with "Could not find artifact
-#                                 systems.hugmesh:hugmesh-auth-core:jar:<new> in
+#                                 net.hugmesh:hugmesh-auth-core:jar:<new> in
 #                                 gitlab-maven". tests/stack/test-m2-bootstrap.sh's
 #                                 pin-drift guard exists for exactly this — keep it
 #                                 in CI and run it after every auth-core release.
@@ -126,11 +126,13 @@ EOF
 fi
 
 have_artifact() { # artifactId version kind(pom|jar|jar+tests) groupPath
-  # groupPath is passed per-artifact and NOT assumed: hugmesh-commons moved to
-  # net.hugmesh (completing the .net domain move) while build-config/parent/
-  # auth-core are still systems.hugmesh. Hard-coding one group here made the
-  # script report a SUCCESSFUL build as "still missing", because it looked for
-  # the jar under the group the artifact no longer publishes to.
+  # groupPath is passed per-artifact and NOT assumed. hugmesh-commons moved to
+  # net.hugmesh first (completing the .net domain move) while build-config/
+  # parent/auth-core still published as systems.hugmesh, so for a while the four
+  # pins genuinely spanned TWO groups; all four are net.hugmesh today. Hard-coding
+  # one group here made the script report a SUCCESSFUL build as "still missing",
+  # because it looked for the jar under the group the artifact no longer
+  # publishes to — keep this per-artifact so the next split cannot repeat it.
   local base="${M2_REPO}/${4}/$1/$2/$1-$2"
   [ -f "${base}.pom" ] || return 1
   case "$3" in
