@@ -11,7 +11,7 @@
 #
 # Usage (in a scheduled pipeline's .gitlab-ci.yml):
 #   include:
-#     - project: 'snapdragon-systems/hugmesh-generator'
+#     - project: 'hugmesh/hugmesh-generator'
 #       file: '/tests/ci/org-integration-stage.gitlab-ci.yml'
 #   org-mainline:
 #     extends: .org-mainline-from-source
@@ -47,7 +47,7 @@
     # Shallow-clone each lib + dependent at its default branch (CI_JOB_TOKEN has read
     # access to the group's repos). The script then builds the libs from source.
     - mkdir -p "$GITHUB_ROOT"
-    - BASE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/snapdragon-systems"
+    - BASE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/hugmesh"
     - for r in hugmesh-commons hugmesh-auth-core $DEPENDENTS; do
         git clone --depth 1 "$BASE/$r.git" "$GITHUB_ROOT/$r" || exit 1;
       done

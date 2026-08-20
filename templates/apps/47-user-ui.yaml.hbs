@@ -14,7 +14,7 @@ spec:
     kustomize:
       namespace: {{BRAND}}-frontend
       images:
-        - name: snapdragon-systems/user-ui
+        - name: hugmesh/user-ui
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-user-ui
           newTag: main
   destination:

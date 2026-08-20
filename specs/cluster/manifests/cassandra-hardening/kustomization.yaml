@@ -20,7 +20,7 @@ namespace: hugmesh-pki
 #   the superuser + auth posture -> apps/00-cassandra.yaml (dbUser.existingSecret)
 #   the consumer env             -> the gateway chart + admin-bff/federation manifests
 # The role/grant matrix moved with it AND was corrected on the way: the gateways
-# are the snapdragon_gateway SCHEMA OWNERS (their image runs the CQL migration
+# are the hugmesh_gateway SCHEMA OWNERS (their image runs the CQL migration
 # runner), not read-only consumers — see manifests/cassandra-init/bootstrap-
 # configmap.yaml. Applying the old SELECT-only matrix would have swapped an
 # authentication failure for an authorization one.

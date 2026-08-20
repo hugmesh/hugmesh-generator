@@ -7,13 +7,13 @@
 # brand-neutral, Host mapping via APP_TENANCY_HOSTS env — NOT a literal predicate).
 # So the ONLY in-source brand token is the CI include org/group; everything else
 # brand-coupled lives in DEPLOY ENV (see deploy/*.hbs, class-A). Java + the
-# literal SPRING_APPLICATION_NAME (snapdragon-<profile>-gateway, code identity)
+# literal SPRING_APPLICATION_NAME (hugmesh-<profile>-gateway, code identity)
 # are NEVER templated.
 edits:
   - file: .gitlab-ci.yml
     optional: false
     anchors:
       - id: ci-include-org
-        find: "Snapdragon-Systems/snapdragon-generator"
+        find: "hugmesh/hugmesh-generator"
         replace: "{{GENERATOR_ORG_GROUP}}"
         required: true

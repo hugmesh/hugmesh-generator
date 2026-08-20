@@ -217,15 +217,22 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
       // header, subprotocol prefix. (The tag:hugmesh.net mesh form is rejected
       // by the DNS/mesh VALIDATOR on the reconcile path — asserted in d1 above — not
       // by isFrozen, whose label-ns match is the slashed 'hugmesh.net/' key.)
-      const frozen = ["hugmesh.net/domain","X-HugMesh-Local","snapdragon.device-terminal.stepup.x"];
+      const frozen = ["hugmesh.net/domain","X-HugMesh-Local","hugmesh.device-terminal.stepup.x"];
+      // THE BAN SIDE (tokens.json retired_protocol_constants): the spellings the
+      // HugMesh rebrand RETIRED must still be refused at emit, or the templating
+      // path silently becomes the way the dead token comes back.
+      const retired = ["snapdragon.systems/image-build","X-Snapdragon-Local","snapdragon.device-terminal.stepup.x"];
       const denied = ["CASDOOR_ADMIN_CLIENT_SECRET","ROOT_PASS","APP_REGISTRY_SIGNING_KEY"];
       for (const t of frozen) if (!c.isFrozen(t)) { console.error("NOT frozen:", t); process.exit(1); }
+      for (const t of frozen) if (c.isRetired(t)) { console.error("live constant wrongly RETIRED:", t); process.exit(1); }
+      for (const t of retired) if (!c.isFrozen(t)) { console.error("retired constant NOT refused:", t); process.exit(1); }
+      for (const t of retired) if (!c.isRetired(t)) { console.error("retired constant not flagged:", t); process.exit(1); }
       for (const t of denied) if (!c.isDenied(t)) { console.error("NOT denied:", t); process.exit(1); }
       if (c.isAllowed("hugmesh.net/domain")) { console.error("frozen ns wrongly ALLOWED"); process.exit(1); }
       process.exit(0);
     ' "${TOKEN_CLASSIFIER}" >/dev/null 2>&1; then
-        ok "(d) token-classifier isFrozen()/isDenied() reject hugmesh.net/* + wire headers + secret keys"
-    else bad "(d) token-classifier did NOT reject a frozen/denied protocol constant"; fi
+        ok "(d) token-classifier isFrozen()/isDenied() reject hugmesh.net/* + wire headers + secret keys + the RETIRED spellings"
+    else bad "(d) token-classifier did NOT reject a frozen/retired/denied protocol constant"; fi
 else
     echo "  SKIP (d) node/token-classifier unavailable (Handlebars-path assertion)"
 fi

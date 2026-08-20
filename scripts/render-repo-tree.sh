@@ -87,6 +87,22 @@ declare -a SET_VALUES=()
 # row (e.g. cluster_domain:) would re-export the scalar AFTER its validator ran,
 # shadowing the DNS/forbidden-char guard and enabling YAML line-injection into the
 # rendered application.yml. The legitimate identity keys never collide with these.
+# ── LEGACY_COMPAT — pre-rebrand admission-stamp name ────────────────────────
+# ingest-foreign-base.sh WRITES `.hugmesh-mesh-admitted`. A quarantine snapshot
+# admitted by an older generator (and still in REPO_BASE_CACHE) carries the
+# pre-rebrand name, and re-admitting is not free — so every READ tries the new
+# name first and falls back. Retire once no cache can hold a pre-rebrand snapshot.
+ADMIT_STAMP=".hugmesh-mesh-admitted"
+ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
+
+# _admit_stamp_path DIR -> echoes the admission stamp inside DIR (new spelling
+# first, LEGACY_COMPAT fallback); returns 1 and echoes nothing when neither exists.
+_admit_stamp_path() {
+  if   [[ -f "$1/${ADMIT_STAMP}" ]];               then printf '%s\n' "$1/${ADMIT_STAMP}"
+  elif [[ -f "$1/${ADMIT_STAMP_LEGACY_COMPAT}" ]]; then printf '%s\n' "$1/${ADMIT_STAMP_LEGACY_COMPAT}"
+  else return 1; fi
+}
+
 _RESERVED_SCALARS=" BRAND BRAND_TITLE ORG CLUSTER_DOMAIN NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME ORG_SLUG HEADSCALE_URL MESH_TAG "
 # --ref <tag|sha>: pin the OWN-MESH base pull to a specific tag/branch/sha (plumbed
 # to pull-repo-base.sh --ref). The pinned ref is recorded as a one-line
@@ -310,7 +326,7 @@ if [[ -n "$FOREIGN_MESH" ]]; then
         --require-content-anchor --expect-tree-sha256 "$PINNED_TREE_SHA256")"; then
     _die "foreign base REJECTED by ingest-foreign-base.sh (mesh=${FOREIGN_MESH}) — refusing to render, nothing emitted"
   fi
-  [[ -n "$ADMITTED" && -d "$ADMITTED" && -f "${ADMITTED}/.snapdragon-mesh-admitted" ]] \
+  [[ -n "$ADMITTED" && -d "$ADMITTED" ]] && _admit_stamp_path "$ADMITTED" >/dev/null \
     || _die "ingestion gate returned no admitted snapshot — fail-closed"
   BASE="$ADMITTED"
   _log "foreign base ADMITTED: overlaying the verified quarantine snapshot ${BASE}"
@@ -349,9 +365,15 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   tar -C "$BASE" \
       --exclude='./.git' --exclude='./node_modules' --exclude='./dist' \
       --exclude='./.angular' --exclude='./target' \
+      --exclude='./.hugmesh-provenance.json' \
+      --exclude='./.hugmesh-provenance.json.sig' \
+      --exclude='./.hugmesh-sbom.json' \
+      --exclude='./.hugmesh-mesh-admitted' \
+      `# LEGACY_COMPAT: a base admitted before the rebrand carries the old envelope` \
+      `# names; they must be stripped from the emitted tree exactly like the new ones,` \
+      `# or a foreign mesh's inbound attestation would ride out under our provenance.` \
       --exclude='./.snapdragon-provenance.json' \
       --exclude='./.snapdragon-provenance.json.sig' \
-      --exclude='./.hugmesh-sbom.json' \
       --exclude='./.snapdragon-mesh-admitted' \
       --exclude='./.foreign-mesh-id' \
       --exclude='./.hugmesh-base-ref' \
@@ -385,7 +407,7 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   # with NO admission-stamp re-verify. So for a foreign base we write OUR OWN
   # authoritative, minimal base-origin provenance INTO the emitted tree — it TRAVELS
   # WITH BRAND_OUT and survives a cache purge, giving publish a fail-closed key
-  # (marker present => a re-verified '.snapdragon-mesh-admitted' stamp is REQUIRED).
+  # (marker present => a re-verified '${ADMIT_STAMP}' stamp is REQUIRED).
   # This is OUR OUTBOUND lineage (consistent with base.originMesh the publish tail
   # records in the signed provenance), NOT the foreign mesh's INBOUND attestation
   # envelope (which stays STRIPPED above). It is written AFTER the strip on OUR
@@ -402,7 +424,9 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
     # embed a stamp path (a mesh-<digest16> path token mixes letters+hex and can, for
     # some digests, cross the 4.5-bit high-entropy floor -> emit-scan false positive);
     # publish reconstructs the stamp location from originMesh itself.
-    _admit_tree="$(sed -n 's/^tree-sha256=//p' "${BASE}/.snapdragon-mesh-admitted" 2>/dev/null | head -n1)"
+    _admit_stamp="$(_admit_stamp_path "$BASE")" \
+      || _die "admitted snapshot carries no admission stamp — cannot write base-origin marker (fail-closed)"
+    _admit_tree="$(sed -n 's/^tree-sha256=//p' "$_admit_stamp" 2>/dev/null | head -n1)"
     [[ "$_admit_tree" =~ ^[0-9a-f]{64}$ ]] \
       || _die "admitted snapshot stamp carries no valid tree-sha256 — cannot write base-origin marker (fail-closed)"
     cat > "${BRAND_OUT}/.hugmesh-base-origin.json" <<JSON

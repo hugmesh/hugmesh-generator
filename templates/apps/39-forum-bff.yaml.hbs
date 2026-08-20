@@ -14,7 +14,7 @@ spec:
     kustomize:
       namespace: {{BRAND}}-backend
       images:
-        - name: snapdragon-systems/forum-bff-api
+        - name: hugmesh/forum-bff-api
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-forum-bff-api
           newTag: main
   destination:

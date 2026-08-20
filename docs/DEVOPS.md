@@ -46,18 +46,20 @@ source-of-truth is **scaffolded but not cut over**:
   with an `scmProvider` generator pointing at the **in-cluster Forgejo**
   (`http://forgejo.hugmesh-pki.svc.cluster.local:3000`, `repositoryMatch
   ^hugmesh-`) — and the deploy contract
-  (`specs/cluster/catalog/snapdragon-deploy.example.yaml`).
+  (`specs/cluster/catalog/hugmesh-deploy.example.yaml`).
 - ✅ **Adoption started (9 of the 32 image-producing repos, all ships-dark).**
   Counted over the whole org, not a local tree: `gh repo list hugmesh`
   returns **38** `hugmesh-*` repos, **32** of which ship a root `Dockerfile` (the
   six that do not are `auth-core`, `build-config`, `commons`, `games`, `generator`,
   `parent`). Registered in `specs/cluster/catalog/adopters.yaml`, whose `spec.sweep`
   block records that provenance and is itself gate-checked:
-  - `snapdragon-deploy.yaml` + `deploy/` — `admin-bff-api`,
-    `character-forge-bff-api`, `federation-api`, `forum-bff-api`, `forum-ui`,
-    `user-bff-api` (the pilot).
-  - `hugmesh-deploy.yaml` + `deploy/` — `be-gateway`, `mod-bff-api`,
-    `remote-fragment`; their rebrand PRs renamed the descriptor.
+  - `hugmesh-deploy.yaml` + `deploy/` — `admin-bff-api`, `be-gateway`,
+    `character-forge-bff-api`, `federation-api`, `forum-ui`, `mod-bff-api`,
+    `remote-fragment`, `user-bff-api`.
+  - `snapdragon-deploy.yaml` + `deploy/` (LEGACY_COMPAT, the pre-rebrand
+    descriptor name) — `forum-bff-api`, the last adopter that has not renamed it.
+    The registry, not this list, is the authority; it is gate-checked against the
+    repos themselves.
   The catalog generators filter on **both** filenames (two `filters` entries — the
   scmProvider ORs across entries and ANDs inside one, and `pathsExist` is itself an
   AND-list, so a single entry cannot express the disjunction). Until 2026-07-30 they

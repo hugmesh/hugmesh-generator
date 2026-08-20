@@ -62,7 +62,7 @@ echo "== container image tags: ${ROOT} =="
 #   no : and no /  not an image reference at all (the grep also catches YAML keys
 #                  named `image:` whose value is a bare word, e.g. an API schema)
 #   first-party    our OWN images. In the base manifests they appear as bare
-#                  `snapdragon-systems/<repo>:dev` / `hugmesh/<repo>` placeholders
+#                  `hugmesh/<repo>:dev` placeholders
 #                  which the overlays' kustomize `images:` transformers rewrite to
 #                  registry.hugmesh.net/hugmesh/<repo>:main. They are built and
 #                  pushed by our own CI and have never existed on Docker Hub, so
@@ -71,7 +71,12 @@ echo "== container image tags: ${ROOT} =="
 #                  anonymous client may not see — indistinguishable from a rate
 #                  limit). Their freshness is Harbor's problem, covered by
 #                  test-eso-target-collisions.sh's pull-secret leg.
-FIRST_PARTY_RE='^(snapdragon-systems|hugmesh|snapdragon)/'
+# The retired org segments stay in the pattern as a LEGACY_COMPAT alternation: this
+# regex EXCLUDES first-party images from the Docker Hub probe, so a stale spelling
+# that slipped back in must keep being recognised as ours — probing Docker Hub for it
+# asks the wrong registry and gets an unusable 401. Catching the stale spelling is
+# lint:image-builder-always-on's job, not this probe's.
+FIRST_PARTY_RE='^(hugmesh|snapdragon-systems|snapdragon)/'
 images="$(grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]"]+' "${ROOT}" 2>/dev/null \
           | sed 's/.*image:[[:space:]]*//' \
           | grep -vE '\{\{|REPLACE_WITH_|@sha256:' \

@@ -135,15 +135,25 @@ REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 # shellcheck source=scripts/_github-auth-lib.sh
 . "${HERE}/_github-auth-lib.sh"
 
-# TODO(org-move): hugmesh.net GitHub org.
-#   This default still names the LEGACY org. The content rebrand is done (all 38
-#   repos renamed hugmesh-*), but the GitHub ORG itself is still
-#   Snapdragon-Systems — renaming it is a browser-only operation nobody has run.
-#   When it happens, this default and every sibling listed in
-#   docs/ORG-MOVE-TODO.md flip together, and GitHub's org-rename redirects keep
-#   old remotes working only until the old name is re-registered by someone else.
-#   Draft commits for the flip are prepared; see docs/ORG-MOVE-TODO.md.
+# The GitHub org and every repo under it are on the hugmesh names; see
+# docs/ORG-MOVE-TODO.md for the remaining non-GitHub sibling flips.
 GIT_BASE="${GIT_BASE:-https://github.com/hugmesh}"
+
+# ── LEGACY_COMPAT — pre-rebrand admission-stamp name ────────────────────────
+# ingest-foreign-base.sh WRITES `.hugmesh-mesh-admitted`. A quarantine snapshot
+# admitted by an older generator (and still in REPO_BASE_CACHE) carries the
+# pre-rebrand name, and re-admitting is not free — so every READ tries the new
+# name first and falls back. Retire once no cache can hold a pre-rebrand snapshot.
+ADMIT_STAMP=".hugmesh-mesh-admitted"
+ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
+
+# _admit_stamp_path DIR -> echoes the admission stamp inside DIR (new spelling
+# first, LEGACY_COMPAT fallback); returns 1 and echoes nothing when neither exists.
+_admit_stamp_path() {
+  if   [[ -f "$1/${ADMIT_STAMP}" ]];               then printf '%s\n' "$1/${ADMIT_STAMP}"
+  elif [[ -f "$1/${ADMIT_STAMP_LEGACY_COMPAT}" ]]; then printf '%s\n' "$1/${ADMIT_STAMP_LEGACY_COMPAT}"
+  else return 1; fi
+}
 GIT_REF="${GIT_REF:-main}"
 REPO_BASE_CACHE="${REPO_BASE_CACHE:-${REPO_ROOT}/.repo-base}"
 OFFLINE="${OFFLINE:-0}"
@@ -315,7 +325,7 @@ if [[ "$FOREIGN" -eq 1 ]]; then
         "${ANCHOR_ARGS[@]}")"; then
     die "foreign base for ${REPO} REJECTED by ingest-foreign-base.sh (mesh '${FOREIGN_MESH}') — nothing returned, nothing admitted"
   fi
-  [[ -n "$ADMITTED" && -d "$ADMITTED" && -f "${ADMITTED}/.snapdragon-mesh-admitted" ]] \
+  [[ -n "$ADMITTED" && -d "$ADMITTED" ]] && _admit_stamp_path "$ADMITTED" >/dev/null \
     || die "ingestion gate returned no admitted snapshot — fail-closed"
   log "foreign base ADMITTED (mesh=${FOREIGN_MESH} pin=${PINNED_DIGEST}): ${ADMITTED}"
   printf '%s\n' "$ADMITTED"

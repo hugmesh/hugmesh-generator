@@ -73,12 +73,12 @@ services:
   #  run to completion, then the services that need them start.
   # ════════════════════════════════════════════════════════════════════
 
-  # The three gateways open a CqlSession on `snapdragon_gateway` (frozen protocol
+  # The three gateways open a CqlSession on `hugmesh_gateway` (frozen protocol
   # name — NOT rebranded) and federation-api caches manifests in
-  # `snapdragon_federation`. Spring Data's schema-action CREATE_IF_NOT_EXISTS makes
+  # `hugmesh_federation`. Spring Data's schema-action CREATE_IF_NOT_EXISTS makes
   # the TABLES but never the KEYSPACE, and the stock cassandra:5 image ships none,
   # so all three gateways crash-looped on
-  #   InvalidKeyspaceException: Invalid keyspace snapdragon_gateway
+  #   InvalidKeyspaceException: Invalid keyspace hugmesh_gateway
   # and the FRONT DOOR never opened — which then surfaces confusingly downstream as
   # `make stack-seed` reporting "front door http://localhost:8088 is not answering".
   # In-cluster these keyspaces are provisioned outside the app; locally this is that
@@ -94,9 +94,9 @@ services:
       - -c
       - |
         cqlsh cassandra 9042 -e "
-          CREATE KEYSPACE IF NOT EXISTS snapdragon_gateway
+          CREATE KEYSPACE IF NOT EXISTS hugmesh_gateway
             WITH replication = {'class':'SimpleStrategy','replication_factor':1};
-          CREATE KEYSPACE IF NOT EXISTS snapdragon_federation
+          CREATE KEYSPACE IF NOT EXISTS hugmesh_federation
             WITH replication = {'class':'SimpleStrategy','replication_factor':1};"
 
   # admin-bff's Liquibase changelog GRANTs table privileges to `adminbff_app`, the
@@ -354,7 +354,7 @@ services:
       # provider's keys; unset, the in-DNS Casdoor default is byte-identical.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
-      CASSANDRA_KEYSPACE: snapdragon_gateway
+      CASSANDRA_KEYSPACE: hugmesh_gateway
       CASSANDRA_LOCAL_DC: datacenter1
       # Cassandra REQUEST timeout — widened from the DataStax driver's 2s default.
       # The gateway runs CassandraSchemaMigrations.runOnce as a fail-fast
@@ -473,7 +473,7 @@ services:
       # provider's keys; unset, the in-DNS Casdoor default is byte-identical.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
-      CASSANDRA_KEYSPACE: snapdragon_gateway
+      CASSANDRA_KEYSPACE: hugmesh_gateway
       CASSANDRA_LOCAL_DC: datacenter1
       # Cassandra request timeout — same fail-fast @PostConstruct DDL migration and
       # the same 2s driver default this gateway shares with pki-gateway above, where
@@ -564,7 +564,7 @@ services:
       # provider's keys; unset, the in-DNS Casdoor default is byte-identical.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
-      CASSANDRA_KEYSPACE: snapdragon_gateway
+      CASSANDRA_KEYSPACE: hugmesh_gateway
       CASSANDRA_LOCAL_DC: datacenter1
       # Cassandra request timeout — same fail-fast @PostConstruct DDL migration and
       # the same 2s driver default this gateway shares with pki-gateway above, where
@@ -674,7 +674,7 @@ services:
       APP_BUNDLES_DIR: /var/hugmesh/federation/bundles
       MANIFEST_CACHE_ENABLED: "false"
       MANIFEST_CACHE_CASSANDRA: "cassandra:9042"
-      MANIFEST_CACHE_KEYSPACE: snapdragon_federation
+      MANIFEST_CACHE_KEYSPACE: hugmesh_federation
       MANIFEST_CACHE_LOCAL_DC: dc1
     volumes:
       - federation-bundles:/var/hugmesh/federation/bundles
@@ -701,8 +701,8 @@ services:
     environment:
       # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
       # creates org `hugmesh`, but this repo's application.yml still defaults to
-      # the pre-rename `snapdragon` — so every native login failed with
-      #   "The user: snapdragon/e2e-admin doesn't exist"
+      # the pre-rename org slug — so every native login failed with
+      #   "The user: <pre-rename-org>/e2e-admin doesn't exist"
       # immediately after a seed that verified the persona. One value, both
       # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
       CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
@@ -729,7 +729,7 @@ services:
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
       # The cookie->JWT session exchange calls this BFF back on ITS OWN address. Left
       # empty (application.yml's default) the app derives an IN-CLUSTER k8s DNS name
-      # (snapdragon-<svc>.snapdragon-backend.svc.cluster.local) that does not exist on
+      # (hugmesh-<svc>.hugmesh-backend.svc.cluster.local) that does not exist on
       # compose, so the loopback never connects, the exchange yields no bearer, and every
       # /api/** call made with a session cookie answers 401 — while /bff/** keeps working,
       # which reads as an authz bug rather than an unreachable hostname.
@@ -763,7 +763,7 @@ services:
       # `external.forum.enabled` to FALSE, so every call returns a
       # not-enabled outcome and the page looks empty/broken rather than saying
       # why. Its base-url default is also stale — it still names the pre-rebrand
-      # `snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local`, which does
+      # `hugmesh-forum-bff-api.hugmesh-backend.svc.cluster.local`, which does
       # not resolve anywhere in this stack. Both are set explicitly here so the
       # console actually talks to the forum BFF that compose already runs.
       EXTERNAL_FORUM_ENABLED: "true"
@@ -792,12 +792,12 @@ services:
       # own session from app.mirror.cassandra.contact-point, whose placeholder is
       # ${ROUTE_MIRROR_CASSANDRA}. The CASSANDRA_CONTACT_POINTS that used to be
       # here matched NO placeholder, so the mirror silently dialled its baked
-      # default (the pre-rebrand cassandra.snapdragon-pki… in-cluster DNS), failed,
+      # default (the pre-rebrand cassandra in-cluster DNS), failed,
       # and swallowed it — the gateways' gateway_route_access + url_registry rows
       # were never written locally either. Same dead env was in the cluster
       # manifest; both fixed together.
       ROUTE_MIRROR_CASSANDRA: "cassandra:9042"
-      ROUTE_MIRROR_KEYSPACE: snapdragon_gateway
+      ROUTE_MIRROR_KEYSPACE: hugmesh_gateway
       # datacenter1 = what the stock cassandra:5 image's SimpleSnitch advertises
       # (the app default is dc1 → NoNodeAvailableException). The cluster's bitnami
       # Cassandra reports the same name, for the same snitch reason.
@@ -857,8 +857,8 @@ services:
     environment:
       # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
       # creates org `hugmesh`, but this repo's application.yml still defaults to
-      # the pre-rename `snapdragon` — so every native login failed with
-      #   "The user: snapdragon/e2e-admin doesn't exist"
+      # the pre-rename `hugmesh` — so every native login failed with
+      #   "The user: hugmesh/e2e-admin doesn't exist"
       # immediately after a seed that verified the persona. One value, both
       # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
       CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
@@ -895,7 +895,7 @@ services:
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
       # The cookie->JWT session exchange calls this BFF back on ITS OWN address. Left
       # empty (application.yml's default) the app derives an IN-CLUSTER k8s DNS name
-      # (snapdragon-<svc>.snapdragon-backend.svc.cluster.local) that does not exist on
+      # (hugmesh-<svc>.hugmesh-backend.svc.cluster.local) that does not exist on
       # compose, so the loopback never connects, the exchange yields no bearer, and every
       # /api/** call made with a session cookie answers 401 — while /bff/** keeps working,
       # which reads as an authz bug rather than an unreachable hostname.
@@ -934,8 +934,8 @@ services:
     environment:
       # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
       # creates org `hugmesh`, but this repo's application.yml still defaults to
-      # the pre-rename `snapdragon` — so every native login failed with
-      #   "The user: snapdragon/e2e-admin doesn't exist"
+      # the pre-rename `hugmesh` — so every native login failed with
+      #   "The user: hugmesh/e2e-admin doesn't exist"
       # immediately after a seed that verified the persona. One value, both
       # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
       CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
@@ -1205,11 +1205,11 @@ services:
   # image builds from the repo ROOT.
   #
   # This slug was held out of the default set behind an OPT-IN `charforge` profile
-  # while its repo was still on the pre-rename `systems.snapdragon:*` coordinates
+  # while its repo was still on the pre-rename Maven coordinates
   # nothing publishes any more — an unbuildable service in the default set fails
   # `docker compose build` and takes the WHOLE local mesh down with it. That is
   # over: the repo now parents on systems.hugmesh:hugmesh-parent:2.8.0 with zero
-  # snapdragon coordinates or imports, so it is an ordinary private-maven consumer
+  # pre-rename coordinates or imports, so it is an ordinary private-maven consumer
   # like its BFF siblings — wired to the local registry in compose.m2-local.yaml,
   # http-blocker patched in scripts/patch-stack-src.sh like every other repo that
   # ships a settings.xml.

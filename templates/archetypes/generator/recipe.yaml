@@ -54,7 +54,7 @@ edits:
       # stays so the seam rebrands the moment the generator's CI ever adopts
       # the standard include, exactly the class-UNION no-op contract above.
       - id: ci-include-org
-        find: "Snapdragon-Systems/hugmesh-generator"
+        find: "hugmesh/hugmesh-generator"
         replace: "{{GENERATOR_ORG_GROUP}}"
   - file: docs/BRANDING.md
     optional: false
@@ -69,9 +69,9 @@ edits:
 # renames[] PILOT (the first per-org FILE rename in the pipeline): the branding
 # doc is re-filed under the tenant's org slug so N orgs' generator copies carry
 # distinctly-named branding docs (safe, NON-CONTRACT file — the engine refuses
-# contract names like snapdragon-deploy.yaml + hugmesh-deploy.yaml (both deploy-
-# descriptor spellings are live and filtered on) / .snapdragon-provenance.json /
-# .snapdragon-mesh-admitted outright). Applied AFTER edits; both sides rendered
+# contract names like hugmesh-deploy.yaml / .hugmesh-provenance.json /
+# .hugmesh-mesh-admitted — and their LEGACY_COMPAT pre-rebrand spellings, which
+# are still filtered on and still dual-READ — outright). Applied AFTER edits; both sides rendered
 # through the same fail-closed classifier gate.
 renames:
   - id: branding-doc-per-org

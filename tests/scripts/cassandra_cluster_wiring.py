@@ -23,7 +23,7 @@ WHAT IT ASSERTS, and why each line of it was earned on a real cluster
   [keyspace]     every keyspace any consumer names is CREATEd by a bootstrap that
                  the cluster actually runs.  Spring's schema-action creates
                  TABLES, never keyspaces; nothing cluster-side created them, and
-                 the gateways died on `Invalid keyspace snapdragon_gateway`.
+                 the gateways died on `Invalid keyspace hugmesh_gateway`.
   [role]         every role a consumer authenticates as is CREATEd by that
                  bootstrap and holds EXACTLY the permissions its declared access
                  class calls for on EXACTLY the keyspace it dials — set equality,

@@ -10,9 +10,9 @@
 #
 # WHY THIS EXISTS. The catalog generators discover repos by `pathsExist` on a
 # FIXED descriptor filename. The HugMesh rebrand renamed that file to
-# `hugmesh-deploy.yaml` in 3 of the 9 adopting repos (be-gateway, mod-bff-api,
-# remote-fragment) and left `snapdragon-deploy.yaml` in the other 6, while both
-# generators filtered on the legacy name ONLY. Those 3 repos were invisible to the
+# `hugmesh-deploy.yaml` repo by repo, leaving the pre-rebrand
+# `snapdragon-deploy.yaml` live in the ones that had not moved yet, while both
+# generators filtered on ONE name only. The unmatched repos were invisible to the
 # catalog — and NOTHING reported it: an scmProvider filter that matches no repo is
 # not an error, the ApplicationSet just generates no Application. No event, no
 # degraded Application, no log line. All three repos' own descriptors meanwhile

@@ -166,18 +166,36 @@ renames:
 
 run_recipe A10 'edits: []
 renames:
+  - { from: .hugmesh-provenance.json, to: "docs/p.json" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A10.err" && ok "A10 contract denylist FROM=.hugmesh-provenance.json refused" || bad "A10 provenance rename accepted"
+
+# LEGACY_COMPAT half of the SAME contract. provenance.sh verify / ingest-foreign-
+# base.sh still dual-READ the pre-rebrand envelope off other meshes' disks, so a
+# recipe that renames it away is exactly as breaking as renaming the new name.
+run_recipe A10b 'edits: []
+renames:
   - { from: .snapdragon-provenance.json, to: "docs/p.json" }' "$T"
-[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A10.err" && ok "A10 contract denylist FROM=.snapdragon-provenance.json refused" || bad "A10 provenance rename accepted"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A10b.err" && ok "A10b contract denylist FROM=.snapdragon-provenance.json (LEGACY_COMPAT) refused" || bad "A10b legacy provenance rename accepted"
 
 run_recipe A11 'edits: []
 renames:
+  - { from: .hugmesh-mesh-admitted, to: "docs/stamp" }' "$T"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A11.err" && ok "A11 contract denylist FROM=.hugmesh-mesh-admitted refused" || bad "A11 admission-stamp rename accepted"
+
+run_recipe A11b 'edits: []
+renames:
   - { from: .snapdragon-mesh-admitted, to: "docs/stamp" }' "$T"
-[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A11.err" && ok "A11 contract denylist FROM=.snapdragon-mesh-admitted refused" || bad "A11 admission-stamp rename accepted"
+[ $RC -ne 0 ] && grep -q "CONTRACT" "${WORK}/recipe-A11b.err" && ok "A11b contract denylist FROM=.snapdragon-mesh-admitted (LEGACY_COMPAT) refused" || bad "A11b legacy admission-stamp rename accepted"
 
 run_recipe A12 'edits: []
 renames:
-  - { from: docs/BRANDING.md, to: "sub/.snapdragon-mesh-admitted" }' "$T"
+  - { from: docs/BRANDING.md, to: "sub/.hugmesh-mesh-admitted" }' "$T"
 [ $RC -ne 0 ] && ok "A12 contract denylist fires on the BASENAME even in a subdir (laundering guard)" || bad "A12 subdir contract name accepted"
+
+run_recipe A12b 'edits: []
+renames:
+  - { from: docs/BRANDING.md, to: "sub/.snapdragon-mesh-admitted" }' "$T"
+[ $RC -ne 0 ] && ok "A12b BASENAME guard also fires on the LEGACY_COMPAT stamp name" || bad "A12b subdir legacy contract name accepted"
 
 T="${WORK}/A13"; mktree "$T"; printf 'y\n' > "${T}/docs/EXISTS.md"
 run_recipe A13 'edits: []
@@ -427,7 +445,7 @@ grep -q "/api/v1/orgs/Acme-Inc/repos" "${WORK}/curl-D1.log" \
 if ! grep -q "$PAT" "${WORK}/curl-D1.log" && ! grep -q "$PAT" "${WORK}/pub-D1.out" "${WORK}/pub-D1.err"; then
   ok "D3 PAT never on any curl argv / output (header-file custody held)"
 else bad "D3 PAT LEAKED to argv/output"; fi
-grep -q '"ref": "v1.2.3"' "${OUTC}/acme-generator/.snapdragon-provenance.json" 2>/dev/null \
+grep -q '"ref": "v1.2.3"' "${OUTC}/acme-generator/.hugmesh-provenance.json" 2>/dev/null \
   && ok "D4 provenance stamped base.ref=v1.2.3" || bad "D4 provenance base.ref"
 
 # 409 leg: repo + PR already exist -> open-list lookup -> PATCH /pulls/7.

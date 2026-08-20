@@ -27,7 +27,7 @@ import yaml
 # which legitimately exist: upstream operator/add-on namespaces that their own
 # ArgoCD Application creates via `CreateNamespace=true`, plus kube-system.
 # A namespace that is neither declared here nor created in-repo is drift (e.g.
-# the pre-rebrand `snapdragon-backend`, which nothing anywhere creates).
+# the pre-rebrand backend namespace, which nothing anywhere creates).
 EXTERNAL_NAMESPACES = {
     "argocd",            # ArgoCD's own install namespace (apps/00-argocd bootstrap)
     "external-secrets",  # ESO operator (apps/03-external-secrets, CreateNamespace=true)
@@ -826,7 +826,7 @@ def check_internal_surfaces(root):
 # looking at its values.
 #
 # manifests/casdoor/init-data-configmap.yaml shipped that way: a botched #451
-# merge concatenated the whole pre-rebrand `owner: "snapdragon"` roles array in
+# merge concatenated the whole pre-rebrand `owner:` roles array in
 # front of the rebranded one, leaving what had been the array's last element as
 # an interior element with no trailing comma —
 #     Expecting ',' delimiter: line 42 column 5 (char 4764)

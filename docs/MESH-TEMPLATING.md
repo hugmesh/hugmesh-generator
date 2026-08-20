@@ -186,7 +186,7 @@ proves the **overlay-primary, skeleton-fallback** model on a real app repo:
   Deliberately **left untemplated** (grounding): `nginx.conf` (brand-neutral),
   `docker-entrypoint.d/*` (runtime env-injected), the `X-HugMesh-Local` wire
   header (frozen protocol constant), the `snap-login-root` element, and every
-  `snapdragon` in `src/**` / comments / groupId — that is **upstream code
+  `hugmesh` in `src/**` / comments / groupId — that is **upstream code
   identity**, not tenant brand. Tier-1 is deliberately narrow.
 
 `NPM_SCOPE` / `HOST_NAME` / `GENERATOR_ORG_GROUP` are registered in the token
@@ -584,8 +584,9 @@ render): absolute paths; any `..` segment; a realpath (symlinked parents
 included) escaping the target tree; renaming a **directory** (files only — a dir
 rename could silently move the `deploy/` discovery contract); clobbering an
 existing destination; and the hardcoded **contract denylist** —
-`snapdragon-deploy.yaml`, `hugmesh-deploy.yaml`, `.snapdragon-provenance.json`,
-`.snapdragon-mesh-admitted` (renaming those breaks the 13d `pathsExist`
+`hugmesh-deploy.yaml` (+ the legacy `snapdragon-deploy.yaml`),
+`.hugmesh-provenance.json`, `.hugmesh-mesh-admitted` (and their legacy
+spellings) — renaming those breaks the 13d `pathsExist`
 discovery filter, the fixed provenance manifest name, and the publish
 launder-refusal stamp reads) plus their siblings (`.sig`, base-origin/base-ref
 markers). BOTH deploy-descriptor spellings are denylisted because both are live:

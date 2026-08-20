@@ -516,9 +516,10 @@ lint:image-builder-always-on:
 
 # Service-catalog DISCOVERY gate. The catalog ApplicationSets find a repo by
 # `pathsExist` on a FIXED deploy-descriptor filename; the HugMesh rebrand renamed
-# that file to `hugmesh-deploy.yaml` in 3 of the 9 adopting repos and left
-# `snapdragon-deploy.yaml` in the other 6, while both generators matched only the
-# legacy name. Those 3 repos were INVISIBLE to the catalog and nothing said so —
+# that file to `hugmesh-deploy.yaml` repo by repo, leaving the pre-rebrand
+# `snapdragon-deploy.yaml` live in the ones that had not moved yet, while both
+# generators matched only one name. The unmatched repos were INVISIBLE to the
+# catalog and nothing said so —
 # an scmProvider filter that matches no repo is not an error, it just generates no
 # Application (no event, no degraded app, no log line). This job asserts every
 # registered adopter (specs/cluster/catalog/adopters.yaml) is matched by a filter,

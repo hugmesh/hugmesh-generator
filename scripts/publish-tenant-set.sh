@@ -12,12 +12,12 @@
 #
 # WHAT IT DOES, per rendered repo dir out/<brand>-<repo>/:
 #   1. DISCOVERY CONTRACT: ensure the tree ships a deploy descriptor
-#      (`snapdragon-deploy.yaml` OR `hugmesh-deploy.yaml` — the appsets filter on
+#      (`hugmesh-deploy.yaml`, or the LEGACY_COMPAT `snapdragon-deploy.yaml` — the appsets filter on
 #      both) + a `deploy/` kustomize dir (the 13-catalog / 13d-brand-repos appset
 #      filter requires BOTH a descriptor and deploy/ to discover the repo). The
 #      render-tenant-set trees do NOT carry them, so we synthesise a minimal,
 #      brand-scoped pair when NEITHER descriptor spelling is present.
-#   2. PROVENANCE: write `.snapdragon-provenance.json` (+ detached Ed25519 .sig
+#   2. PROVENANCE: write `.hugmesh-provenance.json` (+ detached Ed25519 .sig
 #      when a signing key is provided out-of-band) — see scripts/provenance.sh.
 #   3. SECRET-SCAN GATE: scripts/secret-scan.sh over the WHOLE tree (incl. the
 #      provenance file) — fail-closed BEFORE any network/push.
@@ -143,6 +143,17 @@ FORGEJO_REMOTE_TEMPLATE="${FORGEJO_REMOTE_TEMPLATE:-${FORGEJO_BASE_URL%/}/${FORG
 # REPO_BASE_CACHE (or a *_BASE_DIR override) pointed elsewhere.
 REPO_BASE_CACHE="${REPO_BASE_CACHE:-${REPO_ROOT}/.repo-base}"
 
+# ── LEGACY_COMPAT — pre-rebrand fixed filenames this script must still READ ──
+# The HugMesh rebrand renamed three fixed-name contract files. Every WRITE below
+# uses the new spelling only; every READ tries the new spelling FIRST and falls
+# back to the pre-rebrand one, because these files are already on OTHER meshes'
+# disks (signed provenance, admission receipts) and inside adopter repos this tree
+# does not own. Deleting the fallback orphans that data — it does not clean it up.
+# Retire an entry only once nothing in the fleet can still be carrying it.
+DESCRIPTOR_LEGACY_COMPAT="snapdragon-deploy.yaml"
+ADMIT_STAMP=".hugmesh-mesh-admitted"
+ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
+
 # ── FAIL-CLOSED token resolution (env or file; NEVER argv/committed) ─────────
 # Resolve BEFORE any repo/network op so a missing token aborts up front.
 PUSH_TOKEN=""
@@ -266,19 +277,21 @@ forgejo_ensure_pr() {
 # tenant replaces deploy/ with the repo's real kustomize overlay; the descriptor
 # marks the repo as catalog-opted-in.
 #
-# EITHER descriptor spelling satisfies the contract (13d filters on both since the
-# HugMesh rebrand left `hugmesh-deploy.yaml` in some org repos and
-# `snapdragon-deploy.yaml` in others). A tree that already ships EITHER name is
-# left alone — synthesising a second descriptor next to an existing one would put
-# two conflicting contracts in one repo, and the appset would still emit exactly
-# one Application, so the extra file is pure drift. New scaffolds keep the legacy
-# spelling: it is the name templates/archetypes/generator/recipe.yaml records as
-# frozen and the one catalog/snapdragon-deploy.example.yaml documents.
+# EITHER descriptor spelling satisfies the contract (13d filters on both). A tree
+# that already ships EITHER name is left alone — synthesising a second descriptor
+# next to an existing one would put two conflicting contracts in one repo, and the
+# appset would still emit exactly one Application, so the extra file is pure drift.
+# WRITE side is NEW-ONLY: a synthesised scaffold always gets `hugmesh-deploy.yaml`
+# (the name templates/archetypes/generator/recipe.yaml records as frozen and the
+# one catalog/hugmesh-deploy.example.yaml documents). The READ side below is
+# LEGACY_COMPAT and must keep recognising the pre-rebrand spelling, because adopter
+# repos still ship it on disk — see specs/cluster/catalog/adopters.yaml.
 ensure_discovery_contract() {
   local dir="$1" brand="$2" repo="$3"
-  if [[ ! -f "${dir}/snapdragon-deploy.yaml" && ! -f "${dir}/hugmesh-deploy.yaml" ]]; then
-    cat > "${dir}/snapdragon-deploy.yaml" <<EOF
-# snapdragon-deploy.yaml — catalog opt-in descriptor (Phase 5 discovery contract).
+  # LEGACY_COMPAT read: NEW spelling first, pre-rebrand spelling as the fallback.
+  if [[ ! -f "${dir}/hugmesh-deploy.yaml" && ! -f "${dir}/${DESCRIPTOR_LEGACY_COMPAT}" ]]; then
+    cat > "${dir}/hugmesh-deploy.yaml" <<EOF
+# hugmesh-deploy.yaml — catalog opt-in descriptor (Phase 5 discovery contract).
 # Presence of THIS file + a deploy/ kustomize dir is what the brand-repo
 # ApplicationSet (specs/cluster/apps/13d-brand-repos.yaml[.hbs]) filters on to
 # auto-discover this repo. Synthesised by publish-tenant-set.sh when the rendered
@@ -292,7 +305,7 @@ spec:
   repo: ${repo}
   deployPath: deploy
 EOF
-    _log "  + synthesised snapdragon-deploy.yaml (discovery contract)"
+    _log "  + synthesised hugmesh-deploy.yaml (discovery contract)"
   fi
   if [[ ! -d "${dir}/deploy" ]]; then
     mkdir -p "${dir}/deploy"
@@ -399,7 +412,7 @@ publish_one() {
   #       --foreign). It can be removed; the marker cannot (it is inside the tree we
   #       are about to publish).
   # If EITHER fires, publishing REQUIRES the base's inbound admission STAMP — the
-  # '.snapdragon-mesh-admitted' receipt scripts/ingest-foreign-base.sh promotes into
+  # '${ADMIT_STAMP}' receipt scripts/ingest-foreign-base.sh promotes into
   # its quarantine snapshot — present for this mesh AND re-verified RIGHT NOW:
   # verified=1, mesh-id match, well-formed immutable pin, and a recomputed canonical
   # tree digest of the admitted snapshot == the stamped tree-sha256 (so a snapshot
@@ -459,7 +472,7 @@ publish_one() {
   fi
 
   if [[ -n "$origin_mesh" ]]; then
-    # Locate THIS mesh's inbound admission stamp — the '.snapdragon-mesh-admitted'
+    # Locate THIS mesh's inbound admission stamp — the '${ADMIT_STAMP}'
     # receipt scripts/ingest-foreign-base.sh promotes into its per-run quarantine
     # snapshot (pull-repo-base.sh --foreign leaves it under
     # ${REPO_BASE_CACHE}/.mesh-quarantine/<repo>/<mesh>-<digest16>/). The marker (in
@@ -468,15 +481,19 @@ publish_one() {
     # — the practical foreign path pins a synthetic immutable digest via *_BASE_DIR,
     # not a git HEAD). If the cache (incl. this quarantine) was purged, no stamp is
     # found and we _die below — a marker-bearing tree is NEVER laundered stamp-less.
+    # LEGACY_COMPAT dual-read: NEW stamp name first, pre-rebrand name as fallback.
+    # Both names are swept in ONE pass so a quarantine holding both spellings is
+    # still caught as ambiguous rather than silently preferring one.
     local stamp="" s
-    for s in "${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/${origin_mesh}"-*/.snapdragon-mesh-admitted; do
+    for s in "${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/${origin_mesh}"-*/"${ADMIT_STAMP}" \
+             "${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/${origin_mesh}"-*/"${ADMIT_STAMP_LEGACY_COMPAT}"; do
       [[ -f "$s" ]] || continue
       [[ -z "$stamp" ]] \
         || _die "multiple admission stamps for mesh '${origin_mesh}' repo '${repo}' — ambiguous; purge the stale quarantine snapshot before publishing"
       stamp="$s"
     done
     [[ -n "$stamp" ]] \
-      || _die "foreign base for mesh '${origin_mesh}' repo '${repo}' has NO .snapdragon-mesh-admitted stamp from ingest-foreign-base.sh under ${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/ — REFUSING to publish ${base} (unverified foreign code is never pushed onward)"
+      || _die "foreign base for mesh '${origin_mesh}' repo '${repo}' has NO ${ADMIT_STAMP} stamp from ingest-foreign-base.sh under ${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/ — REFUSING to publish ${base} (unverified foreign code is never pushed onward)"
     local admit_snap; admit_snap="$(dirname "$stamp")"
     local s_mesh s_pin s_tree s_ver
     s_mesh="$(sed -n 's/^mesh-id=//p'       "$stamp" | head -n1)"

@@ -10,7 +10,7 @@ BASE="${HUGMESH_GIT_BASE:-https://github.com/${ORG}}"
 # The core stack repos (extend freely). hugmesh-generator carries the cluster +
 # compose manifests; the rest are the services/UIs.
 REPOS=(
-    hugmesh-generator snapdragon-commons snapdragon-parent
+    hugmesh-generator hugmesh-commons hugmesh-parent
     admin-bff user-bff mod-bff forum-bff owncast-bff tube-bff wiki-bff
     auth-core federation-api
     hugmesh.net login-ui admin-ui mod-ui matrix-ui owncast-ui tube-ui

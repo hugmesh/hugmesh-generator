@@ -328,12 +328,13 @@ remotes (the `social-ui` ArgoCD grouping), and hugmesh.games. See
 > source-of-truth is scaffolded — the Forgejo deploy (`apps/09-forgejo.yaml`), the
 > service-catalog `scmProvider` ApplicationSet (`apps/13-service-catalog.yaml`,
 > already configured to scan the in-cluster Forgejo) and the deploy contract
-> (`catalog/snapdragon-deploy.example.yaml`) all exist — but the source flip is
+> (`catalog/hugmesh-deploy.example.yaml`) all exist — but the source flip is
 > **live-gated** (needs a booted Forgejo + admin + OIDC + the org mirror +
 > `forgejo-scm-token`). **9 service repos have adopted the descriptor + a
-> `deploy/` kustomize tree** — 6 as `snapdragon-deploy.yaml`, 3 as
-> `hugmesh-deploy.yaml` after the rebrand, all ships-dark until the flip. The
-> generators filter on **both** names; the live adoption state is registered in
+> `deploy/` kustomize tree** — as `hugmesh-deploy.yaml`, plus any that have not
+> yet renamed the descriptor from the pre-rebrand spelling; all ships-dark until
+> the flip. The generators filter on **both** names (the older one as
+> LEGACY_COMPAT); the live adoption state is registered in
 > [`catalog/adopters.yaml`](../specs/cluster/catalog/adopters.yaml) and enforced by
 > `scripts/validate-catalog-discovery.sh`. The org has **38** `hugmesh-*` repos,
 > **32** of which produce a container image, so **23 have not adopted yet**
@@ -539,12 +540,11 @@ implementation on `main`.
 ## Related repositories
 
 > **All org repos are `hugmesh-*` since the 2026-07-22 rebrand** — verified
-> against the org listing on 2026-08-05: **38** `hugmesh-*` repos, zero
-> `snapdragon-*` ones. The **GitHub organization itself** is still named
-> `Snapdragon-Systems` (that rename is browser-only and outstanding), which is why
-> the paths below keep that prefix. Two repos changed shape as well as name:
-> `snapdragon.systems` → `hugmesh-host-shell`, `hugmesh.games` →
-> `hugmesh-games`. The old `Snapdragon-Systems/sdn` repo **no longer exists**.
+> against the org listing: **38** `hugmesh-*` repos, zero pre-rebrand ones. The
+> **GitHub organization itself** is `hugmesh` (see
+> [`ORG-MOVE-TODO.md`](ORG-MOVE-TODO.md)), which is the prefix the paths below
+> use. Two repos changed shape as well as name — the domain-named site repo became
+> `hugmesh-host-shell` and `hugmesh.games` became `hugmesh-games`.
 
 ### Shared Maven libraries
 
@@ -581,7 +581,7 @@ implementation on `main`.
 
 | Repo | Role |
 |---|---|
-| `hugmesh/hugmesh-host-shell` | Angular host shell / front page — federates every remote below (was `snapdragon.systems`) |
+| `hugmesh/hugmesh-host-shell` | Angular host shell / front page — federates every remote below |
 | `hugmesh/hugmesh-matrix-ui` | Matrix chat + WebRTC video micro-frontend |
 | `hugmesh/hugmesh-mastodon-ui` | Mastodon micro-frontend |
 | `hugmesh/hugmesh-login-ui` | Login/registration micro-frontend (the native login form) |

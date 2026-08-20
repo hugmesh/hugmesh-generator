@@ -23,7 +23,7 @@ Asserts, offline, against a specs/cluster tree PLUS the first-party service sour
                   So a change to either side, alone, turns this red.
   [stale-ref]     no env VALUE emitted by ANY workload in specs/cluster names a
                   namespace the tree does not create or a domain it does not serve.
-                  Derived by the same rules — not a `snapdragon-*` pattern list, which
+                  Derived by the same rules — not a brand-prefix pattern list, which
                   is why it sees `casdoor.hugmesh-casdoor.svc.cluster.local`.
 
 Plus [coverage]: every first-party *-bff-api Deployment is classified in the contract,
@@ -334,9 +334,15 @@ class CasdoorSource:
 
 
 # ── first-party services, and where their sources are ────────────────────────
-#: the image idiom: snapdragon-systems/<name> is built from the repo hugmesh-<name>
-#: (the GitHub org has not been renamed; the repos have — see the rebrand memo).
-IMAGE_PREFIX = "snapdragon-systems/"
+#: the image idiom: <registry-or-org>/<name> is built from the repo hugmesh-<name>.
+#: The prefix is matched, never SLICED BY LENGTH: `image[len(IMAGE_PREFIX):]` is what
+#: broke tests/scripts/liquibase_grant_roles.py when the rebrand shortened the org
+#: segment — the slice kept eating the old prefix's width and ate into the NAME, so the
+#: checker went looking for a repo that does not exist and reported INCOMPLETE (reads as
+#: a missing checkout, not a parser fault, so the gate stays dark). Taking the basename
+#: is prefix-length independent and survives the next registry move
+#: (`ghcr.io/hugmesh/...` included).
+IMAGE_PREFIX = "hugmesh/"
 #: every Spring service in this fleet keeps its packaged config here
 APPLICATION_YML = "src/main/resources/application.yml"
 
@@ -349,7 +355,7 @@ class ServiceContainer:
         self.deployment = deployment
         self.name = container.get("name")
         self.image = container.get("image", "")
-        short = self.image[len(IMAGE_PREFIX):].split(":")[0]
+        short = self.image.split("/")[-1].split(":")[0]
         self.repo = f"hugmesh-{short}"
         self.env: dict[str, dict] = {}
         for entry in container.get("env") or []:
@@ -573,7 +579,7 @@ def check_emitted_values(cluster: Path, facts: ClusterFacts) -> None:
     Fleet-wide (every Deployment/StatefulSet/DaemonSet/Job/CronJob, app and init
     containers), and judged by the same derived rules as the defaults: a namespace
     specs/cluster does not create, or a domain it does not serve. The predecessor of
-    this check matched the literal `snapdragon-` prefix, so it was blind to
+    this check matched a literal pre-rebrand brand prefix, so it was blind to
     `casdoor.hugmesh-casdoor.svc.cluster.local` — a post-rebrand-SHAPED name for a
     namespace that has never existed — which two live Deployments were emitting.
     """

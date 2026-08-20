@@ -19,7 +19,7 @@
 #       specs/cluster` returned nothing, and Spring's schema-action
 #       CREATE_IF_NOT_EXISTS creates TABLES, never keyspaces — so the next error
 #       after auth was `InvalidKeyspaceException: Invalid keyspace
-#       snapdragon_gateway`. compose.local.yaml has had a cassandra-init service
+#       hugmesh_gateway`. compose.local.yaml has had a cassandra-init service
 #       doing exactly this for years, with a comment describing the bug.
 #
 # Three more defects of the same family were found while fixing those, and this
@@ -28,7 +28,7 @@
 #   * admin-bff-api's manifest set CASSANDRA_CONTACT_POINTS, an env that binds to
 #     NOTHING in that image (it reads ${ROUTE_MIRROR_CASSANDRA}). Its route mirror
 #     defaults ENABLED and swallows failures, so it silently dialled the
-#     pre-rebrand snapdragon-pki DNS and wrote no gateway_route_access or
+#     pre-rebrand PKI-namespace DNS and wrote no gateway_route_access or
 #     url_registry rows at all. Hence [creds] keys off the VALUE being a cassandra
 #     host, not off the env's name.
 #   * The dark overlay's grant matrix made the gateways SELECT-only readers. Their
@@ -196,8 +196,8 @@ expect_catch "offline USB bundle missing a key the Vault path has" "[seed]" '
 # ── #6: the keyspace/role bootstrap ─────────────────────────────────────────
 expect_catch "keyspace a consumer uses is never created (the shipped bug)" "[keyspace]" '
   sub "$T/specs/cluster/manifests/cassandra-init/bootstrap-configmap.yaml" \
-      "CREATE KEYSPACE IF NOT EXISTS snapdragon_gateway WITH" \
-      "CREATE KEYSPACE IF NOT EXISTS snapdragon_gateway_typo WITH"
+      "CREATE KEYSPACE IF NOT EXISTS hugmesh_gateway WITH" \
+      "CREATE KEYSPACE IF NOT EXISTS hugmesh_gateway_typo WITH"
 '
 expect_catch "role a consumer authenticates as is never created" "[role]" '
   sub "$T/specs/cluster/manifests/cassandra-init/bootstrap-configmap.yaml" \
@@ -224,15 +224,15 @@ p = sys.argv[1] + "/specs/cluster/manifests/cassandra-init/bootstrap-configmap.y
 # gateways as SELECT-only readers and admin-bff as the writer. Every role holds a
 # grant on its keyspace, so a presence check passes; the gateway image runs the
 # CQL migration runner, so on a real cluster this dies on the first CREATE TABLE.
-historical = """    # snapdragon_gateway: admin-bff writes the URL registry; gateways read.
-    cql "GRANT MODIFY ON KEYSPACE snapdragon_gateway TO admin_bff_cass;"
-    cql "GRANT SELECT ON KEYSPACE snapdragon_gateway TO admin_bff_cass;"
+historical = """    # hugmesh_gateway: admin-bff writes the URL registry; gateways read.
+    cql "GRANT MODIFY ON KEYSPACE hugmesh_gateway TO admin_bff_cass;"
+    cql "GRANT SELECT ON KEYSPACE hugmesh_gateway TO admin_bff_cass;"
     for r in pki_gw_cass be_gw_cass fe_gw_cass sa_gw_cass; do
-      cql "GRANT SELECT ON KEYSPACE snapdragon_gateway TO \${r};"
+      cql "GRANT SELECT ON KEYSPACE hugmesh_gateway TO \${r};"
     done
-    # snapdragon_federation: federation-api owns its manifest cache (r/w).
-    cql "GRANT MODIFY ON KEYSPACE snapdragon_federation TO federation_cass;"
-    cql "GRANT SELECT ON KEYSPACE snapdragon_federation TO federation_cass;"
+    # hugmesh_federation: federation-api owns its manifest cache (r/w).
+    cql "GRANT MODIFY ON KEYSPACE hugmesh_federation TO federation_cass;"
+    cql "GRANT SELECT ON KEYSPACE hugmesh_federation TO federation_cass;"
 """
 s = open(p, encoding="utf-8").read()
 head = "    for r in pki_gw_cass"
@@ -244,17 +244,17 @@ PY
 '
 expect_catch "gateways left ONE permission short (ALTER) — three of four still granted" "[role]" '
   sub "$T/specs/cluster/manifests/cassandra-init/bootstrap-configmap.yaml" \
-      "      cql \"GRANT ALTER  ON KEYSPACE snapdragon_gateway TO \${r};\"
+      "      cql \"GRANT ALTER  ON KEYSPACE hugmesh_gateway TO \${r};\"
 " ""
 '
 expect_catch "a later REVOKE quietly takes back a correct GRANT" "[role]" '
-  add_cql "$T" "REVOKE MODIFY ON KEYSPACE snapdragon_gateway FROM be_gw_cass;"
+  add_cql "$T" "REVOKE MODIFY ON KEYSPACE hugmesh_gateway FROM be_gw_cass;"
 '
 expect_catch "DROP handed to a role whose declared class is DML-only" "[role]" '
-  add_cql "$T" "GRANT DROP ON KEYSPACE snapdragon_gateway TO admin_bff_cass;"
+  add_cql "$T" "GRANT DROP ON KEYSPACE hugmesh_gateway TO admin_bff_cass;"
 '
 expect_catch "a role granted on a keyspace its consumer never dials" "[role]" '
-  add_cql "$T" "GRANT SELECT ON KEYSPACE snapdragon_gateway TO federation_cass;"
+  add_cql "$T" "GRANT SELECT ON KEYSPACE hugmesh_gateway TO federation_cass;"
 '
 expect_catch "ALL PERMISSIONS ON ALL KEYSPACES beside the correct grants" "[role]" '
   add_cql "$T" "GRANT ALL PERMISSIONS ON ALL KEYSPACES TO federation_cass;"
@@ -263,7 +263,7 @@ expect_catch "role-to-role inheritance instead of a permission grant" "[role]" '
   add_cql "$T" "GRANT admin_bff_cass TO fe_gw_cass;"
 '
 expect_catch "a permission CQL does not accept on a KEYSPACE resource" "[role]" '
-  add_cql "$T" "GRANT EXECUTE ON KEYSPACE snapdragon_gateway TO fe_gw_cass;"
+  add_cql "$T" "GRANT EXECUTE ON KEYSPACE hugmesh_gateway TO fe_gw_cass;"
 '
 expect_catch "application roles created as cluster SUPERUSERs" "[role]" '
   python3 - "$T" <<PY
@@ -283,7 +283,7 @@ expect_catch "a seventh, unowned privileged login role" "[role]" '
       "    create_role federation_cass FEDERATION_CASS_PASSWORD" \
       "    create_role federation_cass FEDERATION_CASS_PASSWORD
     create_role ops_cass        FEDERATION_CASS_PASSWORD" &&
-  add_cql "$T" "GRANT SELECT ON KEYSPACE snapdragon_gateway TO ops_cass;"
+  add_cql "$T" "GRANT SELECT ON KEYSPACE hugmesh_gateway TO ops_cass;"
 '
 expect_catch "declared class promoted without touching a single GRANT" "[role]" '
   sub "$T/specs/cluster/manifests/admin-bff-api/deployment.yaml" \
@@ -323,8 +323,8 @@ expect_catch "a CREATE TABLE ordered before the keyspace that holds it" "[order]
 import sys
 p = sys.argv[1] + "/specs/cluster/manifests/cassandra-init/bootstrap-configmap.yaml"
 s = open(p, encoding="utf-8").read()
-ks = "    cql \"CREATE KEYSPACE IF NOT EXISTS snapdragon_federation WITH replication = \${KEYSPACE_REPLICATION};\"\n"
-tbl_head = "    cql \"CREATE TABLE IF NOT EXISTS snapdragon_federation.federation_manifest ("
+ks = "    cql \"CREATE KEYSPACE IF NOT EXISTS hugmesh_federation WITH replication = \${KEYSPACE_REPLICATION};\"\n"
+tbl_head = "    cql \"CREATE TABLE IF NOT EXISTS hugmesh_federation.federation_manifest ("
 if s.count(ks) != 1 or s.count(tbl_head) != 1:
     sys.exit("anchors not found exactly once")
 i = s.index(tbl_head)
@@ -356,7 +356,7 @@ expect_catch "GRANT ordered before the CREATE KEYSPACE it names" "[order]" '
 import sys
 p = sys.argv[1] + "/specs/cluster/manifests/cassandra-init/bootstrap-configmap.yaml"
 s = open(p, encoding="utf-8").read()
-line = "    cql \"CREATE KEYSPACE IF NOT EXISTS snapdragon_federation WITH replication = \${KEYSPACE_REPLICATION};\"\n"
+line = "    cql \"CREATE KEYSPACE IF NOT EXISTS hugmesh_federation WITH replication = \${KEYSPACE_REPLICATION};\"\n"
 if s.count(line) != 1:
     sys.exit("anchor not found exactly once")
 s = s.replace(line, "", 1)

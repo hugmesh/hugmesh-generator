@@ -38,7 +38,7 @@ spec:
           # its dedicated Postgres (mesh-bff-db) carries c81.
           level: "s0:c80"
       # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
-      # Mirrors the snapdragon-gateway chart's build-keystore initContainer: turns
+      # Mirrors the hugmesh-gateway chart's build-keystore initContainer: turns
       # the Vault-PKI-issued, ESO-synced TLS Secret (hugmesh-mesh-bff-api-mtls:
       # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
       # (cluster CA) for the server.ssl.* config to REQUIRE a client cert chaining
@@ -125,14 +125,14 @@ spec:
             - { name: APP_MESH_USER_BFF_ENABLED, value: "true" }
             # …and WHERE that WebClient dials. The flag above is ON, so this leg is
             # LIVE — and app.mesh.user-bff.base-url defaulted to
-            # snapdragon-user-bff-api.snapdragon-backend, i.e. every registered-device
+            # hugmesh-user-bff-api.hugmesh-backend, i.e. every registered-device
             # attribution call was already resolving to NXDOMAIN. The deployed peer is
             # hugmesh-user-bff-api in hugmesh-backend, https:// because it serves TLS
             # with client-auth=need (this pod presents the /pki client cert above).
             - name: APP_MESH_USER_BFF_BASE_URL
               value: "https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/user/internal/mesh-devices"
             # app.mirror.cassandra.contact-point — the shared Cassandra the gateway
-            # revocation/URL registry lives in. Defaulted to the snapdragon-pki
+            # revocation/URL registry lives in. Defaulted to the hugmesh-pki
             # namespace; the deployed StatefulSet is cassandra in hugmesh-pki (the same
             # contact point admin-bff's CASSANDRA_CONTACT_POINTS already names).
             - { name: CASSANDRA_CONTACT_POINT, value: "cassandra.hugmesh-pki.svc.cluster.local:9042" }

@@ -83,9 +83,9 @@ KEYFP="$(base64 -d "${TRUST}/${MESH}/foreign-provenance-pub.ed25519" 2>/dev/null
 mkclean_base() { # mkclean_base DIR
   local d="$1"
   mkdir -p "${d}/src"
-  printf '{\n  "name": "@snapdragon/login",\n  "version": "1.0.0"\n}\n' > "${d}/package.json"
-  printf '<html><head><title>Snapdragon Login (remote)</title></head><body></body></html>\n' > "${d}/src/index.html"
-  printf 'include:\n  - project: hugmesh/snapdragon-generator\n    file: ci.yml\n' > "${d}/.gitlab-ci.yml"
+  printf '{\n  "name": "@hugmesh/login",\n  "version": "1.0.0"\n}\n' > "${d}/package.json"
+  printf '<html><head><title>HugMesh Login (remote)</title></head><body></body></html>\n' > "${d}/src/index.html"
+  printf 'include:\n  - project: hugmesh/hugmesh-generator\n    file: ci.yml\n' > "${d}/.gitlab-ci.yml"
   printf 'export const remoteEntry = "login";\n' > "${d}/federation-base.js"
   cat > "${d}/.hugmesh-sbom.json" <<'JSON'
 { "bomFormat":"CycloneDX","specVersion":"1.5",
@@ -98,7 +98,27 @@ JSON
 # pin/mesh/tree/generation, sign it with $priv. sign_base DIR PRIV MESH PIN GEN
 sign_base() {
   local d="$1" priv="$2" mesh="$3" pin="$4" gen="$5"
-  rm -f "${d}/.snapdragon-provenance.json" "${d}/.snapdragon-provenance.json.sig"
+  rm -f "${d}/.hugmesh-provenance.json" "${d}/.hugmesh-provenance.json.sig"
+  local tree; tree="$(_fib_tree_digest "$d")"
+  cat > "${d}/.hugmesh-provenance.json" <<JSON
+{ "schema":"hugmesh.net/provenance/v1",
+  "base":{"repo":"hugmesh-login-ui","commitSha":"${pin}","meshId":"${mesh}","treeSha256":"${tree}","generation":${gen},"mode":"overlay"},
+  "template":{"archetype":"angular-mfe"},
+  "tenant":{"brand":"acme","org":"Acme-Inc","clusterDomain":"acme.test"} }
+JSON
+  openssl pkeyutl -sign -inkey "$priv" -rawin \
+    -in "${d}/.hugmesh-provenance.json" -out "${d}/.hugmesh-provenance.json.sig" 2>/dev/null
+}
+
+# LEGACY_COMPAT signer: same envelope, PRE-REBRAND filenames. Exercises the
+# dual-READ in scripts/provenance.sh + scripts/ingest-foreign-base.sh — a mesh that
+# cut its base before the HugMesh rebrand ships `.snapdragon-provenance.json(.sig)`
+# and its detached signature covers exactly those bytes, so the gate must still
+# admit it. sign_base_legacy DIR PRIV MESH PIN GEN
+sign_base_legacy() {
+  local d="$1" priv="$2" mesh="$3" pin="$4" gen="$5"
+  rm -f "${d}/.hugmesh-provenance.json" "${d}/.hugmesh-provenance.json.sig" \
+        "${d}/.snapdragon-provenance.json" "${d}/.snapdragon-provenance.json.sig"
   local tree; tree="$(_fib_tree_digest "$d")"
   cat > "${d}/.snapdragon-provenance.json" <<JSON
 { "schema":"hugmesh.net/provenance/v1",
@@ -121,9 +141,9 @@ content_only_digest() {
   ( cd "$1" || exit 1
     find . -type f \
         ! -path './.git/*' \
-        ! -path './.snapdragon-provenance.json' \
-        ! -path './.snapdragon-provenance.json.sig' \
-        ! -path './.snapdragon-mesh-admitted' \
+        ! -path './.hugmesh-provenance.json' \
+        ! -path './.hugmesh-provenance.json.sig' \
+        ! -path './.hugmesh-mesh-admitted' \
         ! -path './.foreign-mesh-id' \
         -print0 \
       | LC_ALL=C sort -z \
@@ -160,7 +180,7 @@ assert_reject() { # assert_reject CASE
 
 # ── (1) UNSIGNED ────────────────────────────────────────────────────────────────
 B="${WORK}/unsigned"; mkclean_base "$B"; PIN="$(digest_of unsigned)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
-rm -f "${B}/.snapdragon-provenance.json.sig"
+rm -f "${B}/.hugmesh-provenance.json.sig"
 run_gate unsigned "$B" "$MESH" "$PIN"; assert_reject "(unsigned)"
 
 # ── (2) VALID SIG BUT UNKNOWN MESH (no trust entry) ──────────────────────────────
@@ -180,7 +200,7 @@ run_gate tampered "$B" "$MESH" "$PIN"; assert_reject "(tampered-after-sign: tree
 B="${WORK}/digestswap"; mkclean_base "$B"; PIN="$(digest_of digestswap)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 printf '// backdoor\n' >> "${B}/federation-base.js"
 NEWTREE="$(_fib_tree_digest "$B")"
-jq --arg t "$NEWTREE" '.base.treeSha256=$t' "${B}/.snapdragon-provenance.json" > "${B}/.m" && mv "${B}/.m" "${B}/.snapdragon-provenance.json"
+jq --arg t "$NEWTREE" '.base.treeSha256=$t' "${B}/.hugmesh-provenance.json" > "${B}/.m" && mv "${B}/.m" "${B}/.hugmesh-provenance.json"
 run_gate digestswap "$B" "$MESH" "$PIN"; assert_reject "(digest-swap: manifest updated, signature no longer verifies)"
 
 # ── (4c) POST-SIGN SUBDIR ENVELOPE-NAMED PLANT — a file merely NAMED like the
@@ -189,7 +209,7 @@ run_gate digestswap "$B" "$MESH" "$PIN"; assert_reject "(digest-swap: manifest u
 #         MUST break the digest binding (regression test for the fail-open where
 #         -name excluded it from the digest everywhere in the tree). ─────────────
 B="${WORK}/subenv"; mkclean_base "$B"; PIN="$(digest_of subenv)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
-printf '{"schema":"hugmesh.net/provenance/v1","note":"planted post-sign"}\n' > "${B}/src/.snapdragon-provenance.json"
+printf '{"schema":"hugmesh.net/provenance/v1","note":"planted post-sign"}\n' > "${B}/src/.hugmesh-provenance.json"
 run_gate subenv "$B" "$MESH" "$PIN"; assert_reject "(post-sign SUBDIR envelope-named plant: digest-covered)"
 
 # ── (4d) SIGNED-IN SUBDIR ENVELOPE-NAMED FROZEN CARRIER — present at signing (so
@@ -197,7 +217,7 @@ run_gate subenv "$B" "$MESH" "$PIN"; assert_reject "(post-sign SUBDIR envelope-n
 #         envelope-shaped name. The frozen screen excludes ONLY the root-level
 #         envelope, so this MUST still reject (laundering-vector regression). ────
 B="${WORK}/subenvfrozen"; mkclean_base "$B"
-printf 'labels: { hugmesh.net/domain: attacker }\n' > "${B}/src/.snapdragon-provenance.json"
+printf 'labels: { hugmesh.net/domain: attacker }\n' > "${B}/src/.hugmesh-provenance.json"
 PIN="$(digest_of subenvfrozen)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate subenvfrozen "$B" "$MESH" "$PIN"; assert_reject "(signed-in SUBDIR envelope-named frozen-constant carrier)"
 
@@ -313,11 +333,34 @@ B="${WORK}/benignjar"; mkclean_base "$B"; mkdir -p "${B}/libs"
 printf 'PK\x03\x04 fake\n' > "${B}/libs/left-pad-1.3.0.jar"
 PIN="$(digest_of benignjar)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 6
 run_gate benignjar "$B" "$MESH" "$PIN" --min-generation 5
-if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.snapdragon-mesh-admitted" ]; then
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.hugmesh-mesh-admitted" ]; then
   ok "(benign vendored jar left-pad-1.3.0.jar not on floor -> ADMITTED, no false positive)"
 else
   bad "(benign vendored jar wrongly REJECTED (rc=${GATE_RC}) — tree-vuln scan over-blocks)"
 fi
+
+# ── (10g) LEGACY_COMPAT ENVELOPE — a PRE-REBRAND foreign base still ADMITS ───────
+#          The rebrand renamed the attestation envelope to `.hugmesh-provenance.json`
+#          (+ .sig), but signed bases cut before it are already on other meshes'
+#          disks and their signature covers those exact bytes. provenance.sh verify
+#          and ingest-foreign-base.sh therefore dual-READ, new spelling first. Without
+#          this case the fallback could be deleted and every gate here would stay
+#          green while every pre-rebrand mesh silently became "unsigned/unattested".
+B="${WORK}/legacyenv"; mkclean_base "$B"
+PIN="$(digest_of legacyenv)"; sign_base_legacy "$B" "$PRIV" "$MESH" "$PIN" 5
+run_gate legacyenv "$B" "$MESH" "$PIN"
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.hugmesh-mesh-admitted" ]; then
+  ok "(LEGACY_COMPAT pre-rebrand provenance envelope -> ADMITTED, stamped with the new name)"
+else
+  bad "(LEGACY_COMPAT pre-rebrand envelope wrongly REJECTED (rc=${GATE_RC}) — the dual-read fallback is gone)"
+fi
+
+# ── (10h) …and a MIXED envelope must NOT half-verify: the new manifest beside only
+#          the LEGACY .sig is a mismatched pair, not a valid base.
+B="${WORK}/mixedenv"; mkclean_base "$B"
+PIN="$(digest_of mixedenv)"; sign_base_legacy "$B" "$PRIV" "$MESH" "$PIN" 5
+mv "${B}/.snapdragon-provenance.json" "${B}/.hugmesh-provenance.json"
+run_gate mixedenv "$B" "$MESH" "$PIN"; assert_reject "(new manifest + legacy-only .sig — mismatched envelope)"
 
 # ── (11) SYMLINK ESCAPE (relative symlink out of the tree) ───────────────────────
 B="${WORK}/symesc"; mkclean_base "$B"; ln -s '../../../../etc/passwd' "${B}/src/escape"
@@ -389,7 +432,7 @@ run_prb() { # run_prb CASEID REGISTRY BASE MESH PIN
 }
 # (P1) hostile: unsigned foreign base behind the pull wiring -> refused, nothing returned.
 B="${WORK}/prb_unsigned"; mkclean_base "$B"; PIN="$(digest_of prb_unsigned)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
-rm -f "${B}/.snapdragon-provenance.json.sig"
+rm -f "${B}/.hugmesh-provenance.json.sig"
 run_prb p1 "$REG" "$B" "$MESH" "$PIN"; assert_reject "(pull-wiring: unsigned foreign base refused)"
 # (P2) unknown mesh: no registry row -> fail-closed BEFORE any fetch/gate.
 B="${WORK}/prb_unknown"; mkclean_base "$B"; PIN="$(digest_of prb_unknown)"; sign_base "$B" "$PRIV" "nobody-mesh" "$PIN" 5
@@ -403,7 +446,7 @@ run_prb p4 "$REG" "$B" "$MESH" "main"; assert_reject "(pull-wiring: mutable-ref 
 # (P5) POSITIVE: clean signed base -> rc=0 and the ADMITTED snapshot (not the raw dir).
 B="${WORK}/prb_legit"; mkclean_base "$B"; PIN="$(digest_of prb_legit)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_prb p5 "$REG" "$B" "$MESH" "$PIN"
-if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.snapdragon-mesh-admitted" ] \
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.hugmesh-mesh-admitted" ] \
    && [ "$(cd "${GATE_OUT}" && pwd)" != "$(cd "$B" && pwd)" ]; then
   ok "(pull-wiring) clean base returned as the ADMITTED snapshot (never the raw tree)"
 else
@@ -444,7 +487,7 @@ assert_no_render() { # assert_no_render CASE BASE MESH PIN [mingen] [registry]
 }
 if [ "${HAVE_RENDER}" -eq 1 ]; then
   # unsigned
-  B="${WORK}/r_unsigned"; mkclean_base "$B"; PIN="$(digest_of r_unsigned)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5; rm -f "${B}/.snapdragon-provenance.json.sig"
+  B="${WORK}/r_unsigned"; mkclean_base "$B"; PIN="$(digest_of r_unsigned)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5; rm -f "${B}/.hugmesh-provenance.json.sig"
   assert_no_render "render-unsigned" "$B" "$MESH" "$PIN"
   # tampered
   B="${WORK}/r_tampered"; mkclean_base "$B"; PIN="$(digest_of r_tampered)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5; printf 'x\n' >> "${B}/federation-base.js"
@@ -490,7 +533,7 @@ ORIG_ANCHOR="$(_fib_tree_digest "$B")"
 printf '// backdoor\n' >> "${B}/federation-base.js"     # signer swaps in a backdoor…
 sign_base "$B" "$PRIV" "$MESH" "$PIN" 5                  # …and RE-SIGNS the mutated tree
 run_gate r3anchor_old "$B" "$MESH" "$PIN"                # (old) no operator anchor
-if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.snapdragon-mesh-admitted" ]; then
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.hugmesh-mesh-admitted" ]; then
   ok "(R3 old-vs-new) WITHOUT the operator anchor the re-signed mutated override ADMITS — the exact hole R3 closes"
 else
   bad "(R3 old-vs-new) expected admit without anchor (rc=${GATE_RC}) — case not exercising the hole"
@@ -519,7 +562,7 @@ assert_reject "(R4 gate: signing key in registry revokedKeys refused despite a v
 # RAISED floor (a component that became CRITICAL after admission) and is refused.
 B="${WORK}/r4fresh"; mkclean_base "$B"; PIN="$(digest_of r4fresh)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate r4fresh_ok "$B" "$MESH" "$PIN"                 # shipped floor: left-pad@1.3.0 benign
-if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.snapdragon-mesh-admitted" ]; then
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.hugmesh-mesh-admitted" ]; then
   ok "(R4 freshness) base admits under the shipped floor (pre-disclosure)"
 else
   bad "(R4 freshness) base unexpectedly rejected under the shipped floor (rc=${GATE_RC})"
@@ -685,7 +728,7 @@ echo
 echo "-- POSITIVE CONTROL: a clean, signed, digest-pinned base from a TRUSTED mesh IS admitted + renders --"
 B="${WORK}/legit"; mkclean_base "$B"; PIN="$(digest_of legit)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 7
 run_gate legit "$B" "$MESH" "$PIN" --min-generation 5
-if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -d "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.snapdragon-mesh-admitted" ]; then
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -d "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.hugmesh-mesh-admitted" ]; then
   ok "(legit) gate ADMITTED a clean signed digest-pinned base (rc=0, snapshot promoted)"
 else
   bad "(legit) gate REJECTED a clean base (rc=${GATE_RC}, out='${GATE_OUT}') — FALSE POSITIVE / blanket lockout"
@@ -706,7 +749,7 @@ if [ "${HAVE_RENDER}" -eq 1 ]; then
     if grep -rq '{{BRAND_TITLE}}' "$BO" 2>/dev/null; then bad "(legit) BRAND_TITLE unsubstituted"; fi
     if grep -rq 'Acme Portal Login (remote)' "$BO" 2>/dev/null; then ok "(legit) brand token substituted (title rebranded)"; else bad "(legit) brand rebrand not applied"; fi
     # gate markers + foreign attestation envelope must NOT ride into the emitted tree.
-    if [ -e "${BO}/.snapdragon-mesh-admitted" ] || [ -e "${BO}/.foreign-mesh-id" ] || [ -e "${BO}/.snapdragon-provenance.json" ] || [ -e "${BO}/.hugmesh-sbom.json" ]; then
+    if [ -e "${BO}/.hugmesh-mesh-admitted" ] || [ -e "${BO}/.foreign-mesh-id" ] || [ -e "${BO}/.hugmesh-provenance.json" ] || [ -e "${BO}/.hugmesh-sbom.json" ]; then
       bad "(legit) gate/foreign-attestation markers leaked into the emitted tree"
     else ok "(legit) gate markers + foreign attestation stripped from the emitted tree"; fi
   else
@@ -791,7 +834,7 @@ if command -v node >/dev/null && [ -d "${REPO}/scripts/tooling/node_modules/js-y
   #      INTENDED reason (the gate's signature check), not merely the earlier R3 pre-check.
   if [ "${HAVE_RENDER}" -eq 1 ]; then
     UB="${WORK}/o_unsigned"; mkclean_base "$UB"; OPIN="$(digest_of o_unsigned | cut -c1-40)"
-    sign_base "$UB" "$PRIV" "$MESH" "$OPIN" 5; rm -f "${UB}/.snapdragon-provenance.json.sig"
+    sign_base "$UB" "$PRIV" "$MESH" "$OPIN" 5; rm -f "${UB}/.hugmesh-provenance.json.sig"
     OANCHOR="$(_fib_tree_digest "$UB")"
     OREG="${WORK}/o_registry.json"
     jq -n --arg m "$MESH" --arg t "$OANCHOR" \
@@ -812,7 +855,7 @@ fi
 
 echo
 echo "-- Phase 7 GRAFT: publish-tenant-set.sh LAUNDER-REFUSAL (capability #2) --"
-# A foreign-origin tree may be published ONLY with a valid '.snapdragon-mesh-admitted'
+# A foreign-origin tree may be published ONLY with a valid '.hugmesh-mesh-admitted'
 # receipt from A's gate. Positive: a signed clean foreign base admits (persistent
 # stamp), renders foreign-overlay, and publishes (push fires + provenance records
 # base.originMesh). Then the stamp is DELETED and the SAME publish must die BEFORE any
@@ -847,8 +890,8 @@ EOF
      LOGIN_UI_BASE_DIR="$LBASE" OFFLINE=1 FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
      FOREIGN_PINNED_TREE_SHA256="$LANCHOR" \
      bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$LPIN" login-ui 2>"${WORK}/lprb.err")"
-  LSTAMP="${LCACHE}/.mesh-quarantine/login-ui/${MESH}-${LPIN:0:16}/.snapdragon-mesh-admitted"
-  [ -f "$LSTAMP" ] && ok "(launder) inbound gate left a persistent .snapdragon-mesh-admitted stamp" \
+  LSTAMP="${LCACHE}/.mesh-quarantine/login-ui/${MESH}-${LPIN:0:16}/.hugmesh-mesh-admitted"
+  [ -f "$LSTAMP" ] && ok "(launder) inbound gate left a persistent .hugmesh-mesh-admitted stamp" \
     || bad "(launder) no admission stamp: $(tail -2 "${WORK}/lprb.err")"
   # 2) durable foreign-clone origin signal (as fetch-mode would create).
   mkdir -p "${LCACHE}/foreign/${MESH}"; cp -r "$LBASE" "${LCACHE}/foreign/${MESH}/hugmesh-login-ui"
@@ -869,7 +912,7 @@ EOF
   else bad "(launder) publish FAILED with the stamp present: $(tail -3 "${WORK}/lpub.err")"; fi
   grep -q PUSH "$PLOG" && ok "(launder) push recorder saw the POSITIVE push (recorder is live, not vacuous)" \
     || bad "(launder) no push recorded on the positive control"
-  grep -q '"originMesh": "'"${MESH}"'"' "${LOUT}/acme-login-ui/.snapdragon-provenance.json" 2>/dev/null \
+  grep -q '"originMesh": "'"${MESH}"'"' "${LOUT}/acme-login-ui/.hugmesh-provenance.json" 2>/dev/null \
     && ok "(launder) provenance records base.originMesh=${MESH} + mode foreign-overlay" || bad "(launder) provenance lacks the foreign lineage"
   LMAIN="$("${REAL_GIT}" -C "${LBARE}/acme-login-ui.git" rev-parse main 2>/dev/null)"
   # 5) DELETE the stamp -> the SAME publish must die BEFORE any push.
@@ -880,7 +923,7 @@ EOF
         bash "$PUB" "$LOUT" >/dev/null 2>"${WORK}/lpub2.err"); then
     bad "(launder) publish SUCCEEDED with the stamp GONE (foreign code LAUNDERED!)"
   else
-    grep -q "NO .snapdragon-mesh-admitted stamp" "${WORK}/lpub2.err" \
+    grep -q "NO .hugmesh-mesh-admitted stamp" "${WORK}/lpub2.err" \
       && ok "(launder) publish REFUSED the stamp-less foreign base (fail-closed reason)" \
       || ok "(launder) publish refused (rc!=0): $(grep FATAL "${WORK}/lpub2.err" | head -1)"
   fi
@@ -928,7 +971,7 @@ EOF
     ok "(cache-purge) render wrote a durable OUR-authored base-origin marker (originMesh+pinnedDigest+treeSha256)"
   else bad "(cache-purge) render did not write a well-formed base-origin marker at ${CPMARK}"; fi
   # PURGE the entire foreign cache (clone + quarantine stamp) — the pre-fix signal is gone.
-  CPSTAMP="${CPCACHE}/.mesh-quarantine/login-ui/${MESH}-${CPPIN:0:16}/.snapdragon-mesh-admitted"
+  CPSTAMP="${CPCACHE}/.mesh-quarantine/login-ui/${MESH}-${CPPIN:0:16}/.hugmesh-mesh-admitted"
   [ -f "$CPSTAMP" ] && ok "(cache-purge) durable admission stamp present pre-purge" || bad "(cache-purge) no stamp pre-purge: $(tail -2 "${WORK}/cpprb.err")"
   rm -rf "${CPCACHE}/foreign" "${CPCACHE}/.mesh-quarantine"
   { [ ! -e "${CPCACHE}/foreign/${MESH}/hugmesh-login-ui" ] && [ ! -f "$CPSTAMP" ]; } \
@@ -942,7 +985,7 @@ EOF
         bash "$PUB" "$CPOUT" >/dev/null 2>"${WORK}/cppub.err"); then
     bad "(cache-purge) publish SUCCEEDED via marker-present + cache-purged (foreign code LAUNDERED past the belt!)"
   else
-    grep -q "NO .snapdragon-mesh-admitted stamp" "${WORK}/cppub.err" \
+    grep -q "NO .hugmesh-mesh-admitted stamp" "${WORK}/cppub.err" \
       && ok "(cache-purge) publish detected foreign via the in-tree marker + REFUSED the stamp-less tree (fail-closed)" \
       || ok "(cache-purge) publish refused (rc!=0): $(grep FATAL "${WORK}/cppub.err" | head -1)"
   fi

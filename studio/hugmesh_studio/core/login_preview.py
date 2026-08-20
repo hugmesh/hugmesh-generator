@@ -76,8 +76,8 @@ def preview_out_dir() -> str:
 
     WHY: every open mechanism is asynchronous — the click returns before the browser
     ever reads the file — and on this fleet ``$TMPDIR`` can point into build scratch
-    that gets swept mid-session (the studio venv itself lives under
-    /var/tmp/portage/snapdragon-work/, and portage sweeps its tmpdir on every build).
+    that gets swept mid-session (the studio venv itself lives under a
+    /var/tmp/portage/<pkg>-work/ tree, and portage sweeps its tmpdir on every build).
     A preview written to gettempdir() can therefore vanish between the click and the
     render: the browser shows file-not-found (or nothing at all) and the operator
     reads it as "the preview button doesn't work". ``~/.cache`` survives builds;

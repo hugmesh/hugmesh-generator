@@ -3,7 +3,7 @@ kind: Ingress
 metadata:
   name: gateway-{{PROFILE}}
   labels:
-    app.kubernetes.io/name: snapdragon-{{PROFILE}}-gateway
+    app.kubernetes.io/name: hugmesh-{{PROFILE}}-gateway
 spec:
   rules:
     # Brand ingress host = the tenant cluster domain. The /api/** route seed is
@@ -15,6 +15,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: snapdragon-{{PROFILE}}-gateway
+                name: hugmesh-{{PROFILE}}-gateway
                 port:
                   number: 8080
