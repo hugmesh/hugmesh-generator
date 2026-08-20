@@ -1,0 +1,87 @@
+# scripts/hugmesh-view.tsv — the LOCAL BROWSING catalog: which front doors
+# `scripts/hugmesh-view.py` can put in this machine's browser, and on which
+# loopback port each one lands.
+#
+# WHY THIS FILE IS A FILE. Every HugMesh front door routes by HOST HEADER
+# (the kind ingress serves `hugmesh.net` + `*.hugmesh.net`; Harbor serves
+# `registry.hugmesh.net`), so `http://localhost:8443/` 404s and the names do
+# not resolve without an /etc/hosts entry — which needs root. hugmesh-view
+# solves that by serving HTTPS on 127.0.0.1 under a loopback-only CA this user's
+# own browsers trust, and speaking HTTPS upstream with the right Host header.
+# WHICH host, WHICH upstream and WHICH loopback port is policy, not code: a mesh
+# with more domains just gets more rows here.
+#
+# Format: one door per row, exactly SIX TAB-separated columns:
+#
+#   <name>  <lane>  <host>  <upstream>  <local_port>  <path>
+#
+#   name        stable id. Also names the port override env var:
+#               HUGMESH_VIEW_PORT_<NAME>, uppercased with '-' -> '_'
+#               (so `app` -> HUGMESH_VIEW_PORT_APP=9190 moves it).
+#   lane        which set of doors this row belongs to; `--lane` / `make view
+#               LANE=…` selects exactly one, and `kind` is the default:
+#                 kind        the HOST SHELL, and nothing else. One port.
+#                 kind-svc    the platform's internal UIs (ArgoCD, Vault,
+#                             Casdoor, Harbor). Deliberately NOT in `kind`:
+#                             every one of them is meant to be reached THROUGH
+#                             the shell, and a standing row of side ports is how
+#                             a broken federated route goes unnoticed until
+#                             production. Opt in when debugging the platform.
+#                 compose     the tests/stack compose lane's front doors.
+#                 device      a live emulated device's own front door.
+#   host        the Host header the door routes on, and the hostname rewritten
+#               back to the loopback origin in redirects, cookies and bodies.
+#               '-' for a door that does not route by name (a port-forwarded
+#               ClusterIP service answers whatever Host it is given).
+#   upstream    where the door actually listens. The SCHEME picks the mechanism:
+#                 https://H:P            talk straight to it (self-signed OK)
+#                 http://H:P             ditto, plaintext
+#                 k8s+https://NS/SVC:P   `kubectl port-forward`, then proxy
+#                 k8s+http://NS/SVC:P    (ClusterIP-only services: no ingress)
+#                 device+https://LABEL   `ssh -L` into a live emulated device,
+#                                        then proxy. LABEL may be `@gateway`,
+#                                        which resolves to the running device
+#                                        carrying the mesh's front door.
+#               `${VAR:-default}` is expanded from the environment, so the
+#               compose rows honour the same PUBLIC_*_PORT knobs compose does.
+#   local_port  default loopback port the browser opens. Overridable per row
+#               (see `name`) — a port collision is a one-line fix, never an edit
+#               to this file.
+#   path        the path worth opening (printed in the table). '-' means '/'.
+#
+# To ADD a domain: append a row. Nothing else. `hugmesh-view.py list` will show
+# it, `up` will serve it, and any OTHER door's redirect to that hostname is
+# rewritten to its loopback port automatically (that is what keeps an SSO round
+# trip inside the tool instead of escaping to a name the browser cannot
+# resolve).
+#
+# '#' lines and blank lines are ignored. Columns are TABS, not spaces.
+#
+# ── kind lane: THE HOST SHELL, and nothing else ──────────────────────────────
+# The kind node publishes 443 -> host 8443 (specs/cluster/bootstrap/kind-local/
+# kind-local.yaml), and the internal ingress routes by name. This one row is the
+# whole default lane on purpose: the shell is the product, and every user-facing
+# surface behind it is a federated remote reached THROUGH this port.
+app	kind	hugmesh.net	https://127.0.0.1:${KIND_HTTPS_PORT:-8443}	9080	/
+# ── kind-svc lane: the platform's own UIs, opt-in ────────────────────────────
+# `--lane kind-svc` (or `--only harbor-portal`) when you are debugging the
+# platform rather than using the product. Harbor has a real Ingress of its own;
+# the rest are ClusterIP-only, so they are reachable only through a
+# port-forward. argocd-server serves TLS on 443 and 307-redirects http -> https
+# on whatever port it is handed, so it needs the proxy in front to terminate;
+# the other three are plain http behind it.
+registry	kind-svc	registry.hugmesh.net	https://127.0.0.1:${KIND_HTTPS_PORT:-8443}	9081	/
+argocd	kind-svc	-	k8s+https://devops/argocd-server:443	9082	/
+casdoor	kind-svc	-	k8s+http://hugmesh-pki/casdoor:8000	9083	/
+vault	kind-svc	-	k8s+https://vault/vault:8200	9084	/ui/
+harbor-portal	kind-svc	-	k8s+http://hugmesh-pki/harbor-portal:80	9085	/
+# ── compose lane (tests/stack/compose.local.yaml) ────────────────────────────
+# The plain door is already plaintext; it is here so the fe-gateway sees
+# `Host: hugmesh.net` and emits the absolute URLs it would emit in the cluster.
+# The TLS door is fronted so the browser never meets its per-machine CA.
+compose-app	compose	hugmesh.net	http://127.0.0.1:${PUBLIC_HOST_PORT:-8088}	9090	/login/
+compose-tls	compose	hugmesh.net	https://127.0.0.1:${PUBLIC_HTTPS_PORT:-8488}	9091	/login/
+# ── emulated-device lane (tests/qemu keep-alive devices) ─────────────────────
+# A keep-alive device publishes ONLY ssh on 127.0.0.1:22300-22399, so its web
+# UI is reachable only through an ssh -L tunnel to the guest's own :443.
+device-app	device	hugmesh.net	device+https://@gateway	9095	/login/
