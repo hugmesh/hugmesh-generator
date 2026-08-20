@@ -7,12 +7,12 @@
 # matrix/mastodon/owncast/tube/wiki/forum-ui + api-docs + character-studio-ui +
 # superadmin-service-catalog-ui). NO whole-file overlay of package.json/index.html:
 # those embed the repo's OWN identity (npm segment, `ng build <slug>` target,
-# <snap-<slug>-root> selector) — a whole-file swap from login-ui would rename
+# <hug-<slug>-root> selector) — a whole-file swap from login-ui would rename
 # @scope/user->@scope/login, break `ng build` (no such project), and bootstrap the
 # wrong root element. Only the brand-coupled substrings are anchor-edited.
 #
 # Per-repo IDENTITY comes from the repos[].identity row: APP_SLUG (npm segment,
-# left-as-is ng target + <snap-APP_SLUG-root> selector) and TITLE_WORD (per-UI
+# left-as-is ng target + <hug-APP_SLUG-root> selector) and TITLE_WORD (per-UI
 # tab-title differentiator). BOTH find and replace are rendered with the token
 # context, so a single recipe matches every UI's own base.
 edits:
@@ -30,7 +30,7 @@ edits:
     optional: false
     anchors:
       # Per-UI tab title: rebrand the leading word only, keep the role word
-      # (TITLE_WORD). The <snap-<slug>-root> bootstrap selector is
+      # (TITLE_WORD). The <hug-<slug>-root> bootstrap selector is
       # NOT touched (repo identity — must match the app's own root component).
       - id: tab-title
         find: "<title>HugMesh {{TITLE_WORD}}</title>"
