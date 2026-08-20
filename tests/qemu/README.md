@@ -62,7 +62,7 @@ runner polls until `--timeout`. Console output is captured to
 | `run-qemu-e2e.sh` | Node E2E: boot a role image + run the Playwright suite against the forwarded UI (root). |
 | `verify-client.sh` | Client desktop: non-root boot + console-assertion verification (laptop/chromebook/desktop). |
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
-| `launch-pi.sh` | Boot a Pi kernel+stage4 under `-M virt` with a KEYS disk. |
+| `launch-pi.sh` | Boot a Pi **golden `.img`** under `-M virt` with a KEYS disk (`--kernel` loaded directly — QEMU has no BCM2712 model; it takes no `--stage4`, that is `run-qemu-test.sh`'s input). |
 | `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts/orangepi4-lts) under `-M virt` (kernel+DTB direct). |
 | `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
 | `mesh-cluster.sh` | Opt-in 3-node k8s cluster: CP `kubeadm init` + two pinned-token joins over a shared QEMU mcast L2 (issue #48). |
@@ -225,7 +225,7 @@ studio pytest suite and runs every pass.
 ## Matrix QEMU e2e (`run-matrix-e2e.sh` — opt-in)
 
 Boots the **whole device build matrix** — every `(platform, role, env, board, flavor,
-desktop)` cell of `tests/build-matrix/matrix.tsv` (118 rows; the same single source of
+desktop)` cell of `tests/build-matrix/matrix.tsv` (150 rows; the same single source of
 truth `check.sh` walks) — under `qemu-system`, and per row asserts the **boot marker**,
 the image **SIZE**, and the runtime **LOAD** envelope. Like `run-qemu-test.sh` it
 **never builds anything**: it boots operator-supplied golden `.img`/`.iso` artifacts
@@ -271,14 +271,14 @@ Gated exactly like the Tor onion e2e: without `HUGMESH_QEMU_E2E=1` (and qemu) th
 boot path **SKIPs cleanly** (exit 0), and a missing artifact for a row is a per-row SKIP,
 never a FAIL. EXPERIMENTAL boards (frite/jetson/orangepi) may be **INCONCLUSIVE** under
 `-M virt` (no vendor firmware) — recorded as soft-pass, not FAIL. Under TCG on an x86
-host the full 118-cell walk is many hours (no aarch64 KVM), so keep it nightly and use
+host the full 150-cell walk is many hours (no aarch64 KVM), so keep it nightly and use
 `--only` / `MATRIX_FILTER` for a subset.
 
 The always-run **offline** half of this proof lives in the studio pytest suite
 (`studio/tests/test_qemu_matrix_e2e.py`): the harness-exists check, the matrix
 enumeration + per-platform census, the launcher resolution, the pseudo-role translation,
 the `(1 + 512 + ROOT_MiB + 1)` size formula, the `img_size=`-from-`--print-plan` parser,
-the `ram_mb` ceiling accessor, and the driver's `--dry-run` (118 rows) — all runs every
+the `ram_mb` ceiling accessor, and the driver's `--dry-run` (150 rows) — all runs every
 pass with the gate unset. The pure Python view of the enumeration + maths is
 `studio/hugmesh_studio/core/build_matrix.py`.
 

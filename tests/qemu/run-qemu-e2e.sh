@@ -149,7 +149,18 @@ autodetect_pi() {
         # shellcheck disable=SC2012
         [ -n "${STAGE4}" ] || STAGE4="$(ls -1t "${WORK_DIR}"/stage4-*.tar.xz 2>/dev/null | head -1 || true)"
     fi
-    [ -n "${KERNEL}" ] && [ -n "${STAGE4}" ]
+    [ -n "${KERNEL}" ] || return 1
+    # launch-pi.sh boots the golden .img — it has no --stage4 at all (that is
+    # run-qemu-test.sh's input, a different harness) — so kernel + a bootable
+    # golden image IS a complete boot set. Requiring a stage4 alongside one
+    # turned a perfectly bootable work dir into "pi kernel+stage4 not found".
+    # The stage4 is only the LAST resort signal that the tree at least built
+    # this role, kept for work dirs that hold no golden image yet.
+    if compgen -G "${WORK_DIR}/hugmesh-rpi5-*-${ROLE}-*.img*" >/dev/null 2>&1 \
+       || compgen -G "${WORK_DIR}/hugmesh-rpi5-*.img*" >/dev/null 2>&1; then
+        return 0
+    fi
+    [ -n "${STAGE4}" ]
 }
 
 # Resolve accel for x86 (auto -> kvm if usable).
@@ -164,7 +175,7 @@ if [[ "${TARGET}" == "x86" || "${TARGET}" == "both" ]]; then
     resolve_accel
 fi
 if [[ "${TARGET}" == "pi" || "${TARGET}" == "both" ]]; then
-    autodetect_pi || die "pi kernel+stage4 not found in ${WORK_DIR} (pass --kernel/--stage4)."
+    autodetect_pi || die "pi kernel + bootable golden .img (or stage4) not found in ${WORK_DIR} (pass --kernel, and build the image first)."
 fi
 
 # Which launchers do we need, and do they exist?
@@ -182,7 +193,10 @@ info "baseURL : https://localhost:${UI_PORT}"
 if ${DRY_RUN}; then
     step "dry-run: artifacts resolved, plan printed; not booting."
     [[ "${TARGET}" == "x86" || "${TARGET}" == "both" ]] && echo "  would run: ${LAUNCH_X86} --img ${IMG} --ssh-port ${SSH_PORT} --ui-port ${UI_PORT} --accel ${ACCEL} ..."
-    [[ "${TARGET}" == "pi"  || "${TARGET}" == "both" ]] && echo "  would run: ${LAUNCH_PI} --kernel ${KERNEL} --stage4 ${STAGE4} --ssh-port ${SSH_PORT} --ui-port ${UI_PORT} ..."
+    # No --stage4 here: launch-pi.sh REJECTS that flag (unknown args are a hard
+    # error in its loop) — the printed plan must be the exact argv the boot
+    # phase below really uses, or the dry run advertises a command that dies.
+    [[ "${TARGET}" == "pi"  || "${TARGET}" == "both" ]] && echo "  would run: ${LAUNCH_PI} -w ${WORK_DIR} -r ${ROLE} --kernel ${KERNEL} --keys-img <keys.img> --ssh-port ${SSH_PORT} --ui-port ${UI_PORT} ..."
     exit 0
 fi
 

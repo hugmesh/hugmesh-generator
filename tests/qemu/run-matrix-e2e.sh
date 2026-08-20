@@ -6,7 +6,7 @@
 # (operator-supplied image; SKIP-clean when absent so CI stays green).
 #
 # Enumeration is the SAME single source of truth every channel uses:
-# tests/build-matrix/matrix.tsv (134 cells; check.sh already walks it). We reuse
+# tests/build-matrix/matrix.tsv (150 cells; check.sh already walks it). We reuse
 # check.sh's exact `while IFS=$'\t' read -r platform role env board flavor desktop`
 # parse so a new row is auto-covered. The JOB-channel pseudo-roles (rpi5
 # standalone-desktop; ARM flavor=standalone) are translated to their real
@@ -20,7 +20,7 @@
 #                        otherwise SKIP-clean (exit 0). Per row, a missing artifact is a
 #                        per-row SKIP (exit-0 accounting), never a FAIL.
 #
-# SCALE: 134 cells under TCG is many hours and the ARM rows have no KVM on an x86 host;
+# SCALE: 150 cells under TCG is many hours and the ARM rows have no KVM on an x86 host;
 # keep the full walk nightly/operator-only and use --only / MATRIX_FILTER for a subset.
 # EXPERIMENTAL boards (frite/jetson/orangepi) may be INCONCLUSIVE under -M virt (no
 # vendor firmware) — those are recorded as soft-pass, not FAIL.
@@ -45,7 +45,10 @@ cat <<EOF
 Usage: $0 [--dry-run] [--only PLATFORM[/ROLE]] [-w WORK_DIR]
 
   --dry-run           Enumerate + resolve every matrix row; no root, no boot, no build.
-  --only PLAT[/ROLE]  Subset filter (also settable via MATRIX_FILTER=). e.g. x86/be+gpu
+  --only PAT          Subset filter (also settable via MATRIX_FILTER=): exact
+                      PLATFORM[/ROLE] (e.g. x86/be+gpu) or a substring of
+                      "<platform>/<role>" (e.g. pki) — the same grammar as
+                      run-qemu-docker.sh --only.
   -w, --work-dir DIR  Where per-platform golden artifacts are autodetected. Default: ${WORK_DIR}
   -h, --help          This help.
 
@@ -176,12 +179,23 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     [ "${flavor}" = "-" ]  && flavor=""
     [ "${desktop}" = "-" ] && desktop=""
 
-    # subset filter: PLATFORM or PLATFORM/ROLE
+    # Subset filter — ONE grammar with run-qemu-docker.sh --only, so a
+    # MATRIX_FILTER value means the same rows whichever make target consumes
+    # it: the exact PLATFORM[/ROLE] spelling keeps working (first branch), and
+    # a SUBSTRING of "<platform>/<role>" now works too (second branch), e.g.
+    # --only pki or --only orangepi. Exactness when substring is too greedy is
+    # what the runner's --only-exact is for; here a row-set driver, over-
+    # matching only costs extra rows, never a wrong verdict.
     if [ -n "${ONLY}" ]; then
         want_plat="${ONLY%%/*}"; want_role=""
         case "${ONLY}" in */*) want_role="${ONLY#*/}" ;; esac
-        [ "${platform}" = "${want_plat}" ] || continue
-        [ -z "${want_role}" ] || [ "${role}" = "${want_role}" ] || continue
+        if [ "${platform}" = "${want_plat}" ] && { [ -z "${want_role}" ] || [ "${role}" = "${want_role}" ]; }; then
+            :
+        elif [[ "${platform}/${role}" == *"${ONLY}"* ]]; then
+            :
+        else
+            continue
+        fi
     fi
 
     N_TOTAL=$((N_TOTAL+1))

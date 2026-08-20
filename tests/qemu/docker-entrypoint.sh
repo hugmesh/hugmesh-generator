@@ -85,6 +85,11 @@ QMP_SOCK=""
 # a /work/... ssh key path would be unusable to it. --host-work is the argv
 # spelling, HOST_WORK the environment one; both mean the same thing.
 HOST_WORK="${HOST_WORK:-}"
+# Host side of the /artifacts bind mount, same convention. The device record's
+# "artifacts" field is the contract a per-device Start needs: to boot this row
+# again, the starter must point run-qemu-docker.sh at the SAME artifacts dir
+# the device came from, and "/artifacts" names nothing on the host.
+HOST_ARTIFACTS="${HOST_ARTIFACTS:-}"
 # Loopback host port run-qemu-docker.sh published this container's ssh forward
 # on; 0 when nothing was published. Recorded here, never bound here — the port
 # is chosen and bound OUTSIDE, so this value can only ever arrive from the
@@ -144,6 +149,10 @@ Interactive devices (golden mode only; everything below is off by default):
   --host-work PATH host side of the /work bind mount, so the device record can
                    name HOST paths the Studio can actually open.
                    Env: HOST_WORK.
+  --host-artifacts PATH
+                   host side of the /artifacts bind mount, so the record's
+                   "artifacts" field names the dir a per-device restart must be
+                   pointed at. Env: HOST_ARTIFACTS.
   --ssh-host-port P
                    loopback host port the guest's ssh was published on; goes
                    into the device record verbatim. 0 = not published.
@@ -175,6 +184,7 @@ while [[ $# -gt 0 ]]; do
         --keep-alive)    KEEP_ALIVE=true; shift ;;
         --extra-user)    EXTRA_USERS+=("$2"); shift 2 ;;
         --host-work)     HOST_WORK="$2"; shift 2 ;;
+        --host-artifacts) HOST_ARTIFACTS="$2"; shift 2 ;;
         --ssh-host-port) SSH_HOST_PORT="$2"; shift 2 ;;
         --container)     CONTAINER_NAME="$2"; shift 2 ;;
         --qmp)           QMP_SOCK="$2"; shift 2 ;;
@@ -242,6 +252,16 @@ EOF
 # this container, and an ssh key path the Studio cannot open is worthless.
 host_path() {
     local p="${1:-}"
+    # The /artifacts mapping first: ${ARTIFACTS} is never under ${WORK}, so the
+    # two prefixes cannot shadow each other, but checking it before the
+    # HOST_WORK bail-out means a caller that supplied ONLY --host-artifacts
+    # still gets its artifacts paths mapped.
+    if [ -n "${HOST_ARTIFACTS}" ]; then
+        case "${p}" in
+            "${ARTIFACTS}")   printf '%s\n' "${HOST_ARTIFACTS}"; return 0 ;;
+            "${ARTIFACTS}"/*) printf '%s\n' "${HOST_ARTIFACTS}/${p#"${ARTIFACTS}"/}"; return 0 ;;
+        esac
+    fi
     # No HOST_WORK => emit the container path unchanged. It is wrong for the
     # Studio, but it is honest and greppable, which beats a fabricated path.
     [ -n "${HOST_WORK}" ] || { printf '%s\n' "${p}"; return 0; }
@@ -267,6 +287,16 @@ json_str() {
 }
 
 # write_device_record STATE — booting|running|assertions|stopped
+#
+# "artifacts" and "image" are the per-device START contract: together with
+# "label" they are everything a restarter needs to boot this row again —
+# `run-qemu-docker.sh --artifacts <artifacts> --only-exact <label>`. "image" is
+# the basename of the image THIS qemu is actually booting (for a compressed
+# artifact that is the decompressed copy under <work>/images/, which is also
+# what the cache sweep protects while this container exists). The first record
+# is written in state "booting" the moment qemu launches — minutes before the
+# guest answers ssh on TCG — so a row killed during boot still leaves a
+# findable, stoppable device behind instead of tonight's zero-trace exit 143s.
 write_device_record() {
     local state="$1" users_json="" u
     mkdir -p "${DEVICES_DIR}" 2>/dev/null || true
@@ -304,6 +334,8 @@ write_device_record() {
   "ssh_key": $(json_str "$(host_path "${SSHKEY}")"),
   "users": [${users_json}],
   "qmp": $(json_str "$(host_path "${QMP_SOCK}")"),
+  "artifacts": $(json_str "$(host_path "${ARTIFACTS}")"),
+  "image": $(json_str "$(basename "${IMG}")"),
   "state": $(json_str "${state}"),
   "started_at": $(json_str "${STARTED_AT}")
 }
@@ -777,10 +809,50 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Publish the BOOTING record now that qemu is actually running — deliberately
+# after the cleanup trap above, so no exit from here on can leave a record
+# behind that cleanup() will not flip to "stopped". Before this record existed
+# a device killed during its (minutes-long, TCG) boot vanished without trace:
+# no registry entry, no verdict, and its port claim leaked because nothing
+# named a container to reconcile against. The record is rewritten as the state
+# advances: booting -> running -> assertions -> running -> stopped.
+if ${KEEP_ALIVE}; then
+    write_device_record booting
+    info "device record (booting): ${DEVICE_JSON}"
+fi
+
 # ── Wait for the guest, then assert ─────────────────────────────────────────
 SSH_OPTS=(-i "${SSHKEY}" -p "${SSH_PORT}"
           -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
           -o ConnectTimeout=5 -o LogLevel=ERROR)
+
+# A `docker stop` (or a Studio cancel, or a ctrl-C through `docker run -it`)
+# that lands during the ssh wait used to leave NOTHING: bash has no default
+# TERM/INT handling that runs the EXIT trap, so the container died at exit 143
+# with no result JSON, no console tail, and — under --keep-alive — a port claim
+# still naming it (2026-08-19: x86/be and x86/pki, both killed mid-boot, both
+# invisible to the summary except as "container wrote no result JSON", claims
+# 22303/22309 leaked). The verdict is written FIRST, then the same cleanup that
+# any other exit runs, then the signal is re-raised so the wait status still
+# says what happened. This shim is exec'd as PID 1, and PID 1 does receive
+# signals it has handlers for; the loop below sleeps in the BACKGROUND so
+# delivery is never deferred past docker's 10s SIGKILL grace.
+sshwait_on_signal() {
+    local sig="$1"
+    warn "received SIG${sig} while waiting for guest SSH — writing the FAIL verdict this row would otherwise lose"
+    echo "----- last 80 lines of console -----"
+    tail -n 80 "${CONSOLE}" 2>/dev/null || true
+    emit_result FAIL "killed while waiting for guest SSH (SIG${sig})"
+    trap - TERM INT EXIT
+    cleanup
+    # Re-raise so the wait status reports the signal — except as PID 1, where
+    # the kernel discards a default-disposition signal a process sends itself,
+    # so the 128+signo convention is spelled out as the fallback. Never 0.
+    kill -s "${sig}" $$
+    if [ "${sig}" = "INT" ]; then exit 130; else exit 143; fi
+}
+trap 'sshwait_on_signal TERM' TERM
+trap 'sshwait_on_signal INT'  INT
 
 step "Waiting up to ${TIMEOUT}s for guest SSH (${SSH_USER}@localhost:${SSH_PORT})"
 deadline=$((SECONDS + TIMEOUT)); up=false
@@ -789,7 +861,10 @@ while [ "${SECONDS}" -lt "${deadline}" ]; do
         warn "QEMU exited early"; break
     fi
     if ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" true 2>/dev/null; then up=true; break; fi
-    sleep 5
+    # Background + wait, not a plain sleep: bash defers a trap until the
+    # current FOREGROUND child returns, and 5s of deferral is half of docker
+    # stop's grace window (see keepalive_wait below for the same pattern).
+    sleep 5 & wait $! 2>/dev/null || true
 done
 
 if ! ${up}; then
@@ -798,6 +873,9 @@ if ! ${up}; then
     emit_result FAIL "guest did not reach SSH within ${TIMEOUT}s"
     exit 1
 fi
+# The ssh wait is over: this trap's verdict text would be a lie from here on,
+# and every later phase is timeout-bounded and writes its own emit_result.
+trap - TERM INT
 info "SSH is up; running assertions"
 
 # A2: publish the device the moment it answers, BEFORE the assertions — they are
@@ -836,24 +914,32 @@ if ${KEEP_ALIVE}; then write_device_record assertions; fi
 # 900s is ~3.5x the slowest whole row that ever asserted, which is the margin a
 # healthy but slow TCG/ARM row needs. --assert-timeout is used verbatim if an
 # operator disagrees: no floor, no clamp, in either direction.
+#
+# RETRIES, and only for the transport. ssh reports its OWN failures as 255 —
+# never the streamed script's, whose exits are 0/1 — so 255 here means the
+# connection could not be held: a guest still settling after boot (sshd
+# restarted under it), or a banner exchange that timed out (both rpi5 rows on
+# 2026-08-19 died exactly there: "Connection timed out during banner exchange"
+# is the LAST line of their assertions.log). Those deserve another attempt
+# before a FAIL; a real verdict (0/1) or a timeout kill (124/137) never
+# retries. Each attempt overwrites assertions.log via tee, so the graded log is
+# always the last attempt's. ConnectTimeout is raised to 15s for this one ssh,
+# and it goes BEFORE ${SSH_OPTS[@]}: ssh keeps the FIRST value it obtains for
+# an option, so appended after the array it would silently lose to the 5.
 set +e
-timeout -k 30 "${ASSERT_TIMEOUT}" \
-    ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
-    < "${QEMU_DIR}/assertions.sh" 2>&1 | tee "${RUN_DIR}/assertions.log"
-ARC=${PIPESTATUS[0]}
+ASSERT_ATTEMPTS=0
+while :; do
+    ASSERT_ATTEMPTS=$((ASSERT_ATTEMPTS + 1))
+    timeout -k 30 "${ASSERT_TIMEOUT}" \
+        ssh -o ConnectTimeout=15 "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
+        < "${QEMU_DIR}/assertions.sh" 2>&1 | tee "${RUN_DIR}/assertions.log"
+    ARC=${PIPESTATUS[0]}
+    [ "${ARC}" -eq 255 ] || break
+    [ "${ASSERT_ATTEMPTS}" -lt 3 ] || break
+    warn "assertion ssh could not hold a connection (rc=255, attempt ${ASSERT_ATTEMPTS}/3); retrying in $((ASSERT_ATTEMPTS * 5))s"
+    sleep $((ASSERT_ATTEMPTS * 5))
+done
 set -e
-
-# '|| true' is load-bearing. The prologue is `set -uo pipefail` WITHOUT -e, but
-# errexit is switched on three lines up — so under pipefail a log with no
-# "RESULT: N passed" line makes this pipeline exit 1, the assignment inherits
-# that status, and errexit KILLS THE SCRIPT RIGHT HERE: past the diagnostics,
-# past both emit_result calls, past the `exit ${ARC}`. The container exits 1
-# while ${WORK}/results/<label>.json still holds the PREVIOUS run's verdict,
-# which the CLI summary and the Studio grid then report as this run's — a stale
-# green for a row that never finished. Exactly the case this fires on is the one
-# that matters: a guest that panics or drops SSH part-way through assertions.sh.
-PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1 || true)"
-FAILED="$(grep -oE '[0-9]+ failed'          "${RUN_DIR}/assertions.log" | grep -oE '[0-9]+' | head -1 || true)"
 
 # Assertions are over (passed, failed or killed — the device is up either way,
 # and a FAILED row is exactly the one an operator wants a terminal on).
@@ -889,6 +975,16 @@ done
 timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
     'sudo rc-service headscale status 2>&1; echo "--- rc-update ---"; sudo rc-update show default 2>&1' \
     > "${RUN_DIR}/guest_headscale-status.txt" 2>/dev/null || true
+# NetworkManager state: several boot-time failures (a guest that answers ssh on
+# the slirp NIC but never brings its provisioned connections up, or an rc
+# service stuck in 'starting') are only diagnosable from the NM/OpenRC side,
+# and those logs are as unreadable from the host as the headscale ones above.
+# Same shape as every other diagnostic here: timeout-bounded, best-effort,
+# `|| true` throughout — a missing tool prints its own error into the capture
+# instead of failing the harvest.
+timeout -k 5 60 ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" \
+    'sudo rc-status 2>&1; echo "--- nmcli general status ---"; sudo nmcli general status 2>&1 || true; echo "--- nmcli device ---"; sudo nmcli device 2>&1 || true; echo "--- rc.log tail ---"; sudo tail -n 200 /var/log/rc.log 2>&1 || true; echo "--- NetworkManager syslog ---"; sudo grep -ah NetworkManager /var/log/messages /var/log/syslog 2>/dev/null | tail -n 100 || true' \
+    > "${RUN_DIR}/guest_networkmanager-status.txt" 2>/dev/null || true
 
 if ${KEEP_ALIVE}; then
     info "keep-alive: ${LABEL} stays up — not powering the guest down"
@@ -902,23 +998,59 @@ else
     sleep 3
 fi
 
-if [ "${ARC}" -eq 0 ]; then
-    info "${GREEN}${LABEL}: DEVICE TEST PASSED${RST} (${PASSED:-?} assertions)"
-    emit_result PASS "all assertions passed" "${PASSED:-0}" "${FAILED:-0}"
-elif [ "${ARC}" -eq 124 ] || [ "${ARC}" -eq 137 ]; then
-    # timeout(1) reports 124 when SIGTERM was enough and 137 when it had to
-    # escalate to SIGKILL. Neither can come from the guest here: assertions.sh
-    # ends in `[ "${FAIL}" -eq 0 ]`, so its only exit codes are 0 and 1, and ssh
-    # reports its own transport failures as 255. A row that hits this is a HANG,
-    # not a failed assertion — say so, with whatever partial counts the log held,
-    # rather than filing it under the generic "assertions failed".
-    warn "${LABEL}: DEVICE TEST TIMED OUT after ${ASSERT_TIMEOUT}s (rc=${ARC})"
-    emit_result FAIL "assertion ssh exceeded its ${ASSERT_TIMEOUT}s wall clock; killed" \
-        "${PASSED:-0}" "${FAILED:-0}"
-else
-    warn "${LABEL}: DEVICE TEST FAILED (${FAILED:-?} assertions failed)"
-    emit_result FAIL "assertions failed" "${PASSED:-0}" "${FAILED:-0}"
-fi
+# emit_assertion_verdict — grade ${ARC} + the assertions.log into the row's
+# result JSON, and correct ${ARC} when the two disagree. A function (a) so the
+# grading is one auditable unit and (b) so tests/qemu/verdict_test.sh can
+# extract and drive it hermetically, the way devices_test.sh drives the port
+# allocator. Always returns 0: errexit is ON at the call site and this must
+# never be the statement that aborts the run after the verdict is written.
+emit_assertion_verdict() {
+    local log="${RUN_DIR}/assertions.log" note=""
+    [ "${ASSERT_ATTEMPTS:-1}" -gt 1 ] && note=" (ssh attempts: ${ASSERT_ATTEMPTS})"
+    # '|| true' is load-bearing: under `set -e` + pipefail a log with no
+    # "RESULT: N passed" line would make these assignments ABORT the script —
+    # past both emit_result calls — leaving the row's PREVIOUS result JSON on
+    # disk to be reported as this run's.
+    PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${log}" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+    FAILED="$(grep -oE '[0-9]+ failed'          "${log}" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+    if [ "${ARC}" -eq 0 ] && ! grep -q '== RESULT:' "${log}" 2>/dev/null; then
+        # THE VERDICT LINE IS PART OF THE CONTRACT. assertions.sh is STREAMED
+        # into `bash -s`, so anything in it that reads stdin can eat the rest of
+        # the script and bash then EOF-exits 0 with the run incomplete — which
+        # is exactly how ausearch turned six 2026-08-19 rows holding 9-12 real
+        # FAILs each into "PASS": every one of their logs stops dead at the
+        # '-- AVC harvest' header. ssh saying 0 is therefore only believed when
+        # the script's own last line ('== RESULT: N passed, M failed ==') made
+        # it out; otherwise the row FAILS and says why.
+        warn "${LABEL}: DEVICE TEST FAILED — ssh exited 0 but assertions.sh never printed its RESULT line (truncated run graded as PASS is the 2026-08-19 defect)"
+        emit_result FAIL "assertions did not complete (no RESULT line)${note}" "${PASSED:-0}" "${FAILED:-0}"
+        ARC=1
+    elif [ "${ARC}" -eq 0 ]; then
+        info "${GREEN}${LABEL}: DEVICE TEST PASSED${RST} (${PASSED:-?} assertions)"
+        emit_result PASS "all assertions passed${note}" "${PASSED:-0}" "${FAILED:-0}"
+    elif [ "${ARC}" -eq 124 ] || [ "${ARC}" -eq 137 ]; then
+        # timeout(1) reports 124 when SIGTERM was enough and 137 when it had to
+        # escalate to SIGKILL. Neither can come from the guest here: assertions.sh
+        # ends in `[ "${FAIL}" -eq 0 ]`, so its only exit codes are 0 and 1, and ssh
+        # reports its own transport failures as 255. A row that hits this is a HANG,
+        # not a failed assertion — say so, with whatever partial counts the log held,
+        # rather than filing it under the generic "assertions failed".
+        warn "${LABEL}: DEVICE TEST TIMED OUT after ${ASSERT_TIMEOUT}s (rc=${ARC})"
+        emit_result FAIL "assertion ssh exceeded its ${ASSERT_TIMEOUT}s wall clock; killed${note}" \
+            "${PASSED:-0}" "${FAILED:-0}"
+    elif [ "${ARC}" -eq 255 ]; then
+        # The transport never held, through every retry above. Distinct from
+        # "assertions failed" because nothing was asserted at all.
+        warn "${LABEL}: DEVICE TEST FAILED — assertion ssh could not hold a connection (rc=255)"
+        emit_result FAIL "assertion ssh could not connect${note:- (ssh attempts: ${ASSERT_ATTEMPTS:-1})}" \
+            "${PASSED:-0}" "${FAILED:-0}"
+    else
+        warn "${LABEL}: DEVICE TEST FAILED (${FAILED:-?} assertions failed)"
+        emit_result FAIL "assertions failed${note}" "${PASSED:-0}" "${FAILED:-0}"
+    fi
+    return 0
+}
+emit_assertion_verdict
 
 # ── keep-alive: hold the container open ─────────────────────────────────────
 # The verdict is already on disk above, so the matrix reports this row normally
