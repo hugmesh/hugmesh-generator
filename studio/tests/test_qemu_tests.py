@@ -152,6 +152,41 @@ def test_discover_sessions_can_include_empty(tmp_path):
     assert not sessions[0].has_images
 
 
+def test_session_summary_names_the_roles_under_each_platform(tmp_path):
+    """``summary()`` is the picker line (gui/pages/_emulation_common.py builds the
+    session combo out of it), so it is the ONLY place an operator sees WHAT a
+    session can boot before choosing it. A line that says "2 image(s): rpi5; x86"
+    cannot be told apart from a different session with the same platform spread,
+    which is exactly how the wrong session gets picked.
+
+    Three platforms on purpose: ``frite`` sorts BEFORE ``rpi5`` alphabetically but
+    AFTER it by ``platform_rank`` (Pi first, other ARM next, x86 last), so the
+    positional assertion below fails if the grouping ever falls back to plain
+    name order instead of the boot order the runner will actually use.
+    """
+    sess = tmp_path / "out" / "sessions" / "20260807-071119-5c1ccb"
+    sess.mkdir(parents=True)
+    _write(str(sess),
+           "hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img.xz",
+           "hugmesh-rpi5-arm64-backend-test-20260807T185415Z.img.xz",
+           "hugmesh-frite-arm64-be-test-20260807T190000Z.img.xz",
+           "hugmesh-x86-amd64-standalone-thin-prod-20260807T172418Z.img")
+
+    session, = qt.discover_sessions(str(tmp_path))
+    text = session.summary()
+
+    assert "4 image(s)" in text
+    # roles, grouped under their platform — not a bare platform list, and not one
+    # flat role list that loses which device each role belongs to
+    assert "rpi5 (backend, pki)" in text
+    assert "frite (be)" in text
+    assert "x86 (standalone-thin)" in text
+    # ...in platform_rank order, which is NOT alphabetical here
+    assert text.index("rpi5 (") < text.index("frite (") < text.index("x86 (")
+    # .platforms stays the plain alphabetical set the pickers filter on
+    assert session.platforms == ["frite", "rpi5", "x86"]
+
+
 # ---- session completeness ------------------------------------------------------------
 # The shape of out/sessions/20260819-125930-89bb8e: a mesh build that ABORTED with
 # 1 bootable image where 4 per-image build logs (and a 7-image manifest) say more
@@ -268,6 +303,41 @@ def test_runner_command_defaults_and_filters():
     assert "--list" not in cmd
 
 
+def test_runner_command_defaults_the_work_dir_under_the_generator():
+    """``--work`` is the one envelope flag with a computed default, and it is always
+    emitted: the runner caches multi-GB decompressed images, per-row results and the
+    device registry under it, and core/qemu_devices.py resolves saves against the
+    SAME directory (its ``default_work_dir``). A drifted default does not fail — it
+    quietly splits the run and the saves across two trees.
+    """
+    from hugmesh_studio.core import qemu_devices
+
+    cmd = qt.runner_command("/gen", qt.QemuRunOptions())
+    assert cmd[cmd.index("--work") + 1] == os.path.join("/gen", qt.DEFAULT_WORK_SUBDIR)
+    assert cmd[cmd.index("--work") + 1] == qemu_devices.default_work_dir("/gen")
+    # an explicit work dir still wins
+    explicit = qt.runner_command("/gen", qt.QemuRunOptions(work_dir="/scratch"))
+    assert explicit[explicit.index("--work") + 1] == "/scratch"
+
+
+def test_runner_command_emits_every_row_filter():
+    """--platform / --role / --only / --only-exact are four DIFFERENT ways to narrow
+    the matrix, and each is silently ignorable: a filter that never reaches the argv
+    boots the whole fan-out (hours of TCG guests) instead of the one row asked for.
+    Absent from a default argv, verbatim when set.
+    """
+    default = qt.runner_command("/gen", qt.QemuRunOptions())
+    for flag in ("--platform", "--role", "--only", "--only-exact"):
+        assert flag not in default
+
+    cmd = qt.runner_command("/gen", qt.QemuRunOptions(
+        platform="rpi5", role="pki", only="rpi5/pki", only_exact="rpi5/pki"))
+    assert cmd[cmd.index("--platform") + 1] == "rpi5"
+    assert cmd[cmd.index("--role") + 1] == "pki"
+    assert cmd[cmd.index("--only") + 1] == "rpi5/pki"
+    assert cmd[cmd.index("--only-exact") + 1] == "rpi5/pki"
+
+
 def test_runner_command_emits_mode_list_and_build_image():
     cmd = qt.runner_command("/gen", qt.QemuRunOptions(mode="stage4", list_only=True,
                                                       build_image=True, keep=True))
@@ -348,7 +418,14 @@ def test_read_results_empty_without_dir(tmp_path):
     assert qt.read_results(str(tmp_path)) == []
 
 
-@pytest.mark.skipif(not os.path.exists(RUNNER), reason="runner script not present")
+#: The two cross-checks below shell out to the real script; both carry this mark.
+#: It used to sit on ``_shell_rows`` instead, where pytest never reads it — a mark
+#: on a plain helper is inert, so a missing runner ERRORed the tests it was meant
+#: to skip.
+_needs_runner = pytest.mark.skipif(not os.path.exists(RUNNER),
+                                   reason="runner script not present")
+
+
 def _shell_rows(tmp_path) -> set[tuple[str, str]]:
     """(label, image basename) pairs from the real runner's --list."""
     proc = subprocess.run(
@@ -368,6 +445,7 @@ def _py_rows(tmp_path) -> set[tuple[str, str]]:
     return {(r.label, r.basename) for r in qt.discover_rows(str(tmp_path))}
 
 
+@_needs_runner
 def test_shell_and_python_agree_on_row_discovery(tmp_path):
     """The shell runner and this module must select the SAME rows.
 
@@ -384,6 +462,7 @@ def test_shell_and_python_agree_on_row_discovery(tmp_path):
     assert _shell_rows(tmp_path) == _py_rows(tmp_path)
 
 
+@_needs_runner
 def test_shell_and_python_agree_on_which_build_wins(tmp_path):
     """Parity under ambiguity: same role rebuilt, and one artifact in both forms.
 
@@ -404,6 +483,39 @@ def test_shell_and_python_agree_on_which_build_wins(tmp_path):
     }
     assert _py_rows(tmp_path) == expected
     assert _shell_rows(tmp_path) == expected
+
+
+def test_runner_script_is_executable():
+    """run-qemu-docker.sh must keep its +x bit.
+
+    The Studio spawns it as argv[0] (``QemuRunner.run`` -> ``subprocess.Popen``,
+    and every ``*_argv`` builder in core/emulation.py and core/qemu_devices.py puts
+    the script path first), NOT as ``bash <script>``. Strip the mode bit and every
+    one of those becomes OSError -> "could not start the runner", at the moment an
+    operator tries to boot a device.
+
+    Nothing else in the suite can see this: the two ``--list`` cross-checks above
+    invoke it through ``bash``, which runs a non-executable file happily. A lost
+    mode bit is also invisible in a review diff and survives a merge, so the check
+    covers BOTH the file on disk and the mode git has recorded — a commit that drops
+    it to 100644 leaves this developer's checkout executable and only breaks on the
+    next fresh clone.
+    """
+    assert os.path.isfile(RUNNER), f"missing runner: {RUNNER}"
+    assert os.access(RUNNER, os.X_OK), "run-qemu-docker.sh must keep its +x bit"
+    with open(RUNNER, "rb") as fh:
+        assert fh.read(2) == b"#!", "run-qemu-docker.sh must keep its shebang"
+
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "-s", "--", qt.RUNNER_SCRIPT],
+            cwd=GENERATOR_DIR, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:   # pragma: no cover
+        pytest.skip(f"git unavailable: {exc}")
+    if tracked.returncode != 0 or not tracked.stdout.strip():   # pragma: no cover
+        pytest.skip("not a git checkout")
+    assert tracked.stdout.split()[0] == "100755", \
+        f"git has run-qemu-docker.sh as mode {tracked.stdout.split()[0]}, not 100755"
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker not installed")
