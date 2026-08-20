@@ -34,7 +34,7 @@ wiki / forum-ui + api-docs + character-studio-ui + superadmin-service-catalog-ui
   native-federation remote in the house shape (user-ui-pinned dep majors,
   `hugmeshRemote` federation config exposing `./routes`, standalone+signals
   component with `[textContent]` bindings — Angular's double-curly interpolation
-  would trip the renderer's fail-closed brand-token scan — `--sd-*` palette
+  would trip the renderer's fail-closed brand-token scan — `--hug-*` palette
   floor, CORS nginx.conf on 8080, nginx-unprivileged Dockerfile, fleet CI,
   karma/jasmine spec). `npm ci && npm run build` in a rendered tree is a real
   `@angular-architects/native-federation:build` (registry access required — the
