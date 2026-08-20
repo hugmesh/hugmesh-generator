@@ -4,11 +4,17 @@ WHY THIS FILE EXISTS. The runtime-theme contract has exactly two halves and they
 live in different repositories:
 
   * the PRODUCER half, here: tests/stack/compose.local.yaml declares
-    ``SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}`` on every themed UI service (and the
-    Studio derives the value, core/theme.py -> LocalStackNode._build_env()).
+    ``HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}`` on every themed UI
+    service (and the Studio derives the value, core/theme.py ->
+    LocalStackNode._build_env()). The KEY is the live spelling; the nested default
+    only lets a host env still set under the legacy name reach the container.
   * the CONSUMER half, in each UI checkout: a docker-entrypoint.d hook reads
-    ``$SNAP_THEME_CSS`` and writes it verbatim to snap-theme.css, which the page
-    <link>s.
+    ``$HUG_THEME_CSS`` (falling back to ``$SNAP_THEME_CSS``) and writes it
+    verbatim to snap-theme.css, which the page <link>s.
+
+NB: the producer flip happened on 2026-08-20, and this file needed NO logic change
+to survive it — which is what it was built for. Both sides are discovered, never
+hard-coded, so the rename is just a different pair of discovered names.
 
 Before this file, ``grep -rn snap-theme tests/`` matched only COMMENTS, and
 studio/tests/test_login_theme_pipeline.py pinned only generator-local files (the

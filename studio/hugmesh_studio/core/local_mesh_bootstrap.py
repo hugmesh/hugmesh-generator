@@ -238,7 +238,7 @@ class LocalMeshBootstrapConfig:
     # ALREADY-DERIVED snap-theme.css text for the login-ui (studio core/theme.py is
     # the single derivation; GUI/CLI compose it, this config only CARRIES it). Like
     # web_locales this is cluster-plane web-login data, not desktop theming — but
-    # unlike web_locales it is RUNTIME: compose passes it as the SNAP_THEME_CSS env
+    # unlike web_locales it is RUNTIME: compose passes it as the HUG_THEME_CSS env
     # and the login-ui entrypoint writes snap-theme.css at container start, so a
     # rebrand needs no image rebuild. EMPTY = shipped default brand, byte-identical.
     login_theme_css: str = ""
@@ -724,7 +724,7 @@ class LocalMeshBootstrap:
                      f"SOCIAL={'on' if c.effective_social() else 'off'}"
                      + f", TOR={'on' if c.effective_with_tor() else 'off'}"
                      + (f", HUG_WEB_LOCALES={_wl}" if _wl else "")
-                     + (", SNAP_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
+                     + (", HUG_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
                      + (f", OIDC_ISSUER={c.idp_issuer.strip()}"
                         f", OIDC_CLIENT_ID={c.idp_client_id.strip()}"
                         f", OIDC_JWKS_URI={c.effective_idp_jwks()}"
@@ -1239,7 +1239,7 @@ def main(argv: list[str] | None = None) -> int:
                         "the source language and needs no catalog.")
     p.add_argument("--login-primary", default="",
                    help="web login-theme primary colour (#RRGGBB). Derives the full "
-                        "--sd-* palette (core/theme.py) into SNAP_THEME_CSS; the "
+                        "palette (core/theme.py) into HUG_THEME_CSS; the "
                         "login-ui writes it to snap-theme.css at container start. "
                         "EMPTY (default) = the shipped brand, byte-identical.")
     p.add_argument("--login-secondary", default="",

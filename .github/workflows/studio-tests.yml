@@ -20,7 +20,7 @@ on:
       - '.github/workflows/studio-tests.yml'
       # NOT a studio path, deliberately. studio/tests/test_theme_boundary.py and
       # test_login_theme_pipeline.py assert against this compose file — it is the
-      # PRODUCER half of the runtime-theme contract (the SNAP_THEME_CSS passthrough
+      # PRODUCER half of the runtime-theme contract (the HUG_THEME_CSS passthrough
       # every themed UI service carries). A rename or a dropped passthrough lands
       # ONLY in this file, so without this path the very gate that exists to catch
       # a one-sided theme rename would not run on the change that causes one.

@@ -17,14 +17,14 @@ wiki / forum-ui + api-docs + character-studio-ui + superadmin-service-catalog-ui
   - `package.json`: npm scope only (`@hugmesh/<slug>` -> `@<NPM_SCOPE>/<slug>`);
     the `<slug>` == `ng build <slug>` target is preserved.
   - `src/index.html`: tab title leading brand word (`BRAND_TITLE`) + per-UI
-    `TITLE_WORD`; the `<snap-<slug>-root>` bootstrap selector is left literal.
+    `TITLE_WORD`; the `<hug-<slug>-root>` bootstrap selector is left literal.
   - `.gitlab-ci.yml`: only the `include: project:` org/group.
 - **Left literal (repo identity):** the `<slug>` npm segment / ng project name /
   root selector, `package.json` description.
 
 ## Per-repo identity (repos[].identity)
 
-- `app_slug` — npm segment / ng target / `<snap-<slug>-root>` selector word.
+- `app_slug` — npm segment / ng target / `<hug-<slug>-root>` selector word.
 - `title_word` — per-UI tab-title role differentiator.
 
 ## Files

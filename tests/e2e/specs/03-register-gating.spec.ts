@@ -28,7 +28,7 @@ test('a provisioned user can sign in but Matrix/Mastodon stay locked until regis
   // was previously asserted here too ("blocked by the registration guard,
   // redirects to login-view"), but that isn't a real gate: matrix-ui's raw
   // gateway path (like every other federated remote) serves ONLY the
-  // <snap-matrix-root> custom-element shell for the HOST to mount internally
+  // <hug-matrix-root> custom-element shell for the HOST to mount internally
   // — verified live it never renders matrix-view for ANY caller navigating
   // there directly, complete-registration or not, so the old assertion was
   // checking a redirect that doesn't exist rather than a real registration

@@ -1366,7 +1366,6 @@ PUBLIC_HTTPS_PORT ?= 8488
 # stack-certs` (gen-certs.sh), gitignored. NOT tests/stack/certs: those are
 # committed mock-stack fixtures whose CA key is public in the repo.
 STACK_TLS_DIR   := tests/stack/.tls-front
-# TODO(org-move): legacy GitHub org — see docs/ORG-MOVE-TODO.md.
 GIT_BASE        ?= https://github.com/hugmesh
 GIT_REF         ?= main
 SOCIAL          ?=
@@ -1555,12 +1554,21 @@ STACK_MFA_ENV := $(if $(strip $(MFA)), APP_MFA_ENABLED='true',)
 # `make` invocation — so any TERMINAL `make stack-up` (a restore, a rebuild, a
 # peer's bring-up) silently reverted the login page to the shipped default
 # brand, which reads as "my theme choices are not applied". The Studio now also
-# WRITES the composed --sd-* token CSS to this file, and whenever it exists the
-# recipe shell threads its text as SNAP_THEME_CSS (login-ui's 50-snap-theme.sh
-# writes it verbatim at container start — env is the transport BY DESIGN, no
-# image rebuild). Delete the file to return to the shipped brand.
+# WRITES the composed token CSS to this file, and whenever it exists the recipe
+# shell threads its text as HUG_THEME_CSS (login-ui's 50-snap-theme.sh writes it
+# verbatim at container start — env is the transport BY DESIGN, no image
+# rebuild). Delete the file to return to the shipped brand.
+#
+# ONE spelling is exported here, deliberately, and it is the NEW one. The old
+# SNAP_THEME_CSS is not ALSO set because this Makefile and the compose file it
+# invokes ($(STACK_COMPOSE), a pinned in-tree path) are always the same checkout
+# and cannot version-skew — so a second export would buy no coverage while
+# threading a multi-kilobyte CSS blob through argv twice, and running $(cat) a
+# second time. The legacy spelling is honoured ONE layer down instead, in
+# compose.local.yaml's `${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}` value, which is
+# where a host env set by someone OTHER than this Makefile actually arrives.
 STACK_THEME_FILE := tests/stack/.theme.css
-STACK_THEME_ENV := $(if $(wildcard $(STACK_THEME_FILE)),SNAP_THEME_CSS="$$(cat $(STACK_THEME_FILE))",)
+STACK_THEME_ENV := $(if $(wildcard $(STACK_THEME_FILE)),HUG_THEME_CSS="$$(cat $(STACK_THEME_FILE))",)
 BRANDB_CASDOOR := http://casdoor-brandb.localtest.me:8001
 comma := ,
 # BRAND_B=1 -> the opt-in per-brand issuer registry (DomainRegistry /
