@@ -3557,6 +3557,10 @@ for puf in "${SPECS_DIR}/portage/package.use/"*; do
         desktop) ${ROLE_CLIENT} || continue ;;
         capable) ${CAPABLE} || continue ;;
         nvidia)  ${NVIDIA_PROPRIETARY} || continue ;;
+        # nvidia-headless (-tools) ONLY for HEADLESS proprietary-NVIDIA roles
+        # (edge_ai/be+gpu): nvidia-settings' gtk+:3[X] dep walls under the node
+        # -X posture (issue #60 item 3). Desktop GPU roles keep 'tools'.
+        nvidia-headless) ${NVIDIA_PROPRIETARY} && ! ${ROLE_CLIENT} || continue ;;
         amd-pro) ${AMD_PRO} || continue ;;
         intel-pro) ${INTEL_PRO} || continue ;;
         steam)   ${STEAM_NATIVE} || continue ;;

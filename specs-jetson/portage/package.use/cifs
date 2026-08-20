@@ -1,0 +1,14 @@
+# net-fs/cifs-utils ships mount.cifs for the network backup-share mounts (see
+# packages.list). Its default-on +acl hard-RDEPENDs >=net-fs/samba — and samba's
+# waf cross-configure DIES on this cross builder (2026-08-15 fleet run, all four
+# jetson images: "ERROR: net-fs/samba-4.24.6::gentoo failed (configure phase)"),
+# so --keep-going silently DROPPED cifs-utils ("dropped because it requires
+# >=net-fs/samba-4.0.0_alpha1") and the image shipped with NO mount.cifs while
+# the build still reported success (issue #60 item 4, secondary).
+#
+# Dropping acl/ads removes the samba + krb5/keyutils chain entirely. mount.cifs
+# itself needs neither: acl only adds the cifsacl/cifsidmap helpers, ads adds
+# AD/Kerberos — both unused on this appliance. Ported VERBATIM from
+# specs-rpi5/portage/package.use/cifs (same cross-compile failure class, same
+# fix, documented there since the rpi5 incident).
+net-fs/cifs-utils -acl -ads

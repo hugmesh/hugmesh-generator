@@ -1,0 +1,15 @@
+# PROPRIETARY NVIDIA driver on a HEADLESS node role (edge_ai / be+gpu / any
+# non-client GPU role) — copied into the sysroot by build-x86-host-stage4.sh
+# ONLY when NVIDIA_PROPRIETARY && ! ROLE_CLIENT. Desktop GPU roles never see
+# this file, so they keep the full driver userspace (nvidia-settings etc.).
+#
+# -tools: x11-drivers/nvidia-drivers' default-on 'tools' USE builds
+# nvidia-settings, whose GUI hard-depends on x11-libs/gtk+:3[X] — and a headless
+# node's global USE is -X, so resolution walls instead of merging (2026-08-15
+# fleet run, build-edge_ai.x86.log:
+#     emerge: there are no ebuilds built with USE flags to satisfy
+#     "x11-libs/gtk+:3[X]" ... required by x11-drivers/nvidia-drivers[tools]
+# issue #60 item 3). A CUDA inference node needs the kernel module + libcuda /
+# NVML userspace, not a GTK settings panel; nvidia-smi ships with the base
+# package, NOT behind 'tools'. Do NOT copy this to desktop GPU roles.
+x11-drivers/nvidia-drivers -tools

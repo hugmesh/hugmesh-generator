@@ -1,0 +1,54 @@
+# CLIENT desktop (--role desktop) ONLY — copied into the sysroot by
+# build-jetson-stage4.sh solely for ROLE_CLIENT (headless node roles never
+# reference desktop USE). specs-jetson's make.conf.tmpl keeps the hardened
+# headless posture GLOBAL (-X -gtk, no @@CLIENT_USE@@ append), so the lean LXDE
+# desktop payload (packages-desktop.list) needs its X/GTK USE closure enabled
+# PER-PACKAGE here. Every entry below is a wall the 2026-08-15 fleet run hit
+# verbatim (build-jetson-desktop.jetson.log "Change USE:" lines; issue #60
+# item 5):
+#
+#   gtk+[X]      — REQUIRED_USE 'any-of ( aqua wayland X )' + the whole LXDE/
+#                  lightdm-gtk-greeter stack renders under Xorg
+#   pango[X]     — pangoxft/pangox for the GTK3 X11 text stack
+#   libglvnd[X]  — GLX dispatch (xorg-server/mesa chain)
+#   imlib2[X]    — media-gfx/feh's image backend needs the X11 loaders
+#   libfm[gtk]   — x11-misc/pcmanfm's core lib must build its GTK UI half
+#
+# Closure completers (the packages above hard-require them once their X/gtk
+# halves are on — without these the walls just move one package down; the full
+# set was CONVERGED by replaying the builder's exact cross pretend resolution
+# against the failed 08-15 sysroot in hugmesh-builder until rc=0):
+#
+#   cairo[X]           — gtk+:3/pango require >=x11-libs/cairo-1.14[X?] with X on
+#   libepoxy[X]        — gtk+:3[X] requires >=media-libs/libepoxy-1.4[X(+)?]
+#   mesa[X]            — libepoxy/libglvnd GLX legs USE-match mesa[X]
+#   freetype[harfbuzz] — pango requires >=media-libs/freetype-2.5.0.1:2[harfbuzz]
+#   libdom[xml]        — www-client/netsurf[svgtiny,svg] -> libsvgtiny ->
+#                        libdom[xml] (netsurf is currently package.provided on
+#                        this platform — see profile/package.provided — so this
+#                        entry is inert until that exclusion is lifted; kept for
+#                        parity with rpi5/x86 and to stay ahead of the wall)
+#
+# Session/login closure — the hardened headless globals carry no elogind either
+# (rpi5's @@CLIENT_USE@@ adds it globally; jetson has no such mechanism, so it
+# is pinned per-package here):
+#
+#   lightdm[elogind]   — REQUIRED_USE 'exactly-one-of ( elogind systemd )' and
+#                        this fleet is OpenRC (-systemd is global)
+#   pambase[elogind]   — registers pam_elogind so lightdm sessions get a logind
+#                        seat (the lightdm[elogind] leg USE-depends on it)
+#
+# Mirrors specs-rpi5/portage/package.use/desktop + specs-x86's desktop file.
+# Entries for packages a role doesn't pull are ignored by portage.
+x11-libs/gtk+ X
+x11-libs/pango X
+media-libs/libglvnd X
+media-libs/imlib2 X
+x11-libs/libfm gtk
+x11-libs/cairo X
+media-libs/libepoxy X
+media-libs/mesa X
+media-libs/freetype harfbuzz
+net-libs/libdom xml
+x11-misc/lightdm elogind
+sys-auth/pambase elogind

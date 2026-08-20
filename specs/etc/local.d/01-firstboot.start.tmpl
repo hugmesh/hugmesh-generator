@@ -113,6 +113,35 @@ if [ -d /usr/libexec/cni ] && [ -z "$(ls -A /opt/cni/bin 2>/dev/null)" ]; then
     cp /usr/libexec/cni/* /opt/cni/bin/
 fi
 
+# ── nullmailer ownership re-fix (cross-build postinst casualty, issue #60) ────
+# mail-mta/nullmailer's pkg_postinst runs `chown nullmail:nullmail …` BY NAME.
+# On the CROSS builders (rpi5/jetson/orangepi*/frite: ROOT=<sysroot> merges,
+# crossdev wrapper appends --root-deps=rdeps and cross_emerge passes
+# --with-bdeps=n) that chown executes on the x86 BUILD HOST and resolves the
+# name against the HOST's passwd — where acct-user/nullmail never merges — so
+# it dies "chown: invalid user: 'nullmail'" (2026-08-19 mesh run). The package's
+# FILES still land, but the log/spool dirs ship root-owned and the trigger fifo
+# may be missing. The clean fix is upstream-shaped (a ROOT-aware postinst in the
+# ebuild / portage-side name mapping), so re-run the postinst's idempotent tail
+# HERE, at first boot on the REAL system, where acct-user/nullmail IS in
+# /etc/passwd (it merges into the sysroot fine — only the host-side name lookup
+# broke). No-op when nullmailer isn't installed or ownership is already right;
+# native x86 builds were never affected (their chroot IS the sysroot).
+if getent passwd nullmail >/dev/null 2>&1 && [ -d /var/spool/nullmailer ]; then
+    [ -p /var/spool/nullmailer/trigger ] || mkfifo --mode=0660 /var/spool/nullmailer/trigger || true
+    chown nullmail:nullmail /var/log/nullmailer \
+        /var/spool/nullmailer/tmp /var/spool/nullmailer/queue \
+        /var/spool/nullmailer/failed /var/spool/nullmailer/trigger 2>/dev/null || true
+    chmod 770 /var/log/nullmailer /var/spool/nullmailer/tmp \
+        /var/spool/nullmailer/queue /var/spool/nullmailer/failed 2>/dev/null || true
+    chmod 660 /var/spool/nullmailer/trigger 2>/dev/null || true
+    if [ -f /etc/nullmailer/remotes ]; then
+        chown root:nullmail /etc/nullmailer/remotes 2>/dev/null || true
+        chmod 0640 /etc/nullmailer/remotes 2>/dev/null || true
+    fi
+    echo "nullmailer: re-applied postinst ownership (cross-build sysroot fix — see the builder's ROOT= merge note)"
+fi
+
 if [ -b /dev/nvme0n1 ]; then
     echo "NVMe detected: $(nvme id-ctrl /dev/nvme0n1 -H 2>/dev/null | grep 'Model Number' || echo '/dev/nvme0n1')"
 fi

@@ -3189,6 +3189,35 @@ HOSTSELINUX
     info "Pre-seeded HOST /etc/portage/package.use: libselinux[python]+audit[python] (containerd selinux toolchain)"
 fi
 
+# ── HOST package.use pre-seed 3: the desktop role's HOST GTK icon toolchain ──
+# --role desktop only. x11-themes/adwaita-icon-theme (RDEPEND of the target
+# gtk+/lightdm-gtk-greeter stack) BDEPENDs x11-libs/gtk+:3 for its
+# gtk-encode-symbolic-svg build tool. BDEPENDs are HOST/x86 packages under this
+# cross layout (the crossdev wrapper's --root-deps=rdeps sends only runtime deps
+# to the sysroot), so that gtk+ resolves against the HOST's /etc/portage — where
+# gtk+'s IUSE-default +X meets the container's cairo/libglvnd defaults of -X and
+# freetype's -harfbuzz, and resolution DIES with the famously misleading
+#     emerge: there are no ebuilds built with USE flags to satisfy
+#     ">=x11-libs/cairo-1.14[...X?...]"     (NO "for <sysroot>" suffix = HOST)
+# killing @system itself (2026-08-15 fleet run, build-rpi5-desktop.rpi5.log;
+# issue #60 item 2 — the TARGET half of that fix is package.use/desktop). The
+# set below was converged by replaying the exact cross pretend resolution in
+# hugmesh-builder until rc=0. Mirrors the HOSTSELINUX pre-seed precedent above;
+# jetson does NOT need this twin: its profile/package.provided excludes adwaita
+# (librsvg rust-cross exclusion), so no host gtk+ is ever pulled there.
+if ${ROLE_CLIENT} && hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; then
+    mkdir -p /etc/portage/package.use
+    cat > /etc/portage/package.use/hugmesh-cross-host-desktop-gtk <<'HOSTDESKTOPGTK'
+# Auto-written by build-rpi5-stage4.sh (--role desktop cross build). The HOST x86 gtk+:3
+# build tool (adwaita-icon-theme BDEPEND: gtk-encode-symbolic-svg) needs its X leg
+# satisfiable on the host. Safe to delete on a non-build host.
+x11-libs/cairo X
+media-libs/libglvnd X
+media-libs/freetype harfbuzz
+HOSTDESKTOPGTK
+    info "Pre-seeded HOST /etc/portage/package.use: cairo[X]+libglvnd[X]+freetype[harfbuzz] (desktop-role host gtk+ icon toolchain)"
+fi
+
 HOST_POLICY_TOOLS=()
 command -v checkpolicy       &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
 command -v checkmodule       &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
@@ -3425,7 +3454,21 @@ ln -sfn "${GENTOO_REPO}/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.p
 cp "${SPECS_DIR}/portage/profile/use.mask"                "${SYSROOT}/etc/portage/profile/use.mask"
 # Copy every file in these portage config dirs (so added spec files always land).
 pcs_sync_dir "${SPECS_DIR}/portage/package.accept_keywords" "${SYSROOT}/etc/portage/package.accept_keywords"
-pcs_sync_dir "${SPECS_DIR}/portage/package.use" "${SYSROOT}/etc/portage/package.use"
+# package.use: role-independent files always; 'desktop' (the client X/GTK USE
+# closure — issue #60 item 2) ONLY for --role desktop (ROLE_CLIENT). Staged into
+# a temp dir then pcs_sync_dir'd so a resumed HEADLESS sysroot PRUNES a stale
+# desktop file instead of keeping it (mirrors build-x86-host-stage4.sh's
+# role-conditional package.use copies; see scripts/_portage-config-lib.sh).
+PCS_STAGE_PU="$(mktemp -d)"
+for puf in "${SPECS_DIR}/portage/package.use/"*; do
+    [ -e "${puf}" ] || continue
+    case "$(basename "${puf}")" in
+        desktop) ${ROLE_CLIENT} || continue ;;
+    esac
+    cp "${puf}" "${PCS_STAGE_PU}/"
+done
+pcs_sync_dir "${PCS_STAGE_PU}" "${SYSROOT}/etc/portage/package.use"
+rm -rf "${PCS_STAGE_PU}"
 pcs_sync_dir "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
 # Quiet portage's per-file sendfile WARNING-traceback spam before the first
 # merge into this sysroot (sendfile(2) EINVALs for EVERY file merged onto the

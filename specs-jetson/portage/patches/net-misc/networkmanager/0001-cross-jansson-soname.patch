@@ -1,0 +1,34 @@
+--- a/meson.build
++++ b/meson.build
+@@ -296,13 +296,30 @@
+ jansson_msg = 'no'
+ if jansson_dep.found()
+   jansson_libdir = jansson_dep.get_variable(pkgconfig: 'libdir')
+-  res = run_command(find_program('eu-readelf', 'readelf'), '-d', join_paths(jansson_libdir, 'libjansson.so'), check: false)
+   jansson_soname = ''
++  # Gentoo cross-compile fix: pkg-config's libdir variable is the ON-TARGET path
++  # (/usr/lib64), NOT the build sysroot path, so 'readelf -d /usr/lib64/libjansson.so'
++  # reads a file that does not exist on the x86 build host -> empty SONAME -> the
++  # assert below dies. Prefix the cross sysroot (PKG_CONFIG_SYSROOT_DIR, which the
++  # crossdev pkg-config wrapper exports = ESYSROOT) so readelf reads the real
++  # aarch64 libjansson.so in the sysroot. Native builds: the env var is empty, so
++  # the path is unchanged and behaviour is identical to upstream.
++  jansson_sysroot = run_command('sh', '-c', 'printf %s "${PKG_CONFIG_SYSROOT_DIR}"', check: false).stdout().strip()
++  jansson_so = join_paths(jansson_sysroot + jansson_libdir, 'libjansson.so')
++  res = run_command(find_program('eu-readelf', 'readelf'), '-d', jansson_so, check: false)
+   foreach line: res.stdout().split('\n')
+     if line.strip().contains('SONAME')
+        jansson_soname = line.split('[')[1].split(']')[0]
+     endif
+   endforeach
++  if jansson_soname == ''
++    # Last-resort fallback to the jansson 2.x ABI soname (libjansson.so.4 - the
++    # soname major is the library ABI version, NOT the 2.x package version, and is
++    # arch-independent), so a cross build never fails configure on a readelf hiccup.
++    # NM dlopen()s jansson by this exact soname at runtime
++    # (src/libnm-glib-aux/nm-json-aux.c).
++    jansson_soname = 'libjansson.so.4'
++  endif
+   assert(jansson_soname != '', 'Unable to determine Jansson SONAME')
+   config_h.set_quoted('JANSSON_SONAME', jansson_soname)
+   jansson_msg = 'yes (soname: ' + jansson_soname + ')'
