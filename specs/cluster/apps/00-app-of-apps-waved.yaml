@@ -68,3 +68,13 @@ spec:
       namespace: devops
       jsonPointers:
         - /spec/generators/0/list/elements
+    # Per-domain Casdoor list (issue #47, 05b-casdoor-domains.yaml): same
+    # single-writer model — build-time bake + the admin-bff DomainReconciler own
+    # the element list; git carries the empty scaffold. Kept identical to
+    # ../app-of-apps.yaml so BOTH topologies honour the runtime write.
+    - group: argoproj.io
+      kind: ApplicationSet
+      name: casdoor-domains
+      namespace: devops
+      jsonPointers:
+        - /spec/generators/0/list/elements

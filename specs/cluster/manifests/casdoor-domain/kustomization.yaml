@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# casdoor-domain — the ENV-PARAMETERIZED per-domain Casdoor base (issue #47,
+# Domain.idp=own). One INSTANCE of this base = one domain that chose to run its
+# OWN identity provider instead of riding the superdomain's central Casdoor
+# (manifests/casdoor/). Shape cloned from manifests/casdoor-games/ (the proven
+# second-IdP precedent: own pg, own app.conf origin/issuer, ESO-backed creds,
+# sync-wave "1" so JWKS precedes consumers) but with EVERY per-domain literal
+# lifted into the casdoor-domain-params ConfigMap / the ExternalSecret
+# remoteRefs, so the SAME base serves any number of domains.
+#
+# WHO INSTANTIATES IT: the casdoor-domains ApplicationSet
+# (specs/cluster/apps: 05b-casdoor-domains.yaml). Its template points one
+# Application per idp=own domain at THIS directory and injects the per-domain
+# values (origin/org/host/Vault path/MCS levels) via kustomize patches, and the
+# per-domain NAMESPACE (<nsPrefix>-pki) via spec.source.kustomize.namespace —
+# which is why NOTHING here pins a metadata.namespace and this file carries no
+# `namespace:` transformer. Deployed standalone/unpatched this base is a
+# placeholder (origin https://id.hugmesh.net, Vault path hugmesh/casdoor-domain
+# that gen-cluster-secrets.sh deliberately never seeds) — it is NOT meant to be
+# applied outside the ApplicationSet.
+#
+# NO static init_data.json (deliberate divergence from casdoor/casdoor-games):
+# a per-domain seed blob would be per-domain CONTENT in a shared base. The
+# env-driven init Job (init-job.yaml, reconcile.py reading CASDOOR_ORG et al —
+# the manifests/casdoor/init-job.yaml CASDOOR_ORG-env precedent) is the ONLY
+# seeder; app.conf leaves initDataFile empty so Casdoor's InitFromFile() is a
+# documented no-op.
+resources:
+  - params-configmap.yaml      # the per-domain value surface (patched by 05b)
+  - external-secrets.yaml      # ESO: db/admin/app creds <- secret/<slug>/casdoor
+  - pg.yaml                    # dedicated Postgres (PVC is Prune=false)
+  - app-conf-configmap.yaml    # Casdoor app.conf pointing at casdoor-domain-pg
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml               # public issuer host id.<domain>
+  - init-job.yaml              # env-driven org/app/admin-password reconcile
+  - db-networkpolicy.yaml      # ADR-32 per-pod isolation for casdoor-domain-pg

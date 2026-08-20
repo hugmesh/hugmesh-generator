@@ -43,6 +43,12 @@ const TOKEN_KEYS = [
   // brand profile's MFA knob by render-handlebars.sh — never a secret, never
   // operator free-text (the .sh derivation is a closed two-value case).
   'MFA_ENABLED',
+  // Per-domain own-IdP lane (issue #47): the brand's Casdoor organization
+  // (DNS-label-validated by render-handlebars.sh, mirroring
+  // generate-brand-repos.sh) and the ORG lowercase slug (already registered
+  // live in tokens.json for render-repo-tree.sh; here it names the Forgejo org
+  // segment of the brand's own <BRAND>-gitops repoURL). Neither is a secret.
+  'CASDOOR_ORG', 'ORG_SLUG',
 ];
 
 function die(msg) {
@@ -51,11 +57,21 @@ function die(msg) {
 }
 
 function parseArgs(argv) {
-  const out = { templates: null, out: null, extraTokens: [] };
+  const out = { templates: null, out: null, extraTokens: [], skipPrefixes: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--templates') out.templates = argv[++i];
     else if (a === '--out') out.out = argv[++i];
+    // --skip-prefixes CSV: template paths (RELATIVE to --templates, exact file
+    // or 'dir/' prefix) to SKIP this render. The per-domain own-IdP gate
+    // (issue #47): render-handlebars.sh passes the casdoor template prefixes
+    // whenever the brand profile is NOT IDP=own, mirroring
+    // generate-brand-repos.sh's _idp_gated_template() verbatim so the parity
+    // gate holds on both lanes. ABSENT flag = the pre-#47 sweep, byte-identical.
+    else if (a === '--skip-prefixes') {
+      out.skipPrefixes = (argv[++i] || '')
+        .split(',').map((s) => s.trim()).filter(Boolean);
+    }
     // --extra-tokens CSV: ADDITIONAL allowlisted token names to place in the
     // render context, on top of the fixed 7. Used by the Phase-2 repo-tree
     // overlay (templates/repos/login-ui) which references brand-delta tokens
@@ -156,6 +172,13 @@ function main() {
   const files = listHbs(templatesDir);
   let rendered = 0;
   for (const tmpl of files) {
+    // Per-domain own-IdP gate (issue #47) — see --skip-prefixes above. Match on
+    // the POSIX-style path relative to the templates root, exactly the string
+    // generate-brand-repos.sh's case pattern sees.
+    const relHbs = path.relative(templatesDir, tmpl).split(path.sep).join('/');
+    if (args.skipPrefixes.some((p) => relHbs === p || relHbs.startsWith(p))) {
+      continue;
+    }
     const src = fs.readFileSync(tmpl, 'utf8');
 
     // Fail-closed guardrail (shared with the Phase-4 recipe engine via

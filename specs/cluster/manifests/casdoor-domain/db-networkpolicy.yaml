@@ -1,0 +1,29 @@
+# casdoor-domain-pg per-pod Ingress isolation (ADR-32 network backstop).
+#
+# The superdomain's casdoor-pg / casdoor-games-pg predate ADR-32 and sit on the
+# DB_ISOLATION_KNOWN_GAPS list; a NEW per-domain Postgres does not get to grow
+# that list. This is the db-ingress.yaml shape applied at birth: the DB pod is
+# default-deny for Ingress and reachable ONLY from its one real consumer, the
+# casdoor-domain pod (the init Job talks to the Casdoor API on :8000, never to
+# Postgres directly).
+#
+# NOTE — no broad tier-ingress policy selects the per-domain <nsPrefix>-pki
+# namespaces (manifests/networkpolicy targets the hugmesh-* namespaces only), so
+# there is no NotIn-exclusion counterpart to keep in sync here; this single
+# policy is the whole isolation story for the instance's namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-casdoor-domain-pg
+  labels: { app: casdoor-domain-pg, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor-domain-pg }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # casdoor-domain (same namespace) — the only Postgres consumer.
+        - podSelector:
+            matchLabels: { app: casdoor-domain }
+      ports:
+        - { protocol: TCP, port: 5432 }

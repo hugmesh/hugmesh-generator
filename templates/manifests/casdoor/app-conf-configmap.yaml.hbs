@@ -1,0 +1,49 @@
+# {{BRAND_TITLE}} casdoor app.conf — points this brand's own Casdoor at its
+# dedicated Postgres and carries the brand's BAKED issuer (the tenant-lane twin
+# of specs/cluster/manifests/casdoor-domain/app-conf-configmap.yaml, which
+# derives the same values from env instead).
+# Generated from hugmesh-generator/templates/manifests/casdoor/app-conf-configmap.yaml.hbs
+#
+# NO secrets here — the DB user/password are interpolated at startup from env
+# (CASDOOR_DB_USER / CASDOOR_DB_PASSWORD <- ESO Secret {{BRAND}}-casdoor-db).
+#
+# !!! Casdoor's app.conf keys and the beego "${ENV||default}" interpolation are
+# !!! version-specific — validate against the deployed casbin/casdoor image
+# !!! (the same warning manifests/casdoor-games carries).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{BRAND}}-casdoor-app-conf
+  labels: { app: {{BRAND}}-casdoor, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+data:
+  app.conf: |
+    appname = casdoor
+    httpport = 8000
+    runmode = prod
+    copyrequestbody = true
+    SessionOn = true
+    # Dedicated Postgres ({{BRAND}}-casdoor-pg, db "casdoor"). For the postgres
+    # driver Casdoor uses the dataSourceName verbatim (it only appends dbName
+    # for MySQL), so dbname= must be set inline here. Credentials come from env
+    # (ESO Secret {{BRAND}}-casdoor-db).
+    driverName = postgres
+    dataSourceName = "user=${CASDOOR_DB_USER||casdoor} password=${CASDOOR_DB_PASSWORD||} host={{BRAND}}-casdoor-pg port=5432 sslmode=disable dbname=casdoor"
+    dbName = casdoor
+    tableNamePrefix =
+    showSql = false
+    redisEndpoint =
+    isCloudIntranet = false
+    authState = "casdoor"
+    socks5Proxy = ""
+    verificationCodeTimeout = 10
+    initScore = 0
+    logPostOnly = true
+    # Public issuer (OIDC `iss` origin) of this brand's realm — BAKED at brand
+    # render time (the compose.brand-b.yaml contract: issuer = the PUBLISHED
+    # URL; in-cluster consumers fetch JWKS from the Service URL).
+    origin = "https://id.{{CLUSTER_DOMAIN}}"
+    enableGzip = true
+    # NO declarative seed — the env-driven {{BRAND}}-casdoor-init Job is the
+    # ONLY seeder (initDataFile left empty = InitFromFile() is a documented
+    # no-op). See specs/cluster/manifests/casdoor-domain for the full rationale.
+    initDataFile =

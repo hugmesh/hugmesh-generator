@@ -1,0 +1,79 @@
+# casdoor-domain — a domain's OWN Casdoor identity provider (issue #47,
+# Domain.idp=own): a SEPARATE, INDEPENDENT Casdoor instance per domain that
+# opted out of the superdomain's central IdP (manifests/casdoor/). One instance
+# of this Deployment runs per idp=own domain, in that domain's <nsPrefix>-pki
+# namespace, instantiated by the casdoor-domains ApplicationSet
+# (specs/cluster/apps: 05b-casdoor-domains.yaml). It issues the OAuth2/OIDC JWTs
+# for issuer https://id.<clusterDomain> and owns its OWN native users/roles;
+# the shared gateways admit it via one more APP_TENANCY_ISSUERS/_HOSTS registry
+# pair (docs/DOMAIN-IDP.md — the compose.brand-b.yaml contract).
+#
+# Shape mirrors manifests/casdoor-games/deployment.yaml (the proven second-IdP
+# precedent) with every per-instance literal lifted into casdoor-domain-params /
+# the ESO Secrets / ApplicationSet patches.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casdoor-domain
+  labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: casdoor-domain }
+  template:
+    metadata:
+      labels: { app: casdoor-domain }
+    spec:
+      nodeSelector:
+        hugmesh.net/pki: "true"
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          # PLACEHOLDER MCS category — ALWAYS patched per domain by the
+          # casdoor-domains ApplicationSet ({{ .selinuxLevel }}). Each domain
+          # instance MUST get a category no other workload on the mesh uses
+          # (docs/SECURITY.md §3); the element writer owns that allocation.
+          level: "s0:c85"
+      containers:
+        - name: casdoor
+          # Same image pin as the casdoor-games precedent — the app.conf env
+          # interpolation is validated against THIS version (see the warning in
+          # app-conf-configmap.yaml before bumping).
+          image: casbin/casdoor:3.80.0
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - name: RUNNING_IN_DOCKER
+              value: "true"
+            # Dedicated Postgres credentials — interpolated into conf/app.conf
+            # (casdoor-domain-app-conf). Materialized by ESO from Vault
+            # (secret/<slug>/casdoor via external-secrets.yaml).
+            - name: CASDOOR_DB_USER
+              valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: username } }
+            - name: CASDOOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: password } }
+            # Public issuer origin of this domain's realm — interpolated into
+            # app.conf's `origin`. Patched per domain via casdoor-domain-params.
+            - name: CASDOOR_ORIGIN
+              valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_ORIGIN } }
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            # app.conf override that points Casdoor at casdoor-domain-pg and
+            # carries the env-interpolated issuer. NOTE: the conf path is
+            # image-version-specific (casbin/casdoor reads conf/app.conf from
+            # its workdir) — validate against the deployed image.
+            - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+      volumes:
+        # DB state lives in casdoor-domain-pg (dedicated Postgres); this
+        # configMap just points Casdoor at it. NO init-data volume: the seed is
+        # the env-driven init Job (see app-conf-configmap.yaml).
+        - name: app-conf
+          configMap:
+            name: casdoor-domain-app-conf

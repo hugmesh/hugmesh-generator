@@ -58,6 +58,10 @@ fi
 # so an ambient exported MFA cannot leak into the render (mirrors
 # generate-brand-repos.sh; keep IN SYNC or scripts/parity-gate.sh diverges).
 MFA=""
+# Same rule for the per-domain IdP choice (issue #47) and its Casdoor org
+# (mirrors generate-brand-repos.sh — keep IN SYNC).
+IDP=""
+CASDOOR_ORG=""
 # shellcheck source=/dev/null
 source "$BRAND_CONF"
 
@@ -126,10 +130,35 @@ case "${MFA}" in
   *) _hbdie "invalid MFA '${MFA}' in the brand profile (use MFA=1 to enable; unset/0/false/off = disabled)" ;;
 esac
 
+# Derive IDP / CASDOOR_ORG / ORG_SLUG identically to generate-brand-repos.sh
+# (per-domain IdP choice, issue #47; fail closed on unknown spellings). Keep in
+# sync — the parity gate byte-compares the two engines' output, including an
+# IDP=own leg.
+case "${IDP}" in
+  ""|superdomain) IDP="superdomain" ;;
+  own)            IDP="own" ;;
+  *) _hbdie "invalid IDP '${IDP}' in the brand profile (use IDP=own for a per-domain Casdoor; unset/superdomain = the central IdP)" ;;
+esac
+CASDOOR_ORG="${CASDOOR_ORG:-$BRAND}"
+[[ "$CASDOOR_ORG" =~ $_DNS_LABEL ]] \
+  || _hbdie "invalid CASDOOR_ORG '${CASDOOR_ORG}' (must be a DNS label)"
+ORG_SLUG="${ORG,,}"
+ORG_SLUG="${ORG_SLUG//[^a-z0-9-]/-}"
+ORG_SLUG="$(echo "$ORG_SLUG" | sed 's/^-*//; s/-*$//')"
+
+# The own-Casdoor templates render ONLY for an IDP=own brand — mirror
+# generate-brand-repos.sh's _idp_gated_template() prefixes VERBATIM (keep the
+# two lists in sync or the parity gate diverges).
+SKIP_ARGS=()
+if [[ "$IDP" != "own" ]]; then
+  SKIP_ARGS=(--skip-prefixes "apps/05-casdoor.yaml.hbs,manifests/casdoor/")
+fi
+
 BRAND_OUT="${OUT_DIR}/${BRAND}-gitops"
 
-export BRAND BRAND_TITLE ORG CLUSTER_DOMAIN HEADSCALE_URL HARBOR_PROJECT MESH_TAG NS_PREFIX MFA_ENABLED
+export BRAND BRAND_TITLE ORG CLUSTER_DOMAIN HEADSCALE_URL HARBOR_PROJECT MESH_TAG NS_PREFIX MFA_ENABLED CASDOOR_ORG ORG_SLUG
 
 exec node "${TOOLING_DIR}/render-handlebars.js" \
   --templates "$TEMPLATES_DIR" \
-  --out "$BRAND_OUT"
+  --out "$BRAND_OUT" \
+  ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}

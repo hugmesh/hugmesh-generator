@@ -1,0 +1,60 @@
+# casdoor-domain app.conf override — points a domain's own Casdoor (issue #47,
+# Domain.idp=own) at its dedicated Postgres (casdoor-domain-pg) and carries the
+# per-domain issuer via ENV interpolation. Mounted over the image's conf/app.conf.
+# NO secrets here — DB user/password are interpolated at startup from env
+# (CASDOOR_DB_USER / CASDOOR_DB_PASSWORD <- ESO Secret casdoor-domain-db), and the
+# issuer from CASDOOR_ORIGIN (<- the casdoor-domain-params ConfigMap, patched per
+# domain by the casdoor-domains ApplicationSet).
+#
+# !!! Casdoor's app.conf keys and the beego "${ENV||default}" interpolation are
+# !!! version-specific (the same warning manifests/casdoor-games carries). The
+# !!! dataSourceName interpolation is the proven casdoor-games shape; the `origin`
+# !!! interpolation below is the SAME mechanism but MUST be validated against the
+# !!! deployed casbin/casdoor:3.80.0 before the first idp=own domain goes live.
+# !!! FALLBACK if `origin` turns out not to interpolate on that image: have the
+# !!! casdoor-domains ApplicationSet strategic-merge-patch this ConfigMap's whole
+# !!! app.conf data key per domain (the value surface is already per-Application,
+# !!! so only the patch mechanics change — no manifest redesign).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-domain-app-conf
+  labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
+data:
+  app.conf: |
+    appname = casdoor
+    httpport = 8000
+    runmode = prod
+    copyrequestbody = true
+    SessionOn = true
+    # Dedicated Postgres (casdoor-domain-pg, db "casdoor"). For the postgres
+    # driver Casdoor uses the dataSourceName verbatim (it only appends dbName for
+    # MySQL), so dbname= must be set inline here. Credentials come from env (ESO
+    # Secret casdoor-domain-db).
+    driverName = postgres
+    dataSourceName = "user=${CASDOOR_DB_USER||casdoor} password=${CASDOOR_DB_PASSWORD||} host=casdoor-domain-pg port=5432 sslmode=disable dbname=casdoor"
+    dbName = casdoor
+    tableNamePrefix =
+    showSql = false
+    redisEndpoint =
+    isCloudIntranet = false
+    authState = "casdoor"
+    socks5Proxy = ""
+    verificationCodeTimeout = 10
+    initScore = 0
+    logPostOnly = true
+    # Public issuer (OIDC `iss` origin) of THIS domain's realm — interpolated
+    # from CASDOOR_ORIGIN (Deployment env <- casdoor-domain-params, patched to
+    # https://id.<clusterDomain> per domain). The compose.brand-b.yaml contract:
+    # issuer = the PUBLISHED URL; in-network consumers fetch JWKS from the
+    # Service URL. The default matches the params-configmap placeholder only.
+    origin = "${CASDOOR_ORIGIN||https://id.hugmesh.net}"
+    enableGzip = true
+    # ── NO declarative seed — DELIBERATE (differs from casdoor/casdoor-games) ─
+    # A static init_data.json would be per-domain CONTENT baked into this shared
+    # base. initDataFile is left EMPTY so object/init_data.go's InitFromFile()
+    # returns immediately (the documented opt-in: an empty key = no import), and
+    # the env-driven casdoor-domain-init Job (init-job.yaml) is the ONLY seeder —
+    # it creates the org/application from CASDOOR_ORG/CASDOOR_APP_NAME env and
+    # verifies every write by re-reading it.
+    initDataFile =

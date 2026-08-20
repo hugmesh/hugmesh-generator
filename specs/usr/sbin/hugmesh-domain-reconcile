@@ -39,8 +39,12 @@
 #   BRAND_TITLE := brand            (slug fallback title)
 #   HEADSCALE_URL := https://headscale.<clusterDomain>   (brands/example.conf:30 convention)
 # Closing this gap needs either two new DomainEntry fields in admin-bff #118 or a static per-mesh
-# map baked at provision time. nsPrefix/casdoorOrg have NO {{TOKEN}} slot in the 12 templates
-# today, so they are carried (and signature-covered) but currently unused by generation.
+# map baked at provision time. nsPrefix/casdoorOrg NOW have template slots ({{NS_PREFIX}} since
+# Phase 5 / {{CASDOOR_ORG}} since issue #47's own-IdP lane) and are threaded into the transient
+# profile when present. REMAINING #118 gap: the DomainEntry has NO `idp` field yet (the
+# Domain.idp=superdomain|own choice landed in the Studio/KEYS manifest via PR #71); until the
+# admin-bff export carries it, `.idp // empty` below reads absent == superdomain, so every
+# current export renders the pre-#47 template set unchanged (docs/DOMAIN-IDP.md).
 #
 # WRITEBACK (Phase 5 — WIRED, enablement-gated): ack_generation() is now CALLED from main()
 # via writeback_acks() per acted-on domain, but stays a NO-OP unless DOMAIN_ACK_URL is set
@@ -398,6 +402,7 @@ render_brand_repos() {
         _DR_EMIT_FAILED=1
         return 1
     fi
+    local idp
     for ((i = 0; i < n; i++)); do
         dom="$(jq -r ".body.entries[$i].clusterDomain // empty" "${export_json}" 2>/dev/null)"
         brand="$(jq -r ".body.entries[$i].brand // empty" "${export_json}" 2>/dev/null)"
@@ -405,6 +410,7 @@ render_brand_repos() {
         mesh="$(jq -r ".body.entries[$i].meshTag // empty" "${export_json}" 2>/dev/null)"
         ns="$(jq -r ".body.entries[$i].nsPrefix // empty" "${export_json}" 2>/dev/null)"
         casdoor="$(jq -r ".body.entries[$i].casdoorOrg // empty" "${export_json}" 2>/dev/null)"
+        idp="$(jq -r ".body.entries[$i].idp // empty" "${export_json}" 2>/dev/null)"
         ca_prov="$(jq -r ".body.entries[$i].caProvisioned // false" "${export_json}" 2>/dev/null)"
         appset="$(jq -r ".body.entries[$i].appsetRegistered // false" "${export_json}" 2>/dev/null)"
         [ -n "${dom}" ] || continue
@@ -415,6 +421,21 @@ render_brand_repos() {
         # Fail-closed CONTENT gate (#13): reject brand/domain/org/mesh that could
         # path-traverse or inject into generate-brand-repos.sh before we render.
         entry_fields_ok "${brand}" "${dom}" "${org}" "${mesh}" || continue
+        # Same gate for the #47 per-domain-IdP fields (they land on the same raw
+        # sed sink via the transient profile): idp is a CLOSED enum (absent ==
+        # superdomain, every pre-#47 export), nsPrefix/casdoorOrg must be DNS
+        # labels when present. Reject the ENTRY (warn+continue) on any breach —
+        # the downstream generator re-validates (defense-in-depth).
+        case "${idp}" in
+            ""|superdomain|own) : ;;
+            *) warn "rejecting entry ${dom}: invalid idp '${idp}' (want superdomain|own)"; continue ;;
+        esac
+        if [ -n "${ns}" ] && ! [[ "${ns}" =~ ${_DR_DNS_LABEL} ]]; then
+            warn "rejecting entry ${dom}: invalid nsPrefix '${ns}' (not a DNS label)"; continue
+        fi
+        if [ -n "${casdoor}" ] && ! [[ "${casdoor}" =~ ${_DR_DNS_LABEL} ]]; then
+            warn "rejecting entry ${dom}: invalid casdoorOrg '${casdoor}' (not a DNS label)"; continue
+        fi
         # FIELD-GAP derivation (see header) — NOT authoritative; flagged for #118.
         local title="${brand}"                          # BRAND_TITLE := brand (slug fallback)
         local headscale="https://headscale.${dom}"      # HEADSCALE_URL := convention
@@ -428,9 +449,14 @@ render_brand_repos() {
             printf 'CLUSTER_DOMAIN=%q\n' "${dom}"
             printf 'HEADSCALE_URL=%q\n' "${headscale}"
             printf 'MESH_TAG=%q\n' "${mesh}"
-            # nsPrefix/casdoorOrg are carried (signature-covered) but have NO template slot today.
-            printf '# NS_PREFIX=%q  (export-only; no template token yet)\n' "${ns}"
-            printf '# CASDOOR_ORG=%q (export-only; no template token yet)\n' "${casdoor}"
+            # Issue #47 (Domain.idp=own): these three NOW have template slots —
+            # NS_PREFIX ({{NS_PREFIX}}, 13d + the casdoor templates), IDP (the
+            # generator's own-Casdoor render gate) and CASDOOR_ORG
+            # ({{CASDOOR_ORG}}). Absent export fields keep the generator's own
+            # defaults (superdomain / BRAND) — pre-#47 exports render unchanged.
+            [ -n "${ns}" ]      && printf 'NS_PREFIX=%q\n' "${ns}"
+            [ -n "${idp}" ]     && printf 'IDP=%q\n' "${idp}"
+            [ -n "${casdoor}" ] && printf 'CASDOOR_ORG=%q\n' "${casdoor}"
         } > "${prof}"
         log "rendering brand repo for ${brand} (${dom}) -> quarantine -> scan -> promote"
         render_and_scan_profile "${prof}" "${brand}" "${OUT_DIR}" \

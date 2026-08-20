@@ -838,6 +838,23 @@ lint:kind-profile-app-closure:
   script:
     - bash tests/scripts/test-kind-profile-app-closure.sh
 
+# Per-domain Casdoor lane (issue #47, Domain.idp=own): the casdoor-domains
+# ApplicationSet must ship an EMPTY element scaffold, both roots must carry the
+# ignoreDifferences+RespectIgnoreDifferences keystone (without it selfHeal
+# silently reverts every runtime element write — the exact optional-services
+# no-op shape), the template must keep the tokenless-kind repoURL literals AND
+# sit in bootstrap-kind.sh's sso curated set, the base PVC must be Prune=false,
+# and every kustomize patch target/path must resolve against the base. Includes
+# its own negative controls (each corruption must bite).
+lint:casdoor-domains-appset:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-casdoor-domains-appset.sh
+
 # Outbound (client-side) mTLS must be given the password to the stores it uses.
 # The init containers minted a PKCS12 pair under a generated password and wrote
 # only `server.ssl.*` — the INBOUND listener's keys. Outbound calls bind a

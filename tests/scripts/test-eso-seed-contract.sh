@@ -232,7 +232,11 @@ fi
 
 # The scope claim must be MEASURED, not asserted in a comment: fail if the walk
 # stops covering the ExternalSecrets that live outside manifests/external-secrets.
-ES_FILES_OUTSIDE="$(grep -rl 'kind: ExternalSecret' "${CLUSTER}" \
+# Anchored at line start: only a top-level `kind: ExternalSecret` DECLARES an
+# object — an indented mention (e.g. a kustomize patch TARGET naming the kind,
+# as apps/05b-casdoor-domains.yaml carries) is a reference, not a document, and
+# the checker's YAML walk rightly does not count it.
+ES_FILES_OUTSIDE="$(grep -rlE '^kind: ExternalSecret' "${CLUSTER}" \
     --include='*.yaml' --include='*.yml' 2>/dev/null \
     | grep -v '/manifests/external-secrets/' | sort | wc -l)"
 if grep -qF "file(s) outside manifests/external-secrets" <<<"${OUT}" \

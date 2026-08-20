@@ -514,6 +514,14 @@ SSO_APPS=(
   40-frontend.yaml        # Angular host shell (hugmesh-systems-web)
   45-social-ui.yaml       # login-ui remote (+ matrix/mastodon/admin remotes)
   14-workload-console-rbac.yaml # workload-console SAs + token Secrets (lights the dual-SA client the committed admin-bff overlay already enables; RoleBindings for app-tier namespaces absent from this slice degrade that Application partially, which is the honest state)
+  # casdoor-domains ApplicationSet (issue #47, per-domain own-IdP lane). INERT
+  # here: it ships with ZERO list elements, so it generates nothing until a
+  # writer supplies an idp=own domain — it is applied in this profile ONLY so
+  # apply_core_app's sed retargets the GitHub repoURL/targetRevision literals
+  # inside its TEMPLATE at the tokenless local git daemon (the issue-#48
+  # contract: a repo-synced ApplicationSet would keep the GitHub literal and
+  # generate Applications that cannot fetch on kind).
+  05b-casdoor-domains.yaml
 )
 if [ "${KIND_PROFILE}" = "sso" ]; then
   for f in "${SSO_APPS[@]}"; do

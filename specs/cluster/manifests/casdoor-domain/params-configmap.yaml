@@ -1,0 +1,33 @@
+# casdoor-domain-params — the ONE per-domain value surface of the casdoor-domain
+# base (issue #47, Domain.idp=own). Every key here is a PLACEHOLDER default that
+# the casdoor-domains ApplicationSet (specs/cluster/apps: 05b-casdoor-domains.yaml)
+# replaces per domain via a kustomize patch; the base itself stays byte-identical
+# for every domain. Consumed by:
+#   * the casdoor-domain Deployment (CASDOOR_ORIGIN -> beego ${ENV||default}
+#     interpolation of app.conf's `origin`, i.e. the OIDC `iss` this instance
+#     stamps into every JWT), and
+#   * the casdoor-domain-init Job (org/app/client-id/redirect-host seed values).
+#
+# NOTHING here is a secret: org names, hostnames and client ids are public
+# identifiers. Credentials ride the ESO Secrets (external-secrets.yaml) only.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-domain-params
+  labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
+data:
+  # Public issuer (OIDC `iss` origin) of this domain's realm — ALWAYS patched to
+  # https://id.<clusterDomain> by the ApplicationSet (the compose.brand-b.yaml
+  # contract: issuer = the PUBLISHED URL; consumers do JWKS against the
+  # in-cluster Service URL http://casdoor-domain.<nsPrefix>-pki.svc:8000).
+  CASDOOR_ORIGIN: "https://id.hugmesh.net"
+  # The Casdoor organization owning this domain's users/roles — patched to the
+  # DomainEntry's casdoorOrg (#118 export field, default: the domain slug).
+  CASDOOR_ORG: "hugmesh-domain"
+  # The domain's public host — the init Job derives the OAuth redirectUris
+  # (https://<domain>/callback, https://<domain>/silent-refresh.html) from it.
+  CASDOOR_DOMAIN: "hugmesh.net"
+  # OAuth2 application shell + its PUBLIC client id (not a secret; the secret
+  # half rides the casdoor-domain-app ESO Secret).
+  CASDOOR_APP_NAME: "hugmesh-domain-app"
+  CASDOOR_CLIENT_ID: "hugmesh-domain-client"
