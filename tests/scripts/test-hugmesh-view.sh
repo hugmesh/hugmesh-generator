@@ -248,6 +248,50 @@ has "${out}" "A default-src 'self'; connect-src https://127.0.0.1:9080; upgrade-
 has "${out}" "B default-src 'self'; frame-ancestors 'none'" \
     "control: a CSP naming no mapped host is unchanged (the rewrite is surgical)"
 
+# TWO ROWS, ONE HOST. The shipped catalog does this four times over (one row per
+# lane on hugmesh.net) and the compose lane does it WITHIN one lane on purpose: a
+# plaintext door and a TLS door onto the same stack. A hostmap keyed only by host
+# collapses them and the LAST row parsed wins, so door A rewrote its own links,
+# Location and CSP to door B's port — a page you are reading on :9090 whose every
+# onward URL says :9091. A loud parse-time refusal is not available here: it would
+# reject this tool's OWN catalog. So the door's own port must win for its own
+# responses, and only OTHER hosts still resolve cross-row.
+out="$(py <<'PY'
+from hvload import hv
+rows = [hv.Entry("compose-app", "compose", "hugmesh.net", "http://127.0.0.1:8088", 9090, "/", 1),
+        hv.Entry("compose-tls", "compose", "hugmesh.net", "https://127.0.0.1:8488", 9091, "/", 2),
+        hv.Entry("id",          "compose", "id.hugmesh.net", "http://127.0.0.1:8000", 9092, "/", 3)]
+print("A", hv.build_hostmap(rows, rows[0])["hugmesh.net"])
+print("B", hv.build_hostmap(rows, rows[1])["hugmesh.net"])
+print("C", hv.build_hostmap(rows, rows[0])["id.hugmesh.net"])
+print("D", hv.build_hostmap(rows, rows[2])["hugmesh.net"])
+print("E", hv.rewrite_text('<a href="https://hugmesh.net/login/">',
+                           hv.build_hostmap(rows, rows[0])))
+PY
+)"
+has "${out}" "A 127.0.0.1:9090" "with two rows on one host, the FIRST door rewrites that host to its OWN port"
+has "${out}" "B 127.0.0.1:9091" "control: the SECOND door on the same host rewrites it to ITS port, not the first's"
+has "${out}" "C 127.0.0.1:9092" "a host that is NOT this door's own still resolves cross-row (the SSO bounce still works)"
+has "${out}" "D 127.0.0.1:9090" "control: for a door owning NEITHER duplicate, catalog order decides — deterministic, not last-wins"
+has "${out}" 'E <a href="https://127.0.0.1:9090/login/">' \
+    "so a body served from the first door keeps the reader on the first door"
+
+out="$(py <<'PY'
+from hvload import hv
+import os
+rows = hv.load_catalog(os.environ["CATALOG"])
+named = [r for r in rows if r.host]
+print("A", len({r.host for r in named}) < len(named))
+for r in named:
+    print("B", r.name, hv.build_hostmap(rows, r)[r.host] == f"{hv.LOOPBACK}:{r.port}")
+PY
+)"
+has "${out}" "A True" "the SHIPPED catalog really does put several rows on one host (so this is not hypothetical)"
+has "${out}" "B compose-app True" "…and compose-app now maps hugmesh.net to compose-app's own port"
+has "${out}" "B compose-tls True" "…and compose-tls to its own — the collapse is gone from the real catalog"
+has "${out}" "B app True" "…and the kind lane's app row too"
+has "${out}" "B device-app True" "…and the device lane's row, which was also being rewritten to compose-tls"
+
 out="$(py <<'PY'
 from hvload import hv
 r = {"127.0.0.1:9080": "https://hugmesh.net"}
@@ -459,6 +503,54 @@ PY
 )"
 eq "${redir}" "308 https://127.0.0.1:${DOOR_PORT}/login/" \
    "plain http on the door's own port 308s to https, preserving the path"
+
+python3 "${VIEW}" stop >/dev/null 2>&1
+
+# ── the same door, LIVE, with a second row sharing its host ───────────────────
+# The pure-function checks above pin build_hostmap; this pins what a browser
+# actually receives, because the bug was only ever visible end to end: a body and
+# a CSP served from door A that named door B's port. Two doors are started from
+# ONE catalog, exactly as the shipped compose lane is.
+cat > "${TMP}/upstream2.py" <<'PY'
+import http.server, sys
+BODY = b'<a href="https://hugmesh.net/next">next</a>'
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; connect-src https://hugmesh.net")
+        self.send_header("Content-Length", str(len(BODY)))
+        self.end_headers(); self.wfile.write(BODY)
+    def log_message(self, *a): pass
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+UP2="$(freeport)"; DOOR_A="$(freeport)"; DOOR_B="$(freeport)"
+python3 "${TMP}/upstream2.py" "${UP2}" & KIDS="${KIDS} $!"
+for _ in $(seq 60); do
+    python3 -c "import socket,sys;s=socket.socket();s.settimeout(.3);sys.exit(0 if s.connect_ex(('127.0.0.1',${UP2}))==0 else 1)" && break
+    sleep 0.1
+done
+{
+  printf 'dup-a\tcompose\thugmesh.net\thttp://127.0.0.1:%s\t%s\t/\n' "${UP2}" "${DOOR_A}"
+  printf 'dup-b\tcompose\thugmesh.net\thttp://127.0.0.1:%s\t%s\t/\n' "${UP2}" "${DOOR_B}"
+} > "${TMP}/dup.tsv"
+python3 "${VIEW}" up --catalog "${TMP}/dup.tsv" --lane compose > "${TMP}/dup.log" 2>&1 & KIDS="${KIDS} $!"
+for _ in $(seq 150); do [ -f "${HUGMESH_VIEW_STATE}/session.json" ] && break; sleep 0.1; done
+
+a="$(python3 "${TMP}/fetch.py" "https://127.0.0.1:${DOOR_A}/" "${CA}" 2>&1)"
+b="$(python3 "${TMP}/fetch.py" "https://127.0.0.1:${DOOR_B}/" "${CA}" 2>&1)"
+
+has   "${a}" "BODY <a href=\"https://127.0.0.1:${DOOR_A}/next\">" \
+    "a two-rows-one-host catalog STARTS, and door A's body points at door A"
+hasnt "${a}" "127.0.0.1:${DOOR_B}" \
+    "…and names door B's port NOWHERE in the response it hands the browser"
+has   "${a}" "H content-security-policy: default-src 'self'; connect-src https://127.0.0.1:${DOOR_A}" \
+    "…including the CSP, which named the wrong door's port too (that is a blank page, not an error)"
+has   "${b}" "BODY <a href=\"https://127.0.0.1:${DOOR_B}/next\">" \
+    "control: door B is not simply hardcoded to A — it rewrites the same host to ITS own port"
+hasnt "${b}" "127.0.0.1:${DOOR_A}" "control: …and never to A's"
 
 python3 "${VIEW}" stop >/dev/null 2>&1
 
