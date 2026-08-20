@@ -328,12 +328,25 @@ echo "-- AVC harvest (data, not verdicts) --"
 # in the assertions.log artifact both harness drivers already tee per run.
 # ausearch is preferred (structured, survives ring-buffer wrap); dmesg is the
 # fallback when ausearch/auditd is absent or holds no audit log.
+#
+# STDIN MUST BE /dev/null HERE, AND THIS IS THE LINE THAT FALSIFIED SIX VERDICTS.
+# This whole file is STREAMED into the guest — docker-entrypoint.sh runs
+# `ssh ... 'sudo bash -s' < assertions.sh` — so at any point during execution,
+# bash's stdin IS the remainder of this script. ausearch reads audit records
+# from stdin whenever stdin is not a tty, so on every image that ships auditd
+# it swallowed everything from here down: the RESULT line never printed, bash
+# hit EOF and exited 0, and the harness graded the row PASS. All six
+# 2026-08-19 "PASS" logs truncate at the '-- AVC harvest' header above while
+# holding 9-12 real FAILs each. --input-logs pins ausearch to the audit log
+# files (the thing actually being harvested) and </dev/null makes stdin
+# unswallowable even for an ausearch too old to know the flag; the dmesg
+# fallback gets the same guard because it runs in exactly the same stream.
 AVC_REPORT_GUEST="${AVC_REPORT_GUEST:-/var/log/hugmesh-avc-report.txt}"
 _avc_src=""; _avc_raw=""
-if command -v ausearch >/dev/null 2>&1 && _avc_raw="$(ausearch -m AVC,USER_AVC -ts boot 2>/dev/null)"; then
-    _avc_src="ausearch -m AVC,USER_AVC -ts boot"
+if command -v ausearch >/dev/null 2>&1 && _avc_raw="$(ausearch -m AVC,USER_AVC -ts boot --input-logs </dev/null 2>/dev/null)"; then
+    _avc_src="ausearch -m AVC,USER_AVC -ts boot --input-logs"
 else
-    _avc_raw="$(dmesg 2>/dev/null | grep -E 'type=1400|type=1107|avc: *denied' || true)"
+    _avc_raw="$(dmesg </dev/null 2>/dev/null | grep -E 'type=1400|type=1107|avc: *denied' || true)"
     _avc_src="dmesg grep (ausearch/auditd absent, or no audit log to search)"
 fi
 {

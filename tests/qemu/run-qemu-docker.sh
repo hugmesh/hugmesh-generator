@@ -96,8 +96,19 @@ WORK="${REPO_DIR}/out/qemu-runs"
 PLATFORM_FILTER=""
 ROLE_FILTER=""
 ONLY=""
+# Exact "<platform>/<role>" equality, for callers that mean ONE row and cannot
+# afford substring surprises: --only be matches be, be+gpu AND be-ha, which is
+# fine for a human and wrong for a per-device Start button.
+ONLY_EXACT=""
 MODE="golden"
 JOBS="2"
+# Cap (GiB) on the decompressed-image cache under ${WORK}/images, enforced by
+# cache_sweep below. 0 = unbounded, the historical behaviour.
+CACHE_MAX_GB="0"
+# How long a started keep-alive row may gate admission of the next one before
+# the stagger lets it through anyway (see admission_poll). Env-overridable so
+# the hermetic tests need not wait two real minutes.
+ADMIT_STAGGER="${ADMIT_STAGGER:-120}"
 MEM="2048"
 SMP="2"
 TIMEOUT="2400"
@@ -185,8 +196,16 @@ Usage: $0 [OPTIONS]
   --platform P      only this platform (rpi5|x86|frite|jetson|orangepi*)
   --role R          only this role (pki|backend|frontend|be|fe|omnibus|...)
   --only PAT        substring filter on the "<platform>/<role>" label
+  --only-exact L    exact "<platform>/<role>" equality — ONE row, no substring
+                    surprises ("x86/be" never drags in be+gpu/be-ha). This is
+                    the spelling a per-device Start uses.
   --mode M          golden (default; boots the real .img) | stage4
   -j, --jobs N      concurrent emulated devices. Default: ${JOBS}
+  --cache-max-gb N  bound the decompressed-image cache (<work>/images) to N GiB,
+                    evicting least-recently-touched images first. NEVER deletes
+                    a .part mid-decompress, an image referenced by a device
+                    record whose container still exists, or this run's own
+                    rows. 0 (default) = unbounded, the historical behaviour.
   --mem MB          guest RAM per device. Default: ${MEM}
   --smp N           guest vCPUs per device. Default: ${SMP}
   -t, --timeout SEC guest SSH wait. Default: ${TIMEOUT}
@@ -200,9 +219,11 @@ Usage: $0 [OPTIONS]
   --keep-alive      leave every device RUNNING after its assertions instead of
                     powering it off, publish its ssh on a free loopback port in
                     ${DEV_PORT_MIN}-${DEV_PORT_MAX}, and write the device registry the
-                    Studio reads. Returns as soon as the containers are up — the
-                    guests are still booting — so -j/--jobs has nothing left to
-                    schedule and is ignored.
+                    Studio reads. -j/--jobs is an ADMISSION GATE here: at most
+                    N rows boot at once, each admitting the next when its
+                    registry record appears or after ${ADMIT_STAGGER}s, whichever is
+                    first. --jobs 0 starts everything at once (the old, ungated
+                    fan-out that ran 3 TCG + 7 KVM guests simultaneously).
   --extra-user NAME additional wheel login on the guest, repeatable. Forwarded to
                     the container payload. Root ssh stays off (assertions.sh
                     asserts PermitRootLogin no), so a superuser shell is one of
@@ -247,8 +268,12 @@ while [[ $# -gt 0 ]]; do
         --platform)     PLATFORM_FILTER="$2"; shift 2 ;;
         --role)         ROLE_FILTER="$2"; shift 2 ;;
         --only)         ONLY="$2"; shift 2 ;;
+        --only-exact)   [ $# -ge 2 ] || { echo "--only-exact needs a platform/role label" >&2; usage 1; }
+                        ONLY_EXACT="$2"; shift 2 ;;
         --mode)         MODE="$2"; shift 2 ;;
         -j|--jobs)      JOBS="$2"; shift 2 ;;
+        --cache-max-gb) [ $# -ge 2 ] || { echo "--cache-max-gb needs a number of GiB" >&2; usage 1; }
+                        CACHE_MAX_GB="$2"; shift 2 ;;
         --mem)          MEM="$2"; shift 2 ;;
         --smp)          SMP="$2"; shift 2 ;;
         -t|--timeout)   TIMEOUT="$2"; shift 2 ;;
@@ -295,6 +320,13 @@ done
 # failing.
 [[ "${DEV_SAVE_TIMEOUT}" =~ ^[0-9]+$ ]] && [ "${DEV_SAVE_TIMEOUT}" -gt 0 ] \
     || die "--save-timeout must be a positive whole number of seconds, got '${DEV_SAVE_TIMEOUT}'"
+
+# Both reach bash arithmetic: a typo would be a fatal "unbound variable"-class
+# error at the point of use rather than a named refusal here.
+[[ "${CACHE_MAX_GB}" =~ ^[0-9]+$ ]] \
+    || die "--cache-max-gb must be a whole number of GiB (0 = unbounded), got '${CACHE_MAX_GB}'"
+[[ "${JOBS}" =~ ^[0-9]+$ ]] \
+    || die "--jobs must be a whole number (0 = ungated in --keep-alive mode), got '${JOBS}'"
 
 # Same reasoning one step further: an --extra-user value is not just an argv item
 # here, it becomes a LOGIN NAME created on the guest. Reject anything useradd
@@ -622,6 +654,31 @@ release_port_for_record() {
     release_port "${port}" "$(record_field "${rec}" container)"
 }
 
+# Drop every port claim whose owner container no longer exists. claim_port
+# already reclaims a stale claim lazily when that exact port is re-picked, but
+# a claim for a port nothing happens to pick again is held forever: a row
+# killed BEFORE its record landed (docker stop during boot) had nothing for
+# reconcile_stopped_records to release, which is how claims 22303/22309 leaked
+# on 2026-08-19 — their rows (x86/be, x86/pki) died at exit 143 pre-
+# registration. --stop-all-devices means "leave nothing of the fleet behind",
+# so it sweeps these too. port_claim_is_stale carries the safety: an owner the
+# daemon still lists is NEVER swept, and when docker does not answer, nothing
+# is.
+sweep_stale_portlocks() {
+    local dir p swept=0
+    [ -d "${PORTLOCK_DIR}" ] || return 0
+    for dir in "${PORTLOCK_DIR}"/*/; do
+        [ -d "${dir}" ] || continue
+        p="$(basename "${dir}")"
+        port_claim_is_stale "${p}" || continue
+        rm -f "${dir}owner" 2>/dev/null || true
+        rmdir "${dir}" 2>/dev/null || true
+        info "released stale port claim ${p} (its owner container is gone)"
+        swept=$((swept+1))
+    done
+    return 0
+}
+
 # Mark every record whose container is no longer running. Used after a stop, so
 # the registry agrees with docker even for readers that never ask docker.
 reconcile_stopped_records() {
@@ -664,7 +721,13 @@ cmd_stop_all() {
     # there — and "stop every device" has to mean every device.
     names="$( { docker ps --format '{{.Names}}' --filter "name=^${DEV_NAME_PREFIX}" 2>/dev/null
                 registry_containers; } | sort -u )"
-    if [ -z "${names}" ]; then info "no device containers to stop"; return 0; fi
+    if [ -z "${names}" ]; then
+        info "no device containers to stop"
+        # Nothing running is EXACTLY when leaked claims are all that is left —
+        # tonight's 22303/22309 outlived rows that never even registered.
+        sweep_stale_portlocks
+        return 0
+    fi
     while IFS= read -r name; do
         [ -n "${name}" ] || continue
         stop_one_container "${name}" || continue
@@ -672,6 +735,9 @@ cmd_stop_all() {
         stopped=$((stopped+1))
     done <<< "${names}"
     reconcile_stopped_records
+    # Claims from rows killed before their record ever landed have no record to
+    # release through; sweep them by asking docker directly.
+    sweep_stale_portlocks
     info "${stopped} device container(s) stopped"
 }
 
@@ -1558,16 +1624,28 @@ platform_rank() {
     esac
 }
 
+# row_matches_filters PLATFORM ROLE — every row filter in one place. --only
+# stays a SUBSTRING on the label (the human spelling); --only-exact is full
+# equality, because "x86/be" as a substring also matches x86/be+gpu and
+# x86/be-ha, and a per-device Start that boots two extra 20G guests as a side
+# effect is not a Start button.
+row_matches_filters() {
+    local platform="$1" role="$2"
+    [ -z "${PLATFORM_FILTER}" ] || [ "${platform}" = "${PLATFORM_FILTER}" ]    || return 1
+    [ -z "${ROLE_FILTER}" ]     || [ "${role}" = "${ROLE_FILTER}" ]            || return 1
+    [ -z "${ONLY}" ]            || [[ "${platform}/${role}" == *"${ONLY}"* ]]  || return 1
+    [ -z "${ONLY_EXACT}" ]      || [ "${platform}/${role}" = "${ONLY_EXACT}" ] || return 1
+    return 0
+}
+
 ROWS=()
 while IFS=$'\t' read -r platform role env img; do
     [ -n "${platform}" ] || continue
-    [ -z "${PLATFORM_FILTER}" ] || [ "${platform}" = "${PLATFORM_FILTER}" ] || continue
-    [ -z "${ROLE_FILTER}" ]     || [ "${role}" = "${ROLE_FILTER}" ]         || continue
-    [ -z "${ONLY}" ]            || [[ "${platform}/${role}" == *"${ONLY}"* ]] || continue
+    row_matches_filters "${platform}" "${role}" || continue
     ROWS+=("$(platform_rank "${platform}")|${platform}|${role}|${env}|${img}")
 done < <(discover_rows | collapse_rows)
 
-[ "${#ROWS[@]}" -gt 0 ] || die "no runnable rows found in ${ARTIFACTS} (filters: platform='${PLATFORM_FILTER}' role='${ROLE_FILTER}' only='${ONLY}')"
+[ "${#ROWS[@]}" -gt 0 ] || die "no runnable rows found in ${ARTIFACTS} (filters: platform='${PLATFORM_FILTER}' role='${ROLE_FILTER}' only='${ONLY}' only-exact='${ONLY_EXACT}')"
 
 IFS=$'\n' ROWS=($(printf '%s\n' "${ROWS[@]}" | sort -t'|' -k1,1n -k2,2 -k3,3)); unset IFS
 
@@ -1694,6 +1772,108 @@ done
 # can still delete each other's cached images — the loser re-decompresses, which
 # costs time, not correctness, since /artifacts is read-only and untouched.
 
+# The basenames under ${WORK}/images that cache_sweep must NEVER delete, one
+# per line. Two sources:
+#   * this run's own rows: the decompressed spelling of every .img.xz row (what
+#     the entrypoint is about to create or reuse), plus plain-.img basenames for
+#     completeness — those boot straight from /artifacts and simply never match;
+#   * every image a device record points at while that record's container still
+#     EXISTS (docker ps -a, not just running: a stopped keep-alive device can be
+#     started again and its overlay still backs onto the decompressed golden by
+#     absolute path). When docker does not answer, every record-referenced image
+#     is protected — never steal blind.
+# Records are files this harness itself writes (json_str-escaped, one key per
+# line), so the sed field-pluck is exact for them; python is deliberately not
+# required on this path.
+cache_protected_names() {
+    local r img rec image cname existing
+    for r in "${ROWS[@]}"; do
+        IFS='|' read -r _ _ _ _ img <<< "${r}"
+        case "${img}" in
+            *.img.xz) printf '%s\n' "$(basename "${img}" .xz)" ;;
+            *)        printf '%s\n' "$(basename "${img}")" ;;
+        esac
+    done
+    [ -d "${DEVICES_DIR}" ] || return 0
+    if docker info >/dev/null 2>&1; then
+        existing="$(docker ps -a --format '{{.Names}}' 2>/dev/null)"
+        for rec in "${DEVICES_DIR}"/*.json; do
+            [ -f "${rec}" ] || continue
+            image="$(sed -n 's/^ *"image": *"\([^"]*\)".*$/\1/p' "${rec}" | head -1)"
+            [ -n "${image}" ] || continue
+            cname="$(sed -n 's/^ *"container": *"\([^"]*\)".*$/\1/p' "${rec}" | head -1)"
+            [ -n "${cname}" ] || continue
+            grep -qxF "${cname}" <<< "${existing}" || continue
+            printf '%s\n' "${image}"
+        done
+    else
+        for rec in "${DEVICES_DIR}"/*.json; do
+            [ -f "${rec}" ] || continue
+            sed -n 's/^ *"image": *"\([^"]*\)".*$/\1/p' "${rec}" | head -1
+        done
+    fi
+    return 0
+}
+
+cache_sweep() {
+    # 0 = unbounded: the historical behaviour, byte for byte — nothing is
+    # deleted, not even a stale .part.
+    [ "${CACHE_MAX_GB}" -gt 0 ] || return 0
+    local imgdir="${WORK}/images"
+    [ -d "${imgdir}" ] || return 0
+    local budget=$((CACHE_MAX_GB * 1024 * 1024 * 1024)) total=0
+    local protected f base mtime size path
+
+    # Orphaned .part files first, budget or no budget. A LIVE decompress
+    # rewrites its .part's mtime continuously (xz streams into it), so one
+    # untouched for an hour can only be the leavings of a killed run — a 16.5G
+    # probe.part sat here from 2026-08-13 with nothing ever going to reclaim
+    # it. A .part younger than that is potentially another invocation's
+    # in-flight decompress and is never touched.
+    for f in "${imgdir}"/*.part; do
+        [ -e "${f}" ] || continue
+        [ -n "$(find "${f}" -maxdepth 0 -mmin +60 2>/dev/null)" ] || continue
+        info "cache: removing orphaned stale $(basename "${f}") ($(du -h "${f}" 2>/dev/null | cut -f1 || echo '?'))"
+        rm -f "${f}"
+    done
+
+    protected="$(cache_protected_names)"
+
+    # Pass 1: charge every protected image that exists to the budget FIRST.
+    # They are exempt from deletion whatever they cost, which is why the cache
+    # can legitimately hold max(cap, this run's images) after a sweep.
+    for f in "${imgdir}"/*; do
+        [ -f "${f}" ] || continue
+        case "${f}" in *.part) continue ;; esac
+        base="${f##*/}"
+        grep -qxF "${base}" <<< "${protected}" || continue
+        size="$(stat -c '%s' "${f}" 2>/dev/null || echo 0)"
+        total=$((total + size))
+    done
+
+    # Pass 2: everything else, newest mtime first; evict once the running
+    # total would pass the cap. Newest-first is the LRU half: the files that
+    # fit under the cap are the most recently touched ones.
+    while read -r mtime size path; do
+        [ -n "${path}" ] || continue
+        base="${path##*/}"
+        grep -qxF "${base}" <<< "${protected}" && continue
+        if [ $((total + size)) -gt "${budget}" ]; then
+            info "cache: evicting ${base} ($(( size / 1024 / 1024 / 1024 ))G, over the ${CACHE_MAX_GB}G cap)"
+            rm -f "${path}"
+        else
+            total=$((total + size))
+        fi
+    done < <(
+        for f in "${imgdir}"/*; do
+            [ -f "${f}" ] || continue
+            case "${f}" in *.part) continue ;; esac
+            stat -c '%Y %s %n' "${f}" 2>/dev/null
+        done | sort -rn -k1,1
+    )
+    return 0
+}
+
 
 # ── Keep-alive: start the devices and leave them up ─────────────────────────
 # A test run boots, asserts and powers the guest off; --keep-alive starts the
@@ -1702,6 +1882,12 @@ done
 # (aarch64 is pure TCG on this host) and the point of the mode is that the
 # operator gets the prompt back and drives the devices from the Studio.
 set_device_paths
+
+# Sweep BEFORE the decompress fan-out (both the test path and keep-alive pass
+# through here): with the cap in force, the space the new rows are about to
+# decompress into is reclaimed from superseded images now, not after the fan-out
+# has already filled the disk.
+cache_sweep
 
 port_free() {
     local p="$1"
@@ -1756,6 +1942,11 @@ start_device_row() {
     # `docker logs` is the only post-mortem a detached device has). Now that the
     # row is being started again, that copy is in the way of the name.
     docker rm "${name}" >/dev/null 2>&1 || true
+    # The row's previous registry record is stale by definition here (no
+    # container of this name is running), and the admission gate reads "this
+    # row's record appeared" as boot progress — so clear the old one now,
+    # before it can impersonate the record the new container will write.
+    rm -f "${DEVICES_DIR}/${safe}.json" 2>/dev/null || true
 
     while IFS= read -r port; do
         # Belt and braces. The candidate list is generated from the range, but
@@ -1784,9 +1975,12 @@ start_device_row() {
         # container is the short container ID, and A2's "container" field has to
         # be the NAME, or --stop-device and the `docker ps` reconciliation in
         # cmd_devices can never match a record to its container.
-        # docker-entrypoint.sh takes HOST_UID, HOST_GID, HOST_WORK, SSH_HOST_PORT
-        # and CONTAINER_NAME from the environment; the last three also have flag
-        # spellings (--host-work/--ssh-host-port/--container). The env spelling is
+        # docker-entrypoint.sh takes HOST_UID, HOST_GID, HOST_WORK,
+        # HOST_ARTIFACTS, SSH_HOST_PORT and CONTAINER_NAME from the environment
+        # (HOST_ARTIFACTS is how the record's "artifacts" field can name the
+        # HOST dir a per-device restart must be pointed back at); most also have
+        # flag spellings (--host-work/--host-artifacts/--ssh-host-port/
+        # --container). The env spelling is
         # used wherever there is a choice because an unread variable costs
         # nothing, while an option the entrypoint does not know is fatal to it —
         # its argument loop ends in `echo "Unknown arg"; usage 1`. --keep-alive
@@ -1802,6 +1996,7 @@ start_device_row() {
             --name "${name}" \
             -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
             -e HOST_WORK="${WORK}" \
+            -e HOST_ARTIFACTS="${ARTIFACTS}" \
             -e SSH_HOST_PORT="${port}" \
             -e CONTAINER_NAME="${name}" \
             -p "127.0.0.1:${port}:${GUEST_SSH_PORT}" \
@@ -1861,6 +2056,43 @@ start_device_row() {
     return 0
 }
 
+# ── Keep-alive boot admission ────────────────────────────────────────────────
+# `docker run -d` returns instantly, so the old keep-alive loop started EVERY
+# row's guest within seconds of each other — on 2026-08-19 that was 10 VMs at
+# once (3 pure-TCG rpi5 + 7 KVM x86) on one workstation, and both rpi5 rows
+# then missed their ssh deadline ("Connection timed out during banner exchange"),
+# which an ungated fan-out is the most plausible cause of. --jobs therefore
+# gates ADMISSION here: at most ${JOBS} rows may be mid-boot at once, where
+# "mid-boot" ends when the row's registry record appears (the entrypoint writes
+# it in state "booting" the moment qemu launches — i.e. its decompress and
+# kernel extraction, the expensive serialized part, are behind it) or when the
+# row has been pending ${ADMIT_STAGGER}s, whichever is first. --jobs 0 is the
+# old all-at-once behaviour, by request only.
+#
+# PENDING_SINCE maps a pending row's record path -> the epoch second it
+# started. admission_poll is the single-step primitive (and the unit
+# verdict_test.sh drives): drop every pending row that has resolved, then
+# answer whether a new row may start.
+declare -A PENDING_SINCE=()
+
+admission_poll() {
+    local now rec since
+    now="$(date +%s)"
+    for rec in "${!PENDING_SINCE[@]}"; do
+        since="${PENDING_SINCE[${rec}]}"
+        if [ -f "${rec}" ] || [ $((now - since)) -ge "${ADMIT_STAGGER}" ]; then
+            unset "PENDING_SINCE[${rec}]"
+        fi
+    done
+    [ "${#PENDING_SINCE[@]}" -lt "${JOBS}" ]
+}
+
+admission_wait() {
+    [ "${JOBS}" -gt 0 ] || return 0     # --jobs 0: ungated, the old behaviour
+    while ! admission_poll; do sleep 5; done
+    return 0
+}
+
 if ${KEEP_ALIVE}; then
     # Create the registry directory HOST-side, before any container can. Records
     # are written from inside the container; a directory owned by the invoking
@@ -1869,13 +2101,19 @@ if ${KEEP_ALIVE}; then
     # sudo to clean out ${WORK}.
     mkdir -p "${DEVICES_DIR}"
     step "Starting ${#ROWS[@]} device(s), ssh published on 127.0.0.1:${DEV_PORT_MIN}-${DEV_PORT_MAX}"
-    [ "${JOBS}" = "1" ] || info "--jobs is ignored in --keep-alive mode (nothing is waited on); filter rows with --only/--platform if ${#ROWS[@]} concurrent guests is too many"
+    if [ "${JOBS}" -gt 0 ]; then
+        info "boot admission: at most ${JOBS} device(s) mid-boot at once — a row admits the next when its registry record appears, or after ${ADMIT_STAGGER}s (--jobs 0 for the old ungated all-at-once fan-out)"
+    else
+        info "--jobs 0: starting all ${#ROWS[@]} devices at once, ungated"
+    fi
     printf '%-24s %-32s %s\n' "LABEL" "CONTAINER" "SSH"
     STARTED=0; DEV_FAILED=0
     for r in "${ROWS[@]}"; do
         IFS='|' read -r _rank platform role env img <<< "${r}"
+        admission_wait
         if start_device_row "${platform}" "${role}" "${img}"; then
             STARTED=$((STARTED+1))
+            PENDING_SINCE["${DEVICES_DIR}/$(safe_label "${platform}/${role}").json"]="$(date +%s)"
         else
             DEV_FAILED=$((DEV_FAILED+1))
         fi
@@ -1883,9 +2121,10 @@ if ${KEEP_ALIVE}; then
     echo "----------------------------------------------------------------------"
     echo "${STARTED} device(s) starting, ${DEV_FAILED} failed to start"
     # Said plainly because it is the one surprise of this mode: the guests are
-    # still booting. The record for a device appears only once its guest answers
-    # ssh, so --devices is empty for a while and that is not a fault.
-    echo "Devices are BOOTING; each record appears in ${DEVICES_DIR} once its guest answers ssh."
+    # still booting. A record appears in state "booting" once its row's qemu
+    # launches (decompress first — minutes for a fresh .img.xz) and flips to
+    # "running" when the guest answers ssh; a device is only reachable then.
+    echo "Devices are BOOTING; records land in ${DEVICES_DIR} as each row's qemu launches (state \"booting\"), and turn \"running\" when the guest answers ssh."
     echo "  $0 --work '${WORK}' --devices"
     echo "  $0 --work '${WORK}' --qmp <label> status"
     echo "  $0 --work '${WORK}' --stop-all-devices"
@@ -1916,6 +2155,7 @@ done
 # the cap is not handed back until the NEXT invocation, which may be days away —
 # i.e. the space is held for exactly as long as it is useless. This run's own
 # images are still spared, so an immediate re-run of the same rows stays cached.
+cache_sweep
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo
