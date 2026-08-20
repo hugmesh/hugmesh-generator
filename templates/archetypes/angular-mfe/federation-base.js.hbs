@@ -29,6 +29,41 @@ const STD_SHARED = shareAll({
   requiredVersion: 'auto',
 });
 
+// ---------------------------------------------------------------------------
+// FLEET INVARIANT — `@angular/localize/init` has EXACTLY ONE importer.
+//
+// Recorded here because this file's whole job is to keep the federation contract
+// in ONE place shared with the host and every sibling remote. Today only
+// hugmesh-login-ui does runtime i18n (verified: zero `@angular/localize` and
+// zero .xlf anywhere else in the fleet), so this is latent — but the next repo to
+// add i18n is exactly who needs to read it.
+//
+// `@angular/localize` is NOT in the `shared` surface above, and MUST NOT be added
+// to it. That is not an oversight: native-federation hard-codes '@angular/localize',
+// '@angular/localize/init' and '@angular/localize/tools' into its NG_SKIP_LIST
+// (src/config/angular-skip-list.js), and its shareAll() wrapper injects that list
+// whenever no explicit `opts.skipList` is passed — which is what the call above
+// does. Verified against a real build: the emitted remoteEntry.json carries zero
+// localize entries whether or not '@angular/localize' is in package.json, so
+// adding the dependency perturbs this contract by zero bytes. Adding it to
+// `shared` (or to STD_SKIP) is at best redundant and at worst actively harmful.
+//
+// THE CONSEQUENCE, and why it is worth writing down: because localize is never
+// shared, every bundle that imports it inlines its OWN copy of the localize
+// chunk. `loadTranslations()` mutates the `$localize` object of ITS copy, while
+// `@angular/localize/init` assigns `globalThis.$localize` from ITS copy. So two
+// bundles importing '/init' race for one global. The last one to load wins, and a
+// virgin instance has `translate === undefined`, which makes `$localize` skip
+// translation entirely — no error, no warning, not even the library's
+// "No translation found" message. The symptom is a silently untranslated UI.
+//
+// Rule: exactly ONE bundle in the fleet may import '@angular/localize/init'
+// (today: hugmesh-login-ui's src/app/login.routes.ts, enforced by its
+// `npm run i18n:check`). If a second repo needs i18n, do NOT add the import
+// there — pass the locale between host and remote over the existing snap-config.js
+// global channel and keep a single owner of $localize.
+// ---------------------------------------------------------------------------
+
 /**
  * Federation config for a remote bundle. `exposes` is the public surface the
  * host's loadRemoteModule({ remoteName, exposedModule }) consumes.
