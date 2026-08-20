@@ -13,17 +13,27 @@ ssh argv the GUI's buttons would spawn), not spawned processes — a terminal
 operator pastes them into a shell of their own, which also keeps this screen
 read-only toward the host. Every hint is built by the same single-argv-author
 core functions the GUI uses, so the spelling can never drift.
+
+T4: the argv authors are now reached through :mod:`...core.emulation`, the one
+facade that composes the four emulation cores. Behaviour is unchanged for every
+hint but ONE, and that one is the point of the move: a per-device start is
+addressed with T1's ``--only-exact`` instead of ``--only``, which is a SUBSTRING
+filter — restarting ``x86/be`` used to drag be+gpu and be-ha along. The fleet
+stop now carries ``--work`` too, so a mesh booted in a custom work dir is
+stopped against the registry it actually registered in.
 """
 from __future__ import annotations
 
 import shlex
 
+from ..core import emulation as emu
+from ..core import emulation_save
 from ..core import mesh_emulation as me
 from ..core import qemu_devices, qemu_tests
 from . import model
 
 __all__ = ["MeshEmuScreen", "device_table", "device_detail_lines",
-           "plan_summary_lines"]
+           "plan_summary_lines", "save_hint_lines"]
 
 
 def _results_by_label(plan: me.MeshPlan) -> dict[str, dict]:
@@ -63,10 +73,67 @@ def plan_summary_lines(plan: me.MeshPlan) -> list[str]:
     ]
 
 
-def device_detail_lines(generator_dir: str, plan: me.MeshPlan,
-                        planned: me.PlannedDevice, devices: list) -> list[str]:
+def save_hint_lines(eplan: emu.EmulationPlan) -> list[str]:
+    """The WHOLE-MESH SAVE hint (issue #50 item 10) — the TUI's face of it.
+
+    A save copies every live device's disk at its FULL virtual size (16 GiB per
+    ARM row, 32 GiB per x86 row), so the preview matters more than the command:
+    this box has run out of room mid-fleet before, and that failure takes the
+    live mesh's own volumes down with it. ``emulation.plan_mesh_save`` answers
+    what the save WOULD need and whether it fits — purely, from the registry and
+    a ``statvfs``; nothing is paused, created or copied by looking.
+
+    The command itself is only ever printed. Saving is a multi-GB, device-pausing
+    action, and this screen does not act on the host.
+    """
+    preview = emu.plan_mesh_save(eplan)
+    devices = preview["devices"]
+    blocked = [row for row in devices if row["blocker"]]
+    unresolved = preview["unresolved"]
+    needed, free = preview["needed_bytes"], preview["free_bytes"]
+    gib = emulation_save.GIB
+    lines = [
+        "save the WHOLE mesh — every LIVE device's disk plus its emulated KEYS "
+        "stick, into one flashable save-set:",
+        f"  python -m hugmesh_studio.core.emulation save-mesh "
+        f"--generator-dir {shlex.quote(eplan.generator_dir)} "
+        f"--session {shlex.quote(eplan.session_name)}",
+        "  (the Makefile's `make qemu-save-mesh` saves every device the registry "
+        "holds; the command above saves exactly THIS session's planned fleet.)",
+        # denominator is the PLAN's fleet, not the resolved subset: "0 of 0" for a
+        # mesh that is simply not running would read as "nothing to save".
+        f"budget preview: {len(devices) - len(blocked)} of {len(eplan.rows)} "
+        f"planned device(s) savable, needs {needed / gib:.1f} GiB, "
+        + ("free space unknown" if free < 0 else f"{free / gib:.1f} GiB free"),
+    ]
+    for row in blocked:
+        lines.append(f"  blocked   {row['label']} — {row['blocker']}")
+    # Group by REASON: a whole fleet that is simply not up shares one explanation
+    # (a paragraph each would bury the row that is unsaveable for a DIFFERENT
+    # one). The core's errors open with the row's own label, so that prefix is
+    # dropped before grouping — the sentence after it is the shared reason, and
+    # it is reproduced verbatim rather than reworded here.
+    by_reason: dict[str, list[str]] = {}
+    for row in unresolved:
+        label, reason = row["label"], row["error"]
+        prefix = f"{label} "
+        by_reason.setdefault(
+            reason[len(prefix):] if reason.startswith(prefix) else reason,
+            []).append(label)
+    for reason, labels in by_reason.items():
+        lines.append(f"  no device {', '.join(labels)} — {reason}")
+    if preview["refusal"]:
+        lines.append(f"  REFUSED: {preview['refusal']}")
+    return lines
+
+
+def device_detail_lines(eplan: emu.EmulationPlan, planned: me.PlannedDevice,
+                        devices: list) -> list[str]:
     """The per-device detail: identity, section statuses WITH their detail text,
-    and the copy-ready command hints (start / ssh / web tunnel)."""
+    and the copy-ready command hints (start / ssh / QMP / web tunnel / save)."""
+    plan = eplan.mesh
+    assert plan is not None, "device_detail_lines needs a DEPLOY plan"
+    generator_dir = eplan.generator_dir
     results = _results_by_label(plan)
     dev = qemu_devices.device_by_label(devices, planned.label)
     gateway = planned.label == plan.gateway_label
@@ -86,22 +153,27 @@ def device_detail_lines(generator_dir: str, plan: me.MeshPlan,
     lines.append("")
     if dev is not None and dev.is_running and dev.ssh_host_port > 0 and dev.ssh_key:
         lines.append("ssh in:")
-        lines.append("  " + shlex.join(qemu_devices.ssh_argv(dev, dev.ssh_user)))
+        lines.append("  " + shlex.join(emu.ssh_argv(dev, dev.ssh_user)))
+        lines.append("ask the emulator what it thinks this guest is doing "
+                     "(reads only, changes nothing):")
+        lines.append("  " + shlex.join(emu.qmp_argv(generator_dir, dev, "status")))
         if gateway:
             lines.append("web front door — start the tunnel, then browse "
                          f"{me.front_door_url(plan)}:")
-            lines.append("  " + shlex.join(me.web_tunnel_argv(dev, planned)))
+            lines.append("  " + shlex.join(emu.web_tunnel_argv(dev, planned)))
     else:
         lines.append("not running — start it (keep-alive) with:")
         lines.append("  " + shlex.join(
-            me.start_device_argv(generator_dir, plan, planned)))
+            emu.start_device_argv(eplan, planned.label)))
         lines.append(f"once up, ssh lands on {me.SSH_HOST}:{planned.ssh_port} "
                      "(planned — the device registry is authoritative).")
     lines.append("")
     lines.append("start the WHOLE mesh with:")
-    lines.append("  " + shlex.join(me.start_mesh_argv(generator_dir, plan)))
+    lines.append("  " + shlex.join(emu.run_argv(eplan)))
     lines.append("stop everything with:")
-    lines.append("  " + shlex.join(me.stop_mesh_argv(generator_dir)))
+    lines.append("  " + shlex.join(emu.stop_all_argv(eplan)))
+    lines.append("")
+    lines += save_hint_lines(eplan)
     return lines
 
 
@@ -115,11 +187,15 @@ class MeshEmuScreen:
     def __init__(self):
         self._sub = "pick"               # pick | table | detail
         self._sessions: list = []
+        #: The DEPLOY plan from the facade; ``_eplan.mesh`` IS the MeshPlan the
+        #: table renders, so the two can never describe different device sets.
+        self._eplan: emu.EmulationPlan | None = None
         self._plan: me.MeshPlan | None = None
         self._detail: me.PlannedDevice | None = None
 
     def enter(self, j) -> None:
         self._sub = "pick"
+        self._eplan = None
         self._plan = None
         self._detail = None
         # which prior sessions hold bootable images — the same discovery the
@@ -144,10 +220,10 @@ class MeshEmuScreen:
                            f"image(s)")
             out += ["", "(a NUMBER picks; q = back to the menu)"]
             return out
-        assert self._plan is not None
+        assert self._plan is not None and self._eplan is not None
         if self._sub == "detail" and self._detail is not None:
-            return device_detail_lines(j.generator_dir, self._plan,
-                                       self._detail, self._devices()) + \
+            return device_detail_lines(self._eplan, self._detail,
+                                       self._devices()) + \
                 ["", "(r = refresh · q = back to the device list)"]
         out = plan_summary_lines(self._plan)
         out.append("")
@@ -170,7 +246,12 @@ class MeshEmuScreen:
             if row is None:
                 j.status = f"no such session: {line!r}"
                 return
-            self._plan = me.plan_mesh(self._sessions[row], j.generator_dir)
+            # epoch="" — this screen inspects a mesh some other process started,
+            # so verdicts are gated by each device's own boot stamp rather than
+            # by "when was the session picked" (the status CLI's rule).
+            self._eplan = emu.plan(j.generator_dir, self._sessions[row],
+                                   emu.EmulationMode.DEPLOY, epoch="")
+            self._plan = self._eplan.mesh
             self._sub = "table"
             return
         if self._sub == "detail":

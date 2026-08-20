@@ -50,6 +50,31 @@ def test_every_canonical_slug_has_a_journey_screen():
     j = journey.Journey(".")
     for slug in WIZARD_PAGE_SLUGS:
         assert j.screen_for(slug) is not None
+    # side-flows are entered only via their card, never positionally — but the
+    # registry still has to cover every one of them.
+    for slug in journey.SIDE_FLOW_SLUGS:
+        assert j.screen_for(slug).slug == slug
+
+
+def test_the_hosted_screens_are_real_not_honest_stubs():
+    """Which flows the TUI actually HOSTS, pinned by name so a screen can never
+    silently regress into a stub (and a stub can never quietly claim a slug)."""
+    j = journey.Journey(".")
+    hosted = {slug for slug in journey.SIDE_FLOW_SLUGS
+              if not isinstance(j.screen_for(slug), journey.PendingSideFlow)}
+    # qemu joined localcloud/meshemu once tui/qemu.py landed: both emulation
+    # lanes (TEST and DEPLOY) are hosted here; the MDM/cloud drivers are not.
+    assert hosted == {"localcloud", "qemu", "meshemu"}
+
+
+def test_the_qemu_card_opens_the_real_device_test_screen():
+    from hugmesh_studio.tui.qemu import QemuScreen
+    j = _walk("", "4")
+    assert j.slug == "qemu"
+    assert isinstance(j.screen_for("qemu"), QemuScreen)
+    text = "\n".join(j.lines())
+    assert "not yet ported to the TUI" not in text
+    assert "pick the session" in text
 
 
 def test_a_fresh_start_lands_on_welcome():
