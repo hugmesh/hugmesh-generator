@@ -1950,7 +1950,7 @@ local_mesh_bootstrap_screen() {
         ui_msg "Local mesh (from scratch)" "python3 is required (it drives the shared hugmesh_studio.core.local_mesh_bootstrap entrypoint)."
         return 0
     fi
-    local env="test" superadmin="superadmin" social="" tor="" domain="" authkey="" choice
+    local env="test" superadmin="superadmin" social="" tor="" domain="" authkey="" own_domains="" choice
     while :; do
         choice="$(ui_menu "Local mesh — from scratch" \
             "Generate ALL credentials + start a NEW superadmin-controlled mesh on THIS machine (full platform stack, seeded superadmin). Nothing runs until you pick 'up'. Creds land in the gitignored keys-out/ at runtime only." \
@@ -1960,6 +1960,7 @@ local_mesh_bootstrap_screen() {
             tor       "Tor v3 .onion ........ ${tor:+on}${tor:-off}  (expose the mesh over Tor; no public IP/DNS/ports)" \
             idp       "Identity provider .... ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo " (${OPT_IDP_ISSUER:-issuer unset})")   (casdoor=built-in default)" \
             domain    "Public domain (prod) . ${domain:-<brand default in test>}" \
+            owncas    "Own-Casdoor domains .. ${own_domains:-<none — superdomain Casdoor serves every domain>}" \
             authkey   "Auth key (prod) ...... $([ -n "${authkey}" ] && echo '(set)' || echo '(unset)')" \
             plan      "★ Preview the plan (no side effects)" \
             up        "GENERATE creds + START from scratch" \
@@ -1973,19 +1974,40 @@ local_mesh_bootstrap_screen() {
             tor)       if [ -n "${tor}" ]; then tor=""; else tor=1; fi ;;
             idp)       idp_screen ;;   # I6.6: same picker on the local-mesh flow (shared OPT_IDP* state)
             domain)    domain="$(ui_input "Public domain" "Public apex domain (required in prod; blank = brand default in test)" "${domain}")" ;;
+            owncas)
+                # Issue #47: the per-domain sign-in question, asked exactly where a
+                # domain is named. Superdomain Casdoor is the DEFAULT and threads
+                # NOTHING (omit-when-default, like the Domain.idp schema); picking
+                # Own adds the name (one --own-casdoor-domain per name at run time),
+                # re-answering Superdomain removes it again.
+                local ocd_name ocd_pick ocd_rebuilt ocd_d
+                ocd_name="$(ui_input "Domain sign-in" "Domain to set the per-domain sign-in choice for (e.g. team.example)" "")"
+                if [ -n "${ocd_name}" ]; then
+                    ocd_pick="$(ui_menu "Sign-in for ${ocd_name}" "Where does ${ocd_name}'s sign-in live? (issue #47 — per-domain choice)" \
+                        superdomain "Superdomain Casdoor (default) — sign-in via the mesh's central Casdoor" \
+                        own         "Own Casdoor — this domain runs its own Casdoor instance")" || ocd_pick=""
+                    ocd_rebuilt=""
+                    for ocd_d in ${own_domains}; do
+                        [ "${ocd_d}" = "${ocd_name}" ] || ocd_rebuilt="${ocd_rebuilt}${ocd_rebuilt:+ }${ocd_d}"
+                    done
+                    [ "${ocd_pick}" = own ] && ocd_rebuilt="${ocd_rebuilt}${ocd_rebuilt:+ }${ocd_name}"
+                    own_domains="${ocd_rebuilt}"
+                fi ;;
             authkey)   authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (required in prod)" "${authkey}")" ;;
             plan|up|down|status)
-                _local_mesh_bootstrap_run "${choice}" "${env}" "${superadmin}" "${social}" "${domain}" "${authkey}" "${tor}" ;;
+                _local_mesh_bootstrap_run "${choice}" "${env}" "${superadmin}" "${social}" "${domain}" "${authkey}" "${tor}" "${own_domains}" ;;
             back|"") return 0 ;;
         esac
     done
 }
 
-# _local_mesh_bootstrap_run SUB ENV SUPERADMIN SOCIAL DOMAIN AUTHKEY — one child
-# invocation. The auth key (when set) goes into a chmod-600 mktemp file (off the argv)
-# and is shredded afterwards.
+# _local_mesh_bootstrap_run SUB ENV SUPERADMIN SOCIAL DOMAIN AUTHKEY TOR OWN_DOMAINS
+# — one child invocation. The auth key (when set) goes into a chmod-600 mktemp file
+# (off the argv) and is shredded afterwards. OWN_DOMAINS (optional 8th arg) is the
+# space-separated own-Casdoor domain names (issue #47): one repeatable
+# --own-casdoor-domain per name; empty threads nothing (the superdomain default).
 _local_mesh_bootstrap_run() {
-    local sub="$1" env="$2" superadmin="$3" social="$4" domain="$5" authkey="$6" tor="$7"
+    local sub="$1" env="$2" superadmin="$3" social="$4" domain="$5" authkey="$6" tor="$7" own_domains="${8:-}"
     local -a args=("${sub}" --env "${env}" --superadmin-username "${superadmin}")
     [ -n "${social}" ] && args+=(--social)
     [ -n "${tor}" ] && args+=(--with-tor)
@@ -1995,6 +2017,9 @@ _local_mesh_bootstrap_run() {
         [ -n "${OPT_IDP_JWKS}" ] && args+=(--idp-jwks "${OPT_IDP_JWKS}")
     fi
     [ -n "${domain}" ] && args+=(--cluster-domain "${domain}")
+    # #47: per-domain own-Casdoor choice — one repeatable flag per name.
+    local ocd
+    for ocd in ${own_domains}; do args+=(--own-casdoor-domain "${ocd}"); done
     local keyfile=""
     if [ -n "${authkey}" ]; then
         keyfile="$(mktemp "${STATE_DIR}/bootkey.XXXXXX")" || { ui_msg "Local mesh (from scratch)" "could not create a temp file for the auth key"; return 0; }
