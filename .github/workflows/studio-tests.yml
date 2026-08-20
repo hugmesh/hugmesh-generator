@@ -113,7 +113,12 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          nodes=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' tests/known-failures.txt)
+          # `|| true` IS LOad-BEARING. Actions runs `run:` under `bash -e`, and grep
+          # exits 1 when it selects no lines — which is exactly what happens once the
+          # list is all comments. Without it this step dies on its FIRST line, writes
+          # nothing to the summary at all, and only `continue-on-error: true` keeps
+          # the job green. Observed, not theorised: run 32423468651.
+          nodes=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' tests/known-failures.txt || true)
           echo "## Known failures (pre-existing on main)" >> "$GITHUB_STEP_SUMMARY"
           echo >> "$GITHUB_STEP_SUMMARY"
 
