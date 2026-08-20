@@ -99,10 +99,11 @@ def test_mode_page_renders_eight_cards_with_the_radio_ids(wiz):
     for i, card in enumerate(cards):
         assert isinstance(card, cc.ChoiceCard)
         assert page.group.button(i) is card          # id == option index, as before
-    # option ids are the parity contract with validatePage/cfg — pinned verbatim
+    # option ids are the parity contract with validatePage/cfg — pinned verbatim,
+    # in the operator's mesh-building journey order (issue #50)
     assert [m for m, _, _ in page.modes] == [
-        "mesh", "localmesh", "cloud", "standalone", "phone", "quest", "deploy",
-        "qemu"]
+        "localmesh", "mesh", "qemu", "deploy", "phone", "quest", "cloud",
+        "standalone"]
 
 
 def test_idp_page_renders_one_card_per_idp_choice(wiz):
@@ -155,17 +156,17 @@ def test_loaded_config_reselects_its_card(wiz):
 
 def test_arrow_keys_move_the_selection_through_the_cards(wiz):
     page = _page(wiz, "ModePage")
-    page._buttons["standalone"].setChecked(True)      # index 3
-    _key(page._buttons["standalone"], Qt.Key.Key_Down)
+    page._buttons["deploy"].setChecked(True)          # index 3 (journey order)
+    _key(page._buttons["deploy"], Qt.Key.Key_Down)
     assert page.group.checkedButton().property("mode") == "phone"
     _key(page._buttons["phone"], Qt.Key.Key_Up)
+    assert page.group.checkedButton().property("mode") == "deploy"
+    # wraps at the edges instead of dead-ending ("standalone" is the last card now)
+    page._buttons["standalone"].setChecked(True)
+    _key(page._buttons["standalone"], Qt.Key.Key_Right)
+    assert page.group.checkedButton().property("mode") == "localmesh"
+    _key(page._buttons["localmesh"], Qt.Key.Key_Left)
     assert page.group.checkedButton().property("mode") == "standalone"
-    # wraps at the edges instead of dead-ending ("qemu" is the last card now)
-    page._buttons["qemu"].setChecked(True)
-    _key(page._buttons["qemu"], Qt.Key.Key_Right)
-    assert page.group.checkedButton().property("mode") == "mesh"
-    _key(page._buttons["mesh"], Qt.Key.Key_Left)
-    assert page.group.checkedButton().property("mode") == "qemu"
 
 
 def test_enter_and_space_select_the_focused_card(wiz):

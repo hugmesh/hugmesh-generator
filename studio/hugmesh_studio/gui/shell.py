@@ -382,7 +382,7 @@ class StudioShell(QtCore.QObject):
             _log_swallowed("StudioShell._forget_build_window")
 
     def builds_manager(self):
-        """The Studio's ONE builds manager (``WelcomePage.previous_builds``), opening a
+        """The Studio's ONE builds manager (``SessionsPage.previous_builds``), opening a
         Studio window if none is up.
 
         Resume / edit / delete run THROUGH it rather than being re-implemented here: it
@@ -395,7 +395,7 @@ class StudioShell(QtCore.QObject):
             pb = getattr(wiz.page(pid), "previous_builds", None)
             if pb is not None:
                 return pb
-        return None                              # pragma: no cover - WelcomePage is fixed
+        return None                              # pragma: no cover - SessionsPage is fixed
 
     def _delegate(self, row, name: str) -> bool:
         """Carry out one per-build action from a tray-opened window.
@@ -407,7 +407,7 @@ class StudioShell(QtCore.QObject):
         """
         try:
             pb = self.builds_manager()
-            if pb is None:                       # pragma: no cover - WelcomePage is fixed
+            if pb is None:                       # pragma: no cover - SessionsPage is fixed
                 return False
             pb.refresh()
             # ONE re-resolution rule, shared with the widget: by row IDENTITY, which

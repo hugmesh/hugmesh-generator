@@ -21,8 +21,8 @@ from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
     HomePage, IdpPage, KeyZipPage, LaunchPage, LocalMeshPage, ModePage, NetworkPage,
-    PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SystemPage, UsersChoicePage,
-    UsersPage, WelcomePage, WorklistPage,
+    PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SessionsPage, SystemPage,
+    UsersChoicePage, UsersPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -31,7 +31,7 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
-    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
+    "WelcomePage", "SessionsPage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
     "DeployPage", "QemuPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
@@ -156,7 +156,8 @@ class StudioWizard(QtWidgets.QWizard):
         # until then it is None and the flow terminates on BuildPage — the None-filter
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
-            WelcomePage, ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
+            WelcomePage, SessionsPage,
+            ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
             QemuPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,

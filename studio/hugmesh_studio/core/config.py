@@ -116,7 +116,17 @@ MODE_DEFAULT_ROLE = {
 # ASK 22 splits the terminal pair in three: "build" is the REVIEW screen (what will be
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
-WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "quest", "deploy",
+#
+# Issue #50 (welcome flow): "welcome" is the three-card first screen (start building /
+# start a local mesh / review prior sessions) and "sessions" is the demoted old first
+# screen (Load/Save config + the Previous-builds manager). "sessions" sits IMMEDIATELY
+# after "welcome": only WelcomePage.nextId() ever routes INTO it (a plain Next flows
+# welcome -> mode), and its own positional next is "mode" — reviewing what you built
+# continues naturally into building. A fresh start shows "welcome" (first slug, and
+# nothing sets a start id); prior-session RESTART still enters at "progress" via
+# StudioWizard.start_build_from_session.
+WIZARD_PAGE_SLUGS = ("welcome", "sessions",
+                     "mode", "localmesh", "phone", "quest", "deploy",
                      "qemu",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
