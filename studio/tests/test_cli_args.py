@@ -1434,11 +1434,19 @@ def test_non_argv_fields_set():
     # qemu_e2e (post-build emulated-device tests) follows the pentest precedent
     # exactly: a Studio-driven step AFTER the build (tests/qemu/run-qemu-docker.sh),
     # forwarded to the build environment as HUGMESH_QEMU_E2E=1 — never a builder flag.
+    # login_header_*/login_footer_*/login_bg_effect (the Themes editor's web-chrome
+    # half, #50 item 2) joined the login_* family: same SNAP_THEME_CSS channel
+    # (literal --sd-header-*/--sd-footer-*/--sd-bg-effect tokens), never argv.
     assert set(NON_ARGV_FIELDS) == {
         "headscale_url", "pentest", "hw_profile",
         "login_primary_color", "login_secondary_color", "login_font",
         "login_font_file", "login_font_licence", "login_font_source",
         "login_theme_preset", "login_theme_mode",
+        "login_header_hidden", "login_header_size", "login_header_bg",
+        "login_header_text",
+        "login_footer_hidden", "login_footer_size", "login_footer_bg",
+        "login_footer_text",
+        "login_bg_effect",
         "additional_domains", "configure_users", "qemu_e2e"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode
     for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):

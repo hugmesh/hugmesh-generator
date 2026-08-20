@@ -762,7 +762,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # BrandingPage is unreachable from it. Collapsed: a from-scratch bring-up
         # usually starts with the shipped brand.
         self.login_theme = LoginThemeGroup()
-        lay.addWidget(collapsible("Web login theme (colours + fonts)",
+        # "Themes", not "Web login theme" (#50 item 2): label-only rename — the
+        # persisted login_* config keys keep their names so old sessions load.
+        lay.addWidget(collapsible("Themes (colours, fonts + web chrome)",
                                   self.login_theme, expanded=False))
 
         # IDENTITY PROVIDER (I6.6) — the SAME picker the node wizard's IdP page
@@ -1599,7 +1601,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         if self.login_theme.error_text():
             self.status.setText(
-                "Cannot start: web login theme: " + self.login_theme.error_text())
+                "Cannot start: themes: " + self.login_theme.error_text())
             return
         problems = self.boot.validate()
         if problems:

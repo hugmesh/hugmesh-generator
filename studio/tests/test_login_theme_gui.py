@@ -232,5 +232,5 @@ def test_bootstrap_up_refuses_on_a_typoed_colour_instead_of_silently_unthemed(qa
     page.ack.setChecked(True)
     page.login_theme.primary.setText("#33669")     # one digit short
     page._bootstrap_up()
-    assert "web login theme" in page.status.text()
+    assert "themes" in page.status.text()          # the renamed surface (#50 item 2)
     assert not page._running                       # nothing launched
