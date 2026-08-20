@@ -1,11 +1,17 @@
 """LocalCloudNodesPage (issue #50, items 3-5) — the "create nodes for local cloud"
 gate: routing off the ModePage card, the INLINE k8s-will-stop confirmation (modeless
-— no QMessageBox/exec in page logic), the local-mesh identity import into
-ImageConfig, and the abbreviated worklist (ONLY laptop + node rows on offer).
+— no QMessageBox/exec in page logic), the TEARDOWN that confirmation arms, the
+local-mesh identity import into ImageConfig, and the abbreviated worklist (ONLY
+laptop + node rows on offer).
 
-Runs the REAL wizard on Qt's offscreen platform, like test_wizard.py.
+Runs the REAL wizard on Qt's offscreen platform, like test_wizard.py. Nothing here
+talks to kind: both k8s seams (``local_k8s_running`` / ``local_k8s_teardown``) are
+stubbed, so the suite is deterministic on a host with or without a live cluster and
+no test can delete one.
 """
 import os
+import threading
+import time
 
 import pytest
 
@@ -48,10 +54,71 @@ def _canned_local_mesh(monkeypatch):
                         lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS)))
 
 
+@pytest.fixture
+def k8s_state():
+    """The modelled host's k8s truth, mutable per test: {"up": bool}. A teardown stub
+    flips it the way a real `kind delete cluster` would."""
+    return {"up": False}
+
+
+@pytest.fixture(autouse=True)
+def _canned_k8s(monkeypatch, k8s_state):
+    """No cluster unless a test says otherwise. The page probes the REAL host on entry,
+    so without this a dev box running `hugmesh-local` would change what every other
+    test here sees — and the teardown seam is stubbed in the same breath so no test can
+    ever delete the operator's cluster."""
+    def _never(_gd, on_line=None, cancel=None):
+        raise AssertionError("local_k8s_teardown called without a test stubbing it")
+
+    monkeypatch.setattr(lc_mod, "local_k8s_running", lambda _gd: k8s_state["up"])
+    monkeypatch.setattr(lc_mod, "local_k8s_teardown", _never)
+
+
+def _wait_until(qapp, pred, timeout_s: float = 5.0) -> bool:
+    """Pump the event loop until ``pred()`` or the ceiling. The page's k8s answers and
+    verb results arrive as QUEUED signals off worker threads, so a headless test has to
+    let the loop breathe rather than assert on the instant after the call."""
+    deadline = time.monotonic() + timeout_s
+    while not pred() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+    return bool(pred())
+
+
+def _settled(wiz, qapp):
+    """Route to the gate page and wait for its entry probe to answer."""
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    assert _wait_until(qapp, lambda: page._k8s_up is not None), "k8s probe never answered"
+    return page
+
+
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
             or QtWidgets.QApplication(["hugmesh-studio-tests"]))
+
+
+#: The page's background threads — its k8s entry probe and the teardown worker.
+_THREAD_ATTRS = ("_k8s_probe", "worker")
+
+
+def _drain(page, qapp, timeout_ms: int = 5000):
+    """Join every background thread the page owns and deliver what they posted.
+
+    "Never let a live QThread outlive its page: destroying one aborts under Qt" — the
+    same teardown rule test_localmesh_page_entry_offthread.py states. Skipping this
+    SEGFAULTED this file: the first test to pump the event loop delivered the earlier
+    wizards' queued probe answers into pages that had already been collected."""
+    for name in _THREAD_ATTRS:
+        try:
+            t = getattr(page, name, None)
+            if t is not None:
+                t.wait(timeout_ms)
+        except RuntimeError:            # C++ side already gone — nothing to join
+            pass
+    qapp.processEvents()
 
 
 @pytest.fixture
@@ -59,6 +126,7 @@ def wiz(qapp):
     w = wizard_mod.StudioWizard(GENERATOR_DIR)
     w.show()          # offscreen: makes per-widget isVisible() meaningful
     yield w
+    _drain(w.page(w._page_ids["localcloud"]), qapp)
     w.close()
 
 
@@ -132,6 +200,118 @@ def test_gate_names_the_k8s_stop_and_is_reasked_on_reentry(wiz):
     page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
     assert page.confirm.isChecked() is False
     assert page.isComplete() is False
+
+
+# ---- the k8s teardown the confirmation arms (issue #50 item 4) ----------------------
+
+def test_no_cluster_means_nothing_to_stop(wiz, qapp):
+    """The common case: no DevOps lane running. The destructive button stays dark and
+    the gate is the consent alone — exactly the behaviour before the teardown landed."""
+    page = _settled(wiz, qapp)
+    assert page._k8s_up is False
+    page.confirm.setChecked(True)
+    assert page.down_btn.isEnabled() is False
+    assert page.isComplete() is True
+    assert "nothing to stop" in page.gate_note.text()
+
+
+def test_a_running_cluster_holds_next_until_it_is_stopped(wiz, qapp, k8s_state):
+    """THE issue-4 requirement: with k8s up, ticking the box is no longer enough to
+    proceed — it ARMS the teardown, and Next stays shut until the cluster is gone."""
+    k8s_state["up"] = True
+    page = _settled(wiz, qapp)
+    page.confirm.setChecked(True)
+    assert page.down_btn.isEnabled() is True       # consent ARMS the destructive verb
+    assert page.isComplete() is False              # ... and does not substitute for it
+    here = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == here                 # stayed: validatePage refused too
+    assert wiz.cfg.mode != "mesh"                  # nothing committed on a live cluster
+
+
+def test_the_teardown_never_runs_without_the_consent(wiz, qapp, k8s_state, monkeypatch):
+    """Nothing on this page may delete a cluster unasked — not from the button (it is
+    unarmed) and not from a programmatic call."""
+    ran = []
+
+    def fake_teardown(gd, on_line=None, cancel=None):
+        ran.append(gd)
+        return True, ""
+
+    monkeypatch.setattr(lc_mod, "local_k8s_teardown", fake_teardown)
+    k8s_state["up"] = True
+    page = _settled(wiz, qapp)
+    assert page.down_btn.isEnabled() is False
+    page.down_btn.click()
+    page._stop_k8s()                               # even called directly it refuses
+    assert ran == []
+    assert page._running is False
+
+
+def test_stopping_kubernetes_runs_the_verb_off_thread_and_opens_the_gate(
+        wiz, qapp, k8s_state, monkeypatch):
+    """The wiring end to end: the press runs the real `make kind-down` seam on a WORKER
+    (the click returns with the verb still in flight — a synchronous call here would
+    freeze the wizard for the minutes a teardown takes), streams its output into the
+    page's console, and the gate opens only once the RE-PROBE says the cluster is gone."""
+    calls = []
+
+    def fake_teardown(gd, on_line=None, cancel=None):
+        calls.append(gd)
+        on_line("deleting cluster \"hugmesh-local\" ...")
+        k8s_state["up"] = False                    # what a real kind-down leaves behind
+        return True, ""
+
+    monkeypatch.setattr(lc_mod, "local_k8s_teardown", fake_teardown)
+    k8s_state["up"] = True
+    page = _settled(wiz, qapp)
+    page.confirm.setChecked(True)
+    page.down_btn.click()
+    assert page._running is True                   # off-thread: the click already returned
+    assert page.isComplete() is False              # ... and Next is held while it streams
+    assert _wait_until(qapp, lambda: not page._running), "teardown never finished"
+    assert calls == [wiz.generator_dir]
+    assert "deleting cluster" in page.log.toPlainText()
+    assert _wait_until(qapp, lambda: page._k8s_up is False), "gate never re-probed"
+    assert page.isComplete() is True
+    wiz.next()
+    assert wiz.cfg.mode == "mesh"                  # and the abbreviated wizard continues
+    assert isinstance(wiz.currentPage(), wizard_mod.IdpPage)
+
+
+def test_a_failed_teardown_keeps_the_gate_shut(wiz, qapp, k8s_state, monkeypatch):
+    """`make kind-down` failing must NOT be reported as a stopped cluster: the gate
+    stays shut, the button re-arms for a retry, and the log says so."""
+    monkeypatch.setattr(lc_mod, "local_k8s_teardown",
+                        lambda gd, on_line=None, cancel=None: (False, "boom"))
+    k8s_state["up"] = True                         # ... and it stays up
+    page = _settled(wiz, qapp)
+    page.confirm.setChecked(True)
+    page.down_btn.click()
+    assert _wait_until(qapp, lambda: not page._running), "teardown never finished"
+    assert "FAILED" in page.log.toPlainText()
+    assert page.isComplete() is False
+    assert _wait_until(qapp, lambda: page.down_btn.isEnabled()), "retry never re-armed"
+
+
+def test_entering_the_page_does_not_block_on_the_probe(wiz, qapp, monkeypatch):
+    """`kind get clusters` shells out (15 s ceiling). initializePage must not wait on
+    it: the page renders with the answer still unknown, and unknown is rendered as
+    unknown — never as a claim about the operator's cluster."""
+    released = threading.Event()
+    monkeypatch.setattr(lc_mod, "local_k8s_running",
+                        lambda _gd: (released.wait(5.0), False)[1])
+    pick_mode(wiz, "localcloud")
+    t0 = time.monotonic()
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    entry_s = time.monotonic() - t0
+    try:
+        assert entry_s < 1.0, f"initializePage blocked on the probe for {entry_s:.1f}s"
+        assert page._k8s_up is None
+        assert "Checking" in page.gate_note.text()
+    finally:
+        released.set()
+        _wait_until(qapp, lambda: page._k8s_up is not None)
 
 
 # ---- the identity import -----------------------------------------------------------
