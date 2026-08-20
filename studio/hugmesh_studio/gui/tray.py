@@ -28,6 +28,7 @@ from .qt import Qt, QtCore, QtGui, QtWidgets
 from .branding_icon import (
     ICON_PX as _ICON_PX, brand_icon as _brand_icon, brand_pixmap as _brand_pixmap)
 from ..core import build_sessions
+from ..core import resource_limits as _resource_limits
 from ..core.mesh_node import MeshNode
 from ..core.local_stack_node import LocalStackNode
 
@@ -37,6 +38,19 @@ _BUILD_STATES = ("idle", "building", "error", "complete")
 # ASK 16 — the "Running builds" submenu label and its honest empty row.
 RUNNING_BUILDS_LABEL = "Running builds"
 NO_RUNNING_BUILDS = "(no builds running)"
+
+#: The resource-limits entry. The label carries the CURRENT setting so the operator
+#: can read it without opening anything — a menu item that says only "Resource
+#: limits…" makes you open a dialog to answer "am I limited right now?".
+LIMITS_LABEL = "Resource limits…"
+
+
+def limits_menu_label(limits=None) -> str:
+    """The tray label for the current limits, e.g. "Resource limits: 7 CPU, 23808m…"."""
+    limits = _resource_limits.effective() if limits is None else limits
+    if limits.is_unlimited():
+        return "Resource limits: none…"
+    return f"Resource limits: {limits.describe()}…"
 
 
 def _log_swallowed(where: str) -> None:
@@ -263,7 +277,7 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
 
     def __init__(self, sections, *, tooltip: str, on_open_studio=None,
                  on_open_golive=None, on_open_build=None, builds_provider=None,
-                 parent=None):
+                 generator_dir: str = "", parent=None):
         super().__init__(_brand_icon(), parent)
         self.sections = list(sections)
         for s in self.sections:
@@ -276,6 +290,9 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
         # test can drive an exact roster instead of racing real records on disk.
         self._on_open_build = on_open_build
         self._builds_provider = builds_provider or running_builds
+        # Where the limits dialog reads the compose service list from, so it can say
+        # what a whole-mesh budget means per service.
+        self._generator_dir = generator_dir
         self.setToolTip(tooltip)
         menu = QtWidgets.QMenu()
         for i, s in enumerate(self.sections):
@@ -289,6 +306,15 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
         # a menu nobody has opened is pure waste.
         self.builds_menu.aboutToShow.connect(self.refresh_running_builds)
         self.refresh_running_builds()
+        menu.addSeparator()
+        # Resource limits belong in the TRAY, not only in the wizard: the tray is what
+        # is running while the operator uses the machine for something else, and
+        # "the mesh made my laptop unusable" is the problem the setting solves. Also
+        # the one place it is reachable when the wizard window is closed.
+        self.limits_act = menu.addAction(LIMITS_LABEL)
+        self.limits_act.triggered.connect(self._open_limits)
+        self.refresh_limits_label()
+
         menu.addSeparator()
         if on_open_studio:
             menu.addAction("Open Image Studio…").triggered.connect(lambda: on_open_studio())
@@ -307,6 +333,29 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
 
     def _notify(self, title, msg) -> None:
         self.showMessage(title, msg, _brand_icon(), 4000)
+
+    # ---- resource limits ----------------------------------------------------------
+    def refresh_limits_label(self) -> None:
+        """Re-read the effective limits and restate them on the menu entry."""
+        try:
+            self.limits_act.setText(limits_menu_label())
+        except Exception:            # pragma: no cover - a label must never take the tray down
+            _log_swallowed("refresh_limits_label")
+            self.limits_act.setText(LIMITS_LABEL)
+
+    def _open_limits(self) -> None:
+        # Imported lazily: the dialog pulls in QtWidgets form machinery that a tray
+        # which is never asked for limits should not pay for at startup.
+        try:
+            from .limits_dialog import open_limits_dialog
+            saved = open_limits_dialog(generator_dir=self._generator_dir)
+        except Exception:            # pragma: no cover - never let a dialog kill the tray
+            _log_swallowed("_open_limits")
+            return
+        if saved is not None:
+            self.refresh_limits_label()
+            self._notify("Resource limits saved",
+                         "Applies to the next build, stack bring-up or emulated mesh.")
 
     # ---- ASK 16: running-builds submenu -------------------------------------------
     def refresh_running_builds(self) -> None:
@@ -410,7 +459,7 @@ class MeshTray(_ControlTray):
         super().__init__([_mesh_section(generator_dir)], tooltip="HugMesh mesh node",
                          on_open_studio=on_open_studio, on_open_golive=on_open_golive,
                          on_open_build=on_open_build, builds_provider=builds_provider,
-                         parent=parent)
+                         generator_dir=generator_dir, parent=parent)
 
 
 class StackTray(_ControlTray):
@@ -421,7 +470,7 @@ class StackTray(_ControlTray):
         super().__init__([_stack_section(generator_dir)], tooltip="HugMesh local dev stack",
                          on_open_studio=on_open_studio, on_open_golive=on_open_golive,
                          on_open_build=on_open_build, builds_provider=builds_provider,
-                         parent=parent)
+                         generator_dir=generator_dir, parent=parent)
 
 
 class CombinedTray(_ControlTray):
@@ -434,7 +483,8 @@ class CombinedTray(_ControlTray):
         super().__init__([_mesh_section(generator_dir), _stack_section(generator_dir)],
                          tooltip="HugMesh Image Studio", on_open_studio=on_open_studio,
                          on_open_golive=on_open_golive, on_open_build=on_open_build,
-                         builds_provider=builds_provider, parent=parent)
+                         builds_provider=builds_provider, generator_dir=generator_dir,
+                         parent=parent)
 
 
 def build_tray(generator_dir: str, *, show_mesh: bool = True, show_stack: bool = True,

@@ -63,6 +63,7 @@ from .qemu_devices import Device, qmp_argv, ssh_argv              # noqa: F401
 from .qemu_devices import device_save_argv as save_device_argv    # noqa: F401
 from .qemu_tests import (BuildSession, DeviceRow, QemuRunOptions,
                          runner_command)
+from . import proc_group
 
 #: The SELinux AVC workout (issue #45): boots ONE row through the launchers,
 #: drives the confined workloads and harvests every AVC into a narrowing report.
@@ -626,13 +627,7 @@ def spawn(argv: list[str], cwd: str,
         def _watch():
             cancel.wait()
             if proc.poll() is None:
-                try:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                except OSError:
-                    try:
-                        proc.terminate()
-                    except OSError:
-                        pass
+                proc_group.terminate_group(proc)
         threading.Thread(target=_watch, daemon=True).start()
 
     assert proc.stdout is not None

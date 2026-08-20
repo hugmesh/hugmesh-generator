@@ -28,10 +28,14 @@ from __future__ import annotations
 import getpass
 import json
 import os
-import pwd
 import shutil
 import subprocess
 import threading
+
+try:  # POSIX only — absent on Windows, where the MSI installs this same code.
+    import pwd
+except ImportError:  # pragma: no cover - exercised on Windows, not in CI
+    pwd = None  # type: ignore[assignment]
 
 from . import proc_text
 from collections.abc import Callable
@@ -219,7 +223,10 @@ class WorklistDriver:
         if os.access(probe, os.W_OK | os.X_OK):
             return []
         try:
-            owner = pwd.getpwuid(os.stat(probe).st_uid).pw_name
+            # Without pwd (Windows) the numeric uid is still the honest answer, and
+            # the advice below is POSIX-shaped anyway — this whole warning is about
+            # a root-owned output directory left by a native sudo build.
+            owner = pwd.getpwuid(os.stat(probe).st_uid).pw_name if pwd else str(os.stat(probe).st_uid)
         except (KeyError, OSError):
             owner = str(os.stat(probe).st_uid)
         return [f"Output directory is not writable: {probe} is owned by '{owner}' and "

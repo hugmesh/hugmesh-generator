@@ -1,0 +1,41 @@
+# Tests that FAIL ON `main` — deselected by .github/workflows/studio-tests.yml so the
+# gate reflects the change under review rather than a backlog it did not cause.
+#
+# THIS FILE IS NOT A MUTE BUTTON. The workflow re-runs everything listed here in a
+# separate, non-blocking step and reports the result to the job summary, so their
+# status stays visible and a fix is noticed rather than silently absorbed.
+#
+# Verified 2026-08-20 against origin/main with no Qt binding installed:
+#   13 failed, 3840 passed, 81 skipped
+# Every entry below reproduces on a clean checkout of main. Delete a line the moment
+# its test starts passing — that is the point of the re-run step.
+#
+# Format: one pytest node id per line, `#` comments and blank lines ignored.
+
+# The frozen worklist JSON-schema no longer matches the envelope the code emits.
+tests/test_worklist.py::test_envelope_conforms_to_frozen_schema
+
+# The Makefile's compose down-path profile flags drifted from what the test pins.
+tests/test_local_services.py::test_profile_slugs_name_a_profile_compose_actually_declares
+
+# tests/stack/m2-bootstrap.sh's CHECK_PATH no longer matches the pinned artifact.
+tests/test_local_stack_preflight.py::test_check_artifact_matches_the_m2_bootstrap_script
+
+# Banner count/order drift between build-x86-host-stage4.sh and the phase table
+# (29 banners vs the 28 the table describes).
+tests/test_progress_parse.py::test_banner_drift_probe[x86-build-x86-host-stage4.sh]
+tests/test_progress_uniformity.py::test_banner_execution_order_is_monotonic_over_the_phase_table[x86]
+
+# A gating-scope delegate the core no longer exposes under the name the test expects.
+tests/test_field_scope.py::test_gating_scope_allows_delegates_to_core
+
+# The emulation-page spawn-lane audit still names pre-unification modules. The
+# emulation GUI/core unification (PRs #87, #90) moved these lanes, and the audit was
+# not moved with them.
+tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_no_page_reads_a_pipe_of_its_own[qemu]
+tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_no_page_reads_a_pipe_of_its_own[mesh_emulation]
+tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_no_page_reads_a_pipe_of_its_own[_emulation_common]
+tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_every_runner_invocation_goes_through_the_facade[qemu]
+tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_every_runner_invocation_goes_through_the_facade[mesh_emulation]
+tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_a_detached_launch_is_detached_and_unread[qemu]
+tests/test_proc_text_decoding.py::TestTheEmulationPagesHaveOnlyOneSpawnLane::test_a_detached_launch_is_detached_and_unread[mesh_emulation]

@@ -1279,9 +1279,25 @@ ABSENT and the authz/MFA claims present — before that config can flip live), a
 `domain-registry-reconcile-verify` (the signed-export domain bridge fails closed
 on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 
-> **GitHub Actions is intentionally absent** — Actions is billing-blocked
-> org-wide (jobs fail at setup). Do **not** add `.github/workflows`; CI lives in
-> GitLab.
+> **CI lives in GitLab; GitHub Actions is additive.** `.gitlab-ci.yml` (83 jobs,
+> in-cluster privileged runner) is the real pipeline and remains so — it is the only
+> lane that can build ISOs and images.
+>
+> This repository previously said Actions was billing-blocked org-wide and that
+> `.github/workflows` must not be added. **That is no longer true**:
+> `gh api repos/hugmesh/<repo>/actions/permissions` returns
+> `{"enabled":true,"allowed_actions":"all"}`, and sibling repositories have run
+> `ubuntu-latest` jobs successfully. Two workflows now exist, both narrow and both on
+> GitHub-hosted runners:
+>
+> | Workflow | What it does |
+> |---|---|
+> | [`studio-tests.yml`](.github/workflows/studio-tests.yml) | Runs the Qt-free `studio/` test subset on a pull request that touches `studio/`. A fast pre-merge answer, not a replacement for GitLab's fuller `test:studio-suite`. |
+> | [`studio-release.yml`](.github/workflows/studio-release.yml) | Builds the Studio's Windows MSI and Linux Flatpak and publishes them as a GitHub Release. Dispatch- or tag-triggered only. |
+>
+> **Never target `[self-hosted, hugmesh-x86]` from a GitHub workflow.** No self-hosted
+> runners are registered against this org, so such a job queues for 24 hours and is
+> cancelled. Use `ubuntu-latest` / `windows-latest`.
 
 ## Security notes
 

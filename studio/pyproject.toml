@@ -1,0 +1,75 @@
+# Packaging metadata for HugMesh Image Studio.
+#
+# The Studio has always been RUN FROM A CHECKOUT (./hugmesh-studio, or
+# `python -m hugmesh_studio`), and that stays the primary way to use it — it is a
+# front end over the build scripts in the surrounding hugmesh-generator repo, and it
+# resolves that checkout at runtime. This file exists so the SAME code can also be
+# frozen into a Windows MSI and a Linux Flatpak for people who do not want a Python
+# environment. It does not change how a checkout is used.
+#
+# VERSION IS NOT DYNAMIC. hugmesh_studio/__init__.py's __version__ is the single
+# source, read by app.setApplicationVersion, by the installer filenames and by the
+# release tag. setuptools-scm would derive a fourth, different answer from git
+# describe, and the first symptom would be an installer whose filename disagrees with
+# its own About box.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hugmesh-image-studio"
+dynamic = ["version"]
+description = "Build HugMesh images with a wizard, and run a mesh from your system tray."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "HugMesh" }]
+keywords = ["hugmesh", "gentoo", "image-builder", "kubernetes", "qemu", "self-hosted"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Installation/Setup",
+]
+
+# PySide6 only. gui/qt.py accepts PyQt6 as a fallback for a machine that already has
+# it, but PySide6 is what we DEPEND on and it is a licensing decision, not a
+# preference: PySide6 is LGPL and PyQt6 is GPL, so a frozen bundle that picked up
+# PyQt6 would relicense the whole installer. The PyInstaller spec excludes PyQt6 for
+# the same reason.
+dependencies = ["PySide6>=6.5"]
+
+[project.optional-dependencies]
+# The terminal UI (`python -m hugmesh_studio.tui`). Deliberately NOT a hard
+# dependency: without urwid the TUI degrades to plain prompts, and Gentoo keeps urwid
+# ~arch-keyworded.
+tui = ["urwid"]
+# Windows ships no system timezone database, so core/timezones.py silently collapses
+# to its FALLBACK_ZONES list without this. A frozen Windows build must include it.
+win = ["tzdata"]
+test = ["pytest", "PyYAML", "jsonschema"]
+
+[project.urls]
+Homepage = "https://hugmesh.net"
+Documentation = "https://hugmesh.net/studio"
+Source = "https://github.com/hugmesh/hugmesh-generator"
+
+[project.scripts]
+hugmesh-studio = "hugmesh_studio.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "hugmesh_studio.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hugmesh_studio*"]
+
+# THREE non-Python files, and they are not optional extras — progress-tables.json is
+# read at MODULE IMPORT time by core/progress_parse.py, so a bundle that omits it
+# does not degrade, it fails to start.
+[tool.setuptools.package-data]
+"hugmesh_studio.core" = ["device-catalog.json", "progress-tables.json"]
+"hugmesh_studio.assets" = ["*.html"]

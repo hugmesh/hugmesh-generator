@@ -20,6 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field  # noqa: F401  (field: dataclass idiom parity)
 from typing import Any
 
+from . import build_driver
 from .build_driver import BuildDriver
 from .config import IdentityValidationError, validate_domain_name
 
@@ -210,6 +211,12 @@ class FleetDriver(BuildDriver):
                 env_args += ["-e", f"{k}={v}"]
             return [
                 "docker", "run", "--rm", "--privileged",
+                # THE lane the 2026-07-15 host freeze came from — a fleet build, in an
+                # unbounded container, on a desktop that was also being used. It was
+                # also the only lane with no cap at all: BuildDriver capped memory for
+                # single images and this one inherited nothing. Same wrapper, same
+                # knobs, same byte-identical argv when limits are off.
+                *build_driver.docker_limit_args(),
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *env_args,

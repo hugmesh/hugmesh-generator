@@ -24,7 +24,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
-from . import host_resources, proc_text, secret_files
+from . import host_resources, proc_text, resource_limits, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
 from .platform_info import HostInfo, detect
 
@@ -115,6 +115,20 @@ def _host_tool_present(*names: str) -> bool:
         if any(os.access(os.path.join(d, n), os.X_OK) for d in _SBIN_DIRS):
             return True
     return False
+
+
+def docker_limit_args() -> list[str]:
+    """The full ``docker run`` resource-limit wrapper for a builder run: CPU, memory
+    and GPU, resolved by :mod:`hugmesh_studio.core.resource_limits`.
+
+    Supersedes :func:`docker_memory_args`, which capped memory and left CPU
+    unbounded — half of the 2026-07-15 host-freeze defence. With every limit off this
+    returns ``[]`` and the surrounding argv is byte-identical to the pre-guard
+    command, which is what keeps the committed command-string tests valid.
+
+    Evaluated at command()-assembly time, so the PREVIEW the operator is shown and
+    the argv that is DISPATCHED are the same by construction."""
+    return resource_limits.docker_run_args(resource_limits.effective())
 
 
 def docker_memory_args() -> list[str]:
@@ -330,9 +344,9 @@ class BuildDriver:
                 # (cancel) actually stops the build instead of orphaning it. --name:
                 # the stable handle cancel() targets.
                 "--init", "--name", self._container_name,
-                # Container memory cap (docker-run wrapper only — the inner builder
-                # argv below is byte-untouched): see docker_memory_args.
-                *docker_memory_args(),
+                # Container CPU/memory/GPU caps (docker-run wrapper only — the inner
+                # builder argv below is byte-untouched): see docker_limit_args.
+                *docker_limit_args(),
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,

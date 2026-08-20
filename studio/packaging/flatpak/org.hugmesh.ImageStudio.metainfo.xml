@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata for the HugMesh Image Studio Flatpak.
+
+  The description is deliberately explicit about what does NOT work inside the
+  sandbox. The Studio is a front end over host tooling — docker, qemu, kubectl,
+  lsblk, ssh — and a user who installs it expecting a self-contained image builder
+  and then meets "No build backend" has been misled by the packaging, not by the app.
+-->
+<component type="desktop-application">
+  <id>org.hugmesh.ImageStudio</id>
+  <name>HugMesh Image Studio</name>
+  <summary>Build HugMesh images and run a mesh from your tray</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="net.hugmesh">
+    <name>HugMesh</name>
+  </developer>
+
+  <description>
+    <p>
+      HugMesh Image Studio is a desktop wizard for the HugMesh platform. It builds
+      hardened OS images for every cluster role without needing to remember builder
+      script flags, and it runs a local mesh from the system tray.
+    </p>
+    <p>What it does:</p>
+    <ul>
+      <li>A guided wizard over every generator flag — role, platform, GPU driver, branding, encryption, optional services.</li>
+      <li>A hardware scanner that pre-fills the build from the machine you are on.</li>
+      <li>A system-tray controller that starts, stops and inspects a local mesh node and the full local stack.</li>
+      <li>Resource limits: cap the CPU, memory and GPU that builds, the local stack and emulated meshes may use, so the machine stays usable.</li>
+      <li>Device imaging: write a finished image to an attached USB, SD or eMMC device.</li>
+    </ul>
+    <p>Requirements, stated plainly:</p>
+    <ul>
+      <li>Building images requires Docker on the host, or a Gentoo host for a native build. The Studio drives those tools; it does not replace them.</li>
+      <li>Point the Studio at a hugmesh-generator checkout on first run. It reads the build scripts and cluster specs from there, so it cannot work without one.</li>
+      <li>Flashing a device and running an emulated mesh need host access to block devices and QEMU. Inside a Flatpak sandbox these need the host filesystem permission this package requests, and they will report what is missing rather than failing silently.</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">org.hugmesh.ImageStudio.desktop</launchable>
+  <url type="homepage">https://hugmesh.net</url>
+  <url type="help">https://hugmesh.net/studio</url>
+  <url type="bugtracker">https://github.com/hugmesh/hugmesh-generator/issues</url>
+
+  <content_rating type="oars-1.1" />
+
+  <categories>
+    <category>Development</category>
+    <category>System</category>
+  </categories>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <requires>
+    <!-- The wizard is a multi-column form; below this it does not lay out. -->
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <releases>
+    <release version="1.0.0" date="2026-08-20">
+      <description>
+        <p>First packaged release.</p>
+        <ul>
+          <li>Windows MSI and Linux Flatpak installers.</li>
+          <li>Resource limits for CPU, memory and GPU across the build, local-stack and emulation lanes.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>
