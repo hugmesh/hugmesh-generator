@@ -179,6 +179,23 @@ DOCUMENTED_EXCLUSIONS = {
     ("hugmesh-fe-gateway", "/bff/wiki/admin/**",               "ROLE_ADMIN"),
 }
 
+# PER-DOMAIN MFA SCOPE (issue #47 × casdoor-choice). url_patterns an operator has
+# listed in the UPDATE's per-domain arm — the seed-side convergence list for
+# per-domain TIGHTENING rows (a domain-scoped sibling row outside the two blanket
+# prefixes with mfa_required=true). EMPTY today: the reference mesh defines no
+# per-domain tightening. Cross-checked against the arm's own IN (...) list in
+# BOTH directions, exactly like DOCUMENTED_EXCLUSIONS: a surface listed in the
+# SQL arm but not here (or here but not in the arm) fails the gate, so widening
+# the per-domain scope is always a conscious two-place edit (plus §1.2a prose).
+PER_DOMAIN_SCOPE = set()
+
+# The gateway's own domain-scope equivalence, as the seed must spell it in the
+# uq index, the INSERT's ON CONFLICT target, the de-dup DELETE and the UPDATE's
+# per-domain arm (GatewayRouteAccessService.domainApplies(): NULL/blank/default
+# — case-insensitive, trimmed — is ONE unscoped class; scoped compare is
+# trimmed + case-insensitive).
+DOMAIN_EXPR = "COALESCE(NULLIF(lower(trim(domain)), 'default'), '')"
+
 sql = open(sys.argv[1], encoding="utf-8").read()
 out = []
 def emit(k, v): out.append("%s %s" % (k, v))
@@ -239,6 +256,34 @@ for s in STMTS:
         uq = s
 emit("UQ_FOUND", "yes" if uq else "no")
 emit("UQ_HAS_MFA", "yes" if (uq and "mfa_required" in uq) else "no")
+
+# ── per-domain scope: the domain leg of the key must be the gateway's OWN scope
+# equivalence, spelled identically in the index, the ON CONFLICT target and the
+# de-dup DELETE — and the in-place upgrade must DROP the old lexical index first
+# (IF NOT EXISTS keeps it, and then the re-applied INSERT's ON CONFLICT target
+# matches no index and aborts the whole initdb), with the de-dup DELETE running
+# before both so alias-duplicates are collapsed before the stricter key lands.
+emit("UQ_DOMAIN_NORMALIZED", "yes" if (uq and DOMAIN_EXPR in uq) else "no")
+onconf_stmt = next((s for s in STMTS if re.search(
+    r"ON\s+CONFLICT\s*\(", s, re.I) and re.match(r"^\s*INSERT\b", s, re.I)), None)
+onconf_m = re.search(r"ON\s+CONFLICT\s*\((.*)\)\s*DO\s+NOTHING", onconf_stmt or "", re.I | re.S)
+emit("ONCONFLICT_DOMAIN_NORMALIZED",
+     "yes" if (onconf_m and DOMAIN_EXPR in onconf_m.group(1)) else "no")
+dedup_stmt = next((s for s in STMTS if re.search(r"\bctid\b", s, re.I)
+                   and re.search(r"\bUSING\b", s, re.I)), None)
+emit("DEDUP_DOMAIN_NORMALIZED",
+     "yes" if (dedup_stmt
+               and "COALESCE(NULLIF(lower(trim(a.domain)), 'default'), '')" in dedup_stmt
+               and "COALESCE(NULLIF(lower(trim(b.domain)), 'default'), '')" in dedup_stmt)
+     else "no")
+drop_stmt = next((s for s in STMTS if re.match(
+    r"^\s*DROP\s+INDEX\s+IF\s+EXISTS\s+uq_route_access_row\s*$", s.strip(), re.I)), None)
+stmt_pos = {id(s): i for i, s in enumerate(STMTS)}
+if uq and drop_stmt and dedup_stmt:
+    order_ok = stmt_pos[id(dedup_stmt)] < stmt_pos[id(drop_stmt)] < stmt_pos[id(uq)]
+    emit("UQ_UPGRADE_ORDER", "yes" if order_ok else "no")
+else:
+    emit("UQ_UPGRADE_ORDER", "no")
 
 # ── which statements touch the table, in EVERY spelling Postgres accepts ───────
 # The first version of this demanded a BARE, unqualified, unquoted table name
@@ -358,6 +403,26 @@ if len(mfa_ups) == 1:
     # The statement itself, flattened to one line: the real-engine leg (1c)
     # re-runs it after the second full replay and reads the UPDATE tag (must be 0).
     emit("RAW_FLIP", flat(up))
+    # PER-DOMAIN ARM: the final OR of the predicate — domain-scoped rows on the
+    # url_patterns listed in its IN (...) get the same seed convergence the two
+    # blanket prefixes get. The list is cross-checked against PER_DOMAIN_SCOPE
+    # in both directions so it can neither grow nor rot unnoticed.
+    arm_m = re.search(
+        r"OR \(" + re.escape(DOMAIN_EXPR) + r" <> '' AND url_pattern IN \(([^)]*)\)\)",
+        flat(up))
+    emit("UPDATE_DOMAIN_ARM", "yes" if arm_m else "no")
+    arm_surfaces = set()
+    if arm_m:
+        arm_surfaces = {x.strip().strip("'") for x in arm_m.group(1).split(",")} - {""}
+    emit("DOMAIN_ARM_SURFACES", ",".join(sorted(arm_surfaces)) if arm_surfaces else "-")
+    arm_undoc = sorted(arm_surfaces - PER_DOMAIN_SCOPE)
+    emit("DOMAIN_ARM_UNDOCUMENTED", len(arm_undoc))
+    for a in arm_undoc:
+        emit("DOMAIN_ARM_UNDOCUMENTED_ROW", a)
+    arm_stale = sorted(PER_DOMAIN_SCOPE - arm_surfaces)
+    emit("DOMAIN_ARM_STALE", len(arm_stale))
+    for a in arm_stale:
+        emit("DOMAIN_ARM_STALE_ROW", a)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NET-EFFECT SIMULATION (defect (d)). Replay the file's OWN statements, in file
@@ -545,6 +610,83 @@ after = sorted(con.execute(sel).fetchall())
 emit("SIM_REAPPLY_STABLE", "yes" if before == after else "no")
 emit("SIM_MFA_CHANGES_2", second[mfa_idx] if mfa_idx >= 0 and second[mfa_idx] is not None else -1)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PER-DOMAIN MFA SCOPE, proven BEHAVIOURALLY on the replayed database (issue #47
+# × casdoor-choice). Staged per-domain rows are inserted through the file's OWN
+# ON CONFLICT idiom, the file's DML is re-applied over them, and the verdicts
+# are read back from the resulting rows — then everything is rolled back so no
+# later check sees the probes. What is proven:
+#   * the uniqueness key collapses exactly the gateway's unscoped equivalence
+#     class ('Default' == NULL) and its scoped equivalence (case/whitespace),
+#     while a genuinely scoped sibling row is ACCEPTED beside the canonical one;
+#   * the blanket is DOMAIN-BLIND: a domain-scoped allow row under the two
+#     prefixes ends up flipped by a re-apply exactly like its unscoped siblings
+#     (a scoped false row there is a phantom exemption — decide() ORs
+#     mfa_required across every granting row that domain-applies, and unscoped
+#     rows apply to every domain — so converging it to true is the honest state);
+#   * a per-domain TIGHTENING row outside the prefixes keeps mfa_required=true
+#     across a re-apply, and its UNSCOPED twin stays false (the tightening
+#     touches its own domain only).
+# ─────────────────────────────────────────────────────────────────────────────
+onconf_clause = onconf_m.group(0) if onconf_m else ""
+pd = {"alias_default": False, "sibling_ok": False, "alias_scoped": False,
+      "blanket_scoped": False, "tighten_kept": False, "tighten_scoped_only": False}
+pd_err = []
+con.execute("SAVEPOINT perdomain")
+try:
+    try:
+        if not onconf_clause:
+            raise RuntimeError("no ON CONFLICT clause found in the canonical INSERT")
+        n0 = con.execute("SELECT count(*) FROM gateway_route_access").fetchone()[0]
+        # (i) an alias-spelled "scoped" duplicate of a canonical row must collapse
+        con.execute("INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain) VALUES "
+                    "('hugmesh-fe-gateway', '/bff/admin/**', 'ROLE_ADMIN', true, 'Default')\n" + onconf_clause)
+        pd["alias_default"] = con.execute(
+            "SELECT count(*) FROM gateway_route_access").fetchone()[0] == n0
+        # (ii) a genuinely scoped sibling row is accepted beside the canonical row
+        con.execute("INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain) VALUES "
+                    "('hugmesh-fe-gateway', '/bff/admin/phone-fleet/**', 'ROLE_FLEET_ADMIN', true, 'brand-x.example')\n" + onconf_clause)
+        pd["sibling_ok"] = con.execute(
+            "SELECT count(*) FROM gateway_route_access").fetchone()[0] == n0 + 1
+        # (iii) a case/whitespace alias of that scoped row collides
+        con.execute("INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain) VALUES "
+                    "('hugmesh-fe-gateway', '/bff/admin/phone-fleet/**', 'ROLE_FLEET_ADMIN', true, ' Brand-X.Example ')\n" + onconf_clause)
+        pd["alias_scoped"] = con.execute(
+            "SELECT count(*) FROM gateway_route_access").fetchone()[0] == n0 + 1
+        # (iv) a per-domain TIGHTENING row outside the blanket prefixes
+        con.execute("INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain, mfa_required) VALUES "
+                    "('hugmesh-fe-gateway', '/bff/wiki/admin/**', 'ROLE_ADMIN', true, 'brand-x.example', true)\n" + onconf_clause)
+        # now RE-APPLY the whole file's DML with the per-domain rows in place
+        for s in dml:
+            try:
+                con.execute(normalize(s))
+            except Exception as e:                              # noqa: BLE001
+                if not (re.search(r"\bctid\b", s, re.I) and re.search(r"\bUSING\b", s, re.I)):
+                    pd_err.append("re-apply over per-domain rows: %s" % e)
+        got = con.execute("SELECT mfa_required FROM gateway_route_access "
+                          "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/admin/phone-fleet/**'").fetchall()
+        pd["blanket_scoped"] = len(got) == 1 and bool(got[0][0])
+        got = con.execute("SELECT mfa_required FROM gateway_route_access "
+                          "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+        pd["tighten_kept"] = len(got) == 1 and bool(got[0][0])
+        got = con.execute("SELECT mfa_required FROM gateway_route_access "
+                          "WHERE domain IS NULL AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+        pd["tighten_scoped_only"] = len(got) == 1 and not got[0][0]
+    except Exception as e:                                      # noqa: BLE001
+        pd_err.append(str(e))
+finally:
+    con.execute("ROLLBACK TO perdomain")
+    con.execute("RELEASE perdomain")
+emit("PD_ERRORS", len(pd_err))
+for e in pd_err:
+    emit("PD_ERROR", e)
+emit("DOMAIN_ALIAS_COLLAPSED", "yes" if pd["alias_default"] else "no")
+emit("DOMAIN_SCOPED_SIBLING_OK", "yes" if pd["sibling_ok"] else "no")
+emit("DOMAIN_SCOPED_ALIAS_COLLAPSED", "yes" if pd["alias_scoped"] else "no")
+emit("DOMAIN_BLANKET_COVERS_SCOPED", "yes" if pd["blanket_scoped"] else "no")
+emit("DOMAIN_TIGHTENING_KEPT", "yes" if pd["tighten_kept"] else "no")
+emit("DOMAIN_TIGHTENING_SCOPED_ONLY", "yes" if pd["tighten_scoped_only"] else "no")
+
 rows = [(g, p, r, bool(a), bool(m)) for (g, p, r, a, m) in final]
 flipped = sorted((g, p, r) for (g, p, r, a, m) in rows if m)
 emit("FLIPPED", len(flipped))
@@ -659,6 +801,39 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                         "missing=%s unexpected=%s"
                         % (name, len(got), len(want), expect,
                            sorted(want - got)[:4], sorted(got - want)[:4]))
+            elif expect == "per-domain-tightening":
+                # The runbook's per-domain tightening EXAMPLE, executed for real:
+                # its INSERT must land beside the unscoped canonical row, survive
+                # a full seed re-apply with mfa_required=true, and leave the
+                # unscoped twin false (the tightening touches its own domain only).
+                con.execute("SAVEPOINT docsql")
+                try:
+                    for st in split_statements(body):
+                        con.execute(normalize(st))
+                    for st in dml:
+                        try:
+                            con.execute(normalize(st))
+                        except Exception:                       # noqa: BLE001
+                            if not (re.search(r"\bctid\b", st, re.I)
+                                    and re.search(r"\bUSING\b", st, re.I)):
+                                raise
+                    scoped = con.execute(
+                        "SELECT mfa_required FROM gateway_route_access "
+                        "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                    unscoped = con.execute(
+                        "SELECT mfa_required FROM gateway_route_access "
+                        "WHERE domain IS NULL AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                finally:
+                    con.execute("ROLLBACK TO docsql")
+                    con.execute("RELEASE docsql")
+                if not (len(scoped) == 1 and bool(scoped[0][0])):
+                    doc_bad.append("%s: the documented tightening row did not survive a "
+                                   "seed re-apply as ONE mfa_required=true row (got %r)"
+                                   % (name, scoped))
+                elif not (len(unscoped) == 1 and not unscoped[0][0]):
+                    doc_bad.append("%s: the UNSCOPED twin of the documented tightening "
+                                   "surface did not stay mfa_required=false (got %r) — "
+                                   "the example leaks onto other domains" % (name, unscoped))
             else:
                 doc_bad.append("%s: unknown expect=%s" % (name, expect))
         except Exception as e:                                  # noqa: BLE001
@@ -1284,6 +1459,55 @@ else
   fi
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 1d) PER-DOMAIN MFA SCOPE (issue #47 × casdoor-choice) — the domain key, the
+#     per-domain arm of the UPDATE, and the behavioural proofs on staged rows
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "── 1d) per-domain MFA scope (domain key + per-domain arm) ──"
+
+[ "$(g UQ_DOMAIN_NORMALIZED)" = "yes" ] && [ "$(g ONCONFLICT_DOMAIN_NORMALIZED)" = "yes" ] \
+  && ok "uq_route_access_row keys the domain leg on the gateway's OWN scope equivalence (COALESCE(NULLIF(lower(trim(domain)), 'default'), '')) and the INSERT's ON CONFLICT target spells it identically — domainApplies() treats NULL/blank/'default' (case-insensitive, trimmed) as ONE unscoped class, so the lexical COALESCE(domain,'') key could hold two rows the gateway cannot tell apart" \
+  || bad "the domain leg of the uniqueness key is not the gateway's scope equivalence (uq=$(g UQ_DOMAIN_NORMALIZED), on_conflict=$(g ONCONFLICT_DOMAIN_NORMALIZED)) — alias-spelled duplicate rows ('Default' beside NULL) become possible, or the two spellings diverge and the re-applied INSERT aborts initdb"
+
+[ "$(g DEDUP_DOMAIN_NORMALIZED)" = "yes" ] \
+  && ok "the ctid de-dup DELETE compares the domain leg with the SAME normalization, so an in-place upgrade collapses alias-duplicates BEFORE the stricter unique index is created" \
+  || bad "the ctid de-dup DELETE still compares the domain leg lexically — an upgraded cluster holding a NULL row beside a 'Default' row aborts at CREATE UNIQUE INDEX and nothing after it in the file runs"
+
+[ "$(g UQ_UPGRADE_ORDER)" = "yes" ] \
+  && ok "in-place-upgrade order is de-dup DELETE → DROP INDEX IF EXISTS uq_route_access_row → CREATE UNIQUE INDEX: the old lexical index cannot survive under the new ON CONFLICT target (which must match the index expression exactly), and the stricter key never lands on a still-duplicated table" \
+  || bad "the de-dup DELETE / DROP INDEX / CREATE UNIQUE INDEX upgrade dance is missing or mis-ordered (UQ_UPGRADE_ORDER=$(g UQ_UPGRADE_ORDER)) — CREATE UNIQUE INDEX IF NOT EXISTS is a NO-OP while the old index holds the name, and then the re-applied INSERT's ON CONFLICT matches no index and aborts the whole initdb"
+
+if [ "${HAVE_UPDATE}" = "1" ]; then
+[ "$(g UPDATE_DOMAIN_ARM)" = "yes" ] \
+  && ok "the flip UPDATE carries the per-domain arm (domain-scoped rows on the url_patterns it lists get the same seed convergence the two blanket prefixes get); listed surfaces today: $(g DOMAIN_ARM_SURFACES)" \
+  || bad "the flip UPDATE's per-domain arm is gone — per-domain tightening rows lose their seed-side convergence (a CRUD un-flip of one silently survives every re-apply), and §1.2a's documented mechanism no longer exists in the SQL"
+
+[ "$(g DOMAIN_ARM_UNDOCUMENTED)" = "0" ] && [ "$(g DOMAIN_ARM_STALE)" = "0" ] \
+  && ok "the per-domain arm's surface list and the gate's PER_DOMAIN_SCOPE set agree in both directions (widening per-domain MFA scope is a conscious two-place edit, plus runbook §1.2a)" \
+  || bad "per-domain arm vs PER_DOMAIN_SCOPE drift: $(g DOMAIN_ARM_UNDOCUMENTED) surface(s) in the SQL arm but undocumented ($(sed -n 's/^DOMAIN_ARM_UNDOCUMENTED_ROW //p' "${W}/real.out" | tr '\n' ';')), $(g DOMAIN_ARM_STALE) documented but missing from the arm ($(sed -n 's/^DOMAIN_ARM_STALE_ROW //p' "${W}/real.out" | tr '\n' ';'))"
+fi
+
+[ "$(g PD_ERRORS)" = "0" ] \
+  && ok "the staged per-domain probe rows inserted through the file's OWN ON CONFLICT idiom and replayed cleanly" \
+  || bad "$(g PD_ERRORS) error(s) staging the per-domain probes — the behavioural verdicts below are unreliable: $(sed -n 's/^PD_ERROR //p' "${W}/real.out" | tr '\n' ';')"
+
+[ "$(g DOMAIN_ALIAS_COLLAPSED)" = "yes" ] && [ "$(g DOMAIN_SCOPED_ALIAS_COLLAPSED)" = "yes" ] \
+  && ok "alias spellings COLLAPSE instead of duplicating: a 'Default'-spelled twin of a canonical row is dropped by ON CONFLICT (it is unscoped to the gateway), and a case/whitespace alias of a scoped row collides with it" \
+  || bad "alias spellings do NOT collapse (default-alias=$(g DOMAIN_ALIAS_COLLAPSED), scoped-alias=$(g DOMAIN_SCOPED_ALIAS_COLLAPSED)) — the table can hold rows the gateway cannot tell apart, with contradictory allow/mfa_required"
+
+[ "$(g DOMAIN_SCOPED_SIBLING_OK)" = "yes" ] \
+  && ok "a GENUINELY domain-scoped sibling row is accepted beside its unscoped canonical twin — the row shape per-domain MFA tightening needs" \
+  || bad "a domain-scoped sibling row was NOT accepted beside the canonical row — the uniqueness key is over-collapsed and per-domain rows are impossible"
+
+[ "$(g DOMAIN_BLANKET_COVERS_SCOPED)" = "yes" ] \
+  && ok "the blanket is DOMAIN-BLIND: a domain-scoped allow row under the two prefixes ends up mfa_required=true after a re-apply, exactly like its unscoped siblings — a scoped false row there is a PHANTOM EXEMPTION (decide() ORs mfa_required across every granting row that domain-applies, and unscoped rows apply to every domain), so converging it true is the honest state" \
+  || bad "a domain-scoped allow row under the blanket prefixes ends up mfa_required=false — the seed now manufactures phantom per-domain exemptions: the table LOOKS exempted while the gateway still enforces (or, for a scoped-only surface, an un-MFA'd per-domain admin surface ships inside the blanket)"
+
+[ "$(g DOMAIN_TIGHTENING_KEPT)" = "yes" ] && [ "$(g DOMAIN_TIGHTENING_SCOPED_ONLY)" = "yes" ] \
+  && ok "a per-domain TIGHTENING row outside the prefixes keeps mfa_required=true across a full re-apply while its UNSCOPED twin stays false — per-domain MFA scope tightens ONLY its own domain" \
+  || bad "per-domain tightening broke (kept=$(g DOMAIN_TIGHTENING_KEPT), scoped_only=$(g DOMAIN_TIGHTENING_SCOPED_ONLY)) — either the seed reverts a provisioned tightening row, or the tightening leaks onto every domain via the unscoped twin"
+
 # ── (FIX 4) coverage of the admin surface, enumerated INDEPENDENTLY ────────────
 [ "$(g ADMINISH_UNCOVERED)" = "0" ] \
   && ok "$(g ADMINISH) admin-ish /bff/ allow rows exist (enumerated independently: a path segment 'admin'/'superadmin', OR a ROLE_SUPERADMIN/*_ADMIN role); each is either flipped or one of the $(g EXCLUSIONS_DOCUMENTED) exclusions named in the SQL header + runbook §1.2a" \
@@ -1527,9 +1751,9 @@ assert new != up, "the allow=true arm was not found inside the flip UPDATE"
 s = s.replace(up, new, 1).replace("url_pattern LIKE %s" % repr("/bff/admin/%"), "url_pattern LIKE %s" % repr("/bff/%"), 1)'
 
 nc "mfa_required folded into uq_route_access_row" UQ_HAS_MFA no \
-   'anchor("role, COALESCE(casdoor_user, %s), COALESCE(domain, %s));" % (repr(""), repr("")))
-s = s.replace("role, COALESCE(casdoor_user, %s), COALESCE(domain, %s));" % (repr(""), repr("")),
-              "role, mfa_required, COALESCE(casdoor_user, %s), COALESCE(domain, %s));" % (repr(""), repr("")), 1)'
+   'tail = "role, COALESCE(casdoor_user, %s), COALESCE(NULLIF(lower(trim(domain)), %s), %s));" % (repr(""), repr("default"), repr(""))
+anchor(tail)
+s = s.replace(tail, tail.replace("role, ", "role, mfa_required, ", 1), 1)'
 
 nc "UPDATE replaced by a parallel 5-value INSERT row (the ON CONFLICT DO NOTHING trap)" FIVE_VALUE_ROWS 0 \
    "s = s.replace(one(r'${FLIP}'),"'
@@ -1622,6 +1846,42 @@ nc "a documented exclusion that no longer exists (the list rots)" STALE_EXCLUSIO
    'anchor("'"'"'/bff/wiki/admin/**'"'"'")
 s = re.sub(r"^.*%s.*$\n" % re.escape("'"'"'/bff/wiki/admin/**'"'"'"), "", s, flags=re.M)'
 
+# ── per-domain MFA scope (issue #47), proven to bite ──────────────────────────
+nc "the domain key devolves to the lexical COALESCE(domain, ...) — alias rows duplicate again" DOMAIN_ALIAS_COLLAPSED yes \
+   'norm = "COALESCE(NULLIF(lower(trim(domain)), %s), %s)" % (repr("default"), repr(""))
+idx_tail = "COALESCE(casdoor_user, %s), %s);" % (repr(""), norm)
+oc_tail  = "COALESCE(casdoor_user, %s), %s) DO NOTHING;" % (repr(""), norm)
+anchor(idx_tail)
+anchor(oc_tail)
+lex = "COALESCE(domain, %s)" % repr("")
+s = s.replace(idx_tail, idx_tail.replace(norm, lex), 1)
+s = s.replace(oc_tail, oc_tail.replace(norm, lex), 1)'
+
+nc "the blanket narrowed to unscoped rows only (a scoped row under the prefixes stays false — a phantom exemption ships)" DOMAIN_BLANKET_COVERS_SCOPED yes \
+   'a = " WHERE allow = true\n   AND (url_pattern = %s" % repr("/bff/admin")
+anchor(a)
+s = s.replace(a, " WHERE allow = true\n   AND domain IS NULL\n   AND (url_pattern = %s" % repr("/bff/admin"), 1)'
+
+nc "the per-domain arm removed from the UPDATE (tightening rows lose seed convergence)" UPDATE_DOMAIN_ARM yes \
+   'arm = "\n     OR (COALESCE(NULLIF(lower(trim(domain)), %s), %s) <> %s\n         AND url_pattern IN (%s)))" % (repr("default"), repr(""), repr(""), repr(""))
+anchor(arm)
+s = s.replace(arm, ")", 1)'
+
+nc "a surface listed in the per-domain arm without documenting it (scope widened on the sly)" DOMAIN_ARM_UNDOCUMENTED 0 \
+   'a = "AND url_pattern IN (%s)))" % repr("")
+anchor(a)
+s = s.replace(a, "AND url_pattern IN (%s, %s)))" % (repr(""), repr("/bff/wiki/admin/**")), 1)'
+
+nc "the DROP INDEX upgrade step removed (an upgraded cluster keeps the OLD lexical key and the re-applied INSERT aborts)" UQ_UPGRADE_ORDER yes \
+   'a = "DROP INDEX IF EXISTS uq_route_access_row;\n"
+anchor(a)
+s = s.replace(a, "", 1)'
+
+nc "the de-dup DELETE keeps the lexical domain compare while the index normalizes (upgrade aborts at CREATE UNIQUE INDEX)" DEDUP_DOMAIN_NORMALIZED yes \
+   'a = "    AND COALESCE(NULLIF(lower(trim(a.domain)), %s), %s)\n      = COALESCE(NULLIF(lower(trim(b.domain)), %s), %s);" % (repr("default"), repr(""), repr("default"), repr(""))
+anchor(a)
+s = s.replace(a, "    AND COALESCE(a.domain, %s) = COALESCE(b.domain, %s);" % (repr(""), repr("")), 1)'
+
 # ── the runbook SQL that this gate executes, proven to bite ──────────────────
 # nd <name> <key> <expected-not-value> <python-mutator-on-a-COPY-of-the-doc>
 nd() {
@@ -1670,10 +1930,15 @@ nd "the runbook's verification query silently widened to every row" DOC_SQL_BAD 
 anchor(a)
 s = s.replace(a, "    WHERE 1 = 1", 1)'
 
-nd "the runbook's quoted UPDATE drifts from the seed's real one" DOC_SQL_BAD 0 \
-   'anchor("     OR url_pattern LIKE %s)\n   AND mfa_required IS DISTINCT FROM true;" % repr("/bff/superadmin/%"))
-s = s.replace("     OR url_pattern LIKE %s)\n   AND mfa_required IS DISTINCT FROM true;" % repr("/bff/superadmin/%"),
-              "     OR url_pattern LIKE %s);" % repr("/bff/superadmin/%"), 1)'
+nd "the runbook's quoted UPDATE drifts from the seed's real one (per-domain arm dropped from the doc)" DOC_SQL_BAD 0 \
+   'a = "\n     OR (COALESCE(NULLIF(lower(trim(domain)), %s), %s) <> %s\n         AND url_pattern IN (%s)))\n   AND mfa_required IS DISTINCT FROM true;" % (repr("default"), repr(""), repr(""), repr(""))
+anchor(a)
+s = s.replace(a, ")\n   AND mfa_required IS DISTINCT FROM true;", 1)'
+
+nd "the runbook's per-domain tightening example loses its mfa_required=true (an example that provisions nothing)" DOC_SQL_BAD 0 \
+   'a = ", %s, true)\nON CONFLICT" % repr("brand-x.example")
+anchor(a)
+s = s.replace(a, ", %s, false)\nON CONFLICT" % repr("brand-x.example"), 1)'
 
 nd "the runbook's rollback stops actually rolling everything back" DOC_SQL_BAD 0 \
    'anchor("    WHERE url_pattern LIKE %s OR url_pattern LIKE %s" % (

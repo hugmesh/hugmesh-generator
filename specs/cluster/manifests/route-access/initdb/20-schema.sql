@@ -82,13 +82,19 @@ CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway,
 -- adding the real uniqueness constraint just below — otherwise CREATE UNIQUE
 -- INDEX fails outright on an already-duplicated table during an in-place
 -- upgrade. Keeps the row with the lowest ctid (arbitrary but stable) per key.
+-- The domain leg compares the NORMALIZED scope (see the index note below), so
+-- an in-place upgrade also collapses alias-spelled duplicates the OLD lexical
+-- key permitted (a NULL row beside a 'Default' row, or brand-x beside a
+-- space-padded Brand-X) BEFORE the stricter index is created — otherwise that
+-- CREATE aborts the whole initdb on exactly the clusters this repair targets.
 DELETE FROM gateway_route_access a USING gateway_route_access b
   WHERE a.ctid < b.ctid
     AND a.gateway = b.gateway
     AND a.url_pattern = b.url_pattern
     AND a.role = b.role
     AND COALESCE(a.casdoor_user, '') = COALESCE(b.casdoor_user, '')
-    AND COALESCE(a.domain, '')       = COALESCE(b.domain, '');
+    AND COALESCE(NULLIF(lower(trim(a.domain)), 'default'), '')
+      = COALESCE(NULLIF(lower(trim(b.domain)), 'default'), '');
 -- Real uniqueness key for a seed row: the table's only constraint was the
 -- random `id uuid PRIMARY KEY`, so `ON CONFLICT DO NOTHING` below never fired
 -- on a re-apply (every run generates fresh, non-colliding ids) — re-applying
@@ -96,8 +102,33 @@ DELETE FROM gateway_route_access a USING gateway_route_access b
 -- this is supported for an in-place cluster upgrade) duplicated all seed
 -- rows. casdoor_user/domain are nullable and NULLs never compare equal in a
 -- plain unique index, so COALESCE them to a non-null sentinel.
+--
+-- PER-DOMAIN MFA SCOPE (issue #47 × the casdoor-choice schema): the domain leg
+-- is keyed on the GATEWAY'S OWN scope equivalence, not the raw text.
+-- GatewayRouteAccessService.domainApplies() (hugmesh-gateway) treats
+-- NULL / blank / the word default — case-insensitively, trimmed — as ONE
+-- unscoped class that applies to every domain, and compares a scoped domain
+-- trimmed + case-insensitively. The old lexical key COALESCE(domain, '') let
+-- the table hold two rows the gateway cannot tell apart (NULL beside
+-- 'Default', brand-x beside a space-padded Brand-X) with contradictory
+-- allow/mfa_required values. Per-domain SIBLING rows are now a supported
+-- idiom (a domain-scoped row beside the unscoped canonical row expresses
+-- per-domain MFA tightening — see the per-domain arm of the UPDATE at the end
+-- of this file and docs/MFA-ROLLOUT.md §1.2a), so the key must collapse
+-- exactly what the gateway collapses:
+--   COALESCE(NULLIF(lower(trim(domain)), 'default'), '')
+--
+-- The DROP is REQUIRED for the in-place upgrade: CREATE UNIQUE INDEX
+-- IF NOT EXISTS is a no-op while the OLD lexical index still holds the name,
+-- and the INSERT's ON CONFLICT target below must match the index expression
+-- EXACTLY — with the old expression still in place the re-applied INSERT
+-- aborts the whole initdb ("no unique or exclusion constraint matching the
+-- ON CONFLICT specification"). Dropping + recreating on every re-apply is
+-- cheap at this table's size, and the de-dup DELETE above has already
+-- collapsed any alias-duplicates the stricter key would reject.
+DROP INDEX IF EXISTS uq_route_access_row;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_route_access_row
-  ON gateway_route_access (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(domain, ''));
+  ON gateway_route_access (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NULLIF(lower(trim(domain)), 'default'), ''));
 
 -- Retire the misspelled api-docs row an earlier apply seeded: the real fe route
 -- is /api-docs/** (see the renamed row below), so /apidocs/** matched nothing
@@ -742,9 +773,12 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-superadmin-gateway', '/attest/api/create-account', 'ROLE_SUPERADMIN', false), -- explicit DENY: no app-layer auth on this handler
   ('hugmesh-superadmin-gateway', '/attest/api/**',             'ROLE_SUPERADMIN', true)   -- AttestationServer human console (create-account explicitly excluded above)
 -- Targets the uq_route_access_row expression index above (must match its
--- definition exactly, COALESCE included) so a genuine repeat seed row is
--- skipped instead of duplicated on a re-apply.
-ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(domain, '')) DO NOTHING;
+-- definition exactly — COALESCE/NULLIF/lower/trim included) so a genuine
+-- repeat seed row is skipped instead of duplicated on a re-apply, while a
+-- genuinely DOMAIN-SCOPED sibling row (per-domain MFA scope, §1.2a of
+-- docs/MFA-ROLLOUT.md) keys differently and is accepted beside its unscoped
+-- canonical twin.
+ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NULLIF(lower(trim(domain)), 'default'), '')) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- D6/D8 MFA REQUIREMENT — the PRIVILEGED-SURFACE BLANKET.
@@ -782,7 +816,8 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(do
 -- all three must be understood before anyone "simplifies" this back into the
 -- INSERT above:
 --   1. `mfa_required` is NOT part of `uq_route_access_row` (gateway, url_pattern,
---      role, COALESCE(casdoor_user,''), COALESCE(domain,'')). A PARALLEL row that
+--      role, COALESCE(casdoor_user,''), COALESCE(NULLIF(lower(trim(domain)),
+--      'default'),'')). A PARALLEL row that
 --      differs ONLY in `mfa_required` collides on that 5-tuple and the INSERT's
 --      `ON CONFLICT DO NOTHING` SILENTLY DROPS it — the seed would look right and
 --      enforce nothing. The value has to be CHANGED on the existing row.
@@ -845,11 +880,55 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(do
 --     turn either flag on from specs/cluster/apps/*.yaml or the chart defaults, and
 --     docs/MFA-ROLLOUT.md is the runbook.
 --
+-- PER-DOMAIN MFA SCOPE (issue #47 × the casdoor-choice schema, PR #71). Several
+-- local domains can sit behind the SAME gateways, and gateway_route_access rows
+-- can carry a per-row `domain`. What that can and cannot express for MFA is
+-- fixed by GatewayRouteAccessService.decide() (hugmesh-gateway) — verified, not
+-- assumed: among the rows at the longest matching pattern, decide() ORs
+-- mfa_required across EVERY row that grants the principal and domain-applies,
+-- and an UNSCOPED row domain-applies to every domain. Three consequences,
+-- mirrored in the runbook's §1.2a per-domain scope table:
+--   * The blanket above is DOMAIN-BLIND exactly like it is gateway-blind: a
+--     domain-scoped allow row under the two prefixes is flipped together with
+--     its unscoped siblings. Deliberately so, twice over. (1) A scoped
+--     mfa_required=false row under the prefixes is a PHANTOM EXEMPTION — the
+--     unscoped canonical row still applies to that domain and still pulls the
+--     MFA floor up, so the false row exempts nothing; leaving it false would
+--     only make the TABLE look exempted while the gateway enforces. Re-flipping
+--     it true converges the data to the truth. (2) A scoped-ONLY allow row (a
+--     per-domain admin surface with no unscoped twin) must not ship un-MFA'd
+--     inside the blanket prefixes.
+--   * Per-domain TIGHTENING is the direction rows CAN express: a domain-scoped
+--     sibling row (same gateway/url_pattern/role, its own domain, allow=true,
+--     mfa_required=true) OUTSIDE the two prefixes demands a second factor on
+--     its own domain only — domainApplies() keeps it off every other domain.
+--     Such rows are provisioning/CRUD data, not canonical seed rows. The
+--     per-domain arm of the UPDATE below (the final OR) is their seed-side
+--     CONVERGENCE list: list a url_pattern there and every DOMAIN-SCOPED row
+--     carrying it is re-flipped true on each re-apply, exactly like the blanket
+--     does for the prefixes, so a CRUD un-flip cannot silently survive. The
+--     list is EMPTY today (the empty-string element matches no pattern) because
+--     the reference mesh defines no per-domain tightening yet; widening it is a
+--     one-line, reviewed edit of this predicate, and
+--     tests/scripts/test-mfa-required-rules.sh cross-checks the list against
+--     its own PER_DOMAIN_SCOPE set and runbook §1.2a in both directions.
+--   * Per-domain EXEMPTION from the blanket is NOT expressible — not by a row
+--     (see the phantom-exemption note) and not by this predicate (the blanket
+--     rows are UNSCOPED, and unscoped rows apply to every domain). In
+--     particular a domain that hosts its OWN Casdoor (Domain.idp=own, the
+--     casdoor-choice schema) authenticates its principals against a
+--     domain-local issuer: they can never carry MFA_SATISFIED, because
+--     mfa_satisfied_at is a user Property in the SUPERDOMAIN's Casdoor. On a
+--     shared-gateway mesh the §2.4 machine-caller caveat therefore extends to
+--     that whole population — enumerate own-idp domains BEFORE flipping
+--     app.mfa.enabled. docs/MFA-ROLLOUT.md §1.2a carries the full table.
+--
 -- OPERATOR CAVEAT: this converges the admin-managed table back to the canonical
 -- posture on every re-apply, exactly like the INSERT above. A per-row exemption
--- made through the admin-bff CRUD under these prefixes will be re-flipped to true
--- if this file is re-applied. Exempt a surface by changing this predicate, not by
--- hand-editing a row.
+-- made through the admin-bff CRUD under these prefixes — domain-scoped or not —
+-- will be re-flipped to true if this file is re-applied, and so will any
+-- domain-scoped row whose url_pattern is listed in the per-domain arm. Exempt a
+-- surface by changing this predicate, not by hand-editing a row.
 --
 -- DUAL-WRITE PARTNERS (checked 2026-07-30, no companion change needed):
 --   * hugmesh-gateway cache/CanonicalSeed.java — its `r()` helper hard-codes
@@ -868,7 +947,9 @@ UPDATE gateway_route_access
    AND (url_pattern = '/bff/admin'
      OR url_pattern LIKE '/bff/admin/%'
      OR url_pattern = '/bff/superadmin'
-     OR url_pattern LIKE '/bff/superadmin/%')
+     OR url_pattern LIKE '/bff/superadmin/%'
+     OR (COALESCE(NULLIF(lower(trim(domain)), 'default'), '') <> ''
+         AND url_pattern IN ('')))
    AND mfa_required IS DISTINCT FROM true;
 
 -- ─────────────────────────────────────────────────────────────────────────────
