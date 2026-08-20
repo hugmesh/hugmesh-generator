@@ -1,0 +1,22 @@
+# {{BRAND_TITLE}} casdoor-pg per-pod Ingress isolation (ADR-32 network
+# backstop, at birth — the per-brand IdP store never joins the
+# DB_ISOLATION_KNOWN_GAPS list): default-deny Ingress, reachable ONLY from the
+# {{BRAND}}-casdoor pod (the init Job talks to the Casdoor API on :8000, never
+# to Postgres directly).
+# Generated from hugmesh-generator/templates/manifests/casdoor/db-networkpolicy.yaml.hbs
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-{{BRAND}}-casdoor-pg
+  labels: { app: {{BRAND}}-casdoor-pg, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+spec:
+  podSelector:
+    matchLabels: { app: {{BRAND}}-casdoor-pg }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # {{BRAND}}-casdoor (same namespace) — the only Postgres consumer.
+        - podSelector:
+            matchLabels: { app: {{BRAND}}-casdoor }
+      ports:
+        - { protocol: TCP, port: 5432 }

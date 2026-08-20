@@ -63,6 +63,11 @@ esac
 # where an exported MFA=1 leaking into a render would flip gateway MFA
 # enforcement for a tenant whose profile never asked for it. Reset before source.
 MFA=""
+# Same rule for the per-domain IdP choice (issue #47) and its Casdoor org: an
+# ambient IDP=own leaking into a render would stand up an identity provider a
+# tenant's profile never asked for. Reset before source.
+IDP=""
+CASDOOR_ORG=""
 # shellcheck source=/dev/null
 source "$BRAND_CONF"
 
@@ -178,6 +183,38 @@ case "${MFA}" in
   *) _die "invalid MFA '${MFA}' in the brand profile (use MFA=1 to enable; unset/0/false/off = disabled)" ;;
 esac
 
+# ── PER-DOMAIN IdP choice (issue #47): brands/<brand>.conf `IDP=own` ───────────
+# superdomain (the DEFAULT — absent field == every pre-#47 profile) rides the
+# mesh's central Casdoor and renders EXACTLY the pre-#47 template set; own
+# ADDITIONALLY renders this brand's OWN Casdoor (apps/05-casdoor.yaml +
+# manifests/casdoor/ — see the skip rule in the render loop below). On a mesh
+# node the value is synthesised into the transient profile by
+# hugmesh-domain-reconcile from the #118 DomainEntry.idp field. Fail closed on
+# any spelling outside the allowlist so a typo cannot silently mean either lane.
+case "${IDP}" in
+  ""|superdomain) IDP="superdomain" ;;
+  own)            IDP="own" ;;
+  *) _die "invalid IDP '${IDP}' in the brand profile (use IDP=own for a per-domain Casdoor; unset/superdomain = the central IdP)" ;;
+esac
+
+# CASDOOR_ORG: the Casdoor organization of an IDP=own brand's realm (the #118
+# DomainEntry.casdoorOrg field; {{CASDOOR_ORG}} template token). Defaults to the
+# brand slug. Validated as a DNS label — it lands raw on a sed replacement AND
+# names a Casdoor org, so the same fail-closed posture as BRAND applies.
+CASDOOR_ORG="${CASDOOR_ORG:-$BRAND}"
+[[ "$CASDOOR_ORG" =~ $_DNS_LABEL ]] \
+  || _die "invalid CASDOOR_ORG '${CASDOOR_ORG}' (must be a DNS label: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\$)"
+
+# ORG_SLUG: the SAME ORG lowercased slug already registered live in
+# scripts/tooling/tokens.json (derived by render-repo-tree.sh with this exact
+# rule — keep the three derivations in sync). Gets an app-CRD render slot here
+# because templates/apps/05-casdoor.yaml.hbs sources the brand's OWN pushed
+# <BRAND>-gitops repo, whose Forgejo org segment is this slug (the "Next steps"
+# publish location below: ${FORGEJO_BASE_URL}/${GITLAB_GROUP}/...).
+ORG_SLUG="${ORG,,}"
+ORG_SLUG="${ORG_SLUG//[^a-z0-9-]/-}"
+ORG_SLUG="$(echo "$ORG_SLUG" | sed 's/^-*//; s/-*$//')"
+
 echo "[generate-brand-repos] Brand:         ${BRAND}"
 echo "[generate-brand-repos] Title:         ${BRAND_TITLE}"
 echo "[generate-brand-repos] Org:           ${ORG}"
@@ -188,6 +225,10 @@ echo "[generate-brand-repos] NS prefix:      ${NS_PREFIX}"
 echo "[generate-brand-repos] Headscale:     ${HEADSCALE_URL}"
 echo "[generate-brand-repos] Mesh tag:      ${MESH_TAG}"
 echo "[generate-brand-repos] Gateway MFA:   ${MFA_ENABLED}"
+echo "[generate-brand-repos] Domain IdP:    ${IDP}"
+if [[ "$IDP" == "own" ]]; then
+  echo "[generate-brand-repos] Casdoor org:   ${CASDOOR_ORG}"
+fi
 echo ""
 
 # Escape a string for the REPLACEMENT side of `sed s|...|...|` (mirrors the
@@ -214,12 +255,28 @@ render_template() {
     -e "s|{{CLUSTER_DOMAIN}}|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
     -e "s|{{HEADSCALE_URL}}|$(_sed_rep_escape "${HEADSCALE_URL}")|g" \
     -e "s|{{HARBOR_PROJECT}}|$(_sed_rep_escape "${HARBOR_PROJECT}")|g" \
+    -e "s|{{CASDOOR_ORG}}|$(_sed_rep_escape "${CASDOOR_ORG}")|g" \
     -e "s|{{MFA_ENABLED}}|$(_sed_rep_escape "${MFA_ENABLED}")|g" \
+    -e "s|{{ORG_SLUG}}|$(_sed_rep_escape "${ORG_SLUG}")|g" \
     -e "s|{{MESH_TAG}}|$(_sed_rep_escape "${MESH_TAG}")|g" \
     -e "s|{{NS_PREFIX}}|$(_sed_rep_escape "${NS_PREFIX}")|g" \
     -e "s|{{BRAND}}|$(_sed_rep_escape "${BRAND}")|g" \
     -e "s|{{ORG}}|$(_sed_rep_escape "${ORG}")|g" \
     "$src" > "$dst"
+}
+
+# ── Per-domain-IdP conditional templates (issue #47) ──────────────────────────
+# The ONLY templates whose RENDERING is gated on a profile knob: an IDP=own
+# brand gets its own Casdoor Application + manifests; a superdomain brand's
+# output tree stays byte-identical to pre-#47. Path prefixes are relative to
+# templates/ and shared verbatim with scripts/tooling/render-handlebars.sh
+# (--skip-prefixes) — keep the two lists in sync or scripts/parity-gate.sh's
+# own-IdP leg diverges.
+_idp_gated_template() { # <rel-path-under-templates> -> rc 0 when IDP-gated
+  case "$1" in
+    apps/05-casdoor.yaml.hbs|manifests/casdoor/*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # ── Output directory ──────────────────────────────────────────────────────────
@@ -243,6 +300,12 @@ mkdir -p "$BRAND_OUT"
 rendered=0
 while IFS= read -r -d '' tmpl; do
   rel="${tmpl#"${TEMPLATES_DIR}/"}"
+  # Per-domain-IdP gate (issue #47): the own-Casdoor templates render ONLY for
+  # an IDP=own brand — a superdomain brand's tree stays byte-identical to
+  # pre-#47 output.
+  if [[ "$IDP" != "own" ]] && _idp_gated_template "$rel"; then
+    continue
+  fi
   # Strip .hbs suffix for the output filename
   out_rel="${rel%.hbs}"
   out="${BRAND_OUT}/${out_rel}"

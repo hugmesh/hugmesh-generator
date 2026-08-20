@@ -1,0 +1,15 @@
+# {{BRAND_TITLE}} casdoor Service — the IN-NETWORK half of the issuer contract
+# (docs/DOMAIN-IDP.md): issuer = https://id.{{CLUSTER_DOMAIN}} (Ingress), JWKS
+# for in-cluster consumers = this Service URL
+# (http://{{BRAND}}-casdoor.{{NS_PREFIX}}-pki.svc.cluster.local:8000) — the
+# published-URL/in-network-URL split tests/stack/compose.brand-b.yaml proved.
+# Generated from hugmesh-generator/templates/manifests/casdoor/service.yaml.hbs
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{BRAND}}-casdoor
+  labels: { app: {{BRAND}}-casdoor, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+spec:
+  selector: { app: {{BRAND}}-casdoor }
+  ports:
+    - { name: http, port: 8000, targetPort: http }

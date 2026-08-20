@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# {{BRAND_TITLE}} per-brand Casdoor (issue #47, Domain.idp=own — the TENANT-SET
+# lane). Rendered into the <BRAND>-gitops tree ONLY when the brand profile
+# carries IDP=own; consumed by the {{BRAND}}-casdoor Application
+# (apps/05-casdoor.yaml of this same tree). The single-mesh twin is the
+# env-parameterized specs/cluster/manifests/casdoor-domain base — same instance
+# shape, but here every per-domain value is BAKED by the brand render (org
+# {{CASDOOR_ORG}}, origin https://id.{{CLUSTER_DOMAIN}}, ESO remoteRef
+# {{BRAND}}/casdoor) instead of patched per Application.
+namespace: {{NS_PREFIX}}-pki
+resources:
+  - external-secrets.yaml      # ESO: db/admin/app creds <- secret/{{BRAND}}/casdoor
+  - pg.yaml                    # dedicated Postgres (PVC is Prune=false)
+  - app-conf-configmap.yaml    # Casdoor app.conf pointing at {{BRAND}}-casdoor-pg
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml               # public issuer host id.{{CLUSTER_DOMAIN}}
+  - init-job.yaml              # env-driven org/app/admin-password reconcile
+  - db-networkpolicy.yaml      # ADR-32 per-pod isolation for {{BRAND}}-casdoor-pg

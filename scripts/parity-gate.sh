@@ -94,7 +94,53 @@ for conf in "${BRANDS[@]}"; do
     sed 's/^/    /' "${WORK}/${name}.diff"
     FAILED=1
   fi
+
+  # DEFAULT profiles must NOT carry the IDP=own-gated casdoor templates (issue
+  # #47): both engines skip them unless the profile says IDP=own, keeping every
+  # pre-#47 tree byte-identical. Assert on the sed tree (the hbs tree is
+  # byte-compared against it above).
+  if [[ -e "${sed_tree}/apps/05-casdoor.yaml" || -e "${sed_tree}/manifests/casdoor" ]]; then
+    echo "  RESULT: IDP GATE LEAK [FAIL] -- default (non-own) profile rendered casdoor templates"
+    FAILED=1
+  fi
 done
+
+# ── Issue #47: the IDP=own leg ────────────────────────────────────────────────
+# A brand profile carrying IDP=own renders the ADDITIONAL own-Casdoor templates
+# (apps/05-casdoor.yaml + manifests/casdoor/*) — assert the two engines stay
+# byte-identical on that lane too, and that the gated files actually appear.
+own_conf="${WORK}/example-own.conf"
+normalize_conf "brands/example.conf" "$own_conf"
+printf '\nIDP=own\n' >> "$own_conf"
+own_slug="$(set +u; source "$own_conf"; printf '%s' "$BRAND")"
+sed_out="${WORK}/example-own/sed"
+hbs_out="${WORK}/example-own/hbs"
+mkdir -p "$sed_out" "$hbs_out"
+echo ""
+echo "--- brand 'example-own' (BRAND=${own_slug}, IDP=own) ---"
+./generate-brand-repos.sh "$own_conf" --out-dir "$sed_out" >/dev/null
+if ! scripts/tooling/render-handlebars.sh "$own_conf" --out-dir "$hbs_out" 2>"${hbs_out}/.render-stderr"; then
+  echo "  FAIL handlebars renderer exited nonzero for brand 'example-own':"
+  sed 's/^/        /' "${hbs_out}/.render-stderr" | tail -20
+  exit 1
+fi
+rm -f "${hbs_out}/.render-stderr"
+sed_tree="${sed_out}/${own_slug}-gitops"
+hbs_tree="${hbs_out}/${own_slug}-gitops"
+n_sed="$(find "$sed_tree" -type f | wc -l | tr -d ' ')"
+n_hbs="$(find "$hbs_tree" -type f | wc -l | tr -d ' ')"
+if diff -r "$sed_tree" "$hbs_tree" >"${WORK}/example-own.diff" 2>&1; then
+  echo "  sed files: ${n_sed}   handlebars files: ${n_hbs}"
+  echo "  RESULT: BYTE-IDENTICAL [OK]"
+else
+  echo "  RESULT: MISMATCH [FAIL] -- diff follows:"
+  sed 's/^/    /' "${WORK}/example-own.diff"
+  FAILED=1
+fi
+if [[ ! -f "${sed_tree}/apps/05-casdoor.yaml" || ! -f "${sed_tree}/manifests/casdoor/deployment.yaml" ]]; then
+  echo "  RESULT: IDP GATE INERT [FAIL] -- IDP=own profile did NOT render the casdoor templates"
+  FAILED=1
+fi
 
 echo ""
 echo "=============================================================="

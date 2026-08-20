@@ -1,0 +1,30 @@
+# casdoor-domain Ingress — the PUBLISHED half of the issuer contract: the
+# domain's OIDC issuer https://id.<clusterDomain> must actually resolve to this
+# Casdoor for browser logins + OIDC discovery. The host below is a PLACEHOLDER,
+# ALWAYS patched to id.<clusterDomain> per domain by the casdoor-domains
+# ApplicationSet.
+#
+# NOTE — the SUPERDOMAIN Casdoor ships with NO Ingress: its exposure rides
+# cloudflared/gateway routes. A per-domain instance cannot ride those shared
+# routes (they are pinned to the superdomain's hosts), so it carries its own
+# Ingress. className "nginx" is the RELEASE_STATE=public posture; an internal
+# (LAN/tailnet-only) mesh patches it to "nginx-internal" via the same
+# ApplicationSet patch mechanism (the 22-gateway-superadmin precedent for the
+# internal class).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: casdoor-domain
+  labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: id.hugmesh.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: casdoor-domain
+                port: { name: http }

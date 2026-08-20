@@ -1,0 +1,25 @@
+# {{BRAND_TITLE}} casdoor Ingress — the PUBLISHED half of the issuer contract:
+# https://id.{{CLUSTER_DOMAIN}} must resolve to this Casdoor for browser logins
+# and OIDC discovery.
+# Generated from hugmesh-generator/templates/manifests/casdoor/ingress.yaml.hbs
+#
+# className "nginx" is the RELEASE_STATE=public posture; an internal
+# (LAN/tailnet-only) tenant flips it to "nginx-internal" (the
+# 22-gateway-superadmin precedent for the internal class).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{BRAND}}-casdoor
+  labels: { app: {{BRAND}}-casdoor, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: id.{{CLUSTER_DOMAIN}}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{BRAND}}-casdoor
+                port: { name: http }

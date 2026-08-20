@@ -46,3 +46,14 @@ spec:
       namespace: devops
       jsonPointers:
         - /spec/generators/0/list/elements
+    # Same single-writer model for the per-domain Casdoor list (issue #47,
+    # apps/05b-casdoor-domains.yaml): the element list is written at build time
+    # (KEYS-manifest domains bake) and at runtime by the admin-bff
+    # DomainReconciler — git carries the empty scaffold only. Keep IN LOCKSTEP
+    # with apps/00-app-of-apps-waved.yaml.
+    - group: argoproj.io
+      kind: ApplicationSet
+      name: casdoor-domains
+      namespace: devops
+      jsonPointers:
+        - /spec/generators/0/list/elements

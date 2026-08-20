@@ -1,0 +1,76 @@
+# casdoor-domain-pg — dedicated Postgres backing ONE domain's own Casdoor
+# (issue #47, Domain.idp=own). Mirrors manifests/casdoor-games/pg.yaml (the
+# second-IdP precedent) with the per-instance literals lifted: db/user are the
+# fixed name "casdoor" (per-domain isolation comes from the per-domain NAMESPACE
+# and the per-domain password, not from a per-domain role name), the password is
+# ESO-materialized from secret/<slug>/casdoor (external-secrets.yaml).
+#
+# PVC PRUNE PROTECTION: argocd.argoproj.io/sync-options Prune=false. The
+# casdoor-domains ApplicationSet prunes casdoor-<slug> when a domain's element
+# is dropped (domain removal / idp flip back to superdomain) — everything else
+# goes, but IDENTITY DATA (users, org, grants) survives an accidental de-list.
+# Deleting the PVC (and the Vault path secret/<slug>/casdoor) is a named MANUAL
+# purge step in the removal runbook (docs/DOMAIN-IDP.md).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: casdoor-domain-pg-data
+  labels: { app: casdoor-domain-pg, app.kubernetes.io/part-of: hugmesh.net }
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casdoor-domain-pg
+  labels: { app: casdoor-domain-pg, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: casdoor-domain-pg } }
+  template:
+    metadata: { labels: { app: casdoor-domain-pg } }
+    spec:
+      nodeSelector: { hugmesh.net/pki: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          # PLACEHOLDER MCS category — ALWAYS patched per domain by the
+          # casdoor-domains ApplicationSet ({{ .selinuxLevelPg }}). Each domain
+          # instance MUST get a category no other workload on the mesh uses
+          # (docs/SECURITY.md §3); the element writer owns that allocation.
+          level: "s0:c86"
+      containers:
+        - name: pg
+          image: postgres:16-alpine
+          ports: [{ name: pg, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB, value: casdoor }
+            - { name: POSTGRES_USER,     valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: username } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: casdoor-domain-db, key: password } } }
+            # Use a subdir so the volume root (lost+found) doesn't upset initdb.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "casdoor", "-d", "casdoor"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: casdoor-domain-pg-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: casdoor-domain-pg
+  labels: { app: casdoor-domain-pg, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  selector: { app: casdoor-domain-pg }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]

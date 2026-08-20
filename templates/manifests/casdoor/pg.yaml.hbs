@@ -1,0 +1,73 @@
+# {{BRAND_TITLE}} casdoor Postgres — dedicated store behind this brand's own
+# Casdoor (issue #47, Domain.idp=own).
+# Generated from hugmesh-generator/templates/manifests/casdoor/pg.yaml.hbs
+#
+# PVC PRUNE PROTECTION: argocd.argoproj.io/sync-options Prune=false — pruning
+# the {{BRAND}}-casdoor Application (idp flip back / domain removal) deletes
+# everything EXCEPT the identity data; the PVC and the Vault path
+# secret/{{BRAND}}/casdoor are named MANUAL purge steps (docs/DOMAIN-IDP.md).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{BRAND}}-casdoor-pg-data
+  labels: { app: {{BRAND}}-casdoor-pg, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: hugmesh-local
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{BRAND}}-casdoor-pg
+  labels: { app: {{BRAND}}-casdoor-pg, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{BRAND}}-casdoor-pg } }
+  template:
+    metadata: { labels: { app: {{BRAND}}-casdoor-pg } }
+    spec:
+      nodeSelector: { {{CLUSTER_DOMAIN}}/pki: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          # Hand-picked like every brand-template level (the 20-gateway-be
+          # s0:c12 precedent) — and like those, SHARED by every brand rendered
+          # from this template: fine on a full-isolation tenant cluster, but on
+          # a SHARED cluster a second own-IdP brand needs a per-brand level
+          # override (the single-mesh lane's ApplicationSet allocates per-domain
+          # levels for exactly this reason — docs/DOMAIN-IDP.md).
+          level: "s0:c88"
+      containers:
+        - name: pg
+          image: postgres:16-alpine
+          ports: [{ name: pg, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB, value: casdoor }
+            - { name: POSTGRES_USER,     valueFrom: { secretKeyRef: { name: {{BRAND}}-casdoor-db, key: username } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: {{BRAND}}-casdoor-db, key: password } } }
+            # Use a subdir so the volume root (lost+found) doesn't upset initdb.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "casdoor", "-d", "casdoor"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{BRAND}}-casdoor-pg-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{BRAND}}-casdoor-pg
+  labels: { app: {{BRAND}}-casdoor-pg, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+spec:
+  selector: { app: {{BRAND}}-casdoor-pg }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]

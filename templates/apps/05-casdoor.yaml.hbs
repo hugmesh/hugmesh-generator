@@ -1,0 +1,46 @@
+# {{BRAND_TITLE}} casdoor — this domain's OWN identity provider (issue #47,
+# Domain.idp=own — the TENANT-SET lane).
+# Generated from hugmesh-generator/templates/apps/05-casdoor.yaml.hbs
+#
+# CONDITIONAL TEMPLATE: rendered ONLY when the brand profile carries IDP=own
+# (generate-brand-repos.sh + scripts/tooling/render-handlebars.sh both gate on
+# it; hugmesh-domain-reconcile synthesizes IDP from the #118 DomainEntry.idp).
+# A superdomain-idp brand's rendered tree is byte-identical to pre-#47 output —
+# no casdoor Application, the brand rides the shared central Casdoor.
+#
+# SOURCE: unlike the 12 sibling Applications (which reuse the SHARED
+# specs/cluster manifests/chart with kustomize/helm overrides), per-brand IdP
+# CONTENT (issuer origin, org, redirect host, Vault path) is rendered INTO the
+# brand repo itself — manifests/casdoor/ of this same <BRAND>-gitops tree,
+# pushed to tailnet-internal Forgejo under the tenant org slug (the
+# generate-brand-repos.sh "Next steps" publish location:
+# ${FORGEJO_BASE_URL}/<org-slug>/<BRAND>-gitops.git).
+#
+# sync-wave "1": the IdP-before-consumers rule (the 06-casdoor-games precedent)
+# — the domain's JWKS/realm must exist before this brand's gateways/BFFs sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-casdoor
+  namespace: devops
+  labels:
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/brand: "{{BRAND}}"
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  # PER-TENANT ArgoCD project (the 13d decision-#2 posture) — the tenant's own
+  # IdP is tenant-scoped, never `default`. The project must exist (provisioned
+  # alongside the tenant); ArgoCD refuses an Application in an absent project —
+  # a deliberate fail-closed.
+  project: {{BRAND}}
+  source:
+    repoURL: http://forgejo.hugmesh-pki.svc.cluster.local:3000/{{ORG_SLUG}}/{{BRAND}}-gitops.git
+    targetRevision: main
+    path: manifests/casdoor
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{NS_PREFIX}}-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

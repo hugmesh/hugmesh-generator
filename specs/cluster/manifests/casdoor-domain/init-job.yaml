@@ -1,0 +1,321 @@
+# casdoor-domain-init — the ENV-DRIVEN per-domain Casdoor seeder (issue #47,
+# Domain.idp=own). Replaces the static init_data.json of the casdoor /
+# casdoor-games precedents (a per-domain seed blob cannot live in a shared
+# base): everything it creates is derived from the casdoor-domain-params
+# ConfigMap (CASDOOR_ORG / CASDOOR_DOMAIN / CASDOOR_APP_NAME / CASDOOR_CLIENT_ID
+# — the manifests/casdoor init-job CASDOOR_ORG-env precedent) plus the ESO
+# Secrets (admin password, app client-secret). It:
+#   1. puts the Vault/ESO password on the built-in admin and PROVES the casdoor
+#      bootstrap default no longer logs in,
+#   2. creates the domain's Casdoor ORGANIZATION (create-only), and
+#   3. reconciles the domain OAuth2 APPLICATION — client id from env, client
+#      secret from Vault, redirectUris derived from CASDOOR_DOMAIN
+#      (https://<domain>/callback + /silent-refresh.html).
+#
+# THIS JOB'S "done" MEANS DONE, for the same reason the casdoor-games one's
+# does: Casdoor reports errors as HTTP 200 with {"status":"error"} in the body,
+# so login is verified by reading the session back, every write is verified by
+# re-reading the object, and any failed step exits non-zero. Idempotent; ArgoCD
+# re-runs it on each sync (PostSync).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-domain-init-script
+  labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
+data:
+  reconcile.py: |
+    #!/usr/bin/env python3
+    """Ensure the per-domain Casdoor org + OAuth2 application exist, entirely
+    from env + mounted ESO Secrets (NO static init_data.json). Pure stdlib
+    (urllib) so the image needs no extra packages / network installs."""
+    import json, os, time, urllib.request, urllib.parse, urllib.error, http.cookiejar
+
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor-domain:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "hugmesh-domain")
+    DOMAIN = os.environ.get("CASDOOR_DOMAIN", "hugmesh.net")
+    ORIGIN = os.environ.get("CASDOOR_ORIGIN", f"https://id.{DOMAIN}")
+    APP_NAME   = os.environ.get("CASDOOR_APP_NAME", f"{ORG}-app")
+    CLIENT_ID  = os.environ.get("CASDOOR_CLIENT_ID", f"{ORG}-client")
+    SECRETS   = os.environ.get("CASDOOR_SECRETS_DIR", "/secrets")
+    ADMIN_USER = open(f"{SECRETS}/admin/username").read().strip()
+    ADMIN_PASS = open(f"{SECRETS}/admin/password").read().strip()
+    # The password casbin/casdoor gives the built-in admin when it bootstraps an
+    # empty database — public knowledge, hence a bootstrap value and not a secret.
+    CASDOOR_BOOTSTRAP_PASSWORD = "123"
+
+    # Steps that failed. A non-empty list makes the Job exit non-zero; the "done"
+    # line is only ever printed when it is empty.
+    FAILURES = []
+
+    def fail(msg):
+        print(f"  FAIL {msg}")
+        FAILURES.append(msg)
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+    class CasdoorError(RuntimeError):
+        """A Casdoor call that did not report success."""
+
+    def call(path, payload=None, method="GET", form=None):
+        """The ONE way this script talks to Casdoor. Nothing may bypass it: a
+        denial, a bad login and a validation error all arrive as HTTP 200 with
+        {"status":"error"} in the body, so the envelope is checked here, once.
+        `form` sends application/x-www-form-urlencoded (what /api/set-password
+        reads its parameters from); `payload` sends JSON."""
+        headers = {}
+        if form is not None:
+            data = urllib.parse.urlencode(form).encode()
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        elif payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        else:
+            data = None
+        req = urllib.request.Request(BASE + path, data=data, method=method,
+                                     headers=headers)
+        try:
+            with opener.open(req, timeout=15) as r:
+                body = r.read()
+        except urllib.error.HTTPError as e:
+            raise CasdoorError(f"{method} {path}: HTTP {e.code}") from None
+        except urllib.error.URLError as e:
+            raise CasdoorError(f"{method} {path}: {e.reason}") from None
+        try:
+            resp = json.loads(body or "{}")
+        except ValueError:
+            raise CasdoorError(f"{method} {path}: response was not JSON") from None
+        if not isinstance(resp, dict):
+            raise CasdoorError(f"{method} {path}: unexpected response shape") from None
+        if resp.get("status") != "ok":
+            raise CasdoorError(f"{method} {path}: {resp.get('msg') or resp}") from None
+        return resp
+
+    def probe(path):
+        """GET an object, or None when it does not exist. Casdoor is inconsistent
+        about a missing object (ok+null on some endpoints, an error envelope on
+        others), so an error reads as absent — safe only because
+        require_admin_session() has already proved the session, and because every
+        write is re-read before anything is reported as done."""
+        try:
+            return call(path).get("data")
+        except CasdoorError:
+            return None
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                call("/api/health"); return
+            except CasdoorError:
+                time.sleep(3)
+        raise SystemExit("casdoor-domain not reachable")
+
+    def require_admin_session():
+        """Read the session back — a 200/ok from /api/login is not proof of one."""
+        try:
+            me = call("/api/get-account")
+        except CasdoorError:
+            return False
+        name = (me.get("data") or {}).get("name") or me.get("name")
+        return name == ADMIN_USER
+
+    def try_login(password):
+        """Attempt an admin login with `password`; True only with a usable session.
+        Built-in app/org host the admin. Never logs or returns the password."""
+        cj.clear()
+        body = {"application": "app-built-in", "organization": "built-in",
+                "username": ADMIN_USER, "password": password, "type": "login",
+                "autoSignin": True}
+        try:
+            call("/api/login", body, "POST")
+        except CasdoorError:
+            return False
+        return require_admin_session()
+
+    def reconcile_admin_password():
+        """Put the Vault/ESO password on this domain realm's built-in admin and
+        PROVE the casdoor default no longer works. Same mechanism and same
+        reasoning as casdoor-games (see that init-job): update-user cannot change
+        a password, /api/set-password can, and it takes form parameters. Tries
+        the desired password first, so a converged instance performs one login
+        and touches nothing. No password value is printed on any path."""
+        if ADMIN_PASS == CASDOOR_BOOTSTRAP_PASSWORD:
+            fail("the provisioned domain admin password IS the casdoor bootstrap "
+                 "default — rotate it in Vault; refusing to leave this domain's "
+                 "IdP on a publicly known credential")
+            return False
+        if try_login(ADMIN_PASS):
+            print("  admin password: already the provisioned value (no change)")
+        elif try_login(CASDOOR_BOOTSTRAP_PASSWORD):
+            print("  admin password: still the casdoor bootstrap default — applying "
+                  "the provisioned value")
+            try:
+                call("/api/set-password", method="POST",
+                     form={"userOwner": "built-in", "userName": ADMIN_USER,
+                           "oldPassword": CASDOOR_BOOTSTRAP_PASSWORD,
+                           "newPassword": ADMIN_PASS})
+            except CasdoorError as e:
+                fail(f"set-password failed: {e}")
+                return False
+            if not try_login(ADMIN_PASS):
+                fail("set-password reported success but the provisioned password "
+                     "does not log in — the admin credential is NOT what Vault holds")
+                return False
+            print("  admin password: applied and verified by re-login")
+        else:
+            fail("admin login failed with BOTH the provisioned password and the "
+                 "casdoor bootstrap default — reconcile the Vault value with the "
+                 "account's real password (nothing below can run)")
+            return False
+        if try_login(CASDOOR_BOOTSTRAP_PASSWORD):
+            fail("the casdoor bootstrap default password STILL logs in as the "
+                 "domain admin")
+            return False
+        if not try_login(ADMIN_PASS):
+            fail("lost the admin session after the default-password check")
+            return False
+        return True
+
+    def ensure_org():
+        """Create the domain's organization (create-only — an existing org is
+        left alone, exactly like an initDataNewOnly import would)."""
+        oid = f"admin/{ORG}"
+        if probe(f"/api/get-organization?id={oid}"):
+            print(f"  org {ORG}: already present")
+            return
+        org = {
+            "owner": "admin", "name": ORG, "displayName": ORG,
+            "websiteUrl": f"https://{DOMAIN}",
+            "passwordType": "pbkdf2-salt", "phonePrefix": "1",
+            "languages": ["en"], "tags": [], "isProfilePublic": False,
+        }
+        call("/api/add-organization", org, "POST")
+        if not probe(f"/api/get-organization?id={oid}"):
+            raise CasdoorError(f"add-organization {oid} reported success but the "
+                               f"org is not readable")
+        print(f"  org {ORG}: created")
+
+    def reconcile_app():
+        # The domain application's client-secret (from Vault via ESO).
+        secret = open(f"{SECRETS}/app/clientSecret").read().strip()
+        app = {
+            "owner": "admin", "name": APP_NAME, "displayName": APP_NAME,
+            "organization": ORG, "clientId": CLIENT_ID, "clientSecret": secret,
+            "cert": "cert-built-in", "signingCert": "cert-built-in",
+            # RE-PINNED on EVERY ArgoCD PostSync — derived from CASDOOR_DOMAIN so
+            # a domain rename converges instead of reverting (the
+            # parameterize_games_domain lesson from casdoor-games).
+            "redirectUris": [
+                f"https://{DOMAIN}/callback",
+                f"https://{DOMAIN}/silent-refresh.html",
+            ],
+            "grantTypes": ["authorization_code", "password", "client_credentials",
+                           "token", "id_token"],
+            "tokenFormat": "JWT", "expireInHours": 168, "refreshExpireInHours": 336,
+            "enablePassword": True, "enableSignUp": False,
+        }
+        path = f"/api/get-application?id=admin/{APP_NAME}"
+        if probe(path):
+            call(f"/api/update-application?id=admin/{APP_NAME}", app, "POST")
+            verb = "updated"
+        else:
+            call("/api/add-application", app, "POST")
+            verb = "added  "
+        # "added" must mean the object is READABLE afterwards — a {"status":"ok"}
+        # that persisted nothing is a shape this platform has already been bitten by.
+        if not probe(path):
+            raise CasdoorError(f"{APP_NAME}: {verb.strip()} reported success but the "
+                               f"application is not readable")
+        print(f"  {verb} {APP_NAME} (issuer {ORIGIN})")
+
+    # ── run ──────────────────────────────────────────────────────────────────
+    # Every leg is a named step. A step that raises is RECORDED, not swallowed,
+    # and the Job exits non-zero at the end.
+    def step(label, fn):
+        try:
+            fn()
+        except CasdoorError as e:
+            fail(f"{label}: {e}")
+        except FileNotFoundError as e:
+            fail(f"{label}: required input missing: {e.filename}")
+        except Exception as e:  # noqa: BLE001 — an unexpected fault is still a failure
+            fail(f"{label}: unexpected error: {type(e).__name__}: {e}")
+
+    wait_ready()
+    # Nothing below can work without a real admin session, and this is also where
+    # the provisioned password gets applied — fatal on the spot rather than pressed
+    # on with anonymously.
+    if not reconcile_admin_password():
+        for f in FAILURES:
+            print(f"  - {f}")
+        raise SystemExit("casdoor-domain-init: FAILED — no usable Casdoor admin session")
+    step("org", ensure_org)
+    step(APP_NAME, reconcile_app)
+
+    if FAILURES:
+        print(f"casdoor-domain-init: FAILED — {len(FAILURES)} step(s) did not complete:")
+        for f in FAILURES:
+            print(f"  - {f}")
+        raise SystemExit(1)
+    print("casdoor-domain-init: done")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: casdoor-domain-init
+  labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: casdoor-domain-init }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        hugmesh.net/pki: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: reconcile
+          image: python:3.12-alpine
+          command: ["python3", "/script/reconcile.py"]
+          env:
+            # Same-namespace Service (each domain instance lives in its own
+            # <nsPrefix>-pki namespace, so no FQDN is baked here).
+            - name: CASDOOR_URL
+              value: "http://casdoor-domain:8000"
+            # The per-domain seed values — every one patched per domain through
+            # the casdoor-domain-params ConfigMap by the casdoor-domains
+            # ApplicationSet.
+            - name: CASDOOR_ORG
+              valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_ORG } }
+            - name: CASDOOR_DOMAIN
+              valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_DOMAIN } }
+            - name: CASDOOR_ORIGIN
+              valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_ORIGIN } }
+            - name: CASDOOR_APP_NAME
+              valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_APP_NAME } }
+            - name: CASDOOR_CLIENT_ID
+              valueFrom: { configMapKeyRef: { name: casdoor-domain-params, key: CASDOOR_CLIENT_ID } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: admin, mountPath: /secrets/admin, readOnly: true }
+            - { name: app, mountPath: /secrets/app, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: casdoor-domain-init-script, defaultMode: 0555 }
+        # ESO-materialized from Vault (secret/<slug>/casdoor) — never committed.
+        - name: admin
+          secret: { secretName: casdoor-domain-admin }
+        - name: app
+          secret: { secretName: casdoor-domain-app }

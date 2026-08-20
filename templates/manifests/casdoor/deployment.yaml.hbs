@@ -1,0 +1,65 @@
+# {{BRAND_TITLE}} casdoor — this brand's OWN Casdoor identity provider (issue
+# #47, Domain.idp=own): a SEPARATE, INDEPENDENT instance issuing the
+# OAuth2/OIDC JWTs for issuer https://id.{{CLUSTER_DOMAIN}}. The tenant-lane
+# twin of specs/cluster/manifests/casdoor-domain/deployment.yaml, with the
+# per-domain values BAKED by the brand render instead of env-patched.
+# Generated from hugmesh-generator/templates/manifests/casdoor/deployment.yaml.hbs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{BRAND}}-casdoor
+  labels: { app: {{BRAND}}-casdoor, app.kubernetes.io/part-of: {{CLUSTER_DOMAIN}} }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: {{BRAND}}-casdoor }
+  template:
+    metadata:
+      labels: { app: {{BRAND}}-casdoor }
+    spec:
+      nodeSelector:
+        {{CLUSTER_DOMAIN}}/pki: "true"
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          # Hand-picked like every brand-template level; shared across brands
+          # rendered from this template — see the caveat in pg.yaml.hbs.
+          level: "s0:c87"
+      containers:
+        - name: casdoor
+          # Same image pin as the casdoor-games precedent — the app.conf env
+          # interpolation is validated against THIS version.
+          image: casbin/casdoor:3.80.0
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - name: RUNNING_IN_DOCKER
+              value: "true"
+            # Dedicated Postgres credentials — interpolated into conf/app.conf
+            # ({{BRAND}}-casdoor-app-conf). Materialized by ESO from Vault
+            # (secret/{{BRAND}}/casdoor via external-secrets.yaml).
+            - name: CASDOOR_DB_USER
+              valueFrom: { secretKeyRef: { name: {{BRAND}}-casdoor-db, key: username } }
+            - name: CASDOOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{BRAND}}-casdoor-db, key: password } }
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            # app.conf override that points Casdoor at {{BRAND}}-casdoor-pg and
+            # carries the baked issuer. NOTE: the conf path is
+            # image-version-specific (casbin/casdoor reads conf/app.conf from
+            # its workdir) — validate against the deployed image.
+            - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+      volumes:
+        # DB state lives in {{BRAND}}-casdoor-pg (dedicated Postgres); this
+        # configMap just points Casdoor at it. NO init-data volume: the seed is
+        # the env-driven init Job (see app-conf-configmap.yaml.hbs).
+        - name: app-conf
+          configMap:
+            name: {{BRAND}}-casdoor-app-conf

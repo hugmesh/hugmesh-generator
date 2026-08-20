@@ -1,0 +1,15 @@
+# casdoor-domain Service — the IN-NETWORK half of the issuer contract
+# (docs/DOMAIN-IDP.md): the domain's public issuer is https://id.<clusterDomain>
+# (Ingress), but in-cluster consumers (gateways' per-brand token decoder, BFF
+# JWKS fetches) resolve this Service URL —
+# http://casdoor-domain.<nsPrefix>-pki.svc.cluster.local:8000 — exactly the
+# published-URL/in-network-URL split tests/stack/compose.brand-b.yaml proved.
+apiVersion: v1
+kind: Service
+metadata:
+  name: casdoor-domain
+  labels: { app: casdoor-domain, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  selector: { app: casdoor-domain }
+  ports:
+    - { name: http, port: 8000, targetPort: http }

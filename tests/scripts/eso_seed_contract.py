@@ -142,6 +142,16 @@ OPERATOR_SEEDED_PATHS = {
         "token is issued by CLOUDFLARE (keys-template/cloudflared/README.md), so "
         "the generator has nothing to mint; absent creds simply leave the "
         "cloudflared Deployment down, which the manifest calls 'harmless'.",
+    "hugmesh/casdoor-domain":
+        "manifests/casdoor-domain/external-secrets.yaml: 'DELIBERATELY NOT "
+        "SEEDED by scripts/gen-cluster-secrets.sh: a per-domain path cannot "
+        "exist before the domain does. It is minted at DOMAIN-CREATION time — "
+        "by the operator, or by the DomainReconciler runtime lane once it "
+        "lands'. hugmesh/casdoor-domain is the base's PLACEHOLDER remoteRef "
+        "key, ALWAYS patched to <slug>/casdoor per idp=own domain by the "
+        "casdoor-domains ApplicationSet (issue #47, docs/DOMAIN-IDP.md); a "
+        "per-domain path the provisioning-time seeder wrote would be a secret "
+        "for a domain that does not exist.",
 }
 
 # Materialized k8s Secrets the OFFLINE USB bundle structurally cannot carry.
