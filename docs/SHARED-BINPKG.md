@@ -279,6 +279,60 @@ cache recovery / fingerprint-mismatched pool refusal / two concurrent writers se
 all ten builders carry the wiring. Studio side:
 `studio/tests/test_shared_build_assets.py`.
 
+## The host-side BDEPEND pool (arm cross builds; PR #72 §4)
+
+Cross builds merge every BDEPEND **"to /"** — the builder container's own root —
+under the crossdev wrapper's `--root-deps=rdeps`, and the wave-1 measurement
+(#46) found 33–49 such amd64 host tools source-compiled *per arm image* because
+the container's default `PKGDIR` dies with the container. These are host tools
+**executed by the builder** (checkpolicy, m4, setuptools-scm chains, the host
+SELinux toolchain, …); the target board's `-mcpu` is irrelevant to them, so ONE
+leg serves every arm board:
+
+    <root>/pkgdir/host-amd64-bdep
+
+wired by `build-rpi5-stage4.sh` / `build-jetson-stage4.sh` (the two builders the
+#72 design named; the other cross builders are mechanical follow-ups):
+
+- **Keying — HOST identity, never the target's.** The same
+  `pool_fingerprint_preflight` stamp, computed from the HOST `/etc/portage/make.conf`
+  ABI values + the HOST profile (`readlink -f /etc/portage/make.profile`), salted
+  with the builder-toolchain identity (`sa_host_bdep_pool_salt`: host gcc + glibc
+  versions — the ABI carriers an image rebuild changes when it matters;
+  `HUGMESH_HOST_BDEP_SALT` is the channel for #72's exact image-digest keying, set
+  it on every launch channel or on none). The #44-style empty→non-empty-profile
+  stamp **migration** applies unchanged.
+- **Flush, not refuse, on mismatch.** Unlike a target pool, a stale HOST tool is a
+  build-time hazard on the builder itself, never a shipped-image SIGILL — and a
+  mismatch means "the builder identity changed", so the old binpkgs are garbage by
+  definition. `sa_host_bdep_pool_guard` therefore **empties and restamps the leg,
+  loudly**, instead of bricking every arm build until an operator hand-flushes a
+  shared directory.
+- **HOST make.conf only.** `PKGDIR` + `FEATURES="… buildpkg binpkg-multi-instance"`
+  are appended to the HOST `/etc/portage/make.conf` behind
+  `hostguard_mutation_allowed` (a real machine is never rewired; unavailable ⇒ the
+  build proceeds unpooled, loudly). The sysroot's rendered make.conf keeps its
+  per-board `POOL_DIR`, so a target binpkg can never land in — or be taken from —
+  the host leg. Consumption is the already-global `--usepkg=y
+  --binpkg-respect-use=y` on `cross_emerge` plus the same flags on the native
+  host-tools emerge.
+- **Locking — `binpkg-multi-instance`, the design's stated alternative to
+  `sa_pool_hold`.** Host bdeps merge to `/` *during* the hours-long target
+  cross-emerge, so the leg's write window IS the target emerge: holding the
+  single-writer lock across it would serialize all arm builds of different boards
+  end-to-end (exactly what #72's design forbids), and releasing it early would
+  leave the actual writes unguarded. With multi-instance on the HOST config only,
+  each concurrent build packs its own build-id instance and portage serializes the
+  `Packages`-index update under its own index lock. Target pools remain
+  single-writer (`sa_pool_hold`) — the "no binpkg-multi-instance" rule above still
+  holds for them.
+
+Hermetic proof: `tests/scripts/test-host-bdep-pool.sh` (gated fail-closed in the
+build matrix's SBP family): leg shape, host-keyed stamp, idempotent + value-aware
+make.conf wiring, flush-on-identity-change (never refuse, never silent), no flush
+on match, #44-consistent migration, unpooled fallback, and the structural sweep
+over both builders including target/host `PKGDIR` isolation.
+
 ## Prebuild-once workflow
 
 ```sh
@@ -498,6 +552,15 @@ reports `PLAN_KERNEL_CACHE=<root>|off`.
   `pool_fingerprint_preflight` — a real CHOST/CFLAGS change still refuses reuse.
   Like every claim in this section, the reuse RATE on a real queue is owed proof
   from the next full mesh build's plan-preview `[binary]` counts.
+- **The arm host-side bdep pool (#72 §4) is wired on rpi5 + jetson only, and its
+  reuse RATE is owed proof.** The leg's decisions (host-keyed stamp, flush-on-identity
+  -change, make.conf wiring, target isolation) are proven hermetically in
+  `tests/scripts/test-host-bdep-pool.sh`; that a real second arm build actually
+  installs its 33–49 host bdeps as `[binary]` is owed from the next fleet build's
+  emerge logs (the same "to /" batch wave 1 counted). The other seven cross builders
+  carry no leg yet — wiring them is the same four hunks — and portage's concurrent
+  index handling under `binpkg-multi-instance` has not been exercised by a real
+  concurrent fleet build here.
 - **Signed-kernel cache (G4) — what is NOT done and NOT proven.**
   - **Only two builders are wired: `build-x86-host-stage4.sh` and
     `build-rpi5-stage4.sh`** (the latter covering `--board rpi5|rpi4|rpi3`). The other
