@@ -171,7 +171,19 @@ def test_field_in_scope_is_fail_open_for_unknown_fields():
 
 def test_gating_scope_allows_delegates_to_core():
     """_gating.scope_allows is the wizard's name for field_in_scope; one implementation, so
-    the GUI and the Qt-free channels cannot disagree about whether a field applies."""
+    the GUI and the Qt-free channels cannot disagree about whether a field applies.
+
+    The ONE assertion in this otherwise pure-core file that has to reach into
+    ``gui.pages`` — and ``gui/pages/__init__.py`` imports the Qt shim, so with no
+    binding installed this raises ModuleNotFoundError at import time. It spent that
+    time listed on tests/known-failures.txt as a code failure ("a gating-scope
+    delegate the core no longer exposes"), which was never true: ``scope_allows``
+    is right there in ``gui/pages/_gating.py`` and the test passes wherever Qt
+    exists. A missing optional dependency is a SKIP — the repo's own convention for
+    every other Qt-touching assertion — not a permanent deselect that also keeps the
+    known-failures re-run step red forever."""
+    pytest.importorskip("hugmesh_studio.gui.qt",
+                        reason="no Qt binding (PySide6/PyQt6) installed")
     from hugmesh_studio.gui.pages._gating import scope_allows
     for mode, role in MODE_ROLE:
         cfg = ImageConfig(mode=mode, role=role, platform="x86")

@@ -1618,7 +1618,17 @@ test:studio-suite:
     - apt-get update -qq && apt-get install -qq -y
         libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0
         squashfs-tools git > /dev/null
-    - pip install --quiet pytest PySide6
+    # jsonschema is NOT optional here even though the test that needs it guards
+    # itself with `pytest.importorskip`. studio/tests/test_worklist.py::
+    # test_envelope_conforms_to_frozen_schema is the ONLY thing that validates a real
+    # serialized worklist envelope against docs/schemas/worklist.v1.schema.json — the
+    # frozen wire contract the Studio, the web admin-ui and the admin-bff envelope
+    # validator all claim to share. Without the package that assertion SKIPS silently
+    # and the job still says "passed", which is how three undeclared entry keys
+    # (infra_services / desktop_user / desktop_user_role) reached the wire against an
+    # `additionalProperties: false` schema and stayed there: this job skipped it, and
+    # the GitHub job (which does install jsonschema) had the node deselected.
+    - pip install --quiet pytest PySide6 jsonschema
   script:
     # NB the deselect node id is ROOTDIR-relative: studio/pytest.ini makes rootdir
     # studio/, so ids are tests/…, NOT studio/tests/… — the studio-prefixed form
