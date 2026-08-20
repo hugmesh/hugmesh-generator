@@ -1,4 +1,10 @@
-"""The "Web login theme" group — colours + fonts for the login page the MESH serves.
+"""The "Themes" group — colours, fonts and web chrome for the pages the MESH serves.
+
+(Renamed from "Web login theme" per #50 item 2 — the LABELS changed; the persisted
+``login_*`` config keys deliberately did NOT, so every saved session keeps loading.
+The crammed options now DECOMPRESS into the modeless ThemeEditorDialog
+(:mod:`._theme_editor`), opened from this group's "Open the Themes editor…" button;
+the in-page group stays the compact surface both hosts embed.)
 
 Hosted in TWO places (one implementation, so they cannot drift):
   * BrandingPage — every mode, INCLUDING mesh (the page's desktop-asset half greys
@@ -35,6 +41,36 @@ _HEX_PLACEHOLDER = "#RRGGBB — empty keeps the shipped colour"
 _KEEP_FONT = "(keep the shipped font — Arial)"
 
 
+def populate_preset_combo(combo: QtWidgets.QComboBox) -> None:
+    """Fill ``combo`` with the Custom row + the grouped presets (notes as tooltips).
+
+    Shared by this group and the Themes editor dialog so the two surfaces can never
+    offer different preset sets — the "GUI offers what the model rejects" defect class
+    a single population point prevents."""
+    combo.addItem("Custom (type colours below)", "")
+    for group in theme_presets.groups():
+        combo.insertSeparator(combo.count())
+        for pr in theme_presets.PRESETS:
+            if pr.group == group:
+                combo.addItem(f"{group}: {pr.label}", pr.preset_id)
+                if pr.note:
+                    combo.setItemData(combo.count() - 1, pr.note,
+                                      QtCore.Qt.ItemDataRole.ToolTipRole)
+
+
+def default_chrome() -> dict:
+    """The web-chrome state at its shipped defaults — one key per cfg.login_header_*/
+    login_footer_*/login_bg_effect field (theme.chrome_tokens keyword names). A dict
+    rather than widgets because the OPTIONS live in the modeless editor dialog while
+    the STATE must exist (load/commit/compose) whether or not the dialog was ever
+    opened."""
+    return {
+        "header_hidden": False, "header_size": "", "header_bg": "", "header_text": "",
+        "footer_hidden": False, "footer_size": "", "footer_bg": "", "footer_text": "",
+        "bg_effect": theme.BG_EFFECT_DEFAULT,
+    }
+
+
 def _swatch(hex_color: str, caption: str) -> QtWidgets.QLabel:
     """A colour tile whose text is auto black/white via the SAME on_color rule that
     ships — the board demonstrates the derivation by being built from it."""
@@ -50,7 +86,7 @@ def _swatch(hex_color: str, caption: str) -> QtWidgets.QLabel:
 
 class LoginThemeGroup(QtWidgets.QGroupBox):
     def __init__(self, parent=None):
-        super().__init__("Web login theme (the login page this mesh serves)", parent)
+        super().__init__("Themes (the web pages this mesh serves)", parent)
         lay = QtWidgets.QVBoxLayout(self)
 
         intro = QtWidgets.QLabel(
@@ -62,19 +98,21 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
+        # The DECOMPRESSED editor (#50 item 2): everything below plus the web-chrome
+        # options (header/footer size, existence, backgrounds, content; background
+        # effect) in one larger window. MODELESS by repo rule — open_editor() uses
+        # show(), never exec().
+        self.edit_btn = QtWidgets.QPushButton("Open the Themes editor…")
+        self.edit_btn.setToolTip(
+            "A larger, modeless editor for these colour options PLUS the web chrome: "
+            "header/footer size, visibility, backgrounds and content, and the page "
+            "background effect. Edits apply to this section live.")
+        self.edit_btn.clicked.connect(self.open_editor)
+        lay.addWidget(self.edit_btn)
+
         # ── theme preset (the wizard's one-click path; Custom = type hex below) ──
         self.theme_preset = QtWidgets.QComboBox()
-        self.theme_preset.addItem("Custom (type colours below)", "")
-        for group in theme_presets.groups():
-            self.theme_preset.insertSeparator(self.theme_preset.count())
-            for pr in theme_presets.PRESETS:
-                if pr.group == group:
-                    label = f"{group}: {pr.label}"
-                    self.theme_preset.addItem(label, pr.preset_id)
-                    if pr.note:
-                        self.theme_preset.setItemData(
-                            self.theme_preset.count() - 1, pr.note,
-                            QtCore.Qt.ItemDataRole.ToolTipRole)
+        populate_preset_combo(self.theme_preset)
         self.theme_mode = QtWidgets.QComboBox()
         self.theme_mode.addItem("Dark ramp", "dark")
         self.theme_mode.addItem("Light ramp", "light")
@@ -213,6 +251,10 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         self._font_bytes = b""
         self._font_family = ""
         self._error = ""
+        # web-chrome state (edited by the modeless Themes editor; the state lives
+        # HERE so load/commit/compose work whether or not the dialog was opened)
+        self.chrome = default_chrome()
+        self.editor = None
 
         self.primary.textChanged.connect(self._refresh)
         self.secondary.textChanged.connect(self._refresh)
@@ -247,6 +289,22 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         self.font_file.setText(cfg.login_font_file)
         self.font_licence.setText(cfg.login_font_licence)
         self.font_source.setText(cfg.login_font_source)
+        # web chrome: getattr with the shipped default, so a cfg object predating
+        # these fields (old saves, test doubles) loads as "the shipped page".
+        self.chrome = {
+            "header_hidden": bool(getattr(cfg, "login_header_hidden", False)),
+            "header_size": getattr(cfg, "login_header_size", "") or "",
+            "header_bg": getattr(cfg, "login_header_bg", "") or "",
+            "header_text": getattr(cfg, "login_header_text", "") or "",
+            "footer_hidden": bool(getattr(cfg, "login_footer_hidden", False)),
+            "footer_size": getattr(cfg, "login_footer_size", "") or "",
+            "footer_bg": getattr(cfg, "login_footer_bg", "") or "",
+            "footer_text": getattr(cfg, "login_footer_text", "") or "",
+            "bg_effect": getattr(cfg, "login_bg_effect", "") or theme.BG_EFFECT_DEFAULT,
+        }
+        if self.editor is not None:
+            self.editor.load_from_group()
+        self._refresh()
 
     def commit(self, cfg) -> None:
         """Widgets -> cfg.login_* (raw fields; derivation happens at delivery via
@@ -259,6 +317,37 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         cfg.login_font_file = self.font_file.text().strip()
         cfg.login_font_licence = self.font_licence.text().strip()
         cfg.login_font_source = self.font_source.text().strip()
+        cfg.login_header_hidden = bool(self.chrome["header_hidden"])
+        cfg.login_header_size = self.chrome["header_size"]
+        cfg.login_header_bg = self.chrome["header_bg"]
+        cfg.login_header_text = self.chrome["header_text"]
+        cfg.login_footer_hidden = bool(self.chrome["footer_hidden"])
+        cfg.login_footer_size = self.chrome["footer_size"]
+        cfg.login_footer_bg = self.chrome["footer_bg"]
+        cfg.login_footer_text = self.chrome["footer_text"]
+        cfg.login_bg_effect = self.chrome["bg_effect"] or theme.BG_EFFECT_DEFAULT
+
+    # ── the modeless Themes editor ───────────────────────────────────────────────
+    def set_chrome(self, key: str, value) -> None:
+        """Editor write-through: one chrome option changed. Slot-safe — the refresh
+        funnels into compose_css(), which never raises (bad chrome input lands in
+        error_text() like every other theme error)."""
+        if key not in self.chrome:
+            return
+        self.chrome[key] = value
+        self._refresh()
+
+    def open_editor(self, *_):
+        """Show the decompressed Themes editor. MODELESS by repo rule (no exec() /
+        QMessageBox reachable from page logic — a nested event loop hangs headless
+        tests and blocks the wizard): one reused instance, shown with show()."""
+        from ._theme_editor import ThemeEditorDialog
+        if self.editor is None:
+            self.editor = ThemeEditorDialog(self)
+        self.editor.load_from_group()
+        self.editor.show()
+        self.editor.raise_()
+        self.editor.activateWindow()
 
     def _preset_name(self) -> str:
         return "" if self.font_preset.currentIndex() <= 0 else self.font_preset.currentText()
@@ -330,6 +419,13 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
                     pid, self.theme_mode.currentData() or "dark")
                 if delta:
                     css = (css + "\n" if css else "") + delta
+            # Web chrome rides the same later-block-wins append — all-defaults
+            # composes "" so an untouched editor changes nothing, and the SAME
+            # kwargs feed cfg.login_theme_css() so this preview cannot drift
+            # from the delivered bytes.
+            chrome = theme.chrome_css(**self.chrome)
+            if chrome:
+                css = (css + "\n" if css else "") + chrome
             self._error = ""
         except ValueError as exc:
             css, self._error = "", str(exc)

@@ -727,6 +727,13 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_primary_color", "login_secondary_color", "login_font",
                    "login_font_file", "login_font_licence", "login_font_source",
                    "login_theme_preset", "login_theme_mode",
+                   # the Themes editor's web-chrome half (#50 item 2): same channel as
+                   # the login_* colours — SNAP_THEME_CSS token text, never argv.
+                   "login_header_hidden", "login_header_size", "login_header_bg",
+                   "login_header_text",
+                   "login_footer_hidden", "login_footer_size", "login_footer_bg",
+                   "login_footer_text",
+                   "login_bg_effect",
                    "additional_domains", "configure_users", "qemu_e2e")
 
 
@@ -2022,6 +2029,27 @@ class ImageConfig:
     # compose_login_css output, so fonts + derivation stay single-sourced.
     login_theme_preset: str = ""       # theme_presets.PRESETS id; "" = custom colours
     login_theme_mode: str = "dark"     # "dark" | "light" neutral ramp
+    # ── web chrome (the Themes editor: header/footer existence, size, background,
+    # content, plus the page background effect — #50 item 2). Same plane and same
+    # channel as the login_* colours above: NON-argv, delivered as literal
+    # --sd-header-*/--sd-footer-*/--sd-bg-effect tokens inside SNAP_THEME_CSS
+    # (theme.chrome_tokens). Every default is the SHIPPED page exactly, so an old
+    # saved config — whose JSON has none of these keys and therefore loads the
+    # dataclass defaults — composes byte-identical css.
+    login_header_hidden: bool = False  # True emits --sd-header-display: none
+    login_header_size: str = ""        # "" = shipped | a theme.CHROME_SIZES name
+    login_header_bg: str = ""          # "#RRGGBB" | "" = shipped (emits -on twin too)
+    login_header_text: str = ""        # replacement header content; "" = shipped
+    login_footer_hidden: bool = False
+    login_footer_size: str = ""
+    login_footer_bg: str = ""
+    login_footer_text: str = ""
+    # Background effect — the generator-side persistence anchor for host-shell
+    # PR #20's deferred vanta catalog. "gradient" (the shipped theme-driven moving
+    # gradient) is the default and emits no token; "none" flattens the backdrop;
+    # "vanta-<effect>" (theme.VANTA_EFFECTS) is persisted but not yet selectable in
+    # the UI — the effect loader ships only in hugmesh-login-ui today.
+    login_bg_effect: str = "gradient"  # theme.BG_EFFECTS
     # ── egress VPN ──
     egress_vpn: str = ""               # --egress-vpn FILE
     egress_vpn_locked: bool = False
@@ -2301,6 +2329,22 @@ class ImageConfig:
             # Later :root:root block wins at equal specificity — the delta lands
             # after the base tokens without touching the shared composer.
             css = (css + "\n" if css else "") + delta
+        # Web chrome (Themes editor) rides the SAME later-block-wins mechanism.
+        # All-defaults composes "" here, so a pre-chrome config's css is untouched;
+        # chrome-only theming (e.g. just hiding the footer) still emits its block
+        # even when no colour/font was chosen.
+        chrome = _theme.chrome_css(
+            header_hidden=self.login_header_hidden,
+            header_size=self.login_header_size,
+            header_bg=self.login_header_bg,
+            header_text=self.login_header_text,
+            footer_hidden=self.login_footer_hidden,
+            footer_size=self.login_footer_size,
+            footer_bg=self.login_footer_bg,
+            footer_text=self.login_footer_text,
+            bg_effect=self.login_bg_effect)
+        if chrome:
+            css = (css + "\n" if css else "") + chrome
         return css
 
     def validate_identity(self) -> None:
@@ -2378,6 +2422,29 @@ class ImageConfig:
                         f"{fld} is required (printable, non-empty) when uploading a "
                         "font — embedding a face we cannot attribute is the licensing "
                         "landmine the upload path exists to make explicit")
+        # web chrome (Themes editor, #50 item 2): the same fail-closed rules the other
+        # login_* fields follow — strict hex-or-empty for colours, closed vocabularies
+        # for the size names and the background effect (they flow into SNAP_THEME_CSS
+        # token text; a typo would silently mis-render at runtime), printable-only for
+        # the content strings (they become CSS string literals).
+        validate_login_color("login_header_bg", self.login_header_bg)
+        validate_login_color("login_footer_bg", self.login_footer_bg)
+        from .theme import BG_EFFECTS, CHROME_SIZES  # local import: config stays lean
+        for fld in ("login_header_size", "login_footer_size"):
+            v = getattr(self, fld)
+            if v and v not in CHROME_SIZES:
+                raise IdentityValidationError(
+                    f"unknown {fld}: {v!r} — known: {', '.join(CHROME_SIZES)} "
+                    "(or \"\" for the shipped size)")
+        if self.login_bg_effect and self.login_bg_effect not in BG_EFFECTS:
+            raise IdentityValidationError(
+                f"unknown login_bg_effect: {self.login_bg_effect!r} — known: "
+                f"{', '.join(BG_EFFECTS)}")
+        for fld in ("login_header_text", "login_footer_text"):
+            v = getattr(self, fld)
+            if v and not v.isprintable():
+                raise IdentityValidationError(
+                    f"{fld} must be printable text (it becomes a CSS string literal)")
         # cluster_domain + per-domain names flow into --domains / the mesh manifest
         validate_domain_name(self.cluster_domain)
         if self.games_domain:
