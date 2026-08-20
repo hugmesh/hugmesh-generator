@@ -13,7 +13,7 @@
   python -m hugmesh_studio --show-session ID [--json]
   python -m hugmesh_studio --session-artifacts ID [--json]
   python -m hugmesh_studio --delete-session ID --yes [--delete-artifacts]
-      # headless: the wizard Welcome page's build-session history (core/build_sessions)
+      # headless: the wizard Sessions page's build-session history (core/build_sessions)
   python -m hugmesh_studio --generator-dir /path/to/hugmesh-generator
   python -m hugmesh_studio --remember-roles-for-passwordless-login
       # OPT-IN, default OFF: KeyZipPage imports also mirror human-loginable KEYS
@@ -66,7 +66,7 @@ def main(argv=None) -> int:
                     help="open the fleet build dialog (build EVERY role for the selected "
                          "platforms in one run — the GUI front-end to "
                          "scripts/build-all-roles.sh; also reachable from the wizard's "
-                         "welcome page)")
+                         "sessions page)")
     ap.add_argument("--login-agent", action="store_true",
                     help="headless: run the passwordless local-login loopback agent "
                          "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui)")
@@ -121,7 +121,7 @@ def main(argv=None) -> int:
     ap.add_argument("--list-sessions", action="store_true",
                     help="headless: the recorded build-session history, one line per "
                          "session (id, date, roles, status, artifact count), newest "
-                         "first — the wizard Welcome page's Previous-builds list "
+                         "first — the wizard Sessions page's Previous-builds list "
                          "(core/build_sessions.py). --json for the stable row schema.")
     ap.add_argument("--show-session", metavar="ID",
                     help="headless: one session's full record (per-image outcomes, "
@@ -282,7 +282,7 @@ def main(argv=None) -> int:
     if args.list_sessions or args.show_session or args.session_artifacts \
             or args.delete_session:
         # Qt-free path: the build-session history (core/build_sessions.py — the same
-        # records/guards the wizard Welcome page renders and the TUI drives; all the
+        # records/guards the wizard Sessions page renders and the TUI drives; all the
         # listing/formatting lives in core so every front-end shows the same truth).
         import json
         from .core import build_sessions

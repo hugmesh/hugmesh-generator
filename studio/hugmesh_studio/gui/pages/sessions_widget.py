@@ -1,4 +1,4 @@
-"""PreviousBuildsWidget — the Welcome screen's first-class "Previous builds" manager.
+"""PreviousBuildsWidget — the Sessions screen's first-class "Previous builds" manager.
 
 A capped-height, searchable table of persisted build sessions
 (:mod:`...core.build_sessions`) plus best-effort DISCOVERED pre-session ``wl-*.*``
@@ -10,7 +10,7 @@ artifacts, and a view-errors/log dialog that renders the persisted per-image err
 tails — or, for a stale "running" record, the honest "process gone" text, never an
 upgrade to complete.
 
-The whole groupbox hides itself when there are zero rows, so a first-run Welcome
+The whole groupbox hides itself when there are zero rows, so a first-run Sessions
 screen renders pixel-identical to before this widget existed.
 """
 from __future__ import annotations
@@ -283,7 +283,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
     def refresh(self) -> None:
         """Rebuild the rows from disk: session records newest-first, then unmanaged
         wl-*.* dirs under the default out dir, then unreadable record files. Hides the
-        whole groupbox when there is nothing to show (first-run Welcome unchanged)."""
+        whole groupbox when there is nothing to show (first-run Sessions screen unchanged)."""
         sessions, unreadable = build_sessions.scan()
         rows = [_RowData("session", session=s) for s in sessions]
         rows += [_RowData("unmanaged", unmanaged=u)
@@ -557,7 +557,7 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             # a fleet run restarts through the fleet window, pinned to the SAME
             # record/workdir (prior outcome archived); it lands on the Review step,
             # so "Build fleet now" there IS the confirmation. Deferred import — the
-            # fleet channel stays self-contained (welcome.py precedent).
+            # fleet channel stays self-contained (sessions.py precedent).
             from . import fleet
             fleet.open_fleet_window(self.wiz, session=s)
             return

@@ -97,8 +97,9 @@ def _progress_page(wiz):
     return wiz.page(wiz._page_ids["progress"])
 
 
-def _welcome_page(wiz):
-    return wiz.page(wiz._page_ids["welcome"])
+def _sessions_page(wiz):
+    # the sessions manager moved off Welcome onto its own page (issue #50 welcome flow)
+    return wiz.page(wiz._page_ids["sessions"])
 
 
 def _run_to_completion(qapp, page, timeout_ms=5000):
@@ -229,7 +230,7 @@ def test_welcome_lists_sessions_with_honest_status_and_filters(qapp, wiz, tmp_pa
     ok, bad = _seed_sessions(tmp_path)
     (tmp_path / "out" / "wl-pki.x86").mkdir(parents=True)      # (e) unmanaged
     wiz.cfg.output_dir = str(tmp_path / "out")
-    page = _welcome_page(wiz)
+    page = _sessions_page(wiz)
     page.initializePage()
     w = page.previous_builds
     assert not w.isHidden()                       # rows exist -> section shown
@@ -251,7 +252,7 @@ def test_welcome_lists_sessions_with_honest_status_and_filters(qapp, wiz, tmp_pa
 
 def test_welcome_hidden_when_no_rows(qapp, wiz, tmp_path):
     wiz.cfg.output_dir = str(tmp_path / "empty-out")
-    page = _welcome_page(wiz)
+    page = _sessions_page(wiz)
     page.initializePage()
     assert page.previous_builds.isHidden()             # first-run Welcome unchanged
 
@@ -260,7 +261,7 @@ def test_welcome_button_gating_unmanaged_vs_session(qapp, wiz, tmp_path):
     _seed_sessions(tmp_path)
     (tmp_path / "out" / "wl-pki.x86").mkdir(parents=True)
     wiz.cfg.output_dir = str(tmp_path / "out")
-    w = _welcome_page(wiz).previous_builds
+    w = _sessions_page(wiz).previous_builds
     w.refresh()
     session_row = next(i for i, r in enumerate(w._row_data) if r.kind == "session")
     unmanaged_row = next(i for i, r in enumerate(w._row_data) if r.kind == "unmanaged")
@@ -281,7 +282,7 @@ def test_stale_running_record_renders_as_stale_not_complete(qapp, wiz, tmp_path)
     s.pid = proc.pid                               # simulate a crashed Studio
     bs.save(s)
     wiz.cfg.output_dir = str(tmp_path / "no-out")
-    w = _welcome_page(wiz).previous_builds
+    w = _sessions_page(wiz).previous_builds
     w.refresh()
     assert w.table.item(0, 2).text() == "● running (stale?)"
 
@@ -291,7 +292,7 @@ def test_unreadable_record_surfaced_as_row(qapp, wiz, tmp_path):
     with open(os.path.join(bs.sessions_dir(), "zzz.json"), "w") as fh:
         fh.write("{broken")
     wiz.cfg.output_dir = str(tmp_path / "no-out")
-    w = _welcome_page(wiz).previous_builds
+    w = _sessions_page(wiz).previous_builds
     w.refresh()
     assert w.table.rowCount() == 1
     assert w.table.item(0, 2).text() == "unreadable record"
@@ -381,7 +382,7 @@ def test_restart_with_deleted_workdir_offers_redo(qapp, wiz, tmp_path):
 def test_delete_button_gating(qapp, wiz, tmp_path):
     _seed_sessions(tmp_path)
     wiz.cfg.output_dir = str(tmp_path / "out")
-    w = _welcome_page(wiz).previous_builds
+    w = _sessions_page(wiz).previous_builds
     w.refresh()
     w.table.clearSelection()
     w._update_buttons()
@@ -394,7 +395,7 @@ def test_delete_button_gating(qapp, wiz, tmp_path):
 def test_delete_finished_session_drops_the_row(monkeypatch, qapp, wiz, tmp_path):
     ok, bad = _seed_sessions(tmp_path)
     wiz.cfg.output_dir = str(tmp_path / "out")
-    w = _welcome_page(wiz).previous_builds
+    w = _sessions_page(wiz).previous_builds
     w.refresh()
     assert len(bs.scan()[0]) == 2
     monkeypatch.setattr(QtWidgets.QMessageBox, "exec",
@@ -413,7 +414,7 @@ def test_delete_active_session_refused_with_warning(monkeypatch, qapp, wiz, tmp_
     s = bs.new_session(synthesize(_standalone_cfg(tmp_path)), GENERATOR_DIR)
     bs.start(s)                                    # running, our live pid -> active
     wiz.cfg.output_dir = str(tmp_path / "no-out")
-    w = _welcome_page(wiz).previous_builds
+    w = _sessions_page(wiz).previous_builds
     w.refresh()
     warned = []
     monkeypatch.setattr(QtWidgets.QMessageBox, "warning",
@@ -433,7 +434,7 @@ def test_delete_all_finished_prunes_but_keeps_running(monkeypatch, qapp, wiz, tm
                              GENERATOR_DIR)
     bs.start(running)                              # active -> must be skipped
     wiz.cfg.output_dir = str(tmp_path / "out")
-    w = _welcome_page(wiz).previous_builds
+    w = _sessions_page(wiz).previous_builds
     w.refresh()
     assert w.table.rowCount() == 3
     monkeypatch.setattr(QtWidgets.QMessageBox, "exec",

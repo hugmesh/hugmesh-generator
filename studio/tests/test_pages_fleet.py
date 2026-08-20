@@ -81,8 +81,9 @@ def wiz(qapp):
     w.deleteLater()
 
 
-def _welcome_page(wiz):
-    return wiz.page(wiz._page_ids["welcome"])
+def _sessions_page(wiz):
+    # the sessions manager moved off Welcome onto its own page (issue #50 welcome flow)
+    return wiz.page(wiz._page_ids["sessions"])
 
 
 # ── (c) emission identity: goldens captured from the PRE-refactor code ────────────────
@@ -241,7 +242,7 @@ def test_hidden_group_keeps_stale_values(qapp):
 # ── (a) non-modal: the Welcome page + sessions manager stay interactive ───────────────
 def test_fleet_opens_nonmodal_and_welcome_stays_interactive(qapp, wiz, tmp_path):
     wiz.restart()
-    welcome = _welcome_page(wiz)
+    welcome = _sessions_page(wiz)
     # The OLD path was FleetDialog(...).exec() — a blocking modal: this call would
     # not return until the dialog closed, deadlocking everything below.
     welcome._fleet()
@@ -343,7 +344,7 @@ def test_fleet_run_writes_honest_complete_record(qapp, wiz, tmp_path):
         assert "fleet line 1" in fh.read()
     # LIVE visibility: session_changed drove the Previous-builds refresh — no
     # initializePage was called after the dispatch
-    pb = _welcome_page(wiz).previous_builds
+    pb = _sessions_page(wiz).previous_builds
     labels = [pb.table.item(r, 0).text() for r in range(pb.table.rowCount())]
     assert "fleet: rpi5, x86" in labels
     assert page.pending_session_id is None      # the next run mints a fresh record
@@ -370,7 +371,7 @@ def test_restart_routes_fleet_session_back_into_fleet_window(qapp, wiz, tmp_path
     bs.update_image(s, 0, status="failed", exit_code=2)
     bs.finish(s, bs.FAILED, {"fleet": ["boom"]})
     os.makedirs(s.workdir, exist_ok=True)       # can_restart needs the workdir
-    pb = _welcome_page(wiz).previous_builds
+    pb = _sessions_page(wiz).previous_builds
     pb.refresh()
     row = next(r for r in range(pb.table.rowCount())
                if pb.table.item(r, 0).text().startswith("fleet:"))
@@ -400,7 +401,7 @@ def test_redo_loads_fleet_config_as_new_session(qapp, wiz, tmp_path):
     bs.start(s)
     bs.update_image(s, 0, status="ok", exit_code=0)
     bs.finish(s, bs.COMPLETE)
-    pb = _welcome_page(wiz).previous_builds
+    pb = _sessions_page(wiz).previous_builds
     pb.refresh()
     row = next(r for r in range(pb.table.rowCount())
                if pb.table.item(r, 0).text().startswith("fleet:"))
@@ -487,7 +488,7 @@ def test_sessions_widget_interactive_while_run_in_progress(qapp, wiz, held_run):
     the old exec() modal (or any main-thread-blocking driver) would deadlock
     every line of this test body."""
     win, page, sid, release = held_run()
-    welcome = _welcome_page(wiz)
+    welcome = _sessions_page(wiz)
     t0 = time.time()
     qapp.processEvents()                       # the event loop must stay live
     assert time.time() - t0 < 1.0, "event loop blocked while the run streams"

@@ -10,8 +10,8 @@ without any wizard-page registration, so the single-image wizard's page registry
 All option logic lives Qt-free in core.fleet (FleetConfig/FleetDriver) — this
 module only collects widgets into a FleetConfig and streams the run.
 
-NON-MODAL + SINGLE INSTANCE: the wizard's Welcome page opens the fleet flow via
-:func:`open_fleet_window` — a plain ``show()`` (never ``exec()``), so the Welcome
+NON-MODAL + SINGLE INSTANCE: the wizard's Sessions page opens the fleet flow via
+:func:`open_fleet_window` — a plain ``show()`` (never ``exec()``), so the Sessions
 screen and its Previous-builds session manager stay fully interactive while the
 fleet window is open AND while a run streams (_FleetWorker already runs off the
 GUI thread; the old ``exec()`` nested-event-loop block is gone). Re-invoking
@@ -37,7 +37,7 @@ itself never changes. Status is honest: running -> complete/failed/stopped, one
 aggregate "all-roles" image row (we cannot truthfully track per-role outcomes
 from the script's stream, so we do not fabricate them), and the streamed output
 is teed into ``<workdir>/fleet.log``. ``session_changed`` fires after every
-record write so the Welcome screen's Previous-builds table refreshes LIVE.
+record write so the Sessions screen's Previous-builds table refreshes LIVE.
 """
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ class FleetPage(QtWidgets.QWidget):
     """
 
     #: Emitted after EVERY build_sessions write (start/update/finish) so the
-    #: Welcome screen's Previous-builds table can refresh live.
+    #: Sessions screen's Previous-builds table can refresh live.
     session_changed = Signal()
 
     def __init__(self, generator_dir: str, parent=None):
@@ -760,7 +760,7 @@ def open_fleet_window(wiz, session=None, reuse_record: bool = True):
 
     Owns the singleton: an existing ``wiz.fleet_window`` is shown/raised; otherwise
     a FleetWindow is created parented to the wizard (a QDialog parented to the
-    wizard is still a separate top-level window — non-modal, so the Welcome page,
+    wizard is still a separate top-level window — non-modal, so the Sessions page,
     the Previous-builds table, and every wizard button stay fully interactive while
     the fleet window is open AND while a run streams). Its ``session_changed`` is
     wired to the Previous-builds refresh so a dispatched fleet run appears/updates
@@ -783,7 +783,7 @@ def open_fleet_window(wiz, session=None, reuse_record: bool = True):
 
 
 def _previous_builds_widget(wiz):
-    """The wizard's PreviousBuildsWidget (WelcomePage.previous_builds), or None."""
+    """The wizard's PreviousBuildsWidget (SessionsPage.previous_builds), or None."""
     for pid in (wiz.pageIds() if hasattr(wiz, "pageIds") else []):
         pb = getattr(wiz.page(pid), "previous_builds", None)
         if pb is not None:

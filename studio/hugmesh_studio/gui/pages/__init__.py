@@ -5,6 +5,7 @@ golive.py is NOT part of this set: it is the separate go-live wizard's page modu
 (GOLIVE_PAGE_SLUGS) fronting scripts/go-live.sh, deliberately not imported here.
 """
 from .welcome import WelcomePage
+from .sessions import SessionsPage
 from .localmesh import LocalMeshDialog, LocalMeshPage
 from .phone import PhoneDialog, PhonePage
 from .quest import QuestDialog, QuestPage
@@ -37,7 +38,7 @@ except ImportError:                    # pragma: no cover — until WS-REVIEWUI 
     ProgressPage = None
 
 __all__ = [
-    "WelcomePage", "ModePage", "LocalMeshPage", "LocalMeshDialog",
+    "WelcomePage", "SessionsPage", "ModePage", "LocalMeshPage", "LocalMeshDialog",
     "PhonePage", "PhoneDialog", "QuestPage", "QuestDialog",
     "DeployPage", "DeployDialog", "QemuPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
