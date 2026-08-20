@@ -20,7 +20,8 @@ from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
-    HomePage, IdpPage, KeyZipPage, LaunchPage, LocalMeshPage, ModePage, NetworkPage,
+    HomePage, IdpPage, KeyZipPage, LaunchPage, LocalCloudNodesPage, LocalMeshPage,
+    ModePage, NetworkPage,
     PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SystemPage, UsersChoicePage,
     UsersPage, WelcomePage, WorklistPage,
 )
@@ -32,7 +33,7 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
     "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
-    "DeployPage", "QemuPage", "IdpPage",
+    "DeployPage", "QemuPage", "LocalCloudNodesPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
@@ -128,6 +129,15 @@ class StudioWizard(QtWidgets.QWizard):
         # durable thing QemuPage may set is cfg.qemu_e2e, the same NON-ARGV field the
         # BuildPage checkbox drives, when the operator picks "build first, then test").
         self.qemu_selected = False
+        # transient: ModePage's CREATE NODES FOR LOCAL CLOUD choice (issue #50) — read
+        # by LocalCloudNodesPage.applies_to(). Unlike its terminal siblings the page
+        # REJOINS the image flow: it commits cfg.mode="mesh" itself on Next.
+        self.localcloud_selected = False
+        # The abbreviated-worklist restriction hook (issue #50): an iterable of mesh
+        # ROLE ids WorklistPage may offer, or None = unrestricted (the full catalog).
+        # Installed by LocalCloudNodesPage.validatePage, lifted by any other ModePage
+        # commit — see WorklistPage._allowed_roles().
+        self.worklist_role_allow = None
         # The build-session id of the NEXT dispatch (core/build_sessions): minted lazily
         # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
         # record + workdir reused), cleared by ProgressPage at finish.
@@ -157,7 +167,7 @@ class StudioWizard(QtWidgets.QWizard):
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
             WelcomePage, ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
-            QemuPage,
+            QemuPage, LocalCloudNodesPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,

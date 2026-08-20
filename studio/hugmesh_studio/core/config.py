@@ -116,8 +116,12 @@ MODE_DEFAULT_ROLE = {
 # ASK 22 splits the terminal pair in three: "build" is the REVIEW screen (what will be
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
+# "localcloud" (issue #50) is the create-nodes-for-local-cloud GATE page: the last
+# side-flow slot before "idp", dynamically skipped (applies_to) unless its ModePage
+# card was picked; unlike its terminal siblings it REJOINS the image flow as an
+# abbreviated mesh wizard (it commits cfg.mode="mesh" itself on Next).
 WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "quest", "deploy",
-                     "qemu",
+                     "qemu", "localcloud",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "users_choice", "users",
