@@ -443,6 +443,26 @@ lint:kind-bootstrap-honesty:
   script:
     - bash tests/scripts/test-kind-bootstrap-honesty.sh
 
+# kubelet join/TLS-bootstrap gate (issue #48). specs/etc/init.d/kubelet hardcoded
+# command_args with no --bootstrap-kubeconfig and never read
+# /var/lib/kubelet/kubeadm-flags.env, so `kubeadm join`'s TLS bootstrap could never
+# complete on ANY node (hardware included) — while `kubeadm init` writes kubelet.conf
+# directly, which is why single-node always looked fine. The gate pins the bootstrap
+# flag + the kubeadm-flags.env sourcing on the LIVE command_args line, proves both by
+# sourcing the script in plain sh against a sandboxed env file (absent -> byte-identical
+# single-node args; present -> kubeadm's flags land), asserts the shared overlay stays
+# the ONLY copy (no specs-*/ per-arch fork) and that both k8s builders install it from
+# ${SHARED_SPECS}, and re-runs itself against five staged regressions that each must go
+# red. Offline: bash + sh + grep/sed, no root, no docker, no cluster.
+lint:kubelet-join-bootstrap:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash
+  script:
+    - bash tests/boot/test-kubelet-join-bootstrap.sh
+
 # ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
 # image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE
 # SITS IN: the root app-of-apps recurses specs/cluster/apps, so moving
