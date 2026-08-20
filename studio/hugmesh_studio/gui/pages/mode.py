@@ -81,6 +81,12 @@ class ModePage(QtWidgets.QWizardPage):
             ("localmesh", "Local Docker mesh",
              "Run a mesh on THIS machine in Docker — no separate server hardware. "
              "Configure it and launch the dockerized node right here."),
+            ("localcloud", "Create nodes for local cloud",
+             "Turn the local Docker mesh you already run HERE into real device "
+             "images: an abbreviated mesh wizard that reuses its domain and "
+             "accounts and offers ONLY the laptop and node image types. The local "
+             "k8s (DevOps) stack must stop first — the next screen asks you to "
+             "confirm that."),
             ("mesh", "Mesh node",
              "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
              "edge-AI — that run a mesh on dedicated hardware."),
@@ -99,12 +105,6 @@ class ModePage(QtWidgets.QWizardPage):
              "Enroll a USB Meta Quest 3/3S as an MDM-managed mesh device (Headwind + "
              "tailnet + XR-chat URL) — no image build, no flash. Same driver, quest "
              "device class."),
-            ("localcloud", "Create nodes for local cloud",
-             "Turn the local Docker mesh you already run HERE into real device "
-             "images: an abbreviated mesh wizard that reuses its domain and "
-             "accounts and offers ONLY the laptop and node image types. The local "
-             "k8s (DevOps) stack must stop first — the next screen asks you to "
-             "confirm that."),
             ("cloud", "Mesh desktop client",
              "Build a branded desktop that JOINS an existing mesh (tailnet + SSO). "
              "Load your admin-provided key-zip or configuration link."),
