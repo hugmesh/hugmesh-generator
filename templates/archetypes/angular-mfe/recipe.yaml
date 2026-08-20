@@ -30,11 +30,11 @@ edits:
     optional: false
     anchors:
       # Per-UI tab title: rebrand the leading word only, keep the role word
-      # (TITLE_WORD) + "(remote)". The <snap-<slug>-root> bootstrap selector is
+      # (TITLE_WORD). The <snap-<slug>-root> bootstrap selector is
       # NOT touched (repo identity — must match the app's own root component).
       - id: tab-title
-        find: "<title>HugMesh {{TITLE_WORD}} (remote)</title>"
-        replace: "<title>{{BRAND_TITLE}} {{TITLE_WORD}} (remote)</title>"
+        find: "<title>HugMesh {{TITLE_WORD}}</title>"
+        replace: "<title>{{BRAND_TITLE}} {{TITLE_WORD}}</title>"
         required: true
   - file: .gitlab-ci.yml
     optional: false
