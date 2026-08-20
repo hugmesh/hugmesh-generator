@@ -2298,6 +2298,7 @@ run_nongating_smokes() {
                 "sharedbinpkg-ro-distdir:${REPO_DIR}/tests/scripts/test-arm-ro-distdir.sh" \
                 "sharedbinpkg-pool-fingerprint:${REPO_DIR}/tests/scripts/test-binpkg-pool-fingerprint.sh" \
                 "sharedbinpkg-shared-assets:${REPO_DIR}/tests/scripts/test-shared-build-assets.sh" \
+                "sharedbinpkg-host-bdep-pool:${REPO_DIR}/tests/scripts/test-host-bdep-pool.sh" \
                 "sharedbinpkg-kernel-cache:${REPO_DIR}/tests/scripts/test-kernel-artifact-cache.sh" \
                 "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh" \
                 "package-completeness:${REPO_DIR}/tests/build-package-completeness.sh" \
@@ -2337,10 +2338,11 @@ run_nongating_smokes() {
 # and whose hit path must never bypass an artifact-integrity gate. So these are gated,
 # and a MISSING file counts as a failure too: deleting a smoke must not shrink the gate.
 SBP_PASS=0; SBP_FAIL=0
-SBP_EXPECTED=6
+SBP_EXPECTED=7
 SBP_NAMES=(sharedbinpkg-prebuild-target sharedbinpkg-per-board-pkgdir
            sharedbinpkg-ro-distdir sharedbinpkg-pool-fingerprint
-           sharedbinpkg-shared-assets sharedbinpkg-kernel-cache)
+           sharedbinpkg-shared-assets sharedbinpkg-host-bdep-pool
+           sharedbinpkg-kernel-cache)
 score_sharedbinpkg_smokes() {
     local n
     for n in "${SBP_NAMES[@]}"; do
