@@ -21,7 +21,7 @@ from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
     HomePage, IdpPage, KeyZipPage, LaunchPage, LocalCloudNodesPage, LocalMeshPage,
-    ModePage, NetworkPage,
+    MeshEmulationPage, ModePage, NetworkPage,
     PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SessionsPage, SystemPage,
     UsersChoicePage, UsersPage, WelcomePage, WorklistPage,
 )
@@ -33,7 +33,7 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
     "WelcomePage", "SessionsPage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
-    "DeployPage", "QemuPage", "LocalCloudNodesPage", "IdpPage",
+    "DeployPage", "QemuPage", "MeshEmulationPage", "LocalCloudNodesPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
@@ -129,6 +129,10 @@ class StudioWizard(QtWidgets.QWizard):
         # durable thing QemuPage may set is cfg.qemu_e2e, the same NON-ARGV field the
         # BuildPage checkbox drives, when the operator picks "build first, then test").
         self.qemu_selected = False
+        # transient: ModePage's MESH EMULATION choice — read by
+        # MeshEmulationPage.applies_to(), likewise NEVER persisted into cfg
+        # (emulating a built mesh is not an image mode; the page is terminal).
+        self.meshemu_selected = False
         # transient: ModePage's CREATE NODES FOR LOCAL CLOUD choice (issue #50) — read
         # by LocalCloudNodesPage.applies_to(). Unlike its terminal siblings the page
         # REJOINS the image flow: it commits cfg.mode="mesh" itself on Next.
@@ -168,7 +172,7 @@ class StudioWizard(QtWidgets.QWizard):
         page_ctors = [
             WelcomePage, SessionsPage,
             ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
-            QemuPage, LocalCloudNodesPage,
+            QemuPage, MeshEmulationPage, LocalCloudNodesPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,

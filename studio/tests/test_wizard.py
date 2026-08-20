@@ -115,6 +115,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "localmesh": wizard_mod.LocalMeshPage, "phone": wizard_mod.PhonePage,
               "quest": wizard_mod.QuestPage,
               "deploy": wizard_mod.DeployPage, "qemu": wizard_mod.QemuPage,
+              "meshemu": wizard_mod.MeshEmulationPage,
               "localcloud": wizard_mod.LocalCloudNodesPage,
               "idp": wizard_mod.IdpPage,
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,

@@ -1,13 +1,15 @@
-"""ModePage — the menu of choices: pick ONE of eight clearly-distinct things to build.
+"""ModePage — the menu of choices: pick ONE of nine clearly-distinct things to build.
 
-The choices map onto the EXISTING three emission modes plus five non-image
+The choices map onto the EXISTING three emission modes plus six non-image
 side-flows, PRESENTED in the operator's mesh-building journey order (issue #50):
 local mesh first, then the production mesh build, then QEMU emulation of the built
-images, then the publish/flash side-flows, then the two single-image desktop builds:
+images, then whole-mesh emulation, then the publish/flash side-flows, then the two
+single-image desktop builds:
 
   - LOCAL DOCKER MESH    -> NO cfg.mode            (side-flow: run a dockerized mesh HERE)
   - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
   - QEMU DEVICE TESTS    -> NO cfg.mode            (side-flow: boot built images emulated)
+  - MESH EMULATION       -> NO cfg.mode            (side-flow: boot a WHOLE built mesh locally)
   - CLOUD DEPLOY         -> NO cfg.mode            (side-flow: publish a packaged image to a cloud)
   - MDM PHONE            -> NO cfg.mode            (side-flow: flash+enroll a Pixel HERE)
   - MDM QUEST HEADSET    -> NO cfg.mode            (side-flow: enroll a Meta Quest 3/3S HERE)
@@ -47,6 +49,7 @@ _MODE_ICONS = {
     "quest": "quest",               # a VR headset under a cloud
     "deploy": "cloud-deploy",       # three-way arrow up to AWS / AZURE / CF marks
     "qemu": "mesh",                 # reuses the boards-under-a-cloud mark: emulated devices
+    "meshemu": "mesh",              # same mark: the whole mesh, emulated locally
     "localcloud": "localmesh",      # reuses the desktop-under-a-cloud mark: the same
                                     # local stack, now becoming node images (issue #50)
 }
@@ -64,14 +67,16 @@ class ModePage(QtWidgets.QWizardPage):
             "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
             "QUEST HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
             "already-packaged image to a cloud provider, QEMU DEVICE TESTS boots "
-            "built images as emulated devices, and CREATE NODES FOR LOCAL CLOUD "
+            "built images as emulated devices, MESH EMULATION boots a whole "
+            "built mesh locally, and CREATE NODES FOR LOCAL CLOUD "
             "turns the local mesh into buildable node images.")
-        # eight cards are taller than eight radios were: scroll, never clip
+        # nine cards are taller than nine radios were: scroll, never clip
         lay = scrollable(self)
         self.group = ChoiceCardGroup(self)
-        # EIGHT clearly-distinct choices, in the operator's mesh-building JOURNEY
+        # NINE clearly-distinct choices, in the operator's mesh-building JOURNEY
         # order (issue #50): local mesh -> prod mesh build -> QEMU emulation ->
-        # publish/flash side-flows -> the single-image desktop builds. Each carries
+        # whole-mesh emulation -> publish/flash side-flows -> the single-image
+        # desktop builds. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
         # exactly as before; "localmesh", "phone", "quest", "deploy" and "qemu" are
         # transient side-flows that never touch cfg.mode. The DEFAULT is chosen by id
@@ -94,6 +99,10 @@ class ModePage(QtWidgets.QWizardPage):
              "Boot built images as emulated devices in Docker and assert they "
              "provisioned correctly — Pi roles first, then x86. Test images from an "
              "earlier build session, or build new ones and test them after."),
+            ("meshemu", "Mesh emulation",
+             "Emulate a WHOLE built mesh locally: pick a prior build session and "
+             "boot every image it holds as emulated devices — per-device status, "
+             "ssh logins, USB provisioning keys and the mesh's web front door."),
             ("deploy", "Cloud deploy",
              "Publish an already-built, cloud-packaged x86 image to a cloud provider "
              "(AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are "
@@ -191,7 +200,12 @@ class ModePage(QtWidgets.QWizardPage):
         # can rejoin the image flow — "build new images first, then test them" — which
         # QemuPage expresses through its own nextId(), not through cfg.mode.
         self.wiz.qemu_selected = (mid == "qemu")
-        # CREATE NODES FOR LOCAL CLOUD (issue #50) is the fifth side-flow ENTRY: the
+        # MESH EMULATION is the fifth side-flow: it boots a WHOLE prior session's
+        # images as one emulated mesh and commits nothing to cfg.mode. Terminal —
+        # unlike QEMU DEVICE TESTS it never rejoins the image flow (it exists only
+        # AFTER a build, so "build first" is the mesh flow itself).
+        self.wiz.meshemu_selected = (mid == "meshemu")
+        # CREATE NODES FOR LOCAL CLOUD (issue #50) is the sixth side-flow ENTRY: the
         # gate page imports the local mesh's identity, then REJOINS the image flow as
         # an abbreviated mesh wizard (LocalCloudNodesPage commits cfg.mode itself).
         self.wiz.localcloud_selected = (mid == "localcloud")
@@ -199,7 +213,8 @@ class ModePage(QtWidgets.QWizardPage):
             # any other committed choice lifts the abbreviated-worklist restriction
             # the localcloud gate installs (see LocalCloudNodesPage.validatePage).
             self.wiz.worklist_role_allow = None
-        if mid in ("localmesh", "phone", "quest", "deploy", "qemu", "localcloud"):
+        if mid in ("localmesh", "phone", "quest", "deploy", "qemu", "meshemu",
+                   "localcloud"):
             return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid
