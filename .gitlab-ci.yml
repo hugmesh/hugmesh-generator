@@ -1145,6 +1145,27 @@ lint:cloud-package:
   script:
     - bash tests/scripts/test-cloud-package.sh
 
+# Local image-publishing export gate (scripts/publish-images.sh — Phase 1 of the
+# image-publishing outline recorded on hugmesh-host-shell#19). Hermetic: a
+# synthetic out/sessions/<id>/ tree — xz-magic/CD001-stamped fixtures wearing
+# real builder names NEXT TO planted keys-*/, secureboot/ and wl-*/sysroot
+# secret material — proves the export ships images + manifests ONLY, that the
+# deny-list is structural (poisoned trees — deny∩allow names, symlinks wearing
+# artifact names, rogue names, a PEM inside a .img.xz, a secret-laced mesh
+# manifest — REFUSE the whole export and clean the staging dir), that
+# SHA256SUMS verifies, and that publish-manifest.json is deterministic and
+# Ed25519-signable (PROVENANCE_SIGNING_KEY seam). No qemu, root or network;
+# coreutils for dd/truncate/stat, gawk for the secret-scan gate, openssl +
+# python3 for the signing/JSON-contract legs.
+lint:publish-images:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache coreutils findutils grep gawk sed openssl python3
+  script:
+    - bash tests/scripts/test-publish-images.sh
+
 # ARM cross-dracut helper (scripts/_dracut-cross-lib.sh): the --encrypt-root
 # qemu-aarch64 binfmt registration + the availability predicate the fail-fast
 # preflight evaluates. Proves preflight_ok is FALSE when qemu-aarch64 is
