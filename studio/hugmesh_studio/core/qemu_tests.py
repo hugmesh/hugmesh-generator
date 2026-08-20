@@ -38,6 +38,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .platform_info import wsl_docker_remedy
+from . import proc_group
 
 #: Where the builders drop per-session artifact dirs, relative to the generator repo.
 SESSIONS_SUBDIR = os.path.join("out", "sessions")
@@ -597,10 +598,4 @@ class QemuTestRunner:
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
-        try:
-            os.killpg(proc.pid, 15)
-        except (OSError, ProcessLookupError):
-            try:
-                proc.terminate()
-            except OSError:
-                pass
+        proc_group.terminate_group(proc)

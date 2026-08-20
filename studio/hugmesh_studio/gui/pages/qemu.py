@@ -82,6 +82,7 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 
+from ...core import proc_group
 from ..qt import Qt, QtGui, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
@@ -403,15 +404,7 @@ class _DeviceJob:
             proc = self._proc
         if proc is None or proc.poll() is not None:
             return
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except OSError:
-            # ProcessLookupError is an OSError: the group is already gone. Fall back
-            # to the plain terminate in case the session never got created.
-            try:
-                proc.terminate()
-            except OSError:
-                pass
+        proc_group.terminate_group(proc)
 
 
 class QemuPage(QtWidgets.QWizardPage):

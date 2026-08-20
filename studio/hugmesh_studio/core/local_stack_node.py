@@ -22,7 +22,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
-from . import devops_tools, own_casdoor, proc_text
+from . import devops_tools, own_casdoor, proc_group, proc_text
 from .local_services import federation_env
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
@@ -617,13 +617,7 @@ class LocalStackNode:
         cancelled = timed_out = False
 
         def _kill() -> None:
-            try:
-                if os.name == "posix":
-                    os.killpg(proc.pid, signal.SIGTERM)
-                else:
-                    proc.terminate()
-            except OSError:
-                pass
+            proc_group.terminate_group(proc)
 
         while True:
             if cancel is not None and cancel.is_set() and not cancelled:
@@ -651,13 +645,7 @@ class LocalStackNode:
         try:
             rc = proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            try:
-                if os.name == "posix":
-                    os.killpg(proc.pid, signal.SIGKILL)
-                else:
-                    proc.kill()
-            except OSError:
-                pass
+            proc_group.kill_group(proc)
             rc = proc.wait()
         text = "\n".join(tail).strip()
         if cancelled:
