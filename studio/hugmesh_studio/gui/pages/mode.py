@@ -11,6 +11,9 @@ images, then the publish/flash side-flows, then the two single-image desktop bui
   - CLOUD DEPLOY         -> NO cfg.mode            (side-flow: publish a packaged image to a cloud)
   - MDM PHONE            -> NO cfg.mode            (side-flow: flash+enroll a Pixel HERE)
   - MDM QUEST HEADSET    -> NO cfg.mode            (side-flow: enroll a Meta Quest 3/3S HERE)
+  - CREATE NODES FOR LOCAL CLOUD -> NO cfg.mode HERE (issue #50: the gate page imports
+    the local mesh's identity, then commits cfg.mode="mesh" ITSELF and rejoins the
+    image flow as an abbreviated mesh wizard)
   - MESH DESKTOP CLIENT  -> cfg.mode="cloud"       (branded tailnet + SSO client)
   - STANDALONE GENTOO    -> cfg.mode="standalone"  (hardened/unaffiliated personal desktop)
 
@@ -44,6 +47,8 @@ _MODE_ICONS = {
     "quest": "quest",               # a VR headset under a cloud
     "deploy": "cloud-deploy",       # three-way arrow up to AWS / AZURE / CF marks
     "qemu": "mesh",                 # reuses the boards-under-a-cloud mark: emulated devices
+    "localcloud": "localmesh",      # reuses the desktop-under-a-cloud mark: the same
+                                    # local stack, now becoming node images (issue #50)
 }
 
 _GENTOO_URL = "https://www.gentoo.org/"
@@ -58,8 +63,9 @@ class ModePage(QtWidgets.QWizardPage):
             "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
             "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
             "QUEST HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
-            "already-packaged image to a cloud provider, and QEMU DEVICE TESTS boots "
-            "built images as emulated devices.")
+            "already-packaged image to a cloud provider, QEMU DEVICE TESTS boots "
+            "built images as emulated devices, and CREATE NODES FOR LOCAL CLOUD "
+            "turns the local mesh into buildable node images.")
         # eight cards are taller than eight radios were: scroll, never clip
         lay = scrollable(self)
         self.group = ChoiceCardGroup(self)
@@ -75,6 +81,12 @@ class ModePage(QtWidgets.QWizardPage):
             ("localmesh", "Local Docker mesh",
              "Run a mesh on THIS machine in Docker — no separate server hardware. "
              "Configure it and launch the dockerized node right here."),
+            ("localcloud", "Create nodes for local cloud",
+             "Turn the local Docker mesh you already run HERE into real device "
+             "images: an abbreviated mesh wizard that reuses its domain and "
+             "accounts and offers ONLY the laptop and node image types. The local "
+             "k8s (DevOps) stack must stop first — the next screen asks you to "
+             "confirm that."),
             ("mesh", "Mesh node",
              "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
              "edge-AI — that run a mesh on dedicated hardware."),
@@ -179,7 +191,15 @@ class ModePage(QtWidgets.QWizardPage):
         # can rejoin the image flow — "build new images first, then test them" — which
         # QemuPage expresses through its own nextId(), not through cfg.mode.
         self.wiz.qemu_selected = (mid == "qemu")
-        if mid in ("localmesh", "phone", "quest", "deploy", "qemu"):
+        # CREATE NODES FOR LOCAL CLOUD (issue #50) is the fifth side-flow ENTRY: the
+        # gate page imports the local mesh's identity, then REJOINS the image flow as
+        # an abbreviated mesh wizard (LocalCloudNodesPage commits cfg.mode itself).
+        self.wiz.localcloud_selected = (mid == "localcloud")
+        if mid != "localcloud":
+            # any other committed choice lifts the abbreviated-worklist restriction
+            # the localcloud gate installs (see LocalCloudNodesPage.validatePage).
+            self.wiz.worklist_role_allow = None
+        if mid in ("localmesh", "phone", "quest", "deploy", "qemu", "localcloud"):
             return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid

@@ -126,9 +126,14 @@ MODE_DEFAULT_ROLE = {
 # continues naturally into building. A fresh start shows "welcome" (first slug, and
 # nothing sets a start id); prior-session RESTART still enters at "progress" via
 # StudioWizard.start_build_from_session.
+#
+# "localcloud" (issue #50) is the create-nodes-for-local-cloud GATE page: the last
+# side-flow slot before "idp", dynamically skipped (applies_to) unless its ModePage
+# card was picked; unlike its terminal siblings it REJOINS the image flow as an
+# abbreviated mesh wizard (it commits cfg.mode="mesh" itself on Next).
 WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "mode", "localmesh", "phone", "quest", "deploy",
-                     "qemu",
+                     "qemu", "localcloud",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "users_choice", "users",

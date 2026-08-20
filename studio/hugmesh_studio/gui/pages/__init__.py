@@ -11,6 +11,7 @@ from .phone import PhoneDialog, PhonePage
 from .quest import QuestDialog, QuestPage
 from .deploy import DeployDialog, DeployPage
 from .qemu import QemuPage
+from .localcloud_nodes import LocalCloudNodesPage
 from .mode import ModePage
 from .idp import IdpPage
 from .role import RolePage
@@ -40,7 +41,7 @@ except ImportError:                    # pragma: no cover — until WS-REVIEWUI 
 __all__ = [
     "WelcomePage", "SessionsPage", "ModePage", "LocalMeshPage", "LocalMeshDialog",
     "PhonePage", "PhoneDialog", "QuestPage", "QuestDialog",
-    "DeployPage", "DeployDialog", "QemuPage", "IdpPage",
+    "DeployPage", "DeployDialog", "QemuPage", "LocalCloudNodesPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
