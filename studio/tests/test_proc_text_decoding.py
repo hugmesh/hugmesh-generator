@@ -114,3 +114,66 @@ class TestTheSharedDecodingRule:
         with open(src, encoding="utf-8") as fh:
             text = fh.read()
         assert "proc_text.TEXT_IO" in text, f"{module} streams output without the shared decoding rule"
+
+
+class TestTheEmulationPagesHaveOnlyOneSpawnLane:
+    """The rule above only holds if there is ONE place to apply it.
+
+    Both emulation screens stream a subprocess into a console, and both used to do
+    it themselves: the test page carried its own ``_DeviceJob`` (a second Popen with
+    its own read loop) alongside ``QemuTestRunner``'s, and the mesh page a third. A
+    decoding rule — or a cancel rule, or a process-group rule — applied to one of
+    those is not applied to the others, which is exactly how the two screens came to
+    kill devices differently.
+
+    After T3 every runner invocation on both pages goes through
+    ``core.emulation.spawn``, the single process boundary the facade documents. That
+    is what makes these pages testable with no docker and no qemu (the tests replace
+    that one function), and it is what leaves exactly ONE call site where the shared
+    decoding rule has to hold.
+
+    NOTE for whoever lands the decoding fix in the facade: ``emulation.spawn`` still
+    opens its pipe with a bare ``text=True`` — i.e. the launcher's locale — where
+    ``qemu_tests.QemuTestRunner`` (its sibling, and the lane it replaced) pins
+    ``proc_text.TEXT_IO``. That is a core/ change, deliberately not made from the GUI
+    workstream; these assertions are what guarantee it is a ONE-LINE change when it
+    is made, rather than four.
+    """
+
+    #: The GUI modules that may spawn at all, and what each is allowed to spawn.
+    #: Detached desktop launches (a terminal, an ssh tunnel) are fine — they own
+    #: their own tty or nothing at all, and the page never reads their output — but
+    #: a PIPED spawn is a second console lane and is refused.
+    PAGES = ["qemu", "mesh_emulation", "_emulation_common"]
+
+    def _source(self, page):
+        import importlib
+        src = importlib.import_module(f"hugmesh_studio.gui.pages.{page}").__file__
+        with open(src, encoding="utf-8") as fh:
+            return fh.read()
+
+    @pytest.mark.parametrize("page", PAGES)
+    def test_no_page_reads_a_pipe_of_its_own(self, page):
+        text = self._source(page)
+        for forbidden in ("stdout=subprocess.PIPE", "stderr=subprocess.PIPE",
+                          "subprocess.run(", "subprocess.call(",
+                          "subprocess.check_output("):
+            assert forbidden not in text, (
+                f"gui/pages/{page}.py reads a pipe of its own — that is a second "
+                "streaming lane the shared decoding rule does not cover")
+
+    @pytest.mark.parametrize("page", ["qemu", "mesh_emulation"])
+    def test_every_runner_invocation_goes_through_the_facade(self, page):
+        text = self._source(page)
+        assert "emulation.spawn(" in text
+        assert "QemuTestRunner" not in text, (
+            f"gui/pages/{page}.py still drives the old runner lane, which spawns "
+            "and decodes independently of core.emulation.spawn")
+
+    @pytest.mark.parametrize("page", ["qemu", "mesh_emulation"])
+    def test_a_detached_launch_is_detached_and_unread(self, page):
+        # The only Popen either page may reach for: a terminal or an ssh tunnel,
+        # start_new_session'd so it outlives the wizard, with no pipe to decode.
+        text = self._source(page)
+        if "subprocess.Popen(" in text:
+            assert "start_new_session=True" in text
