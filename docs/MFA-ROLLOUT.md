@@ -792,3 +792,44 @@ Cross-repo (not changeable from here):
 `config/CasdoorAuthorities.java`, `filter/BffSessionAuthFilter.java`;
 `hugmesh-auth-core` `mfa/MfaEnrollmentService.java`, `mfa/RecoveryCodeService.java`,
 `casdoor/MfaChallengeController.java`.
+
+---
+
+## 8. `MFA=1` — the operational flip switch (issue #47)
+
+Everything above describes WHAT to flip; this section is the ONE switch that
+performs the flip, per lane, following the `PHPBB=1`/`AKKOMA=1` knob precedent.
+It flips **only `app.mfa.enabled`**: the freshness window keeps its default
+(600000) everywhere, and the privileged floor is **not reachable from this
+switch on any lane** — `MFA_FLOOR=1` (§3 step 5) stays its own deliberate,
+compose-only rehearsal knob, and a cluster floor flip stays the hand-executed §3
+step 7. **Every precondition in §2 (enroll before you enforce, the machine-caller
+census in §2.4) binds on every lane below.** Nothing here changes a committed
+default: the chart stays `false`, no `specs/cluster/apps/*.yaml` flips it, and
+the posture gates (`tests/stack/test-gateway-mfa-env.sh`,
+`tests/scripts/test-mfa-required-rules.sh`) keep enforcing that.
+
+| lane | invocation | mechanism | scope |
+|---|---|---|---|
+| compose dev stack | `make stack-up MFA=1` | threads an EXPLICIT `APP_MFA_ENABLED='true'` into every compose invocation (`STACK_MFA_ENV` in the Makefile), overriding even an operator shell that exports `APP_MFA_ENABLED=false`. A plain `make stack-up` stays byte-identical (the dev default is already `true`, §1.3). | the run |
+| kind SSO slice | `make kind-up MFA=1` | `bootstrap-kind.sh` appends a `mfa.enabled=true` **helm parameter** to every gateway Application it applies (today: `hugmesh-gateway-fe`) — the same runtime-patch mechanism as its `ingress.className` override, so the committed chart/apps stay untouched. Fails loudly under `KIND_PROFILE=core` (no gateway is applied there) and on any unrecognised `MFA` spelling. With it on, spec 27's cluster carries live route-level enforcement for the non-privileged case, same as compose (§3.1). | the kind cluster |
+| per-domain / tenant | `MFA=1` in `brands/<brand>.conf`, then `./generate-brand-repos.sh brands/<brand>.conf` | renders `mfa: {enabled: true}` into **that brand's** gateway Applications via the `{{MFA_ENABLED}}` token (both render engines; parity-proven). Conf-only by design: an ambient exported `MFA=1` does NOT leak into a render whose profile never set it (root-cron reconcile safety). | one `CLUSTER_DOMAIN` |
+
+**The reference cluster (specs/cluster) is deliberately NOT a lane.** Its flip
+remains §3 step 6 — a reviewed commit that sets the shared chart's `mfa.enabled`
+and moves the `EXPECT_*` pins in the same change. `MFA=1` gives you the
+rehearsal (compose), the integration proof (kind), and the tenant rollout
+(brands); it never silently changes the posture a cluster ships with.
+
+**Per-domain WITHIN one mesh** (several local domains behind the same gateways)
+is NOT expressible yet: `gateway_route_access.mfa_required` rows are
+domain-blind in the seed today, and choosing a per-domain Casdoor org is the
+casdoor-choice schema work. When that schema lands, the join point is the
+`domain` column already present in `uq_route_access_row` (§5) plus the seed's
+`UPDATE` predicate — extend both together, with the §1.2a scope table.
+
+Wiring proof: `tests/stack/test-mfa-flip-wiring.sh` (CI `lint:mfa-flip-wiring`)
+re-derives every consumer of the trio per lane from the artifacts themselves and
+fails if any consumer stops receiving the switch — the inert-toggle failure mode
+(a flag wiring only half its consumers has shipped dark twice in this repo). All
+of its checks are mutation-tested on staged copies.

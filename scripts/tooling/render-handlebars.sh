@@ -54,6 +54,10 @@ if [[ ! -d "${TOOLING_DIR}/node_modules/handlebars" ]]; then
   exit 1
 fi
 
+# Security-posture knobs come from the BRAND PROFILE only — reset before source
+# so an ambient exported MFA cannot leak into the render (mirrors
+# generate-brand-repos.sh; keep IN SYNC or scripts/parity-gate.sh diverges).
+MFA=""
 # shellcheck source=/dev/null
 source "$BRAND_CONF"
 
@@ -113,9 +117,18 @@ NS_PREFIX="${NS_PREFIX:-$BRAND}"
 [[ "$NS_PREFIX" =~ $_DNS_LABEL ]] \
   || _hbdie "invalid NS_PREFIX '${NS_PREFIX}' (must be a DNS label)"
 
+# Derive MFA_ENABLED identically to generate-brand-repos.sh (per-domain gateway
+# MFA flip, issue #47; fail closed on unknown spellings). Keep in sync — the
+# parity gate byte-compares the two engines' output.
+case "${MFA}" in
+  ""|0|false|off) MFA_ENABLED="false" ;;
+  1|true|on)      MFA_ENABLED="true" ;;
+  *) _hbdie "invalid MFA '${MFA}' in the brand profile (use MFA=1 to enable; unset/0/false/off = disabled)" ;;
+esac
+
 BRAND_OUT="${OUT_DIR}/${BRAND}-gitops"
 
-export BRAND BRAND_TITLE ORG CLUSTER_DOMAIN HEADSCALE_URL HARBOR_PROJECT MESH_TAG NS_PREFIX
+export BRAND BRAND_TITLE ORG CLUSTER_DOMAIN HEADSCALE_URL HARBOR_PROJECT MESH_TAG NS_PREFIX MFA_ENABLED
 
 exec node "${TOOLING_DIR}/render-handlebars.js" \
   --templates "$TEMPLATES_DIR" \
