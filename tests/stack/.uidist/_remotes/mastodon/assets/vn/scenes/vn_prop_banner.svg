@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- flat-vector VN prop: pennant banner string (no text/image/script) -->
+  <path d="M10 90 q190 90 380 0" stroke="#8a5a3b" stroke-width="8" fill="none"/>
+  <circle cx="10" cy="90" r="10" fill="#8a5a3b"/>
+  <circle cx="390" cy="90" r="10" fill="#8a5a3b"/>
+  <path d="M52 110 l56 10 -22 74 z" fill="#e86a8a"/>
+  <path d="M124 130 l58 4 -26 74 z" fill="#ffd97a"/>
+  <path d="M200 136 l58 -2 -28 74 z" fill="#5a8fd9"/>
+  <path d="M276 128 l56 -10 -32 76 z" fill="#9ec49a"/>
+  <path d="M338 108 l50 -18 -36 74 z" fill="#c9909e"/>
+</svg>

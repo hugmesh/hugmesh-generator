@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- flat-vector VN prop: round wooden table (no text/image/script) -->
+  <ellipse cx="200" cy="150" rx="180" ry="46" fill="#8a5a3b"/>
+  <ellipse cx="200" cy="140" rx="180" ry="46" fill="#a5714c"/>
+  <ellipse cx="200" cy="140" rx="140" ry="34" fill="#8a5a3b" opacity="0.35"/>
+  <rect x="184" y="178" width="32" height="150" fill="#6f4a2d"/>
+  <path d="M184 328 l-70 44 24 12 62 -44 z" fill="#5d3a26"/>
+  <path d="M216 328 l70 44 -24 12 -62 -44 z" fill="#5d3a26"/>
+  <ellipse cx="200" cy="332" rx="52" ry="14" fill="#5d3a26"/>
+</svg>

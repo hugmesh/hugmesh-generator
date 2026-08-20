@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900">
+  <!-- flat-vector VN background: cozy bedroom at night (no text/image/script) -->
+  <rect width="1600" height="620" fill="#4a3f66"/>
+  <rect y="596" width="1600" height="28" fill="#372f4e"/>
+  <rect y="624" width="1600" height="276" fill="#6b5646"/>
+  <rect y="624" width="1600" height="10" fill="#553f31"/>
+  <!-- window with night sky and moon -->
+  <rect x="960" y="110" width="420" height="330" rx="14" fill="#2b2f55"/>
+  <rect x="982" y="132" width="376" height="286" rx="8" fill="#141a3d"/>
+  <circle cx="1268" cy="212" r="42" fill="#f4ecc8"/>
+  <circle cx="1252" cy="200" r="34" fill="#141a3d"/>
+  <circle cx="1032" cy="180" r="5" fill="#e9e4c8"/>
+  <circle cx="1090" cy="250" r="4" fill="#e9e4c8"/>
+  <circle cx="1150" cy="170" r="3" fill="#e9e4c8"/>
+  <circle cx="1210" cy="320" r="4" fill="#e9e4c8"/>
+  <circle cx="1310" cy="300" r="3" fill="#e9e4c8"/>
+  <rect x="1160" y="132" width="10" height="286" fill="#2b2f55"/>
+  <rect x="982" y="266" width="376" height="10" fill="#2b2f55"/>
+  <!-- curtains -->
+  <path d="M950 100 q40 190 -20 350 l-40 0 0 -350 z" fill="#8a6f9e"/>
+  <path d="M1390 100 q-40 190 20 350 l40 0 0 -350 z" fill="#8a6f9e"/>
+  <rect x="880" y="92" width="570" height="18" rx="9" fill="#5c4a75"/>
+  <!-- bed -->
+  <rect x="110" y="470" width="120" height="240" rx="16" fill="#54324a"/>
+  <rect x="130" y="540" width="580" height="180" rx="22" fill="#7a4f63"/>
+  <rect x="160" y="516" width="150" height="64" rx="26" fill="#e9e2d0"/>
+  <rect x="288" y="560" width="422" height="120" rx="20" fill="#a26a84"/>
+  <path d="M288 560 h422 v34 q-110 26 -211 0 q-101 26 -211 0 z" fill="#b57e97"/>
+  <rect x="130" y="700" width="580" height="22" rx="10" fill="#54324a"/>
+  <!-- nightstand and lamp -->
+  <rect x="760" y="560" width="130" height="130" rx="10" fill="#54463b"/>
+  <rect x="775" y="586" width="100" height="26" rx="6" fill="#6f5c4c"/>
+  <rect x="818" y="500" width="14" height="60" fill="#3c332c"/>
+  <path d="M786 470 h78 l-14 44 h-50 z" fill="#ffd97a"/>
+  <circle cx="825" cy="492" r="46" fill="#ffd97a" opacity="0.16"/>
+  <!-- rug -->
+  <ellipse cx="1120" cy="790" rx="310" ry="70" fill="#8b6f8f"/>
+  <ellipse cx="1120" cy="790" rx="228" ry="48" fill="#a487a8"/>
+  <ellipse cx="1120" cy="790" rx="140" ry="28" fill="#8b6f8f"/>
+  <!-- wall posters -->
+  <rect x="330" y="170" width="150" height="200" rx="8" fill="#3b3157"/>
+  <rect x="348" y="192" width="114" height="120" rx="4" fill="#8fb3d9"/>
+  <circle cx="405" cy="240" r="26" fill="#ffd97a"/>
+  <rect x="560" y="220" width="120" height="150" rx="8" fill="#3b3157"/>
+  <rect x="576" y="238" width="88" height="90" rx="4" fill="#c9909e"/>
+  <!-- shelf -->
+  <rect x="330" y="430" width="330" height="14" rx="7" fill="#3c332c"/>
+  <rect x="360" y="386" width="26" height="44" rx="3" fill="#c96f4a"/>
+  <rect x="392" y="378" width="26" height="52" rx="3" fill="#8fb3d9"/>
+  <rect x="424" y="392" width="26" height="38" rx="3" fill="#9ec49a"/>
+  <circle cx="560" cy="408" r="24" fill="#9ec49a"/>
+  <rect x="548" y="418" width="24" height="14" rx="3" fill="#c96f4a"/>
+</svg>

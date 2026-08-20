@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- flat-vector VN prop: hot drink with steam (no text/image/script) -->
+  <path d="M120 200 q20 -60 0 -90" stroke="#c9c2b8" stroke-width="12" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M180 190 q22 -66 0 -100" stroke="#c9c2b8" stroke-width="12" stroke-linecap="round" fill="none" opacity="0.6"/>
+  <path d="M240 200 q20 -60 0 -90" stroke="#c9c2b8" stroke-width="12" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M90 220 h220 l-24 140 q-4 24 -30 24 h-112 q-26 0 -30 -24 z" fill="#e86a8a"/>
+  <path d="M90 220 h220 l-6 34 h-208 z" fill="#d5567a"/>
+  <ellipse cx="200" cy="220" rx="110" ry="26" fill="#f2a0b6"/>
+  <ellipse cx="200" cy="220" rx="88" ry="18" fill="#6f4a2d"/>
+  <path d="M310 250 q70 -10 62 50 q-8 52 -74 44 l6 -30 q40 6 44 -20 q4 -26 -44 -16 z" fill="#e86a8a"/>
+</svg>

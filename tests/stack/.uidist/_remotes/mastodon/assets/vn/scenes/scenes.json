@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "scenes": [
+    { "id": "vn_scene_bedroom", "displayName": "Bedroom", "file": "vn_scene_bedroom.svg", "tags": ["indoor", "cozy", "night"] },
+    { "id": "vn_scene_cafe", "displayName": "Café", "file": "vn_scene_cafe.svg", "tags": ["indoor", "warm", "day"] },
+    { "id": "vn_scene_park", "displayName": "Park", "file": "vn_scene_park.svg", "tags": ["outdoor", "green", "day"] },
+    { "id": "vn_scene_beach_sunset", "displayName": "Beach sunset", "file": "vn_scene_beach_sunset.svg", "tags": ["outdoor", "warm", "sunset"] },
+    { "id": "vn_scene_night_city", "displayName": "Night city", "file": "vn_scene_night_city.svg", "tags": ["outdoor", "urban", "night"] },
+    { "id": "vn_scene_library", "displayName": "Library", "file": "vn_scene_library.svg", "tags": ["indoor", "quiet", "day"] }
+  ],
+  "props": [
+    { "id": "vn_prop_table", "displayName": "Table", "file": "vn_prop_table.svg" },
+    { "id": "vn_prop_plant", "displayName": "Plant", "file": "vn_prop_plant.svg" },
+    { "id": "vn_prop_lamp", "displayName": "Lamp", "file": "vn_prop_lamp.svg" },
+    { "id": "vn_prop_drink", "displayName": "Drink", "file": "vn_prop_drink.svg" },
+    { "id": "vn_prop_books", "displayName": "Books", "file": "vn_prop_books.svg" },
+    { "id": "vn_prop_banner", "displayName": "Banner", "file": "vn_prop_banner.svg" },
+    { "id": "vn_prop_radio", "displayName": "Radio", "file": "vn_prop_radio.svg" },
+    { "id": "vn_prop_cat_cushion", "displayName": "Cat cushion", "file": "vn_prop_cat_cushion.svg" }
+  ]
+}

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- flat-vector VN prop: potted plant (no text/image/script) -->
+  <path d="M200 240 q-10 -120 -90 -160 q100 10 110 130 z" fill="#5aa04f"/>
+  <path d="M200 240 q10 -120 90 -160 q-100 10 -110 130 z" fill="#7cc26e"/>
+  <path d="M196 250 q-60 -60 -140 -50 q70 -40 148 22 z" fill="#7cc26e"/>
+  <path d="M204 250 q60 -60 140 -50 q-70 -40 -148 22 z" fill="#5aa04f"/>
+  <path d="M192 254 q-4 -90 8 -170 q22 80 8 172 z" fill="#4f8f45"/>
+  <path d="M130 388 l-18 -140 h176 l-18 140 z" fill="#c96f4a"/>
+  <rect x="100" y="236" width="200" height="34" rx="12" fill="#d9825c"/>
+  <path d="M130 388 l-8 -60 q78 24 156 0 l-8 60 z" fill="#a85a3c"/>
+</svg>

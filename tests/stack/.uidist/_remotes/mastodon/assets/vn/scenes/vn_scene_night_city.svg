@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900">
+  <!-- flat-vector VN background: night city skyline (no text/image/script) -->
+  <rect width="1600" height="900" fill="#10142e"/>
+  <circle cx="1280" cy="170" r="70" fill="#f4ecc8"/>
+  <circle cx="1252" cy="152" r="58" fill="#10142e"/>
+  <circle cx="180" cy="120" r="4" fill="#e9e4c8"/>
+  <circle cx="340" cy="200" r="3" fill="#e9e4c8"/>
+  <circle cx="520" cy="90" r="4" fill="#e9e4c8"/>
+  <circle cx="700" cy="160" r="3" fill="#e9e4c8"/>
+  <circle cx="900" cy="80" r="4" fill="#e9e4c8"/>
+  <circle cx="1060" cy="210" r="3" fill="#e9e4c8"/>
+  <circle cx="1450" cy="110" r="4" fill="#e9e4c8"/>
+  <circle cx="1540" cy="260" r="3" fill="#e9e4c8"/>
+  <!-- back skyline -->
+  <rect x="60" y="360" width="180" height="440" fill="#1b2144"/>
+  <rect x="300" y="300" width="140" height="500" fill="#1b2144"/>
+  <rect x="520" y="380" width="200" height="420" fill="#1b2144"/>
+  <rect x="800" y="260" width="150" height="540" fill="#1b2144"/>
+  <rect x="1020" y="340" width="170" height="460" fill="#1b2144"/>
+  <rect x="1280" y="300" width="220" height="500" fill="#1b2144"/>
+  <rect x="860" y="210" width="30" height="50" fill="#1b2144"/>
+  <!-- front skyline -->
+  <rect x="0" y="480" width="220" height="420" fill="#232b57"/>
+  <rect x="260" y="430" width="190" height="470" fill="#232b57"/>
+  <rect x="560" y="500" width="230" height="400" fill="#232b57"/>
+  <rect x="880" y="440" width="200" height="460" fill="#232b57"/>
+  <rect x="1160" y="520" width="210" height="380" fill="#232b57"/>
+  <rect x="1440" y="470" width="160" height="430" fill="#232b57"/>
+  <!-- lit windows -->
+  <rect x="40" y="520" width="26" height="34" fill="#ffd97a"/>
+  <rect x="110" y="520" width="26" height="34" fill="#ffd97a" opacity="0.7"/>
+  <rect x="40" y="600" width="26" height="34" fill="#ffd97a" opacity="0.45"/>
+  <rect x="150" y="660" width="26" height="34" fill="#ffd97a"/>
+  <rect x="300" y="470" width="28" height="36" fill="#ffd97a" opacity="0.8"/>
+  <rect x="370" y="470" width="28" height="36" fill="#ffd97a" opacity="0.4"/>
+  <rect x="300" y="560" width="28" height="36" fill="#ffd97a"/>
+  <rect x="370" y="640" width="28" height="36" fill="#ffd97a" opacity="0.6"/>
+  <rect x="600" y="540" width="28" height="36" fill="#ffd97a"/>
+  <rect x="670" y="540" width="28" height="36" fill="#ffd97a" opacity="0.5"/>
+  <rect x="600" y="640" width="28" height="36" fill="#ffd97a" opacity="0.75"/>
+  <rect x="720" y="700" width="28" height="36" fill="#ffd97a"/>
+  <rect x="920" y="480" width="28" height="36" fill="#ffd97a" opacity="0.85"/>
+  <rect x="990" y="480" width="28" height="36" fill="#ffd97a"/>
+  <rect x="920" y="580" width="28" height="36" fill="#ffd97a" opacity="0.5"/>
+  <rect x="990" y="660" width="28" height="36" fill="#ffd97a" opacity="0.7"/>
+  <rect x="1200" y="560" width="28" height="36" fill="#ffd97a"/>
+  <rect x="1280" y="560" width="28" height="36" fill="#ffd97a" opacity="0.5"/>
+  <rect x="1200" y="660" width="28" height="36" fill="#ffd97a" opacity="0.8"/>
+  <rect x="1480" y="520" width="28" height="36" fill="#ffd97a" opacity="0.9"/>
+  <rect x="1480" y="620" width="28" height="36" fill="#ffd97a" opacity="0.4"/>
+  <!-- antenna beacons -->
+  <rect x="330" y="250" width="8" height="50" fill="#3c4470"/>
+  <circle cx="334" cy="244" r="7" fill="#ff6b6b"/>
+  <rect x="1380" y="240" width="8" height="60" fill="#3c4470"/>
+  <circle cx="1384" cy="234" r="7" fill="#ff6b6b"/>
+  <!-- street glow -->
+  <rect y="860" width="1600" height="40" fill="#0c0f22"/>
+  <ellipse cx="800" cy="870" rx="500" ry="18" fill="#2c3568" opacity="0.6"/>
+</svg>
