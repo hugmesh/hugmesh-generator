@@ -33,6 +33,13 @@ WHAT IS ASSERTED, and why it is spelled this way:
   * The hook FILENAME is discovered too (any docker-entrypoint.d/*.sh that reads
     a theme var), not pinned to ``50-snap-theme.sh``. A fleet-wide hook rename is
     a legitimate refactor; a hook that reads nothing is not.
+  * A hook may read SEVERAL spellings — that is the DUAL READ a cross-process
+    rename requires, and it is the thing that makes the flip safe rather than a
+    thing to forbid. So the consumer side is checked by CONTAINMENT ("the hook
+    reads the name compose passes"), not equality. Equality would have made this
+    gate fire on the very migration step it exists to enable, which is how a
+    rename ends up half-done. What still goes red is the defect: a hook that
+    reads NONE of the spellings compose passes.
   * The Dockerfile must COPY the hook it found. A hook present in the checkout
     but never copied into the image is the same silent zero-byte outcome.
   * The REVERSE direction: a checkout that ships a theme hook must have its
@@ -142,6 +149,19 @@ def _theme_vars_read_by(path: str):
     return {m for m in re.findall(r"\$\{?([A-Z][A-Z0-9_]*_THEME_CSS)\b", code)}
 
 
+def _hook_honours(compose_key: str, read: set) -> bool:
+    """Does a hook that READS ``read`` honour the name compose PASSES?
+
+    CONTAINMENT, not equality — extracted so the rule is testable and so a future
+    edit cannot quietly re-tighten it. A hook reading BOTH spellings is the DUAL
+    READ that a cross-process rename is sequenced through: the consumer images
+    ship first, accepting either name, and only then may the producer flip.
+    Equality would fail exactly that intermediate state and force the rename to
+    be one-sided — the failure this whole file exists to prevent.
+    """
+    return compose_key in read
+
+
 def _hooks_reading_theme(ctx_dir: str):
     """docker-entrypoint.d/*.sh in this build context that read a theme var.
 
@@ -186,6 +206,59 @@ def _skip_or_fail(skipped):
     if _require_stack_src():
         pytest.fail("REQUIRE_STACK_SRC=1 but " + msg)
     pytest.skip(msg)
+
+
+# ── the comparison rule itself (no clone tree needed: always load-bearing) ─────────
+
+# A dual-read hook body, verbatim in shape from the fleet's
+# docker-entrypoint.d/50-snap-theme.sh. Its header prose deliberately names only
+# the OLD spelling, to prove the comment stripper is what makes the discovery
+# honest rather than the code happening to be tidy.
+_DUAL_READ_HOOK = """#!/bin/sh
+# Writes snap-theme.css from $SNAP_THEME_CSS at container start.
+set -eu
+OUT="${HUG_THEME_OUT:-${SNAP_THEME_OUT:-/usr/share/nginx/html/snap-theme.css}}"
+CSS="${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}"
+printf '%s' "$CSS" > "$OUT"
+"""
+
+_SINGLE_READ_HOOK = """#!/bin/sh
+set -eu
+OUT="${SNAP_THEME_OUT:-/usr/share/nginx/html/snap-theme.css}"
+printf '%s' "${SNAP_THEME_CSS:-}" > "$OUT"
+"""
+
+
+def test_discovery_finds_every_spelling_a_dual_read_hook_accepts(tmp_path):
+    """The hook is read for what its CODE references, so a dual read shows up as
+    two names — not as the one the header prose happens to mention."""
+    p = tmp_path / "50-theme.sh"
+    p.write_text(_DUAL_READ_HOOK, encoding="utf-8")
+    assert _theme_vars_read_by(str(p)) == {"HUG_THEME_CSS", "SNAP_THEME_CSS"}
+
+    p2 = tmp_path / "50-old.sh"
+    p2.write_text(_SINGLE_READ_HOOK, encoding="utf-8")
+    assert _theme_vars_read_by(str(p2)) == {"SNAP_THEME_CSS"}
+
+
+def test_a_dual_read_hook_satisfies_either_producer_spelling():
+    """THE rule that lets a cross-process rename happen at all.
+
+    Consumer images ship the dual read FIRST (green against today's producer),
+    the producer flips SECOND (green against the already-shipped images). Neither
+    step is ever one-sided, and there is no window in which the hook reads a name
+    nothing sets — which is the zero-byte-stylesheet outcome this file guards."""
+    both = {"HUG_THEME_CSS", "SNAP_THEME_CSS"}
+    assert _hook_honours("SNAP_THEME_CSS", both), "pre-flip: producer still on SNAP_*"
+    assert _hook_honours("HUG_THEME_CSS", both), "post-flip: producer moved to HUG_*"
+
+
+def test_a_hook_that_reads_none_of_the_passed_name_is_still_a_failure():
+    """Containment must not degrade into 'anything goes'. A hook that reads only
+    the OTHER spelling is a genuine one-sided rename and stays red."""
+    assert not _hook_honours("SNAP_THEME_CSS", {"HUG_THEME_CSS"})
+    assert not _hook_honours("HUG_THEME_CSS", {"SNAP_THEME_CSS"})
+    assert not _hook_honours("SNAP_THEME_CSS", set())
 
 
 # ── the producer half, on its own (runs with or without a clone tree) ──────────────
@@ -257,13 +330,22 @@ def test_every_themed_compose_service_has_a_hook_reading_the_same_env_var(capsys
                 f"dropped on the floor (zero-byte snap-theme.css, shipped brand)")
             continue
         read = set().union(*hooks.values())
-        if read != {key}:
+        # CONTAINMENT, not equality. A hook that reads BOTH spellings is a dual
+        # read — the deliberate intermediate state of a cross-process rename, and
+        # the only shape under which the producer can be flipped without an
+        # image rebuild landing first. Demanding equality here would go red on
+        # the migration step itself. The defect is a hook that reads none of
+        # what compose passes, and that still fails below.
+        if not _hook_honours(key, read):
             problems.append(
                 f"{svc}: compose passes {key} but {rel}/docker-entrypoint.d/"
                 f"{{{','.join(sorted(hooks))}}} reads {sorted(read)} — a ONE-SIDED "
-                f"rename; both halves must move together")
+                f"rename; the hook must read the name compose passes (reading the "
+                f"OTHER spelling too is fine, and is how the rename is sequenced)")
             continue
-        checked.append(f"{svc} -> {rel}/docker-entrypoint.d/{sorted(hooks)[0]} [{key}]")
+        extra = sorted(read - {key})
+        note = f"{key} + also accepts {extra}" if extra else key
+        checked.append(f"{svc} -> {rel}/docker-entrypoint.d/{sorted(hooks)[0]} [{note}]")
 
     with capsys.disabled():
         print(f"\n  theme boundary: {len(checked)} service(s) checked, "
