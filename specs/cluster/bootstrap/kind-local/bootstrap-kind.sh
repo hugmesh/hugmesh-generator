@@ -544,12 +544,41 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   # Application this profile applies (SSO_APPS above) — if another gateway app is
   # ever added there, it needs the same MFA parameter treatment, and
   # tests/stack/test-mfa-flip-wiring.sh fails the build until it gets it.
+  #
+  # HTTPS-ONLY FRONT DOOR ON KIND. In a real cluster this Ingress is the
+  # SECONDARY path and Cloudflare Tunnel terminates TLS at the edge, so the
+  # chart leaves `ingress.tls` false and adds no redirect — correct there, and
+  # deliberately not changed here (a force-redirect in front of an edge that
+  # forwards plaintext with X-Forwarded-Proto: https is how you build a redirect
+  # loop). On kind there is no Cloudflare: this Ingress IS the front door, and
+  # kind-local.yaml publishes BOTH 80 -> 8080 and 443 -> 8443, so without a
+  # redirect the whole application answers 200 in cleartext on :8080 — sessions,
+  # bearer tokens and all. Measured before this override: `curl -H 'Host:
+  # hugmesh.net' http://127.0.0.1:8080/` returned 200 with the host shell.
+  #
+  # `force-ssl-redirect` (not `ssl-redirect`) because the plain form only acts
+  # when the Ingress carries a TLS block, and this one deliberately does not —
+  # the controller serves it under its own default certificate. Harbor's Ingress
+  # in this same cluster already redirects, so this also ends an inconsistency
+  # where one door on the mesh was strict and the other was open.
+  # ⚠ `forceString: true` is LOAD-BEARING, not decoration. It makes ArgoCD use
+  # `helm --set-string`, which renders `"true"`; a plain `--set` renders a YAML
+  # BOOLEAN, and `metadata.annotations` is map[string]string, so the API server
+  # rejects the whole Ingress ("cannot unmarshal bool into string"). The failure
+  # lands on the Application as a sync error, not on this script — i.e. the door
+  # would simply stop routing with nothing here to blame. Verified both ways
+  # with `helm template` before this was committed.
+  #
+  # The `\\\\.` spelling survives two unescapings: bash double-quotes collapse it
+  # to `\\`, then JSON collapses that to the single `\` helm's --set parser needs
+  # to read a dot as literal rather than as a path separator.
   GW_FE_PARAMS='{"name":"ingress.className","value":"nginx-internal"}'
+  GW_FE_PARAMS="${GW_FE_PARAMS},{\"name\":\"ingress.annotations.nginx\\\\.ingress\\\\.kubernetes\\\\.io/force-ssl-redirect\",\"value\":\"true\",\"forceString\":true}"
   if [ -n "${MFA}" ]; then
     GW_FE_PARAMS="${GW_FE_PARAMS},{\"name\":\"mfa.enabled\",\"value\":\"true\"}"
     log "MFA=1: gateway MFA enforcement ON for this kind run (helm parameter mfa.enabled=true; floor stays off — docs/MFA-ROLLOUT.md §3)"
   fi
-  log "Overriding fe-gateway ingress.className -> nginx-internal (kind has no public controller)"
+  log "Overriding fe-gateway ingress.className -> nginx-internal (kind has no public controller), force-ssl-redirect -> true (this Ingress is the front door here)"
   kubectl -n "${ARGOCD_NS}" patch application hugmesh-gateway-fe --type merge -p \
     "{\"spec\":{\"source\":{\"helm\":{\"parameters\":[${GW_FE_PARAMS}]}}}}" >/dev/null
 fi
