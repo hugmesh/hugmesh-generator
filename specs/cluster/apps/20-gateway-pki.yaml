@@ -6,7 +6,7 @@ metadata:
   namespace: devops
   annotations:
     # Wave 2 = after apps/00b-cassandra-init.yaml (wave 1), which creates the
-    # snapdragon_gateway keyspace and this instance's CQL role. Starting before
+    # hugmesh_gateway keyspace and this instance's CQL role. Starting before
     # that Job has run is not a slow start, it is a CrashLoopBackOff:
     # InvalidKeyspaceException / AuthenticationException at bean creation
     # (docs/KIND-SSO-E2E-FINDINGS.md #5 + #6).
@@ -36,7 +36,7 @@ spec:
         # as a docker config — an anonymous pull against the private project.
         imagePullSecrets:
           - name: hugmesh-registry-pull
-        # This instance's OWN Cassandra role, scoped to snapdragon_gateway only,
+        # This instance's OWN Cassandra role, scoped to hugmesh_gateway only,
         # created by manifests/cassandra-init (see that overlay for why a gateway
         # role needs CREATE/ALTER and not just SELECT). The password comes from
         # the cassandra-app-creds ESO Secret in THIS namespace (hugmesh-pki).

@@ -7,7 +7,7 @@
 # 2026-08-05 (KIND_PROFILE=sso). The native-login chain hit FIVE configuration blockers
 # back to back, each only visible after fixing the one before it
 # (docs/KIND-SSO-E2E-FINDINGS.md #11-#15): CASDOOR_ORG unset ("The user:
-# snapdragon/e2e-user doesn't exist"), the OIDC client-id defaulting to `user-bff`
+# <pre-rebrand-org>/e2e-user doesn't exist"), the OIDC client-id defaulting to `user-bff`
 # against a registered `app-user-bff` ("Invalid client_id"), a pre-rebrand redirect-uri,
 # NXDOMAIN namespace defaults, and admin-bff unable to START on an unresolved
 # ${SVC_PASSWORD}. Every one had an override in tests/stack/compose.local.yaml, several
@@ -79,7 +79,30 @@ neg_bad(){  echo "  FAIL negative control: $*"; NEG_F=$((NEG_F+1)); }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
 # One pristine copy of the service sources; controls that need to mutate them copy again.
-cp -r "${SRC_ROOT}" "${WORK}/src-pristine"
+#
+# ONLY the files the checker actually reads — every `hugmesh-*/src/main/resources/
+# application.yml` under the resolved root — not the root itself. `cp -r "${SRC_ROOT}"`
+# is fine when SERVICE_SRC_ROOT points at CI's dedicated clone dir, but the LOCAL
+# fallback root is the operator's whole sibling-checkout tree (dozens of repos,
+# node_modules, build output, many GB): copying it once per control is not viable, and
+# when it fails every control reports "injection itself failed" — 19 red controls that
+# say nothing about the gate. resolve_service_src() only requires that each needed repo
+# has its application.yml, so this minimal tree satisfies it exactly.
+stage_pristine_sources() {
+  local dest="$1" src ymls=0
+  mkdir -p "${dest}"
+  for src in "${SRC_ROOT}"/hugmesh-*/src/main/resources/application.yml; do
+    [ -f "${src}" ] || continue
+    local repo; repo="${src#"${SRC_ROOT}"/}"; repo="${repo%%/*}"
+    mkdir -p "${dest}/${repo}/src/main/resources"
+    cp "${src}" "${dest}/${repo}/src/main/resources/application.yml"
+    ymls=$((ymls+1))
+  done
+  # ANTI-VACUITY: an empty stage makes every control below fail as "injection failed"
+  # (or, worse, pass for the wrong reason) while looking like a gate problem.
+  [ "${ymls}" -gt 0 ] || { echo "  FAIL staged ZERO service application.yml files from ${SRC_ROOT}"; exit 1; }
+}
+stage_pristine_sources "${WORK}/src-pristine"
 
 # $1 = label, $2 = expected "[check-id] … substring" in the failure output,
 # $3 = shell snippet run with $T = staged specs/cluster and $S = staged service sources.
@@ -150,11 +173,17 @@ expect_catch "OIDC client-id reverted to the app default 'user-bff' (finding #12
     '[e.update(value=\"user-bff\") for e in env if e[\"name\"]==\"APP_BFF_OIDC_CLIENT_ID\"]'
 "
 
-# (3) #13 verbatim: the pre-rebrand redirect URI comes back.
-expect_catch "redirect-uri reverted to https://hugmesh.net/login/callback (finding #13)" \
+# (3) #13's defect class: the redirect URI is a host Casdoor never registered.
+#     The planted value must be UNREGISTERED — an earlier sweep rebranded this
+#     control's literal into `https://hugmesh.net/login/callback`, which is exactly
+#     what init-job.yaml DOES register, so the control planted a CORRECT value and
+#     could never bite. It went unnoticed because the whole gate was exiting
+#     INCOMPLETE. A reserved-for-documentation host cannot be rebranded into a real
+#     one by the next sweep.
+expect_catch "redirect-uri points at a host Casdoor never registered (finding #13)" \
   "[casdoor-agreement] hugmesh-user-bff-api: APP_BFF_OIDC_REDIRECT_URI" "
   python3 -c '${PY_ENV}' \"\$T/manifests/user-bff-api/deployment.yaml\" hugmesh-user-bff-api \
-    '[e.update(value=\"https://hugmesh.net/login/callback\") for e in env if e[\"name\"]==\"APP_BFF_OIDC_REDIRECT_URI\"]'
+    '[e.update(value=\"https://login.example.invalid/login/callback\") for e in env if e[\"name\"]==\"APP_BFF_OIDC_REDIRECT_URI\"]'
 "
 
 # (4) #15 verbatim: admin-bff loses the mandatory placeholder again. It must be caught
@@ -226,7 +255,7 @@ p = pathlib.Path(sys.argv[1]) / 'manifests/casdoor/init-data-configmap.yaml'
 s = p.read_text(encoding='utf-8')
 old = '\"owner\": \"admin\",\n          \"name\": \"hugmesh\",'
 assert old in s, 'injection anchor not found'
-p.write_text(s.replace(old, '\"owner\": \"admin\",\n          \"name\": \"snapdragon\",', 1), encoding='utf-8')
+p.write_text(s.replace(old, '\"owner\": \"admin\",\n          \"name\": \"notthisorg\",', 1), encoding='utf-8')
 PY
 "
 
@@ -244,14 +273,18 @@ p.write_text(s.replace(old, 'appname = f\"hm-{name}\"'), encoding='utf-8')
 PY
 "
 
-# (11) #14 verbatim: a pre-rebrand namespace comes back as an EMITTED value.
+# (11) #14 verbatim: a pre-rebrand namespace comes back as an EMITTED value. The
+#      planted host keeps the RETIRED spelling on purpose — this control's whole
+#      subject is a pre-rebrand identifier resurfacing, so a rebranded fixture would
+#      make it a duplicate of (12) and stop testing what it names. Drift-guard
+#      fixture: the token is named here to prove it is CAUGHT, never to keep it live.
 expect_catch "pre-rebrand namespace reintroduced in an env value (finding #14)" \
   "[stale-ref] hugmesh-user-bff-api/hugmesh-user-bff-api: ADMIN_BFF_INTERNAL_BASE_URL" "
   python3 -c '${PY_ENV}' \"\$T/manifests/user-bff-api/deployment.yaml\" hugmesh-user-bff-api \
     '[e.update(value=\"http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080\") for e in env if e[\"name\"]==\"ADMIN_BFF_INTERNAL_BASE_URL\"]'
 "
 
-# (12) …and the version a `snapdragon`-pattern rule CANNOT see: a perfectly
+# (12) …and the version a brand-prefix pattern rule CANNOT see: a perfectly
 #      post-rebrand-looking host in a namespace that has simply never existed. Two live
 #      Deployments were emitting exactly this shape (casdoor.hugmesh-casdoor…) while the
 #      pattern-matching predecessor of this check reported clean.
@@ -346,10 +379,13 @@ spec:
     spec:
       containers:
         - name: hugmesh-newthing-bff-api
-          image: snapdragon-systems/newthing-bff-api:dev
+          image: hugmesh/newthing-bff-api:dev
           env:
             - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
 YAML
+  # Drift-guard fixture: the packaged default deliberately keeps a RETIRED
+  # pre-rebrand namespace — that is the exact shape [env-derived] exists to catch
+  # when a new BFF arrives carrying its own stale default. Named to be caught.
   cat > "$2/hugmesh-newthing-bff-api/src/main/resources/application.yml" <<'YAML'
 newthing:
   peer:
@@ -387,7 +423,17 @@ PY
 echo "-- guard honesty: absent service sources must be INCOMPLETE, not green --"
 rm -rf "${WORK}/src-missing"; cp -r "${WORK}/src-pristine" "${WORK}/src-missing"
 rm -rf "${WORK}/src-missing/hugmesh-mod-bff-api"
-OUT="$(SERVICE_SRC_ROOT="${WORK}/src-missing" python3 "${CHECKER}" "${REPO}/specs/cluster" 2>&1)"; HRC=$?
+# Run a STAGED COPY of the checker, so resolve_service_src()'s last-resort candidate
+# — `repo_root.parent`, i.e. the directory holding the checker's own repo — is a temp
+# dir with no checkouts in it. On a developer box that fallback is the operator's
+# sibling-checkout tree, which DOES carry every repo, so the control silently proved
+# nothing there and only ever bit in CI. Same checker, same inputs, no fallback.
+mkdir -p "${WORK}/fakerepo/tests/scripts"
+# The checker imports its sibling service_env_defaults module by name, so the whole
+# scripts dir travels — copying the entry point alone dies on ModuleNotFoundError,
+# which the assertion below would have read as "not INCOMPLETE" (rc 1, not 3).
+cp "$(dirname "${CHECKER}")"/*.py "${WORK}/fakerepo/tests/scripts/"
+OUT="$(SERVICE_SRC_ROOT="${WORK}/src-missing" python3 "${WORK}/fakerepo/tests/scripts/$(basename "${CHECKER}")" "${REPO}/specs/cluster" 2>&1)"; HRC=$?
 if [ "${HRC}" -eq 3 ] && grep -q "INCOMPLETE" <<<"${OUT}"; then
   neg_ok "a missing service checkout is INCOMPLETE (rc 3), not a silent pass"
 else

@@ -22,7 +22,7 @@ keys-template/mesh-trust/
 
 `<mesh-id>` is a strict DNS label (the gate rejects anything else, so the path can
 never traverse) and matches the mesh id in `templates/mesh-trust/registry.json` and
-in the foreign base's signed `.snapdragon-provenance.json` `base.meshId`.
+in the foreign base's signed `.hugmesh-provenance.json` `base.meshId`.
 
 ## How it is used (the no-TOFU rule)
 

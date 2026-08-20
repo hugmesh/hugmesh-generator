@@ -24,7 +24,7 @@ spec:
         - name: {{APP_SLUG}}-bff
           # Rewritten by deploy/kustomization.yaml images: to the in-cluster
           # registry (registry.{{CLUSTER_DOMAIN}}).
-          image: snapdragon-systems/{{APP_SLUG}}-bff:main
+          image: hugmesh/{{APP_SLUG}}-bff:main
           ports:
             - { containerPort: 8080, name: http }
           env:

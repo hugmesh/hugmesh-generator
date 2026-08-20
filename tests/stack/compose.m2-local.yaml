@@ -99,7 +99,7 @@ services:
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
 
   # Joined the default set when the `charforge` opt-in profile came off (its repo
-  # finished the Snapdragon->HugMesh rebrand, so it cold-builds like its siblings).
+  # finished the HugMesh->HugMesh rebrand, so it cold-builds like its siblings).
   # Ordinary consumer: parents on hugmesh-parent 2.8.0, ships its own settings.xml
   # and declares both ARGs. Only the BFF image builds from this checkout ROOT — the
   # character-forge UI builds from its frontend/ subdir, an Angular image that
@@ -140,7 +140,7 @@ services:
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
 
   # Joined the set when its repo started resolving net.hugmesh:hugmesh-commons for
-  # real. It previously declared the PRE-RENAME systems.snapdragon:snapdragon-commons,
+  # real. It previously declared the PRE-RENAME commons coordinate,
   # which is published nowhere — so patch-stack-src.sh DELETED the dependency outright
   # and the build needed no registry at all. Once the checkout tracked main again the
   # dependency became live and resolvable, and the missing entry here surfaced as

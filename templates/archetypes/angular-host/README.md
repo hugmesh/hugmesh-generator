@@ -1,6 +1,6 @@
 # angular-host archetype
 
-Renders the Snapdragon **native-federation HOST shell** class. Exemplar member =
+Renders the HugMesh **native-federation HOST shell** class. Exemplar member =
 the site shell that mounts every angular-mfe remote — published as
 `hugmesh-host-shell` (the same tree the site was historically clonable as
 `hugmesh.net`). One-member class today, but a class by design: a
@@ -51,7 +51,7 @@ host-shell` / the tenant-set driver).
 ## Files
 
 - `recipe.yaml`, `_identity.env` (drift oracle, host-shell upstream
-  values), `_skeleton/` — a RUNNABLE minimal HOST: `snapdragonHost` federation
+  values), `_skeleton/` — a RUNNABLE minimal HOST: `hugmeshHost` federation
   config + the shared `federation-base.js` contract, static
   `src/assets/federation.manifest.json` floor pointing at the example remote,
   the exemplar's dynamic-union federation-bootstrap + `main.ts`, a

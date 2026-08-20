@@ -4,8 +4,10 @@ Parity lane (issue #51 phase 2, catching up to the GUI features merged after the
 #54 scaffold): the WELCOME flow with its three journey entry points (#67), the
 journey-ordered mode menu (#67), the create-nodes-for-local-cloud abbreviated
 wizard (#65, :mod:`.localcloud`), the whole-mesh emulation screen (#69,
-:mod:`.meshemu`), the Themes screen (#63, :mod:`.themes`) and the per-domain
-Sign-in choice on the domains step (#71, :mod:`.domains_step`).
+:mod:`.meshemu`), the QEMU device-test screen (:mod:`.qemu` — the TEST lane of
+the same emulation plan the mesh screen deploys), the Themes screen (#63,
+:mod:`.themes`) and the per-domain Sign-in choice on the domains step (#71,
+:mod:`.domains_step`).
 
 PARITY RULES (what the tests pin):
 
@@ -94,14 +96,20 @@ MODE_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("mesh", "Mesh node",
      "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
      "edge-AI — that run a mesh on dedicated hardware."),
+    # MIRROR of gui/pages/mode.py (T3): the two emulation cards say EPHEMERAL vs
+    # PERSISTENT before the click, because that — not "one image vs several" — is
+    # the difference an operator has to choose on. test_tui_gui_parity pins these
+    # descriptions word for word, so the two faces are edited together or not at all.
     ("qemu", "QEMU device tests",
-     "Boot built images as emulated devices in Docker and assert they "
-     "provisioned correctly — Pi roles first, then x86. Test images from an "
-     "earlier build session, or build new ones and test them after."),
+     "Test built images: ephemeral asserted boots. Boot a build session's "
+     "images as emulated devices, check they provisioned correctly and "
+     "power them off — Pi roles first, then x86. Or build new images and "
+     "test them after."),
     ("meshemu", "Mesh emulation",
-     "Emulate a WHOLE built mesh locally: pick a prior build session and "
-     "boot every image it holds as emulated devices — per-device status, "
-     "ssh logins, USB provisioning keys and the mesh's web front door."),
+     "Emulate the mesh you are readying for deployment: persistent devices, "
+     "console, save-back. Boot every image of a prior build session and keep "
+     "the guests up — per-device status, ssh logins, the QEMU console, disk "
+     "saves, USB provisioning keys and the mesh's web front door."),
     ("deploy", "Cloud deploy",
      "Publish an already-built, cloud-packaged x86 image to a cloud provider "
      "(AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are "
@@ -130,13 +138,15 @@ PENDING_NOTE = ("this step is not yet ported to the TUI — configure it in the 
                 "GUI (python -m hugmesh_studio) if you need it; Enter keeps the "
                 "step's defaults and continues.")
 
-#: Side-flow stubs: these run whole drivers the TUI does not host yet.
+#: Side-flow stubs: these run whole drivers the TUI does not host yet. "qemu" left
+#: this set once :mod:`.qemu` landed — a real screen over core.emulation, read-only
+#: toward the host like :mod:`.meshemu` — so the two emulation lanes (TEST and
+#: DEPLOY) are both hosted here and only the MDM/cloud drivers remain stubbed.
 _SIDE_FLOW_STUB = {
     "localmesh": "Local Docker mesh",
     "phone": "MDM phone",
     "quest": "MDM Quest headset",
     "deploy": "Cloud deploy",
-    "qemu": "QEMU device tests",
 }
 
 _PENDING_STEPS = {
@@ -606,6 +616,7 @@ class Journey:
         from .domains_step import DomainsScreen
         from .localcloud import LocalCloudScreen
         from .meshemu import MeshEmuScreen
+        from .qemu import QemuScreen
         self.generator_dir = generator_dir
         self.cfg = cfg or ImageConfig()
         self.worklist: WorklistConfig | None = None
@@ -620,7 +631,7 @@ class Journey:
         self.overlay = None              # e.g. the Themes screen (a screen object)
         screens = [
             WelcomeScreen(), ModeScreen(),
-            LocalCloudScreen(), MeshEmuScreen(),
+            LocalCloudScreen(), QemuScreen(), MeshEmuScreen(),
             IdpScreen(), RoleScreen(), WorklistScreen(),
             YesNoStep("domains_choice", "Domains",
                       "Add more domains beyond the internal orchestration "

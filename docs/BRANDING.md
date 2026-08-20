@@ -10,10 +10,10 @@ renders a tenant copy, this very file is re-filed as
 `docs/BRANDING-<org-slug>.md`, so each org's copy carries a distinctly-named
 branding doc. It is a deliberately safe, **non-contract** file — the rename
 engine (scripts/tooling/render-recipe.js) refuses to rename the contract set
-(`snapdragon-deploy.yaml` **and** `hugmesh-deploy.yaml` — both descriptor
-spellings are live in the org, see `specs/cluster/catalog/adopters.yaml` —
-`.snapdragon-provenance.json`, `.snapdragon-mesh-admitted`, and their marker
-siblings) outright.
+(`hugmesh-deploy.yaml`, `.hugmesh-provenance.json`, `.hugmesh-mesh-admitted`,
+their marker siblings, **and** the LEGACY_COMPAT pre-rebrand spellings of all
+three — still live on adopter repos' and other meshes' disks, see
+`specs/cluster/catalog/adopters.yaml`) outright.
 
 ## Rebranded in a tenant copy (the whole list)
 
@@ -28,8 +28,15 @@ siblings) outright.
 * the repo name `hugmesh-generator` and every `hugmesh` in
   `scripts/**`, `specs/**`, builder entrypoints — code identity;
 * `hugmesh.net/*` label KEYS, `X-HugMesh-Local` and the other wire
-  headers, the step-up subprotocol prefix — FROZEN protocol constants
-  (`scripts/tooling/tokens.json`), enforced fail-closed at render;
+  headers, the `hugmesh.device-terminal.stepup.` subprotocol prefix — FROZEN
+  protocol constants (`scripts/tooling/tokens.json`
+  `frozen_protocol_constants`), enforced fail-closed at render;
+* …and their RETIRED pre-rebrand spellings are BANNED, not merely un-frozen:
+  `scripts/tooling/tokens.json` `retired_protocol_constants` names them, and
+  `token-classifier.isFrozen()` refuses them at emit exactly like the live ones,
+  so the templating path can never re-introduce a dead protocol token. That
+  block and the drift guards are the only places in the tree licensed to spell
+  them out — a ban rule has to name what it bans;
 * `Makefile`, `tests/stack/compose.local.yaml` and the rest of the local-stack
   machinery — a tenant copy must keep `make stack-up` (building the local mesh)
   working byte-for-byte;

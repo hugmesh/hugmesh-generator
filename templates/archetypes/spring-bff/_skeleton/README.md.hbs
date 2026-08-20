@@ -2,7 +2,7 @@
 
 A minimal but **REAL** Spring Boot 4 / WebFlux BFF in the platform shape,
 rendered by the mesh repo-templating **spring-bff** archetype when the Tier-2
-base (`snapdragon-{{REPO_NAME}}`) is not pullable. Unlike the old placeholder
+base (`hugmesh-{{REPO_NAME}}`) is not pullable. Unlike the old placeholder
 this tree **builds, tests and runs**:
 
 ```
@@ -60,7 +60,7 @@ env-default blocks + the Testcontainers CI wiring.
 
 ## Growing into a real BFF
 
-The archetype's real path is overlay-on-base: when `snapdragon-{{REPO_NAME}}`
+The archetype's real path is overlay-on-base: when `hugmesh-{{REPO_NAME}}`
 is resolvable, `render-repo-tree.sh` pulls it and anchor-edits only the
 brand-coupled seams (see `templates/archetypes/spring-bff/recipe.yaml`). This
 skeleton is the standing example codebase + the base-absent fallback — see

@@ -19,11 +19,11 @@ edits:
   - file: package.json
     optional: false
     anchors:
-      # npm scope rebrand ONLY: @snapdragon/<slug> -> @<NPM_SCOPE>/<slug>. The
+      # npm scope rebrand ONLY: @hugmesh/<slug> -> @<NPM_SCOPE>/<slug>. The
       # <slug> segment (== the ng project name / build target) is repo identity
       # and is preserved on BOTH sides, so `ng build <slug>` still resolves.
       - id: npm-scope
-        find: "@snapdragon/{{APP_SLUG}}"
+        find: "@hugmesh/{{APP_SLUG}}"
         replace: "@{{NPM_SCOPE}}/{{APP_SLUG}}"
         required: true
   - file: src/index.html
@@ -33,13 +33,13 @@ edits:
       # (TITLE_WORD) + "(remote)". The <snap-<slug>-root> bootstrap selector is
       # NOT touched (repo identity — must match the app's own root component).
       - id: tab-title
-        find: "<title>Snapdragon {{TITLE_WORD}} (remote)</title>"
+        find: "<title>HugMesh {{TITLE_WORD}} (remote)</title>"
         replace: "<title>{{BRAND_TITLE}} {{TITLE_WORD}} (remote)</title>"
         required: true
   - file: .gitlab-ci.yml
     optional: false
     anchors:
       - id: ci-include-org
-        find: "Snapdragon-Systems/snapdragon-generator"
+        find: "hugmesh/hugmesh-generator"
         replace: "{{GENERATOR_ORG_GROUP}}"
         required: true

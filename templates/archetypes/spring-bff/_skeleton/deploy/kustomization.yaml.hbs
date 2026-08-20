@@ -9,7 +9,7 @@ resources:
 # gitlab-registry imagePullSecret (ESO-materialized), added by the same patch the
 # fleet BFF deploys carry.
 images:
-  - { name: snapdragon-systems/{{APP_SLUG}}-bff, newName: registry.{{CLUSTER_DOMAIN}}/{{NPM_SCOPE}}/{{APP_SLUG}}-bff, newTag: main }
+  - { name: hugmesh/{{APP_SLUG}}-bff, newName: registry.{{CLUSTER_DOMAIN}}/{{NPM_SCOPE}}/{{APP_SLUG}}-bff, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

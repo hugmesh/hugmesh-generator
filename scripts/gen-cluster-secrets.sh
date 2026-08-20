@@ -1089,7 +1089,7 @@ data = {
             "password": os.environ["ROUTE_ACCESS_ADMIN_BFF_PASSWORD"],
         },
         # Cassandra roles reachable from the backend ns: be-gateway (schema owner
-        # for snapdragon_gateway), admin-bff (DML writer) and federation (its own
+        # for hugmesh_gateway), admin-bff (DML writer) and federation (its own
         # keyspace). No other key is delivered here.
         "cassandra-app-creds": {
             "be-gateway": os.environ["CASSANDRA_APP_BE_GATEWAY_PASSWORD"],

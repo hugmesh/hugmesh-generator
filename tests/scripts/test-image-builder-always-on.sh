@@ -281,13 +281,19 @@ expect_catch "retired brand as the registry host in build:images DEST_REPO" "[pr
   sed -i "s|DEST_REPO: \"registry.hugmesh.net/|DEST_REPO: \"registry.snapdragon.systems/|" \
       "$T/.gitlab-ci.yml"
 '
-# (9f) the retired brand as the GIT HOST in the Application repoURL — the field that decides
-#      whether ArgoCD can sync the always-on app at all.
+# (9f) a retired brand identifier in the Application repoURL — the field that decides
+#      whether ArgoCD can sync the always-on app at all. The takeover plants the RETIRED
+#      REPO NAME (`snapdragon-generator`, renamed to `hugmesh-generator`) on a NEUTRAL
+#      example git host: the operator's rule is that no `.systems` spelling may exist
+#      anywhere in this tree except where a ban rule names what it bans, and a takeover
+#      fixture is not that place — 9c/9e already pin the `…snapdragon.systems/<path>`
+#      HOST shape. `git.example.internal` is reserved-for-documentation, so the control
+#      still proves a foreign repoURL carrying a retired identifier is caught.
 #      The org segment is matched as a WILDCARD, not pinned: forks legitimately rehome this
 #      repoURL onto their own org (hugmesh, hugmesh-net, a tenant org), and pinning one
 #      spelling silently turns this control into a no-op on every other tree.
-expect_catch "retired brand as the git host in the Application repoURL" "[pre-rebrand]" '
-  sed -i -E "s|repoURL: https://github.com/[^/]+/hugmesh-generator.git|repoURL: https://git.snapdragon.systems/hugmesh/hugmesh-generator.git|" \
+expect_catch "retired repo name in the Application repoURL (foreign git host)" "[pre-rebrand]" '
+  sed -i -E "s|repoURL: https://github.com/[^/]+/hugmesh-generator.git|repoURL: https://git.example.internal/hugmesh/snapdragon-generator.git|" \
       "$T/specs/cluster/apps/60-image-builder.yaml"
 '
 # (9g) the RETIRED label-KEY namespace. `snapdragon.systems/<name>:` in mapping-KEY position

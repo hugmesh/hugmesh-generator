@@ -28,6 +28,6 @@ edits:
       # org/group. The rest of the CI (two-image build: sync + nginx) is code
       # identity and is NOT overlaid.
       - id: ci-include-org
-        find: "Snapdragon-Systems/snapdragon-generator"
+        find: "hugmesh/hugmesh-generator"
         replace: "{{GENERATOR_ORG_GROUP}}"
         required: true

@@ -18,10 +18,10 @@
 #      keys in one ExternalSecret. PyYAML/kustomize last-wins silently dropped
 #      the mesh-bff mTLS pair and relocated the character-forge one into a
 #      namespace that does not exist. A plain safe_load does NOT notice this.
-#   3. Objects, Argo destinations and gateway route URIs pointed at namespace
-#      `snapdragon-backend`, which the rebrand deleted; the route-access seed
-#      carried rows for gateway id `snapdragon-fe-gateway`, which no longer
-#      exists, so /bff/mesh/** was default-denied for every ROLE_MESH holder.
+#   3. Objects, Argo destinations and gateway route URIs pointed at a namespace
+#      the rebrand deleted; the route-access seed carried rows for a gateway id
+#      that no longer exists, so /bff/mesh/** was default-denied for every
+#      ROLE_MESH holder.
 #   4. The Vault PKI role loop was two `for app in ...` headers line-continued
 #      into one, so bash put the literal words `for`, `app` and `in` in the word
 #      list and vault-pki-init minted three junk cluster-CA issuing roles.
@@ -45,7 +45,7 @@
 #      authenticated() floor, into a prefix admin-bff permitAll()s app-side).
 #   9. casdoor/init-data-configmap.yaml carried an init_data.json that DOES NOT
 #      PARSE — the same #451 merge concatenated the entire pre-rebrand
-#      `owner: "snapdragon"` roles array in front of the rebranded one, leaving
+#      `owner:` roles array in front of the rebranded one, leaving
 #      what had been that array's last element as an interior element with no
 #      trailing comma ("Expecting ',' delimiter: line 42 column 5"). Casdoor
 #      imports the file wholesale on boot, so the WHOLE identity seed — the
@@ -131,13 +131,18 @@ open(p,"w",encoding="utf-8").write(s)
 PY
 '
 # (3a) an object parked in a namespace nothing creates.
+#      The planted namespace is deliberately a name NO brand ever had. These three
+#      controls used to plant the retired brand's namespace / gateway id, so a rename
+#      sweep collapsed each sed into `s/X/X/` — a no-op that still runs, leaving the
+#      control reporting the GATE as broken while the gate was fine. A never-existent
+#      name cannot be renamed into a live one by the next sweep.
 expect_catch "object in a namespace the platform never creates" "[namespace]" '
-  sed -i "s/namespace: hugmesh-backend$/namespace: snapdragon-backend/" \
+  sed -i "s/namespace: hugmesh-backend$/namespace: nosuch-backend/" \
       "$T/manifests/mesh-bff-api/service.yaml"
 '
 # (3b) a gateway route uri pointing into a dead namespace.
 expect_catch "gateway route uri into a dead namespace" "[namespace]" '
-  sed -i "s|hugmesh-mesh-bff-api.hugmesh-backend.svc.cluster.local|hugmesh-mesh-bff-api.snapdragon-backend.svc.cluster.local|" \
+  sed -i "s|hugmesh-mesh-bff-api.hugmesh-backend.svc.cluster.local|hugmesh-mesh-bff-api.nosuch-backend.svc.cluster.local|" \
       "$T/apps/20-gateway-fe.yaml"
 '
 # (3c) a gateway route uri whose Service does not exist.
@@ -152,7 +157,7 @@ import sys
 p=sys.argv[1]+"/manifests/route-access/initdb/20-schema.sql"
 s=open(p,encoding="utf-8").read()
 s=s.replace("(\x27hugmesh-fe-gateway\x27,  \x27/bff/mesh/**\x27",
-            "(\x27snapdragon-fe-gateway\x27,  \x27/bff/mesh/**\x27",1)
+            "(\x27nosuch-fe-gateway\x27,  \x27/bff/mesh/**\x27",1)
 open(p,"w",encoding="utf-8").write(s)
 PY
 '
@@ -168,7 +173,7 @@ p=sys.argv[1]+"/manifests/vault-pki/pki-init-configmap.yaml"
 s=open(p,encoding="utf-8").read()
 anchor="    for entry in hugmesh-pki-gateway:"
 assert s.count(anchor)==1, "for-entry loop anchor matched %d times, not 1" % s.count(anchor)
-fused=("    for entry in snapdragon-pki-gateway:snapdragon-pki-gateway.hugmesh-pki \\\n"
+fused=("    for entry in hugmesh-pki-gateway:hugmesh-pki-gateway.hugmesh-pki \\\n"
        "    for entry in hugmesh-pki-gateway:")
 open(p,"w",encoding="utf-8").write(s.replace(anchor,fused,1))
 PY

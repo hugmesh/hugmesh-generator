@@ -170,7 +170,7 @@ def _compose_profiled_services():
 
     Derived from the file rather than hard-coded, so the set tracks reality. Today
     nothing built from a STACK_SRC checkout is profiled — the charforge slug was
-    (#464: its repo still carried the dead ``systems.snapdragon`` coordinates and an
+    (#464: its repo still carried the dead pre-rebrand Maven coordinates and an
     unbuildable service in the default set fails the whole `docker compose build`),
     and it rejoined the default set once that repo finished the rebrand, which is
     exactly when it had to appear in compose.m2-local.yaml. The remaining profiles

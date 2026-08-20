@@ -5,7 +5,7 @@
 # resources are applied, re-runs on every sync (BeforeHookCreation replaces the
 # previous Job), and a FAILURE fails the sync instead of being swallowed. That
 # matters here — a bootstrap that quietly does nothing is precisely how
-# `Invalid keyspace snapdragon_gateway` reached a live cluster.
+# `Invalid keyspace hugmesh_gateway` reached a live cluster.
 #
 # ORDERING. This app carries sync-wave "1": after apps/00-cassandra.yaml (wave 0,
 # the StatefulSet) and before the four gateway Applications, which were moved to

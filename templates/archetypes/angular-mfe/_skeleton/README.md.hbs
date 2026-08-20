@@ -2,7 +2,7 @@
 
 A minimal but **REAL** Angular 22 **native-federation remote** in the house
 shape, rendered by the mesh repo-templating **angular-mfe** archetype when the
-Tier-2 base (`snapdragon-{{REPO_NAME}}`) is not pullable:
+Tier-2 base (`hugmesh-{{REPO_NAME}}`) is not pullable:
 
 ```
 npm ci                      # honest committed lockfile — see archetype README
@@ -11,9 +11,9 @@ npm test                    # karma/jasmine on ChromeHeadlessCI (CHROME_BIN)
 npm start                   # standalone dev shell on :4201
 ```
 
-## Shape (mirrors snapdragon-user-ui)
+## Shape (mirrors hugmesh-user-ui)
 
-- `federation.config.js` — `snapdragonRemote({ name: '{{APP_SLUG}}', exposes: { './routes': ... } })`;
+- `federation.config.js` — `hugmeshRemote({ name: '{{APP_SLUG}}', exposes: { './routes': ... } })`;
   the shared singleton/strictVersion surface + RxJS skip list live in
   `federation-base.js` (the class-A contract file, one source of truth).
 - `src/app/remote.routes.ts` — exports the `ROUTES` const the host mounts

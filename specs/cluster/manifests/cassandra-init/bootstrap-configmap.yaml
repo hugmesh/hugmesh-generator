@@ -7,16 +7,16 @@
 # `grep -r 'CREATE KEYSPACE' specs/cluster` returned nothing. Spring Data's
 # schema-action: CREATE_IF_NOT_EXISTS creates TABLES, never keyspaces, so every
 # gateway died with `InvalidKeyspaceException: Invalid keyspace
-# snapdragon_gateway`. Separately the bitnami image runs PasswordAuthenticator by
+# hugmesh_gateway`. Separately the bitnami image runs PasswordAuthenticator by
 # default, so nothing could connect at all without credentials. Both halves are
 # fixed here; the per-app roles this creates are the ones the gateway chart and
 # the two BFFs now authenticate as.
 #
 # Keyspaces (the two Cassandra stores in this platform — the names are FROZEN
 # protocol identifiers, deliberately NOT rebranded):
-#   snapdragon_gateway     — gateway revocation list + gateway_route_access mirror
+#   hugmesh_gateway     — gateway revocation list + gateway_route_access mirror
 #                            + url_registry + resource_access + hs_tokens.
-#   snapdragon_federation  — federation-api manifest write-through cache.
+#   hugmesh_federation  — federation-api manifest write-through cache.
 #
 # ── THE GRANT MATRIX WAS WRONG BEFORE THIS FILE, AND IT MATTERS ──────────────
 # manifests/cassandra-hardening (dark) declared the four gateways SELECT-only
@@ -41,10 +41,10 @@
 # Effective matrix (CassandraAuthorizer is DENY-by-default, so a role with no
 # GRANT authenticates but reads/writes NOTHING — this fails CLOSED):
 #   pki_gw_cass / be_gw_cass / fe_gw_cass / sa_gw_cass
-#                    -> SELECT+MODIFY+CREATE+ALTER on snapdragon_gateway
+#                    -> SELECT+MODIFY+CREATE+ALTER on hugmesh_gateway
 #                       (schema owner: the migration runner is in the gateway)
-#   admin_bff_cass   -> SELECT+MODIFY            on snapdragon_gateway  (DML only)
-#   federation_cass  -> SELECT+MODIFY            on snapdragon_federation (DML only)
+#   admin_bff_cass   -> SELECT+MODIFY            on hugmesh_gateway  (DML only)
+#   federation_cass  -> SELECT+MODIFY            on hugmesh_federation (DML only)
 # No role gets DROP or AUTHORIZE, none can reach the other keyspace, none can
 # touch system_auth, and none is a SUPERUSER. The `cassandra` superuser is used
 # ONLY by this Job and is never handed to an application.
@@ -128,17 +128,17 @@ data:
 
     # ── 1. KEYSPACES (must precede every GRANT below) ─────────────────────────
     echo "==> creating keyspaces (replication ${KEYSPACE_REPLICATION})"
-    cql "CREATE KEYSPACE IF NOT EXISTS snapdragon_gateway WITH replication = ${KEYSPACE_REPLICATION};"
-    cql "CREATE KEYSPACE IF NOT EXISTS snapdragon_federation WITH replication = ${KEYSPACE_REPLICATION};"
+    cql "CREATE KEYSPACE IF NOT EXISTS hugmesh_gateway WITH replication = ${KEYSPACE_REPLICATION};"
+    cql "CREATE KEYSPACE IF NOT EXISTS hugmesh_federation WITH replication = ${KEYSPACE_REPLICATION};"
 
     # federation-api has no schema runner of its own and no Liquibase for
     # Cassandra, so this one table has never been created anywhere. Its column
     # shape is the one CassandraManifestCache documents and binds.
-    # snapdragon_gateway's tables are deliberately NOT created here: the gateway
+    # hugmesh_gateway's tables are deliberately NOT created here: the gateway
     # owns them through its versioned change-id runner, and creating them at
     # their final shape would leave that runner's later ALTER TABLE ... ADD
     # change-ids failing on an already-present column.
-    cql "CREATE TABLE IF NOT EXISTS snapdragon_federation.federation_manifest (
+    cql "CREATE TABLE IF NOT EXISTS hugmesh_federation.federation_manifest (
            id text PRIMARY KEY,
            body text,
            updated_at timestamp
@@ -166,22 +166,22 @@ data:
 
     # ── 3. GRANTS (deny-by-default authorizer) ────────────────────────────────
     echo "==> granting least-privilege keyspace permissions"
-    # The four gateways own the snapdragon_gateway SCHEMA (CassandraSchemaMigrations
+    # The four gateways own the hugmesh_gateway SCHEMA (CassandraSchemaMigrations
     # runs in the gateway image), so they need CREATE (CREATE TABLE in keyspace)
     # and ALTER (ALTER TABLE in keyspace) on top of the read/write pair. Not DROP,
     # not AUTHORIZE.
     for r in pki_gw_cass be_gw_cass fe_gw_cass sa_gw_cass; do
-      cql "GRANT SELECT ON KEYSPACE snapdragon_gateway TO ${r};"
-      cql "GRANT MODIFY ON KEYSPACE snapdragon_gateway TO ${r};"
-      cql "GRANT CREATE ON KEYSPACE snapdragon_gateway TO ${r};"
-      cql "GRANT ALTER  ON KEYSPACE snapdragon_gateway TO ${r};"
+      cql "GRANT SELECT ON KEYSPACE hugmesh_gateway TO ${r};"
+      cql "GRANT MODIFY ON KEYSPACE hugmesh_gateway TO ${r};"
+      cql "GRANT CREATE ON KEYSPACE hugmesh_gateway TO ${r};"
+      cql "GRANT ALTER  ON KEYSPACE hugmesh_gateway TO ${r};"
     done
     # admin-bff writes the route mirror / url_registry / hs_tokens rows but issues
     # no DDL — DML only.
-    cql "GRANT SELECT ON KEYSPACE snapdragon_gateway TO admin_bff_cass;"
-    cql "GRANT MODIFY ON KEYSPACE snapdragon_gateway TO admin_bff_cass;"
+    cql "GRANT SELECT ON KEYSPACE hugmesh_gateway TO admin_bff_cass;"
+    cql "GRANT MODIFY ON KEYSPACE hugmesh_gateway TO admin_bff_cass;"
     # federation-api owns its manifest cache rows; its table is created above.
-    cql "GRANT SELECT ON KEYSPACE snapdragon_federation TO federation_cass;"
-    cql "GRANT MODIFY ON KEYSPACE snapdragon_federation TO federation_cass;"
+    cql "GRANT SELECT ON KEYSPACE hugmesh_federation TO federation_cass;"
+    cql "GRANT MODIFY ON KEYSPACE hugmesh_federation TO federation_cass;"
 
     echo "==> cassandra bootstrap complete (2 keyspaces + 6 roles + grants; superuser untouched-by-apps)"

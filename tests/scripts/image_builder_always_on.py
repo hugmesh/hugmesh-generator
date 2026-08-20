@@ -37,15 +37,18 @@ CI_JOB = "build:images"
 # Pre-rebrand scan. Exactly ONE occurrence of the old brand is still NOT stale, and only in
 # one syntactic position:
 #   * `snapdragon-deploy.yaml` (and its `.example.` sibling) — the LEGACY service-catalog
-#     deploy-descriptor filename, which 6 of the 9 adopting repos still ship on disk and
-#     which both catalog generators deliberately still accept (#498).
+#     deploy-descriptor filename, which adopting repos still ship on disk and which both
+#     catalog generators deliberately still accept as LEGACY_COMPAT (#498). The live
+#     count is registered in specs/cluster/catalog/adopters.yaml, not restated here.
 # Everything else bearing the old brand in this surface is a rebrand miss.
 #
 # RETIRED ALLOWLIST ENTRY — `snapdragon.systems/<name>:` label KEYS (was entry (a)). The
 # operator has ruled that hugmesh carries NO `.systems` token at all: `snapdragon.systems`
 # is their PRIVATE control-plane domain, not hugmesh naming. The label-key/annotation
 # namespace therefore migrated to `hugmesh.net/<name>`, together with the CRD API group
-# (`platform.hugmesh.systems` -> `platform.hugmesh.net`) and every hugmesh.systems host.
+# (the CRD API group moved to `platform.hugmesh.net`) and every host with it. There is
+# no `.systems` hugmesh spelling: that form is banned in EVERY brand, not just the old
+# one, which is why the migration was a move to `.net` and not a rebrand in place.
 # That migration could be done outright, with no dual-label transition, because there is no
 # live cluster to keep schedulable — set-sites and selectors moved in the same pass.
 # The exemption is gone, so a `snapdragon.systems/` label key is now a finding EVEN IN
@@ -68,8 +71,11 @@ CI_JOB = "build:images"
 # this check exists to catch:
 #     DEST_REPO: "registry.snapdragon.systems/hugmesh/hugmesh-gateway"   (Kaniko PUSH target)
 #     image:      registry.snapdragon.systems/hugmesh/…                  (Job template)
-#     repoURL:    https://git.snapdragon.systems/hugmesh/hugmesh-generator.git  (ArgoCD source)
+#     repoURL:    https://<git-host>/hugmesh/snapdragon-generator.git             (ArgoCD source)
 # All three passed the old check with exit 0. They are negative controls 9c/9e/9f now.
+# (9f plants its takeover on a NEUTRAL example host — `git.example.internal` — because no
+# `.systems` spelling may live in this tree outside a rule that names what it bans; 9c/9e
+# still pin the `…snapdragon.systems/<path>` HOST shape directly.)
 #
 # So the allowlist is a list of ANCHORED regexes, and matching is POSITIONAL: a brand-token
 # occurrence is exempt only when its span lies inside the span an allowlist pattern marks as
@@ -77,9 +83,9 @@ CI_JOB = "build:images"
 BRAND_RE = re.compile(r"snapdragon", re.IGNORECASE)
 ALLOWLIST_RES = (
     # (c) the LEGACY DEPLOY-DESCRIPTOR FILENAME, which is still live on disk in other repos.
-    #     The rebrand renamed it to `hugmesh-deploy.yaml` in only 3 of the 9 adopting repos;
-    #     the other 6 still ship `snapdragon-deploy.yaml`, and the service-catalog generators
-    #     deliberately accept BOTH spellings (#498 — dropping the legacy name makes those 6
+    #     The rebrand renamed it to `hugmesh-deploy.yaml` repo by repo; adopters that have
+    #     not moved still ship `snapdragon-deploy.yaml`, and the service-catalog generators
+    #     deliberately accept BOTH spellings (#498 — dropping the legacy name makes those
     #     repos invisible to the catalog again). So it is a live filename, not a rebrand miss.
     #     Anchored to the WHOLE filename token — nothing of the `[\w.-]` class may precede it
     #     and no name character may follow — so `registry.snapdragon-deploy.yaml/hugmesh/…`

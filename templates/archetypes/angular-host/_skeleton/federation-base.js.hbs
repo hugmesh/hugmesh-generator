@@ -2,7 +2,7 @@
 // bundles authored in this repo.
 //
 // The host's federation.config.js used to inline the same shareAll args and
-// skip list every other Snapdragon repo carries. Centralising them here means
+// skip list every other HugMesh repo carries. Centralising them here means
 // the federation surface (singletons, strictVersion, the RxJS skip list) lives
 // in ONE place — so a drift between host and remotes (e.g. one bundle sharing a
 // different RxJS subpath) can't quietly produce a "shared is not a function"
@@ -36,7 +36,7 @@ const STD_SHARED = shareAll({
  * `extraSkip` lets a specific remote tack on its own skip entries without
  * losing the standard list.
  */
-function snapdragonRemote({ name, exposes, extraSkip = [] }) {
+function hugmeshRemote({ name, exposes, extraSkip = [] }) {
   return withNativeFederation({
     name,
     exposes,
@@ -48,10 +48,10 @@ function snapdragonRemote({ name, exposes, extraSkip = [] }) {
 /**
  * Federation config for the host shell. The host has no `exposes` block (it's a
  * consumer, not a provider), only a shared-deps surface and the skip list.
- * Naming the host explicitly keeps the convention shared across Snapdragon
+ * Naming the host explicitly keeps the convention shared across HugMesh
  * repos; a host carries no manifest self-row requirement.
  */
-function snapdragonHost({ name = '{{HOST_NAME}}', extraSkip = [] } = {}) {
+function hugmeshHost({ name = '{{HOST_NAME}}', extraSkip = [] } = {}) {
   return withNativeFederation({
     name,
     shared: { ...STD_SHARED },
@@ -60,8 +60,8 @@ function snapdragonHost({ name = '{{HOST_NAME}}', extraSkip = [] } = {}) {
 }
 
 module.exports = {
-  snapdragonRemote,
-  snapdragonHost,
+  hugmeshRemote,
+  hugmeshHost,
   STD_SKIP,
   STD_SHARED,
 };

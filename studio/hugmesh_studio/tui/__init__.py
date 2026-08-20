@@ -43,9 +43,18 @@ flow, catching the TUI up to the GUI features merged after the scaffold:
 * the **create-nodes-for-local-cloud** abbreviated wizard (:mod:`.localcloud`,
   GUI PR #65) with the laptop+node worklist restriction;
 * the **whole-mesh emulation** per-device status list with copy-ready ssh /
-  web-tunnel hints (:mod:`.meshemu`, GUI PR #69);
+  web-tunnel / whole-mesh-save hints (:mod:`.meshemu`, GUI PR #69) — the DEPLOY
+  lane of an emulation plan;
+* the **QEMU device tests** screen (:mod:`.qemu`) — the TEST lane of that same
+  plan: planned rows, the exact runner argv, and the verdict table
+  ``core.emulation`` grades (PASS / FAIL / NO-RESULT / SUSPECT / STALE);
 * the per-domain **Sign-in choice** on the domains step (:mod:`.domains_step`,
   GUI PR #71).
+
+Both emulation screens are READ-ONLY toward the host by design: they plan and
+they read, and everything that would spawn a guest, a container or an ssh is
+printed as a copy-ready command built by ``core.emulation``'s single argv
+authors. That is a deliberate scope decision for a terminal face, not a gap.
 
 Steps not ported yet say so honestly and keep the config's defaults — the walk
 still ends in a saveable config the GUI/CLI can build.

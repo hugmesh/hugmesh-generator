@@ -12,7 +12,7 @@ test('front page loads over generated certs and gates anonymous visitors to nati
   // This assertion used to name a two-word brand, which was a straggler from the
   // marketing splash page #273 deleted: that commit retired the OTHER splash
   // assertions and left this one behind, pointing at a heading that no longer
-  // renders anywhere. The rebrand then mapped it Snapdragon Systems -> HugMesh
+  // renders anywhere. The rebrand then mapped it HugMesh Systems -> HugMesh
   // Systems faithfully, preserving a string the app has never emitted. Nothing
   // caught it because spec 01 had never been run against a live cluster until
   // 2026-08-06 — the same reason the whole GitOps payload's breakage went unseen.

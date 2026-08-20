@@ -10,12 +10,12 @@
 # first time on 2026-08-05 walked straight through five of them, each only visible
 # after fixing the one before (docs/KIND-SSO-E2E-FINDINGS.md #11-#15):
 #
-#   #11  CASDOOR_ORG unset            -> "The user: snapdragon/e2e-user doesn't exist"
+#   #11  CASDOOR_ORG unset            -> "The user: <pre-rebrand-org>/e2e-user doesn't exist"
 #   #12  OIDC client-id defaulted     -> "Invalid client_id"   (the app is `app-user-bff`)
 #   #13  redirect-uri defaulted       -> "Redirect URI … doesn't exist in the
 #                                         allowed Redirect URI list"
-#   #14  namespace defaults           -> NXDOMAIN on casdoor.snapdragon-pki and
-#                                         snapdragon-admin-bff-api.snapdragon-backend
+#   #14  namespace defaults           -> NXDOMAIN on the pre-rebrand casdoor and
+#                                         admin-bff hosts
 #   #15  SVC_PASSWORD never provided  -> "Could not resolve placeholder
 #                                         'SVC_PASSWORD'" — admin-bff cannot START
 #
@@ -44,7 +44,7 @@
 # nobody editing anything. It is also why admin-bff's app-store headscale URL is
 # caught — its default puts headscale in a namespace of the same name, which has
 # never existed here (headscale runs in hugmesh-pki). That default contains no
-# pre-rebrand string at all, so every `snapdragon`-pattern rule was blind to it.
+# pre-rebrand string at all, so every brand-prefix pattern rule was blind to it.
 # (Deliberately not spelled out as a literal in-cluster FQDN here:
 # tests/scripts/cluster_manifest_integrity.py reads every FQDN in this tree,
 # comments included, and would report the example itself as a dangling namespace.)
@@ -100,10 +100,10 @@ services:
       - key: CASDOOR_ORG
         mustEqual: casdoor.org
         why: >-
-          finding #11. The app default is the pre-rebrand `snapdragon` and casdoor-init
-          creates `hugmesh` — but that is not why this rule exists. `snapdragon` is a
-          perfectly well-formed org name; nothing in the manifests could tell you it is
-          the wrong one. Only the IdP can.
+          finding #11. The app default is the pre-rebrand org slug and casdoor-init
+          creates `hugmesh` — but that is not why this rule exists. The pre-rebrand slug
+          is a perfectly well-formed org name; nothing in the manifests could tell you it
+          is the wrong one. Only the IdP can.
       - key: APP_BFF_OIDC_CLIENT_ID
         mustEqual: casdoor.clientId(user-bff)
         why: "finding #12. The registered client is `app-user-bff`; the app default is `user-bff`."

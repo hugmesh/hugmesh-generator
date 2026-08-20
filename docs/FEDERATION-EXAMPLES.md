@@ -63,7 +63,7 @@ The host shell resolves every remote's `remoteEntry.json` **before** Angular
 bootstraps (`initFederation` must map `name -> remoteEntry URL` first). The
 example host's `src/app/federation/federation-bootstrap.ts` implements the
 **dynamic-first, static-floor** contract (carried whole from the
-`snapdragon.systems` exemplar):
+host-shell exemplar):
 
 1. **Dynamic first.** Fetch `GET /api/federation/manifest` (federation-api,
    `federation_modules` table) with `credentials: 'include'` — pre-DI, so it is
@@ -160,8 +160,8 @@ Adding a remote to a live mesh touches eight places. The example trio exercises
    brand-X caller.
 
 8. **k8s + ArgoCD.** The remote's `deploy/` (Deployment/Service/nginx) + its
-   catalog descriptor (`snapdragon-deploy.yaml` or `hugmesh-deploy.yaml` — the
-   generators filter on both), discovered by the brand-repo
+   catalog descriptor (`hugmesh-deploy.yaml`, or the legacy `snapdragon-deploy.yaml`
+   an adopter has not renamed yet — the generators filter on both), discovered by the brand-repo
    ApplicationSet (`13d`) and, for optional services, gated by the
    optional-services operator (`13a`/`13d`) which prunes the whole
    `manifests/<slug>/` dir when the slug is deselected.

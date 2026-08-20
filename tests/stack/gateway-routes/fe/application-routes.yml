@@ -290,7 +290,7 @@ spring:
             # The service name MUST stay byte-identical to the compose service in
             # compose.local.yaml and to the cluster Service in
             # manifests/character-forge-bff-api/service.yaml — it was renamed
-            # snapdragon-* -> hugmesh-* by the rebrand (docs/XR-CHAT.md); the
+            # hugmesh-* -> hugmesh-* by the rebrand (docs/XR-CHAT.md); the
             # `character-forge` PATH prefix is a feature slug and did NOT change.
             - id: hugmesh-character-forge-bff-api
               uri: http://hugmesh-character-forge-bff-api:8080

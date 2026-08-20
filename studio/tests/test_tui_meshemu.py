@@ -4,13 +4,20 @@ Headless and hermetic: the 3-device session fixture mirrors
 test_mesh_emulation.py's, the registry/results dirs start empty (honest "not
 started" everywhere), and NOTHING is spawned — access is copy-ready command
 hints built by the same single-argv-author core functions the GUI drives.
+
+T4 repointed those authors at ``core.emulation`` (the facade over the four
+cores). The pins below compare each printed hint to the FACADE's own output, so
+"the TUI prints what the GUI runs" is checked against the shared author rather
+than against a copy of its spelling.
 """
 import io
 import json
 import os
+import shlex
 
 import pytest
 
+from hugmesh_studio.core import emulation as emu
 from hugmesh_studio.core import mesh_emulation as me
 from hugmesh_studio.core import qemu_tests
 from hugmesh_studio.tui import app as tui_app
@@ -99,7 +106,10 @@ def test_detail_shows_identity_and_a_start_hint_for_a_stopped_device(gen):
     text = "\n".join(j.lines())
     assert "52:54:00" in text and "10.77.0." in text
     assert "keys.img" in text                        # the USB provisioning stick
-    assert "--only rpi5/pki" in text and "--keep-alive" in text
+    # T4: the per-device start is the FACADE's contract — --only-exact, never the
+    # substring --only that would drag be+gpu/be-ha along with x86/be.
+    assert "--only-exact rpi5/pki" in text and "--keep-alive" in text
+    assert "--only rpi5/pki" not in text
     assert "run-qemu-docker.sh" in text
     assert "--stop-all-devices" in text
 
@@ -124,6 +134,72 @@ def test_detail_ssh_and_tunnel_hints_for_a_live_gateway(gen):
     assert "ssh -i /w/keys/id_ed25519 -p 22399" in text
     assert f"-L {gw.ui_port}:127.0.0.1:443" in text  # the web tunnel hint
     assert me.front_door_url(plan) in text
+    # T4: the read-only QMP probe is offered for a LIVE device (the runner owns
+    # the socket; the Studio never speaks QMP itself).
+    assert f"--qmp {gw.label} status" in text
+
+
+# ── T4: every hint is the FACADE's argv, not a second spelling of it ────────────────
+def _deploy_plan(gen):
+    sessions = qemu_tests.discover_sessions(gen)
+    return emu.plan(gen, sessions[0], emu.EmulationMode.DEPLOY, epoch="")
+
+
+def test_every_hint_is_authored_by_core_emulation(gen):
+    """The single-argv-author pin: each printed command is byte-for-byte what the
+    facade returns, so the TUI cannot drift from the GUI, CLI or Makefile."""
+    j = _at_table(gen)
+    j.feed("1")                                      # rpi5/pki detail
+    text = "\n".join(j.lines())
+    eplan = _deploy_plan(gen)
+    for argv in (emu.start_device_argv(eplan, "rpi5/pki"),
+                 emu.run_argv(eplan),
+                 emu.stop_all_argv(eplan)):
+        assert shlex.join(argv) in text, argv
+
+
+def test_the_repoint_changed_exactly_one_hint(gen):
+    """T4 is behaviour-preserving except where the facade FIXES something. The
+    whole-mesh start is byte-identical to the pre-repoint author; the per-device
+    start is the one that had to change (--only is a substring filter)."""
+    eplan = _deploy_plan(gen)
+    plan = eplan.mesh
+    assert emu.run_argv(eplan) == me.start_mesh_argv(gen, plan)
+    before = me.start_device_argv(gen, plan, plan.devices[0])
+    after = emu.start_device_argv(eplan, plan.devices[0].label)
+    assert before != after
+    assert [a.replace("--only-exact", "--only") for a in after] == before
+
+
+def test_the_fleet_stop_carries_the_work_dir(gen):
+    """The start/stop asymmetry the facade closed: a mesh booted with --work must
+    be stopped against THAT registry, not the runner's default one."""
+    eplan = _deploy_plan(gen)
+    argv = emu.stop_all_argv(eplan)
+    assert "--work" in argv and eplan.work_dir in argv
+    j = _at_table(gen)
+    j.feed("1")
+    assert shlex.join(argv) in "\n".join(j.lines())
+
+
+def test_detail_carries_the_whole_mesh_save_hint_and_its_budget(gen):
+    """Issue #50 item 10's TUI face: the save-mesh spelling plus the preview that
+    says what it would cost — a save is each disk's FULL virtual size."""
+    j = _at_table(gen)
+    j.feed("1")
+    text = "\n".join(j.lines())
+    assert "core.emulation save-mesh" in text
+    assert f"--session {SESSION}" in text
+    # the denominator is the PLANNED fleet, not the resolved subset: a mesh that
+    # is simply not running must not read as "nothing to save"
+    assert "0 of 3 planned device(s) savable" in text
+    assert "GiB" in text
+    # nothing is live, so every planned device is unresolved — stated, not hidden,
+    # and folded into ONE line because they share the core's reason verbatim
+    unsaveable = [ln for ln in j.lines() if ln.strip().startswith("no device ")]
+    assert len(unsaveable) == 1
+    assert "rpi5/pki, x86/be, x86/fe" in unsaveable[0]
+    assert "--keep-alive?" in unsaveable[0]      # the core's own wording, kept
 
 
 def test_q_walks_back_through_the_substates_not_out(gen):

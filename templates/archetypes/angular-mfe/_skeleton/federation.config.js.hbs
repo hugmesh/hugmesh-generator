@@ -6,10 +6,10 @@
 //
 // The shared-deps surface + RxJS skip list live in ./federation-base.js so a
 // change to the federation contract lands in one file, consistent with the host
-// and every other Snapdragon remote (games convention).
-const { snapdragonRemote } = require('./federation-base');
+// and every other HugMesh remote (games convention).
+const { hugmeshRemote } = require('./federation-base');
 
-module.exports = snapdragonRemote({
+module.exports = hugmeshRemote({
   name: '{{APP_SLUG}}',
   exposes: {
     './routes': './src/app/remote.routes.ts',

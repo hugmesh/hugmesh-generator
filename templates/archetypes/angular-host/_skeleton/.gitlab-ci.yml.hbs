@@ -19,7 +19,7 @@ stages: [test, build, pentest]
 # not node. Swap in the exemplar's karma job when specs land.
 test:build-smoke:
   stage: test
-  tags: [snapdragon-x86, privileged]
+  tags: [hugmesh-x86, privileged]
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -30,7 +30,7 @@ test:build-smoke:
 build:image:
   stage: build
   needs: [test:build-smoke]
-  tags: [snapdragon-x86, privileged]
+  tags: [hugmesh-x86, privileged]
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'

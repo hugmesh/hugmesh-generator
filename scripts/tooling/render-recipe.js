@@ -43,12 +43,12 @@
 //   * any `..` segment on either side;
 //   * a resolved path (realpath — symlinked parents included) escaping the
 //     target tree on either side;
-//   * a CONTRACT-DENYLISTED name on either side — snapdragon-deploy.yaml +
-//     hugmesh-deploy.yaml (BOTH descriptor spellings are live) +
-//     .snapdragon-provenance.json + .snapdragon-mesh-admitted (renaming those
-//     breaks the 13d pathsExist discovery filter, the provenance manifest's
-//     fixed name, and the publish launder-refusal stamp checks) plus their
-//     fail-closed siblings (.sig / base-origin / base-ref markers);
+//   * a CONTRACT-DENYLISTED name on either side — hugmesh-deploy.yaml +
+//     .hugmesh-provenance.json + .hugmesh-mesh-admitted, and their LEGACY_COMPAT
+//     pre-rebrand spellings (renaming those breaks the 13d pathsExist discovery
+//     filter, the provenance manifest's fixed name, and the publish
+//     launder-refusal stamp checks) plus their fail-closed siblings
+//     (.sig / base-origin / base-ref markers);
 //   * renaming a DIRECTORY (files only — a dir rename could silently move the
 //     `deploy/` discovery contract);
 //   * a destination that already exists (never clobber).
@@ -106,22 +106,30 @@ function renderGated(str, ctx, label) {
 // ── renames[] guards ─────────────────────────────────────────────────────────
 // CONTRACT DENYLIST: fixed-name files the platform's discovery/provenance/publish
 // machinery HARDCODES. Renaming any of them in an emitted tree breaks, in order:
-// the 13d brand-repo ApplicationSet pathsExist filter (snapdragon-deploy.yaml),
+// the 13d brand-repo ApplicationSet pathsExist filter (hugmesh-deploy.yaml),
 // provenance.sh's fixed MANIFEST/SIG names, and publish-tenant-set.sh's Phase-7
-// launder-refusal stamp + durable-marker reads. The last two entries are OUR
-// outbound lineage markers — publish keys fail-closed behavior off their exact
-// names, so a recipe may never move them either.
+// launder-refusal stamp + durable-marker reads. The base-origin/base-ref entries
+// are OUR outbound lineage markers — publish keys fail-closed behavior off their
+// exact names, so a recipe may never move them either.
+//
+// LEGACY_COMPAT: the pre-rebrand spellings stay in the SAME denylist. They are
+// still filtered on (13-service-catalog + 13d), still dual-READ by
+// provenance.sh / ingest-foreign-base.sh / publish-tenant-set.sh, and still
+// present on adopter repos' and other meshes' disks — so moving one silently
+// un-discovers a repo or orphans a signed envelope exactly as moving the new
+// name does. Retire an entry only once nothing in the fleet can still carry it.
 const RENAME_CONTRACT_DENYLIST = new Set([
-  'snapdragon-deploy.yaml',
-  // The post-rebrand spelling of the SAME contract: 3 org repos carry this name
-  // and both 13-service-catalog + 13d filter on it, so moving it breaks discovery
-  // exactly as moving the legacy name does. Registered in catalog/adopters.yaml.
   'hugmesh-deploy.yaml',
+  '.hugmesh-provenance.json',
+  '.hugmesh-provenance.json.sig',
+  '.hugmesh-mesh-admitted',
+  '.hugmesh-base-origin.json',
+  '.hugmesh-base-ref',
+  // ── LEGACY_COMPAT (pre-rebrand spellings, still live on disk elsewhere) ──
+  'snapdragon-deploy.yaml',
   '.snapdragon-provenance.json',
   '.snapdragon-provenance.json.sig',
   '.snapdragon-mesh-admitted',
-  '.hugmesh-base-origin.json',
-  '.hugmesh-base-ref',
 ]);
 
 // Shape-validate ONE side of a rename (already Handlebars-rendered). Returns the

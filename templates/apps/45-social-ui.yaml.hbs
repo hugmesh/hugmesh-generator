@@ -14,16 +14,16 @@ spec:
     kustomize:
       namespace: {{BRAND}}-frontend
       images:
-        - name: snapdragon-systems/matrix-ui
+        - name: hugmesh/matrix-ui
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-matrix-ui
           newTag: main
-        - name: snapdragon-systems/mastodon-ui
+        - name: hugmesh/mastodon-ui
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-mastodon-ui
           newTag: main
-        - name: snapdragon-systems/login-ui
+        - name: hugmesh/login-ui
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-login-ui
           newTag: main
-        - name: snapdragon-systems/admin-ui
+        - name: hugmesh/admin-ui
           newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-admin-ui
           newTag: main
   destination:

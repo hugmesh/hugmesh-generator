@@ -1,6 +1,6 @@
 # angular-mfe archetype
 
-Renders any Snapdragon **Angular native-federation micro-frontend** from ONE
+Renders any HugMesh **Angular native-federation micro-frontend** from ONE
 recipe + one class-A shared file, parameterized by the per-repo `repos[].identity`
 row. Seeded from the Phase-2 `login-ui` exemplar; proven on `user-ui` with only
 manifest identity (no new hand overlay).
@@ -14,7 +14,7 @@ wiki / forum-ui + api-docs + character-studio-ui + superadmin-service-catalog-ui
   the class except the `HOST_NAME` federation-host default — safe wholesale
   overlay, single source of truth. (Verified identical across login-ui/user-ui.)
 - **Class-B anchored edits (`recipe.yaml` on the base's OWN files):**
-  - `package.json`: npm scope only (`@snapdragon/<slug>` -> `@<NPM_SCOPE>/<slug>`);
+  - `package.json`: npm scope only (`@hugmesh/<slug>` -> `@<NPM_SCOPE>/<slug>`);
     the `<slug>` == `ng build <slug>` target is preserved.
   - `src/index.html`: tab title leading brand word (`BRAND_TITLE`) + per-UI
     `TITLE_WORD`; the `<snap-<slug>-root>` bootstrap selector is left literal.
@@ -32,7 +32,7 @@ wiki / forum-ui + api-docs + character-studio-ui + superadmin-service-catalog-ui
 - `recipe.yaml`, `federation-base.js.hbs` (class-A), `_identity.env` (drift oracle,
   login-ui upstream values), `_skeleton/` — a RUNNABLE minimal Angular 22
   native-federation remote in the house shape (user-ui-pinned dep majors,
-  `snapdragonRemote` federation config exposing `./routes`, standalone+signals
+  `hugmeshRemote` federation config exposing `./routes`, standalone+signals
   component with `[textContent]` bindings — Angular's double-curly interpolation
   would trip the renderer's fail-closed brand-token scan — `--sd-*` palette
   floor, CORS nginx.conf on 8080, nginx-unprivileged Dockerfile, fleet CI,

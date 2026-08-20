@@ -1,6 +1,6 @@
 # remote-fragment archetype
 
-Renders the Snapdragon **remote-fragment** class: the runtime federation-bundle
+Renders the HugMesh **remote-fragment** class: the runtime federation-bundle
 delivery pod (Spring-Native sync sidecar + static nginx) that pulls PUBLISHED
 remote bundles from federation-api and serves them so a tenant can mount remotes
 it does not build. Exemplar (and only) member = `hugmesh-remote-fragment`.

@@ -16,6 +16,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import emulation as em                       # noqa: E402
+from hugmesh_studio.core import qemu_tests as qt                      # noqa: E402
 from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS               # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
@@ -26,6 +28,7 @@ from hugmesh_studio.gui.pages import welcome as gui_welcome            # noqa: E
 from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E402
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
 from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
+from hugmesh_studio.tui import qemu as tui_qemu                        # noqa: E402
 
 from _helpers import advance_to                                        # noqa: E402
 
@@ -96,6 +99,41 @@ def test_mode_menu_matches_the_gui_page_id_for_id(wiz):
 def test_mode_default_is_standalone_by_id_on_both_faces(wiz):
     page = advance_to(wiz, wizard_mod.ModePage)
     assert page._selected_mode() == "standalone" == journey.MODE_DEFAULT_CHOICE
+
+
+# ── qemu device tests: both faces host the TEST lane, over one grader ──────────────
+def test_qemu_flow_is_hosted_on_both_faces(wiz):
+    """The card is not a promise the TUI breaks: the GUI's "qemu" slug is a real
+    QemuPage and the TUI's is a real QemuScreen, not the honest stub it used to
+    render (which sent the operator back to the GUI)."""
+    page = wiz.page(wiz._page_ids["qemu"])
+    assert isinstance(page, wizard_mod.QemuPage)
+    j = journey.Journey(GENERATOR_DIR)
+    screen = j.screen_for("qemu")
+    assert isinstance(screen, tui_qemu.QemuScreen)
+    assert not isinstance(screen, journey.PendingSideFlow)
+
+
+def test_qemu_session_completeness_words_come_from_the_session_itself():
+    """Both pickers describe an aborted build with the SESSION's own badge — the
+    GUI combo renders ``BuildSession.summary()`` (which embeds it), the TUI
+    renders the badge directly. Neither face spells "partial" for itself."""
+    row = qt.DeviceRow(platform="x86", arch="amd64", role="be", env="test",
+                       image="/s/hugmesh-x86-amd64-be-test-20260819T125930Z.img")
+    aborted = qt.BuildSession(path="/s", name="s", rows=[row], expected_images=4)
+    whole = qt.BuildSession(path="/s", name="s", rows=[row], expected_images=1)
+    assert tui_qemu.session_badge(aborted) == aborted.completeness_badge()
+    assert tui_qemu.session_badge(aborted) in aborted.summary()
+    assert tui_qemu.session_badge(whole) == tui_qemu.COMPLETE_BADGE
+    assert whole.completeness_badge() == ""      # complete: no badge to embed
+
+
+def test_qemu_verdict_vocabulary_is_the_single_graders():
+    """The three verdicts no runner ever prints are synthesized in exactly one
+    place (core.emulation) and only LOOKED UP by either face — so a row cannot be
+    graded PASS on one surface and SUSPECT on the other."""
+    assert set(tui_qemu.VERDICT_LEGEND) == {
+        em.VERDICT_SUSPECT, em.VERDICT_STALE, em.VERDICT_NO_RESULT}
 
 
 # ── localcloud (#65): the derived allow-set and the identity reader ─────────────────
