@@ -1,6 +1,6 @@
 {
-  "_comment": "Org/admin DEFAULT appearance for the snapdragon-mastodon-ui remote. This shipped asset is the fallback a non-customised user inherits when no admin/org default has been set in this browser. The admin 'Set as the default for everyone' control currently writes a per-browser override (localStorage key snap.mastodon.prefs.orgdefault.v1) and applies it immediately; a cluster-wide durable default needs an admin-bff endpoint (see PreferencesService DEFAULTS_SYNC_HOOK). Edit this file (or wire it to the admin-bff) to change the shipped baseline. Shape matches AppearancePreferences in preferences.service.ts.",
-  "theme": "snap-neon",
+  "_comment": "Org/admin DEFAULT appearance for the hugmesh-mastodon-ui remote. This shipped asset is the fallback a non-customised user inherits when no admin/org default has been set in this browser. The admin 'Set as the default for everyone' control currently writes a per-browser override (localStorage key hug.mastodon.prefs.orgdefault.v1) and applies it immediately; a cluster-wide durable default needs an admin-bff endpoint (see PreferencesService DEFAULTS_SYNC_HOOK). Edit this file (or wire it to the admin-bff) to change the shipped baseline. Shape matches AppearancePreferences in preferences.service.ts.",
+  "theme": "hug-neon",
   "accent": "neon",
   "appearance": "dark",
   "layout": "single",

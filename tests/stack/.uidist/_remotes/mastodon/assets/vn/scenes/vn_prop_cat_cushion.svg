@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- flat-vector VN prop: cat curled on a cushion (no text/image/script) -->
+  <ellipse cx="200" cy="310" rx="170" ry="60" fill="#b48ad6"/>
+  <ellipse cx="200" cy="296" rx="170" ry="56" fill="#c9a6e6"/>
+  <ellipse cx="200" cy="296" rx="130" ry="40" fill="#b48ad6" opacity="0.5"/>
+  <!-- curled body -->
+  <ellipse cx="200" cy="240" rx="110" ry="72" fill="#f2a65a"/>
+  <path d="M92 250 q-18 46 30 58 q40 10 66 -14 l-20 -28 q-30 18 -48 6 q-16 -10 -4 -30 z" fill="#e08f43"/>
+  <!-- head -->
+  <circle cx="272" cy="212" r="52" fill="#f2a65a"/>
+  <path d="M236 176 l-8 -34 30 18 z" fill="#f2a65a"/>
+  <path d="M302 172 l14 -32 -36 14 z" fill="#f2a65a"/>
+  <path d="M240 180 l-2 -18 16 10 z" fill="#e86a8a"/>
+  <path d="M298 176 l8 -16 -18 6 z" fill="#e86a8a"/>
+  <!-- sleeping face -->
+  <path d="M250 216 q8 8 16 0" stroke="#6b4a2b" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M284 216 q8 8 16 0" stroke="#6b4a2b" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M268 236 q6 6 12 0" stroke="#6b4a2b" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <!-- stripes -->
+  <path d="M160 190 q20 -16 44 -12 l-6 22 q-20 -6 -38 6 z" fill="#e08f43"/>
+  <path d="M150 260 q24 10 48 2 l-4 -20 q-22 8 -40 0 z" fill="#e08f43"/>
+</svg>

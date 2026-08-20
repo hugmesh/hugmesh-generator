@@ -2,12 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Snapdragon Admin (remote)</title>
+  <!-- Dev-shell document only: in production the hugmesh.net host owns the
+       tab (title/branding), so the "(remote)" suffix is the sanctioned dev-shell
+       convention. The favicon + theme-color below brand the STANDALONE shell
+       (`ng serve admin`, the @offline e2e lane) — favicon.ico is the canonical
+       multi-resolution platform icon copied from the host shell's src/. -->
+  <title>HugMesh Admin (remote)</title>
   <base href="/"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<link rel="stylesheet" href="styles-AWV36ELJ.css"></head>
+  <meta name="description" content="HugMesh platform administration console"/>
+  <meta name="theme-color" content="#0a0a12"/>
+  <link rel="icon" type="image/x-icon" href="favicon.ico"/>
+  <!-- Runtime THEME (colours + fonts), written at container start by
+       docker-entrypoint.d/50-snap-theme.sh from SNAP_THEME_CSS and served from
+       /tmp via the nginx.conf exact-match alias (the docroot is root-owned
+       under the unprivileged base, uid 101). Carries ALREADY-DERIVED sd token
+       text under a doubled ":root:root" selector, which out-specifies the
+       compiled :root fallbacks in the Angular-injected stylesheet — the index
+       writer appends its styles bundle link AFTER this line, right before the
+       closing head tag — so the theme wins regardless of which sheet the
+       browser loads last. Empty (zero-byte) on unbranded deploys, so the
+       shipped defaults render. RELATIVE path (no leading slash) so it resolves
+       against the /admin/ base href; the fe-gateway StripPrefix=1 maps
+       /admin/snap-theme.css back to /snap-theme.css on this container. -->
+  <link rel="stylesheet" href="snap-theme.css"/>
+<link rel="stylesheet" href="styles-2EMGBIZX.css"></head>
 <body>
 		<script type="esms-options">{"shimMode":true}</script>
-  <snap-admin-root></snap-admin-root>
-<link rel="modulepreload" href="chunk-VG67F64M.js"><script src="polyfills-HJIIS2RB.js" type="module"></script><script src="main-RLKGT6VH.js" type="module-shim"></script></body>
+  <hug-admin-root></hug-admin-root>
+<link rel="modulepreload" href="chunk-VG67F64M.js"><script src="polyfills-NZT6DW33.js" type="module"></script><script src="main-6NJDOAAL.js" type="module-shim"></script></body>
 </html>

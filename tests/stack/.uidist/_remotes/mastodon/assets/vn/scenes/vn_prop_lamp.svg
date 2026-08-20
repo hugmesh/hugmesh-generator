@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- flat-vector VN prop: floor lamp with a warm glow (no text/image/script) -->
+  <circle cx="200" cy="110" r="105" fill="#ffd97a" opacity="0.18"/>
+  <path d="M130 60 h140 l-26 96 h-88 z" fill="#ffd97a"/>
+  <path d="M130 60 h140 l-6 22 h-128 z" fill="#e8b04b"/>
+  <rect x="192" y="156" width="16" height="196" fill="#3c332c"/>
+  <ellipse cx="200" cy="360" rx="78" ry="20" fill="#3c332c"/>
+  <ellipse cx="200" cy="352" rx="78" ry="20" fill="#55493f"/>
+  <circle cx="200" cy="132" r="14" fill="#fff3c4"/>
+</svg>

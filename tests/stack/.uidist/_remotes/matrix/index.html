@@ -5,14 +5,19 @@
   <title>HugMesh Matrix (remote)</title>
   <base href="/"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <!-- Standalone/dev serving branding: under the hugmesh.systems host shell
+  <!-- Standalone/dev serving branding: under the hugmesh.net host shell
        the host owns the tab chrome; these only surface when served alone. -->
   <link rel="icon" href="favicon.ico" sizes="any"/>
   <meta name="theme-color" content="#0a0a12"/>
   <meta name="description" content="HugMesh Matrix chat — rooms, DMs, threads, calls and moderation on the HugMesh platform."/>
+  <!-- Runtime theme (fleet 50-snap-theme.sh mechanism): RELATIVE href so it
+       resolves under this app's mount behind the gateway; the file's
+       :root:root block out-specifies the compiled :root fallbacks regardless
+       of stylesheet order. Empty when unthemed (zero-byte 200, no 404). -->
+  <link rel="stylesheet" href="snap-theme.css">
 <link rel="stylesheet" href="styles-HFBXIV5R.css"></head>
 <body>
 		<script type="esms-options">{"shimMode":true}</script>
   <hug-matrix-root></hug-matrix-root>
-<link rel="modulepreload" href="chunk-4CLCTAJ7.js"><script src="polyfills-LQD7X4LH.js" type="module"></script><script src="main-BKPLAJGW.js" type="module-shim"></script></body>
+<link rel="modulepreload" href="chunk-4CLCTAJ7.js"><script src="polyfills-M54MWKDU.js" type="module"></script><script src="main-VFISUHG5.js" type="module-shim"></script></body>
 </html>
