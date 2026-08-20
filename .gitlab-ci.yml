@@ -2668,7 +2668,11 @@ templating-rename-verify:
     # tool)". node:20-alpine does not ship it, so without this the job is red on
     # every default-branch pipeline — the same environmental-red this whole
     # change set exists to eliminate.
-    - apk add --no-cache bash jq git tar coreutils grep sed gawk findutils openssl
+    # python3 + py3-yaml: case B11 of the suite PARSES this file as YAML to assert
+    # template-drift-verify below still exists, still runs the sweep, and still cannot
+    # be waved through with allow_failure — the archetype gate's whole original defect
+    # was that no CI job ran it. Same recipe as node-storage-verify / egress-vpn-verify.
+    - apk add --no-cache bash jq git tar coreutils grep sed gawk findutils openssl python3 py3-yaml
     - (cd scripts/tooling && npm ci --no-audit --no-fund)
   script:
     # Fail-closed on the skip: this job's whole reason to exist is that
@@ -2682,6 +2686,12 @@ templating-rename-verify:
         - scripts/render-repo-tree.sh
         - scripts/pull-repo-base.sh
         - scripts/publish-tenant-set.sh
+        # Cases B8-B11 of test-templating-rename-pr.sh are the ONLY thing that grades
+        # the archetype drift gate's own honesty (that a real drift exits non-zero, and
+        # that template-drift-verify below is still wired). Without these two paths an
+        # MR touching only the sweep skips the suite that guards it.
+        - scripts/validate-repo-templates.sh
+        - scripts/validate-repo-templates-all.sh
         - tests/domain-registry/**/*
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

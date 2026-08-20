@@ -23,7 +23,10 @@
 #       BYTE-UNTOUCHED, zero residual {{TOKEN}}s; render-tenant-set.js admits
 #       archetype 'generator' and its residual sweep stays green; plus the
 #       ALL-archetype drift sweep (validate-repo-templates-all.sh) grading every
-#       archetype on disk and failing closed on a base it cannot resolve.
+#       archetype on disk, failing closed on a base it cannot resolve, EXITING
+#       NON-ZERO ON A REAL INJECTED DRIFT (the negative control — without it the
+#       sweep's RC can be switched off with this suite still green), and being
+#       actually WIRED into an un-waivable .gitlab-ci.yml job.
 #   [C] --ref plumbing — pull-repo-base.sh --ref (fresh clone at a tag, cached
 #       re-pin, fail-closed bogus ref, --foreign refusal), render-repo-tree.sh
 #       --ref (tag content rendered, .hugmesh-base-ref marker written).
@@ -60,9 +63,15 @@ PRB="${REPO}/scripts/pull-repo-base.sh"
 PUB="${REPO}/scripts/publish-tenant-set.sh"
 RTS_JS="${REPO}/scripts/tooling/render-tenant-set.js"
 
-for t in node jq git tar realpath sha256sum; do
+# python3 + PyYAML are for the [B] CI-wiring case (B11) and for the drift-injection
+# in B10: both READ .gitlab-ci.yml / a recipe.yaml as YAML rather than grepping it,
+# the same way tests/scripts/test-reserved-prefix-copy-gate.sh case (f) does. They go
+# through _skip like every other tool here — an unparseable-because-untooled run is
+# INCOMPLETE (exit 3), never a green one.
+for t in node jq git tar realpath sha256sum python3; do
   command -v "$t" >/dev/null || _skip "need $t"
 done
+python3 -c 'import yaml' 2>/dev/null || _skip "need PyYAML (python3 -c 'import yaml')"
 [ -d "${REPO}/scripts/tooling/node_modules/handlebars" ] \
   || _skip "handlebars not installed (cd scripts/tooling && npm install)"
 
@@ -466,8 +475,20 @@ else bad "B8 drift oracle: $(grep DRIFT "${WORK}/B8.out" | head -n2 | tr '\n' ' 
 # same vacuous green as a missing one. Hermetic: OFFLINE=1 over an EMPTY base cache, so
 # the five exemplar members are deliberately unreachable and only `generator` (whose
 # base is this checkout) can grade.
+#
+# HERMETIC MEANS env -i. This case originally inherited the developer's shell, and
+# this repo's own documented offline workflow is to EXPORT <NAME>_BASE_DIR at a local
+# clone of each exemplar — so a developer following the docs handed the sweep five
+# resolvable bases, the sweep passed, and B9's "exited 0 with every base unreachable"
+# assertion fired as a FALSE FAILURE. It did not show up when the sweep landed only
+# because three overlays were drifting at the time, so the sweep was red either way;
+# the moment those drifts were fixed (#116, admin-bff-api#39, remote-fragment#12) the
+# same suite passed from a bare shell and failed from a configured one. A case whose
+# verdict depends on the caller's environment is not a test. env -i, and the sweep's
+# own REPO_ROOT default is what still gives `generator` a base.
 ALL_ARCH="$(for d in "${REPO}"/templates/archetypes/*/; do basename "$d"; done | sort)"
-if ( cd "$REPO" && OFFLINE=1 REPO_BASE_CACHE="${WORK}/empty-base-cache" \
+if ( cd "$REPO" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
+      OFFLINE=1 REPO_BASE_CACHE="${WORK}/empty-base-cache" \
       bash scripts/validate-repo-templates-all.sh ) >"${WORK}/B9.out" 2>"${WORK}/B9.err"; then
   bad "B9 archetype sweep exited 0 with every exemplar base unreachable — vacuous green"
 else
@@ -481,6 +502,188 @@ else
   grep -qE "^  PASS  +generator( |$)" "${WORK}/B9.out" \
     && ok "B9c the sweep still grades 'generator' against this checkout (B8's base, offline)" \
     || bad "B9c generator archetype was not graded against this checkout"
+fi
+
+# ── B10 THE NEGATIVE CONTROL: A REAL DRIFT MUST MAKE THE SWEEP EXIT NON-ZERO ───
+# B9/B9b/B9c all run the sweep with every exemplar base deliberately UNREACHABLE, so
+# every archetype but `generator` lands in the ERROR arm and NOTHING there ever grades
+# a drifted overlay. That leaves the one property the gate exists for unasserted, and
+# it is not a theoretical gap: moving the shared `RC=1` into the ERROR arm of the
+# sweep's `case` — a one-line edit — leaves this suite at 64 passed / 0 failed, exit 0,
+# while the sweep prints `DRIFT generator` AND `RESULT: PASS`, and exits 0. A gate that
+# can be switched off with the suite still green is not a gate.
+#
+# So: grade a REAL drift, hermetically. `generator` is the archetype that can be graded
+# offline (its base is a local checkout), so the sweep runs in a scratch tree holding
+# ONLY that archetype, against THIS repo as the base:
+#   1. IN SYNC   -> rc 0 and the clean PASS verdict          (vacuity control: the lab
+#                                                             is capable of passing, so
+#                                                             step 2's red is the drift)
+#   2. DRIFTED   -> rc NON-ZERO, `DRIFT generator` in the summary, and NO clean PASS.
+# BOTH HALVES ARE ASSERTED — exit status AND verdict line — because the mutation above
+# produced exactly the contradictory pair (`DRIFT generator` + `RESULT: PASS`): checking
+# only the summary, or only the status, misses half of it.
+#
+# The injected drift is the SAME SHAPE the three live ones had: a required anchor whose
+# `find` literal no longer occurs in the base. Appending a marker to find AND replace
+# keeps the replace==find round-trip a no-op, so it is the presence check — and only the
+# presence check — that bites.
+echo "-- [B] drift negative control: a real drift must fail the sweep --"
+LAB="${WORK}/driftlab"
+mkdir -p "${LAB}/templates"
+tar -c -C "$REPO" --exclude='scripts/tooling/node_modules' scripts | tar -x -C "$LAB"
+# node_modules is 10MB of unchanging vendor tree; the gate only ever reads it.
+ln -s "${REPO}/scripts/tooling/node_modules" "${LAB}/scripts/tooling/node_modules"
+cp -a "${REPO}/templates/archetypes" "${LAB}/templates/archetypes"
+for d in "${LAB}"/templates/archetypes/*/; do
+  [ "$(basename "$d")" = generator ] || rm -rf "$d"
+done
+
+_sweep_lab() { # <outfile> -> rc of the sweep in the lab tree
+  ( cd "$LAB" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" OFFLINE=1 \
+      GENERATOR_BASE_DIR="$REPO" bash scripts/validate-repo-templates-all.sh ) \
+    >"$1" 2>&1
+}
+CLEAN_PASS='^RESULT: PASS — every archetype overlay is in sync'
+
+if _sweep_lab "${WORK}/B10a.out" && grep -qE "$CLEAN_PASS" "${WORK}/B10a.out"; then
+  ok "B10 vacuity control: the one-archetype lab is GREEN in sync (rc 0 + clean PASS)"
+else
+  bad "B10 lab is not green before the drift is injected — the control below proves nothing: $(tail -n3 "${WORK}/B10a.out" | tr '\n' ' ')"
+fi
+
+RECIPE="${LAB}/templates/archetypes/generator/recipe.yaml" \
+python3 - >"${WORK}/B10.inject" 2>&1 <<'PY'
+import os, sys, yaml
+p = os.environ["RECIPE"]
+doc = yaml.safe_load(open(p))
+MARK = " NO-SUCH-LITERAL-IN-ANY-UPSTREAM-BASE"
+hit = None
+for e in doc.get("edits") or []:
+    for a in e.get("anchors") or []:
+        if a.get("required") is True:
+            a["find"] += MARK
+            a["replace"] += MARK        # keep replace==find: only PRESENCE breaks
+            hit = "%s#%s" % (e.get("file"), a.get("id"))
+            break
+    if hit:
+        break
+if not hit:
+    print("NO_REQUIRED_ANCHOR")
+    sys.exit(1)
+yaml.safe_dump(doc, open(p, "w"), sort_keys=False, default_flow_style=False, width=4096)
+print("INJECTED", hit)
+PY
+if grep -q '^INJECTED ' "${WORK}/B10.inject"; then
+  ok "B10 injected a real drift ($(sed -n 's/^INJECTED //p' "${WORK}/B10.inject") — required anchor, find absent from base)"
+else
+  bad "B10 could not inject a drift: $(tr '\n' ' ' <"${WORK}/B10.inject") — the control below is vacuous"
+fi
+
+_sweep_lab "${WORK}/B10b.out"; DRIFT_RC=$?
+[ "$DRIFT_RC" -ne 0 ] \
+  && ok "B10 A REAL DRIFT FAILS THE SWEEP (exit ${DRIFT_RC})" \
+  || bad "B10 the sweep EXITED 0 on a genuinely drifted overlay — the gate is off"
+grep -qE "$CLEAN_PASS" "${WORK}/B10b.out" \
+  && bad "B10b the sweep still printed the clean PASS verdict over a drifted overlay — a reader is told the tree is in sync" \
+  || ok "B10b the drifted sweep never prints the clean PASS verdict"
+grep -qE '^  DRIFT  *generator( |$)' "${WORK}/B10b.out" \
+  && ok "B10c the drifted archetype is reported DRIFT (graded and bit), not ERROR (never graded)" \
+  || bad "B10c drifted overlay not summarised as DRIFT: $(grep -E '^  (PASS|DRIFT|ERROR)' "${WORK}/B10b.out" | tr '\n' ' ')"
+
+# ── B11 THE CI WIRING IS PART OF THE GATE ─────────────────────────────────────
+# The original defect was not "the sweep is wrong", it was "no pipeline ever ran the
+# single-archetype gate", and three overlays rotted behind that. The sweep and its CI
+# job landed together — but NOTHING asserted the job. Deleting the whole
+# template-drift-verify block from .gitlab-ci.yml leaves valid YAML, and every suite
+# stays exactly as green as before: this file 64/0, test-gitlab-ci-wellformed.sh 9/0,
+# test-guard-integrity.sh byte-identical. So the original defect could be restored in
+# full, silently — as could `allow_failure: true`, which is the same thing with extra
+# steps. tests/scripts/test-reserved-prefix-copy-gate.sh case (f) already solved this
+# shape for the sibling gate; this is that check for this one.
+echo "-- [B] CI wiring: template-drift-verify must exist and must be able to fail --"
+CI_FILE="${REPO}/.gitlab-ci.yml"
+if [ ! -r "$CI_FILE" ]; then
+  bad "B11 no .gitlab-ci.yml at ${CI_FILE}"
+else
+CI="$CI_FILE" python3 - >"${WORK}/B11.out" 2>&1 <<'PY'
+import os, yaml
+ci = yaml.safe_load(open(os.environ["CI"])) or {}
+job = ci.get("template-drift-verify")
+if not isinstance(job, dict):
+    print("MISSING_JOB")
+    raise SystemExit(0)
+script = job.get("script") or []
+if isinstance(script, str):
+    script = [script]
+before = job.get("before_script") or []
+if isinstance(before, str):
+    before = [before]
+allsh = " ".join(str(x) for x in list(script) + list(before))
+rules = job.get("rules") if isinstance(job.get("rules"), list) else []
+changes = [c for r in rules if isinstance(r, dict) for c in (r.get("changes") or [])]
+
+print("RUNS_SWEEP", "yes" if "validate-repo-templates-all.sh" in allsh else "no")
+print("STAGE", job.get("stage"))
+print("ON_DEFAULT_BRANCH", "yes" if any(
+    isinstance(r, dict) and "CI_DEFAULT_BRANCH" in str(r.get("if", "")) for r in rules) else "no")
+# allow_failure: true (or an exit_codes form) makes a red gate a green pipeline.
+print("ALLOW_FAILURE", "yes" if job.get("allow_failure") not in (None, False) else "no")
+print("HAS_HANDLEBARS", "yes" if ("npm ci" in allsh and "node_modules/handlebars" in allsh) else "no")
+print("SETS_GIT_BASE", "yes" if "GIT_BASE" in allsh else "no")
+# The job must re-run when an overlay OR the sweep itself changes.
+for label, want in (("WATCHES_OVERLAYS", "templates/archetypes/**/*"),
+                    ("WATCHES_SWEEP", "scripts/validate-repo-templates-all.sh")):
+    print(label, "yes" if (not changes or want in changes) else "no")
+
+# DEFECT 4: the suite that GUARDS the sweep must itself re-run when the sweep changes.
+guard = ci.get("templating-rename-verify")
+if not isinstance(guard, dict):
+    print("MISSING_GUARD_JOB")
+else:
+    grules = guard.get("rules") if isinstance(guard.get("rules"), list) else []
+    gchanges = [c for r in grules if isinstance(r, dict) for c in (r.get("changes") or [])]
+    missing = [w for w in ("scripts/validate-repo-templates.sh",
+                           "scripts/validate-repo-templates-all.sh")
+               if gchanges and w not in gchanges]
+    print("GUARD_WATCHES_SWEEP", "-" if not missing else " ".join(missing))
+PY
+  if grep -q '^MISSING_JOB$' "${WORK}/B11.out"; then
+    bad "B11 no template-drift-verify job in .gitlab-ci.yml — the archetype gate is wired into no CI, which is the defect it was added to fix"
+  else
+    _b11() { grep -q "^$1 $2\$" "${WORK}/B11.out" && ok "B11 $3" || bad "B11 $4"; }
+    _b11 RUNS_SWEEP yes \
+      "template-drift-verify runs scripts/validate-repo-templates-all.sh" \
+      "template-drift-verify never runs the sweep — the job is decoration"
+    _b11 STAGE verify \
+      "template-drift-verify is in the 'verify' stage" \
+      "template-drift-verify stage is '$(sed -n 's/^STAGE //p' "${WORK}/B11.out")', expected 'verify'"
+    _b11 ON_DEFAULT_BRANCH yes \
+      "template-drift-verify runs on the default branch (drift is re-checked on main)" \
+      "template-drift-verify has no \$CI_DEFAULT_BRANCH rule — merged drift is never re-checked"
+    _b11 ALLOW_FAILURE no \
+      "template-drift-verify does NOT carry allow_failure — a drift stops the pipeline" \
+      "template-drift-verify sets allow_failure — a red gate would leave the pipeline green"
+    _b11 HAS_HANDLEBARS yes \
+      "template-drift-verify installs handlebars AND fail-closes if the install no-ops" \
+      "template-drift-verify does not npm ci + assert node_modules/handlebars — the gate would exit 2 environmentally"
+    _b11 SETS_GIT_BASE yes \
+      "template-drift-verify exports GIT_BASE so the exemplar bases actually resolve" \
+      "template-drift-verify never sets GIT_BASE — every archetype would be ERROR (unresolvable base)"
+    _b11 WATCHES_OVERLAYS yes \
+      "template-drift-verify re-runs when an archetype overlay changes" \
+      "template-drift-verify's rules:changes does not cover templates/archetypes/**/* — editing an overlay cannot run the gate"
+    _b11 WATCHES_SWEEP yes \
+      "template-drift-verify re-runs when the sweep script changes" \
+      "template-drift-verify's rules:changes does not cover the sweep script"
+    if grep -q '^MISSING_GUARD_JOB$' "${WORK}/B11.out"; then
+      bad "B11 no templating-rename-verify job — nothing runs this suite"
+    else
+      _b11 GUARD_WATCHES_SWEEP - \
+        "templating-rename-verify re-runs this suite when validate-repo-templates*.sh changes" \
+        "templating-rename-verify's rules:changes omits $(sed -n 's/^GUARD_WATCHES_SWEEP //p' "${WORK}/B11.out") — an MR touching only the sweep skips the suite that guards it"
+    fi
+  fi
 fi
 
 # ── [C] --ref plumbing against a LOCAL file:// upstream ────────────────────────
