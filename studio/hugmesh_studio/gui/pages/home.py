@@ -447,13 +447,13 @@ class HomePage(QtWidgets.QWizardPage):
         # The standalone CHECKBOX above was already scoped. The GROUP around it never was:
         # it is a bare QGroupBox added to the layout, nothing ever called setVisible on it,
         # and its title says "standalone account" on every mesh node's screen. Inside it
-        # sit local_user (default "magus", emitted as --local-user on EVERY x86 build) and
+        # sit local_user (default: the invoking user, emitted as --local-user on EVERY x86 build) and
         # local_pass — which on a mesh flow rides the shared base that _materialize_one
         # deepcopies onto every entry, i.e. a desktop password baked into every node image.
         #
         # Emission-neutral by construction, which is why this is a hide and not a
         # narrowing of the FIELD: local_user stays at its dataclass default (so
-        # --local-user magus is emitted exactly as before — the x86 builder honours it on
+        # --local-user <invoking user> is emitted exactly as before — the x86 builder honours it on
         # every role, :1597, and inventing a class rule there would repeat the mistake
         # _STANDALONE_CLASS_GATED_PLATFORMS records), and local_pass is empty by default,
         # so the only thing that stops reaching a node is a password the operator typed on
@@ -528,7 +528,7 @@ class HomePage(QtWidgets.QWizardPage):
         # could only ever patch up after the fact.
         # ASK 11's emission half, also kept from main. `local_user` is collected
         # UNCONDITIONALLY on purpose: the x86 builder honours --local-user on every role,
-        # the field defaults to "magus" and is emitted on every x86 build, so blanking it
+        # the field defaults to the invoking user and is emitted on every x86 build, so blanking it
         # would change the argv of every existing mesh flow. `local_pass` is the one that
         # matters and the one that is gated: it is a SECRET_FIELD that would otherwise
         # ride the shared mesh base onto every node image.

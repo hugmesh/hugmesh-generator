@@ -2,7 +2,24 @@
 
 description="Kubernetes Kubelet"
 command="/usr/bin/kubelet"
-command_args="--config=/var/lib/kubelet/config.yaml --kubeconfig=/etc/kubernetes/kubelet.conf --v=2"
+
+# kubeadm (init AND join) writes this node's runtime kubelet flags here
+# (KUBELET_KUBEADM_ARGS: --container-runtime-endpoint, --node-ip, ...).
+# Source it when present so those flags reach the kubelet; when absent
+# (fresh image, before keys-provision has run kubeadm) command_args below
+# stays byte-identical to the pre-#48 single-node behavior.
+if [ -f /var/lib/kubelet/kubeadm-flags.env ]; then
+    . /var/lib/kubelet/kubeadm-flags.env
+fi
+
+# --bootstrap-kubeconfig is consumed ONLY while /etc/kubernetes/kubelet.conf
+# does not exist yet: `kubeadm join` stages bootstrap-kubelet.conf and then
+# waits for the kubelet's TLS bootstrap to mint kubelet.conf — without this
+# flag a join can never complete on ANY node (issue #48). Once kubelet.conf
+# exists (kubeadm init writes it directly; a completed join minted it) the
+# kubelet ignores the bootstrap flag, so init/single-node behavior is
+# unchanged.
+command_args="--config=/var/lib/kubelet/config.yaml --kubeconfig=/etc/kubernetes/kubelet.conf --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --v=2${KUBELET_KUBEADM_ARGS:+ ${KUBELET_KUBEADM_ARGS}}"
 command_background=true
 pidfile="/run/${RC_SVCNAME}.pid"
 start_stop_daemon_args="--stderr /var/log/kubelet.err --stdout /var/log/kubelet.log"

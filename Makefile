@@ -1120,6 +1120,18 @@ qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=
 qemu-matrix-enumerate: ## dry-run enumerate every matrix row + its launcher/size/RAM (no boot, no build)
 	tests/qemu/run-matrix-e2e.sh --dry-run $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
 
+# SELinux AVC workout (issue #45): boot ONE image, drive the workloads
+# specs/selinux/*.te confine, harvest AVCs, and emit the narrowing report
+# (denials grouped by source type -> owning .te). Run once per image type.
+# ENFORCING=1 runs the workload under `setenforce 1` (the enforcing campaign);
+# the boot itself always provisions permissive, like the enforce-gate posture.
+.PHONY: avc-workout
+PLATFORM ?= x86
+avc-workout: ## SELinux AVC workout for ONE image: make avc-workout PLATFORM=x86 ROLE=pki [IMG=…] [ENFORCING=1]
+	$(SUDO) tests/qemu/avc-workout.sh --platform $(PLATFORM) --role $(ROLE) -w "$(WORK_DIR)" \
+	  $(if $(IMG),--img "$(IMG)",) $(if $(BOARD),--board "$(BOARD)",) \
+	  $(if $(KERNEL),--kernel "$(KERNEL)",) $(if $(filter 1,$(ENFORCING)),--enforcing,)
+
 # Containerized emulated-device tests (tests/qemu/run-qemu-docker.sh): one
 # --privileged container per platform/role row, against a build session's
 # artifacts. NO $(SUDO) on purpose — the whole point of the container is that
@@ -1172,8 +1184,8 @@ qemu-save-mesh: ## save EVERY live emulated device's disk + KEYS stick to a flas
 kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice first-party images (needs the kind cluster to exist)
 	bash scripts/kind-load-images.sh
 
-kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds)
-	KIND_PROFILE=sso bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
+kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled)
+	KIND_PROFILE=sso MFA='$(MFA)' bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
 
 kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
 	cd tests/e2e && \
@@ -1362,6 +1374,30 @@ MANAGED_WIKI_BFF_LIQUIBASE_URL  ?=
 #   make stack-up MFA_FLOOR=1
 MFA_FLOOR ?=
 STACK_MFA_FLOOR_ENV := $(if $(strip $(MFA_FLOOR)), APP_MFA_ENFORCE_PRIVILEGED_FLOOR='true',)
+# MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
+# knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
+# freshness window keeps its default (600000) and the privileged floor stays on its
+# OWN deliberate switch (MFA_FLOOR=1 above; never coupled to this one):
+#   * compose lane (make stack-up MFA=1): threads an EXPLICIT APP_MFA_ENABLED='true'
+#     so the run is ON even when the operator's shell exports APP_MFA_ENABLED=false.
+#     EMPTY (the default) expands to NOTHING, so the compose-side
+#     `${APP_MFA_ENABLED:-true}` dev default applies AND an exported override still
+#     reaches the containers — a plain `make stack-up` stays byte-identical.
+#   * kind SSO lane (make kind-up MFA=1): threaded into bootstrap-kind.sh, which
+#     adds a `mfa.enabled=true` HELM PARAMETER to every gateway Application it
+#     applies (a runtime patch, same mechanism as its ingress.className override —
+#     the committed chart and specs/cluster/apps stay untouched and default-OFF,
+#     which tests/stack/test-gateway-mfa-env.sh and
+#     tests/scripts/test-mfa-required-rules.sh keep enforcing).
+#   * per-domain/tenant lane: NOT this variable — set MFA=1 in the brand profile
+#     (brands/<brand>.conf) and generate-brand-repos.sh renders mfa.enabled: true
+#     into that ONE brand's gateway Applications ({{MFA_ENABLED}} token).
+# Wiring for all three lanes is gated by tests/stack/test-mfa-flip-wiring.sh.
+# ⚠ Enforcement preconditions (enroll BEFORE you enforce, machine-caller census)
+# are unchanged: docs/MFA-ROLLOUT.md §2/§3 still apply to every lane.
+#   make stack-up MFA=1        /  make kind-up MFA=1
+MFA ?=
+STACK_MFA_ENV := $(if $(strip $(MFA)), APP_MFA_ENABLED='true',)
 # Runtime web-login THEME persistence (tests/stack/.theme.css, gitignored).
 # The Studio's theme choice used to travel ONLY as an env var on the GUI's own
 # `make` invocation — so any TERMINAL `make stack-up` (a restore, a rebuild, a
@@ -1396,7 +1432,7 @@ STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_T
              MANAGED_FORUM_BFF_R2DBC_URL='$(MANAGED_FORUM_BFF_R2DBC_URL)' \
              MANAGED_FORUM_BFF_LIQUIBASE_URL='$(MANAGED_FORUM_BFF_LIQUIBASE_URL)' \
              MANAGED_WIKI_BFF_R2DBC_URL='$(MANAGED_WIKI_BFF_R2DBC_URL)' \
-             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV) \
+             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV) \
              EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
@@ -1521,7 +1557,7 @@ stack-build: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) build
 
 stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
-	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
+	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(strip $(MFA)), mfa=ON(explicit),)$(if $(strip $(MFA_FLOOR)), mfa-floor=ON,)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_EGRESS_FLAGS) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"

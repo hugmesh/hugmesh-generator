@@ -88,7 +88,7 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Branding")
         self.setSubTitle("Desktop branding (a premade theme or your own assets) plus "
-                         "the web login theme the mesh serves.")
+                         "the Themes for the web pages the mesh serves.")
         # scrollable: the login-theme group grew this page past the #400 jitter
         # budget — tall content scrolls inside the page instead of resizing the window.
         lay = scrollable(self)
@@ -202,7 +202,9 @@ class BrandingPage(QtWidgets.QWizardPage):
         # by default in desktop flows; initializePage expands it in mesh, where it
         # is the reason the page is shown at all.
         self.login_theme = LoginThemeGroup()
-        self.login_collapsible = collapsible("Web login theme", self.login_theme,
+        # "Themes", not "Web login theme" (#50 item 2): label-only rename — the
+        # persisted login_* config keys keep their names so old sessions load.
+        self.login_collapsible = collapsible("Themes", self.login_theme,
                                              expanded=False)
         lay.addWidget(self.login_collapsible)
         lay.addStretch(1)

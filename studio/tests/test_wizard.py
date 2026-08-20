@@ -110,11 +110,13 @@ def test_page_slugs_map_to_the_right_pages(wiz):
     slug to its page CLASS so a reorder can't silently skip the wrong page. The new
     "worklist" (mesh multi-select) and "progress" (terminal) slugs are included;
     ProgressPage lands in WS-REVIEWUI, so it is None-tolerant until registered."""
-    expect = {"welcome": wizard_mod.WelcomePage, "mode": wizard_mod.ModePage,
+    expect = {"welcome": wizard_mod.WelcomePage, "sessions": wizard_mod.SessionsPage,
+              "mode": wizard_mod.ModePage,
               "localmesh": wizard_mod.LocalMeshPage, "phone": wizard_mod.PhonePage,
               "quest": wizard_mod.QuestPage,
               "deploy": wizard_mod.DeployPage, "qemu": wizard_mod.QemuPage,
               "meshemu": wizard_mod.MeshEmulationPage,
+              "localcloud": wizard_mod.LocalCloudNodesPage,
               "idp": wizard_mod.IdpPage,
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
               "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,

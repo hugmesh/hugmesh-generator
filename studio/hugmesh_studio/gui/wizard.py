@@ -20,10 +20,10 @@ from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
-    HomePage, IdpPage, KeyZipPage, LaunchPage, LocalMeshPage, MeshEmulationPage,
-    ModePage, NetworkPage,
-    PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SystemPage, UsersChoicePage,
-    UsersPage, WelcomePage, WorklistPage,
+    HomePage, IdpPage, KeyZipPage, LaunchPage, LocalCloudNodesPage, LocalMeshPage,
+    MeshEmulationPage, ModePage, NetworkPage,
+    PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SessionsPage, SystemPage,
+    UsersChoicePage, UsersPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -32,8 +32,8 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
-    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
-    "DeployPage", "QemuPage", "MeshEmulationPage", "IdpPage",
+    "WelcomePage", "SessionsPage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
+    "DeployPage", "QemuPage", "MeshEmulationPage", "LocalCloudNodesPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
@@ -133,6 +133,15 @@ class StudioWizard(QtWidgets.QWizard):
         # MeshEmulationPage.applies_to(), likewise NEVER persisted into cfg
         # (emulating a built mesh is not an image mode; the page is terminal).
         self.meshemu_selected = False
+        # transient: ModePage's CREATE NODES FOR LOCAL CLOUD choice (issue #50) — read
+        # by LocalCloudNodesPage.applies_to(). Unlike its terminal siblings the page
+        # REJOINS the image flow: it commits cfg.mode="mesh" itself on Next.
+        self.localcloud_selected = False
+        # The abbreviated-worklist restriction hook (issue #50): an iterable of mesh
+        # ROLE ids WorklistPage may offer, or None = unrestricted (the full catalog).
+        # Installed by LocalCloudNodesPage.validatePage, lifted by any other ModePage
+        # commit — see WorklistPage._allowed_roles().
+        self.worklist_role_allow = None
         # The build-session id of the NEXT dispatch (core/build_sessions): minted lazily
         # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
         # record + workdir reused), cleared by ProgressPage at finish.
@@ -161,8 +170,9 @@ class StudioWizard(QtWidgets.QWizard):
         # until then it is None and the flow terminates on BuildPage — the None-filter
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
-            WelcomePage, ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
-            QemuPage, MeshEmulationPage,
+            WelcomePage, SessionsPage,
+            ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
+            QemuPage, MeshEmulationPage, LocalCloudNodesPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,

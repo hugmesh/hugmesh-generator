@@ -48,6 +48,7 @@ from hugmesh_studio.core.config import (                          # noqa: E402
     SERVICES_ALL,
     SERVICES_NONE,
     USER_LEVEL_SERVICES,
+    default_local_user,
     external_media_applies,
     flow_allows,
     home_options_allowed,
@@ -789,13 +790,14 @@ def test_hiding_those_fields_changes_no_argv_for_a_flow_that_never_had_them(wiz)
     so the argv must be what it would have been anyway — a gating fix that adds or drops
     a flag is a build change wearing a UI change's clothes.
 
-    `--local-user magus` is the deliberate survivor and is asserted PRESENT: the x86
-    builder honours --local-user on every role (build-x86-host-stage4.sh:1597), the field
-    defaults to "magus", so blanking it would have changed every existing mesh build."""
+    `--local-user <default account>` is the deliberate survivor and is asserted PRESENT:
+    the x86 builder honours --local-user on every role (build-x86-host-stage4.sh:1597),
+    the field defaults to the invoking user (default_local_user()), so blanking it would
+    have changed every existing mesh build."""
     mesh(wiz, "pki.x86")
     advance_to(wiz, wizard_mod.BuildPage)
     args = wiz.cfg.to_cli_args()
-    assert ("--local-user", "magus") in pairs(args)
+    assert ("--local-user", default_local_user()) in pairs(args)
     assert "--local-pass" not in args
     assert "--standalone" not in args
     assert "--media-data" not in args and "--no-vaults" not in args

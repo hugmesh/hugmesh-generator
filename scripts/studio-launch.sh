@@ -14,6 +14,9 @@
 #   scripts/studio-launch.sh --detect   print the DETECT report and exit (never prompts)
 #   scripts/studio-launch.sh --auto      as guided, but every offer is accepted
 #   scripts/studio-launch.sh --menu      hand off to the ncurses build menu (build-menu.sh)
+#   scripts/studio-launch.sh --redo-first-run
+#                                        force the first-run bootstrap (symlinks/properties/
+#                                        doctor — scripts/_first-run-lib.sh, issue #49)
 #   scripts/studio-launch.sh --...       any OTHER --arg is HEADLESS automation: no prompts,
 #                                        no installs, straight to `python3 -m hugmesh_studio`
 #                                        (e.g. --print-command, the build-matrix GUI channel)
@@ -45,6 +48,14 @@ PYTHON_MIN_MINOR=10
 # it): export PYTHONPATH so `python3 -m hugmesh_studio` resolves from any working directory.
 export PYTHONPATH="${STUDIO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
+# First-run bootstrap (issue #49): symlinks + properties + advisory doctor. Sourcing only
+# defines functions; the call sits in the dispatch below (guided/--menu paths — the headless
+# automation channel documents "no installs", and --detect documents "report only").
+# Located off BASH_SOURCE, not SCRIPT_DIR: when the TEST SUITE sources this launcher, $0
+# (hence SCRIPT_DIR) points at the test dir, but the lib always sits next to THIS file.
+# shellcheck source=scripts/_first-run-lib.sh
+. "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/_first-run-lib.sh"
+
 # ── Colours (only when stderr is a TTY, matching scripts/build-menu.sh) ──────────
 if [ -t 2 ]; then
     C_RED=$'\033[31m'; C_YEL=$'\033[33m'; C_GRN=$'\033[32m'; C_RST=$'\033[0m'
@@ -61,12 +72,16 @@ DETECT_ONLY=0
 AUTO=0
 WANT_MENU=0
 HEADLESS=0
+REDO_FIRST_RUN=0
 FORWARD=()                 # args passed through to python (or to build-menu.sh for --menu)
 for arg in "$@"; do
     case "${arg}" in
         --detect) DETECT_ONLY=1 ;;
         --auto)   AUTO=1 ;;
         --menu)   WANT_MENU=1 ;;
+        # Launcher-local (like --detect/--auto): force the first-run bootstrap. NOT
+        # forwarded — hugmesh_studio's argparse does not know it.
+        --redo-first-run) REDO_FIRST_RUN=1 ;;
         # Interactive GUI modes (app.py opens a window/tray — they NEED Qt + a display):
         # forward them but keep the GUIDED path (distro report + consent-gated venv
         # bootstrap), so on a bare box they get the guided setup instead of a raw
@@ -319,6 +334,14 @@ run_interactive() {
 # the functions without launching anything — same guard as scripts/build-menu.sh.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     if [ "${DETECT_ONLY}" = 1 ]; then run_detect; exit 0; fi
+    # First-run bootstrap (idempotent; one `cat` when already stamped). Guided and
+    # --menu paths only: the headless channel's contract is "no prompts, no installs",
+    # and creating PATH symlinks is an install. Advisory by contract — it cannot fail
+    # the launch, and everything it prints goes to stderr.
+    if [ "${HEADLESS}" = 0 ]; then
+        [ "${REDO_FIRST_RUN}" = 1 ] || REDO_FIRST_RUN="$(first_run_wants_redo)"
+        first_run_bootstrap "${REPO_DIR}" "${REDO_FIRST_RUN}"
+    fi
     if [ "${WANT_MENU}" = 1 ]; then launch_menu; fi     # execs
     if [ "${HEADLESS}" = 1 ]; then launch_headless; fi  # execs
     run_interactive

@@ -76,6 +76,31 @@ SKIP_VAULT_BOOTSTRAP="${SKIP_VAULT_BOOTSTRAP:-0}"
 KIND_PROFILE="${KIND_PROFILE:-core}"
 case "${KIND_PROFILE}" in core|sso) ;; *) echo "KIND_PROFILE must be 'core' or 'sso' (got '${KIND_PROFILE}')" >&2; exit 1 ;; esac
 
+# ── MFA operational flip (issue #47; `make kind-up MFA=1`) ────────────────────
+# MFA=1 adds a `mfa.enabled=true` HELM PARAMETER to EVERY gateway Application
+# this bootstrap applies (step 6b) — the same runtime-patch mechanism as the
+# ingress.className override there, so the committed chart values and
+# specs/cluster/apps/*.yaml stay untouched and default-OFF (which
+# tests/stack/test-gateway-mfa-env.sh + tests/scripts/test-mfa-required-rules.sh
+# keep enforcing). It flips ONLY app.mfa.enabled: the freshness window keeps the
+# chart default (600000) and APP_MFA_ENFORCE_PRIVILEGED_FLOOR is DELIBERATELY not
+# reachable from this script — the privileged floor fails closed for SUPERADMIN
+# too, so it stays a hand-executed step (docs/MFA-ROLLOUT.md §3 step 7).
+# Fail-closed value parse: an unrecognised spelling must not silently mean "off".
+MFA="${MFA:-}"
+case "${MFA}" in
+  ""|0|false|off) MFA="" ;;
+  1|true|on)      MFA="1" ;;
+  *) echo "MFA must be empty/0/false/off or 1/true/on (got '${MFA}')" >&2; exit 1 ;;
+esac
+# HONESTY (see the kind-honesty gate's rationale): under KIND_PROFILE=core no
+# gateway Application is applied at all, so MFA=1 would flip NOTHING while the
+# bootstrap exits 0 — report the unperformed work loudly instead of implying it.
+if [ -n "${MFA}" ] && [ "${KIND_PROFILE}" != "sso" ]; then
+  echo "MFA=1 needs KIND_PROFILE=sso: the core profile applies no gateway Application, so there is nothing to flip and exiting 0 would report work that was not done." >&2
+  exit 1
+fi
+
 log() { echo "==> $*"; }
 # Recreate a completed/failed Job. `kubectl delete job` BLOCKS on the pod's
 # grace period, and a Job pod wedged in Terminating never releases it — observed
@@ -499,9 +524,26 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   # class "nginx-internal" — without this override the Ingress is admitted by
   # nothing and the host ports mapped by kind-local.yaml never route. A helm
   # parameter (not a values edit) so the committed chart stays untouched.
+  #
+  # ⚠ `--type merge` REPLACES spec.source.helm.parameters WHOLESALE, so every
+  # parameter a gateway Application needs on kind must ride in ONE patch: a
+  # second merge patch of the same list would silently drop the first one's
+  # entries (the ingress override would vanish and nothing would route). That is
+  # why the MFA flip below APPENDS to this list instead of patching again.
+  #
+  # MFA=1 (see the parse at the top): flip app.mfa.enabled on the gateway via the
+  # same helm-parameter mechanism. ⚠ hugmesh-gateway-fe is the ONLY gateway
+  # Application this profile applies (SSO_APPS above) — if another gateway app is
+  # ever added there, it needs the same MFA parameter treatment, and
+  # tests/stack/test-mfa-flip-wiring.sh fails the build until it gets it.
+  GW_FE_PARAMS='{"name":"ingress.className","value":"nginx-internal"}'
+  if [ -n "${MFA}" ]; then
+    GW_FE_PARAMS="${GW_FE_PARAMS},{\"name\":\"mfa.enabled\",\"value\":\"true\"}"
+    log "MFA=1: gateway MFA enforcement ON for this kind run (helm parameter mfa.enabled=true; floor stays off — docs/MFA-ROLLOUT.md §3)"
+  fi
   log "Overriding fe-gateway ingress.className -> nginx-internal (kind has no public controller)"
   kubectl -n "${ARGOCD_NS}" patch application hugmesh-gateway-fe --type merge -p \
-    '{"spec":{"source":{"helm":{"parameters":[{"name":"ingress.className","value":"nginx-internal"}]}}}}' >/dev/null
+    "{\"spec\":{\"source\":{\"helm\":{\"parameters\":[${GW_FE_PARAMS}]}}}}" >/dev/null
 fi
 
 # ─────────────────────────────────────────────────────────────────────────

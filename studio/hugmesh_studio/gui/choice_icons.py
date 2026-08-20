@@ -690,6 +690,24 @@ def _main_menu(p: QtGui.QPainter, st: IconStyle) -> None:
     _arrow(p, st, 44, 44, 22, 44, width=2.8, head=6.0)
 
 
+def _sessions(p: QtGui.QPainter, st: IconStyle) -> None:
+    """Prior sessions: a stack of build-list rows, the newest wearing its status
+    tick — the Previous-builds table as a glyph (WelcomePage's REVIEW card)."""
+    p.setPen(_pen(st.fg, 2.2))
+    p.setBrush(QtGui.QBrush(QtGui.QColor(st.faint)))
+    for y in (8, 26, 44):
+        p.drawRoundedRect(_rect(6, y, 38, 12), 3.0, 3.0)
+    # a muted label stub inside each row (reads as text at any size)
+    p.setPen(_pen(st.muted, 2.0))
+    for y in (14, 32, 50):
+        p.drawLine(QtCore.QPointF(11, y), QtCore.QPointF(30, y))
+    # the newest row's status: an accent tick beside it, drawn last so it reads first
+    p.setPen(_pen(st.accent, 3.0))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawLine(QtCore.QPointF(48, 13), QtCore.QPointF(53, 19))
+    p.drawLine(QtCore.QPointF(53, 19), QtCore.QPointF(60, 6))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # registry
 # ──────────────────────────────────────────────────────────────────────────────
@@ -727,6 +745,9 @@ ICON_PAINTERS: Dict[str, Callable[[QtGui.QPainter, IconStyle], None]] = {
     # LaunchPage (ask 22)
     "build-run": _build_run,
     "main-menu": _main_menu,
+    # WelcomePage (issue #50 welcome flow) — the REVIEW PRIOR SESSIONS card;
+    # its other two cards reuse "main-menu" and "localmesh" above.
+    "sessions": _sessions,
 }
 
 ICON_NAMES = tuple(ICON_PAINTERS)

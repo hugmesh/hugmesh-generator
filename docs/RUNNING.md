@@ -109,7 +109,13 @@ Debian/Ubuntu, Fedora)? Two **additive** front doors (they change nothing above)
   ./scripts/studio-launch.sh          # detect → offer a venv (y/N) → launch the wizard
   ./scripts/studio-launch.sh --detect # print the DETECT report and exit
   ./scripts/studio-launch.sh --menu   # hand off to the ncurses build menu
+  ./scripts/studio-launch.sh --redo-first-run   # force the first-run bootstrap
   ```
+
+  The first guided/menu run also performs a one-time, advisory-only bootstrap:
+  `hugmesh-studio` / `hugmesh-build-menu` symlinks in `~/.local/bin` (no sudo),
+  a `~/.hugmesh/studio/properties.json` with the resolved paths, and a fast
+  doctor pass — see [`docs/FIRST-RUN.md`](FIRST-RUN.md).
 
 See [`docs/NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) for per-distro copy-paste blocks
 (SteamOS Desktop vs Game Mode, `QT_QPA_PLATFORM=xcb`, read-only rootfs, the

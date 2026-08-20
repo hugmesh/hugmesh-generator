@@ -475,10 +475,23 @@ class WorklistPage(QtWidgets.QWizardPage):
         self._item_arch[id(item)] = dev.arch
         return item
 
+    # ---- flow restriction hook (issue #50) -------------------------------------------
+    def _allowed_roles(self) -> set[str] | None:
+        """Which ROLE rows this page may OFFER for the current flow, or None for the
+        full catalog (the default). A side-flow narrows the offer by setting
+        ``wiz.worklist_role_allow`` (an iterable of mesh role ids) — the
+        create-nodes-for-local-cloud gate restricts it to the laptop + node types
+        (LocalCloudNodesPage.LOCALCLOUD_ALLOWED_ROLES); any other ModePage commit
+        clears it back to None. A hook on THIS page rather than a forked page:
+        the rows, ids, combos and validatePage contract stay single-sourced."""
+        allow = getattr(self.wiz, "worklist_role_allow", None)
+        return None if allow is None else set(allow)
+
     # ---- arch/search filtering (presentation only) ----------------------------------
     def _apply_filter(self, *_a) -> None:
         arch = self.arch_filter.currentData() or ""
         needle = self.device_search.text().strip().lower()
+        allowed = self._allowed_roles()
         # ASK 18: the non-mesh-capable rows are excluded from the arriving view. Folded
         # into the EXISTING filter rather than given a hide-pass of its own, because two
         # independent writers of setHidden on the same items is how a row ends up visible
@@ -490,6 +503,13 @@ class WorklistPage(QtWidgets.QWizardPage):
             for i in range(fitem.childCount()):
                 child = fitem.child(i)
                 show = id(child) not in excluded
+                # restricted flow: only the allow-set's role rows are on offer — the
+                # info rows (no entry id) are withdrawn too, they explain a catalog
+                # this flow deliberately does not show.
+                if allowed is not None:
+                    rid = child.data(_COL_CHECK, Qt.ItemDataRole.UserRole)
+                    show = show and (rid in self._id_axes
+                                     and self._id_axes[rid][0] in allowed)
                 show = show and (not arch or self._item_arch.get(id(child), "") == arch)
                 if show and needle:
                     hay = " ".join(child.text(c) for c in
@@ -673,6 +693,22 @@ class WorklistPage(QtWidgets.QWizardPage):
             if default_id is not None:
                 self.rows[default_id].setCheckState(_COL_CHECK, Qt.CheckState.Checked)
         self.tree.blockSignals(False)
+        # ── flow restriction (issue #50): enforce the allow-set on the CHECK STATE,
+        # not just visibility — the arch/search filter is presentation-only ("a
+        # hidden checked row still builds"), so a merely-hidden disallowed row
+        # (a loaded worklist, the default pre-check) would still be collected. ──
+        allowed = self._allowed_roles()
+        if allowed is not None:
+            self.tree.blockSignals(True)
+            for rid, item in self.rows.items():
+                if self._id_axes[rid][0] not in allowed:
+                    item.setCheckState(_COL_CHECK, Qt.CheckState.Unchecked)
+            self.tree.blockSignals(False)
+        # the ask-18 disclosure lists devices with NO mesh role — inside a restricted
+        # flow the restriction hides them regardless, so the checkbox would be a dead
+        # control; it only shows when the full catalog is on offer.
+        self.show_non_mesh.setVisible(allowed is None)
+        self._apply_filter()
         # Reconcile the people map against the check states (the loop above ran
         # under blockSignals, so _on_item_changed never saw these): every checked
         # desktop row needs at least the PLACEHOLDER pair — otherwise the
@@ -732,10 +768,13 @@ class WorklistPage(QtWidgets.QWizardPage):
         prior = {e.id: e for e in wl.entries} if wl is not None else {}
 
         entries: list[WorklistEntry] = []
+        allowed = self._allowed_roles()
         for rid, item in self.rows.items():          # dict preserves row (table) order
             if not self._is_checked(item):
                 continue
             role, platform = self._id_axes[rid]
+            if allowed is not None and role not in allowed:
+                continue     # restriction hook: a disallowed row is never collected
             board_combo, flavor_combo = self._combos[rid]
             board = board_combo.currentText() if board_combo is not None else ""
             flavor = flavor_combo.currentText() if flavor_combo is not None else ""

@@ -1,6 +1,6 @@
 """ASK 15 — clicking a build opens its OWN window: resume / view artifacts / edit / delete.
 
-The Welcome screen's build list (``sessions_widget.PreviousBuildsWidget``) offered its
+The Sessions screen's build list (``sessions_widget.PreviousBuildsWidget``) offered its
 actions as a row of buttons under the table, enabled or disabled by selection. The ask
 is a per-build WINDOW: click the entry, get a window about that build.
 
