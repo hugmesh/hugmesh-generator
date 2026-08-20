@@ -3759,9 +3759,15 @@ for svc in ${_base_svcs}; do
     cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"; chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
 unset _base_svcs
-# firewalld installs /etc/init.d/firewalld; alias 'firewall' so the `after firewall`
-# deps in tailscaled/kubelet/headscale/containerd/egress-vpn still resolve.
-ln -sfn firewalld "${SYSROOT}/etc/init.d/firewall"
+# NO 'firewall' alias for firewalld. 'firewall' is an OpenRC VIRTUAL (firewalld's
+# own init script `provide firewall`s it); a real /etc/init.d/firewall symlink on
+# top of that made every first boot print "Error: firewall is the name of a real
+# and virtual service." and corrupted dependency-cache generation (2026-08-19
+# forensics: prime suspect for nondeterministic service ordering / NetworkManager
+# coming up inactive). The `after firewall` deps in tailscaled/kubelet/headscale/
+# containerd/egress-vpn resolve against the VIRTUAL — and `after` is a soft edge,
+# so it is satisfied even where no provider is installed. Never symlink a real
+# service onto a virtual name (gate: tests/no-openrc-virtual-shadow.sh).
 # Bake ENV-appropriate firewalld config: prod = hardened (DefaultZone=drop, tailscale0-only
 # via trusted.xml), test = permissive (DefaultZone=trusted) so CI harnesses can reach
 # the node without a tailnet.
@@ -4332,9 +4338,9 @@ if ${ROLE_CLIENT}; then
     # UNAFFILIATED additionally drops keys-provision (KEYS-USB fleet provisioning —
     # platform machinery; the local user is created by the firstboot script instead).
     if ${UNAFFILIATED}; then
-        SVCS=(sshd NetworkManager cronie haveged growroot firewall auditd local dbus elogind display-manager)
+        SVCS=(sshd NetworkManager cronie haveged growroot auditd local dbus elogind display-manager)
     else
-        SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall auditd local dbus elogind display-manager)
+        SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local dbus elogind display-manager)
     fi
     # gui-libs/display-manager-init's /etc/init.d/display-manager reads this to decide
     # WHICH DM to launch; lightdm ships no OpenRC service. Without it the service falls
@@ -4384,7 +4390,11 @@ LIGHTDM
         info "Media-data: /media auto-detect + Steam->${STEAM_DIR} + Vaults (gocryptfs) wired (steam=${STEAM_DELIVERY})"
     fi
 else
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet auditd local)
+    # NOTE: no 'firewall' entry — that name is an OpenRC virtual (see the alias
+    # removal note above); firewalld is shipped but deliberately NOT enabled, the
+    # nftables backstop (hugmesh-firewall-reconcile) owns the host firewall
+    # (tests/qemu/assertions.sh keys its firewalld gate on exactly this).
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
