@@ -56,7 +56,7 @@ host-shell` / the tenant-set driver).
   `src/assets/federation.manifest.json` floor pointing at the example remote,
   the exemplar's dynamic-union federation-bootstrap + `main.ts`, a
   `REMOTE_ROUTES` spec table, a menu keyed off a capabilities stub, BOTH
-  palette tiers (SCSS tokens + `--sd-*` runtime contract), nonce-CSP
+  palette tiers (SCSS tokens + `--hug-*` runtime contract), nonce-CSP
   `nginx.conf`, nginx-unprivileged Dockerfile, fleet CI.
   `npm ci && npm run build` in a rendered tree is a real
   `@angular-architects/native-federation:build`.
