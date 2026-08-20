@@ -39,6 +39,10 @@ const classifier = require('./token-classifier');
 const TOKEN_KEYS = [
   'BRAND', 'BRAND_TITLE', 'ORG', 'CLUSTER_DOMAIN',
   'HEADSCALE_URL', 'HARBOR_PROJECT', 'MESH_TAG', 'NS_PREFIX',
+  // Per-domain gateway MFA flip (issue #47): "true"/"false", derived from the
+  // brand profile's MFA knob by render-handlebars.sh — never a secret, never
+  // operator free-text (the .sh derivation is a closed two-value case).
+  'MFA_ENABLED',
 ];
 
 function die(msg) {

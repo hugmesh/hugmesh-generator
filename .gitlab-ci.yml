@@ -713,6 +713,26 @@ lint:gateway-mfa-env:
   script:
     - bash tests/stack/test-gateway-mfa-env.sh
 
+# MFA OPERATIONAL FLIP wiring gate (issue #47). The companion of the two jobs
+# above: they pin the default-OFF POSTURE, this one pins the SWITCH — MFA=1 must
+# reach EVERY consumer of the gateway MFA trio on every lane it claims to drive
+# (compose env thread, kind bootstrap helm-parameter patch, per-brand
+# {{MFA_ENABLED}} render), because a flag that wires only half its consumers
+# ships dark twice (that is how the trio itself first shipped, and how the
+# AI-cloak lane shipped). Consumer sets are RE-DERIVED from the artifacts
+# (compose file, SSO_APPS array, rendered tenant tree — the tenant lane runs the
+# REAL sed renderer, no docker/network), every assertion is mutation-tested on
+# staged copies, and the tally carries a MIN_CHECKS floor. Needs only
+# python3+PyYAML+bash+coreutils.
+lint:mfa-flip-wiring:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/stack/test-mfa-flip-wiring.sh
+
 # Probe AUTH-SURFACE gate: no kubelet probe may target a path the service itself
 # role-gates unless the probe tolerates the 401 that gating produces. The first
 # real kind run found NO gateway could ever become Ready on Kubernetes — the
