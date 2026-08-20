@@ -41,6 +41,7 @@ _MODE_ICONS = {
     "quest": "quest",               # a VR headset under a cloud
     "deploy": "cloud-deploy",       # three-way arrow up to AWS / AZURE / CF marks
     "qemu": "mesh",                 # reuses the boards-under-a-cloud mark: emulated devices
+    "meshemu": "mesh",              # same mark: the whole mesh, emulated locally
 }
 
 _GENTOO_URL = "https://www.gentoo.org/"
@@ -55,12 +56,13 @@ class ModePage(QtWidgets.QWizardPage):
             "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
             "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
             "QUEST HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
-            "already-packaged image to a cloud provider, and QEMU DEVICE TESTS boots "
-            "built images as emulated devices.")
-        # eight cards are taller than eight radios were: scroll, never clip
+            "already-packaged image to a cloud provider, QEMU DEVICE TESTS boots "
+            "built images as emulated devices, and MESH EMULATION boots a whole "
+            "built mesh locally.")
+        # nine cards are taller than nine radios were: scroll, never clip
         lay = scrollable(self)
         self.group = ChoiceCardGroup(self)
-        # EIGHT clearly-distinct choices, in the spec's STEP-1 order. Each carries
+        # NINE clearly-distinct choices, in the spec's STEP-1 order. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
         # exactly as before; "localmesh", "phone", "quest", "deploy" and "qemu" are
         # transient side-flows that never touch cfg.mode. The DEFAULT is chosen by id
@@ -94,6 +96,10 @@ class ModePage(QtWidgets.QWizardPage):
              "Boot built images as emulated devices in Docker and assert they "
              "provisioned correctly — Pi roles first, then x86. Test images from an "
              "earlier build session, or build new ones and test them after."),
+            ("meshemu", "Mesh emulation",
+             "Emulate a WHOLE built mesh locally: pick a prior build session and "
+             "boot every image it holds as emulated devices — per-device status, "
+             "ssh logins, USB provisioning keys and the mesh's web front door."),
         ]
         self._buttons = {}
         for i, (mid, label, desc) in enumerate(self.modes):
@@ -174,7 +180,12 @@ class ModePage(QtWidgets.QWizardPage):
         # can rejoin the image flow — "build new images first, then test them" — which
         # QemuPage expresses through its own nextId(), not through cfg.mode.
         self.wiz.qemu_selected = (mid == "qemu")
-        if mid in ("localmesh", "phone", "quest", "deploy", "qemu"):
+        # MESH EMULATION is the fifth side-flow: it boots a WHOLE prior session's
+        # images as one emulated mesh and commits nothing to cfg.mode. Terminal —
+        # unlike QEMU DEVICE TESTS it never rejoins the image flow (it exists only
+        # AFTER a build, so "build first" is the mesh flow itself).
+        self.wiz.meshemu_selected = (mid == "meshemu")
+        if mid in ("localmesh", "phone", "quest", "deploy", "qemu", "meshemu"):
             return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid

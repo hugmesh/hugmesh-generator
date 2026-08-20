@@ -20,7 +20,8 @@ from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
-    HomePage, IdpPage, KeyZipPage, LaunchPage, LocalMeshPage, ModePage, NetworkPage,
+    HomePage, IdpPage, KeyZipPage, LaunchPage, LocalMeshPage, MeshEmulationPage,
+    ModePage, NetworkPage,
     PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SystemPage, UsersChoicePage,
     UsersPage, WelcomePage, WorklistPage,
 )
@@ -32,7 +33,7 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
     "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
-    "DeployPage", "QemuPage", "IdpPage",
+    "DeployPage", "QemuPage", "MeshEmulationPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
@@ -128,6 +129,10 @@ class StudioWizard(QtWidgets.QWizard):
         # durable thing QemuPage may set is cfg.qemu_e2e, the same NON-ARGV field the
         # BuildPage checkbox drives, when the operator picks "build first, then test").
         self.qemu_selected = False
+        # transient: ModePage's MESH EMULATION choice — read by
+        # MeshEmulationPage.applies_to(), likewise NEVER persisted into cfg
+        # (emulating a built mesh is not an image mode; the page is terminal).
+        self.meshemu_selected = False
         # The build-session id of the NEXT dispatch (core/build_sessions): minted lazily
         # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
         # record + workdir reused), cleared by ProgressPage at finish.
@@ -157,7 +162,7 @@ class StudioWizard(QtWidgets.QWizard):
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
             WelcomePage, ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
-            QemuPage,
+            QemuPage, MeshEmulationPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,

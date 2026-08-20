@@ -117,7 +117,7 @@ MODE_DEFAULT_ROLE = {
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
 WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "quest", "deploy",
-                     "qemu",
+                     "qemu", "meshemu",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "users_choice", "users",

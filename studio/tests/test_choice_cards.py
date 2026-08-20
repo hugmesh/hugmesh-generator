@@ -91,10 +91,10 @@ def _key(widget, key):
 
 # ── surfaces render one card per option, ids/order byte-identical ────────────────
 
-def test_mode_page_renders_eight_cards_with_the_radio_ids(wiz):
+def test_mode_page_renders_nine_cards_with_the_radio_ids(wiz):
     page = _page(wiz, "ModePage")
     cards = page.group.buttons()
-    assert len(cards) == 8 == len(page.modes)
+    assert len(cards) == 9 == len(page.modes)
     assert [c.property("mode") for c in cards] == [m for m, _, _ in page.modes]
     for i, card in enumerate(cards):
         assert isinstance(card, cc.ChoiceCard)
@@ -102,7 +102,7 @@ def test_mode_page_renders_eight_cards_with_the_radio_ids(wiz):
     # option ids are the parity contract with validatePage/cfg — pinned verbatim
     assert [m for m, _, _ in page.modes] == [
         "mesh", "localmesh", "cloud", "standalone", "phone", "quest", "deploy",
-        "qemu"]
+        "qemu", "meshemu"]
 
 
 def test_idp_page_renders_one_card_per_idp_choice(wiz):
@@ -160,12 +160,12 @@ def test_arrow_keys_move_the_selection_through_the_cards(wiz):
     assert page.group.checkedButton().property("mode") == "phone"
     _key(page._buttons["phone"], Qt.Key.Key_Up)
     assert page.group.checkedButton().property("mode") == "standalone"
-    # wraps at the edges instead of dead-ending ("qemu" is the last card now)
-    page._buttons["qemu"].setChecked(True)
-    _key(page._buttons["qemu"], Qt.Key.Key_Right)
+    # wraps at the edges instead of dead-ending ("meshemu" is the last card now)
+    page._buttons["meshemu"].setChecked(True)
+    _key(page._buttons["meshemu"], Qt.Key.Key_Right)
     assert page.group.checkedButton().property("mode") == "mesh"
     _key(page._buttons["mesh"], Qt.Key.Key_Left)
-    assert page.group.checkedButton().property("mode") == "qemu"
+    assert page.group.checkedButton().property("mode") == "meshemu"
 
 
 def test_enter_and_space_select_the_focused_card(wiz):
