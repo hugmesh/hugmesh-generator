@@ -199,7 +199,37 @@ domain. Hence this scope table:
 | the blanket (two prefixes) on every domain, **including** rows someone scoped to one domain under them | **yes — enforced** | the seed `UPDATE` is **domain-blind**, deliberately, like it is gateway-blind. A scoped `mfa_required=false` row under the prefixes is a **phantom exemption**: the unscoped canonical row still applies to that domain and still pulls the MFA floor up, so the false row exempts nothing — the seed re-flips it to make the table say what the gateway does. And a scoped-**only** allow row (a per-domain admin surface with no unscoped twin) must not ship un-MFA'd inside the blanket |
 | require a second factor on **one domain only**, on a surface outside the blanket (per-domain **tightening**) | **yes** | insert a domain-scoped sibling row — same `gateway`/`url_pattern`/`role`, its own `domain`, `allow=true`, `mfa_required=true`. `domainApplies()` keeps it off every other domain. To give it the same re-apply convergence the blanket has, also list its `url_pattern` in the `UPDATE`'s per-domain arm (§1.2) **and** in the gate's `PER_DOMAIN_SCOPE` set — the gate cross-checks the two in both directions |
 | **exempt** one domain from the blanket | **no** | not by a row (see the phantom-exemption note — `decide()` is a sticky OR), and not by the predicate (the blanket rows are **unscoped**, and unscoped rows apply to every domain). A real per-domain exemption means splitting the canonical rows per domain — a new scope decision with the full §3 step-7 blast-radius conversation attached |
-| an **own-IdP domain** (`Domain.idp: own`, PR #71) satisfying MFA | **no (today)** | its principals authenticate against the domain-local Casdoor and can never carry `MFA_SATISFIED` — `mfa_satisfied_at` is a user Property in the **superdomain's** Casdoor (§2.4). On a shared-gateway mesh, treat that whole population like the §2.4 machine callers: enumerate own-IdP domains **before** §3 step 6, or their non-privileged holders (e.g. a pure `ROLE_FLEET_ADMIN`) are 403'd on every `mfa_required` surface with no way to enroll |
+| an **own-IdP domain** (`Domain.idp: own`, PR #71) satisfying MFA | **no (today)** — see the source chain below | its principals authenticate against the domain-local Casdoor and can never carry `MFA_SATISFIED`. On a shared-gateway mesh, treat that whole population like the §2.4 machine callers: enumerate own-IdP domains **before** §3 step 6, or their non-privileged holders (e.g. a pure `ROLE_FLEET_ADMIN`) are 403'd on every `mfa_required` surface with no way to enroll |
+
+##### Why an own-IdP principal cannot satisfy MFA — both legs, from the source
+
+Re-verified 2026-08-20. §2.4 lists two carriers that CAN satisfy an `mfa_required`
+route. An `idp: own` principal is closed out of **both**, and the two closures are
+independent — fixing either one alone changes nothing:
+
+1. **The opaque `bff_` session leg is unreachable.** `/bff/login` is bound to ONE
+   Casdoor: `CasdoorLoginConfig` (hugmesh-user-bff-api) builds the single
+   `CasdoorLoginClient` from `app.bff.oidc.login-base` + `app.bff.oidc.organization`,
+   with no per-domain routing anywhere on that path. A user who exists only in the
+   domain-local Casdoor therefore never gets a `bff_session` row at all.
+2. **The raw-JWT leg never gets a stamp written.** `mfa_satisfied_at` is a user
+   Property, and `CasdoorAdminClient.writeMfaProperty` (hugmesh-auth-core) writes it
+   through the **superdomain's** admin client — never the domain-local Casdoor — so
+   the claim cannot appear in a token minted by the domain's own issuer.
+
+The tighter fact, and the reason raising the freshness window or pointing an admin
+client at the tenant Casdoor would not be enough on its own: the `bff_session` row is
+a **hard precondition for the Property write too**.
+`MfaChallengeService.onSessionStamped` returns `false` and **skips the advisory
+Property leg entirely** when the authoritative session stamp updates zero rows. So for
+a principal with no `bff_session`, `POST /bff/mfa/challenge` cannot succeed and
+`mfa_satisfied_at` is never written **in any Casdoor**. The blocker is the login
+binding in (1), not only the Property's location in (2).
+
+> **Cross-repo, and therefore NOT gate-pinned.** Everything above lives in
+> hugmesh-user-bff-api and hugmesh-auth-core; the generator's gates cannot see either,
+> so nothing here fails the build when one of those classes changes. Re-read all three
+> call sites named above before §3 step 6 on any mesh that hosts an `idp: own` domain.
 
 The uniqueness key makes the sibling-row idiom safe: `uq_route_access_row`
 keys its domain leg on the **gateway's own scope equivalence**
@@ -893,3 +923,43 @@ re-derives every consumer of the trio per lane from the artifacts themselves and
 fails if any consumer stops receiving the switch — the inert-toggle failure mode
 (a flag wiring only half its consumers has shipped dark twice in this repo). All
 of its checks are mutation-tested on staged copies.
+
+### 8.1 Observing the flip on the kind lane
+
+```console
+$ make kind-mfa-posture      # what the RUNNING gateway pod actually has
+APP_MFA_ENABLED=false
+$ make kind-e2e-mfa          # spec 29 against the cluster, at that live posture
+```
+
+`kind-e2e` runs spec 27 only, so before `kind-e2e-mfa` the kind lane could flip MFA
+on and had no way to run the MFA spec against **either** posture. The target reads
+`APP_MFA_ENABLED` back off the gateway Deployment (`scripts/kind-mfa-posture.sh`) and
+hands it to spec 29, which **selects** between its two stack blocks on that value:
+`false` runs the OFF-posture block (the seeded `mfa_required` rows are inert, the role
+wall on the same rows is not, an un-enrolled admin is never challenged) and anything
+else runs the per-row enforcement block.
+
+Read live, never guessed, and never threaded from `$(MFA)` — deliberately. `kind-up`
+is a separate invocation and the cluster outlives it, so the caller's shell describes
+a cluster it may never have flipped; and the repo cannot answer either, because
+`kind-up MFA=1` flips through an ArgoCD **helm parameter**, leaving the committed
+chart reading `mfa.enabled: false` on a cluster that is enforcing. The helper is
+fail-closed: an unreachable cluster is an error, not an "assume off" that would report
+a clean pass for the posture the cluster is **not** holding.
+
+**What the flip changes, concretely** (verified on the kind SSO slice, 2026-08-20 —
+9 `mfa_required` rows seeded, `hugmesh-gateway-fe` holding `APP_MFA_ENABLED=false`):
+`make kind-up MFA=1` appends `{"name":"mfa.enabled","value":"true"}` to the
+`hugmesh-gateway-fe` Application's helm parameters, the chart re-renders
+`APP_MFA_ENABLED=true` into the gateway container, and the pod rolls. Nothing else
+moves — `APP_MFA_FRESHNESS_WINDOW` stays 600000 and
+`APP_MFA_ENFORCE_PRIVILEGED_FLOOR` stays `false` (§3 step 7 is still a hand-executed
+step). The observable difference is that a pure `ROLE_FLEET_ADMIN` on
+`/bff/admin/phone-fleet/**` goes from "reaches admin-bff" to the gateway's 403 +
+`X-Route-Denied`; privileged roles are unchanged until the floor is on (§3.1).
+
+⚠ The equivalent one-shot `kubectl patch` must carry **both** parameters —
+`--type merge` replaces `spec.source.helm.parameters` wholesale, so a patch that sets
+only `mfa.enabled` drops the kind lane's `ingress.className: nginx-internal` override
+and nothing routes.
