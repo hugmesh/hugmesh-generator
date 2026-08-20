@@ -57,7 +57,7 @@ spec:
               find "$SNAP_REPORT_DIR" -type f \( -name '*.log' -o -name '*.json' -o -name '*.xml' \) \
                 -exec sed -i -E 's/(Bearer|access_token"?[:=]"?)[[:space:]]*[A-Za-z0-9._-]+/\1 REDACTED/g' {} + || true
           env:
-            - { name: SNAP_BASE_URL, value: "https://hugmesh-systems-web.hugmesh-frontend.svc.cluster.local:8443" }
+            - { name: SNAP_BASE_URL, value: "https://hugmesh-host-shell.hugmesh-frontend.svc.cluster.local:8443" }
             - { name: SYSTEMS_CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
             - { name: LIVE_GATEWAY, value: "1" }
             # The admin-bff ingest endpoint the reporter POSTs live events to.

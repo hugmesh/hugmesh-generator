@@ -372,7 +372,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-fe-gateway',  '/',                     'PUBLIC', true),  -- public front page
   -- The rest of the anonymous SPA shell the '/' row already implies: the
   -- document, the root-level hashed bundles the Angular browser build serves
-  -- from the systems-web webroot (Ant '*' does not cross '/', so only webroot
+  -- from the host-shell webroot (Ant '*' does not cross '/', so only webroot
   -- files match), the module-federation manifests, favicon and static assets.
   -- Mirrors the SecurityConfig FE_SHELL_PUBLIC_GET_PATHS floor (GET-only, fe
   -- tier only) so the coarse layer and the route-access layer agree the

@@ -97,7 +97,7 @@ fi
 # Hand off to python for the actual set-logic (YAML + SQL parsing). The script
 # prints a human report and exits non-zero on any violation.
 python3 - "$CANONICAL" "$CONFIGMAP" "$SCHEMA_SQL" "$GATEWAY_GLOB" "$MANIFESTS_DIR" \
-         "$SIBLING_ROOT" "$ALLOW_MISSING_COPIES" <<'PY'
+         "$SIBLING_ROOT" "$ALLOW_MISSING_COPIES" "$REPO_ROOT" <<'PY'
 import glob
 import json
 import os
@@ -112,7 +112,8 @@ import sys
     manifests_dir,
     sibling_root,
     allow_missing_copies_raw,
-) = sys.argv[1:8]
+    repo_root,
+) = sys.argv[1:9]
 
 allow_missing_copies = allow_missing_copies_raw.strip().lower() in {
     "1", "true", "yes", "on"}
@@ -303,15 +304,15 @@ SERVICE_ALLOW_EXACT = {
     "signup-gate",
     # NOTE: the host-shell web Service used to need an EXACT entry here — it kept a
     # pre-rebrand name because it is the compose DNS name the fe-gateway routes
-    # target, so renaming it needed both sides moved together. Both sides live in
-    # THIS repo (tests/stack/compose.local.yaml and
-    # tests/stack/gateway-routes/fe/application-routes.yml), so it was renamed to
+    # target, so renaming it needed both sides moved together. It was renamed to
     # `hugmesh-host-shell` — matching its build context and repo — and is now covered
     # by the `^hugmesh-.*$` family pattern below, exactly as the character-forge pair
     # was. (Its PUBLIC surface is unchanged: the frontend-host /** catch-all.)
-    # NOT YET the specs/cluster side: the k8s Service/Deployment/Application there is
-    # still `hugmesh-systems-web`, a half-renamed hybrid. Moving it means moving an
-    # ArgoCD Application NAME as well as a Service DNS name, so it needs its own PR.
+    # This used to record a SPLIT: the compose lane had moved but the specs/cluster
+    # lane was still `hugmesh-systems-web`, a half-renamed hybrid carrying no banned
+    # token — which is precisely why no grep-driven sweep ever found it. Both lanes
+    # now say `hugmesh-host-shell`, and that is no longer a NOTE anybody has to
+    # remember: stage 6b below ASSERTS it, cross-lane, and fails on any future hybrid.
     # NOTE: the two character-forge Services used to need EXACT entries here
     # (they were created under the pre-rebrand brand prefix).
     # The HugMesh rebrand renamed them to
@@ -374,6 +375,216 @@ if svc_drift:
 else:
     print()
     print("PASS: every publicly-routable Service is reserved or explicitly allowlisted.")
+
+# ---- 6b) HALF-RENAME gate: hybrid names + the host shell's paired move -------
+# WHY THIS STAGE EXISTS
+# --------------------
+# The host shell was renamed `snapdragon-systems-web` -> `hugmesh-host-shell`, but
+# an intermediate sweep left it as `hugmesh-systems-web`. That hybrid carries NO
+# banned token — it is already `hugmesh-` prefixed — so every grep-driven rename
+# sweep since has reported the tree CLEAN while the cluster lane still pointed at
+# a Service by its half-renamed name. It survived precisely because it looked done.
+#
+# Worse, the rename is a PAIRED move. The Deployment name, its `app:` selector
+# labels, the Service name, the HPA scaleTargetRef, the PDB selector and the ArgoCD
+# Application name must all move in one commit — move a subset and the Service
+# selects no pods, or ArgoCD orphans the old Application — and the fe-gateway's
+# `/**` catch-all in the OTHER lane has to move with it or the front page 502s.
+# Nothing about any single file makes that coupling visible, which is how the
+# kustomize image match keys broke before.
+#
+# So both halves become assertions here rather than prose anyone must remember:
+#   (a) NO first-party workload name may be a `-systems-` hybrid, in any lane.
+#   (b) Every name in the host shell's paired set must be the SAME string, across
+#       the cluster manifests, the ArgoCD Application, and the compose lane.
+FIRST_PARTY_NAME_RE = re.compile(r"(?:\{\{BRAND\}\}|hugmesh)-[a-z0-9-]+")
+
+# The DEPLOYABLE lanes — the files that actually name workloads and route to
+# them. Deliberately TEXT-scanned, not YAML-parsed: the hybrid survived inside a
+# bash array in bootstrap-kind.sh and an nginx.conf comment, neither of which a
+# structured parse would ever reach. Scoped to these lanes so that prose
+# elsewhere (this script's own history note, a test's SHELL_HINT rationale) may
+# still spell the retired name when explaining it.
+HYBRID_SCAN_GLOBS = [
+    "specs/cluster/apps/*.yaml",
+    "specs/cluster/manifests/**/*.yaml",
+    "specs/cluster/manifests/**/*.conf",
+    "specs/cluster/bootstrap/**/*.sh",
+    "templates/apps/*.hbs",
+    "tests/stack/compose.local.yaml",
+    "tests/stack/gateway-routes/**/*.yml",
+]
+
+
+def is_hybrid(name):
+    """A first-party name that still carries the retired `systems` infix."""
+    return "-systems-" in name or name.endswith("-systems")
+
+
+hybrids = {}  # name -> set("relpath:line")
+for pattern in HYBRID_SCAN_GLOBS:
+    for path in sorted(glob.glob(os.path.join(repo_root, pattern), recursive=True)):
+        rel = os.path.relpath(path, repo_root)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    for name in FIRST_PARTY_NAME_RE.findall(line):
+                        if is_hybrid(name):
+                            hybrids.setdefault(name, set()).add(f"{rel}:{lineno}")
+        except OSError as e:
+            print(f"FATAL: cannot read {rel} ({e})", file=sys.stderr)
+            sys.exit(2)
+
+print()
+print("== half-rename hybrid gate ==")
+print(f"deployable lanes scanned : {len(HYBRID_SCAN_GLOBS)} glob(s)")
+if hybrids:
+    failed = True
+    print()
+    print("FAIL: first-party workload name(s) still carry the retired `-systems-` "
+          "infix — this is a HALF-RENAMED hybrid:", file=sys.stderr)
+    for name in sorted(hybrids):
+        print(f"  - {name}", file=sys.stderr)
+        for src in sorted(hybrids[name]):
+            print(f"      {src}", file=sys.stderr)
+    print(file=sys.stderr)
+    print("A hybrid is `hugmesh-`-prefixed, so it carries no banned token and NO "
+          "grep-driven", file=sys.stderr)
+    print("rename sweep will ever surface it. Finish the rename in every lane in "
+          "ONE commit.", file=sys.stderr)
+else:
+    print("PASS: no `-systems-` hybrid in any first-party workload name.")
+
+
+def uri_host_label(uri):
+    """First DNS label of a route uri's host, for cluster AND compose spellings.
+    http://hugmesh-host-shell.hugmesh-frontend.svc.cluster.local:80 -> host-shell? no:
+      -> 'hugmesh-host-shell'  ; http://hugmesh-host-shell:8080 -> 'hugmesh-host-shell'."""
+    m = re.match(r"^[a-z0-9+.-]+://([a-z0-9-]+)", str(uri))
+    return m.group(1) if m else None
+
+
+def load_docs(relpath):
+    with open(os.path.join(repo_root, relpath)) as fh:
+        return [d for d in yaml.safe_load_all(fh) if d]
+
+
+def find_route(node, route_id):
+    """Depth-first search for a route dict with this id, under ANY `routes:` list.
+    Deliberately shape-agnostic: the cluster lane nests routes under an ArgoCD
+    helm `values` string, the compose lane under
+    spring.cloud.gateway.server.webflux.routes, and that Spring path has already
+    moved once (…gateway.routes -> …gateway.server.webflux.routes). Hard-coding
+    either spelling would make this assertion quietly stop finding the route —
+    the same silent-pass failure the whole stage exists to prevent."""
+    if isinstance(node, dict):
+        for r in (node.get("routes") or []) if isinstance(node.get("routes"), list) else []:
+            if isinstance(r, dict) and r.get("id") == route_id:
+                return r
+        for v in node.values():
+            hit = find_route(v, route_id)
+            if hit:
+                return hit
+    elif isinstance(node, list):
+        for v in node:
+            hit = find_route(v, route_id)
+            if hit:
+                return hit
+    return None
+
+
+def route_uri_by_id(relpath, route_id):
+    """The uri of one route in an ArgoCD-wrapped or plain Spring route table."""
+    for doc in load_docs(relpath):
+        helm = (((doc.get("spec") or {}).get("source") or {}).get("helm") or {})
+        if helm.get("values"):
+            hit = find_route(yaml.safe_load(helm["values"]) or {}, route_id)
+            if hit:
+                return hit.get("uri")
+        hit = find_route(doc, route_id)
+        if hit:
+            return hit.get("uri")
+    # A route id that resolves NOWHERE must fail the assertion, not pass it
+    # silently as "nothing to compare".
+    return f"<no route id '{route_id}' in {relpath}>"
+
+
+# (b) the host shell's paired set. ANCHOR on the Service name in the frontend
+# manifests — the Service is what the gateway route dials, so it is the one name
+# every other member of the set has to agree with.
+FRONTEND_DIR = "specs/cluster/manifests/frontend"
+paired = {}  # human label -> observed value
+try:
+    fe_docs = load_docs(f"{FRONTEND_DIR}/deployment.yaml")
+    dep = next(d for d in fe_docs if d.get("kind") == "Deployment")
+    svc = next(d for d in fe_docs if d.get("kind") == "Service")
+    shell = svc["metadata"]["name"]
+
+    paired["Deployment metadata.name"] = dep["metadata"]["name"]
+    paired["Deployment metadata.labels.app"] = (dep["metadata"].get("labels") or {}).get("app")
+    paired["Deployment spec.selector.matchLabels.app"] = \
+        ((dep["spec"].get("selector") or {}).get("matchLabels") or {}).get("app")
+    paired["Deployment pod template labels.app"] = \
+        ((dep["spec"]["template"].get("metadata") or {}).get("labels") or {}).get("app")
+    paired["Service spec.selector.app"] = (svc["spec"].get("selector") or {}).get("app")
+
+    hpa = next(d for d in load_docs(f"{FRONTEND_DIR}/hpa.yaml")
+               if d.get("kind") == "HorizontalPodAutoscaler")
+    paired["HPA metadata.name"] = hpa["metadata"]["name"]
+    paired["HPA spec.scaleTargetRef.name"] = (hpa["spec"].get("scaleTargetRef") or {}).get("name")
+
+    pdb = next(d for d in load_docs(f"{FRONTEND_DIR}/pdb.yaml")
+               if d.get("kind") == "PodDisruptionBudget")
+    paired["PDB metadata.name"] = pdb["metadata"]["name"]
+    paired["PDB spec.selector.matchLabels.app"] = \
+        ((pdb["spec"].get("selector") or {}).get("matchLabels") or {}).get("app")
+
+    app = next(d for d in load_docs("specs/cluster/apps/40-frontend.yaml")
+               if d.get("kind") == "Application")
+    paired["ArgoCD Application metadata.name"] = app["metadata"]["name"]
+
+    # BOTH lanes' front-page catch-all must dial that same Service.
+    paired["cluster fe route[frontend-host].uri"] = uri_host_label(
+        route_uri_by_id("specs/cluster/apps/20-gateway-fe.yaml", "frontend-host"))
+    paired["compose fe route[frontend-host].uri"] = uri_host_label(
+        route_uri_by_id("tests/stack/gateway-routes/fe/application-routes.yml", "frontend-host"))
+
+    # …and the compose lane must actually DEFINE a service under that name.
+    compose = load_docs("tests/stack/compose.local.yaml")[0]
+    compose_services = set((compose.get("services") or {}).keys())
+    paired["compose.local.yaml services[<shell>]"] = \
+        shell if shell in compose_services else f"<absent: {sorted(compose_services)[:1]}…>"
+except (OSError, KeyError, StopIteration, TypeError) as e:
+    failed = True
+    shell = None
+    print()
+    print(f"FAIL: cannot resolve the host shell's paired name set ({e!r}).", file=sys.stderr)
+
+if shell:
+    mismatched = {k: v for k, v in paired.items() if v != shell}
+    print()
+    print("== host-shell paired-move assertion ==")
+    print(f"anchor (frontend Service name) : {shell}")
+    for k in sorted(paired):
+        mark = "OK" if paired[k] == shell else "MISMATCH"
+        print(f"  [{mark:<8}] {k} = {paired[k]}")
+    if mismatched:
+        failed = True
+        print()
+        print("FAIL: the host shell's name did NOT move as one set. These disagree "
+              f"with the Service name '{shell}':", file=sys.stderr)
+        for k in sorted(mismatched):
+            print(f"  - {k} = {mismatched[k]}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("Selector labels, the Service, the HPA target, the PDB selector, the "
+              "ArgoCD Application", file=sys.stderr)
+        print("name and BOTH lanes' /** catch-all route must move in the SAME "
+              "commit — a partial move", file=sys.stderr)
+        print("means the Service selects no pods, or the front page 502s.", file=sys.stderr)
+    else:
+        print()
+        print(f"PASS: all {len(paired)} members of the host-shell name set agree "
+              "across both lanes.")
 
 # ---- 7) CODE-COPY assertion: each ReservedNames.java set == canonical -------
 # Mechanically asserts the app-repo ReservedNames copies match the canonical set

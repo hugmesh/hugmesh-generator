@@ -5,14 +5,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hugmesh-systems-web
+  name: hugmesh-host-shell
   namespace: hugmesh-frontend
-  labels: { app: hugmesh-systems-web, app.kubernetes.io/part-of: hugmesh.net }
+  labels: { app: hugmesh-host-shell, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: hugmesh-systems-web } }
+  selector: { matchLabels: { app: hugmesh-host-shell } }
   template:
-    metadata: { labels: { app: hugmesh-systems-web } }
+    metadata: { labels: { app: hugmesh-host-shell } }
     spec:
       nodeSelector: { hugmesh.net/frontend: "true" }
       # POD-level hardening (replicates the media-poisoner exemplar pattern):
@@ -69,8 +69,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: hugmesh-systems-web
+  name: hugmesh-host-shell
   namespace: hugmesh-frontend
 spec:
-  selector: { app: hugmesh-systems-web }
+  selector: { app: hugmesh-host-shell }
   ports: [{ name: http, port: 80, targetPort: http }]

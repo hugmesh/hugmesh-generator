@@ -3,7 +3,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: hugmesh-systems-web
+  name: hugmesh-host-shell
   namespace: devops
 spec:
   project: default
