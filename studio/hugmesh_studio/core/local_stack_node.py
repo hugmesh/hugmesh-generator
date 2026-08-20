@@ -515,18 +515,32 @@ class LocalStackNode:
         # an empty value mean the same thing: English-only.
         if self.web_locales:
             env["SNAP_WEB_LOCALES"] = ",".join(self.web_locales)
-        # Same only-when-set discipline: compose's ${SNAP_THEME_CSS:-} defaults empty,
+        # Same only-when-set discipline: compose's theme passthrough defaults empty,
         # so unset and empty both mean "shipped default brand" and the unthemed env
         # stays byte-identical to every existing caller.
         if self.login_theme_css.strip():
+            # BOTH spellings, and this is the ONE producer where that is worth its
+            # keep. HUG_THEME_CSS is the live name (compose declares it; the fleet's
+            # 50-snap-theme.sh prefers it). SNAP_THEME_CSS rides along because the
+            # Studio is the only theme producer that can VERSION-SKEW from the tree
+            # it drives: it ships as an installed application (MSI / Flatpak) and is
+            # pointed at a generator checkout by path, so a newer Studio can be asked
+            # to bring up an OLDER checkout whose compose still declares only
+            # SNAP_THEME_CSS. Without this line that pairing loses the theme silently
+            # — the file-persistence path below is best-effort and would be the only
+            # thing left carrying it. Same string, already in memory, passed through
+            # the process env rather than argv: the cost is one dict entry.
+            # (The Makefile does NOT do this — see STACK_THEME_ENV's comment: it
+            # cannot skew from its own compose file, so there it would be dead weight.)
+            env["HUG_THEME_CSS"] = self.login_theme_css
             env["SNAP_THEME_CSS"] = self.login_theme_css
             # ALSO persist it (tests/stack/.theme.css, gitignored): the env var only
             # covers THIS invocation, so before this write a terminal `make stack-up`
             # (a restore, a rebuild, a peer's bring-up) silently reverted the login
             # page to the shipped brand — the operator's "my theme isn't applied".
-            # The Makefile threads the file's text back as SNAP_THEME_CSS whenever it
+            # The Makefile threads the file's text back as HUG_THEME_CSS whenever it
             # exists (STACK_THEME_ENV). Best-effort on purpose: an unwritable file
-            # must never block a bring-up, and the env var above still applies now.
+            # must never block a bring-up, and the env vars above still apply now.
             try:
                 theme_file = os.path.join(
                     self.generator_dir, "tests", "stack", ".theme.css")
