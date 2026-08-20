@@ -386,6 +386,17 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
             sw.setMinimumWidth(8)
             self.preset_swatches_lay.addWidget(sw, 1)
         self.preset_swatches.setVisible(bool(preset.stripes))
+        # A preset MAY declare a background effect (ThemePreset.effect) — fill the
+        # picker exactly like the hex fields, so the Themes editor never shows a
+        # value the preset's delta block overrides. ONLY when declared: a preset
+        # without one leaves the operator's own effect choice alone (the effect is
+        # orthogonal decoration, like the font). Note load() runs this via the
+        # combo signal BEFORE it assigns self.chrome from cfg, so a persisted
+        # operator override still wins on reload.
+        if preset.effect:
+            self.set_chrome("bg_effect", preset.effect)
+            if self.editor is not None:
+                self.editor.load_from_group()
         self._refresh()
 
     def _maybe_clear_preset(self, *_):
