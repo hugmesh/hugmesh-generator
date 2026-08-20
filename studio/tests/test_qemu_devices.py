@@ -117,6 +117,35 @@ def test_discover_devices_reads_every_contract_field(tmp_path):
     assert dev.state == "assertions" and dev.started_at.endswith("Z")
 
 
+def test_device_reads_the_t1_start_contract_fields_tolerantly(tmp_path):
+    """Records written since 2026-08-19 carry "artifacts" (host path) and "image"
+    (booted basename) — the per-device restart contract — plus a state:"booting"
+    record published the moment qemu launches. All three must parse, and a record
+    from BEFORE that contract must still yield a usable row with empty defaults:
+    the registry outlives harness upgrades, and one old record must never cost the
+    device list."""
+    _write_device(tmp_path, "rpi5/pki", state="booting",
+                  artifacts="/host/out/sessions/20260819-125930-89bb8e",
+                  image="hugmesh-rpi5-arm64-pki-test-20260819T195951Z.img")
+    _write_device(tmp_path, "x86/be")          # pre-T1 shape: neither field
+    new = qd.device_by_label(qd.discover_devices(str(tmp_path)), "rpi5/pki")
+    old = qd.device_by_label(qd.discover_devices(str(tmp_path)), "x86/be")
+    assert new.artifacts == "/host/out/sessions/20260819-125930-89bb8e"
+    assert new.image == "hugmesh-rpi5-arm64-pki-test-20260819T195951Z.img"
+    # booting is a LIVE state: a row killed mid-boot is findable and stoppable.
+    assert new.state == "booting" and new.is_running
+    assert old.artifacts == "" and old.image == ""
+
+
+def test_device_from_record_is_the_public_parsing_rule():
+    """core.emulation feeds this the runner's --devices output — same records,
+    fetched differently — so the public spelling must be the same rule."""
+    assert qd.device_from_record({"label": "rpi5/pki", "state": "running",
+                                  "artifacts": "/a", "image": "b.img"}).artifacts == "/a"
+    assert qd.device_from_record({"state": "running"}) is None    # nameless: no row
+    assert qd.device_from_record("not a dict") is None
+
+
 def test_device_by_label(tmp_path):
     _write_device(tmp_path, "rpi5/pki")
     _write_device(tmp_path, "x86/omnibus", started_at="2026-08-15T04:00:00Z")
@@ -220,14 +249,25 @@ def test_qmp_argv_rejects_unknown_verb():
 
 
 def test_device_control_argv():
-    """stop is the runner's LABEL-addressed subcommand; start re-enters the boot path
-    filtered to this one row, because a stopped device has no container to resume."""
+    """stop is the runner's LABEL-addressed subcommand — the one action left here."""
     assert qd.device_control_argv("/gen", _dev(), "stop") == [
         "/gen/tests/qemu/run-qemu-docker.sh", "--stop-device", "rpi5/pki"]
-    assert qd.device_control_argv("/gen", _dev(), "start") == [
-        "/gen/tests/qemu/run-qemu-docker.sh", "--keep-alive", "--only", "rpi5/pki"]
     assert qd.stop_all_argv("/gen") == [
         "/gen/tests/qemu/run-qemu-docker.sh", "--stop-all-devices"]
+    assert qd.DEVICE_ACTIONS == ("stop",)
+
+
+def test_device_control_argv_start_is_a_shim_naming_its_successor():
+    """'start' was DELETED (T2): the old spelling let the runner guess its newest
+    session and matched the label by substring, so a restart could boot a different
+    build than the device came from and drag be+gpu/be-ha along. The shim raises —
+    never authors a doomed argv — and its message names the single author a caller
+    must move to (core.emulation.start_device_argv, which pins --artifacts/--work
+    and uses --only-exact). The shim itself goes with its last caller in T3."""
+    with pytest.raises(ValueError) as err:
+        qd.device_control_argv("/gen", _dev(), "start")
+    assert "emulation.start_device_argv" in str(err.value)
+    assert "--only-exact" in str(err.value)
 
 
 def test_device_control_argv_rejects_unknown_action():

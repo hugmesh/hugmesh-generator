@@ -152,6 +152,106 @@ def test_discover_sessions_can_include_empty(tmp_path):
     assert not sessions[0].has_images
 
 
+# ---- session completeness ------------------------------------------------------------
+# The shape of out/sessions/20260819-125930-89bb8e: a mesh build that ABORTED with
+# 1 bootable image where 4 per-image build logs (and a 7-image manifest) say more
+# was intended. Offering it as "the session" silently emulates a fraction of the
+# configured mesh, so pickers badge it and the default selection skips it.
+
+def _partial_session(root, name, *, images, logs=(), manifest_images=0, mtime=None):
+    sess = root / "out" / "sessions" / name
+    sess.mkdir(parents=True)
+    _write(str(sess), *images)
+    for log in logs:
+        (sess / log).write_text("…")
+    if manifest_images:
+        (sess / qt.MESH_MANIFEST_NAME).write_text(json.dumps(
+            {"format": 2, "images": [{"id": f"img{i}"} for i in range(manifest_images)]}))
+    if mtime is not None:
+        os.utime(sess, (mtime, mtime))
+    return sess
+
+
+def test_expected_image_count_prefers_build_logs_over_the_manifest(tmp_path):
+    """A per-image log exists only for a build that STARTED, so the log count is
+    what the run attempted — the aborted 08-19 session reads "1 of 4", not
+    "1 of 7", because three manifest images never even began. The shared build.log
+    is not a per-image log and must not count."""
+    sess = _partial_session(
+        tmp_path, "20260819-125930-89bb8e",
+        images=["hugmesh-x86-amd64-pki-test-20260819T195951Z.img.xz"],
+        logs=["build.log", "build-pki.x86.log", "build-pki.rpi5.log",
+              "build-be.x86.log", "build-be.rpi5.log"],
+        manifest_images=7)
+    assert qt.expected_image_count(str(sess)) == 4
+    session, = qt.discover_sessions(str(tmp_path))
+    assert session.expected_images == 4
+    assert session.is_partial
+    assert session.completeness_badge() == "PARTIAL — 1 of 4 image(s)"
+    assert "[PARTIAL — 1 of 4 image(s)]" in session.summary()
+
+
+def test_expected_image_count_falls_back_to_the_manifest(tmp_path):
+    """A builder that died before minting a single per-image log still declared its
+    intent in the mesh manifest."""
+    sess = _partial_session(
+        tmp_path, "20260819-000000-dead00",
+        images=["hugmesh-x86-amd64-pki-test-20260819T000000Z.img"],
+        logs=["build.log"], manifest_images=3)
+    assert qt.expected_image_count(str(sess)) == 3
+    session, = qt.discover_sessions(str(tmp_path))
+    assert session.is_partial and "1 of 3" in session.completeness_badge()
+
+
+def test_sessions_without_intent_witnesses_read_complete(tmp_path):
+    """No logs, no manifest: nothing can accuse the session of missing images, and
+    a corrupt manifest is 'unknown', never a crash or a false PARTIAL."""
+    sess = _partial_session(tmp_path, "20260101-000000-bare00",
+                            images=["hugmesh-x86-amd64-pki-test-20260101T000000Z.img"])
+    assert qt.expected_image_count(str(sess)) == 0
+    (sess / qt.MESH_MANIFEST_NAME).write_text("{not json")
+    assert qt.expected_image_count(str(sess)) == 0
+    session, = qt.discover_sessions(str(tmp_path))
+    assert not session.is_partial and session.completeness_badge() == ""
+
+
+def test_default_session_is_the_newest_complete_one(tmp_path):
+    """The newest session being an aborted build must not become the default: its
+    images are individually runnable, but 'the whole mesh' from it is a fraction of
+    what was configured. Only when EVERY session is partial does the newest partial
+    win — runnable-with-a-badge beats nothing."""
+    _partial_session(
+        tmp_path, "20260810-000000-comple",
+        images=["hugmesh-x86-amd64-pki-test-20260810T000000Z.img"],
+        logs=["build-pki.x86.log"], mtime=1_000_000_000)
+    _partial_session(
+        tmp_path, "20260819-125930-89bb8e",
+        images=["hugmesh-x86-amd64-pki-test-20260819T195951Z.img.xz"],
+        logs=["build-pki.x86.log", "build-pki.rpi5.log",
+              "build-be.x86.log", "build-be.rpi5.log"],
+        mtime=2_000_000_000)
+    # newest_session keeps its historical meaning: literally the newest.
+    assert qt.newest_session(str(tmp_path)).name == "20260819-125930-89bb8e"
+    assert qt.default_session(str(tmp_path)).name == "20260810-000000-comple"
+
+    # All partial: the newest partial is still offered rather than nothing.
+    import shutil as _shutil
+    _shutil.rmtree(tmp_path / "out" / "sessions" / "20260810-000000-comple")
+    assert qt.default_session(str(tmp_path)).name == "20260819-125930-89bb8e"
+    assert qt.default_session(str(tmp_path / "nowhere")) is None
+
+
+def test_manifest_and_log_spellings_match_their_authors():
+    """qemu_tests spells the manifest/log names locally to stay import-light; the
+    OWNING modules are worklist_driver (manifest) and build_sessions (logs). Drift
+    in either direction silently turns every session into 'complete'."""
+    from hugmesh_studio.core import build_sessions, worklist_driver
+    assert qt.MESH_MANIFEST_NAME == worklist_driver.MANIFEST_NAME
+    assert qt.SHARED_BUILD_LOG == build_sessions.LOG_NAME
+    assert build_sessions.image_log_name("pki.x86") == \
+        qt.IMAGE_LOG_PREFIX + "pki.x86" + qt.IMAGE_LOG_SUFFIX
+
+
 def test_runner_command_defaults_and_filters():
     opts = qt.QemuRunOptions(artifacts_dir="/art", work_dir="/work", platform="rpi5",
                              jobs=3, mem_mb=4096, timeout_s=1800)
@@ -173,6 +273,24 @@ def test_runner_command_emits_mode_list_and_build_image():
                                                       build_image=True, keep=True))
     assert cmd[cmd.index("--mode") + 1] == "stage4"
     assert "--list" in cmd and "--build-image" in cmd and "--keep" in cmd
+
+
+def test_runner_command_emits_the_t1_knobs_only_when_asked():
+    """--only-exact / --assert-timeout / --cache-max-gb / --extra-user are all
+    non-default knobs: absent from a default argv (the shell stays the home of the
+    defaults) and emitted verbatim when set."""
+    default = qt.runner_command("/gen", qt.QemuRunOptions())
+    for flag in ("--only-exact", "--assert-timeout", "--cache-max-gb", "--extra-user"):
+        assert flag not in default
+
+    cmd = qt.runner_command("/gen", qt.QemuRunOptions(
+        only_exact="x86/be", assert_timeout_s=900, cache_max_gb=120,
+        extra_users=("alice", "bob")))
+    assert cmd[cmd.index("--only-exact") + 1] == "x86/be"
+    assert cmd[cmd.index("--assert-timeout") + 1] == "900"
+    assert cmd[cmd.index("--cache-max-gb") + 1] == "120"
+    users = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--extra-user"]
+    assert users == ["alice", "bob"]
 
 
 def test_read_results_sorts_failures_first(tmp_path):
@@ -292,3 +410,44 @@ def test_shell_and_python_agree_on_which_build_wins(tmp_path):
 def test_docker_available_returns_a_reason():
     ok, why = qt.docker_available()
     assert isinstance(ok, bool) and why
+
+
+def test_docker_available_async_probes_off_thread(monkeypatch):
+    """The pages froze 15s in initializePage running docker_available inline. The
+    async variant must return a started daemon thread immediately, run the SAME
+    probe with the SHORT timeout, and deliver (ok, reason) through the callback —
+    including when the probe itself blows up (a mute probe thread is a page that
+    says 'checking…' forever)."""
+    import threading
+
+    seen = {}
+
+    def _fake_available(timeout_s=15.0):
+        seen["timeout"] = timeout_s
+        return False, "no daemon here"
+
+    monkeypatch.setattr(qt, "docker_available", _fake_available)
+    delivered = []
+    done = threading.Event()
+
+    def _cb(ok, why):
+        delivered.append((ok, why))
+        done.set()
+
+    thread = qt.docker_available_async(_cb)
+    assert thread.daemon
+    assert done.wait(10), "the probe callback never fired"
+    thread.join(10)
+    assert delivered == [(False, "no daemon here")]
+    assert seen["timeout"] == qt.DOCKER_PROBE_TIMEOUT_S
+    assert qt.DOCKER_PROBE_TIMEOUT_S < 15   # the whole point: shorter than inline
+
+    def _boom(timeout_s=15.0):
+        raise RuntimeError("docker exploded")
+
+    monkeypatch.setattr(qt, "docker_available", _boom)
+    delivered.clear()
+    done.clear()
+    qt.docker_available_async(_cb).join(10)
+    assert delivered and delivered[0][0] is False
+    assert "docker exploded" in delivered[0][1]

@@ -1190,6 +1190,28 @@ qemu-save-mesh-plan: ## preview saving the WHOLE emulated mesh (disk budget + KE
 qemu-save-mesh: ## save EVERY live emulated device's disk + KEYS stick to a flashable set (SAVE_ONLY=… SAVE_SESSION=…)
 	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation_save save $(_EMU_SAVE_ARGS)
 
+# Whole-mesh emulation, one lane end to end: boot/inspect/stop the emulated mesh
+# through the SAME Qt-free facade the Studio pages and the TUI drive
+# (core/emulation.py), which composes qemu_tests + qemu_devices + mesh_emulation +
+# emulation_save — no argv is spelled here that a core does not author. Knobs:
+# SESSION=<name|path> (default: the newest COMPLETE session — a partial, aborted
+# session is skipped, not silently half-booted), QEMU_WORK=dir, QEMU_JOBS=N (the
+# keep-alive boot-admission gate; 0 = ungated), JSON=1 on status.
+.PHONY: mesh-emu-up mesh-emu-status mesh-emu-down
+_MESH_EMU_ARGS = $(if $(SESSION),--session "$(SESSION)") \
+  $(if $(QEMU_WORK),--work "$(QEMU_WORK)") \
+  $(if $(QEMU_JOBS),--jobs $(QEMU_JOBS)) \
+  --generator-dir .
+
+mesh-emu-up: ## boot the WHOLE mesh emulated: --keep-alive fan-out over the session, device registry, web front door
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation up $(_MESH_EMU_ARGS)
+
+mesh-emu-status: ## reconciled per-device state + verdicts for the emulated mesh (JSON=1 for machine-readable)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation status $(_MESH_EMU_ARGS) $(if $(filter 1,$(JSON)),--json)
+
+mesh-emu-down: ## stop every emulated device the harness started (sweeps stale port claims too)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.emulation down $(_MESH_EMU_ARGS)
+
 # ── kind SSO e2e — the same native-login proof the compose stack runs
 # (tests/e2e/specs/27-native-login.spec.ts), against a REAL kind cluster
 # running the GitOps payload (ArgoCD + Vault/ESO/Casdoor + fe-gateway + BFFs).

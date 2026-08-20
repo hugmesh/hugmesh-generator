@@ -143,6 +143,8 @@ def test_start_mesh_argv_is_the_keepalive_fanout_over_the_session(plan):
 
 
 def test_start_device_argv_reenters_the_boot_path_for_one_label(plan):
+    """The GUI/TUI-facing spelling (--only, substring) until T3/T4 move those
+    surfaces onto core.emulation.start_device_argv, which uses --only-exact."""
     gen, p = plan
     d = p.device("x86/be")
     argv = me.start_device_argv(gen, p, d)
@@ -157,6 +159,23 @@ def test_stop_argvs_are_the_runners_own_verbs(plan):
         os.path.join(gen, qemu_tests.RUNNER_SCRIPT), "--stop-device", "rpi5/pki"]
     assert me.stop_mesh_argv(gen) == [
         os.path.join(gen, qemu_tests.RUNNER_SCRIPT), "--stop-all-devices"]
+
+
+def test_stop_argvs_can_carry_the_meshes_work_dir(plan):
+    """The start/stop asymmetry fix: every start argv pins --work, so a stop that
+    let the runner default would aim at a registry the device never registered in.
+    Callers that know the work dir (core.emulation always does) pass it; a bare
+    label works too, because a stop only needs the name."""
+    gen, p = plan
+    d = p.device("rpi5/pki")
+    assert me.stop_device_argv(gen, d, work_dir=p.work_dir) == [
+        os.path.join(gen, qemu_tests.RUNNER_SCRIPT),
+        "--work", p.work_dir, "--stop-device", "rpi5/pki"]
+    assert me.stop_device_argv(gen, "rpi5/pki", work_dir=p.work_dir) == \
+        me.stop_device_argv(gen, d, work_dir=p.work_dir)
+    assert me.stop_mesh_argv(gen, work_dir=p.work_dir) == [
+        os.path.join(gen, qemu_tests.RUNNER_SCRIPT),
+        "--work", p.work_dir, "--stop-all-devices"]
 
 
 # ---- section statuses ----------------------------------------------------------------
@@ -209,6 +228,26 @@ def test_device_status_maps_the_registry_states(plan):
 
 
 # ---- the ONE process boundary ---------------------------------------------------------
+# spawn() was PROMOTED to core/emulation.py (T2); the alias here must keep the
+# full contract until T4 retires it, so these tests exercise it THROUGH the alias.
+
+def test_spawn_is_an_alias_for_the_facades_boundary(monkeypatch):
+    """tui/meshemu.py keeps importing mesh_emulation.spawn until T4 — it must call
+    the ONE promoted implementation, arguments forwarded verbatim."""
+    from hugmesh_studio.core import emulation as em
+    seen = {}
+
+    def _spy(argv, cwd, on_line=None, cancel=None):
+        seen.update(argv=argv, cwd=cwd, on_line=on_line, cancel=cancel)
+        return 42
+
+    monkeypatch.setattr(em, "spawn", _spy)
+    cancel = threading.Event()
+    cb = lambda line: None  # noqa: E731
+    assert me.spawn(["echo", "hi"], "/cwd", on_line=cb, cancel=cancel) == 42
+    assert seen == {"argv": ["echo", "hi"], "cwd": "/cwd",
+                    "on_line": cb, "cancel": cancel}
+
 
 def test_spawn_streams_lines_and_returns_the_exit_code(tmp_path):
     """spawn() is the single function the GUI calls and the tests mock — so its
