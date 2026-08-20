@@ -29,6 +29,20 @@
 #                one's entries), the mfa.enabled append must feed that same
 #                patch, and it must sit INSIDE the `if [ -n "${MFA}" ]` guard —
 #                an unguarded append is a kind default-ON regression.
+#     verifier:  `make kind-e2e-mfa` must run the MFA spec (29) against the
+#                cluster, and must take the spec's APP_MFA_ENABLED from the
+#                RUNNING gateway pod (scripts/kind-mfa-posture.sh) rather than
+#                from $(MFA) or a literal. A flip nobody can observe is the same
+#                shipped-dark failure one step later: kind-e2e runs spec 27 only,
+#                so until this target existed NEITHER kind posture was ever
+#                asserted end to end. Threading $(MFA) instead would look
+#                equivalent and is not — kind-up is a SEPARATE invocation and the
+#                cluster outlives it, so the caller's shell describes a cluster
+#                it may never have flipped. The helper itself is proven
+#                FAIL-CLOSED by EXECUTION against a stub kubectl (empty /
+#                unparseable / erroring reads must all exit non-zero), because
+#                "assume off" would report a clean pass for the posture the
+#                cluster is NOT holding.
 #   lane C — per-domain / tenant render (brands/<brand>.conf MFA=1)
 #     switch:    generate-brand-repos.sh derives {{MFA_ENABLED}} from the brand
 #                profile (conf-only: ambient env must NOT leak in).
@@ -51,12 +65,17 @@
 # missing the {{MFA_ENABLED}} substitution, a Makefile that defines but never
 # threads STACK_MFA_ENV, a bootstrap without the mfa append / with the append
 # UNGUARDED / with a second clobbering patch, a compose gateway hardcoding the
-# env, and a committed brand profile shipping MFA=1. Every mutator PROVES IT
-# LANDED (exits non-zero when its target text is absent) — a mutator that
-# silently no-ops turns its control into a fake pass.
+# env, a committed brand profile shipping MFA=1, a Makefile with no kind-e2e-mfa
+# target, a kind-e2e-mfa that STILL calls the posture helper but overrides its
+# answer with $(MFA), and a posture helper that answers "false" for a cluster it
+# could not read. Every mutator PROVES IT LANDED (exits non-zero when its target
+# text is absent) — a mutator that silently no-ops turns its control into a fake
+# pass.
 #
 # Tools: bash>=4, python3 + PyYAML (reuses tests/stack/gateway_mfa_env.py for the
-# compose model), coreutils/sed/grep/awk. No cluster, no docker, no network.
+# compose model), coreutils/sed/grep/awk. No cluster, no docker, no network — the
+# live-posture helper is exercised against a STUB kubectl on a scratch PATH, never
+# against a real one, so this gate stays runnable on a laptop with no kubeconfig.
 set -uo pipefail
 
 _self="${BASH_SOURCE[0]}"; _selfdir="${_self%/*}"
@@ -347,6 +366,83 @@ grep -q 'MFA=1 needs KIND_PROFILE=sso' "${BOOTSTRAP}" \
   && ok "(3c) MFA=1 under KIND_PROFILE=core refuses loudly (no gateway is applied there — kind-honesty rule)" \
   || bad "(3c) bootstrap-kind.sh no longer refuses MFA=1 under the core profile — it would exit 0 having flipped nothing"
 
+# ── 3d/3e/3f: lane B's VERIFIER. A flip nobody can observe is the same shipped-dark
+# failure one step later: `make kind-up MFA=1` flipped the cluster and, until
+# kind-e2e-mfa existed, the kind lane's only e2e target ran spec 27 — so the MFA spec
+# had no kind lane at all and NEITHER kind posture was ever asserted end to end.
+#
+# The posture MUST come from the running cluster, not from the caller. Threading
+# $(MFA) here would look equivalent and is not: kind-up is a SEPARATE invocation and
+# the cluster outlives it, so `make kind-e2e-mfa MFA=1` against a cluster brought up
+# without the flag would hand spec 29 the enforcement block and fail for a reason that
+# has nothing to do with MFA — while `make kind-e2e-mfa` against a cluster brought up
+# WITH it would run the OFF block and report a clean pass for a posture the cluster is
+# not holding. The repo cannot answer it either: kind-up flips through an ArgoCD helm
+# PARAMETER, so the committed chart reads false on an enforcing cluster.
+recipe_of() { # <makefile> <target> — the recipe lines (TAB-prefixed) of one target
+  awk -v t="$2" 'BEGIN{re="^" t ":"} $0 ~ re {grab=1; next} grab { if ($0 ~ /^\t/) {print; next} exit }' "$1"
+}
+KIND_MFA_RECIPE="$(recipe_of "${MAKEFILE}" kind-e2e-mfa)"
+if [ -z "${KIND_MFA_RECIPE}" ]; then
+  bad "(3d) no 'kind-e2e-mfa' target in the Makefile — the kind lane can flip MFA on but has no way to run the MFA spec against either posture"
+  bad "(3e) …and therefore nothing derives the spec's APP_MFA_ENABLED from the live cluster"
+else
+  printf '%s\n' "${KIND_MFA_RECIPE}" | grep -q '29-mfa-privileged-floor.spec.ts' \
+    && ok "(3d) kind-e2e-mfa runs the MFA spec (29) against the kind cluster — the flip has a verifier" \
+    || bad "(3d) kind-e2e-mfa does not run specs/29-mfa-privileged-floor.spec.ts — the target exists but verifies something else"
+  if ! printf '%s\n' "${KIND_MFA_RECIPE}" | grep -q 'kind-mfa-posture.sh'; then
+    bad "(3e) kind-e2e-mfa does not read the posture via scripts/kind-mfa-posture.sh — it is guessing at the cluster's state"
+  elif printf '%s\n' "${KIND_MFA_RECIPE}" | grep -qE "APP_MFA_ENABLED=[\"']?(\\\$\(MFA\)|true|false)"; then
+    bad "(3e) kind-e2e-mfa hands spec 29 a CALLER-supplied APP_MFA_ENABLED (\$(MFA) or a literal) — the live posture is overridden by a guess"
+  else
+    ok "(3e) kind-e2e-mfa derives APP_MFA_ENABLED from the RUNNING gateway pod (scripts/kind-mfa-posture.sh), not from \$(MFA) or a literal"
+  fi
+fi
+
+# 3f: and that helper is FAIL-CLOSED, proven by EXECUTING it against a stub kubectl
+# rather than by grepping it. "Assume off" would be the friendly behaviour and the
+# wrong one — it hands spec 29 the OFF block against a cluster that is enforcing and
+# reports a clean pass for the posture the cluster is NOT holding.
+POSTURE_SH="${REPO}/scripts/kind-mfa-posture.sh"
+# <stub-dir> <mode>: writes a fake kubectl that emits/exits as `mode` demands.
+stub_kubectl() { # <dir> <empty|garbage|rc1|true|false>
+  local d="$1" mode="$2"
+  mkdir -p "${d}"
+  { echo '#!/usr/bin/env bash'
+    case "${mode}" in
+      empty)   echo 'exit 0' ;;
+      garbage) echo "printf 'maybe'" ;;
+      rc1)     echo 'echo "Error from server (NotFound)" >&2; exit 1' ;;
+      true)    echo "printf 'true'" ;;
+      false)   echo "printf 'false'" ;;
+    esac
+  } > "${d}/kubectl"
+  chmod +x "${d}/kubectl"
+}
+# rc + stdout of the helper with only <dir> plus the base tools on PATH
+run_posture() { # <helper> <stub-dir>
+  PATH="$2:/usr/bin:/bin" bash "$1" --value 2>/dev/null
+}
+if [ ! -f "${POSTURE_SH}" ]; then
+  bad "(3f) scripts/kind-mfa-posture.sh is missing — the live-posture read has no implementation"
+else
+  fc_problems=""
+  for mode in empty garbage rc1; do
+    stub_kubectl "${WORK}/stub-${mode}" "${mode}"
+    out="$(run_posture "${POSTURE_SH}" "${WORK}/stub-${mode}")"; rc=$?
+    [ "${rc}" -ne 0 ] || fc_problems="${fc_problems}${mode}: exited 0 printing '${out}' instead of failing; "
+  done
+  for mode in true false; do
+    stub_kubectl "${WORK}/stub-${mode}" "${mode}"
+    out="$(run_posture "${POSTURE_SH}" "${WORK}/stub-${mode}")"; rc=$?
+    { [ "${rc}" -eq 0 ] && [ "${out}" = "${mode}" ]; } \
+      || fc_problems="${fc_problems}${mode}: expected rc0 + '${mode}', got rc${rc} + '${out}'; "
+  done
+  [ -z "${fc_problems}" ] \
+    && ok "(3f) kind-mfa-posture.sh is fail-closed AND non-vacuous, EXECUTED against a stub kubectl: empty / unparseable / erroring reads all exit non-zero, true and false both round-trip" \
+    || bad "(3f) kind-mfa-posture.sh posture read: ${fc_problems}"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 4) lane C: the per-domain flip, proven on REAL renderer output
 # ═══════════════════════════════════════════════════════════════════════════
@@ -574,8 +670,56 @@ hits="$(brand_mfa_on_hits "${WORK}/brands-6h")"
   && ok "(6h) committed-profile check BITES: a brands/*.conf with MFA=1 is caught" \
   || bad "(6h) VACUOUS: a committed profile with MFA=1 was not caught"
 
+# 6i: the verifier target deleted -> (3d) fails
+sed '/^kind-e2e-mfa:/,/^$/d' "${MAKEFILE}" > "${WORK}/Makefile.6i"
+if [ -n "$(recipe_of "${MAKEFILE}" kind-e2e-mfa)" ] && [ -z "$(recipe_of "${WORK}/Makefile.6i" kind-e2e-mfa)" ]; then
+  ok "(6i) verifier check BITES: a Makefile with no kind-e2e-mfa target leaves the kind flip unobservable and fails (3d)"
+else
+  bad "(6i) MUTATOR DID NOT LAND: kind-e2e-mfa still extractable from the mutant (or absent from the real Makefile)"
+fi
+
+# 6j: the posture threaded from the CALLER instead of the cluster -> (3e) fails.
+# The subtle one, and the reason (3e) is written as a NEGATIVE match: this mutant
+# still calls the helper, so a check that only asserted "the helper is referenced"
+# would pass it while the caller's $(MFA) silently wins the assignment.
+sed 's|APP_MFA_ENABLED="$${posture}"|APP_MFA_ENABLED="$(MFA)"|' "${MAKEFILE}" > "${WORK}/Makefile.6j"
+mut_recipe="$(recipe_of "${WORK}/Makefile.6j" kind-e2e-mfa)"
+if printf '%s\n' "${mut_recipe}" | grep -q 'APP_MFA_ENABLED="$(MFA)"'; then
+  { printf '%s\n' "${mut_recipe}" | grep -q 'kind-mfa-posture.sh'; } \
+    && { printf '%s\n' "${mut_recipe}" | grep -qE "APP_MFA_ENABLED=[\"']?(\\\$\(MFA\)|true|false)"; } \
+    && ok "(6j) live-posture check BITES: threading \$(MFA) into the spec's env fails (3e) even though the helper is still called" \
+    || bad "(6j) VACUOUS: a caller-supplied APP_MFA_ENABLED passed the live-posture check"
+else
+  bad "(6j) MUTATOR DID NOT LAND (the recipe's APP_MFA_ENABLED assignment was not rewritten)"
+fi
+
+# 6k: a posture helper that DEFAULTS instead of dying -> (3f) fails
+if [ -f "${POSTURE_SH}" ]; then
+  python3 - "${POSTURE_SH}" "${WORK}/posture.6k.sh" <<'PY'
+import re, sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+# the unreadable-value catch-all becomes a silent default…
+s2 = re.sub(r'\n\s*\*\) die "deploy/', '\n  *) posture=false ;;\n  __never__) die "deploy/', s, count=1)
+if s2 == s: raise SystemExit("6k: the case catch-all was not found")
+# …and an empty read falls through to it instead of dying.
+s3 = s2.replace('[ -n "${raw}" ] \\\n', '[ -n "${raw}" ] || raw=nonsense\n[ -n "${raw}" ] \\\n', 1)
+if s3 == s2: raise SystemExit("6k: the empty-read guard was not found")
+open(dst, "w", encoding="utf-8").write(s3)
+PY
+  if mut_ok $? 6k; then
+    stub_kubectl "${WORK}/stub-6k" empty
+    out="$(run_posture "${WORK}/posture.6k.sh" "${WORK}/stub-6k")"; rc=$?
+    { [ "${rc}" -eq 0 ] && [ "${out}" = "false" ]; } \
+      && ok "(6k) fail-closed check BITES: a helper that answers 'false' for an unreadable cluster passes ITSELF and fails (3f)'s empty-read case" \
+      || bad "(6k) VACUOUS or mutator inert: the defaulting helper did not answer 'false' on an empty read (rc${rc} '${out}')"
+  fi
+else
+  bad "(6k) control not exercised: scripts/kind-mfa-posture.sh is missing"
+fi
+
 # ── tally guard ───────────────────────────────────────────────────────────────
-MIN_CHECKS=24
+MIN_CHECKS=30
 TOTAL=$((P + F))
 echo ""
 if [ "${TOTAL}" -lt "${MIN_CHECKS}" ]; then
