@@ -245,6 +245,9 @@ function assertTemplateSafe(src, label) {
     if (classifier.isFrozen(tok)) {
       throw new Error(`${label} references token '{{${tok}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
     }
+    if (classifier.isThemeContract(tok)) {
+      throw new Error(`${label} references token '{{${tok}}}' that targets a THEME CONTRACT identifier (tokens.json theme_contract_constants) — refusing to render (it must stay literal: the other end of this hand-off lives in a different repo and would not be rebranded with it)`);
+    }
     if (!classifier.isAllowed(tok)) {
       throw new Error(`${label} references token '{{${tok}}}' that is neither allowlisted nor denylisted — refusing to render (fail-closed). Add it to scripts/tooling/tokens.json (allowlist) or remove the reference.`);
     }
@@ -252,6 +255,15 @@ function assertTemplateSafe(src, label) {
   for (const body of referencedRawBodies(src)) {
     if (classifier.isFrozen(body)) {
       throw new Error(`${label} references '{{${body}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
+    }
+    // The theme contract's --hug-*/--sd-* custom properties are NOT Handlebars
+    // identifiers (leading dashes), so TOKEN_RE above never captures them and the
+    // identifier loop's fail-closed allowlist check is unreachable for them: a
+    // template writing {{--sd-accent}} rendered to an EMPTY string and exited 0,
+    // silently deleting the custom property it named. Same reachability fix the
+    // frozen-constant raw-body scan exists for — see the RAW_MUSTACHE_RE comment.
+    if (classifier.isThemeContract(body)) {
+      throw new Error(`${label} references '{{${body}}}' that targets a THEME CONTRACT identifier (tokens.json theme_contract_constants) — refusing to render (it must stay literal; templating it drops or rebrands one end of a cross-repo hand-off that has no build-time or boot-time error)`);
     }
     if (classifier.isDenied(body)) {
       throw new Error(`${label} references denylisted secret token '{{${body}}}' — refusing to render`);
