@@ -158,6 +158,66 @@ HSTS is scoped per *host*, not per port, so a single pinned response on
 loopback to https for a year. It is the same trap as problem 3, aimed at
 localhost.
 
+### The lanes — kind, compose, and an emulated device
+
+`LANE=` picks which set of doors is served. All of them use the same proxy; only
+what sits behind it differs.
+
+| `LANE=` | What it serves | How it reaches it |
+|---|---|---|
+| `kind` *(default)* | the host shell | straight to the kind node's published `:8443`, with `Host: hugmesh.net` |
+| `kind-svc` | ArgoCD, Vault, Casdoor, harbor-portal, Harbor's ingress | `kubectl port-forward` onto an **ephemeral** local port, with the proxy in front |
+| `compose` | the `tests/stack/compose.local.yaml` front doors | straight to the published `PUBLIC_HOST_PORT` / `PUBLIC_HTTPS_PORT` |
+| `device` | a live emulated device's own front door | `ssh -L` through the device's published ssh port |
+
+Three things about that table are worth stating rather than discovering:
+
+- **The port-forward is managed, not fire-and-forget.** It is started, health-checked
+  (the tool waits for the port to actually accept, and gives up early if kubectl has
+  already exited), recorded, and killed on exit. A *crashed* run's leftover forward is
+  the nastier case — it keeps holding its port, so the next run's door silently serves
+  the previous run's service — so every `make view` sweeps the last session's children
+  first, and says what it swept. It only signals a pid whose `/proc` cmdline still
+  matches what was recorded, so a recycled pid is never killed.
+- **ArgoCD needs the proxy, not just a port-forward.** `argocd-server` serves TLS on
+  443 and 307-redirects http→https on whatever port you hand it, so a bare
+  `kubectl port-forward` gives you a redirect loop; the door terminates TLS for it.
+- **The compose knobs are honoured.** The compose rows spell their upstreams as
+  `${PUBLIC_HOST_PORT:-8088}` / `${PUBLIC_HTTPS_PORT:-8488}`, expanded from the
+  environment, so a stack brought up on non-default ports needs no edit here.
+
+The `device` lane is gated on a device actually being up: it reads the keep-alive
+registry under `out/qemu-runs/devices/` and refuses, naming what it found, if every
+record says `stopped`. `device+https://@gateway` resolves to the running device
+carrying the front door. The tunnel argv comes from studio's single web-tunnel author
+(`hugmesh_studio.core.emulation.web_tunnel_argv`), so this tool cannot spell a forward
+that differs from the one the Studio's own button uses.
+
+> **Verified so far:** the `kind` and `kind-svc` lanes are exercised live. The
+> `compose` and `device` lanes are implemented from the compose file's published
+> ports and the device registry contract respectively, and are covered by the
+> offline gate — but neither has been run against a live stack or a booted device,
+> because neither was running when they were written. Treat them as untested.
+
+### If a browser is already stuck on this domain
+
+If you (or an earlier attempt) already clicked through `https://hugmesh.net:8443`
+before this tool existed, the browser may have pinned HSTS for the domain — and
+because the certificate is self-signed, Chrome then refuses to let you proceed at
+all, with no "advanced" escape. The pin outlives the cluster; deleting the kind
+cluster does not clear it.
+
+- **Chrome/Chromium:** open `chrome://net-internals/#hsts`, put `hugmesh.net` into
+  **"Delete domain security policies"** and delete it. Do the same for any subdomain
+  you hit (`registry.hugmesh.net`, …) — `includeSubDomains` means the apex entry is
+  usually the one that matters. There is no way to do this from the interstitial.
+- **Firefox:** History → Clear Recent History with "Site settings" ticked, or delete
+  the site's entry via `about:permissions`; Firefox stores HSTS in
+  `SiteSecurityServiceState.txt` in the profile.
+
+Browsing through `make view` cannot cause this: HSTS is stripped from every response
+on the way down, precisely so that visiting a door can never pin anything.
+
 ### Adding a domain
 
 Append a row to `scripts/hugmesh-view.tsv` — six tab-separated columns

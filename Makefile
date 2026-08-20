@@ -385,6 +385,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
         kind-images kind-up kind-e2e kind-down kind-honesty \
+        view view-list view-stop view-trust view-untrust view-honesty \
         scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
 
 help: ## list targets
@@ -1281,9 +1282,11 @@ view-list: ## show the domain -> loopback-port map (no side effects)
 view-stop: ## stop the background view session (and sweep any stale port-forwards)
 	python3 scripts/hugmesh-view.py stop $(VIEW_ARGS)
 
-# Offline gate for the above: fake kubectl/ssh on PATH, a loopback stand-in for
-# the upstream, and a negative control per behaviour. No cluster, no network.
-view-honesty: ## offline: prove the view tool's rewrites, collisions and cleanup
+# Offline gate for the above: a fake kubectl and a fake certutil on PATH, HOME
+# redirected into a temp dir so no real browser trust store is reachable, a
+# loopback stand-in for the upstream, and a NEGATIVE CONTROL per behaviour so
+# the gate is proven to bite. No cluster, no network, no root.
+view-honesty: ## offline: prove the view tool's rewrites, CA constraints, collisions and cleanup
 	bash tests/scripts/test-hugmesh-view.sh
 
 playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
