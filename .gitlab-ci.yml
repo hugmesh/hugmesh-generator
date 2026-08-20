@@ -2563,8 +2563,10 @@ orphan-guards-verify:
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
+        tests/scripts/test-first-run-lib.sh
         tests/scripts/test-headscale-oidc-secret-staging.sh
         tests/scripts/test-host-accept-keywords.sh
+        tests/scripts/test-host-bdep-pool.sh
         tests/scripts/test-host-mutation-guard.sh
         tests/scripts/test-host-selinux-tools.sh
         tests/scripts/test-idp-builder-functions.sh
@@ -2578,6 +2580,7 @@ orphan-guards-verify:
         tests/scripts/test-shared-build-assets.sh
         tests/scripts/test-spec-use-parity.sh
         tests/scripts/test-x86-artifact-integrity.sh
+        tests/stack/test-front-door-client-surface.sh
       "
       rc=0
       failed=""
