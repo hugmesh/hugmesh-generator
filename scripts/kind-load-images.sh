@@ -20,6 +20,8 @@ STACK_SRC="${STACK_SRC:-${REPO_ROOT}/.stack-src}"
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
 REGISTRY="registry.hugmesh.net/hugmesh"
 
+# shellcheck source=scripts/_tools-path-lib.sh
+. "${SCRIPT_DIR}/_tools-path-lib.sh"; hugmesh_tools_path
 for bin in docker kind; do
   command -v "${bin}" >/dev/null 2>&1 || { echo "missing required tool: ${bin}" >&2; exit 1; }
 done

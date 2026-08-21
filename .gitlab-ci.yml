@@ -239,6 +239,22 @@ lint:nullmailer-cross-postinst:
   script:
     - bash tests/scripts/test-nullmailer-cross-postinst.sh
 
+# scripts/_tools-path-lib.sh. The Studio pins kind under
+# ~/.local/share/hugmesh-studio/tools/bin and puts it on PATH for its own children
+# only, so a terminal `make kind-up` died with "missing required tool: kind" on a
+# box where kind was installed — a message that reads as "not installed" and sends
+# the reader to install a second copy at a different version. The suite is fully
+# hermetic (it builds fake tools dirs and drives the lib via HUGMESH_TOOLS_BIN), so
+# it asserts the same thing on a runner with no Studio as on the workstation.
+lint:tools-path-lib:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash
+  script:
+    - bash tests/scripts/test-tools-path-lib.sh
+
 # GitHub credential preflight for first-party clones. Deliberately NO `rules:` —
 # it must run on every pipeline. This gate exists because the two properties it
 # checks fail SILENTLY: a leaked token looks like a working build, and a missing
