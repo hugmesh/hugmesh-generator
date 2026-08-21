@@ -694,7 +694,17 @@ class LocalStackNode:
         ``cancel`` (a threading.Event-like with .is_set()) terminates the whole
         process GROUP — make's compose/docker children included, which is why the
         child starts in its own session. The returned message is the output TAIL
-        (last 400 lines), which is what error reporting actually needs."""
+        (last 400 lines), which is what error reporting actually needs.
+
+        WHY THE THREE `on_line` CALLS BELOW EXIST. The GUI's streaming worker
+        deliberately DISCARDS the returned message (it already streamed —
+        re-dumping it doubled every milestone in the log). That is right for the
+        tail, and wrong for the three sentences this function INVENTS and never
+        streams: "make could not be started", "timed out", "cancelled". Without
+        them a `make kind-up` that hit DEVOPS_UP_TIMEOUT_S showed a log that
+        simply STOPPED and a status bar reading "FAILED (see log)" — with the
+        reason nowhere in the log it points at. They are new sentences, not
+        replays, so streaming them cannot double anything."""
         env = self._build_env(extra_env)
         if on_line is None and cancel is None:
             try:
@@ -712,7 +722,10 @@ class LocalStackNode:
                 # utf-8 is the other half of the same fix. See core/proc_text.
                 start_new_session=(os.name == "posix"), **proc_text.TEXT_IO)
         except OSError as e:
-            return False, str(e)
+            why = f"could not start `make {target}`: {e}"
+            if on_line is not None:
+                on_line(why)
+            return False, why
         tail: collections.deque[str] = collections.deque(maxlen=400)
         deadline = time.monotonic() + timeout
         cancelled = timed_out = False
@@ -750,10 +763,16 @@ class LocalStackNode:
             rc = proc.wait()
         text = "\n".join(tail).strip()
         if cancelled:
-            return False, f"cancelled by operator.\n{text}"[:8000]
+            note = "cancelled by operator."
+            if on_line is not None:
+                on_line(note)
+            return False, f"{note}\n{text}"[:8000]
         if timed_out:
-            return False, (f"timed out after {timeout} s (process group terminated)."
-                           f"\n{text}")[:8000]
+            note = (f"timed out after {timeout} s (process group terminated) — "
+                    f"`make {target}` was still running.")
+            if on_line is not None:
+                on_line(note)
+            return False, f"{note}\n{text}"[:8000]
         return rc == 0, text
 
     def cold_build_expected(self) -> bool:
@@ -977,9 +996,38 @@ class LocalStackNode:
         always works; otherwise the DEFAULT tokenless local sync needs (a) this
         checkout to be a full clone (.git directory — a linked worktree's .git
         is a file pointing at an object store the kind mount can't carry) and
-        (b) any EXISTING kind cluster to carry the read-only repo mount, which
-        can only be added at CREATE time. A fresh cluster needs nothing —
-        bootstrap-kind.sh mounts and serves the checkout automatically."""
+        (b) any EXISTING kind cluster to actually SERVE the read-only repo
+        mount. A fresh cluster needs nothing — bootstrap-kind.sh mounts and
+        serves the checkout automatically.
+
+        "Not serving" has THREE causes with three different remedies, and this
+        used to collapse all of them into "delete your cluster":
+
+        * the node DECLARES no bind at KIND_REPO_MOUNT — a cluster from before
+          the local-sync path. A bind can only be ADDED at create time, so this
+          one really does need the recreate.
+        * the node declares a bind, but from a DIFFERENT checkout than the one
+          the Studio is driving. Also a recreate, and the message has to name
+          the other path or the operator recreates into the same mismatch.
+        * the node declares the bind FROM THIS CHECKOUT and still cannot see
+          .git — the bind went STALE. Docker resolves a bind's source path when
+          the container STARTS, not when it is created (verified 2026-08-21 by
+          repointing a symlinked source and restarting: the container picked up
+          the new target). So a node that restarted while $HOME was not yet
+          mounted — an eCryptfs/LUKS home, an unlocked-on-login home, a
+          suspend/resume, a dockerd restart before the user session — is serving
+          the empty directory that $HOME shadows, forever, while `docker
+          inspect` still shows the right Source. That is a `docker restart
+          <node>` away from fixed, and deleting the cluster to fix it is 40
+          minutes of rebuild for a 20-second remedy.
+
+        Live shape (2026-08-21): an eCryptfs $HOME, the kind node restarted
+        while it was unmounted, and its bind resolved to the btrfs directory the
+        eCryptfs mount shadows — 1 entry instead of 44, no .git. `docker
+        inspect` still reported the right Source; only the node's view had gone
+        wrong. The in-cluster git daemon answered every ArgoCD fetch with "no
+        such repository: /hugmesh-generator", so every git-path Application sat
+        OutOfSync and nothing about it named a mount."""
         if os.environ.get("ARGOCD_REPO_TOKEN"):
             return []
         git_path = os.path.join(self.generator_dir, ".git")
@@ -997,17 +1045,54 @@ class LocalStackNode:
         rc, out = self._probe([kind, "get", "clusters"])
         if rc != 0 or cluster not in out.split():
             return []  # no existing cluster: a fresh one gets the mount automatically
-        rc, _ = self._probe(["docker", "exec", f"{cluster}-control-plane",
+        node = f"{cluster}-control-plane"
+        rc, _ = self._probe(["docker", "exec", node,
                              "test", "-d", f"{KIND_REPO_MOUNT}/.git"])
-        if rc != 0:
-            return [f"existing kind cluster '{cluster}' lacks the read-only repo "
-                    f"mount ({KIND_REPO_MOUNT}) that the tokenless local sync "
-                    f"serves ArgoCD from, and the mount can only be added at "
-                    f"CREATE time — `kind delete cluster --name {cluster}` and "
-                    f"start this lane again (a fresh cluster mounts it "
-                    f"automatically), or export ARGOCD_REPO_TOKEN=<token with "
-                    f"read access to hugmesh-generator>."]
-        return []
+        if rc == 0:
+            return []
+        token_hint = ("or export ARGOCD_REPO_TOKEN=<token with read access to "
+                      "hugmesh-generator>")
+        declared = self._kind_repo_bind_source(node)
+        if declared and os.path.abspath(declared) == os.path.abspath(self.generator_dir):
+            # STALE BIND: declared correctly, serving something else. Restart
+            # re-resolves the source; recreating the cluster would too, but it
+            # is two orders of magnitude more expensive for the same result.
+            return [f"kind cluster '{cluster}' mounts this checkout at "
+                    f"{KIND_REPO_MOUNT} but the node cannot see its .git — the "
+                    f"bind went STALE. Docker resolves a bind's source when the "
+                    f"container STARTS, so a node that restarted before "
+                    f"{self.generator_dir} was mounted (encrypted or "
+                    f"late-mounted home, suspend/resume, a dockerd restart) is "
+                    f"serving the empty directory underneath it. Fix without "
+                    f"losing the cluster: `docker restart {node}` (check first "
+                    f"that the path is mounted now), then start this lane "
+                    f"again — {token_hint}."]
+        if declared:
+            return [f"kind cluster '{cluster}' mounts a DIFFERENT checkout at "
+                    f"{KIND_REPO_MOUNT} ({declared}, not {self.generator_dir}), "
+                    f"so ArgoCD would sync someone else's tree. A bind can only "
+                    f"be set at CREATE time — `kind delete cluster --name "
+                    f"{cluster}` and start this lane again from this checkout, "
+                    f"{token_hint}."]
+        return [f"existing kind cluster '{cluster}' lacks the read-only repo "
+                f"mount ({KIND_REPO_MOUNT}) that the tokenless local sync "
+                f"serves ArgoCD from, and the mount can only be added at "
+                f"CREATE time — `kind delete cluster --name {cluster}` and "
+                f"start this lane again (a fresh cluster mounts it "
+                f"automatically), {token_hint}."]
+
+    def _kind_repo_bind_source(self, node: str) -> str:
+        """The HOST path the kind node declares as its repo bind, or "" when it
+        declares none (or cannot be inspected).
+
+        Read from `docker inspect`, deliberately NOT from inside the container:
+        the whole point is to tell "no bind was ever configured" apart from "the
+        bind is configured and resolving to the wrong tree", and only the host
+        side of the mount table can answer the first question."""
+        fmt = ('{{range .Mounts}}{{if eq .Destination "' + KIND_REPO_MOUNT +
+               '"}}{{.Source}}{{end}}{{end}}')
+        rc, out = self._probe(["docker", "inspect", node, "--format", fmt])
+        return out.strip() if rc == 0 else ""
 
     def devops_up(self, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make kind-up` — create the local Kubernetes cluster and bootstrap the
@@ -1020,6 +1105,12 @@ class LocalStackNode:
         never silently reconfigure the other."""
         problems = self.devops_available()
         if problems:
+            # Streamed for the same reason the repo-access block below is: the
+            # GUI worker drops a streaming verb's return value, so a reason that
+            # is only returned is a reason the operator never sees.
+            if on_line:
+                for p in problems:
+                    on_line(f"[devops] {p}")
             return False, "\n".join(problems)
         # Repo-access preflight (issue #48) BEFORE the long verb: bootstrap-kind.sh
         # itself now fails closed on this condition, but only after cluster-create

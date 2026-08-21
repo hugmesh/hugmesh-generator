@@ -196,7 +196,16 @@ class _MeshWorker(QtCore.QThread):
       * streaming: ``stream=True`` and the callable takes (on_line, cancel) — every
         line is emitted AS THE VERB RUNS (line.emit is thread-safe: a queued
         signal), and the returned lines are NOT re-emitted (they already streamed —
-        re-dumping them doubled every milestone in the log)."""
+        re-dumping them doubled every milestone in the log).
+
+    THE ONE EXCEPTION, and why it is not a hole in that rule: a streaming verb that
+    FAILS having emitted NOTHING. "They already streamed" is the whole justification
+    for dropping the return value, and when nothing streamed it is simply false — the
+    run then showed an empty log under a status bar reading "FAILED (see log)", which
+    is the least useful thing this page can say. Zero emitted lines means there is
+    nothing to double, so emitting the reason there is safe by construction. The
+    verbs themselves also stream their own reasons now (core/local_stack_node,
+    core/devops_tools); this is the net under any future one that forgets."""
     line = Signal(str)
     done = Signal(bool)
 
@@ -209,7 +218,17 @@ class _MeshWorker(QtCore.QThread):
     def run(self):  # noqa: D102 — QThread contract
         try:
             if self._stream:
-                ok, _out = self._fn(self.line.emit, self.cancel)
+                emitted = 0
+
+                def _emit(ln: str) -> None:
+                    nonlocal emitted
+                    emitted += 1
+                    self.line.emit(ln)
+
+                ok, out = self._fn(_emit, self.cancel)
+                if not ok and emitted == 0 and out:
+                    for ln in str(out).splitlines():
+                        self.line.emit(ln)
             else:
                 ok, out = self._fn()
                 for ln in (out if isinstance(out, (list, tuple)) else [out]):

@@ -77,18 +77,28 @@ def install(generator_dir: str, tools: tuple[str, ...] | None = None,
     """Download + checksum-verify the missing tools into the user-local dir.
 
     Returns (ok, message). Never raises: this backs a GUI verb, and a network
-    failure must read as a sentence, not a traceback."""
+    failure must read as a sentence, not a traceback.
+
+    Every failure is SAID as well as returned. The GUI runs this streamed, and a
+    streaming verb's return value is dropped by the worker (it already streamed)
+    — so a reason that was only ever returned reached nobody. "Install DevOps
+    prerequisites" failing on a DNS outage used to print "downloading kind …"
+    and then nothing at all, under a status bar reading "FAILED (see log)"."""
     def say(line: str) -> None:
         if on_line is not None:
             on_line(line)
 
+    def fail(msg: str) -> tuple[bool, str]:
+        say(f"[devops-tools] FAILED: {msg}")
+        return False, msg
+
     arch = _arch()
     if arch is None:
-        return False, (f"Unsupported machine architecture "
-                       f"'{platform.machine()}' — install kind/kubectl manually.")
+        return fail(f"Unsupported machine architecture "
+                    f"'{platform.machine()}' — install kind/kubectl manually.")
     if platform.system().lower() != "linux":
-        return False, ("Automatic install covers Linux only — install kind and "
-                       "kubectl with your platform's package manager.")
+        return fail("Automatic install covers Linux only — install kind and "
+                    "kubectl with your platform's package manager.")
 
     want = list(tools) if tools is not None else missing(generator_dir)
     if not want:
@@ -109,12 +119,12 @@ def install(generator_dir: str, tools: tuple[str, ...] | None = None,
         except Exception as exc:                     # network/HTTP/DNS
             if os.path.exists(tmp):
                 os.remove(tmp)
-            return False, f"Could not download {tool}: {exc}"
+            return fail(f"Could not download {tool} from {url}: {exc}")
         got = hashlib.sha256(open(tmp, "rb").read()).hexdigest()
         if got.lower() != published.lower():
             os.remove(tmp)
-            return False, (f"{tool}: SHA-256 MISMATCH — refusing to install. "
-                           f"published={published} downloaded={got}")
+            return fail(f"{tool}: SHA-256 MISMATCH — refusing to install. "
+                        f"published={published} downloaded={got}")
         os.replace(tmp, target)
         os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR | stat.S_IXGRP)
         say(f"[devops-tools] {tool} installed + checksum-verified -> {target}")
