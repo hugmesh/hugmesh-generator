@@ -80,6 +80,73 @@ else
   echo "WARN: ${M2_ENV} missing — Java builds will fail to resolve systems.hugmesh:*; run 'make stack-m2-bootstrap' first" >&2
 fi
 
+# ── assert every Java checkout can actually SEE the private registry ──────────
+#
+# WHY THIS EXISTS. The three Java images depend on org-private net.hugmesh:*
+# artifacts that are not on Maven Central. Nothing in the repos themselves knows
+# about the local m2 registry — scripts/patch-stack-src.sh injects that wiring
+# into ./.stack-src (a settings.xml `-s` thread for the eight BFF/federation
+# repos, a whole ARG+settings injection for hugmesh-gateway, and a same-id
+# mirror that neutralises Maven 3.9's http-blocker so a plain-HTTP registry
+# resolves at all).
+#
+# THAT WIRING IS FRAGILE IN ONE SPECIFIC WAY, and it bit this lane on
+# 2026-08-21: the patcher's "already patched" markers live in TRACKED files
+# (Dockerfile, settings.xml), so any `git pull`/reset of a .stack-src checkout
+# silently reverts every injection. The untracked artefact it wrote
+# (hugmesh-local-settings.xml) SURVIVES the reset, so the tree looks patched to
+# a human while being entirely unpatched to maven. Nine checkouts were in that
+# state at once and nothing reported it.
+#
+# The symptom is maximally misleading — an ELEVEN MINUTE build that dies with
+#   Could not find artifact net.hugmesh:hugmesh-commons:jar:2.1.0 in central
+# naming only Maven Central, never the local registry, because `-s` was never
+# threaded in and the registry was therefore never consulted. It reads like a
+# broken dependency; it is a broken checkout.
+#
+# So: check the wiring in milliseconds and say exactly which command repairs it.
+# Positive markers only — a checkout is wired iff its Dockerfile actually threads
+# a settings file into maven AND that file exists on disk.
+assert_maven_wired() { # <ctx> <repo>
+  # NB: separate statements, not one `local a=.. b="${a}".. `. bash 5.3 localises
+  # every name in a `local` list BEFORE running any assignment, so a later item
+  # referencing an earlier one dies with "unbound variable" under `set -u`.
+  local ctx="$1" repo="$2" settings=""
+  local df="${ctx}/Dockerfile"
+  if grep -q 'hugmesh-local-settings.xml' "${df}"; then
+    settings="${ctx}/hugmesh-local-settings.xml"      # patcher-injected (gateway)
+  elif grep -qE -- '-s[[:space:]]+settings\.xml' "${df}"; then
+    settings="${ctx}/settings.xml"                    # committed (BFF siblings)
+  else
+    echo "${repo}: Dockerfile threads NO maven settings file, so the private" >&2
+    echo "  net.hugmesh:* artifacts can only be looked for on Maven Central and the" >&2
+    echo "  build will fail ~11 minutes from now with a misleading 'not in central'." >&2
+    echo "  The .stack-src patches were reverted by a git update. Repair with:" >&2
+    echo "      bash scripts/patch-stack-src.sh" >&2
+    exit 2
+  fi
+  [ -f "${settings}" ] || {
+    echo "${repo}: Dockerfile threads $(basename "${settings}") but that file is missing." >&2
+    echo "  Repair with: bash scripts/patch-stack-src.sh" >&2
+    exit 2
+  }
+  # Maven 3.9 ships a `maven-default-http-blocker` mirror that refuses EVERY
+  # plain-http repository. The local registry container is plain http by design,
+  # so a same-id override must be present or resolution dies even though the
+  # repo IS declared. Only assert this when the registry we are pointing at is
+  # actually http:// — an https registry (real GitLab CI) needs no override, and
+  # demanding one there would be a false alarm.
+  case "${CI_API_V4_URL:-}" in
+    http://*)
+      grep -q 'maven-default-http-blocker' "${settings}" || {
+        echo "${repo}: $(basename "${settings}") has no maven-default-http-blocker override," >&2
+        echo "  but CI_API_V4_URL=${CI_API_V4_URL} is plain http — maven 3.9 will refuse it." >&2
+        echo "  Repair with: bash scripts/patch-stack-src.sh" >&2
+        exit 2
+      } ;;
+  esac
+}
+
 # repo dir (under STACK_SRC) -> rendered image ref. Tags mirror the manifests:
 # kustomize rewrites first-party images to :main; the hugmesh-gateway chart
 # values pin :dev. java=1 marks the builds that need the m2 registry args.
@@ -142,6 +209,7 @@ for triple in "${IMAGES[@]}"; do
   [ -d "${ctx}" ] || { echo "source ${ctx} missing — run 'make stack-clone'" >&2; exit 1; }
   echo "==> Building ${ref} from ${ctx}"
   if [ "${kind_flag}" = "java" ]; then
+    assert_maven_wired "${ctx}" "${repo}"
     docker build "${BUILD_NET_ARGS[@]}" "${M2_ARGS[@]}" -t "${ref}" "${ctx}"
   else
     docker build "${BUILD_NET_ARGS[@]}" -t "${ref}" "${ctx}"
