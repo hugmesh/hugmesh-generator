@@ -116,7 +116,7 @@ def test_localmesh_choice_flows_into_the_wizard_page_not_a_popout(wiz):
     assert wiz.localmesh_selected is True
     lm = wiz.page(wiz._page_ids["localmesh"])
     assert lm.applies_to(wiz.cfg) is True        # the page is IN the flow
-    assert lm.nextId() == -1 and lm.isFinalPage()  # and terminal: Finish, no image
+    assert lm.nextId() == -1 and lm.isFinalPage()  # and terminal: Exit, no image
 
 
 def test_localmesh_never_touches_cfg_mode(wiz):

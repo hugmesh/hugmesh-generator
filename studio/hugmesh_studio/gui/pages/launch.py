@@ -23,8 +23,9 @@ actions the operator asked for, as big icon buttons in the choice-card idiom (as
   worklist commit is in-memory; ``build_sessions.new_session`` is only called on the
   progress page), so leaving here writes nothing and starts nothing.
 
-The wizard's own Next/Finish button still works — this page adds a deliberate,
-self-describing action pair, it does not take the standard navigation away.
+The wizard's own Next button still works — this page adds a deliberate,
+self-describing action pair, it does not take the standard navigation away. (There
+is no Finish button here: the page is not final, ProgressPage follows it.)
 
 Qt duality: the venv is PySide6, the operator runs PyQt6 where an exception escaping a
 slot calls qFatal and kills the Studio — both slots here are exception-guarded.

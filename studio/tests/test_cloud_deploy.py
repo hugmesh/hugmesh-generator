@@ -404,7 +404,7 @@ def test_deploy_page_apply_is_gated_on_the_ack_and_on_validate(qapp, tmp_path, m
     _drain_worker(qapp, dlg.page)
     argv = (out / "argv").read_text().splitlines()
     assert argv[0] == "apply" and "--provider" in argv and "generic-qcow2" in argv
-    assert dlg.page.isComplete() is True        # Finish re-armed after done
+    assert dlg.page.isComplete() is True        # Exit re-armed after done
     assert "stub ran verb=apply" in dlg.log.toPlainText()
 
 

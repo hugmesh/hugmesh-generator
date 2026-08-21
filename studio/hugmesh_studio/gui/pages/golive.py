@@ -30,6 +30,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from .. import choice_nav
 from ._scroll import scrollable
 from ..wizard import _file_picker, _row
+from ._widgets import label_finish_as_exit
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 from ...core.progress_parse import ProgressParser, track_phases
 
@@ -541,6 +542,11 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Go live — flip the release posture")
         self.setSubTitle("The ONLY step that changes the device. Human confirm, twice — by design.")
+        # LAST page of the go-live wizard, and its final button does nothing but close
+        # the window: the flip is the in-page "GO LIVE" button below (it opens the
+        # driver's own TTY confirmation), never the wizard button. So the wizard button
+        # says Exit (_widgets.label_finish_as_exit).
+        label_finish_as_exit(self)
         lay = QtWidgets.QVBoxLayout(self)
         self.warning = QtWidgets.QLabel("")
         self.warning.setWordWrap(True)

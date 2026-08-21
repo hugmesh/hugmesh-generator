@@ -47,10 +47,12 @@ image and runs a node locally.
 | **Standalone Gentoo desktop** | `standalone` | A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo desktop with zero HugMesh branding. No mesh, no SSO. |
 
 **The Local Docker mesh choice is a first-class, functional choice** — not a stub. It
-builds no image, so it deliberately disables Next/Finish (`isComplete()` returns
-`False`) and reveals an inline **"Configure & run local mesh…"** launcher instead. The
-launcher opens [`gui/pages/localmesh.py`](../studio/hugmesh_studio/gui/pages/localmesh.py)
-`LocalMeshDialog`, which drives
+builds no image, so Next flows into the registered terminal
+[`gui/pages/localmesh.py`](../studio/hugmesh_studio/gui/pages/localmesh.py)
+`LocalMeshPage` (the old inline **"Configure & run local mesh…"** popout launcher is
+gone; `LocalMeshDialog` survives only as a standalone-host shim around the same page).
+Because that page ends the branch and its final button starts nothing, the button reads
+**Exit**, not Finish — see `_widgets.label_finish_as_exit`. The page drives
 [`core/local_mesh.py`](../studio/hugmesh_studio/core/local_mesh.py)
 `LocalMeshNode` — a thin subclass of the tray's
 [`core/mesh_node.py`](../studio/hugmesh_studio/core/mesh_node.py) `MeshNode`, so the
@@ -92,7 +94,8 @@ collected into `cfg`.
 - **Local Docker mesh** (side-flow) — terminal wizard page, no image build:
   `welcome → mode → localmesh` (the `LocalMeshPage` runs the dockerized node in-place;
   `LocalMeshDialog` only survives as a standalone-host shim around the same page, not
-  the flow's launcher — Finish ends the branch here, `isFinalPage()`)
+  the flow's launcher — **Exit** ends the branch here, `isFinalPage()`; the mesh keeps
+  running in Docker after the Studio closes)
 - **Mesh desktop client** (`cloud`) — skips worklist/idp:
   `welcome → mode → role → hardware → branding → network → keyzip → domains → users → system → home → build`
 - **Standalone Gentoo desktop** (`standalone`) — skips idp/worklist/keyzip/domains/users:

@@ -2,11 +2,14 @@
 
 The page keeps every build knob (backend / env / output / artifact matrix / Secure Boot /
 plumbing / the command + preflight panes) but no longer runs the build itself: the in-form
-"Build now" button is gone. Instead the wizard's Finish becomes a Build action — leaving this
-(commit) page commits a WorklistConfig and lands on the terminal ProgressPage, which drives
-the WorklistDriver. Standalone/cloud commit a 1-entry worklist synthesized from the config so
-the driver / progress / manifest code path has exactly one shape; mesh commits the
-WorklistPage's selection.
+"Build now" button is gone, and this page shows NO Finish button at all — it is a Qt COMMIT
+page (setCommitPage(True)), so Qt replaces Next with the Commit button. Leaving the page
+commits a WorklistConfig and advances to the separate LaunchPage (ask 22), whose "Continue
+the build" is what reaches the terminal ProgressPage and the WorklistDriver. Nothing is
+dispatched here, which is why the Commit button reads "Continue" and not "Build".
+Standalone/cloud commit a 1-entry worklist synthesized from the config so the driver /
+progress / manifest code path has exactly one shape; mesh commits the WorklistPage's
+selection.
 
 The retired free-text extra-packages field is replaced by a "Packages…" button opening the
 per-image :class:`~.packages_dialog.PackagesDialog` (mesh gets one per worklist row, in a
@@ -1251,12 +1254,20 @@ class BuildPage(QtWidgets.QWizardPage):
         self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
-        """Disable + spinner-text the wizard's Commit/Build button while a docker probe
-        is in flight (isComplete() reads _recompute_busy)."""
+        """Disable + spinner-text the wizard's Commit button while a docker probe is in
+        flight (isComplete() reads _recompute_busy), then put it back to "Continue".
+
+        RESTORING "Continue" IS THE POINT. Ask 22 moved the dispatch off this page and
+        renamed the button in __init__ accordingly — "it no longer promises 'Build' in
+        its title or on its button, because leaving it no longer starts anything" — but
+        this method was missed and still restored the pre-ask-22 "Build". Since a
+        preflight runs on every page visit, the __init__ label never survived to be
+        seen: the live button read "Build" on a page that builds nothing, one screen
+        above the subtitle telling the operator the NEXT screen is where it starts."""
         self._recompute_busy = busy
         try:
             self.wiz.setButtonText(QtWidgets.QWizard.WizardButton.CommitButton,
-                                   "Checking Docker…" if busy else "Build")
+                                   "Checking Docker…" if busy else "Continue")
         except Exception:
             pass
         self.completeChanged.emit()
@@ -1421,9 +1432,10 @@ class BuildPage(QtWidgets.QWizardPage):
 
     # ---- commit -----------------------------------------------------------------
     def isComplete(self) -> bool:
-        """Build/Finish is enabled only when the aggregate preflight is clean (design 3.12)
-        AND no docker probe is in flight (the freeze-fix busy state — the button reads
-        'Checking Docker…' and is disabled until the off-thread recompute returns)."""
+        """The Commit ("Continue") button is enabled only when the aggregate preflight
+        is clean (design 3.12) AND no docker probe is in flight (the freeze-fix busy
+        state — the button reads 'Checking Docker…' and is disabled until the
+        off-thread recompute returns)."""
         return not self._problems and not self._recompute_busy
 
     def validatePage(self) -> bool:
