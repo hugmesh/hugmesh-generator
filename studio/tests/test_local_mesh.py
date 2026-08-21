@@ -199,18 +199,19 @@ def test_bootstrap_plan_preview_populates_and_hides_prod_group(qapp):
     assert "https://id." in dlg.plan_view.toPlainText()
 
 
-def test_bootstrap_start_is_gated_behind_acknowledgement(qapp, monkeypatch):
-    up_ran = {"called": False}
-    monkeypatch.setattr(LocalMeshBootstrap, "up",
-                        lambda self: up_ran.__setitem__("called", True) or (True, ["ok"]),
-                        raising=True)
+def test_bootstrap_start_is_armed_with_no_acknowledgement(qapp):
+    """Was: "gated behind acknowledgement". The "I understand this will MINT
+    credentials …" tick-box is GONE (operator report) — it gated a LOCAL, REVERSIBLE
+    action and its text merely restated the button's label. Nothing still runs on
+    mere selection: the plan preview is read-only and the button is what runs it.
+
+    Asserted as `not hasattr` on purpose: a hidden-but-live checkbox left behind
+    would leave this button permanently dead, which is the worse bug."""
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    # nothing runs on mere selection: the button is disabled until acknowledged
-    assert dlg.boot_start_btn.isEnabled() is False
-    dlg._bootstrap_up()                       # clicking anyway is a no-op
-    assert up_ran["called"] is False
-    dlg.ack.setChecked(True)
+    assert not hasattr(dlg.page, "ack")
     assert dlg.boot_start_btn.isEnabled() is True
+    assert "acknowledge" not in dlg.boot_start_btn.toolTip().lower()
+    _join_page_threads(dlg)
 
 
 def test_bootstrap_up_collects_config_and_runs(qapp, monkeypatch):
@@ -230,11 +231,11 @@ def test_bootstrap_up_collects_config_and_runs(qapp, monkeypatch):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.superadmin.setText("root-boss")
     dlg.social.setChecked(True)
-    dlg.ack.setChecked(True)
     dlg._bootstrap_up()
     _drain_worker(qapp, dlg.page)
     assert seen == {"env": "test", "superadmin": "root-boss", "social": True}
     assert "[done] platform up" in dlg.log.toPlainText()
+    _join_page_threads(dlg)
 
 
 def test_bootstrap_web_locales_widget_defaults_to_english_only(qapp):
@@ -268,10 +269,10 @@ def test_bootstrap_up_carries_web_locales(qapp, monkeypatch):
     monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.web_locales.setText("en-XA")
-    dlg.ack.setChecked(True)
     dlg._bootstrap_up()
     _drain_worker(qapp, dlg.page)
     assert seen == {"web_locales": ("en-XA",)}
+    _join_page_threads(dlg)
 
 
 def test_bootstrap_up_blocked_by_validation(qapp, monkeypatch):
@@ -283,10 +284,10 @@ def test_bootstrap_up_blocked_by_validation(qapp, monkeypatch):
         raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.env_prod.setChecked(True)     # prod without domain/key -> validate() blocks
-    dlg.ack.setChecked(True)
     dlg._bootstrap_up()
     assert up_ran["called"] is False
     assert "cannot start" in dlg.status.text().lower()
+    _join_page_threads(dlg)
 
 
 def _join_page_threads(dlg):
@@ -453,10 +454,10 @@ def test_bootstrap_up_carries_the_services_selection(qapp, monkeypatch):
     monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.service_boxes["character-forge"].setChecked(True)
-    dlg.ack.setChecked(True)
     dlg._bootstrap_up()
     _drain_worker(qapp, dlg.page)
     assert seen["services"] == ("character-forge",)
+    _join_page_threads(dlg)
 
 
 # ---- the pure-core runner (no Qt, no docker needed) ----

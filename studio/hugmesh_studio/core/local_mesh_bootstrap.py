@@ -659,8 +659,8 @@ class LocalMeshBootstrap:
     # ---- confirm-before-run manifest (PURE, no side effects) --------------------
     def plan(self) -> str:
         """A human-readable manifest of EXACTLY what an ``up`` will generate + start —
-        side-effect-free. The GUI shows it in a read-only preview the operator must
-        acknowledge; the CLI prints it. Renders: (a) which scripts run + the out dir,
+        side-effect-free. The GUI shows it in a read-only preview above the start
+        button; the CLI prints it. Renders: (a) which scripts run + the out dir,
         (b) which compose projects come up, (c) ENV/issuer/domain, (d) the superadmin
         USERNAME + WHERE its freshly-minted password will be written (NEVER the value)."""
         c = self.cfg

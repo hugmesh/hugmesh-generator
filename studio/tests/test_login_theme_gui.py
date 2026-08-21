@@ -229,7 +229,6 @@ def test_collect_bootstrap_carries_the_derived_theme_css(qapp):
 
 def test_bootstrap_up_refuses_on_a_typoed_colour_instead_of_silently_unthemed(qapp):
     page = _mesh_page(qapp)
-    page.ack.setChecked(True)
     page.login_theme.primary.setText("#33669")     # one digit short
     page._bootstrap_up()
     assert "themes" in page.status.text()          # the renamed surface (#50 item 2)

@@ -315,21 +315,59 @@ def test_the_gui_exposes_stop_and_clean_as_separate_verbs():
     assert "cancelled — nothing was removed" in handler, "declining must be a no-op"
 
 
-def test_disabled_start_says_why(qapp_localmesh_page):
-    """"Generate & start" is disabled until the acknowledgement is ticked. A disabled
-    button that explains nothing reads as a broken app — and the "Acknowledge the plan
-    first." status line is unreachable precisely BECAUSE the button is disabled."""
+def test_start_is_armed_with_no_acknowledgement_to_tick(qapp_localmesh_page):
+    """"Generate & start" is armed as soon as the page paints. The "I understand this
+    will MINT credentials …" tick-box that used to gate it is GONE (operator report):
+    it guarded nothing destructive and nothing remote, and its text only repeated the
+    button's own label. Was: "disabled until the acknowledgement is ticked".
+
+    The regression this guards is the one that removal invites — a hidden checkbox
+    left behind still gating the click, i.e. a permanently dead button."""
     page = qapp_localmesh_page
-    page.ack.setChecked(False)
+    assert not hasattr(page, "ack"), \
+        "the acknowledgement widget is back — it must not gate this button"
+    assert page.boot_start_btn.isEnabled(), \
+        "the from-scratch start must be clickable with no precondition to satisfy"
+    tip = page.boot_start_btn.toolTip()
+    assert "acknowledge" not in tip.lower(), f"stale acknowledgement reason: {tip!r}"
+    assert "mint" in tip.lower(), f"the button must still say what it does: {tip!r}"
+    # and the status line no longer nags about a box that does not exist
+    assert "acknowledge" not in page.status.text().lower()
+
+
+def test_start_disabled_while_a_verb_runs_still_says_why(qapp_localmesh_page):
+    """The ONE remaining precondition — no other verb in flight — must still explain
+    itself. A disabled button that explains nothing reads as a broken app; that rule
+    outlived the acknowledgement it was written for."""
+    page = qapp_localmesh_page
+    page._running = True
+    page._sync_boot_gate()
     assert not page.boot_start_btn.isEnabled()
     tip = page.boot_start_btn.toolTip()
-    assert "acknowledgement" in tip.lower(), f"no reason given: {tip!r}"
-    assert "tick the acknowledgement" in page.status.text().lower()
+    assert "running" in tip.lower(), f"no reason given: {tip!r}"
 
-    page.ack.setChecked(True)
+    page._running = False
+    page._sync_boot_gate()
     assert page.boot_start_btn.isEnabled()
-    assert "acknowledgement" not in page.boot_start_btn.toolTip().lower(), \
+    assert "disabled" not in page.boot_start_btn.toolTip().lower(), \
         "the stale 'why disabled' reason survived into the enabled state"
+
+
+def test_bootstrap_up_is_not_gated_by_any_leftover_checkbox(qapp_localmesh_page,
+                                                            monkeypatch):
+    """Clicking start on a fresh page must reach the runner. Removing the widget but
+    leaving its `if not self.ack.isChecked(): return` behind would make the handler a
+    silent no-op — worse than the friction that was removed."""
+    page = qapp_localmesh_page
+    ran = {"called": False}
+    monkeypatch.setattr(LocalMeshBootstrap, "up",
+                        lambda self, on_line=None, cancel=None:
+                        ran.__setitem__("called", True) or (True, ["ok"]),
+                        raising=True)
+    monkeypatch.setattr(page, "_launch",
+                        lambda label, fn, **kw: fn(lambda line: None, None))
+    page._bootstrap_up()
+    assert ran["called"] is True, "the start handler refused with nothing to refuse on"
 
 
 def test_discover_brands_leads_with_default_and_excludes_non_brand_conf():
@@ -342,11 +380,22 @@ def test_discover_brands_leads_with_default_and_excludes_non_brand_conf():
 # ── page fixture (offscreen; no wizard needed for the collect test) ────────────────
 @pytest.fixture
 def qapp_localmesh_page():
+    """YIELD, not return, and the QApplication is held for the test's whole life.
+
+    `_ = QApplication.instance() or QApplication([...])` inside a *return* fixture
+    drops its only reference the moment the fixture body ends. When this file runs
+    on its own (nothing else created a lasting app) the QApplication is collected
+    with the page still parented to it, and every widget access in the test raises
+    "wrapped C/C++ object of type ChoiceCard has been deleted" — a failure that has
+    nothing to do with what the test asserts. Every other GUI test file in this
+    suite already uses the yield form."""
     pytest.importorskip("hugmesh_studio.gui.qt",
                         reason="no Qt binding (PySide6/PyQt6) installed")
     from hugmesh_studio.gui.qt import QtWidgets
     from hugmesh_studio.gui.pages.localmesh import LocalMeshPage
     import types
-    _ = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
     shim = types.SimpleNamespace(generator_dir=GENERATOR_DIR, localmesh_selected=True)
-    return LocalMeshPage(shim)
+    page = LocalMeshPage(shim)
+    yield page
+    del page, app
