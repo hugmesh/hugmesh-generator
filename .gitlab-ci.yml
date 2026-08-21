@@ -221,6 +221,24 @@ lint:no-duplicate-env:
   script:
     - bash tests/scripts/test-no-duplicate-env.sh
 
+# The first-boot nullmailer ownership re-fix (#60 item 7). nullmailer's
+# pkg_postinst chowns BY NAME with `|| die`; under the cross builders'
+# ROOT=<sysroot> merges the ebuild's own BDEPEND never merges to /, so the chown
+# runs against the HOST passwd and dies. The re-fix lives in the SHARED first-boot
+# finaliser, which means a regression there hits every arch at once — and the
+# original defect was that the re-fix ANNOUNCED SUCCESS UNCONDITIONALLY, so a
+# broken one is indistinguishable from a working one by reading the boot log.
+# Static: the suite reads specs/etc/local.d/01-firstboot.start.tmpl and needs only
+# awk/grep/sed, no root and no image build.
+lint:nullmailer-cross-postinst:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash
+  script:
+    - bash tests/scripts/test-nullmailer-cross-postinst.sh
+
 # GitHub credential preflight for first-party clones. Deliberately NO `rules:` —
 # it must run on every pipeline. This gate exists because the two properties it
 # checks fail SILENTLY: a leaked token looks like a working build, and a missing
