@@ -32,6 +32,44 @@ done
 # file `make stack-build` threads into docker compose). BuildKit is required
 # for their optional RUN --mount=type=secret.
 export DOCKER_BUILDKIT=1
+
+# BUILD_NETWORK=host — build with the HOST network stack instead of docker's bridge.
+#
+# WHY: docker's default bridge is MTU 1500. If the host's default route is a tunnel
+# with a smaller MTU — WireGuard is 1420, tailscale 1280 — every build pushes
+# 1500-byte frames into it and the oversized ones are black-holed. DNS and small
+# GETs still succeed, so the network looks healthy; only large TLS payloads hang,
+# and `npm install` dies after ~80s with
+#     npm error code ETIMEDOUT
+#     npm error network request to https://registry.npmjs.org/... failed
+#
+# Measured on this host 2026-08-21 (default route wg-IS-US-1, mtu 1420, vs docker0
+# mtu 1500):  default bridge 79.5s and FAILING  |  host network 0.42s.
+#
+# TWO TRAPS worth recording, because both look like the answer and are not:
+#  * The DNS answer for registry.npmjs.org is AAAA-only and containers cannot route
+#    v6, which makes IPv6 look like the culprit. It is not — forcing
+#    NODE_OPTIONS=--dns-result-order=ipv4first still took 79.5s. It is framing, not
+#    resolution.
+#  * A custom `docker network create --opt com.docker.network.driver.mtu=1420` DOES
+#    fix it for `docker run`, but BUILDKIT REJECTS a custom network name:
+#      network mode "<name>" not supported by buildkit
+#    Only host/none/default are accepted, so `host` is the usable knob here.
+#
+# Unset, nothing changes and the bridge is used exactly as before.
+BUILD_NET_ARGS=()
+if [ -n "${BUILD_NETWORK:-}" ]; then
+  case "${BUILD_NETWORK}" in
+    host|none|default) ;;
+    *)
+      echo "BUILD_NETWORK='${BUILD_NETWORK}': buildkit accepts only host, none or default." >&2
+      echo "  A custom docker network fixes the MTU for 'docker run' but NOT for builds." >&2
+      echo "  Use BUILD_NETWORK=host (see the comment above this check)." >&2
+      exit 2 ;;
+  esac
+  BUILD_NET_ARGS=(--network "${BUILD_NETWORK}")
+  echo "==> BUILD_NETWORK=${BUILD_NETWORK} (bypasses the docker bridge MTU)"
+fi
 M2_ENV="${REPO_ROOT}/tests/stack/.m2-registry.env"
 M2_ARGS=()
 if [ -f "${M2_ENV}" ]; then
@@ -104,9 +142,9 @@ for triple in "${IMAGES[@]}"; do
   [ -d "${ctx}" ] || { echo "source ${ctx} missing — run 'make stack-clone'" >&2; exit 1; }
   echo "==> Building ${ref} from ${ctx}"
   if [ "${kind_flag}" = "java" ]; then
-    docker build "${M2_ARGS[@]}" -t "${ref}" "${ctx}"
+    docker build "${BUILD_NET_ARGS[@]}" "${M2_ARGS[@]}" -t "${ref}" "${ctx}"
   else
-    docker build -t "${ref}" "${ctx}"
+    docker build "${BUILD_NET_ARGS[@]}" -t "${ref}" "${ctx}"
   fi
 done
 
