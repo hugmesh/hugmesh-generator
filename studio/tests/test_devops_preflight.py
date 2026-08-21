@@ -31,10 +31,18 @@ def _worktree(tmp_path):
     return str(tmp_path)
 
 
-def _probes(monkeypatch, *, kind_installed=True, clusters="", mount_ok=True):
+def _probes(monkeypatch, *, kind_installed=True, clusters="", mount_ok=True,
+            declared_bind=None):
     """Wire which()/probe() to a modelled host: `clusters` is what
-    `kind get clusters` prints; `mount_ok` is whether the node carries the
-    read-only repo mount."""
+    `kind get clusters` prints; `mount_ok` is whether the node can SEE the repo
+    at the read-only mount; `declared_bind` is the host path the node's mount
+    table DECLARES for it (None = the node declares no such bind).
+
+    Those last two are deliberately independent, because on a real host they
+    are: docker resolves a bind's source when the container starts, so a node
+    can declare exactly the right Source and still be serving whatever that path
+    resolved to at start time. Modelling them as one flag is what let the
+    preflight answer "delete your cluster" to a stale mount."""
     monkeypatch.setattr(devops_tools, "which",
                         lambda tool, gd: "/fake/bin/kind" if kind_installed else None,
                         raising=True)
@@ -45,6 +53,9 @@ def _probes(monkeypatch, *, kind_installed=True, clusters="", mount_ok=True):
         if cmd[0] == "docker" and cmd[1] == "exec":
             assert cmd[-1] == f"{KIND_REPO_MOUNT}/.git"
             return (0, "") if mount_ok else (1, "")
+        if cmd[0] == "docker" and cmd[1] == "inspect":
+            assert KIND_REPO_MOUNT in cmd[-1], "the format must select THIS mount"
+            return (0, declared_bind or "")
         raise AssertionError(f"unexpected probe: {cmd}")
     monkeypatch.setattr(LocalStackNode, "_probe", probe, raising=True)
 
@@ -87,11 +98,13 @@ def test_worktree_checkout_names_both_remedies(monkeypatch, tmp_path):
 
 def test_mountless_cluster_names_both_remedies(monkeypatch, tmp_path):
     # THE #48 SHAPE: an existing cluster from before the local-sync path, no
-    # token. The remedy must name the recreate (mounts are create-time-only)
-    # AND the token override — before the 8-minute wait, not after.
+    # token, and NO bind declared at all. The remedy must name the recreate
+    # (a bind can only be ADDED at create time) AND the token override —
+    # before the 8-minute wait, not after.
     monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
     monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
-    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=None)
     node = LocalStackNode(_clone(tmp_path))
     problems = node.devops_repo_access()
     assert len(problems) == 1
@@ -103,10 +116,105 @@ def test_mountless_cluster_names_both_remedies(monkeypatch, tmp_path):
 def test_cluster_name_override_is_respected(monkeypatch, tmp_path):
     monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
     monkeypatch.setenv("KIND_CLUSTER_NAME", "other-cluster")
-    _probes(monkeypatch, clusters="other-cluster", mount_ok=False)
+    _probes(monkeypatch, clusters="other-cluster", mount_ok=False,
+            declared_bind=None)
     node = LocalStackNode(_clone(tmp_path))
     problems = node.devops_repo_access()
     assert problems and "kind delete cluster --name other-cluster" in problems[0]
+
+
+# ── the STALE bind: declared right, serving nothing (live 2026-08-21) ────────
+# /home is eCryptfs; the kind node restarted while it was not yet mounted, so
+# docker re-resolved the bind against the empty directory the eCryptfs mount
+# shadows. `docker inspect` still showed the correct Source, the node saw 1
+# entry instead of 44, and the in-cluster git daemon answered every ArgoCD
+# fetch with "no such repository". The old preflight called that a mountless
+# cluster and told the operator to delete it — a 40-minute rebuild for a
+# condition a 20-second `docker restart` clears.
+
+def test_stale_bind_offers_the_restart_not_a_teardown(monkeypatch, tmp_path):
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=gd)
+    problems = LocalStackNode(gd).devops_repo_access()
+    assert len(problems) == 1
+    assert "docker restart hugmesh-local-control-plane" in problems[0]
+    # the destructive remedy must NOT be offered for a condition a restart fixes
+    assert "kind delete cluster" not in problems[0]
+    assert "ARGOCD_REPO_TOKEN" in problems[0]
+
+
+def test_stale_bind_is_matched_through_a_non_normalised_path(monkeypatch, tmp_path):
+    # `docker inspect` reports the path docker recorded, which need not be the
+    # spelling the Studio was launched with. Comparing the raw strings would
+    # misfile a stale bind as "a different checkout" and send the operator to
+    # the teardown after all.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=gd + "/./")
+    problems = LocalStackNode(gd).devops_repo_access()
+    assert problems and "docker restart" in problems[0]
+
+
+def test_a_foreign_checkout_bind_names_the_other_path(monkeypatch, tmp_path):
+    # Several sessions share checkouts on this machine. A cluster created against
+    # a DIFFERENT tree would sync that tree; a restart cannot change which path a
+    # container binds, so this one really is a recreate — and the message has to
+    # name the other path or the operator recreates into the same mismatch.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind="/home/someone/other-generator")
+    problems = LocalStackNode(gd).devops_repo_access()
+    assert len(problems) == 1
+    assert "/home/someone/other-generator" in problems[0]
+    assert gd in problems[0]
+    assert "kind delete cluster --name hugmesh-local" in problems[0]
+    assert "docker restart" not in problems[0]
+
+
+def test_a_serving_mount_never_asks_docker_inspect(monkeypatch, tmp_path):
+    # The inspect is a DIAGNOSIS step, not part of the happy path: a node that
+    # can see .git is ready, and spending a docker inspect to confirm it would
+    # be pure cost on every single lane start.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=True)
+    node = LocalStackNode(_clone(tmp_path))
+    monkeypatch.setattr(LocalStackNode, "_kind_repo_bind_source",
+                        lambda self, n: (_ for _ in ()).throw(
+                            AssertionError("inspect must not run when the mount serves")),
+                        raising=True)
+    assert node.devops_repo_access() == []
+
+
+def test_uninspectable_node_falls_back_to_the_recreate(monkeypatch, tmp_path):
+    # `docker inspect` failing (daemon gone, node removed under us) must not be
+    # read as "the bind is declared" — an unestablished answer stays the
+    # conservative one, the same tri-state rule devops_running() follows.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    monkeypatch.setattr(devops_tools, "which", lambda tool, gd: "/fake/bin/kind",
+                        raising=True)
+
+    def probe(self, cmd, timeout=15):
+        if cmd[0].endswith("kind"):
+            return (0, "hugmesh-local")
+        if cmd[1] == "exec":
+            return (1, "")
+        return (1, "Error: No such object: hugmesh-local-control-plane")
+    monkeypatch.setattr(LocalStackNode, "_probe", probe, raising=True)
+    problems = LocalStackNode(_clone(tmp_path)).devops_repo_access()
+    assert len(problems) == 1
+    assert "lacks the read-only repo mount" in problems[0]
+    assert "kind delete cluster --name hugmesh-local" in problems[0]
+    # and the inspect's STDERR must never be paraded as the bind's host path
+    assert "No such object" not in problems[0]
 
 
 def test_missing_kind_tool_defers_to_devops_available(monkeypatch, tmp_path):
@@ -123,7 +231,8 @@ def test_missing_kind_tool_defers_to_devops_available(monkeypatch, tmp_path):
 def test_devops_up_blocks_and_logs_before_make(monkeypatch, tmp_path):
     monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
     monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
-    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=None)
     node = LocalStackNode(_clone(tmp_path))
     monkeypatch.setattr(LocalStackNode, "devops_available",
                         lambda self: [], raising=True)
