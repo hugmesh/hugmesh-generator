@@ -24,6 +24,7 @@ Everything here drives the REAL wizard offscreen. Nothing constructs a page dire
 asks 3, 11 and 18 are all about what the FLOW makes reachable, and a directly-built page
 has no flow to be wrong about.
 """
+import inspect
 import os
 import re
 
@@ -41,6 +42,7 @@ from hugmesh_studio.core.config import (                          # noqa: E402
     INFRA_SERVICES_CHOICES,
     ImageAxes,
     ImageConfig,
+    OPTIONAL_SERVICES_BY_PLATFORM,
     OPTIONAL_SERVICES_CHOICES,
     PLATFORM_FIELD_SUPPORT,
     SERVICE_DESCRIPTIONS,
@@ -392,20 +394,100 @@ def test_service_descriptions_and_groups_cover_the_whole_catalog():
     missing from either lands on screen as a bare identifier again (ask 5's complaint) or
     silently never lands at all. Both directions pinned.
 
-    `edge-ai-tts` is deliberately in the groups but NOT in the slug catalog: it is a
-    dedicated-flag-only service (--with-edge-ai-tts), which is exactly the kind of row the
-    unified table exists to carry."""
+    Two rows sit in the groups but NOT in the node-image slug catalog, for DIFFERENT
+    reasons, and each reason is pinned rather than lumped into one exception list:
+      * `edge-ai-tts`    — reachable through a DEDICATED flag (--with-edge-ai-tts),
+                           which is exactly the kind of row the unified table carries;
+      * `media-poisoner` — reachable through NEITHER. No node build can bake it; it is
+                           in the SHARED table because the local-mesh surface renders
+                           these same groups (core.local_services.local_groups) and runs
+                           it as a compose profile. On the node wizard the row is HIDDEN
+                           (_service_channel -> "" -> item.setHidden(True)), which is
+                           what keeps a row nothing here can build off this screen.
+    This assertion stood at `{"edge-ai-tts"}` and went RED the day media-poisoner joined
+    the shared groups, so it is written to say what makes each exception legitimate — an
+    exception list nobody can check is how the next one gets added without noticing."""
     catalog = set(OPTIONAL_SERVICES_CHOICES) | set(INFRA_SERVICES_CHOICES)
     grouped = [s for _t, slugs in SERVICE_GROUPS for s in slugs]
     assert len(grouped) == len(set(grouped)), "a slug is listed in two groups"
     assert catalog <= set(grouped), f"never rendered: {catalog - set(grouped)}"
     flag_only = set(grouped) - catalog
-    assert flag_only == {"edge-ai-tts"}, (
-        f"unexpected non-catalog rows {flag_only} — each needs a dedicated flag")
+    assert flag_only == {"edge-ai-tts", "media-poisoner"}, (
+        f"unexpected non-catalog rows {flag_only} — each needs either a dedicated flag "
+        "or a demonstrated reason it is hidden on every node platform")
+    assert "edge-ai-tts" in _FLAG_SERVICE_FIELDS
+    assert "media-poisoner" not in _FLAG_SERVICE_FIELDS
+    # ...and "hidden on every node platform" is DEMONSTRATED, not asserted in prose.
+    # `()` is the catalog initializePage passes for a platform that parses no
+    # --optional-services at all, so these three cover every value it can take.
+    for _plat, _cat in (("x86", OPTIONAL_SERVICES_BY_PLATFORM["x86"]),
+                        ("rpi5", OPTIONAL_SERVICES_BY_PLATFORM["rpi5"]),
+                        ("jetson", ())):
+        assert network_mod._service_channel("media-poisoner", _plat, _cat) == "", _plat
     assert set(grouped) <= set(SERVICE_DESCRIPTIONS), (
         f"no description: {set(grouped) - set(SERVICE_DESCRIPTIONS)}")
     assert set(SERVICE_DESCRIPTIONS) <= set(grouped), (
         f"orphaned description: {set(SERVICE_DESCRIPTIONS) - set(grouped)}")
+
+
+def test_the_privacy_group_carries_every_privacy_service():
+    """OPERATOR, 2026-08-21: "anubis belongs in the privacy and scraping section as does
+    tor".
+
+    Both are network-level, which is how they came to sit under "Network & access" — but
+    this table groups by WHAT A SERVICE IS FOR, and what these two are for is privacy:
+    `tor` is a privacy TRANSPORT (SERVICE_DESCRIPTIONS: reachable "without exposing a
+    public IP"), `anubis` is the "Anti-scraper proof-of-work gate" the group title's
+    second half names outright. Pinned because a grouping nobody asserts is a grouping
+    that drifts back on the next edit — the axis is the whole point of the constant.
+    """
+    groups = dict(SERVICE_GROUPS)
+    assert set(groups["Privacy & anti-scraping"]) == {"tor", "anubis", "media-poisoner"}
+    # The descriptions have to keep BACKING the grouping. If either line stops being
+    # about privacy, this group is the wrong home and the test should say so here
+    # rather than let a row drift away from its own caption.
+    assert "without exposing a public IP" in SERVICE_DESCRIPTIONS["tor"]
+    assert "Anti-scraper" in SERVICE_DESCRIPTIONS["anubis"]
+    # The group they LEFT keeps the plain plumbing, and keeps ROWS: initializePage hides
+    # a group header whose every row is unreachable, so emptying this tuple would delete
+    # "Network & access" from the surface rather than shrink it.
+    assert groups["Network & access"] == ("egress-vpn", "workloadConsole")
+
+
+def test_regrouping_a_row_cannot_change_what_it_emits(wiz):
+    """SERVICE_GROUPS is PRESENTATION ONLY — proved, not asserted in prose, because the
+    tor/anubis move rests entirely on it.
+
+    _service_channel is the one place the surface picks between the dedicated flag, the
+    catalogue slug and "not offered here". Its parameters are pinned: the day a group
+    becomes an input to that decision, moving a row stops being a cosmetic change and
+    this fails instead of the operator finding out from a build."""
+    assert list(inspect.signature(network_mod._service_channel).parameters) == \
+        ["slug", "platform", "catalog"], (
+            "_service_channel grew a parameter — if it is a group, regrouping is no "
+            "longer presentation-only and SERVICE_GROUPS needs a real coupling review")
+    x86_cat = OPTIONAL_SERVICES_BY_PLATFORM["x86"]
+    rpi5_cat = OPTIONAL_SERVICES_BY_PLATFORM["rpi5"]
+    # tor is the row that moved AND the one row whose channel genuinely differs per
+    # builder, so a group-sensitive break would surface here first.
+    assert network_mod._service_channel("tor", "x86", x86_cat) == "flag"
+    assert network_mod._service_channel("tor", "rpi5", rpi5_cat) == "slug"
+    # anubis has no dedicated flag on either builder: rpi5 reaches it as a catalogue
+    # slug, x86 not at all (INFRA_SERVICES_CHOICES is folded into rpi5's catalog only).
+    assert network_mod._service_channel("anubis", "rpi5", rpi5_cat) == "slug"
+    assert network_mod._service_channel("anubis", "x86", x86_cat) == ""
+    # ...and end to end: the moved row still drives its x86 dedicated flag onto the argv.
+    mesh(wiz)
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.tor_onion is net.service_boxes["tor"]
+    assert not net._svc_items["tor"].isHidden(), (
+        "tor stopped being offered on an x86 mesh node — the move was supposed to "
+        "change which header it sits under, nothing else")
+    net.tor_onion.setChecked(True)
+    advance_to(wiz, wizard_mod.KeyZipPage)          # Next past Network collects
+    assert wiz.cfg.tor_onion_service not in (False, "off", "")
+    args = wiz.cfg.to_cli_args()
+    assert "--with-tor" in args and "--no-tor" not in args
 
 
 def test_builtin_default_services_match_both_builders():
