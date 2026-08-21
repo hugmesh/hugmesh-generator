@@ -160,9 +160,6 @@ def test_entering_the_page_returns_immediately(qapp, page):
 def test_unknown_is_rendered_as_unknown_not_as_no(qapp, page):
     """Tri-state. While the probes are out the page must say it is CHECKING — rendering
     'stopped' / listing blockers would state something nothing has established."""
-    # the shared status line is also the boot gate's "tick the acknowledgement" hint, so
-    # tick it: this test is about the probe's rendering, not about that hint.
-    page.ack.setChecked(True)
     page.initializePage()
 
     assert "checking" in page.status.text().lower()

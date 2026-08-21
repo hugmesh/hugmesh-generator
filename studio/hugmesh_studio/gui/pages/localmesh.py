@@ -19,7 +19,8 @@ TWO mutually-exclusive paths, surfaced as tabs (unchanged from the dialog):
     knobs into a LocalMeshConfig and drive LocalMeshNode start/stop/logs.
   - GENERATE & START a NEW local mesh FROM SCRATCH — mint ALL credentials + bring
     up the full platform stack seeded with a fresh superadmin, via LocalMeshBootstrap.
-    Nothing runs until the operator acknowledges the read-only plan preview.
+    Nothing runs on mere selection: the read-only plan preview says what an ``up``
+    will do, and the button is what runs it.
 
 NEW on the bootstrap tab (the operator's other two asks):
   - BRAND — the GUI was strictly less capable than its own CLI: collect_bootstrap()
@@ -414,9 +415,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # as `docker compose ps` takes).
         self._mesh_up: bool | None = None
 
-        # Run the gate ONCE now that every widget it touches exists: the operator
-        # should see WHY 'Generate & start' is disabled before clicking it, not
-        # only after toggling the checkbox.
+        # Run the gate ONCE now that every widget it touches exists, so
+        # 'Generate & start' is armed (and carries its tooltip) from first paint.
         self._sync_boot_gate()
 
     # ── wizard-flow contract ─────────────────────────────────────────────────────
@@ -506,8 +506,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "Generate ALL credentials from scratch and start a NEW superadmin-"
             "controlled mesh on THIS machine: mint the Casdoor/DB/observability "
             "secrets + a fresh superadmin, bring up the full platform stack, and (in "
-            "prod) attach the tailscale overlay. Nothing runs until you acknowledge "
-            "the plan below.")
+            "prod) attach the tailscale overlay. Nothing runs until you press "
+            "'Generate && start' — the read-only plan below is what it will do.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
@@ -842,10 +842,6 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "when you enter this page and after every verb finishes.")
         lay.addWidget(self._mesh_state_label)
 
-        self.ack = QtWidgets.QCheckBox(
-            "I understand this will MINT credentials and START containers on this machine.")
-        lay.addWidget(self.ack)
-
         # A WRAPPING block, not a row. These fourteen actions in a QHBoxLayout
         # made the page's minimum width the SUM of all fourteen buttons — wider
         # than a laptop screen, so everything past "Generate && start" drifted
@@ -877,7 +873,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         brow.addWidget(self.boot_clean_btn)
         # Host readiness WITHOUT committing to anything: the same preflight `up`
         # runs (docker daemon, buildx-in-env, disk headroom, maven prerequisites),
-        # surfaced on demand so problems appear BEFORE the operator acknowledges.
+        # surfaced on demand so problems appear BEFORE anything is started.
         self.preflight_btn = QtWidgets.QPushButton("Check readiness")
         self.preflight_btn.setToolTip(
             "Read-only host probes — docker daemon, buildx visibility in the exact "
@@ -999,7 +995,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
 
-        # Live-refresh the plan + gate the start button on the acknowledgement.
+        # Live-refresh the plan preview from every control that feeds it.
         self.env_test.toggled.connect(self._refresh_plan)
         self.env_prod.toggled.connect(self._refresh_plan)
         self.brand.currentTextChanged.connect(self._refresh_plan)
@@ -1026,7 +1022,6 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_domain.textChanged.connect(self._refresh_plan)
         self.boot_auth_key.textChanged.connect(self._refresh_plan)
         self.boot_login_server.textChanged.connect(self._refresh_plan)
-        self.ack.toggled.connect(self._sync_boot_gate)
         self._refresh_plan()
         return w
 
@@ -1455,8 +1450,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # The onion/creds/web buttons are only meaningful against a live stack too,
         # but they are read-only and self-explaining when it is down, so they keep
         # their existing behaviour rather than growing another disabled state.
-        # the bootstrap start additionally requires the acknowledgement — and carries
-        # the "why am I disabled?" tooltip, so route it through the one gate.
+        # boot_start_btn carries its own "why am I disabled?" tooltip, so route it
+        # through the one gate rather than the blanket loop above.
         self._sync_boot_gate()
         self._sync_e2e_gate()
 
@@ -1573,31 +1568,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self._set_verbs_enabled(True)
 
     def _sync_boot_gate(self):
-        # The from-scratch start is gated behind the explicit acknowledgement — nothing
-        # is generated or started on mere selection (non-destructive by default).
-        acked = self.ack.isChecked()
-        self.boot_start_btn.setEnabled(acked and not self._running)
-        # A disabled button that explains nothing reads as "the app is broken": the
-        # click does nothing, and the "Acknowledge the plan first." status line below
-        # is UNREACHABLE precisely because the button is disabled. Say why, on the
-        # control itself and in the status line, before anyone clicks.
+        """Arm 'Generate && start' whenever no verb is already running.
+
+        THERE IS NO ACKNOWLEDGEMENT ANY MORE. A tick-box reading "I understand this
+        will MINT credentials and START containers on this machine" used to gate this
+        button; it was removed on operator report. It restated the button's own label
+        ("Generate && start"), sat under a read-only plan preview that already spells
+        out exactly what an ``up`` generates and starts, and everything it warned
+        about happens on THIS machine and is undone from this same page (Stop mesh /
+        Stop && clean Docker). The three OTHER "I understand" boxes in Studio stay:
+        deploy.py gates an APPLY against a real cloud account, and the two localcloud
+        ones gate a k8s teardown — destructive or remote, neither reversible here.
+
+        A disabled button that explains nothing still reads as "the app is broken",
+        so the one remaining precondition (no verb already in flight) says so."""
+        idle = not self._running
+        self.boot_start_btn.setEnabled(idle)
         self.boot_start_btn.setToolTip(
-            "Mint credentials and bring up the whole local mesh. On a cold box this "
-            "also builds the maven prerequisites first, automatically."
-            if acked else
-            "Disabled until the acknowledgement above is ticked — nothing is "
-            "generated or started on mere selection.")
-        # getattr: this gate also runs during construction, BEFORE the shared status
-        # label exists (and _set_verbs_enabled can reach it early too).
-        status = getattr(self, "status", None)
-        if status is not None and not acked and not self._running:
-            status.setText("Tick the acknowledgement above to enable "
-                           "'Generate && start'.")
+            "Mint credentials and bring up the whole local mesh on THIS machine. On "
+            "a cold box this also builds the maven prerequisites first, "
+            "automatically. Undone from this page: 'Stop mesh' drops the containers "
+            "and volumes (in prod it also detaches the overlay)."
+            if idle else
+            "Disabled while a verb is running — wait for it to finish, or Cancel.")
 
     def _bootstrap_up(self):
-        if not self.ack.isChecked():
-            self.status.setText("Acknowledge the plan first.")
-            return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         if self.login_theme.error_text():
             self.status.setText(

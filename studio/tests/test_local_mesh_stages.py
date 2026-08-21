@@ -225,7 +225,19 @@ pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod     # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                         # noqa: E402
+from hugmesh_studio.gui.qt import QtCore, QtWidgets                 # noqa: E402
+
+
+def _join_page_threads(dlg):
+    """Wait out every QThread the page owns before the dialog is collected.
+
+    LocalMeshDialog.__init__ ends in initializePage(), which starts probes that
+    shell out to docker. On a machine with a REAL mesh running they are still in
+    flight at teardown and Qt turns that into a FATAL — "QThread: Destroyed while
+    thread is still running" aborts the whole interpreter. Same helper, same
+    reason, as tests/test_local_mesh.py."""
+    for _t in dlg.findChildren(QtCore.QThread):
+        _t.wait(60_000)
 
 
 @pytest.fixture
@@ -454,7 +466,6 @@ def test_the_handlers_pre_flight_lines_belong_to_the_run_they_announce(qapp, mon
                         (on_line and on_line("[done] platform up")) or (True, []),
                         raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
-    dlg.ack.setChecked(True)
     dlg._bootstrap_up()
     _drain(qapp, dlg.page)
     assert dlg.page._runs and dlg.page._runs[0].stage_items      # the "up" ladder is staged
@@ -462,6 +473,7 @@ def test_the_handlers_pre_flight_lines_belong_to_the_run_they_announce(qapp, mon
     assert "[bootstrap] generating credentials" in raw
     assert "[done] platform up" in raw
     assert "[done] platform up" in dlg.log.toPlainText()
+    _join_page_threads(dlg)
 
 
 def test_a_declined_confirmation_does_not_donate_its_line_to_the_next_run(qapp,
