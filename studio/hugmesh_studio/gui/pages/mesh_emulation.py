@@ -16,12 +16,12 @@ and it grew a SECOND process lane and a SECOND spelling of the per-device Start
 verb it owned is now here, once:
 
 * the QMP console — pause / resume / status / power off, and ``reset`` behind an
-  inline arm-tick because under ``-no-reboot`` (which every launcher passes:
-  launch-pi.sh, launch-arm.sh, launch-x86.sh) a QMP ``system_reset`` does not reboot
-  the guest, it ENDS it;
-* per-device Save copy / Overwrite save, with the inline arm-tick consent and the
-  on-disk verification that reports what actually landed rather than what the exit
-  status claimed;
+  inline “confirm reset” tick because under ``-no-reboot`` (which every launcher
+  passes: launch-pi.sh, launch-arm.sh, launch-x86.sh) a QMP ``system_reset`` does
+  not reboot the guest, it ENDS it;
+* per-device Save copy / Overwrite save, with the inline “confirm overwrite” tick
+  as its consent, and the on-disk verification that reports what actually landed
+  rather than what the exit status claimed;
 * the desktop-terminal shell, with the copy-ready fallback.
 
 And one thing that was on NEITHER page: the WHOLE-MESH save (issue #50 item 10). A
@@ -115,9 +115,10 @@ _QMP_LABELS = {
 #: back. Presenting these as ordinary controls is what the label above avoids.
 _QMP_ENDS_GUEST = frozenset({"reset", "powerdown"})
 
-#: The verb that needs an INLINE arm-tick before it can fire. Power off ends the
-#: guest too, but it is the ORDERLY shutdown an operator means when they say "shut
-#: it down"; reset is the one whose name promises the opposite of what it does.
+#: The verb that needs an INLINE confirmation tick before it can fire. Power off
+#: ends the guest too, but it is the ORDERLY shutdown an operator means when they
+#: say "shut it down"; reset is the one whose name promises the opposite of what
+#: it does.
 _QMP_ARMED = "reset"
 
 _QMP_TOOLTIPS = {
@@ -130,8 +131,8 @@ _QMP_TOOLTIPS = {
              "emulator shut down and exit instead of rebooting: qemu reports the "
              "shutdown with reason host-qmp-system-reset. Nothing is lost that a "
              "disposable overlay was not going to lose anyway, but the row stops "
-             "and has to be Started (a full boot) to come back. Tick “arm” beside "
-             "it first.",
+             "and has to be Started (a full boot) to come back. Tick "
+             "“confirm reset” beside it first.",
     "powerdown": "Press the guest's ACPI power button: an ORDERLY shutdown from "
                  "inside. The device ends — use Start to boot it again.",
     "status": "Ask the emulator what it thinks the guest is doing. Reads only; "
@@ -410,16 +411,18 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             "Save every planned device's disk and its KEYS set into ONE save-set "
             "directory. The FIRST press only PREVIEWS: what would be written, what "
             "it would cost, and whether it fits. Nothing is paused or copied until "
-            "you tick “arm” and press again — a mesh save is 9.5-20.5 GB per "
-            "device, and running out mid-fleet is the worst shape of failure "
-            "available here.")
+            "you tick “confirm mesh save” and press again — a mesh save is "
+            "9.5-20.5 GB per device, and running out mid-fleet is the worst shape "
+            "of failure available here.")
         self.mesh_save_btn.clicked.connect(self._save_mesh_clicked)
         save_row.addWidget(self.mesh_save_btn)
-        self.mesh_save_arm = QtWidgets.QCheckBox("arm")
+        self.mesh_save_arm = QtWidgets.QCheckBox("confirm mesh save")
         self.mesh_save_arm.setToolTip(
-            "Arm the mesh save. Disabled until a preview exists that FITS; cleared "
-            "again after every run, because this is consent for one save, not a "
-            "mode the page stays in.")
+            "Confirm the mesh save — this tick is CONSENT, not an architecture "
+            "choice (each device is saved for the architecture its own image was "
+            "built for; see the Arch column). Disabled until a preview exists that "
+            "FITS; cleared again after every run, because this is consent for one "
+            "save, not a mode the page stays in.")
         self.mesh_save_arm.setEnabled(False)
         self.mesh_save_arm.toggled.connect(lambda *_: self._sync_controls())
         save_row.addWidget(self.mesh_save_arm)
@@ -631,7 +634,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 b.clicked.connect(
                     lambda _=False, i=r, c=command: self._device_qmp(i, c))
                 qmp[command] = b
-            arm_reset = QtWidgets.QCheckBox("arm")
+            arm_reset = QtWidgets.QCheckBox("confirm reset")
             arm_reset.setChecked(False)
             # Arming is what SHOWS the warning, not clicking: the operator must be
             # able to read what "reset" does on this harness before the destructive
@@ -646,7 +649,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             overwrite.setStyleSheet(f"color: {WARN};")
             # Default OFF, and off again after every save: arming is per-click
             # consent, not a mode the row stays in.
-            arm_save = QtWidgets.QCheckBox("arm")
+            arm_save = QtWidgets.QCheckBox("confirm overwrite")
             arm_save.setChecked(False)
             arm_save.toggled.connect(lambda *_: self._sync_controls())
             save.clicked.connect(
@@ -858,9 +861,11 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                                         or row.arm_reset.isChecked()))
         row.arm_reset.setEnabled(live)
         row.arm_reset.setToolTip(
-            "Arm the reset verb. Under -no-reboot a QMP system_reset does not "
-            "restart this guest — it ENDS it. Off again after every verb: consent "
-            "for one click, not a mode the row stays in.")
+            "Confirm the reset verb so it can fire — this tick is CONSENT, not an "
+            "architecture choice (this device's architecture is the Arch column, "
+            "and it follows the image it was built from). Under -no-reboot a QMP "
+            "system_reset does not restart this guest — it ENDS it. Off again "
+            "after every verb: consent for one click, not a mode the row stays in.")
         self._arm_pause(row, live)
         self._arm_save(row, idle)
 
@@ -931,9 +936,12 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         row.overwrite.setEnabled(enabled and bool(target)
                                  and row.arm_save.isChecked())
         row.arm_save.setToolTip(
-            "Arm the overwrite. Off by default, and off again after every save: "
-            "this is consent for ONE click, not a mode the row stays in."
-            if target else f"Nothing to arm: {row.label} has no saved copy yet.")
+            "Confirm the overwrite — this tick is CONSENT, not an architecture "
+            "choice (see the Arch column for that). Off by default, and off again "
+            "after every save: this is consent for ONE click, not a mode the row "
+            "stays in."
+            if target else
+            f"Nothing to confirm: {row.label} has no saved copy yet.")
 
         if not row.up:
             why = (f"Disabled: {row.label} is not running. While QEMU holds a "
@@ -974,9 +982,10 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 "disk as it is now. There is no undo and no second copy is kept; if "
                 "you want to keep it, press “Save copy” instead.\n\n"
                 "Same consistency as “Save copy”: CRASH-CONSISTENT, not a clean "
-                "shutdown. Tick “arm” beside this button to enable it."
+                "shutdown. Tick “confirm overwrite” beside this button to enable "
+                "it."
                 + ("" if row.arm_save.isChecked() else
-                   "\n\nDisabled: “arm” is not ticked."))
+                   "\n\nDisabled: “confirm overwrite” is not ticked."))
 
     def _sync_mesh_save(self, idle: bool):
         savable = any(row.can_save for row in self._rows)
@@ -985,7 +994,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         # The PREVIEW is offered whenever there is a plan, even when nothing can be
         # saved: "why can I not save this mesh" is answered by the per-device
         # blockers the preview lists, and a button greyed with no explanation is the
-        # question rather than the answer. Only the ARM needs something to save.
+        # question rather than the answer. Only the CONFIRMATION tick needs
+        # something to save.
         self.mesh_save_btn.setEnabled(idle and self.plan is not None)
         self.mesh_save_arm.setEnabled(idle and savable and fits)
         if not fits and self.mesh_save_arm.isChecked():
@@ -1102,7 +1112,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             self.note.setText(note)
 
     def _disarm_all(self):
-        """Spend every arm-tick when a verb finishes.
+        """Spend every confirmation tick when a verb finishes.
 
         Arming is consent for ONE click, not a mode the row stays in. The old console
         got that for free because it REBUILT the whole table after every verb; this
@@ -1188,11 +1198,11 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
     # ── the QMP console ─────────────────────────────────────────────────────────
     def _reset_armed(self, index: int, armed: bool):
-        """Ticking the reset arm PRINTS what it just armed."""
+        """Ticking “confirm reset” PRINTS what it just allowed."""
         if armed:
             row = self._rows[index]
             self.note.setText(
-                f'<span style="color:{WARN}"><b>Reset is armed for '
+                f'<span style="color:{WARN}"><b>Reset is confirmed for '
                 f"{html.escape(row.label)}.</b></span> " + _reset_warning(row.label))
         self._sync_controls()
 
@@ -1210,10 +1220,12 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             # confirmation, so saying "tick it" inline keeps the answer where the
             # question is.
             self.note.setText(
-                f'<span style="color:{WARN}"><b>Reset is not armed.</b></span> '
+                f'<span style="color:{WARN}"><b>Reset is not confirmed.</b></span> '
+                "Tick “confirm reset” beside the button to allow it. "
                 + _reset_warning(row.label))
-            console.write(self.log,
-                          f"[mesh] refused: reset of {row.label} is not armed")
+            console.write(
+                self.log,
+                f"[mesh] refused: reset of {row.label} is not confirmed")
             return
         # A status reply is read off the STREAM, so the reader has to know whose it
         # is before the first line arrives.
@@ -1268,13 +1280,14 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                 return
             if not row.arm_save.isChecked():
                 self.note.setText(
-                    f'<span style="color:{WARN}">Overwrite is not armed.</span> It '
-                    f"would DELETE {html.escape(target)} "
+                    f'<span style="color:{WARN}">Overwrite is not confirmed.</span> '
+                    f"It would DELETE {html.escape(target)} "
                     f"({common.describe_file(target)}) and replace it with the disk "
-                    "as it is now. Tick “arm” beside the button to allow that, or "
-                    "press “Save copy” to keep both.")
-                console.write(self.log,
-                              f"[mesh] refused: overwrite of {target} is not armed")
+                    "as it is now. Tick “confirm overwrite” beside the button to "
+                    "allow that, or press “Save copy” to keep both.")
+                console.write(
+                    self.log,
+                    f"[mesh] refused: overwrite of {target} is not confirmed")
                 return
         try:
             # qemu_devices owns WHICH FILE a mode resolves to — the naming rule, the
@@ -1361,10 +1374,11 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
     def _save_mesh_clicked(self):
         """PREVIEW first, execute second — never the other way round.
 
-        Two presses, and the arm-tick between them, because a mesh save is 9.5-20.5
-        GB PER DEVICE. The preview is pure (``emulation.plan_mesh_save`` creates,
-        pauses and copies nothing) and it is the only place the operator can see the
-        fleet total against the free space BEFORE a single guest is frozen. Running
+        Two presses, and the “confirm mesh save” tick between them, because a
+        mesh save is 9.5-20.5 GB PER DEVICE. The preview is pure
+        (``emulation.plan_mesh_save`` creates, pauses and copies nothing) and it is
+        the only place the operator can see the fleet total against the free space
+        BEFORE a single guest is frozen. Running
         out mid-fleet leaves earlier saves landed, the current one a giant
         ``.partial``, and — measured on this workstation — can take the live mesh's
         own volumes down with a full filesystem.
@@ -1431,9 +1445,10 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             lines.append(f'<span style="color:{WARN}"><b>REFUSED — nothing will be '
                          f"saved.</b> {html.escape(refusal)}</span>")
         else:
-            lines.append("Tick <b>arm</b> and press <b>Save mesh</b> again to run "
-                         "it. Each device is paused for its copy and put back the "
-                         "way it was found; the copies are CRASH-CONSISTENT.")
+            lines.append("Tick <b>confirm mesh save</b> and press <b>Save mesh</b> "
+                         "again to run it. Each device is paused for its copy and "
+                         "put back the way it was found; the copies are "
+                         "CRASH-CONSISTENT.")
         return "<br>".join(lines)
 
     def _run_mesh_save(self):

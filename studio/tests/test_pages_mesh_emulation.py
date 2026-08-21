@@ -564,6 +564,84 @@ def test_qmp_buttons_are_built_from_the_exported_verb_tuple(wiz, registry):
                if verb != "reset")
 
 
+def test_no_consent_tick_is_labelled_as_an_architecture(wiz, registry):
+    """The consent ticks must not read as an ARCHITECTURE choice.
+
+    An operator read the QMP cell's checkbox — then labelled ``arm`` — as picking the
+    guest's CPU architecture, in a table whose very next-door column is ``Arch`` and
+    in a project that builds ARM (rpi5/jetson) and x86 images side by side. It never
+    was: every one of these ticks is per-click CONSENT for a destructive verb, and
+    architecture follows the selected image into the Arch column with no control on
+    this page able to change it.
+
+    Asserted on the RENDERED widget (``.text()``), not on the constructor call, so a
+    label that is overwritten later — by a repaint, a retranslation, an ``_arm_row``
+    pass — still fails this. And asserted as an EXCLUSION of every architecture
+    spelling rather than only as an equality, so the next label to be invented here
+    cannot quietly reintroduce the confusion.
+    """
+    page = _page(wiz)
+    registry(_device("rpi5/pki"), _device("x86/be"))
+    page._refresh_reality()
+
+    ticks = {"mesh save": page.mesh_save_arm}
+    for label in ("rpi5/pki", "x86/be"):
+        row = _row(page, label)
+        ticks[f"{label} reset"] = row.arm_reset
+        ticks[f"{label} overwrite"] = row.arm_save
+
+    for where, tick in ticks.items():
+        text = tick.text()
+        assert text.startswith("confirm "), (
+            f"{where}: consent tick reads {text!r}, not a confirmation")
+        for arch in ("arm", "arm64", "aarch64", "x86", "x86_64", "amd64", "arch"):
+            assert arch not in text.lower().split(), (
+                f"{where}: consent tick reads {text!r} — that is an ARCHITECTURE "
+                "name, and this table already has an Arch column")
+
+    # each names the verb it consents to, because the Save cell holds TWO buttons
+    # and a bare "confirm" there cannot say which of them it unlocks
+    assert _row(page, "rpi5/pki").arm_reset.text() == "confirm reset"
+    assert _row(page, "rpi5/pki").arm_save.text() == "confirm overwrite"
+    assert page.mesh_save_arm.text() == "confirm mesh save"
+
+    # ...and the surfaces that tell the operator to tick it agree with the label
+    assert "confirm reset" in _row(page, "rpi5/pki").qmp["reset"].toolTip()
+    assert "confirm mesh save" in page.mesh_save_btn.toolTip()
+
+    # the Arch column is where architecture actually lives, and it follows the image
+    assert page_mod._HEADERS[page_mod._MCOL_ARCH] == "Arch"
+    arches = {label: _cell(page, label, page_mod._MCOL_ARCH).text()
+              for label in ("rpi5/pki", "x86/be")}
+    assert all(arches.values()), f"the Arch column is empty: {arches}"
+
+
+def test_a_consent_tick_still_gates_its_verb_after_the_relabel(wiz, registry):
+    """The relabel is WORDING only — the gate itself must be exactly as shut.
+
+    Named separately from the destructive-path tests above so that a future edit to
+    the LABELS cannot pass by having quietly loosened the guard they describe.
+    """
+    page = _page(wiz)
+    registry(_device("rpi5/pki"))
+    page._refresh_reality()
+    row = _row(page, "rpi5/pki")
+
+    assert not row.arm_reset.isChecked()
+    assert not row.qmp["reset"].isEnabled(), "reset is live without its tick"
+    row.arm_reset.setChecked(True)
+    assert row.qmp["reset"].isEnabled()
+    row.arm_reset.setChecked(False)
+    assert not row.qmp["reset"].isEnabled(), "unticking did not re-shut the gate"
+
+    # overwrite has no previous save yet, so its tick is not even offered
+    assert not row.arm_save.isChecked()
+    assert not row.overwrite.isEnabled()
+    # and the whole-mesh tick starts shut, with no preview to consent to
+    assert not page.mesh_save_arm.isChecked()
+    assert not page.mesh_save_arm.isEnabled()
+
+
 def test_reset_says_it_ends_the_guest_rather_than_restarting_it(wiz, registry):
     """Every launcher runs qemu with -no-reboot, and under that flag a QMP
     system_reset makes the emulator shut down and exit."""
@@ -587,13 +665,14 @@ def test_reset_is_armed_inline_before_it_can_fire(wiz, qapp, registry,
     # directly, because a disabled button's click() never reaches the slot at all.
     page._device_qmp(_index(page, "rpi5/pki"), "reset")
     assert not mocked_spawn, "an unarmed reset became a command"
-    assert "Reset is not armed" in page.note.text()
+    assert "Reset is not confirmed" in page.note.text()
+    assert "confirm reset" in page.note.text()   # the refusal names the tick
     assert "-no-reboot" in page.note.text()      # the loud inline warning
     assert "refused: reset" in page.log.toPlainText()
 
     row.arm_reset.setChecked(True)
-    # arming is what PRINTS the warning — read before the button lights up
-    assert "Reset is armed" in page.note.text()
+    # ticking is what PRINTS the warning — read before the button lights up
+    assert "Reset is confirmed" in page.note.text()
     assert "host-qmp-system-reset" in page.note.text()
     assert row.qmp["reset"].isEnabled()
     row.qmp["reset"].click()
@@ -783,8 +862,9 @@ def test_overwrite_must_be_armed_inline_before_it_can_fire(wiz, qapp, registry,
     # guard that matters is the one in front of the ACTION.
     page._device_save(_index(page, "rpi5/pki"), "overwrite")
     assert len(mocked_spawn) == before, "an unarmed overwrite became a command"
-    assert "Overwrite is not armed" in page.note.text()
-    assert "not armed" in page.log.toPlainText()
+    assert "Overwrite is not confirmed" in page.note.text()
+    assert "confirm overwrite" in page.note.text()   # the refusal names the tick
+    assert "not confirmed" in page.log.toPlainText()
 
     row.arm_save.setChecked(True)
     assert row.overwrite.isEnabled()
