@@ -36,7 +36,13 @@ WHAT THIS PAGE OFFERS
   2. BUILD FIRST, THEN TEST — leave into the normal image flow with ``cfg.qemu_e2e``
      set, so the tests run against the images that build produces. The chaining flag
      is the SAME one BuildPage exposes, and the ownership latch in ``validatePage``
-     is unchanged.
+     is unchanged. Two things make this arm REPORT ITSELF as inert if they are
+     omitted, and both were: the button bar must be refreshed when the arm is picked
+     (``_source_changed``'s ``setFinalPage``), because QWizard caches whether the
+     current page can continue and would otherwise leave FINISH on screen with no
+     Next to press; and the arm must SAY what Next will do (``chain_note``), because
+     every other widget on this page belongs to the other arm and is hidden, so
+     picking it otherwise blanks the page.
 
   3. READ THE VERDICTS HONESTLY — the results table is one row per PLANNED row, fed
      by ``emulation.status()``. A planned row that produced no verdict says
@@ -169,6 +175,28 @@ class QemuPage(QtWidgets.QWizardPage):
         self.use_existing.setChecked(True)
         sg.addWidget(self.use_existing)
         sg.addWidget(self.build_first)
+        #: Why an arm is unavailable — ALWAYS visible, and deliberately NOT inside the
+        #: session group box. This text used to be written into ``rows_label``, which
+        #: lives in that box; picking build-first hides the box AND blanks the label, so
+        #: the one sentence telling an operator with no images what to do was erased by
+        #: the very choice it was telling them to make.
+        self.source_note = QtWidgets.QLabel()
+        self.source_note.setWordWrap(True)
+        self.source_note.setTextFormat(Qt.TextFormat.RichText)
+        self.source_note.setVisible(False)
+        sg.addWidget(self.source_note)
+        #: What pressing Next will do. Shown ONLY on the build-first arm, where every
+        #: other widget on this page is hidden — this line is then the whole page, so it
+        #: cannot live in ``cmd_view``, which that same arm hides.
+        self.chain_note = QtWidgets.QLabel(
+            "The tests will run automatically when the build you configure next "
+            "finishes. Press <b>Next</b> to configure that build — the choice is "
+            "carried to the Build screen as its “after the build, run the QEMU "
+            "emulated-device tests” checkbox, which stays yours to untick there.")
+        self.chain_note.setWordWrap(True)
+        self.chain_note.setTextFormat(Qt.TextFormat.RichText)
+        self.chain_note.setVisible(False)
+        sg.addWidget(self.chain_note)
         lay.addWidget(self.source_group)
 
         # ── session picker + the rows it implies ────────────────────────────────
@@ -445,13 +473,24 @@ class QemuPage(QtWidgets.QWizardPage):
         self._sessions = qemu_tests.discover_sessions(self.wiz.generator_dir)
         common.populate_sessions(self.session_combo, self._sessions)
         if not self._sessions:
-            self.rows_label.setText(
+            # Said on source_note, NOT rows_label: rows_label lives in session_box,
+            # which the build-first arm hides — and _source_changed blanks it — so this
+            # guidance was written and then erased before anyone could read it. The
+            # instruction is "press Next", not "choose build-first": the line below has
+            # already chosen it, so naming the radio sent the operator hunting for a
+            # control that was checked and (until the setFinalPage fix in
+            # _source_changed) could not be acted on either.
+            self.source_note.setText(
                 f'<span style="color:{WARN}">No build session under out/sessions/ holds a '
-                "bootable image yet.</span> Choose “Build new images first”, or "
-                "build on this machine and come back.")
+                "bootable image yet</span>, so there is nothing here to boot — <b>Build "
+                "new images first</b> is preselected below. Press <b>Next</b> to "
+                "configure that build here, or run one of the generator's "
+                "<tt>build-*-stage4.sh</tt> scripts outside Studio and come back.")
+            self.source_note.setVisible(True)
             self.use_existing.setEnabled(False)
             self.build_first.setChecked(True)
         else:
+            self.source_note.setVisible(False)
             self.use_existing.setEnabled(True)
         self._session_changed()
 
@@ -493,13 +532,35 @@ class QemuPage(QtWidgets.QWizardPage):
         for w in (self.run_btn, self.list_btn, self.refresh_btn, self.avc_btn,
                   self.avc_combo):
             w.setVisible(existing)
+        self.chain_note.setVisible(not existing)
         if not existing:
             self.rows_label.setText("")
-            self.cmd_view.setPlainText(
-                "The tests will run automatically when the build you configure next "
-                "finishes.")
+            self.cmd_view.setPlainText("")
         else:
             self._refresh_command()
+        # REFRESH THE BUTTON BAR — this is what made the radio read as INERT.
+        #
+        # nextId() reports the right answer the instant this toggles. QWizard does not
+        # ask it again: canContinue/canFinish are cached by
+        # QWizardPrivate::updateCurrentPage(), which runs when a page is ENTERED and is
+        # never re-run because a current page's nextId() changed underneath it. This
+        # page arrives on the use-existing arm, where nextId() is -1, so the bar is
+        # built as FINISH with Next hidden and disabled — and ticking "build new images
+        # first" left it exactly that way. The only live button then ENDED the wizard
+        # instead of continuing into the build, which is indistinguishable from a radio
+        # that does nothing.
+        #
+        # setFinalPage() is the public lever that re-runs updateCurrentPage() (it does
+        # so whenever the page is current), and what it asserts is precisely the fact
+        # that changed: this page is terminal only on the test-what-exists arm.
+        # completeChanged, emitted below, is NOT a substitute — it re-runs
+        # _q_updateButtonStates(), which READS those cached flags rather than
+        # recomputing them.
+        #
+        # Every other test of this chain drives it with wiz.next(), which bypasses the
+        # button bar entirely; that is why they were all green while the operator's
+        # only route was dead.
+        self.setFinalPage(existing)
         self._sync_controls()
         self.completeChanged.emit()
 
