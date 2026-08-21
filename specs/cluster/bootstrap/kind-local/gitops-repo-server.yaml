@@ -48,11 +48,36 @@ spec:
     spec:
       containers:
         - name: git-daemon
-          # alpine/git = the git CLI on alpine. Small, no registry login, and
-          # the only binary this needs is `git daemon` itself. Pinned by
-          # DIGEST (the multi-arch manifest list for v2.45.2), same practice
-          # as the vault-tls-init alpine/openssl pin.
+          # alpine/git = the git CLI on alpine. Small, no registry login.
+          # Pinned by DIGEST (the multi-arch manifest list for v2.45.2), same
+          # practice as the vault-tls-init alpine/openssl pin.
+          #
+          # ⚠ THIS IMAGE DOES NOT CONTAIN `git daemon`. On Alpine the daemon
+          # ships in a SEPARATE apk package, `git-daemon`; the image installs
+          # only git, git-init-template, git-lfs and git-perl. Running it with
+          # `args: [daemon, ...]` died instantly on
+          #     git: 'daemon' is not a git command.
+          # and CrashLoopBackOff'd forever (17 restarts before this was found),
+          # which took every git-path ArgoCD Application down with it. The
+          # comment that used to sit here said "the only binary this needs is
+          # `git daemon` itself" — which was true, and was exactly the binary
+          # that was missing. Verify with:
+          #   docker run --rm --entrypoint sh alpine/git:v2.45.2 -c 'git daemon --help'
           image: alpine/git:v2.45.2@sha256:16ad8e788e1d3b0c30f18da8dde5c0ace3b187445a62d8af893b003ca1e70592
+          # `sh -ec` so a failed apk aborts the container LOUDLY rather than
+          # falling through to a `git daemon` that is still missing — the
+          # readiness probe would otherwise be the only signal, and a pod that
+          # is merely never-ready reads as slow rather than broken.
+          #
+          # This adds a network dependency at pod start. That is not a new
+          # dependency class for this lane (the bootstrap already pulls every
+          # image from the network), but it does mean a restart in an offline
+          # cluster will fail here. If that becomes a problem, the fix is to
+          # bake git-daemon into a first-party image and `kind load` it, not to
+          # make this step optional.
+          command:
+            - /bin/sh
+            - -ec
           # --export-all: serve every repo under --base-path without requiring
           #   a git-daemon-export-ok marker file — the base path contains ONLY
           #   the single read-only kind mount, so the blast radius is exactly
@@ -61,12 +86,33 @@ spec:
           #   of a silent hangup — ArgoCD's ComparisonError then names it.
           # NO --enable=receive-pack anywhere: fetch-only, by construction.
           args:
-            - daemon
-            - --export-all
-            - --base-path=/hugmesh
-            - --reuseaddr
-            - --informative-errors
-            - --verbose
+            - |
+              apk add --no-cache git-daemon
+              # The kind hostPath mount carries the operator's own uid (1002),
+              # but this container runs as root, so git's ownership check
+              # refuses the repo:
+              #     fatal: detected dubious ownership in repository at
+              #            '/hugmesh/hugmesh-generator/.git'
+              # Without this the pod is Running AND Ready — the tcpSocket probe
+              # only proves the port is open — while every fetch fails and each
+              # ArgoCD Application reports ComparisonError. That reads as
+              # healthy, which is worse than the crash loop it replaced, so the
+              # exception must be '*', not the absolute path: git daemon
+              # chdir()s into the repo before forking upload-pack, so the
+              # ownership check runs against '.' and no absolute entry ever
+              # matches it. Adding the two absolute paths looked correct, was
+              # accepted by git config, and still failed with
+              #     fatal: detected dubious ownership in repository at '.'
+              # The wildcard is proportionate here and no wider than the mount
+              # already is: --base-path holds exactly one repo, mounted
+              # READ-ONLY, and the daemon is fetch-only (no receive-pack).
+              git config --global --add safe.directory '*'
+              exec git daemon \
+                --export-all \
+                --base-path=/hugmesh \
+                --reuseaddr \
+                --informative-errors \
+                --verbose
           ports:
             - name: git
               containerPort: 9418
