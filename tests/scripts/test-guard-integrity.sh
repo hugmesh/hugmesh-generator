@@ -433,6 +433,78 @@ if any(re.search(r"\bguard_require_(tools|capability)\b",
         else:
             ok("%s skips ONLY under %s and otherwise exits 1" % (LIB_REL, OPT_OUT))
 
+# ── 7) HOW MANY SUITES ACTUALLY GATE A PULL REQUEST ──────────────────────────
+# Check 3 asks "does ANYTHING run this suite?" and answers it honestly. It is not
+# the same question as "can this suite stop a bad merge", and conflating the two
+# is how 123 guards came to gate nothing at all while this analyser printed green.
+#
+# Both runners check 3 accepts are POST-merge or no-merge:
+#   * .gitlab-ci.yml — GitLab here is an in-cluster PULL MIRROR
+#     (mirror_trigger_builds:true). Its pipelines run on the mirrored commit,
+#     i.e. AFTER the merge that introduced the defect.
+#   * the Makefile — a local target. It gates nothing; it is a convenience.
+#
+# Measured 2026-08-21 on this repo: 123 suites on disk, ZERO named by any
+# GitHub Actions workflow. The one pull_request-triggered workflow
+# (studio-tests.yml) runs the Studio pytest suite only — path-filtered, with
+# tests/known-failures.txt deselected.
+#
+# This check does NOT demand the 123 be wired: which of them can even run in a
+# hosted runner (docker, qemu, kind, node) is a real design question, not
+# something a static analyser should force. What it refuses to allow is the
+# number being INVISIBLE. It prints the ratio on every run and pins it, so the
+# gap is a stated fact rather than an inference nobody draws, and so neither
+# direction of drift is silent: unwiring a gated suite fails, and gating a new
+# one fails until the baseline is raised to match (the same honesty rule check 4
+# already applies to ALLOW_UNWIRED).
+print()
+print("-- 7) how many suites actually gate a pull request --")
+PREMERGE_BASELINE = 0
+wf_dir = os.path.join(repo, ".github", "workflows")
+pr_wf, wf_text = [], ""
+if os.path.isdir(wf_dir):
+    for fn in sorted(os.listdir(wf_dir)):
+        if not fn.endswith((".yml", ".yaml")):
+            continue
+        t = open(os.path.join(wf_dir, fn), encoding="utf-8", errors="replace").read()
+        # Scan the top-level `on:` block WITHOUT PyYAML (python:3-slim has no yaml).
+        # A trigger counts only inside that block, so a `pull_request` mentioned in
+        # a job name, a comment or an `if:` does not fool this.
+        on_block, in_on = [], False
+        for line in t.split("\n"):
+            if re.match(r"^(on|True)\s*:", line):
+                in_on = True
+                on_block.append(line)
+                continue
+            if in_on:
+                if line.strip() and not line.startswith((" ", "\t")):
+                    break
+                on_block.append(line)
+        if re.search(r"\bpull_request\b", "\n".join(on_block)):
+            pr_wf.append(fn)
+            wf_text += t + "\n"
+
+gated = [s for s in suites
+         if s in wf_text or (os.path.dirname(s) + "/*.sh") in wf_text]
+n, total = len(gated), len(suites)
+print("         %d of %d suites are named by a pull_request-triggered workflow"
+      % (n, total))
+print("         pull_request workflows: %s"
+      % (", ".join(pr_wf) if pr_wf else "NONE"))
+if n == PREMERGE_BASELINE:
+    if n == 0:
+        ok("pre-merge suite coverage pinned at 0/%d — no shell guard blocks a merge, "
+           "and that fact is now asserted rather than implied" % total)
+    else:
+        ok("pre-merge suite coverage pinned at %d/%d" % (n, total))
+elif n < PREMERGE_BASELINE:
+    bad("pre-merge suite coverage DROPPED to %d, baseline is %d — a suite that used "
+        "to block a bad merge no longer does" % (n, PREMERGE_BASELINE))
+else:
+    bad("pre-merge suite coverage rose to %d, baseline still says %d — raise "
+        "PREMERGE_BASELINE to %d so the recorded number stays true"
+        % (n, PREMERGE_BASELINE, n))
+
 print()
 print("== guard integrity: %d passed, %d failed ==" % (P[0], F[0]))
 sys.exit(1 if F[0] else 0)
@@ -553,6 +625,23 @@ echo "== ${P} passed, ${F} failed =="
     > "${NEG}/tree/.gitlab-ci.yml"
   neg_case "guard_require_* called without sourcing the helper" \
            "without sourcing tests/lib/guard-preflight.sh"
+
+  # (i) check 7's own red: a suite that IS pull_request-gated while the recorded
+  #     PREMERGE_BASELINE still says none is. The tree is otherwise CLEAN, so this
+  #     case can only be biting on check 7. Without it the baseline could be pinned
+  #     at a number nothing ever compares against — a check that only ever agrees
+  #     with itself is the exact shape this file exists to catch.
+  build_tree 'P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+ok "nothing wrong"
+echo "== ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]'
+  mkdir -p "${NEG}/tree/.github/workflows"
+  printf 'name: pr\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash tests/probe/test-probe.sh\n' \
+    > "${NEG}/tree/.github/workflows/pr.yml"
+  neg_case "a pre-merge-gated suite the baseline does not record" \
+           "raise PREMERGE_BASELINE"
 
   # (e) POSITIVE control: the same miniature repo, all defects removed, must PASS.
   #     Without this, cases (a)-(d) could be passing because the child ALWAYS fails.
