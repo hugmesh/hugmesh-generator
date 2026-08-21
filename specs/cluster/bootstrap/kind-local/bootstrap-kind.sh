@@ -150,6 +150,10 @@ warn() { echo "    WARN: $*" >&2; }
 # openssl is not optional: step 3b mints the local-dev CA with it, and the mTLS
 # post-condition at the end verifies an issued certificate with it. It used to be
 # an undeclared dependency discovered halfway through a bring-up.
+# The Studio installs its pinned kind under ~/.local/share/hugmesh-studio; a plain
+# terminal does not see it. Appended as a fallback, so a system kind still wins.
+_HM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+[ -f "${_HM_ROOT}/scripts/_tools-path-lib.sh" ] && { . "${_HM_ROOT}/scripts/_tools-path-lib.sh"; hugmesh_tools_path; }
 for bin in kind kubectl docker git jq openssl base64; do
   command -v "${bin}" >/dev/null 2>&1 || { echo "missing required tool: ${bin}" >&2; exit 1; }
 done
