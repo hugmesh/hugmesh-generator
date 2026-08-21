@@ -687,6 +687,60 @@ PY
 fi
 
 # ── [C] --ref plumbing against a LOCAL file:// upstream ────────────────────────
+# ── B12/B13 AN UNRUNNABLE SWEEP MUST BE RED, NOT A CLEAN PASS ─────────────────
+# The sweep's own header states the rule: "an unrunnable gate is the same vacuous
+# green as a missing one". B10 proves a DRIFTED overlay fails and B11 proves the CI
+# job exists — but nothing asserted that rule itself, and two one-line mutations walk
+# straight through both:
+#
+#   * drop `[[ ${#ARCHETYPES[@]} -gt 0 ]] || _die` and point the sweep at an EMPTY
+#     templates/archetypes/. The for-loop runs zero times, RC stays 0, and the sweep
+#     prints — verbatim —
+#         == archetype drift summary (0 archetype(s)) ==
+#         RESULT: PASS — every archetype overlay is in sync with its exemplar base.
+#     and exits 0. Zero overlays checked, every overlay declared in sync. That is the
+#     exact disease this whole gate exists to cure, reproduced inside the gate.
+#
+#   * change `_die`'s `exit 2` to `exit 0`. Every FATAL — missing single-archetype
+#     gate, absent templates/archetypes — then prints to stderr and exits 0, so CI
+#     goes green on a gate that never graded a single archetype.
+#
+# Both left this suite at 78 passed / 0 failed. They are asserted here as BEHAVIOUR
+# (run the sweep in a scratch tree and read its exit status), never as a grep for the
+# guard's source text — a test that greps for the line it wants would be satisfied by
+# a commented-out one.
+echo "-- [B] an unrunnable sweep must be RED (empty set / fatal) --"
+
+# B12: templates/archetypes exists and is EMPTY. Nothing to grade => must NOT pass.
+B12LAB="${WORK}/emptylab"
+mkdir -p "${B12LAB}/templates/archetypes"
+tar -c -C "$REPO" --exclude='scripts/tooling/node_modules' scripts | tar -x -C "$B12LAB"
+ln -s "${REPO}/scripts/tooling/node_modules" "${B12LAB}/scripts/tooling/node_modules"
+( cd "$B12LAB" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" OFFLINE=1 \
+    bash scripts/validate-repo-templates-all.sh ) >"${WORK}/B12.out" 2>&1
+B12_RC=$?
+[ "$B12_RC" -ne 0 ] \
+  && ok "B12 an EMPTY archetype set fails the sweep (exit ${B12_RC}) — zero graded is not a pass" \
+  || bad "B12 the sweep EXITED 0 having graded ZERO archetypes — vacuous green inside the drift gate itself"
+grep -qE "$CLEAN_PASS" "${WORK}/B12.out" \
+  && bad "B12b the sweep printed 'every archetype overlay is in sync' after grading NOTHING — a reader is told the tree is clean" \
+  || ok "B12b the empty sweep never claims every overlay is in sync"
+
+# B13: the single-archetype gate is MISSING. _die must be fatal, not advisory.
+B13LAB="${WORK}/nogatelab"
+mkdir -p "${B13LAB}/scripts" "${B13LAB}/templates/archetypes/generator"
+cp "${REPO}/scripts/validate-repo-templates-all.sh" "${B13LAB}/scripts/"
+# validate-repo-templates.sh is deliberately NOT copied.
+( cd "$B13LAB" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" OFFLINE=1 \
+    bash scripts/validate-repo-templates-all.sh ) >"${WORK}/B13.out" 2>&1
+B13_RC=$?
+[ "$B13_RC" -ne 0 ] \
+  && ok "B13 a missing single-archetype gate is FATAL (exit ${B13_RC}), not a silent pass" \
+  || bad "B13 the sweep EXITED 0 with the gate binary absent — it graded nothing and reported success"
+grep -qE "$CLEAN_PASS" "${WORK}/B13.out" \
+  && bad "B13b the sweep claimed every overlay is in sync while its own gate was missing" \
+  || ok "B13b the fatal sweep never claims every overlay is in sync"
+
 echo "-- [C] --ref versioned pull (local file:// upstream, no network) --"
 
 SRC="${WORK}/src-upstream"; mkfixture "$SRC"
