@@ -25,7 +25,14 @@ PUBKEY="$(cat "${WORK}/key.pub")"
 HASH="$(openssl passwd -6 'boot-emu-pass')"
 
 emulate_role() {
-  local role="$1" krole keys="${WORK}/keys-${role}"
+  # NB: `keys` is assigned in a SEPARATE statement from `role`. bash 5.3 localises
+  # every name in a `local` list BEFORE running any of its assignments, so the
+  # one-liner this replaced ("local role=\"$1\" krole keys=\"${WORK}/keys-${role}\"")
+  # died on the very first role under this file's `set -u`:
+  #     emulate-firstboot.sh: line 28: role: unbound variable
+  # i.e. the whole first-boot emulation could not run at all on bash >= 5.3.
+  local role="$1" krole
+  local keys="${WORK}/keys-${role}"
   case "${role}" in
     pki) krole="control-plane" ;;
     *)   krole="worker" ;;
