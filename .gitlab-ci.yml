@@ -255,6 +255,19 @@ lint:tools-path-lib:
   script:
     - bash tests/scripts/test-tools-path-lib.sh
 
+# tests/pentest/run-pentest.sh had three stacked ways to turn "no scan happened"
+# into a green job, and the third defeated the second's own stated purpose. This
+# suite pins that an ABSENT scan and an UNCOMPUTABLE verdict both fail loudly.
+# It does NOT change the gating policy — the pentest stage stays allow_failure.
+# Hermetic: it copies the harness and drives it through a SYNTHETIC env profile,
+# so it can never reach tests/stack/up.sh or down.sh.
+lint:dast-honesty:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/pentest/test-dast-honesty.sh
+
 # GitHub credential preflight for first-party clones. Deliberately NO `rules:` —
 # it must run on every pipeline. This gate exists because the two properties it
 # checks fail SILENTLY: a leaked token looks like a working build, and a missing
