@@ -109,14 +109,39 @@ log() { echo "==> $*"; }
 # deletion, do not wait on it, and then block until the object is genuinely gone
 # so the re-apply cannot race a still-terminating predecessor.
 recreate_job() { # <namespace> <job> <kustomize-dir>
-  local ns="$1" job="$2" dir="$3" i
+  # A Job's spec is immutable, so it must be deleted before re-applying. The
+  # delete is asynchronous, and applying into that window is REJECTED with
+  #     Warning: Detected changes to resource <job> which is currently being
+  #              deleted.
+  # leaving no Job at all. That happened live on 2026-08-20 to vault-pki-init:
+  # the apply's status was discarded, the script continued, and the failure
+  # only surfaced 180s later as a confusing
+  #     Error from server (NotFound): jobs.batch "vault-pki-init" not found
+  # from the wait — which reads as "the job failed" rather than "the job was
+  # never created". So: wait for the object to be genuinely GONE (not merely
+  # unreadable), then apply with its exit status CHECKED and retried.
+  local ns="$1" job="$2" dir="$3" i rc
   kubectl -n "${ns}" delete job "${job}" --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
   kubectl -n "${ns}" delete pods -l "job-name=${job}" --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
+  # `get job` can transiently succeed while the object carries a
+  # deletionTimestamp, so absence is asserted on the name listing rather than
+  # on a bare get exit status.
   for i in $(seq 1 60); do
-    kubectl -n "${ns}" get job "${job}" >/dev/null 2>&1 || break
+    [ -z "$(kubectl -n "${ns}" get job "${job}" -o name 2>/dev/null)" ] && break
     sleep 2
   done
-  kubectl apply -k "${dir}" >/dev/null
+  # Retry: even after the object disappears from the listing the apiserver can
+  # briefly refuse the recreate. Three attempts, then fail LOUDLY — a silent
+  # miss here takes out every step that depends on this Job.
+  for i in 1 2 3; do
+    if kubectl apply -k "${dir}" >/dev/null 2>&1; then
+      return 0
+    fi
+    rc=$?
+    sleep 5
+  done
+  echo "FATAL: could not (re)create job ${ns}/${job} from ${dir} after 3 attempts (last kubectl apply rc=${rc:-?}). Everything downstream of this Job would fail with a misleading NotFound." >&2
+  return 1
 }
 
 
