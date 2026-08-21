@@ -88,7 +88,7 @@ from ._credentials_dialog import CredentialsDialog
 from ._add_user_dialog import AddUserDialog
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
-from ._widgets import _row, collapsible, own_probe, probe_running
+from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_running
 # The staged view is progress.py's, not a second one: importing its glyph palette and
 # its two formatters is what keeps a stage rendered here byte-identical to the same
 # stage rendered on the image-build screen. Re-declaring {"done": ("✓", "#188038"), …}
@@ -307,8 +307,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.setTitle("Local Docker mesh")
         self.setSubTitle("Run a HugMesh mesh on THIS machine in Docker — no image "
                          "build, no server hardware. This is the end of this path: "
-                         "Finish closes the wizard; the mesh keeps running in Docker.")
+                         "Exit closes the Studio; the mesh keeps running in Docker.")
         self.setFinalPage(True)
+        # Pressing the final button here does nothing but close the Studio — no
+        # build, no apply, no write, no state commit — so it says so (_widgets:
+        # label_finish_as_exit).
+        label_finish_as_exit(self)
 
         # the bootstrap tab stacks ~15 rows + a plan preview — by far the tallest
         # page in the wizard (minimum ~670px). Wrap in the shared scroll area so a
@@ -454,7 +458,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return bool(getattr(self.wiz, "localmesh_selected", False))
 
     def isComplete(self) -> bool:
-        # Finish stays disabled while a verb runs — leaving mid-up would orphan the
+        # Exit stays disabled while a verb runs — leaving mid-up would orphan the
         # worker's signals into a destroyed page.
         return not self._running
 
@@ -1176,7 +1180,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     # ── worker plumbing (the no-freeze fix) ──────────────────────────────────────
     def _launch(self, label: str, fn, stream: bool = False,
                 cancellable: bool = False, verb: str = ""):
-        """Run one verb off the GUI thread; buttons + Finish re-arm on done.
+        """Run one verb off the GUI thread; buttons + Exit re-arm on done.
         ``stream=True`` verbs take (on_line, cancel) and their output lands in the
         log LIVE (what makes an hour-long cold compose build watchable);
         ``cancellable`` arms the Cancel button, which terminates the verb's whole

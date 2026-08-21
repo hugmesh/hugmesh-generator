@@ -1,17 +1,20 @@
 """ProgressPage — the terminal build page, present in EVERY mode (slug "progress").
 
-The wizard's Finish is a Build action: leaving the Review page commits a WorklistConfig
-(standalone/cloud = a 1-entry worklist; mesh = the WorklistPage's selection) and lands here.
+Leaving the Review page commits a WorklistConfig (standalone/cloud = a 1-entry worklist;
+mesh = the WorklistPage's selection); the separate Launch screen's Continue then lands here.
 This page runs that worklist through :class:`~...core.worklist_driver.WorklistDriver` on a
 worker thread and shows ONE row per image — status, a determinate progress bar driven by the
 honest banner-phase parser (:mod:`...core.progress_parse`), the current phase, and a per-row
 Stop — plus a shared log that switches to the clicked row's ring buffer, and footer lines for
 the once-per-worklist steps (mesh manifest written, per-node key-zips generated).
 
-Finish is disabled until every row is terminal (ok / failed / stopped); Back is disabled for
-free because the Review page is a commit page. Nothing here fakes a percent — an image whose
-builder has not yet hit a known phase banner shows an indeterminate (busy) bar, exactly as
-:class:`~...core.progress_parse.ProgressParser` reports it.
+This page's final button is EXIT, not Finish: the build is already running by the time the
+page is reached, so pressing it does nothing but close the Studio (see
+_widgets.label_finish_as_exit). It is disabled until every row is terminal (ok / failed /
+stopped); Back is disabled for free because the Review page is a commit page. Nothing here
+fakes a percent — an image whose builder has not yet hit a known phase banner shows an
+indeterminate (busy) bar, exactly as :class:`~...core.progress_parse.ProgressParser`
+reports it.
 
 PACKAGES (third level): under the stage that is emerging, every package portage reports
 gets its OWN row — JOB -> STAGE -> GROUP -> PACKAGE — fed by the Qt-free
@@ -71,6 +74,7 @@ from ...core.emerge_packages import (
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
+from ._widgets import label_finish_as_exit
 
 # Residual control bytes AFTER strip_ansi() — a bare ESC that formed no complete
 # SGR/CSI sequence, plus BEL/BS/CR/VT/FF (the x86 emerge stream carries CR from its
@@ -256,7 +260,7 @@ class _WorklistWorker(QtCore.QThread):
                 on_keys=lambda i, p, ok: self.keys.emit(i, p, ok))
         except BaseException as e:  # noqa: BLE001 - a hung GUI is worse than any re-raise
             # Surface it where the operator is already looking (the log pane), then end
-            # the run non-zero so the UI leaves "queued" and Finish/Back become usable.
+            # the run non-zero so the UI leaves "queued" and Exit/Back become usable.
             self.line.emit(0, f"!! build run aborted before completion: {e}")
             for ln in traceback.format_exc().rstrip().splitlines():
                 self.line.emit(0, f"   {ln}")
@@ -414,14 +418,18 @@ class ProgressPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Building")
-        self.setSubTitle("One progress bar per image. Finish is enabled once every build "
+        self.setSubTitle("One progress bar per image. Exit is enabled once every build "
                          "has finished, failed, or stopped.")
+        # The build is ALREADY running by the time this page is reached — the final
+        # button starts nothing and writes nothing, it only closes the Studio, so it
+        # says Exit (_widgets.label_finish_as_exit).
+        label_finish_as_exit(self)
         lay = QtWidgets.QVBoxLayout(self)
 
         # ── view controls: a single "Configure view" entry point above everything
         # else, so the operator can add/remove columns without hunting for a header
         # context menu. Right-aligned on its own row: it is a view preference, not a
-        # build action, and must not sit in the same visual rank as Finish/Stop.
+        # build action, and must not sit in the same visual rank as Exit/Stop.
         view_row = QtWidgets.QHBoxLayout()
         view_row.addStretch(1)
         self.configure_view_btn = QtWidgets.QToolButton()
@@ -2629,5 +2637,5 @@ class ProgressPage(QtWidgets.QWizardPage):
             btn.setEnabled(self._all_terminal)
 
     def isComplete(self) -> bool:
-        """Finish is enabled only once every image row is terminal (the run has settled)."""
+        """Exit is enabled only once every image row is terminal (the run has settled)."""
         return self._all_terminal

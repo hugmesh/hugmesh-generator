@@ -1235,7 +1235,7 @@ def test_leaving_the_page_takes_the_tunnels_down(wiz, registry, spawned,
 
 def test_closing_the_studio_takes_the_tunnels_down(wiz, registry, spawned,
                                                    monkeypatch):
-    """Qt calls cleanupPage() on Back, never on Finish or a window close — so the
+    """Qt calls cleanupPage() on Back, never on Exit or a window close — so the
     third way out of this page needs its own hook, or a tunnel survives the Studio
     and the next session finds its loopback port taken."""
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",

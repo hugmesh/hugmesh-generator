@@ -276,7 +276,7 @@ def test_phone_page_streamed_verb_runs_off_thread(qapp, tmp_path, monkeypatch):
     argv = (out / "argv").read_text().splitlines()
     assert argv[0] == "plan"
     assert "--codename" in argv and "comet" in argv
-    assert dlg.page.isComplete() is True            # Finish re-armed after done
+    assert dlg.page.isComplete() is True            # Exit re-armed after done
     assert "stub ran verb=plan" in dlg.log.toPlainText()
 
 

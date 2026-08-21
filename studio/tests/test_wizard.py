@@ -338,7 +338,7 @@ def test_phone_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.phone_selected is True
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # phone never sets cfg.mode
-    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
+    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Exit, no image
     for slug in ("localmesh", "quest", "deploy", "qemu", "role", "hardware", "branding",
                  "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
@@ -356,7 +356,7 @@ def test_quest_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.phone_selected is False
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # quest never sets cfg.mode
-    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
+    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Exit, no image
     for slug in ("localmesh", "phone", "deploy", "qemu", "role", "hardware", "branding",
                  "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
@@ -374,7 +374,7 @@ def test_deploy_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.phone_selected is False
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # deploy never sets cfg.mode
-    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
+    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Exit, no image
     for slug in ("localmesh", "phone", "quest", "qemu", "role", "hardware", "branding",
                  "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])

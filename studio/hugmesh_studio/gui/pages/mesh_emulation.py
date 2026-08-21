@@ -68,6 +68,7 @@ from ..styles import MUTED, WARN
 from ...core import emulation, emulation_save, mesh_emulation, qemu_devices, qemu_tests
 from . import _emulation_common as common
 from ._scroll import scrollable
+from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
 
 #: Device-table columns — symbolic, never hardcoded at a call site (progress.py's
@@ -277,6 +278,10 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             "Boot every image of a finished build session as persistent emulated "
             "devices and drive the whole mesh locally — status per device, ssh "
             "logins, the QEMU console, disk saves, and the mesh's web front door.")
+        # Terminal side-flow: the final button does nothing but close the Studio (the
+        # emulated devices keep running — the verbs on this page are what start and
+        # stop them), so it says Exit (_widgets.label_finish_as_exit).
+        label_finish_as_exit(self)
         self._running = False
         self._cancel = threading.Event()
         #: Whether the operator pressed Cancel for the work now in flight. Distinct
@@ -456,7 +461,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.poll.timeout.connect(self._poll_tick)
 
         # Closing the Studio is the third way to leave this page, and the only one
-        # cleanupPage() never sees (Qt calls it on Back, not on Finish/close). A
+        # cleanupPage() never sees (Qt calls it on Back, not on Exit/close). A
         # tunnel that survives the window is a bound loopback port with nothing
         # behind it, which the NEXT session would find taken.
         finished = getattr(wiz, "finished", None)

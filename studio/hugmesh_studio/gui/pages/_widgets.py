@@ -139,6 +139,37 @@ def collapsible(title: str, content: QtWidgets.QWidget, expanded: bool = True):
     return Collapsible(title, content, expanded)
 
 
+#: What a terminal page's final button is called when pressing it does NOTHING but
+#: close the window. Operator report, 2026-08-21: "if all the finish button does is
+#: exit then just label it exit."
+#:
+#: "Exit" rather than "Close": the operator's own word, and it is the one that stays
+#: distinct from the Cancel sitting beside it. "Close" and "Cancel" are near-synonyms
+#: in the same visual rank, so a reader has to guess which one discards something —
+#: "Exit" reads as "leave the Studio", which is exactly what the button does.
+EXIT_BUTTON_TEXT = "Exit"
+
+
+def label_finish_as_exit(page) -> None:
+    """Relabel THIS page's Finish button "Exit" — for a terminal page whose Finish
+    performs no build, no apply, no write, and no state commit.
+
+    PAGE-level, not wizard-level, deliberately. ``QWizard.setButtonText`` is one text
+    for the whole flow, and this wizard has BOTH kinds of final page: the ones this
+    helper is for, and pages where the final button really does something (see
+    ``gui/pages/idp_provider.py``, whose Finish is what writes the provider endpoints
+    back into ``cfg``). ``QWizardPage.setButtonText`` is the Qt-native per-page
+    override — Qt's ``updateButtonTexts()`` prefers the CURRENT page's custom text
+    over the wizard's — so each page carries its own honest label and a page that
+    says nothing keeps the default "&Finish".
+
+    Safe on a CONDITIONALLY final page (``QemuPage``: terminal only on the "test
+    images that already exist" arm). Qt hides the Finish button outright on a page
+    that is not final, so the text simply goes unrendered on the other arm.
+    """
+    page.setButtonText(QtWidgets.QWizard.WizardButton.FinishButton, EXIT_BUTTON_TEXT)
+
+
 def _row(label, widget):
     w = QtWidgets.QWidget()
     h = QtWidgets.QHBoxLayout(w)

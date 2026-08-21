@@ -309,3 +309,26 @@ def test_flip_button_arms_only_on_the_typed_domain(wiz, baked_domain):
     assert not flip.flip_btn.isEnabled()
     assert baked_domain in flip.warning.text()
     assert "posture: INTERNAL" in flip.status.toPlainText()
+
+
+def test_flip_page_final_button_says_exit_not_finish(wiz, baked_domain):
+    """Operator report 2026-08-21: "if all the finish button does is exit then just
+    label it exit."
+
+    The flip page is the LAST page of this wizard, and its wizard button does nothing
+    but close the window: the flip itself is the in-page "GO LIVE" button above (which
+    opens the driver's own TTY confirmation), and there is no ``validatePage`` here, so
+    the wizard button neither commits nor rolls anything back. Read off the RENDERED
+    widget — the relabel is a per-page ``QWizardPage.setButtonText`` override, and one
+    that never reaches the button is exactly what a call-site assertion cannot see."""
+    from hugmesh_studio.gui.qt import QtWidgets
+
+    pick_model(wiz, "public-dns")
+    inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
+    inputs.ingress_ip.setText("203.0.113.7")
+    flip = advance_to(wiz, golive_mod.GoLiveFlipPage)
+    assert flip.nextId() == -1                       # it really is the end of the flow
+
+    btn = wiz.button(QtWidgets.QWizard.WizardButton.FinishButton)
+    assert btn is not None and btn.isVisible()
+    assert btn.text() == "Exit", f"the flip page still renders {btn.text()!r}"

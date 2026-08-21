@@ -89,6 +89,7 @@ from ..styles import MUTED, WARN
 from ...core import emulation, qemu_tests
 from . import _emulation_common as common
 from ._scroll import scrollable
+from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
 
 #: Result-table columns. Symbolic, never hardcoded at a call site (progress.py's
@@ -111,6 +112,11 @@ class QemuPage(QtWidgets.QWizardPage):
         self.setSubTitle(
             "Boot a build session's images as emulated devices, assert they "
             "provisioned correctly and power them off — Pi roles first, then x86.")
+        # On the "images that already exist" arm this page is TERMINAL, and its final
+        # button does nothing but close the Studio — so it says Exit, not Finish. On
+        # the "build first" arm the page is not final and Qt hides the button entirely
+        # (_widgets.label_finish_as_exit).
+        label_finish_as_exit(self)
         self._running = False
         # Whether Cancel has already been pressed for the work now in flight, so a
         # second press reads as "re-sending" rather than repeating itself.

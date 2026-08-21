@@ -41,7 +41,7 @@ from ..qt import QtWidgets
 from .. import console
 from ...core.phone_wizard import PhoneWizard, PhoneWizardConfig
 from ._scroll import scrollable
-from ._widgets import _row
+from ._widgets import _row, label_finish_as_exit
 from .localmesh import _MeshWorker
 
 
@@ -71,8 +71,12 @@ class PhonePage(QtWidgets.QWizardPage):
         self.setSubTitle("Flash a USB Pixel with VERIFIED GrapheneOS and enroll it in "
                          "the mesh — no image build. Dry-run by default; every "
                          "destructive step is gated by the driver itself. This is the "
-                         "end of this path: Finish closes the wizard.")
+                         "end of this path: Exit closes the Studio.")
         self.setFinalPage(True)
+        # Pressing the final button here does nothing but close the Studio — no
+        # build, no apply, no write, no state commit — so it says so (_widgets:
+        # label_finish_as_exit).
+        label_finish_as_exit(self)
 
         lay = scrollable(self)
         intro = QtWidgets.QLabel(
@@ -184,7 +188,7 @@ class PhonePage(QtWidgets.QWizardPage):
         return bool(getattr(self.wiz, "phone_selected", False))
 
     def isComplete(self) -> bool:
-        # Finish stays disabled while a verb runs — leaving mid-run would orphan the
+        # Exit stays disabled while a verb runs — leaving mid-run would orphan the
         # worker's signals into a destroyed page.
         return not self._running
 

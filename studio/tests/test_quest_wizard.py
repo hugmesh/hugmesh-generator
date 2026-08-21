@@ -286,7 +286,7 @@ def test_quest_page_streamed_verb_runs_off_thread_with_the_class_flag(
     assert argv[0] == "plan"
     assert argv[1:3] == ["--device-class", "quest"]
     assert "--codename" in argv and "eureka" in argv
-    assert dlg.page.isComplete() is True           # Finish re-armed after done
+    assert dlg.page.isComplete() is True           # Exit re-armed after done
     assert "stub ran verb=plan" in dlg.log.toPlainText()
 
 

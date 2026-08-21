@@ -2,7 +2,7 @@
 
 Drives the REAL page on Qt's offscreen platform with BuildDriver + gen-provision-keys mocked
 (no real build runs), then flushes the worker thread's queued signals and asserts the page
-lifecycle: one row per image, Finish gated until every row is terminal, failure-tolerant
+lifecycle: one row per image, Exit gated until every row is terminal, failure-tolerant
 continue (a failed image does not abort the rest), Stop-all, and the once-per-worklist footer
 (mesh manifest + per-node key-zips).
 """
@@ -218,9 +218,9 @@ def _prime(wiz, worklist, generate_keys=True):
 
 
 # ── tests ──────────────────────────────────────────────────────────────────────────────
-def test_finish_disabled_before_any_build_runs(wiz):
+def test_exit_disabled_before_any_build_runs(wiz):
     page = _progress_page(wiz)
-    assert not page.isComplete()          # nothing terminal yet -> Finish disabled
+    assert not page.isComplete()          # nothing terminal yet -> Exit disabled
 
 
 def test_no_worklist_completes_immediately(wiz):
@@ -246,7 +246,7 @@ def test_single_entry_standalone_run(monkeypatch, qapp, wiz, tmp_path):
     assert page._rows[0].bar.value() == 100
 
 
-def test_all_succeed_rows_terminal_and_finish_enabled(monkeypatch, qapp, wiz, tmp_path):
+def test_all_succeed_rows_terminal_and_exit_enabled(monkeypatch, qapp, wiz, tmp_path):
     _install_fake_builddriver(monkeypatch)
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _mesh_worklist(tmp_path))
@@ -268,7 +268,7 @@ def test_failure_is_tolerated_and_run_still_completes(monkeypatch, qapp, wiz, tm
     _run_to_completion(qapp, page)
     assert [page.driver.results[i].status for i in range(3)] == ["ok", "failed", "ok"]
     assert all(r.terminal for r in page._rows)   # a failure does not abort the rest
-    assert page.isComplete()                     # every row terminal -> Finish enabled
+    assert page.isComplete()                     # every row terminal -> Exit enabled
 
 
 def test_stop_all_marks_rows_stopped(monkeypatch, qapp, wiz, tmp_path):
