@@ -67,7 +67,7 @@ from hugmesh_studio.gui.pages import _emulation_common as common     # noqa: E40
 from hugmesh_studio.gui.pages import qemu as qemu_page               # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                          # noqa: E402
 
-from _helpers import advance_to, pick_mode                           # noqa: E402
+from _helpers import advance_to, back_to, pick_mode                  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -261,6 +261,11 @@ def _device(label="rpi5/pki", state="running", port=22301,
 def _qemu_page(wiz):
     pick_mode(wiz, "qemu")
     return advance_to(wiz, wizard_mod.QemuPage)
+
+
+def _text_of(w):
+    """Whatever a label/plain-text widget is currently showing."""
+    return w.text() if hasattr(w, "text") else w.toPlainText()
 
 
 def _echoed(page, marker="STUB-RUNNER"):
@@ -688,6 +693,94 @@ def test_qemu_build_first_rejoins_the_image_flow_and_arms_the_hook(wiz):
     wiz.next()
     assert wiz.cfg.qemu_e2e is True                     # armed on the way out
     assert not isinstance(wiz.currentPage(), wizard_mod.QemuPage)
+
+
+_NEXT = QtWidgets.QWizard.WizardButton.NextButton
+_FINISH = QtWidgets.QWizard.WizardButton.FinishButton
+
+
+def test_qemu_build_first_makes_the_wizard_next_button_live(wiz, qapp):
+    """Ticking the radio must put a REACHABLE Next in the button bar.
+
+    This is the operator-visible bug and the reason the control read as inert:
+    QWizard caches canContinue/canFinish in updateCurrentPage() when the page is
+    ENTERED, and nothing re-runs it when a page's nextId() changes afterwards. The
+    page arrives with "use existing" checked, so nextId() is -1 and the bar shows
+    FINISH; ticking "build new images first" flips nextId() to a real page and
+    flips isFinalPage() to False, but the bar keeps showing Finish with Next hidden
+    and disabled. The only live button then ENDS the wizard.
+
+    Asserted on the BUTTONS, not on nextId(): every existing test here drives the
+    chain with wiz.next(), which bypasses the button bar entirely and passes while
+    the operator's actual route is dead.
+    """
+    page = _qemu_page(wiz)
+    qapp.processEvents()
+    assert wiz.button(_FINISH).isVisible(), "the 'test what exists' arm is terminal"
+    assert not wiz.button(_NEXT).isVisible()
+
+    page.build_first.setChecked(True)
+    qapp.processEvents()
+    assert page.nextId() != -1                        # the flow agrees...
+    nxt = wiz.button(_NEXT)
+    assert nxt.isVisible() and nxt.isEnabled(), (
+        "the radio rejoins the image flow but the button bar still offers no Next — "
+        "the operator has no way to act on the choice they just made")
+    assert not wiz.button(_FINISH).isVisible(), (
+        "Finish is still offered on a page that is no longer final — pressing it "
+        "ends the wizard instead of building anything")
+
+    nxt.click()                                       # the REAL route, not wiz.next()
+    qapp.processEvents()
+    assert not isinstance(wiz.currentPage(), wizard_mod.QemuPage)
+    assert wiz.cfg.qemu_e2e is True
+
+    back_to(wiz, wizard_mod.QemuPage)
+    qapp.processEvents()
+    page.use_existing.setChecked(True)
+    qapp.processEvents()
+    assert wiz.button(_FINISH).isVisible(), "going back to 'test what exists' re-arms Finish"
+    assert not wiz.button(_NEXT).isVisible()
+
+
+def test_qemu_build_first_arm_says_what_next_will_do(wiz):
+    """The build-first arm must not render blank.
+
+    _source_changed() hides cmd_view on this arm and then writes the one line that
+    explains what happens next INTO cmd_view — so the explanation was set on a
+    widget that had just been hidden. Everything else on the page is hidden too, so
+    picking the radio made the page go empty with no feedback at all.
+    """
+    page = _qemu_page(wiz)
+    page.build_first.setChecked(True)
+    visible = [w for w in (page.chain_note, page.cmd_view, page.rows_label,
+                           page.session_note)
+               if w.isVisible() and _text_of(w).strip()]
+    assert visible, "the build-first arm shows no text anywhere"
+    said = " ".join(_text_of(w) for w in visible)
+    assert "Next" in said, f"nothing tells the operator to press Next: {said!r}"
+
+
+def test_qemu_no_session_guidance_is_visible_not_erased(wiz, monkeypatch, qapp):
+    """With no bootable image the page must still say what to do — VISIBLY.
+
+    _reload_sessions() wrote that guidance into rows_label and then checked
+    build_first, whose toggled handler blanks rows_label and hides the group box it
+    lives in. The operator with nothing to test therefore saw an empty page, and the
+    text that did exist told them to "Choose 'Build new images first'" — a control
+    that was already checked and, per the test above, could not be acted on.
+    """
+    monkeypatch.setattr(qemu_tests, "discover_sessions", lambda *_a, **_k: [])
+    page = _qemu_page(wiz)
+    qapp.processEvents()
+    shown = " ".join(_text_of(w) for w in (page.source_note, page.chain_note,
+                                           page.rows_label, page.cmd_view)
+                     if w.isVisible())
+    assert "bootable image" in shown, (
+        "the no-image explanation is not visible anywhere on the page")
+    assert "Next" in shown, "no route forward is offered"
+    assert "Choose “Build new images first”" not in shown, (
+        "still telling the operator to pick a radio that is already checked")
 
 
 def test_qemu_page_without_sessions_forces_build_first(wiz, monkeypatch):
