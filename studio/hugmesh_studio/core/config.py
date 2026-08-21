@@ -498,10 +498,19 @@ SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Social & community", ("akkoma", "tuwunel", "phpbb")),
     ("Media & play", ("owncast", "tube", "games")),
     ("Characters & avatars", ("character-studio", "character-forge", "edge-ai-tts")),
-    ("Network & access", ("tor", "egress-vpn", "anubis", "workloadConsole")),
-    # The AI cloak sits under privacy rather than "Characters & avatars": it is a
-    # protection applied to what a person UPLOADS, not a thing they create with.
-    ("Privacy & anti-scraping", ("media-poisoner",)),
+    ("Network & access", ("egress-vpn", "workloadConsole")),
+    # All three of these are here because PRIVACY is what they are FOR, which is the
+    # axis the operator reads. `tor` and `anubis` sat under "Network & access" only
+    # because they are also network-level, which is the implementation detail, not
+    # the purpose: `tor` is a privacy TRANSPORT (reach the mesh without exposing a
+    # public IP or a DNS name to whoever is watching), and `anubis` is the
+    # anti-scraper gate on the public routes — the group title's second half names
+    # it outright. The AI cloak sits here rather than under "Characters & avatars"
+    # for the same why-not-what reason: it is a protection applied to what a person
+    # UPLOADS, not a thing they create with. What stays in "Network & access" is the
+    # plumbing that carries no privacy claim — where this node's egress goes, and a
+    # console for its workloads.
+    ("Privacy & anti-scraping", ("tor", "anubis", "media-poisoner")),
 )
 
 # --person-role client-identity picker (FD-08). The x86 builder honours --person-role/
