@@ -299,6 +299,40 @@ slx_compile_module() {
 # really carries a base policy to load (base.pp), so a deliberately
 # non-SELinux image is never held to a postcondition it cannot meet.
 # Content is DETERMINISTIC (no timestamps): re-runs must be byte-identical.
+# ── slx_init_can_load_policy <sysroot> ───────────────────────────────────────
+# Shipping policy an image can never LOAD is worse than shipping none: every
+# process then runs as the initial SID `kernel`, nothing transitions, and the
+# node looks selinux-aware while confining nothing.
+#
+# Measured on hugmesh-x86-amd64-pki-test-20260814T112817Z, booted:
+#   cat /proc/self/attr/current      ->  kernel        (a bare initial SID)
+#   load_policy; new process context ->  system_u:system_r:kernel_t:s0
+#   ldd /sbin/openrc | grep -c selinux -> 0
+#   grep -rl selinux /lib/rc/sh/       -> (nothing)
+# i.e. OpenRC was built WITHOUT USE=selinux, so nothing ever calls load_policy,
+# so no policy is loaded at boot. That one fact explains the whole cascade: it is
+# also why setfiles wrote the literal string "kernel" as every file label (with
+# no policy loaded it cannot map a context), and therefore why no domain
+# transition could occur even after the modules and .fc rules were fixed.
+#
+# That image predates #44, which bound the hardened/selinux profile and is what
+# makes USE=selinux apply at all — so this is expected THERE and must never come
+# back silently.
+#
+# Returns: 0 = something will load policy, 1 = positively will not, 2 = unknown.
+slx_init_can_load_policy() {
+    local sysroot="${1:?}" use found=0
+    for use in "${sysroot}"/var/db/pkg/sys-apps/openrc-*/USE; do
+        [ -f "${use}" ] || continue
+        found=1
+        grep -qw selinux "${use}" && return 0
+    done
+    # An initramfs or a hand-rolled service may call load_policy instead.
+    grep -rqs load_policy "${sysroot}/lib/rc/sh" "${sysroot}/etc/init.d" 2>/dev/null && return 0
+    [ "${found}" = 1 ] && return 1
+    return 2
+}
+
 slx_mark_selinux_built() {
     local sysroot="${1:?slx_mark_selinux_built: sysroot required}" detail="${2:-}" type
     type="$(slx_policy_type "${sysroot}")"
@@ -306,6 +340,19 @@ slx_mark_selinux_built() {
         _slx_say "NOT marking selinux-built: no ${type}/base.pp in the sysroot — not a selinux-aware image, first boot stays fail-open"
         return 0
     fi
+    slx_init_can_load_policy "${sysroot}"
+    case "$?" in
+        0) : ;;
+        1) _slx_fail "this image ships SELinux policy that NOTHING WILL LOAD."
+           _slx_fail "  sys-apps/openrc was merged without USE=selinux and no init path calls"
+           _slx_fail "  load_policy, so the kernel boots with no policy: every process stays in"
+           _slx_fail "  the initial SID 'kernel', nothing transitions, and file relabelling"
+           _slx_fail "  writes 'kernel' as every label because contexts cannot be mapped."
+           _slx_fail "  The node would look selinux-aware and confine nothing."
+           _slx_fail "  Fix the profile binding (see PR #44) so USE=selinux applies to openrc."
+           return 1 ;;
+        *) _slx_say "WARN: cannot tell whether this image's init loads policy (no openrc USE record)." ;;
+    esac
     install -d -m 0755 "${sysroot}/usr/share/hugmesh" || { _slx_fail "cannot create ${sysroot}/usr/share/hugmesh"; return 1; }
     {
         echo "# This image was built with selinux-aware userland (base.pp present at build time)."

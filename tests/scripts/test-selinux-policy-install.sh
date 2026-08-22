@@ -541,6 +541,50 @@ else
     fi
 fi
 
+# C3f: AN IMAGE MUST NOT SHIP POLICY NOTHING WILL LOAD.
+# Measured on hugmesh-x86-amd64-pki-test-20260814T112817Z, booted:
+#     cat /proc/self/attr/current       -> kernel     (a bare initial SID)
+#     load_policy; new process context  -> system_u:system_r:kernel_t:s0
+#     ldd /sbin/openrc | grep -c selinux -> 0
+#     grep -rl selinux /lib/rc/sh/       -> nothing
+# OpenRC was merged without USE=selinux, so nothing ever calls load_policy and the
+# kernel boots with NO POLICY. That single fact explains the whole cascade: every
+# process stays in the initial SID, nothing transitions, and relabelling writes
+# the literal string "kernel" as every label because contexts cannot be mapped
+# without a loaded policy. The node looks selinux-aware and confines nothing.
+#
+# base.pp presence alone must therefore NOT be enough to mark an image
+# selinux-aware.
+echo "-- C3f) an image whose init cannot load policy is refused --"
+C3F="${TMP}/c3f"
+for case in with without none; do
+    R="${C3F}/${case}"
+    mkdir -p "${R}/usr/share/selinux/mcs" "${R}/var/db/pkg/sys-apps/openrc-0.55"
+    : > "${R}/usr/share/selinux/mcs/base.pp"
+    case "${case}" in
+        with)    echo "acl pam selinux unicode" > "${R}/var/db/pkg/sys-apps/openrc-0.55/USE" ;;
+        without) echo "acl pam unicode"         > "${R}/var/db/pkg/sys-apps/openrc-0.55/USE" ;;
+        none)    rm -rf "${R}/var/db/pkg" ;;
+    esac
+done
+( . "${GEN}/scripts/_selinux-policy-lib.sh"
+  slx_init_can_load_policy "${C3F}/with";    echo "with=$?"
+  slx_init_can_load_policy "${C3F}/without"; echo "without=$?"
+  slx_init_can_load_policy "${C3F}/none";    echo "none=$?"
+) > "${C3F}/rc" 2>/dev/null
+grep -qx 'with=0' "${C3F}/rc"    && ok "C3f USE=selinux on openrc => the init will load policy" \
+                                 || bad "C3f openrc WITH selinux was not recognised"
+grep -qx 'without=1' "${C3F}/rc" && ok "C3f openrc merged WITHOUT USE=selinux is positively rejected" \
+                                 || bad "C3f openrc without selinux was not rejected — this is the whole kernel_t cascade"
+grep -qx 'none=2' "${C3F}/rc"    && ok "C3f an image with no openrc USE record is UNKNOWN, not a silent pass or a false failure" \
+                                 || bad "C3f the unknown case is not distinguished"
+( . "${GEN}/scripts/_selinux-policy-lib.sh"; slx_mark_selinux_built "${C3F}/without" >/dev/null 2>&1 ) \
+    && bad "C3f an image that cannot load policy was still marked selinux-aware" \
+    || ok "C3f marking selinux-aware FAILS when nothing will load the policy"
+( . "${GEN}/scripts/_selinux-policy-lib.sh"; slx_mark_selinux_built "${C3F}/with" >/dev/null 2>&1 ) \
+    && ok "C3f a capable image is still marked (the check is not always-red)" \
+    || bad "C3f a capable image was refused"
+
 # C4-C6: THE PERMISSIVE-BY-DEFAULT PROOF.
 [ -x "${S}/etc/init.d/selinux-enforce-gate" ] \
     && ok "enforce-gate service shipped executable into /etc/init.d" \
