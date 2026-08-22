@@ -614,8 +614,18 @@ fi
 # ── R6: DoS caps HOISTED ahead of the clone/pipeline (bound before disk exhaustion) ─
 # (R6a) pull's post-fetch, pre-gate inode cap fires on an oversized override BEFORE
 # the ingestion gate runs (offline; mirrors the gate's hoisted DoS-cap pattern).
+# THE ENTRY COUNT IS THE TEST. This case used 40 entries against a cap of 20,
+# which proved the cap fires but could never have caught how it fired. The guard
+# counts with `find … | head -n $((cap+1)) | wc -l`; head exits early — as it must,
+# a DoS guard may not enumerate a hostile tree in full — and that SIGPIPEs find.
+# Under pull-repo-base.sh's `set -euo pipefail` the 141 became the pipeline's
+# status and killed the script AT THE ASSIGNMENT, so the `die` explaining the
+# refusal never ran. It only does that once find's output OVERFLOWS THE 64 KiB
+# PIPE BUFFER: at 40 short paths (~2 KiB) find finishes writing before head can
+# exit and nothing is signalled. 3000 entries is ~180 KiB, far into the range
+# where it is deterministic — measured 200/200 above 128 KiB, 0/3000 below 16 KiB.
 B="${WORK}/r6files"; mkclean_base "$B"; mkdir -p "${B}/many"
-i=0; while [ $i -lt 40 ]; do : > "${B}/many/f${i}"; i=$((i+1)); done
+i=0; while [ $i -lt 3000 ]; do : > "${B}/many/f${i}"; i=$((i+1)); done
 PIN="$(digest_of r6files)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 R6_ANCHOR="$(_fib_tree_digest "$B")"
 GATE_Q="${WORK}/prb/r6files/.mesh-quarantine/login-ui"
@@ -624,6 +634,14 @@ GATE_OUT="$(REPO_BASE_CACHE="${WORK}/prb/r6files" MESH_REGISTRY="$REG" MESH_TRUS
     FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
     bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$PIN" login-ui 2>>"${WORK}/gate.err")"; GATE_RC=$?
 assert_reject "(R6 pull pre-gate inode cap: oversized override refused ahead of the gate)"
+# ...and it must REFUSE, not crash. assert_reject only requires rc != 0, and an
+# abort is also rc != 0 — so it cannot tell a guard that explained itself from one
+# that died mid-count. The message IS the guard's output; demand it.
+if grep -q 'DoS/zip-bomb guard' "${WORK}/gate.err" 2>/dev/null; then
+  ok "(R6 pull pre-gate inode cap: refusal is EXPLAINED, not an abort)"
+else
+  bad "(R6 pull pre-gate inode cap: rc was non-zero but the DoS-guard message never printed — the cap died mid-count instead of refusing; see ${WORK}/gate.err)"
+fi
 # (R6b) fetch-time byte watchdog: a fake git that streams an UNBOUNDED clone is
 # ABORTED mid-fetch before it can exhaust disk (the clone stays bounded near the cap).
 if command -v setsid >/dev/null 2>&1; then
