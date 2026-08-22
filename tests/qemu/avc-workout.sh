@@ -61,6 +61,16 @@ MEM=""                         # empty = launcher default
 SMP=""
 SSH_PORT="2262"                # off the 2222 defaults so a live harness run is not collided with
 UI_PORT="8462"
+# The launcher also forwards guest 80/6443/8080. Its defaults (8080/6443/8081)
+# collide with a RUNNING local compose stack — phpbb binds host 8081 and the
+# front door binds 8080 — and QEMU then refuses the whole -netdev:
+#   Could not set up host forwarding rule 'tcp::8081-:8080'
+# so the boot dies before a single AVC can be produced. These follow the same
+# "off the common defaults" rule SSH_PORT/UI_PORT above already state, and are
+# overridable for the same reason.
+HTTP_PORT="8480"
+API_PORT="6543"
+HS_PORT="8481"
 SSH_USER="tester"
 TIMEOUT="2400"                 # boot->SSH budget; TCG ARM first boot is slow
 PROBE_TIMEOUT="1800"           # wall clock for the whole in-guest workload run
@@ -85,6 +95,9 @@ Usage: $0 --platform PLAT --role ROLE [OPTIONS]
   -m, --mem MB / --smp N        forwarded to the launcher when set
       --ssh-port P  host->guest 22 forward. Default: ${SSH_PORT}
       --ui-port P   host->guest 443 forward. Default: ${UI_PORT}
+      --http-port P host->guest 80 forward. Default: ${HTTP_PORT}
+      --api-port P  host->guest 6443 forward. Default: ${API_PORT}
+      --hs-port P   host->guest 8080 forward. Default: ${HS_PORT}
       --ssh-user U  login the KEYS payload creates. Default: ${SSH_USER}
   -t, --timeout SEC boot->SSH budget. Default: ${TIMEOUT}
       --probe-timeout SEC  in-guest workload wall clock. Default: ${PROBE_TIMEOUT}
@@ -107,13 +120,20 @@ while [[ $# -gt 0 ]]; do
         --board)         BOARD="$2"; shift 2 ;;
         -r|--role)       ROLE="$2"; shift 2 ;;
         -w|--work-dir)   WORK_DIR="$2"; shift 2 ;;
-        --img)           IMG="$2"; shift 2 ;;
+        # Absolutised: qemu-img resolves a RELATIVE backing file against the
+        # OVERLAY's directory, not the cwd, so `--img out/x.img` became
+        # <run-dir>/launch/out/x.img and died with "Could not open backing image"
+        # — naming a path the caller never typed.
+        --img)           IMG="$(cd "$(dirname "$2")" 2>/dev/null && pwd)/$(basename "$2")"; shift 2 ;;
         --kernel)        KERNEL="$2"; shift 2 ;;
         --run-dir)       RUN_DIR="$2"; shift 2 ;;
         -m|--mem)        MEM="$2"; shift 2 ;;
         --smp)           SMP="$2"; shift 2 ;;
         --ssh-port)      SSH_PORT="$2"; shift 2 ;;
         --ui-port)       UI_PORT="$2"; shift 2 ;;
+        --http-port)     HTTP_PORT="$2"; shift 2 ;;
+        --api-port)      API_PORT="$2"; shift 2 ;;
+        --hs-port)       HS_PORT="$2"; shift 2 ;;
         --ssh-user)      SSH_USER="$2"; shift 2 ;;
         -t|--timeout)    TIMEOUT="$2"; shift 2 ;;
         --probe-timeout) PROBE_TIMEOUT="$2"; shift 2 ;;
@@ -200,7 +220,8 @@ ${AVC_KEYS_CMD:-bash "${SCRIPT_DIR}/make-test-keys.sh"} "${KEYS_SRC}" "${KEYS_IM
 step "Booting ${LABEL} (expected getenforce after workout setup: ${EXPECTED_MODE})"
 launch() {
     local common=(--keys-img "${KEYS_IMG}" --run-dir "${LAUNCH_DIR}" --keep
-                  --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" --timeout "${TIMEOUT}")
+                  --ssh-port "${SSH_PORT}" --ui-port "${UI_PORT}" --timeout "${TIMEOUT}"
+                  --http-port "${HTTP_PORT}" --api-port "${API_PORT}" --hs-port "${HS_PORT}")
     [ -n "${IMG}" ]      && common+=(--img "${IMG}")
     [ -n "${WORK_DIR}" ] && common+=(-w "${WORK_DIR}")
     [ -n "${MEM}" ]      && common+=(--mem "${MEM}")
