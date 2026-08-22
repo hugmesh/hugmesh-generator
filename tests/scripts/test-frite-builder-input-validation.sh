@@ -69,6 +69,9 @@ _defaults() {
     HOSTNAME="hugmesh-frite"; DEFAULT_USER="frite"
     BRAND_TITLE="HugMesh Systems"; RPI_CPU="cortex-a53"
     CROSS_TARGET="aarch64-unknown-linux-gnu"
+    # optional in the builder (it declares SUPERDOMAIN="" at the top) but READ
+    # by the validation block, so the mirror has to carry it or `set -u` bites.
+    SUPERDOMAIN=""
 }
 # 0 if the validation block ACCEPTS the current var-set, 1 if it REJECTs (the
 # slice's `exit 1` on a bad value is caught by running it in a subshell).
@@ -82,6 +85,34 @@ rejects() {  # <label> <var> <value>
     _defaults; eval "$2=\$3"
     if _runval; then bad "ACCEPTED injection $1 ($2='$3')"; else ok "REJECT $1 ($2='$3')"; fi
 }
+
+# ── the mirror must cover what the slice reads ────────────────────────────────
+# _defaults() hand-mirrors the builder's own default var-set. When the builder's
+# validation block grows a reference to a variable the mirror does not carry,
+# every ACCEPT case dies on `set -u` inside _runval, is scored a REJECTION, and
+# the suite reports a plausible-looking tally. Every REJECT case still passes --
+# a guard that rejects EVERYTHING looks correct from the negative side alone,
+# which is exactly how ${SUPERDOMAIN} sat here unnoticed (#142).
+# So name the gap instead of absorbing it.
+_slice_unset_vars() {
+    local refd assigned v out=""
+    refd="$(printf '%s\n' "${VALSLICE}" \
+        | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*' | sed 's/^\${//' | sort -u)"
+    # names the slice assigns itself (incl. `local x=` / `readonly x=`) are fine
+    assigned="$(printf '%s\n' "${VALSLICE}" \
+        | grep -oE '(^|[[:space:]]|;)(local |readonly |export )?[A-Za-z_][A-Za-z0-9_]*=' \
+        | sed -E 's/.*[[:space:];]//; s/^(local|readonly|export) //; s/=$//' | sort -u)"
+    for v in ${refd}; do
+        printf '%s\n' "${assigned}" | grep -x "${v}" >/dev/null && continue
+        eval "[ \"\${${v}+set}\" = set ]" || out="${out} ${v}"
+    done
+    printf '%s' "${out}"
+}
+_defaults
+_MISSING="$(_slice_unset_vars)"
+[ -z "${_MISSING}" ] \
+    && ok "_defaults() covers every variable the sliced validation block reads" \
+    || bad "_defaults() does not set:${_MISSING} — every ACCEPT case dies on set -u inside _runval and is scored a rejection (#142)"
 
 # Legit defaults must all pass (the all-defaults set, plus a couple of variants).
 _defaults

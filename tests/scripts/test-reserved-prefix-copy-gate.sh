@@ -59,9 +59,9 @@ W="$(mktemp -d)"; trap 'rm -rf "${W}" 2>/dev/null' EXIT
 # mismatch with the script is visible (checked in section (f) below).
 COPY_REPOS=(hugmesh-federation-api hugmesh-actions hugmesh-auth-core)
 COPY_RELS=(
-  src/main/java/systems/hugmesh/federation/controller/ReservedNames.java
-  src/main/java/systems/hugmesh/actions/registration/ReservedNames.java
-  src/main/java/systems/hugmesh/authcore/reserved/ReservedNames.java
+  src/main/java/net/hugmesh/federation/controller/ReservedNames.java
+  src/main/java/net/hugmesh/actions/registration/ReservedNames.java
+  src/main/java/net/hugmesh/authcore/reserved/ReservedNames.java
 )
 COPY_FIELDS=(RESERVED_LABELS RESERVED RESERVED)   # both field names are in use
 
