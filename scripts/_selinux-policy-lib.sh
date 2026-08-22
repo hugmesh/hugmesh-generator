@@ -201,16 +201,65 @@ slx_have_interface() {
     grep -rqE "^[[:space:]]*(interface|template)\(\`${name}'" "${hdr}" 2>/dev/null
 }
 
-# ── slx_module_is_conditional <name> → 0 iff container headers are needed ────
-# Kept as an explicit two-name list rather than a guess derived from the .te:
-# these are the two k8s EXEMPLARS, and the orphaned enforce-gate names them, so
-# a reviewer can see the whole conditional surface on one line.
-_SLX_CONDITIONAL_MODULES=(localpath_provisioner otel_collector)
-_SLX_CONDITIONAL_IFACE=container_domain_template
+# ── slx_module_deps <name> → the upstream policy MODULES it needs loaded ─────
+#
+# WHY THIS IS A STORE CHECK AND NOT A HEADER CHECK.
+# This used to gate on an INTERFACE being present in the refpolicy headers
+# (`container_domain_template`). That test is close to vacuous:
+# sec-policy/selinux-base installs the WHOLE refpolicy include tree, so every
+# services/*.if is on disk no matter which .pp modules the image actually
+# merged. A module therefore COMPILED happily and then could not LOAD, because
+# the types its interfaces expand to live in a .pp that was never installed.
+#
+# Measured on hugmesh-x86-amd64-pki-test-20260814T112817Z, booted:
+#   FAIL hugmesh_tor            :: Failed to resolve typeattributeset ... cil:11
+#   FAIL localpath_provisioner  :: Failed to resolve typeattributeset ... cil:20
+#   FAIL otel_collector         :: Failed to resolve typeattributeset ... cil:20
+# The image had services/kubernetes.if (from selinux-base) but no kubernetes.pp,
+# so `kubernetes_container()` expanded to the attribute kubernetes_container_domain
+# that nothing defines. hugmesh_tor requires tor_t and no tor.pp was merged.
+#
+# That is not a cosmetic failure. specs/etc/init.d/selinux-enforce-gate's
+# check_modules() requires EVERY module named in the on-image manifest to be
+# loaded, so three unloadable modules meant the gate could never flip — setting
+# HUGMESH_SELINUX_ENFORCE_GATE=1 would have shipped an image that refuses to go
+# enforcing on every boot, silently. See issue #45.
+#
+# Gating on the STORE fixes both halves: a module whose dependency is absent is
+# SKIPPED (so the manifest never names it, so check_modules() never demands it),
+# and a module that IS installed is one whose dependencies are provably present.
+#
+# The map is explicit rather than derived from the .te: a reviewer can see the
+# whole conditional surface at once, and a wrong entry fails loudly at build
+# time instead of at first boot.
+_SLX_MODULE_DEPS=(
+    "localpath_provisioner:container kubernetes"   # container_domain_template + kubernetes_container
+    "otel_collector:container kubernetes"          # ditto, plus container_log_t
+    "hugmesh_tor:tor"                              # require { type tor_t; tor_var_lib_t; tor_etc_t; }
+)
+
+# slx_module_deps <name> -> space-separated upstream module names ("" if none)
+slx_module_deps() {
+    local n="${1:?}" e
+    for e in "${_SLX_MODULE_DEPS[@]}"; do
+        [ "${e%%:*}" = "${n}" ] && { printf '%s' "${e#*:}"; return 0; }
+    done
+    printf ''
+}
+
+# slx_missing_deps <name> <store> -> space-separated deps whose .pp is NOT in the store
+slx_missing_deps() {
+    local n="${1:?}" store="${2:?}" d missing=""
+    for d in $(slx_module_deps "${n}"); do
+        [ -f "${store}/${d}.pp" ] || missing="${missing}${missing:+ }${d}"
+    done
+    printf '%s' "${missing}"
+}
+
+# Retained: a module with ANY declared dependency is conditional by definition.
 slx_module_is_conditional() {
-    local n="${1:?}" m
-    for m in "${_SLX_CONDITIONAL_MODULES[@]}"; do [ "${m}" = "${n}" ] && return 0; done
-    return 1
+    local n="${1:?}"
+    [ -n "$(slx_module_deps "${n}")" ]
 }
 
 # ── slx_compile_module <work> <name> <headerdir> ─────────────────────────────
@@ -357,17 +406,20 @@ slx_stage_node_policy() {
     work="$(mktemp -d)" || { _slx_fail "mktemp -d failed"; return 1; }
     cp "${src}"/*.te "${src}"/*.fc "${work}/" || { rm -rf "${work}"; _slx_fail "staging ${src} failed"; return 1; }
 
-    local have_container=1
-    slx_have_interface "${hdr}" "${_SLX_CONDITIONAL_IFACE}" || have_container=0
-
-    _slx_say "refpolicy headers: ${hdr}   policy store: ${store}   container headers: $([ "${have_container}" = 1 ] && echo present || echo absent)"
+    _slx_say "refpolicy headers: ${hdr}   policy store: ${store}"
 
     local te built=() skipped=() rc=0 log="${work}/compile.log"
     for te in "${work}"/*.te; do
         name="$(basename "${te}" .te)"
-        if slx_module_is_conditional "${name}" && [ "${have_container}" = 0 ]; then
+        local miss; miss="$(slx_missing_deps "${name}" "${store}")"
+        if [ -n "${miss}" ]; then
             skipped+=("${name}")
-            _slx_say "SKIP ${name}: needs the container policy headers (${_SLX_CONDITIONAL_IFACE}); sec-policy/selinux-container is not merged into this image"
+            local pkgs="" d
+            for d in ${miss}; do pkgs="${pkgs}${pkgs:+ }sec-policy/selinux-${d}"; done
+            _slx_say "SKIP ${name}: upstream policy module(s) not in ${store}: ${miss// /.pp }.pp"
+            _slx_say "     merge ${pkgs} into this image to install it. Skipping is CORRECT here:"
+            _slx_say "     the module would compile and then fail to load, and the enforce-gate"
+            _slx_say "     requires every manifest module to load before it will flip."
             continue
         fi
         if slx_compile_module "${work}" "${name}" "${hdr}" >"${log}" 2>&1; then

@@ -14,5 +14,6 @@
 # on-disk handoff (node.env + baked pubkey).
 
 /usr/sbin/hugmesh-domain-reconcile          --    gen_context(system_u:object_r:hugmesh_domain_reconcile_exec_t,s0)
+/usr/bin/hugmesh-domain-reconcile          --    gen_context(system_u:object_r:hugmesh_domain_reconcile_exec_t,s0)
 
 /var/lib/hugmesh/domain-registry(/.*)?            gen_context(system_u:object_r:hugmesh_domain_reconcile_cache_t,s0)

@@ -71,11 +71,22 @@ BUILDERS=(build-frite-stage4.sh build-jetson-stage4.sh
           build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh
           build-orangepi4-lts-stage4.sh build-orangepi5-stage4.sh
           build-rpi5-stage4.sh build-x86-host-stage4.sh)
-# The 7 modules that must compile on EVERY image (base refpolicy interfaces only)
+# The 6 modules that install on EVERY image: they reference base-refpolicy types
+# only, so nothing beyond selinux-base has to be merged for them to LOAD.
+#
+# hugmesh_tor USED TO BE LISTED HERE and that was wrong, proven by booting
+# hugmesh-x86-amd64-pki-test-20260814T112817Z: it requires tor_t/tor_var_lib_t/
+# tor_etc_t, which live in tor.pp (sec-policy/selinux-tor). With no tor.pp merged
+# it compiled fine and then died on load with
+#     Failed to resolve typeattributeset ... hugmesh_tor/cil:11
+# It is a DEPENDENT module, not a mandatory one.
 MANDATORY=(hugmesh_authkeys hugmesh_device_registry_sync hugmesh_domain_reconcile
-           hugmesh_node_storage hugmesh_policy_sync hugmesh_tor hugmesh_vpn)
-# The 2 k8s exemplars the orphaned enforce-gate names BY NAME — omitting them
-# would guarantee the gate can never pass.
+           hugmesh_node_storage hugmesh_policy_sync hugmesh_vpn)
+# Modules that need an upstream policy MODULE (a .pp in the store) — not merely
+# an interface in the headers. selinux-base ships the WHOLE refpolicy include
+# tree, so "the interface exists" is nearly always true and gates nothing; what
+# decides loadability is whether the .pp defining those types was merged.
+DEPENDENT=(hugmesh_tor localpath_provisioner otel_collector)
 EXEMPLARS=(localpath_provisioner otel_collector)
 
 echo "== SELinux node-policy compile+install gate =="
@@ -254,6 +265,15 @@ mk_sysroot() {
     : > "${s}/usr/share/selinux/mcs/base.pp"                 # emake install
     printf '<policy/>\n' > "${s}/usr/share/selinux/devel/policy.xml"  # the ONLY devel/ file
     mk_headers "${s}/usr/share/selinux/mcs/include" "$2" "$3"
+    # The DEPENDENT modules load only when the upstream .pp is in the STORE.
+    # Headers alone are not enough and never were — that is the bug this suite
+    # now pins. A "with-container" image is one that merged the container AND
+    # kubernetes AND tor policy modules.
+    if [ "$3" = "with-container" ]; then
+        : > "${s}/usr/share/selinux/mcs/container.pp"
+        : > "${s}/usr/share/selinux/mcs/kubernetes.pp"
+        : > "${s}/usr/share/selinux/mcs/tor.pp"
+    fi
 }
 
 # mk_sysroot_fedora — the second-choice layout the lib still accepts, so a
@@ -286,7 +306,12 @@ run_lib() {  # run_lib <sysroot> <shared_specs> -> rc, output on stdout
       slx_stage_node_policy "$1" "$2" ) 2>&1
 }
 
-n_mods() { find "$1/usr/share/selinux/mcs" -maxdepth 1 -name '*.pp' ! -name base.pp | wc -l; }
+# Count OUR modules only. base.pp is the distro's, and container/kubernetes/tor
+# .pp are the upstream DEPENDENCIES a with-container fixture ships so the
+# DEPENDENT modules can load — counting those would make "installed" mean
+# "files in the store", which is not what any assertion here is about.
+n_mods() { find "$1/usr/share/selinux/mcs" -maxdepth 1 -name '*.pp' \
+             ! -name base.pp ! -name container.pp ! -name kubernetes.pp ! -name tor.pp | wc -l; }
 
 # ── C) execution against a fake sysroot ──────────────────────────────────────
 echo "-- C) real lib against a fake sysroot --"
@@ -297,7 +322,7 @@ out="$(run_lib "${S}" "${SP}")"; rc=$?
 if [ "${rc}" -eq 0 ]; then ok "no-container image: lib succeeds (rc=0)"; else bad "no-container image: rc=${rc}"$'\n'"${out}"; fi
 missing=""
 for m in "${MANDATORY[@]}"; do [ -f "${S}/usr/share/selinux/mcs/${m}.pp" ] || missing="${missing} ${m}"; done
-[ -z "${missing}" ] && ok "all 7 mandatory .pp installed into the policy store" \
+[ -z "${missing}" ] && ok "all 6 mandatory .pp installed into the policy store" \
                     || bad "mandatory .pp missing from the store:${missing}"
 extra=""
 for m in "${EXEMPLARS[@]}"; do [ -f "${S}/usr/share/selinux/mcs/${m}.pp" ] && extra="${extra} ${m}"; done
@@ -350,8 +375,8 @@ fi
 # C-fedora: the second-choice layout still works.
 S2="${TMP}/cfed/sysroot"; SP2="${TMP}/cfed/specs"; mk_sysroot_fedora "${S2}" stub no-container; mk_specs "${SP2}"
 out2="$(run_lib "${S2}" "${SP2}")"; rc2=$?
-{ [ "${rc2}" -eq 0 ] && [ "$(n_mods "${S2}")" -eq 7 ]; } \
-    && ok "Fedora devel/ layout (devel/Makefile + devel/include) still compiles all 7" \
+{ [ "${rc2}" -eq 0 ] && [ "$(n_mods "${S2}")" -eq 6 ]; } \
+    && ok "Fedora devel/ layout (devel/Makefile + devel/include) still compiles all 6" \
     || bad "Fedora layout regressed: rc=${rc2} installed=$(n_mods "${S2}")"$'\n'"${out2}"
 
 # C3: with container headers -> all 9.
@@ -361,6 +386,72 @@ n_pp="$(n_mods "${S}")"
 { [ "${rc}" -eq 0 ] && [ "${n_pp}" -eq 9 ]; } \
     && ok "container-capable image: all 9 modules installed (incl. both k8s exemplars)" \
     || bad "container-capable image: rc=${rc} installed=${n_pp} (want rc=0, 9)"$'\n'"${out}"
+
+# C3b: THE REGRESSION THIS MODEL EXISTS FOR — headers PRESENT, .pp ABSENT.
+# The old gate asked "is the container_domain_template interface in the headers?"
+# sec-policy/selinux-base installs the WHOLE refpolicy include tree, so that is
+# true on images that merged no container/kubernetes/tor MODULE at all. Those
+# modules therefore compiled, got written into the manifest, and then failed to
+# load on the real node:
+#     Failed to resolve typeattributeset ... localpath_provisioner/cil:20
+# because kubernetes_container() expands to the attribute kubernetes_container_domain
+# which only kubernetes.pp defines. check_modules() demands every manifest module,
+# so the enforce-gate could never flip. Measured on
+# hugmesh-x86-amd64-pki-test-20260814T112817Z (issue #45).
+#
+# This fixture is the exact shape: full headers, NO dependency .pp.
+S="${TMP}/c3b/sysroot"; SP="${TMP}/c3b/specs"; mk_sysroot "${S}" stub with-container; mk_specs "${SP}"
+rm -f "${S}/usr/share/selinux/mcs/container.pp" \
+      "${S}/usr/share/selinux/mcs/kubernetes.pp" \
+      "${S}/usr/share/selinux/mcs/tor.pp"
+out="$(run_lib "${S}" "${SP}")"; rc=$?
+[ "${rc}" -eq 0 ] && ok "C3b headers-without-modules: the step still succeeds" \
+                  || bad "C3b: rc=${rc}"$'\n'"${out}"
+built_dep=""
+for m in "${DEPENDENT[@]}"; do [ -f "${S}/usr/share/selinux/mcs/${m}.pp" ] && built_dep="${built_dep} ${m}"; done
+[ -z "${built_dep}" ] \
+    && ok "C3b a module whose upstream .pp is ABSENT is skipped even though its headers are present" \
+    || bad "C3b built module(s) that cannot load:${built_dep} — the header gate is back"
+MAN3B="${S}/usr/share/hugmesh/selinux-modules.list"
+named=""
+for m in "${DEPENDENT[@]}"; do grep -qx "${m}" "${MAN3B}" 2>/dev/null && named="${named} ${m}"; done
+[ -z "${named}" ] \
+    && ok "C3b the manifest never names an unloadable module (so check_modules() can pass)" \
+    || bad "C3b manifest names unloadable module(s):${named} — the enforce-gate could never flip"
+printf '%s' "${out}" | grep -q 'sec-policy/selinux-kubernetes' \
+    && ok "C3b the skip message names the package that would fix it" \
+    || bad "C3b skip message does not name sec-policy/selinux-kubernetes"$'\n'"${out}"
+
+# C3c: USRMERGE — a /usr/sbin .fc rule can never match on these images.
+# Measured in the booted guest: /usr/sbin is a symlink to bin (and /sbin to
+# usr/bin), and libselinux canonicalises a path through symlinks BEFORE matching
+# file contexts. So a rule written for /usr/sbin/x never applies:
+#     matchpathcon /usr/sbin/hugmesh-authorized-keys-lookup -> bin_t
+#     matchpathcon /usr/bin/hugmesh-authorized-keys-lookup  -> bin_t
+# while semanage fcontext -l happily lists the /usr/sbin rule. The entrypoint
+# executable therefore keeps bin_t, and a domain transition into
+# hugmesh_*_exec_t -> hugmesh_*_t CANNOT HAPPEN. Every one of these 9 rules is an
+# entrypoint, so this silently disabled every hugmesh domain.
+#
+# Adding the /usr/bin spelling was verified live in the guest:
+#     Relabeled /usr/bin/hugmesh-authorized-keys-lookup
+#       from system_u:object_r:bin_t:s0 to system_u:object_r:hugmesh_authkeys_exec_t:s0
+#
+# Both spellings are kept: on a non-usrmerge image /usr/sbin is a real directory
+# and its rule is the one that matches. Neither is redundant, and dropping the
+# /usr/bin one silently re-disables the domains.
+echo "-- C3c) every /usr/sbin exec rule has a /usr/bin sibling (usrmerge) --"
+orphans=""
+for fc in "${SRC}"/*.fc; do
+    while IFS= read -r path; do
+        [ -n "${path}" ] || continue
+        sib="/usr/bin/${path#/usr/sbin/}"
+        grep -qF "${sib}" "${fc}" || orphans="${orphans} $(basename "${fc}"):${path}"
+    done < <(grep -oE '^/usr/sbin/[^[:space:]]+' "${fc}" 2>/dev/null)
+done
+[ -z "${orphans}" ] \
+    && ok "C3c every /usr/sbin exec rule also labels the /usr/bin path it resolves to" \
+    || bad "C3c /usr/sbin rule(s) with no /usr/bin sibling — the domain can never be entered:${orphans}"
 
 # C4-C6: THE PERMISSIVE-BY-DEFAULT PROOF.
 [ -x "${S}/etc/init.d/selinux-enforce-gate" ] \
@@ -409,11 +500,11 @@ n_pp="$(n_mods "${S}")"
 # and the enforce-gate would wait forever for a module that can never load.
 S="${TMP}/c10b/sysroot"; SP="${TMP}/c10b/specs"; mk_sysroot "${S}" stub no-container; mk_specs "${SP}"
 cat >> "${S}/usr/share/selinux/mcs/include/Makefile" <<'MK'
-hugmesh_tor.pp:
+hugmesh_policy_sync.pp:
 	@echo "fixture: silent no-op, exits 0, writes nothing"
 MK
 out="$(run_lib "${S}" "${SP}")"; rc=$?
-{ [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q 'make reported success but hugmesh_tor.pp does not exist'; } \
+{ [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q 'make reported success but hugmesh_policy_sync.pp does not exist'; } \
     && ok "a make that succeeds without writing the .pp fails loudly and names the module" \
     || bad "a silent no-op make was accepted (rc=${rc})"$'\n'"${out}"
 [ "$(n_mods "${S}")" -eq 0 ] && ok "silent no-op make: nothing installed" \

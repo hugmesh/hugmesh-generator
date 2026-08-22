@@ -35,11 +35,40 @@ The lib therefore compiles with the **SYSROOT's headers and the HOST's binaries*
 also means each module is compiled against the refpolicy version the image will
 actually load it into. Nothing is ever compiled on the target.
 
-**(B) The two k8s exemplars cannot compile on every image.**
+**(B) Some modules cannot LOAD on every image — and the test for that was wrong
+until 2026-08-22.**
 `localpath_provisioner` and `otel_collector` call `container_domain_template` /
-`kubernetes_container` / `container_list_log_dirs` / `container_search_logs`,
-which come from `sec-policy/selinux-container` — only cluster-node images pull
-that in. The other seven modules call base-refpolicy interfaces only. So the lib
+`kubernetes_container` / `container_list_log_dirs` / `container_search_logs`.
+This document used to attribute all of those to `sec-policy/selinux-container`.
+That is incorrect: `kubernetes_container()` is defined in
+`services/kubernetes.if` and expands to the attribute
+`kubernetes_container_domain`, which only **`kubernetes.pp`
+(`sec-policy/selinux-kubernetes`)** defines. `hugmesh_tor` was likewise listed as
+mandatory while requiring `tor_t`/`tor_var_lib_t`/`tor_etc_t` from **`tor.pp`
+(`sec-policy/selinux-tor`)**.
+
+The gate was also testing the wrong thing. It asked whether an *interface* was
+present in the refpolicy headers — but `sec-policy/selinux-base` installs the
+**whole** include tree, so every `services/*.if` is on disk regardless of which
+`.pp` modules were merged. Those three therefore compiled happily and then failed
+to load on a real node:
+
+```
+FAIL hugmesh_tor            :: Failed to resolve typeattributeset ... cil:11
+FAIL localpath_provisioner  :: Failed to resolve typeattributeset ... cil:20
+FAIL otel_collector         :: Failed to resolve typeattributeset ... cil:20
+```
+
+measured by booting `hugmesh-x86-amd64-pki-test-20260814T112817Z` (issue #45).
+Because `check_modules()` requires **every** manifest module to be loaded, three
+unloadable modules meant the enforce-gate could never flip — `SELINUX_ENFORCE_GATE`
+would have refused on every boot, silently, even when switched on.
+
+The lib now gates on the **policy store** (`<store>/<dep>.pp`), not on headers.
+A module whose dependency is absent is skipped with the package name that would
+fix it, and never enters the manifest — so `check_modules()` demands only modules
+that provably load. Merge `sec-policy/selinux-kubernetes` / `sec-policy/selinux-tor`
+into an image and those modules build, install and are required automatically. The other seven modules call base-refpolicy interfaces only. So the lib
 splits them: the seven are MANDATORY (a compile failure fails the build) and the
 two exemplars are CONDITIONAL (built where the container headers exist, recorded
 as skipped-WITH-REASON where they do not). Every image writes

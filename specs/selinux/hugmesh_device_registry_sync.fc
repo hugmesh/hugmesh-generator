@@ -10,3 +10,4 @@
 # The binary is copied to /usr/sbin by the (protected) build script.
 
 /usr/sbin/hugmesh-device-registry-sync    --    gen_context(system_u:object_r:hugmesh_device_registry_sync_exec_t,s0)
+/usr/bin/hugmesh-device-registry-sync    --    gen_context(system_u:object_r:hugmesh_device_registry_sync_exec_t,s0)

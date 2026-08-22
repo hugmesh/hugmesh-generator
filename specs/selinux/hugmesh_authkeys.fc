@@ -11,6 +11,7 @@
 # by the sync agent).
 
 /usr/sbin/hugmesh-authorized-keys-lookup    --    gen_context(system_u:object_r:hugmesh_authkeys_exec_t,s0)
+/usr/bin/hugmesh-authorized-keys-lookup    --    gen_context(system_u:object_r:hugmesh_authkeys_exec_t,s0)
 
 /etc/hugmesh/registry(/.*)?                       gen_context(system_u:object_r:hugmesh_authkeys_cache_t,s0)
 
