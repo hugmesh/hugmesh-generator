@@ -32,7 +32,7 @@ def _worktree(tmp_path):
 
 
 def _probes(monkeypatch, *, kind_installed=True, clusters="", mount_ok=True,
-            declared_bind=None):
+            declared_bind=None, apps=(), app_conds=""):
     """Wire which()/probe() to a modelled host: `clusters` is what
     `kind get clusters` prints; `mount_ok` is whether the node can SEE the repo
     at the read-only mount; `declared_bind` is the host path the node's mount
@@ -42,14 +42,27 @@ def _probes(monkeypatch, *, kind_installed=True, clusters="", mount_ok=True,
     are: docker resolves a bind's source when the container starts, so a node
     can declare exactly the right Source and still be serving whatever that path
     resolved to at start time. Modelling them as one flag is what let the
-    preflight answer "delete your cluster" to a stale mount."""
+    preflight answer "delete your cluster" to a stale mount.
+
+    ``apps`` is what ArgoCD reports for its Applications as (repoURL, revision)
+    rows, and ``app_conds`` the text of their status conditions — the evidence
+    the preflight reads to decide whether a fetch actually SUCCEEDED. The
+    default is no Applications, i.e. a cluster that proves nothing, so every
+    case written before this existed keeps meaning exactly what it meant."""
     monkeypatch.setattr(devops_tools, "which",
-                        lambda tool, gd: "/fake/bin/kind" if kind_installed else None,
+                        lambda tool, gd: f"/fake/bin/{tool}" if kind_installed else None,
                         raising=True)
 
     def probe(self, cmd, timeout=15):
         if cmd[0].endswith("kind") and cmd[1:3] == ["get", "clusters"]:
             return (0, clusters)
+        if cmd[0].endswith("kubectl"):
+            spec = cmd[-1]
+            if spec.startswith("custom-columns=REPO:"):
+                return (0, "\n".join(f"{r}   {v}" for r, v in apps))
+            if spec.startswith("custom-columns=MSG:"):
+                return (0, app_conds)
+            raise AssertionError(f"unexpected kubectl probe: {cmd}")
         if cmd[0] == "docker" and cmd[1] == "exec":
             assert cmd[-1] == f"{KIND_REPO_MOUNT}/.git"
             return (0, "") if mount_ok else (1, "")
@@ -89,6 +102,11 @@ def test_existing_cluster_with_mount_is_ready(monkeypatch, tmp_path):
 
 def test_worktree_checkout_names_both_remedies(monkeypatch, tmp_path):
     monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    # Modelled, not left to the host: the fetch-evidence probe now runs before
+    # the checkout-shape check, and an unmocked one would read whatever cluster
+    # the machine running the tests happens to have.
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False)
     node = LocalStackNode(_worktree(tmp_path))
     problems = node.devops_repo_access()
     assert len(problems) == 1
@@ -199,10 +217,12 @@ def test_uninspectable_node_falls_back_to_the_recreate(monkeypatch, tmp_path):
     # conservative one, the same tri-state rule devops_running() follows.
     monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
     monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
-    monkeypatch.setattr(devops_tools, "which", lambda tool, gd: "/fake/bin/kind",
+    monkeypatch.setattr(devops_tools, "which", lambda tool, gd: f"/fake/bin/{tool}",
                         raising=True)
 
     def probe(self, cmd, timeout=15):
+        if cmd[0].endswith("kubectl"):
+            return (0, "")          # no Applications: nothing is proven
         if cmd[0].endswith("kind"):
             return (0, "hugmesh-local")
         if cmd[1] == "exec":
@@ -317,3 +337,141 @@ def test_devops_running_is_false_without_kind(monkeypatch, tmp_path):
     monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
     _probes(monkeypatch, kind_installed=False)
     assert LocalStackNode(_clone(tmp_path)).devops_running() is False
+
+
+# ── the credential the CLUSTER already holds (live 2026-08-22) ───────────────
+# The preflight asked two questions, neither of which is the question that
+# matters. "Is ARGOCD_REPO_TOKEN in *this* process's environment?" and "is the
+# mount serving?" both answer NO on a cluster that was bootstrapped once WITH a
+# token and is fetching happily ever since — so the lane was blocked, and the
+# remedy printed was `docker restart` on a 22-hour-old healthy control plane, to
+# repair a mount nothing in that cluster reads. The stale bind was real; it was
+# also irrelevant.
+#
+# The fix must be EVIDENCE, not the existence of a Secret: a stored token
+# expires, and "there is a credential" over a dead credential is issue #48
+# again. So these pin both directions — proven fetch clears the lane, and every
+# way of NOT proving it leaves the old refusal exactly as it was.
+
+_REPO = "https://github.com/hugmesh/hugmesh-generator.git"
+_SHA = "6964d0892d8ae4ac4113fded3c0b0c68483f3754"
+
+
+def test_proven_fetch_clears_a_stale_bind(monkeypatch, tmp_path):
+    # THE LIVE SHAPE. Stale mount, no token in the environment, and ArgoCD
+    # nonetheless synced at a real commit: ready, and no remedy is printed.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=gd, apps=[(_REPO, _SHA)])
+    assert LocalStackNode(gd).devops_repo_access() == []
+
+
+def test_proven_fetch_clears_a_worktree_checkout(monkeypatch, tmp_path):
+    # A linked worktree cannot serve the tokenless sync — but a cluster already
+    # fetching from GitHub does not need it to.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            apps=[(_REPO, _SHA)])
+    assert LocalStackNode(_worktree(tmp_path)).devops_repo_access() == []
+
+
+def test_an_expired_credential_is_not_proof(monkeypatch, tmp_path):
+    # THE REGRESSION THIS MUST NOT BECOME. A revision recorded from a fetch that
+    # worked LAST week, plus #48's authentication error live on an Application,
+    # is a dead credential — and reporting it ready is the outage the preflight
+    # exists to prevent. The refusal must survive intact.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=gd, apps=[(_REPO, _SHA)],
+            app_conds="ComparisonError: authentication required")
+    problems = LocalStackNode(gd).devops_repo_access()
+    assert len(problems) == 1
+    assert "docker restart hugmesh-local-control-plane" in problems[0]
+
+
+def test_an_unresolved_revision_is_not_proof(monkeypatch, tmp_path):
+    # `.status.sync.revision` carrying a BRANCH NAME (or kubectl's <none>) means
+    # the repo-server never came back with a commit. Only a resolved SHA is
+    # evidence that a fetch happened; matching on "non-empty" would accept the
+    # spec's own targetRevision echoed back and prove nothing.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    # The long non-hex names matter: with only short ones here, deleting the
+    # hex test left this green — the length floor was doing all the work and
+    # half the condition was untested. (Found by mutation, 2026-08-22.)
+    for rev in ("main", "<none>", "HEAD", "abc",
+                "refs/heads/main", "release/2026-08-22", "not-a-sha-at-all"):
+        _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+                declared_bind=gd, apps=[(_REPO, rev)])
+        problems = LocalStackNode(gd).devops_repo_access()
+        assert len(problems) == 1, f"{rev!r} was accepted as a resolved commit"
+        assert "docker restart" in problems[0]
+
+
+def test_another_repo_s_application_is_not_proof(monkeypatch, tmp_path):
+    # The cluster's Applications include Helm sources (harbor) and could include
+    # a fork. Only a fetch of THIS repo says anything about THIS repo's access.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=gd,
+            apps=[("https://helm.goharbor.io", _SHA),
+                  ("https://github.com/someone/fork.git", _SHA)])
+    problems = LocalStackNode(gd).devops_repo_access()
+    assert len(problems) == 1 and "docker restart" in problems[0]
+
+
+def test_a_fresh_cluster_proves_nothing_and_still_takes_the_local_path(
+        monkeypatch, tmp_path):
+    # The check may only ever RELAX a re-run. With no Applications there is no
+    # evidence, so a first bootstrap keeps the tokenless local sync it had.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=None, apps=[])
+    problems = LocalStackNode(gd).devops_repo_access()
+    assert len(problems) == 1
+    assert "kind delete cluster --name hugmesh-local" in problems[0]
+
+
+def test_proof_is_not_sought_when_the_token_is_set(monkeypatch, tmp_path):
+    # The override short-circuits everything, including this probe: the operator
+    # asked to (re)register that credential, and spending two kubectl calls to
+    # second-guess them is pure cost on every lane start.
+    monkeypatch.setenv("ARGOCD_REPO_TOKEN", "tok")
+    monkeypatch.setattr(
+        LocalStackNode, "_argocd_repo_fetch_proven",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("must not probe when the token override is set")),
+        raising=True)
+    assert LocalStackNode(_clone(tmp_path)).devops_repo_access() == []
+
+
+def test_devops_up_names_the_clusters_own_credential(monkeypatch, tmp_path):
+    # The lane must say WHICH of the three modes it is running in. "tokenless
+    # local sync" was printed for this case too, which is what made the log
+    # unreadable: it claimed the daemon path while ArgoCD fetched from GitHub.
+    monkeypatch.delenv("ARGOCD_REPO_TOKEN", raising=False)
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    gd = _clone(tmp_path)
+    _probes(monkeypatch, clusters="hugmesh-local", mount_ok=False,
+            declared_bind=gd, apps=[(_REPO, _SHA)])
+    node = LocalStackNode(gd)
+    monkeypatch.setattr(LocalStackNode, "devops_available",
+                        lambda self: [], raising=True)
+    monkeypatch.setattr(LocalStackNode, "_make",
+                        lambda self, target, timeout, on_line=None, cancel=None:
+                        (True, "done"), raising=True)
+    lines: list[str] = []
+    ok, _ = node.devops_up(on_line=lines.append)
+    assert ok is True
+    assert any(_SHA[:10] in ln for ln in lines), lines
+    assert not any("tokenless local sync" in ln for ln in lines), lines
