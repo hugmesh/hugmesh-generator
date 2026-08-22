@@ -1745,6 +1745,13 @@ gate_optional_services() {
                 _opt_drop_route "${apps}/20-gateway-be.yaml" matrix-api matrix-wellknown matrix
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/_matrix/**' '/.well-known/matrix/**' '/_synapse/**'
+                # The front door grants the same Matrix surface on its own gateway
+                # (20-schema.sql has a second block of /_matrix rows under
+                # hugmesh-fe-gateway). Dropping only the be-gateway leg left
+                # three live ROLE_MATRIX/MOD/ADMIN grants pointing at a
+                # homeserver that is not installed. See #143.
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
+                    '/_matrix/**' '/.well-known/matrix/**'
                 ;;
             phpbb)
                 rm -f "${apps}/30-phpbb.yaml" "${apps}/38-forum-bff-db.yaml" \
