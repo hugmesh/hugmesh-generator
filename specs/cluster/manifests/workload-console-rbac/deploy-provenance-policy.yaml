@@ -29,13 +29,39 @@ spec:
           - resources:
               kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet"]
               namespaces:
-                - hugmesh-backend
-                - hugmesh-frontend
-                - hugmesh-forum
-                - hugmesh-games
+                # RUNTIME/CONSOLE DESTINATIONS ONLY — measured, not assumed.
+                #
+                # This list used to name all seven app tiers, which made the rule
+                # far broader than the provenance intent above and, once Kyverno
+                # was actually installed (2026-08-22), un-syncable: ArgoCD could
+                # no longer apply admin-bff-api, user-bff-api, hugmesh-host-shell
+                # or hugmesh-social-ui, because every one of the 53 repo-managed
+                # workloads in those tiers is tag-based (0 digest-pinned). The
+                # admission webhook denied ArgoCD's own patch.
+                #
+                # Those tiers are NOT console deploys. They are platform
+                # infrastructure defined in specs/cluster/manifests and reviewed
+                # as a PR before ArgoCD ever applies them. A console deploy is
+                # created at RUNTIME — GameInstanceReconciler writes into
+                # hugmesh-games-instances, and the catalog effector points a
+                # generated ArgoCD Application at a Kaniko-built digest — which
+                # is precisely the input this policy exists to constrain, because
+                # it is the only one that never passes through review.
+                #
+                # Narrowing by namespace rather than by a label is deliberate: the
+                # console holds NO create RBAC (its mutate Role grants pods
+                # get/list/delete + exec + portforward, nothing more), so console
+                # deploys reach the cluster through ArgoCD exactly as platform
+                # ones do. There is no in-cluster marker distinguishing them and
+                # nothing currently sets one, so a label selector would match
+                # NOTHING and report enforcement while enforcing nothing.
+                #
+                # tests/workload-console/test-workload-console.sh pins the
+                # invariant that makes this safe to Enforce: every repo-managed
+                # workload in a matched namespace must ITSELF be digest-pinned.
+                # Widening this list back to a tier full of tag-based platform
+                # workloads fails that check by name.
                 - hugmesh-games-instances
-                - hugmesh-tube
-                - hugmesh-owncast
       validate:
         message: >-
           App-tier container images must be digest-pinned to the own registry

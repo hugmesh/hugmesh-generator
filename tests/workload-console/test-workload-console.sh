@@ -156,6 +156,83 @@ grep -q "ClusterPolicy" "${POLICY}" && ok "deploy-provenance ClusterPolicy exist
 grep -q "sha256" "${POLICY}" && ok "deploy-provenance policy enforces @sha256: digest" || bad "deploy-provenance policy does not require a digest"
 grep -q "Enforce" "${POLICY}" && ok "deploy-provenance policy is Enforce" || bad "deploy-provenance policy is not Enforce"
 
+# THE INVARIANT THAT MAKES Enforce SAFE — and the one this policy broke.
+#
+# The rule used to match all seven app tiers. That is not what "console deploy
+# provenance" means, and it was not survivable: when Kyverno was actually
+# installed (2026-08-22) the webhook began denying ArgoCD's own patches, because
+# every repo-managed workload in those tiers is tag-based. Four Applications
+# went un-syncable — the policy blocked the platform it was meant to protect.
+#
+# So the scope is not asserted as a hardcoded list (which would just re-encode
+# today's answer). It is DERIVED: for every namespace the rule matches, every
+# workload this repo defines in that namespace must itself be digest-pinned.
+# Widening the rule back over a tier full of tag-based platform Deployments
+# fails here by name, and so does dropping a tag-based workload INTO a matched
+# tier. Both are the same defect from opposite directions.
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  bad "PyYAML absent — the policy-scope invariant did not run (it would have passed vacuously)"
+else
+  scope_out="$(POLICY="${POLICY}" MANIFESTS="${RBAC}/.." python3 - <<'PYEOF'
+import os, sys, yaml, glob
+
+pol = list(yaml.safe_load_all(open(os.environ["POLICY"], encoding="utf-8")))
+rules = [d for d in pol if d and d.get("kind") == "ClusterPolicy"]
+if not rules:
+    sys.exit("NOSCOPE no ClusterPolicy in the file")
+matched = set()
+for d in rules:
+    for r in d["spec"].get("rules", []):
+        for m in (r.get("match", {}).get("any") or []):
+            matched.update((m.get("resources") or {}).get("namespaces") or [])
+if not matched:
+    sys.exit("NOSCOPE the rule matches no namespace at all — it would enforce nothing")
+
+root = os.environ["MANIFESTS"]
+bad, seen = [], 0
+for f in glob.glob(os.path.join(root, "**", "*.y*ml"), recursive=True):
+    try:
+        docs = list(yaml.safe_load_all(open(f, encoding="utf-8")))
+    except Exception:
+        continue
+    for d in docs:
+        if not isinstance(d, dict):
+            continue
+        if d.get("kind") not in ("Deployment", "StatefulSet", "DaemonSet", "Pod"):
+            continue
+        ns = (d.get("metadata") or {}).get("namespace")
+        if ns not in matched:
+            continue
+        spec = d["spec"]
+        pod = spec.get("template", {}).get("spec") if "template" in spec else spec
+        for c in (pod or {}).get("containers", []) or []:
+            seen += 1
+            if "@sha256:" not in c.get("image", ""):
+                bad.append("%s/%s image=%s (%s)" % (ns, d["metadata"].get("name"),
+                           c.get("image"), os.path.relpath(f, root)))
+print("MATCHED %s" % ",".join(sorted(matched)))
+print("CHECKED %d" % seen)
+for b in bad:
+    print("VIOLATION %s" % b)
+PYEOF
+)"; scope_rc=$?
+  if [ "${scope_rc}" -ne 0 ]; then
+    bad "deploy-provenance scope check could not run: ${scope_out}"
+  else
+    viol="$(printf '%s\n' "${scope_out}" | grep '^VIOLATION ' || true)"
+    nsl="$(printf '%s\n' "${scope_out}" | sed -n 's/^MATCHED //p')"
+    nchk="$(printf '%s\n' "${scope_out}" | sed -n 's/^CHECKED //p')"
+    if [ -n "${viol}" ]; then
+      bad "deploy-provenance is Enforce over namespaces holding TAG-BASED repo workloads — ArgoCD cannot sync them:"
+      printf '%s\n' "${viol}" | sed 's/^VIOLATION /        /'
+    elif [ "${nchk:-0}" -eq 0 ]; then
+      bad "deploy-provenance matches ${nsl} but this repo defines NO workload there — the scope check inspected 0 containers and proves nothing"
+    else
+      ok "deploy-provenance Enforce scope is survivable: ${nchk} repo-managed container(s) in ${nsl}, all digest-pinned"
+    fi
+  fi
+fi
+
 # ── 5. ArgoCD Application shape ─────────────────────────────────────────────────
 [ -f "${APP}" ] && ok "ArgoCD Application apps/14-workload-console-rbac.yaml exists" || bad "ArgoCD Application missing"
 grep -q "prune: true" "${APP}" && grep -q "selfHeal: true" "${APP}" && ok "Application has prune+selfHeal" || bad "Application missing prune/selfHeal"
