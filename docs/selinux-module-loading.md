@@ -240,10 +240,39 @@ uniform, correct path for all three images.)
 
 ## What is left (the follow-up this change deliberately does NOT do)
 
-1. **Narrow the `# INFERRED-WIDE` rules.** Run a real protected build, boot it,
-   collect the permissive-pass AVCs, and narrow every rule so tagged in
-   `specs/selinux/*.te`. Nothing in this wiring can produce those AVCs; guessing
-   a narrowing without them would be a security claim with no evidence behind it.
+1. **Narrow the `# INFERRED-WIDE` rules — but NOT from AVC denials.**
+   This step used to read "collect the permissive-pass AVCs and narrow every rule
+   so tagged". **That cannot work**, and the distinction matters:
+
+   * an AVC **denial** is raised for something the policy does **not** allow — it
+     tells you what to **ADD**;
+   * narrowing an over-broad `allow` needs what was actually **EXERCISED**, which
+     is an **`auditallow`** record (`type=AVC ... granted=`).
+
+   Measured: with six modules loaded and the full workload driven in permissive
+   mode, the run produced **zero denials** — correctly, because a deliberately
+   wide rule denies nothing. Denial-collection can never narrow it.
+
+   The instrument is `scripts/selinux-make-auditallow.sh`. It converts each
+   compiled `.pp` back to CIL — which is **post-expansion**, so it captures the
+   28 tagged lines that are interface calls (`corenet_tcp_connect_all_ports(...)`)
+   and not just the 12 that are raw `allow` statements — and rewrites every
+   `(allow <hugmesh_*> ...)` into `(auditallow ...)`. `hugmesh_vpn` alone expands
+   from 19 tagged lines to 217 auditallow rules. The emitted module grants
+   nothing and changes no decision; it makes granted accesses visible:
+
+   ```
+   scripts/selinux-make-auditallow.sh --pp-tool <sysroot>/usr/libexec/selinux/hll/pp \
+       /usr/share/selinux/mcs/hugmesh_*.pp > narrow.cil
+   semodule -s mcs -i narrow.cil     # verified: loads clean on a real node
+   ... drive tests/qemu/avc-workload.sh ...
+   ausearch -m AVC | grep granted=   # exactly what each wide rule really used
+   ```
+
+   Two traps, each of which silently produces a clean-looking result:
+   * AVCs land in **`/var/log/audit/audit.log`** (auditd runs), **not dmesg**.
+   * **`runcon` is not installed** on these images, so the obvious "force a denial
+     to prove audit works" probe does nothing and reads as success.
 2. **Then, and only then, enable the gate.** `HUGMESH_SELINUX_ENFORCE_GATE=1`
    builds an image whose gate may flip to enforcing — and only on a later boot,
    after `check_mode_sane && check_modules && check_relabel_clean &&

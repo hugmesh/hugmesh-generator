@@ -342,6 +342,7 @@ jobs:
         run: |
           SUITES="
             tests/scripts/test-selinux-policy-install.sh
+            tests/scripts/test-selinux-auditallow-generator.sh
             tests/stack/test-gateway-mfa-env.sh
             tests/stack/test-mdm-manifests-render.sh
           "
