@@ -121,7 +121,15 @@ _prb_checkout_capped() {
 # on a tree that already blew the bound. HOISTED like the gate's DoS caps.
 _prb_enforce_source_caps() {
   local dir="$1" n b
-  n="$(find "$dir" -mindepth 1 2>/dev/null | head -n "$((FOREIGN_MAX_FILES + 1))" | wc -l | tr -d ' ')"
+  # `set +o pipefail` INSIDE the substitution subshell, and only here. head MUST
+  # keep exiting early — a DoS guard may not enumerate a hostile tree in full —
+  # and head exiting is exactly what SIGPIPEs find. Under this file's
+  # `set -euo pipefail` that 141 became the pipeline's status and `set -e` killed
+  # the script AT THE ASSIGNMENT, so on the one input this guard exists to refuse
+  # it aborted with no message instead of running the `die` below. Measured: a
+  # 3000-entry tree against a cap of 100 exited 141 and printed nothing.
+  # Draining (awk/wc without head) would fix the status and defeat the guard.
+  n="$(set +o pipefail; find "$dir" -mindepth 1 2>/dev/null | head -n "$((FOREIGN_MAX_FILES + 1))" | wc -l | tr -d ' ')"
   [ "${n:-0}" -le "$FOREIGN_MAX_FILES" ] \
     || die "foreign source ${dir} has > ${FOREIGN_MAX_FILES} entries (DoS/zip-bomb guard, pre-gate R6)"
   b="$(du -sb "$dir" 2>/dev/null | awk '{print $1+0}')"
