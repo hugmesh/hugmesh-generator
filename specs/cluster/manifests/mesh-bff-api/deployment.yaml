@@ -131,11 +131,32 @@ spec:
             # with client-auth=need (this pod presents the /pki client cert above).
             - name: APP_MESH_USER_BFF_BASE_URL
               value: "https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/user/internal/mesh-devices"
-            # app.mirror.cassandra.contact-point — the shared Cassandra the gateway
-            # revocation/URL registry lives in. Defaulted to the hugmesh-pki
-            # namespace; the deployed StatefulSet is cassandra in hugmesh-pki (the same
-            # contact point admin-bff's CASSANDRA_CONTACT_POINTS already names).
-            - { name: CASSANDRA_CONTACT_POINT, value: "cassandra.hugmesh-pki.svc.cluster.local:9042" }
+            # ── NO Cassandra mirror here, deliberately (issue #140) ─────────────
+            # This manifest used to set
+            #     CASSANDRA_CONTACT_POINT: cassandra.hugmesh-pki.svc.cluster.local:9042
+            # which did nothing twice over. app.mirror.cassandra.enabled is
+            # "${APP_MIRROR_CASSANDRA_ENABLED:false}" and this manifest never set that
+            # flag, so no CqlSession is ever built; and the value it emitted was
+            # character-for-character the contact-point default already baked into the
+            # app's own application.yml. It configured a disabled feature to the
+            # setting it already had — while reading, to anyone opening the file, as a
+            # live Cassandra dependency. That misreading is the whole defect: the
+            # cluster-wiring gate concluded this pod dialled Cassandra unauthenticated,
+            # and the real answer was that it does not dial at all.
+            #
+            # If the mirror is ever wanted here, the flag is NOT enough on its own —
+            # two of the app's defaults are wrong for this cluster and would fail at
+            # first dial, not degrade:
+            #   * local-dc defaults to dc1; apps/00-cassandra.yaml runs the
+            #     chart-default SimpleSnitch, which advertises datacenter1. Every dial
+            #     ends in NoNodeAvailableException. Set CASSANDRA_LOCAL_DC=datacenter1.
+            #   * auth defaults off, but the bitnami image runs PasswordAuthenticator,
+            #     so credentials are required rather than optional hardening. Set
+            #     CASSANDRA_AUTH_ENABLED=true plus a username and a secretKeyRef
+            #     password, and claim a hugmesh.net/cassandra-access class — copy
+            #     admin-bff-api's block, which carries both corrections already.
+            # tests/scripts/test-cassandra-cluster-wiring.sh asserts this absence, so
+            # re-adding a contact point without that wiring fails the gate by name.
             # ── Casdoor client-credentials mint for that ROLE_SERVICE bearer.
             # Client id/secret are ESO-synced (Secret mesh-bff-casdoor-client —
             # provisioned manually in Casdoor alongside the role grant; see

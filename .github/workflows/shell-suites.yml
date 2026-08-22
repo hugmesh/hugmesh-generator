@@ -45,16 +45,13 @@
 #       systems.hugmesh -> net.hugmesh package move (#141), and census_files()
 #       used `grep --exclude-dir`, which busybox does not have, so on alpine the
 #       census came back empty and reported nine false "blind spots".
-#   * tests/scripts/test-cassandra-cluster-wiring.sh
-#       RED on issue #140, which is waiting on a decision, not a fix: mesh-bff-api
-#       configures a Cassandra mirror it never enables. Wire it when #140 closes.
 #   * tests/pentest/nuclei/test-templates.sh
 #       RED on issue #146; also needs a pinned nuclei v3.9.0 the CI images do not
 #       carry. #157 may already have fixed it (the failing check was a
 #       `| grep -q` under pipefail) -- re-run it on a box with nuclei to find out.
 #
-# Those two are the last of the nine suites found RED while measuring pre-merge
-# coverage and filed as #140-#146; the other seven now gate. Gating a red suite
+# That one is the last of the nine suites found RED while measuring pre-merge
+# coverage and filed as #140-#146; the other eight now gate. Gating a red suite
 # would make this workflow red on day one and train everyone to ignore it;
 # leaving them out means any red it shows is a NEW regression.
 name: shell-suites
@@ -262,6 +259,7 @@ jobs:
             tests/node-storage/test-appset.sh
             tests/node-storage/test-node-agent.sh
             tests/phone/test-phone-wizard.sh
+            tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh
             tests/scripts/test-eso-provider-refs.sh
