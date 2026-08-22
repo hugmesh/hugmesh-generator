@@ -607,6 +607,52 @@ def _conf_value(text, key):
     return val[1:-1] if len(val) > 1 and val.startswith('"') and val.endswith('"') else val
 
 
+def _conf_reconcile_job(d):
+    """The env-driven alternative to a static init_data.json, or None.
+
+    Requires all four, so a stray file cannot excuse a missing seed:
+      (1) init-job.yaml exists AND is listed in kustomization.yaml's RESOURCES
+          (an unreferenced manifest is never applied -- and a substring test on
+          the file text is not enough: a comment there names it too);
+      (2) it really carries a Job;
+      (3) the Job ships a reconcile script that talks to Casdoor -- checked by
+          looking for the seeded object kinds, not for a filename.
+    """
+    job_file = d / "init-job.yaml"
+    if not job_file.exists():
+        return None
+    kust = d / "kustomization.yaml"
+    if not kust.exists():
+        return None
+    # The RESOURCES LIST, not the file text: this same kustomization explains the
+    # divergence in a comment that names init-job.yaml, so a substring test passes
+    # even after the resource is unlisted -- i.e. after it stops being applied.
+    kdoc = next((o for o in _load(kust) if isinstance(o, dict)), None) or {}
+    if "init-job.yaml" not in (kdoc.get("resources") or []):
+        return None
+    objs = _load(job_file)
+    if not any(o.get("kind") == "Job" for o in objs):
+        return None
+    text = job_file.read_text(encoding="utf-8")
+    if not all(tok in text for tok in ("organization", "application")):
+        return None
+    # (4) and the directory must ship NO seed at all. casdoor and casdoor-games
+    #     BOTH have an init-job.yaml too -- theirs is a verification pass that
+    #     mounts the same init-data ConfigMap the Deployment does. Without this
+    #     condition, either of them could quietly stop mounting its seed and be
+    #     excused by the presence of a Job that only ever READS one. A directory
+    #     that still carries a seed ConfigMap must still deliver it.
+    # STRUCTURAL, not textual: a seed is a ConfigMap carrying an init_data.json
+    # KEY. Scanning the file text instead would match the prose in
+    # casdoor-domain's own app.conf explaining why it has no seed -- the same way
+    # a substring test on kustomization.yaml matched its explanatory comment.
+    for f in sorted(d.glob("*.yaml")):
+        for o in _load(f):
+            if o.get("kind") == "ConfigMap" and "init_data.json" in (o.get("data") or {}):
+                return None
+    return job_file.name
+
+
 def check_conf(cluster):
     dirs = sorted(pathlib.Path(cluster, "manifests").glob("casdoor*"))
     dirs = [d for d in dirs if (d / "deployment.yaml").exists()]
@@ -627,8 +673,27 @@ def check_conf(cluster):
                 if m.get("subPath") == "init_data.json":
                     mount = m
         if not mount:
-            bad(f"{label}: the Deployment mounts no init_data.json — the declarative "
-                f"seed is not delivered at all")
+            # TWO DELIVERY MECHANISMS, and a directory must use exactly one.
+            # casdoor/casdoor-games mount a static init_data.json. casdoor-domain
+            # deliberately does not (a domain's org/app/admin-password are
+            # env-driven and not knowable at build time) and delivers the same
+            # seed through an init Job running reconcile.py instead.
+            #
+            # This is NOT an exemption by name. A name list would be a standing
+            # amnesty that keeps passing after the divergence is undone -- which
+            # is how the guard came to fail here in the first place: it was
+            # written 2026-08-06, the divergence landed 2026-08-19, and neither
+            # side could see the other. The alternative is DERIVED from the tree,
+            # so a directory that stops delivering the seed by EITHER route still
+            # goes red, and a directory that quietly grows a second route does too.
+            reconciler = _conf_reconcile_job(d)
+            if reconciler:
+                ok(f"{label}: no static init_data.json, and the seed is delivered by "
+                   f"the env-driven init Job instead ({reconciler})")
+                continue
+            bad(f"{label}: the Deployment mounts no init_data.json AND there is no "
+                f"env-driven init Job to deliver the seed either — it is not "
+                f"delivered at all")
             continue
         seed_volume = next((v for v in pod.get("volumes", [])
                             if v.get("name") == mount["name"]), None)

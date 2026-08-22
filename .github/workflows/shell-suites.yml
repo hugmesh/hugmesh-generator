@@ -38,9 +38,9 @@
 #     #140-#146 rather than gated. Gating them now would make this workflow red
 #     on day one and train everyone to ignore it; leaving them out means any red
 #     it shows is a NEW regression. Wire each one as its issue closes -- #141,
-#     #142, #143 and #144 have now closed, and their five runner-capable suites
-#     are listed above (a sixth, test-secret-contract.sh, is deferred just below
-#     for a reason unrelated to those bugs).
+#     #142, #143, #144 and #145 have now closed, and their six runner-capable
+#     suites are listed above (a seventh, test-secret-contract.sh, is deferred
+#     just below for a reason unrelated to those bugs).
 name: shell-suites
 
 on:
@@ -120,6 +120,7 @@ jobs:
             tests/scripts/test-builder-log-paths.sh
             tests/scripts/test-calamares-boost-seed.sh
             tests/scripts/test-casdoor-domains-appset.sh
+            tests/scripts/test-casdoor-init-honesty.sh
             tests/scripts/test-casdoor-jwt-no-preferred-username.sh
             tests/scripts/test-catalog-discovery-gate.sh
             tests/scripts/test-cloud-package.sh
