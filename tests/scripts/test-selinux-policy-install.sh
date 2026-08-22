@@ -499,6 +499,48 @@ else
     fi
 fi
 
+# C3e: restorecon MUST be preferred over setfiles.
+# On hugmesh-x86-amd64-pki-test-20260814T112817Z, with the policy loaded and a
+# valid file_contexts, setfiles wrote the literal context "kernel" for every path
+# and exited 0:
+#     Relabeled /usr/bin from <no context> to kernel        rc=0
+# while restorecon produced correct labels from the same inputs:
+#     /usr/bin -> system_u:object_r:bin_t:s0
+# Because setfiles exits 0, the old `setfiles || restorecon` never reached
+# restorecon — so every node was labelled "kernel" and every process ran kernel_t,
+# which makes every domain transition impossible.
+#
+# Behavioural, with BOTH tools stubbed: whichever the code prefers is the one
+# that leaves a marker.
+echo "-- C3e) restorecon is preferred over setfiles --"
+PROV="${GEN}/specs/etc/keys-provision/provision.sh"
+if [ ! -f "${PROV}" ]; then
+    bad "C3e provision.sh not found"
+else
+    C3E="${TMP}/c3e"; mkdir -p "${C3E}/bin"
+    printf '#!/bin/sh\necho restorecon >> "%s/called"\nexit 0\n' "${C3E}" > "${C3E}/bin/restorecon"
+    printf '#!/bin/sh\necho setfiles   >> "%s/called"\nexit 0\n' "${C3E}" > "${C3E}/bin/setfiles"
+    chmod +x "${C3E}/bin/restorecon" "${C3E}/bin/setfiles"
+    { echo '#!/usr/bin/env bash'
+      echo 'have(){ command -v "$1" >/dev/null 2>&1; }'
+      echo 'warn(){ :; }'
+      echo 'type=mcs; relabel_ok=1'
+      sed -n '/# restorecon IS THE RELABELER/,/^    fi$/p' "${PROV}" | head -40
+    } > "${C3E}/harness.sh"
+    if ! grep -q 'restorecon -RF /' "${C3E}/harness.sh"; then
+        bad "C3e could not extract the relabel block from provision.sh"
+    else
+        ( PATH="${C3E}/bin:${PATH}" bash "${C3E}/harness.sh" >/dev/null 2>&1 )
+        first="$(head -1 "${C3E}/called" 2>/dev/null | tr -d ' ')"
+        [ "${first}" = "restorecon" ] \
+            && ok "C3e restorecon runs first (setfiles writes 'kernel' for every path and exits 0)" \
+            || bad "C3e the relabeler tried first was [${first:-none}] — setfiles-first is what made the fleet kernel_t"
+        grep -qx 'setfiles' "${C3E}/called" 2>/dev/null \
+            && bad "C3e setfiles ran even though restorecon was available" \
+            || ok "C3e setfiles is not run when restorecon exists"
+    fi
+fi
+
 # C4-C6: THE PERMISSIVE-BY-DEFAULT PROOF.
 [ -x "${S}/etc/init.d/selinux-enforce-gate" ] \
     && ok "enforce-gate service shipped executable into /etc/init.d" \
