@@ -2855,11 +2855,39 @@ EOF
     # ── END hugmesh node-policy load ──
     log "Relabelling filesystem (this can take a while)"
     local relabel_ok=1
-    if have setfiles && [ -f "/etc/selinux/${type}/contexts/files/file_contexts" ]; then
+    # restorecon IS THE RELABELER. setfiles used to be tried first with restorecon
+    # as an `||` fallback, and that combination is what left the fleet kernel_t.
+    #
+    # Measured on hugmesh-x86-amd64-pki-test-20260814T112817Z, same loaded policy,
+    # and a perfectly valid file_contexts (/usr/bin(/.*)? -> ...:bin_t:s0):
+    #
+    #   setfiles -v -F <file_contexts> /usr/bin
+    #     Relabeled /usr/bin      from <no context> to kernel
+    #     Relabeled /usr/bin/dcb  from <no context> to kernel        rc=0
+    #   restorecon -RF /usr/bin
+    #     /usr/bin    -> system_u:object_r:bin_t:s0                  rc=0
+    #     /usr/bin/sh -> system_u:object_r:shell_exec_t:s0
+    #
+    # setfiles writes the literal string "kernel" as EVERY label. That is not a
+    # valid file context, and it is exactly why every process on the node ends up
+    # kernel_t and no domain transition can occur. Worse it EXITS 0, so the `||`
+    # never fired and the relabeler that works was never reached.
+    #
+    # restorecon reads the same policy and the same file_contexts and produces
+    # correct labels — including repairing paths setfiles had already corrupted.
+    # So: restorecon first, always. setfiles remains only for an image with no
+    # restorecon at all, and the postcondition below catches it when it lies.
+    if have restorecon; then
+        restorecon -RF / 2>/dev/null || { relabel_ok=0; warn "restorecon -RF / failed"; }
+    elif have setfiles && [ -f "/etc/selinux/${type}/contexts/files/file_contexts" ]; then
+        warn "no restorecon on this image — falling back to setfiles, which has been"
+        warn "  observed writing the literal context 'kernel' for every path; the"
+        warn "  postcondition below is the only thing between that and a node that"
+        warn "  believes it is labelled."
         setfiles -F "/etc/selinux/${type}/contexts/files/file_contexts" / 2>/dev/null || \
-        restorecon -RF / 2>/dev/null || { relabel_ok=0; warn "relabel incomplete"; }
+            { relabel_ok=0; warn "relabel incomplete"; }
     else
-        restorecon -RF / 2>/dev/null || { relabel_ok=0; warn "restorecon unavailable"; }
+        relabel_ok=0; warn "no relabeler available (neither restorecon nor setfiles)"
     fi
     # /.autorelabel carries the STANDARD semantics: it REQUESTS a relabel and is
     # removed by whatever completes one. On these images provision_selinux() IS
