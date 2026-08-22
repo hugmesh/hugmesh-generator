@@ -59,9 +59,15 @@ GUARD_ROOT="${GUARD_ROOT:-${REPO}}"
 if [ -n "${GUARD_ALLOW+x}" ]; then ALLOW_TEXT="${GUARD_ALLOW}"
 else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 
+# How many suites are wired into a pull_request-triggered workflow (check 7).
+# GUARD_PREMERGE overrides it for the negative-control children below, exactly as
+# GUARD_ALLOW does for the allowlist: this number describes THE REAL REPO, and a
+# synthesised one-suite tree cannot be measured against it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-106}"
+
 echo "== guard integrity: every guard can fail, and something runs it =="
 
-REPO="${GUARD_ROOT}" ALLOW_UNWIRED="${ALLOW_TEXT}" python3 - <<'PY'
+REPO="${GUARD_ROOT}" ALLOW_UNWIRED="${ALLOW_TEXT}" PREMERGE_BASELINE="${PREMERGE_BASELINE}" python3 - <<'PY'
 import os, re, sys
 
 repo = os.environ["REPO"]
@@ -459,7 +465,7 @@ if any(re.search(r"\bguard_require_(tools|capability)\b",
 # already applies to ALLOW_UNWIRED).
 print()
 print("-- 7) how many suites actually gate a pull request --")
-PREMERGE_BASELINE = 0
+PREMERGE_BASELINE = int(os.environ.get("PREMERGE_BASELINE", "0"))
 wf_dir = os.path.join(repo, ".github", "workflows")
 pr_wf, wf_text = [], ""
 if os.path.isdir(wf_dir):
@@ -482,7 +488,14 @@ if os.path.isdir(wf_dir):
                 on_block.append(line)
         if re.search(r"\bpull_request\b", "\n".join(on_block)):
             pr_wf.append(fn)
-            wf_text += t + "\n"
+            # Comment lines are STRIPPED before matching. A workflow that documents
+            # which suites it deliberately does NOT run — and it should — would
+            # otherwise have those names counted as gated, so the number would grow
+            # by writing prose. This check must measure what CI executes, not what
+            # the file mentions.
+            wf_text += "\n".join(
+                l for l in t.split("\n") if not l.lstrip().startswith("#")
+            ) + "\n"
 
 gated = [s for s in suites
          if s in wf_text or (os.path.dirname(s) + "/*.sh") in wf_text]
@@ -531,7 +544,7 @@ if [ -z "${GUARD_SELFTEST_CHILD:-}" ]; then
   # neg_case NAME EXPECTED_SUBSTRING  (tree already built in ${NEG}/tree)
   neg_case() {
     local name="$1" want="$2" out crc
-    out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" bash "${SELF}" 2>&1)"; crc=$?
+    out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=0 bash "${SELF}" 2>&1)"; crc=$?
     if [ "${crc}" -ne 0 ] && printf '%s' "${out}" | grep -qF "${want}"; then
       ok "negative control bites: ${name}"
     else
@@ -651,11 +664,11 @@ bad(){ echo "  FAIL $*"; F=$((F+1)); }
 ok "nothing wrong"
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]'
-  if GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" bash "${SELF}" >/dev/null 2>&1; then
+  if GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=0 bash "${SELF}" >/dev/null 2>&1; then
     ok "positive control: a clean miniature repo passes (the analyser is not just always-red)"
   else
     bad "positive control FAILED — the analyser rejects a clean tree, so (a)-(d) prove nothing"
-    GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" bash "${SELF}" 2>&1 | sed 's/^/           /'
+    GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=0 bash "${SELF}" 2>&1 | sed 's/^/           /'
   fi
 
   # ── DYNAMIC control: the real suites, really missing a real tool ────────────
