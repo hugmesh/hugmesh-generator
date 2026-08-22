@@ -261,6 +261,17 @@ lint:tools-path-lib:
 # It does NOT change the gating policy — the pentest stage stays allow_failure.
 # Hermetic: it copies the harness and drives it through a SYNTHETIC env profile,
 # so it can never reach tests/stack/up.sh or down.sh.
+# The instrument that can NARROW an INFERRED-WIDE rule. See the script header:
+# AVC denials say what to ADD; narrowing needs what was EXERCISED (auditallow).
+lint:selinux-auditallow-generator:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash
+  script:
+    - bash tests/scripts/test-selinux-auditallow-generator.sh
+
 lint:dast-honesty:
   stage: lint
   image: python:3-slim
