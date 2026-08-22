@@ -17,7 +17,10 @@
 # into an error. tests/scripts/test-guard-integrity.sh check 7 counts these names
 # and pins the total, so neither adding nor dropping one can be silent.
 #
-# NOT LISTED HERE (deliberate, with reasons):
+# NOT LISTED HERE (deliberate, with reasons). Every suite on disk is either listed
+# above or listed here: six were in NEITHER place until 2026-08-22, which made this
+# very block's claim false. Each of the six was then RUN in alpine:3 to decide
+# which it was -- three are now gated, three are below.
 #   * tests/scripts/test-liquibase-grant-roles.sh
 #       python:3.12-slim + perl/PyYAML, with /home/magus/Github mounted and SERVICE_SRC_ROOT set
 #   * tests/scripts/test-service-env-contract.sh
@@ -26,6 +29,14 @@
 #       alpine:3 + apk add bash python3 py3-yaml helm coreutils (+ --network host)
 #   * tests/stack/test-web-locales-wiring.sh
 #       python:3.12-slim + pyyaml + apt-get install make + host docker CLI and compose plugin bind-mount
+#   * tests/casdoor/test-jwt-custom-token.sh
+#       a container runtime INSIDE the job container (it starts casdoor itself);
+#       alpine:3 has neither docker nor podman and no daemon socket is mounted
+#   * tests/device-registry/test-layer-a-headscale-acl.sh
+#       the hugmesh-admin-bff-api sibling checkout, for the BFF-side Layer-A compiler
+#   * tests/stack/test-m2-bootstrap.sh
+#       the ${STACK_SRC:-.stack-src} consumer checkouts its pin-drift leg walks
+#       (`make stack-clone`), or M2_PIN_DRIFT_SKIP=1
 #   * tests/egress-vpn/test-secret-contract.sh
 #       needs the hugmesh-admin-bff-api sibling checkout for its writer half. It
 #       is CORRECT on a hosted runner (45 passed, 0 failed) but exits 3 saying
@@ -34,13 +45,18 @@
 #       systems.hugmesh -> net.hugmesh package move (#141), and census_files()
 #       used `grep --exclude-dir`, which busybox does not have, so on alpine the
 #       census came back empty and reported nine false "blind spots".
-#   * suites that are GATEABLE but currently RED on real defects, filed as issues
-#     #140-#146 rather than gated. Gating them now would make this workflow red
-#     on day one and train everyone to ignore it; leaving them out means any red
-#     it shows is a NEW regression. Wire each one as its issue closes -- #141,
-#     #142, #143, #144 and #145 have now closed, and their six runner-capable
-#     suites are listed above (a seventh, test-secret-contract.sh, is deferred
-#     just below for a reason unrelated to those bugs).
+#   * tests/scripts/test-cassandra-cluster-wiring.sh
+#       RED on issue #140, which is waiting on a decision, not a fix: mesh-bff-api
+#       configures a Cassandra mirror it never enables. Wire it when #140 closes.
+#   * tests/pentest/nuclei/test-templates.sh
+#       RED on issue #146; also needs a pinned nuclei v3.9.0 the CI images do not
+#       carry. #157 may already have fixed it (the failing check was a
+#       `| grep -q` under pipefail) -- re-run it on a box with nuclei to find out.
+#
+# Those two are the last of the nine suites found RED while measuring pre-merge
+# coverage and filed as #140-#146; the other seven now gate. Gating a red suite
+# would make this workflow red on day one and train everyone to ignore it;
+# leaving them out means any red it shows is a NEW regression.
 name: shell-suites
 
 on:
@@ -111,6 +127,7 @@ jobs:
             tests/node-storage/test-degrade.sh
             tests/node-storage/test-pool-entrypoint.sh
             tests/node-storage/test-provision-pool.sh
+            tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
             tests/scripts/test-anubis-env-gate.sh
@@ -236,6 +253,7 @@ jobs:
         shell: bash
         run: |
           SUITES="
+            tests/api/test-bff-admin.sh
             tests/auto-update/test-builder-opt-in.sh
             tests/egress-vpn/test-vpn-reconcile-verify.sh
             tests/keystores/test-keystores-multidomain.sh
@@ -256,6 +274,7 @@ jobs:
             tests/scripts/test-pki-role-san-coverage.sh
             tests/scripts/test-provision-keys-escrow-guard.sh
             tests/scripts/test-python-targets-seed.sh
+            tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-x86-artifact-integrity.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh

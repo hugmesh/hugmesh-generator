@@ -51,13 +51,18 @@ P=0; F=0
 ok(){ echo "  PASS $*"; P=$((P+1)); }
 bad(){ echo "  FAIL $*"; F=$((F+1)); }
 
+# FAIL-CLOSED, not `SKIP … exit 0`. Without a container runtime this suite checked
+# nothing and exited 0 — so on every machine and image without docker it reported
+# a property as verified that was never looked at, which is precisely the shape
+# tests/lib/guard-preflight.sh exists to kill and that check 6 of
+# tests/scripts/test-guard-integrity.sh forbids for any CI-run suite. Deliberate
+# local opt-out: GUARD_TOOLING_ALLOW_SKIP=1.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/guard-preflight.sh"
 RT=""
 if command -v docker >/dev/null 2>&1; then RT="docker"
 elif command -v podman >/dev/null 2>&1; then RT="podman"; fi
-if [ -z "${RT}" ]; then
-  echo "SKIP: no docker/podman on PATH — cannot run the held-until-live casdoor mint test"
-  exit 0
-fi
+[ -n "${RT}" ] || guard_require_capability \
+  "no docker or podman on PATH — this guard needs a container runtime to start casdoor"
 
 cleanup(){
   [ -n "${CID}" ]   && ${RT} rm -f "${CID}"   >/dev/null 2>&1 || true
