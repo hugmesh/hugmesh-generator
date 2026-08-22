@@ -226,6 +226,12 @@ node_label_scan() {
       arming = (index(win, "nodeselector") > 0) || \
                (win ~ /label/ && win ~ /(^|[^a-z])nodes?([^a-z]|$)/)
       line = $0
+      # An `image:` value is `repo/name:tag`, which collides with the label
+      # grammar by pure coincidence and can never BE a label. It was carried as a
+      # named exemption ("bitnami/kubectl") until the vendor moved the image to
+      # docker.io/bitnamilegacy and the stale entry stopped matching — a rot the
+      # allowlist could not detect. Excluding the line structurally cannot rot.
+      if (cur ~ /^[ \t]*-?[ \t]*image[ \t]*:/) next
       while (match(line, TOK)) {
           tok  = substr(line, RSTART, RLENGTH)
           line = substr(line, RSTART + RLENGTH)
@@ -268,8 +274,6 @@ node_label_other_ok() {
         echo "the POD opt-in label: hugmesh-vpn-mark sets it on marked pods and manifests/networkpolicy/egress-vpn-interaction.yaml's podSelector matches it. A different carrier with a different consumer, and ONE TRANSPOSITION away from the node key — so it is legal HERE, in the doc that explains the pod leg, and nowhere else" ;;
       secret-projector-daemonset.yaml:hugmesh.net/compute)
         echo "the GPU plugin's node label, cited in this DaemonSet's header as the shape this one copies — another service's key, legal in this header and nowhere else" ;;
-      secret-projector-daemonset.yaml:bitnami/kubectl)
-        echo "the projector's container image reference; \`repo/name:tag\` collides with the label grammar by coincidence and selects nothing" ;;
       *) echo "" ;;
     esac
 }
@@ -452,14 +456,24 @@ census_nested() {
     return 1
 }
 
+# PORTABILITY, and why it mattered. busybox grep -- what the alpine CI image
+# ships -- has NO --exclude-dir: it exits 2 with a usage dump, which the
+# `2>/dev/null` below swallowed whole. The census therefore came back EMPTY on
+# alpine and every asserted file reported as a "census blind spot": nine
+# confident, entirely wrong messages pointing at the manifests instead of at
+# grep. find-based pruning is understood by both greps.
+_census_textfiles() { # <ere> -> repo-relative text files matching it
+    find . -name .git -prune -o -type f -print0 2>/dev/null \
+      | xargs -0 grep -lIE "$1" 2>/dev/null | sed 's|^\./||'
+}
 census_files() {
     ( cd "${REPO}" || exit 0
       # -I: skip binary files. A sibling checkout with build output carries
       # .class files whose constant pool contains these very strings, and a
       # census that reports compiled bytecode as a contract copy gets muted.
-      grep -rlIE --exclude-dir=.git "${RE_A}" . 2>/dev/null | sed 's|^\./||'
+      _census_textfiles "${RE_A}"
       # Detector B: only where the file also talks about egress-vpn.
-      grep -rlIE --exclude-dir=.git 'egress-vpn' . 2>/dev/null | sed 's|^\./||' | while read -r f; do
+      _census_textfiles 'egress-vpn' | while read -r f; do
           grep -qE "${RE_B}" "${f}" 2>/dev/null && printf '%s\n' "${f}"
       done
     ) | sort -u | while read -r f; do
@@ -468,6 +482,12 @@ census_files() {
 }
 
 CENSUS="$(census_files)"
+# NON-VACUITY. A blind census is a TOOLING failure, and it has to say so in one
+# true sentence rather than as N false "blind spot" reports about the manifests.
+CENSUS_N="$(printf '%s\n' "${CENSUS}" | grep -c . 2>/dev/null)"
+[ "${CENSUS_N:-0}" -gt 0 ] \
+    && ok "census detectors resolved ${CENSUS_N} file(s) — the sweep below is not vacuous" \
+    || bad "census_files() resolved NOTHING — the detectors are blind, so every 'blind spot' below would be a false positive. This is a tooling failure, not a contract failure (busybox grep has no --exclude-dir)."
 CONTRACT_REL="${CONTRACT#"${REPO}"/}"
 unknown=0; exempted=0; checked=0
 while IFS= read -r rel; do
@@ -554,7 +574,7 @@ fi
 
 # Read from origin/main when the sibling is a git checkout — never from a working
 # tree another session may be mid-edit in. Falls back to the file on disk.
-W_REL="src/main/java/systems/hugmesh/adminbff/egressvpn/Fabric8VpnConfigSecretWriter.java"
+W_REL="src/main/java/net/hugmesh/adminbff/egressvpn/Fabric8VpnConfigSecretWriter.java"
 Y_REL="src/main/resources/application.yml"
 SIB_REF=""
 for ref in origin/main origin/HEAD; do

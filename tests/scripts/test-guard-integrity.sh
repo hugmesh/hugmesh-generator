@@ -63,7 +63,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # GUARD_PREMERGE overrides it for the negative-control children below, exactly as
 # GUARD_ALLOW does for the allowlist: this number describes THE REAL REPO, and a
 # synthesised one-suite tree cannot be measured against it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-107}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-110}"
 
 echo "== guard integrity: every guard can fail, and something runs it =="
 

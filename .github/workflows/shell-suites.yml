@@ -26,11 +26,21 @@
 #       alpine:3 + apk add bash python3 py3-yaml helm coreutils (+ --network host)
 #   * tests/stack/test-web-locales-wiring.sh
 #       python:3.12-slim + pyyaml + apt-get install make + host docker CLI and compose plugin bind-mount
-#   * 9 suites that are GATEABLE but currently RED on real defects, filed as
-#     issues #140-#146 rather than gated. Two pairs share a root cause, so 9 red
-#     suites are 7 bugs. Gating them now would make this workflow red on day one
-#     and train everyone to ignore it; leaving them out means any red it shows is
-#     a NEW regression. Wire each one as its issue closes.
+#   * tests/egress-vpn/test-secret-contract.sh
+#       needs the hugmesh-admin-bff-api sibling checkout for its writer half. It
+#       is CORRECT on a hosted runner (45 passed, 0 failed) but exits 3 saying
+#       WRITER HALF UNCHECKED, which is the honest answer and not a gateable one.
+#       Its other two defects are fixed: the writer path had not followed the
+#       systems.hugmesh -> net.hugmesh package move (#141), and census_files()
+#       used `grep --exclude-dir`, which busybox does not have, so on alpine the
+#       census came back empty and reported nine false "blind spots".
+#   * suites that are GATEABLE but currently RED on real defects, filed as issues
+#     #140-#146 rather than gated. Gating them now would make this workflow red
+#     on day one and train everyone to ignore it; leaving them out means any red
+#     it shows is a NEW regression. Wire each one as its issue closes -- #141 and
+#     #142 have now closed, and their three runner-capable suites are listed
+#     above (the fourth, test-secret-contract.sh, is deferred just below for a
+#     reason unrelated to those bugs).
 name: shell-suites
 
 on:
@@ -119,6 +129,7 @@ jobs:
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
             tests/scripts/test-fetch-retry-hardening.sh
+            tests/scripts/test-frite-builder-input-validation.sh
             tests/scripts/test-github-auth-lib.sh
             tests/scripts/test-guard-integrity.sh
             tests/scripts/test-harbor-robots-ownership.sh
@@ -141,6 +152,8 @@ jobs:
             tests/scripts/test-portage-config-sync.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
+            tests/scripts/test-reserved-prefix-copy-gate.sh
+            tests/scripts/test-rpi5-builder-input-validation.sh
             tests/scripts/test-rpi5-per-board-pkgdir.sh
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
