@@ -105,10 +105,10 @@ echo "== cloud-deploy wizard: offline driver + 4-provider emission test =="
 # (a) registry sanity via list ---------------------------------------------------
 out="$(cdd list)"
 for want in aws-ec2 azure-image openshift-cnv generic-qcow2; do
-    echo "${out}" | grep -qE "^${want} .* full " && ok "list includes ${want} (full)" || { bad "list missing/!full ${want}"; echo "${out}"; }
+    echo "${out}" | grep -E "^${want} .* full " >/dev/null && ok "list includes ${want} (full)" || { bad "list missing/!full ${want}"; echo "${out}"; }
 done
-echo "${out}" | grep -q ' stub ' && bad "a provider lists as stub" || ok "no provider lists as stub"
-echo "${out}" | grep -qE '^aws-ec2 +raw ' && ok "list carries the format column (aws-ec2 raw)" || bad "format column wrong for aws-ec2"
+echo "${out}" | grep ' stub ' >/dev/null && bad "a provider lists as stub" || ok "no provider lists as stub"
+echo "${out}" | grep -E '^aws-ec2 +raw ' >/dev/null && ok "list carries the format column (aws-ec2 raw)" || bad "format column wrong for aws-ec2"
 
 # (b) validate_inputs rejection table -------------------------------------------
 while IFS='|' read -r desc flag val; do
@@ -227,12 +227,12 @@ grep -q '<domain type="kvm">' "${GENOUT}/domain.xml" && grep -q 'firmware="efi"'
 # aws calls would land in ARGV_LOG — so the emptiness assertion can really fail.
 : > "${ARGV_LOG}"
 out="$(cdn apply --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
-[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && echo "${out}" | grep -q 'not a TTY' \
+[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && echo "${out}" | grep 'not a TTY' >/dev/null \
     && ok "apply on a non-TTY refused AT THE GATE (fail-safe), no cloud call" \
     || { bad "apply on non-TTY did NOT fail-safe at the gate (rc=${rc})"; echo "${out}"; }
 : > "${ARGV_LOG}"
 out="$(cdn destroy --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
-[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && echo "${out}" | grep -q 'not a TTY' \
+[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && echo "${out}" | grep 'not a TTY' >/dev/null \
     && ok "destroy on a non-TTY refused AT THE GATE (fail-safe), no cloud call" \
     || { bad "destroy on non-TTY did NOT fail-safe at the gate (rc=${rc})"; echo "${out}"; }
 # There is deliberately NO --yes flag on this driver.
@@ -252,7 +252,7 @@ out="$(cdy apply --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${LOOSE}
 [ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && ok "apply with a 0644 creds file refused (0600 custody enforced)" \
     || { bad "loose-perms creds NOT refused (rc=${rc})"; echo "${out}"; }
 out="$(cdy apply --provider generic-qcow2 --out-dir "${GENOUT}")"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'virt-install' && ok "generic-qcow2 apply refuses with the virt-install pointer (by design)" \
+[ "${rc}" -ne 0 ] && echo "${out}" | grep 'virt-install' >/dev/null && ok "generic-qcow2 apply refuses with the virt-install pointer (by design)" \
     || { bad "generic-qcow2 apply wrong (rc=${rc})"; echo "${out}"; }
 
 # (g) apply/status/destroy against the recording stubs ---------------------------
@@ -272,7 +272,7 @@ grep -q 'secretpayload-never-argv' "${ARGV_LOG}" && bad "creds CONTENTS leaked i
 # status: prints the hints, calls NOTHING.
 LOG_BEFORE="$(wc -l < "${ARGV_LOG}")"
 out="$(PATH="${STUB}:${PATH}" cdd status --provider aws-ec2 --out-dir "${AWSOUT}")"
-echo "${out}" | grep -q 'ami-0stub' && ok "status prints the recorded state hints" || { bad "status missing hints"; echo "${out}"; }
+echo "${out}" | grep 'ami-0stub' >/dev/null && ok "status prints the recorded state hints" || { bad "status missing hints"; echo "${out}"; }
 [ "$(wc -l < "${ARGV_LOG}")" = "${LOG_BEFORE}" ] && ok "status made NO cloud-CLI calls (read-only)" || bad "status CALLED a cloud CLI"
 # destroy: teardown argv + hints cleared.
 out="$(cdy destroy --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
@@ -295,13 +295,13 @@ grep -q -- '--service-principal' "${ARGV_LOG}" && bad "azure apply attempted a s
 out="$(cdy apply --provider openshift-cnv --out-dir "${OCOUT}" --creds-file "${CREDS}")"; rc=$?
 [ "${rc}" -eq 0 ] && ok "openshift-cnv apply ran against the stub (rc=0)" || { bad "openshift-cnv apply failed (rc=${rc})"; echo "${out}"; }
 grep -q "KUBECONFIG=${CREDS}" "${ARGV_LOG}" && ok "argv: kubeconfig threaded by PATH only (KUBECONFIG env)" || bad "KUBECONFIG not threaded"
-grep -n 'apply -f' "${ARGV_LOG}" | head -2 | tr '\n' ' ' | grep -q 'datavolume.yaml.*vm.yaml' \
+grep -n 'apply -f' "${ARGV_LOG}" | head -2 | tr '\n' ' ' | grep 'datavolume.yaml.*vm.yaml' >/dev/null \
     && ok "argv: datavolume applied before vm" || { bad "oc apply order wrong"; cat "${ARGV_LOG}"; }
 
 # (h) unknown provider + missing plan dir ---------------------------------------
 cdd plan --provider not-a-provider --out-dir "${WORK}/x" >/dev/null 2>&1 && bad "unknown provider was accepted" || ok "unknown provider rejected"
 out="$(cdy apply --provider aws-ec2 --out-dir "${WORK}/never-planned" --creds-file "${CREDS}")"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${out}" | grep -q "run 'plan" && ok "apply without a prior plan refuses with guidance" || bad "apply without plan wrong (rc=${rc})"
+[ "${rc}" -ne 0 ] && echo "${out}" | grep "run 'plan" >/dev/null && ok "apply without a prior plan refuses with guidance" || bad "apply without plan wrong (rc=${rc})"
 
 # (i) Makefile OIDC_* seam (make -n proof; stack-ps has no prereqs) --------------
 # THREE vars, one seam: OIDC_ISSUER overrides the derived issuer on the frozen
@@ -315,7 +315,7 @@ if command -v make >/dev/null 2>&1; then
     def="$(printf '%s' "${def_out}" | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
     [ "${def}" = "CASDOOR_ISSUER_URI='http://localhost:8000'" ] \
         && ok "Makefile default: STACK_ENV threads the derived Casdoor issuer" || bad "Makefile default issuer wrong: ${def}"
-    printf '%s' "${def_out}" | grep -q "CASDOOR_APP_CLIENT_ID=\|CASDOOR_JWKS_URI=" \
+    printf '%s' "${def_out}" | grep "CASDOOR_APP_CLIENT_ID=\|CASDOOR_JWKS_URI=" >/dev/null \
         && bad "Makefile default STACK_ENV names CASDOOR_APP_CLIENT_ID/CASDOOR_JWKS_URI — empty must expand to NOTHING (compose fallbacks + operator env both depend on it)" \
         || ok "Makefile default: no client-id/JWKS assignment rides STACK_ENV (compose defaults untouched)"
     ovr="$(make -s -n -C "${REPO}" stack-ps OIDC_ISSUER=https://login.microsoftonline.com/tid/v2.0 2>/dev/null | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
@@ -335,7 +335,7 @@ if command -v make >/dev/null 2>&1; then
     emp="$(printf '%s' "${emp_out}" | grep -o "CASDOOR_ISSUER_URI='[^']*'" | head -1)"
     [ "${emp}" = "CASDOOR_ISSUER_URI='http://localhost:8000'" ] \
         && ok "Makefile empty OIDC_ISSUER leaves today's behavior byte-for-byte" || bad "empty OIDC_ISSUER changed behavior: ${emp}"
-    printf '%s' "${emp_out}" | grep -q "CASDOOR_APP_CLIENT_ID=\|CASDOOR_JWKS_URI=" \
+    printf '%s' "${emp_out}" | grep "CASDOOR_APP_CLIENT_ID=\|CASDOOR_JWKS_URI=" >/dev/null \
         && bad "explicitly-empty OIDC_CLIENT_ID/OIDC_JWKS_URI still emit an assignment (must expand to NOTHING)" \
         || ok "Makefile explicitly-empty OIDC_CLIENT_ID/OIDC_JWKS_URI expand to NOTHING"
 else

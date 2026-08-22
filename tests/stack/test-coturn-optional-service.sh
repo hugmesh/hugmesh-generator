@@ -61,7 +61,7 @@ if [ -n "${KZ}" ]; then
     # append `static-auth-secret=$(cat /run/secrets/...)` (reads the mounted Secret).
     # A literal would be `static-auth-secret=<base64/hex chars>` with no $(...).
     grep -q 'use-auth-secret' <<<"${RENDER}"                      && ok "render: turnserver.conf uses REST long-term-credential mode" || bad "render: use-auth-secret missing"
-    if grep -nE 'static-auth-secret[[:space:]]*=' <<<"${RENDER}" | grep -vE 'static-auth-secret=\$\(cat ' | grep -qE 'static-auth-secret[[:space:]]*=[[:space:]]*[A-Za-z0-9+/=]'; then
+    if grep -nE 'static-auth-secret[[:space:]]*=' <<<"${RENDER}" | grep -vE 'static-auth-secret=\$\(cat ' | grep -E 'static-auth-secret[[:space:]]*=[[:space:]]*[A-Za-z0-9+/=]' >/dev/null; then
       bad "SECURITY: a literal static-auth-secret VALUE is baked into the manifest"
     else
       ok "render: NO literal static-auth-secret value (only the runtime \$(cat ...) append)"
@@ -83,7 +83,7 @@ grep -q 'kind: ExternalSecret' "${ESO}"                       && ok "ESO: Extern
 grep -q 'key: hugmesh/coturn-shared-secret' "${ESO}"       && ok "ESO: references Vault path hugmesh/coturn-shared-secret" || bad "ESO: Vault path ref missing"
 # A literal would be a long inline base64/hex value on a secret-ish key; the
 # legitimate lines are short refs (secretKey: secret / property: secret / key: <path>).
-if grep -nE '(static-auth-secret|secretKey|property)[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9+/]{20,}' "${ESO}" | grep -qv '#'; then
+if grep -nE '(static-auth-secret|secretKey|property)[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9+/]{20,}' "${ESO}" | grep -v '#' >/dev/null; then
   bad "SECURITY: ESO file appears to carry a literal secret value"
 else
   ok "ESO: no literal secret value (reference only)"
@@ -118,7 +118,7 @@ grep -qE '\{[[:space:]]*slug:[[:space:]]*coturn[[:space:]]*,.*path:[[:space:]]*s
 
 # NO baked bootstrap Application (anubis runtime-only pattern): nothing in apps/ may
 # reference the coturn manifest dir as a bootstrap Application source path.
-if grep -rlE 'path:[[:space:]]*specs/cluster/manifests/coturn' "${SRC}/apps/" 2>/dev/null | grep -qv '13a-optional-services.yaml'; then
+if grep -rlE 'path:[[:space:]]*specs/cluster/manifests/coturn' "${SRC}/apps/" 2>/dev/null | grep -v '13a-optional-services.yaml' >/dev/null; then
   bad "a baked Application sources manifests/coturn (must be runtime-only via 13a)"
 else
   ok "no baked bootstrap Application for coturn (runtime-only via 13a — genuinely default-off)"
@@ -440,7 +440,7 @@ _gl_plan "${GLT}/on" --provider byo-domain --tunnel-cname tun.example.net --turn
 grep -qE 'turn\.example\.org\.\s+A\s+198\.51\.100\.9' "${GLT}/on/records.txt" 2>/dev/null \
   && ok "go-live(run): marker PRESENT emits turn.<domain> as a DIRECT A at --turn-ip (the RELAY node, not the ingress node)" \
   || bad "go-live(run): turn record missing / not pointed at --turn-ip with the marker present"
-grep -E 'turn\.example\.org' "${GLT}/on/records.txt" 2>/dev/null | grep -q 'CNAME' \
+grep -E 'turn\.example\.org' "${GLT}/on/records.txt" 2>/dev/null | grep 'CNAME' >/dev/null \
   && bad "go-live(run): turn.<domain> got the tunnel CNAME (TURN cannot ride an HTTP tunnel)" \
   || ok "go-live(run): turn.<domain> refuses the tunnel CNAME"
 # Cloudflare Tunnel emits its OWN record set (it never calls _glp_record_for for

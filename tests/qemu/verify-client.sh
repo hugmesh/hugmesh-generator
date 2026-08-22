@@ -201,7 +201,7 @@ if ${SSH_OK}; then
     got_dm="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'rc-service display-manager status 2>/dev/null | head -1' || true)"
     [ "${got_role}" = "${PERSON_ROLE}" ] && info "  ✓ identity-role=${got_role}" || warn "  identity-role='${got_role}' (expected ${PERSON_ROLE})"
     [ -n "${got_dom}" ] && info "  ✓ domain marker='${got_dom}'" || warn "  domains marker empty"
-    echo "${got_dm}" | grep -qi 'start' && info "  ✓ display-manager: ${got_dm}" || warn "  display-manager status: ${got_dm:-<none>}"
+    echo "${got_dm}" | grep -i 'start' >/dev/null && info "  ✓ display-manager: ${got_dm}" || warn "  display-manager status: ${got_dm:-<none>}"
 else
     warn "SSH not reachable (known qemu user-net/DHCP limitation on some hosts) — relying on console assertions."
 fi

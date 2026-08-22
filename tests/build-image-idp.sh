@@ -56,7 +56,7 @@ worker() {
 # argv_has NEEDLE -> exact builder-argv token between the __BUILDER_ARGV_*__ markers?
 argv_has() {
   awk '/__BUILDER_ARGV_BEGIN__/{f=1;next} /__BUILDER_ARGV_END__/{f=0} f' "$work/out" \
-    | grep -qxF -- "$1"
+    | grep -xF -- "$1" >/dev/null
 }
 argv_count() {
   # grep -c exits 1 on zero matches; tolerate it (0 is a valid answer here).

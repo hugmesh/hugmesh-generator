@@ -77,7 +77,7 @@ HUGMESH_PROVISION_MANIFEST="${SB}/var/lib/hugmesh/node-storage/pool-manifest.jso
     ps_run "${SB}" --pool
 RC=$?
 
-if ps_log "${SB}" mount | grep -q "${SB}/dev/pooldisk ${SB}/srv/pool0"; then
+if ps_log "${SB}" mount | grep "${SB}/dev/pooldisk ${SB}/srv/pool0" >/dev/null; then
     ok "the pool device was MOUNTED at its pool path (rc=${RC})"
 else
     bad "the pool device was never mounted — --pool did no pool work. Run log:
@@ -88,12 +88,12 @@ if grep -q "${SB}/srv/pool0" "${SB}/etc/fstab"; then
 else
     bad "no /etc/fstab entry for the pool: [$(cat "${SB}/etc/fstab")]"
 fi
-if grep "${SB}/srv/pool0" "${SB}/etc/fstab" | grep -q 'nofail'; then
+if grep "${SB}/srv/pool0" "${SB}/etc/fstab" | grep 'nofail' >/dev/null; then
     ok "the pool's fstab entry carries ,nofail (a removed pool disk degrades, never blocks boot)"
 else
     bad "the pool's fstab entry MUST carry ,nofail: [$(grep "${SB}/srv/pool0" "${SB}/etc/fstab")]"
 fi
-if grep -q "${SB}/srv/data" "${SB}/etc/fstab" || ps_log "${SB}" mount | grep -q 'sysdisk'; then
+if grep -q "${SB}/srv/data" "${SB}/etc/fstab" || ps_log "${SB}" mount | grep 'sysdisk' >/dev/null; then
     bad "--pool touched the SYSTEM disk — pool mode must skip every device without a pool marker"
 else
     ok "the system disk (no pool marker) was left alone"
@@ -127,7 +127,7 @@ prepare_node "${SB2}" "${PROV}" || { echo "  FAIL sandbox staging"; exit 1; }
     NS_PROVISION_CMD=""          # the DEFAULT command line is what is under test
     provision_pools
 ) > "${SB2}/log/agent.out" 2>&1
-if ps_log "${SB2}" mount | grep -q "${SB2}/dev/pooldisk ${SB2}/srv/pool0"; then
+if ps_log "${SB2}" mount | grep "${SB2}/dev/pooldisk ${SB2}/srv/pool0" >/dev/null; then
     ok "the agent's own provision_pools() reaches the pool work end to end"
 else
     bad "the agent's provision_pools() did not provision the pool. Agent output:
@@ -177,7 +177,7 @@ SB5="${WORK}/prefix"
 if prepare_node "${SB5}" "${NEG}"; then
     HUGMESH_PROVISION_MANIFEST="${SB5}/var/lib/hugmesh/node-storage/pool-manifest.json" \
         ps_run "${SB5}" --pool
-    if ps_log "${SB5}" mount | grep -q 'pooldisk'; then
+    if ps_log "${SB5}" mount | grep 'pooldisk' >/dev/null; then
         bad "negative control: the pool was provisioned WITHOUT the dispatch — this test proves nothing"
     else
         ok "negative control: without the dispatch, --pool provisions nothing (that was main's behaviour)"

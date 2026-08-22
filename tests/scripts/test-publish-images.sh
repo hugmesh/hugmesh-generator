@@ -101,7 +101,7 @@ IMG_LINE='^IMAGE [a-z0-9_.-]+ FILE [^ ]+ BYTES [0-9]+ SHA256 [0-9a-f]{64}$'
 bash -n "${PI}" && ok "bash -n: parses" || bad "bash -n: syntax error"
 bash "${PI}" --help >/dev/null 2>&1 && ok "--help exits 0" || bad "--help should exit 0"
 out="$(run_pub "${SESS}")"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'Missing --dest' \
+[ "${rc}" -ne 0 ] && echo "${out}" | grep 'Missing --dest' >/dev/null \
     && ok "missing --dest shows usage" || bad "missing --dest accepted (rc=${rc})"
 
 # ── 1. happy path: full export ───────────────────────────────────────────────
@@ -141,7 +141,7 @@ for f in "${X86_STEM}.img.xz" "${X86_STEM}.installer.iso" "${X86_STEM}.fs.tar.xz
 done
 ok "every expected file is present"
 [ ! -e "${D1}/publish-manifest.json.sig" ] && ok "unsigned run emits no .sig" || bad "unsigned run emitted a .sig"
-echo "${o1}" | grep -q 'UNSIGNED' && ok "unsigned run warns UNSIGNED" || bad "unsigned run did not warn"
+echo "${o1}" | grep 'UNSIGNED' >/dev/null && ok "unsigned run warns UNSIGNED" || bad "unsigned run did not warn"
 
 # Verifiability + parseable lines.
 ( cd "${D1}" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) \
@@ -155,9 +155,9 @@ line="$(echo "${o1}" | grep "FILE ${D1}/${X86_STEM}.img.xz ")"
     && ok "IMAGE line SHA256 is the real artifact hash" || bad "IMAGE line SHA256 wrong: ${line}"
 [ "$(sha256sum "${D1}/${X86_STEM}.img.xz" | awk '{print $1}')" = "$(sha256sum "${SESS}/${X86_STEM}.img.xz" | awk '{print $1}')" ] \
     && ok "exported artifact is byte-identical to the session's" || bad "exported artifact differs from source"
-echo "${o1}" | grep -q "^IMAGE be.rpi5 FILE .*${RPI_STEM}.img.xz " \
+echo "${o1}" | grep "^IMAGE be.rpi5 FILE .*${RPI_STEM}.img.xz " >/dev/null \
     && ok "rpi5 long role spelling normalizes: backend -> be.rpi5" || bad "backend did not normalize to be.rpi5"
-echo "${o1}" | grep -q "^IMAGE pki.x86 " && ok "x86 id pki.x86 stamped" || bad "pki.x86 id missing"
+echo "${o1}" | grep "^IMAGE pki.x86 " >/dev/null && ok "x86 id pki.x86 stamped" || bad "pki.x86 id missing"
 
 # Manifest: valid JSON, right schema, deterministic producedAt (newest builtAt).
 python3 - "${D1}/publish-manifest.json" <<'PY' && ok "publish-manifest.json is valid JSON with the v1 contract" || bad "publish-manifest.json invalid or off-contract"
@@ -195,7 +195,7 @@ o3="$(run_pub "${SESS}" --dest "${D3}" --images pki.x86)"; rc=$?
 [ "$(find "${D3}" -maxdepth 1 \( -name '*.img.xz' -o -name '*.iso' -o -name '*.tar.xz' \) | wc -l)" -eq 4 ] \
     && ok "--images pki.x86 ships that image's 4 artifacts" || bad "--images artifact count wrong"
 o3b="$(run_pub "${SESS}" --dest "${WORK}/pub3b" --images nope.x86)"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${o3b}" | grep -q 'no artifact of session' \
+[ "${rc}" -ne 0 ] && echo "${o3b}" | grep 'no artifact of session' >/dev/null \
     && ok "--images with an unknown id is FATAL (never a silent empty publish)" \
     || bad "--images nope.x86 should refuse (rc=${rc}): ${o3b}"
 [ ! -e "${WORK}/pub3b" ] && ok "unknown-id refusal creates no dest" || bad "unknown-id refusal left a dest"
@@ -221,7 +221,7 @@ poison() {  # poison <label> <stderr-regex> <poison-cmd...>
     local out rc
     out="$(run_pub "${sd}" --dest "${dest}")"; rc=$?
     if [ "${rc}" -eq 0 ]; then bad "${label}: must refuse (exit non-zero)"; return; fi
-    echo "${out}" | grep -Eqi "${want}" && ok "${label}" \
+    echo "${out}" | grep -Ei "${want}" >/dev/null && ok "${label}" \
         || bad "${label}: refusal reason missing /${want}/: ${out}"
     [ ! -e "${dest}" ] || bad "${label}: refusal still created the dest"
     if ls "${dest}".staging.* >/dev/null 2>&1; then
@@ -253,13 +253,13 @@ poison "poison: secret-laced mesh manifest (scan gate)" 'secret scan' \
 
 # (h) existing --dest: never clobber.
 o5="$(run_pub "${SESS}" --dest "${D1}")"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${o5}" | grep -q 'already exists' \
+[ "${rc}" -ne 0 ] && echo "${o5}" | grep 'already exists' >/dev/null \
     && ok "existing --dest refused (no clobber)" || bad "existing --dest accepted (rc=${rc})"
 ( cd "${D1}" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) \
     && ok "prior export untouched by the refused re-run" || bad "prior export was disturbed"
 # (i) --dest nested inside the session dir.
 o6="$(run_pub "${SESS}" --dest "${SESS}/pub-inside")"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${o6}" | grep -q 'inside the session dir' \
+[ "${rc}" -ne 0 ] && echo "${o6}" | grep 'inside the session dir' >/dev/null \
     && ok "--dest inside the session dir refused" || bad "nested --dest accepted (rc=${rc})"
 [ ! -e "${SESS}/pub-inside" ] && ok "nested-dest refusal left nothing behind" || bad "nested-dest refusal left a dir"
 
@@ -283,7 +283,7 @@ PROVENANCE_SIGNING_KEY="${KEY}" bash "${PI}" "${SESS}" --dest "${D8}" >/dev/null
 [ "$(sha256sum < "${D7}/publish-manifest.json.sig")" = "$(sha256sum < "${D8}/publish-manifest.json.sig")" ] \
     && ok "Ed25519 signature is deterministic across re-runs" || bad "signature differs across identical runs"
 o9="$(PROVENANCE_SIGNING_KEY="${WORK}/no-such-key.pem" bash "${PI}" "${SESS}" --dest "${WORK}/pub9" 2>&1)"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${o9}" | grep -q 'PROVENANCE_SIGNING_KEY' \
+[ "${rc}" -ne 0 ] && echo "${o9}" | grep 'PROVENANCE_SIGNING_KEY' >/dev/null \
     && ok "missing signing key is fail-closed (never silently unsigned)" \
     || bad "missing signing key should refuse (rc=${rc})"
 

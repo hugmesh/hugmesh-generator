@@ -164,7 +164,7 @@ HW_INITDB="$(find_doc "${WORK}/hw-doc" ConfigMap headwind-db-initdb)" \
 
 # ── 6) admin provisioning: ADMIN_EMAIL from Secret; dead vars stay dead ───────
 echo "-- 6) headwind admin provisioning env --"
-grep -A4 'name: ADMIN_EMAIL' "${HW_DEP}" | grep -q 'name: headwind-admin' \
+grep -A4 'name: ADMIN_EMAIL' "${HW_DEP}" | grep 'name: headwind-admin' >/dev/null \
   && ok "(6) ADMIN_EMAIL <- secretKeyRef headwind-admin (the ONLY admin-provisioning env the entrypoint honors)" \
   || bad "(6) ADMIN_EMAIL not sourced from Secret headwind-admin"
 if grep -qE 'HEADWIND_ADMIN_(USERNAME|PASSWORD)' "${WORK}/hw.yaml" "${WORK}/att.yaml"; then
@@ -184,7 +184,7 @@ grep -q 'httpGet' "${WORK}/att.yaml" \
 grep -q 'name: smtp-config-seeder' "${ATT_DEP}" \
   && ok "(7) smtp-config-seeder sidecar present" \
   || bad "(7) smtp-config-seeder sidecar missing"
-grep -A2 'secretRef:' "${ATT_DEP}" | grep -q 'name: attestation-server-smtp' \
+grep -A2 'secretRef:' "${ATT_DEP}" | grep 'name: attestation-server-smtp' >/dev/null \
   && ok "(7) seeder is fed from Secret attestation-server-smtp (envFrom)" \
   || bad "(7) seeder's attestation-server-smtp secretRef missing"
 grep -q 'image: registry.hugmesh.net/hugmesh/hugmesh-attestation-server:main' "${ATT_DEP}" \
@@ -228,7 +228,7 @@ for _dep_label in "headwind:${HW_DEP}" "attestation-server:${ATT_DEP}"; do
     continue
   fi
   for _n in ${_names}; do
-    if printf '%s\n' "${PKI_ES_TARGETS}" | grep -qxF "${_n}"; then
+    if printf '%s\n' "${PKI_ES_TARGETS}" | grep -xF "${_n}" >/dev/null; then
       ok "(7) ${_lbl}: imagePullSecrets '${_n}' is materialized by an ExternalSecret in hugmesh-pki"
     else
       bad "(7) ${_lbl}: imagePullSecrets '${_n}' is NOT an ExternalSecret target in hugmesh-pki — nothing materializes it (this is the harbor-registry collision class; see tests/scripts/test-eso-target-collisions.sh)"

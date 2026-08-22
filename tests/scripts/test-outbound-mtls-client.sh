@@ -135,7 +135,7 @@ for f in "${DIR}"/*/*.yaml; do
   # `- { name: X, value: "true" }` flow-map shape) or on the following line.
   if grep -qE 'HUGMESH_MTLS_CLIENT_ENABLED[",}[:space:]].*value:[[:space:]]*"?true"?' "${f}" \
      || grep -A2 -E 'name:[[:space:]]*HUGMESH_MTLS_CLIENT_ENABLED[[:space:]]*$' "${f}" 2>/dev/null \
-          | grep -qE 'value:[[:space:]]*"?true"?'; then
+          | grep -E 'value:[[:space:]]*"?true"?' >/dev/null; then
     gate_on=yes
     n_gate_on=$((n_gate_on+1))
   fi

@@ -222,7 +222,7 @@ expect_out() {
   local want="$1" pat="$2" label="$3"; shift 4
   local out rc
   out="$("$@" 2>&1)"; rc=$?
-  if [ "${rc}" -eq "${want}" ] && printf '%s' "${out}" | grep -q -- "${pat}"; then
+  if [ "${rc}" -eq "${want}" ] && printf '%s' "${out}" | grep -- "${pat}" >/dev/null; then
     echo "  ok   ${label} (rc=${rc}, matched /${pat}/)"
   else
     echo "  FAIL ${label}: expected rc=${want} and output matching /${pat}/, got rc=${rc}"

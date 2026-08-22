@@ -56,17 +56,17 @@ echo "== go-live wizard foundation: offline driver + byo-domain emit test =="
 
 # (a) status + list ------------------------------------------------------------
 out="$(gl status)"
-echo "${out}" | grep -q "release-state:       internal" && echo "${out}" | grep -q "go-live marker:      absent" \
+echo "${out}" | grep "release-state:       internal" >/dev/null && echo "${out}" | grep "go-live marker:      absent" >/dev/null \
     && ok "status reflects internal + no marker" || { bad "status wrong"; echo "${out}"; }
-echo "${out}" | grep -q "effective posture:   internal" && ok "effective posture internal by default" || bad "effective posture not internal"
+echo "${out}" | grep "effective posture:   internal" >/dev/null && ok "effective posture internal by default" || bad "effective posture not internal"
 
 out="$(gl list)"
-echo "${out}" | grep -qE '^byo-domain .* full ' && ok "list marks byo-domain full" || { bad "byo-domain not full in list"; echo "${out}"; }
+echo "${out}" | grep -E '^byo-domain .* full ' >/dev/null && ok "list marks byo-domain full" || { bad "byo-domain not full in list"; echo "${out}"; }
 # After the consolidation every provider is fully implemented — none list as stub.
-echo "${out}" | grep -qE '^cloudflare-tunnel .* full ' && ok "list marks cloudflare-tunnel full" || { bad "cloudflare-tunnel not full"; echo "${out}"; }
-echo "${out}" | grep -q ' stub ' && bad "a provider still lists as stub after consolidation" || ok "no provider lists as stub"
+echo "${out}" | grep -E '^cloudflare-tunnel .* full ' >/dev/null && ok "list marks cloudflare-tunnel full" || { bad "cloudflare-tunnel not full"; echo "${out}"; }
+echo "${out}" | grep ' stub ' >/dev/null && bad "a provider still lists as stub after consolidation" || ok "no provider lists as stub"
 for want in duckdns tailscale-funnel router-portforward; do
-    echo "${out}" | grep -qE "^${want} .* full " && ok "list includes ${want} (full)" || bad "list missing/!full ${want}"
+    echo "${out}" | grep -E "^${want} .* full " >/dev/null && ok "list includes ${want} (full)" || bad "list missing/!full ${want}"
 done
 
 # (b) plan is a DRY-RUN: emits artifacts, NEVER writes the marker ---------------
@@ -87,7 +87,7 @@ if command -v named-checkzone >/dev/null 2>&1; then
 else
     ok "named-checkzone absent — grep-based zone sanity only (SKIP strict parse)"
 fi
-head -1 "${OUT}/records.csv" | grep -qx 'name,type,value,ttl,proxied' && ok "csv header correct" || bad "csv header wrong"
+head -1 "${OUT}/records.csv" | grep -x 'name,type,value,ttl,proxied' >/dev/null && ok "csv header correct" || bad "csv header wrong"
 grep -q ',A,203.0.113.10,300,false' "${OUT}/records.csv" && ok "csv carries the ingress IP row" || bad "csv missing ingress row"
 grep -q '203.0.113.10' "${OUT}/records.txt" && ok "record set carries the ingress IP" || bad "record set missing ingress IP"
 # The 4 promised hostnames (apex + api/matrix/mastodon).
@@ -103,7 +103,7 @@ out="$(gl commit --provider byo-domain)"; rc=$?
 # (e) commit --yes writes the marker; effective posture -> public --------------
 gl commit --provider byo-domain --yes >/dev/null
 [ -e "${MARKER}" ] && ok "commit --yes wrote the go-live marker" || bad "commit --yes did NOT write the marker"
-gl status | grep -q "effective posture:   public" && ok "effective posture public after commit" || bad "effective posture not public after commit"
+gl status | grep "effective posture:   public" >/dev/null && ok "effective posture public after commit" || bad "effective posture not public after commit"
 # release-state NOT persisted unless asked.
 grep -qx 'internal' "${ETC}/release-state" && ok "commit left release-state=internal (marker-only)" || bad "commit unexpectedly changed release-state"
 
@@ -115,10 +115,10 @@ grep -qx 'public' "${ETC}/release-state" && ok "--persist-public baked release-s
 gl rollback --yes >/dev/null
 [ ! -e "${MARKER}" ] && ok "rollback removed the marker" || bad "rollback did NOT remove the marker"
 # release-state still public (persisted) -> still effectively public.
-gl status | grep -q "effective posture:   public" && ok "still public after marker-only rollback (release-state persisted)" || bad "posture not public after marker-only rollback"
+gl status | grep "effective posture:   public" >/dev/null && ok "still public after marker-only rollback (release-state persisted)" || bad "posture not public after marker-only rollback"
 gl rollback --yes --revert-release-state >/dev/null
 grep -qx 'internal' "${ETC}/release-state" && ok "--revert-release-state restored internal" || bad "--revert-release-state did NOT restore internal"
-gl status | grep -q "effective posture:   internal" && ok "fully rolled back to internal" || bad "not internal after full rollback"
+gl status | grep "effective posture:   internal" >/dev/null && ok "fully rolled back to internal" || bad "not internal after full rollback"
 
 # (h) cloudflare-tunnel emits a real CNAME record set + token-drop guide --------
 CFOUT="${WORK}/cfout"; mkdir -p "${CFOUT}"

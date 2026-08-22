@@ -177,7 +177,7 @@ _hg_live_lines() {
 # form (dev-python/setuptools-scm) contains no other metacharacter.
 _hg_atom_listed() {
     local p="$1" atom="$2"
-    _hg_live_lines "${p}" | grep -qE "^[[:space:]]*[<>=~!]*${atom//./\\.}(-[0-9][^[:space:]]*)?([[:space:]]|$)"
+    _hg_live_lines "${p}" | grep -E "^[[:space:]]*[<>=~!]*${atom//./\\.}(-[0-9][^[:space:]]*)?([[:space:]]|$)" >/dev/null
 }
 
 # _hg_use_listed <path> <atom> <flag> — 0 iff a LIVE line at <path> names <atom>
@@ -185,7 +185,7 @@ _hg_atom_listed() {
 _hg_use_listed() {
     local p="$1" atom="$2" flag="$3"
     _hg_live_lines "${p}" | grep -E "^[[:space:]]*[<>=~!]*${atom//./\\.}(-[0-9][^[:space:]]*)?[[:space:]]" \
-        | grep -qE "[[:space:]]${flag}([[:space:]]|$)"
+        | grep -E "[[:space:]]${flag}([[:space:]]|$)" >/dev/null
 }
 
 # hostguard_require_host_portage — READ-ONLY verification that the HOST already

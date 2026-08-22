@@ -503,7 +503,7 @@ fi
 # guard, because it looks like coverage. With this, detectors that go blind take
 # every verified file red at once instead.
 for rel in ${V}; do
-    printf '%s\n' "${CENSUS}" | grep -qxF "${rel}" \
+    printf '%s\n' "${CENSUS}" | grep -xF "${rel}" >/dev/null \
         || bad "census blind spot: ${rel} is asserted above but matches no census detector — the detectors no longer see the file they are supposed to police"
 done
 
@@ -586,7 +586,7 @@ case "${SD_ARG}" in
 esac
 
 # 3b. Secret NAME == secretRef (this is what makes the projected FILENAME right).
-printf '%s\n' "${WRITER_SRC}" | grep -qE '\.withName\(secretRef\)' \
+printf '%s\n' "${WRITER_SRC}" | grep -E '\.withName\(secretRef\)' >/dev/null \
     && eq "writer Secret name" "secretRef" "${C_NAME}" \
     || bad "writer no longer sets metadata.name from secretRef — the projected filename contract breaks"
 

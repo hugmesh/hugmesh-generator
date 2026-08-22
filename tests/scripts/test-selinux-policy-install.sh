@@ -125,7 +125,7 @@ for b in "${BUILDERS[@]}"; do
     fi
 
     # A bare call would let a policy-less image ship on a soft failure.
-    if [ -n "${call_ln}" ] && sed -n "$((call_ln)),$((call_ln + 2))p" "${f}" | grep -q 'exit 1'; then
+    if [ -n "${call_ln}" ] && sed -n "$((call_ln)),$((call_ln + 2))p" "${f}" | grep 'exit 1' >/dev/null; then
         ok "${b}: call site is guarded (exit 1 on failure)"
     else
         bad "${b}: call site is NOT guarded with exit 1"
@@ -168,7 +168,7 @@ grep -qE '^/run/user/[^[:space:]]+/hugmesh\(/\.\*\)\?[[:space:]].*gen_context\('
 # the genhomedircon template); as a plain file_contexts regex it can only ever
 # match the literal directory "%{uid}", i.e. nothing. Prove liveness, not spelling.
 oidc_pat="$(grep -E '^/run/user/.*hugmesh.*gen_context\(' "${SRC}/hugmesh_authkeys.fc" | head -1 | awk '{print $1}')"
-if [ -n "${oidc_pat}" ] && printf '%s\n' '/run/user/1000/hugmesh/oidc-token' | grep -qE "^${oidc_pat}$"; then
+if [ -n "${oidc_pat}" ] && printf '%s\n' '/run/user/1000/hugmesh/oidc-token' | grep -E "^${oidc_pat}$" >/dev/null; then
     ok "the oidc file-context regex actually matches /run/user/1000/hugmesh/oidc-token"
 else
     bad "the oidc file-context regex [${oidc_pat:-<none>}] matches NO real /run/user/<uid> path"
@@ -357,7 +357,7 @@ devel_files="$(cd "${S}/usr/share/selinux/devel" && ls -A | tr '\n' ' ')"
 [ "${devel_files}" = "policy.xml " ] \
     && ok "fixture devel/ holds ONLY policy.xml, exactly like selinux-base's insinto" \
     || bad "fixture devel/ is not the selinux-base shape: [${devel_files}]"
-printf '%s' "${out}" | grep -qF "refpolicy headers: ${S}/usr/share/selinux/mcs/include" \
+printf '%s' "${out}" | grep -F "refpolicy headers: ${S}/usr/share/selinux/mcs/include" >/dev/null \
     && ok "lib compiled against <sysroot>/usr/share/selinux/mcs/include (the install-headers path)" \
     || bad "lib did not use the per-type include dir"$'\n'"${out}"
 # And the pins the contract Makefile records — NAME/SHAREDIR must compose to it.
@@ -418,7 +418,7 @@ for m in "${DEPENDENT[@]}"; do grep -qx "${m}" "${MAN3B}" 2>/dev/null && named="
 [ -z "${named}" ] \
     && ok "C3b the manifest never names an unloadable module (so check_modules() can pass)" \
     || bad "C3b manifest names unloadable module(s):${named} — the enforce-gate could never flip"
-printf '%s' "${out}" | grep -q 'sec-policy/selinux-kubernetes' \
+printf '%s' "${out}" | grep 'sec-policy/selinux-kubernetes' >/dev/null \
     && ok "C3b the skip message names the package that would fix it" \
     || bad "C3b skip message does not name sec-policy/selinux-kubernetes"$'\n'"${out}"
 
@@ -486,14 +486,14 @@ else
         printf '#!/bin/sh\necho "Would relabel /bin/sh"\n' > "${C3D}/bin/restorecon"
         chmod +x "${C3D}/bin/restorecon"
         o="$(PATH="${C3D}/bin:${PATH}" bash "${C3D}/harness.sh" 2>&1)"
-        printf '%s' "${o}" | grep -q 'relabel_ok=0' \
+        printf '%s' "${o}" | grep 'relabel_ok=0' >/dev/null \
             && ok "C3d a relabel that left work pending is treated as FAILED (so /.autorelabel is re-raised)" \
             || bad "C3d a no-op relabel was accepted as success: ${o}"
         # restorecon has nothing to do => a real relabel happened
         printf '#!/bin/sh\nexit 0\n' > "${C3D}/bin/restorecon"
         chmod +x "${C3D}/bin/restorecon"
         o="$(PATH="${C3D}/bin:${PATH}" bash "${C3D}/harness.sh" 2>&1)"
-        printf '%s' "${o}" | grep -q 'relabel_ok=1' \
+        printf '%s' "${o}" | grep 'relabel_ok=1' >/dev/null \
             && ok "C3d a genuinely clean relabel still passes (the check is not always-red)" \
             || bad "C3d a clean relabel was rejected: ${o}"
     fi
@@ -636,7 +636,7 @@ hugmesh_policy_sync.pp:
 	@echo "fixture: silent no-op, exits 0, writes nothing"
 MK
 out="$(run_lib "${S}" "${SP}")"; rc=$?
-{ [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q 'make reported success but hugmesh_policy_sync.pp does not exist'; } \
+{ [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep 'make reported success but hugmesh_policy_sync.pp does not exist' >/dev/null; } \
     && ok "a make that succeeds without writing the .pp fails loudly and names the module" \
     || bad "a silent no-op make was accepted (rc=${rc})"$'\n'"${out}"
 [ "$(n_mods "${S}")" -eq 0 ] && ok "silent no-op make: nothing installed" \
@@ -670,12 +670,12 @@ if [ -d /usr/share/selinux ]; then
     ok "SKIP header-absent diagnostic (this host has its own /usr/share/selinux)"
 else
     out="$(run_lib "${S}" "${SP}")"; rc=$?
-    { [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q 'no refpolicy module-build header tree found'; } \
+    { [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep 'no refpolicy module-build header tree found' >/dev/null; } \
         && ok "missing refpolicy header tree fails loudly with the reason" \
         || bad "missing header tree did not fail loudly (rc=${rc})"$'\n'"${out}"
     # The old message blamed a missing selinux-base even when base.pp was right
     # there. It must now name the real cause.
-    printf '%s' "${out}" | grep -q 'base.pp EXISTS, so selinux-base IS merged' \
+    printf '%s' "${out}" | grep 'base.pp EXISTS, so selinux-base IS merged' >/dev/null \
         && ok "the diagnostic distinguishes 'headers stripped' from 'selinux-base absent'" \
         || bad "the diagnostic still misattributes the cause"$'\n'"${out}"
 fi
@@ -877,10 +877,10 @@ FC
     # CROSS-SAFETY: the refpolicy Makefile must be pinned to the HOST /usr/bin, or
     # a cross build would try to run aarch64 checkmodule/semodule_package.
     vars="$(cat "${S}/usr/share/selinux/mcs/include/compile.vars" 2>/dev/null)"
-    printf '%s' "${vars}" | grep -q '^BINDIR=/usr/bin$' \
+    printf '%s' "${vars}" | grep '^BINDIR=/usr/bin$' >/dev/null \
         && ok "compile ran with BINDIR pinned to the HOST /usr/bin (never a target binary)" \
         || bad "BINDIR was not pinned to the host: [${vars}]"
-    printf '%s' "${vars}" | grep -q "^HEADERDIR=${S}/usr/share/selinux/mcs/include$" \
+    printf '%s' "${vars}" | grep "^HEADERDIR=${S}/usr/share/selinux/mcs/include$" >/dev/null \
         && ok "compile ran against the SYSROOT's refpolicy headers" \
         || bad "HEADERDIR did not point at the sysroot header tree: [${vars}]"
 else
@@ -915,10 +915,10 @@ if command -v m4 >/dev/null && command -v checkmodule >/dev/null && command -v s
         || bad "C-pin fixture did not arm (${n_armed}/3) — the trap is inert"
     out="$(run_lib "${S}" "${SP}")"; rc=$?
     vars="$(cat "${S}/usr/share/selinux/mcs/include/compile.vars" 2>/dev/null)"
-    { [ "${rc}" -eq 0 ] && printf '%s' "${vars}" | grep -q '^BINDIR=/usr/bin$'; } \
+    { [ "${rc}" -eq 0 ] && printf '%s' "${vars}" | grep '^BINDIR=/usr/bin$' >/dev/null; } \
         && ok "the BINDIR pin overrides the sysroot Makefile — checkmodule came from the HOST" \
         || bad "the sysroot Makefile's target BINDIR won: rc=${rc} vars=[${vars}]"$'\n'"${out}"
-    printf '%s' "${vars}" | grep -q '^SBINDIR=/usr/sbin$' \
+    printf '%s' "${vars}" | grep '^SBINDIR=/usr/sbin$' >/dev/null \
         && ok "the SBINDIR pin overrides the sysroot Makefile too" \
         || bad "SBINDIR was not pinned to the host: [${vars}]"
 else
@@ -1059,7 +1059,7 @@ gate_enforcing "${G}" && bad "SELINUX_ENFORCE_GATE=no rewrote /etc/selinux/confi
                       || ok "SELINUX_ENFORCE_GATE=no leaves SELINUX=permissive in the config"
 [ -e "${G}/marker" ] && bad "SELINUX_ENFORCE_GATE=no still wrote the settle marker (it walked into the flip path)" \
                      || ok "SELINUX_ENFORCE_GATE=no does not even write the settle marker"
-printf '%s' "${o}${o2}" | grep -q 'node stays PERMISSIVE' \
+printf '%s' "${o}${o2}" | grep 'node stays PERMISSIVE' >/dev/null \
     && ok "the disabled gate says so out loud" || bad "the disabled gate is silent"
 
 # D-run3 — the settle-marker guard: never flip on the relabel (first) boot.
@@ -1126,10 +1126,10 @@ if [ -f "${PROV}" ]; then
     { [ -n "${ld_ln}" ] && [ -n "${rl_ln}" ] && [ "${ld_ln}" -lt "${rl_ln}" ]; } \
         && ok "the explicit load (line ${ld_ln}) runs BEFORE the relabel (line ${rl_ln})" \
         || bad "the explicit load does not precede the relabel (load=${ld_ln:-none} relabel=${rl_ln:-none})"
-    sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep -q 'selinux-modules.list' \
+    sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep 'selinux-modules.list' >/dev/null \
         && ok "the explicit load is driven by the build-time manifest, not a blind glob" \
         || bad "the explicit load does not read /usr/share/hugmesh/selinux-modules.list"
-    sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep -qE 'semodule .*-i ' \
+    sed -n "${ld_ln},${rl_ln}p" "${PROV}" | grep -E 'semodule .*-i ' >/dev/null \
         && ok "the explicit load uses semodule -i (installs into the store)" \
         || bad "the explicit load does not call semodule -i"
     # ── the per-module visibility layer (issue #45) ───────────────────────────
@@ -1140,25 +1140,25 @@ if [ -f "${PROV}" ]; then
     blk="$(sed -n "${ld_ln},${rl_ln}p" "${PROV}")"
     # Comments are excluded: the block's own rationale QUOTES the old defective
     # spelling ("semodule -i ... 2>/dev/null || warn") and must not trip this.
-    if printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -E 'semodule .*-i ' | grep -q '2>/dev/null'; then
+    if printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -E 'semodule .*-i ' | grep '2>/dev/null' >/dev/null; then
         bad "a semodule -i in the load block still discards stderr to /dev/null — a failing module is invisible again"
     else
-        printf '%s\n' "${blk}" | grep -qE 'semodule -s "\$\{type\}" -i \$\{hm_mods\} 2>"' \
+        printf '%s\n' "${blk}" | grep -E 'semodule -s "\$\{type\}" -i \$\{hm_mods\} 2>"' >/dev/null \
             && ok "the manifest load CAPTURES semodule stderr (per-batch, into the provision log)" \
             || bad "the manifest load no longer captures semodule stderr"
     fi
-    printf '%s\n' "${blk}" | grep -qE 'for hm_pp in \$\{hm_mods\}' \
+    printf '%s\n' "${blk}" | grep -E 'for hm_pp in \$\{hm_mods\}' >/dev/null \
         && ok "batch failure falls back to a per-module retry (isolates the offender, stderr per module)" \
         || bad "no per-module retry loop — a batch failure cannot name the offending module"
     # The WRITE itself (the > redirect), not any line that merely mentions the
     # file name — a warn string naming the path must not keep this green.
-    { printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -qE '> "\$\{STATE_DIR\}/selinux-modules.status"' \
-      && printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -qE 'semodule -s "\$\{type\}" -l'; } \
+    { printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -E '> "\$\{STATE_DIR\}/selinux-modules.status"' >/dev/null \
+      && printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -E 'semodule -s "\$\{type\}" -l' >/dev/null; } \
         && ok "per-module verdicts are derived from the STORE (semodule -l) and written machine-readably (selinux-modules.status)" \
         || bad "the machine-readable per-module status (selinux-modules.status, derived from semodule -l) is gone"
     # Non-comment lines only: the block's rationale comment NAMES the function,
     # and a grep that matches prose would survive the call being deleted.
-    printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep -q 'selinux_provision_failed' \
+    printf '%s\n' "${blk}" | grep -v '^[[:space:]]*#' | grep 'selinux_provision_failed' >/dev/null \
         && ok "a non-loaded manifest module records the selinux-load-failed marker (enforce-gate refuses on it)" \
         || bad "module-load failure no longer records the selinux-load-failed marker"
     # Matched pair: provision.sh writes selinux-modules.status, the QEMU

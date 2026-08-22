@@ -276,7 +276,7 @@ grep -q '^MEDIA_PROXY_MASTODON_BASE_URL=.*mastodon-web:3000' <<<"$UB"
 check $? "the mastodon media-proxy base URL is the compose homeserver"
 grep -q '^MEDIA_PROXY_MATRIX_BASE_URL=.*tuwunel:8008' <<<"$UB"
 check $? "the matrix media-proxy base URL is the compose homeserver"
-! grep -E '^MEDIA_PROXY_.*BASE_URL=' <<<"$UB" | grep -q 'svc.cluster.local'
+! grep -E '^MEDIA_PROXY_.*BASE_URL=' <<<"$UB" | grep 'svc.cluster.local' >/dev/null
 check $? "neither base URL inherited a cluster-only host"
 
 # NEGATIVE CONTROL: hardcode the egress flag off — exactly the state that produced

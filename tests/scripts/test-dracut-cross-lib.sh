@@ -277,10 +277,10 @@ for b in rpi5 frite orangepi5 orangepi-zero2 orangepi-zero2w orangepi-zero3 oran
     # consult the single-sourced resolver and the pinned waf family INSIDE the
     # prerequisites section, and carry the actionable message idiom.
     PREREQ_REGION="$(sed -n '/banner "Verifying prerequisites"/,/^banner /p' "${BF}")"
-    printf '%s' "${PREREQ_REGION}" | grep -q 'dracut_cross_target_exec_blockers' \
+    printf '%s' "${PREREQ_REGION}" | grep 'dracut_cross_target_exec_blockers' >/dev/null \
         && ok "${b}: general qemu preflight consults dracut_cross_target_exec_blockers in the prerequisites section" \
         || bad "${b}: prerequisites section never calls dracut_cross_target_exec_blockers"
-    printf '%s' "${PREREQ_REGION}" | grep -q 'resolve_stage4_packages quiet' \
+    printf '%s' "${PREREQ_REGION}" | grep 'resolve_stage4_packages quiet' >/dev/null \
         && ok "${b}: general qemu preflight resolves the REAL package set (resolve_stage4_packages quiet)" \
         || bad "${b}: general qemu preflight does not use resolve_stage4_packages"
     grep -q 'They would fail ~40min in and be silently dropped' "${BF}" \
@@ -291,7 +291,7 @@ for b in rpi5 frite orangepi5 orangepi-zero2 orangepi-zero2w orangepi-zero3 oran
     # preflight block (from the _exec_blockers resolve to its unset) and
     # require an exit 1 inside it.
     GP_BLOCK="$(sed -n '/_exec_blockers="\$(resolve_stage4_packages quiet/,/unset _exec_blockers/p' "${BF}")"
-    printf '%s' "${GP_BLOCK}" | grep -qE '^\s*exit 1$' \
+    printf '%s' "${GP_BLOCK}" | grep -E '^\s*exit 1$' >/dev/null \
         && ok "${b}: general qemu preflight blockers branch hard-exits (exit 1)" \
         || bad "${b}: general qemu preflight lost its exit 1 (fail-fast defanged)"
     # Single-source invariant: Phase 2 must consume the same resolver (no

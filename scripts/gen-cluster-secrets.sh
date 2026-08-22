@@ -696,7 +696,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
                     "${VAULT_KV_MOUNT}/${BASE}/harbor-robots" 2>&1 >/dev/null)"; then
                 vault kv patch "${VAULT_KV_MOUNT}/${BASE}/harbor-robots" \
                     "${HARBOR_ROBOT_OVERRIDE[@]}"
-            elif printf '%s' "${_hr_probe}" | grep -qi 'no value found'; then
+            elif printf '%s' "${_hr_probe}" | grep -i 'no value found' >/dev/null; then
                 # Virgin path: `kv patch` cannot create a document, and there is
                 # nothing to clobber. Only the supplied keys are written — never
                 # a fabricated value for the robot we were not given.

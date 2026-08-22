@@ -902,7 +902,7 @@ mastodon_account() { # <user>
   # with a generic "email unreachable" failure, regardless of MX reachability.
   out="$(docker exec "${MASTODON_CTR}" bin/tootctl accounts create "$1" \
           --email "$1@e2e.local" --confirmed --approve 2>&1)" \
-    || { echo "${out}" | grep -qi "taken\|exists" \
+    || { echo "${out}" | grep -i "taken\|exists" >/dev/null \
            || die "could not create Mastodon account $1: ${out}"; }
   log "mastodon account $1 present"
 }

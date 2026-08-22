@@ -353,7 +353,7 @@ if [ -r "${PARITY_PARAMS}" ] && [ -r "${PARITY_EXPORT}" ] && [ -r "${PARITY_GOLD
     else
         bad "golden's per-node ssh dst tags != tag:<dev_tag_for_fp> of the export's fingerprints (golden: $(echo "${GOLDEN_NODE_DSTS}" | tr '\n' ' ')| expected: $(echo "${EXPECT_NODE_DSTS}" | tr '\n' ' ')) — the document both writers are gated against no longer addresses nodes by the tag the force-tagger assigns"
     fi
-    if [ -n "${GOLDEN_NODE_DSTS}" ] && ! printf '%s\n' "${GOLDEN_NODE_DSTS}" | grep -qv "^${EXPECT_NODE_TAG_PREFIX}"; then
+    if [ -n "${GOLDEN_NODE_DSTS}" ] && ! printf '%s\n' "${GOLDEN_NODE_DSTS}" | grep -v "^${EXPECT_NODE_TAG_PREFIX}" >/dev/null; then
         ok "every per-node dst in the golden carries the ${EXPECT_NODE_TAG_PREFIX} prefix"
     else
         bad "a per-node dst in the golden does not start with ${EXPECT_NODE_TAG_PREFIX}"
@@ -423,10 +423,10 @@ fi
 # ...and the constant must be LOAD-BEARING: the method that builds every emitted dst tag
 # has to read it. A constant no emission path reads is decoration, not a contract.
 NODE_TAG_FN="$(awk '/static String nodeTagFor\(/{p=1} p{print} p&&/^[[:space:]]*}[[:space:]]*$/{exit}' "${BFF_COMPILER}")"
-printf '%s\n' "${NODE_TAG_FN}" | grep -v -E '^[[:space:]]*(/?\*|//)' | grep -Fq 'NODE_TAG_PREFIX' \
+printf '%s\n' "${NODE_TAG_FN}" | grep -v -E '^[[:space:]]*(/?\*|//)' | grep -F 'NODE_TAG_PREFIX' >/dev/null \
     && ok "NODE_TAG_PREFIX is LOAD-BEARING: nodeTagFor() builds the emitted dst tag out of it" \
     || bad "NODE_TAG_PREFIX is INERT — nodeTagFor() does not read it, so the constant asserted above has zero effect on the emitted policy (it can say anything and every edge still compiles the same). Build the tag from the constant; do not spell it a second way"
-java_code "${BFF_COMPILER}" | grep -Fq 'tag:node-' \
+java_code "${BFF_COMPILER}" | grep -F 'tag:node-' >/dev/null \
     && bad "compiler CODE still emits the tag:node-<fp> shape — no node carries it" \
     || ok "no tag:node- shape in compiler code (any mention is a regression note only)"
 grep -Fq "${VEC_TAG}" "${BFF_COMPILER_TEST}" \
@@ -441,7 +441,7 @@ grep -Fq 'acls[]: kept empty' "${BFF_COMPILER}" \
     && bad "compiler still declares 'acls[]: kept empty' — the data-plane rule would be dropped" \
     || ok "compiler no longer keeps acls[] empty"
 # ...and it is not enough for the CIDRs to exist as constants; a rule must be ADDED.
-java_code "${BFF_COMPILER}" | grep -Fq 'acls.add(' \
+java_code "${BFF_COMPILER}" | grep -F 'acls.add(' >/dev/null \
     && ok "compiler CODE actually adds a rule into acls[] (not just declaring the CIDRs)" \
     || bad "compiler declares the CIDRs but never adds a rule to acls[] — the emitted acls[] is still empty"
 
@@ -449,13 +449,13 @@ java_code "${BFF_COMPILER}" | grep -Fq 'acls.add(' \
 grep -Fq 'tag:superadmin' "${BFF_COMPILER}" && grep -Fq 'tag:mesh_' "${BFF_COMPILER}" \
     && ok "compiler declares tag:superadmin + tag:mesh_ (the SUPERADMIN mesh rule's parts)" \
     || bad "compiler omits tag:superadmin / tag:mesh_ — a push would cut superadmin off from the core nodes the export deliberately omits"
-java_code "${BFF_COMPILER}" | grep -Fq 'sshRule(SUPERADMIN_TAG' \
+java_code "${BFF_COMPILER}" | grep -F 'sshRule(SUPERADMIN_TAG' >/dev/null \
     && ok "compiler CODE adds the SUPERADMIN mesh edge into ssh[]" \
     || bad "compiler never adds the SUPERADMIN mesh edge to ssh[] — superadmin loses its ONLY reach to core nodes on the first push"
 grep -Fq '"tagOwners"' "${BFF_COMPILER}" \
     && ok "compiler emits tagOwners (dst tags stay control-owned, not self-applyable)" \
     || bad "compiler emits no tagOwners — [FIX-SERVERTAG] re-opens (a node could self-advertise a dst tag)"
-java_code "${BFF_COMPILER}" | grep -Fq 'group:op-' \
+java_code "${BFF_COMPILER}" | grep -F 'group:op-' >/dev/null \
     && bad "compiler CODE still emits group:op-<operator> src — headscale has no per-operator identity (FIX-OIDC-USERS deferred); those principals do not exist" \
     || ok "compiler emits no fictional group:op-* principals"
 
@@ -465,7 +465,7 @@ if grep -Fq "${EXPECT_BASE_URL}" "${BFF_PROPS}" && grep -Fq "${EXPECT_BASE_URL}"
 else
     bad "BFF base-url default != ${EXPECT_BASE_URL} (derived from ${HS_SERVICE}) in HeadscaleAclProperties.java and/or application.yml"
 fi
-java_code "${BFF_PROPS}" | grep -Fq 'headscale.headscale.svc' \
+java_code "${BFF_PROPS}" | grep -F 'headscale.headscale.svc' >/dev/null \
     && bad "HeadscaleAclProperties CODE still names the nonexistent headscale.headscale.svc namespace" \
     || ok "no stale headscale.headscale.svc default in HeadscaleAclProperties code"
 
@@ -493,10 +493,10 @@ grep -Fq "sshUser = \"${EXPECT_SSH_USER}\"" "${BFF_PROPS}" \
 grep -Fq "APP_REGISTRY_HEADSCALE_ACL_SSH_USER:${EXPECT_SSH_USER}" "${BFF_YML}" \
     && ok "application.yml ssh-user default agrees (${EXPECT_SSH_USER})" \
     || bad "application.yml ssh-user default != ${EXPECT_SSH_USER} (provision.sh resolve_ssh_user) — the deployed default would name an account the node does not grant"
-java_code "${BFF_COMPILER}" | grep -Fq "? \"${EXPECT_SSH_USER}\" : sshUser" \
+java_code "${BFF_COMPILER}" | grep -F "? \"${EXPECT_SSH_USER}\" : sshUser" >/dev/null \
     && ok "compiler's blank-input ssh-user fallback is also '${EXPECT_SSH_USER}'" \
     || bad "compiler's blank-input ssh-user fallback != '${EXPECT_SSH_USER}' — a blank/absent config would silently compile edges for a different account than the node grants"
-java_code "${BFF_COMPILER}" | grep -Fq 'autogroup:nonroot' \
+java_code "${BFF_COMPILER}" | grep -F 'autogroup:nonroot' >/dev/null \
     && bad "compiler CODE still hard-codes users:[autogroup:nonroot]; the renderer uses the resolved TS_SSH_USER" \
     || ok "compiler no longer hard-codes autogroup:nonroot as the ssh user"
 

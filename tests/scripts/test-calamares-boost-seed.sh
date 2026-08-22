@@ -58,7 +58,7 @@ if [ -n "${LOOP}" ]; then
 else
     bad "x86 package.use copy loop not found (anchors moved?)"
 fi
-if printf '%s' "${LOOP}" | grep -qE '^\s*boost\)'; then
+if printf '%s' "${LOOP}" | grep -E '^\s*boost\)' >/dev/null; then
     bad "x86 copy loop grew a 'boost)' case filter (node images lose the seed)"
 else
     ok "x86 copy loop has no 'boost)' case entry (file reaches every role)"
@@ -70,9 +70,9 @@ fi
 # retired literal made this leg permanently red; the suite was CI-orphaned so
 # nothing noticed, and an always-red guard gets ignored exactly like an
 # always-green one.
-if printf '%s' "${LOOP}" | grep -qE '^\s*cp "\$\{puf\}" "\$\{SYSROOT\}/etc/portage/package\.use/"$'; then
+if printf '%s' "${LOOP}" | grep -E '^\s*cp "\$\{puf\}" "\$\{SYSROOT\}/etc/portage/package\.use/"$' >/dev/null; then
     ok "x86 copy loop still cps package.use files unconditionally after the case"
-elif printf '%s' "${LOOP}" | grep -qE '^\s*cp "\$\{puf\}" "\$\{PCS_STAGE_PU\}/"$' \
+elif printf '%s' "${LOOP}" | grep -E '^\s*cp "\$\{puf\}" "\$\{PCS_STAGE_PU\}/"$' >/dev/null \
      && grep -qE '^\s*pcs_sync_dir "\$\{PCS_STAGE_PU\}" "\$\{SYSROOT\}/etc/portage/package\.use"' "${X86}"; then
     ok "x86 copy loop stages package.use files unconditionally after the case, then pcs_sync_dir mirrors the stage into the sysroot"
 else

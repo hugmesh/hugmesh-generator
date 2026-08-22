@@ -774,7 +774,7 @@ probe_os() {
     # other AOSP-derived/vendor ROMs) — require it AND a harder GrapheneOS-
     # specific getprop marker, not either alone, so a non-GrapheneOS ROM with
     # a datestamp-shaped incremental can't be misclassified.
-    "${ADB}" -s "${s}" shell getprop 2>/dev/null | grep -qi grapheneos || has_gos_marker=0
+    "${ADB}" -s "${s}" shell getprop 2>/dev/null | grep -i grapheneos >/dev/null || has_gos_marker=0
     if [[ "${incr}" =~ ^20[0-9]{8}$ ]] && [ "${has_gos_marker}" -eq 1 ]; then
         OS_ID="grapheneos"; OS_VERSION="${incr}"
         return 0
@@ -1373,7 +1373,7 @@ cmd_attest() {
         pw_info "installing ${AUDITOR_APK}"
         "${ADB}" -s "${s}" install -r "${AUDITOR_APK}" || pw_die 1 "adb install failed"
     fi
-    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${pkg}"; then
+    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -x "package:${pkg}" >/dev/null; then
         if [ -n "${AUDITOR_APK}" ]; then
             pw_die 1 "installed the APK but ${pkg} is not listed — wrong APK?"
         fi
@@ -1550,7 +1550,7 @@ cmd_mdm_enroll_dpc() {
         pw_info "installing ${HEADWIND_APK}"
         "${ADB}" -s "${s}" install -r "${HEADWIND_APK}" || pw_die 1 "adb install failed"
     fi
-    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${pkg}"; then
+    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -x "package:${pkg}" >/dev/null; then
         if [ -n "${HEADWIND_APK}" ]; then
             pw_die 1 "installed the APK but ${pkg} is not listed — wrong APK?"
         fi
@@ -1647,7 +1647,7 @@ cmd_mdm_enroll_dpc() {
             pw_info "installing ${MOONLIGHT_APK}"
             "${ADB}" -s "${s}" install -r "${MOONLIGHT_APK}" || pw_die 1 "adb install of the Moonlight APK failed"
         fi
-        if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${ml_pkg}"; then
+        if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -x "package:${ml_pkg}" >/dev/null; then
             if [ -n "${MOONLIGHT_APK}" ]; then
                 pw_die 1 "installed the APK but ${ml_pkg} is not listed — wrong APK?"
             fi
@@ -1961,7 +1961,7 @@ cmd_enroll() {
         pw_info "installing ${TAILSCALE_APK}"
         "${ADB}" -s "${s}" install -r "${TAILSCALE_APK}" || pw_die 1 "adb install failed"
     fi
-    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${pkg}"; then
+    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -x "package:${pkg}" >/dev/null; then
         if [ -n "${TAILSCALE_APK}" ]; then
             pw_die 1 "installed the APK but ${pkg} is not listed — wrong APK?"
         fi
@@ -1979,7 +1979,7 @@ cmd_enroll() {
         fi
         echo
         local waited=0
-        while ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${pkg}"; do
+        while ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -x "package:${pkg}" >/dev/null; do
             waited=$((waited + POLL_INTERVAL)); sleep "${POLL_INTERVAL}"
             if [ "${waited}" -ge "${JOIN_TIMEOUT}" ]; then
                 [ "${FORCE}" -eq 1 ] || pw_die 2 "${pkg} did not appear within ${JOIN_TIMEOUT}s — install it and retry (or --force to skip this wait)"

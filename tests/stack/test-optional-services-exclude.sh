@@ -325,8 +325,8 @@ if [ -f "${BUILDER_X86}" ]; then
   for marker in '13c-games-instances.yaml' 'manifests/games-instances' \
                 'games-services-admin-sync-job.yaml' 'games-services-runner-sync-job.yaml' \
                 'games-servers-console' 'games-services/instances' 'admin/games-services'; do
-    rpi5_has=1; echo "${RPI5_GAMES_CASE}" | grep -qF -- "${marker}" && rpi5_has=0
-    x86_has=1;  echo "${X86_GAMES_CASE}"  | grep -qF -- "${marker}" && x86_has=0
+    rpi5_has=1; echo "${RPI5_GAMES_CASE}" | grep -F -- "${marker}" >/dev/null && rpi5_has=0
+    x86_has=1;  echo "${X86_GAMES_CASE}"  | grep -F -- "${marker}" >/dev/null && x86_has=0
     if [ "${rpi5_has}" -eq 0 ] && [ "${x86_has}" -eq 0 ]; then
       ok "games-instances parity: both builders prune '${marker}' in the games) case"
     elif [ "${rpi5_has}" -eq 0 ] && [ "${x86_has}" -ne 0 ]; then

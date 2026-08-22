@@ -87,7 +87,7 @@ else
 fi
 # PROGRESS_URL must NOT be in the required-env loop
 req_loop="$(grep -n 'for v in BUILD_ID' "$BUILD_IMAGE_SH" | head -1 | cut -d: -f1)"
-if [ -n "$req_loop" ] && ! sed -n "${req_loop}p" "$BUILD_IMAGE_SH" | grep -q PROGRESS_URL; then
+if [ -n "$req_loop" ] && ! sed -n "${req_loop}p" "$BUILD_IMAGE_SH" | grep PROGRESS_URL >/dev/null; then
   ok not-required "PROGRESS_URL absent from the required-env loop (it is optional)"
 else
   bad not-required "PROGRESS_URL leaked into the required-env loop"

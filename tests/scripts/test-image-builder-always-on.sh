@@ -79,7 +79,7 @@ expect_catch() {
   out="$(python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
   if [ "${rc}" -eq 0 ]; then
     neg_bad "${desc} — checker still PASSED"
-  elif ! printf '%s' "${out}" | grep -qF "${tag}"; then
+  elif ! printf '%s' "${out}" | grep -F "${tag}" >/dev/null; then
     neg_bad "${desc} — checker failed, but not on ${tag}:"
     printf '%s\n' "${out}" | sed 's/^/        /'
   else

@@ -34,16 +34,16 @@ bash "${REPO}/scripts/gen-keystores.sh" "${OUT}" >/dev/null 2>&1 || { echo "  FA
 
 TS_PASS="$(pw)"
 keytool -list -keystore "${OUT}/keystores/truststore.jks" -storepass "${TS_PASS}" 2>/dev/null \
-  | grep -q trustedCertEntry && ok "truststore.jks contains the cluster CA" || bad "truststore missing CA"
+  | grep trustedCertEntry >/dev/null && ok "truststore.jks contains the cluster CA" || bad "truststore missing CA"
 [ -f "${OUT}/keystores/truststore.p12" ] && ok "truststore.p12 (PKCS12) present" || bad "truststore.p12 missing"
 
 for svc in "${EXPECT[@]}"; do
   ks="${OUT}/keystores/${svc}.keystore.jks"
   if [ ! -f "${ks}" ]; then bad "${svc}: keystore missing"; continue; fi
   out="$(keytool -list -v -keystore "${ks}" -storepass "$(pw "${svc}")" 2>/dev/null)"
-  echo "${out}" | grep -q 'PrivateKeyEntry'                 && ok "${svc}: has private-key identity" || bad "${svc}: no PrivateKeyEntry"
-  echo "${out}" | grep -q 'Certificate chain length: 2'      && ok "${svc}: cert chain → CA (len 2)"  || bad "${svc}: chain not anchored to CA"
-  echo "${out}" | grep -q "Issuer: CN=${BRAND} Cluster CA"   && ok "${svc}: issued by cluster CA"     || bad "${svc}: wrong issuer"
+  echo "${out}" | grep 'PrivateKeyEntry' >/dev/null                 && ok "${svc}: has private-key identity" || bad "${svc}: no PrivateKeyEntry"
+  echo "${out}" | grep 'Certificate chain length: 2' >/dev/null      && ok "${svc}: cert chain → CA (len 2)"  || bad "${svc}: chain not anchored to CA"
+  echo "${out}" | grep "Issuer: CN=${BRAND} Cluster CA" >/dev/null   && ok "${svc}: issued by cluster CA"     || bad "${svc}: wrong issuer"
 done
 
 # Cryptographically verify one service cert against the CA.

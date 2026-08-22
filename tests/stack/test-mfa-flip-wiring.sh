@@ -331,10 +331,10 @@ grep -qE "^STACK_MFA_ENV := \\\$\(if \\\$\(strip \\\$\(MFA\)\), APP_MFA_ENABLED=
 stack_env_block() { # <makefile>
   awk '/^STACK_ENV :=/{grab=1} grab{print; if ($0 !~ /\\$/) exit}' "$1"
 }
-stack_env_block "${MAKEFILE}" | grep -q '\$(STACK_MFA_ENV)' \
+stack_env_block "${MAKEFILE}" | grep '\$(STACK_MFA_ENV)' >/dev/null \
   && ok "(1c) STACK_ENV threads \$(STACK_MFA_ENV) into every compose invocation" \
   || bad "(1c) STACK_ENV does NOT reference \$(STACK_MFA_ENV) — MFA=1 would define an env nobody passes to compose"
-awk '/^kind-up:/{grab=1; next} grab{print; exit}' "${MAKEFILE}" | grep -q "MFA='\$(MFA)'.*bootstrap-kind.sh" \
+awk '/^kind-up:/{grab=1; next} grab{print; exit}' "${MAKEFILE}" | grep "MFA='\$(MFA)'.*bootstrap-kind.sh" >/dev/null \
   && ok "(1d) kind-up threads MFA='\$(MFA)' into bootstrap-kind.sh" \
   || bad "(1d) kind-up recipe does not thread MFA into bootstrap-kind.sh — the kind lane switch is disconnected"
 
@@ -387,12 +387,12 @@ if [ -z "${KIND_MFA_RECIPE}" ]; then
   bad "(3d) no 'kind-e2e-mfa' target in the Makefile — the kind lane can flip MFA on but has no way to run the MFA spec against either posture"
   bad "(3e) …and therefore nothing derives the spec's APP_MFA_ENABLED from the live cluster"
 else
-  printf '%s\n' "${KIND_MFA_RECIPE}" | grep -q '29-mfa-privileged-floor.spec.ts' \
+  printf '%s\n' "${KIND_MFA_RECIPE}" | grep '29-mfa-privileged-floor.spec.ts' >/dev/null \
     && ok "(3d) kind-e2e-mfa runs the MFA spec (29) against the kind cluster — the flip has a verifier" \
     || bad "(3d) kind-e2e-mfa does not run specs/29-mfa-privileged-floor.spec.ts — the target exists but verifies something else"
-  if ! printf '%s\n' "${KIND_MFA_RECIPE}" | grep -q 'kind-mfa-posture.sh'; then
+  if ! printf '%s\n' "${KIND_MFA_RECIPE}" | grep 'kind-mfa-posture.sh' >/dev/null; then
     bad "(3e) kind-e2e-mfa does not read the posture via scripts/kind-mfa-posture.sh — it is guessing at the cluster's state"
-  elif printf '%s\n' "${KIND_MFA_RECIPE}" | grep -qE "APP_MFA_ENABLED=[\"']?(\\\$\(MFA\)|true|false)"; then
+  elif printf '%s\n' "${KIND_MFA_RECIPE}" | grep -E "APP_MFA_ENABLED=[\"']?(\\\$\(MFA\)|true|false)" >/dev/null; then
     bad "(3e) kind-e2e-mfa hands spec 29 a CALLER-supplied APP_MFA_ENABLED (\$(MFA) or a literal) — the live posture is overridden by a guess"
   else
     ok "(3e) kind-e2e-mfa derives APP_MFA_ENABLED from the RUNNING gateway pod (scripts/kind-mfa-posture.sh), not from \$(MFA) or a literal"
@@ -581,7 +581,7 @@ fi
 
 # 6c: Makefile defines the knob but never threads it -> (1c) fails
 sed 's|$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)|$(STACK_MFA_FLOOR_ENV)|' "${MAKEFILE}" > "${WORK}/Makefile.6c"
-if grep -q '\$(STACK_MFA_ENV)' "${MAKEFILE}" && ! stack_env_block "${WORK}/Makefile.6c" | grep -q '\$(STACK_MFA_ENV)'; then
+if grep -q '\$(STACK_MFA_ENV)' "${MAKEFILE}" && ! stack_env_block "${WORK}/Makefile.6c" | grep '\$(STACK_MFA_ENV)' >/dev/null; then
   ok "(6c) thread check BITES: STACK_ENV without \$(STACK_MFA_ENV) fails (the defined-but-unthreaded inert toggle)"
 else
   bad "(6c) VACUOUS or mutator did not land: STACK_ENV check passed without the reference"
@@ -684,9 +684,9 @@ fi
 # would pass it while the caller's $(MFA) silently wins the assignment.
 sed 's|APP_MFA_ENABLED="$${posture}"|APP_MFA_ENABLED="$(MFA)"|' "${MAKEFILE}" > "${WORK}/Makefile.6j"
 mut_recipe="$(recipe_of "${WORK}/Makefile.6j" kind-e2e-mfa)"
-if printf '%s\n' "${mut_recipe}" | grep -q 'APP_MFA_ENABLED="$(MFA)"'; then
-  { printf '%s\n' "${mut_recipe}" | grep -q 'kind-mfa-posture.sh'; } \
-    && { printf '%s\n' "${mut_recipe}" | grep -qE "APP_MFA_ENABLED=[\"']?(\\\$\(MFA\)|true|false)"; } \
+if printf '%s\n' "${mut_recipe}" | grep 'APP_MFA_ENABLED="$(MFA)"' >/dev/null; then
+  { printf '%s\n' "${mut_recipe}" | grep 'kind-mfa-posture.sh' >/dev/null; } \
+    && { printf '%s\n' "${mut_recipe}" | grep -E "APP_MFA_ENABLED=[\"']?(\\\$\(MFA\)|true|false)" >/dev/null; } \
     && ok "(6j) live-posture check BITES: threading \$(MFA) into the spec's env fails (3e) even though the helper is still called" \
     || bad "(6j) VACUOUS: a caller-supplied APP_MFA_ENABLED passed the live-posture check"
 else

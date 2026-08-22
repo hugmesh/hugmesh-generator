@@ -50,7 +50,7 @@ done
 [ "${SHAPE_OK}" -eq 1 ] && ok "(a) every id has a full row (label/mech/status/sovereignty/emits) + an mdmp_emit_<id>"
 # no orphan array keys beyond the id list
 for id in "${!MDM_PROVIDER_LABEL[@]}"; do
-    printf '%s\n' "${MDM_PROVIDER_IDS[@]}" | grep -qx "${id}" \
+    printf '%s\n' "${MDM_PROVIDER_IDS[@]}" | grep -x "${id}" >/dev/null \
         || bad "(a) MDM_PROVIDER_LABEL has an orphan key '${id}' not in MDM_PROVIDER_IDS"
 done
 

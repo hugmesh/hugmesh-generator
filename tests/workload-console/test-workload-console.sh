@@ -577,7 +577,7 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
     local out rc
     out="$(python3 "${PROP}" --entries "$2" 2>&1)"; rc=$?
     if [ "$4" = "fail" ]; then
-      if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -qF "$3"; then
+      if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -F "$3" >/dev/null; then
         ok "control: $1 — the property check catches it, via ${3}"
       else
         bad "control: $1 — the property check did NOT catch it (rc=${rc}); a check that cannot fail is not a check"

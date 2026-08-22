@@ -71,7 +71,7 @@ case "${DOCKER_LINE}" in
   *) bad "the in-container settings.xml path is not part of the docker command" ;;
 esac
 # A stray host-level mvn call in this script would mean the split reappeared.
-if printf '%s\n' "${JOINED}" | grep -qE '^\s*mvn '; then
+if printf '%s\n' "${JOINED}" | grep -E '^\s*mvn ' >/dev/null; then
   bad "a bare 'mvn' runs at the top level of build_one — that executes on the HOST"
 else
   ok "no host-level mvn invocation"
@@ -411,7 +411,7 @@ POM
   m2_neg() { # m2_neg <label> <corpus-dir> <expected-substring>
     local label="$1" corpus="$2" want="$3" out rc
     out="$(M2_SELFTEST_CHILD=1 STACK_SRC="${corpus}" bash "${SELF_M2}" 2>&1)"; rc=$?
-    if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -qF "${want}"; then
+    if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -F "${want}" >/dev/null; then
       ok "negative control bites: ${label}"
     else
       bad "negative control did NOT bite (rc=${rc}): ${label} — wanted '${want}'"

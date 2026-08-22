@@ -146,7 +146,20 @@ conf_cache_violations() { # <conf> -> one matched line per violation
     | grep -iE '(proxy_hide_header|add_header)[[:space:]]+"?(cache-control|pragma|expires)([^a-z-]|$)|^[[:space:]]*expires([[:space:]]|;)|proxy_cache|proxy_store'
 }
 conf_is_proxy_front() { # <conf> — non-vacuity: the file really proxies
-  grep -viE '^[[:space:]]*#' "$1" | grep -qE '^[[:space:]]*proxy_pass[[:space:]]'
+  grep -viE '^[[:space:]]*#' "$1" | grep -E '^[[:space:]]*proxy_pass[[:space:]]' >/dev/null
+}
+# Evidence for when the line above goes red. Issue #151 burned a day because a
+# staged-conf FAIL carried no way to tell "the write was truncated" from "the
+# pipeline reported a failure it did not have": the direct, pipeline-free hit
+# count separates them on sight, and the per-stage statuses name the stage.
+conf_diag() { # <conf>
+  local n hits st
+  n="$(wc -l < "$1" 2>/dev/null)"
+  hits="$(grep -c '^[[:space:]]*proxy_pass[[:space:]]' "$1" 2>/dev/null)"
+  grep -viE '^[[:space:]]*#' "$1" | grep -E '^[[:space:]]*proxy_pass[[:space:]]' >/dev/null
+  st="${PIPESTATUS[*]}"
+  echo "         [diag] $1: ${n:-?} line(s); proxy_pass hits read WITHOUT a pipeline:" \
+       "${hits:-?}; pipeline stage statuses: ${st}"
 }
 # Compose audit: TSV of GW/UBFF membership rows and HIT rows for env names
 # matching the cache tripwire, over an arbitrary compose file.
@@ -322,7 +335,8 @@ for ctl in \
     # (not a broken stage) is what the predicate saw.
     conf_is_proxy_front "${mconf}" \
       && ok "(${tag}) staged conf still a proxy front — the mutation is isolated" \
-      || bad "(${tag}) staged conf lost its proxy_pass — control did not isolate the cache directive"
+      || { bad "(${tag}) staged conf lost its proxy_pass — control did not isolate the cache directive"
+           conf_diag "${mconf}"; }
   fi
 done
 
@@ -346,7 +360,7 @@ MRC=$?
 if mut_ok "${MRC}" 5e; then
   if compose_cache_audit "${WORK}/compose-knob.yaml" > "${WORK}/audit-knob.tsv" 2>/dev/null; then
     knob_hits="$(audit_hits "${WORK}/audit-knob.tsv")"
-    printf '%s' "${knob_hits}" | grep -q 'BFF_RESPONSE_CACHE_SECONDS' \
+    printf '%s' "${knob_hits}" | grep 'BFF_RESPONSE_CACHE_SECONDS' >/dev/null \
       && ok "(5e) compose tripwire bites: a *_CACHE_* env on the fe-gateway FAILS it" \
       || bad "(5e) COMPOSE TRIPWIRE VACUOUS: BFF_RESPONSE_CACHE_SECONDS on the fe-gateway was not flagged (hits: '${knob_hits:-none}')"
     # the mutant must not have broken discovery, or the miss above means nothing

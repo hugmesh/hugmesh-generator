@@ -158,7 +158,7 @@ if command -v jq >/dev/null 2>&1; then
   # JSON with escaped \n + \" — jq -r un-escapes them into the real newlines/quotes the exploit uses.
   printf '%s' '{"mesh":{"cp_dns_name":"kube-api.evil\"\n      type: \"A\"\n      value: \"6.6.6.6\"\n    - name: \"x","magic_dns_domain":"hugmesh.internal"}}' > "${CPW}/evil.json"
   cpout="$(bash "${CPW}/h.sh" "${CPW}/evil.json")"
-  if [ "$(printf '%s' "${cpout}" | wc -l)" -eq 0 ] && ! printf '%s' "${cpout}" | grep -q '6.6.6.6'; then
+  if [ "$(printf '%s' "${cpout}" | wc -l)" -eq 0 ] && ! printf '%s' "${cpout}" | grep '6.6.6.6' >/dev/null; then
     ok "malicious cp_dns_name resolved to a single clean line (no injected A-record): ${cpout}"
   else
     bad "malicious cp_dns_name leaked injection: $(printf %q "${cpout}")"

@@ -496,7 +496,7 @@ control() { # <label> <root> <expect-substring>
   local rc=$?
   if [ "${rc}" -eq 0 ]; then
     bad "(2) ${label}: the analyser PASSED a tree that is broken on purpose — the check is decorative"
-  elif printf '%s' "${outp}" | grep -qF "${want}"; then
+  elif printf '%s' "${outp}" | grep -F "${want}" >/dev/null; then
     ok "(2) ${label}: bites (rc=${rc})"
   else
     bad "(2) ${label}: failed, but not for the staged reason (wanted ${want}); got: $(printf '%s' "${outp}" | head -2 | tr '\n' ' ')"

@@ -175,7 +175,7 @@ log "http backend started (pid ${HTTP_PID}) on 127.0.0.1:${BACKEND_PORT}"
 # so a later onion failure can't be blamed on the backend.
 backend_ok=""
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -fsS --max-time 5 "http://127.0.0.1:${BACKEND_PORT}/" 2>/dev/null | grep -q "${MARKER}"; then
+    if curl -fsS --max-time 5 "http://127.0.0.1:${BACKEND_PORT}/" 2>/dev/null | grep "${MARKER}" >/dev/null; then
         backend_ok=1; break
     fi
     kill -0 "${HTTP_PID}" 2>/dev/null || fail "http backend died on startup (see ${WORKDIR}/http.log)"
@@ -255,7 +255,7 @@ for i in $(seq 1 "${FETCH_TRIES}"); do
     kill -0 "${TOR_PID}" 2>/dev/null || fail "tor died during fetch phase"
     body="$(curl -sS --socks5-hostname "127.0.0.1:${SOCKS_PORT}" \
                  --max-time "${FETCH_MAXTIME}" "http://${ONION}/" 2>/dev/null || true)"
-    if printf '%s' "${body}" | grep -q "${MARKER}"; then
+    if printf '%s' "${body}" | grep "${MARKER}" >/dev/null; then
         t_fetched=$(( $(date +%s) - T0 ))
         log "onion fetch SUCCEEDED on attempt ${i} (marker matched) after ${t_fetched}s from launch"
         break

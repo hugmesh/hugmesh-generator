@@ -118,10 +118,10 @@ expect_pair() {
   got="$(stack_env "$@")"
   hug="$(printf '%s\n' "$got"  | sed -n "s/^HUG_WEB_LOCALES='\(.*\)'$/\1/p")"
   snap="$(printf '%s\n' "$got" | sed -n "s/^SNAP_WEB_LOCALES='\(.*\)'$/\1/p")"
-  if ! printf '%s\n' "$got" | grep -q "^HUG_WEB_LOCALES="; then
+  if ! printf '%s\n' "$got" | grep "^HUG_WEB_LOCALES=" >/dev/null; then
     bad "${label}: STACK_ENV carries no HUG_WEB_LOCALES at all"; return
   fi
-  if ! printf '%s\n' "$got" | grep -q "^SNAP_WEB_LOCALES="; then
+  if ! printf '%s\n' "$got" | grep "^SNAP_WEB_LOCALES=" >/dev/null; then
     bad "${label}: STACK_ENV dropped the SNAP_WEB_LOCALES skew mirror"; return
   fi
   if [ "$hug" = "$want" ] && [ "$snap" = "$want" ]; then

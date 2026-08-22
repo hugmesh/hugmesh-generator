@@ -102,8 +102,8 @@ R_OUT="${OUT1}/$(basename "${X86_IMG}")"
 M1="${OUT1}/cloud-package.manifest"
 [ -f "${M1}" ] && ok "raw: manifest file created" || bad "raw: manifest missing"
 line1="$(tail -n1 "${M1}" 2>/dev/null)"
-echo "${line1}" | grep -Eq "${SHAPE}" && ok "raw: manifest line matches the pinned shape" || bad "raw: bad manifest line: '${line1}'"
-echo "${o1}" | grep -qF "${line1}" && ok "raw: manifest line echoed to stdout" || bad "raw: manifest line not echoed"
+echo "${line1}" | grep -E "${SHAPE}" >/dev/null && ok "raw: manifest line matches the pinned shape" || bad "raw: bad manifest line: '${line1}'"
+echo "${o1}" | grep -F "${line1}" >/dev/null && ok "raw: manifest line echoed to stdout" || bad "raw: manifest line not echoed"
 [ "$(echo "${line1}" | awk '{print $6}')" = "$(stat -c %s "${R_OUT}")" ] \
     && ok "raw: manifest BYTES is the real artifact size" || bad "raw: manifest BYTES wrong"
 [ "$(echo "${line1}" | awk '{print $8}')" = "$(sha256sum "${R_OUT}" | awk '{print $1}')" ] \
@@ -137,10 +137,10 @@ o3="$(run_cp "${OUT3}" --img "${WHOLE_IMG}" --format vhd-fixed 2>&1)"; rc=$?
 V_OUT="${OUT3}/$(basename "${WHOLE_IMG%.img}").vhd"
 [ -f "${V_OUT}" ] && ok "vhd whole-MiB: <base>.vhd landed" || bad "vhd whole-MiB: missing ${V_OUT}"
 vline="$(grep '^ARGV convert' "${QIMG_LOG}")"
-echo "${vline}" | grep -q -- '-O vpc' && ok "vhd whole-MiB: -O vpc" || bad "vhd whole-MiB: missing -O vpc"
-echo "${vline}" | grep -q -- '-o subformat=fixed,force_size' \
+echo "${vline}" | grep -- '-O vpc' >/dev/null && ok "vhd whole-MiB: -O vpc" || bad "vhd whole-MiB: missing -O vpc"
+echo "${vline}" | grep -- '-o subformat=fixed,force_size' >/dev/null \
     && ok "vhd whole-MiB: subformat=fixed,force_size" || bad "vhd whole-MiB: missing fixed/force_size opts"
-echo "${vline}" | grep -qF " ${WHOLE_IMG} " \
+echo "${vline}" | grep -F " ${WHOLE_IMG} " >/dev/null \
     && ok "vhd whole-MiB: converts the ORIGINAL (no pad copy)" || bad "vhd whole-MiB: did not convert the original"
 [ "$(echo "${vline}" | awk -F'SRCSIZE ' '{print $2}')" = "$(( 516 * MIB ))" ] \
     && ok "vhd whole-MiB: source size at convert time is EXACTLY 516 MiB (no over-round)" \
@@ -164,7 +164,7 @@ srcsize="$(echo "${vline}" | awk -F'SRCSIZE ' '{print $2}')"
 [ "${srcsize}" = "$(( 4 * MIB ))" ] \
     && ok "vhd odd-size: 3MiB+4096B rounds UP to exactly 4 MiB at convert time" \
     || bad "vhd odd-size: expected $(( 4 * MIB )), qemu-img saw '${srcsize}'"
-echo "${vline}" | grep -qF " ${X86_IMG} " \
+echo "${vline}" | grep -F " ${X86_IMG} " >/dev/null \
     && bad "vhd odd-size: converted the INPUT in place (must use a padded working copy)" \
     || ok "vhd odd-size: converted a padded working copy, not the input"
 [ "$(stat -c %s "${X86_IMG}")" -eq "$(( 3 * MIB + 4096 ))" ] \
@@ -175,7 +175,7 @@ else
     ok "vhd odd-size: pad temp cleaned up"
 fi
 line4="$(tail -n1 "${OUT4}/cloud-package.manifest")"
-echo "${line4}" | grep -Eq "${SHAPE}" && ok "vhd odd-size: manifest line shape" || bad "vhd odd-size: bad manifest line: '${line4}'"
+echo "${line4}" | grep -E "${SHAPE}" >/dev/null && ok "vhd odd-size: manifest line shape" || bad "vhd odd-size: bad manifest line: '${line4}'"
 
 # ── 5. manifest APPENDS across runs in one out-dir ───────────────────────────
 o5="$(run_cp "${OUT2}" --img "${WHOLE_IMG}" --format qcow2 2>&1)" \
@@ -192,7 +192,7 @@ refuse() {  # refuse <label> <stderr-regex> <args...>
     rm -rf "${outdir}"
     out="$(SNAP_QEMU_IMG="${STUB_BIN}/qemu-img" bash "${CP}" --out-dir "${outdir}" "$@" 2>&1)"; rc=$?
     if [ "${rc}" -eq 0 ]; then bad "${label}: should refuse (exit non-zero)"; return; fi
-    echo "${out}" | grep -Eqi "${want}" && ok "${label}" || bad "${label}: refusal reason missing /${want}/: ${out}"
+    echo "${out}" | grep -Ei "${want}" >/dev/null && ok "${label}" || bad "${label}: refusal reason missing /${want}/: ${out}"
     if [ -d "${outdir}" ] && [ -n "$(find "${outdir}" -type f ! -name '*.manifest' 2>/dev/null)" ]; then
         bad "${label}: refusal still left an artifact behind"
     fi
@@ -226,10 +226,10 @@ refuse "refusal: empty (0-byte) input"          'EMPTY|hollow'  --img "${EMPTY}"
 # Bad flags.
 refuse "refusal: unknown --format"              'qcow2 \| vhd-fixed \| raw' --img "${X86_IMG}" --format vmdk
 out="$(bash "${CP}" --img "${X86_IMG}" --format raw 2>&1)"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'Missing --out-dir' \
+[ "${rc}" -ne 0 ] && echo "${out}" | grep 'Missing --out-dir' >/dev/null \
     && ok "refusal: missing --out-dir shows usage" || bad "refusal: missing --out-dir accepted (rc=${rc})"
 out="$(bash "${CP}" --bogus 2>&1)"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'Unknown option' \
+[ "${rc}" -ne 0 ] && echo "${out}" | grep 'Unknown option' >/dev/null \
     && ok "refusal: unknown option shows usage" || bad "refusal: unknown option accepted (rc=${rc})"
 
 # ── 7. overwrite refusal: a second run must not clobber the first artifact ───
@@ -237,13 +237,13 @@ sha_before="$(sha256sum "${R_OUT}" | awk '{print $1}')"
 o7="$(run_cp "${OUT1}" --img "${X86_IMG}" --format raw 2>&1)"; rc=$?
 [ "${rc}" -ne 0 ] && ok "overwrite: second raw run into the same out-dir refuses" \
     || bad "overwrite: clobbered an existing artifact"
-echo "${o7}" | grep -q 'already exists' && ok "overwrite: names the existing file" || bad "overwrite: unexplained refusal: ${o7}"
+echo "${o7}" | grep 'already exists' >/dev/null && ok "overwrite: names the existing file" || bad "overwrite: unexplained refusal: ${o7}"
 [ "$(sha256sum "${R_OUT}" | awk '{print $1}')" = "${sha_before}" ] \
     && ok "overwrite: prior artifact bytes untouched" || bad "overwrite: prior artifact changed"
 
 # ── 8. qemu-img seam fails LOUD when the tool is absent (conversions only) ───
 out="$(SNAP_QEMU_IMG="${WORK}/no-such-qemu-img" bash "${CP}" --out-dir "${WORK}/out-noq" --img "${WHOLE_IMG}" --format qcow2 2>&1)"; rc=$?
-[ "${rc}" -ne 0 ] && echo "${out}" | grep -q 'qemu-img not found' \
+[ "${rc}" -ne 0 ] && echo "${out}" | grep 'qemu-img not found' >/dev/null \
     && ok "missing qemu-img: qcow2 dies with the install hint" || bad "missing qemu-img: qcow2 should die (rc=${rc}): ${out}"
 [ ! -e "${WORK}/out-noq/$(basename "${WHOLE_IMG%.img}").qcow2" ] \
     && ok "missing qemu-img: no artifact emitted" || bad "missing qemu-img: artifact appeared without a converter"

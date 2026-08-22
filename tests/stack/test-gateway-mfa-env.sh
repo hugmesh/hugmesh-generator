@@ -557,7 +557,7 @@ elif python3 "${EXTRACT}" apps --root "${APPS_DIR}" "${ALL_APPS[@]}" > "${WORK}/
     # also covers "no lines at all". A `case` over the joined output would silently
     # stop matching the moment a file grew a second Application.
     forms_got="$(apps_forms "${WORK}/apps.tsv" "${f}")"
-    if [ -z "${forms_got}" ] || printf '%s\n' "${forms_got}" | grep -qvE '(^|,)values(,|$)'; then
+    if [ -z "${forms_got}" ] || printf '%s\n' "${forms_got}" | grep -vE '(^|,)values(,|$)' >/dev/null; then
       forms_bad="${forms_bad} ${f}:[$(printf '%s' "${forms_got}" | tr '\n' '|')]"
     fi
   done
@@ -1043,7 +1043,7 @@ PY
   if mut_ok ${MRC} "${label}"; then
     mapfile -t MUT_APPS < <(discover_apps "${AD}")
     # the mutation only counts if DISCOVERY actually reached the planted file
-    if ! printf '%s\n' "${MUT_APPS[@]}" | grep -qx -- "${AD}/${rel}"; then
+    if ! printf '%s\n' "${MUT_APPS[@]}" | grep -x -- "${AD}/${rel}" >/dev/null; then
       bad "(${label}) discovery did NOT reach the planted ${rel} — that is the bug this control exists for; discover_apps must match ArgoCD (recursive, .yaml/.yml/.json)"
     elif ! python3 "${EXTRACT}" apps --root "${AD}" "${MUT_APPS[@]}" > "${WORK}/apps-${hidden}.tsv" 2>"${WORK}/apps-${hidden}.err"; then
       bad "(${label}) staged apps mutant failed to audit: $(tr -d '\n' <"${WORK}/apps-${hidden}.err" | cut -c1-200)"

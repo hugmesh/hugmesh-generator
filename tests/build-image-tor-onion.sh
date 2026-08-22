@@ -68,7 +68,7 @@ worker() {
 # LOG line, which also contains "--with-tor".
 argv_has() {
   awk '/__BUILDER_ARGV_BEGIN__/{f=1;next} /__BUILDER_ARGV_END__/{f=0} f' "$work/out" \
-    | grep -qxF -- "$1"
+    | grep -xF -- "$1" >/dev/null
 }
 
 # accept_tor NAME IMAGE_TYPE HARDWARE_CLASS TOR_ONION WANT(present|absent)

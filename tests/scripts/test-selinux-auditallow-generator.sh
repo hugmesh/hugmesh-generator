@@ -44,13 +44,13 @@ out="$(bash "${GEN}" --pp-tool "${TMP}/pp" "${TMP}/hugmesh_authkeys.pp" 2>"${TMP
 [ "$(printf '%s' "${out}" | grep -c '^(auditallow ')" -eq 2 ] \
     && ok "every hugmesh (allow …) becomes (auditallow …)" \
     || bad "wrong auditallow count: $(printf '%s' "${out}" | grep -c '^(auditallow ')"
-printf '%s' "${out}" | grep -q '^(allow ' \
+printf '%s' "${out}" | grep '^(allow ' >/dev/null \
     && bad "an (allow …) leaked into the output — the instrument would GRANT, not observe" \
     || ok "no (allow …) leaks through: the module grants nothing"
-printf '%s' "${out}" | grep -q 'init_t some_other_t' \
+printf '%s' "${out}" | grep 'init_t some_other_t' >/dev/null \
     && bad "a NON-hugmesh rule was audited — that buries the signal in base-policy noise" \
     || ok "rules whose source is not a hugmesh domain are excluded"
-printf '%s' "${out}" | grep -q 'hugmesh_authkeys_t sshd_t (fd (use))' \
+printf '%s' "${out}" | grep 'hugmesh_authkeys_t sshd_t (fd (use))' >/dev/null \
     && ok "an interface-expanded rule (post-expansion CIL) is captured" \
     || bad "expanded rule missing — the .te-only approach it replaces would have lost it"
 

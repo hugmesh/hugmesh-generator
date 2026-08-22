@@ -160,7 +160,7 @@ else
   ok "specs-rpi5 does not request net-firewall/firewalld (deliberate exclusion; cross g-i bootstrap is broken)"
 fi
 if grep -q 'DELIBERATELY EXCLUDED' "${RPI5}/portage/packages.list" \
-   && grep -A3 'DELIBERATELY EXCLUDED' "${RPI5}/portage/packages.list" | grep -q 'firewalld'; then
+   && grep -A3 'DELIBERATELY EXCLUDED' "${RPI5}/portage/packages.list" | grep 'firewalld' >/dev/null; then
   ok "packages.list carries the exclusion paper trail (DELIBERATELY EXCLUDED block naming firewalld)"
 else
   bad "the firewalld exclusion lost its paper trail in packages.list — a bare deletion is indistinguishable from the silently-shipped-firewalld-less-image hole this gate exists to prevent"

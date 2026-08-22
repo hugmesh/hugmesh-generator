@@ -818,7 +818,7 @@ port_claim_is_stale() {
         # Only the daemon can answer this, so when it does not answer at all the
         # conservative reading is "still held" — never steal a claim blind.
         docker info >/dev/null 2>&1 || return 1
-        docker ps --format '{{.Names}}' 2>/dev/null | grep -qxF "${owner}" && return 1
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -xF "${owner}" >/dev/null && return 1
         return 0
     fi
     # No owner recorded: a claim caught between mkdir and `docker run`. Age it
@@ -2098,7 +2098,7 @@ port_free() {
     # ss sees a listener on ANY address, which matters because the thing we must
     # never collide with (the operator's live stack) binds 0.0.0.0, not loopback.
     if command -v ss >/dev/null 2>&1; then
-        ss -H -ltn "sport = :${p}" 2>/dev/null | grep -q . && return 1
+        ss -H -ltn "sport = :${p}" 2>/dev/null | grep . >/dev/null && return 1
         return 0
     fi
     # No iproute2: a connect probe still catches anything actually accepting.
@@ -2143,7 +2143,7 @@ start_device_row() {
     # normal run's docker argv byte-for-byte what it has always been.
     local mesh_args=()
 
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qxF "${name}"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -xF "${name}" >/dev/null; then
         warn "${label} is already up as ${name} — leaving it alone (--stop-device '${label}' first to replace it)"
         return 0
     fi

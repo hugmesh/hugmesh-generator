@@ -64,7 +64,7 @@ echo "== python-targets seed guard =="
 for d in "${SPEC_DIRS[@]}"; do
     f="${GEN}/${d}/portage/make.conf.tmpl"
     if [ ! -f "${f}" ]; then bad "${d}: make.conf.tmpl missing"; continue; fi
-    if grep -vE '^[[:space:]]*#' "${f}" | grep -qE '^[[:space:]]*PYTHON_(TARGETS|SINGLE_TARGET)=.*python3_[0-9]'; then
+    if grep -vE '^[[:space:]]*#' "${f}" | grep -E '^[[:space:]]*PYTHON_(TARGETS|SINGLE_TARGET)=.*python3_[0-9]' >/dev/null; then
         bad "${d}/make.conf.tmpl: assigns a FROZEN python3_NN literal — make.conf REPLACES the profile default; derive it from the seed instead (docs/PYTHON-TARGETS-SEED-DRIFT.md)"
     else
         ok "${d}/make.conf.tmpl: no frozen PYTHON_TARGETS/PYTHON_SINGLE_TARGET literal"
@@ -76,7 +76,7 @@ done
 for d in "${SPEC_DIRS[@]}"; do
     f="${GEN}/${d}/portage/package.use/python-targets"
     if [ ! -f "${f}" ]; then bad "${d}: package.use/python-targets missing"; continue; fi
-    if grep -vE '^[[:space:]]*#' "${f}" | grep -qE 'PYTHON_TARGETS:.*python3_[0-9]'; then
+    if grep -vE '^[[:space:]]*#' "${f}" | grep -E 'PYTHON_TARGETS:.*python3_[0-9]' >/dev/null; then
         bad "${d}/package.use/python-targets: ships a FROZEN python3_NN target list"
     else
         ok "${d}/package.use/python-targets: no frozen target literal"
@@ -90,7 +90,7 @@ done
 for d in "${SPEC_DIRS[@]}"; do
     f="${GEN}/${d}/portage/package.use/python-targets"
     [ -f "${f}" ] || continue
-    if grep -vE '^[[:space:]]*#' "${f}" | grep -qE 'PYTHON_TARGETS:.*-\*'; then
+    if grep -vE '^[[:space:]]*#' "${f}" | grep -E 'PYTHON_TARGETS:.*-\*' >/dev/null; then
         bad "${d}/package.use/python-targets: uses '-*' — that makes the delta REPLACE the profile default"
     else
         ok "${d}/package.use/python-targets: additive (no '-*')"
@@ -102,7 +102,7 @@ done
 for d in "${SPEC_DIRS[@]}"; do
     f="${GEN}/${d}/portage/package.use/python-targets"
     [ -f "${f}" ] || continue
-    if grep -vE '^[[:space:]]*#' "${f}" | grep -qE '^\s*\*/\*\s+PYTHON_SINGLE_TARGET'; then
+    if grep -vE '^[[:space:]]*#' "${f}" | grep -E '^\s*\*/\*\s+PYTHON_SINGLE_TARGET' >/dev/null; then
         bad "${d}: seed force-enables a global PYTHON_SINGLE_TARGET (REQUIRED_USE ^^ hazard)"
     else
         ok "${d}: no global PYTHON_SINGLE_TARGET override"

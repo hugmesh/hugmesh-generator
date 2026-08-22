@@ -187,7 +187,7 @@ verify_dep() {  # repo
   patch_commons_tests_version "$dest/pom.xml"
   local out; out=$( cd "$dest" && "$MVN" -o test 2>&1 )
   local line; line=$(echo "$out" | grep -E 'Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$' | tail -1)
-  if echo "$out" | grep -q 'BUILD SUCCESS'; then
+  if echo "$out" | grep 'BUILD SUCCESS' >/dev/null; then
     RESULT[$repo]="PASS  ${line:-(no test summary)}"
   else
     local why; why=$(echo "$out" | grep -E 'ERROR.*\.java:\[|cannot find symbol|cannot be applied|<<< FAILURE|<<< ERROR|Could not resolve|version.*is missing' | head -1 | sed 's#.*/##' | cut -c1-80)

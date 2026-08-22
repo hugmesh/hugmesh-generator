@@ -129,8 +129,8 @@ done
 # distinct roots (different fingerprints) + correct per-brand CN
 afp="$(ca_fp "${M2OUT}/certs/acme/cluster-ca.crt")"; bfp="$(ca_fp "${M2OUT}/certs/beta/cluster-ca.crt")"
 [ -n "${afp}" ] && [ -n "${bfp}" ] && [ "${afp}" != "${bfp}" ] && ok "the two domain roots are INDEPENDENT (distinct certs)" || bad "domain roots not distinct"
-openssl x509 -in "${M2OUT}/certs/acme/cluster-ca.crt" -noout -subject 2>/dev/null | grep -q 'CN *= *acme Cluster CA' && ok "acme root CN = 'acme Cluster CA'" || bad "acme root CN wrong"
-openssl x509 -in "${M2OUT}/certs/beta/cluster-ca.crt" -noout -subject 2>/dev/null | grep -q 'CN *= *beta Cluster CA' && ok "beta root CN = 'beta Cluster CA'" || bad "beta root CN wrong"
+openssl x509 -in "${M2OUT}/certs/acme/cluster-ca.crt" -noout -subject 2>/dev/null | grep 'CN *= *acme Cluster CA' >/dev/null && ok "acme root CN = 'acme Cluster CA'" || bad "acme root CN wrong"
+openssl x509 -in "${M2OUT}/certs/beta/cluster-ca.crt" -noout -subject 2>/dev/null | grep 'CN *= *beta Cluster CA' >/dev/null && ok "beta root CN = 'beta Cluster CA'" || bad "beta root CN wrong"
 
 # each NARROW truststore holds EXACTLY its OWN root (cross-domain DENY at the anchor)
 ap="$(pw "${M2OUT}/keystores/acme/passwords.json")"; bp="$(pw "${M2OUT}/keystores/beta/passwords.json")"
@@ -180,7 +180,7 @@ DOMAINS_CONF="${M3}" bash "${GEN}" "${M3OUT}" >/dev/null 2>&1 || bad "import-CA 
 [ -f "${M3OUT}/certs/gen/cluster-ca.key" ] && [ "$(ca_fp "${M3OUT}/certs/gen/cluster-ca.crt")" != "${IMP_FP}" ] && ok "gen domain GENERATED its own independent root (!= imported)" || bad "gen domain did not generate a distinct root"
 # leaf issued by the imported CA + verifies against it
 keytool -exportcert -keystore "${M3OUT}/keystores/imp/imp-be-gateway.keystore.jks" -storepass "$(pw "${M3OUT}/keystores/imp/passwords.json" imp-be-gateway)" -alias imp-be-gateway -rfc 2>/dev/null > "${W}/imp-leaf.pem"
-openssl x509 -in "${W}/imp-leaf.pem" -noout -issuer 2>/dev/null | grep -q "${EXT_CN}" && ok "imp leaf issued by the IMPORTED CA" || bad "imp leaf issuer != imported CA"
+openssl x509 -in "${W}/imp-leaf.pem" -noout -issuer 2>/dev/null | grep "${EXT_CN}" >/dev/null && ok "imp leaf issued by the IMPORTED CA" || bad "imp leaf issuer != imported CA"
 openssl verify -CAfile "${EXTDIR}/imp.crt" "${W}/imp-leaf.pem" >/dev/null 2>&1 && ok "imp leaf verifies against the imported CA" || bad "imp leaf does NOT verify against imported CA"
 # WIDE store anchors the imported root (alongside the generated one)
 W3="${M3OUT}/keystores/architecture"; w3p="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["truststore"])' "${W3}/passwords.json")"
