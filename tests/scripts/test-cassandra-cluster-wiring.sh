@@ -165,6 +165,20 @@ expect_catch "Cassandra password committed as a literal instead of a secretKeyRe
       "            - name: CASSANDRA_PASSWORD
               value: \"hunter2\""
 '
+# ── #140: a contact point re-added without the wiring that makes it work ─────
+# mesh-bff-api's manifest used to set CASSANDRA_CONTACT_POINT to the value the
+# app already defaults to, for a mirror whose enable flag it never set — a live
+# Cassandra dependency to any reader, and nothing at all at runtime. Removing it
+# leaves the gate passing for an ABSENCE, which proves nothing on its own: this
+# control is what makes the absence an assertion, so putting the contact point
+# back without a username/keyspace/auth fails BY NAME instead of quietly
+# reinstating the same misreading.
+expect_catch "a Cassandra contact point re-added with none of the wiring (#140)" "[creds]" '
+  sub "$T/specs/cluster/manifests/mesh-bff-api/deployment.yaml" \
+      "            - name: APP_CASDOOR_PLATFORM_BASE_URL" \
+      "            - { name: CASSANDRA_CONTACT_POINT, value: \"cassandra.hugmesh-pki.svc.cluster.local:9042\" }
+            - name: APP_CASDOOR_PLATFORM_BASE_URL"
+'
 expect_catch "credentials wired but the driver told not to send them" "[creds]" '
   sub "$T/specs/cluster/manifests/admin-bff-api/deployment.yaml" \
       "{ name: CASSANDRA_AUTH_ENABLED, value: \"true\" }" \
