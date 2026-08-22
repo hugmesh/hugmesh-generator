@@ -70,10 +70,12 @@ done
 EXEMPT_KEYS=(
   "00b-cassandra-init.yaml -> 03a-harbor.yaml"
   "00b-cassandra-init.yaml -> 03b-harbor-provision.yaml"
+  "15-kyverno.yaml -> 16-reserved-prefixes-policy.yaml"
 )
 EXEMPT_WHY=(
   "ANALOGY, not a dependency: 00b explains its own Helm-vs-git-path split with 'the same split as apps/03a-harbor.yaml (Helm) vs apps/03b-harbor-provision.yaml (git path)'. Cassandra's init needs nothing from Harbor."
   "ANALOGY, not a dependency: the second half of the Harbor split cited above."
+  "REVERSE DIRECTION, not a missing bootstrap: kyverno is the policy ENGINE and 16-reserved-prefixes-policy is one CONSUMER of it. The dependency runs 16 -> 15; 15's header names 16 only to explain why the engine was introduced at all. Kyverno needs nothing from it. Verified live 2026-08-22: kyverno runs Synced/Healthy on the kind cluster serving workload-console-rbac's deploy-provenance ClusterPolicy while 16-reserved-prefixes-policy is not applied there at all. NOTE THE REAL CONSEQUENCE, which this exemption does NOT paper over: the reserved-prefix vanity-collision rule is therefore UNENFORCED on kind. That predates this list gaining kyverno — the profile has never applied 16 — and adding it is a separate decision, because it is another Enforce ClusterPolicy whose blast radius on a local cluster has not been measured."
 )
 
 # THE TWO EXEMPTIONS THAT USED TO BE HERE WERE A LIE, AND THE LIE WAS LOAD-BEARING.
