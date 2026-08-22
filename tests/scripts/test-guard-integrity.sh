@@ -48,8 +48,6 @@ bad(){ echo "  FAIL $*"; F=$((F+1)); }
 # blanket amnesty. Nothing may be added here because it is red; a red suite is a
 # bug report, not an exemption.
 ALLOW_UNWIRED=(
-  "tests/api/test-bff-admin.sh|needs a LIVE admin-BFF + Casdoor on localhost (it asserts real 401/403 route-access responses); belongs to the compose/e2e lanes, not a static verify job"
-  "tests/scripts/test-studio-launch.sh|drives the PyQt/PySide Studio entrypoint and takes minutes with a GUI toolkit venv; belongs to the studio pytest lane"
 )
 
 # GUARD_ROOT lets the negative-control section below re-run this ANALYSER against
@@ -63,7 +61,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # GUARD_PREMERGE overrides it for the negative-control children below, exactly as
 # GUARD_ALLOW does for the allowlist: this number describes THE REAL REPO, and a
 # synthesised one-suite tree cannot be measured against it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-113}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-116}"
 
 echo "== guard integrity: every guard can fail, and something runs it =="
 
@@ -223,7 +221,7 @@ else:
 
 # ── 3) WIRING: something must actually run each suite ────────────────────────
 print()
-print("-- 3) every suite is invoked by .gitlab-ci.yml or the Makefile --")
+print("-- 3) every suite is invoked by a pipeline job, a make target, or the gate --")
 ci_path = os.path.join(repo, ".gitlab-ci.yml")
 mk_path = os.path.join(repo, "Makefile")
 ci = open(ci_path, encoding="utf-8", errors="replace").read() if os.path.isfile(ci_path) else ""
@@ -232,7 +230,25 @@ if not ci:
     bad(".gitlab-ci.yml is missing or empty — wiring cannot be verified")
 if not mk:
     bad("Makefile is missing or empty — wiring cannot be verified")
-runners = ci + "\n" + mk
+# The GitHub workflows count too. When this check was written they ran no shell
+# suite at all, so "wired" could only mean GitLab or the Makefile; since the
+# pre-merge gate exists, a suite it names is run by the STRONGEST runner of the
+# three, and calling that "nothing runs it" is simply false.
+#
+# COMMENT LINES ARE STRIPPED, and that is not tidiness. shell-suites.yml carries
+# a NOT-LISTED-HERE block that names, in prose, every suite it deliberately does
+# NOT run. Matching raw file text would read those names as wiring and mark the
+# deliberately-excluded suites as covered — the exact inversion this check exists
+# to catch. (Check 7 strips comments for the same reason.)
+gh_dir = os.path.join(repo, ".github", "workflows")
+gh = ""
+if os.path.isdir(gh_dir):
+    for fn in sorted(os.listdir(gh_dir)):
+        if fn.endswith((".yml", ".yaml")):
+            t = open(os.path.join(gh_dir, fn), encoding="utf-8", errors="replace").read()
+            gh += "\n".join(l for l in t.split("\n")
+                            if not l.lstrip().startswith("#")) + "\n"
+runners = ci + "\n" + mk + "\n" + gh
 
 # A `bash <path>` mention, or a directory glob that sweeps the suite in.
 def wired(rel):
@@ -249,8 +265,8 @@ if unlisted:
         print("         %s" % s)
     print("         (wire them, or add them to ALLOW_UNWIRED with a reason)")
 else:
-    ok("all %d suites are invoked by a pipeline job or a make target (%d allowlisted)"
-       % (len(suites), len(allow)))
+    ok("all %d suites are invoked by a pipeline job, a make target or the pre-merge "
+       "gate (%d allowlisted)" % (len(suites), len(allow)))
 
 # ── 4) THE ALLOWLIST ITSELF MUST NOT ROT ─────────────────────────────────────
 print()
