@@ -343,6 +343,18 @@ expect_catch "velero Schedule template regressed to paused:false" "[velero-sched
   grep -q "^  paused: false$" "$T/manifests/velero/schedule-template.yaml"
 '
 
+# A Deployment an HPA scales must not pin spec.replicas — both write that field,
+# so GitOps and the autoscaler overwrite each other forever. Measured on kind
+# 2026-08-22: seven Deployments at generation ~950-964 after 38h, one rewrite
+# every ~2.4 minutes, Applications permanently OutOfSync while every pod was
+# Running and healthy. Nothing looked wrong except a sync status that never
+# cleared, which is exactly why this needs a guard and not a code review.
+expect_catch "a Deployment re-pins replicas the HPA owns" "[hpa-replicas]" '
+  sed -i "0,/^spec:$/s//spec:\n  replicas: 1/" \
+      "$T/manifests/admin-bff-api/deployment.yaml"
+  grep -q "^  replicas: 1$" "$T/manifests/admin-bff-api/deployment.yaml"
+'
+
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="
 [ "${NEG_F}" -eq 0 ] || exit 1
