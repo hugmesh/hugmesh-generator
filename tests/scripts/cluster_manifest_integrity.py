@@ -922,6 +922,71 @@ def check_embedded_json(root):
 #      paused: true inside the file (the feature's double-gate contract). An
 #      active or unpaused Schedule silently starts real backups on a cluster
 #      whose superadmin only opted into installing the engine.
+def check_hpa_replicas(root):
+    """A Deployment an HPA scales must NOT pin spec.replicas.
+
+    Both write the same field, so pinning it makes GitOps and the autoscaler
+    fight in a loop that never converges: the HPA scales to minReplicas, ArgoCD
+    reads that as drift and writes the manifest value back, the HPA scales up
+    again. Measured on kind 2026-08-22 — seven Deployments sat at generation
+    ~950-964 after 38 hours (a rewrite every ~2.4 minutes) and their
+    Applications never left OutOfSync. It is silent: every pod is Running and
+    healthy, so nothing looks wrong except a sync status that will not clear.
+
+    Checked as a PAIR, never by reading replicas alone: `replicas: 1` is
+    perfectly correct on a Deployment with no HPA, and that is most of them.
+    """
+    scaled = {}
+    for path in yaml_files(root):
+        for doc in docs_of(path):
+            if not isinstance(doc, dict) or doc.get("kind") != "HorizontalPodAutoscaler":
+                continue
+            tgt = (doc.get("spec") or {}).get("scaleTargetRef") or {}
+            ns = (doc.get("metadata") or {}).get("namespace")
+            scaled[(ns, tgt.get("kind"), tgt.get("name"))] = os.path.relpath(path, root)
+
+    checked = 0
+    for path in yaml_files(root):
+        for doc in docs_of(path):
+            if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+                continue
+            meta = doc.get("metadata") or {}
+            key = (meta.get("namespace"), "Deployment", meta.get("name"))
+            if key not in scaled:
+                continue
+            checked += 1
+            if (doc.get("spec") or {}).get("replicas") is not None:
+                fail("[hpa-replicas]",
+                     "%s: Deployment %s/%s pins spec.replicas=%s while the HPA in %s "
+                     "scales it (minReplicas=%s). Both write that field, so ArgoCD and "
+                     "the autoscaler will overwrite each other forever and the "
+                     "Application never reaches Synced. Delete the replicas key — the "
+                     "HPA owns it."
+                     % (os.path.relpath(path, root), meta.get("namespace"),
+                        meta.get("name"), doc["spec"]["replicas"], scaled[key],
+                        _hpa_min(root, key)))
+    if scaled and not checked:
+        fail("[hpa-replicas]",
+             "%d HorizontalPodAutoscaler(s) name a scale target, but no Deployment "
+             "matched any of them — the pairing lookup found nothing and this check "
+             "proved nothing. A namespace or name key has drifted." % len(scaled))
+    elif checked:
+        ok("[hpa-replicas]",
+           "%d HPA-scaled Deployment(s) leave spec.replicas to the autoscaler" % checked)
+
+
+def _hpa_min(root, key):
+    for path in yaml_files(root):
+        for doc in docs_of(path):
+            if not isinstance(doc, dict) or doc.get("kind") != "HorizontalPodAutoscaler":
+                continue
+            tgt = (doc.get("spec") or {}).get("scaleTargetRef") or {}
+            if ((doc.get("metadata") or {}).get("namespace"), tgt.get("kind"),
+                    tgt.get("name")) == key:
+                return (doc.get("spec") or {}).get("minReplicas")
+    return "?"
+
+
 def check_velero_backups(root):
     # a) the repo-password ExternalSecret
     found = None
@@ -1023,6 +1088,7 @@ def main():
     check_internal_surfaces(root)
     check_embedded_json(root)
     check_velero_backups(root)
+    check_hpa_replicas(root)
     for check, msg in notes:
         print("  PASS %-24s %s" % (check, msg))
     for check, msg in failures:
