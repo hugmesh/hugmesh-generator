@@ -102,6 +102,7 @@ jobs:
         shell: bash
         run: |
           SUITES="
+            tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
             tests/auto-update/test-update-poller.sh
             tests/boot/test-kubelet-join-bootstrap.sh
@@ -177,6 +178,7 @@ jobs:
             tests/scripts/test-spec-use-parity.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
+            tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh
             tests/stack/test-attestation-dockerfile-patches.sh
@@ -253,7 +255,6 @@ jobs:
         shell: bash
         run: |
           SUITES="
-            tests/api/test-bff-admin.sh
             tests/auto-update/test-builder-opt-in.sh
             tests/egress-vpn/test-vpn-reconcile-verify.sh
             tests/keystores/test-keystores-multidomain.sh
@@ -274,7 +275,6 @@ jobs:
             tests/scripts/test-pki-role-san-coverage.sh
             tests/scripts/test-provision-keys-escrow-guard.sh
             tests/scripts/test-python-targets-seed.sh
-            tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-x86-artifact-integrity.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
