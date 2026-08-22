@@ -1,0 +1,358 @@
+# Pre-merge shell-suite gate.
+#
+# WHY THIS FILE EXISTS. This repo had 123 shell test suites and ZERO of them could
+# stop a bad merge. tests/scripts/test-guard-integrity.sh check 3 reported "all 123
+# suites are invoked by a pipeline job or a make target" — literally true, and
+# completely misleading: GitLab here is an in-cluster PULL MIRROR
+# (mirror_trigger_builds:true) whose pipelines run AFTER the merge, and a Makefile
+# target gates nothing at all. GitHub Actions is the only thing that gates a PR.
+#
+# WHICH SUITES, AND WHY THESE. Every suite below was EXECUTED in the image named by
+# its job before being listed here — not classified by reading it. Reading is a
+# guess: several suites exit 0 while skipping their most valuable assertions when a
+# tool is absent, and would have looked perfectly gateable from source.
+#
+# The lists are EXPLICIT, never a glob. A glob quietly changes what is gated when a
+# file is renamed; an explicit list plus the missing-file check below turns that
+# into an error. tests/scripts/test-guard-integrity.sh check 7 counts these names
+# and pins the total, so neither adding nor dropping one can be silent.
+#
+# NOT LISTED HERE (deliberate, with reasons):
+#   * tests/scripts/test-liquibase-grant-roles.sh
+#       python:3.12-slim + perl/PyYAML, with /home/magus/Github mounted and SERVICE_SRC_ROOT set
+#   * tests/scripts/test-service-env-contract.sh
+#       alpine:3 + apk add bash python3 py3-yaml, PLUS the 9 first-party BFF checkouts mounted and SERVI
+#   * tests/scripts/test-eso-target-collisions.sh
+#       alpine:3 + apk add bash python3 py3-yaml helm coreutils (+ --network host)
+#   * tests/stack/test-web-locales-wiring.sh
+#       python:3.12-slim + pyyaml + apt-get install make + host docker CLI and compose plugin bind-mount
+#   * 9 suites that are GATEABLE but currently RED on real defects, filed as
+#     issues #140-#146 rather than gated. Two pairs share a root cause, so 9 red
+#     suites are 7 bugs. Gating them now would make this workflow red on day one
+#     and train everyone to ignore it; leaving them out means any red it shows is
+#     a NEW regression. Wire each one as its issue closes.
+name: shell-suites
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shell-suites-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  alpine:
+    name: shell suites (alpine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: alpine:3
+    steps:
+      - run: apk add --no-cache bash coreutils curl flock gawk git helm jq make nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 util-linux xz
+      - uses: actions/checkout@v4
+      - name: trust the workspace
+        # Container jobs run as root against a checkout git considers foreign, so
+        # `git ls-files` returns NOTHING. test-platform-key-spelling.sh refuses to
+        # run in that state (correctly — it would scan zero files and pass), and
+        # other git-reading suites would quietly cover less. Explicit rather than
+        # relying on actions/checkout doing it for us.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: preflight
+        run: |
+          # PREFLIGHT. Many of these suites SKIP their most valuable assertions when a
+          # tool is missing and still exit 0 — test-self-report silently drops its jq
+          # body-parse asserts, test-cloud-deploy-driver prints "PASS make absent".
+          # If the install step ever silently degrades, the whole job would go green
+          # having asserted almost nothing. Fail here instead.
+          missing=""
+          for b in bash jq openssl python3 git make flock gawk; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
+          echo "preflight ok: bash jq openssl python3 git make flock gawk"
+      - name: run suites
+        shell: bash
+        run: |
+          SUITES="
+            tests/auto-update/test-provision-update.sh
+            tests/auto-update/test-update-poller.sh
+            tests/boot/test-kubelet-join-bootstrap.sh
+            tests/cloud-deploy/test-cloud-deploy-driver.sh
+            tests/desktop-governance/test-desktop-sudo-mapper.sh
+            tests/desktop-governance/test-gen-sso-session-start.sh
+            tests/desktop-governance/test-provision-desktop-governance.sh
+            tests/device-registry/test-registry-allow-deny.sh
+            tests/device-registry/test-self-report.sh
+            tests/domain-registry/test-domain-reconcile-verify.sh
+            tests/domain-registry/test-foreign-ingest-fuzz.sh
+            tests/egress-vpn/test-optional-service-gate.sh
+            tests/egress-vpn/test-provision-vpn.sh
+            tests/egress-vpn/test-split-tunnel.sh
+            tests/egress-vpn/test-vpn-mark.sh
+            tests/egress-vpn/test-vpn-secret-projector.sh
+            tests/egress-vpn/test-x86-role-gate.sh
+            tests/go-live/test-go-live-driver.sh
+            tests/go-live/test-go-live-reconcile-verify.sh
+            tests/keystores/test-keystores-external-ca.sh
+            tests/keystores/test-keystores.sh
+            tests/node-storage/test-bake-coverage.sh
+            tests/node-storage/test-degrade.sh
+            tests/node-storage/test-pool-entrypoint.sh
+            tests/node-storage/test-provision-pool.sh
+            tests/phone/test-make-phone-face.sh
+            tests/phone/test-mdm-providers.sh
+            tests/scripts/test-anubis-env-gate.sh
+            tests/scripts/test-arm-ro-distdir.sh
+            tests/scripts/test-binpkg-pool-fingerprint.sh
+            tests/scripts/test-brand-path-validation.sh
+            tests/scripts/test-builder-log-paths.sh
+            tests/scripts/test-calamares-boost-seed.sh
+            tests/scripts/test-casdoor-domains-appset.sh
+            tests/scripts/test-casdoor-jwt-no-preferred-username.sh
+            tests/scripts/test-catalog-discovery-gate.sh
+            tests/scripts/test-cloud-package.sh
+            tests/scripts/test-container-image-tags.sh
+            tests/scripts/test-download-verify.sh
+            tests/scripts/test-dracut-cross-lib.sh
+            tests/scripts/test-e2e-persona-catalogue.sh
+            tests/scripts/test-edge-ai-cuda-host-compiler.sh
+            tests/scripts/test-fetch-retry-hardening.sh
+            tests/scripts/test-github-auth-lib.sh
+            tests/scripts/test-guard-integrity.sh
+            tests/scripts/test-harbor-robots-ownership.sh
+            tests/scripts/test-host-accept-keywords.sh
+            tests/scripts/test-host-bdep-pool.sh
+            tests/scripts/test-host-mutation-guard.sh
+            tests/scripts/test-host-selinux-tools.sh
+            tests/scripts/test-hugmesh-view.sh
+            tests/scripts/test-idp-builder-functions.sh
+            tests/scripts/test-image-builder-always-on.sh
+            tests/scripts/test-installer-ui-node-default.sh
+            tests/scripts/test-kernel-artifact-cache.sh
+            tests/scripts/test-kind-bootstrap-honesty.sh
+            tests/scripts/test-kind-profile-app-closure.sh
+            tests/scripts/test-lsm-posture-honesty.sh
+            tests/scripts/test-no-duplicate-env.sh
+            tests/scripts/test-nullmailer-cross-postinst.sh
+            tests/scripts/test-outbound-mtls-client.sh
+            tests/scripts/test-platform-key-spelling.sh
+            tests/scripts/test-portage-config-sync.sh
+            tests/scripts/test-provision-manifest-injection.sh
+            tests/scripts/test-publish-images.sh
+            tests/scripts/test-rpi5-per-board-pkgdir.sh
+            tests/scripts/test-shared-build-assets.sh
+            tests/scripts/test-spec-use-parity.sh
+            tests/scripts/test-studio-launch.sh
+            tests/scripts/test-sunshine-fence.sh
+            tests/scripts/test-x86-identity-injection.sh
+            tests/scripts/test-x86-kernel-net-symbols.sh
+            tests/stack/test-attestation-dockerfile-patches.sh
+            tests/stack/test-coturn-optional-service.sh
+            tests/stack/test-front-door-client-surface.sh
+            tests/stack/test-no-store-posture.sh
+            tests/stack/test-probe-auth-surface.sh
+          "
+          # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
+          # suite's status and silently forgives every earlier one — that is defect
+          # shape (3) in tests/scripts/test-guard-integrity.sh's own taxonomy.
+          rc=0; failed=""; ran=0
+          for t in $SUITES; do
+            [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
+            echo "::group::$t"
+            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            echo "::endgroup::"
+            ran=$((ran+1))
+          done
+          echo "── ran $ran suite(s) ──"
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; }
+          exit $rc
+
+  debian:
+    name: shell suites (debian/python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: python:3.12-slim
+    steps:
+      - run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless
+          pip install --quiet pyyaml
+      - uses: actions/checkout@v4
+      - name: trust the workspace
+        # Container jobs run as root against a checkout git considers foreign, so
+        # `git ls-files` returns NOTHING. test-platform-key-spelling.sh refuses to
+        # run in that state (correctly — it would scan zero files and pass), and
+        # other git-reading suites would quietly cover less. Explicit rather than
+        # relying on actions/checkout doing it for us.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: preflight
+        run: |
+          # PREFLIGHT. Many of these suites SKIP their most valuable assertions when a
+          # tool is missing and still exit 0 — test-self-report silently drops its jq
+          # body-parse asserts, test-cloud-deploy-driver prints "PASS make absent".
+          # If the install step ever silently degrades, the whole job would go green
+          # having asserted almost nothing. Fail here instead.
+          missing=""
+          for b in bash jq openssl python3 git perl make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
+          echo "preflight ok: bash jq openssl python3 git perl make"
+          python3 -c "import yaml" || { echo "::error::pyyaml missing — yaml suites would skip"; exit 1; }
+      - name: run suites
+        shell: bash
+        run: |
+          SUITES="
+            tests/auto-update/test-builder-opt-in.sh
+            tests/egress-vpn/test-vpn-reconcile-verify.sh
+            tests/keystores/test-keystores-multidomain.sh
+            tests/managed-services/test-managed-services-gate.sh
+            tests/node-storage/test-appset.sh
+            tests/node-storage/test-node-agent.sh
+            tests/phone/test-phone-wizard.sh
+            tests/scripts/test-client-connect-routes.sh
+            tests/scripts/test-cluster-manifest-integrity.sh
+            tests/scripts/test-eso-provider-refs.sh
+            tests/scripts/test-eso-seed-contract.sh
+            tests/scripts/test-first-run-lib.sh
+            tests/scripts/test-gitlab-ci-wellformed.sh
+            tests/scripts/test-headscale-oidc-secret-staging.sh
+            tests/scripts/test-mfa-raw-jwt-posture.sh
+            tests/scripts/test-mfa-required-rules.sh
+            tests/scripts/test-passhash-lib.sh
+            tests/scripts/test-pki-role-san-coverage.sh
+            tests/scripts/test-provision-keys-escrow-guard.sh
+            tests/scripts/test-python-targets-seed.sh
+            tests/scripts/test-x86-artifact-integrity.sh
+            tests/stack/test-mfa-flip-wiring.sh
+            tests/stack/test-patch-stack-src.sh
+            tests/workload-console/test-workload-console.sh
+          "
+          # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
+          # suite's status and silently forgives every earlier one — that is defect
+          # shape (3) in tests/scripts/test-guard-integrity.sh's own taxonomy.
+          rc=0; failed=""; ran=0
+          for t in $SUITES; do
+            [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
+            echo "::group::$t"
+            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            echo "::endgroup::"
+            ran=$((ran+1))
+          done
+          echo "── ran $ran suite(s) ──"
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; }
+          exit $rc
+
+  node:
+    name: shell suites (node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: node:24-alpine
+    steps:
+      - run: apk add --no-cache bash coreutils findutils git grep jq openssl py3-yaml python3 sed tar
+      - uses: actions/checkout@v4
+      - name: trust the workspace
+        # Container jobs run as root against a checkout git considers foreign, so
+        # `git ls-files` returns NOTHING. test-platform-key-spelling.sh refuses to
+        # run in that state (correctly — it would scan zero files and pass), and
+        # other git-reading suites would quietly cover less. Explicit rather than
+        # relying on actions/checkout doing it for us.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: render tooling + git identity
+        # test-templating-rename-pr.sh drives the real handlebars render tooling and
+        # makes commits. Without the node deps it exits 3 INCOMPLETE — "this suite
+        # checked nothing ... Refusing to exit 0" — which is correct behaviour and is
+        # exactly how this omission was caught, instead of the job going green on a
+        # suite that rendered nothing.
+        run: |
+          npm ci --prefix scripts/tooling
+          git config --global user.email ci@hugmesh.invalid
+          git config --global user.name  "hugmesh ci"
+      - name: preflight
+        run: |
+          # PREFLIGHT. Many of these suites SKIP their most valuable assertions when a
+          # tool is missing and still exit 0 — test-self-report silently drops its jq
+          # body-parse asserts, test-cloud-deploy-driver prints "PASS make absent".
+          # If the install step ever silently degrades, the whole job would go green
+          # having asserted almost nothing. Fail here instead.
+          missing=""
+          for b in bash jq openssl python3 git node; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
+          [ -d scripts/tooling/node_modules/handlebars ] || { echo "::error::handlebars absent — the drift gate would render nothing"; exit 1; }
+          echo "preflight ok: bash jq openssl python3 git node handlebars"
+      - name: run suites
+        shell: bash
+        run: |
+          SUITES="
+            tests/domain-registry/test-domain-reconcile-fuzz.sh
+            tests/domain-registry/test-templating-rename-pr.sh
+          "
+          # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
+          # suite's status and silently forgives every earlier one — that is defect
+          # shape (3) in tests/scripts/test-guard-integrity.sh's own taxonomy.
+          rc=0; failed=""; ran=0
+          for t in $SUITES; do
+            [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
+            echo "::group::$t"
+            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            echo "::endgroup::"
+            ran=$((ran+1))
+          done
+          echo "── ran $ran suite(s) ──"
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; }
+          exit $rc
+
+  extras:
+    name: shell suites (tool-heavy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: python:3.12-slim
+    steps:
+      - run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends git jq openssl curl ca-certificates \
+            make m4 checkpolicy semodule-utils policycoreutils selinux-policy-dev
+          pip install --quiet pyyaml
+          # Pinned. An unpinned "latest" here would change what these suites assert
+          # without a commit ever saying so.
+          curl -fsSL https://get.helm.sh/helm-v3.16.3-linux-amd64.tar.gz \
+            | tar -xz -C /tmp linux-amd64/helm
+          mv /tmp/linux-amd64/helm /usr/local/bin/helm
+          curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
+      - uses: actions/checkout@v4
+      - name: trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: preflight
+        run: |
+          # kubectl matters MORE than usual here: without it
+          # tests/stack/test-mdm-manifests-render.sh exits 0 having rendered and
+          # asserted nothing. If the download above ever silently fails, this job
+          # would pass while covering a third less than it claims.
+          missing=""
+          for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
+          python3 -c "import yaml" || { echo "::error::pyyaml missing"; exit 1; }
+          echo "preflight ok"
+      - name: run suites
+        shell: bash
+        run: |
+          SUITES="
+            tests/scripts/test-selinux-policy-install.sh
+            tests/stack/test-gateway-mfa-env.sh
+            tests/stack/test-mdm-manifests-render.sh
+          "
+          rc=0; failed=""; ran=0
+          for t in $SUITES; do
+            [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
+            echo "::group::$t"
+            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            echo "::endgroup::"
+            ran=$((ran+1))
+          done
+          echo "── ran $ran suite(s) ──"
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; }
+          exit $rc
