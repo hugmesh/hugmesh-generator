@@ -13,5 +13,6 @@
 # hugmesh_authkeys.fc — the shared on-disk handoff (node.env + baked pubkey).
 
 /usr/sbin/hugmesh-node-storage-reconcile    --    gen_context(system_u:object_r:hugmesh_node_storage_exec_t,s0)
+/usr/bin/hugmesh-node-storage-reconcile    --    gen_context(system_u:object_r:hugmesh_node_storage_exec_t,s0)
 
 /var/lib/hugmesh/node-storage(/.*)?               gen_context(system_u:object_r:hugmesh_node_storage_cache_t,s0)

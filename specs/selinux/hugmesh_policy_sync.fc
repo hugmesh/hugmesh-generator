@@ -14,3 +14,4 @@
 # if one is available).
 
 /usr/sbin/gen-headscale-policy.sh    --    gen_context(system_u:object_r:hugmesh_policy_sync_exec_t,s0)
+/usr/bin/gen-headscale-policy.sh    --    gen_context(system_u:object_r:hugmesh_policy_sync_exec_t,s0)

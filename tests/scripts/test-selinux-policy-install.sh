@@ -422,6 +422,37 @@ printf '%s' "${out}" | grep -q 'sec-policy/selinux-kubernetes' \
     && ok "C3b the skip message names the package that would fix it" \
     || bad "C3b skip message does not name sec-policy/selinux-kubernetes"$'\n'"${out}"
 
+# C3c: USRMERGE — a /usr/sbin .fc rule can never match on these images.
+# Measured in the booted guest: /usr/sbin is a symlink to bin (and /sbin to
+# usr/bin), and libselinux canonicalises a path through symlinks BEFORE matching
+# file contexts. So a rule written for /usr/sbin/x never applies:
+#     matchpathcon /usr/sbin/hugmesh-authorized-keys-lookup -> bin_t
+#     matchpathcon /usr/bin/hugmesh-authorized-keys-lookup  -> bin_t
+# while semanage fcontext -l happily lists the /usr/sbin rule. The entrypoint
+# executable therefore keeps bin_t, and a domain transition into
+# hugmesh_*_exec_t -> hugmesh_*_t CANNOT HAPPEN. Every one of these 9 rules is an
+# entrypoint, so this silently disabled every hugmesh domain.
+#
+# Adding the /usr/bin spelling was verified live in the guest:
+#     Relabeled /usr/bin/hugmesh-authorized-keys-lookup
+#       from system_u:object_r:bin_t:s0 to system_u:object_r:hugmesh_authkeys_exec_t:s0
+#
+# Both spellings are kept: on a non-usrmerge image /usr/sbin is a real directory
+# and its rule is the one that matches. Neither is redundant, and dropping the
+# /usr/bin one silently re-disables the domains.
+echo "-- C3c) every /usr/sbin exec rule has a /usr/bin sibling (usrmerge) --"
+orphans=""
+for fc in "${SRC}"/*.fc; do
+    while IFS= read -r path; do
+        [ -n "${path}" ] || continue
+        sib="/usr/bin/${path#/usr/sbin/}"
+        grep -qF "${sib}" "${fc}" || orphans="${orphans} $(basename "${fc}"):${path}"
+    done < <(grep -oE '^/usr/sbin/[^[:space:]]+' "${fc}" 2>/dev/null)
+done
+[ -z "${orphans}" ] \
+    && ok "C3c every /usr/sbin exec rule also labels the /usr/bin path it resolves to" \
+    || bad "C3c /usr/sbin rule(s) with no /usr/bin sibling — the domain can never be entered:${orphans}"
+
 # C4-C6: THE PERMISSIVE-BY-DEFAULT PROOF.
 [ -x "${S}/etc/init.d/selinux-enforce-gate" ] \
     && ok "enforce-gate service shipped executable into /etc/init.d" \
