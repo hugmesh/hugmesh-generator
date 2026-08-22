@@ -68,9 +68,21 @@ printf '%s\n' "${BLOCK}" | grep 'profiles:' >/dev/null \
   || ok "unconditional (no compose profile)"
 
 echo "-- 2) nginx terminator conf --"
-grep -qE 'proxy_pass +http://hugmesh-fe-gateway:8080' "${CONF}" \
-  && ok "proxies to hugmesh-fe-gateway:8080" \
-  || bad "conf does not proxy to hugmesh-fe-gateway:8080"
+# The door proxies to the fe-gateway on 8080 through a VARIABLE, and the variable
+# is the point: nginx resolves a LITERAL proxy_pass hostname exactly once, when
+# the config loads, and then caches that address forever — so recreating the
+# fe-gateway container black-holes the door until nginx is reloaded. This guard
+# used to pin the literal spelling `proxy_pass http://hugmesh-fe-gateway:8080`,
+# which the conf correctly stopped using on 2026-08-20; it then read as "the door
+# does not proxy to the fe-gateway at all". Assert the two halves that actually
+# carry the protection instead, so neither the target nor the re-resolution can
+# be dropped without this going red.
+grep -qE '^[[:space:]]*set +\$fe_gateway +hugmesh-fe-gateway;' "${CONF}" \
+  && ok "names hugmesh-fe-gateway as the upstream (via \$fe_gateway)" \
+  || bad "conf no longer names hugmesh-fe-gateway as the upstream"
+grep -qE 'proxy_pass +http://\$fe_gateway:8080' "${CONF}" \
+  && ok "proxies to \$fe_gateway:8080 — a VARIABLE, so nginx re-resolves it per request" \
+  || bad "proxy_pass does not go through \$fe_gateway:8080 — a literal hostname is resolved once at load and cached forever, so a recreated gateway black-holes the door"
 grep -qE "listen +${CONTAINER_PORT:-NEVER} +ssl" "${CONF}" \
   && ok "nginx listens on the SAME port compose publishes (${CONTAINER_PORT})" \
   || bad "nginx listen port != compose container port (${CONTAINER_PORT})"
@@ -81,11 +93,18 @@ for f in fullchain.crt server.key; do
 done
 grep -q 'X-Forwarded-Proto https' "${CONF}" \
   && ok "sets X-Forwarded-Proto https" || bad "missing X-Forwarded-Proto https"
-# Comments explaining WHY there is no HSTS are fine - only a live directive
-# (a non-comment line) is the defect.
-grep -viE '^[[:space:]]*#' "${CONF}" | grep -i 'Strict-Transport-Security' >/dev/null \
-  && bad "conf sends HSTS - per-HOST scope would break every plain localhost port" \
-  || ok "no HSTS directive (deliberate: HSTS is per-host, not per-port)"
+# HSTS, in two halves. The old single check matched ANY live mention of
+# Strict-Transport-Security and so could not tell SENDING it from STRIPPING it —
+# it fired on the conf's own `proxy_hide_header Strict-Transport-Security`, which
+# is the protection, not the defect. Comments explaining the stance are fine
+# either way; only non-comment lines are read.
+LIVE="$(grep -viE '^[[:space:]]*#' "${CONF}")"
+printf '%s\n' "${LIVE}" | grep -iE 'add_header[[:space:]]+"?Strict-Transport-Security' >/dev/null \
+  && bad "conf SENDS HSTS — it is scoped per-HOST, not per-port, so one header force-upgrades every other plain localhost door (8088 front door, 8000 Casdoor, ...)" \
+  || ok "conf never sends HSTS (deliberate: HSTS is per-host, not per-port)"
+printf '%s\n' "${LIVE}" | grep -iE 'proxy_hide_header[[:space:]]+Strict-Transport-Security' >/dev/null \
+  && ok "conf STRIPS any upstream HSTS — the gateway's own header cannot pin localhost" \
+  || bad "conf no longer strips upstream Strict-Transport-Security: a gateway that sends HSTS would pin localhost in the browser, and removing the header afterwards does NOT un-pin it (chrome://net-internals/#hsts is the only cure)"
 
 echo "-- 3) SNAP_BFF_URL same-origin default (mixed-content guard) --"
 BFFLINE="$(grep -E '^ +SNAP_BFF_URL:' "${COMPOSE}" || true)"

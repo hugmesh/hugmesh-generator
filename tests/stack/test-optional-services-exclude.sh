@@ -183,6 +183,53 @@ grep -q "'/social/forum/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.
 # both homeservers gone => shared social-ui pruned.
 [ ! -f "${TREE}/apps/45-social-ui.yaml" ] && ok "shared 45-social-ui pruned when BOTH homeservers excluded" || bad "social-ui survived with both homeservers gone"
 
+# ── every drop must cover EVERY gateway that carries the path ─────────────────
+# The spot-checks above ask "did this one row go?". They cannot ask "did the row
+# go EVERYWHERE it exists", and 20-schema.sql grants several paths on more than
+# one gateway: the Matrix surface is granted on hugmesh-be-gateway AND, for the
+# front door, on hugmesh-fe-gateway. tuwunel's case dropped only the be-gateway
+# leg, so three live ROLE_MATRIX/MOD/ADMIN grants outlived the homeserver (#143).
+#
+# So sweep the whole table instead of sampling it: for every path any
+# _opt_drop_rows call names, the set of gateways that HAVE rows for it must be
+# covered by the set of gateways that case actually cleans. Both builders are
+# checked, because they carry independent copies of the same case list.
+echo "-- route-access drops: whole-table gateway coverage --"
+if command -v python3 >/dev/null; then
+  for _b in "${BUILDER}" "${BUILDER_X86}"; do
+    python3 - "${_b}" "${REPO}/specs/cluster/manifests/route-access/initdb/20-schema.sql" <<'PY'
+import collections, re, sys
+bld, sql = (open(p, encoding="utf-8").read() for p in sys.argv[1:3])
+rows = collections.defaultdict(set)
+for gw, path in re.findall(r"\(\s*'([^']+)'\s*,\s*'([^']+)'", sql):
+    rows[path].add(gw)
+drops = collections.defaultdict(set)
+for gw, blob in re.findall(
+        r"_opt_drop_rows\s+\"[^\"]+\"\s+(\S+)\s*\\?\s*\n?\s*((?:'[^']*'\s*)+)", bld):
+    for p in re.findall(r"'([^']*)'", blob):
+        drops[p].add(gw)
+if not drops:
+    print("         no _opt_drop_rows call parsed — the sweep would be vacuous")
+    sys.exit(2)
+gaps = {p: sorted(rows.get(p, set()) - g) for p, g in drops.items() if rows.get(p, set()) - g}
+for p, gws in sorted(gaps.items()):
+    print("         '%s' still granted on %s — that case never cleans it there"
+          % (p, ", ".join(gws)))
+print("         swept %d dropped path(s) against %d schema path(s)" % (len(drops), len(rows)))
+sys.exit(1 if gaps else 0)
+PY
+    _rc=$?
+    _bn="${_b##*/}"
+    case "${_rc}" in
+      0) ok "${_bn}: every dropped path is cleaned on every gateway that grants it" ;;
+      2) bad "${_bn}: the coverage sweep parsed ZERO _opt_drop_rows calls — vacuous, not clean" ;;
+      *) bad "${_bn}: a route-access row outlives its service on a gateway the case never cleans (see the paths above)" ;;
+    esac
+  done
+else
+  bad "route-access coverage sweep needs python3 — skipping it would leave the #143 class unguarded"
+fi
+
 seed_tree "excl-owncast-tube"
 OPTIONAL_SERVICES="akkoma tuwunel phpbb"   # owncast+tube+games excluded (default-off)
 gate_optional_services
