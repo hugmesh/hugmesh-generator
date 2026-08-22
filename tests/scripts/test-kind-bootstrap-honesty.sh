@@ -1321,6 +1321,106 @@ if grep -q '^ensure_repo_access$' "${BOOTSTRAP}"; then
 else
   bad "ensure_repo_access is defined but never invoked — every Application would again sync from nothing"
 fi
+
+# ── the curated slice must install what its own Applications REQUIRE ─────────
+# 14-workload-console-rbac carries the deploy-provenance ClusterPolicy. Without
+# kyverno.io/v1 registered ArgoCD cannot render it at all — "failed to discover
+# server resources for group version kyverno.io/v1" — so on every kind cluster
+# ever built that Application sat OutOfSync/Missing and the digest-pinning
+# admission backstop was simply absent. apps/15-kyverno.yaml was in the repo the
+# whole time (sync-wave -1, for exactly this ordering); it was only ever missing
+# from the curated list. Asserted by ORDER, not mere presence: applying the
+# policy first is the bug.
+KY_LINE="$(grep -n '^  15-kyverno.yaml' "${BOOTSTRAP}" | head -1 | cut -d: -f1)"
+WC_LINE="$(grep -n '^  14-workload-console-rbac.yaml' "${BOOTSTRAP}" | head -1 | cut -d: -f1)"
+if [ -z "${KY_LINE}" ]; then
+  bad "bootstrap-kind.sh's curated list omits apps/15-kyverno.yaml — 14-workload-console-rbac cannot render its ClusterPolicy and the deploy-provenance backstop is ABSENT, not merely unsynced"
+elif [ -z "${WC_LINE}" ]; then
+  bad "could not find 14-workload-console-rbac.yaml in the curated list (anchor moved) — the kyverno ordering check verified nothing"
+elif [ "${KY_LINE}" -ge "${WC_LINE}" ]; then
+  bad "apps/15-kyverno.yaml is listed AFTER 14-workload-console-rbac.yaml (lines ${KY_LINE} vs ${WC_LINE}) — the CRDs must be registered before the policy that needs them"
+else
+  ok "the curated list installs kyverno BEFORE the Application whose ClusterPolicy needs kyverno.io/v1"
+fi
+
+# and it must actually WAIT for the CRD: Applications sync asynchronously, so
+# list order alone buys nothing.
+#
+# Both of the checks below read a COMMENT-STRIPPED copy. That is not fussiness:
+# the first version of each grepped the whole file, and the prose above happens
+# to name both `clusterpolicies.kyverno.io` and every namespace — so deleting
+# the real code left them GREEN. Mutation testing caught it. This repo has now
+# hit that exact inversion three times (guard-integrity checks 3 and 7 before
+# this), which is why it is written down here rather than just fixed.
+BOOT_CODE="${TMP}/bootstrap.code"
+sed 's/[[:space:]]*#.*$//' "${BOOTSTRAP}" > "${BOOT_CODE}"
+
+if grep -q 'kubectl get crd clusterpolicies.kyverno.io' "${BOOT_CODE}"; then
+  ok "bootstrap-kind.sh waits for kyverno.io/v1 to register (order alone does not sequence async syncs)"
+else
+  bad "bootstrap-kind.sh never probes for clusterpolicies.kyverno.io in executable code — listing kyverno first does not sequence two asynchronous ArgoCD syncs"
+fi
+
+# The namespaces the curated Applications target must be ensured. Missing ones
+# made external-secrets-config and workload-console-rbac fail to sync with an
+# error that names Kubernetes ("namespaces ... not found") rather than the
+# cause. Derived from the manifests, never a hardcoded list: a new
+# ExternalSecret target that nothing creates must fail this. Matched against the
+# ensure LOOP only — the whole file mentions every one of these in prose.
+# Every namespace the bootstrap creates, from EVERY create site — there are
+# three (the cluster-CA loop, the generator-namespace loop, and the curated-app
+# loop), and an earlier version of this check only read one of them, so it
+# reported namespaces as missing that a different loop already made. Tokens are
+# normalised: the last entry of a `for ns in ... ; do` list carries a trailing
+# `;`, which a naive word match silently fails on.
+NS_LOOP="$(awk '
+  # Buffer each `for ns in ... done` block and emit its namespace list ONLY if
+  # the body actually creates them. Reading the loop HEADER alone was not
+  # enough: gutting the body while leaving the list in place kept this green
+  # (found by mutation). A namespace named by a loop that creates nothing is
+  # exactly the vacuity this suite exists to reject.
+  /^[[:space:]]*for ns in / { buf = $0; inblk = 1; made = 0; next }
+  inblk {
+    buf = buf " " $0
+    if ($0 ~ /kubectl create namespace/) made = 1
+    if ($0 ~ /^[[:space:]]*done[[:space:]]*$/) {
+      if (made) print buf
+      inblk = 0
+    }
+    next
+  }
+  /kubectl create namespace [a-z]/ { print }
+' "${BOOT_CODE}" | tr '\\\;' '  ' | tr -s '[:space:]' ' ')"
+NS_MISSING=""
+NS_SEEN=0
+for ns in $(python3 - "${REPO}" <<'PYEOF'
+import sys, os, glob, io
+try: import yaml
+except ImportError: sys.exit(0)
+root = sys.argv[1]
+want = set()
+for f in glob.glob(os.path.join(root, "specs/cluster/manifests/external-secrets/*.y*ml")) + \
+         glob.glob(os.path.join(root, "specs/cluster/manifests/workload-console-rbac/*.y*ml")):
+    try: docs = list(yaml.safe_load_all(io.open(f, encoding="utf-8")))
+    except Exception: continue
+    for d in docs:
+        if isinstance(d, dict):
+            ns = (d.get("metadata") or {}).get("namespace")
+            if ns: want.add(ns)
+print("\n".join(sorted(want)))
+PYEOF
+); do
+  NS_SEEN=$((NS_SEEN+1))
+  case " ${NS_LOOP} " in *" ${ns} "*) : ;; *) NS_MISSING="${NS_MISSING} ${ns}" ;; esac
+done
+if [ "${NS_SEEN}" -eq 0 ]; then
+  bad "derived ZERO target namespaces from the curated manifests — PyYAML missing or the paths moved; this check proved nothing"
+elif [ -n "${NS_MISSING}" ]; then
+  bad "namespaces targeted by the curated ExternalSecrets/console-RBAC are never created by the bootstrap:${NS_MISSING} — those Applications fail to sync with 'namespaces ... not found'"
+else
+  ok "all ${NS_SEEN} namespace(s) the curated ExternalSecrets/console-RBAC target are ensured by the bootstrap's create loop"
+fi
+
 if grep -q 'wait_for_vault_pod || exit 1' "${BOOTSTRAP}"; then
   ok "the vault-0 wait is invoked fail-closed (|| exit 1)"
 else

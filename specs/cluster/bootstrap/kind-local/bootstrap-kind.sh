@@ -161,7 +161,7 @@ done
 # ─────────────────────────────────────────────────────────────────────────
 # 1) kind cluster (idempotent)
 # ─────────────────────────────────────────────────────────────────────────
-if kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"; then
+if kind get clusters 2>/dev/null | grep -x "${CLUSTER_NAME}" >/dev/null; then
   log "kind cluster '${CLUSTER_NAME}' already exists — reusing it"
 else
   log "Creating kind cluster '${CLUSTER_NAME}' (this checkout mounted read-only for the tokenless local sync path)"
@@ -586,6 +586,31 @@ git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml
 #     the kind node under their rendered refs (`make kind-images`) — nothing
 #     here can pull them from the in-cluster Harbor.
 # ─────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
+# 5c) NAMESPACES THE CURATED APPS TARGET BUT NOTHING IN THIS SLICE CREATES.
+#
+# external-secrets-config's ExternalSecrets and workload-console-rbac's
+# per-tier RoleBindings name app tiers whose own Applications are NOT in this
+# curated subset, so nothing ever created them and both Applications failed to
+# sync — for MONTHS, with an error that names Kubernetes rather than the cause:
+#
+#   Failed last sync attempt: namespaces "hugmesh-forum" not found,
+#   namespaces "observability" not found, namespaces "hugmesh-image-builds"
+#   not found, namespaces "velero" not found
+#   error running kubectl auth reconcile: error getting namespace
+#
+# Creating them here is deliberate and is NOT the same as deploying those
+# tiers: an empty namespace costs nothing, lets ESO materialize the secrets a
+# later tier will need, and lets the console's RoleBindings land. The tier's
+# own workloads still only arrive with its own Application.
+#
+# Idempotent (create --dry-run=client | apply), like the cluster-CA step above.
+log "Ensuring the namespaces the curated Applications target"
+for ns in hugmesh-forum hugmesh-games hugmesh-games-instances hugmesh-owncast \
+          hugmesh-tube hugmesh-image-builds observability velero; do
+  kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+done
+
 SSO_APPS=(
   00-cassandra.yaml       # gateway backing store (the Bitnami Helm CHART only)
   # 00b-cassandra-init.yaml is NOT optional and NOT a nicety. apps/00-cassandra.yaml
@@ -610,6 +635,19 @@ SSO_APPS=(
   37-user-bff-api.yaml    # POST /bff/login (native-login relocation)
   40-frontend.yaml        # Angular host shell (hugmesh-host-shell)
   45-social-ui.yaml       # login-ui remote (+ matrix/mastodon/admin remotes)
+  # Kyverno MUST precede 14-workload-console-rbac: that Application carries the
+  # deploy-provenance ClusterPolicy, and without kyverno.io/v1 registered ArgoCD
+  # cannot even render it —
+  #   failed to discover server resources for group version kyverno.io/v1
+  # — so the Application sat OutOfSync/Missing on every kind cluster ever built,
+  # and the admission backstop it exists to install was simply absent. The
+  # Application was already in the repo (wave -1, for exactly this ordering); it
+  # was only ever missing from THIS curated list.
+  #
+  # Do NOT "fix" that by applying the CRDs alone: the policy is Enforce with
+  # failurePolicy Fail, so CRDs without the controller give a Synced Application
+  # over an admission webhook that admits everything.
+  15-kyverno.yaml               # policy engine — registers kyverno.io/v1 for the ClusterPolicy below
   14-workload-console-rbac.yaml # workload-console SAs + token Secrets (lights the dual-SA client the committed admin-bff overlay already enables; RoleBindings for app-tier namespaces absent from this slice degrade that Application partially, which is the honest state)
   # casdoor-domains ApplicationSet (issue #47, per-domain own-IdP lane). INERT
   # here: it ships with ZERO list elements, so it generates nothing until a
@@ -624,6 +662,32 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   for f in "${SSO_APPS[@]}"; do
     apply_core_app "${f}"
   done
+  # kyverno.io/v1 has to be REGISTERED before ArgoCD can render the ClusterPolicy
+  # inside 14-workload-console-rbac. Listing kyverno first is not enough —
+  # Applications sync asynchronously, so array order buys nothing on its own.
+  # ArgoCD's selfHeal would converge eventually, but "eventually" means this
+  # bring-up reports a MISSING admission backstop as the settled state of a
+  # cluster that was merely slow, which is the kind of green nobody re-checks.
+  #
+  # Warn, never FATAL: kyverno pulls from ghcr.io, and a local mesh that cannot
+  # reach it still has every other slice working. The warning names the
+  # consequence rather than the symptom.
+  log "Waiting for Kyverno to register kyverno.io/v1 (the ClusterPolicy needs it)"
+  kyverno_ok=""
+  for _ in $(seq 1 60); do
+    if kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then kyverno_ok=1; break; fi
+    sleep 5
+  done
+  if [ -n "${kyverno_ok}" ]; then
+    kubectl wait --for=condition=Established crd/clusterpolicies.kyverno.io --timeout=60s >/dev/null 2>&1 \
+      || warn "clusterpolicies.kyverno.io exists but never reached Established"
+    # It may have failed its first render before the CRD landed; make it retry now.
+    kubectl -n "${ARGOCD_NS}" annotate application workload-console-rbac \
+      argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+    log "  kyverno.io/v1 registered"
+  else
+    warn "Kyverno never registered kyverno.io/v1 after 5m — 14-workload-console-rbac cannot render its deploy-provenance ClusterPolicy, so the digest-pinning admission backstop is ABSENT on this cluster (not merely unsynced). Diagnose: kubectl -n ${ARGOCD_NS} get app kyverno; kubectl -n kyverno get pods"
+  fi
   # The fe-gateway chart's Ingress ships className "nginx" (the real cluster's
   # public controller). kind runs ONLY ingress-nginx-internal, which registers
   # class "nginx-internal" — without this override the Ingress is admitted by
