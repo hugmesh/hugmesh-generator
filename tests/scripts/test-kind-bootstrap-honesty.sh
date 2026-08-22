@@ -1007,6 +1007,10 @@ echo "-- [repo-access] ArgoCD must be given a repo it can fetch, or the run must
 # This runs the REAL ensure_repo_access() out of the real script against
 # kubectl/docker stubs, with the REAL gitops-repo-server.yaml on disk.
 RA_FN="$(awk '/^ensure_repo_access\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+PROVEN_FN="$(awk '/^argocd_repo_fetch_proven\(\) \{/,/^\}/' "${BOOTSTRAP}")"
+if [ -z "${PROVEN_FN}" ]; then
+  bad "bootstrap-kind.sh has no argocd_repo_fetch_proven() — a re-run cannot see the credential the cluster already holds, and KIND_PROFILE=sso FATALs on a working cluster"
+fi
 if [ -z "${RA_FN}" ]; then
   bad "bootstrap-kind.sh has no ensure_repo_access() — the #48 fail-closed/local-sync logic is missing or moved"
 else
@@ -1015,6 +1019,17 @@ else
 #!/usr/bin/env bash
 args="$*"
 case "${args}" in
+  *"get applications"*)
+    # What ArgoCD reports about its Applications — the EVIDENCE the fetch-proof
+    # reads. Both columns are modelled so a test can say "synced at a commit"
+    # and "carrying #48's auth error" independently: on a real cluster they are
+    # independent, and collapsing them is how a dead credential would read as a
+    # live one.
+    case "${args}" in
+      *"custom-columns=REPO:"*) printf '%s\n' "${STUB_APPS:-}" ;;
+      *"custom-columns=MSG:"*)  printf '%s\n' "${STUB_APP_CONDS:-}" ;;
+    esac
+    exit "${STUB_APPS_RC:-0}" ;;
   *"create secret generic hugmesh-generator-repo"*)
     printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: hugmesh-generator-repo\n'; exit 0 ;;
   *"label --local"*)
@@ -1061,6 +1076,8 @@ DSTUB
         SCRIPT_DIR="${T_SCRIPT_DIR}"
         LOCAL_GITOPS_MOUNT=/hugmesh/hugmesh-generator
         LOCAL_GITOPS_URL="git://gitops-repo-server.devops.svc.cluster.local/hugmesh-generator"
+        ARGOCD_PROVEN_REV=""
+        '"${PROVEN_FN}"'
         '"${RA_FN}"'
         ensure_repo_access
         echo "RESULT REPO=${REPO} REV=${REV} VB=${VAULT_BRANCH} HB=${HARBOR_BRANCH}"'
@@ -1158,6 +1175,78 @@ DSTUB
       || bad "the local path clobbered an explicitly pinned revision — $(tail -2 "${RA}/out" | tr '\n' ' ')"
   else
     bad "a pinned-revision local run FAILED — $(tail -3 "${RA}/err" | tr '\n' ' ')"
+  fi
+
+  # (c1..c5) THE CREDENTIAL THE CLUSTER ALREADY HOLDS (live 2026-08-22).
+  # ensure_repo_access only ever asked "$ARGOCD_REPO_TOKEN in *this*
+  # environment?" then "is the mount serving?". A cluster bootstrapped once WITH
+  # a token keeps a working repository Secret and goes on fetching; re-run from
+  # a shell that no longer exports the token and this FATALLED under sso —
+  # naming a mount nothing in that cluster reads, while every git-path
+  # Application was synced to main's HEAD. The proof must be EVIDENCE, because a
+  # stored token expires and "a credential exists" over a dead one is #48 again.
+  SHA=6964d0892d8ae4ac4113fded3c0b0c68483f3754
+  GH_REPO=https://github.com/hugmesh/hugmesh-generator.git
+
+  # (c1) the live shape: stale mount, no token, ArgoCD synced at a real commit.
+  if run_repo_access "${CLONE_ROOT}" sso "STUB_MOUNT_RC=1" "STUB_APPS=${GH_REPO} ${SHA}"; then
+    if grep -q "RESULT REPO=${GH_REPO} REV=main" "${RA}/out" \
+       && ! grep -q 'gitops-repo-server' "${RA}/log"; then
+      ok "a cluster already fetching the repo is left alone: no daemon, no token demanded, repoURL untouched"
+    else
+      bad "the already-credentialed path ran but changed the repo wiring — $(tail -2 "${RA}/out" | tr '\n' ' ')"
+    fi
+    grep -q "${SHA}" "${RA}/out" \
+      && ok "it names the commit it proved the fetch with, not just 'ok'" \
+      || bad "the run accepted the existing credential without naming the evidence — an unfalsifiable claim"
+  else
+    bad "THE LIVE SHAPE: sso + a cluster demonstrably fetching the repo still FATALLED — $(tail -3 "${RA}/err" | tr '\n' ' ')"
+  fi
+
+  # (c2) THE REGRESSION THIS MUST NOT BECOME. A revision recorded from a fetch
+  # that worked last week, plus #48's authentication error live on an
+  # Application, is a DEAD credential. Accepting it is the outage.
+  if run_repo_access "${CLONE_ROOT}" sso "STUB_MOUNT_RC=1" "STUB_APPS=${GH_REPO} ${SHA}" \
+       "STUB_APP_CONDS=ComparisonError: authentication required"; then
+    bad "an EXPIRED credential (apps reporting 'authentication required') was accepted as proof — this is issue #48 restored"
+  else
+    ok "an Application reporting 'authentication required' is not proof: the run still fails closed"
+  fi
+
+  # (c3) only a RESOLVED commit is evidence. `.status.sync.revision` echoing the
+  # branch the spec asked for proves the repo-server never came back.
+  #
+  # Every value here is deliberately LONGER than the minimum commit length, so
+  # this bites on the hex test and not on the length test. Caught by mutation:
+  # the first version of this case used only short names ("main", "<none>"),
+  # so deleting the hex check entirely left the suite GREEN — the length check
+  # was quietly doing all the work and one of the two conditions was untested.
+  c3_bad=0
+  for badrev in main '<none>' refs/heads/main release/2026-08-22 not-a-sha-at-all; do
+    if run_repo_access "${CLONE_ROOT}" sso "STUB_MOUNT_RC=1" "STUB_APPS=${GH_REPO} ${badrev}"; then
+      bad "an unresolved revision ('${badrev}') was accepted as a fetched commit"
+      c3_bad=1
+    fi
+  done
+  [ "${c3_bad}" -eq 0 ] && ok "an unresolved revision is not a fetch — 5 shapes, all longer than the length floor, so the HEX test is what rejects them"
+
+  # (c4) another repo's Application says nothing about THIS repo's access — the
+  # cluster legitimately holds Helm-sourced and forked apps.
+  if run_repo_access "${CLONE_ROOT}" sso "STUB_MOUNT_RC=1" \
+       "STUB_APPS=https://helm.goharbor.io ${SHA}"; then
+    bad "a DIFFERENT repo's synced Application was accepted as proof of access to ${GH_REPO}"
+  else
+    ok "only an Application on this repo counts — a foreign source is not proof"
+  fi
+
+  # (c5) the check may only ever RELAX a re-run. A fresh cluster has no
+  # Applications, so a FIRST bootstrap must still take the tokenless local sync.
+  if run_repo_access "${CLONE_ROOT}" sso "STUB_APPS="; then
+    grep -q 'RESULT REPO=git://gitops-repo-server' "${RA}/out" \
+      && ok "no Applications = no evidence: a first bootstrap still takes the tokenless local sync" \
+      || bad "a cluster proving nothing skipped the local sync — $(tail -2 "${RA}/out" | tr '\n' ' ')"
+  else
+    bad "the fetch-proof broke the default first-bootstrap path — $(tail -3 "${RA}/err" | tr '\n' ' ')"
   fi
 
   # (n6) the daemon never becoming ready is a FAILURE, not a shrug — ArgoCD

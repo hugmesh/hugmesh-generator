@@ -350,6 +350,66 @@ kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-applicationset-controller
 #     warn (README documents supplying a token later; ArgoCD retries on its
 #     own once the credential exists).
 # ─────────────────────────────────────────────────────────────────────────
+# Has ArgoCD DEMONSTRABLY fetched ${REPO} with what the cluster ALREADY has?
+#
+# Re-running against an existing cluster used to ignore this entirely: the two
+# paths below only ever asked "$ARGOCD_REPO_TOKEN in *this* environment?" and
+# "is the local mount serving?". A cluster bootstrapped once WITH a token, then
+# re-run from a shell that no longer exports it, therefore fell through to the
+# tokenless path and — under KIND_PROFILE=sso — FATALLED, naming a mount that
+# nothing in that cluster reads. Live 2026-08-22: every git-path Application was
+# synced to main's HEAD through a working repository Secret while the preflight
+# refused to start the lane and prescribed `docker restart` on a healthy node.
+#
+# Proven by EVIDENCE, never by the Secret's existence. A stored token expires,
+# and answering "yes, it is credentialed" over a dead credential would put back
+# the exact #48 shape this whole block exists to prevent. Only ArgoCD can say
+# whether a fetch SUCCEEDED, and it says it two ways, both required here:
+#   * an Application on ${REPO} whose status records a RESOLVED commit (a bare
+#     `targetRevision` is what the spec asked for; `.status.sync.revision` is
+#     what the repo-server came back with), and
+#   * no Application reporting the authentication ComparisonError of #48.
+# Evidence also covers the case a credential check would get WRONG in the other
+# direction: an anonymously readable repo fetches fine with no Secret at all.
+#
+# A fresh cluster has no Applications, so this is false and the paths below run
+# exactly as before — it cannot weaken a first bootstrap, only a re-run.
+ARGOCD_PROVEN_REV=""
+argocd_repo_fetch_proven() {
+  ARGOCD_PROVEN_REV=""
+  local rows repo rev
+  rows="$(kubectl -n "${ARGOCD_NS}" get applications --no-headers \
+            -o custom-columns='REPO:.spec.source.repoURL,REV:.status.sync.revision' \
+            2>/dev/null)" || return 1
+  [ -n "${rows}" ] || return 1
+  while read -r repo rev; do
+    [ "${repo}" = "${REPO}" ] || continue
+    # A resolved commit: hex, and long enough to be one. `<none>` (kubectl's
+    # empty-field marker) and a branch name both fail this.
+    case "${rev}" in
+      ""|*[!0-9a-f]*) continue ;;
+    esac
+    [ "${#rev}" -ge 7 ] || continue
+    ARGOCD_PROVEN_REV="${rev}"
+    break
+  done <<EOF
+${rows}
+EOF
+  [ -n "${ARGOCD_PROVEN_REV}" ] || return 1
+  # A credential that WAS working can expire. ArgoCD reports that on the
+  # Application, in the words #48 was reported with. Deliberately NOT `grep -q`:
+  # under `set -o pipefail` a -q match closes the pipe, kubectl dies of SIGPIPE,
+  # and a FOUND error would report 141 — the very inversion this repo just spent
+  # a day removing. Plain grep drains, and its exit status is identical.
+  if kubectl -n "${ARGOCD_NS}" get applications --no-headers \
+       -o custom-columns='MSG:.status.conditions[*].message' 2>/dev/null \
+       | grep -Fi 'authentication required' >/dev/null; then
+    ARGOCD_PROVEN_REV=""
+    return 1
+  fi
+  return 0
+}
+
 ensure_repo_access() {
   if [ -n "${ARGOCD_REPO_TOKEN:-}" ]; then
     log "Registering ArgoCD repo credential for ${REPO} (from \$ARGOCD_REPO_TOKEN, never printed)"
@@ -361,6 +421,14 @@ ensure_repo_access() {
       --dry-run=client -o yaml \
       | kubectl label --local -f - "argocd.argoproj.io/secret-type=repository" --dry-run=client -o yaml \
       | kubectl apply -f - >/dev/null
+    return 0
+  fi
+  # An existing cluster that is already fetching ${REPO} needs nothing from
+  # this step. Checked AFTER the token override on purpose: an operator who
+  # exports ARGOCD_REPO_TOKEN is asking to (re)register that credential, which
+  # is also the only way to REPLACE one that has expired.
+  if argocd_repo_fetch_proven; then
+    log "ArgoCD already fetches ${REPO} with the credential this cluster holds (an Application is synced at ${ARGOCD_PROVEN_REV}) — leaving it alone; export ARGOCD_REPO_TOKEN to replace it"
     return 0
   fi
   if [ "${REPO}" != "${GITOPS_REPO_DEFAULT}" ]; then

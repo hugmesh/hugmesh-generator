@@ -96,6 +96,12 @@ DEVOPS_UP_TIMEOUT_S = 3600
 # credential (issue #48). An EXISTING cluster created before that path can
 # never gain the mount; the preflight below detects exactly that.
 KIND_REPO_MOUNT = "/hugmesh/hugmesh-generator"
+# Namespace ArgoCD lives in, and the GitOps repo its Applications name — both
+# are bootstrap-kind.sh's own defaults (ARGOCD_NS, GITOPS_REPO_DEFAULT). Kept
+# here so the repo-access preflight asks about exactly the objects the
+# bootstrap creates.
+ARGOCD_NS = "devops"
+GITOPS_REPO_URL = "https://github.com/hugmesh/hugmesh-generator.git"
 #: The kind cluster bootstrap-kind.sh creates, and the name every probe below asks
 #: about. ONE reader of the override so a probe can never disagree with the verb.
 KIND_CLUSTER_DEFAULT = "hugmesh-local"
@@ -1030,6 +1036,12 @@ class LocalStackNode:
         OutOfSync and nothing about it named a mount."""
         if os.environ.get("ARGOCD_REPO_TOKEN"):
             return []
+        proven = self._argocd_repo_fetch_proven()
+        if proven:
+            # Nothing below applies: this cluster is already fetching the repo
+            # with a credential it holds, so the tokenless local sync — and the
+            # mount that serves it — are not in the picture at all.
+            return []
         git_path = os.path.join(self.generator_dir, ".git")
         if not os.path.isdir(git_path):
             return [f"tokenless local sync unavailable: {git_path} is not a "
@@ -1081,6 +1093,64 @@ class LocalStackNode:
                 f"start this lane again (a fresh cluster mounts it "
                 f"automatically), {token_hint}."]
 
+    def _argocd_repo_fetch_proven(self) -> str:
+        """The commit ArgoCD has DEMONSTRABLY fetched for the GitOps repo, or "".
+
+        Why this exists (live 2026-08-22). This preflight only ever asked two
+        questions — "is ARGOCD_REPO_TOKEN in *this* process's environment?" and
+        "is the read-only mount serving?" — and neither is the question that
+        matters, which is whether ArgoCD can fetch. A cluster bootstrapped once
+        WITH a token keeps a working repository Secret; start the Studio from a
+        shell that no longer exports the token and the preflight fell straight
+        through to the tokenless branch, found the node's bind had gone stale,
+        and BLOCKED the lane while every git-path Application was in fact synced
+        to main's HEAD. The remedy it printed (`docker restart` the node) would
+        have bounced a healthy 22-hour-old control plane to repair a mount
+        nothing in that cluster reads.
+
+        Proven by EVIDENCE, never by the Secret's existence — a stored token
+        expires, and reporting "credentialed" over a dead credential would put
+        back the exact issue-#48 shape this preflight exists to prevent. Two
+        signals, both required: an Application on this repo whose status records
+        a RESOLVED commit (what the repo-server actually returned, as opposed to
+        the `targetRevision` the spec merely asked for), and no Application
+        carrying #48's authentication ComparisonError. Evidence also gets right
+        the case a credential check inverts: an anonymously readable repo
+        fetches with no Secret at all.
+
+        A cluster with no Applications yields no evidence and returns "" — so a
+        FIRST bootstrap still takes the tokenless path exactly as before. This
+        can only relax a re-run, never weaken a bring-up. Mirrors
+        bootstrap-kind.sh's argocd_repo_fetch_proven()."""
+        kubectl = devops_tools.which("kubectl", self.generator_dir)
+        if not kubectl:
+            return ""  # devops_available() already reports the missing tool
+        ctx = ["--context", f"kind-{_kind_cluster_name()}", "-n", ARGOCD_NS]
+        rc, out = self._probe([kubectl] + ctx + [
+            "get", "applications", "--no-headers", "-o",
+            "custom-columns=REPO:.spec.source.repoURL,REV:.status.sync.revision"])
+        if rc != 0 or not out:
+            return ""
+        rev = ""
+        for line in out.split("\n"):
+            parts = line.split()
+            if len(parts) != 2 or parts[0] != GITOPS_REPO_URL:
+                continue
+            # A resolved commit: hex and long enough to be one. kubectl's
+            # empty-field marker "<none>" and a branch name both fail this.
+            cand = parts[1]
+            if len(cand) >= 7 and all(c in "0123456789abcdef" for c in cand):
+                rev = cand
+                break
+        if not rev:
+            return ""
+        rc, msgs = self._probe([kubectl] + ctx + [
+            "get", "applications", "--no-headers", "-o",
+            "custom-columns=MSG:.status.conditions[*].message"])
+        if rc == 0 and "authentication required" in msgs.lower():
+            return ""
+        return rev
+
     def _kind_repo_bind_source(self, node: str) -> str:
         """The HOST path the kind node declares as its repo bind, or "" when it
         declares none (or cannot be inspected).
@@ -1123,12 +1193,20 @@ class LocalStackNode:
                     on_line(f"[devops] {p}")
             return False, "\n".join(repo_problems)
         if on_line:
-            on_line("[devops] repo access preflight OK: "
-                    + ("ARGOCD_REPO_TOKEN is set — ArgoCD will sync from GitHub."
-                       if os.environ.get("ARGOCD_REPO_TOKEN") else
-                       "tokenless local sync — ArgoCD will sync this checkout's "
-                       "last commit (committed objects only; a dirty tree serves "
-                       "stale-but-consistent HEAD)."))
+            # Name WHICH of the three modes this run is in. Printing "tokenless
+            # local sync" for a cluster fetching from GitHub is how the log came
+            # to describe a daemon that was not in the picture.
+            if os.environ.get("ARGOCD_REPO_TOKEN"):
+                mode = "ARGOCD_REPO_TOKEN is set — ArgoCD will sync from GitHub."
+            else:
+                proven = self._argocd_repo_fetch_proven()
+                mode = (f"this cluster already fetches {GITOPS_REPO_URL} with the "
+                        f"credential it holds (an Application is synced at "
+                        f"{proven[:10]}) — nothing to register." if proven else
+                        "tokenless local sync — ArgoCD will sync this checkout's "
+                        "last commit (committed objects only; a dirty tree serves "
+                        "stale-but-consistent HEAD).")
+            on_line("[devops] repo access preflight OK: " + mode)
         return self._make("kind-up", timeout=DEVOPS_UP_TIMEOUT_S,
                           on_line=on_line, cancel=cancel)
 
