@@ -518,6 +518,63 @@ else:
         "PREMERGE_BASELINE to %d so the recorded number stays true"
         % (n, PREMERGE_BASELINE, n))
 
+# ── 8) `| grep -q` UNDER pipefail IS A COIN FLIP ─────────────────────────────
+# `grep -q` exits the instant it matches and closes its end of the pipe. If the
+# stage upstream has not finished writing, the kernel kills it with SIGPIPE and
+# that stage's status is 141. Under `set -o pipefail` the PIPELINE then reports
+# 141 — so a predicate that FOUND WHAT IT WAS LOOKING FOR reads as failure.
+#
+# Measured on this repo, GNU grep, `set -uo pipefail`:
+#   upstream output > the 64 KiB pipe buffer  ->  200/200 runs report failure
+#   upstream output that fits in one write    ->  0/3000 (both stages buffer,
+#                                                 so the writer is already gone)
+# The class is therefore REAL but load-bearing only where a stage streams more
+# than it can buffer — which no static reader can tell by looking. That is the
+# argument for removing it everywhere rather than triaging site by site.
+#
+# THE FIX IS TO DRAIN: drop -q, redirect to /dev/null. Plain grep reads to EOF so
+# nothing is ever signalled, and the status is identical (0 match/1 none/2 error).
+#     BAD :   awk '...' f | grep -vE '^#' | grep -qE 'PAT'
+#     GOOD:   awk '...' f | grep -vE '^#' | grep -E  'PAT' >/dev/null
+#
+# Escape hatch: `# sigpipe-ok` on the line, for a site that genuinely wants the
+# early exit, or for prose that merely quotes the shape (this check's own
+# messages do). It has to be a conscious, reviewable act — that is the point.
+GQ = "`| grep -q`"   # sigpipe-ok: prose, not a pipeline
+print()
+print("-- 8) no %s in a pipefail script (SIGPIPE races the assertion) --" % GQ)
+scan, offenders = [], []
+for sub in ("tests", "scripts"):
+    for root, dirs, files in os.walk(os.path.join(repo, sub)):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules")]
+        for fn in files:
+            if fn.endswith(".sh"):
+                scan.append(os.path.relpath(os.path.join(root, fn), repo))
+scan.sort()
+PIPE_Q = re.compile(r'(?<!\|)\|(?!\|)\s*grep\s+(?:-(?!-)[A-Za-z]*q[A-Za-z]*\b|--quiet\b)')
+for rel in scan:
+    try:
+        txt = open(os.path.join(repo, rel), encoding="utf-8", errors="replace").read()
+    except OSError:
+        continue
+    if "pipefail" not in txt:
+        continue
+    for i, line in enumerate(txt.split("\n"), 1):
+        if line.lstrip().startswith("#") or "sigpipe-ok" in line:
+            continue
+        if PIPE_Q.search(line):
+            offenders.append("%s:%d" % (rel, i))
+if not scan:
+    bad("check 8 found ZERO .sh files to scan — it would be vacuous")
+elif offenders:
+    bad("%d %s site(s) in a pipefail script — each can report FAILURE on a match "
+        "it actually found, whenever upstream is still writing (drop -q, add "
+        ">/dev/null): %s" % (len(offenders), GQ,
+                             " ".join(offenders[:12]) + (" ..." if len(offenders) > 12 else "")))
+else:
+    ok("no %s under pipefail across %d .sh file(s) — no assertion here can be lost "
+       "to a SIGPIPE race" % (GQ, len(scan)))
+
 print()
 print("== guard integrity: %d passed, %d failed ==" % (P[0], F[0]))
 sys.exit(1 if F[0] else 0)
@@ -545,7 +602,7 @@ if [ -z "${GUARD_SELFTEST_CHILD:-}" ]; then
   neg_case() {
     local name="$1" want="$2" out crc
     out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" GUARD_PREMERGE=0 bash "${SELF}" 2>&1)"; crc=$?
-    if [ "${crc}" -ne 0 ] && printf '%s' "${out}" | grep -qF "${want}"; then
+    if [ "${crc}" -ne 0 ] && printf '%s' "${out}" | grep -F "${want}" >/dev/null; then
       ok "negative control bites: ${name}"
     else
       bad "negative control did NOT bite (rc=${crc}): ${name} — wanted '${want}'"
@@ -656,6 +713,19 @@ echo "== ${P} passed, ${F} failed =="
   neg_case "a pre-merge-gated suite the baseline does not record" \
            "raise PREMERGE_BASELINE"
 
+  # (h) `| grep -q` in a pipefail suite. The literal is ASSEMBLED here so this
+  #     file does not itself carry the shape its own check 8 forbids — writing it
+  #     out would make the guard flag its own negative control.
+  Q='-q'
+  build_tree "set -uo pipefail
+P=0; F=0
+ok(){ echo \"  PASS \$*\"; P=\$((P+1)); }
+bad(){ echo \"  FAIL \$*\"; F=\$((F+1)); }
+if cat /etc/hostname | grep ${Q} .; then ok \"host\"; else bad \"host\"; fi
+echo \"== \${P} passed, \${F} failed ==\"
+[ \"\${F}\" -eq 0 ]"
+  neg_case "a pipe into a quiet grep under pipefail" "site(s) in a pipefail script"
+
   # (e) POSITIVE control: the same miniature repo, all defects removed, must PASS.
   #     Without this, cases (a)-(d) could be passing because the child ALWAYS fails.
   build_tree 'P=0; F=0
@@ -691,13 +761,13 @@ echo "== ${P} passed, ${F} failed =="
       KSP="${REPO}/tests/keystores/${ks}"
       [ -f "${KSP}" ] || { bad "dynamic control: ${KSP} missing"; continue; }
       KO="$(env -u GUARD_TOOLING_ALLOW_SKIP PATH="${NOKT}" bash "${KSP}" 2>&1)"; KRC=$?
-      if [ "${KRC}" -ne 0 ] && printf '%s' "${KO}" | grep -qF "missing required tool(s): keytool"; then
+      if [ "${KRC}" -ne 0 ] && printf '%s' "${KO}" | grep -F "missing required tool(s): keytool" >/dev/null; then
         ok "dynamic: ${ks} FAILS (rc=${KRC}) with keytool absent — no silent green"
       else
         bad "dynamic: ${ks} did not fail closed without keytool (rc=${KRC}): ${KO}"
       fi
       KO="$(env GUARD_TOOLING_ALLOW_SKIP=1 PATH="${NOKT}" bash "${KSP}" 2>&1)"; KRC=$?
-      if [ "${KRC}" -eq 0 ] && printf '%s' "${KO}" | grep -qF "GUARD_TOOLING_ALLOW_SKIP=1 was set"; then
+      if [ "${KRC}" -eq 0 ] && printf '%s' "${KO}" | grep -F "GUARD_TOOLING_ALLOW_SKIP=1 was set" >/dev/null; then
         ok "dynamic: ${ks} honours the DELIBERATE local opt-out (rc=0, loud SKIP line)"
       else
         bad "dynamic: ${ks} ignored the explicit opt-out (rc=${KRC}): ${KO}"

@@ -66,7 +66,7 @@ EOF
       echo "----- assertions (role $(cat /etc/hugmesh/role 2>/dev/null || echo n/a)) -----"
       P=0; F=0; ok(){ echo "  PASS $*"; P=$((P+1)); }; bad(){ echo "  FAIL $*"; F=$((F+1)); }
       id opsadmin >/dev/null 2>&1 && ok "user opsadmin created from users.json" || bad "user opsadmin"
-      id -nG opsadmin 2>/dev/null | grep -qw wheel && ok "group wheel auto-created + assigned" || bad "wheel group"
+      id -nG opsadmin 2>/dev/null | grep -w wheel >/dev/null && ok "group wheel auto-created + assigned" || bad "wheel group"
       [ -s /home/opsadmin/.ssh/authorized_keys ] && ok "SSH authorized_keys installed" || bad "authorized_keys"
       [ -f /etc/sudoers.d/10-opsadmin ] && ok "sudoers entry written" || bad "sudoers"
       [ -f /var/lib/keys-provision/users.created ] && ok "users.created marker" || bad "users.created marker"

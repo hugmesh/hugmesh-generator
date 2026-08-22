@@ -73,7 +73,7 @@ done
 
 # The preconditions the invariant exists for (if either disappears, the two
 # checks above still pass — these just document WHY the guard is here).
-grep -vE '^[[:space:]]*(#|$)' "${REPO}/specs-x86/portage/packages-gpu-nvidia-cuda.list" 2>/dev/null | grep -qxF "dev-util/nvidia-cuda-toolkit" \
+grep -vE '^[[:space:]]*(#|$)' "${REPO}/specs-x86/portage/packages-gpu-nvidia-cuda.list" 2>/dev/null | grep -xF "dev-util/nvidia-cuda-toolkit" >/dev/null \
     && ok "precondition holds: packages-gpu-nvidia-cuda.list requests the toolkit" \
     || ok "precondition gone: packages-gpu-nvidia-cuda.list no longer requests the toolkit (guard vacuous but harmless)"
 
@@ -208,16 +208,16 @@ fi
 if [ -n "${call_line}" ]; then
     win_start=$(( call_line > 6 ? call_line - 6 : 1 ))
     window="$(sed -n "${win_start},$(( call_line + 1 ))p" "${BUILDER_LIVE}")"
-    printf '%s\n' "${window}" | grep -qF 'if ${NVIDIA_CUDA}; then' \
+    printf '%s\n' "${window}" | grep -F 'if ${NVIDIA_CUDA}; then' >/dev/null \
         && ok "call-site is gated on \${NVIDIA_CUDA}" \
         || bad "call-site is not gated on \${NVIDIA_CUDA} — every x86 build would run (and possibly die on) a CUDA-only check"
-    printf '%s\n' "${window}" | grep -q 'REBUILD_TOOLCHAIN.*--gcc-not-excluded' \
+    printf '%s\n' "${window}" | grep 'REBUILD_TOOLCHAIN.*--gcc-not-excluded' >/dev/null \
         && ok "REBUILD_TOOLCHAIN=true passes --gcc-not-excluded" \
         || bad "REBUILD_TOOLCHAIN=true does not pass --gcc-not-excluded — a toolchain-rebuild CUDA build (resolvable!) would be refused"
     # (d) FATAL on detection: the block must exit 1, not warn-and-continue —
     # a warn here reproduces the original failure mode (hours, then zero
     # artifacts) with a nicer message at the top.
-    printf '%s\n' "${window}" | grep -q 'exit 1' \
+    printf '%s\n' "${window}" | grep 'exit 1' >/dev/null \
         && ok "preflight failure is fatal (exit 1) at the call-site" \
         || bad "preflight failure is NOT fatal at the call-site — the impossible emerge would still run for hours"
 else

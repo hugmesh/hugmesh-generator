@@ -82,7 +82,7 @@ for p in "${PLATFORMS[@]}"; do
     # the pre-seed unconditionally would flag three specs that are already
     # correct — verified: those three carry `dbus` in make.conf.tmpl's USE.
     if grep -hE '^USE=' "${REPO}/specs-${p}/portage/make.conf.tmpl" 2>/dev/null \
-         | tr ' "' '\n\n' | grep -qx 'dbus'; then
+         | tr ' "' '\n\n' | grep -x 'dbus' >/dev/null; then
       ok "${p}: forces networkmanager[wifi]; global USE=dbus already covers wpa_supplicant"
     elif flag_enabled "${pud}" "net-wireless/wpa_supplicant" "dbus"; then
       ok "${p}: forces networkmanager[wifi] and pre-seeds wpa_supplicant[dbus] (no global dbus)"

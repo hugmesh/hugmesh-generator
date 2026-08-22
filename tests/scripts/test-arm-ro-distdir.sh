@@ -64,19 +64,19 @@ run_block() { # <builder-path> <DISTDIR_SRC value> [SHARED_DISTDIR] ; sets RC + 
 # 1a — good path: DISTDIR_SRC is an existing dir ⇒ RO line appended (host path, not chroot)
 GOODDIR="$(mktemp -d)"
 run_block "${REPO}/build-frite-stage4.sh" "${GOODDIR}"
-if printf '%s\n' "${MKCONF}" | grep -qx "PORTAGE_RO_DISTDIRS=\"${GOODDIR}\""; then
+if printf '%s\n' "${MKCONF}" | grep -x "PORTAGE_RO_DISTDIRS=\"${GOODDIR}\"" >/dev/null; then
     ok "good path: PORTAGE_RO_DISTDIRS=\"<distdir>\" appended to make.conf"
 else
     bad "good path: RO line missing. make.conf was:"; printf '%s\n' "${MKCONF}"
 fi
 # private DISTDIR must be untouched (new fetches stay private)
-printf '%s\n' "${MKCONF}" | grep -qx 'DISTDIR="/br/distfiles"' \
+printf '%s\n' "${MKCONF}" | grep -x 'DISTDIR="/br/distfiles"' >/dev/null \
     && ok "good path: private DISTDIR left intact (shared pool never written)" \
     || bad "good path: private DISTDIR was altered"
 
 # 1b — bad path: DISTDIR_SRC set but not a directory ⇒ WARN + NO RO line
 run_block "${REPO}/build-frite-stage4.sh" "/no/such/distdir/xyz"
-if printf '%s\n' "${MKCONF}" | grep -q 'PORTAGE_RO_DISTDIRS'; then
+if printf '%s\n' "${MKCONF}" | grep 'PORTAGE_RO_DISTDIRS' >/dev/null; then
     bad "bad path: RO line was appended for a nonexistent dir"
 else
     ok "bad path: nonexistent --distdir ignored (no RO line), correct artifact"
@@ -84,14 +84,14 @@ fi
 
 # 1c — empty (default): no flag ⇒ NO RO line (private-only)
 run_block "${REPO}/build-frite-stage4.sh" ""
-printf '%s\n' "${MKCONF}" | grep -q 'PORTAGE_RO_DISTDIRS' \
+printf '%s\n' "${MKCONF}" | grep 'PORTAGE_RO_DISTDIRS' >/dev/null \
     && bad "empty default wrongly added an RO line" \
     || ok "empty default: private-only, no RO line"
 
 # 1e — shared-build-assets: a --distdir naming the SHARED distfiles dir (which is already
 # this build's writable DISTDIR) must be DROPPED, not listed a second time as an RO dir.
 run_block "${REPO}/build-frite-stage4.sh" "${GOODDIR}" "${GOODDIR}"
-if printf '%s\n' "${MKCONF}" | grep -q 'PORTAGE_RO_DISTDIRS'; then
+if printf '%s\n' "${MKCONF}" | grep 'PORTAGE_RO_DISTDIRS' >/dev/null; then
     bad "shared dedup: --distdir == SHARED_DISTDIR still emitted an RO line (dir listed twice)"
 else
     ok "shared dedup: --distdir naming the shared DISTDIR is dropped (no duplicate RO entry)"
@@ -99,7 +99,7 @@ fi
 # …but a DIFFERENT external cache alongside a shared root must STILL be exposed RO.
 OTHERDIR="$(mktemp -d)"
 run_block "${REPO}/build-frite-stage4.sh" "${OTHERDIR}" "${GOODDIR}"
-printf '%s\n' "${MKCONF}" | grep -qx "PORTAGE_RO_DISTDIRS=\"${OTHERDIR}\"" \
+printf '%s\n' "${MKCONF}" | grep -x "PORTAGE_RO_DISTDIRS=\"${OTHERDIR}\"" >/dev/null \
     && ok "shared dedup: an external --distdir alongside a shared root is still exposed RO" \
     || bad "shared dedup: external --distdir was wrongly dropped when a shared root exists"
 rm -rf "${OTHERDIR}"

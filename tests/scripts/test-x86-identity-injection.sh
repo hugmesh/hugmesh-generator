@@ -156,7 +156,7 @@ printf '%s  /home  auto  nofail,noatime,nosuid,nodev  0 2\n' "${HM_DEVICE}" >> "
 lines="$(wc -l < "${fstab}")"
 field1="$(awk '{print $1" "$2}' "${fstab}")"   # field-1 may contain the space → re-read raw
 raw="$(cat "${fstab}")"
-if [ "${lines}" -eq 1 ] && printf '%s' "${raw}" | grep -qF 'LABEL=h x  /home  auto'; then
+if [ "${lines}" -eq 1 ] && printf '%s' "${raw}" | grep -F 'LABEL=h x  /home  auto' >/dev/null; then
   ok "installer fstab: HOME_DEVICE stays one quoted field (no extra line/field injection)"
 else bad "installer fstab field/line injection (lines=${lines} raw=${raw})"; fi
 

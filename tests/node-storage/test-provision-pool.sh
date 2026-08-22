@@ -128,12 +128,12 @@ poolcount=$(count "/mnt/pool0" "${FSTAB}")
     && ok "first-boot (no arg) provisions BOTH system and pool devices" \
     || bad "first-boot should provision both (system=${syscount} pool=${poolcount})"
 
-if grep "/mnt/pool0" "${FSTAB}" | grep -q "nofail"; then
+if grep "/mnt/pool0" "${FSTAB}" | grep "nofail" >/dev/null; then
     ok "pool fstab line carries ,nofail"
 else
     bad "pool fstab line MUST carry ,nofail: $(grep /mnt/pool0 "${FSTAB}")"
 fi
-if grep "/mnt/data" "${FSTAB}" | grep -q "nofail"; then
+if grep "/mnt/data" "${FSTAB}" | grep "nofail" >/dev/null; then
     bad "system fstab line must NOT carry nofail: $(grep /mnt/data "${FSTAB}")"
 else
     ok "system fstab line has NO nofail (a missing system disk still halts boot)"

@@ -184,7 +184,7 @@ BUILDER="${REPO}/build-x86-host-stage4.sh"
 CUDA_LIST="${SPECS}/packages-gpu-nvidia-cuda.list"
 
 toolkit_requested=false
-if [ -f "${CUDA_LIST}" ] && grep -vE '^[[:space:]]*(#|$)' "${CUDA_LIST}" | grep -qxF "${TOOLKIT_ATOM}"; then
+if [ -f "${CUDA_LIST}" ] && grep -vE '^[[:space:]]*(#|$)' "${CUDA_LIST}" | grep -xF "${TOOLKIT_ATOM}" >/dev/null; then
     toolkit_requested=true
 fi
 if ! ${toolkit_requested}; then

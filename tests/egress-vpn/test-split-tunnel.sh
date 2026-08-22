@@ -154,7 +154,7 @@ if [ "$(id -u)" = "0" ] && command -v ip >/dev/null 2>&1; then
             ip -4 route replace default dev wg0 table 176 2>/dev/null || true
             ip -4 route replace blackhole default metric 1000 table 176 2>/dev/null || true
         "
-        if ip netns exec "${NS}" ip rule show | awk '/fwmark 0x76/{print NR}' | grep -q .; then
+        if ip netns exec "${NS}" ip rule show | awk '/fwmark 0x76/{print NR}' | grep . >/dev/null; then
             ok "netns: kernel accepted fwmark 0x76 -> 176 rule (real iproute2)"
         else
             bad "netns: kernel rejected the VPN fwmark rule"

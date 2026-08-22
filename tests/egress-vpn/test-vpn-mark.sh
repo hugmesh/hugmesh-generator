@@ -66,7 +66,7 @@ done
 if [ "\${verb}" = "label" ]; then
     # fail-label-add drives the rollback path: label ADDS (=true) fail, label
     # REMOVES (key-) still succeed so the rollback itself can complete.
-    if [ -f "${WORK}/fail-label-add" ] && tail -1 "${ORDER}" | grep -q -- '=true'; then
+    if [ -f "${WORK}/fail-label-add" ] && tail -1 "${ORDER}" | grep -- '=true' >/dev/null; then
         exit 1
     fi
     exit 0

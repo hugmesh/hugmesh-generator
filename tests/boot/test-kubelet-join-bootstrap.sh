@@ -60,19 +60,19 @@ check_script() {
   _bad(){ [ "${emit}" = yes ] && bad "$@"; lf=$((lf+1)); }
 
   # ── static pins (anchored to LIVE lines so comments cannot satisfy them) ──
-  head -1 "${s}" | grep -q '^#!/sbin/openrc-run$' \
+  head -1 "${s}" | grep '^#!/sbin/openrc-run$' >/dev/null \
     && _ok "openrc: #!/sbin/openrc-run shebang" || _bad "openrc: wrong/missing shebang"
   local ca
   ca="$(grep -E '^command_args=' "${s}" || true)"
   [ -n "${ca}" ] \
     && _ok "pin: live (uncommented) command_args= line exists" || _bad "pin: no live command_args= line"
-  printf '%s' "${ca}" | grep -qF -- "${BOOTSTRAP_ARG}" \
+  printf '%s' "${ca}" | grep -F -- "${BOOTSTRAP_ARG}" >/dev/null \
     && _ok "pin: command_args carries ${BOOTSTRAP_ARG}" || _bad "pin: command_args lost ${BOOTSTRAP_ARG} (kubeadm join TLS bootstrap can never complete — issue #48)"
-  printf '%s' "${ca}" | grep -qF -- "${KUBECONFIG_ARG}" \
+  printf '%s' "${ca}" | grep -F -- "${KUBECONFIG_ARG}" >/dev/null \
     && _ok "pin: command_args keeps ${KUBECONFIG_ARG}" || _bad "pin: command_args lost ${KUBECONFIG_ARG}"
-  printf '%s' "${ca}" | grep -qF -- "${CONFIG_ARG}" \
+  printf '%s' "${ca}" | grep -F -- "${CONFIG_ARG}" >/dev/null \
     && _ok "pin: command_args keeps ${CONFIG_ARG}" || _bad "pin: command_args lost ${CONFIG_ARG}"
-  printf '%s' "${ca}" | grep -q 'KUBELET_KUBEADM_ARGS' \
+  printf '%s' "${ca}" | grep 'KUBELET_KUBEADM_ARGS' >/dev/null \
     && _ok "pin: command_args expands KUBELET_KUBEADM_ARGS" || _bad "pin: command_args does not expand KUBELET_KUBEADM_ARGS (kubeadm's node flags never reach the kubelet)"
   grep -Eq "^[[:space:]]*\.[[:space:]]+${FLAGS_ENV_PATH}" "${s}" \
     && _ok "source: live line sources ${FLAGS_ENV_PATH}" || _bad "source: no live line sources ${FLAGS_ENV_PATH}"

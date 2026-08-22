@@ -119,9 +119,9 @@ grep -q 'homeserver-egress.yaml' "${tree}/manifests/networkpolicy/kustomization.
     && ok "NOT selected: an unrelated node-service Application kept" || bad "pruned an unrelated app"
 
 kept="$(filter_pkgs 'akkoma tuwunel')"
-echo "${kept}" | grep -q 'net-vpn/wireguard-tools' && bad "wireguard-tools survived the prune" || ok "NOT selected: net-vpn/wireguard-tools pruned"
-echo "${kept}" | grep -q 'net-vpn/openvpn' && bad "openvpn survived the prune" || ok "NOT selected: net-vpn/openvpn pruned"
-echo "${kept}" | grep -q 'sys-cluster/kubelet' && ok "NOT selected: unrelated package kept" || bad "dropped an unrelated package"
+echo "${kept}" | grep 'net-vpn/wireguard-tools' >/dev/null && bad "wireguard-tools survived the prune" || ok "NOT selected: net-vpn/wireguard-tools pruned"
+echo "${kept}" | grep 'net-vpn/openvpn' >/dev/null && bad "openvpn survived the prune" || ok "NOT selected: net-vpn/openvpn pruned"
+echo "${kept}" | grep 'sys-cluster/kubelet' >/dev/null && ok "NOT selected: unrelated package kept" || bad "dropped an unrelated package"
 
 # ── selected => keep NetworkPolicy + packages ─────────────────────────────────
 seed_tree on
@@ -135,8 +135,8 @@ grep -q 'egress-vpn-interaction.yaml' "${tree}/manifests/networkpolicy/kustomiza
     && ok "selected: the delivery overlay + its Application kept" || bad "delivery half pruned despite selection"
 
 kept="$(filter_pkgs 'akkoma egress-vpn')"
-echo "${kept}" | grep -q 'net-vpn/wireguard-tools' && ok "selected: net-vpn/wireguard-tools kept" || bad "wireguard-tools pruned despite selection"
-echo "${kept}" | grep -q 'net-vpn/openvpn' && ok "selected: net-vpn/openvpn kept" || bad "openvpn pruned despite selection"
+echo "${kept}" | grep 'net-vpn/wireguard-tools' >/dev/null && ok "selected: net-vpn/wireguard-tools kept" || bad "wireguard-tools pruned despite selection"
+echo "${kept}" | grep 'net-vpn/openvpn' >/dev/null && ok "selected: net-vpn/openvpn kept" || bad "openvpn pruned despite selection"
 
 # ── builder wires the reconcile service link only when selected ───────────────
 # (assert the conditional + the runlevel link exist in the builder source).

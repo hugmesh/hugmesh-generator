@@ -43,7 +43,7 @@ BLOCK="$(awk '/^  hugmesh-https-front:/{f=1} f&&/^  [a-zA-Z]/&&!/^  hugmesh-http
 # Host publish: knobbed port, default 8488 (NOT 8443 - commonly taken on dev
 # boxes). Derive the CONTAINER port so we can cross-check nginx below.
 PORTLINE="$(printf '%s\n' "${BLOCK}" | grep -E 'PUBLIC_HTTPS_PORT' || true)"
-printf '%s' "${PORTLINE}" | grep -q 'PUBLIC_HTTPS_PORT:-8488' \
+printf '%s' "${PORTLINE}" | grep 'PUBLIC_HTTPS_PORT:-8488' >/dev/null \
   && ok "publishes \${PUBLIC_HTTPS_PORT:-8488} (default 8488)" \
   || bad "host publish is not \${PUBLIC_HTTPS_PORT:-8488}: '${PORTLINE}'"
 CONTAINER_PORT="$(printf '%s' "${PORTLINE}" | sed -E 's/.*}:([0-9]+)".*/\1/')"
@@ -52,18 +52,18 @@ CONTAINER_PORT="$(printf '%s' "${PORTLINE}" | sed -E 's/.*}:([0-9]+)".*/\1/')"
 
 # Mounts: the committed conf, and the per-machine cert dir. Derive the mount
 # TARGET so we can cross-check the conf's ssl_certificate paths against it.
-printf '%s\n' "${BLOCK}" | grep -q './tls-front/default.conf:/etc/nginx/conf.d/default.conf:ro' \
+printf '%s\n' "${BLOCK}" | grep './tls-front/default.conf:/etc/nginx/conf.d/default.conf:ro' >/dev/null \
   && ok "mounts the committed tls-front/default.conf" \
   || bad "does not mount tls-front/default.conf into conf.d"
 CERTMOUNT="$(printf '%s\n' "${BLOCK}" | grep -E '\./\.tls-front:' | sed -E 's/.*\.tls-front:([^:]+):ro.*/\1/' || true)"
 [ -n "${CERTMOUNT}" ] && ok "mounts per-machine ./.tls-front certs at ${CERTMOUNT} (ro)" \
                       || bad "does not mount ./.tls-front read-only"
 
-printf '%s\n' "${BLOCK}" | grep -q 'hugmesh-fe-gateway' \
+printf '%s\n' "${BLOCK}" | grep 'hugmesh-fe-gateway' >/dev/null \
   && ok "depends on the fe-gateway" || bad "no fe-gateway dependency"
 # Always-on: an accidental `profiles:` entry would silently drop the https
 # door from plain `make stack-up` - exactly the "works in test and prod" ask.
-printf '%s\n' "${BLOCK}" | grep -q 'profiles:' \
+printf '%s\n' "${BLOCK}" | grep 'profiles:' >/dev/null \
   && bad "https-front is profile-gated - it must be unconditional" \
   || ok "unconditional (no compose profile)"
 
@@ -83,13 +83,13 @@ grep -q 'X-Forwarded-Proto https' "${CONF}" \
   && ok "sets X-Forwarded-Proto https" || bad "missing X-Forwarded-Proto https"
 # Comments explaining WHY there is no HSTS are fine - only a live directive
 # (a non-comment line) is the defect.
-grep -viE '^[[:space:]]*#' "${CONF}" | grep -qi 'Strict-Transport-Security' \
+grep -viE '^[[:space:]]*#' "${CONF}" | grep -i 'Strict-Transport-Security' >/dev/null \
   && bad "conf sends HSTS - per-HOST scope would break every plain localhost port" \
   || ok "no HSTS directive (deliberate: HSTS is per-host, not per-port)"
 
 echo "-- 3) SNAP_BFF_URL same-origin default (mixed-content guard) --"
 BFFLINE="$(grep -E '^ +SNAP_BFF_URL:' "${COMPOSE}" || true)"
-printf '%s' "${BFFLINE}" | grep -qE 'SNAP_BFF_URL: \$\{SNAP_BFF_URL:-\}' \
+printf '%s' "${BFFLINE}" | grep -E 'SNAP_BFF_URL: \$\{SNAP_BFF_URL:-\}' >/dev/null \
   && ok "SNAP_BFF_URL defaults EMPTY (same-origin on both doors)" \
   || bad "SNAP_BFF_URL default is not empty: '${BFFLINE}' - an absolute http:// default is browser-BLOCKED mixed content on the https door"
 
@@ -115,9 +115,9 @@ if command -v openssl >/dev/null 2>&1; then
   if bash "${HERE}/gen-certs.sh" "${TMP}/mint" >/dev/null 2>&1; then
     ok "gen-certs.sh mints into an explicit output dir"
     SAN="$(openssl x509 -in "${TMP}/mint/server.crt" -noout -ext subjectAltName 2>/dev/null || true)"
-    printf '%s' "${SAN}" | grep -q 'DNS:localhost' \
+    printf '%s' "${SAN}" | grep 'DNS:localhost' >/dev/null \
       && ok "leaf SAN covers localhost" || bad "leaf SAN missing DNS:localhost: ${SAN}"
-    printf '%s' "${SAN}" | grep -q '127.0.0.1' \
+    printf '%s' "${SAN}" | grep '127.0.0.1' >/dev/null \
       && ok "leaf SAN covers 127.0.0.1" || bad "leaf SAN missing 127.0.0.1"
     # Key <-> cert agreement, and the chain the conf serves must verify.
     CMOD="$(openssl x509 -in "${TMP}/mint/server.crt" -noout -modulus 2>/dev/null)"
@@ -126,7 +126,7 @@ if command -v openssl >/dev/null 2>&1; then
       && ok "server.key matches server.crt" || bad "server.key does NOT match server.crt"
     openssl verify -CAfile "${TMP}/mint/ca.crt" "${TMP}/mint/server.crt" >/dev/null 2>&1 \
       && ok "leaf verifies against the minted CA" || bad "leaf does not chain to the minted CA"
-    grep -c 'BEGIN CERTIFICATE' "${TMP}/mint/fullchain.crt" | grep -qx 2 \
+    grep -c 'BEGIN CERTIFICATE' "${TMP}/mint/fullchain.crt" | grep -x 2 >/dev/null \
       && ok "fullchain.crt = leaf + CA (2 certs)" || bad "fullchain.crt is not leaf+CA"
   else
     bad "gen-certs.sh failed to mint into ${TMP}/mint"

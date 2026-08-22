@@ -774,7 +774,7 @@ if command -v ssh-keygen >/dev/null && command -v python3 >/dev/null; then
         --foreign-mesh-trust "${KSRC}" >/dev/null 2>"${WORK}/gpk.err"; then
     STAGED="${KOUT}/mesh-trust/beta-mesh/foreign-provenance-pub.ed25519"
     if [ -f "${STAGED}" ] && base64 -d "${STAGED}" 2>/dev/null \
-         | openssl pkey -pubin -inform DER -noout -text 2>/dev/null | grep -qi ED25519; then
+         | openssl pkey -pubin -inform DER -noout -text 2>/dev/null | grep -i ED25519 >/dev/null; then
       ok "(key-staging) real Ed25519 pubkey STAGED gate-readable at <mesh>/foreign-provenance-pub.ed25519"
     else bad "(key-staging) staged key missing / not gate-readable at ${STAGED}"; fi
   else bad "(key-staging) accept run failed: $(tail -2 "${WORK}/gpk.err")"; fi

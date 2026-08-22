@@ -247,7 +247,7 @@ if [ -z "${GUARD_ROOT+x}" ]; then
   # Capture, THEN grep. `run_ctl … | grep -q` inherits the child's exit 1 under pipefail
   # (a control run is EXPECTED to fail), so every control would report a false GREEN.
   run_ctl() { GUARD_ROOT="$1" bash "${BASH_SOURCE[0]}" 2>&1; }
-  saw() { printf '%s' "$1" | grep -qF -- "$2"; }
+  saw() { printf '%s' "$1" | grep -F -- "$2" >/dev/null; }
 
   # (A) delete §2.4's machine row -> rule2 fires
   d="$(stage a)"

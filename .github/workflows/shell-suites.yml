@@ -161,7 +161,23 @@ jobs:
           for t in $SUITES; do
             [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
             echo "::group::$t"
-            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            # </dev/null: a suite must never inherit the job's stdin. One that
+            # lets a child prompt (ssh-keygen does) would otherwise block until
+            # the job timeout, or, in a `while read` runner, silently eat the
+            # rest of the suite list.
+            # The STATUS is reported, not just PASS/FAIL: 141 is SIGPIPE (a
+            # pipeline stage killed, NOT a failed assertion), 137 is the OOM
+            # killer, 124 the timeout. Without it every one of those looks
+            # exactly like a guard that legitimately went red.
+            if bash "$t" </dev/null; then echo "PASS $t"; else
+              s=$?; echo "FAIL($s) $t"
+              case "$s" in
+                141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
+                137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
+                124) echo "::warning::$t exited 124 — it hit the timeout" ;;
+              esac
+              rc=1; failed="$failed $t($s)"
+            fi
             echo "::endgroup::"
             ran=$((ran+1))
           done
@@ -236,7 +252,23 @@ jobs:
           for t in $SUITES; do
             [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
             echo "::group::$t"
-            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            # </dev/null: a suite must never inherit the job's stdin. One that
+            # lets a child prompt (ssh-keygen does) would otherwise block until
+            # the job timeout, or, in a `while read` runner, silently eat the
+            # rest of the suite list.
+            # The STATUS is reported, not just PASS/FAIL: 141 is SIGPIPE (a
+            # pipeline stage killed, NOT a failed assertion), 137 is the OOM
+            # killer, 124 the timeout. Without it every one of those looks
+            # exactly like a guard that legitimately went red.
+            if bash "$t" </dev/null; then echo "PASS $t"; else
+              s=$?; echo "FAIL($s) $t"
+              case "$s" in
+                141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
+                137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
+                124) echo "::warning::$t exited 124 — it hit the timeout" ;;
+              esac
+              rc=1; failed="$failed $t($s)"
+            fi
             echo "::endgroup::"
             ran=$((ran+1))
           done
@@ -296,7 +328,23 @@ jobs:
           for t in $SUITES; do
             [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
             echo "::group::$t"
-            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            # </dev/null: a suite must never inherit the job's stdin. One that
+            # lets a child prompt (ssh-keygen does) would otherwise block until
+            # the job timeout, or, in a `while read` runner, silently eat the
+            # rest of the suite list.
+            # The STATUS is reported, not just PASS/FAIL: 141 is SIGPIPE (a
+            # pipeline stage killed, NOT a failed assertion), 137 is the OOM
+            # killer, 124 the timeout. Without it every one of those looks
+            # exactly like a guard that legitimately went red.
+            if bash "$t" </dev/null; then echo "PASS $t"; else
+              s=$?; echo "FAIL($s) $t"
+              case "$s" in
+                141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
+                137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
+                124) echo "::warning::$t exited 124 — it hit the timeout" ;;
+              esac
+              rc=1; failed="$failed $t($s)"
+            fi
             echo "::endgroup::"
             ran=$((ran+1))
           done
@@ -350,7 +398,23 @@ jobs:
           for t in $SUITES; do
             [ -f "$t" ] || { echo "::error::listed suite does not exist: $t"; rc=1; failed="$failed $t(MISSING)"; continue; }
             echo "::group::$t"
-            if bash "$t"; then echo "PASS $t"; else echo "FAIL $t"; rc=1; failed="$failed $t"; fi
+            # </dev/null: a suite must never inherit the job's stdin. One that
+            # lets a child prompt (ssh-keygen does) would otherwise block until
+            # the job timeout, or, in a `while read` runner, silently eat the
+            # rest of the suite list.
+            # The STATUS is reported, not just PASS/FAIL: 141 is SIGPIPE (a
+            # pipeline stage killed, NOT a failed assertion), 137 is the OOM
+            # killer, 124 the timeout. Without it every one of those looks
+            # exactly like a guard that legitimately went red.
+            if bash "$t" </dev/null; then echo "PASS $t"; else
+              s=$?; echo "FAIL($s) $t"
+              case "$s" in
+                141) echo "::warning::$t exited 141 (SIGPIPE) — a pipeline stage was killed mid-write; this is NOT an assertion failure" ;;
+                137) echo "::warning::$t exited 137 (SIGKILL) — almost always the OOM killer on the runner" ;;
+                124) echo "::warning::$t exited 124 — it hit the timeout" ;;
+              esac
+              rc=1; failed="$failed $t($s)"
+            fi
             echo "::endgroup::"
             ran=$((ran+1))
           done

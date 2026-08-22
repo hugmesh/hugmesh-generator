@@ -2348,7 +2348,7 @@ SBP_NAMES=(sharedbinpkg-prebuild-target sharedbinpkg-per-board-pkgdir
 score_sharedbinpkg_smokes() {
     local n
     for n in "${SBP_NAMES[@]}"; do
-        if printf '%s' "${SMOKE_REPORT}" | grep -qx "  ${n}: PASS"; then
+        if printf '%s' "${SMOKE_REPORT}" | grep -x "  ${n}: PASS" >/dev/null; then
             SBP_PASS=$((SBP_PASS + 1))
         else
             SBP_FAIL=$((SBP_FAIL + 1))

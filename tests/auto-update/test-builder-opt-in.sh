@@ -64,7 +64,7 @@ grep -qE '^DEFAULT_SVCS\+=\(hugmesh-update\)' "${FRITE}" \
 # ── provision.sh wiring + opt-in shape ─────────────────────────────────────────
 has 'provision_update' "${PROV}" && ok "provision.sh: provision_update defined" || bad "provision_update missing"
 grep -qE '^\s*provision_update' "${PROV}" && grep -q 'main()' "${PROV}" \
-    && awk '/^main\(\)/{m=1} m&&/provision_update/{print "found"; exit}' "${PROV}" | grep -q found \
+    && awk '/^main\(\)/{m=1} m&&/provision_update/{print "found"; exit}' "${PROV}" | grep found >/dev/null \
     && ok "provision.sh: main() calls provision_update" || bad "main() does not call provision_update"
 # OPT-IN: provision_update must ALWAYS bake the cron plumbing — NO provision-time
 # disable branch (no `rm -f .../hugmesh-update`); the poller is the runtime gate.

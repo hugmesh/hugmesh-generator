@@ -163,7 +163,7 @@ runtime_mode() {
   local vault_args
   vault_args="$(kubectl -n vault get pods -l app.kubernetes.io/name=vault \
       -o jsonpath='{range .items[*].spec.containers[*]}{.args}{" "}{.command}{"\n"}{end}' 2>/dev/null || true)"
-  if printf '%s' "${vault_args}" | grep -qE '(^|[^a-z])-dev([^a-z]|$)'; then
+  if printf '%s' "${vault_args}" | grep -E '(^|[^a-z])-dev([^a-z]|$)' >/dev/null; then
     fail "the running Vault container is started with a -dev flag"
   else
     ok "running Vault container has no -dev flag"
@@ -177,8 +177,8 @@ runtime_mode() {
     # A real (prod) Vault uses recovery/seal shares >1 (Shamir) and is sealed at
     # rest before the unseal sidecar runs. A dev server reports n==1 && t==1 and
     # is never sealed. We only FLAG the unambiguous dev fingerprint.
-    if printf '%s' "${seal}" | grep -qE '"n"[[:space:]]*:[[:space:]]*1' \
-       && printf '%s' "${seal}" | grep -qE '"t"[[:space:]]*:[[:space:]]*1'; then
+    if printf '%s' "${seal}" | grep -E '"n"[[:space:]]*:[[:space:]]*1' >/dev/null \
+       && printf '%s' "${seal}" | grep -E '"t"[[:space:]]*:[[:space:]]*1' >/dev/null; then
       fail "live Vault seal-status reports a single in-memory share (n=t=1) — looks like a dev server"
     else
       ok "live Vault seal-status is not a dev fingerprint"
@@ -227,7 +227,7 @@ runtime_mode() {
       body="$(kubectl -n "${PROBE_NS}" run "prod-hygiene-seam-$$-${RANDOM}" --rm -i --restart=Never \
           --image=curlimages/curl:8.10.1 --quiet -- \
           -sk --max-time 5 "${target}" 2>/dev/null || true)"
-      if printf '%s' "${body}" | grep -qiE "\"${key}\"[[:space:]]*:[[:space:]]*\"(stub|disabled|noop|dev|placeholder)\""; then
+      if printf '%s' "${body}" | grep -iE "\"${key}\"[[:space:]]*:[[:space:]]*\"(stub|disabled|noop|dev|placeholder)\"" >/dev/null; then
         red   "  ✗ seam not flipped: ${target} reports ${key}=stub/disabled"
         echo "fail ${target}" >> "${TMPDIR:-/tmp}/prod-hygiene-seam-fails"
       else

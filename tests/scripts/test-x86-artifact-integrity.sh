@@ -215,7 +215,7 @@ grep -v '^[[:space:]]*#' "${TMPD}/shimblk" \
 grep -q -- '-extract EFI/BOOT/BOOTX64.EFI' "${TMPD}/shimblk-code" \
   && bad "the UPPERCASE extract is back — grub-mkrescue writes lowercase; this can never succeed" \
   || ok "the impossible uppercase -extract is gone"
-if grep -E 'xorriso .*-extract' "${TMPD}/shimblk-code" | grep -qE '2>/dev/null|\|\| true'; then
+if grep -E 'xorriso .*-extract' "${TMPD}/shimblk-code" | grep -E '2>/dev/null|\|\| true' >/dev/null; then
   bad "an xorriso extract still swallows its error (2>/dev/null / || true) — that hid the bug for 4 ISOs"
 else
   ok "xorriso extract failures now reach the log (checked on joined continuations)"

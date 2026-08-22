@@ -111,9 +111,9 @@ storage_verify_export "${WORK}/new.json" "${PUB_B64}" "${WORK}/lastgood5" \
 
 # ── 6. canonical bytes are byte-stable + carry the storage shape ──────────────
 canon="$(storage_canonical_bytes "${WORK}/good.json")"
-echo "${canon}" | grep -q "^node=fp-node-1$" && ok "canonical bytes carry node= header" || bad "missing node= header"
-echo "${canon}" | grep -q "pool=pool-1	disk=WWN-AAA	path=/mnt/pool-1" && ok "canonical bytes carry the tab-separated pool line" || bad "missing pool line"
-echo "${canon}" | grep -q "  assign=owncast	pvc=owncast-data	requested=4000" && ok "canonical bytes carry the indented assignment line" || bad "missing assignment line"
+echo "${canon}" | grep "^node=fp-node-1$" >/dev/null && ok "canonical bytes carry node= header" || bad "missing node= header"
+echo "${canon}" | grep "pool=pool-1	disk=WWN-AAA	path=/mnt/pool-1" >/dev/null && ok "canonical bytes carry the tab-separated pool line" || bad "missing pool line"
+echo "${canon}" | grep "  assign=owncast	pvc=owncast-data	requested=4000" >/dev/null && ok "canonical bytes carry the indented assignment line" || bad "missing assignment line"
 
 # ── 7. nodePathMap CAS-patch (extract the jq program from the agent) ──────────
 # The agent computes the new config with the jq under `.nodePathMap = ( ... )`. We replay

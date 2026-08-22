@@ -271,7 +271,7 @@ expect_red() {
         printf '%s\n' "${out}" | sed 's/^/         /'
         return
     fi
-    if [ -n "${want}" ] && ! printf '%s' "${out}" | grep -qF -- "${want}"; then
+    if [ -n "${want}" ] && ! printf '%s' "${out}" | grep -F -- "${want}" >/dev/null; then
         fail "${label} -> RED, but for the wrong reason (no finding matching '${want}')"
         printf '%s\n' "${out}" | sed 's/^/         /'
         return
@@ -293,7 +293,7 @@ expect_red_all() {
         return
     fi
     for want in "$@"; do
-        if ! printf '%s' "${out}" | grep -qF -- "${want}"; then
+        if ! printf '%s' "${out}" | grep -F -- "${want}" >/dev/null; then
             fail "${label} -> RED, but no finding matching '${want}'"
             printf '%s\n' "${out}" | sed 's/^/         /'
             return
@@ -602,7 +602,7 @@ s8b_end="$(grep -nxF "${S8B_CLOSE}" "${REPO}/${BK_REL}" | cut -d: -f1)"
 
 # The shape under test must actually BE in the block being wrapped.
 S8B_BRACE='|| { echo "neither external-secrets/vault-token'
-if sed -n "${s8b_start},${s8b_end}p" "${REPO}/${BK_REL}" | grep -qF -- "${S8B_BRACE}"; then
+if sed -n "${s8b_start},${s8b_end}p" "${REPO}/${BK_REL}" | grep -F -- "${S8B_BRACE}" >/dev/null; then
     ok "the wrapped block really contains the self-contained '|| { …; exit 1; }' of line ${s8b_start}..${s8b_end}"
 else
     fail "the wrapped block no longer contains a self-contained '{ … }' — §4d would be testing a simpler shape than production, which is exactly how this defect survived three rounds"
@@ -805,7 +805,7 @@ brace_dangling='opens a `{ … }` group that is never closed'
 # The real tree must be silent — this is the one that says the three shapes
 # above are genuinely closed and not merely re-labelled.
 real_out="$(python3 "${CHECKER}" "${REPO}" 2>&1)"
-if printf '%s' "${real_out}" | grep -qF -e "${brace_unmatched}" -e "${brace_dangling}"; then
+if printf '%s' "${real_out}" | grep -F -e "${brace_unmatched}" -e "${brace_dangling}" >/dev/null; then
     fail "the real repo has an unmatched brace the model cannot pair — every guard below it is unreliable"
     printf '%s\n' "${real_out}" | grep -F -e "${brace_unmatched}" -e "${brace_dangling}" | sed 's/^/         /'
 else
@@ -825,7 +825,7 @@ brace_probe() {   # brace_probe <label> <injected-text> <want>
         return
     fi
     out="$(python3 "${CHECKER}" "${REAL_ROOT}" 2>&1)"
-    if printf '%s' "${out}" | grep -qF -- "$3"; then
+    if printf '%s' "${out}" | grep -F -- "$3" >/dev/null; then
         ok "$1 -> reported as an unmatched brace"
     else
         fail "$1 -> the model absorbed it silently; a gate wrapped around this line would be cancelled without a word"

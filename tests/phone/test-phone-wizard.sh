@@ -1007,9 +1007,9 @@ MDM="${OUT}/device/${DEVID}/mdm.json"
 # mdm-enroll must tell the operator the device is only a HINT until a SUPERADMIN
 # confirms it managed — the spoof-proof trust boundary (self-report never makes
 # a phone lockable). The NEXT STEP must name the management endpoint + mode.
-printf '%s' "${OUT_TXT}" | grep -q 'SUPERADMIN must CONFIRM this device as managed' \
-    && printf '%s' "${OUT_TXT}" | grep -q 'phone-devices/'"${DEVID}"'/management' \
-    && printf '%s' "${OUT_TXT}" | grep -q 'mesh_owned' \
+printf '%s' "${OUT_TXT}" | grep 'SUPERADMIN must CONFIRM this device as managed' >/dev/null \
+    && printf '%s' "${OUT_TXT}" | grep 'phone-devices/'"${DEVID}"'/management' >/dev/null \
+    && printf '%s' "${OUT_TXT}" | grep 'mesh_owned' >/dev/null \
     && ok "(22) mdm-enroll prints the superadmin managed-confirmation NEXT STEP (trust boundary)" \
     || bad "(22) mdm-enroll NEXT STEP missing the managed-confirmation guidance"
 
@@ -1017,10 +1017,10 @@ printf '%s' "${OUT_TXT}" | grep -q 'SUPERADMIN must CONFIRM this device as manag
 # tier): a SUPERADMIN assigns physical_owner + owner_domain, grants ROLE_FLEET_ADMIN
 # and the fleet_entitlement so a non-superadmin owner manages ONLY their own phones
 # on the PUBLIC surface (owner+domain is the sole tenancy wall).
-printf '%s' "${OUT_TXT}" | grep -q 'hand this device to a FLEET OWNER' \
-    && printf '%s' "${OUT_TXT}" | grep -q 'phone-devices/'"${DEVID}"'/owner' \
-    && printf '%s' "${OUT_TXT}" | grep -q 'ROLE_FLEET_ADMIN' \
-    && printf '%s' "${OUT_TXT}" | grep -q 'fleet-entitlements/' \
+printf '%s' "${OUT_TXT}" | grep 'hand this device to a FLEET OWNER' >/dev/null \
+    && printf '%s' "${OUT_TXT}" | grep 'phone-devices/'"${DEVID}"'/owner' >/dev/null \
+    && printf '%s' "${OUT_TXT}" | grep 'ROLE_FLEET_ADMIN' >/dev/null \
+    && printf '%s' "${OUT_TXT}" | grep 'fleet-entitlements/' >/dev/null \
     && ok "(22) mdm-enroll prints the fleet-owner provisioning NEXT STEP (owner+entitlement)" \
     || bad "(22) mdm-enroll NEXT STEP missing the fleet-owner provisioning guidance"
 

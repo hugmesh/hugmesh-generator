@@ -150,14 +150,14 @@ for build in "${X86_BUILD}" "${PI_BUILD}"; do
     for s in "${REQUIRED_NET[@]}"; do
         # Word-boundary match so CONFIG_NF_NAT does not falsely satisfy
         # CONFIG_NF_NAT_MASQUERADE (substring), and vice-versa.
-        echo "${guard}" | grep -qwF "${s}" \
+        echo "${guard}" | grep -wF "${s}" >/dev/null \
             || { bad "$(basename "${build}") guard does NOT assert required symbol: ${s} (guard must cover the FULL fragment set, not a subset)"; gmiss=$((gmiss+1)); }
     done
     # The guard must actually FAIL the build (exit 1) on a missing symbol, and
     # name it as a k8s node kernel option in the error message.
-    echo "${guard}" | grep -qE 'k8s node kernel option .* not enabled after olddefconfig' \
+    echo "${guard}" | grep -E 'k8s node kernel option .* not enabled after olddefconfig' >/dev/null \
         || { bad "$(basename "${build}") has no fail-closed k8s-node-kernel guard message"; gmiss=$((gmiss+1)); }
-    echo "${guard}" | grep -q 'exit 1' || { bad "$(basename "${build}") guard does not exit 1"; gmiss=$((gmiss+1)); }
+    echo "${guard}" | grep 'exit 1' >/dev/null || { bad "$(basename "${build}") guard does not exit 1"; gmiss=$((gmiss+1)); }
     [ "${gmiss}" -eq 0 ] && ok "$(basename "${build}") guard asserts ALL ${#REQUIRED_NET[@]} required symbols post-olddefconfig (fail-closed, no subset gap)"
 done
 

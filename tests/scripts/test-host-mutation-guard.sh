@@ -53,7 +53,7 @@ if [ -f "${LIB}" ]; then
     # Fail-safe by construction: the predicate's fallthrough must be `return 1`
     # (= treat an unproven runtime as the operator's real machine).
     if awk '/^hostguard_in_container\(\)/{g=1} g{print} g&&/^}$/{exit}' "${LIB}" \
-         | grep -qE '^[[:space:]]*return 1$'; then
+         | grep -E '^[[:space:]]*return 1$' >/dev/null; then
         ok "lib: hostguard_in_container falls through to 'return 1' (fail safe)"
     else
         bad "lib: hostguard_in_container lost its fail-safe 'return 1' fallthrough"
@@ -62,7 +62,7 @@ if [ -f "${LIB}" ]; then
     # hugmesh-builder:latest — no "docker" substring. Relying on it would
     # declare the FLEET CONTAINER a host and brick every build. It must never
     # come back as a decision input.
-    if grep -vE '^[[:space:]]*#' "${LIB}" | grep -q '/proc/1/cgroup'; then
+    if grep -vE '^[[:space:]]*#' "${LIB}" | grep '/proc/1/cgroup' >/dev/null; then
         bad "lib: uses /proc/1/cgroup — mutation-proven dead (cgroup v2 '0::/' in the builder image)"
     else
         ok "lib: does not consult /proc/1/cgroup (proven dead heuristic)"
@@ -71,7 +71,7 @@ if [ -f "${LIB}" ]; then
     # hostguard_in_container itself honoured an env var, an env-forgeable path
     # into a host emerge would reopen the exact bug this library closes.
     if awk '/^hostguard_in_container\(\)/{g=1} g{print} g&&/^}$/{exit}' "${LIB}" \
-         | grep -vE '^[[:space:]]*#' | grep -q 'HUGMESH_ASSUME_CONTAINER'; then
+         | grep -vE '^[[:space:]]*#' | grep 'HUGMESH_ASSUME_CONTAINER' >/dev/null; then
         bad "lib: hostguard_in_container consults HUGMESH_ASSUME_CONTAINER (must be mutation_allowed only)"
     else
         ok "lib: HUGMESH_ASSUME_CONTAINER never reaches hostguard_in_container"
@@ -83,7 +83,7 @@ if [ -f "${LIB}" ]; then
     # forgeable; the file markers are runtime-created. Pin the arm out in BOTH
     # directions (static + behavioural, below) so it cannot be re-added unnoticed.
     if awk '/^hostguard_in_container\(\)/{g=1} g{print} g&&/^}$/{exit}' "${LIB}" \
-         | grep -vE '^[[:space:]]*#' | grep -qE '\$\{container|"\$container'; then
+         | grep -vE '^[[:space:]]*#' | grep -E '\$\{container|"\$container' >/dev/null; then
         bad "lib: hostguard_in_container consults the forgeable \$container env var (env must never authorize a host emerge)"
     else
         ok "lib: no \$container env arm in hostguard_in_container (env never authorizes mutation)"
@@ -101,7 +101,7 @@ if [ -f "${LIB}" ]; then
     # container and is a system-wide reconfiguration of a live desktop. The
     # native advice path must never print it. (Comments may discuss it; a LIVE
     # line that emits it is the bug.)
-    if grep -vE '^[[:space:]]*#' "${LIB}" | grep -qE '\*/\* PYTHON_TARGETS'; then
+    if grep -vE '^[[:space:]]*#' "${LIB}" | grep -E '\*/\* PYTHON_TARGETS' >/dev/null; then
         bad "lib: a LIVE line emits the '*/* PYTHON_TARGETS' wildcard — never advise this on a host"
     else
         ok "lib: never advises the '*/* PYTHON_TARGETS' wildcard on a host"
@@ -235,7 +235,7 @@ if [ -f "${DXC}" ]; then
     # Contract: the function must stay NON-FATAL (always return 0) — callers'
     # fail-fast preflights report the real problem at the right altitude.
     if awk '/^dracut_cross_register_qemu\(\)/{g=1} g{print} g&&/^}$/{exit}' "${DXC}" \
-         | grep -qE '^[[:space:]]*exit [0-9]'; then
+         | grep -E '^[[:space:]]*exit [0-9]' >/dev/null; then
         bad "_dracut-cross-lib.sh: register_qemu gained an exit — breaks its non-fatal contract"
     else
         ok "_dracut-cross-lib.sh: register_qemu stays non-fatal (no exit)"
@@ -322,10 +322,18 @@ done
 # The lib must actually implement --soft as NON-EXITING, or the flag is a lie.
 if [ -f "${LIB}" ]; then
     if awk '/^hostguard_require_host_tools\(\)/{g=1} g{print} g&&/^}$/{exit}' "${LIB}" \
-         | grep -vE '^[[:space:]]*#' | grep -qE '^[[:space:]]*if \[ "\$\{soft\}" -eq 1 \]; then$'; then
+         | grep -vE '^[[:space:]]*#' | grep -E '^[[:space:]]*if \[ "\$\{soft\}" -eq 1 \]; then$' >/dev/null; then
         ok "lib: hostguard_require_host_tools implements a non-exiting --soft branch"
     else
         bad "lib: --soft branch is gone — soft sites would exit and kill working builds"
+        # Same reason as tests/stack/test-no-store-posture.sh's conf_diag: this
+        # assertion went red once on a hosted runner and green on a re-run, and
+        # the message alone could not say whether the extraction came back empty
+        # or the text really was gone. See issue #151.
+        printf '           [diag] %s: %s line(s); awk-extracted body: %s line(s); direct hits for the soft branch: %s\n' \
+            "${LIB}" "$(wc -l < "${LIB}" 2>/dev/null)" \
+            "$(awk '/^hostguard_require_host_tools\(\)/{g=1} g{print} g&&/^}$/{exit}' "${LIB}" | wc -l)" \
+            "$(grep -c 'soft.*-eq 1' "${LIB}" 2>/dev/null)"
     fi
 fi
 

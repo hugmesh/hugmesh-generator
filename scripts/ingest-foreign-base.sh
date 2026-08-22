@@ -412,7 +412,7 @@ ingest_foreign_base() {
     case "${tabs}/" in "${b_abs}"/*) : ;; *) _fib_reject "escaping symlink in foreign tree: ${l#$build/} -> ${ltar}"; return 1 ;; esac
   done < <(find "$build" -type l -print0 2>/dev/null)
   # Hardlinks (regular files with link count > 1) — reject defensively.
-  if find "$build" -type f -links +1 2>/dev/null | head -n1 | grep -q .; then
+  if find "$build" -type f -links +1 2>/dev/null | head -n1 | grep . >/dev/null; then
     _fib_reject "hardlink(s) present in foreign tree — refusing"; return 1
   fi
 
@@ -470,7 +470,7 @@ ingest_foreign_base() {
     rm -f "$pub_pem" 2>/dev/null
     _fib_reject "trust-store key for '${MESH_ID}' is not base64 SPKI DER of an Ed25519 PUBLIC key (placeholder/private/garbage) — fail-closed"; return 1
   fi
-  if ! openssl pkey -pubin -in "$pub_pem" -noout -text 2>/dev/null | grep -qi 'ED25519'; then
+  if ! openssl pkey -pubin -in "$pub_pem" -noout -text 2>/dev/null | grep -i 'ED25519' >/dev/null; then
     rm -f "$pub_pem" 2>/dev/null
     _fib_reject "trust-store key for '${MESH_ID}' is not Ed25519 — fail-closed"; return 1
   fi
@@ -548,7 +548,7 @@ ingest_foreign_base() {
     fver="$(printf '%s\n' "$fl" | awk '{print $2}')"
     fsev="$(printf '%s\n' "$fl" | awk '{print toupper($3)}')"
     [ "$fsev" = "CRITICAL" ] || continue
-    if printf '%s\n' "$comp_list" | grep -qxF "${fname}@${fver}"; then
+    if printf '%s\n' "$comp_list" | grep -xF "${fname}@${fver}" >/dev/null; then
       crit="${fname}@${fver}"
       break
     fi

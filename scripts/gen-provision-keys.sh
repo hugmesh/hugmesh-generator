@@ -449,7 +449,7 @@ PY
         local f="$1" src="$2"
         if ! base64 -d "${f}" 2>/dev/null \
                 | openssl pkey -pubin -inform DER -noout -text 2>/dev/null \
-                | grep -qi 'ED25519'; then
+                | grep -i 'ED25519' >/dev/null; then
             echo "ERROR: ${src} does not parse as an Ed25519 PUBLIC key" >&2
             echo "       (expected PEM 'BEGIN PUBLIC KEY' or base64 X.509 SPKI DER; NEVER a private key)" >&2
             rm -f "${f}"
@@ -516,7 +516,7 @@ if [ -n "${FOREIGN_MESH_TRUST_SRC}" ]; then
         [ -f "${fmt_key}" ] || continue
         fmt_name="$(basename "${fmt_key}")"
         fmt_mesh="${fmt_name%.ed25519.pub}"
-        if ! printf '%s' "${fmt_mesh}" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; then
+        if ! printf '%s' "${fmt_mesh}" | grep -E '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' >/dev/null; then
             echo "ERROR: foreign-mesh trust key '${fmt_name}': mesh id '${fmt_mesh}' is not a DNS label" >&2
             rm -rf "${FMT_DIR}"
             exit 1
@@ -538,7 +538,7 @@ if [ -n "${FOREIGN_MESH_TRUST_SRC}" ]; then
         # garbage key fails here too — ABORT rather than stage a broken verifier.
         if ! base64 -d "${fmt_dest}" 2>/dev/null \
                 | openssl pkey -pubin -inform DER -noout -text 2>/dev/null \
-                | grep -qi 'ED25519'; then
+                | grep -i 'ED25519' >/dev/null; then
             echo "ERROR: foreign-mesh trust key '${fmt_name}' does not parse as an Ed25519 PUBLIC key" >&2
             echo "       (expected PEM 'BEGIN PUBLIC KEY' or base64 X.509 SPKI DER; NEVER a private key)" >&2
             rm -rf "${FMT_DIR}"

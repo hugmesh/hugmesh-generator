@@ -211,7 +211,7 @@ fi
 has "https://localhost:47990" && has "Files" && has "tailnet name" \
     && ok "A5 pairing + Headwind app-push runbook printed (PIN at loopback web UI; configuration Files push)" \
     || bad "A5 runbook missing pieces"
-grep -c 'APKSIGNER' "${LOGD}/apksigner.log" | grep -qx '2' \
+grep -c 'APKSIGNER' "${LOGD}/apksigner.log" | grep -x '2' >/dev/null \
     && ok "A6 apksigner verified BOTH pinned APKs (Headwind + Moonlight)" \
     || bad "A6 apksigner call count wrong: $(grep -c APKSIGNER "${LOGD}/apksigner.log")"
 

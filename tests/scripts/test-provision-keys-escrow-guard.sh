@@ -46,7 +46,7 @@ set +e
 LOG_A="$(cd "${REPO}" && "${GPK}" -o "${OUT_A}" 2>&1)"
 RC_A=$?
 set -e
-if [ "${RC_A}" -eq 1 ] && printf '%s' "${LOG_A}" | grep -q "refusing to delete"; then
+if [ "${RC_A}" -eq 1 ] && printf '%s' "${LOG_A}" | grep "refusing to delete" >/dev/null; then
     ok "(a) foreign escrow → exit 1 with a refusing-to-delete error"
 else
     bad "(a) expected exit 1 + refusal, got rc=${RC_A}: $(printf '%s' "${LOG_A}" | head -3)"
@@ -57,7 +57,7 @@ if [ -f "${OUT_A}/vault-seed/device/pixel-1/enterprise-profile.pass" ] \
 else
     bad "(a2) the escrowed file was destroyed or altered"
 fi
-if printf '%s' "${LOG_A}" | grep -q "enterprise-profile.pass"; then
+if printf '%s' "${LOG_A}" | grep "enterprise-profile.pass" >/dev/null; then
     ok "(a3) the refusal names the offending file"
 else
     bad "(a3) refusal does not name the offending file"
@@ -78,7 +78,7 @@ set +e
 LOG_B="$(cd "${REPO}" && timeout 60 "${GPK}" -o "${OUT_B}" 2>&1)"
 RC_B=$?
 set -e
-if printf '%s' "${LOG_B}" | grep -q "==> Building"; then
+if printf '%s' "${LOG_B}" | grep "==> Building" >/dev/null; then
     ok "(b) own regenerable files only → guard passes (rebuild proceeds)"
 else
     bad "(b) guard blocked a legitimate rerun (rc=${RC_B}): $(printf '%s' "${LOG_B}" | head -3)"
@@ -90,7 +90,7 @@ set +e
 LOG_C="$(cd "${REPO}" && timeout 60 "${GPK}" -o "${OUT_C}" 2>&1)"
 RC_C=$?
 set -e
-if printf '%s' "${LOG_C}" | grep -q "==> Building"; then
+if printf '%s' "${LOG_C}" | grep "==> Building" >/dev/null; then
     ok "(c) fresh OUT_DIR → guard passes"
 else
     bad "(c) guard misfired on a fresh OUT_DIR (rc=${RC_C}): $(printf '%s' "${LOG_C}" | head -3)"

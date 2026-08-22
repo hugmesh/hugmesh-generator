@@ -63,13 +63,13 @@ FORBIDDEN='preferred_username|preferredUsername|PreferredUsername|DisplayName'
 FIELDS_BLOCK="$(awk '/JWT_CUSTOM_TOKEN_FIELDS[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f&&/\]/{f=0}' "${INIT_JOB}")"
 if [ -z "${FIELDS_BLOCK}" ]; then
   bad "could not locate the JWT_CUSTOM_TOKEN_FIELDS = [ ... ] block in init-job.yaml"
-elif printf '%s\n' "${FIELDS_BLOCK}" | grep -qiE "${FORBIDDEN}"; then
+elif printf '%s\n' "${FIELDS_BLOCK}" | grep -iE "${FORBIDDEN}" >/dev/null; then
   bad "JWT_CUSTOM_TOKEN_FIELDS names a preferred_username-shaped field -> re-opens the user-bff PR #124 takeover vector:"
   printf '%s\n' "${FIELDS_BLOCK}" | grep -niE "${FORBIDDEN}" | sed 's/^/         /'
 else
   ok "JWT_CUSTOM_TOKEN_FIELDS carries no preferred_username/DisplayName field"
   # Positive assertion: `Name` IS the identity field in the allow-list.
-  if printf '%s\n' "${FIELDS_BLOCK}" | grep -qE '"Name"'; then
+  if printf '%s\n' "${FIELDS_BLOCK}" | grep -E '"Name"' >/dev/null; then
     ok "JWT_CUSTOM_TOKEN_FIELDS carries the Name identity field (emits the name claim)"
   else
     bad "JWT_CUSTOM_TOKEN_FIELDS is missing the \"Name\" identity field — allow-list shape changed"
@@ -83,7 +83,7 @@ fi
 ATTRS_BLOCK="$(awk '/JWT_CUSTOM_TOKEN_ATTRIBUTES[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f&&/\]/{f=0}' "${INIT_JOB}")"
 if [ -z "${ATTRS_BLOCK}" ]; then
   bad "could not locate the JWT_CUSTOM_TOKEN_ATTRIBUTES = [ ... ] block in init-job.yaml"
-elif printf '%s\n' "${ATTRS_BLOCK}" | grep -qiE "${FORBIDDEN}"; then
+elif printf '%s\n' "${ATTRS_BLOCK}" | grep -iE "${FORBIDDEN}" >/dev/null; then
   bad "JWT_CUSTOM_TOKEN_ATTRIBUTES adds a preferred_username-shaped claim:"
   printf '%s\n' "${ATTRS_BLOCK}" | grep -niE "${FORBIDDEN}" | sed 's/^/         /'
 else

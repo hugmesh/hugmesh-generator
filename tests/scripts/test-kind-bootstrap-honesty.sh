@@ -965,7 +965,7 @@ GSTUB
   applied="$(cat "${GT}/log" 2>/dev/null || true)"
   if [ "${rc}" != "0" ]; then
     bad "REGRESSION: an already-initialized Vault (no external-secrets/vault-token, vault/vault-bootstrap present) aborts the bring-up with exit ${rc} instead of falling back"
-  elif ! printf '%s' "${applied}" | grep -q 'namespace: external-secrets'; then
+  elif ! printf '%s' "${applied}" | grep 'namespace: external-secrets' >/dev/null; then
     bad "the fallback ran but never restored external-secrets/vault-token — the ClusterSecretStore stays unauthenticated"
   else
     n="$(printf '%s' "${applied}" | grep -c 'name: vault-ca' || true)"

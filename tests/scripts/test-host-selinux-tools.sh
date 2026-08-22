@@ -75,10 +75,10 @@ if [ -f "${DOCKERFILE}" ]; then
     # FINAL-stage emerge: extract the last 'RUN emerge --verbose --noreplace'
     # block (backslash-continued) and require both packages in it.
     EMERGE_BLOCK="$(awk '/^RUN emerge --verbose --noreplace/{grab=1} grab{print; if ($0 !~ /\\$/) grab=0}' "${DOCKERFILE}")"
-    printf '%s' "${EMERGE_BLOCK}" | grep -q 'sys-libs/libselinux' \
+    printf '%s' "${EMERGE_BLOCK}" | grep 'sys-libs/libselinux' >/dev/null \
         && ok "Dockerfile.build: FINAL-stage emerge installs sys-libs/libselinux" \
         || bad "Dockerfile.build: FINAL-stage emerge lost sys-libs/libselinux"
-    printf '%s' "${EMERGE_BLOCK}" | grep -q 'sys-apps/policycoreutils' \
+    printf '%s' "${EMERGE_BLOCK}" | grep 'sys-apps/policycoreutils' >/dev/null \
         && ok "Dockerfile.build: FINAL-stage emerge installs sys-apps/policycoreutils" \
         || bad "Dockerfile.build: FINAL-stage emerge lost sys-apps/policycoreutils"
 else

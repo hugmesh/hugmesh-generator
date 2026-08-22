@@ -169,7 +169,7 @@ validate_external_ca() {
     echo "WARNING: provided CA certificate is expired (${cert}); proceeding anyway." >&2
   fi
   # basicConstraints CA:TRUE is expected for a CA, but some private CAs omit it.
-  if ! openssl x509 -in "${cert}" -noout -ext basicConstraints 2>/dev/null | grep -qi 'CA:TRUE'; then
+  if ! openssl x509 -in "${cert}" -noout -ext basicConstraints 2>/dev/null | grep -i 'CA:TRUE' >/dev/null; then
     echo "WARNING: provided CA cert lacks basicConstraints CA:TRUE; using it anyway." >&2
   fi
   # Load the key (CA_KEY_PASS via env:, never on the command line / argv).

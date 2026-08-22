@@ -87,7 +87,7 @@ SELFTEST_GOOD=(
 match_any(){ # match_any LINE -> 0 if any pattern fires
   local line="$1" pat
   for pat in "${P_CREATE}" "${P_SVCS}" "${P_RCUP}" "${P_RLVL}"; do
-    printf '%s\n' "${line}" | grep -qE "${pat}" && return 0
+    printf '%s\n' "${line}" | grep -E "${pat}" >/dev/null && return 0
   done
   return 1
 }

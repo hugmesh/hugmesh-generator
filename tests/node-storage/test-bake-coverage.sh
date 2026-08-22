@@ -283,7 +283,7 @@ check_tree() {
         ( set -uo pipefail; source "${LIB}"; bake_node_storage "${SB}" "${T}/specs" ) >/dev/null 2>&1
         printf '{"hostname":"sandbox-node"}\n' > "${SB}/run/keys/provision.json"
         KEYS_PREMOUNTED=1 ps_run "${SB}"
-        if ps_log "${SB}" rc-update | grep -q '^add hugmesh-node-storage-reconcile default$'; then
+        if ps_log "${SB}" rc-update | grep '^add hugmesh-node-storage-reconcile default$' >/dev/null; then
             ok "[enable-effect] provision.sh rc-update'd the boot oneshot into the default runlevel"
         else
             bad "[enable-effect] rc-update was NEVER CALLED for hugmesh-node-storage-reconcile (dead enable; recorded: $(ps_log "${SB}" rc-update | tr '\n' ',')) "

@@ -222,7 +222,7 @@ YAML
   printf '%s\n' "$e_out" | sed 's/^/    /'
   echo "    exit=$e3"
   local e_rule=1
-  printf '%s\n' "$e_out" | grep -q ' high-entropy: ' || e_rule=0
+  printf '%s\n' "$e_out" | grep ' high-entropy: ' >/dev/null || e_rule=0
 
   echo ""
   if [[ "$r1" -eq 0 && "$r2" -eq 1 && "$e3" -eq 1 && "$e_rule" -eq 1 ]]; then

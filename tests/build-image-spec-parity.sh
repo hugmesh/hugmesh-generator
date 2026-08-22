@@ -171,7 +171,7 @@ case_parity() {
     echo "  [$name] --cluster-domain not server-derived: last='$cd_last' (want '$DOMAIN')"
     ok=0
   fi
-  if ! printf '%s\n' "${actual[@]}" | grep -qx "$SPEC_DOMAIN"; then
+  if ! printf '%s\n' "${actual[@]}" | grep -x "$SPEC_DOMAIN" >/dev/null; then
     echo "  [$name] spec cluster_domain '$SPEC_DOMAIN' absent — override test is not meaningful"
     ok=0
   fi
@@ -195,7 +195,7 @@ case_parity() {
   fi
 
   # 5. the correct builder script is present.
-  if ! printf '%s\n' "${actual[@]}" | grep -q "build-.*stage4.sh"; then
+  if ! printf '%s\n' "${actual[@]}" | grep "build-.*stage4.sh" >/dev/null; then
     echo "  [$name] no generator build script token in the assembled command"
     ok=0
   fi

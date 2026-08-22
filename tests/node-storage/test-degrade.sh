@@ -52,10 +52,10 @@ is_mounted() { case "$1" in /mnt/up) return 0;; *) return 1;; esac; }
 degraded_ids="$(detect_degraded_pools "${WORK}/export.json")"; rc=$?
 
 # pool-down flagged degraded; pool-up not.
-echo "${degraded_ids}" | grep -q "pool-down" \
+echo "${degraded_ids}" | grep "pool-down" >/dev/null \
     && ok "mount-lost pool (pool-down) flagged DEGRADED" \
     || bad "pool-down should be flagged degraded (got: ${degraded_ids})"
-echo "${degraded_ids}" | grep -q "pool-up" \
+echo "${degraded_ids}" | grep "pool-up" >/dev/null \
     && bad "pool-up (mounted) must NOT be flagged degraded" \
     || ok "mounted pool (pool-up) NOT flagged (still applied)"
 

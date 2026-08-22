@@ -48,14 +48,14 @@ OUT="${W}/out"
 LOG="$(bash "${GEN}" "${OUT}" --ca-cert "${CADIR}/root.crt" --ca-key "${CADIR}/root.key" 2>&1)"
 [ $? -eq 0 ] && ok "generator exits 0 with external CA" || { bad "generator failed: ${LOG}"; }
 
-echo "${LOG}" | grep -q "Using PROVIDED external CA" && ok "announced external-CA issuer path" || bad "did not announce external CA"
+echo "${LOG}" | grep "Using PROVIDED external CA" >/dev/null && ok "announced external-CA issuer path" || bad "did not announce external CA"
 
 # Provided CA published as the trust anchor, source untouched, key not leaked.
 if cmp -s "${CADIR}/root.crt" "${OUT}/certs/cluster-ca.crt"; then ok "published cluster-ca.crt == provided CA"; else bad "cluster-ca.crt != provided CA"; fi
 [ ! -f "${OUT}/certs/cluster-ca.key" ] && ok "CA private key NOT written into output dir" || bad "CA key leaked into output dir"
 [ "$(sha256sum "${CADIR}/root.crt" | cut -d' ' -f1)" = "${CRT_SHA_BEFORE}" ] && ok "source CA cert untouched" || bad "source CA cert modified"
 [ "$(sha256sum "${CADIR}/root.key" | cut -d' ' -f1)" = "${KEY_SHA_BEFORE}" ] && ok "source CA key untouched" || bad "source CA key modified"
-echo "${LOG}" | grep -qc 'BEGIN .*PRIVATE KEY' && [ "$(echo "${LOG}" | grep -c 'BEGIN .*PRIVATE KEY')" -eq 0 ] 2>/dev/null
+echo "${LOG}" | grep -c 'BEGIN .*PRIVATE KEY' >/dev/null && [ "$(echo "${LOG}" | grep -c 'BEGIN .*PRIVATE KEY')" -eq 0 ] 2>/dev/null
 [ "$(echo "${LOG}" | grep -c 'BEGIN .*PRIVATE KEY')" -eq 0 ] && ok "no PEM key material in output" || bad "key material in output"
 
 # ── Every leaf chains to + is issued by the PROVIDED CA ────────────
@@ -65,7 +65,7 @@ for svc in "${EXPECT[@]}"; do
   [ -f "${ks}" ] || { bad "${svc}: keystore missing"; continue; }
   keytool -exportcert -keystore "${ks}" -storepass "$(pw "${PWJSON}" "${svc}")" -alias "${svc}" -rfc 2>/dev/null > "${W}/leaf.pem"
   if openssl verify -CAfile "${CADIR}/root.crt" "${W}/leaf.pem" >/dev/null 2>&1; then ok "${svc}: verifies against PROVIDED CA"; else bad "${svc}: does NOT verify against provided CA"; fi
-  openssl x509 -in "${W}/leaf.pem" -noout -issuer 2>/dev/null | grep -q "${CA_CN}" && ok "${svc}: issuer = provided CA CN" || bad "${svc}: wrong issuer"
+  openssl x509 -in "${W}/leaf.pem" -noout -issuer 2>/dev/null | grep "${CA_CN}" >/dev/null && ok "${svc}: issuer = provided CA CN" || bad "${svc}: wrong issuer"
 done
 
 # ── Truststore bundles the provided CA ─────────────────────────────
@@ -79,12 +79,12 @@ cafp="$(openssl x509 -in "${CADIR}/root.crt" -noout -fingerprint -sha256 2>/dev/
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${CADIR}/wrong.key" 2>/dev/null
 MLOG="$(bash "${GEN}" "${W}/out-mismatch" --ca-cert "${CADIR}/root.crt" --ca-key "${CADIR}/wrong.key" 2>&1)"; mrc=$?
 [ "${mrc}" -ne 0 ] && ok "mismatch exits non-zero (rc=${mrc})" || bad "mismatch did not fail"
-echo "${MLOG}" | grep -q "does not match" && ok "mismatch prints a clear error" || bad "mismatch error unclear"
+echo "${MLOG}" | grep "does not match" >/dev/null && ok "mismatch prints a clear error" || bad "mismatch error unclear"
 [ "$(echo "${MLOG}" | grep -c 'BEGIN .*PRIVATE KEY')" -eq 0 ] && ok "no key material on mismatch" || bad "key material on mismatch"
 
 # ── 3) Negative: only one of the pair -> 'provide BOTH' ────────────
 OLOG="$(bash "${GEN}" "${W}/out-one" --ca-cert "${CADIR}/root.crt" 2>&1)"; orc=$?
-[ "${orc}" -ne 0 ] && echo "${OLOG}" | grep -q "provide BOTH" && ok "single-half input -> 'provide BOTH' error" || bad "single-half input not rejected"
+[ "${orc}" -ne 0 ] && echo "${OLOG}" | grep "provide BOTH" >/dev/null && ok "single-half input -> 'provide BOTH' error" || bad "single-half input not rejected"
 
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

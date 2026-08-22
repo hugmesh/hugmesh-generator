@@ -66,10 +66,10 @@ chmod +x "${TMP}/bin/ausearch"
 out="$(PATH="${TMP}/bin:${PATH}" AVC_REPORT_GUEST="${TMP}/avc-report.txt" \
        KEYS_LABEL="VERDICTTEST-NO-SUCH-LABEL" \
        bash -s < "${ASSERTIONS}" 2>&1 || true)"
-echo "${out}" | grep -q '== RESULT: [0-9]* passed, [0-9]* failed ==' \
+echo "${out}" | grep '== RESULT: [0-9]* passed, [0-9]* failed ==' >/dev/null \
     && _ok "RESULT line survives a stdin-draining ausearch (streamed via bash -s)" \
     || _bad "RESULT line was swallowed — the 2026-08-19 false-PASS defect is back"
-echo "${out}" | grep -q -- '-- AVC HARVEST BEGIN --' \
+echo "${out}" | grep -- '-- AVC HARVEST BEGIN --' >/dev/null \
     && _ok "harvest section still runs (fix redirects stdin, does not skip it)" \
     || _bad "harvest section missing entirely"
 
@@ -100,10 +100,10 @@ run_verdict() { # run_verdict ARC ATTEMPTS LOGCONTENT... -> emits recorded emit_
 # THE defect: ssh exited 0 but the log is truncated mid-run (real FAILs, no
 # RESULT line) — must be a FAIL verdict, and ARC must turn nonzero.
 got="$(run_verdict 0 1 '  PASS  something' '  FAIL  something else' '-- AVC harvest (data, not verdicts) --')"
-echo "${got}" | grep -q '^FAIL|assertions did not complete (no RESULT line)' \
+echo "${got}" | grep '^FAIL|assertions did not complete (no RESULT line)' >/dev/null \
     && _ok "ARC=0 without a RESULT line is graded FAIL with the named detail" \
     || _bad "ARC=0 without a RESULT line was not FAILed (got: ${got})"
-echo "${got}" | grep -q '^ARC=1$' \
+echo "${got}" | grep '^ARC=1$' >/dev/null \
     && _ok "…and the container's exit code turns nonzero" \
     || _bad "…but ARC stayed 0, so the container still exits green"
 
@@ -116,12 +116,12 @@ eq "$(echo "${got}" | head -1)" "FAIL|assertions failed|30|3" \
    "rc=1 with a RESULT line is the ordinary FAIL, counts preserved"
 
 got="$(run_verdict 124 1 'partial output only')"
-echo "${got}" | grep -q '^FAIL|assertion ssh exceeded its 900s wall clock; killed' \
+echo "${got}" | grep '^FAIL|assertion ssh exceeded its 900s wall clock; killed' >/dev/null \
     && _ok "rc=124 is reported as the hang it is" \
     || _bad "rc=124 not graded as a timeout (got: ${got})"
 
 got="$(run_verdict 255 3 'Connection timed out during banner exchange')"
-echo "${got}" | grep -q '^FAIL|assertion ssh could not connect (ssh attempts: 3)' \
+echo "${got}" | grep '^FAIL|assertion ssh could not connect (ssh attempts: 3)' >/dev/null \
     && _ok "rc=255 after retries names the transport and records the attempt count" \
     || _bad "rc=255 detail wrong (got: ${got})"
 

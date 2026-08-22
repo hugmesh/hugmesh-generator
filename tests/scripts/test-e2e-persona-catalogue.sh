@@ -103,7 +103,7 @@ else
     missing=""
     while read -r p; do
       [ -n "${p}" ] || continue
-      echo "${with}" | grep -qxF "${p}" || missing="${missing} ${p}"
+      echo "${with}" | grep -xF "${p}" >/dev/null || missing="${missing} ${p}"
     done <<< "$(printf '%s\n' "${EXTRA_LIST}" | names)"
     if [ -n "${missing}" ]; then
       bad "personas defined in the shared file never reach the kind catalogue:${missing}"
@@ -170,7 +170,7 @@ if [ "${CHILD}" = no ]; then
   else
     bad "anti-rot: only ${n_extra} personas in the shared file — the list has been gutted, or this guard is reading the wrong thing"
   fi
-  if ( . "${EXTRAS}"; printf '%s\n' "${E2E_EXTRA_PERSONAS}" ) | grep -q 'e2e-fleet:ROLE_FLEET_ADMIN'; then
+  if ( . "${EXTRAS}"; printf '%s\n' "${E2E_EXTRA_PERSONAS}" ) | grep 'e2e-fleet:ROLE_FLEET_ADMIN' >/dev/null; then
     ok "anti-rot: e2e-fleet is still a PURE fleet owner (the persona whose absence started this, and whose ROLE_ADMIN would make spec 29 vacuous)"
   else
     bad "anti-rot: e2e-fleet is missing or no longer ROLE_FLEET_ADMIN-without-ROLE_ADMIN — spec 29's gateway MFA leg goes vacuous"

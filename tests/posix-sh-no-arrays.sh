@@ -45,7 +45,7 @@ PAT_BUILTIN='(^|[[:space:];&|{(])(declare|typeset)[[:space:]]+-[aA]|(^|[[:space:
 
 # is_sh_shebang FILE — first line is a POSIX-sh shebang (not bash/zsh/...).
 is_sh_shebang() {
-  head -n1 -- "$1" 2>/dev/null | grep -qE '^#![[:space:]]*(/bin/sh|/usr/bin/env[[:space:]]+sh)([[:space:]]|$)'
+  head -n1 -- "$1" 2>/dev/null | grep -E '^#![[:space:]]*(/bin/sh|/usr/bin/env[[:space:]]+sh)([[:space:]]|$)' >/dev/null
 }
 
 # scan_one FILE — echo offending "line:content" hits with REAL file line numbers
