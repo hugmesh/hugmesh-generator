@@ -453,6 +453,52 @@ done
     && ok "C3c every /usr/sbin exec rule also labels the /usr/bin path it resolves to" \
     || bad "C3c /usr/sbin rule(s) with no /usr/bin sibling — the domain can never be entered:${orphans}"
 
+# C3d: A RELABEL THAT CHANGED NOTHING MUST NOT COUNT AS A RELABEL.
+# setfiles/restorecon exit 0 when they no-op and provision_selinux() runs both
+# under 2>/dev/null, so exit status alone says nothing. Measured on
+# hugmesh-x86-amd64-pki-test-20260814T112817Z: "Relabelling filesystem (this can
+# take a while)" and the "SELinux configured" line that follows it carried the
+# SAME timestamp on a 15 GB rootfs, /.autorelabel was consumed, and every file
+# was still unlabeled_t with all 116 processes running as kernel_t. The
+# enforce-gate's check_relabel_clean() had nothing to object to, because the flag
+# it keys on had already been removed.
+#
+# Driven with a STUBBED restorecon so this is behaviour, not a grep for the
+# block's source text.
+echo "-- C3d) a no-op relabel is detected and re-raises /.autorelabel --"
+PROV="${GEN}/specs/etc/keys-provision/provision.sh"
+if [ ! -f "${PROV}" ]; then
+    bad "C3d provision.sh not found at ${PROV}"
+else
+    C3D="${TMP}/c3d"; mkdir -p "${C3D}/bin"
+    { echo '#!/usr/bin/env bash'
+      echo 'have(){ command -v "$1" >/dev/null 2>&1; }'
+      echo 'warn(){ echo "WARN: $*"; }'
+      echo 'relabel_ok=1'
+      sed -n '/POSTCONDITION: a relabel that changed nothing/,/^    fi$/p' "${PROV}" | head -32
+      echo 'echo "relabel_ok=${relabel_ok}"'
+    } > "${C3D}/harness.sh"
+    if ! grep -q 'relabel_ok=0' "${C3D}/harness.sh"; then
+        bad "C3d the relabel postcondition is not in provision.sh — a no-op relabel would pass silently"
+        bad "C3d (clean-relabel case skipped: no postcondition to exercise)"
+    else
+        # restorecon still wants to change things => the relabel did not happen
+        printf '#!/bin/sh\necho "Would relabel /bin/sh"\n' > "${C3D}/bin/restorecon"
+        chmod +x "${C3D}/bin/restorecon"
+        o="$(PATH="${C3D}/bin:${PATH}" bash "${C3D}/harness.sh" 2>&1)"
+        printf '%s' "${o}" | grep -q 'relabel_ok=0' \
+            && ok "C3d a relabel that left work pending is treated as FAILED (so /.autorelabel is re-raised)" \
+            || bad "C3d a no-op relabel was accepted as success: ${o}"
+        # restorecon has nothing to do => a real relabel happened
+        printf '#!/bin/sh\nexit 0\n' > "${C3D}/bin/restorecon"
+        chmod +x "${C3D}/bin/restorecon"
+        o="$(PATH="${C3D}/bin:${PATH}" bash "${C3D}/harness.sh" 2>&1)"
+        printf '%s' "${o}" | grep -q 'relabel_ok=1' \
+            && ok "C3d a genuinely clean relabel still passes (the check is not always-red)" \
+            || bad "C3d a clean relabel was rejected: ${o}"
+    fi
+fi
+
 # C4-C6: THE PERMISSIVE-BY-DEFAULT PROOF.
 [ -x "${S}/etc/init.d/selinux-enforce-gate" ] \
     && ok "enforce-gate service shipped executable into /etc/init.d" \

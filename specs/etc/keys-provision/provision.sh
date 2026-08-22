@@ -2870,6 +2870,36 @@ EOF
     # FAILED relabel, raise it instead: the labels on disk cannot be trusted,
     # and the still-present flag is exactly the "a relabel is still owed"
     # signal the enforce-gate refuses on.
+    # POSTCONDITION: a relabel that changed nothing is a relabel that did not run.
+    # setfiles/restorecon exit 0 when they no-op, so "it returned success" is not
+    # evidence that anything was labelled — and both invocations above are
+    # `2>/dev/null`, so whatever they complained about is gone.
+    #
+    # Measured on hugmesh-x86-amd64-pki-test-20260814T112817Z: this block logged
+    # "Relabelling filesystem (this can take a while)" and the "SELinux configured"
+    # line that follows it in the SAME SECOND on a 15 GB rootfs, consumed
+    # /.autorelabel, and left every file unlabeled_t with all 116 processes still
+    # running as kernel_t. The enforce-gate's check_relabel_clean() then had
+    # nothing to object to, because the flag it keys on had been removed.
+    #
+    # So ask the question check_relabel_clean() asks, on a few cheap probes
+    # instead of a second full-tree walk: if restorecon STILL wants to change
+    # these, no relabel happened, whatever the exit status said.
+    if [ "${relabel_ok}" = 1 ] && have restorecon; then
+        _relabel_pending=""
+        for _relabel_probe in /bin/sh /etc/passwd /usr/bin; do
+            [ -e "${_relabel_probe}" ] || continue
+            if [ -n "$(restorecon -nv "${_relabel_probe}" 2>/dev/null)" ]; then
+                _relabel_pending="${_relabel_pending} ${_relabel_probe}"
+            fi
+        done
+        if [ -n "${_relabel_pending}" ]; then
+            relabel_ok=0
+            warn "relabel reported success but restorecon still wants to relabel:${_relabel_pending}"
+            warn "  -> the filesystem was NOT labelled. Every domain transition depends on"
+            warn "     file labels, so SELinux confinement would be inert on this node."
+        fi
+    fi
     if [ "${relabel_ok}" = 1 ]; then
         rm -f /.autorelabel
     else
