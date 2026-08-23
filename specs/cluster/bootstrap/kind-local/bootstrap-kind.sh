@@ -159,6 +159,44 @@ for bin in kind kubectl docker git jq openssl base64; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────
+# 0) ONE BRING-UP AT A TIME.
+#
+# Nothing stopped two of these running against the same cluster, and this script
+# is neither atomic nor commutative: it applies Applications, seeds Vault KV,
+# seeds the identity catalogue and then READS EACH BACK to verify. Two runs
+# interleaved means one's read-back can observe the other's half-written state,
+# and the failure surfaces as a verification error naming the thing that IS
+# correct — the least useful place to start reading.
+#
+# It is not a hypothetical: this repo is worked by several sessions sharing one
+# checkout, and the Studio button plus a terminal `make kind-up` are two doors to
+# the same script with nothing between them. The Studio guards its OWN page
+# (one verb at a time), which is exactly why the gap is invisible from there.
+#
+# Advisory and non-blocking (-n): a second run is REFUSED immediately with a
+# sentence, never queued. Queueing would be worse — the operator would watch a
+# silent process that is doing nothing.
+#
+# flock missing is a WARNING, not a failure: it is util-linux and effectively
+# always present, but a bring-up that works must not start failing over a lock
+# it never had. Say so rather than pretending the protection is there.
+KIND_LOCK="${TMPDIR:-/tmp}/hugmesh-kind-${CLUSTER_NAME}.lock"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>>"${KIND_LOCK}"
+  if ! flock -n 9; then
+    echo "FATAL: another bring-up of kind cluster '${CLUSTER_NAME}' is already running." >&2
+    echo "  Two concurrent runs interleave the app applies, the Vault KV seed and the" >&2
+    echo "  identity seed against ONE cluster, and each verifies by reading back what it" >&2
+    echo "  just wrote — so they corrupt each other's post-conditions." >&2
+    echo "  Wait for it to finish. To see who holds it: fuser -v ${KIND_LOCK}" >&2
+    echo "  (Studio: its own page also refuses a second verb while one is running.)" >&2
+    exit 1
+  fi
+else
+  warn "flock not found — this run is NOT protected against a concurrent bring-up of '${CLUSTER_NAME}'"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
 # 1) kind cluster (idempotent)
 # ─────────────────────────────────────────────────────────────────────────
 if kind get clusters 2>/dev/null | grep -x "${CLUSTER_NAME}" >/dev/null; then

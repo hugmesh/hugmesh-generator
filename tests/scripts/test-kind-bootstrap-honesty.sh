@@ -1322,6 +1322,69 @@ else
   bad "ensure_repo_access is defined but never invoked — every Application would again sync from nothing"
 fi
 
+# ── one bring-up at a time ──────────────────────────────────────────────────
+# This script is neither atomic nor commutative: it applies Applications, seeds
+# Vault KV, seeds the identity catalogue, then READS EACH BACK to verify. Two
+# runs interleaved means one's read-back can observe the other's half-written
+# state, and the failure then names the thing that is CORRECT. Nothing prevented
+# it — the Studio guards its own page, which is exactly why the gap was
+# invisible from there, while a terminal `make kind-up` is a second door.
+#
+# Behavioural: HOLD the lock and run the REAL script against tool stubs, so this
+# tests the refusal rather than the presence of the word "flock".
+if ! command -v flock >/dev/null 2>&1; then
+  ok "SKIP lock test: flock absent (the script warns and continues by design)"
+else
+  LK="${TMP}/lock"; mkdir -p "${LK}/bin"
+  for t in kind kubectl docker git jq openssl base64; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${LK}/bin/${t}"; chmod +x "${LK}/bin/${t}"
+  done
+  # the script derives it as ${TMPDIR}/hugmesh-kind-${CLUSTER_NAME}.lock — hold
+  # EXACTLY that path, or the "held" case silently tests an uncontended run.
+  LKFILE="${TMP}/hugmesh-kind-lockprobe.lock"
+  # hold it in a background subshell, then run the bootstrap with the same name
+  ( flock -x 9; sleep 30 ) 9>>"${LKFILE}" &
+  LK_HOLDER=$!
+  sleep 1
+  ( export PATH="${LK}/bin:${PATH}" TMPDIR="${TMP}" KIND_CLUSTER_NAME="lockprobe"
+      timeout 60 bash "${BOOTSTRAP}" ) > "${TMP}/lock.out" 2>&1
+  LK_RC=$?
+  kill "${LK_HOLDER}" 2>/dev/null; wait "${LK_HOLDER}" 2>/dev/null
+
+  if [ "${LK_RC}" -eq 0 ]; then
+    bad "a bring-up ran while another held the lock — two runs can interleave the app applies, the KV seed and the identity seed against one cluster"
+  elif grep -q 'already running' "${TMP}/lock.out"; then
+    ok "a concurrent bring-up is REFUSED (non-zero) instead of interleaving"
+    grep -q 'fuser' "${TMP}/lock.out" \
+      && ok "the refusal says how to find the holder, not just that it is held" \
+      || bad "the refusal does not tell the operator how to identify the other run"
+  else
+    bad "the run failed but not on the lock — $(head -3 "${TMP}/lock.out" | tr '\n' ' ')"
+  fi
+
+  # VACUITY: with the lock FREE the refusal must not fire, or the check above
+  # would pass on a script that always refuses.
+  ( export PATH="${LK}/bin:${PATH}" TMPDIR="${TMP}" KIND_CLUSTER_NAME="lockprobe2"
+    timeout 20 bash "${BOOTSTRAP}" ) > "${TMP}/lock2.out" 2>&1 || true
+  grep -q 'already running' "${TMP}/lock2.out" \
+    && bad "the bootstrap refuses even with NO other run holding the lock — the guard is inverted" \
+    || ok "an uncontended run is not refused (the lock check is not always-on)"
+
+  # STRUCTURAL: the lock must be taken before anything mutates the cluster, or it
+  # protects nothing that matters.
+  LOCK_LINE="$(grep -n 'KIND_LOCK=' "${BOOTSTRAP}" | head -1 | cut -d: -f1)"
+  MUT_LINE="$(grep -n 'kind create cluster' "${BOOTSTRAP}" | head -1 | cut -d: -f1)"
+  if [ -n "${LOCK_LINE}" ] && [ -n "${MUT_LINE}" ] && [ "${LOCK_LINE}" -lt "${MUT_LINE}" ]; then
+    ok "the lock is taken BEFORE the first cluster mutation (line ${LOCK_LINE} < ${MUT_LINE})"
+  else
+    # NO BACKTICKS: inside double quotes they are command substitution, and an
+    # earlier draft of this line literally RAN `kind create cluster` every time
+    # the assertion failed. A guard whose failure path mutates the machine it is
+    # checking is worse than no guard.
+    bad "the lock is not taken before 'kind create cluster' (lock=${LOCK_LINE} mutate=${MUT_LINE}) — it would guard only the tail of the run"
+  fi
+fi
+
 # ── the curated slice must install what its own Applications REQUIRE ─────────
 # 14-workload-console-rbac carries the deploy-provenance ClusterPolicy. Without
 # kyverno.io/v1 registered ArgoCD cannot render it at all — "failed to discover
