@@ -83,6 +83,7 @@ from ...core.local_services import (
     describe as local_describe, local_groups, local_slugs)
 from ...core.progress_parse import ProgressParser
 from ...core.seeded_credentials import load_roster
+from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ._credentials_dialog import CredentialsDialog
 from ._add_user_dialog import AddUserDialog
@@ -1231,6 +1232,36 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.cancel_btn.setEnabled(False)
             self.status.setText("Cancelling — terminating the build process group…")
 
+    def _save_run_log(self, run, ok: bool) -> str:
+        """Write this run's output to a file and return the path ("" on failure).
+
+        WHY. Until now a verb's output lived ONLY in memory (_StageRun.buffer) and
+        in the log pane. The Studio's own stdout goes to /dev/null under a desktop
+        launcher, so when an operator reported "the DevOps lane fails" there was no
+        artifact anywhere on disk to read — the report could not be acted on
+        without asking them to reproduce it and copy the pane by hand. The verb had
+        already run, at length, and its evidence was thrown away.
+
+        Best-effort by construction: this is a GUI callback on the finish path, so
+        it must never raise and must never be the reason a run reports failure.
+        A path we could not write is simply not offered."""
+        try:
+            d = os.path.join(state_dir(), "logs")
+            os.makedirs(d, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            safe = "".join(c if (c.isalnum() or c in "-_") else "-"
+                           for c in (run.label or "verb")).strip("-") or "verb"
+            path = os.path.join(d, f"{stamp}-{safe}-{'ok' if ok else 'FAILED'}.log")
+            with open(path, "w", encoding="utf-8", errors="replace") as fh:
+                fh.write(f"# {run.label} — {'succeeded' if ok else 'FAILED'}\n")
+                fh.write("# %d line(s) retained (the pane's ring buffer keeps the last "
+                         "%d)\n\n" % (len(run.buffer), _RUN_LOG_MAXLEN))
+                for ln in run.buffer:
+                    fh.write(ln + "\n")
+            return path
+        except Exception:
+            return ""
+
     def _verb_done(self, ok: bool):
         self._running = False
         # FLUSH BEFORE SETTLING: up to one drain interval of output can still be
@@ -1241,7 +1272,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._drain.stop()         # same rule as the clock: an idle page owns no timer
         self._set_verbs_enabled(True)
         self.cancel_btn.setVisible(False)
-        self.status.setText("Done." if ok else "FAILED (see log).")
+        # Persist BEFORE the status text, so a failure can name the file it wrote.
+        saved = self._save_run_log(self._runs[-1], ok) if self._runs else ""
+        if saved:
+            self._on_line(f"[log] this run was saved to {saved}")
+        if ok:
+            self.status.setText("Done." + (f"  Log: {saved}" if saved else ""))
+        else:
+            self.status.setText(
+                ("FAILED — see the log below; a copy is saved at " + saved)
+                if saved else
+                "FAILED (see log). NOTE: the run log could not be written to disk.")
         self._tick.stop()          # unconditionally: an idle page must own no clock
         self._settle_run(ok)
         self._refresh_status()
