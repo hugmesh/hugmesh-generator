@@ -304,6 +304,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # drops out of a later render loses its role memberships.
         self._added_user_specs: list[str] = []
         self._running = False
+        self._running_label = ""
         self.setTitle("Local Docker mesh")
         self.setSubTitle("Run a HugMesh mesh on THIS machine in Docker — no image "
                          "build, no server hardware. This is the end of this path: "
@@ -1192,8 +1193,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         published by that shell, so the run gets ZERO stages and its drill-down is
         simply the raw log — never an invented single-stage ladder."""
         if self._running:
+            # NOT a silent return. This guard is correct — one verb at a time — but
+            # saying nothing made a pressed button indistinguishable from a broken
+            # one, and the buttons are re-armed only in _verb_done, so any verb that
+            # never reaches it leaves every button on this page a no-op that reports
+            # NOTHING. "I pressed Start and nothing happened" is then the only
+            # symptom, with no line in the log and no status text to work from.
+            busy = self._running_label or "a previous step"
+            self.status.setText(
+                f"Still running: {busy}. One verb at a time — its output is in the "
+                f"log below. Wait for it to finish"
+                + (", or press Cancel to stop it."
+                   if self.cancel_btn.isVisible() else ".")
+            )
             return
         self._running = True
+        self._running_label = label
         self._set_verbs_enabled(False)
         cancel = threading.Event() if cancellable else None
         if stream:
@@ -1233,6 +1248,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _verb_done(self, ok: bool):
         self._running = False
+        self._running_label = ""
         # FLUSH BEFORE SETTLING: up to one drain interval of output can still be
         # banked when the verb finishes, and those are exactly the lines that say
         # HOW it finished. Draining after _settle_run would file them under a run
