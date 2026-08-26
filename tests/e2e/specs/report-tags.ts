@@ -41,7 +41,16 @@ export function tags(opts: { role?: string; layer?: Layer }): string {
 /** Parse the role/layer tags out of a (possibly full-path) test title. Used by
  *  the reporter. Returns the LAST occurrence of each (the most specific). */
 export function parseTags(title: string): { role: string; layer: string } {
-  const roleMatches = [...title.matchAll(/@role:([A-Za-z0-9_-]+)/g)];
+  // The character class carries '@' and '.' because a role tag may name an
+  // EMAIL-style persona handle — the seed roster (tests/e2e-extra-personas.sh)
+  // creates alice@gmail.com, rbac-pending@gmail.com, admin@hugmesh.net, and the
+  // Gherkin lane tags scenarios with the handle it logs in as. Without them the
+  // reporter bucketed '@role:alice@gmail.com' as role 'alice', silently merging
+  // distinct personas in summary.json's perRole pivot. Verified by running the
+  // BDD persona-roster feature before and after. ROLE_* spellings are unaffected
+  // (they contain neither character), and a space still terminates the match, so
+  // '@role:alice@gmail.com @layer:ui' still parses as two tags.
+  const roleMatches = [...title.matchAll(/@role:([A-Za-z0-9_@.-]+)/g)];
   const layerMatches = [...title.matchAll(/@layer:([A-Za-z0-9_-]+)/g)];
   return {
     role: roleMatches.length ? roleMatches[roleMatches.length - 1][1] : 'unknown',

@@ -1827,3 +1827,33 @@ stack-logs: ## tail logs from the running local stack
 
 stack-ps: ## list the local stack's containers + status
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+
+# ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────
+# SEPARATE targets on purpose: the `stack-e2e` recipe above is edited by other
+# work in flight, so the BDD lane adds its own targets rather than growing that
+# recipe. Its own .PHONY line, for the same reason.
+#
+# tests/e2e/features/**/*.feature is compiled by `npx bddgen` into the GITIGNORED
+# tests/e2e/.features-gen/, which playwright.config.ts's `bdd` project runs.
+# Conventions every feature author follows: tests/e2e/features/README.md.
+.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check
+
+stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwright specs (bddgen)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	cd tests/e2e && npx bddgen
+
+# OFFLINE gate. No stack, no network. Proves every .feature compiles, every step
+# is bound (bddgen is missingSteps:fail-on-gen, so an undefined step FAILS here),
+# Playwright collects the generated tests, and no generated artefact is tracked.
+# This is the one to run before committing a feature.
+stack-e2e-bdd-check: stack-e2e-bdd-gen ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guard)
+	cd tests/e2e && npx playwright test --list --project=bdd --reporter=line
+	bash tests/scripts/test-e2e-gherkin-harness.sh
+
+# LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
+# make playwright-deps). SNAP_PLATFORM=rpi5|x86 narrows the PLATFORM axis to the
+# image target actually running; unset runs every platform row. SNAP_REPORT_DIR
+# redirects junit/json/summary AND the per-step evidence under bdd-steps/.
+stack-e2e-bdd: stack-e2e-bdd-gen ## run the GHERKIN e2e lane against the RUNNING local stack (needs stack-up + stack-seed)
+	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
+	  npx playwright test -c playwright.config.ts --project=bdd
