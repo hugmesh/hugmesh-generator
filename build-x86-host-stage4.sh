@@ -125,6 +125,39 @@ GAMES_DOMAIN="games.hugmesh.net"
 # infra slugs egress-vpn / tor / workloadConsole / anubis). It is what
 # OPTIONAL_SERVICES=all / --all-services expands to.
 USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
+# ── The FULL registry mirror, for FAIL-CLOSED slug validation (2026-08-26) ────
+# Until this landed, --optional-services took ANY string. The selection is only
+# ever consumed by `_opt_selected` (a bare string compare inside
+# gate_optional_services' hardcoded slug loop), so a slug that is not in that loop
+# simply never matches anything: `--optional-services akoma` (one k) built an image
+# with NO Akkoma and printed nothing, and `--optional-services metrics-server`
+# looked accepted while gating nothing at all. Its sibling knob MANAGED_SERVICES
+# has failed closed on an unknown id since it shipped (validate_managed_services /
+# _mgd_die); this is that same treatment for the optional-services path.
+#
+# All THREE lists MIRROR specs/cluster/optional-services.yaml and are asserted
+# set-equal against it by tests/stack/test-optional-services-exclude.sh, so they
+# cannot rot into a comment:
+#   KNOWN_OPTIONAL_SERVICES      = every `slug:` in the registry (spec.services).
+#   GATED_OPTIONAL_SERVICES      = the subset whose registry row has `gate:` != none,
+#                                  i.e. the ones something reads SOMEWHERE.
+#   SELECTABLE_OPTIONAL_SERVICES = the subset whose registry row lists x86 in its
+#                                  `buildGate:` column — the ones THIS builder
+#                                  actually reads out of OPTIONAL_SERVICES.
+#
+# SELECTABLE, not GATED, is what --optional-services must gate on, and the gap
+# between the two is not academic. `gate: runtime` says IN AS MANY WORDS that a
+# row has no build-time consumer: coturn/meshbridge are turned on by flipping
+# their key in the installed-services ConfigMap + the 13a element on a LIVE
+# cluster, and no builder can bake them. anubis is worse — it HAS a build-time
+# consumer in build-rpi5-stage4.sh (_opt_anubis_installed) and NONE here, so a
+# consumer set unioned over both builders reports it as gated when this builder
+# would silently drop it. Gating on `gate: != none` therefore accepted three
+# slugs this script honours nowhere and told the operator they were fine. Each
+# of the three refusals below names the reason and the lever that DOES work.
+KNOWN_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis metrics-server keda kyverno observability service-catalog-builder optional-services-operator"
+GATED_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis"
+SELECTABLE_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts egress-vpn tor workloadConsole headwind attestation-server"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
 #   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
 #   DEFAULT-OFF (must be specifically added): games owncast tube character-studio
@@ -582,12 +615,28 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             games/owncast/tube/character-studio/character-forge are
                             DEFAULT-OFF.
                             (env/brand.conf: OPTIONAL_SERVICES; =all = the full set)
+                            FAIL-CLOSED since 2026-08-26: a slug this builder
+                            cannot honour ABORTS the build instead of being
+                            silently ignored. Three refusals, each with its own
+                            reason and next step: (1) an UNKNOWN slug (a typo);
+                            (2) a slug the registry marks "gate: none" —
+                            registered, read by nothing anywhere; (3) a slug whose
+                            registry `buildGate:` omits x86 — coturn, meshbridge
+                            and anubis are RUNTIME-ONLY here (anubis is baked by
+                            build-rpi5-stage4.sh only), so they are flipped on a
+                            LIVE cluster via the installed-services ConfigMap +
+                            apps/13a element, never by --optional-services. The
+                            '-<slug>'/'no-<slug>' deselect spelling is rpi5-only
+                            and is refused too — use --exclude-services. Same
+                            rules for --exclude-services' own tokens.
       --all-services        Bake EVERY user-level OPTIONAL service — the FULL-SET
                             shortcut, equivalent to --optional-services all.
                             EXCLUDE_SERVICES still subtracts (e.g. --all-services
                             --exclude-services "games" bakes everything but games).
                             NOTE: the INFRA-level slugs (egress-vpn, tor,
                             workloadConsole, anubis) are NOT included by "all".
+                            anubis/coturn/meshbridge are not selectable here at
+                            all — see the fail-closed note above.
       --exclude-services "<slugs>"
                             The SUBTRACTIVE build-time exclusion list: force-OFF
                             these user-level slugs no matter how they were selected
@@ -1229,6 +1278,90 @@ if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
     info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
     unset _excl_x _x _s _kept
 fi
+
+# ── FAIL-CLOSED optional-service slug validation (2026-08-26) ────────────────
+# WHAT WAS OBSERVED: --optional-services accepted anything. The value is consumed
+# ONLY by _opt_selected(), a bare `[ "${s}" = "$1" ]` compare driven by
+# gate_optional_services()' hardcoded slug loop, so an unrecognised token matches
+# no arm and is simply dropped on the floor. A typo (`akoma`) silently produced an
+# image with no Akkoma; a registered-but-ungated infra slug (`metrics-server`)
+# looked accepted and gated nothing; `coturn`/`meshbridge`/`anubis` — registered,
+# `gate: runtime`, and read by NOTHING in this script — looked accepted too, and
+# that one is worse than silence: the operator gets an AFFIRMATIVE signal for a
+# flag nothing will honour. None of them printed a word of warning. The
+# MANAGED_SERVICES sibling has failed closed on an unknown id since it shipped
+# (validate_managed_services -> _mgd_die); this is the same posture for the
+# optional-services path, and for the EXCLUDE_SERVICES knob, where a typo is worse
+# still: the operator asked for a service to be REMOVED and it shipped anyway.
+#
+# RUNS HERE, deliberately: AFTER the `all` sentinel expansion and every
+# --with-<x> fold (so `all` and the folded slugs are already real slugs by now)
+# and AFTER EXCLUDE_SERVICES subtracts. EXCLUDE_SERVICES itself is read, never
+# rewritten, by that block, so validating it here still catches a typo in it.
+# Multi-line on purpose: the test suite sed-extracts these functions with the
+# repo-standard `/^name() {/,/^}/` range, which a one-line body defeats.
+#
+# DEFINED BEFORE THEY ARE CALLED, and that ordering is load-bearing, not style:
+# the call below is a TOP-LEVEL statement, so bash resolves it at the moment it
+# reaches this line. Moving these definitions after it leaves `bash -n` perfectly
+# happy and makes EVERY invocation of this script die with
+# "validate_optional_services: command not found" (rc=127). The suite asserts the
+# definition line is above the call line AND runs this script for real, because a
+# static extraction of the function bodies into a scratch file re-orders them and
+# structurally cannot see a definition-after-use fault.
+_opt_svc_die() {
+    echo "FATAL(optional-services): $1" >&2
+    exit 1
+}
+# _opt_svc_known / _opt_svc_gated / _opt_svc_selectable — exact-token membership,
+# no substring matching (`edge-ai` must not match `edge-ai-analysis`; a `case` glob
+# over a padded string would). Declared on separate lines: bash 5.3 localises every
+# name BEFORE any assignment runs, so `local s=$1 t=$2` dies under `set -u` here.
+_opt_svc_known() {
+    local _s
+    for _s in ${KNOWN_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
+    return 1
+}
+_opt_svc_gated() {
+    local _s
+    for _s in ${GATED_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
+    return 1
+}
+_opt_svc_selectable() {
+    local _s
+    for _s in ${SELECTABLE_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
+    return 1
+}
+validate_optional_services() {
+    # Separate declaration lines: bash 5.3 localises every name in a `local a=$1
+    # b=$a` list BEFORE any assignment runs, so the second would die under set -u.
+    local _tok
+    local _hint
+    for _tok in ${OPTIONAL_SERVICES} ${EXCLUDE_SERVICES//,/ }; do
+        _hint="${_tok#no-}"; _hint="${_hint#-}"
+        # `-<slug>` / `no-<slug>` — the explicit-deselect spellings — are an
+        # RPI5-ONLY spelling and are REFUSED here. _opt_explicitly_deselected()
+        # lives in build-rpi5-stage4.sh and has NO definition, and no caller, in
+        # this script: the token matches no arm, `_opt_selected` never sees it, and
+        # it is dropped on the floor. That matters most where it looks like it
+        # works — `--optional-services "all -games"` expands the `all` sentinel over
+        # the WHOLE token list and games ships anyway. EXCLUDE_SERVICES is the
+        # subtractive knob on this builder, and it runs AFTER the expansion.
+        case "${_tok}" in
+            no-*|-*) _opt_svc_die \
+                "'${_tok}' uses the '-<slug>' / 'no-<slug>' explicit-deselect spelling, which is an rpi5-only spelling (_opt_explicitly_deselected exists in build-rpi5-stage4.sh; this builder has no definition and no caller for it, so the token would be silently ignored). On this builder use --exclude-services '${_hint}' (EXCLUDE_SERVICES), which subtracts AFTER the 'all' sentinel expands." ;;
+        esac
+        _opt_svc_known "${_tok}" || _opt_svc_die \
+            "unknown optional-service slug '${_tok}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
+        # Two DIFFERENT refusals, because the operator's next move differs.
+        _opt_svc_gated "${_tok}" || _opt_svc_die \
+            "'${_tok}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Selecting it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_selectable "${_tok}" || _opt_svc_die \
+            "'${_tok}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --optional-services cannot bake it, because nothing in build-x86-host-stage4.sh reads it out of the selection. Turn it on/off on the LIVE cluster instead: flip the '${_tok}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Refusing rather than accepting a flag this builder honours nowhere. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+    done
+    unset _tok _hint
+}
+validate_optional_services
 
 # ── Validate role; derive GPU, hostname, node labels and init/join intent ──
 # Node labels/taints are applied at RUNTIME by provision.sh from the KEYS stick;
