@@ -5,12 +5,23 @@
 # transitively need (namespaces, local-path storage, ArgoCD itself, External
 # Secrets Operator + its Vault ClusterSecretStore config, ingress-nginx
 # (internal)). See README.md in this directory for the full scope rationale —
-# in short: the root app-of-apps (specs/cluster/app-of-apps.yaml) syncs ALL 81
-# Applications under specs/cluster/apps (the entire platform: GitLab,
-# Cassandra, all 4 gateways, Matrix/Mastodon, games, media-poisoner, ...) and
-# that is deliberately too much for a validation pass of just the identity/
-# registry stack. This script applies ONLY the curated subset directly with
-# kubectl (skipping the root app-of-apps step entirely).
+# in short: the root app-of-apps (specs/cluster/app-of-apps.yaml) syncs ALL 96
+# files under specs/cluster/apps (91 Application + 5 ApplicationSet objects, one
+# per file, counted 2026-08-26) — the entire platform: GitLab, Cassandra, all 4
+# gateways, Matrix/Mastodon, games, media-poisoner, ... — and that is
+# deliberately too much for a validation pass of just the identity/registry
+# stack. This script applies ONLY the curated subset directly with kubectl
+# (skipping the root app-of-apps step entirely).
+#
+# THAT COUNT SAID "81" UNTIL 2026-08-26, here and in README.md, and had been
+# wrong for long enough that nobody re-derived it. Read the number as a
+# magnitude, not a checksum: it is prose, nothing enforces it, and the point it
+# makes ("far more than this pass needs") survives either way.
+#
+# THE CURATION IS DELIBERATE — it is not a coverage gap, and "sweep the rest in"
+# is the wrong fix. What did not exist was a SELECTION CHANNEL: no way to add an
+# infra Application to the curated set without editing this file. KIND_ADDONS
+# (below) is that channel.
 #
 # Idempotent: safe to re-run against the same cluster — skips cluster creation,
 # keeps an existing cluster-ca Secret, reuses an already-initialized Vault, keeps
@@ -99,6 +110,154 @@ esac
 if [ -n "${MFA}" ] && [ "${KIND_PROFILE}" != "sso" ]; then
   echo "MFA=1 needs KIND_PROFILE=sso: the core profile applies no gateway Application, so there is nothing to flip and exiting 0 would report work that was not done." >&2
   exit 1
+fi
+
+# ── KIND_ADDONS — the infra add-on selection channel (operator ask 2026-08-26) ─
+#
+# WHAT WAS BROKEN. specs/cluster/apps/01-metrics-server.yaml has existed all
+# along (chart 3.12.*, ns kube-system, sync-wave -1) and was in NO profile, while
+# KIND_PROFILE=sso applies SEVEN HorizontalPodAutoscaler objects. Measured, not
+# assumed, on 2026-08-26: manifests/{admin-bff-api,user-bff-api,frontend}/
+# kustomization.yaml each carry one `- hpa.yaml`, and manifests/social-ui/hpa.yaml
+# carries FOUR (matrix-ui, mastodon-ui, login-ui, admin-ui) — 1+1+1+4 = 7, all
+# plain autoscaling/v2 CPU+memory. (The gateway chart's HPA does not count: its
+# values ship autoscaling.enabled=false and this script does not flip it.)
+#
+# An HPA with no resource-metrics API does not fail. It reports `<unknown>/70%`
+# forever and holds its Deployment at the replicas floor — which is
+# indistinguishable, from every surface this bring-up prints, from a cluster that
+# is simply not under load. So the whole autoscaling story on kind has been dark,
+# quietly, for as long as the HPAs have been there.
+#
+# THE MAP: slug -> the apps/*.yaml files that add-on applies, in apply order.
+# Deliberately ONE literal block rather than a bash associative array, so
+# tests/scripts/test-kind-profile-app-closure.sh can parse the exact bytes this
+# script executes. A map the closure guard cannot read is a map with NO closure
+# check and no wait-list check, and this repo has already paid for that shape
+# twice (see the cassandra-init and kyverno notes on APP_NAMES below).
+#
+# WHY ONLY TWO SLUGS. Every slug here must change something OBSERVABLE when
+# selected, or it is an inert toggle — the failure this repo's local-services
+# catalogue exists to prevent. Two nearby Applications are therefore NOT offered
+# yet, on purpose:
+#   * apps/01c-autoscaling-latency.yaml — its KEDA ScaledObjects target the same
+#     Deployments the seven v2 HPAs above already own, and KEDA will not co-own a
+#     Deployment that already has an HPA (the file says so itself). Selecting it
+#     on the sso profile would produce a conflict, not autoscaling. It also reads
+#     a Prometheus that does not exist in this cluster.
+#   * apps/36-observability.yaml — MANUAL-sync by design (no syncPolicy.automated
+#     block). Applying the Application object would create an OutOfSync row and
+#     deploy nothing: a checkbox that changes no bytes.
+# Both belong here the day they gain a story that ends in a running workload.
+# AN ADD-ON'S ROW IS ITS FULL CLOSURE, not just its own Application. `keda`
+# carries 01-metrics-server.yaml as well because apps/01b-keda.yaml's own header
+# says the v2 CPU+memory HPAs it sits beside "only need metrics-server (already
+# live at apps/01-metrics-server.yaml)" — an operator who asks for autoscaling
+# substrate and gets KEDA over an absent resource-metrics API has the inert HPAs
+# back, wearing a different hat. Declaring the dependency HERE, in the row, is
+# what tests/scripts/test-kind-profile-app-closure.sh checks: delete
+# 01-metrics-server.yaml from that row and the closure gate goes red. Duplicate
+# files across selected rows are collapsed by the parse below.
+KIND_ADDON_MAP="
+metrics-server  01-metrics-server.yaml
+keda            01-metrics-server.yaml 01b-keda.yaml
+"
+# DEFAULT ON — and metrics-server is why the default is not empty. The seven HPAs
+# are ALREADY applied and already inert; shipping the add-on opt-in would make
+# the broken state the normal one and leave the fix to whoever reads this file.
+KIND_ADDONS_DEFAULT="metrics-server"
+
+addon_slugs() {                 # every slug in the map, in map order
+  local slug rest
+  while read -r slug rest; do
+    [ -n "${slug}" ] && printf '%s\n' "${slug}"
+  done <<<"${KIND_ADDON_MAP}"
+  return 0
+}
+addon_files() {                 # <slug> -> that add-on's app filenames, one per line
+  local want="$1"
+  local slug rest
+  while read -r slug rest; do
+    [ "${slug}" = "${want}" ] || continue
+    [ -n "${rest}" ] && printf '%s\n' ${rest}
+  done <<<"${KIND_ADDON_MAP}"
+  return 0
+}
+addon_selected() {              # <slug> -> rc 0 iff this run selected it
+  case " ${ADDON_SELECTED[*]:-} " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+# Fail-closed parse, for the same reason MFA's is: an unrecognised spelling must
+# not silently mean "off".
+#
+# `none` is the deliberate spelling for "no add-ons". An EMPTY KIND_ADDONS is
+# treated as UNSET (i.e. the default), because empty is what every layer this
+# value is threaded through produces by accident — make expands an unset variable
+# to nothing, a Python dict comprehension emits "" for an empty selection — and
+# "the operator turned metrics-server off" must never be reachable by accident.
+# SEPARATORS ARE NOT CONTENT. `${x:-default}` only rescues empty-or-unset, so a
+# value of "   " (or "," or a stray newline) sailed past it, word-split to ZERO
+# slugs, and silently meant `none` — the accidental-off this whole parse exists
+# to forbid, reached without anyone typing the word. A `KIND_ADDONS=$(...)`
+# threaded through make/Python that returns whitespace is exactly how that
+# happens. Strip every separator; if NOTHING is left, the value carried no
+# selection at all, which is UNSET.
+_ka_content="${KIND_ADDONS-}"
+_ka_content="${_ka_content//[$' \t\n\r',]/}"
+[ -n "${_ka_content}" ] || KIND_ADDONS=""
+unset _ka_content
+KIND_ADDONS="${KIND_ADDONS:-${KIND_ADDONS_DEFAULT}}"
+case "${KIND_ADDONS}" in none|NONE|None) KIND_ADDONS="" ;; esac
+ADDON_SELECTED=()
+# NAMED `_FILES`, NOT `_APPS`, DELIBERATELY. tests/scripts/test-kind-profile-app-
+# closure.sh discovers the curated profile arrays with `^[A-Z0-9_]+_APPS=\(` and
+# then FAILS any profile it parses zero entries from. A runtime accumulator called
+# ADDON_APPS=() matches that regex, parses as an empty profile, and takes the whole
+# closure gate red for a reason that has nothing to do with closure. The literal
+# declarations (CORE_APPS, SSO_APPS) own that suffix; accumulators must not.
+ADDON_APP_FILES=()
+for _slug in ${KIND_ADDONS//,/ }; do
+  _files="$(addon_files "${_slug}")"
+  if [ -z "${_files}" ]; then
+    echo "unknown KIND_ADDONS entry '${_slug}'. Known add-ons: $(addon_slugs | tr '\n' ' ')" >&2
+    echo "  KIND_ADDONS=none disables all of them. An EMPTY value (or one that is nothing but separators) means UNSET and falls back to '${KIND_ADDONS_DEFAULT}'." >&2
+    exit 1
+  fi
+  addon_selected "${_slug}" && continue
+  ADDON_SELECTED+=("${_slug}")
+  while read -r _f; do
+    [ -n "${_f}" ] || continue
+    # POST-CONDITION on the map, not on an exit code: a slug that names a file
+    # which is not there would otherwise be discovered by kubectl, halfway
+    # through a bring-up, as a sed reading a missing path.
+    [ -r "${CLUSTER_DIR}/apps/${_f}" ] || {
+      echo "FATAL: KIND_ADDONS add-on '${_slug}' maps to specs/cluster/apps/${_f}, which does not exist." >&2; exit 1; }
+    # File-level dedupe, not just slug-level: two selected add-ons can share a
+    # dependency row (keda carries metrics-server), and a duplicate would be
+    # applied twice and land twice in the wait/status table.
+    case " ${ADDON_APP_FILES[*]:-} " in *" ${_f} "*) continue ;; esac
+    ADDON_APP_FILES+=("${_f}")
+  done <<<"${_files}"
+done
+
+# READ-ONLY INTROSPECTION. `KIND_ADDONS_PRINT=1` resolves the selection, prints
+# it and stops — no cluster, no kubectl, nothing created. It exists because the
+# alternative for tests/scripts/test-kind-addon-channel.sh was to RE-IMPLEMENT
+# this parse and then assert against its own copy, which measures the copy. This
+# way the guard measures the bytes that run.
+#
+# It exits 0 having done no bring-up work, which in this file is normally the
+# cardinal sin — so it says so, on stdout, unmissably. It is reachable only from
+# an env var nothing else sets, it runs BEFORE the first mutation of anything, and
+# `make kind-up` never sets it.
+if [ "${KIND_ADDONS_PRINT:-}" = "1" ]; then
+  echo "KIND_ADDONS_PRINT=1 — resolving the add-on selection only. NO cluster work was performed."
+  echo "slugs: ${ADDON_SELECTED[*]:-}"
+  echo "files: ${ADDON_APP_FILES[*]:-}"
+  echo "known: $(addon_slugs | tr '\n' ' ')"
+  echo "default: ${KIND_ADDONS_DEFAULT}"
+  exit 0
 fi
 
 log() { echo "==> $*"; }
@@ -323,7 +482,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # 5) ArgoCD — reuse bootstrap.sh's install + re-namespace + amd64-pin logic.
 #    Deliberately do NOT apply bootstrap.sh's root app-of-apps step (that
-#    pulls in all 81 Applications); we apply our curated subset directly
+#    pulls in all 96 Applications); we apply our curated subset directly
 #    below instead.
 # ─────────────────────────────────────────────────────────────────────────
 log "Installing ArgoCD (${ARGOCD_VERSION}) into namespace '${ARGOCD_NS}'"
@@ -543,68 +702,115 @@ ensure_repo_access
 #    so it needs no such override — only fetching the Application object
 #    itself from the branch that defines it.
 # ─────────────────────────────────────────────────────────────────────────
-apply_core_app() {
-  local file="$1"
-  log "Applying (main) specs/cluster/apps/${file}"
-  sed -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
-      -e "s#targetRevision: main#targetRevision: ${REV}#" \
-      "${CLUSTER_DIR}/apps/${file}" | kubectl apply -f -
+# ONE apply helper for EVERY Application this bootstrap applies — including the
+# three that used to carry bespoke `git show` blocks.
+#
+# WHY THOSE BLOCKS ARE GONE (2026-08-26). 02-vault.yaml, 03a-harbor.yaml and
+# 03b-harbor-provision.yaml were read with `git show <branch>:<path>` because
+# their manifests only existed on unmerged branches. Both branches merged, and
+# the defaults have said `main` here for a while: VAULT_BRANCH=main,
+# HARBOR_BRANCH=main, and the tokenless-local-sync path retargets both to HEAD
+# alongside REV. So on EVERY default run the `git show` was reading the same
+# bytes the working tree already holds — one network fetch and two ref
+# resolutions later. Verified before the change, not assumed:
+#   * `git show HEAD:specs/cluster/apps/<f>` was byte-identical to the
+#     checked-out file for all three;
+#   * 03a's sed is a no-op on it — its repoURL is https://helm.goharbor.io and
+#     its targetRevision is the chart's `1.16.x`, so neither expression matches;
+#   * 02/03b's sed pair is character-for-character the pair below.
+#
+# It is NOT a cosmetic collapse. Those three were invisible to
+# tests/scripts/test-kind-profile-app-closure.sh, which models the applied set
+# from the *_APPS arrays: Harbor was applied but not modelled, so the guard had
+# to carry two "ANALOGY" exemptions for 00b-cassandra-init's references to it.
+# Modelling them retires both exemptions and makes the references load-bearing.
+#
+# THE OVERRIDE MACHINERY IS KEPT, generalised into app_pin(): point VAULT_BRANCH
+# or HARBOR_BRANCH at anything other than the revision the rest of the tree is
+# read at and that one file goes back to the `git show` path, so the next
+# not-yet-merged Application can still be validated exactly the same way.
+app_pin() { # <file> -> the branch this file must be read from, or nothing
+  case "$1" in
+    02-vault.yaml)
+      [ "${VAULT_BRANCH}" != "${REV}" ] && printf '%s' "${VAULT_BRANCH}" ;;
+    03a-harbor.yaml|03b-harbor-provision.yaml)
+      [ "${HARBOR_BRANCH}" != "${REV}" ] && printf '%s' "${HARBOR_BRANCH}" ;;
+  esac
+  return 0
 }
 
+# The Application object name a manifest declares. Used to build the wait/status
+# list for the RUNTIME-selected add-ons, which no hand-maintained list could
+# track. Prints nothing for an ApplicationSet (`kind: Application$` is anchored),
+# which is correct: `kubectl get application <appset>` does not resolve, and the
+# caller treats an empty answer as fatal for an add-on.
+app_object_name() { # <file> -> metadata.name, or nothing
+  sed -n '/^kind: Application$/,$ { /^  name:/ { s/^  name:[[:space:]]*//; s/[[:space:]]*$//; p; q; } }' \
+    "${CLUSTER_DIR}/apps/$1"
+}
+
+apply_core_app() {
+  local file="$1"
+  local pin ref
+  pin="$(app_pin "${file}")"
+  if [ -z "${pin}" ]; then
+    log "Applying (working tree) specs/cluster/apps/${file}"
+    sed -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
+        -e "s#targetRevision: main#targetRevision: ${REV}#" \
+        "${CLUSTER_DIR}/apps/${file}" | kubectl apply -f -
+    return
+  fi
+  # Prefer a local ref if this checkout already has the branch; fall back to
+  # origin/<branch>.
+  git -C "${REPO_ROOT}" fetch -q origin "${pin}" 2>/dev/null || true
+  if git -C "${REPO_ROOT}" rev-parse --verify -q "${pin}" >/dev/null; then
+    ref="${pin}"
+  else
+    ref="origin/${pin}"
+  fi
+  log "Applying (${ref}) specs/cluster/apps/${file} — BRANCH-PINNED (targetRevision main -> ${pin})"
+  git -C "${REPO_ROOT}" show "${ref}:specs/cluster/apps/${file}" \
+    | sed -e "s#targetRevision: main#targetRevision: ${pin}#" \
+          -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
+    | kubectl apply -f -
+}
+
+# ── 6a) THE ADD-ONS GO ON FIRST (sync-wave "-1" substrate) ──────────────────
+# metrics-server and KEDA both carry argocd.argoproj.io/sync-wave "-1", the same
+# early wave as calico/ingress, because the autoscaling substrate has to exist
+# before the workloads that autoscale it. Applied STANDALONE (see the note at the
+# top of step 6) sync-waves buy no cross-Application ordering at all, so the
+# ORDER OF APPLY is the only ordering lever this script actually holds — and it
+# spends it here. The same lever is why 15-kyverno.yaml precedes
+# 14-workload-console-rbac.yaml in SSO_APPS below (PR #167).
+if [ "${#ADDON_APP_FILES[@]}" -gt 0 ]; then
+  log "KIND_ADDONS=${ADDON_SELECTED[*]} — ${#ADDON_APP_FILES[@]} add-on Application(s) on top of the curated base"
+  for f in "${ADDON_APP_FILES[@]}"; do
+    apply_core_app "${f}"
+  done
+else
+  log "KIND_ADDONS=none — no infra add-ons selected"
+fi
+# HONESTY, same rule as the MFA refusal at the top: name the unperformed work
+# rather than letting a green bring-up imply it. Only under sso, because the core
+# profile applies no HPA at all and warning there would be noise.
+if [ "${KIND_PROFILE}" = "sso" ] && ! addon_selected metrics-server; then
+  warn "metrics-server is NOT in KIND_ADDONS. This profile applies SEVEN HorizontalPodAutoscalers (admin-bff-api, user-bff-api, hugmesh-host-shell and four social-ui remotes). With no resource-metrics API every one of them reports <unknown>/70% and pins its Deployment at the replicas floor — a state nothing in this bring-up reports as a failure, and which reads exactly like an idle cluster. Re-run with KIND_ADDONS=metrics-server (the default) to make them real."
+fi
+
 CORE_APPS=(
+  02-vault.yaml                    # the cluster secret store (branch-pin retired 2026-08-26; see app_pin above)
   06-vault-pki.yaml                # vault-pki-init PostSync hook Job
   03-external-secrets.yaml         # ESO controller + CRDs (Helm chart)
   04-external-secrets-config.yaml  # ClusterSecretStore "hugmesh-vault" + ExternalSecrets
   11-ingress-nginx-internal.yaml   # nginx-internal (LAN/VPN-only) — Harbor's Ingress uses this class
   05-casdoor.yaml                  # Casdoor + its dedicated casdoor-pg Postgres
+  03a-harbor.yaml                  # Harbor (Helm chart Application — the sed is a genuine no-op on it)
+  03b-harbor-provision.yaml        # Harbor projects/robots/OIDC (git path -> $REV)
 )
 for f in "${CORE_APPS[@]}"; do
   apply_core_app "${f}"
 done
-
-# Vault (02-vault.yaml) is fetched from $VAULT_BRANCH, not $REV, same reason
-# and same mechanism as Harbor below: manifests/vault/deployment.yaml's
-# vault-tls-init openssl fix only exists on that branch until it merges to
-# main. The Application object itself is unchanged/identical on both
-# branches — only its targetRevision needs the override so ArgoCD's
-# controller fetches manifests/vault content from the branch with the fix.
-git -C "${REPO_ROOT}" fetch -q origin "${VAULT_BRANCH}" 2>/dev/null || true
-vault_ref() {
-  if git -C "${REPO_ROOT}" rev-parse --verify -q "${VAULT_BRANCH}" >/dev/null; then
-    echo "${VAULT_BRANCH}"
-  else
-    echo "origin/${VAULT_BRANCH}"
-  fi
-}
-VREF="$(vault_ref)"
-log "Applying (${VREF}) specs/cluster/apps/02-vault.yaml (targetRevision overridden: main -> ${VAULT_BRANCH}, picks up the vault-tls-init openssl fix)"
-git -C "${REPO_ROOT}" show "${VREF}:specs/cluster/apps/02-vault.yaml" \
-  | sed -e "s#targetRevision: main#targetRevision: ${VAULT_BRANCH}#" \
-        -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
-  | kubectl apply -f -
-
-log "Fetching Harbor Applications from branch '${HARBOR_BRANCH}' (not yet merged to main)"
-git -C "${REPO_ROOT}" fetch -q origin "${HARBOR_BRANCH}" 2>/dev/null || true
-harbor_ref() {
-  # Prefer a local ref if this checkout already has the branch; fall back to
-  # origin/<branch>. Works whether HARBOR_BRANCH is a real branch or (once
-  # the migration merges) just "main".
-  if git -C "${REPO_ROOT}" rev-parse --verify -q "${HARBOR_BRANCH}" >/dev/null; then
-    echo "${HARBOR_BRANCH}"
-  else
-    echo "origin/${HARBOR_BRANCH}"
-  fi
-}
-HREF="$(harbor_ref)"
-
-log "Applying (${HREF}) specs/cluster/apps/03a-harbor.yaml (Helm chart Application, no targetRevision override needed)"
-git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03a-harbor.yaml" | kubectl apply -f -
-
-log "Applying (${HREF}) specs/cluster/apps/03b-harbor-provision.yaml (targetRevision overridden: main -> ${HARBOR_BRANCH})"
-git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml" \
-  | sed -e "s#targetRevision: main#targetRevision: ${HARBOR_BRANCH}#" \
-        -e "s#repoURL: https://github.com/hugmesh/hugmesh-generator.git#repoURL: ${REPO}#" \
-  | kubectl apply -f -
 
 # Explicitly NOT applied under KIND_PROFILE=core (deliberately out of scope
 # for the identity/registry validation pass — see README.md): apps/
@@ -798,8 +1004,34 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   # status table — so a Cassandra with no roles looked, from the bootstrap's own
   # output, exactly like a healthy one, and the failure surfaced much later as an
   # unrelated-looking gateway auth error.
-  APP_NAMES+=(cassandra cassandra-init route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api hugmesh-host-shell hugmesh-social-ui)
+  #
+  # kyverno and workload-console-rbac are the SAME DEFECT, found 2026-08-26 by
+  # the wait-list leg of tests/scripts/test-kind-profile-app-closure.sh. PR #167
+  # added both to SSO_APPS and neither to this list, so for every kind bring-up
+  # since, the script neither waited for them nor printed them in the closing
+  # status table. A Kyverno that never came up — and therefore a deploy-provenance
+  # ClusterPolicy that never rendered, which is the exact admission backstop
+  # 14-workload-console-rbac exists to install — was indistinguishable from a
+  # healthy one in this script's own output. The kyverno CRD wait further down
+  # only warns; it is not the status table, and warnings scroll.
+  APP_NAMES+=(cassandra cassandra-init route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api hugmesh-host-shell hugmesh-social-ui kyverno workload-console-rbac)
+  # 05b-casdoor-domains.yaml is deliberately NOT here: it is an ApplicationSet,
+  # not an Application, so `kubectl get application casdoor-domains` never
+  # resolves — and it generates zero children until a writer supplies an idp=own
+  # domain. The closure guard carries that as a NAMED exemption rather than
+  # letting the absence look like the oversight above.
 fi
+# Add-on Applications join the wait/status list too — DERIVED from the manifest,
+# never hand-listed. The selection is a runtime value, so a second literal list
+# could not track it, and a hand-listed name that drifts from the file's
+# metadata.name is precisely how an Application becomes invisible here.
+for f in ${ADDON_APP_FILES[@]+"${ADDON_APP_FILES[@]}"}; do
+  addon_app_name="$(app_object_name "${f}")"
+  [ -n "${addon_app_name}" ] || {
+    echo "FATAL: add-on manifest specs/cluster/apps/${f} declares no Application metadata.name — it would be applied and then never waited for, never reported, and its failure would be invisible." >&2
+    exit 1; }
+  APP_NAMES+=("${addon_app_name}")
+done
 log "Waiting up to 5m for curated Applications to reach Synced/Healthy (best-effort)"
 deadline=$((SECONDS + 300))
 while [ "${SECONDS}" -lt "${deadline}" ]; do

@@ -385,6 +385,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
+        kind-metrics-check kind-addon-check \
         view view-list view-stop view-trust view-untrust view-honesty \
         scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
 
@@ -1246,8 +1247,28 @@ mesh-emu-down: ## stop every emulated device the harness started (sweeps stale p
 kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice first-party images (ONLY=repo[,repo] for a subset)
 	ONLY='$(ONLY)' bash scripts/kind-load-images.sh
 
-kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled)
-	KIND_PROFILE=sso MFA='$(MFA)' bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
+# KIND_ADDONS — the infra add-on SELECTION channel (operator ask 2026-08-26).
+# `make kind-up` used to pass KIND_PROFILE and MFA and nothing else, so the only
+# way to add an infra Application to the curated set was to edit
+# bootstrap-kind.sh. That is why apps/01-metrics-server.yaml sat in no profile
+# while the sso profile deployed seven HPAs with no resource-metrics API to read.
+#
+#   make kind-up                              # default: KIND_ADDONS=metrics-server
+#   make kind-up KIND_ADDONS=metrics-server,keda
+#   make kind-up KIND_ADDONS=none             # opt OUT (the HPAs go inert again)
+#
+# PASSED ONLY WHEN NON-EMPTY, and that is load-bearing rather than tidy. make
+# expands an unset variable to the empty string, so an unconditional
+# `KIND_ADDONS='$(KIND_ADDONS)'` would hand the script an EMPTY value on every
+# plain `make kind-up`. The script reads empty as UNSET (falling back to its own
+# default) for exactly that reason — but relying on that would put the default in
+# two places, and the one in the Makefile would be the silent one. Leaving the
+# assignment out entirely keeps bootstrap-kind.sh the single authority on what
+# "no selection" means. `none` is the spelling for "none of them".
+_KIND_ADDONS_ENV := $(if $(strip $(KIND_ADDONS)),KIND_ADDONS='$(strip $(KIND_ADDONS))',)
+
+kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons)
+	KIND_PROFILE=sso MFA='$(MFA)' $(_KIND_ADDONS_ENV) bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
 
 kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
 	cd tests/e2e && \
@@ -1281,6 +1302,22 @@ kind-e2e-mfa: playwright-deps ## run the MFA e2e (spec 29) against the kind clus
 
 kind-mfa-posture: ## print the kind gateway's LIVE APP_MFA_ENABLED (fail-closed; never guesses)
 	@bash scripts/kind-mfa-posture.sh
+
+# The BEHAVIOURAL half of the metrics-server add-on. Asserting that
+# 01-metrics-server.yaml is in an array proves the string is in the array and
+# nothing else; this asks the CLUSTER whether metrics.k8s.io answers and whether a
+# named HPA has stopped reporting <unknown>. SKIPS LOUDLY (exit 0, with the reason
+# and the words "nothing was measured") when there is no cluster, and never
+# creates one — a bring-up is minutes of image pulls and is the operator's call.
+# NOT in the pre-merge shell-suite gate for exactly that reason: on a hosted
+# runner it could only ever skip. Run it after `make kind-up`.
+kind-metrics-check: ## ask the LIVE kind cluster whether the metrics API answers and the HPAs read real numbers
+	bash tests/scripts/test-kind-metrics-api.sh
+
+# The kind lane's service-selection channel, offline (Studio -> Makefile ->
+# bootstrap-kind.sh). Also gated pre-merge in .github/workflows/shell-suites.yml.
+kind-addon-check: ## offline: prove a KIND_ADDONS selection reaches bootstrap-kind.sh
+	bash tests/scripts/test-kind-addon-channel.sh
 
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}

@@ -25,7 +25,9 @@ from dataclasses import dataclass
 
 from . import devops_tools, own_casdoor, proc_group, proc_text
 from . import resource_limits, stack_limits
-from .local_services import federation_env
+from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
+                             kind_addon_default_selection, kind_addon_env,
+                             validate_kind_addons)
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 
@@ -153,7 +155,8 @@ class LocalStackNode:
                  idp: str = "casdoor",
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
                  services=None,
-                 own_idp_domains: tuple[str, ...] = ()):
+                 own_idp_domains: tuple[str, ...] = (),
+                 kind_addons=None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -254,6 +257,18 @@ class LocalStackNode:
         # each mechanism is applied. None (and a selection equal to what the registry
         # ships) exports NOTHING — see local_services.federation_env.
         self.services = tuple(services) if services is not None else None
+        # The DEVOPS lane's own service selection (core/local_services.KIND_ADDONS
+        # slugs), or None when no picker was used. A SEPARATE axis from `services`
+        # on purpose: these are Kubernetes Applications the kind bootstrap adds to
+        # its curated set, they have no compose profile and no federation row, and
+        # folding them into the docker lane's list is the lane confusion
+        # local_services exists to prevent.
+        #
+        # None — and a selection equal to what the lane already ships — exports
+        # NOTHING, so `make kind-up` runs with the same env, byte for byte, as
+        # before this axis existed (the same invariant `services`/federation_env
+        # holds). See local_services.kind_addon_env.
+        self.kind_addons = tuple(kind_addons) if kind_addons is not None else None
         self.idp = idp
         self.idp_issuer = idp_issuer
         self.idp_client_id = idp_client_id
@@ -1207,7 +1222,33 @@ class LocalStackNode:
                         "last commit (committed objects only; a dirty tree serves "
                         "stale-but-consistent HEAD).")
             on_line("[devops] repo access preflight OK: " + mode)
+        # The add-on selection is validated BEFORE the long verb, and streamed,
+        # for the same reason the two preflights above are: the GUI's streaming
+        # worker drops a returned message, so a reason that is only returned is a
+        # reason the operator never sees. bootstrap-kind.sh refuses an unknown slug
+        # too — but only after cluster-create and the ArgoCD install.
+        addon_problems = validate_kind_addons(self.kind_addons)
+        if addon_problems:
+            if on_line:
+                for p in addon_problems:
+                    on_line(f"[devops] {p}")
+            return False, "\n".join(addon_problems)
+        addon_env = kind_addon_env(self.kind_addons)
+        if on_line:
+            # Say WHICH infra add-ons this run applies, and say it from the value
+            # actually being exported rather than from the picker — a log that
+            # describes the selection instead of the env is how a threading bug
+            # stays invisible. Empty env = the lane's shipped default.
+            on_line("[devops] infra add-ons: "
+                    + (addon_env[KIND_ADDONS_ENV]
+                       if KIND_ADDONS_ENV in addon_env else
+                       "%s (lane default)" % (",".join(kind_addon_default_selection())
+                                              or KIND_ADDONS_NONE)))
+        # extra_env is the wire that was missing: _make has always ACCEPTED it and
+        # this call has always passed None, so nothing the Studio knew about a kind
+        # bring-up could reach bootstrap-kind.sh.
         return self._make("kind-up", timeout=DEVOPS_UP_TIMEOUT_S,
+                          extra_env=addon_env,
                           on_line=on_line, cancel=cancel)
 
     def devops_running(self) -> bool:
