@@ -17,6 +17,24 @@
 # into an error. tests/scripts/test-guard-integrity.sh check 7 counts these names
 # and pins the total, so neither adding nor dropping one can be silent.
 #
+# ...WITH ONE HOLE, and it is named here rather than left to be discovered. check 7
+# builds its census by walking tests/ for files called test-*.sh, so the *_test.sh
+# convention that tests/qemu/ and tests/menu/ use is outside that census entirely.
+# tests/qemu/kernel_extract_test.sh below IS gated by this file, but it does not
+# move check 7's number and neither would deleting it — the pin cannot see it. The
+# other eight suites on that convention are gated NOWHERE and counted nowhere:
+#   tests/menu/build_menu_cmd_test.sh      tests/qemu/devices_test.sh
+#   tests/menu/ncurses_charset_test.sh     tests/qemu/mesh-cluster_test.sh
+#   tests/qemu/assertions_test.sh          tests/qemu/save_test.sh
+#   tests/qemu/avc-workout_test.sh         tests/qemu/verdict_test.sh
+# That is the same "in NEITHER place" hole the 2026-08-22 sweep closed for the
+# test-*.sh convention, re-opened by a naming difference. Closing it means running
+# each of the eight in a CI image first to decide gated-vs-documented (the
+# measure-by-execution rule above), and widening check 7's census so the number
+# stays honest afterwards. Deliberately NOT bundled into the PR that added the
+# suite below: that PR fixes a harness defect, and this is a coverage change that
+# has to be measured on its own.
+#
 # NOT LISTED HERE (deliberate, with reasons). Every suite on disk is either listed
 # above or listed here: six were in NEITHER place until 2026-08-22, which made this
 # very block's claim false. Each of the six was then RUN in alpine:3 to decide
@@ -75,7 +93,7 @@ jobs:
     container:
       image: alpine:3
     steps:
-      - run: apk add --no-cache bash coreutils curl flock gawk git helm jq make nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 util-linux xz
+      - run: apk add --no-cache bash coreutils curl flock gawk git helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -128,6 +146,7 @@ jobs:
             tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
+            tests/qemu/kernel_extract_test.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh

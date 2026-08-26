@@ -614,6 +614,65 @@ fi
 # container we ARE root, so do the extraction here and hand the launcher an
 # explicit --kernel.
 KERNEL=""
+# Enumerate every partition's (start, size) in 512-byte sectors, one pair per
+# line. Shared by BOTH extraction passes below so they can never disagree about
+# which partitions exist.
+partition_offsets() {
+    sfdisk -d "${IMG}" 2>/dev/null \
+        | sed -n 's/.*start=[[:space:]]*\([0-9]\+\).*size=[[:space:]]*\([0-9]\+\).*/\1 \2/p'
+}
+
+# PASS 1 — mtools. Reads the FAT boot partition straight out of the image file
+# at a byte offset (`mcopy -i IMG@@OFFSET`). No loop device, no mount, no
+# privilege, no host-wide lock, and therefore NO CONCURRENCY LIMIT AT ALL.
+#
+# This is the path every image the matrix actually runs takes: the Pi builders
+# put kernel_2712.img on the FAT32 RPI_BOOT partition and the ARM builders put
+# Image there too. The loop-mount pass below survives only as the fallback for a
+# boot directory on a non-FAT filesystem.
+#
+# WHY IT EXISTS (2026-08-26). The loop-mount pass could not run two rows at
+# once. `mount -o loop` claims a loop device for the whole LIFETIME of the
+# mount, but the critical section only ever held the lock across the mount CALL,
+# so a second container was let in while the first still held the device. That
+# is survivable where the kernel can hand out another loop device — and it
+# cannot here: with /sys/module/loop/parameters/max_loop = 0 the kernel creates
+# each new /dev/loopN on the HOST devtmpfs, which this container's /dev never
+# sees, so a host whose only node is /dev/loop0 has exactly ONE claim to give.
+# Observed: `--platform rpi5 --jobs 2` failed rpi5/backend AND rpi5/frontend
+# with "could not extract kernel_2712.img" while rpi5/pki, which ran alone in
+# the third slot, passed 44 assertions — and each of the two failures passed 42
+# and 41 assertions when re-run on its own. Three good images, reported as two
+# broken ones, purely because of how many rows shared the host.
+extract_kernel_mtools() {
+    local want="$1"
+    local start size off cand
+    command -v mcopy >/dev/null 2>&1 || return 1
+    while read -r start size; do
+        [ -n "${start}" ] && [ -n "${size}" ] || continue
+        [ "${size}" -gt 0 ] 2>/dev/null || continue
+        off=$((start * 512))
+        # minfo is the cheap "is this even FAT?" probe — it fails on an ext4
+        # partition without touching stdout, so non-FAT partitions are skipped
+        # for the price of one header read rather than a failed mcopy each.
+        MTOOLS_SKIP_CHECK=1 minfo -i "${IMG}@@${off}" >/dev/null 2>&1 || continue
+        for cand in "::${want}" "::boot/${want}" "::Image" "::boot/Image"; do
+            # -n: overwrite the target without prompting. mcopy exits non-zero
+            # when the source path is absent, which is the "try the next
+            # candidate" signal.
+            MTOOLS_SKIP_CHECK=1 mcopy -n -i "${IMG}@@${off}" "${cand}" \
+                "${RUN_DIR}/${want}" 2>/dev/null || continue
+            # A zero-byte result means mcopy "succeeded" on something that is
+            # not a kernel; treat it as a miss rather than handing QEMU an empty
+            # -kernel and letting it fail 20 minutes later as a boot timeout.
+            [ -s "${RUN_DIR}/${want}" ] || continue
+            printf '%s\n' "${RUN_DIR}/${want}"
+            return 0
+        done
+    done < <(partition_offsets)
+    return 1
+}
+
 # Mount each partition BY BYTE OFFSET rather than via /dev/loopNpM.
 #
 # `losetup -P` inside a container scans the partition table but the per-partition
@@ -623,7 +682,18 @@ KERNEL=""
 # offset. Same result, no partition device nodes required — and it behaves
 # identically on the host, so there is one code path, not a container special case.
 extract_kernel() {
-    local want="$1" mnt found="" start size
+    local want="$1"
+    local mnt found="" start size
+
+    # PASS 1 first: it needs no privilege and no shared resource, so when it
+    # works (every FAT boot partition) nothing below ever runs and the matrix
+    # has no concurrency ceiling.
+    if found="$(extract_kernel_mtools "${want}")" && [ -n "${found}" ]; then
+        printf '%s\n' "${found}"
+        return 0
+    fi
+    found=""
+
     mnt="${RUN_DIR}/boot-mnt"; mkdir -p "${mnt}"
     umount "${mnt}" 2>/dev/null || true
 
@@ -632,7 +702,7 @@ extract_kernel() {
     # loop-claim critical section HOST-WIDE (the containers share the host's
     # loop-device pool, not its /dev). The subshell this function runs in (it
     # is always called via command substitution) closes the fd on return.
-    exec 9>"${WORK}/.loop-mount.lock"
+    exec 9>>"${WORK}/.loop-mount.lock"
 
     while read -r start size; do
         [ -n "${start}" ] && [ -n "${size}" ] || continue
@@ -647,10 +717,17 @@ extract_kernel() {
         # (and still recovers if the lock cannot be taken at all).
         local attempt=0 mounted=false
         while [ "${attempt}" -lt 10 ]; do
-            flock -w 120 9 2>/dev/null || true
+            flock -w 300 9 2>/dev/null || true
             if mount -o "ro,offset=$((start * 512)),sizelimit=$((size * 512))" \
                      "${IMG}" "${mnt}" 2>/dev/null; then
-                flock -u 9 2>/dev/null || true
+                # NOTE the lock is deliberately still HELD here. It is released
+                # only after umount below, because the resource under contention
+                # is the loop DEVICE and mount holds that for as long as the
+                # filesystem stays mounted — not merely for the mount syscall.
+                # Releasing at mount-success (which is what this did until
+                # 2026-08-26) admits the next container while the device it
+                # needs is still busy, and on a host with a single /dev/loop0
+                # there is no second device for it to get.
                 mounted=true; break
             fi
             flock -u 9 2>/dev/null || true
@@ -666,9 +743,9 @@ extract_kernel() {
             fi
         done
         umount "${mnt}" 2>/dev/null || true
+        flock -u 9 2>/dev/null || true
         [ -n "${found}" ] && break
-    done < <(sfdisk -d "${IMG}" 2>/dev/null \
-             | sed -n 's/.*start=[[:space:]]*\([0-9]\+\).*size=[[:space:]]*\([0-9]\+\).*/\1 \2/p')
+    done < <(partition_offsets)
 
     [ -n "${found}" ] || return 1
     printf '%s\n' "${found}"
