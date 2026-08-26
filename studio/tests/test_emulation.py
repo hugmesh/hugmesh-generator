@@ -717,10 +717,40 @@ def test_root_blocker_names_the_container_and_never_reaches_for_sudo():
 
 
 # ── shell/python parity for the second runner ────────────────────────────────────────
+#
+# NOT by grepping the whole file. Every flag this lane emits also appears in
+# run-qemu-e2e.sh's usage() heredoc AND in its header comments, so "the token is
+# somewhere in the text" is satisfied by PROSE — a flag deleted from the parser, or a
+# refusal that stopped naming the container, would still read as green. That is
+# comment-token inversion, and it has shipped in this repo more than once. The two
+# helpers below narrow the haystack to the only two places that can actually affect
+# an operator: the parser's case arms, and the bytes of the refusal message itself.
+
+_PARSER_RE = re.compile(r"while \[\[ \$# -gt 0 \]\]; do\n(.*?)\ndone\n", re.S)
+_REFUSAL_RE = re.compile(
+    r'if \[ "\$\(id -u\)" -ne 0 \]; then\s*\n\s*cat >&2 <<EOF\n(.*?)\nEOF\n', re.S)
+
+
+def _parser_flags(text):
+    """The option tokens run-qemu-e2e.sh's arg parser actually ACCEPTS."""
+    block = _PARSER_RE.search(text)
+    assert block, "the arg-parser loop moved — this guard can no longer see it"
+    flags = set()
+    for arm in re.finditer(r"^\s*([-a-zA-Z0-9|]+)\)", block.group(1), re.M):
+        flags.update(t for t in arm.group(1).split("|") if t.startswith("-"))
+    return flags
+
+
+def _refusal_message(text):
+    """The heredoc a non-root operator actually reads, comments excluded."""
+    m = _REFUSAL_RE.search(text)
+    assert m, "the non-root refusal heredoc moved — this guard can no longer see it"
+    return m.group(1)
+
 
 @pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
-def test_every_playwright_flag_exists_in_the_e2e_script():
-    """Source-grep drift guard, the twin of the docker runner's. A flag renamed in
+def test_every_playwright_flag_is_a_real_parser_arm_not_just_prose():
+    """Drift guard, the twin of the docker runner's. A flag renamed in
     run-qemu-e2e.sh (or typo'd in the author) fails here rather than at spawn."""
     text = open(PW, encoding="utf-8").read()
     opts = em.PlaywrightOptions(
@@ -731,9 +761,28 @@ def test_every_playwright_flag_exists_in_the_e2e_script():
                                  work_dir="/w")
     flags = {a for a in em.playwright_argv(plan_stub, opts)
              if a.startswith("--") and a != "--"}
-    missing = sorted(f for f in flags if f not in text)
-    assert not missing, f"flags unknown to run-qemu-e2e.sh: {missing}"
-    assert "-w|--work-dir" in text, "the -w spelling this author emits moved"
+    accepted = _parser_flags(text)
+    missing = sorted(f for f in flags if f not in accepted)
+    assert not missing, f"flags no arg-parser arm accepts: {missing}"
+    assert {"-w", "--work-dir"} <= accepted, "the -w spelling this author emits moved"
+    assert {"--list", "--dry-run", "--"} <= accepted   # the two non-root verbs + passthrough
+
+
+@pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
+def test_the_flag_guard_is_not_satisfied_by_comments_or_usage_text():
+    """BREAK-IT TWIN for the guard above — the comment-token-inversion control.
+
+    Delete one parser arm and leave every mention of it in usage()/the comments. The
+    naive whole-file grep the first cut used still finds the flag (asserted, so this
+    twin is proven to model the defect); _parser_flags does not.
+    """
+    text = open(PW, encoding="utf-8").read()
+    mutant = re.sub(r"^\s*--ui-port\).*\n", "", text, flags=re.M)
+    assert mutant != text, "the mutation did not change the text — this twin proves nothing"
+    assert "--ui-port" in mutant, "usage()/comments no longer mention it; twin is moot"
+    assert "--ui-port" in _parser_flags(text)
+    assert "--ui-port" not in _parser_flags(mutant), \
+        "COMMENT-TOKEN INVERSION: a deleted parser arm still counted as wired"
 
 
 @pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
@@ -742,8 +791,29 @@ def test_the_e2e_script_refusal_names_the_container_and_offers_no_sudo():
     the old message was `run as root ...: sudo $0 ...`, which is the one instruction
     a Studio-driven harness must never give."""
     text = open(PW, encoding="utf-8").read()
-    assert "--privileged" in text and "hugmesh-qemu-runner" in text
+    msg = _refusal_message(text)
+    assert "--privileged" in msg and "hugmesh-qemu-runner" in msg
+    assert "make qemu-docker-image" in msg
+    # ...and it offers the two verbs that need no root.
+    assert "--list" in msg and "--dry-run" in msg
+    # The sudo checks stay whole-file on purpose: a commented-out `sudo $0` is still
+    # a regression waiting to be uncommented, so a false RED there is the safe way
+    # round. (Inversion only ever weakens a POSITIVE assertion.)
     assert "sudo $0" not in text, "the sudo-yourself instruction came back"
     assert "Usage: sudo $0" not in text
-    # and the non-root verbs it offers instead really exist in its parser
-    assert "--list)" in text and "--dry-run)" in text
+
+
+@pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
+def test_the_refusal_guard_is_not_satisfied_by_the_header_comment():
+    """BREAK-IT TWIN: the header comment block at the top of run-qemu-e2e.sh already
+    says "the privileged hugmesh-qemu-runner container". A refusal that STOPPED
+    naming the container would therefore pass a whole-file grep. It must not pass
+    this one."""
+    text = open(PW, encoding="utf-8").read()
+    msg = _refusal_message(text)
+    gutted = text.replace(msg, "this lane needs root.\n")
+    assert gutted != text, "the mutation did not change the text — this twin proves nothing"
+    assert "hugmesh-qemu-runner" in gutted, "the header comment stopped baiting the naive grep"
+    assert "--privileged" in gutted
+    assert "hugmesh-qemu-runner" not in _refusal_message(gutted), \
+        "COMMENT-TOKEN INVERSION: a header comment stood in for the refusal message"

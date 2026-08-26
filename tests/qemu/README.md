@@ -60,7 +60,7 @@ runner polls until `--timeout`. Console output is captured to
 |---|---|
 | `run-qemu-test.sh` | Pi: orchestrates build disks, boot QEMU, wait for SSH, assert, power off (root). |
 | `run-qemu-e2e.sh` | Node E2E: boot a role image + run the **Playwright** suite against the forwarded UI (root to boot; `--list` / `--dry-run` need none). |
-| `qemu-e2e-lane_test.sh` | Hermetic tests for that lane's `--list`, `--dry-run` and non-root refusal (no boot, no docker, no root). |
+| `qemu-e2e-lane_test.sh` | Hermetic tests for that lane's `--list`, `--dry-run`, non-root refusal and the `make e2e`/`e2e-list` argv (no boot, no docker, no root — and **no skip under uid 0**: the refusal legs use a proven `id -u` shim). |
 | `verify-client.sh` | Client desktop: non-root boot + console-assertion verification (laptop/chromebook/desktop). |
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
 | `launch-pi.sh` | Boot a Pi **golden `.img`** under `-M virt` with a KEYS disk (`--kernel` loaded directly — QEMU has no BCM2712 model; it takes no `--stage4`, that is `run-qemu-test.sh`'s input). |
@@ -204,8 +204,17 @@ Playwright spec tree, then exits.
 ```bash
 make e2e-list                                   # ROLE/ARCH as usual
 make e2e-list E2E_ARGS='--grep @smoke'          # what would that narrowing run?
+make e2e      E2E_ARGS='--grep @smoke'          # and the real (root) boot, narrowed
 tests/qemu/run-qemu-e2e.sh -w /srv/img --list -- specs/01-frontpage.spec.ts
 ```
+
+`E2E_ARGS` reaches Playwright through the `--` separator both targets render. That
+separator is **not optional here**, unlike `make stack-e2e` where `npx playwright
+test` is the direct consumer: this lane interposes a shell script whose parser
+hard-errors on any word it does not recognise, so a bare `--grep @smoke` — or a bare
+spec path — is `Unknown arg`, not a passthrough. `make e2e` shipped without it on
+2026-08-26 and was dead for every value; `qemu-e2e-lane_test.sh` now renders both
+targets with `make -n` and feeds the result to the real parser.
 
 It needs **no root, no image and no network**: it runs before the artifact
 autodetect, so a tree that has built nothing still describes the lane. The spec half

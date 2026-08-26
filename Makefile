@@ -1341,8 +1341,17 @@ playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \
 	  && npx playwright install --with-deps chromium
 
+# E2E_ARGS here is NOT the same shape as stack-e2e's. There, `npx playwright test`
+# is the DIRECT consumer and bare argv is correct. This lane interposes a shell
+# script whose parser ends in `*) echo "Unknown arg: $1"; usage 1`, so an
+# unseparated `--grep @smoke` (or a bare spec path) is a HARD ERROR, not a
+# passthrough — which is exactly how this target shipped broken on 2026-08-26.
+# The `--` is therefore load-bearing, and the $(if ...) keeps an unset E2E_ARGS
+# from emitting a dangling separator. e2e-list below must stay identical, and
+# tests/qemu/qemu-e2e-lane_test.sh asserts BOTH by rendering `make -n` and feeding
+# the result to the real parser.
 e2e: playwright-deps ## boot ROLE/ARCH in QEMU and run the Playwright e2e (default: x86 be+gpu)
-	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) $(E2E_ARGS)
+	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) $(if $(E2E_ARGS),-- $(E2E_ARGS))
 
 # Enumerate what the QEMU Playwright lane WOULD run — the boot plan plus the spec
 # tree — as one JSON document. NO root, no image, no network, no boot: `--list`
