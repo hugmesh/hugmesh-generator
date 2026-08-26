@@ -9,9 +9,9 @@
 # it absent; the 13a ApplicationSet element flips to installed:"false"; gateway
 # routes + route-access rows are removed so no 502/stale-grant).
 #
-# WHAT THIS PROVES (WITHOUT a full cross-build) by sourcing the REAL helper +
-# gate functions from build-rpi5-stage4.sh and running them against a realistic
-# sandbox baked tree (seeded from the live specs/cluster files):
+# WHAT THIS PROVES (WITHOUT a full cross-build) by loading the REAL helper + gate
+# functions AS build-rpi5-stage4.sh RESOLVES THEM and running them against a
+# realistic sandbox baked tree (seeded from the live specs/cluster files):
 #   * every user-level slug is REGISTERED in optional-services.yaml;
 #   * for EACH slug: EXCLUDED => its owned apps/*.yaml + manifests/<dir> are gone,
 #     its gateway routes + route-access rows are gone, the ConfigMap boolean is
@@ -25,15 +25,27 @@
 #     explicitly added; EXCLUDE_SERVICES removes a default-ON slug. games is now
 #     DEFAULT-OFF (registry default: off + ConfigMap baseline "false").
 #
-# Arch-neutral: the gate operates on the shared specs/cluster tree. The rpi5
-# builder is the canonical cluster-node builder whose gate/helpers are sourced
-# and exercised below; build-x86-host-stage4.sh carries the SAME selection knobs
-# (all-sentinel + EXCLUDE_SERVICES, ported from rpi5) and its wiring is
-# grep-asserted in section 4c so the two builders cannot silently diverge. 4c
-# also extracts BOTH builders' real `games)` case bodies and diffs them for the
-# games-instances/games-services control-plane pruning markers, so a games)
-# case edited in only one builder (the divergence class that shipped once
-# already) fails the test instead of silently drifting.
+# WHERE THE GATE LIVES (changed 2026-08-26). gate_optional_services() and every
+# _opt_* helper moved into the SHARED scripts/_optional-services-lib.sh, which BOTH
+# stage4 builders source. tests/lib/opt-gate-source.sh walks a given builder's own
+# source chain and takes the LAST definition, exactly as bash would, so this suite
+# still executes whatever that builder would actually run.
+#
+# WHAT SECTION 4c IS FOR NOW, AND WHAT IT USED TO BE. 4c used to grep
+# build-x86-host-stage4.sh for the selection KNOBS and diff one case body. That was
+# green while THREE real divergences shipped in x86 images: no
+# _opt_render_appset_flag at all (so a deselected slug stayed installed:"true" in
+# the 13a ApplicationSet and a repo-synced ArgoCD re-forced it on), no anubis
+# handling at all (so --env prod shipped the public PoW shield off and the
+# fe-gateway ingress un-rerouted), and the edge-ai-analysis dependsOn guard running
+# BEFORE EXCLUDE_SERVICES (so --exclude-services edge-ai shipped the orphan
+# wrapper). Replacing those knob greps with FUNCTION-NAME greps would not have
+# caught any of the three — a name is satisfied by a comment, and says nothing
+# about the body. Measured: a name-grep parity suite stays GREEN against all three
+# defects reproduced verbatim. So 4c now asserts only the STRUCTURAL half — one
+# shared gate, sourced by both, no local override, byte-identical resolution — and
+# tests/stack/test-optional-services-parity.sh asserts the BEHAVIOURAL half on the
+# rendered artefacts.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -51,16 +63,25 @@ info(){ :; }; warn(){ :; }; err(){ echo "    ERR $*" >&2; }   # silence the buil
 
 echo "== optional-services BUILD-TIME EXCLUSION unit test =="
 
-# ── Extract the REAL gate + helpers from the builder (so the test tracks them) ──
-extract_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER}"; }
-for fn in _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
+# ── Load the REAL gate + helpers AS THE BUILDER RESOLVES THEM ────────────────
+# They live in the SHARED scripts/_optional-services-lib.sh since 2026-08-26; the
+# loader walks the builder's own source chain (libs first, builder last, last
+# definition winning) so a re-added builder-local override is still what runs here.
+#
+# _opt_set_cr_enabled / _opt_render_optionalservice_cr are in this list now and were
+# NOT before: gate_optional_services calls _opt_render_optionalservice_cr at its very
+# last line, so every gate run in this file was printing
+#     _opt_render_optionalservice_cr: command not found
+# to stderr and carrying on. `set -uo pipefail` does not stop that (no set -e), so
+# 164 assertions passed while the OptionalService CR seed — the runtime desired-state
+# twin of the ConfigMap boolean — was never exercised at all.
+source "${REPO}/tests/lib/opt-gate-source.sh"
+opt_gate_load "${BUILDER}" _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
           _opt_drop_kustomize_line _opt_drop_route _opt_drop_extrahost _opt_drop_rows \
           _opt_fix_trailing_comma _opt_wire_anubis_ingress _opt_render_appset_flag \
-          _opt_render_installed_services gate_optional_services; do
-  eval "$(extract_fn "${fn}")"
-  type "${fn}" >/dev/null 2>&1 || { echo "  FAIL could not extract ${fn}"; exit 1; }
-done
-ok "extracted the real gate + helper functions from build-rpi5-stage4.sh"
+          _opt_render_installed_services _opt_set_cr_enabled _opt_render_optionalservice_cr \
+          gate_optional_services || exit 1
+ok "loaded the real gate + helper functions as build-rpi5-stage4.sh resolves them"
 
 # ── The user-level OPTIONAL services this requirement targets ─────────────────
 USER_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
@@ -106,7 +127,17 @@ seed_tree() {
   SYSROOT="${WORK}/sysroot-$1"; rm -rf "${SYSROOT}"
   local tree="${SYSROOT}/var/lib/hugmesh/cluster"
   mkdir -p "${tree}/apps" "${tree}/manifests/external-secrets" \
-           "${tree}/manifests/route-access/initdb" "${tree}/manifests/policy"
+           "${tree}/manifests/route-access/initdb" "${tree}/manifests/policy" \
+           "${tree}/manifests/optional-services-operator"
+  # The OptionalService CR seed. It was NOT seeded before, so
+  # _opt_render_optionalservice_cr returned at its `[ -f "${seed}" ] || return 0`
+  # line on every single gate run in this file: loading the function silenced a
+  # "command not found" on stderr and added ZERO coverage. MEASURED (2026-08-26,
+  # adversarial review): stubbing the whole function to `return 0` left this suite
+  # at 165/0 and the parity suite at 71/0. §6 below now asserts the rendered
+  # `enabled:` values ABSOLUTELY.
+  cp "${SRC}/manifests/optional-services-operator/seed-optionalservices.yaml" \
+     "${tree}/manifests/optional-services-operator/"
   # The per-slug owned apps + manifest dirs (copy the real ones so the gate's
   # rm -f / rm -rf hit the actual filenames).
   cp "${SRC}/apps/13a-optional-services.yaml" "${tree}/apps/"
@@ -197,7 +228,11 @@ grep -q "'/social/forum/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.
 echo "-- route-access drops: whole-table gateway coverage --"
 if command -v python3 >/dev/null; then
   for _b in "${BUILDER}" "${BUILDER_X86}"; do
-    python3 - "${_b}" "${REPO}/specs/cluster/manifests/route-access/initdb/20-schema.sql" <<'PY'
+    # Sweep the gate AS THAT BUILDER RESOLVES IT (shared lib since 2026-08-26),
+    # not the builder file — which no longer contains a single _opt_drop_rows call
+    # and would make this sweep report ZERO parsed calls, i.e. vacuous.
+    opt_gate_extract_fn "${_b}" gate_optional_services > "${WORK}/gate-$(basename "${_b}").sh"
+    python3 - "${WORK}/gate-$(basename "${_b}").sh" "${REPO}/specs/cluster/manifests/route-access/initdb/20-schema.sql" <<'PY'
 import collections, re, sys
 bld, sql = (open(p, encoding="utf-8").read() for p in sys.argv[1:3])
 rows = collections.defaultdict(set)
@@ -332,48 +367,95 @@ done
 # games is the headline policy move: DEFAULT-OFF.
 case " ${DEFAULT_ON} " in *" games "*) bad "POLICY REGRESSION: games is in the default-on set" ;; *) ok "POLICY: games is DEFAULT-OFF (not in built-in default)" ;; esac
 
-# ── 4c) x86 builder parity: the SAME selection knobs are wired there too ──────
-# build-x86-host-stage4.sh ports the rpi5 resolution (env-respecting built-in
-# default -> `all` sentinel -> opt-in folds -> EXCLUDE_SERVICES LAST). Grep-anchor
-# each leg so a refactor of either builder cannot silently drop the parity.
-echo "-- x86 builder parity (build-x86-host-stage4.sh selection knobs) --"
+# ── 4c) x86 builder parity ────────────────────────────────────────────────────
+# WHAT THIS BLOCK USED TO BE, AND WHY IT FAILED (2026-08-26).
+# It grepped build-x86-host-stage4.sh for the selection KNOBS (built-in default,
+# USER_LEVEL_SERVICES, --all-services, --exclude-services, the `all` expansion,
+# EXCLUDE_SERVICES) and diffed the two builders' `games)` case bodies for a list
+# of prune markers. All of that was green while THREE real divergences shipped in
+# x86 images, because none of them lived in a knob or in the games) case:
+#   1. x86 had NO _opt_render_appset_flag at all, so a deselected slug's
+#      apps/13a-optional-services.yaml element stayed installed:"true" and a
+#      repo-synced ArgoCD re-forced the service on;
+#   2. x86 had NO anubis handling at all, so an --env prod image shipped the
+#      public PoW shield off and the fe-gateway ingress un-rerouted;
+#   3. x86 ran the edge-ai-analysis dependsOn guard BEFORE EXCLUDE_SERVICES, so
+#      --exclude-services edge-ai shipped the orphan analysis wrapper.
+# A parity test that greps for a FUNCTION NAME would not have caught any of them
+# either: a name is satisfied by a comment, and by a present-but-wrong body.
+#
+# The knob greps are gone from here. tests/stack/test-optional-services-parity.sh
+# now asserts the three post-conditions ON THE RENDERED ARTEFACT, per builder,
+# through each builder's own source-chain resolution. What remains here is the
+# STRUCTURAL half that the parity suite cannot state as a post-condition: both
+# builders must resolve their gate to the SAME file, so there is no second copy
+# to drift, and the shared file must actually be sourced by both.
+echo "-- x86 builder parity (structural: ONE gate, resolved from both builders) --"
 if [ -f "${BUILDER_X86}" ]; then
-  grep -q 'OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"' "${BUILDER_X86}" \
-    && ok "x86: built-in default is 'akkoma tuwunel phpbb' (env/brand.conf-respecting)" \
-    || bad "x86: built-in default is not the env-respecting 'akkoma tuwunel phpbb'"
-  grep -q 'USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"' "${BUILDER_X86}" \
-    && ok "x86: USER_LEVEL_SERVICES matches the rpi5 user-level set" \
-    || bad "x86: USER_LEVEL_SERVICES missing or diverged from rpi5"
-  grep -q -- '--all-services' "${BUILDER_X86}" && ok "x86: accepts --all-services CLI flag" || bad "x86: missing --all-services flag"
-  grep -q -- '--exclude-services' "${BUILDER_X86}" && ok "x86: accepts --exclude-services CLI flag" || bad "x86: missing --exclude-services flag"
-  grep -qE 'OPTIONAL_SERVICES="\$\{USER_LEVEL_SERVICES\}"' "${BUILDER_X86}" \
-    && ok "x86: expands the 'all' sentinel to USER_LEVEL_SERVICES" || bad "x86: missing 'all' sentinel expansion"
-  grep -q 'EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"' "${BUILDER_X86}" \
-    && ok "x86: EXCLUDE_SERVICES knob (env/brand.conf) defined" || bad "x86: EXCLUDE_SERVICES knob missing"
-  grep -q 'EXCLUDE_SERVICES removed' "${BUILDER_X86}" \
-    && ok "x86: applies the EXCLUDE_SERVICES subtraction pass" || bad "x86: EXCLUDE_SERVICES subtraction pass missing"
+  OPTLIB="${REPO}/scripts/_optional-services-lib.sh"
+  [ -f "${OPTLIB}" ] && ok "the shared optional-service gate library exists" \
+                     || bad "scripts/_optional-services-lib.sh missing"
+  # Both builders must SOURCE it (comment-stripped: prose naming the path is not a source).
+  for _b in "${BUILDER}" "${BUILDER_X86}"; do
+    sed -e 's/#.*$//' "${_b}" | grep -E '^[[:space:]]*source[[:space:]]+"\$\{SCRIPT_DIR\}/scripts/_optional-services-lib\.sh"' >/dev/null \
+      && ok "$(basename "${_b}"): sources the shared optional-service gate library" \
+      || bad "$(basename "${_b}"): does NOT source scripts/_optional-services-lib.sh"
+  done
+  # And neither may carry a LOCAL redefinition of any gate function: a local copy
+  # is defined AFTER the source line, so bash would run it, and the drift is back.
+  #
+  # EVERY BASH SPELLING, NOT JUST `name() {` AT COLUMN 1. The first version of this
+  # check anchored on `^(gate_optional_services|_opt_[a-z_]+)\(\)`. MEASURED
+  # (2026-08-26, adversarial review): a builder-local override written as
+  # `_opt_render_appset_flag ()  {`, as `function _opt_render_appset_flag {`, or
+  # indented, is run by bash and was invisible here AND to the resolver — all seven
+  # suites stayed green with D1 reproduced verbatim. The ERE below takes
+  #     NAME()   NAME ()   function NAME   function NAME()   …indented,
+  # which is the full set bash accepts.
+  for _b in "${BUILDER}" "${BUILDER_X86}"; do
+    _dupes="$(sed -e 's/#.*$//' "${_b}" \
+      | grep -oE '^[[:space:]]*(function[[:space:]]+(gate_optional_services|_opt_[a-z_]+)[[:space:]]*(\([[:space:]]*\))?[[:space:]]*\{|(gate_optional_services|_opt_[a-z_]+)[[:space:]]*\([[:space:]]*\))' \
+      | grep -oE '(gate_optional_services|_opt_[a-z_]+)' | sort -u | tr '\n' ' ')"
+    [ -z "${_dupes// /}" ] && ok "$(basename "${_b}"): defines NO local copy of any gate function" \
+      || bad "$(basename "${_b}"): re-defines gate function(s) locally, overriding the shared lib: ${_dupes}"
+  done
+  # Every gate function must resolve IDENTICALLY from both builders. This is the
+  # assertion the old games)-case diff was reaching for, generalised to the whole
+  # gate instead of one arm, and it is byte-exact rather than marker-sampled.
+  _fns="gate_optional_services _opt_selected _opt_explicitly_deselected _opt_anubis_installed
+        _opt_render_appset_flag _opt_render_installed_services _opt_wire_anubis_ingress
+        _opt_set_cr_enabled _opt_render_optionalservice_cr _opt_fix_trailing_comma
+        _opt_drop_kustomize_line _opt_drop_route _opt_drop_extrahost _opt_drop_rows"
+  _div=""; _absent=""
+  for _fn in ${_fns}; do
+    _a="$(opt_gate_extract_fn "${BUILDER}"     "${_fn}")"
+    _x="$(opt_gate_extract_fn "${BUILDER_X86}" "${_fn}")"
+    if [ -z "${_a}" ] || [ -z "${_x}" ]; then _absent="${_absent} ${_fn}"
+    elif [ "${_a}" != "${_x}" ];            then _div="${_div} ${_fn}"; fi
+  done
+  [ -z "${_absent// /}" ] && ok "all 14 gate functions resolve from BOTH builders (none absent on either)" \
+    || bad "gate function(s) absent from a builder's source chain:${_absent}"
+  [ -z "${_div// /}" ] && ok "all 14 gate functions resolve BYTE-IDENTICALLY from both builders" \
+    || bad "gate function(s) DIVERGE between the builders:${_div}"
   bash -n "${BUILDER_X86}" && ok "build-x86-host-stage4.sh: bash -n clean" || bad "x86 builder failed bash -n"
+  bash -n "${OPTLIB}"      && ok "scripts/_optional-services-lib.sh: bash -n clean" || bad "shared gate lib failed bash -n"
 
   # ── games-instances (app-store control-plane) prune parity ─────────────────
-  # The games) case in EACH builder must ALSO prune the games-instances/
-  # games-services control plane (13c ApplicationSet, manifests/games-instances,
-  # the two casdoor sync Jobs, the games-servers-console route, and the
-  # games-services route-access rows) when games itself is deselected — that
-  # control plane rides the games slug and cannot be left orphaned. Extract the
-  # REAL `games)` case body from each builder (not a hand-copied excerpt) so a
-  # future refactor of either file is caught here, not just at audit time.
-  extract_case_block() {  # $1 = builder file -> the games) ... ;; block, verbatim
-    awk '/^            games\)$/{p=1} p{print; if(/^                ;;$/){exit}}' "$1"
-  }
-  RPI5_GAMES_CASE="$(extract_case_block "${BUILDER}")"
-  X86_GAMES_CASE="$(extract_case_block "${BUILDER_X86}")"
-  [ -n "${RPI5_GAMES_CASE}" ] && ok "extracted rpi5 games) case body" || bad "could not extract rpi5 games) case body"
-  [ -n "${X86_GAMES_CASE}" ] && ok "extracted x86 games) case body" || bad "could not extract x86 games) case body"
+  # The games) case must ALSO prune the games-instances/games-services control
+  # plane (13c ApplicationSet, manifests/games-instances, the two casdoor sync
+  # Jobs, the games-servers-console route, and the games-services route-access
+  # rows) when games itself is deselected — that control plane rides the games
+  # slug and cannot be left orphaned. Resolved per builder, so a builder-local
+  # override of the case would be what is checked.
+  RPI5_GAMES_CASE="$(opt_gate_case_body "${BUILDER}" games)"
+  X86_GAMES_CASE="$(opt_gate_case_body "${BUILDER_X86}" games)"
+  [ -n "${RPI5_GAMES_CASE}" ] && ok "resolved rpi5 games) case body" || bad "could not resolve rpi5 games) case body"
+  [ -n "${X86_GAMES_CASE}" ] && ok "resolved x86 games) case body" || bad "could not resolve x86 games) case body"
   for marker in '13c-games-instances.yaml' 'manifests/games-instances' \
                 'games-services-admin-sync-job.yaml' 'games-services-runner-sync-job.yaml' \
                 'games-servers-console' 'games-services/instances' 'admin/games-services'; do
-    rpi5_has=1; echo "${RPI5_GAMES_CASE}" | grep -F -- "${marker}" >/dev/null && rpi5_has=0
-    x86_has=1;  echo "${X86_GAMES_CASE}"  | grep -F -- "${marker}" >/dev/null && x86_has=0
+    rpi5_has=1; printf '%s' "${RPI5_GAMES_CASE}" | grep -F -- "${marker}" >/dev/null && rpi5_has=0
+    x86_has=1;  printf '%s' "${X86_GAMES_CASE}"  | grep -F -- "${marker}" >/dev/null && x86_has=0
     if [ "${rpi5_has}" -eq 0 ] && [ "${x86_has}" -eq 0 ]; then
       ok "games-instances parity: both builders prune '${marker}' in the games) case"
     elif [ "${rpi5_has}" -eq 0 ] && [ "${x86_has}" -ne 0 ]; then
@@ -387,7 +469,6 @@ if [ -f "${BUILDER_X86}" ]; then
 else
   bad "build-x86-host-stage4.sh missing"
 fi
-
 # (b) OPTIONAL_SERVICES=all — renders EVERYTHING.
 seed_tree "all-sentinel"
 OPTIONAL_SERVICES="$(resolve_selection "all" "")"
@@ -449,6 +530,82 @@ yaml.safe_load(open(f"{t}/manifests/external-secrets/kustomization.yaml"))
 PY
 else
   echo "  SKIP YAML/JSON parse (no python3)"
+fi
+
+# ── 6) OptionalService CR seed: ABSOLUTE per-slug `enabled:` values ──────────
+# WHY ABSOLUTE, AND WHY HERE. The CR is the runtime desired-state twin of the
+# installed-services ConfigMap boolean; the admin-bff reconciler reads it. The
+# parity suite can only ever diff rpi5's rendered CR against x86's — if the SHARED
+# gate is wrong, both are wrong together and every diff still passes. That is the
+# parity suite's own stated limitation, so the absolute oracle has to live on this
+# (rpi5-side, correctness) suite. MEASURED (2026-08-26, adversarial review) before
+# this section existed: stubbing _opt_render_optionalservice_cr to `return 0`, and
+# separately deleting the `_opt_set_cr_enabled "${seed}" anubis "${val}"` line, each
+# left ALL SEVEN suites green.
+echo "-- OptionalService CR seed: absolute enabled: per slug --"
+CR="manifests/optional-services-operator/seed-optionalservices.yaml"
+# Read the rendered CR INDEPENDENTLY of the production awk (document-scoped scan of
+# the baked file, not a re-use of _opt_set_cr_enabled).
+cr_flag() {  # $1 = slug -> true|false|MISSING
+  local v; v="$(awk -v want="$1" '
+      $1=="---" { sl=""; en=""; next }
+      /^[[:space:]]*slug:[[:space:]]/    { sl=$2 }
+      /^[[:space:]]*enabled:[[:space:]]/ { en=$2 }
+      sl==want && en!="" { print en; exit }
+    ' "${TREE}/${CR}")"
+  echo "${v:-MISSING}"
+}
+if [ ! -f "${SRC}/${CR}" ]; then
+  bad "specs/cluster/${CR} missing — every CR assertion below would be vacuous"
+else
+  # (a) plain selection: selected slugs true, unselected false.
+  seed_tree "cr-selection"
+  ENV="test"
+  OPTIONAL_SERVICES="akkoma tuwunel games"
+  gate_optional_services
+  for slug in akkoma tuwunel games; do
+    [ "$(cr_flag "${slug}")" = "true" ] \
+      && ok "CR: SELECTED ${slug} -> enabled: true" \
+      || bad "CR: SELECTED ${slug} is enabled: $(cr_flag "${slug}"), expected true"
+  done
+  for slug in phpbb owncast tube character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts; do
+    [ "$(cr_flag "${slug}")" = "false" ] \
+      && ok "CR: DESELECTED ${slug} -> enabled: false" \
+      || bad "CR: DESELECTED ${slug} is enabled: $(cr_flag "${slug}"), expected false"
+  done
+  # NON-VACUITY: the rendered CR must differ from the checked-in seed, or every
+  # assertion above could be reading the fixture's own baseline. akkoma/tuwunel/phpbb
+  # ship true in the seed and phpbb is deselected here, so a real render must change it.
+  cmp -s "${TREE}/${CR}" "${SRC}/${CR}" \
+    && bad "CR: the rendered seed is BYTE-IDENTICAL to specs/ — _opt_render_optionalservice_cr never ran" \
+    || ok "CR: the seed was genuinely rewritten by the gate (assertions are not reading the fixture)"
+
+  # (b) anubis is ENV-CONDITIONAL in the CR exactly as in the ConfigMap. These three
+  #     cases are the ones the deleted `_opt_set_cr_enabled ... anubis` line broke.
+  #     case = "<label>|<ENV>|<OPTIONAL_SERVICES>|<expected CR enabled>"
+  while IFS='|' read -r _lbl _env _sel _want; do
+    [ -n "${_lbl}" ] || continue
+    seed_tree "cr-anubis-${_lbl}"
+    ENV="${_env}"
+    OPTIONAL_SERVICES="${_sel}"
+    gate_optional_services
+    [ "$(cr_flag anubis)" = "${_want}" ] \
+      && ok "CR [${_lbl}]: anubis enabled: ${_want} (ENV=${_env})" \
+      || bad "CR [${_lbl}]: anubis is enabled: $(cr_flag anubis), expected ${_want} (ENV=${_env})"
+    # and the ConfigMap boolean it mirrors must agree — a CR that silently disagrees
+    # with the install flag is its own defect.
+    _cm="$(grep -E '^[[:space:]]*anubis:[[:space:]]*"(true|false)"' \
+           "${TREE}/manifests/policy/installed-services-configmap.yaml" | head -1 | grep -oE '(true|false)')"
+    [ "${_cm:-MISSING}" = "${_want}" ] \
+      && ok "CR [${_lbl}]: the installed-services ConfigMap anubis flag AGREES (${_want})" \
+      || bad "CR [${_lbl}]: ConfigMap anubis is ${_cm:-MISSING} but the CR is ${_want} — the twins disagree"
+  done <<'CRCASES'
+prod-default|prod|akkoma tuwunel phpbb|true
+test-default|test|akkoma tuwunel phpbb|false
+prod-deselected|prod|akkoma tuwunel phpbb -anubis|false
+test-selected|test|akkoma tuwunel phpbb anubis|true
+CRCASES
+  ENV="test"
 fi
 
 echo "== RESULT: ${P} passed, ${F} failed =="

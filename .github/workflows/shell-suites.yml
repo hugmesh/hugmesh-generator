@@ -183,6 +183,7 @@ jobs:
             tests/stack/test-front-door-client-surface.sh
             tests/stack/test-no-store-posture.sh
             tests/stack/test-optional-services-exclude.sh
+            tests/stack/test-optional-services-parity.sh
             tests/stack/test-probe-auth-surface.sh
             tests/stack/test-tls-front.sh
           "
