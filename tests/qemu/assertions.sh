@@ -196,6 +196,107 @@ else
     # node is healthy. Counting it as a PASS inflated every ARM-board row.
     skip "kernel lockdown — this image requests none; lockdown is x86 + rpi5 only"
 fi
+# ── PRECONDITION FOR EVERY SELINUX ASSERTION BELOW ─────────────────────────
+# AN UNLABELLED ROOTFS PASSES ALL ~10 SELINUX CHECKS BELOW. That is not a
+# hypothetical: tests/qemu/run-qemu-test.sh used to build the stage4 rootfs with
+#
+#     tar --xattrs-include='*.*' -xpf "${STAGE4}" 2>/dev/null || tar -xpf "${STAGE4}"
+#
+# — stderr discarded, fallback unannounced — so any failure of the
+# xattr-preserving extraction silently produced a rootfs with NO
+# security.selinux on anything. Nothing below can see that. `getenforce` still
+# says Permissive, `semodule -l` still lists every module in the manifest, the
+# mode still matches the manifest, no load-failed marker is standing: a full
+# sweep of green on a filesystem where SELinux is grading nothing at all. Those
+# PASSes are not evidence; they are the shape evidence would have.
+#
+# So establish the precondition FIRST, and let it be the thing that fails.
+# Note this asserts the POSTCONDITION, not the tar: labels can legitimately
+# arrive either from the extraction's xattrs or from provision_selinux()'s
+# first-boot `restorecon -RF /` (specs/etc/keys-provision/provision.sh:2880).
+# Either route is fine. Neither having worked is what must be loud.
+#
+# Reader ladder, strongest first — all three read the same on-disk xattr:
+#   1. getfattr (sys-apps/attr), which names the attribute explicitly;
+#   2. secon (sys-apps/policycoreutils, in every specs-*/packages.list, while
+#      sys-apps/attr is in NONE of them — so on a real image this is usually the
+#      only rung that exists besides ls -Z);
+#   3. ls -Zd (coreutils built with SELinux support).
+# EACH RUNG FALLS THROUGH ON AN EMPTY ANSWER, NOT MERELY ON A MISSING TOOL. The
+# first cut of this function returned unconditionally from whichever rung's
+# binary happened to be installed, so a getfattr that EXISTS but cannot answer
+# (EOPNOTSUPP, attr built without the security namespace, a bind-mounted path)
+# produced an empty context and FAILed the assertion below on a rootfs that
+# secon would have reported as perfectly labelled. Presence is not an answer.
+# If none of the three can answer, this FAILS rather than skipping: on an image
+# that ships getenforce and semodule — which the checks below all assume —
+# being unable to read a single file's label is itself a broken SELinux
+# userland, and a skip here would hand the vacuity straight back.
+_slx_secon_label() { # _slx_secon_label PATH -> context via secon, or empty
+    # secon takes the file as the ARGUMENT OF --file ("secon --file FILE"), so
+    # the earlier "secon --file --rawcontext -- FILE" spelling made secon read a
+    # file literally named --rawcontext; and the raw flag is -R/--raw, not
+    # --rawcontext. Both spellings have moved across policycoreutils releases,
+    # so try the raw form, then the plain one: a rejected option just exits
+    # nonzero and the caller falls through to the next rung.
+    local s=""
+    s="$(secon --raw --file "$1" 2>/dev/null || true)"
+    [ -n "${s}" ] || s="$(secon --file "$1" 2>/dev/null || true)"
+    [ -n "${s}" ] || return 0
+    # secon's default output is one "key: value" line per component, NOT a bare
+    # context, so a naive *:*:*: match on the whole blob would "succeed" on
+    # "user: ...\nrole: ..." — four colons, no context. Test the FIRST line, and
+    # only accept it as a context if it holds no whitespace.
+    local first="${s%%$'\n'*}"
+    case "${first}" in
+        *[[:space:]]*) : ;;
+        *:*:*:*) printf '%s' "${first}"; return 0 ;;
+    esac
+    # Otherwise reassemble user:role:type:range from the labelled lines.
+    printf '%s\n' "${s}" | awk '
+        /^[[:space:]]*user:/  { u = $2 }
+        /^[[:space:]]*role:/  { r = $2 }
+        /^[[:space:]]*type:/  { t = $2 }
+        /^[[:space:]]*(range|level|sensitivity):/ { if (l == "") l = $2 }
+        END { if (u != "" && r != "" && t != "") printf "%s:%s:%s:%s", u, r, t, (l == "" ? "s0" : l) }'
+}
+_slx_label_of() {   # _slx_label_of PATH -> the file's SELinux context, or empty
+    local v=""
+    if command -v getfattr >/dev/null 2>&1; then
+        v="$(getfattr --absolute-names --only-values -n security.selinux -- "$1" 2>/dev/null | tr -d '\000')"
+        [ -n "${v}" ] && { printf '%s' "${v}"; return 0; }
+    fi
+    if command -v secon >/dev/null 2>&1; then
+        v="$(_slx_secon_label "$1")"
+        [ -n "${v}" ] && { printf '%s' "${v}"; return 0; }
+    fi
+    if command -v ls >/dev/null 2>&1; then
+        v="$(ls -Zd -- "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i ~ /^[^ :]+:[^ :]+:[^ :]+:/) {print $i; exit}}')"
+        [ -n "${v}" ] && { printf '%s' "${v}"; return 0; }
+    fi
+    return 0
+}
+# Probe files that come out of the stage4 tarball itself. NOT /etc/fstab and NOT
+# /etc/inittab: run-qemu-test.sh writes both of those on the host after the
+# untar, so their labels say nothing about whether the tarball's survived.
+_slx_xattr_probe="${SELINUX_XATTR_PROBE:-/sbin/init /bin/bash /bin/sh /etc/passwd}"
+_slx_probe_file=""
+for _slx_f in ${_slx_xattr_probe}; do
+    [ -e "${_slx_f}" ] && { _slx_probe_file="${_slx_f}"; break; }
+done
+_slx_probe_label=""
+[ -n "${_slx_probe_file}" ] && _slx_probe_label="$(_slx_label_of "${_slx_probe_file}")"
+# unlabeled_t is what an unlabelled file reports on a node whose policy IS
+# loaded, so an empty answer and unlabeled_t are the same verdict here. '?' is
+# what ls -Z prints when it cannot get a context at all.
+_slx_labelled=0
+case "${_slx_probe_label}" in
+    ''|'?'|*unlabeled_t*|*unlabeled:*) _slx_labelled=0 ;;
+    *:*:*:*)                           _slx_labelled=1 ;;
+    *)                                 _slx_labelled=0 ;;
+esac
+check "rootfs carries SELinux labels on disk — every SELinux check below is vacuous without this (probe:'${_slx_probe_file:-<none of ${_slx_xattr_probe}>}' label:'${_slx_probe_label:-<none>}')" \
+    '[ "${_slx_labelled}" = 1 ]'
 # SELinux: a policy must be LOADED, and the RUNNING mode must be the one that
 # was ASKED for — not merely "some real mode". The old check accepted either
 # mode unconditionally, which is one of the two seams that let the 2026-08-14
