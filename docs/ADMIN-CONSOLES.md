@@ -58,12 +58,76 @@ Two ways today:
 | System findings triage | `/mod/findings` | `ROLE_MOD` or `ROLE_ADMIN` | works |
 | Route access rules | `/admin/route-access` | `ROLE_ADMIN` | **dark — reads the wrong database** |
 | Route definitions | `/admin/routes` | `ROLE_SUPERADMIN` | partial — an ADMIN sees an empty table, not a denial |
+| ArgoCD applications | `/admin/argocd` | `ROLE_ADMIN` | **dark — no backend controller exists in any repo** |
 
 **Route access is the one to be careful with.** `GET /bff/admin/route-access` returns
 `{"rules":[]}` even for a superadmin, while the gateways are enforcing 129 seeded rules
 from a different database. Anything you add through that console lands in a table no
 gateway reads. Treat the panel as non-functional until the binding is fixed; the
 enforced rules live in `route-access-db`.
+
+**The ArgoCD dashboard is worse than dark — it renders as if it succeeded.**
+`hugmesh-admin-ui`'s `bff.service.ts` calls `/bff/admin/argocd/applications`,
+`/{name}` and `/{name}/sync`. **No controller serves any of those paths in any repo
+in the org.** Verified by a comment-stripped scan of every `@RestController` /
+`@RequestMapping` class: the only ArgoCD code in `hugmesh-admin-bff-api` is the
+App-Store effector's `ArgoCdClient` (create/delete an `Application`, ships dark
+behind `NoopArgoCdClient`), which has **no HTTP surface at all**. The controller was
+planned on a branch named `feat/argocd-admin-module` — named in
+`admin-bff-api/src/main/resources/db/changelog/007-data-constraints.xml` — and that
+branch no longer exists on any remote.
+
+Why this reads as success rather than as an outage:
+
+* The gateway is **not** the blocker. There is no `/bff/admin/argocd/**` row, but the
+  seeded `('hugmesh-fe-gateway', '/bff/admin/**', 'ROLE_ADMIN', true)` floor already
+  covers the prefix, so an admin's request is authorized and forwarded — and then the
+  admin BFF answers **404**, because nothing is mapped.
+* The UI only treats **503** as "ArgoCD not connected"
+  (`if (r.status === 503) return { items: [], unavailable: true }`). A 404 falls to
+  `r.ok ? … : { items: [], unavailable: false }`, so `unavailable` stays false.
+* The capability gate does not save it either: `argocdPresent` is satisfied by the
+  cluster-scoped `applications.argoproj.io` CRD, which really is installed, so the
+  gate passes and the live dashboard renders.
+
+Net effect: an admin opens `/admin/argocd` and sees an **empty application grid with
+no warning** — "ArgoCD is connected and manages zero applications" — on a mesh where
+ArgoCD is in fact managing the entire platform.
+
+**Decision: remove the page rather than add the row.** Adding a route-access row
+would be a no-op (the floor already covers the prefix) and adding a *narrower*
+`/bff/admin/argocd/**` row would be actively harmful — longest-pattern-wins means it
+would shadow the floor, and it would create the appearance of wiring where the only
+missing piece is a controller nobody has written. A row that authorizes a 404 is the
+"green surface that proves nothing" pattern in route form.
+
+The edit is **CROSS-REPO — not landable from `hugmesh-generator`**. Exact change,
+two repos:
+
+1. **`hugmesh-admin-ui`**
+   * `src/app/admin.routes.ts` — delete the `{ path: 'argocd', component:
+     ArgocdDashboardComponent }` entry (line ~119) and its import (line ~8), and drop
+     `/admin/argocd` from the route-list doc comment (line ~53).
+   * Delete `src/app/argocd-dashboard.component.ts` and
+     `src/app/argocd-dashboard.component.spec.ts`.
+   * `src/app/bff.service.ts` — delete `argoApplications()`, `argoApplication()` and
+     `argoSync()` (~lines 405–423) and the now-unused `ArgoAppList` / `ArgoAppDetail`
+     / `ArgoSyncResult` types.
+   * `e2e/features/admin/route-matrix.feature` — drop the `/admin/argocd` row.
+2. **`hugmesh-host-shell`**
+   * `src/app/menu/menu.component.ts` — delete
+     `{ label: 'ArgoCD', route: '/admin/argocd', testid: 'subnav-admin-argocd' }`
+     (line ~239). Leaving the menu entry while the route is gone yields a blank
+     shell page, which is the same lie in a new costume.
+
+If the page is ever *restored* instead, the missing contract is: `GET
+/bff/admin/argocd/applications` → `{items:[…]}`; `GET
+/bff/admin/argocd/applications/{name}` → detail incl. resource tree; `POST
+/bff/admin/argocd/applications/{name}/sync` with body `{confirm:"<name>"}` →
+sync result — all `ROLE_ADMIN`, all returning **503 when ArgoCD is not reachable**
+(the UI's only honest-failure signal), served by the admin BFF against
+`argocd-server` in the **`devops`** namespace. Note the operator must still not be
+shown a sync button that cannot sync.
 
 ### The moderation console (`/mod/console`)
 
@@ -194,6 +258,9 @@ Ordered by value. The first two are UI-only — the backends already work.
 5. Fix the phpBB extension's role re-derivation, and stop the forum BFF converting its
    403 into an empty-list 200 — that false-green reads as "no users" instead of
    "authorization is broken".
+6. **Remove the ArgoCD dashboard** (`/admin/argocd`) — cross-repo, spec in §2. It has
+   no backend in any repo and fails *open*, showing an empty app grid instead of an
+   error. Until it is removed, tell operators not to trust it.
 
 ---
 

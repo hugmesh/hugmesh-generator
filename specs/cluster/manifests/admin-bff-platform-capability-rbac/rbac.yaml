@@ -12,8 +12,13 @@
 #       (ArgoCD) + backups.velero.io (Velero) CRD presence → apiextensions.k8s.io
 #       customresourcedefinitions: GET (cluster-scoped).
 #   • apps().deployments().inNamespace(ns).withName(name).get() — argocd-server in
-#       `argocd` + velero in `velero` → apps deployments: GET/LIST scoped to those
-#       two namespaces ONLY.
+#       `devops` + velero in `velero` → apps deployments: GET/LIST scoped to those
+#       two namespaces ONLY. NOTE `devops`, NOT `argocd`: this platform installs
+#       ArgoCD into `devops` (bootstrap.sh / bootstrap-kind.sh both default
+#       ARGOCD_NS=devops and re-namespace the upstream install, which hardcodes
+#       `argocd`). There is no `argocd` namespace on this platform at all — it is
+#       absent from specs/cluster/namespaces/namespaces.yaml AND from the
+#       bootstrap's ensure-namespaces list.
 #   • nodes().list() — the x86 build-node label/arch scan → core nodes: LIST
 #       (cluster-scoped, no per-node binding possible).
 #
@@ -25,8 +30,11 @@
 # Mirrors the workload-console-rbac / velero backups-effector least-privilege
 # pattern: a cluster-read ClusterRole + ClusterRoleBinding for the genuinely
 # cluster-scoped reads (CRDs, Nodes), and a namespaced read Role + RoleBinding in
-# EACH of argocd + velero for the Deployment gets — so Deployment read is bounded to
-# exactly the two infra namespaces the probe names, never cluster-wide. No secrets,
+# EACH of devops + velero for the Deployment gets — so Deployment read is bounded to
+# exactly the two infra namespaces the probe names, never cluster-wide. `devops` is
+# a SHARED infra namespace (it also holds keda, calico, cloudflared, gitlab-runner,
+# the gateways, …), so this read is wider in CONTENT than a dedicated `argocd`
+# namespace would have been — still read-only, still one namespace, no secrets. No secrets,
 # no configmaps, no pods, no exec, no write verbs anywhere. SHIPS DARK: the admin-bff
 # leaves app.platform-capabilities.k8s.enabled=false (NoopPlatformCapabilityProbe)
 # until deliberately enabled, so these grants are unexercised until then.
@@ -74,8 +82,14 @@ subjects:
     name: backups-effector
     namespace: hugmesh-backend
 ---
-# ── Namespaced reads: argocd-server Deployment in `argocd` ──────────────────────
-# (.apps().deployments().inNamespace("argocd").withName("argocd-server").get()).
+# ── Namespaced reads: argocd-server Deployment in `devops` ─────────────────────
+# (.apps().deployments().inNamespace(<ns>).withName("argocd-server").get()).
+# ⚠ DUAL-WRITE PARTNER in ANOTHER repo (hugmesh-admin-bff-api): this Role's
+# namespace and Fabric8PlatformCapabilityProbe.ARGOCD_NAMESPACE must name the SAME
+# namespace. That constant is still "argocd" as of this commit, so the probe's
+# Deployment leg cannot fire until it is changed to "devops" as well — see the
+# cross-repo specification in the commit message. Fixing only this half restores the
+# GRANT; the probe half is what makes the leg actually resolve.
 # A named .get() needs `get`; `list` is added because the probe's fail-safe is
 # unforgiving and a future inNamespace().list() filter would otherwise RBAC-deny.
 # NOTHING else: no other apps kinds, no write, no other namespace.
@@ -83,7 +97,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: admin-bff-platform-capability-probe
-  namespace: argocd
+  namespace: devops
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
@@ -97,7 +111,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: admin-bff-platform-capability-probe
-  namespace: argocd
+  namespace: devops
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
