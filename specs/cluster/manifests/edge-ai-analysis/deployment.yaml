@@ -28,9 +28,28 @@ spec:
     spec:
       securityContext:
         seLinuxOptions:
-          # Unique MCS level (edge-ai=c73); edge-ai-analysis -> c49 (next free).
+          # Unique MCS level (edge-ai=c73); edge-ai-analysis -> c87.
+          #
+          # WAS c49 — CORRECTED 2026-08-26. c49 was NOT free: docs/SECURITY.md §3 had
+          # RESERVED it (with SA `sa-service-catalog-ui`) for the superadmin
+          # service-catalog-ui, whose Deployment had not been written yet, and the
+          # matrix row said so in words — "*(reserved)*" — rather than by any
+          # mechanical marker. This file's "next free" scan read the LIVE manifests,
+          # where nothing carried c49, and took it. The [mcs] uniqueness gate could
+          # not see the clash either, because a reservation with no Deployment is not
+          # a workload. It surfaced the instant that Deployment was added
+          # (manifests/superadmin-service-catalog-ui/deployment.yaml) and the gate
+          # reported c49 claimed by two workloads.
+          #
+          # THIS workload moved rather than the console, for two reasons: the console's
+          # category is the one docs/SECURITY.md pins by name, and this one is a
+          # DEFAULT-OFF stateless pod with emptyDir volumes only — no category-labelled
+          # PV to relabel, so the move costs a pod restart and nothing else. The matrix
+          # in docs/SECURITY.md now carries a row for this service, which is the actual
+          # fix: it was absent from the table, which is why the reservation was
+          # invisible to whoever picked c49 here.
           type: container_t
-          level: "s0:c49"
+          level: "s0:c87"
         runAsNonRoot: true
         runAsUser: 65532
         seccompProfile: { type: RuntimeDefault }

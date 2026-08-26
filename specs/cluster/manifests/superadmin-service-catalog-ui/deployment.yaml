@@ -1,0 +1,135 @@
+# hugmesh-superadmin-service-catalog-ui — the SUPERADMIN Service Catalog console: an
+# Angular native-federation REMOTE (exposes `./ServiceCatalog`) served by its own
+# nginx pod in hugmesh-frontend, mounted by the host shell at
+# /superadmin/service-catalog and reachable ONLY over the tailnet
+# superadmin-gateway (apps/22-gateway-superadmin.yaml).
+#
+# ── WHY THIS FILE EXISTS (observed 2026-08-26) ────────────────────────────────
+# Every OTHER piece of this surface already shipped and cross-referenced this
+# workload by name: the gateway route `superadmin-service-catalog-ui` targets
+# http://hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc.cluster.local:8080,
+# the federation descriptor
+# (manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml)
+# points remoteEntry at the same Service, the route-access seed
+# (manifests/route-access/initdb/20-schema.sql) gates /superadmin/service-catalog/**
+# ROLE_SUPERADMIN, and docs/SECURITY.md §3 reserved the SA + MCS category. Only the
+# Deployment and Service were missing, so the whole chain terminated in nothing:
+# the gateway route resolved to a Service that did not exist and every request to
+# the console returned 503 from Spring Cloud Gateway. docs/SECURITY.md's own note
+# said so out loud ("no Deployment yet"), and the referential-integrity gate had
+# been taught to EXEMPT the missing Service with a false rationale (see the commit
+# that removes it) — so nothing red-flagged it for weeks.
+#
+# CONTAINER: the first-party image is built FROM nginxinc/nginx-unprivileged
+# (uid 101, listens :8080 — no root, no NET_BIND privilege) and bakes the Angular
+# dist/ remote (remoteEntry.json + chunks). The placeholder image reference below
+# is rewritten by the kustomization `images:` transform to the in-cluster Harbor
+# tag, matching character-forge/character-studio.
+#
+# CSP — VERIFIED PRESENT, NOT ASSUMED (the standing repo rule is that every UI must
+# send its OWN nonce'd CSP or the gateway's fallback header blanks the page, and
+# blob: is required rather than optional). Read out of the UI repo's nginx.conf on
+# 2026-08-26: it maps $request_id -> $cspnonce, sub_filter-injects nonce="$cspnonce"
+# into every <script> of index.html, and emits
+#   script-src 'self' 'nonce-$cspnonce' blob:; ... worker-src 'self' blob:
+# with no 'unsafe-inline' in script-src. So no CSP work is owed here; that conf
+# lives in the UI repo and cannot be changed from this one.
+#
+# PROBES use /healthz (the UI's nginx.conf serves it as a `location =` returning
+# 200 'ok'), NOT /remoteEntry.json: that path falls through the SPA
+# `try_files $uri $uri/ /index.html`, so a build that shipped WITHOUT a
+# remoteEntry.json would still probe 200 with an HTML body. A probe that cannot
+# fail is not a probe.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hugmesh-superadmin-service-catalog-ui
+  namespace: hugmesh-frontend
+  labels:
+    app: hugmesh-superadmin-service-catalog-ui
+    app.kubernetes.io/part-of: hugmesh.net
+spec:
+  # Single replica, and NO HorizontalPodAutoscaler: this console is reached by a
+  # handful of superadmins over the tailnet, never by the public. replicas is
+  # pinned deliberately — the [hpa-replicas] gate only forbids pinning it on a
+  # Deployment an HPA also scales, and there is no HPA here.
+  replicas: 1
+  selector:
+    matchLabels: { app: hugmesh-superadmin-service-catalog-ui }
+  template:
+    metadata:
+      labels: { app: hugmesh-superadmin-service-catalog-ui }
+    spec:
+      nodeSelector: { hugmesh.net/frontend: "true" }
+      # The identity docs/SECURITY.md §3 RESERVED for this component, used verbatim.
+      serviceAccountName: sa-service-catalog-ui
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          # RESERVED in docs/SECURITY.md §3 for exactly this workload: "Category
+          # s0:c49 and SA sa-service-catalog-ui are reserved here so that when its
+          # Deployment is added it inherits a non-colliding identity; the Deployment
+          # must carry securityContext.seLinuxOptions: { type: container_t,
+          # level: "s0:c49" }." Not invented, not the next free number.
+          type: container_t
+          level: "s0:c49"
+      containers:
+        - name: web
+          # PLACEHOLDER (rewritten by the kustomization images: transform). Base is
+          # nginxinc/nginx-unprivileged — non-root uid 101, :8080.
+          image: hugmesh/superadmin-service-catalog-ui:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            # nginx-unprivileged writes its pid/cache/tmp; those are on emptyDir
+            # below, so the root filesystem itself can stay read-only.
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits:   { cpu: 300m, memory: 192Mi }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            # nginx-unprivileged + readOnlyRootFilesystem needs writable cache/run/tmp.
+            - { name: nginx-cache, mountPath: /var/cache/nginx }
+            - { name: nginx-run,   mountPath: /tmp }
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+---
+# ClusterIP on :8080 — the EXACT name/namespace/port three other files already
+# forward-reference, and they are the reason none of these three numbers is free
+# to change here:
+#   apps/22-gateway-superadmin.yaml route `superadmin-service-catalog-ui`
+#     uri: http://hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc.cluster.local:8080
+#   manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml
+#     remoteEntry: http://hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc.cluster.local:8080/remoteEntry.json
+#   docs/SECURITY.md §3 JKS/CN column: hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc
+# NOTE the port is 8080 end-to-end (nginx-unprivileged's non-root listener), unlike
+# the older UI remotes whose Service fronts :80 — the descriptor and the gateway
+# route both already say :8080, so the Service must not "normalise" to :80.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugmesh-superadmin-service-catalog-ui
+  namespace: hugmesh-frontend
+  labels:
+    app: hugmesh-superadmin-service-catalog-ui
+    app.kubernetes.io/part-of: hugmesh.net
+spec:
+  type: ClusterIP
+  selector: { app: hugmesh-superadmin-service-catalog-ui }
+  ports: [{ name: http, port: 8080, targetPort: http }]

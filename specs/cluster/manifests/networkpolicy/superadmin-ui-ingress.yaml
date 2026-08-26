@@ -1,0 +1,48 @@
+# superadmin-ui-ingress — admit the TAILNET superadmin-gateway (hugmesh-pki) to the
+# SUPERADMIN Service Catalog console pod in hugmesh-frontend.
+#
+# ── WHY (observed 2026-08-26, while adding the console's Deployment) ──────────
+# tier-ingress.yaml's hugmesh-frontend policy has `podSelector: {}` and a from-set of
+# exactly three namespaces: hugmesh-frontend (self: fe-gateway -> UIs), devops (ArgoCD
+# reconcile) and ingress-nginx (the public facade). hugmesh-pki is NOT in it — every
+# other frontend UI is fronted by the fe-gateway, which lives in hugmesh-frontend, so
+# the omission never mattered before. The Service Catalog console is the FIRST frontend
+# workload whose only front door is a gateway in ANOTHER namespace
+# (hugmesh-superadmin-gateway, hugmesh-pki — apps/22-gateway-superadmin.yaml), so
+# without this file the console pod would run healthy and Ready while every request
+# through its gateway died in the CNI. That is a silent failure: no event, no restart,
+# no log on the pod side; just a gateway timeout.
+#
+# ── WHY A SEPARATE POLICY AND NOT A LINE IN tier-ingress ─────────────────────
+# k8s NetworkPolicy is ADDITIVE (union of every selecting policy) with no deny, so this
+# file can only ever ADD one source to ONE pod. Adding `hugmesh-pki` to the
+# hugmesh-frontend tier from-set instead would admit EVERY pki pod (casdoor,
+# route-access-db, headwind, attestation-server, harbor…) to EVERY frontend pod — a
+# far wider grant than the one route needs. This is the same combined
+# namespaceSelector + podSelector peer shape db-ingress.yaml uses for its
+# cross-namespace gateway consumers: both halves are ANDed inside one from-entry, so it
+# pins the source namespace AND the source pod label.
+#
+# Egress is untouched (this set is ingress-only, see kustomization.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: superadmin-service-catalog-ui-ingress
+  namespace: hugmesh-frontend
+  labels:
+    app: hugmesh-superadmin-service-catalog-ui
+    app.kubernetes.io/part-of: hugmesh.net
+spec:
+  podSelector:
+    matchLabels: { app: hugmesh-superadmin-service-catalog-ui }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # The tailnet superadmin-gateway in hugmesh-pki. The `app.kubernetes.io/instance`
+        # label is what the hugmesh-gateway chart stamps from .Values.instance.name —
+        # the same selector db-ingress.yaml uses to admit this gateway to route-access-db.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
+          podSelector:
+            matchLabels: { app.kubernetes.io/instance: hugmesh-superadmin-gateway }
+      ports:
+        - { protocol: TCP, port: 8080 }
