@@ -33,7 +33,8 @@ WHAT THIS PAGE OFFERS
      (see ``_emulation_common.default_session_index`` for the aborted-session trap
      that rule closes).
 
-  2. BUILD FIRST, THEN TEST — leave into the normal image flow with ``cfg.qemu_e2e``
+  2. BUILD FIRST, THEN TEST — leave into the normal image flow with
+     ``cfg.qemu_device_tests``
      set, so the tests run against the images that build produces. The chaining flag
      is the SAME one BuildPage exposes, and the ownership latch in ``validatePage``
      is unchanged. Two things make this arm REPORT ITSELF as inert if they are
@@ -66,6 +67,22 @@ WHAT THIS PAGE OFFERS
      harvest every SELinux AVC into a narrowing report. The argv is
      ``emulation.avc_argv``'s, pinned to this plan's session like every other.
 
+  6. THE PLAYWRIGHT BROWSER SUITE — ``tests/qemu/run-qemu-e2e.sh`` over ONE planned
+     row: boot it, seed the e2e identities over SSH, and drive the UNCHANGED
+     ``tests/e2e`` specs against the guest's forwarded UI. That harness has worked for
+     months and had NO door anywhere in the Studio (zero references under studio/
+     before 2026-08-26); this group is the door. The argv is
+     ``emulation.playwright_argv``'s, ``-w`` pinned to this plan's session.
+
+THREE THINGS IN THIS TREE ARE CALLED "e2e", AND THIS PAGE TOUCHES TWO OF THEM
+-----------------------------------------------------------------------------
+``run-qemu-docker.sh`` runs IN-GUEST ASSERTIONS over a matrix (items 1-3 above, and
+the post-build opt-in). ``run-qemu-e2e.sh`` runs PLAYWRIGHT against one booted node
+(item 6). ``run-matrix-e2e.sh`` is a third harness nothing here drives. The config
+field behind the build-first arm used to be called ``qemu_e2e``, so its checkbox
+read as a promise to run the browser suite and delivered the assertions instead; it
+is ``cfg.qemu_device_tests`` now, and every label on both screens names its script.
+
 WHY CONTAINERIZED (and why the page says so up-front)
 ------------------------------------------------------
 Booting a golden .img means lifting its kernel out of the boot partition, which is a
@@ -80,6 +97,7 @@ a modal in page logic hangs the headless tests (the no-modals rule).
 """
 from __future__ import annotations
 
+import dataclasses
 import shlex
 import threading
 
@@ -350,6 +368,99 @@ class QemuPage(QtWidgets.QWizardPage):
         avc.addStretch(1)
         lay.addLayout(avc)
 
+        # ── the Playwright browser suite, over ONE booted row ────────────────────
+        # A DIFFERENT harness from everything above: run-qemu-e2e.sh boots the row
+        # through launch-x86.sh/launch-pi.sh, seeds the e2e identities over SSH and
+        # runs the UNCHANGED tests/e2e specs against the guest's forwarded UI. The
+        # group is titled with its script so it cannot be mistaken for the in-guest
+        # assertions the buttons above run.
+        self.pw_group = QtWidgets.QGroupBox(
+            "Playwright browser suite on an emulated device "
+            "(tests/qemu/run-qemu-e2e.sh)")
+        pw = QtWidgets.QFormLayout(self.pw_group)
+
+        self.pw_row = QtWidgets.QComboBox()
+        self.pw_row.setToolTip(
+            "Which planned row to boot and drive with a browser. Only rows whose "
+            "platform has a launcher in run-qemu-e2e.sh are listed — it wires "
+            "launch-x86.sh (x86) and launch-pi.sh (rpi3/4/5) and rejects any other "
+            "--target, so a jetson or OrangePi row has no honest entry here.")
+        pw.addRow("Device to drive:", self.pw_row)
+
+        self.pw_ui_port = QtWidgets.QSpinBox()
+        self.pw_ui_port.setRange(1024, 65535)
+        self.pw_ui_port.setValue(emulation.PlaywrightOptions.ui_port)
+        self.pw_ui_port.setToolTip(
+            "Host port the guest's UI/gateway HTTPS is forwarded to — the specs' "
+            "baseURL becomes https://localhost:<this>. Change it if something on "
+            "this workstation already owns the default.")
+        pw.addRow("Forwarded UI port:", self.pw_ui_port)
+
+        self.pw_ssh_port = QtWidgets.QSpinBox()
+        self.pw_ssh_port.setRange(1024, 65535)
+        self.pw_ssh_port.setValue(emulation.PlaywrightOptions.ssh_port)
+        self.pw_ssh_port.setToolTip(
+            "Host port forwarded to the guest's :22. The accounts are seeded over "
+            "this, so it must be free too.")
+        pw.addRow("Forwarded SSH port:", self.pw_ssh_port)
+
+        self.pw_args = QtWidgets.QLineEdit()
+        self.pw_args.setPlaceholderText(
+            "e.g. specs/01-frontpage.spec.ts   or   --grep @smoke")
+        self.pw_args.setToolTip(
+            "Extra argv handed straight to `playwright test`, after the script's "
+            "own `--` separator: a spec path, --grep, --repeat-each. Split on "
+            "whitespace, so '--grep @smoke' arrives as TWO arguments. It is a "
+            "RunEnvelope field, not a widget read at spawn time, so the command "
+            "below and the run are built from the same value.")
+        pw.addRow("Specs / Playwright args:", self.pw_args)
+
+        self.pw_cmd_view = QtWidgets.QPlainTextEdit()
+        self.pw_cmd_view.setReadOnly(True)
+        self.pw_cmd_view.setMaximumHeight(72)
+        self.pw_cmd_view.setToolTip(
+            "The exact command the buttons below run — authored by "
+            "core.emulation.playwright_argv, the same call the spawn uses.")
+        pw.addRow("Command:", self.pw_cmd_view)
+
+        pwb = QtWidgets.QHBoxLayout()
+        self.pw_list_btn = QtWidgets.QPushButton("List specs")
+        self.pw_list_btn.setToolTip(
+            "Enumerate the boot plan AND the Playwright specs this lane would run, "
+            "as JSON. Boots nothing, needs no root and no network — so it works "
+            "even from an unprivileged Studio.")
+        self.pw_list_btn.clicked.connect(
+            lambda: self._launch_playwright(list_only=True))
+        self.pw_preview_btn = QtWidgets.QPushButton("Preview (dry run)")
+        self.pw_preview_btn.setToolTip(
+            "Resolve the artifacts this row would boot from and print the plan. "
+            "Boots nothing and needs no root.")
+        self.pw_preview_btn.clicked.connect(
+            lambda: self._launch_playwright(dry_run=True))
+        self.pw_run_btn = QtWidgets.QPushButton("Run Playwright suite")
+        self.pw_run_btn.setToolTip(
+            "Boot this row, seed the e2e accounts over SSH and run the tests/e2e "
+            "specs against its forwarded UI. A FULL emulated boot, and it needs "
+            "ROOT — see the line below. Cancel stops it and its children.")
+        self.pw_run_btn.clicked.connect(
+            lambda: self._launch_playwright(list_only=False))
+        for b in (self.pw_list_btn, self.pw_preview_btn, self.pw_run_btn):
+            pwb.addWidget(b)
+        pwb.addStretch(1)
+        pw.addRow("", pwb)
+
+        #: Why the Run button is dead on an unprivileged Studio, stated ON the page
+        #: rather than discovered when the script dies — and naming the containerized
+        #: route, never sudo (there is no way for a GUI to answer a password prompt).
+        #: Inline label, never a dialog: the no-modals rule.
+        self.pw_note = QtWidgets.QLabel()
+        self.pw_note.setWordWrap(True)
+        self.pw_note.setTextFormat(Qt.TextFormat.RichText)
+        self.pw_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        pw.addRow("", self.pw_note)
+        lay.addWidget(self.pw_group)
+
         # ── where the persistent half lives ─────────────────────────────────────
         self.console_pointer = QtWidgets.QLabel(
             f'<span style="color:{MUTED}">{_CONSOLE_POINTER}</span> This page boots '
@@ -383,9 +494,14 @@ class QemuPage(QtWidgets.QWizardPage):
         for w in (self.use_existing, self.build_first):
             w.toggled.connect(self._source_changed)
         for w in (self.jobs, self.mem, self.timeout, self.assert_timeout,
-                  self.cache_max):
+                  self.cache_max, self.pw_ui_port, self.pw_ssh_port):
             w.valueChanged.connect(self._refresh_command)
         self.extra_users.textChanged.connect(self._refresh_command)
+        # The Playwright passthrough is a RunEnvelope field, so changing it must
+        # rebuild the plan the preview and the spawn both read — exactly like every
+        # knob in the Run envelope box above.
+        self.pw_args.textChanged.connect(self._refresh_command)
+        self.pw_row.currentIndexChanged.connect(self._refresh_playwright_command)
 
     # ── wizard-flow contract (mirrors DeployPage/PhonePage) ─────────────────────
     def nextId(self) -> int:
@@ -415,8 +531,8 @@ class QemuPage(QtWidgets.QWizardPage):
     def validatePage(self) -> bool:
         """SEED the chaining flag — BuildPage owns it from the moment it is reached.
 
-        cfg.qemu_e2e has two writers: this page's radio and BuildPage's checkbox. That
-        is fine going forward and broken on the way back, because collect_all() re-runs
+        cfg.qemu_device_tests has two writers: this page's radio and BuildPage's
+        checkbox. That is fine going forward and broken on the way back, because collect_all() re-runs
         the validatePage of every VISITED page (wizard.py:262-268) — so every revisit of
         BuildPage used to re-run this method and re-assert the radio over the operator's
         own choice. The live sequence: build-first -> Next (arms) -> BuildPage -> untick
@@ -435,9 +551,9 @@ class QemuPage(QtWidgets.QWizardPage):
         again BuildPage reads as unvisited, this method re-arms, and the bug survives
         unchanged. (Measured: the trace still showed qemu.py validatePage as the writer.)
         """
-        if getattr(self.wiz, "qemu_e2e_owned_by_build", False):
+        if getattr(self.wiz, "qemu_device_tests_owned_by_build", False):
             return True
-        self.wiz.cfg.qemu_e2e = self.build_first.isChecked()
+        self.wiz.cfg.qemu_device_tests = self.build_first.isChecked()
         return True
 
     # ── docker / kvm notes ──────────────────────────────────────────────────────
@@ -533,7 +649,7 @@ class QemuPage(QtWidgets.QWizardPage):
     def _source_changed(self, *_):
         existing = self.use_existing.isChecked()
         for w in (self.session_box, self.knobs, self.cmd_view, self.results,
-                  self.console_pointer):
+                  self.console_pointer, self.pw_group):
             w.setVisible(existing)
         for w in (self.run_btn, self.list_btn, self.refresh_btn, self.avc_btn,
                   self.avc_combo):
@@ -585,13 +701,25 @@ class QemuPage(QtWidgets.QWizardPage):
                 seen.append(name)
         return tuple(seen)
 
+    def _playwright_args(self) -> tuple[str, ...]:
+        """The spec/--grep field as the argv that rides after the script's ``--``.
+
+        Split on whitespace, because that is what `playwright test` receives on a
+        command line: '--grep @smoke' must arrive as TWO arguments, and a field that
+        handed it over as one would narrow to a spec file literally named
+        '--grep @smoke' and match nothing. (The same word-splitting rule the
+        Makefile's E2E_ARGS passthrough documents.)
+        """
+        return tuple(self.pw_args.text().split())
+
     def _envelope(self) -> emulation.RunEnvelope:
         return emulation.RunEnvelope(
             jobs=self.jobs.value(), mem_mb=self.mem.value(), smp=2,
             timeout_s=self.timeout.value(),
             assert_timeout_s=self.assert_timeout.value(),
             extra_users=self._extra_users(),
-            cache_max_gb=self.cache_max.value())
+            cache_max_gb=self.cache_max.value(),
+            playwright_args=self._playwright_args())
 
     def _build_plan(self) -> emulation.EmulationPlan | None:
         """The preview plan for the current session + envelope. Boots nothing."""
@@ -616,6 +744,11 @@ class QemuPage(QtWidgets.QWizardPage):
         if plan is None:
             self.cmd_view.setPlainText("")
             self.avc_combo.clear()
+            # The Playwright group has its own combo and its own preview; leaving
+            # them populated from the last plan would offer a Run against a session
+            # that is no longer selected.
+            self.pw_row.clear()
+            self._refresh_playwright_command()
             return
         self.cmd_view.setPlainText(
             " ".join(shlex.quote(a) for a in emulation.run_argv(plan)))
@@ -627,7 +760,102 @@ class QemuPage(QtWidgets.QWizardPage):
         if want in plan.labels:
             self.avc_combo.setCurrentIndex(plan.labels.index(want))
         self.avc_combo.blockSignals(False)
+        self._refresh_playwright_rows(plan)
         self._sync_controls()
+
+    # ── the Playwright lane ─────────────────────────────────────────────────────
+    def _refresh_playwright_rows(self, plan: emulation.EmulationPlan):
+        """Offer only rows run-qemu-e2e.sh has a launcher for.
+
+        Listing a jetson row here would be a control that always dies: the script
+        wires launch-x86.sh and launch-pi.sh, and its own parser rejects any other
+        --target. The label under the combo says so when nothing qualifies, rather
+        than leaving an empty dropdown to be read as "no images".
+        """
+        eligible = [r.label for r in plan.rows
+                    if emulation.playwright_target_for(r.platform)]
+        want = self.pw_row.currentData()
+        self.pw_row.blockSignals(True)
+        self.pw_row.clear()
+        for label in eligible:
+            self.pw_row.addItem(label, label)
+        if want in eligible:
+            self.pw_row.setCurrentIndex(eligible.index(want))
+        self.pw_row.blockSignals(False)
+        self._refresh_playwright_command()
+
+    def _playwright_options(self) -> emulation.PlaywrightOptions | None:
+        """The options for the selected row, or None when nothing is selectable."""
+        plan = self.plan
+        label = str(self.pw_row.currentData() or "")
+        if plan is None or not label:
+            return None
+        try:
+            return emulation.playwright_options_for_row(
+                plan, label, ui_port=self.pw_ui_port.value(),
+                ssh_port=self.pw_ssh_port.value())
+        except ValueError:
+            return None
+
+    def _refresh_playwright_command(self, *_):
+        """Repaint the Playwright command + the root refusal.
+
+        The preview is ``emulation.playwright_argv``'s output — the SAME call
+        ``_launch_playwright`` spawns — so what is printed cannot drift from what
+        runs. That is the whole reason the ports and the spec filter are wired
+        through the options/envelope instead of being read off the widgets at spawn.
+        """
+        opts = self._playwright_options()
+        if opts is None or self.plan is None:
+            self.pw_cmd_view.setPlainText("")
+            self.pw_note.setText(
+                f'<span style="color:{MUTED}">No planned row has an x86 or Pi '
+                "launcher in <tt>tests/qemu/run-qemu-e2e.sh</tt>, so this lane has "
+                "nothing to boot from this session.</span>")
+        else:
+            self.pw_cmd_view.setPlainText(
+                " ".join(shlex.quote(a)
+                         for a in emulation.playwright_argv(self.plan, opts)))
+            blocker = emulation.playwright_root_blocker()
+            self.pw_note.setText(
+                f'<span style="color:{WARN}">{blocker}</span>' if blocker else
+                f'<span style="color:{MUTED}">Running as root: this lane can boot '
+                "from here.</span>")
+        self._sync_controls()
+
+    def _launch_playwright(self, *, list_only: bool = False,
+                           dry_run: bool = False):
+        """Enumerate, preview, or actually run the browser suite over one row.
+
+        ``--list`` and ``--dry-run`` need no root and are offered unconditionally;
+        the real run is refused HERE, before the spawn, with the containerized route
+        named — the Studio must never reach for sudo, and letting the script die
+        three seconds later teaches the operator nothing they can act on.
+        """
+        if self._running:
+            return
+        plan = self._build_plan()
+        opts = self._playwright_options()
+        if plan is None or opts is None:
+            return
+        if not (list_only or dry_run):
+            blocker = emulation.playwright_root_blocker()
+            if blocker:
+                self.note.setText(f'<span style="color:{WARN}">{blocker}</span>')
+                console.write(self.log, f"!! refused: {blocker}")
+                return
+        opts = dataclasses.replace(opts, list_only=list_only, dry_run=dry_run)
+        argv = emulation.playwright_argv(plan, opts)
+        verb = ("playwright spec listing" if list_only else
+                "playwright dry run" if dry_run else
+                f"playwright suite on {opts.target}/{opts.role}")
+        if not (list_only or dry_run):
+            console.write(
+                self.log,
+                f"[playwright] {opts.target}/{opts.role}: a FULL emulated boot, then "
+                f"the tests/e2e specs against https://localhost:{opts.ui_port} — "
+                "Cancel stops it and its children.")
+        self._run(verb, argv)
 
     # ── run ─────────────────────────────────────────────────────────────────────
     def _launch(self, *, list_only: bool):
@@ -763,6 +991,15 @@ class QemuPage(QtWidgets.QWizardPage):
             w.setEnabled(idle and docker_ok and planned)
         self.avc_btn.setEnabled(idle and docker_ok and planned
                                 and bool(self.avc_combo.currentData()))
+        # The Playwright lane does NOT gate on docker: run-qemu-e2e.sh drives the
+        # host launchers directly (that is exactly why it needs root and the
+        # containerized lane does not). Gating it on the docker probe would grey out
+        # a listing that works fine on a machine with no daemon at all.
+        pw_row = bool(self.pw_row.currentData())
+        for w in (self.pw_list_btn, self.pw_preview_btn):
+            w.setEnabled(idle and planned and pw_row)
+        self.pw_run_btn.setEnabled(idle and planned and pw_row
+                                   and not emulation.playwright_root_blocker())
         self.refresh_btn.setEnabled(idle)
         self.cancel_btn.setEnabled(self._running)
 

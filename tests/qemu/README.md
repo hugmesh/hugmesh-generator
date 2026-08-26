@@ -59,7 +59,8 @@ runner polls until `--timeout`. Console output is captured to
 | File | Purpose |
 |---|---|
 | `run-qemu-test.sh` | Pi: orchestrates build disks, boot QEMU, wait for SSH, assert, power off (root). |
-| `run-qemu-e2e.sh` | Node E2E: boot a role image + run the Playwright suite against the forwarded UI (root). |
+| `run-qemu-e2e.sh` | Node E2E: boot a role image + run the **Playwright** suite against the forwarded UI (root to boot; `--list` / `--dry-run` need none). |
+| `qemu-e2e-lane_test.sh` | Hermetic tests for that lane's `--list`, `--dry-run` and non-root refusal (no boot, no docker, no root). |
 | `verify-client.sh` | Client desktop: non-root boot + console-assertion verification (laptop/chromebook/desktop). |
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
 | `launch-pi.sh` | Boot a Pi **golden `.img`** under `-M virt` with a KEYS disk (`--kernel` loaded directly — QEMU has no BCM2712 model; it takes no `--stage4`, that is `run-qemu-test.sh`'s input). |
@@ -192,6 +193,45 @@ make avc-workout PLATFORM=x86 ROLE=pki ENFORCING=1 WORK_DIR=...
 Artifacts land in `out/qemu-runs/avc/<platform>_<role>_<ts>/` (`report.txt`,
 `avc-raw.txt`, `probes.log`, `semodule-l.txt`, `selinux-modules.status`,
 `keys-provision.log`, `launch/console.log`).
+
+## Enumerating the Playwright lane (`run-qemu-e2e.sh --list`)
+
+`--list` answers "what would this lane actually run?" without booting anything: it
+emits one JSON document holding the resolved boot plan (target, role, ports,
+base URL, the artifacts it found or `null` for the ones it did not) **and** the
+Playwright spec tree, then exits.
+
+```bash
+make e2e-list                                   # ROLE/ARCH as usual
+make e2e-list E2E_ARGS='--grep @smoke'          # what would that narrowing run?
+tests/qemu/run-qemu-e2e.sh -w /srv/img --list -- specs/01-frontpage.spec.ts
+```
+
+It needs **no root, no image and no network**: it runs before the artifact
+autodetect, so a tree that has built nothing still describes the lane. The spec half
+is `playwright test --list --reporter=json`; `--reporter=json` is **forced**, because
+a bare `--list` under this config's reporter array still fires every file writer and
+would clobber the last real run's `junit.xml`/`report.json`/`summary.json` in
+`SNAP_REPORT_DIR`. Measured 2026-08-26: 33 spec files / 221 tests enumerated, and
+`SNAP_REPORT_DIR` left empty. When `tests/e2e/node_modules` is missing the spec half
+skips **loudly and by name** (`playwright_skipped` in the JSON, plus a line on
+stderr) and the boot-plan half still answers.
+
+## Why this lane refuses instead of calling `sudo`
+
+Booting needs uid 0 — `launch-x86.sh`/`launch-pi.sh` loop-mount the golden image to
+lift its kernel out of the boot partition. `run-qemu-e2e.sh` never invokes `sudo`:
+the Studio drives it, and a GUI cannot answer an interactive password prompt. Its
+refusal instead names the three real routes — `--list`/`--dry-run` (no root), the
+**privileged container** the device-test lane already uses for this same constraint
+(`make qemu-docker-image`, then `docker run --privileged … --entrypoint …`), or a
+shell that is already root.
+
+The container path is **not automatic yet**, and the reason is written in the script:
+`docker/Dockerfile.qemu-runner` deliberately keeps the guest's port forwards inside
+the container and ships no Node, so the browser half would have to run on the host
+against a published `--ui-port` while phases 1-3 run inside. That is a new entrypoint,
+and it cannot be verified without booting a guest.
 
 ## Client desktop images (`verify-client.sh`)
 

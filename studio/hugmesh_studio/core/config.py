@@ -763,7 +763,7 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_footer_hidden", "login_footer_size", "login_footer_bg",
                    "login_footer_text",
                    "login_bg_effect",
-                   "additional_domains", "configure_users", "qemu_e2e")
+                   "additional_domains", "configure_users", "qemu_device_tests")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -2269,7 +2269,18 @@ class ImageConfig:
     # reaches argv. Only meaningful on ENV=test images: a prod build has the test
     # runner pruned out of its app tree, so booting one proves nothing about the
     # stack the assertions look for (BuildPage gates the checkbox on env accordingly).
-    qemu_e2e: bool = False
+    #
+    # NAMED FOR THE LANE IT ACTUALLY DRIVES. Until 2026-08-26 this field was called
+    # `qemu_e2e`, and every label built from that name promised the OTHER lane: THREE
+    # different harnesses in this tree are called "e2e" —
+    #   * tests/qemu/run-qemu-docker.sh   in-guest ASSERTIONS over a matrix of images
+    #                                     (this field, and the only one the Studio ran);
+    #   * tests/qemu/run-qemu-e2e.sh      the PLAYWRIGHT browser suite against ONE booted
+    #                                     image's forwarded UI (core/emulation.playwright_argv);
+    #   * tests/qemu/run-matrix-e2e.sh    the size/load matrix gated on HUGMESH_QEMU_E2E=1.
+    # An operator who ticked "run the e2e suite on the built image" got the first and
+    # expected the second. The name now says assertions, not e2e.
+    qemu_device_tests: bool = False
     extra_flags: str = ""              # escape hatch — shlex-split, appended verbatim
 
     # ---- (de)serialization -------------------------------------------------
@@ -2331,6 +2342,12 @@ class ImageConfig:
             if k in d:
                 v = cls._tri_explicit(d[k], k)
                 d[k] = "" if v is None else v
+        # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
+        # from_dict filters unknown keys, so without this a config saved under the old
+        # name would load with the opt-in silently OFF — the `games` precedent above:
+        # intent preserved, never silently dropped.
+        if "qemu_e2e" in d and "qemu_device_tests" not in d:
+            d["qemu_device_tests"] = d.pop("qemu_e2e")
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
