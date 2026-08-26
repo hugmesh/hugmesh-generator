@@ -125,8 +125,16 @@ print(total)
 PY
 }
 
-# generated_tests <gen-dir> — count of `test(` calls in the generated specs
-# (test.describe/test.use/test.beforeEach do not match: they carry a '.').
+# generated_tests <gen-dir> — count of the test declarations in the generated
+# specs. `test(` is the ordinary case; `test.fixme(` / `test.skip(` are what
+# playwright-bdd emits for a scenario tagged @fixme / @skip — an explicitly
+# PENDING scenario with a named reason (generate/specialTags.js). Those must
+# COUNT: they are still generated, still bound (an undefined step in one still
+# fails bddgen), still listed, and still reported — as a named skip, never
+# silently. Not counting them made every honest pending scenario read to this
+# guard as a scenario that generates nothing, i.e. as the decoration it is the
+# opposite of. test.describe/test.use/test.beforeEach still do not match: the
+# alternation below is anchored on the exact three forms.
 generated_tests() {
   GEN_DIR="$1" python3 - <<'PY'
 import os, re
@@ -137,7 +145,7 @@ if os.path.isdir(root):
         for fn in files:
             if fn.endswith(".spec.js") or fn.endswith(".spec.ts"):
                 text = open(os.path.join(dirpath, fn), encoding="utf-8").read()
-                n += len(re.findall(r'^\s*test\(', text, re.M))
+                n += len(re.findall(r'^\s*test(?:\.fixme|\.skip)?\(', text, re.M))
 print(n)
 PY
 }
