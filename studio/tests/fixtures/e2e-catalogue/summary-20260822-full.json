@@ -1,0 +1,115 @@
+{
+ "tier": "LEAN",
+ "runId": "dev",
+ "result": "failed",
+ "passed": 121,
+ "failed": 76,
+ "skipped": 62,
+ "perRole": [
+  {
+   "role": "unknown",
+   "passed": 82,
+   "failed": 62,
+   "skipped": 43
+  },
+  {
+   "role": "ROLE_USER",
+   "passed": 6,
+   "failed": 12,
+   "skipped": 2
+  },
+  {
+   "role": "ROLE_MOD",
+   "passed": 6,
+   "failed": 2,
+   "skipped": 4
+  },
+  {
+   "role": "ALL",
+   "passed": 0,
+   "failed": 0,
+   "skipped": 1
+  },
+  {
+   "role": "ROLE_ADMIN",
+   "passed": 8,
+   "failed": 0,
+   "skipped": 8
+  },
+  {
+   "role": "ROLE_SUPERADMIN",
+   "passed": 9,
+   "failed": 0,
+   "skipped": 3
+  },
+  {
+   "role": "ROLE_GAMES_ADMIN",
+   "passed": 5,
+   "failed": 0,
+   "skipped": 0
+  },
+  {
+   "role": "ROLE_FORUM",
+   "passed": 2,
+   "failed": 0,
+   "skipped": 0
+  },
+  {
+   "role": "ROLE_GAMES",
+   "passed": 1,
+   "failed": 0,
+   "skipped": 0
+  },
+  {
+   "role": "ROLE_MATRIX",
+   "passed": 2,
+   "failed": 0,
+   "skipped": 1
+  }
+ ],
+ "perLayer": [
+  {
+   "layer": "unknown",
+   "passed": 74,
+   "failed": 44,
+   "skipped": 43
+  },
+  {
+   "layer": "bff",
+   "passed": 5,
+   "failed": 0,
+   "skipped": 5
+  },
+  {
+   "layer": "homeserver",
+   "passed": 2,
+   "failed": 0,
+   "skipped": 4
+  },
+  {
+   "layer": "gateway",
+   "passed": 34,
+   "failed": 0,
+   "skipped": 7
+  },
+  {
+   "layer": "sse",
+   "passed": 0,
+   "failed": 0,
+   "skipped": 1
+  },
+  {
+   "layer": "casdoor",
+   "passed": 6,
+   "failed": 0,
+   "skipped": 1
+  },
+  {
+   "layer": "ui",
+   "passed": 0,
+   "failed": 32,
+   "skipped": 1
+  }
+ ],
+ "finishedAt": "2026-08-23T02:37:06.352Z"
+}
