@@ -1069,6 +1069,24 @@ lint:optional-services-exclude:
   script:
     - bash tests/stack/test-optional-services-exclude.sh
 
+# federation_modules BUILD-TIME GATE. The exclusion gate above proves a deselected
+# slug is pruned from apps/, manifests/, gateway routes, route-access rows, the
+# installed-services ConfigMap and the 13a element — and a USB built that way STILL
+# showed the service's menu entry, because the host shell resolves its remotes from
+# `federation_modules` (GET /api/federation/capabilities) and nothing in the
+# selection ever touched that table. This suite sources the REAL renderer out of
+# BOTH stage4 builders and asserts the POST-CONDITION on the rendered
+# manifests/federation-modules-gate/sql/gate.sql for all eight gated slugs.
+# Its behavioural legs skip LOUDLY here (no local stack on a CI runner).
+lint:federation-modules-selection:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/federation/test-federation-modules-selection.sh
+
 # Merge-conflict-marker gate. A WIP checkpoint PR once merged an UNRESOLVED
 # conflict hunk into tests/stack/gateway-routes/fe/application-routes.yml — a file
 # the fe-gateway parses at STARTUP, so the platform front door crash-looped on

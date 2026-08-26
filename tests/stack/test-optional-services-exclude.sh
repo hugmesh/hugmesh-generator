@@ -56,11 +56,22 @@ extract_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER}";
 for fn in _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
           _opt_drop_kustomize_line _opt_drop_route _opt_drop_extrahost _opt_drop_rows \
           _opt_fix_trailing_comma _opt_wire_anubis_ingress _opt_render_appset_flag \
-          _opt_render_installed_services gate_optional_services; do
+          _opt_render_installed_services \
+          _opt_set_cr_enabled _opt_render_optionalservice_cr \
+          _opt_federation_module _opt_gate_sql_value _opt_render_federation_modules \
+          gate_optional_services; do
   eval "$(extract_fn "${fn}")"
   type "${fn}" >/dev/null 2>&1 || { echo "  FAIL could not extract ${fn}"; exit 1; }
 done
 ok "extracted the real gate + helper functions from build-rpi5-stage4.sh"
+# _opt_render_optionalservice_cr + _opt_render_federation_modules are extracted too,
+# not because THIS suite asserts on them (their own gates do — tests/federation/
+# test-federation-modules-selection.sh for the federation half), but because
+# gate_optional_services CALLS them: without the definitions every run printed
+# "command not found" to stderr while still reporting 0 failed, which is the exact
+# shape of a suite that looks gateable and is quietly running less code than it
+# claims. Both return 0 immediately when their artefact is absent from this
+# sandbox tree, so the assertions below are unchanged.
 
 # ── The user-level OPTIONAL services this requirement targets ─────────────────
 USER_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"

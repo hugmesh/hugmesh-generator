@@ -46,6 +46,19 @@
 #     route-access rows). Driven by OPTIONAL_SERVICES (brand.conf) +
 #     --optional-services (CLI). Precedence: built-in default (all on) <
 #     brand.conf < CLI flag.
+#   * BUILD-TIME (federation half): _opt_render_federation_modules() in the SAME two
+#     stage4 builders reads each service's `federationModule.slug` below and renders
+#     manifests/federation-modules-gate/sql/gate.sql — one
+#     `UPDATE federation_modules SET enabled = <bool> WHERE slug = '<module>';` per
+#     gated module, applied on-cluster by a PostSync hook Job. THIS FIELD WAS DEAD
+#     UNTIL 2026-08-26: a USB built with `--exclude-services akkoma` pruned every
+#     artefact the gate owns AND rendered installed:"false" in both places, and the
+#     host shell still showed the Mastodon entry — because the shell resolves its
+#     remotes from `federation_modules` (GET /api/federation/capabilities), which the
+#     selection never touched. The mapping is NOT 1:1 (phpbb -> forum), which is why
+#     it is declared here and never re-derived from the catalogue slug. See
+#     docs/OPTIONAL-SERVICES.md §3.1. ⚠ This is the MENU-VISIBILITY half only; the
+#     Deployment of a deselected service keeps running.
 #   * RUNTIME (model): rendered into the installed-services ConfigMap
 #     (manifests/policy/installed-services-configmap.yaml) that the
 #     13-service-catalog-style optional-services ApplicationSet keys off, so a
@@ -110,7 +123,10 @@ spec:
         - { gateway: hugmesh-be-gateway, urlPattern: /api/v1/pleroma/admin/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /api/pleroma/admin/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /pleroma/admin/** }
-      # federation_modules registration (federation-api repo — separate wave).
+      # federation_modules registration. The INSERT is owned by the federation-api
+      # repo's Liquibase changeset (named below); `slug` here is READ AT BUILD TIME by
+      # _opt_render_federation_modules() to render the enabled column into
+      # manifests/federation-modules-gate/sql/gate.sql (see the WHO READS IT header).
       federationModule: { slug: akkoma, mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }
       casdoorSeed: null
 

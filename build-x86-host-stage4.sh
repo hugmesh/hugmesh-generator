@@ -2515,6 +2515,11 @@ gate_optional_services() {
     # (dark-by-default) admin-bff OptionalServiceReconciler's desired-state baseline
     # matches this build (a USB built WITHOUT a slug ships its CR enabled:false).
     _opt_render_optionalservice_cr
+    # Apply the SAME surviving selection to the federation_modules registry the host
+    # shell actually reads (manifests/federation-modules-gate/sql/gate.sql, run by a
+    # PostSync hook Job). Without this a deselected slug keeps enabled=true and its
+    # menu entry renders on a USB that never installed it. UI half only.
+    _opt_render_federation_modules
 }
 # Fix the dangling trailing comma left when the LAST VALUES row of an INSERT was
 # pruned: rewrite the trailing '),' of the final data row before 'ON CONFLICT' to
@@ -2658,6 +2663,120 @@ _opt_render_optionalservice_cr() {
         _opt_set_cr_enabled "${seed}" "${slug}" "${val}"
     done
     info "OPTIONAL_SERVICES: seeded OptionalService CR enabled flags (selected: ${OPTIONAL_SERVICES:-none})"
+}
+# ── federation_modules VISIBILITY gate (the half installed:"false" never covered) ──
+# WHAT WAS OBSERVED (2026-08-26). A USB built with `--exclude-services akkoma`
+# pruned akkoma's Application, manifests, gateway routes and route-access rows,
+# rendered installed:"false" into BOTH the installed-services ConfigMap and the 13a
+# ApplicationSet element — and the host shell STILL rendered the Mastodon menu
+# entry, reporting installed=true. Cause: the host shell resolves its remotes from
+# the FEDERATION MANIFEST, which is built from `federation_modules` rows, and NO
+# part of the build-time selection ever touched that table. Every registration is
+# an unconditional Liquibase changeset seeding enabled = true — and those
+# changesets live in the SEPARATE hugmesh-federation-api repo, so the generator
+# can neither add one nor (safely) edit one: editing an APPLIED changeset breaks
+# Liquibase's checksum on every existing mesh. Hence a POST-SEED UPDATE rendered
+# into the GitOps tree (manifests/federation-modules-gate/sql/gate.sql, applied by
+# a PostSync hook Job) — the same shape the local-mesh lane already uses in
+# tests/stack/seed-e2e.sh leg 4.
+#
+# ⚠ UI HALF ONLY. This flips MENU VISIBILITY, not the workload. See the app header
+# (apps/29b-federation-modules-gate.yaml).
+#
+# _opt_federation_module <registry> <catalogue-slug>
+#   Echo the federation_modules.slug for a catalogue slug, or NOTHING when the
+#   service declares `federationModule: null`. The mapping is NOT 1:1 — phpbb's
+#   module is `forum` — and optional-services.yaml's per-slug `federationModule:`
+#   field is the ONE declared source of truth for it (until this gate landed
+#   NOTHING read that field, which is exactly how the two halves drifted apart).
+#   Handles both spellings the registry uses: the inline
+#   `federationModule: { slug: x, ... }` flow map and the multi-line block form.
+#   Comment lines are dropped FIRST — prose naming a token has inverted this class
+#   of check four times in this repo.
+_opt_federation_module() {
+    local reg
+    local slug
+    reg="$1"; slug="$2"
+    [ -f "${reg}" ] || return 0
+    awk -v want="${slug}" '
+        /^[ \t]*#/ { next }                                   # strip comments first
+        /^    - slug:[ \t]/ {
+            cur=$0; sub(/^    - slug:[ \t]*/,"",cur); sub(/[ \t]*$/,"",cur)
+            inblk=(cur==want); blk=0; next
+        }
+        inblk && /^      federationModule:/ {
+            if (match($0, /\{[ \t]*slug:[ \t]*[A-Za-z0-9_-]+/)) {
+                s=substr($0, RSTART, RLENGTH); sub(/^\{[ \t]*slug:[ \t]*/,"",s)
+                print s; exit
+            }
+            blk=1; next                                       # maybe the block form
+        }
+        blk && /^        slug:[ \t]*/ {
+            s=$0; sub(/^        slug:[ \t]*/,"",s); sub(/[ \t]*$/,"",s)
+            print s; exit
+        }
+        blk && /^      [A-Za-z]/ { exit }                     # left the block, no slug
+    ' "${reg}"
+}
+# _opt_gate_sql_value <gate.sql> <module-slug>
+#   Read the CURRENT rendered boolean for one module back out of gate.sql. This is
+#   the POST-CONDITION probe: a sed renderer no-ops silently on a missing anchor and
+#   still returns 0, so the exit code of the rewrite proves nothing. Echoes
+#   true/false, or nothing when the module has no line.
+_opt_gate_sql_value() {
+    local f
+    local mod
+    f="$1"; mod="$2"
+    [ -f "${f}" ] || return 0
+    sed -n -E "s#^[[:space:]]*UPDATE federation_modules SET enabled = (true|false) WHERE slug = '${mod}';.*#\\1#p" "${f}" | head -n 1
+}
+# Render manifests/federation-modules-gate/sql/gate.sql from the resolved
+# OPTIONAL_SERVICES selection: one UPDATE per federation module, enabled = whether
+# the owning catalogue slug survived the selection. Runs LAST in
+# gate_optional_services so it sees the same surviving selection the ConfigMap and
+# the CRs do. Idempotent; rewrites only the boolean of the matching line.
+_opt_render_federation_modules() {
+    local tree
+    local gate
+    local reg
+    tree="${SYSROOT}/var/lib/hugmesh/cluster"
+    gate="${tree}/manifests/federation-modules-gate/sql/gate.sql"
+    reg="${tree}/optional-services.yaml"
+    [ -f "${gate}" ] || return 0
+    if [ ! -f "${reg}" ]; then
+        # LOUD, never silent: with no registry there is no catalogue-slug ->
+        # module-slug mapping, so every module would keep its git baseline and a
+        # deselected service would stay visible in the host shell menu.
+        warn "federation-modules-gate: ${reg} missing — CANNOT map catalogue slugs to federation modules; gate.sql left at its baseline (deselected services may still appear in the menu)"
+        return 0
+    fi
+    local slug
+    local mod
+    local val
+    local got
+    local rendered
+    rendered=""
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge; do
+        mod="$(_opt_federation_module "${reg}" "${slug}")"
+        if [ -z "${mod}" ]; then
+            warn "federation-modules-gate: '${slug}' declares no federationModule in optional-services.yaml — nothing to gate"
+            continue
+        fi
+        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
+        # '#'-delimited so the (true|false) alternation cannot collide with the
+        # delimiter, matching _opt_render_installed_services' convention.
+        sed -i -E "s#^([[:space:]]*UPDATE federation_modules SET enabled = )(true|false)( WHERE slug = '${mod}';)#\\1${val}\\3#" "${gate}"
+        # POST-CONDITION, not exit code: read the value back. A renderer that
+        # no-ops on a missing/renamed anchor still exits 0, and the cost of the
+        # miss is a menu entry for a service that is not installed.
+        got="$(_opt_gate_sql_value "${gate}" "${mod}")"
+        if [ "${got}" != "${val}" ]; then
+            warn "federation-modules-gate: FAILED to render '${mod}' (want enabled=${val}, gate.sql says '${got:-<no line>}') — the host shell menu will NOT match this build's service selection"
+        else
+            rendered="${rendered} ${mod}=${val}"
+        fi
+    done
+    info "OPTIONAL_SERVICES: rendered federation_modules gate (${rendered:-none})"
 }
 
 # ============================================================================

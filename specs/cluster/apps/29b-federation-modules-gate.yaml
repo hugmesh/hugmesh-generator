@@ -1,0 +1,58 @@
+# federation-modules-gate — the BUILD-TIME service selection, applied to the
+# `federation_modules` registry the host shell actually reads.
+#
+# WHAT WAS OBSERVED (2026-08-26). A USB built with `--exclude-services akkoma`
+# reported installed=true for mastodon and the host shell rendered the menu entry
+# anyway. gate_optional_services() prunes the Application, the manifests, the
+# gateway routes and the route-access rows, and renders installed:"false" into both
+# the installed-services ConfigMap and the 13a ApplicationSet element — but the
+# host shell resolves its remotes from the FEDERATION MANIFEST, and that is built
+# from federation_modules rows, which no part of the build-time selection touched.
+# The registrations are unconditional Liquibase changesets seeding enabled = true.
+#
+# WHY THIS IS A SEPARATE APPLICATION rather than a file in manifests/federation-api:
+# federation-api's Application is selfHeal+prune with a Liquibase-owning workload;
+# a PostSync hook Job attached there would re-run on every federation-api sync for
+# reasons unrelated to the service selection. Keeping the gate in its own
+# Application makes "the selection changed" the only thing that reconciles it, and
+# leaves the federation-api Application byte-identical.
+#
+# sync-wave "3": after federation-db (wave 1) and hugmesh-federation-api (wave 2),
+# whose boot-time Liquibase run creates + seeds the rows this gate UPDATEs. The
+# wave is best-effort — a hook Job cannot wait on another pod's startup work — so
+# the SQL itself RAISEs while the table is missing and the Job's backoffLimit
+# retries until the changelog has landed.
+#
+# ⚠ THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY, and THIS FILE IS WHY. The
+# repoURL/targetRevision below are the GitHub literals; specs/cluster/bootstrap/
+# bootstrap.sh rewrites those literals into app-of-apps.yaml ONLY (the single file
+# it pipes to kubectl) and does NOT rewrite child Applications — only the kind-local
+# bootstrap-kind.sh does. So on a real device ArgoCD's repo-server clones GitHub
+# main and generates the gate ConfigMap from the COMMITTED gate.sql, never from the
+# USB's rendered copy, and a `--exclude-services akkoma` build is ignored. Closing
+# this needs this source to point at the device's baked tree (the shape
+# fix/device-syncs-pruned-apps is taking for apps/). Guarded both ways by leg 4c of
+# tests/federation/test-federation-modules-selection.sh.
+#
+# ⚠ AND EVEN THEN, UI HALF ONLY. This flips MENU VISIBILITY. The deselected
+# service's Deployment keeps running wherever one is still deployed; the workload
+# half needs the device to sync from a PRUNED tree, which it also does not do today.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: federation-modules-gate
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/federation-modules-gate
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
