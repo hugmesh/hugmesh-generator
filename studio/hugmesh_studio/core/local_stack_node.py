@@ -21,9 +21,10 @@ import signal
 import subprocess
 import time
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from . import devops_tools, own_casdoor, proc_group, proc_text
+from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
 from . import resource_limits, stack_limits
 from .local_services import federation_env
 
@@ -692,8 +693,17 @@ class LocalStackNode:
 
     def _make(self, target: str, timeout: int,
               extra_env: dict[str, str] | None = None,
-              on_line=None, cancel=None) -> tuple[bool, str]:
-        """Run ``make <target>``. Without ``on_line``/``cancel`` this is the original
+              on_line=None, cancel=None,
+              args: Sequence[str] | None = None) -> tuple[bool, str]:
+        """Run ``make <target> [args...]``.
+
+        ``args`` is appended to ARGV (never to a shell string) — it exists so a caller
+        can pass make VARIABLE ASSIGNMENTS such as ``E2E_SPECS=specs/01-x.spec.ts``.
+        A make variable set on the command line overrides the makefile's own default,
+        which is the only way to narrow a target without the recipe growing a second
+        spelling. It is argv rather than env on purpose: env would work for make, but
+        then nothing about the selection would be visible in the process the operator
+        (or a test) can actually see. Without ``on_line``/``cancel`` this is the original
         buffered contract (subprocess.run, full output at the end). WITH them it
         STREAMS: merged stdout+stderr line-by-line into ``on_line`` as the build
         runs (what makes an hour-long cold compose build watchable in the GUI), and
@@ -712,16 +722,17 @@ class LocalStackNode:
         reason nowhere in the log it points at. They are new sentences, not
         replays, so streaming them cannot double anything."""
         env = self._build_env(extra_env)
+        argv = ["make", target, *[str(a) for a in (args or ())]]
         if on_line is None and cancel is None:
             try:
-                r = subprocess.run(["make", target], cwd=self.generator_dir, env=env,
+                r = subprocess.run(argv, cwd=self.generator_dir, env=env,
                                    capture_output=True, text=True, timeout=timeout)
                 return (r.returncode == 0), (r.stderr or r.stdout).strip()
             except (OSError, subprocess.SubprocessError) as e:
                 return False, str(e)
         try:
             proc = subprocess.Popen(
-                ["make", target], cwd=self.generator_dir, env=env,
+                argv, cwd=self.generator_dir, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 # Had errors="replace" but no encoding, so it could not CRASH — it just
                 # decoded with the launcher's locale and mojibaked under C/POSIX. Pinning
@@ -919,7 +930,8 @@ class LocalStackNode:
         return problems
 
     def run_e2e(self, extra_env: dict[str, str] | None = None,
-                on_line=None, cancel=None) -> tuple[bool, str]:
+                on_line=None, cancel=None,
+                specs: Sequence[str] | None = None) -> tuple[bool, str]:
         """`make stack-e2e` — the Playwright suite (tests/e2e) against the
         RUNNING local stack's TLS front door (SNAP_BASE_URL=web_url's port).
         Streams like the other long verbs; Cancel kills the whole process
@@ -939,8 +951,24 @@ class LocalStackNode:
         # the subprocess env, never argv.
         env = {"SNAP_REPORT_DIR": report_rel}
         env.update(extra_env or {})
+        # THE SELECTION, on its way to argv. `specs` are Playwright positional
+        # filters (``specs/NN-x.spec.ts``, cwd tests/e2e) chosen in the feature tree;
+        # they ride `make stack-e2e E2E_SPECS=...` so the narrowing is visible in the
+        # spawned command rather than hidden in an environment nobody can see.
+        # EMPTY MEANS EVERYTHING, and only because no selection was made at all —
+        # never as a fallback for a selection that failed to compile: the caller
+        # refuses that case before it reaches here.
+        accepted, rejected = e2e_catalogue.safe_spec_args(specs or ())
+        if rejected:
+            return False, ("refusing to run: these selected paths are "
+                           + e2e_catalogue.SPEC_ARG_REJECT_REASON + " "
+                           + ", ".join(rejected))
+        args = [f"E2E_SPECS={' '.join(accepted)}"] if accepted else []
+        if accepted and on_line is not None:
+            on_line(f"[e2e] running {len(accepted)} selected spec file(s): "
+                    + ", ".join(accepted))
         ok, msg = self._make("stack-e2e", timeout=E2E_TIMEOUT_S,
-                             extra_env=env,
+                             extra_env=env, args=args,
                              on_line=on_line, cancel=cancel)
         summary_path = os.path.join(self.generator_dir, "tests", "e2e",
                                     report_rel, "summary.json")

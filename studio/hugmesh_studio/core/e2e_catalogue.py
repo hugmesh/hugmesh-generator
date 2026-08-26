@@ -111,6 +111,18 @@ E2E_DIR = os.path.join("tests", "e2e")
 SPECS_DIR = os.path.join(E2E_DIR, "specs")
 SHOTS_DIR = os.path.join(E2E_DIR, "screenshots")
 RESULTS_DIR = os.path.join(E2E_DIR, "test-results")
+FEATURES_DIR = os.path.join(E2E_DIR, "features")
+STEPS_DIR = os.path.join(E2E_DIR, "steps")
+
+# A checkout whose tree the Studio must NEVER write into. `make stack-clone` wipes
+# and re-clones .stack-src, so an edit saved there is lost with no warning and the
+# operator's next `make` silently un-does their work. Any source the tree surfaces
+# from under it is opened READ-ONLY and says so. (See core/local_mesh_bootstrap: the
+# same directory is gitignored, which is why nothing here would even show as dirty.)
+STACK_SRC_DIR = ".stack-src"
+READONLY_STACK_SRC_REASON = (
+    "READ-ONLY: this file lives under .stack-src, which `make stack-clone` deletes "
+    "and re-clones. A save here would be silently thrown away.")
 PLAYWRIGHT_CONFIG = "playwright.config.ts"
 
 # The enumeration command, as a tuple so no shell ever sees it. `-c` is explicit
@@ -756,6 +768,245 @@ def gated_personas(generator_dir: str, roster: Roster | None = None
     return tuple(out)
 
 
+# ── gherkin features (the playwright-bdd track's nodes) ─────────────────────────
+
+# The operator asked for GHERKIN by name, so a .feature file is a first-class node,
+# not a footnote under the spec that generates it. The harness lands on a CONCURRENT
+# branch (feat/e2e-gherkin-harness), so this checkout may legitimately have no
+# tests/e2e/features at all — and the difference between "no features yet" and "the
+# tree forgot to look" is exactly the kind of silence this module exists to refuse.
+# So the absence is a NAMED reason, never an empty list.
+GHERKIN_ABSENT_REASON = (
+    "tests/e2e/features does not exist in this checkout — the playwright-bdd Gherkin "
+    "harness lands on the feat/e2e-gherkin-harness branch. This is 'not merged here "
+    "yet', NOT 'there are no feature files'.")
+GHERKIN_EMPTY_REASON = (
+    "tests/e2e/features exists but holds no .feature file.")
+
+# Gherkin's own keywords. Only the three the tree renders are parsed; a Background or
+# a step line is deliberately NOT modelled, because nothing downstream consumes it and
+# a half-parser invites a reader to trust it for more than it does.
+_FEATURE_RE = re.compile(r"(?m)^\s*Feature:\s*(?P<t>.*?)\s*$")
+_SCENARIO_RE = re.compile(
+    r"(?m)^\s*(?P<kw>Scenario Outline|Scenario Template|Scenario|Example):"
+    r"\s*(?P<t>.*?)\s*$")
+# `<>` is in the class on purpose: a Scenario Outline tags itself with the
+# PLACEHOLDER (`@platform:<platform>`), and a class that excluded them left those
+# tags stranded in the scenario TITLE with `tags` reported empty.
+_TAG_RE = re.compile(r"@[A-Za-z0-9_:.<>-]+")
+
+
+@dataclass(frozen=True)
+class GherkinScenario:
+    """One ``Scenario:`` line — the leaf a .feature contributes to the tree."""
+    name: str
+    keyword: str
+    line: int
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GherkinFeature:
+    """One .feature FILE. ``rel`` is checkout-relative so a surface can show where it
+    came from; ``path`` is what an editor opens."""
+    path: str
+    rel: str
+    title: str
+    scenarios: tuple[GherkinScenario, ...] = ()
+    tags: tuple[str, ...] = ()
+    error: str = ""
+
+
+@dataclass
+class GherkinIndex:
+    """The .feature files, or a NAMED reason there are none."""
+    features: tuple[GherkinFeature, ...] = ()
+    root: str = ""
+    error: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.features)
+
+
+def parse_gherkin(text: str) -> tuple[str, tuple[GherkinScenario, ...], tuple[str, ...]]:
+    """``(feature title, scenarios, feature-level tags)`` from .feature SOURCE.
+
+    Tags are attributed by ADJACENCY, the way Gherkin actually scopes them: the
+    contiguous run of ``@tag`` lines immediately above a Scenario belongs to it, and a
+    run above the ``Feature:`` line belongs to the file. A file-wide tag scan would
+    hand every scenario every tag, which reads as coverage nobody wrote.
+    """
+    lines = text.splitlines()
+    pending: list[str] = []
+    title = ""
+    ftags: tuple[str, ...] = ()
+    scenarios: list[GherkinScenario] = []
+    for i, raw in enumerate(lines, start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            if not line:
+                pending = []          # a blank line breaks the adjacency run
+            continue
+        if line.startswith("@"):
+            pending.extend(_TAG_RE.findall(line))
+            continue
+        m = _FEATURE_RE.match(raw)
+        if m and not title:
+            title = m.group("t")
+            ftags = tuple(pending)
+            pending = []
+            continue
+        m = _SCENARIO_RE.match(raw)
+        if m:
+            # This suite writes its per-scenario tags INLINE, at the end of the
+            # Scenario line ("... on <platform> @platform:<platform> @layer:ui"),
+            # which is legal Gherkin. Leaving them in the title would put raw
+            # @-noise in every tree row AND leave `tags` falsely empty, so they are
+            # split off the tail — only from the tail, so a '@' inside a scenario's
+            # prose is untouched.
+            name = m.group("t")
+            inline: list[str] = []
+            while True:
+                tail = name.rsplit(" ", 1)
+                if len(tail) == 2 and tail[1].startswith("@") and _TAG_RE.fullmatch(tail[1]):
+                    inline.insert(0, tail[1])
+                    name = tail[0].rstrip()
+                    continue
+                break
+            scenarios.append(GherkinScenario(
+                name=name, keyword=m.group("kw"), line=i,
+                tags=tuple(pending) + tuple(inline)))
+            pending = []
+            continue
+        pending = []                   # any other content ends the run
+    return title, tuple(scenarios), ftags
+
+
+def index_gherkin(generator_dir: str) -> GherkinIndex:
+    """Every ``*.feature`` under tests/e2e/features, recursively, in path order."""
+    root = os.path.join(generator_dir, FEATURES_DIR)
+    idx = GherkinIndex(root=root)
+    if not os.path.isdir(root):
+        idx.error = GHERKIN_ABSENT_REASON
+        return idx
+    found: list[GherkinFeature] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for fn in sorted(filenames):
+            if not fn.endswith(".feature"):
+                continue
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, generator_dir)
+            try:
+                with open(full, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError as e:
+                # A feature we could not READ is still a feature. Dropping it would
+                # under-report the suite; showing it with the read error is honest.
+                found.append(GherkinFeature(path=full, rel=rel, title=fn,
+                                            error=f"could not read: {e}"))
+                continue
+            title, scenarios, tags = parse_gherkin(text)
+            found.append(GherkinFeature(path=full, rel=rel, title=title or fn,
+                                        scenarios=scenarios, tags=tags))
+    idx.features = tuple(found)
+    if not idx.features:
+        idx.error = GHERKIN_EMPTY_REASON
+    return idx
+
+
+# ── which personas a spec draws from ────────────────────────────────────────────
+
+# Boundaries wider than :func:`_token_re`'s, because a persona handle is not a slug:
+# it can carry '-', '@' and '.', and `e2e-pending` occurs INSIDE `rbac-pending` only
+# if '-' is treated as a boundary. Excluding all four keeps `e2e-user` from matching
+# `e2e-user-2` and `admin` from matching `admin@x`.
+def _persona_re(handle: str) -> re.Pattern:
+    return re.compile(r"(?<![A-Za-z0-9@._-])" + re.escape(handle)
+                      + r"(?![A-Za-z0-9@._-])")
+
+
+def spec_personas(generator_dir: str, roster: Roster | None = None,
+                  sources: dict[str, str] | None = None) -> dict[str, tuple[str, ...]]:
+    """``{spec filename: (persona usernames it names, ...)}``.
+
+    The tree must answer "who does this feature log in AS?" — that is the operator's
+    "the table of users that they draw from". The answer is derived the same way
+    :func:`service_coverage` derives its own: over COMMENT-STRIPPED spec source (house
+    rule; a persona named only in a comment is not a persona this spec drives), using
+    the roster parsed by core.seeded_credentials rather than a second name list.
+
+    HONEST LIMIT, and the surface must repeat it: this is a textual reference, not a
+    login trace. A spec that builds a handle at runtime, or reaches a persona through
+    a helper that names it, is not seen here. It under-reports; it does not invent.
+    """
+    r = load_roster(generator_dir) if roster is None else roster
+    raw = _spec_sources(generator_dir) if sources is None else sources
+    src = {fn: _strip_ts_comments(text) for fn, text in raw.items()}
+    pats = [(u.username, _persona_re(u.username)) for u in r.users]
+    out: dict[str, tuple[str, ...]] = {}
+    for fn, text in src.items():
+        out[fn] = tuple(name for name, pat in pats if pat.search(text))
+    return out
+
+
+# ── resolving a node back to a file the operator can read and edit ──────────────
+
+def spec_path(generator_dir: str, spec_file: str) -> str:
+    """Absolute path of a spec FILE as Playwright named it.
+
+    Playwright reports ``file`` relative to ``testDir`` (./specs), but has reported
+    both spellings across versions, so a value that ALREADY starts with the specs
+    directory is not prefixed twice.
+    """
+    rel = spec_file.replace("\\", "/").lstrip("/")
+    if rel.startswith("specs/"):
+        return os.path.join(generator_dir, E2E_DIR, *rel.split("/"))
+    return os.path.join(generator_dir, SPECS_DIR, *rel.split("/"))
+
+
+def is_readonly_source(path: str) -> bool:
+    """True for a path the Studio must never write to — see STACK_SRC_DIR."""
+    parts = os.path.normpath(path).replace("\\", "/").split("/")
+    return STACK_SRC_DIR in parts
+
+
+# ── the run selection, on its way to argv ───────────────────────────────────────
+
+# What may be handed to `make stack-e2e E2E_SPECS=...`. The Makefile expands that
+# variable inside a /bin/sh recipe, so a value is one unquoted shell word: anything
+# outside this class could inject. The list comes from Playwright, not from a text
+# box, which is exactly why the check belongs HERE and not at the widget — a model
+# that only validates what a widget happened to produce validates nothing.
+SPEC_ARG_RE = re.compile(r"^specs/[A-Za-z0-9][A-Za-z0-9._/-]*\.ts$")
+SPEC_ARG_REJECT_REASON = (
+    "not a plain tests/e2e/specs/*.ts path — refused rather than passed to the "
+    "shell that runs the suite.")
+
+
+def spec_run_arg(spec_file: str) -> str:
+    """The positional filter Playwright takes for one spec FILE, cwd tests/e2e."""
+    rel = spec_file.replace("\\", "/").lstrip("/")
+    return rel if rel.startswith("specs/") else "specs/" + rel
+
+
+def safe_spec_args(paths: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(accepted, rejected)`` — de-duplicated, sorted, and shell-safe.
+
+    Rejects are RETURNED, not dropped: a surface that silently discards half a
+    selection and then runs is the vacuity this whole unit exists to prevent.
+    """
+    ok: list[str] = []
+    bad: list[str] = []
+    for p in paths:
+        arg = spec_run_arg(str(p).strip())
+        if SPEC_ARG_RE.match(arg):
+            ok.append(arg)
+        elif p:
+            bad.append(str(p))
+    return tuple(sorted(set(ok))), tuple(sorted(set(bad)))
+
+
 # ── the whole catalogue ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -770,6 +1021,13 @@ class Catalogue:
     gated: tuple[GatedPersona, ...] = ()
     run: LastRun = field(default_factory=LastRun)
     listing: SpecListing = field(default_factory=SpecListing)
+    #: The .feature files, or a NAMED reason there are none (see :func:`index_gherkin`).
+    gherkin: GherkinIndex = field(default_factory=GherkinIndex)
+    #: ``{spec filename: (persona usernames it names, ...)}`` — see :func:`spec_personas`.
+    personas_by_spec: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Screenshots whose filename number matches no spec file. They belong to nobody,
+    #: and a tree that only hangs shots off features would drop them silently.
+    orphan_screenshots: tuple[Screenshot, ...] = ()
     problems: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
@@ -790,6 +1048,11 @@ class Catalogue:
 
     def gated_usernames(self) -> frozenset[str]:
         return frozenset(g.username for g in self.gated)
+
+    def personas_of(self, spec_file: str) -> tuple[str, ...]:
+        """The personas one spec FILE names. Keyed on the basename because
+        Playwright has reported ``file`` both bare and specs/-prefixed."""
+        return self.personas_by_spec.get(os.path.basename(spec_file), ())
 
 
 def _merge_run(tests: Sequence[E2ETest], run_tests: Sequence[E2ETest]) -> list[E2ETest]:
@@ -861,7 +1124,15 @@ def load_catalogue(generator_dir: str, env: dict[str, str] | None = None,
         cat.problems.append(cat.run.error)
 
     tests = _merge_run(cat.listing.tests, cat.run.tests)
-    cat.features = build_features(tests, index_screenshots(generator_dir))
+    shots = index_screenshots(generator_dir)
+    cat.features = build_features(tests, shots)
+    # Any bucket no feature claimed. Screenshot numbers that match no spec file (and
+    # the un-numbered "" bucket) would otherwise be invisible, which is how a flat
+    # tracked directory of 38 PNGs stops being looked at.
+    claimed = {f.number for f in cat.features}
+    cat.orphan_screenshots = tuple(
+        sh for num, group in sorted(shots.items()) if num not in claimed
+        for sh in group)
 
     cat.roster = load_roster(generator_dir, env)
     if cat.roster.error:
@@ -871,6 +1142,11 @@ def load_catalogue(generator_dir: str, env: dict[str, str] | None = None,
         cat.problems.append(
             f"could not read SEED_REGISTRATION_SKIP from {GATED_SCRIPT} — the "
             "deliberately-gated personas cannot be marked, and someone will 'fix' them.")
+
+    cat.gherkin = index_gherkin(generator_dir)
+    if cat.gherkin.error:
+        cat.problems.append(cat.gherkin.error)
+    cat.personas_by_spec = spec_personas(generator_dir, cat.roster)
 
     cat.services = service_coverage(generator_dir)
     missing = uncovered_services(cat.services)
