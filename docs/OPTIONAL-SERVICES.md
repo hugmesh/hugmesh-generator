@@ -420,9 +420,36 @@ alone keeps the console unusable; lighting it is a deliberate, ordered act:
 
 | # | OFF | Owner | Dark behaviour |
 |---|-----|-------|----------------|
-| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two route-access rows pruned | build-time (`workloadConsole` slug) | the gateway **404s** the whole prefix (no route rows), and even a direct in-cluster call 404s (the BFF's `WorkloadAuthorizationFilter` denies a disabled prefix) |
+| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two `hugmesh-be-gateway` route-access rows pruned | build-time (`workloadConsole` slug) | **the BFF is the wall, not the gateway** (corrected 2026-08-26 — see below): a direct in-cluster call 404s because the BFF's `WorkloadAuthorizationFilter` denies a disabled prefix, and the k8s seam is the fail-closed `NoopWorkloadClient` |
 | 2 | **k8s seam** — `WORKLOAD_CONSOLE_K8S_ENABLED=false`, no SA tokens mounted | build-time (same slug) | the fail-closed `NoopWorkloadClient` **503s every call**; no k8s API is ever dialed |
 | 3 | **DB master flag + TTL'd grants** — `workload_console_config.admin_enabled` / `dangerous_tier_enabled` default false; every admin needs an active grant lease (~24 h TTL, expiry-swept) | runtime (SUPERADMIN + step-up) | a fully lit-wired cluster still shows **nobody anything** |
+
+> **Why OFF #1's cell no longer says "the gateway 404s the whole prefix".**
+> The two route-access rows the slug prunes are on **`hugmesh-be-gateway`**, and that
+> gateway declares **no `/bff` route at all** (`apps/20-gateway-be.yaml`) — so pruning
+> them never changed a gateway decision for a browser. What a browser actually hits is
+> `hugmesh-fe-gateway`, and there:
+>
+> * `/bff/admin/workloads/**` has **always** been matched by the pre-existing
+>   `'/bff/admin/**' -> ROLE_ADMIN` floor, deselected or not. The old wording was
+>   already false for the ADMIN half.
+> * `/bff/superadmin/workloads/**` is matched by the `'/bff/superadmin/**' ->
+>   ROLE_SUPERADMIN` floor added 2026-08-26 (without which every shipped superadmin
+>   admin-ui page was a dead end). That floor is deliberately **not** pruned with the
+>   slug, because it also carries backing-services / fleet-entitlements /
+>   phone-devices / desktop-dials / cloud-backups.
+>
+> So on a `workloadConsole`-deselected build the console prefix is **matched and
+> forwarded** at the front door; what stops it is the **BFF**, not the gateway —
+> `WorkloadAuthorizationFilter` denies a disabled prefix, the k8s seam is `Noop`, and
+> OFF #3's DB flags are false. Defence-in-depth at deselect is therefore **one layer,
+> not two**. An operator who wants the gateway layer back adds the single deny row
+> spelled out in `manifests/route-access/initdb/20-schema.sql` beside the floor; note
+> that it also darks the shipped `/admin/workloads` page, which is why it is not the
+> default. The sibling case — the `games` app-store control plane — **is** denied at
+> the fe door unconditionally, because nothing shipped calls it (same file).
+> `tests/scripts/test-superadmin-bff-reachability.sh` §13 executes both real builders'
+> gate for every slug and fails if a third such surface appears.
 
 **What the slug owns (all pruned together on deselect, `gate_optional_services`):**
 the two-SA RBAC Application (`apps/14-workload-console-rbac.yaml` +

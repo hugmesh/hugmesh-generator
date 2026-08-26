@@ -273,9 +273,35 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- arch/** is LONGER than /bff/image-builds/**, so it wins. SUPERADMIN reaches
   -- ordinary admin paths via the gateway cross-domain bypass, so it needs no
   -- per-surface row there.
-  ('hugmesh-be-gateway',  '/bff/image-builds/arch/**', 'ROLE_SUPERADMIN',    true),  -- arch/core builds: superadmin only (wins, longer)
+  --
+  -- ⚠ ORPHANED, ON PURPOSE, AND KEPT (audited 2026-08-26). All EIGHT '/bff/…'
+  -- rows on hugmesh-be-gateway — the three immediately below, plus
+  -- /bff/superadmin/games-services/**, /bff/games-services/instances/**,
+  -- /bff/games-services/catalog/**, /bff/superadmin/workloads/** and
+  -- /bff/admin/workloads/** further down — govern a path this gateway does NOT
+  -- ROUTE: apps/20-gateway-be.yaml declares no /bff route at all. They
+  -- were the whole reason the superadmin console looked "already granted" while
+  -- being unreachable from a browser (see the fe-gateway '/bff/superadmin/**' row
+  -- and its note, further down). They are NOT deleted, for three reasons:
+  --   1. THEY GRANT NOTHING. This table is consulted only for a request the
+  --      gateway has already matched to a route, so an allow row with no route
+  --      cannot admit traffic. Deleting them removes documentation, not risk.
+  --   2. optional-services.yaml KEYS ON THEM. games.routeAccessRows and
+  --      workloadConsole.routeAccessRows list
+  --      { gateway: hugmesh-be-gateway, urlPattern: /bff/… } tuples that
+  --      gate_optional_services removes on deselection; deleting the rows here
+  --      would leave those entries pointing at nothing (and
+  --      tests/stack/test-optional-services-exclude.sh reads that pairing).
+  --   3. THE BE GATEWAY IS A LEGITIMATE SECOND DOOR. It fronts api.<domain> and
+  --      the tailnet; if a /bff route is ever added there, the access posture must
+  --      already be written down — that is exactly the "gateway-scoped write"
+  --      hazard test-mfa-required-rules.sh defect (c) exists for.
+  -- What IS enforced instead: tests/scripts/test-superadmin-bff-reachability.sh
+  -- pins this orphan set by name, so a NEW un-routed /bff row fails loudly rather
+  -- than quietly reading as a grant.
+  ('hugmesh-be-gateway',  '/bff/image-builds/arch/**', 'ROLE_SUPERADMIN',    true),  -- arch/core builds: superadmin only (tailnet; wins, longer) — ORPHANED: no /bff route on be
   ('hugmesh-be-gateway',  '/bff/image-builds/**',      'ROLE_IMAGE_BUILDER', true),  -- mesh-workload builds: image_builder (admins granted it)
-  ('hugmesh-be-gateway',  '/bff/superadmin/**',        'ROLE_SUPERADMIN',    true),  -- superadmin infra console (tailnet)
+  ('hugmesh-be-gateway',  '/bff/superadmin/**',        'ROLE_SUPERADMIN',    true),  -- superadmin infra console (tailnet) — ORPHANED: no /bff route on be
   ('hugmesh-be-gateway',  '/api/admin/**',         'ROLE_ADMIN',     true),  -- hugmesh admin API (NOT ROLE_MOD)
   -- hugmesh-games NAMESPACE admin (games BFF /api/admin/** surface, namespaced
   -- under /games/** so it does NOT collide with the platform /api/admin/** row
@@ -580,6 +606,137 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('hugmesh-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
   ('hugmesh-fe-gateway',  '/bff/me/**',            'ROLE_USER',      true),
+  -- ── SUPERADMIN CONSOLE AT THE FRONT DOOR (2026-08-26) ──────────────────────
+  -- OBSERVED: there was NO browser path to ANY /bff/superadmin/** endpoint, on
+  -- any gateway a browser can reach. The two halves of the routing contract had
+  -- drifted apart in opposite directions and each half looked correct alone:
+  --
+  --   * hugmesh-fe-gateway ROUTES the family. apps/20-gateway-fe.yaml ends with
+  --     the `Path=/bff/**` catch-all to hugmesh-admin-bff-api (and the compose
+  --     lane, tests/stack/gateway-routes/fe/application-routes.yml, ends the same
+  --     way), so /bff/superadmin/anything is forwarded to admin-bff — which is
+  --     the correct upstream, since every superadmin surface named below IS an
+  --     admin-bff controller. But the fe-gateway had NO /bff/superadmin row, and
+  --     a routed path with zero matching allow rows is DEFAULT-DENY.
+  --   * hugmesh-be-gateway had the allow rows (/bff/superadmin/**,
+  --     /bff/superadmin/games-services/**, /bff/superadmin/workloads/**,
+  --     /bff/image-builds/**) and ZERO /bff routes — apps/20-gateway-be.yaml
+  --     declares no /bff route at all, so those rows govern traffic that
+  --     never arrives. They grant nothing; they are also harmless (see below).
+  --
+  -- The consequence was silent and total: the already-shipped admin-ui superadmin
+  -- pages — backing-services, fleet-entitlements, phone-devices, the desktop
+  -- dials, and the superadmin half of the workload console — were dead ends. The
+  -- gateway is not "missing a feature"; it correctly default-denies a surface
+  -- nobody ever granted. This row is the grant.
+  --
+  -- WHY A SINGLE `**` FLOOR AND NOT PER-PAGE ROWS: /bff/superadmin/** is already
+  -- the shape used on both other gateways, so the three doors now agree. Rows are
+  -- resolved by LONGEST MATCHING url_pattern (see this file's header and
+  -- tests/scripts/test-mfa-required-rules.sh defect (b)), NOT by position in this
+  -- INSERT — so this floor cannot shadow, and cannot be shadowed by, anything:
+  -- there is no broader fe row that matches /bff/superadmin/… (the fe gateway has
+  -- no '/bff/**' and no '/**' row), and any LONGER fe row added later
+  -- automatically wins over it. Placement here is for a reader's benefit only:
+  -- the superadmin floor sits directly above the admin floor it out-ranks.
+  --
+  -- ⚠ WHAT THIS DELIBERATELY WIDENS, stated rather than buried. The workload
+  -- console's dangerous tier (/bff/superadmin/workloads/{logs-stream,exec,
+  -- exec-tty,port-forward,lifecycle}) is described further down this file as
+  -- "reachable ONLY over the TAILNET". In practice that property was being held
+  -- up by nothing but this bug: optional-services.yaml mounts the console UI at
+  -- `/admin/workloads` — i.e. inside the PUBLIC fe admin shell — and the shipped
+  -- admin-ui bundle calls /bff/superadmin/workloads/** from there. So the tailnet
+  -- claim was already contradicted by the UI mount; only the missing row made it
+  -- true. This row makes the two agree in the other direction: the tier is now
+  -- reachable at the front door BY ROLE_SUPERADMIN ONLY. The remaining walls are
+  -- the ones that were always the real ones — the admin-bff's central WebFilter
+  -- (dangerous-tier kill switch + namespace allowlist + TTL'd grant + step-up +
+  -- Lease + device/SSH licence) and the fact that the whole slug SHIPS DARK and
+  -- DEFAULT-DESELECTED. An operator who wants the old posture back adds a DENY
+  -- row at the LONGER pattern, which wins on length:
+  --     ('hugmesh-fe-gateway','/bff/superadmin/workloads/**','ROLE_SUPERADMIN',false)
+  -- (same idiom as the SERVICE-ONLY INTERNAL INGEST deny rows below).
+  --
+  -- ⚠ NOT pruned by gate_optional_services — and what that costs, per slug.
+  -- This row is deliberately absent from every *.routeAccessRows list in
+  -- optional-services.yaml, because it also carries backing-services /
+  -- fleet-entitlements / phone-devices / desktop-dials / cloud-backups, none of
+  -- which are optional-gated: pruning it with any one slug would re-break five
+  -- unrelated pages. The consequence is that a superadmin-prefixed surface owned
+  -- by an OPTIONAL slug stays matched at the fe door after that slug is
+  -- deselected. That is TWO surfaces today, and each is stated here with the wall
+  -- that is actually left. (tests/scripts/test-superadmin-bff-reachability.sh §13
+  -- EXECUTES both real builders' gate for every slug and fails on a THIRD.)
+  --
+  --   * workloadConsole -> /bff/superadmin/workloads/**  — ALLOW survives, via
+  --     this floor. CORRECTION, because the earlier wording here was wrong and
+  --     the repo contradicted it in two places: it is NOT true that "the admin-bff
+  --     has no workloads controller to reach". The controller SHIPS in the
+  --     always-present admin-bff and is dark at RUNTIME, exactly as
+  --     build-{rpi5,x86-host}-stage4.sh's own workloadConsole comment says ("the
+  --     BFF endpoints live in the always-present admin-bff"). The walls left are:
+  --     (1) the BFF's WorkloadAuthorizationFilter denies a DISABLED prefix
+  --     (app.workload-console.enabled=false when the overlay is pruned), so a
+  --     direct in-cluster call 404s too; (2) the fail-closed NoopWorkloadClient
+  --     503s every k8s call; (3) the DB master flag workload_console_config
+  --     .{admin_enabled,dangerous_tier_enabled} defaults false plus TTL'd grants;
+  --     (4) ROLE_SUPERADMIN + the mfa_required flip below. Defence-in-depth at
+  --     deselect therefore drops from "gateway wall + BFF wall" to "BFF wall" for
+  --     the superadmin half — a REAL reduction, not a null one.
+  --   * games (app-store control plane) -> /bff/superadmin/games-services/**  —
+  --     CLOSED, see the explicit DENY row immediately below this one. Unlike the
+  --     workload console, NO shipped admin-ui bundle path calls
+  --     /bff/superadmin/games-services/* (verified against
+  --     tests/stack/.uidist/_remotes/admin, which names workloads but never
+  --     games-services), so denying it at the fe door costs nothing and restores
+  --     the exact status quo ante: before this floor existed there was no fe row
+  --     for that family at all, and the app-store control plane was reachable only
+  --     over the tailnet. It is denied UNCONDITIONALLY — selected or not — because
+  --     a row that only appears on deselect is not expressible: _opt_drop_rows can
+  --     REMOVE a row, never ADD one.
+  --
+  -- ⚠ ALSO PRE-EXISTING, and not caused by this row: the fe '/bff/admin/**'
+  -- floor further below already matched /bff/admin/workloads/** long before
+  -- 2026-08-26, so the ADMIN (read-only) half of the workload console has always
+  -- survived deselection at the front door. docs/OPTIONAL-SERVICES.md §7.2's OFF
+  -- #1 cell used to claim "the gateway 404s the whole prefix"; that was already
+  -- false for the admin half and is now false for the superadmin half too. The
+  -- doc is corrected in the same commit.
+  --
+  -- An operator who wants the workload console's tailnet-only posture back adds
+  -- the same shape of DENY row, which wins on length:
+  --     ('hugmesh-fe-gateway','/bff/superadmin/workloads/**','ROLE_SUPERADMIN',false)
+  -- It is NOT added here because the shipped admin-ui DOES call those six paths
+  -- from the public /admin/workloads mount; adding it darks a shipped page. That
+  -- is an operator posture decision, not a defect — and the suite's
+  -- longest-pattern control proves the row would take effect.
+  --
+  -- ⚠ MFA: this row is under the '/bff/superadmin/%' prefix of the mfa_required
+  -- flip UPDATE at the end of this file, so it is flipped to mfa_required=true
+  -- automatically — no companion edit, and test-mfa-required-rules.sh check (b)
+  -- would go red if it were not.
+  --
+  -- ⚠ DUAL-WRITE PARTNER in OTHER repo: the hugmesh-gateway CanonicalSeed.fe()
+  -- baked fallback floor must gain this same row, or a dual-DB outage drops the
+  -- superadmin console back to a dead end (the same shape as the phone-fleet
+  -- lockstep note in the block below).
+  ('hugmesh-fe-gateway',  '/bff/superadmin/**',    'ROLE_SUPERADMIN', true),  -- superadmin console at the front door (admin-ui pages ride the /bff/** catch-all to admin-bff)
+  -- Explicit DENY, MORE SPECIFIC than the floor above (longest matching
+  -- url_pattern wins, and deny-wins at that length — same idiom as the
+  -- attestation-server /attest/api/create-account row further down). The games
+  -- app-store control plane is an add-on of the OPTIONAL `games` slug
+  -- (docs/GAMES-APPSTORE.md), its endpoints live in the ALWAYS-PRESENT
+  -- admin-bff, and gate_optional_services can only remove rows — so without this
+  -- row the floor above would keep the app-store curation surface matched at the
+  -- PUBLIC front door on a games-DESELECTED build, which is strictly wider than
+  -- the posture that existed before the floor was added. No shipped admin-ui
+  -- path calls it (the operator UI at /admin/games-services rides the
+  -- '/admin/games-services/**' + '/bff/games-services/**' families instead), so
+  -- this costs nothing and keeps the control plane tailnet-only via
+  -- hugmesh-be-gateway / hugmesh-superadmin-gateway. NB the mfa_required flip at
+  -- the end of this file is `WHERE allow = true`, so a DENY row is never flipped.
+  ('hugmesh-fe-gateway',  '/bff/superadmin/games-services/**', 'ROLE_SUPERADMIN', false),  -- explicit DENY: app-store control plane stays tailnet-only (games is optional; rows can only be dropped, never added)
   -- ── FLEET-OWNER phone console (fleet-admin entitlement tier) ────────────────
   -- The admin-bff /bff/admin/phone-fleet/** surface lets a NON-superadmin fleet
   -- owner manage ONLY their own phones on the PUBLIC fe-gateway. It rides the
@@ -596,9 +753,16 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- physical_owner/owner_domain scope predicate) — these gateway rows are the
   -- coarse defence-in-depth. The SUPERADMIN owner-assignment + entitlement-admin
   -- endpoints (/bff/superadmin/phone-devices/<id>/owner,
-  -- /bff/superadmin/fleet-entitlements/**) need NO new row — they fall under the
-  -- existing be-gateway + superadmin-gateway '/bff/superadmin/** -> ROLE_SUPERADMIN'
-  -- floors (tailnet-only). ⚠ DUAL-WRITE PARTNER in OTHER repo: the gateway
+  -- /bff/superadmin/fleet-entitlements/**) were described here as needing "NO new
+  -- row — they fall under the existing be-gateway + superadmin-gateway
+  -- '/bff/superadmin/** -> ROLE_SUPERADMIN' floors (tailnet-only)".
+  -- ⚠ THAT SENTENCE WAS FALSE, and it is corrected by the fe-gateway
+  -- '/bff/superadmin/**' row added in the block ABOVE: gateway_route_access is
+  -- keyed on the gateway NAME, so a be-gateway or superadmin-gateway floor
+  -- governs nothing that arrives at the fe-gateway — and BOTH of those endpoints
+  -- are called by admin-ui pages served from the fe front door. See the
+  -- "SUPERADMIN CONSOLE AT THE FRONT DOOR" block above for the full incident.
+  -- ⚠ DUAL-WRITE PARTNER in OTHER repo: the gateway
   -- CanonicalSeed.fe() baked floor must gain the SAME three rows in lockstep (done).
   -- (admin-bff's 001-gateway-route-access changelog is table DDL only — it seeds NO
   -- route-access ROWS, so it is NOT a row-seed partner despite the mfa_required

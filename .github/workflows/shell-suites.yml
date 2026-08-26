@@ -175,6 +175,7 @@ jobs:
             tests/scripts/test-spec-use-parity.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
+            tests/scripts/test-superadmin-bff-reachability.sh
             tests/scripts/test-tools-path-lib.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh

@@ -1878,8 +1878,12 @@ gate_optional_services() {
                 # The WORKLOAD CONSOLE is RBAC + route-access + an admin-bff deployment
                 # overlay (the BFF endpoints live in the always-present admin-bff).
                 # Deselecting it prunes the two-SA RBAC Application + its manifests (so
-                # the SA token Secrets are never minted), the two route-access rows (the
-                # gateway 404s the whole /bff/{admin,superadmin}/workloads/** prefix),
+                # the SA token Secrets are never minted), the two hugmesh-be-gateway
+                # route-access rows (⚠ 2026-08-26: those rows do NOT 404 the prefix for a
+                # browser — the be-gateway routes no /bff path, and the fe-gateway's
+                # '/bff/admin/**' + '/bff/superadmin/**' floors still match. The wall on a
+                # deselected build is the BFF's WorkloadAuthorizationFilter + the Noop k8s
+                # seam + the DB flags; see docs/OPTIONAL-SERVICES.md §7.2),
                 # AND the deployment overlay workload-console-patch.yaml + its single
                 # kustomization `- path:` line — so the dark admin-bff renders
                 # byte-identical to a tree that never had the feature (no
