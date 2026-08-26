@@ -98,6 +98,17 @@ jobs:
       - name: run suites
         shell: bash
         run: |
+          # tests/qemu/role_topology_test.sh is the ONE tests/qemu suite listed here.
+          # That family is named <thing>_test.sh, and test-guard-integrity.sh discovers
+          # only test-*.sh (:89), so NOTHING in tests/qemu/ has ever been counted by
+          # check 7 or gated by this workflow — it is a blind spot, not a decision, and
+          # it is why a role_topology suite added under the house naming would have sat
+          # inert exactly like DAST did. This one is hermetic (no guest, no image, no
+          # loop device; bash + sed + grep + cmp only), so it is cheap to gate and there
+          # is no reason not to. Its neighbours (verdict_test.sh, assertions_test.sh,
+          # devices_test.sh, save_test.sh, mesh-cluster_test.sh, avc-workout_test.sh)
+          # remain ungated — they were NOT measured in this image and are not being
+          # claimed as covered here.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
@@ -128,6 +139,7 @@ jobs:
             tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
+            tests/qemu/role_topology_test.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh

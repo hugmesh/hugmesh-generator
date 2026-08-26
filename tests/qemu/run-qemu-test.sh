@@ -163,12 +163,26 @@ cat > "${KEYS_SRC}/users.json" <<EOF
 }
 EOF
 
+# THE PAYLOAD MUST BE ROLE-ACCURATE. This block hardcoded enabled:true for EVERY
+# role, while the product links headscale into the default runlevel ONLY for the
+# identity/control roles — rpi5 pki|generic (build-rpi5-stage4.sh:3980-3982) and
+# x86 pki|omnibus — and explicitly `rm -f`s the symlink for every other role
+# (build-rpi5-stage4.sh:4044). So `--role backend` asked for a service the image
+# is designed not to run, which failed the headscale assertions on all four rpi5
+# rows (matrix triage 2026-08-13) and now also false-FAILs assertions.sh's
+# role/manifest cross-check on a PERFECTLY CORRECT backend image. Same derivation
+# docker-entrypoint.sh:787-790 has carried since that triage.
+HS_ENABLED=false
+case "${ROLE}" in
+    pki|generic|omnibus) HS_ENABLED=true ;;
+esac
+
 cat > "${KEYS_SRC}/provision.json" <<EOF
 {
   "version": 1,
   "hostname": "hugmesh-test",
   "timezone": "UTC",
-  "headscale": { "enabled": true, "config_file": "headscale/config.yaml" },
+  "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml" },
   "tailscale": { "enabled": false },
   "kubernetes": { "role": "control-plane", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
