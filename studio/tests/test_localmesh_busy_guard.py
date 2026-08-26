@@ -30,6 +30,19 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest  # noqa: E402
+
+# This file is deliberately Qt-FREE — it drives the real methods against
+# stand-ins and never builds a widget — but importing the module they live in
+# pulls gui.qt, and the pre-merge pytest job installs NO Qt binding. Skipping is
+# the documented shape for that here (studio/tests/known-failures.txt header):
+# these run in GitLab's fuller test:studio-suite job against PySide6. Skipping
+# rather than being added to the workflow's --ignore list is the point: that list
+# is for GUI files that ABORT in Qt teardown, which these cannot, so they should
+# start gating the moment this job grows a binding.
+pytest.importorskip("hugmesh_studio.gui.qt",
+                    reason="no Qt binding installed in this job")
+
 from hugmesh_studio.gui.pages import localmesh  # noqa: E402
 
 
