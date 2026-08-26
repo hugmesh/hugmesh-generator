@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hugmesh.net/contracts/fleet-inventory.v1.json",
+  "title": "FleetInventory v1",
+  "description": "The AGGREGATE running-version surface the platform does not yet have. Answers 'which versions of those services are running' in ONE call across every allowlisted namespace, instead of N per-namespace pod lists an operator must read image strings out of by hand. CONTRACT ONLY: no controller in any repo serves this yet (see docs/WORKLOAD-CONSOLE-STATS-AND-VERSIONS.md §4 for the cross-repo change that would). Every field below is derivable from the objects the SHIPPED workload-console read Role already grants (specs/cluster/manifests/workload-console-rbac/read-role.yaml: pods + apps/{deployments,statefulsets,daemonsets,replicasets} get/list/watch, metrics.k8s.io/pods get/list) — no new RBAC, no registry credential, no cluster-scoped read.",
+  "type": "object",
+  "required": ["contract", "generatedAt", "namespacesQueried", "workloads"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": { "const": "fleet-inventory/v1" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "namespacesQueried": {
+      "description": "Exactly the namespaces read, which MUST be a subset of WORKLOAD_CONSOLE_NAMESPACE_ALLOWLIST. Emitted so a short answer cannot be mistaken for a small fleet: a namespace the caller was not allowed to read is an absent ROW, and only this list distinguishes that from a namespace with no workloads.",
+      "type": "array", "items": { "type": "string" }, "minItems": 1
+    },
+    "namespacesDenied": {
+      "description": "Allowlisted namespaces the read call FAILED on (RBAC, API error). Never silently omitted — an inventory missing a tier must say which tier.",
+      "type": "array", "items": { "type": "string" }, "default": []
+    },
+    "workloads": { "type": "array", "items": { "$ref": "#/$defs/workloadRow" } }
+  },
+  "$defs": {
+    "workloadRow": {
+      "type": "object",
+      "required": ["namespace", "name", "kind", "replicasDesired", "replicasReady", "containers", "versionKnown"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "type": "string" },
+        "name": { "type": "string", "description": "The workload (Deployment/StatefulSet/DaemonSet) name, NOT a pod name. The existing PodSummary.workload derives this from ownerReferences[0]; for a Deployment that owner is the ReplicaSet, so a row keyed on it would show 'hugmesh-admin-bff-api-7d9c4f' and change on every rollout. This contract requires the owner chain be walked to the top controller." },
+        "kind": { "enum": ["Deployment", "StatefulSet", "DaemonSet"] },
+        "replicasDesired": { "type": "integer", "minimum": 0 },
+        "replicasReady": { "type": "integer", "minimum": 0 },
+        "replicasUpdated": { "type": "integer", "minimum": 0 },
+        "podsRunning": { "type": "integer", "minimum": 0 },
+        "podsTotal": { "type": "integer", "minimum": 0 },
+        "versionKnown": {
+          "type": "boolean",
+          "description": "FALSE when no pod of this workload reports a resolved digest (never scheduled, ImagePullBackOff, or a runtime that does not populate imageID). An inventory row whose version is unknown must SAY unknown; emitting the spec tag as the version is the defect this contract exists to prevent."
+        },
+        "digestSkew": {
+          "type": "boolean",
+          "description": "TRUE when the pods of this ONE workload report more than one distinct resolved digest for the same container name. This is the single most operationally important bit here and no existing surface carries it: mid-rollout, a half-failed rollout, and a node that pulled a different build behind the same moving tag are all invisible in a per-pod view where every pod's spec image string is byte-identical."
+        },
+        "containers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/containerVersion" } },
+        "oldestPodStartedAt": { "type": ["string", "null"], "format": "date-time" },
+        "newestPodStartedAt": { "type": ["string", "null"], "format": "date-time" },
+        "cpuMillicores": { "type": ["integer", "null"], "description": "Summed across the workload's pods from metrics.k8s.io. NULL, never 0, when metrics-server is absent — specs/cluster/apps/01-metrics-server.yaml is in the app-of-apps but is applied by NEITHER kind profile, so on the kind lane this is null for every row and a 0 would read as an idle fleet." },
+        "memoryBytes": { "type": ["integer", "null"], "description": "Same source and same null-vs-zero rule as cpuMillicores." }
+      }
+    },
+    "containerVersion": {
+      "type": "object",
+      "required": ["name", "specImage", "specTag", "resolvedDigest", "digestSource"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "specImage": {
+          "type": "string",
+          "description": "The image reference as WRITTEN in the pod spec. MUST NOT be presented to a human as 'the version'. Measured on this tree: 31 of 31 first-party image references in specs/cluster/manifests/*/kustomization.yaml carry newTag: main and 0 are digest-pinned, so this string is the same moving tag for the whole first-party fleet and distinguishes no two builds. specs/cluster/manifests/workload-console-rbac/deploy-provenance-policy.yaml records the same measurement independently ('every one of the 53 repo-managed workloads in those tiers is tag-based (0 digest-pinned)') and is the reason that policy had to be narrowed to one namespace."
+        },
+        "specTag": { "type": ["string", "null"], "description": "The tag parsed out of specImage, or null when specImage is itself digest-pinned." },
+        "resolvedDigest": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "The RESOLVED content digest of the image actually running. MUST be read from the pod's .status.containerStatuses[].imageID (normalised to the bare sha256:… form), never from the spec. This is the only field in the whole platform that distinguishes one build of a first-party service from another, and it is precisely the field the shipped ContainerSummary projection drops."
+        },
+        "digestSource": {
+          "enum": ["pod-status", "spec-digest", "unavailable"],
+          "description": "How resolvedDigest was obtained. 'spec-digest' is legal only for an image reference that was itself digest-pinned. 'unavailable' REQUIRES resolvedDigest be null."
+        },
+        "ready": { "type": "boolean" },
+        "restarts": { "type": "integer", "minimum": 0 },
+        "buildRef": {
+          "type": ["object", "null"],
+          "description": "Source provenance (git revision / semver / build time) for the resolved digest. NULL in v1 and expected to stay null: recovering it means reading OCI image labels (org.opencontainers.image.revision) from Harbor, which needs a registry credential the workload-console read SA deliberately does not have. A consumer MUST render the digest when this is null rather than rendering nothing.",
+          "additionalProperties": false,
+          "properties": {
+            "revision": { "type": ["string", "null"] },
+            "version": { "type": ["string", "null"] },
+            "created": { "type": ["string", "null"], "format": "date-time" }
+          }
+        }
+      }
+    }
+  }
+}
