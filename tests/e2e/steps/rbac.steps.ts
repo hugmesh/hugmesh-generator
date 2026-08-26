@@ -460,10 +460,6 @@ Then('the element with test id {string} contains the text {string}',
     await expect(page.getByTestId(testId)).toContainText(text);
   });
 
-Then('the element with test id {string} is disabled', async ({ page }, testId: string) => {
-  await expect(page.getByTestId(testId)).toBeDisabled();
-});
-
 // ═════════════════════════════════════════════════════════════════════════════
 // 4. CONSOLE ACCESS MATRIX (spec 33, live UI)
 // ═════════════════════════════════════════════════════════════════════════════

@@ -44,10 +44,6 @@ When('I click the element with test id {string}', async ({ page }, testId: strin
   await page.getByTestId(testId).click();
 });
 
-Then('the element with test id {string} is disabled', async ({ page }, testId: string) => {
-  await expect(page.getByTestId(testId)).toBeDisabled();
-});
-
 /**
  * `nav-user`'s own <span> is EMPTY BY DESIGN in the opaque-cookie model (the
  * browser never learns the display label), so it has zero rendered size and

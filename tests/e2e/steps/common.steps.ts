@@ -120,3 +120,14 @@ Then('the service named by the service dimension has a pinned surface', async ({
   const def = service(id);
   expect(def.pinned, `service '${id}' surface is not pinned: ${def.note}`).toBe(true);
 });
+
+// Shared DOM vocabulary. This lived in BOTH onboarding.steps.ts and rbac.steps.ts as
+// byte-identical definitions, which is fatal rather than merely untidy: bddgen is
+// all-or-nothing, so ONE ambiguous step stopped all 453 scenarios from generating —
+// the merged lane produced nothing at all. Promoted here on 2026-08-26 during
+// integration, which is the fix onboarding.steps.ts already prescribed in its own
+// header ("promote the single definition into common.steps.ts, never reword one of
+// them"). Any step two domains both need belongs in this file, not duplicated.
+Then('the element with test id {string} is disabled', async ({ page }, testId: string) => {
+  await expect(page.getByTestId(testId)).toBeDisabled();
+});
