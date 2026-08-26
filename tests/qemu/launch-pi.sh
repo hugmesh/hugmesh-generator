@@ -17,9 +17,11 @@
 # growroot has free space to grow the root partition into on first boot.
 #
 # This host is x86_64 with no aarch64 KVM, so the guest runs under TCG (pure
-# emulation) — keep TIMEOUT generous. Requires root only because losetup -P /
-# loop ops are not needed here at all: this script needs NO root for the QEMU
-# launch itself; only the optional --grow path or a root-owned WORK_DIR may.
+# emulation) — keep TIMEOUT generous. NOTHING here needs root: the QEMU launch
+# never did, and since 2026-08-26 neither does --kernel-from-img, which reads the
+# image's FAT boot partition at a byte offset with mtools instead of claiming a
+# loop device (see the long note above that block). Only a root-owned WORK_DIR
+# can still force a sudo.
 #
 # ── Shared artifact autodetect convention (mirrors flash-disk.sh) ───────────
 # Both launchers and flash-disk.sh resolve the OS .img the same way so one
@@ -89,7 +91,10 @@ Artifact selection (shared with flash-disk.sh / launch-x86.sh):
   -r, --role ROLE      Role to select (pki|backend|frontend|generic). Default: ${ROLE}
       --img FILE       Explicit golden .img (skips autodetect).
       --kernel FILE    Explicit kernel Image (default: <work>/{sysroot,isoroot}/boot/${KERNEL_IMG_NAME}).
-      --kernel-from-img  Extract ${KERNEL_IMG_NAME} from the image's ESP/boot (needs root: losetup -P).
+      --kernel-from-img  Extract ${KERNEL_IMG_NAME} from the image's FAT boot
+                         partition with mtools, read straight out of the .img at
+                         a byte offset. NO root, no loop device, no mount — so it
+                         works unprivileged and inside a container.
 
 QEMU / guest:
   -m, --mem MB         Guest RAM. Default: ${MEM}
@@ -131,7 +136,7 @@ Lifecycle:
 Examples:
   $0 --role pki --foreground
   $0 --img /var/tmp/snap/hugmesh-rpi5-arm64-pki-2026.0.img --ui-port 9443
-  sudo $0 --kernel-from-img --role backend     # no kernel in WORK_DIR
+  $0 --kernel-from-img --role backend          # no kernel in WORK_DIR (no sudo needed)
 EOF
 exit "${1:-0}"
 }
@@ -219,22 +224,162 @@ OVERLAY="${RUN_DIR}/run.qcow2"
 CONSOLE="${RUN_DIR}/console.log"
 PIDFILE="${RUN_DIR}/qemu.pid"
 
-# If asked to pull the kernel out of the image, do it now (needs root: losetup -P).
+# ── --kernel-from-img: pull the kernel out of the image's boot partition ─────
+# WHY THIS IS NO LONGER A LOOP MOUNT (2026-08-26). Until today this block read:
+#
+#     [ "$(id -u)" -eq 0 ] || die "--kernel-from-img needs root (losetup -P)"
+#     LOOP="$(losetup -P --show -f "${IMG}")"
+#     mount "${LOOP}p1" "${RUN_DIR}/boot-mnt" || mount "${LOOP}p2" ...
+#
+# and it could NEVER have worked inside the runner container — not even as root,
+# which is what the refusal message implied was enough. `losetup -P` asks the
+# KERNEL to scan the partition table, and the kernel materialises the resulting
+# /dev/loopNpM nodes on the HOST devtmpfs. A container's /dev is a CREATION-TIME
+# SNAPSHOT of the host's device nodes, so a node born after the container started
+# never appears inside it: ${LOOP}p1 is simply absent and the mount fails with
+# ENOENT. The old code then reported that as "could not mount image boot
+# partition", i.e. as a defect in the image. tests/qemu/docker-entrypoint.sh has
+# carried a comment saying exactly this directly above its own extractor for as
+# long as that extractor has existed; this launcher never got the memo. (The
+# sibling fix on docker-entrypoint.sh — the one that made `run-qemu-docker.sh
+# --platform rpi5 --jobs 2` stop failing two of three rows — carries the full
+# incident write-up, timestamps included.)
+#
+# The replacement reads the FAT boot partition straight out of the image FILE at
+# a byte offset: `mcopy -n -i IMG@@OFFSET ::kernel_2712.img dest`. No loop
+# device, no partition node, no mount, no privilege and no host-wide lock — so it
+# behaves identically for an unprivileged user on the host and for any user
+# inside a container, and any number of extractions can run at once. That is the
+# path every image this launcher actually boots takes: the Pi builders put
+# kernel_2712.img on the FAT32 boot partition (build-rpi5-stage4.sh /
+# specs-rpi5/installer/install.sh).
+
+# Enumerate every partition's (start, size) in 512-byte sectors, one pair per
+# line. Shared by BOTH passes below so they can never disagree about which
+# partitions exist. Spelled character-for-character as docker-entrypoint.sh's
+# partition_offsets(): one image layout, one parse, across launcher and harness.
+partition_offsets() {
+    sfdisk -d "${IMG}" 2>/dev/null \
+        | sed -n 's/.*start=[[:space:]]*\([0-9]\+\).*size=[[:space:]]*\([0-9]\+\).*/\1 \2/p'
+}
+
+# PASS 1 — mtools. Unprivileged, mountless, lock-free; the only pass that runs
+# for a normal Pi image.
+extract_kernel_mtools() {
+    local want
+    want="$1"
+    local start size off cand dest
+    dest="${RUN_DIR}/${want}"
+    # Both binaries or neither: with minfo missing, the FAT probe below would
+    # reject EVERY partition and this pass would report "no FAT boot partition"
+    # for an image that has one. Fail the pass outright instead, so the caller's
+    # diagnostic names the missing package rather than blaming the image.
+    command -v mcopy >/dev/null 2>&1 || return 1
+    command -v minfo >/dev/null 2>&1 || return 1
+    while read -r start size; do
+        [ -n "${start}" ] && [ -n "${size}" ] || continue
+        [ "${size}" -gt 0 ] 2>/dev/null || continue
+        off=$((start * 512))
+        # minfo is the cheap "is this even FAT?" probe — it fails on the ext4
+        # root partition without touching stdout, so a non-FAT partition costs
+        # one header read rather than one failed mcopy per candidate path.
+        # PURELY AN OPTIMISATION, and knowingly untested as such: the mutation
+        # battery removed this line and the suite stayed green, because without
+        # it mcopy simply fails on a non-FAT partition and the loop continues to
+        # the next one. It is an equivalent mutant, not a coverage hole.
+        MTOOLS_SKIP_CHECK=1 minfo -i "${IMG}@@${off}" >/dev/null 2>&1 || continue
+        for cand in "::${want}" "::boot/${want}"; do
+            # -n: overwrite the destination without prompting. A non-zero exit is
+            # the "try the next candidate" signal (the source path is absent).
+            MTOOLS_SKIP_CHECK=1 mcopy -n -i "${IMG}@@${off}" "${cand}" "${dest}" \
+                2>/dev/null || continue
+            # A ZERO-BYTE result means mcopy "succeeded" on something that is not
+            # a kernel. Treat it as a miss: QEMU accepts an empty -kernel without
+            # complaint and then simply never boots, which turns a one-second
+            # failure here into an unexplained boot timeout ~40 minutes into a
+            # TCG run. There is deliberately NO rm here — the single cleanup on
+            # the failure path below owns deleting a rejected candidate. An `rm`
+            # in both places was the first spelling of this and it made each of
+            # the two lines an EQUIVALENT MUTANT of the other: the mutation
+            # battery removed either one alone and the suite stayed green,
+            # because whichever survived still deleted the same file.
+            if [ ! -s "${dest}" ]; then continue; fi
+            printf '%s\n' "${dest}"
+            return 0
+        done
+    done < <(partition_offsets)
+    # SINGLE cleanup for every way this pass can miss: a rejected zero-byte hit,
+    # and — the case the zero-byte guard cannot see — an mcopy that failed PART
+    # WAY THROUGH and left a truncated file behind. Leaving either one in RUN_DIR
+    # hands the next reader something that looks exactly like a kernel.
+    rm -f "${dest}" 2>/dev/null || true
+    return 1
+}
+
+# PASS 2 — offset mount. ONLY reachable for an image whose boot directory sits on
+# a filesystem mtools cannot read (ext4 /boot instead of a FAT boot partition).
+# Note it mounts BY BYTE OFFSET rather than via /dev/loopNpM: same result, no
+# partition device nodes required, and it therefore behaves identically on the
+# host and in a container that HAS a usable loop device. It still needs
+# CAP_SYS_ADMIN and a free loop device, so it is strictly a fallback and the
+# refusal below spells out why a container may not be able to reach it at all.
+extract_kernel_offset_mount() {
+    local want
+    want="$1"
+    local mnt start size dest found
+    found=""
+    dest="${RUN_DIR}/${want}"
+    mnt="${RUN_DIR}/boot-mnt"
+    mkdir -p "${mnt}"
+    umount "${mnt}" 2>/dev/null || true
+    while read -r start size; do
+        [ -n "${start}" ] && [ -n "${size}" ] || continue
+        [ "${size}" -gt 0 ] 2>/dev/null || continue
+        mount -o "ro,offset=$((start * 512)),sizelimit=$((size * 512))" \
+              "${IMG}" "${mnt}" 2>/dev/null || continue
+        if cp "${mnt}/${want}" "${dest}" 2>/dev/null \
+           || cp "${mnt}/boot/${want}" "${dest}" 2>/dev/null; then
+            # Same zero-byte rule as PASS 1 — an empty -kernel is a boot timeout
+            # dressed up as a mystery, not a kernel.
+            if [ -s "${dest}" ]; then found="${dest}"; else rm -f "${dest}"; fi
+        fi
+        umount "${mnt}" 2>/dev/null || true
+        if [ -n "${found}" ]; then break; fi
+    done < <(partition_offsets)
+    rmdir "${mnt}" 2>/dev/null || true
+    [ -n "${found}" ] || return 1
+    printf '%s\n' "${found}"
+}
+
 if [ "${KERNEL}" = "@from-img@" ]; then
-    [ "$(id -u)" -eq 0 ] || die "--kernel-from-img needs root (losetup -P): sudo $0 ..."
-    command -v losetup >/dev/null || die "missing losetup"
-    mkdir -p "${RUN_DIR}/boot-mnt"
-    KERNEL="${RUN_DIR}/${KERNEL_IMG_NAME}"
-    step "Extracting ${KERNEL_IMG_NAME} from ${IMG} (losetup -P)"
-    LOOP="$(losetup -P --show -f "${IMG}")"
-    # shellcheck disable=SC2064
-    trap "umount '${RUN_DIR}/boot-mnt' 2>/dev/null || true; losetup -d '${LOOP}' 2>/dev/null || true" EXIT
-    mount "${LOOP}p1" "${RUN_DIR}/boot-mnt" 2>/dev/null \
-        || mount "${LOOP}p2" "${RUN_DIR}/boot-mnt" || die "could not mount image boot partition"
-    cp "${RUN_DIR}/boot-mnt/${KERNEL_IMG_NAME}" "${KERNEL}" 2>/dev/null \
-        || cp "${RUN_DIR}/boot-mnt/boot/${KERNEL_IMG_NAME}" "${KERNEL}" \
-        || die "no ${KERNEL_IMG_NAME} inside image"
-    umount "${RUN_DIR}/boot-mnt"; losetup -d "${LOOP}"; trap - EXIT
+    mkdir -p "${RUN_DIR}"
+    command -v sfdisk >/dev/null \
+        || die "--kernel-from-img needs sfdisk (util-linux) to read ${IMG}'s partition table"
+    step "Extracting ${KERNEL_IMG_NAME} from ${IMG} (mtools at a byte offset — no loop device, no root)"
+    KERNEL=""
+    if command -v mcopy >/dev/null && command -v minfo >/dev/null; then
+        KERNEL="$(extract_kernel_mtools "${KERNEL_IMG_NAME}" || true)"
+    else
+        warn "mtools (mcopy + minfo) is not installed — the unprivileged FAT pass cannot run"
+    fi
+    FALLBACK_STATE="did not run (this process is not uid 0)"
+    if [ -z "${KERNEL}" ] && [ "$(id -u)" -eq 0 ]; then
+        warn "no FAT partition held ${KERNEL_IMG_NAME}; trying the privileged offset mount (non-FAT /boot)"
+        KERNEL="$(extract_kernel_offset_mount "${KERNEL_IMG_NAME}" || true)"
+        FALLBACK_STATE="ran as root and also failed"
+    fi
+    [ -n "${KERNEL}" ] || die "could not extract ${KERNEL_IMG_NAME} from ${IMG}.
+  * the unprivileged mtools pass found no FAT partition holding ::${KERNEL_IMG_NAME}
+    or ::boot/${KERNEL_IMG_NAME} (if 'mcopy' is missing, install mtools — that pass
+    is the supported route and it needs no privilege at all);
+  * the privileged offset-mount fallback ${FALLBACK_STATE}.
+  IN A CONTAINER the fallback is expected to be unusable EVEN AS ROOT, so 'run it
+  with sudo' is not the answer here: it needs CAP_SYS_ADMIN and a free loop device,
+  and a container's /dev is a creation-time snapshot of the host's, so a loop node
+  the kernel creates later never appears inside it. In a container the routes are
+  (a) install mtools so the FAT pass above can run, or (b) extract the kernel
+  outside and pass it with --kernel."
+    info "extracted ${KERNEL} ($(wc -c < "${KERNEL}") bytes)"
 fi
 
 [ -n "${KERNEL}" ] && [ -f "${KERNEL}" ] || die \
