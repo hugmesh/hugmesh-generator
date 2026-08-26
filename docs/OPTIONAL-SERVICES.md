@@ -188,15 +188,32 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 - the shared `45-social-ui.yaml` only when **both** homeservers are deselected.
 
 It then re-renders `manifests/policy/installed-services-configmap.yaml` to match
-the surviving selection. ArgoCD's `recurse:true`+`prune:true` then never
-instantiates a removed Application.
+the surviving selection.
 
-> ⚠️ **Runtime caveat:** build-time `rm -f` only stops the **one-time bootstrap
-> seed**. The live cluster's ArgoCD root app syncs `apps/` from the **gitops
-> repo**, not the baked copy, so on a cluster pointed at the upstream repo a
-> pruned Application would be re-created. Build-time prune truly removes a
-> workload only when the build targets a gitops repo/branch that **also** lacks
-> it. For live add/remove use the runtime model in §7.
+`specs/cluster/bootstrap/bootstrap.sh` applies the **baked** `apps/` tree
+directly, one file at a time, so a pruned Application is simply never
+instantiated — and the *in-file* edits above (dropped gateway routes and
+extraHosts) are the bytes that reach the cluster.
+
+> ⚠️ **This was NOT true before 2026-08-26,** and the caveat that used to sit
+> here understated it. `bootstrap.sh` applied exactly one Application —
+> `app-of-apps.yaml`, whose source is `path: specs/cluster/apps` +
+> `directory.recurse: true` against the **GitOps repo** — and nothing anywhere
+> read the baked tree. So the build-time prune was not "only a bootstrap seed",
+> it was **inert**: a device built with `--optional-services akkoma` received
+> tuwunel, phpbb, games, owncast and tube from `main` regardless. Guarded now by
+> `tests/cluster/test-bootstrap-applies-baked-apps.sh`.
+
+> ⚠️ **What the prune still does NOT cover.** Each surviving Application fetches
+> its own `specs/cluster/manifests/<dir>` from the **git repo**, so a baked edit
+> *under* `manifests/` (the installed-services ConfigMap, `seed-optionalservices.yaml`,
+> the route-access SQL) still does not reach the cluster. Closing that needs a
+> pruned *source*, not another apply — see `specs/cluster/README.md`
+> "What the device syncs". For live add/remove use the runtime model in §7.
+
+> ⚠️ **`HUGMESH_GITOPS_ROOT_RECURSE=1`** restores the old repo-recursing root for
+> a cluster deliberately tracking a git branch. It re-creates every pruned
+> Application from the repo — the build-time selection is ignored, loudly.
 
 ## 4. Worked example — build a USB without akkoma + phpBB
 
@@ -220,8 +237,9 @@ grep -E '^  (akkoma|tuwunel|phpbb|games):' manifests/policy/installed-services-c
 #   akkoma: "false"  tuwunel: "true"  phpbb: "false"  games: "true"
 ```
 
-On the cluster, `argocd app list` shows no `akkoma`/`phpbb`/`forum-*` apps;
-`recurse:true`+`prune:true` never instantiated them.
+On the cluster, `argocd app list` shows no `akkoma`/`phpbb`/`forum-*` apps:
+`bootstrap.sh` applied only the Application files that survived the prune, so
+those were never created (not created-then-pruned).
 
 ## 5. Games subdomain (opt-in; subdomain by default when enabled)
 
@@ -289,7 +307,13 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 
 ## 7. Runtime add/remove on a LIVE cluster
 
-> **STATUS: build-time prune ✅ SHIPPED · build-time 13a render ✅ SHIPPED ·
+> **STATUS: build-time prune ✅ SHIPPED **and now actually governing a device**
+> (`bootstrap.sh` applies the baked `apps/` tree; before 2026-08-26 it applied
+> the repo-recursing root and the prune was inert) · build-time 13a render
+> ✅ SHIPPED **but held at `installed:"false"` for any slug whose hardcoded
+> `apps/30-*`/`50-*` Application still exists** — flipping it would doubly manage
+> one manifest dir (§10); `_opt_appset_cutover_done()` in `build-rpi5-stage4.sh`
+> is the guard and lifts itself at cut-over ·
 > federation `OverrideService` + public `GET /api/federation/capabilities` ✅ SHIPPED ·
 > host (hugmesh.net) capabilities consumption + `menu.component` `enabled()`
 > greying ✅ SHIPPED · live admin-driven flip 🟡 CODE-COMPLETE, SHIPS DARK (the
@@ -389,6 +413,16 @@ the live-flip CRD mechanism does not cover it.
 ArgoCD's automated recurse roots (`app-of-apps.yaml` + `apps/00-app-of-apps-waved.
 yaml`, `selfHeal:true`) and the policy app (`apps/16`) would REVERT any live element /
 ConfigMap write back to git's inert baseline. So:
+
+> **Since 2026-08-26 neither root is applied by default** — `bootstrap.sh` applies
+> the baked `apps/` tree directly — so on a device the 13a half of this is **moot
+> rather than load-bearing**: nothing selfHeals `apps/13a-optional-services.yaml`.
+> The `ignoreDifferences` below are KEPT, unchanged: they are still required for a
+> cluster run under `HUGMESH_GITOPS_ROOT_RECURSE=1` or pointed at the waved root,
+> and removing them would silently re-arm the revert for exactly those clusters.
+> The `apps/16` ConfigMap clause is **unaffected** and still load-bearing — the
+> policy app is applied from the baked tree like every other child and keeps its
+> own `selfHeal`.
 
 - both roots carry `ignoreDifferences` on `argoproj.io ApplicationSet
   optional-services` `jsonPointers:[/spec/generators/0/list/elements]` **+

@@ -2171,8 +2171,17 @@ GROWFS_EOF
 }
 
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
-# ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
-# a YAML from the baked copy is the gate (no live-cluster conditional needed).
+# Physically removing a YAML from the baked copy is the gate (no live-cluster
+# conditional needed) — because specs/cluster/bootstrap/bootstrap.sh applies the
+# BAKED ${CLUSTER_DIR}/apps tree one file at a time.
+#
+# ⚠ THAT WAS NOT TRUE BEFORE 2026-08-26, and this comment used to assert the
+# opposite of the truth: it said ArgoCD "recurses specs/cluster/apps with
+# recurse:true", which it did — from GITHUB, via app-of-apps.yaml, the only thing
+# bootstrap.sh ever applied. Nothing read the baked tree, so every `rm -f` below
+# edited a directory ArgoCD never looked at and the whole gate was INERT on a
+# real device. Do not re-point bootstrap.sh at the repo-recursing root without
+# reading specs/cluster/README.md "What the device syncs".
 # Operates ONLY on ${SYSROOT}/var/lib/hugmesh/cluster/apps — never the repo.
 #   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
@@ -2238,10 +2247,22 @@ rewrite_prod_image_tags() {
 # cannot 502 and a leftover role row cannot stale-grant. Shared apps (social-ui,
 # serving BOTH homeservers) are removed only when ALL owners are deselected.
 #
-# ⚠ RUNTIME NOTE: build-time prune only stops the ONE-TIME bootstrap seed; the
-# live cluster syncs apps/ from the gitops repo. True runtime add/remove uses the
-# installed-services ConfigMap + the optional-services ApplicationSet
-# (apps/13a-optional-services.yaml). See docs/OPTIONAL-SERVICES.md.
+# ⚠ RUNTIME NOTE (REWRITTEN 2026-08-26). The Application set a device deploys IS
+# this pruned tree: bootstrap.sh applies ${CLUSTER_DIR}/apps directly, so a slug
+# pruned here is never instantiated and never re-appears. The sentence that used
+# to sit here — "the live cluster syncs apps/ from the gitops repo" — described
+# the DEFECT, not a limitation: that repo sync is exactly what made this gate
+# inert, and it is gone.
+#   * still true: the manifests each surviving Application pulls
+#     (specs/cluster/manifests/<dir>) come from the git REPO, so a baked edit
+#     UNDER manifests/ does not reach the cluster.
+#   * still true: adding/removing a service on an ALREADY-RUNNING cluster is the
+#     installed-services ConfigMap + the optional-services ApplicationSet
+#     (apps/13a-optional-services.yaml), not a rebuild.
+#   * NEW CONSTRAINT: a selected slug's 13a element must stay installed:"false"
+#     while its hardcoded apps/30-*/50-* Application exists, or the two would
+#     doubly manage one manifest dir — _opt_appset_cutover_done() enforces it.
+# See docs/OPTIONAL-SERVICES.md and specs/cluster/README.md "What the device syncs".
 #
 # ⚠ CROSS-REPO TODO (gateway wave): CanonicalSeed.java (hugmesh-gateway) bakes
 # a route-access floor + the cloudflared configmap hardcodes matrix./mastodon.

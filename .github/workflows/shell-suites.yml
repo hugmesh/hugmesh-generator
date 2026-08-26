@@ -104,6 +104,7 @@ jobs:
             tests/auto-update/test-update-poller.sh
             tests/boot/test-kubelet-join-bootstrap.sh
             tests/cloud-deploy/test-cloud-deploy-driver.sh
+            tests/cluster/test-bootstrap-applies-baked-apps.sh
             tests/desktop-governance/test-desktop-sudo-mapper.sh
             tests/desktop-governance/test-gen-sso-session-start.sh
             tests/desktop-governance/test-provision-desktop-governance.sh

@@ -61,7 +61,9 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # GUARD_PREMERGE overrides it for the negative-control children below, exactly as
 # GUARD_ALLOW does for the allowlist: this number describes THE REAL REPO, and a
 # synthesised one-suite tree cannot be measured against it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-117}"
+# 117 -> 118 on 2026-08-26: tests/cluster/test-bootstrap-applies-baked-apps.sh,
+# wired into the pull_request shell-suites workflow.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-118}"
 
 echo "== guard integrity: every guard can fail, and something runs it =="
 

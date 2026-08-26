@@ -1069,6 +1069,22 @@ lint:optional-services-exclude:
   script:
     - bash tests/stack/test-optional-services-exclude.sh
 
+# THE KEYSTONE for "images with services selected only start those services".
+# The suite above proves the BAKED TREE is pruned; it proves NOTHING about what
+# ArgoCD syncs, and it was green through the entire lifetime of the bug where
+# bootstrap.sh applied only app-of-apps.yaml and ArgoCD therefore instantiated
+# specs/cluster/apps from GITHUB MAIN. This suite drives the real
+# specs/cluster/bootstrap/bootstrap.sh under a stub `kubectl` that captures every
+# applied manifest, then asserts on the RESOLVED SOURCE of what was applied: no
+# Application may resolve to path=specs/cluster/apps, and the applied Application
+# set must equal the SELECTION. Cheap; no cluster and no privileged runner.
+lint:bootstrap-applies-baked-apps:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/cluster/test-bootstrap-applies-baked-apps.sh
+
 # Merge-conflict-marker gate. A WIP checkpoint PR once merged an UNRESOLVED
 # conflict hunk into tests/stack/gateway-routes/fe/application-routes.yml — a file
 # the fe-gateway parses at STARTUP, so the platform front door crash-looped on
@@ -2613,6 +2629,7 @@ orphan-guards-verify:
         tests/auto-update/test-provision-update.sh
         tests/auto-update/test-update-poller.sh
         tests/cloud-deploy/test-cloud-deploy-driver.sh
+        tests/cluster/test-bootstrap-applies-baked-apps.sh
         tests/device-registry/test-registry-allow-deny.sh
         tests/device-registry/test-self-report.sh
         tests/domain-registry/test-domain-reconcile-fuzz.sh

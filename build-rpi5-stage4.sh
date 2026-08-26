@@ -1677,8 +1677,17 @@ GROWFS_EOF
 }
 
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
-# ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
-# a YAML from the baked copy is the gate (no live-cluster conditional needed).
+# Physically removing a YAML from the baked copy is the gate (no live-cluster
+# conditional needed) — because specs/cluster/bootstrap/bootstrap.sh applies the
+# BAKED ${CLUSTER_DIR}/apps tree one file at a time.
+#
+# ⚠ THAT WAS NOT TRUE BEFORE 2026-08-26, and this comment used to assert the
+# opposite of the truth: it said ArgoCD "recurses specs/cluster/apps with
+# recurse:true", which it did — from GITHUB, via app-of-apps.yaml, the only thing
+# bootstrap.sh ever applied. Nothing read the baked tree, so every `rm -f` below
+# edited a directory ArgoCD never looked at and the whole gate was INERT on a
+# real device. Do not re-point bootstrap.sh at the repo-recursing root without
+# reading specs/cluster/README.md "What the device syncs".
 # Operates ONLY on ${SYSROOT}/var/lib/hugmesh/cluster/apps — never the repo.
 #   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
@@ -1697,10 +1706,22 @@ GROWFS_EOF
 # matched route to a deleted upstream cannot 502 and a leftover role row cannot
 # stale-grant). Shared social-ui is removed only when BOTH homeservers go.
 #
-# ⚠ RUNTIME NOTE: build-time prune only stops the bootstrap seed; the live
-# cluster syncs apps/ from the gitops repo. True runtime add/remove uses the
-# installed-services ConfigMap + the optional-services ApplicationSet
-# (apps/13a-optional-services.yaml). See docs/OPTIONAL-SERVICES.md.
+# ⚠ RUNTIME NOTE (REWRITTEN 2026-08-26). The Application set a device deploys IS
+# this pruned tree: bootstrap.sh applies ${CLUSTER_DIR}/apps directly, so a slug
+# pruned here is never instantiated and never re-appears. The sentence that used
+# to sit here — "the live cluster syncs apps/ from the gitops repo" — described
+# the DEFECT, not a limitation: that repo sync is exactly what made this gate
+# inert, and it is gone.
+#   * still true: the manifests each surviving Application pulls
+#     (specs/cluster/manifests/<dir>) come from the git REPO, so a baked edit
+#     UNDER manifests/ does not reach the cluster.
+#   * still true: adding/removing a service on an ALREADY-RUNNING cluster is the
+#     installed-services ConfigMap + the optional-services ApplicationSet
+#     (apps/13a-optional-services.yaml), not a rebuild.
+#   * NEW CONSTRAINT: a selected slug's 13a element must stay installed:"false"
+#     while its hardcoded apps/30-*/50-* Application exists, or the two would
+#     doubly manage one manifest dir — _opt_appset_cutover_done() enforces it.
+# See docs/OPTIONAL-SERVICES.md and specs/cluster/README.md "What the device syncs".
 #
 # ⚠ CROSS-REPO TODO (gateway wave): CanonicalSeed.java (hugmesh-gateway) +
 # the cloudflared configmap reserved hostnames must stay in sync with the rows
@@ -2084,10 +2105,75 @@ _opt_anubis_installed() {
 # absent from EVERY path (bootstrap seed pruned + 13a element dropped by the
 # selector), so a repo-synced ArgoCD can never re-force a deselected service on.
 # Idempotent: rewrites only the `installed: "..."` field of the matching `slug:` element.
+# Echo the `path:` field of ONE 13a list element (the manifest directory that
+# element's generated Application would own), or nothing if the slug has no
+# element. Used by the double-management guard below.
+_opt_appset_element_path() {
+    local slug="$1" appset="$2"
+    [ -f "${appset}" ] || return 0
+    sed -n -E "s#^[[:space:]]*-[[:space:]]*\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*[[:space:]]path:[[:space:]]*([^,[:space:]]+).*#\1#p" \
+        "${appset}" | sed -n '1p'
+}
+# Has the 13a CUT-OVER happened FOR THIS SLUG — i.e. is 13a the ONLY thing that
+# would manage the slug's manifest directory?
+#
+# 13a-optional-services.yaml's own header states the rule this enforces: "while
+# the legacy hardcoded apps/30-akkoma.yaml etc. still exist, this ApplicationSet
+# would create a DUPLICATE ... keep every element installed:false so it creates
+# nothing and cannot collide", and docs/OPTIONAL-SERVICES.md forbids two owners of
+# one manifest directory outright. The generated Application is named
+# `optional-<slug>`, so it does NOT collide by NAME with the hardcoded
+# `tuwunel`/`akkoma`/… Applications — it collides by TARGET: two Applications, both
+# with `automated {prune, selfHeal}`, both sourcing
+# specs/cluster/manifests/<dir>, each entitled to prune the other's objects.
+#
+# This mattered only in theory until 2026-08-26, because bootstrap.sh never
+# applied the baked tree at all (it synced specs/cluster/apps from GitHub), so the
+# baked 13a edit reached nothing. The keystone fix in
+# specs/cluster/bootstrap/bootstrap.sh now applies the BAKED apps/ tree directly —
+# which makes this build-time `installed: "true"` write REACHABLE, and with it the
+# double management. Hence the guard, rather than the previously harmless flip.
+#
+# Returns 0 (cut over — safe to flip true) when NO OTHER baked apps/*.yaml
+# declares the element's `path:`. That is deliberately self-maintaining: the day
+# apps/30-tuwunel.yaml is deleted in favour of the 13a element, this starts
+# returning 0 for tuwunel on its own, with no second edit here.
+#
+# Slugs that ship NO hardcoded Application at all (anubis, coturn, meshbridge —
+# 13a is their ONLY wiring) satisfy this trivially and keep flipping to "true";
+# that path is not double management and must not be blocked.
+_opt_appset_cutover_done() {
+    local slug="$1" appset="$2" apps p f
+    apps="$(dirname "${appset}")"
+    p="$(_opt_appset_element_path "${slug}" "${appset}")"
+    [ -n "${p}" ] || return 0     # no element / no path -> nothing to collide with
+    for f in "${apps}"/*.yaml; do
+        [ -e "${f}" ] || continue
+        case "$(basename "${f}")" in 13a-optional-services.yaml) continue ;; esac
+        # STRIP COMMENTS FIRST. Several apps files name a manifests/<dir> path in
+        # prose ("mirrors specs/cluster/manifests/forum"); counting those as an
+        # owner would wrongly report "not cut over" forever. Only a real
+        # `path: <dir>` key at the start of a line counts as ownership.
+        # Deliberately NOT `grep -q`: under `set -o pipefail` a -q match closes the
+        # pipe and the upstream sed dies of SIGPIPE, inverting a FOUND match into a
+        # failed pipeline. Drained to /dev/null instead.
+        if sed -e 's/#.*$//' "${f}" \
+             | grep -E "^[[:space:]]*path:[[:space:]]*${p}[[:space:]]*\$" >/dev/null; then
+            return 1
+        fi
+    done
+    return 0
+}
 _opt_render_appset_flag() {
     local slug="$1" val="$2"
     local appset="${SYSROOT}/var/lib/hugmesh/cluster/apps/13a-optional-services.yaml"
     [ -f "${appset}" ] || return 0
+    # DOUBLE-MANAGEMENT GUARD (see _opt_appset_cutover_done). "false" is ALWAYS
+    # honoured — a deselection must never be blocked by a guard about installs.
+    if [ "${val}" = "true" ] && ! _opt_appset_cutover_done "${slug}" "${appset}"; then
+        warn "OPTIONAL_SERVICES: '${slug}' selected, but apps/30-*/50-* still owns $(_opt_appset_element_path "${slug}" "${appset}") — leaving its 13a ApplicationSet element installed:\"false\" (flipping it would put TWO prune/selfHeal Applications on one manifest dir; see docs/OPTIONAL-SERVICES.md). The hardcoded baked Application is what installs it."
+        val="false"
+    fi
     # Match a list element line `- { slug: <slug>, ..., installed: "true|false" }`
     # and rewrite ONLY its installed value (the slug token is the line anchor).
     sed -i -E "s#(\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\")(true|false)(\")#\\1${val}\\3#" "${appset}"
