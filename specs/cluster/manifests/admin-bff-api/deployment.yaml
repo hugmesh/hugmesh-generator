@@ -451,6 +451,70 @@ spec:
             # creates hugmesh-service-catalog-builds (with its own default-deny netpol);
             # APPSTORE_BUILDER_REGISTRY above was already pinned, its namespace was not.
             - { name: APPSTORE_BUILDER_NAMESPACE, value: "hugmesh-service-catalog-builds" }
+            # ── APP-STORE / SERVICE-CATALOG EFFECTOR GO-LIVE (D3, 2026-08-26) ──────
+            # OBSERVED: the whole SUPERADMIN Service Catalog was inert. Provisioning a
+            # service reported success and NOTHING was created in-cluster, and every
+            # DOCKERFILE/ZIP submission came back 400 "requires the in-cluster image
+            # builder". Root cause is NOT a bug in the flow — it is that all three
+            # app.appstore.* gates default FALSE in the BFF's application.yml and this
+            # deployment never overrode them, so the ships-dark Noop seams were the
+            # only beans ever wired. Each flag is a TWO-BEAN @ConditionalOnProperty
+            # switch (ArgoCdConfig / FederationModuleClientConfig), i.e. exactly one
+            # bean is registered in either mode — flipping it swaps the seam, it does
+            # not add an unguarded code path.
+            #
+            # 1) APPSTORE_EFFECTOR_ENABLED (app.appstore.effector.enabled)
+            #    ArgoCdConfig: false → NoopArgoCdClient (AddServiceEffector runs its
+            #    full sequence against a no-op ArgoCD seam and creates nothing);
+            #    true → RestArgoCdClient, the real ArgoCD API client. This flag gates
+            #    ONLY the ArgoCD seam. It does NOT gate cloud-backups: BackupEffector-
+            #    Config names app.appstore.effector.enabled in its javadoc PROSE but
+            #    conditions on app.backups.effector.enabled — reading the annotation,
+            #    not the comment, is the whole difference (this repo has inverted a
+            #    check off comment prose four times).
+            # 2) APPSTORE_FEDERATION_ENABLED (app.appstore.federation.enabled)
+            #    FederationModuleClientConfig: false → NoopFederationModuleClient (a
+            #    federate call is LOGGED only and FederateOutcome.federationReal=false,
+            #    so the wizard shows a service that was never registered); true →
+            #    RestFederationModuleClient against APPSTORE_FEDERATION_BASE_URL, which
+            #    is already pinned above.
+            #
+            # KNOWN GAP, deliberately not papered over: neither leg's bearer token has
+            # a source in this tree. APPSTORE_ARGOCD_AUTH_TOKEN and
+            # APPSTORE_FEDERATION_AUTH_TOKEN both default EMPTY in application.yml and
+            # there is no ExternalSecret for either (grep external-secrets/ — argocd
+            # has none; the federation token must be a Casdoor JWT carrying
+            # ROLE_SUPERADMIN). Until they are provisioned these two legs make a REAL
+            # call that comes back 401. That is a LOUD failure surfaced to the caller,
+            # which is why it is acceptable to land ahead of the tokens — unlike the
+            # builder below, whose failure mode is silent. They are NOT wired here as
+            # secretKeyRefs on purpose: a non-optional secretKeyRef naming a Secret
+            # that does not exist wedges this very pod in CreateContainerConfigError,
+            # which would reproduce the exact hang class this unit exists to avoid.
+            #
+            # 3) APPSTORE_BUILDER_ENABLED — STAYS FALSE. ORDERING CONSTRAINT.
+            #    false → no KanikoBuildLauncher bean (@ConditionalOnProperty) and
+            #    AddServiceEffector rejects DOCKERFILE/ZIP with a 400. That 400 is the
+            #    SAFE state. Flipping it true creates a real Kaniko Job whose pod
+            #    mounts the registry push credential NON-optionally, so if the Secret
+            #    is absent the build pod does not fail — it sits in ContainerCreating
+            #    until activeDeadlineSeconds (1800s) with the operator watching a
+            #    "build" that never started. A hang, not an error.
+            #    This flips ONLY after the push-credential ExternalSecret lands (unit
+            #    D1). tests/scripts/test-appstore-effector-flags.sh enforces the
+            #    coupling in BOTH directions: builder=true without an APPLIED manifest
+            #    creating the mounted Secret — right name, right `items` key, and in
+            #    APPSTORE_BUILDER_NAMESPACE above, because a pod can only mount a
+            #    Secret from its own namespace — is a RED test, so the flag cannot be
+            #    flipped in a later PR without the secret coming with it.
+            #    NOTE ON THE VALUE ITSELF: KanikoBuildLauncher's @ConditionalOnProperty
+            #    carries NO havingValue, so Spring enables the bean for ANY value other
+            #    than "false" (case-insensitive) — "TRUE", "yes", "1" and even "" all
+            #    switch the builder ON. A typo here does not ship dark; it arms the
+            #    wedge. The guard requires the literal string for exactly that reason.
+            - { name: APPSTORE_EFFECTOR_ENABLED,   value: "true" }
+            - { name: APPSTORE_FEDERATION_ENABLED, value: "true" }
+            - { name: APPSTORE_BUILDER_ENABLED,    value: "false" }
             # Where the optional-services reconciler writes its policy objects: the
             # deployed namespace is hugmesh-policy (namespaces/namespaces.yaml).
             - { name: APP_OPTIONAL_SERVICES_RECONCILE_POLICY_NAMESPACE, value: "hugmesh-policy" }
