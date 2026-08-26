@@ -41,7 +41,15 @@ import { test as base, createBdd } from 'playwright-bdd';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { BddContext } from 'playwright-bdd/dist/runtime/bddContext';
-import { Dimensions, resolveDimensions, requireDimension } from './dimensions';
+import {
+  Dimensions, resolveDimensions, requireDimension, ENVIRONMENTS,
+  envOf, interfaceOf, isEnvironment, environmentBaseUrl,
+  environmentAvailability, interfaceAvailability,
+} from './dimensions';
+import {
+  slug, runDir, clearPending, drainPending, writeStepEvidence, appendManifest,
+  materializeManifest, transcriptText, StepMeta, CliTranscript,
+} from './evidence';
 
 /** Per-scenario scratchpad. Cleared in Before, so nothing leaks between runs. */
 export class World {
@@ -74,9 +82,23 @@ interface HugMeshBddFixtures {
 
 export const test = base.extend<HugMeshBddFixtures>({
   dimensions: async ({ $tags, $testInfo }, use) => {
-    // Throws here on an unknown persona/service/platform — before a single
-    // browser action runs, with the legal values in the message.
+    // Throws here on an unknown persona/service/platform/env/interface — before
+    // a single browser action or subprocess runs, with the legal values in the
+    // message.
     await use(resolveDimensions($tags, $testInfo.titlePath.join(' ')));
+  },
+  // THE ENVIRONMENT AXIS, MADE REAL FOR page.goto(). A scenario tagged
+  // `@env:kind` must drive the kind ingress, not whatever playwright.config.ts
+  // was started with. Overriding the baseURL OPTION here is what makes every
+  // existing relative `page.goto('/login')` in every step definition follow the
+  // scenario's environment with no change to the step.
+  //
+  // BACKWARD COMPATIBILITY IS THE WHOLE POINT OF THE TERNARY: a scenario that
+  // declared no `@env:` falls through to the config's own baseURL untouched, so
+  // the 453 pre-existing scenarios resolve exactly the URL they resolved before.
+  baseURL: async ({ $tags, $testInfo, baseURL }, use) => {
+    const d = resolveDimensions($tags, $testInfo.titlePath.join(' '));
+    await use(d.env ? environmentBaseUrl(d.env) : baseURL);
   },
   world: async ({}, use) => {
     const w = new World();
@@ -103,25 +125,71 @@ export async function substep<T>(title: string, body: () => Promise<T>): Promise
 }
 
 // ── step evidence ────────────────────────────────────────────────────────────
-
-/** Base dir for per-step evidence — under the REPORT dir, never the git tree. */
-export const BDD_SHOTS = path.resolve(
-  process.env.SNAP_BDD_SHOTS
-  || path.join(process.env.SNAP_REPORT_DIR || 'test-results', 'bdd-steps'),
-);
-
-/** Per-run subdir, keyed the same way the hugmesh reporter keys summary.json. */
-const RUN_ID = process.env.SNAP_RUN_ID || 'dev';
-
-function slug(s: string, max = 60): string {
-  return (s.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'unnamed').slice(0, max);
-}
+//
+// Re-exported so the historical import site keeps working. The machinery itself
+// now lives in steps/evidence.ts, because evidence is no longer one shape: a
+// browser step leaves a PNG, a cli step leaves a TRANSCRIPT, a studio step
+// leaves a Qt widget grab, and all three have to land in one manifest.
+export { BDD_SHOTS } from './evidence';
 
 /** Per-scenario ordinal. Reset in Before; incremented in AfterStep. */
 let stepOrdinal = 0;
 
+/**
+ * Escape a transcript for the throwaway HTML page the PNG rendering uses.
+ * Backticks and `${` matter here: this string is interpolated into a template
+ * literal in setContent, and this repo has been bitten by executable backticks
+ * inside quotes before.
+ */
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
+  ));
+}
+
+/**
+ * Render a CLI transcript to a PNG.
+ *
+ * THE HONEST FRAMING, because the operator asked for "screenshots" everywhere:
+ * a terminal has no screen to shoot, so the transcript (.cli.json / .cli.txt)
+ * is the artefact of RECORD and this picture is a convenience. It is produced
+ * with NO new dependency — the Chromium instance Playwright already launched
+ * renders it.
+ *
+ * IT USES A THROWAWAY PAGE, never the scenario's own. Calling setContent on the
+ * driven page would destroy whatever the browser steps had built up, which is a
+ * silent, spooky corruption in any scenario that mixes interfaces. A second page
+ * in the same context costs a few milliseconds and cannot touch the first.
+ *
+ * Set SNAP_CLI_PNG=0 to skip the rendering entirely; the transcript is unaffected.
+ */
+async function renderTranscriptPng(
+  page: import('@playwright/test').Page, t: CliTranscript, dest: string,
+): Promise<boolean> {
+  if (process.env.SNAP_CLI_PNG === '0') return false;
+  const ctx = page.context();
+  const scratch = await ctx.newPage();
+  try {
+    await scratch.setViewportSize({ width: 1280, height: 900 });
+    await scratch.setContent(
+      '<html><body style="margin:0;background:#0b0e14;color:#d6deeb;'
+      + 'font:13px/1.45 ui-monospace,Menlo,Consolas,monospace">'
+      + '<pre style="margin:0;padding:16px;white-space:pre-wrap;word-break:break-word">'
+      + escapeHtml(transcriptText(t))
+      + '</pre></body></html>',
+    );
+    await scratch.screenshot({ path: dest, fullPage: true });
+    return true;
+  } finally {
+    await scratch.close().catch(() => { /* context already torn down */ });
+  }
+}
+
 Before(async ({ dimensions, $testInfo }) => {
   stepOrdinal = 0;
+  // Nothing a previous scenario collected may bleed into this one's first step.
+  clearPending();
+
   // PLATFORM GATE. A mesh under test is ONE image target at a time. When the
   // runner says which (SNAP_PLATFORM=rpi5|x86), a scenario pinned to the other
   // platform is skipped WITH A NAMED REASON — it still appears in --list, so the
@@ -136,10 +204,79 @@ Before(async ({ dimensions, $testInfo }) => {
       + `SNAP_PLATFORM=${underTest}. Unset SNAP_PLATFORM to run every platform row.`,
     );
   }
+
+  // ── ENVIRONMENT GATE ──────────────────────────────────────────────────────
+  // Applies ONLY to scenarios that explicitly declared `@env:`. That line is
+  // load-bearing for backward compatibility: the 453 pre-existing scenarios
+  // declare no environment, and gating them on availability would convert the
+  // 130 that currently FAIL against a dead stack into 130 skips — turning a
+  // loud, true "nothing at :8443" into a quiet green-looking run. Opting in is
+  // how a feature author asks for the skip.
+  const declaredEnv = dimensions.env;
+  if (declaredEnv) {
+    // Runner-level pin, mirroring SNAP_PLATFORM.
+    const envUnderTest = process.env.SNAP_ENV;
+    if (envUnderTest && !isEnvironment(envUnderTest)) {
+      throw new Error(
+        `SNAP_ENV=${envUnderTest} is not a legal environment. Legal values: `
+        + `${ENVIRONMENTS.join(', ')}. Unset SNAP_ENV to run every environment row.`,
+      );
+    }
+    if (envUnderTest && envUnderTest !== declaredEnv) {
+      $testInfo.skip(
+        true,
+        `scenario is pinned @env:${declaredEnv}; the environment under test is `
+        + `SNAP_ENV=${envUnderTest}. Unset SNAP_ENV to run every environment row.`,
+      );
+    }
+    // Availability. The reason ALWAYS names what to start — a skip that just
+    // says "unavailable" sends the reader to the source to find out which of
+    // three meshes was meant.
+    const availability = await environmentAvailability(declaredEnv);
+    if (!availability.available) {
+      $testInfo.annotations.push({ type: 'env-probe', description: availability.detail });
+      $testInfo.skip(true, `@env:${declaredEnv} ${availability.reason}`);
+    }
+    // KIND + BROWSER needs the chromium resolver rules, because hugmesh.net does
+    // not resolve on a developer box (verified: getent hosts hugmesh.net is
+    // empty — that is exactly why `make kind-e2e` passes host-resolver-rules
+    // rather than editing /etc/hosts). Without them the navigation dies on DNS,
+    // which reads like "kind is broken" rather than "the runner is missing a
+    // variable". Name the variable instead.
+    if (declaredEnv === 'kind' && interfaceOf(dimensions) === 'browser'
+        && !process.env.SNAP_HOST_RESOLVER) {
+      $testInfo.skip(
+        true,
+        '@env:kind with @interface:browser needs chromium host-resolver rules: '
+        + "hugmesh.net does not resolve on this host. Set SNAP_HOST_RESOLVER="
+        + "'MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1' "
+        + '(this is what `make kind-e2e` sets).',
+      );
+    }
+  }
+
+  // ── INTERFACE GATE ────────────────────────────────────────────────────────
+  // browser is always available — Playwright resolved it before this hook ran.
+  // cli and studio can genuinely be missing (no shell, no Qt binding), and a
+  // studio scenario on a Qt-less host must say WHICH package is missing rather
+  // than dying inside a python traceback four layers down.
+  const iface = interfaceOf(dimensions);
+  if (iface !== 'browser') {
+    const ia = await interfaceAvailability(iface);
+    if (!ia.available) {
+      $testInfo.annotations.push({ type: 'interface-probe', description: ia.detail });
+      $testInfo.skip(true, `@interface:${iface} ${ia.reason}`);
+    }
+  }
+
   // Record the resolved cell as annotations so a reporter/reader can pivot on it
   // without re-parsing the title. (The existing hugmesh reporter pivots off the
   // TITLE — which is why the convention puts @role:/@layer: in the scenario name
   // as well as in tags. See features/README.md.)
+  //
+  // Only DECLARED axes are annotated. The effective env/interface (which apply a
+  // default) go into the evidence sidecar instead — annotating a default would
+  // claim the author varied an axis they never touched.
   for (const [axis, value] of Object.entries(dimensions)) {
     if (value) $testInfo.annotations.push({ type: axis, description: String(value) });
   }
@@ -155,10 +292,15 @@ AfterStep(async ({ page, $bddContext, $step, $testInfo, dimensions }) => {
   const ordinal = String(stepOrdinal).padStart(3, '0');
 
   const dir = path.join(
-    BDD_SHOTS, slug(RUN_ID), slug(feature.replace(/\.feature$/, '')), slug(scenario, 80),
+    runDir(), slug(feature.replace(/\.feature$/, '')), slug(scenario, 80),
   );
   const stem = `${ordinal}-${slug(stepTitle, 70)}`;
-  const meta = {
+
+  // THE SIDECAR SCHEMA. The pre-existing fields keep their exact names and
+  // order; `env` and `interface` are the additions, and they carry the
+  // EFFECTIVE value (default applied) rather than the declared one — a reader
+  // asking "which mesh produced this PNG" needs the answer, not a null.
+  const meta: StepMeta = {
     feature: featureUri,
     scenario,
     step: stepTitle,
@@ -167,20 +309,39 @@ AfterStep(async ({ page, $bddContext, $step, $testInfo, dimensions }) => {
     platform: dimensions.platform ?? null,
     service: dimensions.service ?? null,
     layer: dimensions.layer ?? null,
+    env: envOf(dimensions),
+    interface: interfaceOf(dimensions),
     failed: $step?.error !== undefined,
     at: new Date().toISOString(),
   };
 
+  // Whatever this step actually did, regardless of what it was TAGGED as. A
+  // browser-tagged scenario that shells out still gets its transcript.
+  const pending = drainPending();
+
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    const png = path.join(dir, `${stem}.png`);
-    const json = path.join(dir, `${stem}.json`);
-    // Path-based attach: Playwright's HTML reporter only persists path-based
-    // attachments into html/data — a body-based one attaches fine and then is
-    // not there when you open the report.
-    await page.screenshot({ path: png, fullPage: false });
-    fs.writeFileSync(json, JSON.stringify(meta, null, 2));
-    await $testInfo.attach(`step ${stem}`, { path: png, contentType: 'image/png' });
+    const rows = await writeStepEvidence({
+      dir,
+      stem,
+      meta,
+      cli: pending.cli,
+      studio: pending.studio,
+      // Path-based attach: Playwright's HTML reporter only persists path-based
+      // attachments into html/data — a body-based one attaches fine and then is
+      // not there when you open the report.
+      screenshot: async (dest) => { await page.screenshot({ path: dest, fullPage: false }); },
+      renderTranscript: (t, dest) => renderTranscriptPng(page, t, dest),
+    });
+    appendManifest(rows);
+
+    for (const r of rows) {
+      const abs = path.join(runDir(), r.path);
+      const png = r.path.endsWith('.png');
+      await $testInfo.attach(`step ${stem} [${r.kind}]`, {
+        path: abs,
+        contentType: png ? 'image/png' : 'application/json',
+      }).catch(() => { /* the artefact vanished; the manifest row still records it */ });
+    }
     await $testInfo.attach(`step ${stem} meta`, {
       body: JSON.stringify(meta), contentType: 'application/json',
     });
@@ -192,5 +353,26 @@ AfterStep(async ({ page, $bddContext, $step, $testInfo, dimensions }) => {
     await $testInfo.attach(`step ${stem} EVIDENCE-MISSING`, {
       body: `${stem}: ${(e as Error).message}`, contentType: 'text/plain',
     }).catch(() => { /* testInfo itself is gone; nothing left to record onto */ });
+  }
+});
+
+// THE INDEX. manifest.jsonl is appended to during the run (O_APPEND, one line
+// per artefact, so it survives a crash and so a workers>1 run cannot interleave
+// a partial record); manifest.json is the browsable index built from it here.
+//
+// AfterAll runs per worker, and materializeManifest() rebuilds the WHOLE index
+// from the JSONL every time, so N workers converge on the same complete file
+// rather than each writing a partial one. It is also exported for a runner that
+// needs to rebuild the index after a crashed run.
+AfterAll(async () => {
+  try {
+    materializeManifest();
+  } catch (e) {
+    // Never fail a suite over its own bookkeeping — but never lose the fact
+    // either. This lands on stderr where the runner captures it.
+    process.stderr.write(
+      `\n!! EVIDENCE MANIFEST NOT WRITTEN: ${(e as Error).message}\n`
+      + `!! Rebuild it with: node -e "require('./steps/evidence').materializeManifest()"\n`,
+    );
   }
 });
