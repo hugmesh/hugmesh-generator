@@ -41,6 +41,7 @@ from typing import Any
 
 from . import secret_files
 from .config import PLATFORM_FIELD_SUPPORT, SECRET_FIELDS
+from .state_paths import state_dir
 from .worklist import WorklistConfig
 
 # Session terminal/lifecycle states. Per-image states reuse the worklist_driver
@@ -69,12 +70,11 @@ FLEET_LOG_NAME = "fleet.log"
 
 # ── paths ─────────────────────────────────────────────────────────────────────────────
 def sessions_dir() -> str:
-    """The session-record directory. Honours ``$HUGMESH_STUDIO_STATE_DIR`` (tests /
-    hygiene) exactly like ``tray.build_status_path``; defaults to
-    ``~/.hugmesh/studio/sessions``."""
-    base = os.environ.get("HUGMESH_STUDIO_STATE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".hugmesh", "studio")
-    return os.path.join(base, "sessions")
+    """The session-record directory: ``<state>/sessions``. The state dir itself comes
+    from :func:`.state_paths.state_dir` — one resolver for every Studio state path,
+    so ``$HUGMESH_STUDIO_STATE_DIR`` and the pytest home-fallback guard apply here
+    exactly as they do to the tray, the crash logs and the run logs."""
+    return os.path.join(state_dir(), "sessions")
 
 
 def session_workdir(out_dir: str, session_id: str) -> str:

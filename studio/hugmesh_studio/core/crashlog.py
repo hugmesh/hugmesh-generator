@@ -33,16 +33,17 @@ import os
 import sys
 import traceback
 
+from .state_paths import state_dir
+
 _MAX_KEPT = 20          # newest N crash files; older ones are pruned on each write
 
 
 def crashes_dir() -> str:
-    """``<state>/crashes``. Honours ``$HUGMESH_STUDIO_STATE_DIR`` exactly like
-    :func:`build_sessions.sessions_dir`, so tests (and a hygiene run) never write to
-    the real ``~/.hugmesh``."""
-    base = os.environ.get("HUGMESH_STUDIO_STATE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".hugmesh", "studio")
-    return os.path.join(base, "crashes")
+    """``<state>/crashes``. The state dir comes from :func:`.state_paths.state_dir`,
+    the single resolver, so tests (and a hygiene run) never write to the real
+    ``~/.hugmesh``. :func:`write` swallows the guard's RuntimeError like any other
+    failure — a crash handler must never replace the real crash with its own."""
+    return os.path.join(state_dir(), "crashes")
 
 
 def _qt_binding() -> str:

@@ -41,6 +41,8 @@ import socket
 import sys
 import threading
 
+from .state_paths import state_dir as _state_dir
+
 __all__ = [
     "CMD_NEW_WINDOW", "CMD_RESET", "CMD_PING", "InstanceServer",
     "endpoint_name", "probe", "send", "state_dir",
@@ -59,11 +61,10 @@ _TIMEOUT = 2.0           # seconds — a confused peer costs a timeout, never a 
 
 
 def state_dir() -> str:
-    """The Studio state dir — the SAME ``$HUGMESH_STUDIO_STATE_DIR`` override the tray
-    and the session records honour, so a test's isolated state dir isolates the
-    instance endpoint too."""
-    return os.environ.get("HUGMESH_STUDIO_STATE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".hugmesh", "studio")
+    """The Studio state dir — re-exported from :mod:`.state_paths`, which is the one
+    place it is resolved, so a test's isolated state dir isolates the instance
+    endpoint too (and the pytest home-fallback guard applies here as well)."""
+    return _state_dir()
 
 
 def _key() -> str:
