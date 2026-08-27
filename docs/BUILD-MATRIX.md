@@ -230,8 +230,13 @@ no axis), **a path-traversal-shaped `--role` value rejected on both
 orangepi5 and orangepizero2** (that flag is an undocumented marker-only escape
 hatch on both builders — neither has a real `--role` axis — that used to flow
 unescaped into the artifact-path strings with no allow-list check at all), the
-two unaffiliated conflict probes (the unaffiliated role with a `--theme`, and
-`--unaffiliated` on a cluster role, must both hard-error), **the two
+unaffiliated **identity/look boundary probes** — since the 2026-08-26 split a
+`--theme` / `--wallpaper` / `--accent-color` on the unaffiliated role must be
+*accepted* (a look names nobody, and its artefacts bake under neutral names),
+while `--brand`, `--brand-logo` and `--brand-locked` must still hard-error (a
+brand names whose image this is), as must `--unaffiliated` on a cluster role;
+both directions are pinned, because a boundary that is only tested on one side
+can move without any probe going red, **the two
 premade-theme probes** (an unknown `--theme`, and a path-shaped one like
 `../..`, must both be rejected *by `--print-plan` itself* — the name used to be
 resolved only at the branding step ~2100 lines later, so the validator every

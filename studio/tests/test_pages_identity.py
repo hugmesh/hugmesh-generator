@@ -28,8 +28,8 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 
 from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     BUILTIN_DEFAULT_SERVICES, Domain, OPTIONAL_SERVICES_BY_PLATFORM,
-    OPTIONAL_SERVICES_CHOICES, PERSON_ROLE_CHOICES, SERVICES_ALL, SERVICES_NONE, User,
-    USER_LEVEL_SERVICES, WIZARD_PAGE_SLUGS,
+    OPTIONAL_SERVICES_CHOICES, PERSON_ROLE_CHOICES, SERVICES_ALL, SERVICES_NONE,
+    UNAFFILIATED_ROLE, User, USER_LEVEL_SERVICES, WIZARD_PAGE_SLUGS,
 )
 from hugmesh_studio.core.platform_info import HostInfo
 from hugmesh_studio.gui import wizard as wizard_mod
@@ -353,14 +353,200 @@ def test_services_client_note_visible_and_nonblocking_on_a_client_role(wiz):
     assert set(value.split()) == set(BUILTIN_DEFAULT_SERVICES) | {"owncast"}, value
 
 
-def test_services_client_note_visible_on_x86_standalone_desktops(wiz):
-    """x86 classifies EVERY non-node role ROLE_CLIENT (config.py G18 /
-    X86_NODE_ROLES) — the standalone desktops skip the GitOps tree too, so the
-    note shows for them as well."""
+def test_the_x86_standalone_desktop_gets_no_services_picker_at_all(wiz):
+    """DEFECT 4 (operator, 2026-08-26) — this test REPLACES
+    test_services_client_note_visible_on_x86_standalone_desktops, which asserted the
+    heads-up note showed on this very config. The note was the right answer while the
+    picker was on screen; the operator's decision is that on a STANDALONE client the
+    picker should not be there to caption.
+
+    x86 classifies every non-node role ROLE_CLIENT (config.py G18 / X86_NODE_ROLES), and
+    what was measured on this exact config before the change is the argument: the
+    nine-row picker was live with akkoma/tuwunel/phpbb PRE-TICKED and the wizard really
+    emitted `--optional-services akkoma tuwunel phpbb` — for a role
+    build-x86-host-stage4.sh:2234 plans as `none` and never gives a cluster GitOps tree
+    (the `cp -r "${SHARED_SPECS}/cluster" …` at :4621 is in the non-client arm).
+
+    The heads-up note keeps its job on the CLOUD desktop path, which is deliberately
+    untouched — see the test below."""
     pick_role(wiz, "standalone-thick")        # standalone mode (default), platform x86
     net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_box.isVisible()
+    assert not net.services_section.isVisible(), "orphan Services & apps header"
+    assert not net.services_role_note.isVisible(), (
+        "a note explaining a picker that is no longer on screen")
+
+
+def test_hiding_the_standalone_services_picker_emits_an_explicit_none(wiz):
+    """The emission half of DEFECT 4 — REWRITTEN, because its first version asserted the
+    exact regression DEFECT 6 then proved (it demanded `--optional-services` and every
+    --no-<x> be ABSENT, and called that emission-neutral).
+
+    THE PROOF THAT VERSION RESTED ON IS FALSE. It claimed build-x86-host-stage4.sh
+    performs the client-role override itself at :1130/:1146/:1162/:1178/:1214. Those five
+    guards exist, but each tests ${ROLE_CLIENT} while it is still FALSE — ROLE_CLIENT is
+    declared false at :92 (whose own comment says "the opt-in guards for --with-tor /
+    --with-character-studio / --with-edge-ai-tts run BEFORE that derivation"), re-set false
+    at :1259, and only set true inside the role case at :1299/:1302/:1318/:1328/:1338 (and
+    the --standalone fold at :1438) — all of which come AFTER :1214. Demonstrated:
+
+        ./build-x86-host-stage4.sh --role standalone-thick --with-tor \
+            --with-character-studio --with-edge-ai-tts --print-plan
+        -> PLAN_OPTIONAL_SERVICES=none, and NOT ONE "has no effect" warning
+
+    (That ordering is pinned as its own mutation guard in test_services_section.py::
+    test_the_client_role_overrides_cannot_fire_before_the_role_case.)
+
+    So emitting NOTHING is not neutral: it hands the selection to whatever a brand profile
+    carries. The hide's answer is `none`, and the page now says so — the explicit-none
+    sentinel plus the definitely-offs of every row the builder parses here, which is
+    exactly what a visible picker with every box unticked emits. Absent a profile those
+    tokens are measurably inert (`--role be+gpu --no-tor --no-character-studio
+    --no-character-forge --no-edge-ai-tts --print-plan` -> akkoma tuwunel phpbb, identical
+    to passing none of them); the leak they close is measured in
+    test_services_section.py::test_a_hidden_picker_cannot_inherit_a_brand_profiles_services.
+
+    --no-edge-ai is untouched by any of this: the edge-AI widgets are not rows of this
+    table (the AI GROUP row carries its own mode gate) and that flag is real subtraction
+    on every build."""
+    pick_role(wiz, "standalone-thick")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_box.isVisible(), "the hide itself is gone — wrong defect"
+    # the WIDGET state has to agree with the emission, or a Back-then-switch to a cloud
+    # client re-seeds the picker from a config that says one thing while the argv said
+    # another (the hide clears to _PRESET_NONE for exactly this reason).
+    assert net.services_preset.currentIndex() == _PRESET_NONE, (
+        "the hidden picker emits an explicit none but its preset reads "
+        f"{net.services_preset.currentIndex()} — widget and argv disagree")
+    assert all(not b.isChecked() for b in net.service_boxes.values()), (
+        "a row is still ticked underneath a hidden picker that emits none")
+    advance_to(wiz, wizard_mod.SystemPage)          # Next past Network collects
+    args = wiz.cfg.to_cli_args()
+    assert wiz.cfg.optional_services == [SERVICES_NONE], (
+        "a hidden picker must clear to the EXPLICIT none sentinel: the UNSET state emits "
+        "no flag at all, which lets a brand profile's OPTIONAL_SERVICES decide")
+    assert ("--optional-services", "") in pairs(args), (
+        f"no explicit empty selection on a standalone desktop argv: {' '.join(args)}")
+    for flag in ("--no-tor", "--no-character-studio", "--no-character-forge",
+                 "--no-edge-ai-tts"):
+        assert flag in args, (
+            f"{flag} missing — a brand profile's WANT_<x>=true survives "
+            f"--optional-services \"\" and folds the slug straight back in")
+    assert "--no-edge-ai" in args, (
+        "--no-edge-ai is real subtraction and is NOT part of the hidden table")
+    # …and nothing was SELECTED. The point of the explicit none is that it is empty.
+    assert "--all-services" not in args
+    assert dict(pairs(args))["--optional-services"] == ""
+
+
+def test_the_hidden_pickers_explicit_none_does_not_escape_the_standalone_flow(wiz):
+    """THE OTHER HALF of the explicit-none rule, and a regression the fix above caused
+    (2026-08-26 review). Writing [SERVICES_NONE] while the picker is hidden is right FOR
+    A STANDALONE IMAGE — emitting nothing there hands the selection to whatever
+    OPTIONAL_SERVICES a brand.conf carries. But the sentinel is read back by
+    initializePage's seeder at face value, as an operator decision, so it used to ride
+    OUT of the standalone flow into the next one:
+
+        standalone-thick -> Back to Mode -> cloud desktop
+            --optional-services            (was: akkoma tuwunel phpbb)
+
+    The operator never touched the services picker; they walked the default path. An
+    untouched [] round-trips, so the ["none"] the HIDE wrote must too — the page remembers
+    it authored that answer and drops it when the picker comes back on screen."""
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "standalone-thick"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    net.validatePage()
+    assert c.optional_services == [SERVICES_NONE], "the hide must still settle the answer"
+
+    # …now the operator goes Back and picks a cloud desktop instead.
+    c.mode = "cloud"; c.role = "desktop"
+    net.initializePage()
+    assert c.optional_services == [], (
+        "the hidden picker's own [none] was inherited by a flow that never hid it")
+    net.validatePage()
+    args = c.to_cli_args()
+    i = args.index("--optional-services")
+    assert args[i + 1] == "akkoma tuwunel phpbb", (
+        f"the cloud desktop silently lost its built-in services: {args[i + 1]!r}")
+
+
+def test_an_operator_chosen_none_on_a_visible_picker_round_trips(wiz):
+    """The mutation guard for the test above: the drop must be keyed on WHO authored the
+    sentinel, not on its value. A none the operator picks from a picker that was never
+    hidden is their answer and survives a revisit."""
+    c = wiz.cfg
+    c.mode = "cloud"; c.role = "desktop"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.services_box.isVisibleTo(net), "this flow must SHOW the picker"
+    from hugmesh_studio.gui.pages.network import _PRESET_NONE
+    net.services_preset.setCurrentIndex(_PRESET_NONE)
+    net.validatePage()
+    assert c.optional_services == [SERVICES_NONE]
+    net.initializePage(); net.validatePage()
+    assert c.optional_services == [SERVICES_NONE], (
+        "the operator's own explicit none was discarded on a revisit")
+
+
+def test_the_unaffiliated_picker_takes_the_same_explicit_none(wiz):
+    """ONE ANSWER FOR BOTH HIDE ARMS, and it is measured rather than symmetry.
+
+    The unaffiliated arm emits no --config at all (validatePage clears brand_profile), so
+    it looks immune to the profile leak. It is not: the builder auto-detects
+    `$(pwd)/brand.conf` whenever no -C is given (build-x86-host-stage4.sh:955) and Studio
+    runs the builder with cwd=generator_dir — the directory brand.conf.example ships in.
+    Measured from a directory holding OPTIONAL_SERVICES="akkoma tor":
+
+        --role standalone-unaffiliated                        -> akkoma tor
+        --role standalone-unaffiliated --optional-services ""  -> none   (exit 0)
+
+    An unaffiliated image silently emerging net-vpn/tor (the PKGS line at :5134 carries no
+    ROLE_CLIENT guard) is the exact inverse of what the role is for."""
+    pick_role(wiz, UNAFFILIATED_ROLE)
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_box.isVisible()
+    assert not net.brand_profile_row.isVisible(), (
+        "the -C row is back on an unaffiliated flow — DEFECT 3's gate, not this one")
+    advance_to(wiz, wizard_mod.SystemPage)
+    args = wiz.cfg.to_cli_args()
+    assert wiz.cfg.optional_services == [SERVICES_NONE]
+    assert ("--optional-services", "") in pairs(args), (
+        f"the unaffiliated arm still emits nothing: {' '.join(args)}")
+
+
+def test_the_cloud_desktop_services_path_is_deliberately_untouched(wiz):
+    """The boundary of DEFECT 4, pinned so a later "simplification" cannot widen the hide
+    to every client role. A branded CLOUD client can legitimately be re-rolled as a node
+    later, so there the flags-are-parsed-but-ignored note is the honest treatment. A
+    standalone image has no mesh to be re-rolled into."""
+    pick_mode(wiz, "cloud")
+    pick_role(wiz, "laptop")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.services_box.isVisible() and net.services_section.isVisible()
     assert net.services_role_note.isVisible()
-    assert net.service_boxes["akkoma"].isEnabled()
+    assert "IGNORED" in net.services_role_note.text()
+    assert net.service_boxes["akkoma"].isChecked()      # builder default, still ticked
+    advance_to(wiz, wizard_mod.KeyZipPage)
+    assert dict(pairs(wiz.cfg.to_cli_args()))["--optional-services"] == (
+        " ".join(BUILTIN_DEFAULT_SERVICES))
+
+
+def test_the_rpi5_standalone_node_keeps_its_services(wiz):
+    """G16, the other side of DEFECT 4's boundary: standalone rpi5 'generic' is
+    NODE-class (build-rpi5 leaves ROLE_CLIENT=false for generic/pki/backend/frontend) and
+    DOES bake the cluster tree, so the picker stays and still emits. `_client_class_role`
+    — not a mode test — is what keeps it."""
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "generic"; c.platform = "rpi5"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.services_box.isVisible() and net.services_section.isVisible()
+    assert net.service_boxes["akkoma"].isChecked()
+    net.validatePage()
+    assert dict(pairs(wiz.cfg.to_cli_args()))["--optional-services"] == (
+        " ".join(BUILTIN_DEFAULT_SERVICES))
 
 
 def test_services_client_note_hidden_on_node_roles(wiz):
@@ -453,7 +639,7 @@ def test_no_part_checked_state_survives_anywhere_on_the_page(wiz):
     advance_to(wiz, wizard_mod.KeyZipPage)
     c = wiz.cfg
     # …and "unchecked" now REACHES the argv as a definite off. That property is what the
-    # third state existed for (a brand.conf sourced at build-x86-host-stage4.sh:841, i.e.
+    # third state existed for (a brand.conf sourced at build-x86-host-stage4.sh:959, i.e.
     # BEFORE the arg loop, can set WANT_TOR=true), so losing it would have been a real
     # regression rather than a simplification.
     assert (c.aide, c.edge_ai_service, c.tor_onion_service, c.character_studio,
@@ -704,3 +890,237 @@ def test_keyzip_without_key_material_leaves_sb_fields_alone(wiz, tmp_path):
     assert wiz.cfg.keys_usb == "" and wiz.cfg.secureboot_key == ""
     args = wiz.cfg.to_cli_args()
     assert "--keys-usb" not in args and "--secureboot-key" not in args
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# OPERATOR REPORT 2026-08-26 — the "Identity & domain" collapsible, both axes.
+#
+#   "standalone menu is asking same questions seemingly multiple times when nothing
+#    should be an image there related to the mesh or domain at all. There should also be
+#    no inbetween menu for configuring domain. There should be the menu for adding the
+#    themes as in the branded images"
+#
+# The image was role=standalone-unaffiliated / platform=x86
+# (out/sessions/20260826-151356-64070a/build-standalone-unaffiliated.x86.log).
+#
+# The SECTION/header half of these defects is pinned in test_pages_network_sections.py;
+# what is pinned HERE is the half that matters more, because a hide that changes the
+# build is worse than the leak it fixes: every gate is paired with a validatePage clear
+# that resets the field to its ImageConfig dataclass default, so hiding a control cannot
+# add or remove an argv token in either direction.
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+def test_the_apex_domain_is_not_emitted_on_a_standalone_x86_image(wiz):
+    """DEFECT 1, emission half. core/config.py::_x86_args keeps the cluster trio inside
+    `if self.mode in ("cloud", "mesh")`, so the prefilled "hugmesh.net" box the operator
+    met could never reach the argv. The rows are hidden, and NOTHING is emitted.
+
+    The ARGV is the assertion, not the field. This test used to also demand that hiding
+    RESET cluster_domain/games_domain/release_state to their dataclass defaults, and that
+    reset was itself a defect (2026-08-26 review): the three are ONE set of fields shared
+    across the whole wizard session, while the gate is a function of (platform, mode), so
+    an x86 detour reached over and destroyed a domain typed for a Pi image the operator
+    was still building — REMOVING --cluster-domain from a build they never touched. That
+    is the opposite of the hiding-must-not-change-the-build rule this block exists to pin.
+    Its sibling below is the regression test. See _x86_args' own mode gate for why the
+    reset was never load-bearing here: it is what suppresses the flags, field or no field.
+    """
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "standalone-thick"; c.platform = "x86"
+    c.cluster_domain = "acme.example"          # as a loaded config would carry it
+    c.games_domain = "games.acme.example"; c.release_state = "public"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.domain_row.isVisibleTo(net)
+    net.validatePage()
+    args = c.to_cli_args()
+    for flag in ("--cluster-domain", "--games-domain", "--release-state"):
+        assert flag not in args, f"{flag} reached a standalone x86 argv"
+    # …and the loaded values are still THERE, unharmed, for whatever image needs them.
+    assert c.cluster_domain == "acme.example", "the hide destroyed a loaded apex domain"
+    assert c.games_domain == "games.acme.example" and c.release_state == "public"
+
+
+def test_an_x86_detour_does_not_destroy_a_domain_typed_for_an_arm_image(wiz):
+    """THE REGRESSION the reset arm caused, pinned. One wizard session, one cfg: the
+    operator types an apex domain on a standalone rpi5 'generic' image (which really does
+    bake it — build-rpi5-stage4.sh writes /etc/hugmesh/cluster-domain unconditionally),
+    flips the device to x86 to look at something, and flips back. Before the reset arm was
+    removed this ended with cluster_domain silently back at "hugmesh.net" and the rpi5
+    argv missing --cluster-domain entirely."""
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "generic"; c.platform = "rpi5"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.domain_row.isVisibleTo(net), "the rpi5 lane must still ASK for the domain"
+    net.domain.setText("example.org")
+    net.validatePage()
+    assert c.cluster_domain == "example.org"
+    # the detour: same session, same cfg, x86 for a moment
+    c.platform = "x86"; c.role = "standalone-thick"
+    net.initializePage(); net.validatePage()
+    assert c.cluster_domain == "example.org", "an x86 detour destroyed the Pi's domain"
+    # …and back
+    c.platform = "rpi5"; c.role = "generic"
+    net.initializePage(); net.validatePage()
+    assert c.cluster_domain == "example.org"
+    assert ("--cluster-domain", "example.org") in list(
+        zip(c.to_cli_args(), c.to_cli_args()[1:]))
+
+
+def test_the_apex_domain_IS_collected_on_a_standalone_rpi5_image(wiz):
+    """The regression the platform-scoped predicate exists to prevent, and the reason
+    this gate is not `cfg.mode == "standalone"`.
+
+    core/config.py::_arm_common_args emits --cluster-domain with NO mode fork — all nine
+    arm64 builders — and _rpi5_args does the same for --release-state / --games-domain. A
+    standalone rpi5 'generic' image really does bake a cluster domain
+    (build-rpi5-stage4.sh:3386); it is the one standalone role that carries a cluster
+    GitOps tree (G16). A blanket mode hide would have looked correct on the operator's
+    x86 image and blanked a live field on every Pi build."""
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "generic"; c.platform = "rpi5"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.domain_row.isVisibleTo(net)
+    assert net.games_domain_row.isVisibleTo(net)
+    assert net.release_state_row.isVisibleTo(net)
+    net.domain.setText("acme.example")
+    net.games_domain.setText("games.acme.example")
+    net.release_state.setCurrentText("public")
+    net.validatePage()
+    p = pairs(c.to_cli_args())
+    assert ("--cluster-domain", "acme.example") in p
+    assert ("--games-domain", "games.acme.example") in p
+    assert ("--release-state", "public") in p
+
+
+def test_the_platform_grey_on_games_and_release_state_is_not_swallowed_by_the_hide(wiz):
+    """The cluster gate asks ONE question — "does this image bake a cluster plane" —
+    through `cluster_domain`, which every one of the ten builders parses. It deliberately
+    does NOT route the games/release-state PLATFORM axis through the same hide: that axis
+    already has an explanation the operator can read (the grey plus gate_widgets'
+    "cleared when you leave the page" tooltip), and converting it into a disappearance
+    would have deleted the explanation with the widget.
+
+    Non-vacuous: this frite cloud build is exactly the case
+    test_release_state_and_games_domain_grey_and_clear_off_x86_rpi5 pins."""
+    c = wiz.cfg
+    c.mode = "cloud"; c.role = "frite"; c.platform = "frite"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.domain_row.isVisibleTo(net), "frite bakes a cluster domain (arm common)"
+    assert net.games_domain_row.isVisibleTo(net), "greyed, not hidden"
+    assert net.release_state_row.isVisibleTo(net), "greyed, not hidden"
+    assert not net.games_domain.isEnabled() and not net.release_state.isEnabled()
+
+
+def test_an_unaffiliated_build_can_no_longer_be_talked_into_refusing_itself(wiz):
+    """DEFECT 3 — the brand trio HARD-BLOCKED an unaffiliated build.
+
+    Measured before the fix (standalone / standalone-unaffiliated / x86): the identity
+    section was visible AND enabled with brand='hugmesh', org='hugmesh',
+    domain='hugmesh.net'. Type anything into Brand id / Brand title / Org and
+    cfg.to_cli_args() raises ValueError out of _check_unaffiliated_conflicts — the wizard
+    invited an entry that then refused to build. build-x86-host-stage4.sh exits non-zero
+    on the same flags, so this is the builder's contract, not a Studio preference.
+
+    The rows are hidden now, and validatePage forces the three fields back to their
+    dataclass defaults so a value typed while the role was standalone-thick cannot ride a
+    later switch into the argv."""
+    pick_role(wiz, "standalone-thick")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    net.brand.setText("acme"); net.brand_title.setText("Acme Ltd"); net.org.setText("Acme")
+    net.brand_profile.setText("/tmp/brands/acme.conf")
+    net.validatePage()
+    assert wiz.cfg.brand == "acme"                      # precondition: it really collects
+    # …now the same page, same widgets, for the unaffiliated role
+    c = wiz.cfg
+    c.role = "standalone-unaffiliated"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    for name in ("brand_profile_row", "brand_row", "brand_title_row", "org_row"):
+        assert not getattr(net, name).isVisibleTo(net), f"{name} still offered"
+    net.brand.setText("acme")           # even a value forced in behind the hide
+    net.validatePage()
+    assert (c.brand, c.brand_title, c.org) == ("hugmesh", "HugMesh Systems", "hugmesh")
+    assert c.brand_profile == ""
+    args = c.to_cli_args()              # used to raise ValueError; must not now
+    for flag in ("--brand", "--brand-title", "--org", "--config"):
+        assert flag not in args, flag
+
+
+def test_the_composable_unaffiliated_flag_hides_the_brand_rows_too(wiz):
+    """One rule, both spellings. `--unaffiliated` is reachable as the dedicated ROLE id
+    AND as a composable flag on any client role (config.py::_x86_args, G22), and
+    _check_unaffiliated_conflicts refuses a brand identity for either. A gate that only
+    knew the role id would have left the flag path inviting the same refused entry."""
+    pick_role(wiz, "standalone-thick")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    c = wiz.cfg
+    assert not c.unaffiliated and net.brand_row.isVisibleTo(net), (
+        "precondition: the same role WITHOUT the flag offers the brand rows")
+    # Set the flag on cfg and re-enter the page, which is what a revisit does. Driven
+    # this way ON PURPOSE rather than through RolePage's composable checkbox: that widget
+    # belongs to another page (and another lane is changing its visibility right now), so
+    # coupling this gate's test to it would make a NetworkPage regression indistinguishable
+    # from a RolePage layout change. The --config / worklist channels reach this state
+    # with no RolePage in the picture at all.
+    c.unaffiliated = True
+    net.initializePage()
+    assert not net.brand_row.isVisibleTo(net)
+    assert not net.services_box.isVisible()
+    net.validatePage()
+    assert c.brand == "hugmesh" and c.brand_profile == ""
+    assert "--unaffiliated" in c.to_cli_args()     # non-vacuity: it really is that build
+
+
+def test_the_unaffiliated_note_splits_identity_from_look(wiz):
+    """DECISION 1 (operator, 2026-08-26), which this page's note must not contradict:
+    on an unaffiliated image the brand IDENTITY stays forbidden (--brand / --brand-title
+    / --org / --brand-logo / --brand-locked / a -C brand profile — a brand IS an
+    affiliation) while the LOOK becomes ALLOWED (theme, branding-dir, wallpaper, GRUB
+    background + theme, login background, accent colour, colour scheme), baked under
+    NEUTRAL names.
+
+    Pinned as TEXT because the wording is the deliverable here: the note is the only
+    thing on screen where the brand fields used to be, and a note reading "no theming at
+    all" would send the operator away from the branding step they explicitly asked for
+    ("There should be the menu for adding the themes as in the branded images")."""
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "standalone-unaffiliated"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    text = net.identity_reason.text().lower()
+    assert net.identity_reason.isVisible()
+    for word in ("brand", "theme", "wallpaper", "accent"):
+        assert word in text, f"the note does not mention {word}"
+    assert "neutral" in text
+    for wrong in ("no theming", "cannot be themed", "nothing to theme"):
+        assert wrong not in text, f"the note still says {wrong!r}"
+
+
+def test_the_hidden_identity_rows_come_back_and_emit_again(wiz):
+    """The precondition the whole page set relies on, stated for these two new gates: a
+    hidden field that becomes applicable again must be REACHABLE and EMITTED. Structural
+    — every gate is recomputed inside initializePage from cfg, which QWizard re-runs on
+    each visit, so there is no cached hidden-state to go stale."""
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "standalone-unaffiliated"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.brand_row.isVisibleTo(net) and not net.domain_row.isVisibleTo(net)
+    # …the SAME page object (wiz.restart() reuses the page instances), now a mesh node
+    same = net
+    c.mode = "mesh"; c.role = "backend"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net is same, "precondition: this is a re-gate, not a fresh page"
+    for name in ("brand_profile_row", "brand_row", "brand_title_row", "org_row",
+                 "domain_row", "games_domain_row", "release_state_row"):
+        assert getattr(net, name).isVisibleTo(net), f"{name} never came back"
+    net.brand.setText("acme"); net.domain.setText("acme.example")
+    net.validatePage()
+    p = pairs(c.to_cli_args())
+    assert ("--brand", "acme") in p
+    assert ("--cluster-domain", "acme.example") in p

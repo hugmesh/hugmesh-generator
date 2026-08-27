@@ -1,0 +1,497 @@
+{
+ "_provenance": "RECORDED, not authored. Flattened from the report.json of the real run studio-20260822-193645 (2026-08-22) as committed at studio/tests/fixtures/e2e-catalogue/report.json by unit E2 (branch feat/studio-e2e-catalogue-core), which is itself that run's Playwright JSON output with the error stacks trimmed. Each entry is one onTestEnd(test, result) call, in the order Playwright made them. titlePath mirrors the real TestCase.titlePath() shape: ['', <project>, <file>, ...describes, <title>].",
+ "_whyThisRun": "It carries, from a real run, every case the reporter has to get right: a retried failure with two attempts and screenshot+error-context attachments, passes, skips WITH a machine-readable reason (specs 14 and 23), and skips with a bare test.skip() annotation carrying NO description (spec 18) - the case that used to render as a blank cell.",
+ "_expect": {
+  "_why": "Floors, not predictions. They assert the FIXTURE still contains the cases the checks are about; edit an interesting case out and the guard goes red instead of passing over an empty list.",
+  "minTests": 10,
+  "minSpecFiles": 5,
+  "minUnexplainedSkips": 3,
+  "minExplainedSkips": 4,
+  "minAttachments": 4,
+  "minRetriedTests": 1,
+  "minSecretShapedStrings": 0
+ },
+ "config": {
+  "rootDir": "/fixture/tests/e2e"
+ },
+ "runStatus": "failed",
+ "events": [
+  {
+   "test": {
+    "id": "dd1feebe4b781db39ff2-89733a8e672ec886a4b8",
+    "title": "front page loads over generated certs and gates anonymous visitors to native sign-in",
+    "titlePath": [
+     "",
+     "chromium",
+     "01-frontpage.spec.ts",
+     "front page loads over generated certs and gates anonymous visitors to native sign-in"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/01-frontpage.spec.ts",
+     "line": 4,
+     "column": 5
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "failed",
+    "duration": 0,
+    "retry": 0,
+    "error": {
+     "message": "Error: browserType.launch: Executable doesn't exist at /home/magus/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-linux64/chrome-headless-shell"
+    },
+    "annotations": [],
+    "attachments": [
+     {
+      "name": "error-context",
+      "contentType": "text/markdown",
+      "path": "test-results/studio-20260822-193645/test-results/01-frontpage-front-page-lo-b2308--visitors-to-native-sign-in-chromium/error-context.md"
+     },
+     {
+      "name": "screenshot",
+      "contentType": "image/png",
+      "path": "test-results/01-frontpage-chromium/test-failed-1.png"
+     }
+    ]
+   }
+  },
+  {
+   "test": {
+    "id": "dd1feebe4b781db39ff2-89733a8e672ec886a4b8",
+    "title": "front page loads over generated certs and gates anonymous visitors to native sign-in",
+    "titlePath": [
+     "",
+     "chromium",
+     "01-frontpage.spec.ts",
+     "front page loads over generated certs and gates anonymous visitors to native sign-in"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/01-frontpage.spec.ts",
+     "line": 4,
+     "column": 5
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "failed",
+    "duration": 0,
+    "retry": 1,
+    "error": {
+     "message": "Error: browserType.launch: Executable doesn't exist at /home/magus/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-linux64/chrome-headless-shell"
+    },
+    "annotations": [],
+    "attachments": [
+     {
+      "name": "error-context",
+      "contentType": "text/markdown",
+      "path": "test-results/studio-20260822-193645/test-results/01-frontpage-front-page-lo-b2308--visitors-to-native-sign-in-chromium-retry1/error-context.md"
+     },
+     {
+      "name": "screenshot",
+      "contentType": "image/png",
+      "path": "test-results/01-frontpage-chromium/test-failed-1.png"
+     }
+    ]
+   }
+  },
+  {
+   "test": {
+    "id": "8408c68153f24f38bdb3-bba1287580d7b0f88abc",
+    "title": "hugmesh-fe-gateway /admin/usage — e2e-admin => ALLOW (admin reaches the admin UI)",
+    "titlePath": [
+     "",
+     "chromium",
+     "12-rbac-gateway-route-access.spec.ts",
+     "RBAC: gateway route-access ALLOW/DENY (schema.sql contract)",
+     "hugmesh-fe-gateway /admin/usage — e2e-admin => ALLOW (admin reaches the admin UI)"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/12-rbac-gateway-route-access.spec.ts",
+     "line": 86,
+     "column": 9
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 2,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "8408c68153f24f38bdb3-bab096873e7d637ca173",
+    "title": "hugmesh-fe-gateway /admin/usage — e2e-adminonly => ALLOW (ROLE_ADMIN alone reaches /admin)",
+    "titlePath": [
+     "",
+     "chromium",
+     "12-rbac-gateway-route-access.spec.ts",
+     "RBAC: gateway route-access ALLOW/DENY (schema.sql contract)",
+     "hugmesh-fe-gateway /admin/usage — e2e-adminonly => ALLOW (ROLE_ADMIN alone reaches /admin)"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/12-rbac-gateway-route-access.spec.ts",
+     "line": 86,
+     "column": 9
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 0,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "c4f552d8d36f84e01e9a-a78d1726c1db98778d99",
+    "title": "hugmesh-fe-gateway /admin/usage — e2e-admin should be ALLOW (live)",
+    "titlePath": [
+     "",
+     "chromium",
+     "14-rbac-gateway-live.spec.ts",
+     "RBAC: LIVE gateway route-access enforcement",
+     "hugmesh-fe-gateway /admin/usage — e2e-admin should be ALLOW (live)"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/14-rbac-gateway-live.spec.ts",
+     "line": 97,
+     "column": 11
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today — Phase 8/10).",
+      "location": {
+       "file": "specs/14-rbac-gateway-live.spec.ts",
+       "line": 87,
+       "column": 8
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 0,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today — Phase 8/10).",
+      "location": {
+       "file": "specs/14-rbac-gateway-live.spec.ts",
+       "line": 87,
+       "column": 8
+      }
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "c4f552d8d36f84e01e9a-2b8bd97163e51ddca027",
+    "title": "hugmesh-fe-gateway /admin/usage — e2e-adminonly should be ALLOW (live)",
+    "titlePath": [
+     "",
+     "chromium",
+     "14-rbac-gateway-live.spec.ts",
+     "RBAC: LIVE gateway route-access enforcement",
+     "hugmesh-fe-gateway /admin/usage — e2e-adminonly should be ALLOW (live)"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/14-rbac-gateway-live.spec.ts",
+     "line": 97,
+     "column": 11
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today — Phase 8/10).",
+      "location": {
+       "file": "specs/14-rbac-gateway-live.spec.ts",
+       "line": 87,
+       "column": 8
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 0,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today — Phase 8/10).",
+      "location": {
+       "file": "specs/14-rbac-gateway-live.spec.ts",
+       "line": 87,
+       "column": 8
+      }
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "f5e5c8b4d45ec49aa622-ca7796dffeb6433ae6ee",
+    "title": "host shell shows admin nav for ROLE_ADMIN, hides it for ROLE_USER",
+    "titlePath": [
+     "",
+     "chromium",
+     "18-rbac-phase8-10-pending.spec.ts",
+     "PENDING (Phase 8/10): systems host shell role-conditional nav",
+     "host shell shows admin nav for ROLE_ADMIN, hides it for ROLE_USER"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/18-rbac-phase8-10-pending.spec.ts",
+     "line": 22,
+     "column": 8
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "location": {
+       "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+       "line": 22,
+       "column": 8
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 0,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "location": {
+       "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+       "line": 22,
+       "column": 8
+      }
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "f5e5c8b4d45ec49aa622-7352eb150b50b83c8d8d",
+    "title": "host shell shows a ROLE_GAMES games entry-point only for games members",
+    "titlePath": [
+     "",
+     "chromium",
+     "18-rbac-phase8-10-pending.spec.ts",
+     "PENDING (Phase 8/10): systems host shell role-conditional nav",
+     "host shell shows a ROLE_GAMES games entry-point only for games members"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/18-rbac-phase8-10-pending.spec.ts",
+     "line": 29,
+     "column": 8
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "location": {
+       "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+       "line": 29,
+       "column": 8
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 0,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "location": {
+       "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+       "line": 29,
+       "column": 8
+      }
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "f5e5c8b4d45ec49aa622-639dd3e2d8d8cac256f2",
+    "title": "host shell shows a ROLE_MOD moderation entry-point only for moderators",
+    "titlePath": [
+     "",
+     "chromium",
+     "18-rbac-phase8-10-pending.spec.ts",
+     "PENDING (Phase 8/10): systems host shell role-conditional nav",
+     "host shell shows a ROLE_MOD moderation entry-point only for moderators"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/18-rbac-phase8-10-pending.spec.ts",
+     "line": 37,
+     "column": 8
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "location": {
+       "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+       "line": 37,
+       "column": 8
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 0,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "location": {
+       "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+       "line": 37,
+       "column": 8
+      }
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "09b330508e2eac9d50a3-76bd4af3b63bbf79b099",
+    "title": "a plain ROLE_USER is DENIED the mod ban surface (and the subject is unaffected) @role:ROLE_USER @layer:bff",
+    "titlePath": [
+     "",
+     "chromium",
+     "23-domainlock-mod-ban-interaction.spec.ts",
+     "domain-lock × mod-ban: independent axes, no federation leak",
+     "a plain ROLE_USER is DENIED the mod ban surface (and the subject is unaffected) @role:ROLE_USER @layer:bff"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/23-domainlock-mod-ban-interaction.spec.ts",
+     "line": 52,
+     "column": 7
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed — lean/no-x86 run)",
+      "location": {
+       "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+       "line": 54,
+       "column": 10
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 1,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed — lean/no-x86 run)",
+      "location": {
+       "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+       "line": 54,
+       "column": 10
+      }
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "09b330508e2eac9d50a3-a676057151e4838507dd",
+    "title": "domain-locked user banned by mod: local ban, no federated state, lock survives the lift @role:ROLE_MOD @layer:homeserver",
+    "titlePath": [
+     "",
+     "chromium",
+     "23-domainlock-mod-ban-interaction.spec.ts",
+     "domain-lock × mod-ban: independent axes, no federation leak",
+     "domain-locked user banned by mod: local ban, no federated state, lock survives the lift @role:ROLE_MOD @layer:homeserver"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/23-domainlock-mod-ban-interaction.spec.ts",
+     "line": 76,
+     "column": 7
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed — lean/no-x86 run)",
+      "location": {
+       "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+       "line": 78,
+       "column": 10
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 1,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed — lean/no-x86 run)",
+      "location": {
+       "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+       "line": 78,
+       "column": 10
+      }
+     }
+    ],
+    "attachments": []
+   }
+  }
+ ]
+}

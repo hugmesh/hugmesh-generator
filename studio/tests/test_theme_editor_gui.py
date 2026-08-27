@@ -52,22 +52,38 @@ def _opened_editor(qapp) -> tuple[LoginThemeGroup, ThemeEditorDialog]:
 
 
 # ── 1. the rename ────────────────────────────────────────────────────────────────────
-def test_group_and_both_hosts_say_Themes_not_Web_login_theme(qapp):
+def test_group_and_both_hosts_say_Themes_except_where_two_theme_groups_collide(qapp):
+    """The original rename still holds everywhere it was unambiguous — and is
+    DELIBERATELY reversed on the one page that hosts two different theme surfaces.
+
+    Operator, 2026-08-26: the standalone flow "is asking same questions seemingly
+    multiple times". BrandingPage was one of the offenders: its desktop theme cards
+    sit under a "Desktop theme" header, and the mesh web-login group directly below
+    them was titled, flatly, "Themes" — so the page asked for "a theme" twice with
+    the SECOND one carrying the less specific label. DECISION 2(a) collapsed that:
+    the web-login group is now titled for what it themes. Everywhere else there is
+    only one theme surface on screen, so "Themes" stays."""
     assert LoginThemeGroup().title().startswith("Themes")
 
     branding = wizard_mod.BrandingPage(
         SimpleNamespace(cfg=ImageConfig(), generator_dir=GENERATOR_DIR))
-    assert branding.login_collapsible.title() == "Themes"
+    # THE EXEMPTION, and the only one: BrandingPage shows BOTH kinds at once.
+    assert branding.login_collapsible.title() == "Web login theme"
 
     mesh = wizard_mod.LocalMeshPage(
         SimpleNamespace(cfg=ImageConfig(), generator_dir=GENERATOR_DIR,
                         localmesh_selected=True))
     mine = [c for c in mesh.findChildren(Collapsible)
             if c.content is mesh.login_theme]
+    # LocalMeshPage hosts NO desktop theme cards, so there is nothing to collide
+    # with and the short title is still the right one.
     assert mine and mine[0].title().startswith("Themes")
 
-    for label in (LoginThemeGroup().title(), branding.login_collapsible.title(),
-                  mine[0].title(), branding.subTitle()):
+    # The negative survives for every surface that did NOT collide. BrandingPage's
+    # subTitle() is in this list on purpose: the page's mesh-mode subtitle is set by
+    # initializePage, never by the constructor, so a freshly built page must not be
+    # carrying the web-login wording in its standing subtitle.
+    for label in (LoginThemeGroup().title(), mine[0].title(), branding.subTitle()):
         assert "Web login theme" not in label
 
 
