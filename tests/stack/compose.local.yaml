@@ -1002,6 +1002,12 @@ services:
       # verifies oldPassword server-side even for this Basic client credential, so
       # the service credential is not a cross-user escalation on this path.
       CASDOOR_ACCOUNT_ENABLED: ${CASDOOR_ACCOUNT_ENABLED:-true}
+      # Anonymous forgot-password. OFF by default and a separate decision from
+      # ACCOUNT_ENABLED above (see PasswordResetConfig): permitAll +
+      # credential-writing, and undeliverable until Casdoor SMTP is provisioned.
+      # Overridable so the switch exists; it had no env var in any environment
+      # before this, which made a dark surface indistinguishable from a broken one.
+      CASDOOR_PASSWORD_RESET_ENABLED: ${CASDOOR_PASSWORD_RESET_ENABLED:-false}
       CASDOOR_ACCOUNT_BASE_URL: ${CASDOOR_ACCOUNT_BASE_URL:-http://casdoor:8000}
       CASDOOR_ACCOUNT_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       CASDOOR_ACCOUNT_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
