@@ -148,7 +148,32 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # branch — the merge measured 144, which is neither branch's 142 nor the 143 main
 # carried in. Re-run this file after any merge that adds a suite; do not reason about
 # what the number "should" be.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-144}"
+#
+# 144 -> 146, denominator 165 -> 167, when fix/argocd-dashboard-honesty landed. This
+# branch wires TWO new suites into shell-suites.yml
+# (tests/platform-capability-rbac/test-probe-rbac-namespaces.sh and
+# test-argocd-route-honesty.sh) and has now been re-measured THREE times against three
+# different mains: it wrote 119 for its own base, then 145 when main was 143/164, and
+# 146 here, because main moved to 144/165 underneath it when test-url-embedded-credentials.sh
+# was gated. Every one of those three was correct about the tree it measured. That is
+# the ninth value a branch has believed on this line, and the eighth time this exact
+# line has conflicted.
+#
+# Resolved as a union, per the rule the blocks above already state: main's record and
+# this branch's are complementary, not competing, so BOTH are kept. Note that the first
+# resolution of this conflict had to take main's side WHOLESALE rather than line-wise --
+# main did not merely hold a bigger number, it added the PREMERGE_UNGATED set-pin below,
+# which this branch's side predates entirely, and a line-wise keep of 119 would have
+# silently dropped that mechanism.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     146 of 167 suites are named by a pull_request-triggered workflow
+# +2 gated, +2 total: both of this branch's suites are named by shell-suites.yml, which
+# is why the gated count and the denominator moved together and the ungated SET pin
+# below was untouched (it stays 21). That this agrees with 144+2 is a CHECK on the
+# measurement, not a substitute for it -- the seven entries above are all cases where
+# the arithmetic and the measurement disagreed.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-146}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

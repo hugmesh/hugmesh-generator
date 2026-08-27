@@ -91,3 +91,30 @@ kind: Namespace
 metadata:
   name: hugmesh-policy
   labels: { app.kubernetes.io/part-of: hugmesh.net, hugmesh.net/tier: devops }
+---
+# velero — the backup engine's namespace. DECLARED HERE, not left to whoever gets
+# there first. Three things aim namespaced resources at it: manifests/velero/rbac.yaml
+# (the admin-bff backup effector's Role/RoleBinding), the status-sweep CronJob, and
+# manifests/admin-bff-platform-capability-rbac (the probe's Deployment read) — and the
+# last of those syncs from apps/31a-… with `CreateNamespace=false` and
+# `automated: {prune, selfHeal}`, so it applies on EVERY mesh from the first reconcile.
+# apps/55-velero.yaml does carry CreateNamespace=true, but it is deliberately
+# NON-automated (installing the backup engine is a superadmin act), so on a mesh where
+# nobody has synced it the namespace never appears and 31a fails forever with
+# `namespaces "velero" not found` — the exact permanent-phantom failure that made the
+# probe's ArgoCD half inert. bootstrap/kind-local/bootstrap-kind.sh already creates it
+# imperatively (its own ensure-namespaces loop, added after that very error); the
+# non-kind bootstrap.sh applies THIS file and nothing else, so the two lanes had
+# drifted. Declaring it here makes them agree and costs an empty namespace.
+# Guarded by tests/platform-capability-rbac/test-probe-rbac-namespaces.sh.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+  labels:
+    app.kubernetes.io/part-of: hugmesh.net
+    hugmesh.net/tier: devops
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest

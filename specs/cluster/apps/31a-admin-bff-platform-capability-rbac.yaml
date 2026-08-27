@@ -4,17 +4,25 @@
 # presence from the in-cluster API. Bound to the admin-bff pod's backups-effector
 # ServiceAccount (manifests/admin-bff-api/backups-effector-sa.yaml). A cluster-read
 # ClusterRole + ClusterRoleBinding (CRDs get, Nodes list) plus namespaced read Role +
-# RoleBinding in argocd + velero (Deployments get/list). NOTHING write.
+# RoleBinding in devops + velero (Deployments get/list). NOTHING write.
 #
 # AUTOMATED sync (alongside the admin-bff-api Application) so the grants exist whenever
 # the BFF runs — the probe still SHIPS DARK (app.platform-capabilities.k8s.enabled=false
 # → NoopPlatformCapabilityProbe) until deliberately enabled, so these tokens are
 # unexercised until then; granting them early just means a clean answer the moment the
-# probe is switched on. The argocd / velero RoleBindings reference namespaces that may
-# not exist yet when this syncs; the cluster tolerates a RoleBinding whose namespace
-# exists (CreateNamespace=false leaves argocd/velero to their own owning Applications)
-# — the ClusterRole/ClusterRoleBinding apply regardless and the namespaced halves bind
-# the moment those namespaces are present.
+# probe is switched on. The devops / velero RoleBindings reference namespaces that BOTH
+# really exist: `devops` AND `velero` are declared in specs/cluster/namespaces/
+# namespaces.yaml, the ONE inventory both bootstraps apply before ArgoCD is installed.
+# `velero` used to be created only by the kind-local bootstrap's ensure-namespaces loop,
+# which meant the velero half of this Application was a phantom on every non-kind mesh
+# (apps/55-velero.yaml does carry CreateNamespace=true but is deliberately
+# NON-automated, so it may never have synced). That matters because
+# this Application syncs with CreateNamespace=false — a namespaced resource aimed at a
+# namespace nothing creates can NEVER apply, it just fails the sync forever with
+# `namespaces "<ns>" not found`. This file previously aimed its ArgoCD half at an
+# `argocd` namespace that this platform never creates (ArgoCD lives in `devops`), so
+# that half was exactly such a permanent phantom. Guarded by
+# tests/platform-capability-rbac/test-probe-rbac-namespaces.sh.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
