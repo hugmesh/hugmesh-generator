@@ -295,6 +295,103 @@ def test_the_old_button_row_still_works(qapp, tmp_path):
         w.deleteLater()
 
 
+# ── the "Open build window" button: a discoverable face on row activation ────────────
+def test_the_open_window_button_is_gated_on_selection(qapp, tmp_path):
+    """(a) disabled with nothing selected, (b) enabled once a readable row is."""
+    w = _widget_with_one_session(qapp, tmp_path)
+    try:
+        w.table.clearSelection()
+        w._update_buttons()
+        assert not w.open_window_btn.isEnabled()
+        w.table.selectRow(0)
+        assert w.open_window_btn.isEnabled()
+    finally:
+        w.deleteLater()
+
+
+def test_the_open_window_button_opens_the_same_window_as_activation(qapp, tmp_path):
+    """(c) the button routes through open_build_window — the SAME window object the
+    row's click / double-click / Enter activation opens, never a second copy."""
+    w = _widget_with_one_session(qapp, tmp_path)
+    try:
+        w.table.selectRow(0)
+        w.open_window_btn.click()
+        assert len(w._build_windows) == 1
+        win = w._build_windows[0]
+        assert isinstance(win, build_window.BuildActionsWindow)
+        assert win.row is w._row_data[0]
+        # activation re-raises the SAME window the button opened, and vice versa
+        w._row_clicked(0, 0)                     # single click
+        assert w._build_windows == [win]
+        w._open_build_window()                   # double-click / Enter route
+        assert w._build_windows == [win]
+    finally:
+        for win in list(w._build_windows):
+            win.close()
+        w.deleteLater()
+
+
+def test_the_open_window_button_mirrors_activation_for_every_row_kind(qapp, tmp_path):
+    """The button's guard is _open_build_window's own — every row kind a click would
+    open (unmanaged and unreadable included) keeps the button live, so it is never
+    dead where activation works."""
+    w, _broken = _widget_with_every_row_kind(qapp, tmp_path)
+    try:
+        for kind in ("session", "unmanaged", "unreadable"):
+            i = w._row_data.index(_rows_of(w, kind)[0])
+            w.table.selectRow(i)
+            assert w.open_window_btn.isEnabled(), kind
+            before = len(w._build_windows)
+            w.open_window_btn.click()
+            assert len(w._build_windows) == before + 1, kind
+            assert w._build_windows[-1].row is w._row_data[i], kind
+    finally:
+        for win in list(w._build_windows):
+            win.close()
+        w.deleteLater()
+
+
+def test_the_open_window_button_is_laid_out_and_its_window_is_shown(qapp, tmp_path):
+    """Skeptic finding (mutation-proven): clicking the button and counting
+    _build_windows cannot see (1) a button wired but never added to a layout —
+    findChildren()/.click() still work while users never see it — or (2)
+    open_build_window() creating + appending a window it no longer show()s.
+    Both mutations were applied to production; the rest of this suite stayed
+    green under (2), and this test failed on each."""
+    w = _widget_with_one_session(qapp, tmp_path)
+    try:
+        w.show()
+        assert w.open_window_btn.isVisible(), "button exists but users never see it"
+        assert any(lay.indexOf(w.open_window_btn) != -1
+                   for lay in w.findChildren(QtWidgets.QLayout)), \
+            "button was never added to any layout"
+        w.table.selectRow(0)
+        w.open_window_btn.click()
+        assert len(w._build_windows) == 1
+        assert w._build_windows[0].isVisible(), \
+            "window object created but never show()n — a silent no-op for the user"
+    finally:
+        for win in list(w._build_windows):
+            win.close()
+        w.hide()
+        w.deleteLater()
+
+
+def test_nothing_carries_the_retired_click_the_row_tooltip(qapp, tmp_path):
+    """(d) the "Click the row to open…" instruction is retired: the button says it
+    now. No table cell and no child widget may still carry that copy."""
+    w, _broken = _widget_with_every_row_kind(qapp, tmp_path)
+    try:
+        tips = [w.table.item(i, j).toolTip()
+                for i in range(w.table.rowCount())
+                for j in range(w.table.columnCount())
+                if w.table.item(i, j) is not None]
+        tips += [c.toolTip() for c in w.findChildren(QtWidgets.QWidget)]
+        assert not any("click the row" in t.lower() for t in tips), tips
+    finally:
+        w.deleteLater()
+
+
 def test_refresh_re_derives_after_the_state_changes(qapp, tmp_path):
     row = _session(tmp_path, status=bs.FAILED)
     win = _wired(row)
