@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import { shot, apiContext } from './helpers';
 import { totpCode, totpCodeForStep } from './totp';
-import { sharedPassword } from './rbac-roles';
+import { loginPassword } from './rbac-roles';
 
 // 29 — GATEWAY MFA ENFORCEMENT on the seeded mfa_required rows, end-to-end against
 // the real compose stack. First e2e coverage of the two halves that were previously
@@ -78,7 +78,6 @@ const FLOOR = process.env.MFA_FLOOR === '1';
  */
 const MFA_ENFORCEMENT = process.env.APP_MFA_ENABLED !== 'false';
 // Resolved/generated, never a literal (see rbac-roles.ts sharedPassword()).
-const LOGIN_PASSWORD = sharedPassword();
 
 // fe-gateway mfa_required surfaces (20-schema.sql, after its closing UPDATE):
 //   /bff/admin/**              -> ROLE_ADMIN
@@ -123,7 +122,7 @@ function why(r: APIResponse): string {
  *  lands in THIS context's jar and rides every later /bff/** call. Same contract as
  *  specs 13/27. A missing persona 401s here — a loud setup failure, never a skip. */
 async function loginAs(api: APIRequestContext, username: string): Promise<void> {
-  const r = await api.post('/bff/login', { data: { username, password: LOGIN_PASSWORD } });
+  const r = await api.post('/bff/login', { data: { username, password: loginPassword() } });
   expect(
     r.status(),
     `native login ${username} -> ${r.status()} — the persona must be seeded ` +
@@ -488,7 +487,7 @@ test.describe('MFA privileged floor: an admin needs a FRESH factor on mfa_requir
     // mutating /bff/mfa/* calls require, so this exercises the real operator path.
     await page.goto('/login');
     await page.getByTestId('login-username').fill('e2e-admin');
-    await page.getByTestId('login-password').fill(LOGIN_PASSWORD);
+    await page.getByTestId('login-password').fill(loginPassword());
     const loginPost = page.waitForResponse(
       (r) => r.url().includes('/bff/login') && r.request().method() === 'POST',
     );
