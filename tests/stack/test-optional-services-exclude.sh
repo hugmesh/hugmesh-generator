@@ -374,6 +374,14 @@ seed_tree() {
   # rm -f / rm -rf hit the actual filenames).
   cp "${SRC}/apps/13a-optional-services.yaml" "${tree}/apps/"
   cp "${SRC}/manifests/policy/installed-services-configmap.yaml" "${tree}/manifests/policy/"
+  # The OptionalService seed CRs. Without this file _opt_render_optionalservice_cr
+  # hits its `[ -f ... ] || return 0` and no-ops at rc 0 -- which is exactly how the
+  # CR leg went unexercised: the renderer was never extracted (so it died as
+  # `command not found`, swallowed), and even extracted it would have returned
+  # immediately because nothing seeded this path.
+  mkdir -p "${tree}/manifests/optional-services-operator"
+  cp "${SRC}/manifests/optional-services-operator/seed-optionalservices.yaml" \
+     "${tree}/manifests/optional-services-operator/"
   cp "${SRC}/manifests/route-access/initdb/20-schema.sql" "${tree}/manifests/route-access/initdb/"
   cp "${SRC}/manifests/external-secrets/kustomization.yaml" "${tree}/manifests/external-secrets/"
   # owned apps
@@ -784,6 +792,130 @@ PY
 fi
 grep -qE '^[[:space:]]*games:[[:space:]]*"false"' "${SRC}/manifests/policy/installed-services-configmap.yaml" \
   && ok "ConfigMap baseline: games \"false\" (safe default for render-less repo sync)" || bad "ConfigMap baseline games not \"false\""
+
+# ── 4e) OptionalService CR seeding — the runtime override the operator reconciles ──
+#
+# WHY THIS SECTION EXISTS. Everything above asserts the installed-services ConfigMap
+# and the 13a element list. NOTHING asserted the OptionalService CRs, even though the
+# CRD header calls them "the authoritative runtime override" — the lever a superadmin
+# moves to add a service to a LIVE mesh. The gap was three-deep and every layer was
+# silent:
+#   1. `_opt_render_optionalservice_cr` was never in the extraction list above, so
+#      gate_optional_services called it and bash printed `command not found` ELEVEN
+#      times per run — to stderr, unchecked, and the suite still reported 164/0;
+#   2. `_opt_set_cr_enabled` (which it calls) was not extracted either;
+#   3. seed_tree never laid down seed-optionalservices.yaml, so even a correctly
+#      extracted renderer would have hit `[ -f ... ] || return 0` and no-opped at rc 0.
+# Fixing only (1) silences the noise and changes NO assertion count — which would be
+# strictly worse than the bug, because the error message was the only visible signal.
+# So the fix is (1)+(2)+(3) plus these assertions.
+echo "-- OptionalService CR seeding (the runtime override) --"
+
+CR_SEED_REL="manifests/optional-services-operator/seed-optionalservices.yaml"
+
+# Read one CR's enabled flag by slug. Deliberately keyed on `slug:` inside spec (the
+# field the operator reconciles on), NOT metadata.name.
+cr_enabled() {  # $1 = tree, $2 = slug -> "true" | "false" | "" (absent)
+  awk -v want="$2" '
+    /^[[:space:]]*slug:[[:space:]]/ {
+      s=$0; sub(/^[[:space:]]*slug:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); arm=(s==want); next
+    }
+    arm && /^[[:space:]]*enabled:[[:space:]]*(true|false)[[:space:]]*$/ {
+      v=$0; sub(/^[[:space:]]*enabled:[[:space:]]*/,"",v); sub(/[[:space:]]*$/,"",v); print v; exit
+    }
+  ' "$1/${CR_SEED_REL}"
+}
+
+expect_cr() {  # $1 = tree, $2 = slug, $3 = expected, $4 = scenario label
+  local got; got="$(cr_enabled "$1" "$2")"
+  if [ -z "${got}" ]; then
+    bad "$4: ${2} has NO OptionalService CR (the operator has nothing to reconcile)"
+  elif [ "${got}" = "$3" ]; then
+    ok "$4: ${2} CR enabled=$3"
+  else
+    bad "$4: ${2} CR enabled=${got}, expected $3"
+  fi
+}
+
+# VACUITY FLOOR. Every assertion below reads this one file; if it is absent or holds
+# no CRs the whole section would pass by comparing nothing. Fail loudly instead.
+seed_tree "cr-floor"
+gate_optional_services
+CR_COUNT="$(grep -cE '^[[:space:]]*kind:[[:space:]]*OptionalService[[:space:]]*$' "${TREE}/${CR_SEED_REL}" 2>/dev/null || echo 0)"
+if [ "${CR_COUNT}" -ge 8 ]; then
+  ok "CR seed present with ${CR_COUNT} OptionalService document(s)"
+else
+  bad "CR seed derivation is vacuous (${CR_COUNT} OptionalService docs) — every CR assertion below would compare nothing"
+fi
+
+# (a) DEFAULT build: default-on slugs enabled, default-off slugs disabled.
+seed_tree "cr-default"
+OPTIONAL_SERVICES="$(resolve_selection "" "")"
+gate_optional_services
+for slug in ${DEFAULT_ON};  do expect_cr "${TREE}" "${slug}" true  "CR/DEFAULT"; done
+for slug in ${DEFAULT_OFF}; do expect_cr "${TREE}" "${slug}" false "CR/DEFAULT"; done
+
+# (b) EXPLICIT selection: exactly the named slugs are enabled and nothing else is.
+seed_tree "cr-explicit"
+OPTIONAL_SERVICES="$(resolve_selection "games tube" "")"
+gate_optional_services
+for slug in games tube; do expect_cr "${TREE}" "${slug}" true "CR/EXPLICIT"; done
+for slug in akkoma tuwunel phpbb owncast character-studio character-forge; do
+  expect_cr "${TREE}" "${slug}" false "CR/EXPLICIT"
+done
+
+# (c) The CR and the ConfigMap must not disagree. They are two projections of one
+#     decision, written by two different renderers; a mesh where they diverge has a
+#     console that reports one thing and an operator that reconciles another.
+seed_tree "cr-configmap-parity"
+OPTIONAL_SERVICES="$(resolve_selection "owncast" "")"
+gate_optional_services
+CR_PARITY_CHECKED=0
+for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge; do
+  crv="$(cr_enabled "${TREE}" "${slug}")"
+  if grep -qE "^[[:space:]]*${slug}:[[:space:]]*\"true\"" \
+       "${TREE}/manifests/policy/installed-services-configmap.yaml"; then cmv=true; else cmv=false; fi
+  [ -n "${crv}" ] || continue
+  CR_PARITY_CHECKED=$((CR_PARITY_CHECKED+1))
+  [ "${crv}" = "${cmv}" ] \
+    || bad "CR/PARITY: ${slug} CR enabled=${crv} but ConfigMap says ${cmv}"
+done
+if [ "${CR_PARITY_CHECKED}" -ge 8 ]; then
+  ok "CR/PARITY: CR and ConfigMap agree on all ${CR_PARITY_CHECKED} compared slug(s)"
+else
+  bad "CR/PARITY compared only ${CR_PARITY_CHECKED} slug(s) — too few to mean anything"
+fi
+
+# (d) NEGATIVE CONTROLS. Each plants a way the CR leg silently stops working and
+#     proves these assertions go RED. Without these, the section above is just more
+#     green text of the kind that hid the original bug.
+cr_control() {  # $1 = label, $2 = mutated renderer body (a shell function definition)
+  local label="$1" body="$2" saved out
+  saved="$(declare -f _opt_render_optionalservice_cr)"
+  eval "${body}"
+  seed_tree "cr-ctl"
+  OPTIONAL_SERVICES="$(resolve_selection "games" "")"
+  gate_optional_services
+  # games selected => must be true; a broken renderer leaves the seed's baked default.
+  out="$(cr_enabled "${TREE}" games)"
+  eval "${saved}"          # restore the real renderer before judging
+  [ "${out}" = "true" ] \
+    && bad "negative control '${label}': the CR still read true — these assertions do not bite" \
+    || ok "negative control '${label}': caught (games CR read '${out:-absent}', not true)"
+}
+
+cr_control "renderer no-ops at rc 0 (the shipped shape when the seed is missing)" \
+  '_opt_render_optionalservice_cr() { return 0; }'
+
+cr_control "renderer writes every slug false regardless of selection" \
+  '_opt_render_optionalservice_cr() {
+     local seed="${SYSROOT}/var/lib/hugmesh/cluster/'"${CR_SEED_REL}"'"
+     [ -f "${seed}" ] || return 0
+     local slug
+     for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge; do
+       _opt_set_cr_enabled "${seed}" "${slug}" false
+     done
+   }'
 
 # ── 5) the surviving baked artefacts still parse (YAML + JSON + bash) ─────────
 echo "-- artefact integrity after pruning --"
