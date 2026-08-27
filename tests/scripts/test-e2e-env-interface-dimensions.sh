@@ -27,15 +27,31 @@
 # final check asserts `git diff` is clean, so a half-restored tree is itself a
 # failure rather than a surprise for the next agent.
 #
-# OFFLINE. Starts NOTHING. Probes only. The three environments are expected to
-# be down and the suite is designed to be green with all three down: the
-# environment scenarios SKIP, and skipping loudly is the pass condition.
+# OFFLINE. Starts NO MESH. It MEASURES which of the three environments are
+# serving (block 0b) rather than assuming; with all three down the environment
+# scenarios SKIP, and skipping loudly is the pass condition. The one thing it
+# does start is M7's stand-in: a throwaway container on a loopback port that
+# plays the foreign owner the docker probe must veto — built by the guard so the
+# mutation is observable in EVERY host state, and removed on exit (see M7).
+#
+# HOST STATE IS NOT AN INPUT. Every verdict here is either measured or reported
+# as NOT-RUNNABLE with the command that would make it runnable. The two times
+# this file assumed the host (PR #208: "the mesh is down"; today: "the kind node
+# holds :8443 and the browsers live under /var/tmp/portage/pw-browsers") it went
+# RED against correct code, and a false finding sends the next reader to debug
+# a fix that works.
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 E2E="${REPO}/tests/e2e"
-FEATURE_REL=".features-gen/features/platform/"
+# THE ONE FEATURE THIS GUARD GRADES. Not the platform/ directory: another feature
+# (social-function-matrix, the drift guard) landed beside it after this file was
+# written, and grading a whole directory made this guard's verdict depend on a
+# suite it does not own — its 40 scenarios were in every lane and every failure
+# of theirs would have been reported here as an env/interface defect. The file
+# name is what `npx bddgen` emits for platform/env-interface-evidence.feature.
+FEATURE_REL=".features-gen/features/platform/env-interface-evidence.feature.spec.js"
 SCHEMA="${E2E}/evidence-manifest.schema.json"
 
 P=0; F=0
@@ -80,6 +96,55 @@ if ! QT_QPA_PLATFORM=offscreen python3 "${E2E}/studio-driver.py" --self-check \
   echo "  or point SNAP_STUDIO_PYTHON at an interpreter that has one." >&2
   sed -n '1,10p' "${WORK}/studio-selfcheck.out" >&2
   echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
+  rm -rf "${WORK}"   # the EXIT trap is armed further down; do not leak the work dir
+  exit 2
+fi
+
+# THE BROWSER MUST LAUNCH, and that is a prerequisite, not a finding. The bdd
+# project opens a page for every scenario, so a browser that cannot launch turns
+# every scenario RED and "baseline lane rc=1" then reads as a product defect.
+# MEASURED 2026-08-27: this file forced PLAYWRIGHT_BROWSERS_PATH to
+# /var/tmp/portage/pw-browsers — a per-host farm of symlinks into
+# ~/.cache/ms-playwright that pointed at a Chromium revision a later
+# `npx playwright install` had garbage-collected — and reported
+# "FAIL baseline lane rc=1" plus nine manifest problems ("manifest lists ZERO
+# artefacts", "no cli transcript was written at all", ...) against a lane that
+# was rc=0, 44 passed 3 skipped, 67 manifest rows, the moment the override was
+# dropped. Every failure came from one line:
+#   browserType.launch: Executable doesn't exist at /var/tmp/portage/pw-browsers/...
+# So: resolve browsers exactly as the lane does — Playwright's own resolver,
+# honouring PLAYWRIGHT_BROWSERS_PATH ONLY IF THE CALLER SET IT — and launch one
+# page through the same headless channel the bdd project uses. If that fails,
+# exit 2 naming the install command; never grade a lane that cannot open a page.
+PREFLIGHT="${WORK}/preflight"
+mkdir -p "${PREFLIGHT}"
+ln -sfn "${E2E}/node_modules" "${PREFLIGHT}/node_modules"
+cat > "${PREFLIGHT}/pw.config.ts" <<'TS'
+import { defineConfig, devices } from '@playwright/test';
+export default defineConfig({
+  testDir: __dirname, reporter: [['list']], workers: 1, retries: 0, timeout: 60_000,
+  use: { ...devices['Desktop Chrome'] },
+});
+TS
+cat > "${PREFLIGHT}/launch.spec.ts" <<'TS'
+import { test } from '@playwright/test';
+test('the headless browser the bdd project launches is installed', async ({ page }) => {
+  await page.goto('about:blank');
+});
+TS
+if ! ( cd "${E2E}" && npx playwright test -c "${PREFLIGHT}/pw.config.ts" \
+         >"${WORK}/preflight.out" 2>&1 ); then
+  echo "SKIPPED-LOUDLY: the headless browser cannot launch, so every bdd scenario" >&2
+  echo "  would fail before reaching a step and this guard would report a product" >&2
+  echo "  defect that is really a missing prerequisite. Install it with:" >&2
+  echo "    (cd ${E2E} && npx playwright install chromium)   [or: make playwright-deps]" >&2
+  if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
+    echo "  NOTE PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH} is set in this" >&2
+    echo "  environment, so Playwright looks THERE and not in ~/.cache/ms-playwright." >&2
+  fi
+  grep -m1 -E "Executable doesn't exist|browserType.launch|Error:" "${WORK}/preflight.out" >&2
+  echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
+  rm -rf "${WORK}"   # the EXIT trap is armed further down; do not leak the work dir
   exit 2
 fi
 
@@ -113,7 +178,7 @@ restore_all() {
   MUTATED=()
 }
 
-cleanup() { restore_all; rm -rf "${WORK}"; }
+cleanup() { restore_all; m7_standin_stop; rm -rf "${WORK}"; }
 # INT TERM HUP as well as EXIT, because this guard MUTATES production files and
 # restores them in the trap. Bash runs no EXIT trap for an untrapped SIGTERM, so
 # a `timeout`, a Ctrl-C or a killed CI job could leave the tree MUTATED.
@@ -143,11 +208,16 @@ mutate() {
   return 0
 }
 
-# run_lane <label> -> writes $WORK/<label>.json ; echoes the playwright exit code
+# run_lane <label> [VAR=value ...] -> writes $WORK/<label>.json ; echoes the
+# playwright exit code. Extra VAR=value arguments are put in the lane's
+# environment (M7 points the docker probe at its stand-in this way). No
+# PLAYWRIGHT_BROWSERS_PATH is set here: the lane resolves browsers exactly as
+# `make stack-e2e-bdd` does, and the preflight above has already proven that
+# resolution launches.
 run_lane() {
-  local label="$1"
+  local label="$1"; shift
   ( cd "${E2E}" && \
-    PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" \
+    env "$@" \
     SNAP_REPORT_DIR="${WORK}/${label}" \
     SNAP_RUN_ID="${label}" \
     PLAYWRIGHT_JSON_OUTPUT_NAME="${WORK}/${label}.json" \
@@ -168,7 +238,7 @@ else
   sed -n '1,20p' "${WORK}/bddgen.out" >&2
 fi
 
-# ── 1. the baseline lane: 4 pass, 3 skip, every skip with a reason ───────────
+# ── 1. the baseline lane: 4 pass, 3 skip (mesh down), every skip with a reason ─
 BASE_RC="$(run_lane baseline)"
 if [ "${BASE_RC}" -eq 0 ]; then
   ok "the env/interface feature lane is green (rc=0) with NOTHING started"
@@ -448,11 +518,20 @@ test('measure which environments are serving right now', async () => {
 TS
 sed -i "s#__DIMENSIONS__#${E2E}/steps/dimensions#" "${PROBE}/serving.spec.ts"
 
-SERVING_JSON="${WORK}/serving.json"
-( cd "${E2E}" && \
-  SNAP_SERVING_OUT="${SERVING_JSON}" \
-  PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" \
-  npx playwright test -c "${PROBE}/pw.config.ts" >"${WORK}/serving.out" 2>&1 )
+# measure_serving <label> [VAR=value ...] -> $WORK/serving-<label>.json
+# Runs production's environmentAvailability() for all three environments in a
+# fresh process (so no probe cache can answer for a world that changed), with
+# any VAR=value placed in that process's environment. Used for the baseline
+# measurement and re-used by M7 for its control.
+measure_serving() {
+  local label="$1"; shift
+  ( cd "${E2E}" && \
+    env "$@" SNAP_SERVING_OUT="${WORK}/serving-${label}.json" \
+    npx playwright test -c "${PROBE}/pw.config.ts" >"${WORK}/serving-${label}.out" 2>&1 )
+}
+
+measure_serving baseline
+SERVING_JSON="${WORK}/serving-baseline.json"
 if [ -s "${SERVING_JSON}" ]; then
   SERVING_ENVS="$(python3 - "${SERVING_JSON}" <<'PY'
 import json, sys
@@ -464,7 +543,7 @@ PY
 else
   # A measurement that did not happen must not be reported as "all down" — that
   # is the assumption this block replaces. Refuse instead.
-  bad "could not measure environment availability (see ${WORK}/serving.out) — this "\
+  bad "could not measure environment availability (see ${WORK}/serving-baseline.out) — this "\
 "guard cannot tell a correct PASS from a silent one without it"
   SERVING_ENVS="<unmeasured>"
 fi
@@ -624,7 +703,6 @@ sed -i "s#__DIMENSIONS__#${E2E}/steps/dimensions#" "${VOCAB}/vocab.spec.ts"
 
 vocab_lane() {
   ( cd "${E2E}" && \
-    PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" \
     npx playwright test -c "${VOCAB}/pw.config.ts" >"${WORK}/$1.out" 2>&1 )
 }
 
@@ -657,10 +735,12 @@ mut_result() {  # mut_result <name> <caught:0|1> <detail>
 # there. Say so, and make the suite exit 2 (this file's established
 # "SKIPPED-LOUDLY, checked less than it claims" status) rather than 0 or a
 # misleading 1.
+NOT_RUNNABLE_WHY=()
 mut_not_runnable() {  # mut_not_runnable <name> <why>
   echo "  NOT-RUNNABLE $1"
   echo "               $2"
   NOT_RUNNABLE=$((NOT_RUNNABLE+1))
+  NOT_RUNNABLE_WHY+=("$1: $2")
 }
 env_is_serving() {  # env_is_serving <tag>
   case " ${SERVING_ENVS:-} " in (*" $1 "*) return 0 ;; esac
@@ -814,43 +894,112 @@ else
   bad "M6 could not be applied"; fi
 restore_all
 
-# M7 — an UNPROTECTED port collision on the docker probe. Sibling of M6.
+# M7 — docker trusts whatever answers on a port it does not own. Sibling of M6.
 #
-# Two edits, one defect. The defect is "docker trusts whatever answers on a port it
-# does not own". Observing it needs the collision to EXIST, and after the port fix
-# docker asks :8488 where nothing on this host replies — so the first edit is SETUP
-# that points docker back at the shared :8443 (which the kind node publishes here),
-# and the second is the defect itself, removing the owner check.
+# THE DEFECT: the docker probe's SUCCESS branch took any HTTP status line as
+# "the compose stack answered", even when `docker ps` said the port was published
+# by the KIND node (PR #202/#203 added the owner check). Observing the defect
+# needs a FOREIGN OWNER to exist: a container whose name matches /control-plane/,
+# publishing a host port, answering HTTP.
 #
-# Doing only the setup would leave the guard correctly GREEN (docker skips, because
-# the owner check catches it) and report SURVIVED against a working fix — which is
-# what a first draft of this block did.
+# Until today this block BORROWED that owner from the host: it edited docker's
+# fallback back to :8443 and relied on the kind node happening to be Up there.
+# MEASURED 2026-08-27 on a host where the kind node was gone (`docker ps -a` did
+# not list it; nothing on :8443): ECONNREFUSED on both sides of the mutation, the
+# status line read `docker:skipped` both times, and the guard reported SURVIVED
+# against a fix that works — the mirror image of the false verdict #208 removed
+# for the mesh-UP state. A mutation that is only observable in one host state,
+# graded in another, is not a test.
 #
-# Both halves were live at once before today: the fallback said 8443 AND the owner
-# check existed only on the probe's failure branch. Measured then: "4 passed, 1
-# failed — @env:docker scenario PASSED while the environment is down".
+# So the guard now BUILDS the collision instead of hoping for it: a throwaway
+# container named e2eguard-m7-<pid>-control-plane publishes a FREE LOOPBACK port
+# (127.0.0.1 only, never 0.0.0.0) and answers HTTP; the docker probe is pointed
+# at it through SNAP_ENV_DOCKER_BASE_URL — the same override the harness itself
+# honours, and it beats SNAP_BASE_URL — so no setup edit to production is needed
+# and the mutation IS the defect. That makes M7 observable in every host state:
+# nothing up, kind only, compose only.
+#
+# TWO measurements, both required:
+#   CONTROL  production UNMUTATED must veto the stand-in (verdict=foreign-owner).
+#            If it does not, either the stand-in is not what `docker ps` shows or
+#            the owner check is already broken. Both are RED, and neither is
+#            CAUGHT — a control that fails is reported as a failure of its own.
+#   MUTATED  with the owner check disabled the @env:docker scenario must stop
+#            skipping: it drives the stand-in and passes, which is exactly the
+#            silent pass this mutation exists to demonstrate.
+#
+# The container is removed right after M7, and by the EXIT trap on any signal.
+# It needs a reachable docker daemon and a local image that can serve HTTP
+# (E2EGUARD_M7_IMAGE, default python:3.12-slim — the pre-merge debian job's
+# image; alpine:3 will not do, its busybox has no httpd applet). Without either
+# M7 is NOT-RUNNABLE and the run exits 2 naming the command. Nothing is pulled.
+M7_IMAGE="${E2EGUARD_M7_IMAGE:-python:3.12-slim}"
+M7_NAME="e2eguard-m7-$$-control-plane"
+m7_standin_stop() { docker rm -f "${M7_NAME}" >/dev/null 2>&1 || true; }
+m7_standin_start() {  # -> echoes the loopback port on success, nothing on failure
+  # A run killed with SIGKILL runs no trap; its stand-in would still be here.
+  # Sweep only OUR naming shape, never anything else on the host.
+  docker ps -a --format '{{.Names}}' 2>/dev/null \
+    | grep -E '^e2eguard-m7-[0-9]+-control-plane$' \
+    | xargs -r docker rm -f >/dev/null 2>&1 || true
+  docker run -d --name "${M7_NAME}" -p 127.0.0.1::80 "${M7_IMAGE}" \
+    python3 -m http.server 80 --bind 0.0.0.0 -d /tmp \
+    >/dev/null 2>"${WORK}/m7-standin.err" || return 1
+  local port="" i
+  port="$(docker port "${M7_NAME}" 80/tcp 2>/dev/null | sed -n 's/.*://p' | head -1)"
+  [ -n "${port}" ] || return 1
+  # Wait for an HTTP answer, not a TCP accept: docker's userland proxy accepts
+  # before the server inside is listening. Any status code counts.
+  for i in $(seq 1 50); do
+    if python3 - "${port}" <<'PY' >/dev/null 2>&1
+import sys, urllib.request, urllib.error
+try:
+    urllib.request.urlopen("http://127.0.0.1:%s/" % sys.argv[1], timeout=2)
+except urllib.error.HTTPError:
+    pass
+PY
+    then echo "${port}"; return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+
 if [ -z "${BASE_ENVSTATUS}" ]; then
   bad "M7 cannot run: the baseline analysis emitted no envstatus line"
-elif env_is_serving docker; then
-  # The mutation makes docker report AVAILABLE off a foreign owner. If docker is
-  # ALREADY available the status line reads `docker:passed` before and after, and
-  # a comparison that cannot move is not a test. MEASURED 2026-08-27: this exact
-  # state reported "SURVIVED" against the freshly-landed fix.
-  mut_not_runnable "M7 docker accepts the kind node's ingress as the compose stack" \
-    "the docker environment is SERVING, so its baseline status is already 'passed' and the mutation cannot change it — stop the compose stack (make stack-halt) to exercise this one"
-elif mutate tests/e2e/steps/dimensions.ts <<'PY'
+elif ! docker ps >/dev/null 2>&1; then
+  mut_not_runnable "M7 docker accepts a foreign port owner as the compose stack" \
+    "no reachable docker daemon, so the guard cannot stand up the foreign-owner container the mutation needs (start dockerd, or run this on a host with docker)"
+elif ! docker image inspect "${M7_IMAGE}" >/dev/null 2>&1; then
+  mut_not_runnable "M7 docker accepts a foreign port owner as the compose stack" \
+    "image ${M7_IMAGE} is not present locally and this guard pulls nothing — run: docker pull ${M7_IMAGE}   (or set E2EGUARD_M7_IMAGE to a local image that has python3)"
+else
+  M7_PORT="$(m7_standin_start)"
+  if [ -z "${M7_PORT}" ]; then
+    bad "M7 stand-in container ${M7_NAME} (${M7_IMAGE}) did not come up answering HTTP — see ${WORK}/m7-standin.err"
+    sed -n '1,5p' "${WORK}/m7-standin.err" >&2
+  else
+    M7_URL="http://127.0.0.1:${M7_PORT}"
+    M7_OWNER="$(docker ps --format '{{.Names}}\t{{.Ports}}' | grep -F ":${M7_PORT}->" | cut -f1 | head -1)"
+    echo "  M7 stand-in: ${M7_NAME} publishes ${M7_URL} (docker ps owner: ${M7_OWNER:-<none>})"
+    # CONTROL: unmutated production, docker probe aimed at the stand-in.
+    measure_serving m7-control "SNAP_ENV_DOCKER_BASE_URL=${M7_URL}"
+    M7_CONTROL="$(python3 - "${WORK}/serving-m7-control.json" <<'PY' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1])).get("docker", {})
+ok = (not d.get("available")) and ("verdict=foreign-owner" in (d.get("detail") or ""))
+print("ok" if ok else "bad")
+print("available=%s detail=%s" % (d.get("available"), d.get("detail")))
+PY
+)"
+    if [ "$(printf '%s\n' "${M7_CONTROL}" | sed -n 1p)" != "ok" ]; then
+      bad "M7 CONTROL failed: UNMUTATED production did not veto the stand-in as a foreign owner — either 'docker ps' does not show ${M7_NAME} publishing :${M7_PORT}, or the owner check in steps/dimensions.ts is already broken. Not graded as CAUGHT."
+      echo "       $(printf '%s\n' "${M7_CONTROL}" | sed -n 2p)" >&2
+    elif mutate tests/e2e/steps/dimensions.ts <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-
-# SETUP: put docker back on the shared port so a collision can happen at all.
-setup_old = "        || `https://localhost:${process.env.PUBLIC_HTTPS_PORT || '8488'}`,"
-setup_new = "        || 'https://localhost:8443',"
-assert s.count(setup_old) == 1, "M7 setup anchor not unique: %d" % s.count(setup_old)
-s = s.replace(setup_old, setup_new)
-
-# THE DEFECT: both probe branches carry the identical condition, so anchor on the
-# SUCCESS branch's preceding comment. A non-unique anchor must refuse rather than
-# mutate whichever site it reaches first.
+# THE DEFECT, and only the defect: both probe branches carry the identical
+# condition, so anchor on the SUCCESS branch's preceding comment. A non-unique
+# anchor must refuse rather than mutate whichever site it reaches first.
 old = ("    // its pgrep gate above; docker had nothing equivalent.\n"
        "    if (owner && def.id !== 'kind' && /control-plane/.test(owner)) {")
 new = ("    // its pgrep gate above; docker had nothing equivalent.\n"
@@ -858,22 +1007,26 @@ new = ("    // its pgrep gate above; docker had nothing equivalent.\n"
 assert s.count(old) == 1, "anchor for M7 not unique: %d" % s.count(old)
 open(p, 'w').write(s.replace(old, new))
 PY
-then
-  regen >/dev/null 2>&1
-  run_lane m7 >/dev/null
-  analyse m7 lite || true
-  M7_ENVSTATUS="$(sed -n 's/^NOTE envstatus=//p' "${WORK}/m7.analysis" | head -1)"
-  if [ "${M7_ENVSTATUS}" = "${BASE_ENVSTATUS}" ]; then
-    mut_result "M7 docker accepts the kind node's ingress as the compose stack" 0 \
-      "the @env scenarios still reported '${M7_ENVSTATUS}' with docker back on :8443 and the owner check disabled"
-  else
-    mut_result "M7 docker accepts the kind node's ingress as the compose stack" 1 ""
-    echo "             baseline envstatus: ${BASE_ENVSTATUS}"
-    echo "             mutated  envstatus: ${M7_ENVSTATUS}"
+    then
+      regen >/dev/null 2>&1
+      run_lane m7 "SNAP_ENV_DOCKER_BASE_URL=${M7_URL}" >/dev/null
+      analyse m7 lite || true
+      M7_ENVSTATUS="$(sed -n 's/^NOTE envstatus=//p' "${WORK}/m7.analysis" | head -1)"
+      M7_DOCKER="$(printf '%s\n' "${M7_ENVSTATUS}" | tr ',' '\n' | sed -n 's/^docker://p')"
+      if [ -z "${M7_DOCKER}" ] || [ "${M7_DOCKER}" = "skipped" ]; then
+        mut_result "M7 docker accepts a foreign port owner as the compose stack" 0 \
+          "with the owner check disabled and docker aimed at the stand-in, the @env:docker scenario still reported '${M7_DOCKER:-<absent>}' (envstatus '${M7_ENVSTATUS}')"
+      else
+        mut_result "M7 docker accepts a foreign port owner as the compose stack" 1 ""
+        echo "             control  (owner check intact):   docker unavailable, verdict=foreign-owner"
+        echo "             mutated  (owner check disabled): docker:${M7_DOCKER}   (envstatus ${M7_ENVSTATUS})"
+      fi
+    else
+      bad "M7 could not be applied"; fi
   fi
-else
-  bad "M7 could not be applied"; fi
-restore_all
+  restore_all
+  m7_standin_stop
+fi
 
 if [ "${NOT_RUNNABLE}" -gt 0 ]; then
   echo "  mutations: ${CAUGHT} caught, ${SURVIVED} survived, ${NOT_RUNNABLE} NOT RUNNABLE in this host state"
@@ -897,11 +1050,13 @@ fi
 echo
 if [ "${F}" -eq 0 ] && [ "${NOT_RUNNABLE}" -gt 0 ]; then
   echo "== e2e env x interface: ${P} passed, 0 failed, ${NOT_RUNNABLE} mutation(s) NOT RUNNABLE =="
-  echo "   SKIPPED-LOUDLY: this run could not exercise the availability half of the"
-  echo "   battery, because the environment(s) it needs DOWN are serving:"
-  echo "     serving now: ${SERVING_ENVS:-<none>}"
+  echo "   SKIPPED-LOUDLY: this run could not exercise part of the mutation battery"
+  echo "   in this host state (serving now: ${SERVING_ENVS:-<none>}):"
+  for why in "${NOT_RUNNABLE_WHY[@]+"${NOT_RUNNABLE_WHY[@]}"}"; do
+    echo "     - ${why}"
+  done
   echo "   Exiting 2 rather than 0 — a green here would claim coverage this run did"
-  echo "   not have. Nothing is wrong with the tree; re-run with the mesh stopped."
+  echo "   not have. Nothing is wrong with the tree; re-run in the named host state."
   exit 2
 fi
 echo "== e2e env x interface: ${P} passed, ${F} failed =="
