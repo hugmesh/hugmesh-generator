@@ -138,43 +138,66 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
 #
-# 141 -> 142, denominator 163 -> 164, on merging main into
-# feat/appstore-effector-enable (the app-store effector/federation go-live). An
-# EIGHTH value was written into this one line by a branch that believed it (118,
-# correct against that branch's own base of 117 + its one new suite) and, like the
-# seven before it, was not true of the tree that resulted. The branch side of this
-# conflict was ONLY this line; main's side additionally carries the whole
-# PREMERGE_UNGATED set-pin below, so main was taken wholesale and the number was
-# then re-derived rather than either side's being kept.
-# BOTH counts move by exactly one, and that is the point: the single suite the
-# branch adds, tests/scripts/test-appstore-effector-flags.sh, is named by
-# .github/workflows/shell-suites.yml, so it lands GATED and does not belong in
-# PREMERGE_UNGATED -- which is why that list is unchanged at 22 and check 7's set
-# assertion stayed green across this merge. MEASURED by running this file against
-# the merged tree and reading the line it prints:
-#     142 of 164 suites are named by a pull_request-triggered workflow
-# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated. Small, but
-# recorded for the same reason as the reconciliations above: this branch expected
-# 142 and main said 141, and the only number worth writing down is the one MEASURED
-# on the merged tree. It happened to agree with the branch this time; the previous
-# entries in this block are all cases where it did not.
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated, and
+# 141 -> 142 again, independently, when test-url-embedded-credentials.sh was gated
+# on a sibling branch. BOTH measured 142, and both were right about the tree they
+# measured and wrong about the merge: each was looking at a tree containing only
+# its OWN addition. This block exists because that keeps happening.
 #
-# 142 / 143 -> 144, denominator 164 / 164 -> 165, when this branch and main met a
-# SECOND time. Both
-# histories immediately above are kept, for the reason this block already gives
-# twice: each records a real reconciliation and deleting either erases why a
-# number moved. The shape here is the benign one and is still not a free pass --
-# each side gated exactly ONE new suite that the other does not have
-# (tests/scripts/test-appstore-effector-flags.sh here, and main's
-# test-e2e-enumeration-without-credentials.sh) -- so the merged tree is one
-# above the HIGHER of the two, and neither side's number is true of it. Adding
-# the two deltas by hand would have been right by luck; it is MEASURED, by
-# running this file against the merged tree and reading the line it prints:
-#     144 of 165 suites are named by a pull_request-triggered workflow
-# The ungated SET also shrank 22 -> 21 in main's half of this merge (it gated
-# test-e2e-reporter-shape.sh, the named follow-up the block below recorded), and
-# that is why main moved TWO while its own comment names one suite.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-144}"
+# The value below is MEASURED on the integrated tree, not carried over from either
+# branch — the merge measured 144, which is neither branch's 142 nor the 143 main
+# carried in. Re-run this file after any merge that adds a suite; do not reason about
+# what the number "should" be.
+#
+# 144 -> 146, denominator 165 -> 167, when fix/argocd-dashboard-honesty landed. This
+# branch wires TWO new suites into shell-suites.yml
+# (tests/platform-capability-rbac/test-probe-rbac-namespaces.sh and
+# test-argocd-route-honesty.sh) and has now been re-measured THREE times against three
+# different mains: it wrote 119 for its own base, then 145 when main was 143/164, and
+# 146 here, because main moved to 144/165 underneath it when test-url-embedded-credentials.sh
+# was gated. Every one of those three was correct about the tree it measured. That is
+# the ninth value a branch has believed on this line, and the eighth time this exact
+# line has conflicted.
+#
+# Resolved as a union, per the rule the blocks above already state: main's record and
+# this branch's are complementary, not competing, so BOTH are kept. Note that the first
+# resolution of this conflict had to take main's side WHOLESALE rather than line-wise --
+# main did not merely hold a bigger number, it added the PREMERGE_UNGATED set-pin below,
+# which this branch's side predates entirely, and a line-wise keep of 119 would have
+# silently dropped that mechanism.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     146 of 167 suites are named by a pull_request-triggered workflow
+# +2 gated, +2 total: both of this branch's suites are named by shell-suites.yml, which
+# is why the gated count and the denominator moved together and the ungated SET pin
+# below was untouched (it stays 21). That this agrees with 144+2 is a CHECK on the
+# measurement, not a substitute for it -- the seven entries above are all cases where
+# the arithmetic and the measurement disagreed.
+#
+# 146 -> 147, denominator 167 -> 168, when feat/appstore-effector-enable landed. This
+# branch has now met main FOUR times and written a different number each time: 118
+# against its own base of 117, then 142, then 144, and 147 here. Every one of the four
+# was correct about the tree in front of it and wrong about the merge, because main
+# gained suites underneath it each time -- most recently the two from
+# fix/argocd-dashboard-honesty.
+#
+# The shape of this merge is the benign one and is STILL not a free pass: each side
+# gates suites the other does not have (tests/scripts/test-appstore-effector-flags.sh
+# here; main's argocd pair and the url-credentials suite), so the merged tree sits above
+# the higher of the two and neither side's number describes it. Adding the deltas by hand
+# would have been right by luck.
+#
+# Note also why main's side is taken WHOLESALE rather than line-wise: main's half carries
+# the PREMERGE_UNGATED set-pin, which the branch's half predates. A resolution that kept
+# only the branch's number would have deleted that mechanism while looking like a
+# one-line change -- the same trap the first appstore reconciliation recorded.
+#
+# MEASURED by running this file against the merged tree and reading the line it prints:
+#     147 of 168 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total: the branch's single new suite is named by shell-suites.yml, so it
+# lands GATED and does not belong in PREMERGE_UNGATED -- which is why that list is
+# unchanged at 21 and check 7's set assertion stayed green across this merge.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-147}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
