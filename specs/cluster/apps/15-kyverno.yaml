@@ -55,6 +55,26 @@ spec:
         # run. updateRequests is DIFFERENT -- backgroundController is enabled, so it
         # really does produce UpdateRequests -- so that one keeps running, on the
         # image that exists.
+        # policyReportsCleanup is a SEPARATE values key from cleanupJobs below, and
+        # missing it DEADLOCKED the cluster. It drives templates/hooks/
+        # post-upgrade-clean-reports.yaml -- a Helm post-upgrade hook Job -- and it
+        # defaults to bitnami/kubectl:1.28.5 too.
+        #
+        # OBSERVED on kind-hugmesh-local after the cleanupJobs fix was applied: the
+        # Application sat OutOfSync for 13 minutes with
+        #     phase=Running
+        #     msg=waiting for completion of hook batch/Job/kyverno-clean-reports
+        # The hook Job cannot start (its image is a 404), so the sync never completes,
+        # so the five CronJobs never get updated -- THE RETIRED IMAGE BLOCKS THE VERY
+        # SYNC THAT WOULD FIX THE RETIRED IMAGE. A fix that cannot apply itself is not
+        # a fix, and no amount of re-merging would have moved it.
+        #
+        # Disabled rather than repointed: reportsController is off above, so no policy
+        # reports are produced and this hook has nothing to clean. That also takes a
+        # sync-blocking Job off the critical path permanently, which is worth more here
+        # than a working image would be.
+        policyReportsCleanup:
+          enabled: false
         cleanupJobs:
           admissionReports:
             enabled: false
