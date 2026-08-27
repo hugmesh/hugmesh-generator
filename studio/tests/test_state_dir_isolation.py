@@ -32,19 +32,34 @@ import json
 import pwd
 import textwrap
 
+#: Does a Qt binding import? gui.tray needs one and the studio-tests CI job installs
+#: none, so several things in this file must branch on it. Defined HERE, above its
+#: first use, because a module-level forward reference is a NameError at import —
+#: unlike inside a function body, where the name resolves at call time.
+_QT_AVAILABLE = importlib.util.find_spec("PySide6") is not None or \
+    importlib.util.find_spec("PyQt6") is not None
+
+
 
 # Every resolver whose result must live under the isolated state dir. Adding a new
 # Studio state path means adding it here; the floor assertion below makes a
 # silently-shrunken list fail rather than pass vacuously.
 def _state_path_resolvers():
-    from hugmesh_studio.gui import tray
-    return [
+    # gui.tray needs a Qt binding and the studio-tests CI job installs none, so an
+    # unconditional import here is a ModuleNotFoundError in exactly the environment
+    # this file most needs to run in. Appended only when Qt imports; the Qt-capable
+    # case stays covered by test_the_tray_accessor_is_covered_when_qt_is_present,
+    # so a Qt-less skip can never quietly become a permanent hole.
+    resolvers = [
         ("state_paths.state_dir", state_paths.state_dir),
         ("instance.state_dir", instance.state_dir),
         ("build_sessions.sessions_dir", build_sessions.sessions_dir),
         ("crashlog.crashes_dir", crashlog.crashes_dir),
-        ("tray.build_status_path", tray.build_status_path),
     ]
+    if _QT_AVAILABLE:
+        from hugmesh_studio.gui import tray
+        resolvers.append(("tray.build_status_path", tray.build_status_path))
+    return resolvers
 
 
 # The child-process probe (see the end-to-end test). Kept at module level and
@@ -55,7 +70,17 @@ import os
 
 def test_touch_every_state_path():
     from hugmesh_studio.core import build_sessions, crashlog, instance
-    from hugmesh_studio.gui import tray
+    # SELF-CONTAINED ON PURPOSE. test_a_real_suite_run_writes_nothing_into_a_sandboxed_home
+    # extracts this function's SOURCE into a standalone probe file and runs it in a
+    # child pytest, so anything it references must travel with the text. A
+    # module-level _QT_AVAILABLE resolves fine here and is a NameError there — which
+    # is not a clean failure: it makes the child exit non-zero, and the parent then
+    # reports "the child did not run the probe to completion", pointing at the leak
+    # check rather than at the missing name.
+    try:
+        from hugmesh_studio.gui import tray
+    except ModuleNotFoundError:
+        tray = None                     # no Qt binding: the studio-tests CI job has none
 
     # Resolve every state path, then actually CREATE what each one names.
     # Writing is what leaked, so the probe must really write.
@@ -63,10 +88,11 @@ def test_touch_every_state_path():
                crashlog.crashes_dir):
         os.makedirs(fn(), exist_ok=True)
 
-    status = tray.build_status_path()
-    os.makedirs(os.path.dirname(status), exist_ok=True)
-    with open(status, "w", encoding="utf-8") as fh:
-        fh.write("{}")
+    if tray is not None:
+        status = tray.build_status_path()
+        os.makedirs(os.path.dirname(status), exist_ok=True)
+        with open(status, "w", encoding="utf-8") as fh:
+            fh.write("{}")
 
     # the exact path that polluted the operator's home: <state>/logs/<stamp>.log
     logs = os.path.join(instance.state_dir(), "logs")
@@ -76,7 +102,13 @@ def test_touch_every_state_path():
 """
 
 
-_MIN_RESOLVERS = 5          # the five that each carried a private copy of the fallback
+# The five that each carried a private copy of the ~/.hugmesh fallback — but
+# gui.tray needs a Qt binding and the studio-tests CI job installs none, so on a
+# Qt-less box there are four. Deriving the floor from _QT_AVAILABLE keeps it a real
+# floor in BOTH environments: pinning 5 turns every Qt-less run red for a reason
+# that has nothing to do with isolation, and pinning 4 would let a Qt-capable box
+# silently drop tray and still pass.
+_MIN_RESOLVERS = 5 if _QT_AVAILABLE else 4
 
 
 def test_every_state_path_resolver_is_redirected_away_from_home():
@@ -147,10 +179,12 @@ def test_state_dir_refuses_the_home_fallback_under_pytest(monkeypatch):
     assert ".hugmesh" in str(excinfo.value)
 
     # every resolver inherits the guard, not just the entry point
-    from hugmesh_studio.gui import tray
-    for name, fn in [("instance.state_dir", instance.state_dir),
-                     ("build_sessions.sessions_dir", build_sessions.sessions_dir),
-                     ("tray.build_status_path", tray.build_status_path)]:
+    _inheritors = [("instance.state_dir", instance.state_dir),
+                   ("build_sessions.sessions_dir", build_sessions.sessions_dir)]
+    if _QT_AVAILABLE:
+        from hugmesh_studio.gui import tray
+        _inheritors.append(("tray.build_status_path", tray.build_status_path))
+    for name, fn in _inheritors:
         with pytest.raises(RuntimeError):
             fn()
 
@@ -255,8 +289,6 @@ _CONFTEST = os.path.join(_TESTS_DIR, "conftest.py")
 #: docstring of conftest.py promises, so it is appended only when Qt imports — and
 #: ``test_the_tray_accessor_is_covered_when_qt_is_present`` makes sure a Qt-capable box
 #: never silently drops it.
-_QT_AVAILABLE = importlib.util.find_spec("PySide6") is not None or \
-    importlib.util.find_spec("PyQt6") is not None
 
 _STATE_ACCESSORS = [
     ("core.instance.state_dir", instance.state_dir),
