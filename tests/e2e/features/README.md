@@ -500,7 +500,15 @@ bash ../scripts/test-e2e-studio-gui-lane.sh            # the Studio GUI as a dri
 or, from the repo root, `make stack-e2e-bdd-check` (generation + the fast
 guards, no stack needed), `make stack-e2e-bdd-guards` (the axis + Studio-GUI
 mutation batteries; minutes) and `make stack-e2e-coverage-check` (the coverage
-matrix drift guard). `make stack-e2e-bdd` runs the lane against a live mesh,
+matrix drift guard — measured 8m33s end-to-end on 2026-08-27: 4m22s for the
+full 2105-test lane with a real chromium plus ~3m40s for its six-mutation
+battery; a browser store that cannot launch is refused in ~1s with
+`SKIPPED-LOUDLY` rather than burning ~29 minutes failing every cell twice; its
+own guard, `tests/scripts/test-e2e-coverage-matrix-harness.sh`, proves that
+refusal, the restore-under-SIGTERM and the `--retries=0` contract with a stub
+playwright in ~25s, runs first inside the make target, and gates every PR from
+shell-suites.yml's node job).
+`make stack-e2e-bdd` runs the lane against a live mesh,
 `make stack-e2e-bdd-env` runs it against whichever mesh `SNAP_ENV` names, and
 `make stack-e2e-bdd-evidence` says where the artefacts went.
 

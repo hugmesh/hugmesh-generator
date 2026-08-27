@@ -270,7 +270,18 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     152 of 174 suites are named by a pull_request-triggered workflow
 # +2 gated from this branch, +1 total from main; PREMERGE_UNGATED stays at
 # main's 22. Carried by re-running this file, not by arithmetic.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-152}"
+#
+# RE-MEASURED 2026-08-27 on fix/coverage-check-runtime, same procedure: this
+# branch adds tests/scripts/test-e2e-coverage-matrix-harness.sh — the guard OVER
+# test-e2e-coverage-matrix.sh (which itself STAYS in PREMERGE_UNGATED below: it
+# needs node_modules and a real chromium no shell-suites image carries). The
+# harness needs only node+npx, python3, git, md5sum and a STUB playwright it
+# writes itself (~25s, no browser, no npm install), so it is named in
+# shell-suites.yml's NODE job and run first by `make stack-e2e-coverage-check`.
+# Running this file on the merged tree (origin/main at a8015e81) printed
+#     153 of 175 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 22.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-153}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

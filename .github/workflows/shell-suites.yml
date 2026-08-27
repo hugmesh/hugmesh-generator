@@ -519,6 +519,7 @@ jobs:
             tests/domain-registry/test-domain-reconcile-fuzz.sh
             tests/domain-registry/test-templating-rename-pr.sh
             tests/menu/ncurses_charset_test.sh
+            tests/scripts/test-e2e-coverage-matrix-harness.sh
             tests/scripts/test-e2e-docker-base-url-parity.sh
             tests/scripts/test-e2e-reporter-shape.sh
           "

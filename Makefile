@@ -2135,7 +2135,17 @@ stack-e2e-coverage-gen: ## re-emit tests/e2e/features/coverage/ from the persona
 # committed tree, derives the expected persona/service/function/pair sets from the
 # catalogues and compares them with what `playwright test --list` actually
 # generates, runs the whole coverage lane, then breaks production six ways and
-# requires every break to turn it red. Takes ~10 minutes; COVERAGE_MATRIX_FULL=0
-# runs a representative subset instead while iterating.
-stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is complete, pinned and drift-guarded
+# requires every break to turn it red.
+#
+# RUNTIME, MEASURED 2026-08-27 (warm node_modules, chromium in ~/.cache):
+# 8m33s end-to-end = 24s harness + 5s checks 1-3 + 4m22s the full 2105-test
+# lane + ~3m40s the six-mutation battery (a FAILING 124-cell lane costs ~88s —
+# the failure path is ~6x the pass path). A browser store that cannot launch is
+# refused in ~1s (exit 2, SKIPPED-LOUDLY) instead of the ~29 minutes of
+# per-cell launch failures it used to burn before the timeout killed it.
+# COVERAGE_MATRIX_FULL=0 runs a representative subset instead while iterating.
+# The harness runs FIRST: it is the guard's own kill/refusal battery (stub
+# playwright, ~25s) and it also gates every PR from shell-suites.yml's node job.
+stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is complete, pinned and drift-guarded (measured ~9 min)
+	bash tests/scripts/test-e2e-coverage-matrix-harness.sh
 	bash tests/scripts/test-e2e-coverage-matrix.sh
