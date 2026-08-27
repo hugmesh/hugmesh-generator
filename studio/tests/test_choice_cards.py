@@ -102,7 +102,7 @@ def test_mode_page_renders_ten_cards_with_the_radio_ids(wiz):
     # option ids are the parity contract with validatePage/cfg — pinned verbatim,
     # in the operator's mesh-building journey order (issue #50)
     assert [m for m, _, _ in page.modes] == [
-        "localmesh", "localcloud", "mesh", "qemu", "meshemu", "deploy", "phone",
+        "localmesh", "localcloud", "mesh", "e2e", "meshemu", "deploy", "phone",
         "quest", "cloud", "standalone"]
 
 

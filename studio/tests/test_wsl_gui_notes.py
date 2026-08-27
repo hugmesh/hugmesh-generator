@@ -63,6 +63,18 @@ def _docker_stubbed(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _e2e_gate_stubbed(monkeypatch):
+    """The route to this page now passes THROUGH E2EPage (its own mode card was
+    removed 2026-08-27), and E2EPage's entry starts an off-thread readiness probe that
+    shells docker. Stub it, for the same reason `_docker_stubbed` exists right above:
+    nothing asserted in this file is about the host's daemon, and a probe thread still
+    in flight when its page is destroyed is a qFatal rather than an exception."""
+    from hugmesh_studio.core.local_stack_node import LocalStackNode
+    monkeypatch.setattr(LocalStackNode, "e2e_ready",
+                        lambda self, environment="docker": ["stubbed probe"])
+
+
+@pytest.fixture(autouse=True)
 def _local_disk_by_default(monkeypatch):
     """Nothing is on a Windows drive unless a test says so — the slow-filesystem tests
     opt IN, so every other assertion here is unaffected by this machine's mounts."""
@@ -159,9 +171,13 @@ def fake_generator(tmp_path):
 
 
 def _qemu_page(qapp, host, gen):
+    """QemuPage, through its post-2026-08-27 door: the RUN E2E TESTS card's second
+    radio arm. Its own mode-menu card was removed; the page and its KVM/docker notes
+    were not."""
     wiz = _wizard(qapp, host, str(gen))
     wiz.show()
-    pick_mode(wiz, "qemu")
+    pick_mode(wiz, "e2e")
+    advance_to(wiz, wizard_mod.E2EPage).arm_qemu.setChecked(True)
     return wiz, advance_to(wiz, wizard_mod.QemuPage)
 
 
