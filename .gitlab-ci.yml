@@ -2993,6 +2993,31 @@ lint:casdoor-init-honesty:
     - pip install --quiet pyyaml
   script:
     - bash tests/scripts/test-casdoor-init-honesty.sh
+
+# The seed password contract on a RECREATED stack (2026-08-27): a compose
+# recreate keeps the casdoor-pg volume, so Casdoor kept 32 identities seeded
+# under an EARLIER run's .e2e-credentials while the new seed resolved a fresh
+# one — and the apply hook skipped every existing user, the pre-mint blamed
+# "password grant unavailable" for what was wrong-credentials, leg 1c printed
+# 19/19 login 401s under "leg 1c OK" and exited 0, and the Makefile then
+# advertised a password that provably could not log in plus a static "Re-run
+# with SEED_COMPLETE_REGISTRATION=1" hint on a run where the flag WAS set.
+# The suite runs the REAL rendered apply hook and the REAL seed-e2e.sh against
+# a stub Casdoor (casdoor_stub.py, extended with the OAuth token endpoint so
+# convergence is proven by MINTING, not by log text) and a stub front door;
+# `docker` is a PATH shim — no stack, no daemon, no network egress. The
+# battery then breaks the reconcile/honesty/hint 14 ways (M1 is the incident
+# verbatim) and demands RED for each, restoring the tree on EXIT.
+lint:seed-password-reconcile:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash coreutils curl jq make python3
+    - for t in bash curl jq make python3; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t"; exit 1; }; done
+  script:
+    - bash tests/scripts/test-seed-password-reconcile.sh
+    - bash tests/scripts/seed_password_reconcile_mutations.sh
 # ── Guards that nothing ran, now run ─────────────────────────────────────────
 # THE ORPHAN SWEEP. Forty-one tests/**/test-*.sh suites existed on main that no
 # pipeline job and no make target invoked. They were not drafts: they carry the

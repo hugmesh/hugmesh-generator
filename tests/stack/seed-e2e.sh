@@ -692,10 +692,36 @@ if [ "${SEED_COMPLETE_REGISTRATION}" = "1" ]; then
   }
   mastodon_confirm_unconfirmed
 
-  log "leg 1c OK: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} failed"
-  # A failure here is NOT fatal: leg 1's identities are seeded either way, and the
-  # operator can still complete registration from the UI. Say it plainly instead.
-  [ "${reg_fail}" -eq 0 ] || warn "leg 1c: ${reg_fail} persona(s) could not be fully onboarded (see the WARNs above)"
+  # EVERY attempted onboard failing is NOT a degradation — it is the seed
+  # reporting that no seeded identity can sign in, which makes the whole run
+  # (and the password banner `make stack-seed` prints after it) a lie. Measured
+  # 2026-08-27: 19/19 logins 401'd — the stack's Casdoor held passwords from an
+  # earlier run's credentials file — and this leg printed "leg 1c OK: 0
+  # onboarded, … 19 failed" and exited 0, so the banner then advertised a
+  # password that provably could not log in (the contract's own rule: showing a
+  # WRONG password is worse than showing none). Fail, and name the two causes
+  # that produce the uniform-failure shape.
+  if [ "${reg_fail}" -gt 0 ] && [ "${reg_ok}" -eq 0 ]; then
+    echo "${PROG}: leg 1c FAILED: all ${reg_fail} attempted persona onboard(s) failed (0 onboarded; ${reg_gated} deliberately gated)." >&2
+    echo "  A uniform failure like this is one of two things, neither of which a blind re-run fixes:" >&2
+    echo "  * uniform 401s: the stack's Casdoor held identities seeded under a DIFFERENT E2E_PASSWORD" >&2
+    echo "    than this run resolved (a persisted casdoor volume + a lost/regenerated .e2e-credentials" >&2
+    echo "    does this — see tests/stack/e2e-password.sh). The apply hook reconciles stored passwords" >&2
+    echo "    to this run's render, so check the [apply-roles] output above actually ran to its" >&2
+    echo "    'reconciled' summary — then a 401 means the FRONT DOOR path, not Casdoor." >&2
+    echo "  * uniform 5xx/000/404: the front door ${FRONT_DOOR} or the user-bff behind it is not" >&2
+    echo "    serving logins — check the gateway/bff logs, not the identities." >&2
+    exit 3
+  fi
+  if [ "${reg_fail}" -gt 0 ]; then
+    log "leg 1c PARTIAL: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} FAILED"
+    # A PARTIAL failure is NOT fatal: leg 1's identities are seeded either way,
+    # and the operator can still complete registration from the UI. Say it
+    # plainly instead — but never under an "OK" label.
+    warn "leg 1c: ${reg_fail} persona(s) could not be fully onboarded (see the WARNs above)"
+  else
+    log "leg 1c OK: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), 0 failed"
+  fi
   # Which persona opens which app is ROLE-gated, and that is the single most common
   # confusion here: signing in as e2e-admin renders the Matrix UI shell and then 403s
   # on every call, because e2e-admin holds no ROLE_MATRIX. Name the right accounts.
