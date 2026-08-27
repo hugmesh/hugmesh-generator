@@ -10,3 +10,11 @@ package-lock.json
 # (e.g. a PVC/CI artifacts dir) rather than relying on the git tree.
 test-results/
 playwright-report/
+
+# playwright-bdd generated specs. `npx bddgen` compiles features/**/*.feature +
+# steps/**/*.ts into .spec.js files here, and playwright.config.ts's `bdd`
+# project runs them. GENERATED, NEVER COMMITTED: a committed copy goes stale the
+# moment a .feature changes and then runs the OLD scenario while the new one
+# looks green. tests/scripts/test-e2e-gherkin-harness.sh fails if any file under
+# this directory is git-tracked.
+.features-gen/

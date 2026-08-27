@@ -85,6 +85,7 @@ from ...core.progress_parse import ProgressParser
 from ...core.seeded_credentials import load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
+from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from ._add_user_dialog import AddUserDialog
 from ._logintheme import LoginThemeGroup
@@ -176,13 +177,18 @@ class _E2EGateProbe(QtCore.QThread):
     button stuck in its 'checking…' state forever."""
     result = Signal(object)                     # list[str]
 
-    def __init__(self, node, parent=None):
+    def __init__(self, node, environment: str = "docker", parent=None):
         super().__init__(parent)
         self._node = node
+        # WHICH mesh the readiness question is being asked ABOUT. Without it the
+        # probe always answered for the docker compose stack, so selecting kind
+        # or qemu would have greyed the Run button for reasons describing a mesh
+        # the operator had not chosen.
+        self._environment = environment
 
     def run(self):
         try:
-            self.result.emit(list(self._node.e2e_ready()))
+            self.result.emit(list(self._node.e2e_ready(self._environment)))
         except Exception as e:                  # never kill the page over a probe
             self.result.emit([f"the readiness probe failed: {type(e).__name__}: {e}"])
 
@@ -951,10 +957,71 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Runs tests/e2e against the RUNNING stack. Enablement + tooltip are
         # owned by _sync_e2e_gate (test env + stack up + seeded — live probes,
         # never the form's un-applied selection).
-        self.e2e_btn = QtWidgets.QPushButton("Run e2e suite")
+        # WHICH MESH the run drives. The operator asked for e2e evidence in all
+        # three environments; before this chooser the GUI could only ever run
+        # against the docker compose mesh, and there was no way to say otherwise
+        # short of a terminal.
+        #
+        # ONE CONTRACT WITH THE CLI. The choice does not become a flag, a config
+        # key or a different make target — it becomes SNAP_ENV on the child
+        # process, which is exactly what `SNAP_ENV=kind make stack-e2e-bdd-env`
+        # sets and what tests/e2e/steps/world.ts reads. core/e2e_environments
+        # builds both. A second mechanism here is how the GUI's label and the
+        # run's actual target come to disagree.
+        self.e2e_env_combo = QtWidgets.QComboBox()
+        # `envrow`, NOT `_row`: this method already uses the module-level _row()
+        # layout helper, and shadowing it with a loop variable turns every later
+        # call into an UnboundLocalError that only fires when the page is built.
+        for envrow in e2e_environments.describe():
+            self.e2e_env_combo.addItem(envrow["label"], envrow["id"])
+            self.e2e_env_combo.setItemData(
+                self.e2e_env_combo.count() - 1,
+                "%s\n\nRuns: make %s with %s=%s\nPins: %s\nStart it with: %s"
+                % (envrow["note"], envrow["makeTarget"], e2e_environments.ENV_VAR,
+                   envrow["id"], ", ".join(envrow["pins"]) or "<none>",
+                   envrow["startHint"]),
+                int(Qt.ItemDataRole.ToolTipRole))
+        self.e2e_env_combo.setCurrentIndex(
+            max(0, self.e2e_env_combo.findData(e2e_environments.DEFAULT_ENVIRONMENT)))
+        self.e2e_env_combo.setToolTip(
+            "Which mesh the e2e suite drives. The choice rides as "
+            + e2e_environments.ENV_VAR
+            + " on the run — the same channel a terminal uses — so the Studio and "
+              "the CLI can never target different meshes. Nothing here STARTS a "
+              "mesh: a scenario whose environment is not serving skips with a "
+              "reason naming exactly what to run.")
+        # currentIndexChanged, not activated: a programmatic change must re-gate
+        # too. The handler only re-probes and edits a label — it opens NO modal,
+        # because a QMessageBox from a selection handler hangs headless tests.
+        self.e2e_env_combo.currentIndexChanged.connect(self._on_e2e_env_changed)
+        brow.addWidget(QtWidgets.QLabel("e2e target:"))
+        brow.addWidget(self.e2e_env_combo)
+        # LABEL CHANGED 2026-08-26, and the reason is a real behaviour change worth
+        # a name: this button used to run `make stack-e2e` — the 33 HANDWRITTEN
+        # spec files — and now runs `make stack-e2e-bdd-env`, the GHERKIN lane.
+        # That is the only lane that honours the environment chooser (world.ts's
+        # per-scenario SNAP_ENV gate) and the only one that writes per-step
+        # evidence, so a chooser bolted onto the old target would have been a
+        # control that changed nothing. The handwritten specs did not go away;
+        # they are still `make stack-e2e` from a terminal, and the tooltip says so
+        # rather than leaving an operator to discover the swap.
+        self.e2e_btn = QtWidgets.QPushButton("Run e2e suite (Gherkin)")
         self.e2e_btn.setEnabled(False)
         self.e2e_btn.clicked.connect(self._run_e2e)
         brow.addWidget(self.e2e_btn)
+        # The per-step evidence a run leaves behind, browsable per environment
+        # and per interface. Always enabled: it READS a report dir, and its own
+        # empty state names the command that would produce one — greying it on
+        # "no stack" would hide the evidence of every past run.
+        self.e2e_evidence_btn = QtWidgets.QPushButton("e2e evidence…")
+        self.e2e_evidence_btn.setToolTip(
+            "Browse the per-step evidence the Gherkin lane recorded: a screenshot "
+            "for every browser step, a TRANSCRIPT (argv, stdout, the real exit "
+            "code) for every cli step, and a Qt widget grab for every Studio step "
+            "— grouped by environment and interface, with the manifest checked "
+            "against the disk in both directions.")
+        self.e2e_evidence_btn.clicked.connect(self._open_e2e_evidence)
+        brow.addWidget(self.e2e_evidence_btn)
         # ── vaults + managed volumes (operator ask 2026-08-14) ──────────────
         # Always enabled: unlike the verbs above, this opens a READ-FIRST view
         # whose own tabs report honestly when there is nothing to manage (no
@@ -1785,7 +1852,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if probe_running(self, "_e2e_probe"):
             return                       # its answer is already on the way
         probe = own_probe(self, "_e2e_probe",
-                          _E2EGateProbe(self.boot._stack_node(), parent=self))
+                          _E2EGateProbe(self.boot._stack_node(),
+                                        environment=self.e2e_environment(),
+                                        parent=self))
         probe.result.connect(self._on_e2e_ready)
         probe.start()
 
@@ -1799,11 +1868,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         problems = list(problems or [])
         btn.setEnabled(not problems)
         btn.setToolTip(
-            "Run the Playwright e2e suite (tests/e2e) against the running "
-            "local mesh's TLS front door. Output streams below; specs that "
-            "need the mock lane or a federation peer SKIP with their reason, "
-            "and the final line reports passed/failed/skipped from the "
-            "reporter's summary.json."
+            "Run the GHERKIN e2e lane (tests/e2e/features, `make "
+            "stack-e2e-bdd-env`) against the mesh named by the chooser to the "
+            "left. Output streams below; a scenario whose environment or "
+            "persona is unavailable SKIPS with its reason, and the final line "
+            "reports passed/failed/skipped from the reporter's summary.json. "
+            "Every step also leaves evidence — a screenshot, a transcript or a "
+            "Qt widget grab — browsable with 'e2e evidence…'.\n\n"
+            "The 33 HANDWRITTEN spec files are a separate lane and are not run "
+            "by this button: `make stack-e2e` from a terminal."
             if not problems else
             "Disabled:\n- " + "\n- ".join(problems))
 
@@ -1870,13 +1943,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         here (and again inside run_e2e) because enablement can go stale the
         moment the stack changes underneath the page."""
         node = self.boot._stack_node()
-        problems = node.e2e_ready()
+        env_id = self.e2e_environment()
+        problems = node.e2e_ready(env_id)
         if problems:
             self.status.setText("Cannot run e2e: " + "; ".join(problems))
             self._sync_e2e_gate()
             return
-        self._note(f"[e2e] running the Playwright suite against {node.web_url} "
-                   f"(seeded ENV=test stack) …")
+        plan = e2e_environments.plan(env_id)
+        target = (node.web_url if env_id == "docker"
+                  else plan.env.get(e2e_environments.BASE_URL_VAR, env_id))
+        self._note(f"[e2e] running the Gherkin suite against the {env_id} mesh "
+                   f"({target}) — {e2e_environments.ENV_VAR}={env_id}, "
+                   f"make {plan.make_target} …")
         # Bridge the mesh's REAL superadmin identity (minted by this bootstrap)
         # into the suite: without it every superadmin login 401s, because the
         # seeded handle/password are the minted ones, not the e2e defaults.
@@ -1887,11 +1965,55 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                       "E2E_SUPERADMIN_PASSWORD": creds[1]}
             self._note(f"[e2e] superadmin identity bridged: {creds[0]} "
                        "(password from the minted secrets bundle)")
-        self._launch("Running the e2e suite",
+        self._launch(f"Running the e2e suite ({env_id})",
                      lambda on_line, cancel: node.run_e2e(extra_env=bridge,
                                                           on_line=on_line,
-                                                          cancel=cancel),
+                                                          cancel=cancel,
+                                                          environment=env_id),
                      stream=True, cancellable=True, verb="e2e")
+
+    def e2e_environment(self) -> str:
+        """Which mesh the e2e chooser currently names. Falls back to the default
+        (docker — what an unset SNAP_ENV has always meant) when the combo has not
+        been built yet, so a caller during construction cannot crash the page."""
+        combo = getattr(self, "e2e_env_combo", None)
+        if combo is None:
+            return e2e_environments.DEFAULT_ENVIRONMENT
+        return combo.currentData() or e2e_environments.DEFAULT_ENVIRONMENT
+
+    def _on_e2e_env_changed(self, *_a):
+        """The chooser moved: re-gate and say what the new target means.
+
+        NO MODAL HERE. This is a selection handler, and a QMessageBox/exec() in
+        one wedges every headless test — the same rule that keeps them out of
+        validatePage. Everything it has to say goes into the status label and
+        the button tooltip.
+        """
+        env_id = self.e2e_environment()
+        try:
+            plan = e2e_environments.plan(env_id)
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
+        self.status.setText(
+            "e2e target: %s — the run will be launched as %s=%s make %s. "
+            "Nothing here starts that mesh; if it is not serving, every scenario "
+            "pinned to it skips with a reason. Start it with: %s"
+            % (env_id, e2e_environments.ENV_VAR, env_id, plan.make_target,
+               plan.start_hint))
+        self._sync_e2e_gate()
+
+    def _open_e2e_evidence(self):
+        """Open the per-step evidence browser.
+
+        exec() is legitimate HERE and only here: this is a BUTTON CLICK, not
+        page logic — nothing headless is waiting on a validatePage or an
+        itemChanged to return. Held on self so the wrapper is not collected
+        while the dialog is up (the _open_vaults precedent above)."""
+        from ._e2e_evidence_dialog import E2EEvidenceDialog
+        self._e2e_evidence_dialog = E2EEvidenceDialog(
+            self, generator_dir=getattr(self.wizard(), "generator_dir", "") or "")
+        self._e2e_evidence_dialog.exec()
 
     def _open_web_ui(self):
         QtGui.QDesktopServices.openUrl(
