@@ -259,6 +259,27 @@ Breaking the shape (removing/renaming a field, changing a type) means bumping th
 trailing integer of `EVIDENCE_SCHEMA` in `steps/evidence.ts` **and** `schema` in
 the fixture, together. Adding an optional field is compatible.
 
+### 4b-bis. `manifest.json` is PARTIAL while the run is in flight
+
+Measured 2026-08-26, and it corrects what `steps/evidence.ts` used to say.
+`playwright-bdd`'s `AfterAll` is Playwright's `test.afterAll`, which fires at the
+end of **every generated feature spec file** — so `materializeManifest()` rewrites
+`manifest.json` dozens of times per run, each time holding only the rows written
+so far. On a 115-scenario lane it held 188 rows mid-run while the append log
+already held 293, and 407 when the run finished.
+
+The **final** file is complete, so nothing downstream of a finished run is
+affected. But a consumer reading `manifest.json` *while the suite is running*
+sees a truncated index and will report perfectly good artefacts as unindexed.
+Such a consumer must read `manifest.jsonl` instead — the append log has no
+window, because a step's artefacts are written and then its rows appended inside
+one `AfterStep`.
+
+* in a step: `manifestRowsForScenario()` / `readManifestRows()` already read the
+  append log;
+* from the Studio / a script:
+  `python -m hugmesh_studio --e2e-evidence <run-dir> --e2e-evidence-live`.
+
 ### 4c. Asserting on your own evidence
 
 ```gherkin
@@ -270,6 +291,19 @@ These read `manifest.jsonl` (the append log), so they see rows written by
 *earlier steps of the same scenario*. This is the anti-decoration assertion for
 the evidence lane itself.
 
+### 4d. Browsing the evidence: `env × interface`
+
+`studio/hugmesh_studio/core/e2e_evidence.py` is the Qt-free reader the Studio's
+evidence browser renders. It groups rows `env -> interface -> feature -> scenario
+-> step` (that nesting **is** the operator's question order) and verifies the
+index against the disk in both directions. Same model in the terminal:
+
+```sh
+python -m hugmesh_studio --e2e-evidence test-results --json   # exits 1 if the index and the disk disagree
+```
+
+A row whose artefact is gone is rendered **loudly**, never filtered out.
+
 ## 5. Verify your feature before you commit
 
 From `tests/e2e`:
@@ -278,11 +312,61 @@ From `tests/e2e`:
 npx bddgen && npx playwright test --list --project=bdd
 bash ../scripts/test-e2e-gherkin-harness.sh
 bash ../scripts/test-e2e-env-interface-dimensions.sh   # env/interface axes + evidence
+bash ../scripts/test-e2e-studio-gui-lane.sh           # the Studio GUI as a driver
 ```
 
-or, from the repo root, `make stack-e2e-bdd-check` (generation + the guard, no
-stack needed). `make stack-e2e-bdd` runs the lane against a live stack.
+or, from the repo root, `make stack-e2e-bdd-check` (generation + the fast guard,
+no stack needed) and `make stack-e2e-bdd-guards` (both mutation batteries;
+minutes). `make stack-e2e-bdd` runs the lane against a live stack, and
+`make stack-e2e-bdd-env` runs it against whichever mesh `SNAP_ENV` names.
+
+Both battery guards need `npx playwright` **and** a Qt6 binding; without one they
+exit **2** with a `SKIPPED-LOUDLY` line naming the missing package — never 0.
 
 If `bddgen` exits non-zero your feature uses a step nobody defined — that is the
 anti-decoration gate doing its job. Define the step or fix the wording; never
 delete the assertion.
+
+## 6. Driving the Studio GUI as an interface
+
+`@interface:studio` builds the REAL `hugmesh_studio.gui.wizard.StudioWizard`
+offscreen (`QT_QPA_PLATFORM=offscreen`) through `tests/e2e/studio-driver.py` and
+`QWidget.grab()`s it. Each Gherkin step that drives it leaves its own
+`widget-grab`, so a walk through the GUI is browsable step by step.
+
+```gherkin
+@interface:studio
+Scenario: ...
+  When I grab the Studio wizard page "localmesh"      # a named page
+  When I drive the Studio e2e chooser to "kind"       # drive a control, then grab
+  Then the Studio reports the "kind" e2e environment
+  And the Studio grab is a non-empty PNG
+```
+
+The driver reports **what the page says**, not what the step asked for, and it
+raises the tab / scrolls the driven widget into view before grabbing — a
+plausible PNG of the wrong screen passes for evidence, which is worse than none.
+
+### 6a. Choosing the environment: ONE channel
+
+The Studio's environment chooser and the terminal use the same mechanism, and
+that is the point — two mechanisms drift, and then a GUI run drives a mesh the
+label does not name.
+
+| | |
+|---|---|
+| catalogue | `studio/hugmesh_studio/core/e2e_environments.py` (`docker`, `kind`, `qemu`) |
+| channel | `SNAP_ENV` on the spawned process — what `steps/world.ts` reads |
+| target | `make stack-e2e-bdd-env` (the same one for all three; the recipe pins nothing) |
+| CLI | `python -m hugmesh_studio --e2e-plan --e2e-env kind --json` |
+
+```sh
+make stack-e2e-bdd-env                    # docker
+SNAP_ENV=kind make stack-e2e-bdd-env      # the kind cluster
+SNAP_ENV=qemu make stack-e2e-bdd-env      # a device somebody already booted
+```
+
+The Python list and `ENVIRONMENTS` in `steps/dimensions.ts` are **cross-checked**
+(`studio/tests/test_e2e_environments.py` parses the TS file), so adding an
+environment on one side only goes red. Nothing here ever starts a mesh:
+`plan(..., boot=True)` is refused, naming what to run by hand.

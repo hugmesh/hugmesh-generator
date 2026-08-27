@@ -1836,7 +1836,7 @@ stack-ps: ## list the local stack's containers + status
 # tests/e2e/features/**/*.feature is compiled by `npx bddgen` into the GITIGNORED
 # tests/e2e/.features-gen/, which playwright.config.ts's `bdd` project runs.
 # Conventions every feature author follows: tests/e2e/features/README.md.
-.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check
+.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check stack-e2e-bdd-env stack-e2e-bdd-guards
 
 stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwright specs (bddgen)
 	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
@@ -1850,6 +1850,26 @@ stack-e2e-bdd-check: stack-e2e-bdd-gen ## OFFLINE: verify every .feature generat
 	cd tests/e2e && npx playwright test --list --project=bdd --reporter=line
 	bash tests/scripts/test-e2e-gherkin-harness.sh
 
+# The Gherkin lane's TWO deeper guards, each with its own mutation battery. Split
+# out of stack-e2e-bdd-check because they are minutes rather than seconds: each
+# breaks production several ways on purpose, re-runs the lane against every
+# mutant, and restores the tree.
+#
+# THEY ARE A MAKE TARGET AND NOT A CI JOB, deliberately, and the reason is
+# written here so nobody "fixes" it by gating them: both need `npx playwright`
+# AND a Qt6 binding (they build the REAL PyQt wizard offscreen), and no image the
+# shell-suites workflow runs carries either. On such a host both exit 2 with a
+# SKIPPED-LOUDLY line naming the missing prerequisite — never 0, so they can
+# never be mistaken for a pass. Gating a suite that can only skip would train
+# everyone to ignore the job.
+#
+# NOTHING IS STARTED. Both are designed to be green with the compose stack, the
+# kind cluster and every emulator DOWN: they test the vocabulary, the chooser and
+# the evidence, not the meshes.
+stack-e2e-bdd-guards: ## OFFLINE: the Gherkin lane's axis + Studio-GUI guards (mutation batteries; minutes)
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-studio-gui-lane.sh
+
 # LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
 # make playwright-deps). SNAP_PLATFORM=rpi5|x86 narrows the PLATFORM axis to the
 # image target actually running; unset runs every platform row. SNAP_REPORT_DIR
@@ -1857,3 +1877,32 @@ stack-e2e-bdd-check: stack-e2e-bdd-gen ## OFFLINE: verify every .feature generat
 stack-e2e-bdd: stack-e2e-bdd-gen ## run the GHERKIN e2e lane against the RUNNING local stack (needs stack-up + stack-seed)
 	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
 	  npx playwright test -c playwright.config.ts --project=bdd
+
+# ── the ENVIRONMENT-AWARE lane: docker | kind | qemu, one target ─────────────
+# THE WHOLE POINT IS THAT THIS RECIPE PINS NOTHING. `stack-e2e-bdd` above hard-
+# codes SNAP_BASE_URL in the recipe, and a recipe-level assignment OVERRIDES the
+# caller's exported value — so `SNAP_BASE_URL=... make stack-e2e-bdd` silently
+# drives the compose stack no matter what the caller asked for. That is exactly
+# how a run launched "against kind" would have driven docker while every label
+# said kind.
+#
+# So this target passes the CALLER's environment straight through. The pins live
+# in ONE place — studio/hugmesh_studio/core/e2e_environments.py run_env(), which
+# is what the Studio's environment chooser and `python -m hugmesh_studio
+# --e2e-plan` both emit — and tests/e2e/steps/dimensions.ts resolves them. The
+# only default applied here is SNAP_BASE_URL when the caller set none, which
+# keeps a bare `make stack-e2e-bdd-env` byte-equivalent to the docker lane.
+#
+# IT STARTS NOTHING. The mesh named by SNAP_ENV must already be serving; a
+# scenario whose environment is down SKIPS with a reason naming what to start
+# (tests/e2e/steps/world.ts). Bringing up a QEMU device needs root and is NEVER
+# done from here or from the Studio.
+#
+#   make stack-e2e-bdd-env                       # docker (default)
+#   SNAP_ENV=kind make stack-e2e-bdd-env         # the kind cluster
+#   SNAP_ENV=qemu make stack-e2e-bdd-env         # a device somebody already booted
+stack-e2e-bdd-env: stack-e2e-bdd-gen ## run the GHERKIN lane against the mesh SNAP_ENV names (docker|kind|qemu; nothing is started)
+	cd tests/e2e && \
+	  SNAP_ENV='$(or $(SNAP_ENV),docker)' \
+	  SNAP_BASE_URL="$${SNAP_BASE_URL:-https://localhost:$(PUBLIC_HTTPS_PORT)}" \
+	  npx playwright test -c playwright.config.ts --project=bdd $(E2E_ARGS)

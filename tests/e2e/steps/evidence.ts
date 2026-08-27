@@ -20,9 +20,25 @@
 // quadratic — a few thousand steps would rewrite ~1MB thousands of times. So
 // each step APPENDS one line to manifest.jsonl (an O_APPEND write, which is
 // also the only concurrency-safe option if this suite ever runs workers > 1),
-// and manifest.json is materialised once from those lines in AfterAll.
+// and manifest.json is materialised from those lines in AfterAll.
 // materializeManifest() is exported so a runner can rebuild the index after a
 // crashed run rather than losing it.
+//
+// *** manifest.json IS REWRITTEN MANY TIMES PER RUN, NOT ONCE. *** Measured
+// 2026-08-26, correcting what this header used to claim. playwright-bdd maps
+// AfterAll onto Playwright's test.afterAll, which fires at the end of EVERY
+// generated feature spec FILE — so this index is rebuilt after each feature,
+// each time holding only the rows written so far. On a 115-scenario lane it
+// held 188 rows mid-run while the append log already held 293, and 407 when the
+// run finished. The FINAL artefact is therefore correct and complete, and
+// nothing downstream of a finished run is affected; but A CONSUMER READING
+// manifest.json WHILE THE SUITE IS IN FLIGHT SEES A TRUNCATED INDEX and will
+// report perfectly good artefacts as unindexed. Such a consumer must read
+// manifest.jsonl instead — the append log has no window, because a step's
+// artefacts are written and then its rows appended inside one AfterStep.
+// (studio/hugmesh_studio/core/e2e_evidence.load(prefer_jsonl=True) is that
+// reader; `python -m hugmesh_studio --e2e-evidence <dir> --e2e-evidence-live`
+// is its CLI.)
 //
 // PATHS ARE RELATIVE. Every record's `path` is relative to the manifest's own
 // directory, with the absolute base in the top-level `root`. Absolute paths
