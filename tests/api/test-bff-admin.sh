@@ -9,6 +9,13 @@ PORT="${PORT:-8409}"; B="http://localhost:${PORT}"
 P=0; F=0; ok(){ echo "  PASS $*"; P=$((P+1)); }; bad(){ echo "  FAIL $*"; F=$((F+1)); }
 jqp(){ python3 -c "import sys,json;d=json.load(sys.stdin);print($1)"; }
 
+# BEFORE the BFF starts, not just before the login below: mock-bff.mjs resolves
+# the seeded password at module load and THROWS when nothing does (it used to
+# default to the literal "e2e-pass"). Resolving after this line starts a BFF that
+# is already dead, and every assertion below then fails against a closed port.
+. "${REPO}/tests/stack/e2e-password.sh"
+e2e_password_ensure || exit 1
+
 PORT="${PORT}" node "${REPO}/tests/stack/mock-bff.mjs" >/tmp/test-bff.log 2>&1 &
 BFF=$!; trap 'kill ${BFF} 2>/dev/null' EXIT
 for i in $(seq 1 20); do curl -s "${B}/bff/admin/isos" >/dev/null 2>&1 && break; sleep 0.3; done
@@ -20,8 +27,6 @@ echo "== admin BFF: route-access + ISO links =="
 # came back empty, and every assertion below cascaded into a false failure. The
 # session lives in an httpOnly bff_session cookie; mock-bff.mjs's sessionOf()
 # still accepts that same value as a Bearer, so only the MINT has to change.
-. "${REPO}/tests/stack/e2e-password.sh"
-e2e_password_ensure
 LOGIN_PW="${E2E_PASSWORD}"
 mint() { # <username> -> its bff_session token, or empty
   local hdrs
