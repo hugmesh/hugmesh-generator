@@ -26,7 +26,7 @@
 # time so pcs_quiet_sendfile_noise works no matter what the caller's cwd is.
 _PCS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# pcs_quiet_sendfile_noise SYSROOT
+# pcs_quiet_sendfile_noise SYSROOT [backup]
 #   Quiet portage's per-file sendfile WARNING-traceback spam (~300k lines per
 #   stage4 build — measured 308386 in out/build-snap-build-x86.log) by
 #   applying scripts/patch-portage-file-copy.py (root cause, upstream refs and
@@ -45,22 +45,48 @@ _PCS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   the copy itself always succeeded via portage's shutil fallback, so this is
 #   PURELY log noise. Hence: NEVER fatal — on any failure it warns and returns
 #   0. An hours-long build must not die over log cosmetics.
+#
+#   SECOND ARG — pcs_quiet_sendfile_noise SYSROOT backup
+#   Pass the literal word `backup` ONLY from a lane that also calls
+#   pcs_unquiet_sendfile_noise (below) before it packages anything. It opts the
+#   SYSROOT leg into saving a pristine <file>.hugmesh-orig copy so the revert can
+#   restore the file byte-exactly. DEFAULT IS NO BACKUP, and that default is the
+#   fix for a real regression: the copy was unconditional for one change set, and
+#   because only build-x86-host-stage4.sh reverts, the nine ARM/Jetson lanes each
+#   started shipping a ~4 KB vdb-unowned duplicate of a portage source file inside
+#   images that stage AIDE — exactly the build-time residue the revert exists to
+#   remove. A caller that says nothing now leaves nothing. tests/build-matrix/
+#   check.sh's SFO bucket fails any builder that opts in without reverting, so a
+#   FUTURE lane cannot reintroduce the residue by copying the x86 call either.
+#   The "/" leg NEVER takes a backup: the container root is disposable, nothing
+#   reverts it, and a copy there is residue with no consumer.
 pcs_quiet_sendfile_noise() {
     local sysroot="${1:?pcs_quiet_sendfile_noise: sysroot required}"
-    local patcher="${_PCS_LIB_DIR}/patch-portage-file-copy.py" r rc
+    local want_backup="${2:-}"
+    local patcher="${_PCS_LIB_DIR}/patch-portage-file-copy.py" r rc bak
+    case "${want_backup}" in
+        ''|backup) ;;
+        # Fail LOUD on a typo'd opt-in rather than silently patch with no backup:
+        # the revert would then find nothing and ship the patched file forever.
+        *) echo "[portage-config] WARN: pcs_quiet_sendfile_noise: unknown second arg '${want_backup}' (expected 'backup' or nothing) — proceeding WITHOUT a backup" >&2
+           want_backup="" ;;
+    esac
     if [ ! -f "${patcher}" ]; then
         echo "[portage-config] WARN: ${patcher} missing — per-file sendfile tracebacks will spam this build's log" >&2
         return 0
     fi
     for r in "${sysroot}" /; do
+        bak=""
         if [ "${r}" = / ]; then
             # Host-guard gate (fail closed if the guard lib is not sourced):
             # patching / is a host mutation, allowed only on a disposable root.
             command -v hostguard_mutation_allowed >/dev/null 2>&1 || continue
             hostguard_mutation_allowed || continue
+        elif [ "${want_backup}" = backup ]; then
+            bak="--backup"
         fi
         rc=0
-        python3 "${patcher}" "${r}" || rc=$?
+        python3 "${patcher}" ${bak} "${r}" || rc=$?
         case "${rc}" in
             0) ;;
             2) echo "[portage-config] WARN: no portage under ${r} — sendfile-noise patch skipped" >&2 ;;
@@ -68,6 +94,38 @@ pcs_quiet_sendfile_noise() {
             *) echo "[portage-config] WARN: sendfile-noise patch failed under ${r} (rc=${rc}) — continuing; tracebacks will be back" >&2 ;;
         esac
     done
+    return 0
+}
+
+# pcs_unquiet_sendfile_noise SYSROOT
+#   The MANDATORY twin of `pcs_quiet_sendfile_noise SYSROOT backup`: restore the
+#   pristine portage file(s) from the .hugmesh-orig copies and delete the copies,
+#   so the sendfile patch stays a BUILD-TIME artifact and NOTHING — neither the
+#   patch nor its backup — rides into the shipped image. Call it AFTER the last
+#   merge into SYSROOT (a later merge would re-spam the log, and on x86 the
+#   kernel chroot merges gentoo-sources under the same portage) and BEFORE the
+#   stage4 tar / .img / live-ISO squash.
+#   WHY THE SHIPPED IMAGE MUST NOT KEEP THE PATCH: its portage would disagree
+#   with the md5 sys-apps/portage recorded in var/db/pkg/.../CONTENTS forever, so
+#   `equery check sys-apps/portage` and any file-integrity baseline (these images
+#   stage AIDE) would report a modified file — for a workaround the device does
+#   not need, since it merges onto its own root, not the builder's eCryptfs work dir.
+#   Same never-fatal contract as its twin: warn and return 0 on every failure.
+#   Only ever the SYSROOT — the container root "/" keeps its patch (disposable,
+#   and it is the portage the ARM lanes' cross-emerge --root=SYSROOT runs under).
+pcs_unquiet_sendfile_noise() {
+    local sysroot="${1:?pcs_unquiet_sendfile_noise: sysroot required}"
+    local patcher="${_PCS_LIB_DIR}/patch-portage-file-copy.py" rc=0
+    if [ ! -f "${patcher}" ]; then
+        echo "[portage-config] WARN: ${patcher} missing — the sendfile-noise patch stays in the shipped portage (harmless, but its vdb checksum will not match)" >&2
+        return 0
+    fi
+    python3 "${patcher}" --revert "${sysroot}" || rc=$?
+    case "${rc}" in
+        0) ;;
+        2) echo "[portage-config] WARN: no portage under ${sysroot} — sendfile-noise revert skipped" >&2 ;;
+        *) echo "[portage-config] WARN: sendfile-noise revert failed under ${sysroot} (rc=${rc}) — the shipped portage stays patched (harmless, but its vdb checksum will not match)" >&2 ;;
+    esac
     return 0
 }
 

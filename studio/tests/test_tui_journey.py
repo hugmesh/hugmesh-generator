@@ -83,12 +83,20 @@ def test_a_fresh_start_lands_on_welcome():
     assert j.slug == WIZARD_PAGE_SLUGS[0] == "welcome"
 
 
-# ── welcome: the three journey entry points (#67) ──────────────────────────────────
-def test_welcome_offers_the_three_entry_points_with_the_gui_ids():
-    assert [cid for cid, _, _ in journey.WELCOME_CHOICES] == [
-        "build", "localmesh", "sessions"]
-    assert journey.WELCOME_TARGET == {
-        "build": "mode", "localmesh": "localmesh", "sessions": "sessions"}
+# ── welcome: the two journey entry points (#67, minus the #2 duplicate) ────────────
+def test_welcome_offers_the_two_entry_points_with_the_gui_ids():
+    """DECISION 2(d) (operator, 2026-08-26: "asking same questions seemingly multiple
+    times"): the welcome "Start a local mesh" entry and the MODE menu's "Local Docker
+    mesh" card were two doors onto one flow. The mode menu keeps it; welcome dropped
+    it, in the GUI and here — tests/test_tui_gui_parity.py pins that the two front
+    ends made the same cut."""
+    assert [cid for cid, _, _ in journey.WELCOME_CHOICES] == ["build", "sessions"]
+    assert journey.WELCOME_TARGET == {"build": "mode", "sessions": "sessions"}
+    # THE NEGATIVE, kept as a negative: no orphan routing target for an entry nobody
+    # can pick (the GUI calls that an unreachable branch in nextId()).
+    assert "localmesh" not in journey.WELCOME_TARGET
+    # ...and the journey is still REACHABLE, one screen further in
+    assert "localmesh" in [mid for mid, _, _ in journey.MODE_CHOICES]
 
 
 def test_welcome_default_enter_keeps_the_historical_welcome_to_mode_flow():
@@ -97,8 +105,12 @@ def test_welcome_default_enter_keeps_the_historical_welcome_to_mode_flow():
     assert j.flags.get("localmesh_selected") is False
 
 
-def test_welcome_localmesh_entry_raises_the_transient_flag():
-    j = _walk("2")
+def test_the_mode_localmesh_entry_raises_the_transient_flag():
+    """RE-POINTED by DECISION 2(d): the door moved from welcome to the mode menu, so
+    the walk is one screen longer ("" = Enter = Start building, then mode choice 1 =
+    "Local Docker mesh"). The property is untouched — picking it raises the transient
+    flag and commits no image mode."""
+    j = _walk("", "1")
     assert j.slug == "localmesh"
     assert j.flags["localmesh_selected"] is True
     # the flag is transient, never persisted into cfg (cfg.mode stays an image mode)
@@ -106,13 +118,17 @@ def test_welcome_localmesh_entry_raises_the_transient_flag():
 
 
 def test_welcome_sessions_entry_asks_the_face_for_the_review():
-    j = _walk("3")
+    # "2", not "3": sessions is the SECOND welcome entry now that the duplicate
+    # local-mesh entry between them is gone (DECISION 2(d)).
+    j = _walk("2")
     assert j.effect == "sessions"
     assert j.slug == "welcome"          # the journey resumes where it was
 
 
 def test_plain_face_embeds_the_sessions_review_and_resumes():
-    text = _run_plain("3\nq\nq\n")      # welcome -> sessions review -> back -> quit
+    # "2": sessions moved up one slot when the duplicate local-mesh entry was
+    # removed from the welcome screen (DECISION 2(d)).
+    text = _run_plain("2\nq\nq\n")      # welcome -> sessions review -> back -> quit
     assert "previous builds (newest first):" in text
     # after the review quits, the welcome screen renders again
     assert text.count("HugMesh Image Studio") >= 2

@@ -30,13 +30,15 @@ ok(){ echo "  PASS $*"; P=$((P+1)); }
 bad(){ echo "  FAIL $*"; F=$((F+1)); }
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
 
-# ── Extract the REAL helper functions from the builder (so the test tracks them). ─
-# _opt_selected + _opt_drop_kustomize_line are small, dependency-free functions.
-extract_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER}"; }
-eval "$(extract_fn _opt_selected)"
-eval "$(extract_fn _opt_drop_kustomize_line)"
-type _opt_selected >/dev/null 2>&1 || { echo "  FAIL could not extract _opt_selected"; exit 1; }
-type _opt_drop_kustomize_line >/dev/null 2>&1 || { echo "  FAIL could not extract _opt_drop_kustomize_line"; exit 1; }
+# ── Load the REAL helper functions AS THE BUILDER RESOLVES THEM ───────────────
+# _opt_selected + _opt_drop_kustomize_line moved out of the builder into the
+# SHARED scripts/_optional-services-lib.sh on 2026-08-26 (both stage4 builders
+# source it, so the copies that had silently diverged cannot recur). This helper
+# walks the builder's own source chain and takes the LAST definition, exactly as
+# bash would — so a builder-local override would still be what gets executed here.
+info(){ :; }; warn(){ :; }
+source "${REPO}/tests/lib/opt-gate-source.sh"
+opt_gate_load "${BUILDER}" _opt_selected _opt_drop_kustomize_line || exit 1
 
 echo "== egress-vpn optional-service gate unit test =="
 
@@ -144,12 +146,16 @@ grep -q '_opt_selected egress-vpn' "${BUILDER}" && ok "builder gates the reconci
 grep -q 'DEFAULT_SVCS+=(hugmesh-vpn-reconcile)' "${BUILDER}" && ok "builder links hugmesh-vpn-reconcile when selected" || bad "builder missing the reconcile runlevel link"
 
 # ── BOTH cluster-tree builders must carry the delivery prune (parity) ─────────
-# The reproduction above only proves the SHAPE; these greps prove the real
-# builders actually do it (rpi5 + x86 both bake the GitOps tree).
+# The reproduction above only proves the SHAPE; this proves the real builders
+# actually do it (rpi5 + x86 both bake the GitOps tree). Looked up through each
+# builder's RESOLVED egress-vpn case body — the gate moved into the shared
+# scripts/_optional-services-lib.sh on 2026-08-26, and grepping the builder FILE
+# would now find nothing in either one and report a divergence that is not there.
 missing=""
 for b in "${REPO}/build-rpi5-stage4.sh" "${REPO}/build-x86-host-stage4.sh"; do
-    grep -Fq 'rm -rf "${tree}/manifests/egress-vpn"' "${b}" \
-        && grep -Fq 'rm -f "${apps}/13e-egress-vpn.yaml"' "${b}" \
+    _body="$(opt_gate_case_body "${b}" egress-vpn)"
+    printf '%s' "${_body}" | grep -F 'rm -rf "${tree}/manifests/egress-vpn"' >/dev/null \
+        && printf '%s' "${_body}" | grep -F 'rm -f "${apps}/13e-egress-vpn.yaml"' >/dev/null \
         || missing="${missing} $(basename "${b}")"
 done
 [ -z "${missing}" ] && ok "both builders prune the delivery overlay + app with the slug" \

@@ -1,5 +1,5 @@
 {
-  "_comment": "Pre-supported x86 laptop/desktop hardware profiles for the Generator Studio. Each profile fills concrete build settings (gpu_driver, enable_wifi/bluetooth) so picking a machine yields a tuned image. The hardware scanner can also auto-pick one. Curated from Framework + best-sellers on Amazon/Best Buy/Costco/Walmart; extend freely.",
+  "_comment": "Pre-supported x86 laptop/desktop hardware profiles for the Generator Studio. Each profile fills concrete build settings (gpu_driver, enable_wifi/bluetooth) so picking a machine yields a tuned image. The hardware scanner is NOT one of these entries -- it lives on the Hardware step (the 'Scan THIS machine' button in gui/pages/hardware.py, the page that owns the three fields it writes); a synthetic 'this-machine-scan' profile here offered the same scan one page earlier, on RolePage, and was removed as a duplicate (operator report 2026-08-26, decision 2a). Curated from Framework + best-sellers on Amazon/Best Buy/Costco/Walmart; extend freely.",
   "profiles": [
     {"id": "asus-vivobook-f512da", "label": "ASUS VivoBook F512DA (Ryzen 7 3700U / Vega 10)", "category": "laptop", "gpu_driver": "amd-free", "enable_wifi": true, "enable_bluetooth": true, "notes": "Amazon ASUS laptop; integrated Radeon Vega 10; bundle a /home copy (no data SSD)."},
 
@@ -40,7 +40,6 @@
     {"id": "gaming-desktop-nvidia", "label": "Gaming Desktop — NVIDIA RTX (generic)", "category": "gaming-desktop", "gpu_driver": "nvidia", "enable_wifi": false, "enable_bluetooth": false, "notes": "iBUYPOWER/CyberPowerPC/Skytech best-sellers (Amazon/Best Buy/Walmart/Costco); RTX 40-series; wired Ethernet."},
     {"id": "gaming-desktop-amd", "label": "Gaming Desktop — AMD Radeon (generic)", "category": "gaming-desktop", "gpu_driver": "amd-free", "enable_wifi": false, "enable_bluetooth": false, "notes": "Radeon RX 7000-series prebuilts; free amdgpu/mesa."},
     {"id": "corsair-vengeance-desktop", "label": "Corsair Vengeance prebuilt (NVIDIA/AMD)", "category": "gaming-desktop", "gpu_driver": "auto", "enable_wifi": false, "enable_bluetooth": false, "notes": "Corsair's prebuilt gaming desktop line (Corsair itself is primarily a peripherals/PSU/case maker); GPU vendor varies by SKU — pick nvidia/amd-free by the scan."},
-    {"id": "minisforum-mini-pc", "label": "Minisforum mini PC (Intel/AMD)", "category": "desktop", "gpu_driver": "auto", "enable_wifi": true, "enable_bluetooth": true, "notes": "Popular budget mini-PC brand (UM/NAB/NPB series); standard Intel or AMD iGPU, Wi-Fi module varies by SKU."},
-    {"id": "this-machine-scan", "label": "This machine — run the hardware scanner", "category": "auto", "gpu_driver": "auto", "enable_wifi": false, "enable_bluetooth": false, "notes": "Detect GPU/Wi-Fi/BT on the box the Studio is running on and pre-fill the build."}
+    {"id": "minisforum-mini-pc", "label": "Minisforum mini PC (Intel/AMD)", "category": "desktop", "gpu_driver": "auto", "enable_wifi": true, "enable_bluetooth": true, "notes": "Popular budget mini-PC brand (UM/NAB/NPB series); standard Intel or AMD iGPU, Wi-Fi module varies by SKU."}
   ]
 }

@@ -58,26 +58,35 @@ SIDE_FLOW_SLUGS = ("localmesh", "phone", "quest", "deploy", "qemu", "meshemu",
 #: carries (rendered as selectable text here; a terminal has no anchor to click).
 README_GETTING_STARTED = "https://github.com/hugmesh/hugmesh-generator#quick-start"
 
-#: The welcome screen's three journey entry points (issue #50 item 1 / GUI PR #67):
+#: The welcome screen's TWO journey entry points (issue #50 item 1 / GUI PR #67):
 #: (choice id, title, description) — ids and titles mirror gui/pages/welcome.py's
 #: ``choices`` (test_tui_gui_parity pins the match), descriptions are the card
 #: blurbs verbatim.
+#:
+#: The "Start a local mesh" card that used to sit between them is GONE, per the
+#: operator's 2026-08-26 report ("standalone menu is asking same questions
+#: seemingly multiple times") — DECISION 2(d): the welcome card and the mode
+#: menu's "Local Docker mesh" card were two doors onto one flow, so the mode
+#: menu keeps it and welcome drops it. gui/pages/welcome.py made the same cut
+#: (its ``choices``/``_CHOICE_TARGET``/``_CHOICE_ICONS` all lost the entry); the
+#: TUI's own MODE_CHOICES below still carries "localmesh", exactly as ModePage
+#: does, so the journey is unreachable from neither front end.
 WELCOME_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("build", "Start building",
      "Open the menu of choices — build a mesh node, run a local Docker "
      "mesh, build a desktop image, enroll MDM devices, publish to a cloud, "
      "or boot built images as emulated QEMU devices."),
-    ("localmesh", "Start a local mesh",
-     "Flesh out users and domains locally, start the Kubernetes stack, and "
-     "configure branded repositories — a whole mesh on THIS machine in "
-     "Docker, no server hardware."),
     ("sessions", "Review prior sessions",
      "Previous builds and saved configurations: restart or redo a session, "
      "open its artifacts, read its logs — or load/save a config file."),
 )
 
 #: welcome choice id -> the PAGE_ORDER slug it routes to (the GUI's _CHOICE_TARGET).
-WELCOME_TARGET = {"build": "mode", "localmesh": "localmesh", "sessions": "sessions"}
+#: No "localmesh" key: DECISION 2(d) removed that card, and the GUI deliberately
+#: leaves no target for a card nobody can pick (welcome.py:51-54 calls it an
+#: unreachable branch in nextId()). The local-mesh journey is entered from the
+#: MODE screen instead.
+WELCOME_TARGET = {"build": "mode", "sessions": "sessions"}
 
 #: The mode menu, in the operator's mesh-building JOURNEY order (issue #50 /
 #: GUI PR #67; the #65 localcloud and #69 meshemu cards included): (id, title,

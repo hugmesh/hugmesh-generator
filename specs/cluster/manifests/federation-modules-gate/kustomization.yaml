@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-backend
+resources:
+  - job.yaml
+
+# sql/gate.sql is the BUILD-TIME RENDERED artefact (see its header): the stage4
+# builders rewrite one `UPDATE ... SET enabled = <bool> WHERE slug = '<module>';`
+# line per federation module from the resolved OPTIONAL_SERVICES selection.
+# disableNameSuffixHash keeps the ConfigMap name stable so job.yaml can reference
+# it by a fixed name; the Job is a BeforeHookCreation PostSync hook, so it is
+# re-created (and therefore re-reads the ConfigMap) on every sync anyway.
+configMapGenerator:
+  - name: federation-modules-gate-sql
+    files:
+      - sql/gate.sql
+
+generatorOptions:
+  disableNameSuffixHash: true

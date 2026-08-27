@@ -55,6 +55,56 @@ lint:reserved-prefixes:
   script:
     - bash scripts/validate-reserved-prefixes.sh
 
+# federation_modules REGISTRATION drift gate. optional-services.yaml declares, per
+# optional service, the federation module slug + mountAt + the hugmesh-federation-api
+# Liquibase changeset that seeds the row; every `kind: FederationModuleRegistration`
+# descriptor under manifests/ declares the same shape. Nothing checked that the two
+# sides agree, and on 2026-08-26 they did not: `akkoma` and `tuwunel` were declared as
+# module slugs, but 023/024 seed `mastodon`/`matrix` and no changeset ever seeds an
+# akkoma or tuwunel row — so anything resolving the module by the registry's slug
+# looked it up under a name no row carries, silently (the host shell just never finds
+# the remote; tests/stack/seed-e2e.sh leg 4 logs "no federation_modules row … skipped"
+# and stays green). Three changeset forward-references were also pointing at numbers
+# that had since been taken by unrelated changesets.
+#
+# The changelog lives in ANOTHER repo, so this job clones it — same recipe as
+# lint:reserved-prefixes above, and for the same reason: without it the script exits 3
+# (INCOMPLETE) rather than reporting a green run it did not earn.
+lint:federation-module-slugs:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    FEDERATION_SIBLING_ROOT: "${CI_PROJECT_DIR}/.federation-siblings"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${FEDERATION_SIBLING_ROOT}"
+    - git clone --depth 1 "${ORG_BASE}/hugmesh-federation-api.git" "${FEDERATION_SIBLING_ROOT}/hugmesh-federation-api"
+  script:
+    - bash scripts/validate-federation-module-slugs.sh
+
+# Guards THAT guard. Synthesises a changelog FROM the registry (so both sides agree by
+# construction) and then mutates one side at a time — slug drift, a forward reference
+# onto a taken number, a missing <include>, mountAt drift, and BOTH vacuity shapes
+# (deriver yields nothing / declarations derived but none landed). A guard that
+# compares an empty set passes, which is exactly how this class of check dies. Leg A
+# also runs the gate against the real clone, so a green run here is not purely
+# synthetic; without the clone the suite exits 3 (UNVERIFIED), never 0.
+lint:federation-module-slugs-gate-honesty:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    FEDERATION_SIBLING_ROOT: "${CI_PROJECT_DIR}/.federation-siblings"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${FEDERATION_SIBLING_ROOT}"
+    - git clone --depth 1 "${ORG_BASE}/hugmesh-federation-api.git" "${FEDERATION_SIBLING_ROOT}/hugmesh-federation-api"
+  script:
+    - bash tests/scripts/test-federation-module-slugs.sh
+
 # Guards the guard: proves validate-reserved-prefixes.sh cannot report a clean
 # PASS when its ReservedNames.java code-copy assertion did not actually run — the
 # silent-skip hole that let a five-label hugmesh-actions drift sit on a "green"
@@ -114,6 +164,24 @@ lint:client-connect-routes:
     - pip install --quiet pyyaml
   script:
     - bash tests/scripts/test-client-connect-routes.sh
+
+# /_fragments/** must be routed at something that can SERVE bundles. The compose
+# lane pointed it at the remote-fragment SYNC app on its ACTUATOR port, and ran
+# no fragment web server at all — so SYNC_TARGET_DIR was a docroot nothing
+# served and federated remotes could not load (which presents as a BLANK PAGE,
+# not a 404). This asserts the route's target service EXISTS in the compose
+# project, that its port is DERIVED from the target's own nginx conf rather than
+# hardcoded, that the served docroot is a volume some service actually writes,
+# and that compose and the cluster agree on WHICH COMPONENT serves the path.
+# Eight negative controls must each trip it. Offline, no docker, no network.
+lint:fragment-route-target:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-fragment-route-target.sh
 
 # ExternalSecret TARGET-OWNERSHIP gate. The job above reads this repo's own
 # manifests; it cannot know what an UPSTREAM chart creates, and that is exactly
@@ -610,6 +678,47 @@ lint:qemu-mesh-cluster:
   script:
     - bash tests/qemu/mesh-cluster_test.sh
 
+# QEMU runner-hygiene lane. NOTHING boots and no container is created: `docker`
+# and `losetup` are PATH stubs recording their argv, and the loop-device
+# preflight is driven against a seam directory instead of the real /dev.
+#
+# It pins three 2026-08-26 defects, all of which were invisible from a green run:
+# (1) the host boots with max_loop=0, so /dev carries only loop-control until the
+# first attach materialises loop0 — and a container's /dev is a CREATION-TIME
+# SNAPSHOT, so rows whose containers were created before that instant died in
+# extract_kernel while the row that created the node passed. Every failure leaves
+# the node behind, so the harness HEALS ITSELF INTO PASSING; the suite therefore
+# forces the visible node count low, which a check against the real /dev cannot.
+# (2) --jobs 0 is documented (and implemented in the keep-alive lane) as "ungated,
+# all at once", but the plain fan-out's `running >= JOBS` gate read 1 >= 0 as true
+# and FULLY SERIALIZED the matrix — never red, only slow. (3) emit_result
+# interpolated label/platform/board/role/mode/image RAW into its result JSON, so
+# one quote in an operator-supplied --label or in an image path wrote a row the
+# Studio renders as '?', and its FAILED count was scraped with an unanchored
+# '[0-9]+ failed' that matched rc-status's "0 failed" long before the verdict line.
+# Every check carries a negative control, and the file prints what it does NOT
+# prove rather than implying a green run covers it.
+lint:qemu-runner-hygiene:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash python3
+  script:
+    - bash tests/qemu/loop_preflight_test.sh
+    # And prove the suite above can FAIL. The battery breaks run-qemu-docker.sh
+    # thirteen ways — partition nodes counted as devices, `-v /dev:/dev` bent to
+    # `-v /dev:/dev-host`, `--privileged` to `--privileged=false-not-really`,
+    # --rm dropped, attach/detach interleaved, the verdict taken from docker's
+    # exit code, --jobs 0 re-serialized, the call site deleted — and demands RED
+    # for each, verifying every mutation actually changed the file first. It
+    # restores the tree on EXIT and ends on a positive control that the restored
+    # tree is green. Two of these (the -v and --privileged bends) survived at a
+    # full 30/0 before the assertions were changed from substring greps to
+    # whole-argv-word matches, which is exactly why this runs in CI and not once
+    # by hand.
+    - bash tests/qemu/loop_preflight_mutations.sh
+
 # ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
 # image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE
 # SITS IN: the root app-of-apps recurses specs/cluster/apps, so moving
@@ -1013,6 +1122,101 @@ lint:kind-profile-app-closure:
   script:
     - bash tests/scripts/test-kind-profile-app-closure.sh
 
+# The kind lane's SERVICE-SELECTION CHANNEL, end to end and offline: a selection
+# made in the Studio must survive the Makefile and arrive at bootstrap-kind.sh.
+# It exists because `make kind-up` passed only KIND_PROFILE and MFA, so
+# apps/01-metrics-server.yaml sat in no profile while KIND_PROFILE=sso deployed
+# seven HorizontalPodAutoscalers with no resource-metrics API to read — HPAs that
+# report <unknown> forever and look exactly like an idle cluster. Needs make and
+# python3 (the Studio half is asserted by CAPTURING the env `make` is handed, not
+# by reading the source for the word extra_env), hence python:3-slim + make.
+lint:kind-addon-channel:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends make >/dev/null
+  script:
+    - bash tests/scripts/test-kind-addon-channel.sh
+
+# A curated kind profile must also DEPLOY every in-cluster Service its own applied
+# gateway ROUTES point at. KIND_PROFILE=sso applied apps/20-gateway-fe.yaml — route
+# table included — but never apps/47-user-ui.yaml, so
+#   - id: user-ui / uri: http://hugmesh-user-ui.hugmesh-frontend…:80 / path: /user/**
+# was live against a Service nothing created. The API on the same surface
+# (/bff/user/**) WAS routed and WAS allowed by the route-access seed, so curl proved
+# the profile/password endpoint healthy while a browser got 503 from a route into
+# the void. ArgoCD stayed Healthy throughout: a route to nowhere is not a sync error,
+# and the sibling app-closure gate cannot see it because a gateway does not "declare"
+# its route targets anywhere except the route table.
+lint:kind-profile-route-closure:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash >/dev/null
+  script:
+    - bash tests/scripts/test-kind-profile-route-closure.sh
+
+# The e2e route-access ORACLE must be GENERATED from the seed, never hand-copied.
+#
+# tests/e2e/specs/rbac-route-access.ts carried a hand-maintained mirror of
+# gateway_route_access with the instruction "keep in lockstep". Measured by
+# execution on 2026-08-26 it held 11 of the seed's 77 hugmesh-fe-gateway rows and
+# answered DENY for every /bff/user/** profile and password path the real gateway
+# ALLOWs — while six RBAC spec files asserted against it and all six were green.
+lint:route-access-oracle:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash diffutils >/dev/null
+  script:
+    - bash tests/scripts/test-route-access-oracle.sh
+
+# The anonymous forgot-password legs must be reachable in EVERY lane that has a
+# front door. Four files have to agree and each fails silently alone: the cluster
+# route, the compose route, the route-access PUBLIC rows, and (OUT OF REPO, so
+# only documented) hugmesh-gateway SecurityConfig.PUBLIC_PATHS. Before this surface
+# existed a forgotten password was permanent; a silently-unrouted one restores that.
+lint:password-reset-front-door:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash diffutils >/dev/null
+  script:
+    - bash tests/scripts/test-password-reset-front-door.sh
+
+# The docker lane and the cluster lane must run the SAME gateway auth carrier.
+#
+# HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED gates BOTH halves of the bff_ cookie ->
+# custody-JWT swap (@ConditionalOnProperty on BffCookieToBearerWebFilter and
+# BffJwtExchangeConfig). compose.local.yaml has set it since the consequence was
+# diagnosed; specs/cluster never did — `grep -rn BFF_EXCHANGE specs/cluster` was
+# empty — so kind and every baked device image forwarded the raw opaque bff_ as the
+# Bearer and the pure-JWT BFFs (forum/wiki/tube/owncast) answered a bare 401 with
+# nothing in any log, in exactly the two lanes nobody exercises locally.
+#
+# Needs the hugmesh-gateway checkout: the comparison is of EFFECTIVE values, and the
+# IMAGE DEFAULTS come from that repo's application.yml (bff-exchange defaults FALSE,
+# bff-session defaults TRUE — so "set on one side only" means opposite things for
+# the two keys). Without it the suite reports INCOMPLETE and FAILS, never skips.
+lint:gateway-auth-flag-parity:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    GATEWAY_SRC: "${CI_PROJECT_DIR}/.gateway-src"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/hugmesh-gateway.git" "${GATEWAY_SRC}"
+    - git -C "${GATEWAY_SRC}" sparse-checkout set src/main/resources
+  script:
+    - bash tests/stack/test-gateway-auth-flag-parity.sh
+
 # Per-domain Casdoor lane (issue #47, Domain.idp=own): the casdoor-domains
 # ApplicationSet must ship an EMPTY element scaffold, both roots must carry the
 # ignoreDifferences+RespectIgnoreDifferences keystone (without it selfHeal
@@ -1086,8 +1290,10 @@ lint:e2e-persona-catalogue:
   script:
     - bash tests/scripts/test-e2e-persona-catalogue.sh
 
-# Optional-services BUILD-TIME EXCLUSION gate. Sources the REAL gate + helper
-# functions from build-rpi5-stage4.sh and runs gate_optional_services against a
+# Optional-services BUILD-TIME EXCLUSION gate. Loads the REAL gate + helper
+# functions as build-rpi5-stage4.sh RESOLVES them (they live in the shared
+# scripts/_optional-services-lib.sh since 2026-08-26; tests/lib/opt-gate-source.sh
+# walks the builder's source chain) and runs gate_optional_services against a
 # sandbox tree seeded from specs/cluster, proving EVERY user-level service
 # (akkoma/tuwunel/phpbb/games/owncast/tube) is build-time excludable: excluded =>
 # its Application/manifests/routes/rows OMITTED + installed-services ConfigMap
@@ -1101,6 +1307,58 @@ lint:optional-services-exclude:
     - pip install --quiet pyyaml
   script:
     - bash tests/stack/test-optional-services-exclude.sh
+
+# Optional-services CROSS-BUILDER BEHAVIOURAL PARITY gate. The suite above proves
+# the gate is correct for build-rpi5-stage4.sh. This one proves build-x86-host-stage4.sh
+# renders the SAME ARTEFACTS — asserted on the rendered YAML, never on the builder
+# source. Three defects shipped in x86 images on 2026-08-26 that every source-level
+# guard missed: no 13a ApplicationSet flag render (a repo-synced ArgoCD re-forced
+# deselected services back on), no anubis handling at all (prod images shipped the
+# public PoW shield off and the ingress un-rerouted), and the edge-ai-analysis
+# dependsOn guard running BEFORE EXCLUDE_SERVICES (orphan wrapper shipped). A parity
+# check that greps for the FUNCTION NAMES would have passed through all three — the
+# name is satisfied by a comment and says nothing about the body. Cheap; no
+# privileged runner, no pyyaml.
+lint:optional-services-parity:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/stack/test-optional-services-parity.sh
+
+# federation_modules BUILD-TIME GATE. The exclusion gate above proves a deselected
+# slug is pruned from apps/, manifests/, gateway routes, route-access rows, the
+# installed-services ConfigMap and the 13a element — and a USB built that way STILL
+# showed the service's menu entry, because the host shell resolves its remotes from
+# `federation_modules` (GET /api/federation/capabilities) and nothing in the
+# selection ever touched that table. This suite sources the REAL renderer out of
+# BOTH stage4 builders and asserts the POST-CONDITION on the rendered
+# manifests/federation-modules-gate/sql/gate.sql for all eight gated slugs.
+# Its behavioural legs skip LOUDLY here (no local stack on a CI runner).
+lint:federation-modules-selection:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/federation/test-federation-modules-selection.sh
+
+# THE KEYSTONE for "images with services selected only start those services".
+# The suite above proves the BAKED TREE is pruned; it proves NOTHING about what
+# ArgoCD syncs, and it was green through the entire lifetime of the bug where
+# bootstrap.sh applied only app-of-apps.yaml and ArgoCD therefore instantiated
+# specs/cluster/apps from GITHUB MAIN. This suite drives the real
+# specs/cluster/bootstrap/bootstrap.sh under a stub `kubectl` that captures every
+# applied manifest, then asserts on the RESOLVED SOURCE of what was applied: no
+# Application may resolve to path=specs/cluster/apps, and the applied Application
+# set must equal the SELECTION. Cheap; no cluster and no privileged runner.
+lint:bootstrap-applies-baked-apps:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/cluster/test-bootstrap-applies-baked-apps.sh
 
 # Merge-conflict-marker gate. A WIP checkpoint PR once merged an UNRESOLVED
 # conflict hunk into tests/stack/gateway-routes/fe/application-routes.yml — a file
@@ -1259,6 +1517,60 @@ lint:liquibase-grant-roles:
     # bash is required: the negative controls stage copies of specs/cluster AND of the
     # service sources, then re-run the checker against them.
     - bash tests/scripts/test-liquibase-grant-roles.sh
+
+# Optional-service slug closure. The OPTIONAL-service slug set must be ONE set across
+# five surfaces: the 13a ApplicationSet elements, the installed-services ConfigMap
+# booleans, the OptionalService CRD spec.slug enum, the seed CRs, and admin-bff's
+# OptionalServiceRegistry. Measured 2026-08-26 it was five different cardinalities
+# (17/14/13/13/12) and three live defects lived in the gaps — the worst being a slug
+# the CRD ACCEPTS and the registry silently ignores, which actuates nothing and does
+# not even write the CR's /status, so no observable trace says the toggle did nothing.
+# The checker DERIVES the set (13a element AND ConfigMap boolean) rather than listing
+# it, so the next slug cannot repeat this.
+#
+# The admin-bff checkout is part of the gate, not a convenience: the Java leg is the
+# one that catches the silent case, and without the clone the checker exits 3
+# INCOMPLETE and the suite FAILS rather than reporting four green legs of five.
+#
+# ⚠ EXPECTED RED until hugmesh-admin-bff-api's OptionalServiceRegistry gains
+# character-forge and meshbridge (in flight on that repo's
+# feat/superadmin-optional-services-endpoint). That red is the defect, not a flaw in
+# the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
+# allow_failure and do NOT weaken the Java leg to get green — the suite's own
+# positive control stages exactly that landing and requires the whole gate to pass,
+# so the exit criterion is executable.
+# Offline apart from the clone: no cluster, no kubectl.
+lint:optional-service-slug-closure:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    SERVICE_SRC_ROOT: "${CI_PROJECT_DIR}/.slug-closure-src"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${SERVICE_SRC_ROOT}"
+    # Blobless + sparse: only the optionalservices package is ever materialised.
+    - |
+      set -e
+      for r in $(python3 tests/scripts/optional_service_slug_closure.py --list-repos); do
+        git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/${r}.git" "${SERVICE_SRC_ROOT}/${r}"
+        git -C "${SERVICE_SRC_ROOT}/${r}" sparse-checkout set src/main/java/net/hugmesh/adminbff/optionalservices
+      done
+    # A repo --list-repos demands but the loop did not materialise must stop the job
+    # here, loudly. Checking four surfaces of five is the failure this gate exists for.
+    - |
+      set -e
+      for r in $(python3 tests/scripts/optional_service_slug_closure.py --list-repos); do
+        test -f "${SERVICE_SRC_ROOT}/${r}/src/main/java/net/hugmesh/adminbff/optionalservices/OptionalServiceRegistry.java" || {
+          echo "FATAL: ${r} has no OptionalServiceRegistry.java after cloning — the gate would be blind to it"
+          exit 1
+        }
+      done
+  script:
+    # bash is required: the negative controls stage copies of the five surfaces and
+    # re-run the checker against each planted defect.
+    - bash tests/scripts/test-optional-service-slug-closure.sh
 
 # Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
 # post-clone pass that rewrites files in ./.stack-src which `docker compose build`
@@ -2646,6 +2958,7 @@ orphan-guards-verify:
         tests/auto-update/test-provision-update.sh
         tests/auto-update/test-update-poller.sh
         tests/cloud-deploy/test-cloud-deploy-driver.sh
+        tests/cluster/test-bootstrap-applies-baked-apps.sh
         tests/device-registry/test-registry-allow-deny.sh
         tests/device-registry/test-self-report.sh
         tests/domain-registry/test-domain-reconcile-fuzz.sh

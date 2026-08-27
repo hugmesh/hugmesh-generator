@@ -1,15 +1,22 @@
-"""WelcomePage — the Studio's first screen: what HugMesh is, plus three ways in.
+"""WelcomePage — the Studio's first screen: what HugMesh is, plus two ways in.
 
 Issue #50's guided flow starts HERE: an explainer of what this studio builds (with
-the GitHub README's getting-started guide one explicit click away) and THREE large
+the GitHub README's getting-started guide one explicit click away) and TWO large
 icon buttons — the ChoiceCard idiom ModePage established:
 
   - START BUILDING        -> ModePage (the full menu of choices, journey-ordered)
-  - START A LOCAL MESH    -> LocalMeshPage (the existing local-stack flow: flesh out
-                             users/domains locally, start k8s, configure branded
-                             repositories)
   - REVIEW PRIOR SESSIONS -> SessionsPage (the previous default first screen: the
                              Previous-builds manager + Load/Save config)
+
+THE THIRD CARD IS GONE (operator report, 2026-08-26: "standalone menu is asking same
+questions seemingly multiple times"). "Start a local mesh" and ModePage's "Local
+Docker mesh" were ONE destination offered on two consecutive screens — both raised
+``wiz.localmesh_selected`` and both landed on LocalMeshPage — and this page's own
+"Start building" text enumerates ModePage's cards, so screen 1 was a menu OF screen
+2. ModePage owns that choice now, beside the six other side-flows it already carries
+(localcloud, qemu, meshemu, deploy, phone, quest); one extra click reaches it, and
+there is one place where "what am I building?" is answered. "Review prior sessions"
+stays: SessionsPage is NOT a ModePage card, so it is a genuine second door.
 
 The Load/Save/Fleet buttons and the Previous-builds manager this page used to host
 moved wholesale to gui/pages/sessions.py (SessionsPage — the "sessions" slug); the
@@ -41,12 +48,14 @@ README_GETTING_STARTED = "https://github.com/hugmesh/hugmesh-generator#quick-sta
 
 #: welcome choice id -> the WIZARD_PAGE_SLUGS entry it routes to. The ids are the
 #: page's test surface (property("choice")); the slugs are nextId()'s address book.
-_CHOICE_TARGET = {"build": "mode", "localmesh": "localmesh", "sessions": "sessions"}
+#: No "localmesh" entry any more — that door is ModePage's alone (see the module
+#: docstring); leaving a target for a card nobody can pick would be an unreachable
+#: branch in nextId().
+_CHOICE_TARGET = {"build": "mode", "sessions": "sessions"}
 
 #: choice id -> choice_icons registry name (presentation only). "main-menu" is the
 #: same mark LaunchPage's "Back to the main menu" card wears — it IS the same menu.
-_CHOICE_ICONS = {"build": "main-menu", "localmesh": "localmesh",
-                 "sessions": "sessions"}
+_CHOICE_ICONS = {"build": "main-menu", "sessions": "sessions"}
 
 
 def _as_html(text: str) -> str:
@@ -67,9 +76,8 @@ class WelcomePage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("HugMesh Image Studio")
         self.setSubTitle(
-            "Welcome. Start building, run a local mesh on this machine, or review "
-            "what you've built before.")
-        # three cards + two paragraphs can outgrow a small window: scroll, never clip
+            "Welcome. Start building, or review what you've built before.")
+        # the cards + two paragraphs can outgrow a small window: scroll, never clip
         lay = scrollable(self)
 
         # the hugmesh explainer, with the README getting-started guide one click away
@@ -86,19 +94,16 @@ class WelcomePage(QtWidgets.QWizardPage):
         info.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(info)
 
-        # THREE large icon buttons (issue #50 item 1) — one clickable CARD each,
-        # the exact ModePage idiom: title + muted description left, drawn-in-code
-        # icon right, click == choose == proceed (choice_nav).
+        # TWO large icon buttons (issue #50 item 1, minus the duplicate local-mesh
+        # card) — one clickable CARD each, the exact ModePage idiom: title + muted
+        # description left, drawn-in-code icon right, click == choose == proceed
+        # (choice_nav).
         self.group = ChoiceCardGroup(self)
         self.choices = [
             ("build", "Start building",
              "Open the menu of choices — build a mesh node, run a local Docker "
              "mesh, build a desktop image, enroll MDM devices, publish to a cloud, "
              "or boot built images as emulated QEMU devices."),
-            ("localmesh", "Start a local mesh",
-             "Flesh out users and domains locally, start the Kubernetes stack, and "
-             "configure branded repositories — a whole mesh on THIS machine in "
-             "Docker, no server hardware."),
             ("sessions", "Review prior sessions",
              "Previous builds and saved configurations: restart or redo a session, "
              "open its artifacts, read its logs — or load/save a config file."),
@@ -191,19 +196,21 @@ class WelcomePage(QtWidgets.QWizardPage):
         return self._selected_choice() is not None
 
     def validatePage(self):
-        # Entering the local-stack flow DIRECTLY (without walking ModePage):
-        # LocalMeshPage.applies_to reads this transient wizard flag, exactly as it
-        # does for ModePage's "Local Docker mesh" card — never persisted into cfg
-        # (cfg.mode stays an image mode; ModePage.initializePage documents why).
-        # ModePage.validatePage re-derives the flag on its own commit, so a Back
-        # here followed by a different path can never strand a stale True.
-        self.wiz.localmesh_selected = (self._selected_choice() == "localmesh")
+        # This page no longer OFFERS the local-stack flow (see the module docstring) —
+        # but it still CLEARS the transient flag, and that line is load-bearing rather
+        # than tidy-up: LocalMeshPage.applies_to reads it, and an operator who took
+        # ModePage's "Local Docker mesh" card and then stepped Back to this screen would
+        # otherwise walk forward through a stale True. Written as a constant False, not
+        # as a comparison against a choice id nothing can select, so no unreachable
+        # branch is left behind. ModePage.validatePage re-derives it on its own commit.
+        self.wiz.localmesh_selected = False
         return True
 
     def nextId(self):
-        """Route by the selected card: build -> mode, localmesh -> the local-stack
-        flow, sessions -> the Previous-builds screen. Falls back to the positional
-        next page until the wizard's slug->id map exists (construction order)."""
+        """Route by the selected card: build -> mode, sessions -> the Previous-builds
+        screen. Falls back to the positional next page until the wizard's slug->id map
+        exists (construction order). An unknown/absent choice resolves to "mode", which
+        is also what the default card selects."""
         ids = getattr(self.wiz, "_page_ids", None)
         if not ids:
             return super().nextId()

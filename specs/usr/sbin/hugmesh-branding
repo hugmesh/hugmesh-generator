@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hugmesh-branding — apply a HugMesh brand theme to this system: the GRUB boot
+# hugmesh-branding — apply a brand theme to this system: the GRUB boot
 # screen, the graphical login (lightdm greeter) background, the desktop wallpaper, and
 # a consistent colour scheme / accent. Drop-in files and directories supplied at image
 # generation OR by the user later flow through this single tool, so the look is the same

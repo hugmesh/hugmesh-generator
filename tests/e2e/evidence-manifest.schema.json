@@ -1,0 +1,98 @@
+{
+  "_comment": [
+    "PINNED SCHEMA for the BDD evidence manifest. HAND-WRITTEN — this file must",
+    "never be regenerated from a manifest a run produced. Validating a run's",
+    "output against a schema derived from that same output proves only that the",
+    "run agreed with itself; the moment the writer drops a field, a derived",
+    "schema drops it too and the guard stays green while the contract rots.",
+    "",
+    "The Studio's feature tree browses manifest.json, so this is a CONSUMER",
+    "CONTRACT. Adding an optional field is a compatible change. Removing a field,",
+    "renaming one, or changing its type is BREAKING: bump the trailing integer of",
+    "`schema` in steps/evidence.ts (EVIDENCE_SCHEMA) and here together.",
+    "",
+    "Checked by tests/scripts/test-e2e-env-interface-dimensions.sh."
+  ],
+  "schema": "hugmesh.bdd.evidence-manifest/1",
+  "top_level": {
+    "required": {
+      "schema": "string",
+      "runId": "string",
+      "root": "string",
+      "generatedAt": "string",
+      "counts": "object",
+      "artefacts": "array"
+    }
+  },
+  "counts": {
+    "required": {
+      "artefacts": "number",
+      "failed": "number",
+      "byEnv": "object",
+      "byInterface": "object",
+      "byKind": "object"
+    }
+  },
+  "record": {
+    "_comment": "Every key is ALWAYS present on every row. An unknown dimension is null, never an absent key, so a consumer can index without existence checks.",
+    "required": {
+      "env": "string",
+      "interface": "string",
+      "feature": "string",
+      "scenario": "string",
+      "step": "string",
+      "ordinal": "number",
+      "role": "string|null",
+      "service": "string|null",
+      "platform": "string|null",
+      "layer": "string|null",
+      "failed": "boolean",
+      "kind": "string",
+      "path": "string",
+      "sidecar": "string",
+      "bytes": "number",
+      "at": "string",
+      "note": "string"
+    },
+    "enums": {
+      "env": ["docker", "kind", "qemu", "unknown"],
+      "interface": ["browser", "cli", "studio", "unknown"],
+      "kind": ["screenshot", "transcript", "transcript-text", "transcript-render", "widget-grab", "sidecar-only"]
+    }
+  },
+  "transcript": {
+    "_comment": "steps/evidence.ts CliTranscript — the cli interface's artefact of record. exitCode is nullable ON PURPOSE: a process killed by a signal, or one that never started, must NOT report 0.",
+    "required": {
+      "command": "string",
+      "argv": "array",
+      "cwd": "string",
+      "envOverrides": "object",
+      "stdout": "string",
+      "stderr": "string",
+      "exitCode": "number|null",
+      "signal": "string|null",
+      "spawnError": "string|null",
+      "durationMs": "number",
+      "timedOut": "boolean",
+      "truncated": "boolean",
+      "at": "string"
+    }
+  },
+  "sidecar": {
+    "_comment": "The per-step JSON written next to every artefact. The first ten keys predate the env/interface axes and MUST keep their names — other readers already parse them.",
+    "required": {
+      "feature": "string",
+      "scenario": "string",
+      "step": "string",
+      "ordinal": "number",
+      "role": "string|null",
+      "platform": "string|null",
+      "service": "string|null",
+      "layer": "string|null",
+      "env": "string",
+      "interface": "string",
+      "failed": "boolean",
+      "at": "string"
+    }
+  }
+}

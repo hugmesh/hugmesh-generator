@@ -1,6 +1,21 @@
 import { test, expect } from '@playwright/test';
 import { registerOnly, shot } from './helpers';
 
+/**
+ * Handles this spec names that must NEVER be provisioned. Read by the Studio's
+ * spec->persona index (studio/hugmesh_studio/core/e2e_personas.py), which otherwise
+ * cannot tell a handle nobody seeded ON PURPOSE from one somebody forgot to seed —
+ * and reports the latter as a defect, because that is the shape of the 2026-08-06
+ * spec-29 failure (a native-login 401 that read as a broken password and was really
+ * an account nothing ever created).
+ *
+ * Seeding 'mallory@gmail.com' would make the first test below pass without
+ * proving anything: its whole assertion is that an UNPROVISIONED identity is
+ * refused native sign-in. 'frank@gmail.com' is deliberately NOT here — it IS
+ * seeded, and the second test needs it to sign in and then stall at stage 2.
+ */
+export const NEVER_SEEDED_PERSONAS: readonly string[] = ['mallory@gmail.com'];
+
 test('native sign-in is denied for an identity no admin provisioned', async ({ page }) => {
   // Native login has no self-registration surface: an unprovisioned identity
   // simply fails to sign in (401 invalid_credentials → "Sign-in failed").
