@@ -12,8 +12,8 @@
 // /bff/user/** profile and password surface the real gateway ALLOWs.
 // Nothing is copied by hand any more.
 //
-// Rows: 150 total — hugmesh-be-gateway 60, hugmesh-fe-gateway 77, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
-// Pattern shapes: literal 22, prefix-glob 125, root-glob 1, segment-glob 2
+// Rows: 152 total — hugmesh-be-gateway 60, hugmesh-fe-gateway 79, hugmesh-pki-gateway 4, hugmesh-superadmin-gateway 9
+// Pattern shapes: literal 24, prefix-glob 125, root-glob 1, segment-glob 2
 //
 // Every seed row is UNSCOPED (no domain) and UNPINNED (no casdoor_user):
 // the INSERT names exactly (gateway, url_pattern, role, allow), which the
@@ -137,6 +137,8 @@ export const ROUTE_ACCESS_SEED: readonly RouteRule[] = [
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/public/announcements/**', role: 'PUBLIC', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/public/appeal-contact', role: 'PUBLIC', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/login', role: 'PUBLIC', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/password-reset/request', role: 'PUBLIC', allow: true },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/password-reset/confirm', role: 'PUBLIC', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/register/**', role: 'ROLE_USER', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/provision/**', role: 'ROLE_USER', allow: true },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/me/**', role: 'ROLE_USER', allow: true },

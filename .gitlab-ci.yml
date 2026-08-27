@@ -1016,6 +1016,20 @@ lint:route-access-oracle:
   script:
     - bash tests/scripts/test-route-access-oracle.sh
 
+# The anonymous forgot-password legs must be reachable in EVERY lane that has a
+# front door. Four files have to agree and each fails silently alone: the cluster
+# route, the compose route, the route-access PUBLIC rows, and (OUT OF REPO, so
+# only documented) hugmesh-gateway SecurityConfig.PUBLIC_PATHS. Before this surface
+# existed a forgotten password was permanent; a silently-unrouted one restores that.
+lint:password-reset-front-door:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash diffutils >/dev/null
+  script:
+    - bash tests/scripts/test-password-reset-front-door.sh
+
 # The docker lane and the cluster lane must run the SAME gateway auth carrier.
 #
 # HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED gates BOTH halves of the bff_ cookie ->

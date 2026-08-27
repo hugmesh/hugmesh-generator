@@ -194,6 +194,7 @@ jobs:
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
             tests/scripts/test-outbound-mtls-client.sh
+            tests/scripts/test-password-reset-front-door.sh
             tests/scripts/test-platform-key-spelling.sh
             tests/scripts/test-portage-config-sync.sh
             tests/scripts/test-provision-manifest-injection.sh

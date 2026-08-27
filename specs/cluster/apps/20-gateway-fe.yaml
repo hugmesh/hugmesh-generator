@@ -371,6 +371,29 @@ spec:
           - id: hugmesh-user-bff-api-login
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/login
+          # ANONYMOUS PASSWORD RESET -> user-bff (PasswordResetController). The
+          # forgot-password legs, for a visitor with no session and no working
+          # credential. TWO EXACT paths rather than a /bff/password-reset/** subtree,
+          # for the reason the /bff/register/** entry below is a cautionary tale about:
+          # a subtree route SWALLOWS every future sibling under the prefix, and the
+          # cluster table has already shipped that bug once (it routed
+          # /bff/register/complete to a service that does not implement it, so no
+          # account on a cluster could finish onboarding). Exact paths cannot do that.
+          #
+          # MORE SPECIFIC FIRST — Spring Cloud Gateway matches in declared order, the
+          # same reason /bff/login sits above the /bff/** admin-bff catch-all.
+          #
+          # A ROUTE IS NOT ACCESS. These two paths also need a PUBLIC row each in
+          # manifests/route-access/initdb/20-schema.sql AND the same two paths in
+          # hugmesh-gateway SecurityConfig.PUBLIC_PATHS, whose coarse authenticated()
+          # floor 401s an anonymous caller before route-access is consulted. All three
+          # or the reset 401s at the front door while every unit test stays green.
+          - id: hugmesh-user-bff-api-password-reset-request
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/password-reset/request
+          - id: hugmesh-user-bff-api-password-reset-confirm
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/password-reset/confirm
           # REGISTRATION STAGE 2 LIVES ON admin-bff, NOT user-bff. AuthController
           # (admin-bff) owns POST /bff/register/complete — "Registration stage 2:
           # complete; releases service entitlement" — which calls store.markComplete
