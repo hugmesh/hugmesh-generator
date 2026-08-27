@@ -29,6 +29,22 @@
 # check asserts the tree is byte-identical to how it started, so a half-restored
 # tree is a failure rather than a surprise for the next agent.
 #
+# KILL SEMANTICS (measured 2026-08-27; this file's own harness,
+# tests/scripts/test-e2e-coverage-matrix-harness.sh, proves them by sending the
+# kill). The old shape — `trap cleanup EXIT INT TERM HUP` where cleanup removed
+# the scratch dir and RETURNED — made a `timeout` mid-lane produce a run that
+# BLUNDERED ON without its scratch dir: "rc=''" for the lane, six "patch did not
+# apply" survivors and "THE TREE WAS NOT FULLY RESTORED — No such file or
+# directory", every word of it about the guard's own bookkeeping. Two rules now:
+#   * every long-running child runs in the BACKGROUND under `wait`, because bash
+#     defers signal traps while blocked on a foreground child (a command
+#     substitution included) — a TERM used to sit queued behind minutes of lane;
+#   * the signal handler stops the in-flight child subtree, RESTORES the tree,
+#     VERIFIES the restore against the pre-run fingerprint, says so, removes the
+#     scratch dir and EXITS 128+signum. It never returns into the script.
+# A SIGKILL still cannot be caught; the poisoned-tree preflight below is what
+# protects the NEXT run in that case.
+#
 # OFFLINE. Starts NOTHING — no stack, no cluster, no emulator, no image build,
 # no sudo. Every assertion reads a committed file or runs the Gherkin lane, which
 # is itself stack-free.
@@ -41,16 +57,19 @@ COVERAGE_DIR="${E2E}/features/coverage"
 CATALOGUE="${E2E}/steps/coverage-catalogue.ts"
 EMITTER="${E2E}/tools/emit-coverage-matrix.ts"
 
-# WHERE THE BROWSER LIVES. Six of this suite's nine e2e siblings already carry
-# this exact line; this one did not, and it is the only one of the nine that both
-# LAUNCHES a browser and left the path to the ambient default. MEASURED at the
-# 2026-08-26 integration on a host whose ~/.cache/ms-playwright holds a chromium
-# for a DIFFERENT playwright: the lane reported "2101 failed" with 2101 copies of
-# "browserType.launch: Executable doesn't exist at .../chromium_headless_shell-1228",
-# i.e. a tooling gap wearing the costume of a total coverage collapse. The default
-# is the same one `make playwright-deps` installs into, and an operator who has set
-# the variable keeps their own value.
-export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}"
+# WHERE THE BROWSER LIVES. This guard NEVER defaults PLAYWRIGHT_BROWSERS_PATH.
+# It once pinned /var/tmp/portage/pw-browsers "because six siblings did" — a
+# host-local symlink farm that DANGLES after any `npx playwright install`
+# garbage-collects the revision it points at (see
+# reference_hugmesh_pw_browsers_symlink_farm). Measured 2026-08-27 on this box:
+# with the dangling pin, the 124-cell wiki spec took 101.6s (every cell
+# `browserType.launch: Executable doesn't exist`, TWICE each under the config's
+# retries:1) versus 15.2s green with the variable simply unset — extrapolated
+# over the 2105-cell lane that is ~29 minutes of red about the toolchain, which
+# is exactly the >25-minute timeout kill this note replaces. The variable is
+# honoured ONLY if the caller set it; otherwise Playwright resolves its own
+# store (~/.cache/ms-playwright), exactly as `make stack-e2e-bdd` does. The
+# preflight below proves ONE launch before the lane may start.
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -66,15 +85,21 @@ for t in node python3 git bash; do
   }
 done
 # ONE readiness opinion, not a second one: tests/e2e/check-toolchain.sh verifies
-# node_modules against the COMMITTED lock and the browser revision under THE
-# BROWSERS PATH THIS GUARD RUNS WITH. `[ -d node_modules/playwright-bdd ]` used to
-# stand here and said nothing about either — MEASURED 2026-08-27: with
-# /var/tmp/portage/pw-browsers holding dangling r1228 -> r1234 aliases, this guard
-# got past its preflight and reported its lane as "not green" with every browser
-# scenario dying on "Executable doesn't exist at .../chromium_headless_shell-1228",
-# the toolchain gap wearing the costume of a product failure. The probe names the
-# path and the fix (PLAYWRIGHT_BROWSERS_PATH=... make playwright-deps) instead.
-if ! PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" bash "${E2E}/check-toolchain.sh"; then
+# node_modules against the COMMITTED lock and the browser revision under the
+# SAME resolution the lane runs with — the caller's PLAYWRIGHT_BROWSERS_PATH if
+# they set it, otherwise Playwright's own store — because this guard no longer
+# defaults the variable (see WHERE THE BROWSER LIVES above). The probe call
+# carried `:-/var/tmp/portage/pw-browsers` when it landed (true of the OLD guard,
+# which pinned that path); with the pin gone from the lane, pinning it in the
+# probe would refuse a green lane over a store the lane never touches — the
+# wrong-question shape. `[ -d node_modules/playwright-bdd ]` used to stand here
+# and said nothing about the lock or the browser — MEASURED 2026-08-27: dangling
+# r1228 -> r1234 aliases got past it and every browser scenario died on
+# "Executable doesn't exist", the toolchain gap wearing the costume of a product
+# failure. In the HARNESS's scratch tree this probe is a stub (exit 0), exactly
+# like the playwright beside it — the harness grades this guard's orchestration,
+# not the box's toolchain.
+if ! bash "${E2E}/check-toolchain.sh"; then
   echo "SKIPPED-LOUDLY: the e2e toolchain is not ready (above). This guard checked NOTHING. Exiting 2 rather than 0." >&2
   exit 2
 fi
@@ -89,7 +114,8 @@ WORK="${TMPDIR:-/var/tmp/portage}/coverage-matrix-guard.$$"
 mkdir -p "${WORK}"
 
 # Byte fingerprint of every file the battery may touch, taken BEFORE anything is
-# broken. The last check diffs against it.
+# broken. The last check diffs against it — and so does the SIGNAL handler,
+# before the scratch dir (and this fingerprint with it) is removed.
 tree_fingerprint() {
   ( cd "${REPO}" \
     && find tests/e2e/steps tests/e2e/tools tests/e2e/features/coverage -type f \
@@ -115,23 +141,69 @@ restore_all() {
   MUTATED=()
 }
 cleanup() { restore_all; rm -rf "${WORK}"; }
-# INT TERM HUP as well as EXIT, because this guard MUTATES production files and
-# restores them in the trap. Bash runs no EXIT trap for an untrapped SIGTERM, so
-# a `timeout`, a Ctrl-C or a killed CI job could leave the tree MUTATED.
-#
-# THIS WIDENING IS NOT A COMPLETE FIX AND MUST NOT BE READ AS ONE. It fires on a
-# bare `kill -TERM` (verified in isolation), but a `timeout` arriving while the
-# script is blocked in a command substitution around `npx playwright test` was
-# measured TWICE to leave tests/e2e/steps/coverage-catalogue.ts still carrying
-# the M4 always-admit stub after the process was gone. The real protection is
-# the preflight below, which makes the NEXT run refuse instead of silently
-# trusting a poisoned oracle. Worktrees are shared here; that is the hazard.
-trap cleanup EXIT INT TERM HUP
+
+# ── run children in the BACKGROUND, wait interruptibly ───────────────────────
+# bash runs a signal trap only after the current FOREGROUND child completes, and
+# `rc="$(run_lane …)"` was exactly that: a TERM arriving mid-lane waited out the
+# lane (or, under `timeout`, the process group died around the still-blocked
+# script). `wait` on a background child, by contrast, returns the moment a
+# trapped signal lands. RUN_RC carries the child's status; CHILD is what the
+# signal handler stops.
+CHILD=""
+RUN_RC=0
+run_bg() {
+  local log="$1"; shift
+  "$@" > "${log}" 2>&1 & CHILD=$!
+  RUN_RC=0
+  wait "${CHILD}" || RUN_RC=$?
+  CHILD=""
+}
+_in_e2e()    ( cd "${E2E}" && "$@" )
+_in_bridge() ( cd "${BRIDGE}" && "$@" )
+
+# TERM the whole subtree, deepest first: the direct child is a subshell whose
+# npx/node grandchildren would otherwise be orphaned mid-write.
+kill_tree() {
+  local pid="$1" c
+  if command -v pgrep >/dev/null 2>&1; then
+    for c in $(pgrep -P "${pid}" 2>/dev/null); do kill_tree "${c}"; done
+  fi
+  kill -TERM "${pid}" 2>/dev/null || true
+}
+
+# The one path a kill takes. Restore FIRST, verify the restore, say so, and only
+# then remove the scratch dir — the order matters, because the fingerprint the
+# verification needs lives inside it. Never returns.
+on_signal() {
+  local name="$1" num="$2"
+  trap '' INT TERM HUP EXIT
+  echo ""
+  echo "KILLED BY SIG${name} — stopping the in-flight lane and restoring the tree."
+  if [ -n "${CHILD}" ]; then
+    kill_tree "${CHILD}"
+    wait "${CHILD}" 2>/dev/null || true
+    CHILD=""
+  fi
+  restore_all
+  if tree_fingerprint 2>/dev/null | diff -q "${WORK}/tree-before.md5" - >/dev/null 2>&1; then
+    echo "the guarded tree is byte-identical to pre-run — restored under the kill."
+  else
+    echo "RESTORE UNDER THE KILL DID NOT VERIFY — check the mutation targets with:"
+    echo "    git -C ${REPO} status ${MUTATION_TARGETS[*]-}"
+  fi
+  rm -rf "${WORK}"
+  echo "NOTHING WAS VERIFIED by this run: it was killed, not failed."
+  exit $((128 + num))
+}
+trap 'on_signal INT 2'   INT
+trap 'on_signal TERM 15' TERM
+trap 'on_signal HUP 1'   HUP
+trap cleanup EXIT
 
 # ── PREFLIGHT: REFUSE TO RUN ON A TREE A PREVIOUS RUN POISONED ───────────────
-# The battery mutates these files. If a previous run died before restoring them
-# (see the trap note above — measured twice), they are still mutated now, and
-# every clause below would be evaluated against a broken oracle. The M4 stub in
+# The battery mutates these files. A SIGKILL (which no trap can catch) — or the
+# pre-2026-08-27 trap shape — can leave them mutated with no marker, and every
+# clause below would then be evaluated against a broken oracle. The M4 stub in
 # particular makes seedDecision() admit EVERYONE, which does not fail loudly:
 # the emit-vs-committed diff goes red for reasons that read like ordinary drift,
 # and a reader "fixes" it by re-emitting, baking the poison into the tree.
@@ -231,19 +303,45 @@ sed -i -e "s|__DIMENSIONS__|${E2E}/steps/dimensions|" \
        -e "s|__CATALOGUE__|${E2E}/steps/coverage-catalogue|" \
        -e "s|__OUT__|${WORK}/expected.json|" "${BRIDGE}/dump.spec.ts"
 
+# ── PREFLIGHT: ONE REAL LAUNCH BEFORE 2105 CELLS MAY TRY ─────────────────────
+# One page.goto('about:blank') through the same resolution the lane uses. When
+# the browser cannot launch, every cell of the lane fails the same way — twice
+# each under the config's retries:1 — and the run reports ~29 minutes of red
+# that reads like a total coverage collapse but is a tooling gap (measured
+# 2026-08-27, 0.82s/cell dead vs 0.12s/cell green). Refuse in seconds instead.
+cat > "${BRIDGE}/preflight.spec.ts" <<'TS'
+import { test } from '@playwright/test';
+test('the browser launches', async ({ page }) => { await page.goto('about:blank'); });
+TS
+run_bg "${WORK}/preflight.out" _in_bridge \
+  npx --prefix "${E2E}" playwright test -c "${BRIDGE}/pw.config.ts" preflight.spec.ts --reporter=line
+if [ "${RUN_RC}" != "0" ]; then
+  echo "SKIPPED-LOUDLY: the browser cannot launch — one page.goto('about:blank') failed:" >&2
+  sed -n '1,25p' "${WORK}/preflight.out" >&2
+  echo "" >&2
+  echo "PLAYWRIGHT_BROWSERS_PATH is ${PLAYWRIGHT_BROWSERS_PATH:-unset (playwright resolves its own store)} — if you set" >&2
+  echo "it, unset it or point it at a store that actually holds this playwright's" >&2
+  echo "revision. Install with: make playwright-deps" >&2
+  echo "  [or: (cd tests/e2e && npx playwright install chromium)]" >&2
+  echo "This guard checked NOTHING — the lane would have failed all 2105 cells on" >&2
+  echo "the toolchain, not on coverage. Exiting 2 rather than 0 or a false red." >&2
+  exit 2
+fi
+
 dump_expected() {
   rm -f "${WORK}/expected.json"
-  ( cd "${BRIDGE}" && npx --prefix "${E2E}" playwright test -c "${BRIDGE}/pw.config.ts" \
-      --reporter=dot ) > "${WORK}/dump.out" 2>&1
+  run_bg "${WORK}/dump.out" _in_bridge \
+    npx --prefix "${E2E}" playwright test -c "${BRIDGE}/pw.config.ts" dump.spec.ts --reporter=dot
   [ -s "${WORK}/expected.json" ]
 }
 
 # ── the generated listing — what ACTUALLY generates ──────────────────────────
 regen_and_list() {
-  ( cd "${E2E}" && npx bddgen ) > "${WORK}/bddgen.out" 2>&1
-  local rc=$?
-  ( cd "${E2E}" && npx playwright test --list --project=bdd ) > "${WORK}/list.out" 2>&1
-  return ${rc}
+  local rc
+  run_bg "${WORK}/bddgen.out" _in_e2e npx bddgen
+  rc="${RUN_RC}"
+  run_bg "${WORK}/list.out" _in_e2e npx playwright test --list --project=bdd
+  return "${rc}"
 }
 
 # compare_sets — the four drift clauses plus the reverse direction, in python so
@@ -301,33 +399,58 @@ sys.exit(1 if problems else 0)
 PY
 }
 
-# emit_and_diff — re-emit into a scratch dir and diff against the committed tree.
+# emit_and_diff <tag> — re-emit into a scratch dir and diff against the
+# committed tree. Verdict in EMIT_R (a global, not an echo: a command
+# substitution is a foreground child, and a foreground child is where a signal
+# waits — see the run_bg note above).
+EMIT_R=""
 emit_and_diff() {
-  local out="${WORK}/emitted.$1"
+  local tag="$1" out
+  out="${WORK}/emitted.${tag}"
   rm -rf "${out}"; mkdir -p "${out}"
-  if ! bash "${E2E}/gen-coverage-matrix.sh" --out "${out}" > "${WORK}/emit.$1.out" 2>&1; then
-    echo "EMIT-FAILED"
+  run_bg "${WORK}/emit.${tag}.out" bash "${E2E}/gen-coverage-matrix.sh" --out "${out}"
+  if [ "${RUN_RC}" != "0" ]; then
+    EMIT_R="EMIT-FAILED"
     return 2
   fi
-  if diff -ruq "${COVERAGE_DIR}" "${out}" > "${WORK}/diff.$1.out" 2>&1; then
-    echo "IDENTICAL"; return 0
+  if diff -ruq "${COVERAGE_DIR}" "${out}" > "${WORK}/diff.${tag}.out" 2>&1; then
+    EMIT_R="IDENTICAL"; return 0
   fi
-  echo "DIFFERS"; return 1
+  EMIT_R="DIFFERS"; return 1
 }
 
-# run_lane <glob…> — run part of the Gherkin lane and report pass/fail counts.
+# run_lane <tag> <glob…> — run part of the Gherkin lane; rc in LANE_RC.
+# --retries=0 OVERRIDES the config's retries:1 on purpose: this guard grades
+# red/green, and a retry only doubles the time a red lane takes to say so
+# (measured doing exactly that, 2x on all 2105 cells).
+LANE_RC=""
+_lane() {
+  local tag="$1"; shift
+  cd "${E2E}" && SNAP_REPORT_DIR="${WORK}/rep-${tag}" SNAP_CLI_PNG=0 \
+    npx playwright test --project=bdd "$@" --retries=0 --reporter=line
+}
 run_lane() {
   local tag="$1"; shift
-  ( cd "${E2E}" && SNAP_REPORT_DIR="${WORK}/rep-${tag}" SNAP_CLI_PNG=0 \
-      npx playwright test --project=bdd "$@" --reporter=line ) \
-      > "${WORK}/run.${tag}.out" 2>&1
-  echo "$?"
+  run_bg "${WORK}/run.${tag}.out" _lane "${tag}" "$@"
+  LANE_RC="${RUN_RC}"
 }
+# How many times a lane failed to LAUNCH a browser rather than failing a cell.
+# A red lane whose reds are launch failures proves nothing about coverage, so
+# the battery refuses to count one as a CAUGHT.
+launch_failures() { grep -c "browserType.launch" "${WORK}/run.$1.out" 2>/dev/null || true; }
+# Playwright's line reporter colorises even into a redirected file (measured on
+# this box: the summary line arrives as ESC[1A ESC[2K ESC[31m'  124 failed'…),
+# so every ^-anchored match on lane output must strip ANSI first. Unstripped,
+# the old guard read failed='' from a 124-failure lane and graded M4 SURVIVED —
+# and printed an empty summary for a green one.
+strip_ansi() { sed -e $'s/\x1b\[[0-9;]*[A-Za-z]//g' "${WORK}/run.$1.out" 2>/dev/null || true; }
+lane_failed_count() { strip_ansi "$1" | sed -n 's/^ *\([0-9][0-9]*\) failed.*/\1/p' | tail -1; }
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. BASELINE — the committed matrix is exactly what the catalogues emit
 # ═════════════════════════════════════════════════════════════════════════════
-r="$(emit_and_diff base)"
+emit_and_diff base || true
+r="${EMIT_R}"
 if [ "${r}" = "IDENTICAL" ]; then
   ok "the committed features/coverage/ tree is byte-identical to a fresh emit"
 else
@@ -388,12 +511,13 @@ else
         '.features-gen/features/coverage/roster-coverage.feature.spec.js')
   LANE_LABEL="the coverage SUBSET (COVERAGE_MATRIX_FULL=0)"
 fi
-rc="$(run_lane base "${LANE[@]}")"
-SUMMARY="$(grep -E '^ +[0-9]+ (passed|failed|skipped)' "${WORK}/run.base.out" | tr -d '\n')"
-if [ "${rc}" = "0" ] && ! grep -qE '^ +[0-9]+ failed' "${WORK}/run.base.out"; then
+run_lane base "${LANE[@]}"
+rc="${LANE_RC}"
+SUMMARY="$(strip_ansi base | grep -E ' [0-9]+ (passed|failed|skipped)' | tr -d '\n')"
+if [ "${rc}" = "0" ] && [ -z "$(lane_failed_count base)" ]; then
   ok "${LANE_LABEL} is GREEN with nothing started —${SUMMARY}"
 else
-  bad "${LANE_LABEL} is not green (rc=${rc}) —${SUMMARY}"
+  bad "${LANE_LABEL} is not green (rc=${rc}, launch failures=$(launch_failures base)) —${SUMMARY}"
   grep -E '✘|Error:|expect\(' "${WORK}/run.base.out" | head -20 >&2
 fi
 
@@ -414,7 +538,8 @@ s = s.replace('dragoneer:ROLE_USER:E2E_PASSWORD \\',
 open(p, 'w').write(s)
 PY
 if mutate tests/e2e-extra-personas.sh "${WORK}/m1.py"; then
-  r="$(emit_and_diff m1)"; ds=1
+  emit_and_diff m1 || true
+  r="${EMIT_R}"; ds=1
   dump_expected && compare_sets > "${WORK}/sets.m1" 2>&1 && ds=0
   if [ "${r}" != "IDENTICAL" ] && [ "${ds}" != "0" ]; then
     caught "M1 a new persona with no scenario (emit diff: ${r}; drift clause: RED)"
@@ -445,7 +570,8 @@ s = s[:j] + new + s[i:]
 open(p, 'w').write(s)
 PY
 if mutate tests/e2e/steps/dimensions.ts "${WORK}/m2.py"; then
-  r="$(emit_and_diff m2)"; ds=1
+  emit_and_diff m2 || true
+  r="${EMIT_R}"; ds=1
   dump_expected && compare_sets > "${WORK}/sets.m2" 2>&1 && ds=0
   # The emitter REFUSES to emit a service with no functions, so EMIT-FAILED is a
   # catch (loudly), and so is a plain diff.
@@ -473,11 +599,12 @@ PY
 if mutate tests/e2e/steps/coverage-catalogue.ts "${WORK}/m3.py"; then
   ds=1
   dump_expected && compare_sets > "${WORK}/sets.m3" 2>&1 && ds=0
-  rc="$(run_lane m3 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js')"
-  if [ "${ds}" != "0" ] && [ "${rc}" != "0" ]; then
+  run_lane m3 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js'
+  rc="${LANE_RC}"; lf="$(launch_failures m3)"
+  if [ "${ds}" != "0" ] && [ "${rc}" != "0" ] && [ "${lf}" = "0" ]; then
     caught "M3 a deleted function whose scenarios survive (reverse clause RED, lane rc=${rc})"
   else
-    survived "M3 deleted function (reverse clause rc=${ds}, lane rc=${rc})"
+    survived "M3 deleted function (reverse clause rc=${ds}, lane rc=${rc}, launch failures=${lf})"
   fi
 else
   survived "M3 (patch did not apply)"
@@ -497,12 +624,13 @@ s = s[:i] + "\n  return { outcome: 'admitted', pattern: '/**', grantedRoles: [],
 open(p, 'w').write(s)
 PY
 if mutate tests/e2e/steps/coverage-catalogue.ts "${WORK}/m4.py"; then
-  rc="$(run_lane m4 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js')"
-  nfail="$(sed -n 's/^ *\([0-9]*\) failed.*/\1/p' "${WORK}/run.m4.out" | tail -1)"
-  if [ "${rc}" != "0" ] && [ "${nfail:-0}" -gt 0 ]; then
+  run_lane m4 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js'
+  rc="${LANE_RC}"; lf="$(launch_failures m4)"
+  nfail="$(lane_failed_count m4)"
+  if [ "${rc}" != "0" ] && [ "${nfail:-0}" -gt 0 ] && [ "${lf}" = "0" ]; then
     caught "M4 an oracle that admits everyone (${nfail} cells RED)"
   else
-    survived "M4 always-admitted oracle (rc=${rc}, failed=${nfail:-0})"
+    survived "M4 always-admitted oracle (rc=${rc}, failed=${nfail:-0}, launch failures=${lf})"
   fi
 else
   survived "M4 (patch did not apply)"
@@ -521,12 +649,14 @@ if old not in s: sys.exit('anchor wiki.edit probePath not found')
 open(p, 'w').write(s.replace(old, new, 1))
 PY
 if mutate tests/e2e/steps/coverage-catalogue.ts "${WORK}/m5.py"; then
-  r="$(emit_and_diff m5)"
-  rc="$(run_lane m5 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js')"
-  if [ "${r}" != "IDENTICAL" ] && [ "${rc}" != "0" ]; then
+  emit_and_diff m5 || true
+  r="${EMIT_R}"
+  run_lane m5 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js'
+  rc="${LANE_RC}"; lf="$(launch_failures m5)"
+  if [ "${r}" != "IDENTICAL" ] && [ "${rc}" != "0" ] && [ "${lf}" = "0" ]; then
     caught "M5 a re-pointed probe path (emit diff: ${r}, lane rc=${rc})"
   else
-    survived "M5 re-pointed probe path (emit diff: ${r}, lane rc=${rc})"
+    survived "M5 re-pointed probe path (emit diff: ${r}, lane rc=${rc}, launch failures=${lf})"
   fi
 else
   survived "M5 (patch did not apply)"
@@ -543,19 +673,21 @@ if old not in s: sys.exit('anchor row not found')
 open(p, 'w').write(s.replace(old, new, 1))
 PY
 if mutate tests/e2e/features/coverage/access-matrix-wiki.feature "${WORK}/m6.py"; then
-  r="$(emit_and_diff m6)"
-  ( cd "${E2E}" && npx bddgen ) > "${WORK}/bddgen.m6.out" 2>&1
-  rc="$(run_lane m6 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js')"
-  if [ "${r}" != "IDENTICAL" ] && [ "${rc}" != "0" ]; then
+  emit_and_diff m6 || true
+  r="${EMIT_R}"
+  run_bg "${WORK}/bddgen.m6.out" _in_e2e npx bddgen
+  run_lane m6 '.features-gen/features/coverage/access-matrix-wiki.feature.spec.js'
+  rc="${LANE_RC}"; lf="$(launch_failures m6)"
+  if [ "${r}" != "IDENTICAL" ] && [ "${rc}" != "0" ] && [ "${lf}" = "0" ]; then
     caught "M6 a hand-edited outcome cell (emit diff: ${r}, lane rc=${rc})"
   else
-    survived "M6 hand-edited outcome (emit diff: ${r}, lane rc=${rc})"
+    survived "M6 hand-edited outcome (emit diff: ${r}, lane rc=${rc}, launch failures=${lf})"
   fi
 else
   survived "M6 (patch did not apply)"
 fi
 restore_all
-( cd "${E2E}" && npx bddgen ) > "${WORK}/bddgen.restore.out" 2>&1
+run_bg "${WORK}/bddgen.restore.out" _in_e2e npx bddgen
 
 echo "  mutations: ${CAUGHT} caught, ${SURVIVED} survived"
 [ "${SURVIVED}" -eq 0 ] || F=$((F+1))

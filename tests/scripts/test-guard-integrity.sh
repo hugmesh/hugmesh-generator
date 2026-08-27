@@ -284,6 +284,25 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # +1 gated, +1 total; PREMERGE_UNGATED stays at main's 22. Carried by re-running
 # this file, not by arithmetic on either side's number.
 #
+# RE-MEASURED 2026-08-27 on fix/coverage-check-runtime, same procedure: this
+# branch adds tests/scripts/test-e2e-coverage-matrix-harness.sh — the guard OVER
+# test-e2e-coverage-matrix.sh (which itself STAYS in PREMERGE_UNGATED below: it
+# needs node_modules and a real chromium no shell-suites image carries). The
+# harness needs only node+npx, python3, git, md5sum and a STUB playwright it
+# writes itself (~25s, no browser, no npm install), so it is named in
+# shell-suites.yml's NODE job and run first by `make stack-e2e-coverage-check`.
+# Running this file on the merged tree (origin/main at a8015e81) printed
+#     153 of 175 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 22.
+#
+# RE-MEASURED 2026-08-27 on the MERGE of fix/coverage-check-runtime with main at
+# 91fefe05 (which carried the toolchain-readiness suite above: 153 of 175 on its
+# own merged tree, exactly as this branch's 153 of 175 on ITS pre-#216 base —
+# each side added one gated NODE-job suite to the same 152/174). The union is
+# both: running this file on THIS merged tree printed
+#     154 of 176 suites are named by a pull_request-triggered workflow
+# +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
+# re-running this file, not by arithmetic — but the arithmetic agrees.
 # RE-MEASURED 2026-08-27 on the MERGE of fix/seed-password-contract-on-recreated-
 # stack with main at 91fefe05 (which carried the 153 of 175 above). This branch
 # adds ONE gated suite, tests/scripts/test-seed-password-reconcile.sh (stub
@@ -297,7 +316,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # +1 gated, +1 total from each side; PREMERGE_UNGATED stays at main's 22.
 # Carried by re-running this file, not by arithmetic on either side's number —
 # a clean auto-merge of this line is exactly how a baseline goes silently stale.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-154}"
+#
+# RE-MEASURED 2026-08-27 on the MERGE of fix/coverage-check-runtime with main at
+# 0e904b7a (which carried the seed-password-reconcile suite above: 154 of 176 on
+# its own merged tree, exactly as this branch's 154 of 176 on ITS 91fefe05
+# merge — each side added one gated suite to the same 153/175). The union is
+# both again, and again the VALUE line under this comment auto-merged CLEAN at
+# 154 while the merged tree really gates more — the exact silently-stale shape
+# the block above warns about, caught because check 7 stays red until the
+# baseline is raised to what this file MEASURES. Running this file on THIS
+# merged tree printed
+#     155 of 177 suites are named by a pull_request-triggered workflow
+# +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
+# re-running this file, not by arithmetic - but the arithmetic agrees.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-155}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
