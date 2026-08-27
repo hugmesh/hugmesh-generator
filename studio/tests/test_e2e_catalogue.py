@@ -434,6 +434,78 @@ def test_the_named_zero_coverage_services_are_reported_uncovered():
     assert {"owncast", "tube", "wiki", "character-studio"} <= named
 
 
+def test_a_declarative_route_table_is_not_coverage():
+    """THE PHANTOM-COVERAGE CASE, and it is live in this checkout, not invented.
+
+    tests/e2e/specs/rbac-route-access.seed.ts is a TABLE of every gateway route in the
+    platform -- including the routes of services no spec ever visits -- and it is
+    transitively imported by a real spec. `_spec_sources` reads every .ts under specs/
+    on purpose ("a service reached only through helpers.ts is still reached"), which is
+    right for a DRIVER and wrong for a table: reading that file as evidence flipped
+    wiki, owncast, tube and character-studio -- the four the operator named -- from
+    UNCOVERED to covered, each on the strength of that one file and nothing else.
+
+    This test is deliberately built on the REAL file rather than a fixture, because a
+    fixture cannot notice the day someone adds a second such table. It asserts the
+    premise first, and FAILS LOUDLY if the premise stops holding: a silently-vanished
+    seed file would otherwise leave this passing while proving nothing.
+    """
+    table = os.path.join(GENERATOR_DIR, "tests", "e2e", "specs",
+                         "rbac-route-access.seed.ts")
+    assert os.path.exists(table), (
+        f"{table} is gone -- this test's whole premise (a declarative route table "
+        "living under specs/) no longer holds. Re-derive it or delete this test; do "
+        "NOT leave it passing vacuously.")
+    text = open(table, encoding="utf-8").read()
+    named_in_the_table = [s for s in ("owncast", "tube", "wiki", "character-studio")
+                          if s.replace("-", "") in text.replace("-", "")]
+    assert named_in_the_table, (
+        "the route table no longer names ANY zero-coverage service, so this test "
+        "would pass without exercising anything")
+
+    cov = {c.slug: c for c in service_coverage(GENERATOR_DIR)}
+    for slug in named_in_the_table:
+        assert cov[slug].covered is False, (
+            f"{slug} is named ONLY by a route table and still reads as covered")
+        assert cov[slug].spec_files == ()
+    # ...and the table is not counted for anyone: a service it rescues is a service
+    # whose evidence does not run.
+    for c in cov.values():
+        assert "rbac-route-access.seed.ts" not in c.spec_files, c
+
+
+def test_the_table_rule_is_by_SHAPE_and_still_keeps_a_driving_helper():
+    """The other half: this must not have quietly become "*.spec.ts only".
+
+    helpers.ts / federation.ts / swarm-driver.ts are the files the design paragraph in
+    _spec_sources is actually about -- they drive page/request, and a service reached
+    only through one of them IS reached. Pinned on injected sources so the assertion
+    is about the RULE, not about whatever those three files happen to contain today.
+    """
+    driving_helper = {"nowhere.ts": "await page.goto('/tube/channels');\n"}
+    cov = {c.slug: c for c in service_coverage(GENERATOR_DIR, sources=driving_helper)}
+    assert cov["tube"].covered is True, "a helper that DRIVES is still coverage"
+    assert cov["tube"].spec_files == ("nowhere.ts",)
+
+    table_only = {"nowhere.ts": "export const ROWS = [{ url: '/tube/**' }];\n"}
+    cov = {c.slug: c for c in service_coverage(GENERATOR_DIR, sources=table_only)}
+    assert cov["tube"].covered is False, "a bare row table is not coverage"
+    assert cov["tube"].spec_files == ()
+
+    # and the SAME text in a file Playwright RUNS is coverage again -- the rule keys
+    # on what the file is, not on the words in it.
+    as_a_spec = {"nowhere.spec.ts": "export const ROWS = [{ url: '/tube/**' }];\n"}
+    cov = {c.slug: c for c in service_coverage(GENERATOR_DIR, sources=as_a_spec)}
+    assert cov["tube"].covered is True
+    assert cov["tube"].spec_files == ("nowhere.spec.ts",)
+
+    # a driving call named only in a COMMENT does not promote a table (house rule)
+    commented = {"nowhere.ts": "// await page.goto('/tube/x')\nexport const T='/tube';\n"}
+    cov = {c.slug: c for c in service_coverage(GENERATOR_DIR, sources=commented)}
+    assert cov["tube"].covered is False, (
+        "a // comment mentioning page.goto must not make a table look like a driver")
+
+
 def test_services_the_suite_really_does_exercise_are_reported_covered():
     # The other half of the guard: a coverage warning that cries wolf is one an
     # operator learns to ignore, which would take the real gaps down with it.

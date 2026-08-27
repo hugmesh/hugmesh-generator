@@ -825,6 +825,51 @@ def _token_re(token: str) -> re.Pattern:
                       re.IGNORECASE)
 
 
+# A .ts under specs/ that PLAYWRIGHT WILL RUN, or a helper that actually DRIVES the
+# browser or the API. Everything else under specs/ is a declarative table, and a table
+# is not coverage.
+#
+# WHY THIS EXISTS, MEASURED 2026-08-26 on this checkout. `_spec_sources` reads every
+# .ts under specs/ on purpose -- "a service reached only through helpers.ts /
+# federation.ts is still reached" -- and that rule is right for a DRIVER. It is wrong
+# for a ROW TABLE. tests/e2e/specs/rbac-route-access.seed.ts enumerates every gateway
+# route in the platform, including the routes of services no spec ever visits, and it
+# is transitively imported by a real spec. Reading it as evidence flipped FOUR of the
+# nine zero-coverage services to "covered" on the strength of that ONE file:
+#
+#     wiki 0 -> 1    owncast 0 -> 1    tube 0 -> 1    character-studio 0 -> 1
+#
+# Those are the four the operator asked about BY NAME, and "covered by a route table
+# that mentions you" is exactly the green Run button that runs nothing this module
+# exists to refuse. (This is not hypothetical and it is not this integration's doing:
+# the same three tests fail with feat/studio-e2e-catalogue-core alone on top of
+# origin/main once PR #177 lands that seed file.)
+#
+# The discriminator is SHAPE, not a filename: a file is kept if Playwright runs it
+# (*.spec.ts) or if it touches page/request/context or calls test()/expect(). MEASURED
+# effect on this checkout -- kept: helpers.ts, federation.ts, swarm-driver.ts (the
+# three the design paragraph above is about); dropped: rbac-route-access.seed.ts,
+# rbac-route-access.ts, rbac-roles.ts, report-tags.ts, totp.ts. The four phantoms go
+# back to UNCOVERED and no real coverage verdict flips: tuwunel 20 -> 18 files,
+# akkoma 20 -> 18, games 12 -> 9, phpbb 3 -> 1, character-forge 2 -> 1, all still
+# covered. Only the EVIDENCE shrinks, and it shrinks to evidence that runs.
+_DRIVES_RE = re.compile(
+    r"\b(?:page|request|context|apiRequest)\s*\.|"
+    r"(?<![A-Za-z0-9_])(?:test|expect)\s*\(")
+
+
+def is_runnable_source(name: str, stripped_text: str) -> bool:
+    """True for a spec Playwright runs, or a helper that drives something.
+
+    ``stripped_text`` must already be comment-stripped -- a driving call named only in
+    a comment is prose, and this is the same house rule :func:`_strip_ts_comments`
+    enforces one line up.
+    """
+    if name.endswith(".spec.ts"):
+        return True
+    return bool(_DRIVES_RE.search(stripped_text))
+
+
 def service_coverage(generator_dir: str,
                      sources: dict[str, str] | None = None
                      ) -> tuple[ServiceCoverage, ...]:
@@ -834,14 +879,20 @@ def service_coverage(generator_dir: str,
     service added there shows up here as an uncovered row on its first day instead of
     being invisible until someone notices.
 
-    Measured 2026-08-26 over the specs in this checkout, comments stripped: wiki,
-    owncast, tube, character-studio, tor, anubis, edge-ai-tts, media-poisoner and
-    egress-vpn match NOTHING. The five covered are tuwunel (19 files), akkoma (19),
-    games (11), phpbb (2) and character-forge (1).
+    Measured over the specs in this checkout, comments stripped and declarative
+    tables excluded (see :func:`is_runnable_source`): wiki, owncast, tube,
+    character-studio, tor, anubis, edge-ai-tts, media-poisoner and egress-vpn match
+    NOTHING. The five covered are tuwunel (18 files), akkoma (18), games (9),
+    phpbb (1) and character-forge (1). The numbers move when the suite does -- they
+    are re-measured, and pinned as INEQUALITIES where the exact count is not the
+    point; the covered/uncovered VERDICTS are what the tests pin exactly.
     """
     raw = _spec_sources(generator_dir) if sources is None else sources
     # Strip HERE, not at the read site, so every source of text goes through it.
-    src = {fn: _strip_ts_comments(text) for fn, text in raw.items()}
+    stripped = {fn: _strip_ts_comments(text) for fn, text in raw.items()}
+    # ...and drop the tables for the same reason, in the same place, so the
+    # injectable `sources` seam gets both filters or neither.
+    src = {fn: text for fn, text in stripped.items() if is_runnable_source(fn, text)}
     out: list[ServiceCoverage] = []
     for svc in local_services.LOCAL_SERVICES:
         if svc.is_kind():
