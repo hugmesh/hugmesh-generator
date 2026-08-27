@@ -27,7 +27,13 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U casdoor"], interval: 5s, retries: 20 }
 
   casdoor:
-    image: casbin/casdoor:latest
+    # Pinned to the version the cluster lane deploys (specs/cluster/manifests/
+    # casdoor/deployment.yaml) and tests/casdoor/test-jwt-custom-token.sh runs.
+    # The seed's password reconcile PROVES itself through this version's exact
+    # /api/set-password already-current refusal (see tests/qemu/seed-accounts.sh
+    # apply_password), so an untracked `latest` could hard-fail every compose
+    # seed on an upstream wording change while the kind lane stays green.
+    image: casbin/casdoor:3.80.0
     depends_on: { casdoor-db: { condition: service_healthy } }
     environment:
       RUNNING_IN_DOCKER: "true"

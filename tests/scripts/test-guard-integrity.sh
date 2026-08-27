@@ -283,7 +283,21 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     153 of 175 suites are named by a pull_request-triggered workflow
 # +1 gated, +1 total; PREMERGE_UNGATED stays at main's 22. Carried by re-running
 # this file, not by arithmetic on either side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-153}"
+#
+# RE-MEASURED 2026-08-27 on the MERGE of fix/seed-password-contract-on-recreated-
+# stack with main at 91fefe05 (which carried the 153 of 175 above). This branch
+# adds ONE gated suite, tests/scripts/test-seed-password-reconcile.sh (stub
+# Casdoor + stub front door + a `make -n` probe; named in shell-suites.yml's
+# ALPINE job and, with its mutation battery, in .gitlab-ci.yml's
+# lint:seed-password-reconcile). Both sides had independently written 153 on
+# this line — each measuring its OWN suite against a base that lacked the
+# other's — so the textual merge was CLEAN and still wrong: the merged tree
+# really gates both. Running this file on the merged tree printed
+#     154 of 176 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total from each side; PREMERGE_UNGATED stays at main's 22.
+# Carried by re-running this file, not by arithmetic on either side's number —
+# a clean auto-merge of this line is exactly how a baseline goes silently stale.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-154}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

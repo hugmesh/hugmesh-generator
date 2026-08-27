@@ -90,7 +90,7 @@ cat > "${BIN}/curl" <<'CURLSTUB'
 #   STUB_PREMINT=on     the oauth password grant works
 set -uo pipefail
 S="${STUB_STATE}"; mkdir -p "${S}/users" "${S}/roles"
-url=""; out=""; wfmt=""; jar_w=""; jar_r=""; method=""; body=""; failflag=0
+url=""; out=""; wfmt=""; jar_w=""; jar_r=""; method=""; body=""; form=""; failflag=0
 args=("$@"); i=0; n=${#args[@]}
 while [ "${i}" -lt "${n}" ]; do
   a="${args[$i]}"
@@ -102,7 +102,7 @@ while [ "${i}" -lt "${n}" ]; do
     -X|--request)       i=$((i+1)); method="${args[$i]}" ;;
     -H|--header)        i=$((i+1)) ;;
     -d|--data|--data-raw) i=$((i+1)); body="${args[$i]}" ;;
-    --data-urlencode)   i=$((i+1)) ;;
+    --data-urlencode)   i=$((i+1)); form="${form}&${args[$i]}" ;;
     -s|--silent)        ;;
     -f|--fail)          failflag=1 ;;
     -sf|-fs)            failflag=1 ;;
@@ -180,7 +180,9 @@ case "${ep}" in
     if [ "${STUB_ADD_UNAFFECTED:-0}" = "1" ]; then
       emit 200 '{"status":"ok","msg":"","data":"Unaffected"}'
     fi
-    [ -n "${uname_}" ] && : > "${S}/users/${uname_}"
+    if [ -n "${uname_}" ]; then
+      printf '%s' "$(printf '%s' "${body}" | jq -r '.password // empty' 2>/dev/null)" > "${S}/users/${uname_}"
+    fi
     emit 200 '{"status":"ok","msg":"","data":"Affected"}'
     ;;
   /api/get-role)
@@ -194,6 +196,30 @@ case "${ep}" in
       printf '%s' "${body}" > "${S}/roles/${qname}"
     fi
     emit 200 '{"status":"ok","msg":"","data":"Affected"}'
+    ;;
+  /api/set-password)
+    # Casdoor's REAL set-password contract (the apply hook's reconcile relies
+    # on all three legs of it):
+    #   * the target user must exist (controllers/user.go:520-531);
+    #   * a new value IDENTICAL to the stored one is REFUSED
+    #     (check_password_complexity.go:104-124 -> user.go:629-633) — that
+    #     refusal is the only read-back a password has, so a stub that accepted
+    #     the same write twice would let a reconciler "verify" against nothing
+    #     (exactly the convenient-stub bug this suite's header forbids);
+    #   * otherwise the stored value moves.
+    # add-user stores the created password in the user file below, so both
+    # routes a credential can take into "casdoor" are modelled.
+    sname="$(printf '%s' "${form}" | sed -n 's/.*[&]userName=\([^&]*\).*/\1/p')"
+    snew="$(printf '%s' "${form}" | sed -n 's/.*[&]newPassword=\([^&]*\).*/\1/p')"
+    if [ ! -f "${S}/users/${sname}" ]; then
+      emit 200 "{\"status\":\"error\",\"msg\":\"The user: hugmesh/${sname} doesn't exist\",\"data\":null}"
+    fi
+    cur="$(cat "${S}/users/${sname}")"
+    if [ -n "${cur}" ] && [ "${snew}" = "${cur}" ]; then
+      emit 200 '{"status":"error","msg":"The new password must be different from your current password","data":null}'
+    fi
+    printf '%s' "${snew}" > "${S}/users/${sname}"
+    emit 200 '{"status":"ok","msg":"","data":null}'
     ;;
 esac
 emit 200 '{"status":"ok","msg":"","data":null}'
