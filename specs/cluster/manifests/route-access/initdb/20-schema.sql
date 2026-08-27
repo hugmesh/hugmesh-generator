@@ -577,6 +577,27 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- bff_ session (no token reaches the browser). PUBLIC matches the gateway
   -- SecurityConfig PUBLIC_PATHS `/bff/login`; ROLE_USER was a chicken-and-egg lock-out.
   ('hugmesh-fe-gateway',  '/bff/login',            'PUBLIC',         true),
+  -- ANONYMOUS PASSWORD RESET (UNAUTHENTICATED). The forgot-password legs on
+  -- user-bff (PasswordResetController): the visitor has NO session and NO working
+  -- credential BY DEFINITION — that is the situation the flow exists to repair —
+  -- so ROLE_USER here would be the same chicken-and-egg lock-out `/bff/login`
+  -- documents one line above. Until these rows existed there was no password
+  -- reset anywhere in the platform and a forgotten password was PERMANENT.
+  --
+  -- TWO EXACT PATHS, deliberately NOT a '/bff/password-reset/**' subtree: a
+  -- sibling endpoint added under that prefix later would inherit anonymity by
+  -- accident. Same scoping discipline as the '/bff/public/appeal-contact' row
+  -- above (which explains the identical choice), and it matches the BFF's own
+  -- SecurityConfig, which permits the two exact paths and nothing else.
+  --
+  -- THREE LAYERS MUST AGREE and these rows are only one of them. The gateway's
+  -- coarse anyExchange().authenticated() floor runs BEFORE this table is ever
+  -- consulted, so hugmesh-gateway SecurityConfig.PUBLIC_PATHS needs the SAME two
+  -- exact paths — the front-page-parity invariant this file documents throughout.
+  -- The third is the fe-gateway ROUTE itself (20-gateway-fe.yaml + the compose
+  -- tests/stack/gateway-routes/fe/application-routes.yml predicate list).
+  ('hugmesh-fe-gateway',  '/bff/password-reset/request', 'PUBLIC',   true),  -- forgot-password: request a mailed code (UNAUTHENTICATED)
+  ('hugmesh-fe-gateway',  '/bff/password-reset/confirm', 'PUBLIC',   true),  -- forgot-password: redeem the code (UNAUTHENTICATED)
   ('hugmesh-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('hugmesh-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
   ('hugmesh-fe-gateway',  '/bff/me/**',            'ROLE_USER',      true),
@@ -745,15 +766,26 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- gateway. Check-in = device MQTT-push/REST surface: network-locked (this
   -- gateway is tailnet-only end-to-end) but role='PUBLIC' so the Casdoor JWT
   -- check is SKIPPED — Headwind's own per-device enrollment token is the real
-  -- authenticator for this path. A route with ZERO matching allow rows is
-  -- default-deny, so this row is REQUIRED (not "omit to make it public").
+  -- authenticator for this path.
+  -- ⚠ THE ROW IS REQUIRED, BUT NOT FOR THE REASON THIS COMMENT USED TO GIVE. It
+  -- said "a route with ZERO matching allow rows is default-deny". That is FALSE:
+  -- GatewayRouteAccessService.decide() returns Decision.NO_RULE for an unmatched
+  -- path and GatewayRouteAccessFilter rejects ONLY on Decision.DENY, so an
+  -- ungoverned path is FORWARDED (see docs/ROUTE-ACCESS.md, "No matching row is
+  -- NOT a denial"). Omitting the row would therefore NOT deny — it would leave the
+  -- path ungoverned, which is a different and worse thing: the moment any BROADER
+  -- pattern on this gateway comes to match /hmdm/**, the omitted row cannot lose
+  -- to it because it does not exist, and the tier floor silently becomes the
+  -- deciding rule. The explicit PUBLIC row states the intent AND holds the longest
+  -- match. Keep it.
   -- ⚠ gate_optional_services REMOVES both rows when the headwind slug is
   -- deselected (see optional-services.yaml headwind.routeAccessRows).
   ('hugmesh-superadmin-gateway', '/hmdm/manage/**',           'ROLE_SUPERADMIN', true),  -- Headwind MDM human console (tailnet, JSP — no Angular guard)
   ('hugmesh-superadmin-gateway', '/hmdm/rest/**',              'PUBLIC',           true),  -- Headwind device check-in/push (network-locked; Headwind's own device token, not Casdoor)
   -- AttestationServer (GrapheneOS hardware-attestation verification) rows. All
-  -- REQUIRED — a route with ZERO matching allow rows is default-deny, same
-  -- as the headwind rows above. /attest/api/status is device-facing despite the
+  -- REQUIRED, for the reason corrected on the headwind rows above (NOT
+  -- "default-deny" — an ungoverned path is FORWARDED; the explicit row is what
+  -- holds the longest match and states the intent). /attest/api/status is device-facing despite the
   -- /api/ prefix, so it gets its own PUBLIC row; the gateway route ordering
   -- (apps/22-gateway-superadmin.yaml) must evaluate it before /attest/api/**.
   -- ⚠ gate_optional_services REMOVES all rows when the attestation-server
