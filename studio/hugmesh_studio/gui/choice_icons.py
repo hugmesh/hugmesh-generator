@@ -759,8 +759,10 @@ ICON_NAMES = tuple(ICON_PAINTERS)
 # cosmetic, and paint() ignores unknown icon names outright.
 # Canonical node roles + the permanent input aliases, so an icon still resolves for
 # a role id restored from an older saved session (scripts/_roles-lib.sh).
+# NOTE `generic` is deliberately NOT here: the plain unbranded arm64 rpi5 server is
+# offered as a BOARD card (role-board), which is what it was before this change too.
 _SERVER_ROLES = frozenset({"pki", "backend", "frontend", "backend-gpu", "omnibus",
-                           "edge-ai", "generic",
+                           "edge-ai",
                            "be", "fe", "be+gpu", "edge_ai", "full", "gpu-host"})
 _BOARD_ROLES = frozenset({"generic", "frite", "orangepi5", "orangepizero2",
                           "orangepizero2w", "orangepizero3", "orangepi3-lts",
