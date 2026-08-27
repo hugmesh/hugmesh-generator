@@ -145,6 +145,13 @@ echo "END $*" >> "${log}"; exit 0
 STUB
 printf '#!/usr/bin/env bash\necho "START bddgen $*" >> "${STUB_LOG:?}"\nexit 0\n' > "${NM}/.bin/bddgen"
 chmod +x "${NM}/.bin/playwright" "${NM}/.bin/bddgen"
+# The guard's first preflight is tests/e2e/check-toolchain.sh (one readiness
+# opinion for the whole e2e tree). Here it is a stub like the playwright beside
+# it: this harness grades the guard's ORCHESTRATION — refusal, kill, grading —
+# not the box's toolchain, and the real probe would (correctly) refuse a scratch
+# tree whose node_modules is four stub files.
+printf '#!/usr/bin/env bash\necho "START check-toolchain $*" >> "${STUB_LOG:?}"\nexit 0\n' > "${S}/tests/e2e/check-toolchain.sh"
+chmod +x "${S}/tests/e2e/check-toolchain.sh"
 
 # run_guard <guard-file> <label> [VAR=value…] — start the guard in the
 # background against the scratch tree. Sets GPID and GOUT.

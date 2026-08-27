@@ -84,10 +84,23 @@ for t in node python3 git bash; do
     exit 2
   }
 done
-if [ ! -d "${E2E}/node_modules/playwright-bdd" ]; then
-  echo "SKIPPED-LOUDLY: ${E2E}/node_modules/playwright-bdd is missing — run" >&2
-  echo "  (cd ${E2E} && npm install)   [or: make playwright-deps]" >&2
-  echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
+# ONE readiness opinion, not a second one: tests/e2e/check-toolchain.sh verifies
+# node_modules against the COMMITTED lock and the browser revision under the
+# SAME resolution the lane runs with — the caller's PLAYWRIGHT_BROWSERS_PATH if
+# they set it, otherwise Playwright's own store — because this guard no longer
+# defaults the variable (see WHERE THE BROWSER LIVES above). The probe call
+# carried `:-/var/tmp/portage/pw-browsers` when it landed (true of the OLD guard,
+# which pinned that path); with the pin gone from the lane, pinning it in the
+# probe would refuse a green lane over a store the lane never touches — the
+# wrong-question shape. `[ -d node_modules/playwright-bdd ]` used to stand here
+# and said nothing about the lock or the browser — MEASURED 2026-08-27: dangling
+# r1228 -> r1234 aliases got past it and every browser scenario died on
+# "Executable doesn't exist", the toolchain gap wearing the costume of a product
+# failure. In the HARNESS's scratch tree this probe is a stub (exit 0), exactly
+# like the playwright beside it — the harness grades this guard's orchestration,
+# not the box's toolchain.
+if ! bash "${E2E}/check-toolchain.sh"; then
+  echo "SKIPPED-LOUDLY: the e2e toolchain is not ready (above). This guard checked NOTHING. Exiting 2 rather than 0." >&2
   exit 2
 fi
 for f in "${CATALOGUE}" "${EMITTER}" "${E2E}/gen-coverage-matrix.sh"; do

@@ -471,7 +471,10 @@ jobs:
     container:
       image: node:24-alpine
     steps:
-      - run: apk add --no-cache bash coreutils findutils git grep jq openssl py3-yaml python3 sed tar
+      # make: test-e2e-toolchain-readiness.sh renders and DRIVES the repo Makefile
+      # (legs C/D) — node:24-alpine ships no make, and without it the suite exits 2
+      # SKIPPED-LOUDLY, which this job's runner rightly counts as a failure.
+      - run: apk add --no-cache bash coreutils findutils git grep jq make openssl py3-yaml python3 sed tar
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -498,7 +501,7 @@ jobs:
           # If the install step ever silently degrades, the whole job would go green
           # having asserted almost nothing. Fail here instead.
           missing=""
-          for b in bash jq openssl python3 git node; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          for b in bash jq openssl python3 git node make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
           [ -d scripts/tooling/node_modules/handlebars ] || { echo "::error::handlebars absent — the drift gate would render nothing"; exit 1; }
           # PCRE grep. tests/menu/ncurses_charset_test.sh proves the menu's non-UTF-8
@@ -522,6 +525,7 @@ jobs:
             tests/scripts/test-e2e-coverage-matrix-harness.sh
             tests/scripts/test-e2e-docker-base-url-parity.sh
             tests/scripts/test-e2e-reporter-shape.sh
+            tests/scripts/test-e2e-toolchain-readiness.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect
