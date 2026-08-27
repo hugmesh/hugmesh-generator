@@ -516,17 +516,20 @@ def test_page_exposes_a_credentials_button(qapp):
 
 
 def test_credentials_dialog_lists_the_real_seeded_personas(qapp):
-    from hugmesh_studio.core.seeded_credentials import load_roster
+    from hugmesh_studio.core.seeded_credentials import _NOT_SEEDED, load_roster
     from hugmesh_studio.gui.pages._credentials_dialog import CredentialsDialog
     roster = load_roster(GENERATOR_DIR)
     d = CredentialsDialog(roster, front_door="http://localhost:8088")
     assert d.table.rowCount() == len(roster.users)
     shown = {d.table.item(r, 0).text() for r in range(d.table.rowCount())}
     assert {"e2e-admin", "e2e-user"} <= shown
-    # the password column carries the resolved value, not the env-var NAME
+    # the password column carries the resolved value, not the env-var NAME. This
+    # checkout has neither an E2E_PASSWORD env nor a .e2e-credentials file (nobody
+    # ran `make stack-seed` here), so the honest answer is the not-seeded marker —
+    # a WRONG-but-plausible password would be worse than that.
     row = next(r for r in range(d.table.rowCount())
                if d.table.item(r, 0).text() == "e2e-admin")
-    assert d.table.item(row, 1).text() == "e2e-pass"
+    assert d.table.item(row, 1).text() == _NOT_SEEDED
     assert "E2E_" not in d.table.item(row, 1).text()
 
 

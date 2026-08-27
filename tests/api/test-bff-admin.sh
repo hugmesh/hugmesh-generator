@@ -20,7 +20,9 @@ echo "== admin BFF: route-access + ISO links =="
 # came back empty, and every assertion below cascaded into a false failure. The
 # session lives in an httpOnly bff_session cookie; mock-bff.mjs's sessionOf()
 # still accepts that same value as a Bearer, so only the MINT has to change.
-LOGIN_PW="${E2E_PASSWORD:-e2e-pass}"
+. "${REPO}/tests/stack/e2e-password.sh"
+e2e_password_ensure
+LOGIN_PW="${E2E_PASSWORD}"
 mint() { # <username> -> its bff_session token, or empty
   local hdrs
   hdrs="$(curl -s -D - -o /dev/null -XPOST "${B}/bff/login" \

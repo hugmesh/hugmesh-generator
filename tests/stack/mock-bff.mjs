@@ -22,12 +22,54 @@
 // .../active), per-session-user in-memory, CharacterView-shaped responses.
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Read one KEY from the run-state credentials file tests/stack/e2e-password.sh
+// maintains (plain KEY=value lines, no quotes). Returns undefined when the file
+// or the key is absent.
+function readCredentialsFile(key) {
+  const file = process.env.E2E_CREDENTIALS_FILE
+    ?? path.resolve(__dirname, '..', '..', '.e2e-credentials');
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+  let found;
+  for (const line of text.split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    if (line.slice(0, eq) === key) found = line.slice(eq + 1).trim();
+  }
+  return found || undefined;
+}
+
+// Resolve the shared e2e password: explicit env wins, else the run-state
+// credentials file (written by whichever of seed-e2e.sh / seed-accounts.sh /
+// bootstrap-kind.sh generated first in this run), else THROW. NEVER a literal
+// fallback — matches the e2e helper's LOGIN_PASSWORD (rbac-roles.ts
+// sharedPassword()); this mock is the identity backend for the mock lane, and a
+// guessable default here is the exact bug the random-per-run password work
+// removes.
+function resolveLoginPassword() {
+  if (process.env.E2E_PASSWORD) return process.env.E2E_PASSWORD;
+  const fromFile = readCredentialsFile('E2E_PASSWORD');
+  if (fromFile) return fromFile;
+  throw new Error(
+    'E2E_PASSWORD is not set and no run-state credentials file was found. ' +
+    'Run `bash tests/stack/e2e-password.sh` first (it writes .e2e-credentials ' +
+    'at the repo root), or set E2E_PASSWORD explicitly.'
+  );
+}
 
 const PORT = Number(process.env.PORT || 8403);
 const ADMINS = new Set((process.env.ADMIN_EMAILS || 'admin@hugmesh.net').split(','));
-// The deterministic native password every seeded/invited persona signs in with —
-// matches the e2e helper's LOGIN_PASSWORD (E2E_PASSWORD ?? 'e2e-pass').
-const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
+const LOGIN_PASSWORD = resolveLoginPassword();
 const allowEmails = new Set([...ADMINS]);     // emails an admin invited (provisioned)
 const allowDiscord = new Set();               // discord handles an admin invited
 const accounts = new Map();                   // username -> {username,label,roles,registrationComplete,password,matrix?,mastodon?}

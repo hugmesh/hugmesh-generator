@@ -58,7 +58,7 @@ class AddUserDialog(QtWidgets.QDialog):
 
         self.password = QtWidgets.QLineEdit()
         self.password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.password.setPlaceholderText("empty = the shared default e2e-pass")
+        self.password.setPlaceholderText("empty = this run's shared E2E_PASSWORD (see the credentials table)")
         form.addRow("Password", self.password)
         lay.addLayout(form)
 
@@ -131,8 +131,8 @@ class AddUserDialog(QtWidgets.QDialog):
 
         Spec grammar is seed-e2e.sh's ``name:ROLE_A,ROLE_B:PASSWORD_ENV``; the
         password itself travels ONLY in the env var (never argv, never logged).
-        An empty password keeps the shared E2E_PASSWORD default — the spec then
-        names that env instead."""
+        An empty password keeps this run's shared, generated E2E_PASSWORD (no
+        literal fallback exists any more) — the spec then names that env instead."""
         name = self.username.text().strip()
         roles = [r for r, box in self._role_boxes if box.isChecked()]
         password = self.password.text()

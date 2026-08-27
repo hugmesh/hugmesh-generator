@@ -1143,6 +1143,19 @@ SHIM
   kubectl -n hugmesh-pki wait --for=condition=complete job/casdoor-init --timeout=600s \
     || { warn "casdoor-init did not complete — 'kubectl -n hugmesh-pki logs job/casdoor-init'"; exit 1; }
 
+  # Resolve/generate the shared e2e password BEFORE seed-accounts.sh runs (below)
+  # and BEFORE the test-seed-passwords Secret is created (further down): this
+  # kind lane, tests/stack/seed-e2e.sh (compose), and tests/qemu/seed-accounts.sh
+  # standalone (QEMU) are three SEPARATE processes that can each be first to need
+  # a password in a given run, and they must all land on the SAME value. Resolving
+  # it HERE, in this process, means the seed-accounts.sh subprocess below inherits
+  # it via plain env (E2E_PASSWORD is already exported) with no extra plumbing,
+  # and the Secret creation later in this same function sees the same value too.
+  # shellcheck source=../../../../tests/stack/e2e-password.sh
+  . "${REPO_ROOT}/tests/stack/e2e-password.sh"
+  e2e_password_ensure \
+    || { warn "could not resolve/generate E2E_PASSWORD (see tests/stack/e2e-password.sh)"; exit 1; }
+
   log "Seeding e2e identities (seed-accounts.sh --roles) against the kind Casdoor"
   SEED_DIR="$(mktemp -d)"
   # THE EXTRAS ARE NOT OPTIONAL. seed-accounts.sh's built-in catalogue covers the
@@ -1192,8 +1205,12 @@ SHIM
   # test-seed-passwords: the same deterministic-password Secret the in-cluster
   # test Jobs envFrom (optional). Host-side playwright reads the E2E_* env
   # directly, but create it anyway so a later in-cluster runner finds it.
+  # E2E_PASSWORD is the ACTUAL value e2e_password_ensure resolved/generated
+  # above (and seed-accounts.sh --roles just seeded into Casdoor with) — never
+  # a literal, so this Secret cannot drift from what personas can really log in
+  # with.
   kubectl -n hugmesh-frontend create secret generic test-seed-passwords \
-    --from-literal=E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}" \
+    --from-literal=E2E_PASSWORD="${E2E_PASSWORD}" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   rm -rf "${SEED_DIR}"
 

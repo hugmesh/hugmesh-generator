@@ -10,17 +10,23 @@ wizard's Local-Docker-mesh page now shows the roster in a copyable table instead
 THE ROSTER IS PARSED, NEVER RESTATED. `SYSTEMS_ROLE_USERS` is the single source of
 truth for who gets seeded; hardcoding a copy here would silently drift the moment a
 persona is added to the seeder. So :func:`load_roster` reads that assignment out of
-the shell script. The password precedence is likewise a MIRROR of the script's
-`role_password()`: per-user ``E2E_<UPPER>_PASSWORD`` -> shared ``E2E_PASSWORD`` ->
-``e2e-pass``, resolved against the SAME env mapping the Studio hands `make
-stack-seed` (core/local_stack_node.py `_build_env`), so what the table shows is what
-the seeder actually set.
+the shell script. The password precedence is likewise a MIRROR of the shared chain
+(seed-accounts.sh `role_password()`, tests/stack/e2e-password.sh
+`e2e_password_ensure()`): per-user ``E2E_<UPPER>_PASSWORD`` -> shared
+``E2E_PASSWORD`` -> the run-state credentials file -> nothing, resolved against the
+SAME env mapping the Studio hands `make stack-seed` (core/local_stack_node.py
+`_build_env`), so what the table shows is what the seeder actually set — never a
+literal this module invents on its own.
 
-SECRET DISCIPLINE. These are DETERMINISTIC TEST credentials for a throwaway local
-stack — the same values already printed in the clear by the Makefile's stack-seed
-banner and committed in the seeder's defaults. They are not cluster secrets. This
-module therefore reads them but NEVER writes them anywhere: no logging, no config
-file, no argv. The GUI copies to the clipboard on explicit operator action only.
+SECRET DISCIPLINE. These are generated fresh EACH RUN by `tests/stack/e2e-password.sh`
+(a 32-char CSPRNG value, never a fixed literal) and persisted to the gitignored
+run-state file ``${E2E_CREDENTIALS_FILE:-<repo-root>/.e2e-credentials}``, which `make
+stack-seed`'s banner also prints in the clear — so showing it here discloses nothing
+new. This module only READS that value, through the same precedence the seeder
+itself resolves; it never generates one and never writes one anywhere: no logging,
+no config file, no argv. When nothing has been seeded yet it says so plainly instead
+of guessing — a wrong password is worse than none. The GUI copies to the clipboard
+on explicit operator action only.
 """
 from __future__ import annotations
 
@@ -45,7 +51,18 @@ OPERATOR_SCRIPT = os.path.join("tests", "stack", "seed-e2e.sh")
 _ROSTER_VAR = "SYSTEMS_ROLE_USERS"
 _EXTRAS_VAR = "E2E_EXTRA_PERSONAS"
 _SHARED_PASSWORD_ENV = "E2E_PASSWORD"
-_DEFAULT_PASSWORD = "e2e-pass"
+
+# The run-state file tests/stack/e2e-password.sh writes and every consumer reads
+# (CONTRACT rule 3): plain KEY=value lines, no quotes, no export keyword, path
+# overridable via E2E_CREDENTIALS_FILE and defaulting to the checkout root.
+_CREDENTIALS_FILE_ENV = "E2E_CREDENTIALS_FILE"
+_CREDENTIALS_FILE_NAME = ".e2e-credentials"
+
+# Shown in place of a password when NOTHING resolved: no per-user env, no shared
+# env, no credentials file. Deliberately not a plausible-looking password — an
+# operator copy-pasting a WRONG value that happens to authenticate somewhere is
+# worse than one who sees plainly that nothing has been seeded yet.
+_NOT_SEEDED = "(not seeded — run `make stack-seed`)"
 
 # `SYSTEMS_ROLE_USERS="${SYSTEMS_ROLE_USERS:-\` ... `}"` — a line-continued default.
 # Captures the body of the ${VAR:-...} default so a caller-set override in the
@@ -204,20 +221,65 @@ def parse_roster_body(body: str, variables: dict[str, str] | None = None
     return out
 
 
-def resolve_password(password_env: str, env: dict[str, str] | None = None) -> str:
-    """Mirror seed-accounts.sh ``role_password()``: per-user ``E2E_<UPPER>_PASSWORD``
-    wins, else the shared ``E2E_PASSWORD``, else the literal ``e2e-pass``.
+def _read_credentials_file(generator_dir: str | None, src: dict[str, str]) -> dict[str, str]:
+    """Parse the run-state file tests/stack/e2e-password.sh writes: plain
+    ``KEY=value`` lines, no quotes, no export keyword (CONTRACT rule 3) — the same
+    shape `set -a; . file; set +a` and `docker compose --env-file` both accept.
+
+    Path: ``src[E2E_CREDENTIALS_FILE]`` if the caller's env sets it, else
+    ``<generator_dir>/.e2e-credentials``. Best-effort like the rest of this module:
+    a missing/unreadable/unparseable file yields {} so the caller falls through to
+    the not-seeded marker instead of raising.
+    """
+    path = src.get(_CREDENTIALS_FILE_ENV) or (
+        os.path.join(generator_dir, _CREDENTIALS_FILE_NAME) if generator_dir else "")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        out[key.strip()] = val.strip()
+    return out
+
+
+def resolve_password(password_env: str, env: dict[str, str] | None = None,
+                     generator_dir: str | None = None) -> str:
+    """Mirror the shared chain (seed-accounts.sh ``role_password()``,
+    tests/stack/e2e-password.sh ``e2e_password_ensure()``): per-user
+    ``E2E_<UPPER>_PASSWORD`` wins, else the shared ``E2E_PASSWORD``, else whatever
+    the run-state credentials file holds, else :data:`_NOT_SEEDED`.
 
     ``env`` is the mapping the SEEDER will see (the Studio passes the same dict it
     builds for `make stack-seed`), NOT necessarily os.environ — showing the operator
     a password the seeder did not set would be worse than showing nothing.
+    ``generator_dir``, when given, locates the default credentials-file path;
+    without it (e.g. a bare unit-test call) the file step is simply skipped.
+
+    Unlike the shell generator this function NEVER MINTS a password — it only
+    resolves what a run already produced (consumers resolve, they do not invent).
     """
     src = os.environ if env is None else env
     if password_env:
         val = src.get(password_env, "")
         if val:
             return val
-    return src.get(_SHARED_PASSWORD_ENV, "") or _DEFAULT_PASSWORD
+    val = src.get(_SHARED_PASSWORD_ENV, "")
+    if val:
+        return val
+    file_vals = _read_credentials_file(generator_dir, src)
+    if password_env:
+        val = file_vals.get(password_env, "")
+        if val:
+            return val
+    return file_vals.get(_SHARED_PASSWORD_ENV, "") or _NOT_SEEDED
 
 
 def load_roster(generator_dir: str, env: dict[str, str] | None = None) -> Roster:
@@ -255,7 +317,7 @@ def load_roster(generator_dir: str, env: dict[str, str] | None = None) -> Roster
             continue
         seen.add(u)
         users.append(SeededUser(username=u, roles=r,
-                                password=resolve_password(pw_env, env),
+                                password=resolve_password(pw_env, env, generator_dir),
                                 password_env=pw_env))
     if not users:
         return Roster(source=path,

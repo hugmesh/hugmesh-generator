@@ -52,6 +52,12 @@ tests/stack/.compose.limits.yaml
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
 # pre-minted per-persona JWTs. Runtime-only; never commit.
 tests/stack/.seed-e2e/
+# The run-state e2e password (tests/stack/e2e-password.sh): a fresh CSPRNG value
+# generated the first time any seeder in a run needs one (seed-e2e.sh,
+# tests/qemu/seed-accounts.sh, bootstrap-kind.sh) and loaded by every other
+# process in that same run + by the Playwright/mock-BFF consumers. Machine- and
+# run-specific; NEVER commit (this repo, or any that produces/reads one).
+/.e2e-credentials
 # Per-machine TLS CA + leaf for the https front door (`make stack-certs`).
 # PRIVATE KEYS — never commit (unlike tests/stack/certs, the committed
 # mock-stack FIXTURES, this CA may be imported into the operator's browser).
