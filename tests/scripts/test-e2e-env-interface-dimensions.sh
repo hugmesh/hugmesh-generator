@@ -230,9 +230,17 @@ notes.append("envstatus=%s" % ",".join(
     "%s:%s" % (tag, "/".join(sorted(set(sts))))
     for tag, sts in sorted(env_scenarios.items())) or "<none>")
 
-# Every environment scenario must SKIP while its environment is down. Passing is
-# the failure mode this whole design exists to prevent.
+# Every environment scenario must SKIP while its environment is DOWN. Passing is
+# the failure mode this whole design exists to prevent — but "down" is a fact
+# about the host, not an assumption this analyser may make. SERVING_ENVS carries
+# the MEASURED set (the suite asks production's environmentAvailability()); an
+# environment that is genuinely up is SUPPOSED to make its scenarios pass, and
+# flagging that is a false finding. See block 0b of the calling suite.
+serving = set((os.environ.get("SERVING_ENVS") or "").split())
+notes.append("serving=%s" % (",".join(sorted(serving)) or "<none>"))
 for tag, statuses in sorted(env_scenarios.items()):
+    if tag in serving:
+        continue
     for st in statuses:
         if st in ('passed', 'expected'):
             problems.append("@env:%s scenario PASSED while the environment is down "
@@ -381,10 +389,86 @@ sys.exit(1 if problems else 0)
 PY
 
 analyse() {  # analyse <label> <mode>  -> rc 0 clean, 1 problems
+  # SERVING_ENVS is the MEASURED set (see block 0b). The analyser grades
+  # "must skip" only for environments it has been told are down; without it the
+  # analyser was asserting an assumption.
+  SERVING_ENVS="${SERVING_ENVS:-}" \
   python3 "${WORK}/analyse.py" \
     "${WORK}/$1.json" "${WORK}/$1/bdd-steps/$1" "${SCHEMA}" "$2" \
     >"${WORK}/$1.analysis" 2>&1
 }
+
+# ── 0b. WHICH ENVIRONMENTS ARE ACTUALLY SERVING ──────────────────────────────
+# THIS BLOCK EXISTS BECAUSE THE SUITE USED TO ASSUME THE ANSWER. Its header says
+# "the three environments are expected to be down and the suite is designed to be
+# green with all three down" — and nothing enforced or measured that. MEASURED
+# 2026-08-27, with the compose stack up (`make stack-up ENV=test`, 41 containers,
+# https://localhost:8488/ -> 200), this suite reported:
+#
+#   FAIL baseline evidence/manifest problems:
+#        @env:docker scenario PASSED while the environment is down — it must skip
+#   SURVIVED M7 docker accepts the kind node's ingress as the compose stack
+#
+# BOTH were false. The @env:docker scenario passed because the mesh was genuinely
+# up — the correct outcome — and M7 "survived" only because its catch condition
+# compares the mutated per-environment status against the baseline's, and with
+# docker already `passed` at baseline the mutation cannot change it. So the guard
+# went RED exactly when the lane it grades was WORKING, and accused a fix that had
+# just landed (PR #203) of not working. A false finding is worse than no finding:
+# it sends the next reader to debug correct code.
+#
+# The availability is taken from PRODUCTION — `environmentAvailability()` in
+# steps/dimensions.ts, the same function the harness itself gates scenarios on —
+# so this is a measurement, never a second implementation that can disagree.
+PROBE="${WORK}/probe"
+mkdir -p "${PROBE}"
+ln -sfn "${E2E}/node_modules" "${PROBE}/node_modules"
+cat > "${PROBE}/pw.config.ts" <<'TS'
+import { defineConfig } from '@playwright/test';
+export default defineConfig({
+  testDir: __dirname, reporter: [['list']], workers: 1, retries: 0, timeout: 60_000,
+});
+TS
+# QUOTED heredoc + a sed'd placeholder, the vocab lane's rule: an unquoted one
+# would let bash expand the ${...} in the spec.
+cat > "${PROBE}/serving.spec.ts" <<'TS'
+import { test } from '@playwright/test';
+import * as fs from 'node:fs';
+import * as d from '__DIMENSIONS__';
+
+test('measure which environments are serving right now', async () => {
+  const out: Record<string, unknown> = {};
+  for (const id of d.ENVIRONMENTS) {
+    const a = await d.environmentAvailability(id, true);
+    out[id] = { available: !!a.available, reason: a.reason, detail: a.detail };
+  }
+  const dest = process.env.SNAP_SERVING_OUT;
+  if (dest) fs.writeFileSync(dest, JSON.stringify(out, null, 2));
+});
+TS
+sed -i "s#__DIMENSIONS__#${E2E}/steps/dimensions#" "${PROBE}/serving.spec.ts"
+
+SERVING_JSON="${WORK}/serving.json"
+( cd "${E2E}" && \
+  SNAP_SERVING_OUT="${SERVING_JSON}" \
+  PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" \
+  npx playwright test -c "${PROBE}/pw.config.ts" >"${WORK}/serving.out" 2>&1 )
+if [ -s "${SERVING_JSON}" ]; then
+  SERVING_ENVS="$(python3 - "${SERVING_JSON}" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(" ".join(sorted(k for k, v in d.items() if v.get("available"))))
+PY
+)"
+  ok "measured which environments are serving: ${SERVING_ENVS:-<none — all three are down>}"
+else
+  # A measurement that did not happen must not be reported as "all down" — that
+  # is the assumption this block replaces. Refuse instead.
+  bad "could not measure environment availability (see ${WORK}/serving.out) — this "\
+"guard cannot tell a correct PASS from a silent one without it"
+  SERVING_ENVS="<unmeasured>"
+fi
+export SERVING_ENVS
 
 if analyse baseline full; then
   ok "baseline evidence is complete and matches the PINNED schema"
@@ -556,13 +640,31 @@ fi
 echo
 echo "-- mutation battery: break production, prove the guard notices --"
 
-CAUGHT=0; SURVIVED=0
+CAUGHT=0; SURVIVED=0; NOT_RUNNABLE=0
 mut_result() {  # mut_result <name> <caught:0|1> <detail>
   if [ "$2" -eq 1 ]; then
     echo "  CAUGHT   $1"; CAUGHT=$((CAUGHT+1))
   else
     echo "  SURVIVED $1  <-- $3"; SURVIVED=$((SURVIVED+1)); F=$((F+1))
   fi
+}
+# A THIRD verdict, and the reason this file needed one. Some mutations are only
+# OBSERVABLE in a particular host state — M2 and M7 both compare a mutated
+# per-environment status line against the baseline's, which can only differ for
+# an environment that was DOWN at baseline. Run with that environment UP and the
+# comparison is blind, and the old two-valued reporting called that SURVIVED:
+# a fix that works, reported as a defect. Neither CAUGHT nor SURVIVED is true
+# there. Say so, and make the suite exit 2 (this file's established
+# "SKIPPED-LOUDLY, checked less than it claims" status) rather than 0 or a
+# misleading 1.
+mut_not_runnable() {  # mut_not_runnable <name> <why>
+  echo "  NOT-RUNNABLE $1"
+  echo "               $2"
+  NOT_RUNNABLE=$((NOT_RUNNABLE+1))
+}
+env_is_serving() {  # env_is_serving <tag>
+  case " ${SERVING_ENVS:-} " in (*" $1 "*) return 0 ;; esac
+  return 1
 }
 
 # M1 — unknown env accepted silently.
@@ -594,6 +696,9 @@ restore_all
 BASE_ENVSTATUS="$(sed -n 's/^NOTE envstatus=//p' "${WORK}/baseline.analysis" | head -1)"
 if [ -z "${BASE_ENVSTATUS}" ]; then
   bad "M2 cannot run: the baseline analysis emitted no envstatus line"
+elif env_is_serving docker && env_is_serving kind && env_is_serving qemu; then
+  mut_not_runnable "M2 unavailable env passes instead of skipping" \
+    "all three environments are serving (${SERVING_ENVS}), so no scenario skips at baseline and disabling the availability gate cannot change the status line"
 elif mutate tests/e2e/steps/world.ts <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -726,6 +831,13 @@ restore_all
 # failed — @env:docker scenario PASSED while the environment is down".
 if [ -z "${BASE_ENVSTATUS}" ]; then
   bad "M7 cannot run: the baseline analysis emitted no envstatus line"
+elif env_is_serving docker; then
+  # The mutation makes docker report AVAILABLE off a foreign owner. If docker is
+  # ALREADY available the status line reads `docker:passed` before and after, and
+  # a comparison that cannot move is not a test. MEASURED 2026-08-27: this exact
+  # state reported "SURVIVED" against the freshly-landed fix.
+  mut_not_runnable "M7 docker accepts the kind node's ingress as the compose stack" \
+    "the docker environment is SERVING, so its baseline status is already 'passed' and the mutation cannot change it — stop the compose stack (make stack-halt) to exercise this one"
 elif mutate tests/e2e/steps/dimensions.ts <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -763,7 +875,11 @@ else
   bad "M7 could not be applied"; fi
 restore_all
 
-echo "  mutations: ${CAUGHT} caught, ${SURVIVED} survived"
+if [ "${NOT_RUNNABLE}" -gt 0 ]; then
+  echo "  mutations: ${CAUGHT} caught, ${SURVIVED} survived, ${NOT_RUNNABLE} NOT RUNNABLE in this host state"
+else
+  echo "  mutations: ${CAUGHT} caught, ${SURVIVED} survived"
+fi
 
 # ── 4. the tree is back exactly as it was ────────────────────────────────────
 regen >/dev/null 2>&1
@@ -779,5 +895,14 @@ else
 fi
 
 echo
+if [ "${F}" -eq 0 ] && [ "${NOT_RUNNABLE}" -gt 0 ]; then
+  echo "== e2e env x interface: ${P} passed, 0 failed, ${NOT_RUNNABLE} mutation(s) NOT RUNNABLE =="
+  echo "   SKIPPED-LOUDLY: this run could not exercise the availability half of the"
+  echo "   battery, because the environment(s) it needs DOWN are serving:"
+  echo "     serving now: ${SERVING_ENVS:-<none>}"
+  echo "   Exiting 2 rather than 0 — a green here would claim coverage this run did"
+  echo "   not have. Nothing is wrong with the tree; re-run with the mesh stopped."
+  exit 2
+fi
 echo "== e2e env x interface: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
