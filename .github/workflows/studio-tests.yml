@@ -31,6 +31,17 @@ on:
       # here (`systems/hugmesh` -> `net/hugmesh` did exactly that) touches no studio
       # path, so without this line the guard would not run on the change it exists for.
       - 'tests/stack/m2-bootstrap.sh'
+      # Same reason a third time, and the one this unit added. The spec -> persona
+      # index (studio/hugmesh_studio/core/e2e_personas.py) is DERIVED from these six
+      # files and from nothing in studio/: the typed RBAC catalogue and the specs that
+      # slice it, plus the three shell seeders that decide which of those personas a
+      # mesh actually provisions. Its guard exists to fail when a spec, a roster or a
+      # matrix drifts — and every one of those drifts lands ONLY here, so without
+      # these paths the gate would never run on the change it was written to catch.
+      - 'tests/e2e/specs/**'
+      - 'tests/qemu/seed-accounts.sh'
+      - 'tests/stack/seed-e2e.sh'
+      - 'tests/e2e-extra-personas.sh'
   workflow_dispatch: {}
 
 permissions:
