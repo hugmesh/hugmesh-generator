@@ -241,7 +241,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tree printed
 #     151 of 172 suites are named by a pull_request-triggered workflow
 # +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-151}"
+#
+# RE-MEASURED 2026-08-27, the next commit on the same branch: adds
+# tests/scripts/test-stack-fetch-repos.sh (pins the home-seeded stack's repo list
+# against the org listing and exercises fetch-repos.sh against file:// bases; bash
+# + git), ALPINE job again. Running this file on the integrated tree printed
+#     152 of 173 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-152}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
