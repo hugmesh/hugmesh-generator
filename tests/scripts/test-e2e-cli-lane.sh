@@ -158,9 +158,33 @@ stub_run() {
     STUB_LOG="${log}" \
     STUB_BDDGEN_RC="${STUB_BDDGEN_RC:-0}" STUB_PW_RC="${STUB_PW_RC:-0}" \
     PATH="${STUB_DIR}:${PATH}" \
+    E2E_PASSWORD="${E2E_PASSWORD:-cli-lane-stub-never-authenticates-anything}" \
     SNAP_EVIDENCE_SUMMARY=0 \
     bash "${RUN_SH}" "$@" >"${log}.out" 2>&1 )
-  echo "$?"
+  local rc=$?
+  # DID IT REACH THE RUNNER AT ALL? Every assertion downstream reads this log via
+  # stub_args/stub_env, and both answer "" for a log that was never written. An ""
+  # compares unequal to every expectation, so a run.sh that exits BEFORE invoking
+  # npx does not make those checks fail honestly — it makes them report confident,
+  # WRONG verdicts about forwarding and exit codes that were never exercised.
+  #
+  # This is not hypothetical: run.sh grew a MODE=run credential gate that exits 1
+  # before npx, and this lane sets no credential, so all of sections 1-3 silently
+  # measured nothing. The loudest false verdict was "run.sh SWALLOWS the runner's
+  # exit code — the lane can never go red", which is alarming, actionable and
+  # untrue.
+  #
+  # A deliberate failure still records: STUB_BDDGEN_RC=5 invokes bddgen (1
+  # INVOCATION) and only then stops. So ZERO invocations means run.sh never got
+  # that far, which is always a defect in the guard's setup, never a finding.
+  if ! grep -q '^INVOCATION$' "${log}" 2>/dev/null; then
+    STUB_RUN_NEVER_REACHED="${STUB_RUN_NEVER_REACHED}${STUB_RUN_NEVER_REACHED:+ }${log##*/}"
+    echo "  FAIL run.sh exited ${rc} WITHOUT invoking the runner (${log##*/}); the" >&2
+    echo "       recording is empty, so nothing below it measured anything. First" >&2
+    echo "       lines of its output:" >&2
+    sed -n '1,4p' "${log}.out" 2>/dev/null | sed 's/^/         /' >&2
+  fi
+  echo "${rc}"
 }
 
 # The log is a flat record; these read one invocation out of it. `tool` is the
@@ -194,6 +218,7 @@ has_line() {  # has_line <needle> ; stdin is the list
 
 # ── 1. environment forwarding ────────────────────────────────────────────────
 echo
+STUB_RUN_NEVER_REACHED=""
 echo "-- 1. does --env reach the runner? (stub npx records argv + env) --"
 env_expect_docker="https://localhost:8443"
 env_expect_kind="https://hugmesh.net:8443"
@@ -740,6 +765,18 @@ if diff -q "${WORK}/tree-before.md5" "${WORK}/tree-after.md5" >/dev/null; then
 else
   bad "THE TREE IS NOT RESTORED — a mutation is still on disk:"
   diff "${WORK}/tree-before.md5" "${WORK}/tree-after.md5" >&2
+fi
+
+echo
+echo "-- every stub_run reached the runner (else nothing above measured anything) --"
+if [ -n "${STUB_RUN_NEVER_REACHED}" ]; then
+  bad "run.sh exited before invoking the runner in: ${STUB_RUN_NEVER_REACHED}
+       => stub_args/stub_env answer \"\" for an unwritten log, and \"\" compares
+          unequal to every expectation, so the checks above did not fail honestly —
+          they reported verdicts about a run that never happened. Fix the setup
+          before believing anything this suite said."
+else
+  ok "every stub_run invoked the runner, so the recordings the checks read are real"
 fi
 
 echo
