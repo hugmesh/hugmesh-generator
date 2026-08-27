@@ -13,7 +13,9 @@
 # now stop that from coming back:
 #   * tests/scripts/test-stack-fetch-repos.sh pins this list against the org's
 #     real repo names (offline) and the compose build contexts that consume the
-#     clones; a wrong or renamed entry is a red gate, not a runtime shrug.
+#     clones; an entry naming a repo the org does not have is a red gate, not a
+#     runtime shrug. (An ORG-SIDE rename of a listed repo is only visible to
+#     `LIVE=1 bash tests/scripts/test-stack-fetch-repos.sh` — re-pin after one.)
 #   * a repo that cannot be fetched is REPORTED and the script exits non-zero
 #     (see the tail), with the base URL it tried, so "the name is wrong" and
 #     "you are not logged in" are distinguishable on the console.

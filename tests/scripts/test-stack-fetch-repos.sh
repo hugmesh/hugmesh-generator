@@ -22,7 +22,8 @@
 #
 # THE GUARD. The org's real repo names are PINNED below (the full `gh repo list
 # hugmesh --limit 200` of 2026-08-27, 41 repos). Offline, every run asserts:
-#   1. every REPOS entry is in the pinned set (a rename or typo is red, by name);
+#   1. every REPOS entry is in the pinned set — a typo, a pre-rename bare name, or
+#      any REPOS edit that names a repo the org does not have is red, BY NAME;
 #   2. every REPOS entry has the org's `hugmesh-<slug>` shape;
 #   3. every docker-compose.yml build context is `./<a REPOS entry>`;
 #   4. hugmesh-home-setup's "code already bundled" marker dir is a REPOS entry;
@@ -31,9 +32,16 @@
 #   6. BEHAVIOUR: against a file:// base holding a bare repo for every name, it
 #      clones all of them (exit 0), and a second run takes the update path;
 #   7. BEHAVIOUR: `hugmesh-stack fetch` propagates a failing fetch-repos.sh
-#      (exit status AND no "no fetch-repos.sh" message).
-# With LIVE=1 (never in the gate — needs network + gh auth) it ALSO lists the org
-# and asserts pinned == live, so the pin itself can be re-verified on demand.
+#      (exit status AND no "no fetch-repos.sh" message);
+#   8. BEHAVIOUR: every git the script spawns sees GIT_TERMINAL_PROMPT=0, so a
+#      private/missing repo can never park a first-boot hook or a Studio
+#      subprocess on "Username for 'https://github.com':".
+# WHAT THE PIN CANNOT SEE, stated plainly: it is a static list, so an ORG-SIDE
+# rename of a listed repo (or a REPOS edit that swaps in a real-but-unintended
+# repo) passes offline until someone re-pins. GitHub redirects renamed repos, and
+# the 2026-08-20 strand was a cross-org move to NEW names — which checks 1+2 do
+# catch. With LIVE=1 (never in the gate — needs network + gh auth) the suite ALSO
+# lists the org and asserts pinned == live, so the pin itself is re-verifiable.
 #
 # Runs ANYWHERE with bash + git — NO network, NO root, NO docker.
 set -uo pipefail
@@ -208,6 +216,25 @@ rm -f "${W}/fetch-repos.sh"
 out="$(cd "${W}" && ./hugmesh-stack fetch 2>&1)"; rc=$?
 printf '%s\n' "${out}" | grep -F "no fetch-repos.sh" >/dev/null && [ "${rc}" -eq 0 ] \
   && ok "runner still reports a genuinely missing fetch-repos.sh (rc=0)" || bad "missing-script path broke: rc=${rc} '${out}'"
+
+echo "== 8. every spawned git sees GIT_TERMINAL_PROMPT=0 (no interactive credential prompt, ever) =="
+# A `git` shim ahead of the real one records the variable as each clone sees it
+# and fails the clone, so the script walks every repo without touching the network.
+W="${SCRATCH}/prompt"; mkdir -p "${W}/bin"; cp "${FETCH}" "${W}/fetch-repos.sh"; chmod +x "${W}/fetch-repos.sh"
+REC="${W}/seen.txt"; : > "${REC}"
+printf '#!/bin/sh\nprintf "%%s\\n" "${GIT_TERMINAL_PROMPT-unset}" >> "%s"\nexit 1\n' "${REC}" > "${W}/bin/git"; chmod +x "${W}/bin/git"
+cp "${SCRATCH}/bin/gh" "${W}/bin/gh"
+# `env -u`: measure what the SCRIPT exports, not what this shell or a CI image
+# happens to carry — an inherited GIT_TERMINAL_PROMPT=0 would make a dropped
+# export invisible here.
+out="$(cd "${W}" && env -u GIT_TERMINAL_PROMPT PATH="${W}/bin:${PATH}" HUGMESH_GIT_BASE="https://example.invalid/none" ./fetch-repos.sh 2>&1)"; rc=$?
+n_seen="$(grep -c . "${REC}")"
+n_zero="$(grep -cx '0' "${REC}")"
+[ "${n_seen}" -eq "${#REPOS[@]}" ] && ok "git was spawned once per repo (${n_seen})" \
+  || bad "git was spawned ${n_seen} times for ${#REPOS[@]} repos: $(printf '%s\n' "${out}" | awk 'NR==1')"
+[ "${n_seen}" -gt 0 ] && [ "${n_zero}" -eq "${n_seen}" ] && ok "every spawned git saw GIT_TERMINAL_PROMPT=0" \
+  || bad "GIT_TERMINAL_PROMPT was not 0 for every spawned git (values: $(sort -u "${REC}" | tr '\n' ' '))"
+[ "${rc}" -ne 0 ] && ok "and the run still fails closed (rc=${rc})" || bad "run exited 0 with every clone refused"
 
 rm -rf "${SCRATCH}"
 
