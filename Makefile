@@ -1857,3 +1857,26 @@ stack-e2e-bdd-check: stack-e2e-bdd-gen ## OFFLINE: verify every .feature generat
 stack-e2e-bdd: stack-e2e-bdd-gen ## run the GHERKIN e2e lane against the RUNNING local stack (needs stack-up + stack-seed)
 	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
 	  npx playwright test -c playwright.config.ts --project=bdd
+
+# ── THE GENERATIVE COVERAGE MATRIX ───────────────────────────────────────────
+# tests/e2e/features/coverage/ is EMITTED, not hand-written: every seeded
+# persona x every catalogued function x every service, with the expected
+# admitted/refused outcome computed from the COMMITTED gateway route-access seed.
+# Adding a persona to tests/e2e-extra-personas.sh, a service to
+# tests/e2e/steps/dimensions.ts SERVICES, or a function to
+# tests/e2e/steps/coverage-catalogue.ts FUNCTIONS expands the matrix
+# automatically — and the drift guard goes RED until it is re-emitted.
+.PHONY: stack-e2e-coverage-gen stack-e2e-coverage-check
+
+stack-e2e-coverage-gen: ## re-emit tests/e2e/features/coverage/ from the persona/service/function catalogues
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	bash tests/e2e/gen-coverage-matrix.sh
+
+# OFFLINE gate. Starts nothing. Re-emits into a scratch dir and DIFFS against the
+# committed tree, derives the expected persona/service/function/pair sets from the
+# catalogues and compares them with what `playwright test --list` actually
+# generates, runs the whole coverage lane, then breaks production six ways and
+# requires every break to turn it red. Takes ~10 minutes; COVERAGE_MATRIX_FULL=0
+# runs a representative subset instead while iterating.
+stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is complete, pinned and drift-guarded
+	bash tests/scripts/test-e2e-coverage-matrix.sh

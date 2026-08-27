@@ -286,3 +286,78 @@ stack needed). `make stack-e2e-bdd` runs the lane against a live stack.
 If `bddgen` exits non-zero your feature uses a step nobody defined — that is the
 anti-decoration gate doing its job. Define the step or fix the wording; never
 delete the assertion.
+
+## 6. `features/coverage/` is GENERATED — never edit it by hand
+
+The operator's requirement is coverage of *every user in every function in every
+service*. That is 31 personas × 63 functions = **1953 cells**, and hand-writing
+1953 Gherkin rows is decoration by volume: a matrix that is 40% filled looks
+exactly like one that is complete. So the coverage lane is **emitted from the
+catalogues**, and a drift guard fails the build when the emitted files and the
+catalogues stop agreeing.
+
+```
+tests/e2e/steps/coverage-catalogue.ts   the FUNCTION catalogue + the access ORACLE
+tests/e2e/tools/emit-coverage-matrix.ts the generator
+tests/e2e/gen-coverage-matrix.sh        run it   (make stack-e2e-coverage-gen)
+tests/e2e/features/coverage/*.feature   GENERATED — 15 files, 2073 scenarios
+tests/e2e/steps/coverage.steps.ts       the 12 step definitions they bind to
+tests/scripts/test-e2e-coverage-matrix.sh   THE DRIFT GUARD (make stack-e2e-coverage-check)
+```
+
+**Adding a persona, a service or a function expands the matrix automatically.**
+Add a handle to `tests/e2e-extra-personas.sh`, a `ServiceDef` to
+`steps/dimensions.ts` `SERVICES`, or a `ServiceFunction` to
+`steps/coverage-catalogue.ts` `FUNCTIONS`, then run
+`make stack-e2e-coverage-gen` and review the diff. Skip the re-emit and the
+guard goes red naming exactly what has no scenario.
+
+### 6a. Where the expected outcome comes from — and why it is not circular
+
+Each cell's `admitted` / `refused` is computed by replaying the function's probe
+path against the **committed** gateway route-access seed
+(`specs/cluster/manifests/route-access/initdb/20-schema.sql`, 150 rows, the
+artefact the gateways are built from), using the most-specific-pattern-wins model
+`specs/rbac-route-access.ts` documents. It is **not** read off
+`ServiceDef.accessRole` — that would make the matrix assert one field of one
+catalogue against another field of the same catalogue.
+
+The computed value is then **written into the .feature as a literal** at emit
+time, and the step **recomputes it at run time** and compares. The literal is the
+pin: change the route-access seed, or a persona's roles, without re-emitting and
+the cells that moved go red. A step that recomputed and compared with itself
+would be green forever — the mutation battery's M4 (an oracle that admits
+everyone) exists specifically to prove this lane is not that.
+
+The `pattern` column is pinned for the same reason at one level deeper: a seed
+edit that changes **which rule decides** while leaving the outcome alone is the
+dangerous shape, because the cell still reads green.
+
+### 6b. What the drift guard actually checks
+
+`tests/scripts/test-e2e-coverage-matrix.sh` (offline; starts nothing):
+
+1. re-emits into a scratch dir and **diffs** against the committed tree;
+2. requires `bddgen` to generate and `--list` to collect the lane;
+3. derives the expected persona / service / function / persona×service-pair /
+   cell sets **from the catalogues** and compares them with the titles
+   `playwright test --list --project=bdd` actually reports — measured by
+   execution, never by reading the `.feature` files, and **bidirectionally** (a
+   scenario naming a function the catalogue no longer carries is also red);
+4. runs the whole coverage lane and requires it green with nothing started;
+5. breaks production six ways and requires every break to turn it red.
+
+### 6c. Honest limits of this lane
+
+* The access matrix asserts the **contract** (what the committed route-access
+  seed decides), not a live gateway. The gateways that enforce that table are
+  README-only today — the same limitation `specs/rbac-route-access.ts` already
+  documents for the handwritten RBAC specs. When a live enforcer lands, the
+  expectations are unchanged; only the step's evaluation target moves.
+* 15 of the 63 catalogued function probe paths are labelled `asserted`: no
+  committed artefact pins them. The label is in every `function-catalogue` row so
+  nobody mistakes a judgement call for a measurement.
+* The 126-member procedural swarm (`specs/rbac-roles.ts` `generateSwarm()`) is
+  deliberately **out** of the roster: it is generated per run from
+  `SWARM_DEFAULTS`, and folding it in would multiply the matrix by five while
+  adding one distinct role-set.
