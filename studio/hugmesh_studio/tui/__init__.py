@@ -45,9 +45,15 @@ flow, catching the TUI up to the GUI features merged after the scaffold:
 * the **whole-mesh emulation** per-device status list with copy-ready ssh /
   web-tunnel / whole-mesh-save hints (:mod:`.meshemu`, GUI PR #69) — the DEPLOY
   lane of an emulation plan;
+* the **run e2e tests** screen (:mod:`.e2e`) — the mode-menu card that replaced
+  "QEMU device tests" on 2026-08-27: the three catalogued e2e environments
+  (docker / kind / qemu) with each one's copy-ready ``SNAP_ENV=… make …`` line
+  and start hint, all authored by ``core.e2e_environments``;
 * the **QEMU device tests** screen (:mod:`.qemu`) — the TEST lane of that same
   plan: planned rows, the exact runner argv, and the verdict table
-  ``core.emulation`` grades (PASS / FAIL / NO-RESULT / SUSPECT / STALE);
+  ``core.emulation`` grades (PASS / FAIL / NO-RESULT / SUSPECT / STALE). Its own
+  menu card is gone; the e2e screen's ``d`` key is its door, mirroring the GUI's
+  second radio arm exactly;
 * the per-domain **Sign-in choice** on the domains step (:mod:`.domains_step`,
   GUI PR #71).
 

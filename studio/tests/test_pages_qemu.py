@@ -133,6 +133,18 @@ def _docker_stubbed(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _e2e_gate_stubbed(monkeypatch):
+    """The route to this page now passes THROUGH E2EPage (its own mode card was
+    removed 2026-08-27), and E2EPage's entry starts an off-thread readiness probe that
+    shells docker. Stub it, for the same reason `_docker_stubbed` exists right above:
+    nothing asserted in this file is about the host's daemon, and a probe thread still
+    in flight when its page is destroyed is a qFatal rather than an exception."""
+    from hugmesh_studio.core.local_stack_node import LocalStackNode
+    monkeypatch.setattr(LocalStackNode, "e2e_ready",
+                        lambda self, environment="docker": ["stubbed probe"])
+
+
+@pytest.fixture(autouse=True)
 def _status_reads_only_the_registry(monkeypatch):
     """``emulation.status`` must not shell out from a unit test.
 
@@ -278,7 +290,16 @@ def _device(label="rpi5/pki", state="running", port=22301,
 
 
 def _qemu_page(wiz):
-    pick_mode(wiz, "qemu")
+    """Walk to QemuPage the way an operator now can.
+
+    Its own mode-menu card was removed on 2026-08-27 ("remove QEMU device emulation
+    menu item ... but add the run e2e tests button"); the page was NOT, because it is
+    the Studio's only door to tests/qemu/run-qemu-e2e.sh and avc-workout.sh. E2EPage's
+    second radio arm is what writes ``wiz.qemu_selected`` now, so every test in this
+    file enters through it. Everything past this function is unchanged.
+    """
+    pick_mode(wiz, "e2e")
+    advance_to(wiz, wizard_mod.E2EPage).arm_qemu.setChecked(True)
     return advance_to(wiz, wizard_mod.QemuPage)
 
 

@@ -2,8 +2,8 @@
 
 The choices map onto the EXISTING three emission modes plus six non-image
 side-flows, PRESENTED in the operator's mesh-building journey order (issue #50):
-local mesh first, then the production mesh build, then QEMU emulation of the built
-images, then whole-mesh emulation, then the publish/flash side-flows, then the two
+local mesh first, then the production mesh build, then the end-to-end test lane,
+then whole-mesh emulation, then the publish/flash side-flows, then the two
 single-image desktop builds:
 
   - LOCAL DOCKER MESH    -> NO cfg.mode            (side-flow: run a dockerized mesh HERE)
@@ -11,7 +11,10 @@ single-image desktop builds:
                                                     WelcomePage used to offer the same
                                                     destination one screen earlier
   - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
-  - QEMU DEVICE TESTS    -> NO cfg.mode            (side-flow: boot built images emulated)
+  - RUN E2E TESTS        -> NO cfg.mode            (side-flow: run tests/e2e against a mesh
+                                                    that is ALREADY up; also the only door
+                                                    left to the QEMU device-test page, whose
+                                                    own card was removed 2026-08-27)
   - MESH EMULATION       -> NO cfg.mode            (side-flow: boot a WHOLE built mesh locally)
   - CLOUD DEPLOY         -> NO cfg.mode            (side-flow: publish a packaged image to a cloud)
   - MDM PHONE            -> NO cfg.mode            (side-flow: flash+enroll a Pixel HERE)
@@ -51,7 +54,7 @@ _MODE_ICONS = {
     "phone": "phone",               # a handset under a cloud
     "quest": "quest",               # a VR headset under a cloud
     "deploy": "cloud-deploy",       # three-way arrow up to AWS / AZURE / CF marks
-    "qemu": "mesh",                 # reuses the boards-under-a-cloud mark: emulated devices
+    "e2e": "build-run",             # reuses the play-triangle-on-a-slab mark: RUN the suite
     "meshemu": "mesh",              # same mark: the whole mesh, emulated locally
     "localcloud": "localmesh",      # reuses the desktop-under-a-cloud mark: the same
                                     # local stack, now becoming node images (issue #50)
@@ -69,8 +72,9 @@ class ModePage(QtWidgets.QWizardPage):
             "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
             "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
             "QUEST HEADSET enrolls a Meta Quest 3/3S, CLOUD DEPLOY publishes an "
-            "already-packaged image to a cloud provider, QEMU DEVICE TESTS boots "
-            "built images as emulated devices, MESH EMULATION boots a whole "
+            "already-packaged image to a cloud provider, RUN E2E TESTS drives the "
+            "end-to-end suite against a mesh that is already running (and is the "
+            "door to the emulated-device test lanes), MESH EMULATION boots a whole "
             "built mesh locally, and CREATE NODES FOR LOCAL CLOUD "
             "turns the local mesh into buildable node images.")
         # ten cards are taller than the radios were: scroll, never clip
@@ -81,7 +85,7 @@ class ModePage(QtWidgets.QWizardPage):
         # whole-mesh emulation -> publish/flash side-flows -> the single-image
         # desktop builds. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
-        # exactly as before; "localmesh", "phone", "quest", "deploy" and "qemu" are
+        # exactly as before; "localmesh", "phone", "quest", "deploy" and "e2e" are
         # transient side-flows that never touch cfg.mode. The DEFAULT is chosen by id
         # (standalone) below, NOT by index, so a visual reorder can't change which
         # choice the no-pick default flow exercises.
@@ -104,16 +108,21 @@ class ModePage(QtWidgets.QWizardPage):
             ("mesh", "Mesh node",
              "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
              "edge-AI — that run a mesh on dedicated hardware."),
-            # The two emulation cards must say which is which BEFORE the click:
-            # they used to read as "emulate one image" vs "emulate several", when
-            # the real difference is EPHEMERAL vs PERSISTENT. An operator who wants
-            # a shell on a guest and picks the test card gets devices that power
-            # themselves off.
-            ("qemu", "QEMU device tests",
-             "Test built images: ephemeral asserted boots. Boot a build session's "
-             "images as emulated devices, check they provisioned correctly and "
-             "power them off — Pi roles first, then x86. Or build new images and "
-             "test them after."),
+            # RUN E2E TESTS took the slot the "QEMU device tests" card held until
+            # 2026-08-27 (operator: "remove QEMU device emulation menu item as it
+            # does not do anything that cannot be done from the other menu, but add
+            # the run e2e tests button"). The MENU entry is gone; the LANE is not —
+            # E2EPage's second arm arms wiz.qemu_selected and Next lands on the
+            # unchanged QemuPage, which is the Studio's only door to the
+            # Playwright-on-an-emulated-device harness and the SELinux AVC workout.
+            # The blurb below says so, because a destination nothing names is a
+            # destination nobody finds.
+            ("e2e", "Run e2e tests",
+             "Run the end-to-end suite against a mesh that is ALREADY RUNNING — the "
+             "Docker compose stack, the local DevOps (kind) cluster, or a "
+             "QEMU-emulated device. Browse the suite as a tree, check the features "
+             "to run, and read exactly why a run is blocked when it is. Starts no "
+             "mesh. This is also the door to the emulated-device test lanes."),
             ("meshemu", "Mesh emulation",
              "Emulate the mesh you are readying for deployment: persistent devices, "
              "console, save-back. Boot every image of a prior build session and keep "
@@ -211,14 +220,29 @@ class ModePage(QtWidgets.QWizardPage):
         # CLOUD DEPLOY is the third side-flow: it publishes an EXISTING packaged image
         # and commits NOTHING to cfg.mode, advancing into the registered DeployPage.
         self.wiz.deploy_selected = (mid == "deploy")
-        # QEMU DEVICE TESTS is the fourth side-flow: it boots ALREADY-BUILT images as
-        # emulated devices and commits nothing to cfg.mode. Unlike the other three it
-        # can rejoin the image flow — "build new images first, then test them" — which
-        # QemuPage expresses through its own nextId(), not through cfg.mode.
-        self.wiz.qemu_selected = (mid == "qemu")
+        # RUN E2E TESTS is the fourth side-flow: it runs tests/e2e against a mesh that
+        # is ALREADY up and commits nothing to cfg.mode. Like QEMU DEVICE TESTS before
+        # it, it can rejoin the image flow — its second arm routes into QemuPage, which
+        # in turn offers "build new images first, then test them" through its own
+        # nextId(), not through cfg.mode.
+        self.wiz.e2e_selected = (mid == "e2e")
+        # ...and the QEMU device-test page is disarmed by committing ANY OTHER card.
+        # Its own card was removed 2026-08-27; the only writer that can SET this flag
+        # is E2EPage's second arm, so all this screen may do is take it away.
+        #
+        # AND ONLY ON A REAL SWITCH — never on a re-run. collect_all() re-runs the
+        # validatePage of every VISITED page (wizard.py), so a flat
+        # ``qemu_selected = False`` here would disarm the arm the operator had just
+        # picked, every time BuildPage was reached: the E2E radio would still read
+        # "Emulated-device test lanes" while Next silently SKIPPED QemuPage, because
+        # nothing re-arms it (E2EPage deliberately has no validatePage — see its
+        # _sync_arm docstring for why). Conditioning on the committed card keeps the
+        # flag exactly as the radio last set it whenever "e2e" is re-committed, and
+        # clears it the moment a different card is.
+        self.wiz.qemu_selected = self.wiz.qemu_selected and (mid == "e2e")
         # MESH EMULATION is the fifth side-flow: it boots a WHOLE prior session's
         # images as one emulated mesh and commits nothing to cfg.mode. Terminal —
-        # unlike QEMU DEVICE TESTS it never rejoins the image flow (it exists only
+        # unlike RUN E2E TESTS it never rejoins the image flow (it exists only
         # AFTER a build, so "build first" is the mesh flow itself).
         self.wiz.meshemu_selected = (mid == "meshemu")
         # CREATE NODES FOR LOCAL CLOUD (issue #50) is the sixth side-flow ENTRY: the
@@ -229,7 +253,7 @@ class ModePage(QtWidgets.QWizardPage):
             # any other committed choice lifts the abbreviated-worklist restriction
             # the localcloud gate installs (see LocalCloudNodesPage.validatePage).
             self.wiz.worklist_role_allow = None
-        if mid in ("localmesh", "phone", "quest", "deploy", "qemu", "meshemu",
+        if mid in ("localmesh", "phone", "quest", "deploy", "e2e", "meshemu",
                    "localcloud"):
             return True
         prev = self.wiz.cfg.mode

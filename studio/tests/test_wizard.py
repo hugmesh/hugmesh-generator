@@ -47,6 +47,17 @@ def _pinned_host(monkeypatch):
                         lambda builder_image="hugmesh-builder": HOST)
 
 
+@pytest.fixture(autouse=True)
+def _e2e_gate_stubbed(monkeypatch):
+    """E2EPage's entry starts an off-thread readiness probe that shells docker (three
+    30s subprocesses plus an HTTP probe). This file walks that page — it is the RUN
+    E2E TESTS card, and since 2026-08-27 also the route to QemuPage — and none of its
+    assertions are about the host's daemon, so the probe answers instantly here."""
+    from hugmesh_studio.core.local_stack_node import LocalStackNode
+    monkeypatch.setattr(LocalStackNode, "e2e_ready",
+                        lambda self, environment="docker": ["stubbed probe"])
+
+
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
@@ -115,7 +126,8 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "mode": wizard_mod.ModePage,
               "localmesh": wizard_mod.LocalMeshPage, "phone": wizard_mod.PhonePage,
               "quest": wizard_mod.QuestPage,
-              "deploy": wizard_mod.DeployPage, "qemu": wizard_mod.QemuPage,
+              "deploy": wizard_mod.DeployPage, "e2e": wizard_mod.E2EPage,
+              "qemu": wizard_mod.QemuPage,
               "meshemu": wizard_mod.MeshEmulationPage,
               "localcloud": wizard_mod.LocalCloudNodesPage,
               "idp": wizard_mod.IdpPage,
@@ -340,7 +352,8 @@ def test_phone_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # phone never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Exit, no image
-    for slug in ("localmesh", "quest", "deploy", "qemu", "role", "hardware", "branding",
+    for slug in ("localmesh", "quest", "deploy", "e2e", "qemu", "role", "hardware",
+                 "branding",
                  "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
@@ -358,7 +371,8 @@ def test_quest_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # quest never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Exit, no image
-    for slug in ("localmesh", "phone", "deploy", "qemu", "role", "hardware", "branding",
+    for slug in ("localmesh", "phone", "deploy", "e2e", "qemu", "role", "hardware",
+                 "branding",
                  "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
@@ -376,19 +390,43 @@ def test_deploy_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # deploy never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Exit, no image
-    for slug in ("localmesh", "phone", "quest", "qemu", "role", "hardware", "branding",
+    for slug in ("localmesh", "phone", "quest", "e2e", "qemu", "role", "hardware",
+                 "branding",
                  "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 
-def test_qemu_side_flow_reaches_terminal_page_and_skips_images(wiz, monkeypatch):
-    """QEMU device tests is the fourth non-image side-flow: the card routes Mode →
-    Qemu, leaves cfg.mode an image mode untouched, and on its default arm ("images
-    from a previous build session") the page is terminal. Unlike its siblings the
-    -1 is conditional — the "build first, then test" radio rejoins the image flow
-    (covered with the rest of the page's behavior in test_pages_qemu.py). Docker
-    probing and session discovery are stubbed: this test is about ROUTING, and the
-    real probes would make it depend on the host's docker daemon and out/ tree."""
+def test_e2e_side_flow_reaches_terminal_page_and_skips_images(wiz):
+    """RUN E2E TESTS is the fourth non-image side-flow: the card routes Mode → E2E,
+    leaves cfg.mode an image mode untouched, and on its default arm ("run the suite
+    against a running mesh") the page is terminal. Unlike its siblings the -1 is
+    conditional — the "emulated-device test lanes" radio continues into QemuPage
+    (below). It replaced the removed "QEMU device tests" card on 2026-08-27."""
+    pick_mode(wiz, "e2e")
+    before = wiz.cfg.mode
+    page = advance_to(wiz, wizard_mod.E2EPage)
+    assert wiz.e2e_selected is True
+    assert wiz.deploy_selected is False
+    assert wiz.phone_selected is False
+    assert wiz.localmesh_selected is False
+    assert wiz.cfg.mode == before                       # e2e never sets cfg.mode
+    assert page.arm_suite.isChecked()                   # default arm: run the suite
+    assert wiz.qemu_selected is False                   # …so the device page is OFF
+    assert page.nextId() == -1 and page.isFinalPage()   # terminal on that arm
+    for slug in ("localmesh", "phone", "quest", "deploy", "qemu", "role", "hardware",
+                 "branding", "build"):
+        assert not wiz.hasVisitedPage(wiz._page_ids[slug])
+
+
+def test_the_qemu_page_is_reached_from_the_e2e_card_not_a_menu_card(wiz, monkeypatch):
+    """The 2026-08-27 removal, from the routing side.
+
+    "qemu" is no longer a mode-menu id on either face, and ``wiz.qemu_selected`` has
+    exactly one writer left: E2EPage's second arm. That page and every line of the
+    QEMU test machinery survive — a removed card must not delete a lane, and this one
+    is the Studio's only door to tests/qemu/run-qemu-e2e.sh and avc-workout.sh.
+    Docker probing and session discovery are stubbed: this test is about ROUTING, and
+    the real probes would make it depend on the host's docker daemon and out/ tree."""
     from hugmesh_studio.core import qemu_tests
 
     fake = qemu_tests.BuildSession(path="/nowhere/s1", name="s1", rows=[
@@ -397,14 +435,14 @@ def test_qemu_side_flow_reaches_terminal_page_and_skips_images(wiz, monkeypatch)
     monkeypatch.setattr(qemu_tests, "discover_sessions", lambda *_a, **_k: [fake])
     monkeypatch.setattr(qemu_tests, "docker_available",
                         lambda: (True, "docker is available."))
-    pick_mode(wiz, "qemu")
+    mode_page = pick_mode(wiz, "e2e")
+    assert "qemu" not in [m for m, _, _ in mode_page.modes]
     before = wiz.cfg.mode
+    e2e_page = advance_to(wiz, wizard_mod.E2EPage)
+    e2e_page.arm_qemu.setChecked(True)
+    assert wiz.qemu_selected is True                    # the radio is the only writer
     page = advance_to(wiz, wizard_mod.QemuPage)
-    assert wiz.qemu_selected is True
-    assert wiz.deploy_selected is False
-    assert wiz.phone_selected is False
-    assert wiz.localmesh_selected is False
-    assert wiz.cfg.mode == before                       # qemu never sets cfg.mode
+    assert wiz.cfg.mode == before                       # neither page sets cfg.mode
     assert page.use_existing.isChecked()                # default arm: test what exists
     assert page.nextId() == -1 and page.isFinalPage()   # terminal on that arm
     for slug in ("localmesh", "phone", "quest", "deploy", "role", "hardware",

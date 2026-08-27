@@ -28,6 +28,7 @@ import pytest
 from hugmesh_studio.core import emulation as em
 from hugmesh_studio.core import qemu_devices as qd
 from hugmesh_studio.core import qemu_tests as qt
+from hugmesh_studio.tui import e2e as tui_e2e
 from hugmesh_studio.tui import journey
 from hugmesh_studio.tui import qemu as tui_qemu
 
@@ -132,7 +133,11 @@ def _write_record(gen: str, label: str, **overrides) -> dict:
 def _at_picker(gen: str) -> journey.Journey:
     j = journey.Journey(gen)
     j.feed("")            # welcome -> mode
-    j.feed("4")           # the QEMU device-tests card (journey position 4)
+    j.feed("4")           # RUN E2E TESTS (journey position 4)
+    # The "QEMU device tests" card was removed from BOTH menus on 2026-08-27; this
+    # screen is its door now (the GUI twin is E2EPage's second radio arm). The screen
+    # itself is untouched — everything below this helper is unchanged.
+    j.feed(tui_e2e.DEVICE_LANE_KEY)
     assert j.slug == "qemu"
     return j
 
@@ -179,6 +184,7 @@ def test_empty_generator_dir_is_an_honest_empty_list(tmp_path):
     j = journey.Journey(str(tmp_path))
     j.feed("")
     j.feed("4")
+    j.feed(tui_e2e.DEVICE_LANE_KEY)
     assert any("no build session holds bootable images" in ln for ln in j.lines())
     j.feed("")                                   # Enter with nothing to pick
     assert "build one first" in j.status

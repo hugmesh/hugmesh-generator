@@ -107,7 +107,7 @@ The other seven cards commit **nothing** to `mode`. They raise a transient flag 
 | Card | What it is |
 | --- | --- |
 | **Local Docker mesh** | run a whole mesh on this machine in Docker |
-| **QEMU device tests** | boot an existing build session's images as ephemeral emulated devices |
+| **Run e2e tests** | drive `tests/e2e` against a mesh that is already running — and the door to the QEMU device-test lanes |
 | **Mesh emulation** | boot a whole prior build as persistent guests, with console, ssh and disk saves |
 | **Cloud deploy** | publish an already-packaged x86 image to a cloud provider |
 | **MDM phone** | flash and enroll a USB Pixel |
@@ -116,7 +116,7 @@ The other seven cards commit **nothing** to `mode`. They raise a transient flag 
 
 Two of those seven are not terminal:
 
-- **QEMU device tests** offers "Build new images first, then run these tests" against "Images from a previous build session" on its own screen. That arm rejoins the image flow — using whatever mode is *already* committed. On a fresh run that is standalone. If you meant to build mesh nodes and test them, pick **Mesh node** first.
+- **Run e2e tests** offers "Emulated-device test lanes (QEMU device tests)" against "Run the suite against a running mesh" on its own screen. That arm continues into the **QEMU device tests** page, which in turn offers "Build new images first, then run these tests" — and *that* arm rejoins the image flow, using whatever mode is *already* committed. On a fresh run that is standalone. If you meant to build mesh nodes and test them, pick **Mesh node** first.
 - **Create nodes for local cloud** is a gate. It imports the local mesh's apex domain and provisioned accounts, then commits `mode=mesh` itself on Next and restricts the worklist to the laptop role plus every mesh role that produces a cluster node. The rest of the flow is an abbreviated mesh wizard. The local Kubernetes stack has to come down first: an inline checkbox takes your consent and *arms* a Stop button that runs `make kind-down` on a worker thread with streamed output and Cancel — nothing is torn down without a press, and Next stays disabled while a cluster is still known to be up or a teardown is in flight. The consent box is cleared afresh on every forward entry.
 
 **The trap on this screen is coming back to it.** Committing a card rewrites state you may have already entered, with no warning:
@@ -138,9 +138,9 @@ The screen behind Welcome's **Start building** card is **What do you want to bui
 | Mesh desktop client | `cloud` |
 | Standalone Gentoo desktop | `standalone` |
 
-**Standalone Gentoo desktop** is preselected. The other seven cards run a tool instead of configuring a build. Six of those are terminal: Local Docker mesh, MDM phone, MDM Quest headset, Cloud deploy, Mesh emulation, and QEMU device tests on its "use existing images" arm. On a terminal page the final button reads **Exit**, not Finish — pressing it closes Studio and does nothing else. Whatever you started keeps running.
+**Standalone Gentoo desktop** is preselected. The other seven cards run a tool instead of configuring a build. Six of those are terminal: Local Docker mesh, MDM phone, MDM Quest headset, Cloud deploy, Mesh emulation, and Run e2e tests on its "run the suite" arm. On a terminal page the final button reads **Exit**, not Finish — pressing it closes Studio and does nothing else. Whatever you started keeps running.
 
-Two cards are exceptions. **QEMU device tests** rejoins the image flow on its "build new images first" arm. **Create nodes for local cloud** leads to a page that commits `mode = "mesh"` itself on Next.
+Two cards are exceptions. **Run e2e tests** continues into the QEMU device-test page on its "emulated-device test lanes" arm, and that page rejoins the image flow on its own "build new images first" arm. **Create nodes for local cloud** leads to a page that commits `mode = "mesh"` itself on Next.
 
 Picking one of the seven tool cards raises a flag on the wizard, not a field in the config. Every page whose card you did not pick skips itself, so the flow you walk contains only the pages your choice reached.
 
@@ -237,7 +237,28 @@ Trap: the acknowledgement checkbox is Studio's gate, not the driver's. The drive
 
 Downstream: nothing. Terminal.
 
+### Run e2e tests
+
+Added 2026-08-27 at the operator's request — *"remove QEMU device emulation menu item as it does not do anything that cannot be done from the other menu, but add the run e2e tests button"*. It holds the mode-menu slot the **QEMU device tests** card used to hold. That card is gone; the page behind it is not, and this screen is its door.
+
+Two arms, chosen by radio.
+
+**Run the suite against a running mesh** (the default, and terminal). This is `tests/e2e` — the Gherkin lane, `make stack-e2e-bdd-env` — against a mesh that is *already serving*. Nothing here starts one.
+
+- The **e2e target** chooser is built from `core/e2e_environments.py`, never restated: `docker` (the compose stack), `kind` (the local DevOps cluster) and `qemu` (an emulated device over its forwarded UI port). The choice rides as `SNAP_ENV` on the child process — the same channel `SNAP_ENV=kind make stack-e2e-bdd-env` uses and `tests/e2e/steps/world.ts` reads — so the Studio and a terminal can never target different meshes.
+- Under it the page states what that environment *is*, the exact `make` target and pins a run would use, and the command that would **start** it. That last one is text. The Studio will not spawn it: bringing a QEMU device up needs root, and an unanswerable password prompt does not fail, it hangs.
+- The **readiness** line is a live, off-thread probe (`LocalStackNode.e2e_ready`) asked about *the chosen environment*. Until it answers, the door is shut and says so — nothing established reads as a blocker, never as permission. When it refuses, it names every reason. That same list rides into the feature tree, so its Run button can never be armed against a mesh that cannot host the suite.
+- That gate is deliberately **scoped**. For `kind` and `qemu` it checks only this checkout (`tests/e2e` + `node_modules`) and leaves liveness to the harness, which skips each scenario with a reason naming what to start. The page says so rather than implying a full check. For `qemu` it also reports whether a `qemu-system-*` process is running — as a **note**, never a block, because it cannot see a device emulating inside the runner container.
+- **Identity.** The suite's superadmin scenarios log in as the *minted* superadmin whenever the mesh was bootstrapped from Studio. This page reads that bundle through the bootstrap's own reader and says which brand answered — or that none did, which is the terminal-seeded case where the deterministic e2e defaults apply. It is never silent about which identity a run will use.
+- **e2e features…** opens the feature tree (non-modal, so a run streams into the log below it): Gherkin features, spec files with their last verdicts and skip reasons, the personas each draws from, the source, and the screenshots a run produced. What you check is what runs.
+
+The 33 handwritten spec files are a separate lane and are **not** run here: `make stack-e2e` from a terminal.
+
+**Emulated-device test lanes (QEMU device tests).** Picking this hides everything above and leaves one line: Next continues into the QEMU device-test page, described next.
+
 ### QEMU device tests
+
+Reached from **Run e2e tests**, and from nowhere else in the menu — its own card was removed 2026-08-27. (The post-build opt-in is unaffected: the Build screen's "run the QEMU emulated-device tests" checkbox still runs this same containerized harness when a build finishes, with no menu involved.) Keeping the page mattered because it is the only place in Studio that can spawn the Playwright-on-an-emulated-device harness and the SELinux AVC workout — neither of which Mesh emulation offers.
 
 The **test** lane of emulation: ephemeral asserted boots. Boot a session's images, check they provisioned correctly, power them off. Two arms, chosen by radio.
 
@@ -269,7 +290,7 @@ Two notes sit up front. Docker availability is probed off the GUI thread and gat
 Traps:
 
 - This lane runs the whole fleet. There is no per-platform filter. To boot a single device, use Mesh emulation's per-device Start, or the AVC workout above.
-- The card commits no image mode. "Build new images first" continues into whatever mode is already committed — **standalone** on a fresh Studio. If you want node images, go back to the Mode screen and pick Mesh node first.
+- Nothing on the way here commits an image mode. "Build new images first" continues into whatever mode is already committed — **standalone** on a fresh Studio. If you want node images, go back to the Mode screen and pick Mesh node first.
 - With no session holding a bootable image, the existing-images arm is disabled and build-first is preselected for you.
 - Nothing this page starts is meant to outlive the run. For guests that stay up, use Mesh emulation.
 

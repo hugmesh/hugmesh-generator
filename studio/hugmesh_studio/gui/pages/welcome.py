@@ -103,7 +103,7 @@ class WelcomePage(QtWidgets.QWizardPage):
             ("build", "Start building",
              "Open the menu of choices — build a mesh node, run a local Docker "
              "mesh, build a desktop image, enroll MDM devices, publish to a cloud, "
-             "or boot built images as emulated QEMU devices."),
+             "or run the end-to-end test suite."),
             ("sessions", "Review prior sessions",
              "Previous builds and saved configurations: restart or redo a session, "
              "open its artifacts, read its logs — or load/save a config file."),

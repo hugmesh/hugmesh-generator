@@ -19,7 +19,8 @@ from ..core.platform_info import detect
 from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
-    BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, HardwarePage,
+    BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, E2EPage,
+    HardwarePage,
     HomePage, IdpPage, KeyZipPage, LaunchPage, LocalCloudNodesPage, LocalMeshPage,
     MeshEmulationPage, ModePage, NetworkPage,
     PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SessionsPage, SystemPage,
@@ -33,7 +34,8 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
     "WelcomePage", "SessionsPage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
-    "DeployPage", "QemuPage", "MeshEmulationPage", "LocalCloudNodesPage", "IdpPage",
+    "DeployPage", "E2EPage", "QemuPage", "MeshEmulationPage",
+    "LocalCloudNodesPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
@@ -124,10 +126,19 @@ class StudioWizard(QtWidgets.QWizard):
         # transient: ModePage's CLOUD DEPLOY choice — read by DeployPage.applies_to(),
         # likewise NEVER persisted into cfg (a deploy is not an image mode).
         self.deploy_selected = False
-        # transient: ModePage's QEMU DEVICE TESTS choice — read by QemuPage.applies_to(),
-        # likewise NEVER persisted into cfg (running tests is not an image mode; the one
-        # durable thing QemuPage may set is cfg.qemu_device_tests, the same NON-ARGV field the
-        # BuildPage checkbox drives, when the operator picks "build first, then test").
+        # transient: ModePage's RUN E2E TESTS choice — read by E2EPage.applies_to(),
+        # likewise NEVER persisted into cfg (running tests is not an image mode).
+        self.e2e_selected = False
+        # transient: the QEMU DEVICE TESTS arm — read by QemuPage.applies_to(), never
+        # persisted into cfg. Its MODE-MENU card was removed on 2026-08-27 at the
+        # operator's request, so ModePage no longer writes True here: it only CLEARS
+        # the flag on every commit, and the single writer that can raise it is
+        # E2EPage's "emulated-device test lanes" arm (E2EPage._sync_arm). QemuPage
+        # itself is untouched and still registered — the one durable thing it may set
+        # is cfg.qemu_device_tests, the same NON-ARGV field the BuildPage checkbox
+        # drives, when the operator picks "build first, then test". That post-build
+        # opt-in (BuildPage -> progress.py _maybe_qemu_tests) never reads this flag at
+        # all and is unaffected by the menu change.
         self.qemu_selected = False
         # transient: ModePage's MESH EMULATION choice — read by
         # MeshEmulationPage.applies_to(), likewise NEVER persisted into cfg
@@ -172,7 +183,7 @@ class StudioWizard(QtWidgets.QWizard):
         page_ctors = [
             WelcomePage, SessionsPage,
             ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
-            QemuPage, MeshEmulationPage, LocalCloudNodesPage,
+            E2EPage, QemuPage, MeshEmulationPage, LocalCloudNodesPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,

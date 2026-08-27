@@ -219,6 +219,10 @@ def test_evidence_browser_never_edits_the_evidence(qt_app, tmp_path):
 @pytest.mark.parametrize("rel", [
     "hugmesh_studio/gui/pages/_e2e_evidence_dialog.py",
     "hugmesh_studio/gui/pages/localmesh.py",
+    # E2EPage (the RUN E2E TESTS card, 2026-08-27) added a SECOND environment combo
+    # and two arm radios, i.e. two more currentIndexChanged/toggled handlers — the
+    # exact signal class this check exists for.
+    "hugmesh_studio/gui/pages/e2e.py",
 ])
 def test_no_modal_in_page_logic(rel):
     """No QMessageBox and no .exec() inside PAGE LOGIC.

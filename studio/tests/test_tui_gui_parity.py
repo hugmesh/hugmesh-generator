@@ -16,6 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import e2e_environments as env_mod           # noqa: E402
 from hugmesh_studio.core import emulation as em                       # noqa: E402
 from hugmesh_studio.core import qemu_tests as qt                      # noqa: E402
 from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS               # noqa: E402
@@ -27,6 +28,7 @@ from hugmesh_studio.gui.pages import localcloud_nodes as gui_lc        # noqa: E
 from hugmesh_studio.gui.pages import welcome as gui_welcome            # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E402
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
+from hugmesh_studio.tui import e2e as tui_e2e                          # noqa: E402
 from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
 from hugmesh_studio.tui import qemu as tui_qemu                        # noqa: E402
 
@@ -101,17 +103,79 @@ def test_mode_default_is_standalone_by_id_on_both_faces(wiz):
     assert page._selected_mode() == "standalone" == journey.MODE_DEFAULT_CHOICE
 
 
-# ── qemu device tests: both faces host the TEST lane, over one grader ──────────────
-def test_qemu_flow_is_hosted_on_both_faces(wiz):
-    """The card is not a promise the TUI breaks: the GUI's "qemu" slug is a real
-    QemuPage and the TUI's is a real QemuScreen, not the honest stub it used to
-    render (which sent the operator back to the GUI)."""
+# ── the e2e card: the same card, the same door, on both faces ──────────────────────
+def test_the_qemu_card_is_gone_from_both_menus_together(wiz):
+    """The 2026-08-27 removal, pinned as a PAIR.
+
+    A GUI-only edit is the failure this file exists to catch, and it is the exact
+    shape of this change: the card lists are two literals in two modules. Asserting
+    the id is absent from BOTH is what makes a half-done removal red rather than a
+    parity drift discovered three weeks later.
+    """
+    page = advance_to(wiz, wizard_mod.ModePage)
+    assert "qemu" not in [mid for mid, _, _ in page.modes]
+    assert "qemu" not in [mid for mid, _, _ in journey.MODE_CHOICES]
+    assert "e2e" in [mid for mid, _, _ in page.modes]
+    assert "e2e" in [mid for mid, _, _ in journey.MODE_CHOICES]
+
+
+def test_e2e_flow_is_hosted_on_both_faces(wiz):
+    """The card is not a promise the TUI breaks: the GUI's "e2e" slug is a real
+    E2EPage and the TUI's is a real E2EScreen, not an honest stub that would send
+    the operator back to the GUI."""
+    page = wiz.page(wiz._page_ids["e2e"])
+    assert isinstance(page, wizard_mod.E2EPage)
+    j = journey.Journey(GENERATOR_DIR)
+    screen = j.screen_for("e2e")
+    assert isinstance(screen, tui_e2e.E2EScreen)
+    assert not isinstance(screen, journey.PendingSideFlow)
+
+
+def test_the_e2e_chooser_is_the_catalogue_on_both_faces(wiz):
+    """Neither face may restate the environment ids: the GUI combo is built from
+    describe() and the TUI screen renders environment_ids(). A restated list is how
+    a label and the mesh a run actually drives come to disagree."""
+    page = wiz.page(wiz._page_ids["e2e"])
+    ids = list(env_mod.environment_ids())
+    assert [page.env_combo.itemData(i)
+            for i in range(page.env_combo.count())] == ids
+    j = journey.Journey(GENERATOR_DIR)
+    j.feed("")                                        # welcome -> mode
+    j.feed(str([m for m, _, _ in journey.MODE_CHOICES].index("e2e") + 1))
+    text = "\n".join(j.lines())
+    for env_id in ids:
+        assert env_id in text
+
+
+# ── qemu device tests: the card went, the LANE did not, on both faces ──────────────
+def test_qemu_flow_survives_the_card_removal_on_both_faces(wiz):
+    """Removing a MENU CARD must not delete a lane.
+
+    The QEMU device-test page is the Studio's only door to two harnesses the mesh-
+    emulation page does not offer — the Playwright-on-an-emulated-device suite
+    (tests/qemu/run-qemu-e2e.sh) and the SELinux AVC workout
+    (tests/qemu/avc-workout.sh) — so both faces keep hosting it, reached from the e2e
+    card: the GUI's second radio arm and the TUI's `d` key.
+    """
     page = wiz.page(wiz._page_ids["qemu"])
     assert isinstance(page, wizard_mod.QemuPage)
     j = journey.Journey(GENERATOR_DIR)
     screen = j.screen_for("qemu")
     assert isinstance(screen, tui_qemu.QemuScreen)
     assert not isinstance(screen, journey.PendingSideFlow)
+
+    # …and BOTH doors arm the same transient flag, from the e2e surface.
+    e2e_page = wiz.page(wiz._page_ids["e2e"])
+    e2e_page.arm_qemu.setChecked(True)
+    assert wiz.qemu_selected is True
+    e2e_page.arm_suite.setChecked(True)
+    assert wiz.qemu_selected is False
+
+    j.feed("")                                        # welcome -> mode
+    j.feed(str([m for m, _, _ in journey.MODE_CHOICES].index("e2e") + 1))
+    j.feed(tui_e2e.DEVICE_LANE_KEY)
+    assert j.slug == "qemu"
+    assert j.flags["qemu_selected"] is True
 
 
 def test_qemu_session_completeness_words_come_from_the_session_itself():

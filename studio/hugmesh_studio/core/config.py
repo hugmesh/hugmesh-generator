@@ -128,9 +128,23 @@ MODE_DEFAULT_ROLE = {
 # nothing sets a start id); prior-session RESTART still enters at "progress" via
 # StudioWizard.start_build_from_session.
 #
+# "e2e" is the RUN E2E TESTS side-flow page (operator ask 2026-08-27: "remove QEMU
+# device emulation menu item ... but add the run e2e tests button"). It took the mode
+# menu slot the "QEMU device tests" card used to hold, and it is the ONLY door to
+# "qemu" now: the card is gone, so E2EPage's second arm is what writes
+# wiz.qemu_selected. "qemu" therefore sits IMMEDIATELY after "e2e" — nextId()'s skip
+# walk is positional, so the arming page has to come first.
+#
+# "qemu" is the QEMU device-test page: KEPT, registered and reachable. Removing a
+# MENU CARD must not delete a lane, and this one is not redundant with "meshemu" the
+# way the card's blurb implied — it is the only Studio door to the Playwright-on-an-
+# emulated-device harness (tests/qemu/run-qemu-e2e.sh) and to the SELinux AVC workout
+# (tests/qemu/avc-workout.sh). It is ALSO still reached post-build, with no menu at
+# all, via BuildPage's qemu_device_tests opt-in -> progress.py _maybe_qemu_tests().
+#
 # "meshemu" is the whole-mesh-emulation side-flow page: it sits IMMEDIATELY after
-# "qemu" (the journey reads QEMU device tests -> whole-mesh emulation), dynamically
-# skipped (applies_to) unless its ModePage card was picked.
+# "qemu" (the journey reads e2e -> QEMU device tests -> whole-mesh emulation),
+# dynamically skipped (applies_to) unless its ModePage card was picked.
 #
 # "localcloud" (issue #50) is the create-nodes-for-local-cloud GATE page: the last
 # side-flow slot before "idp", dynamically skipped (applies_to) unless its ModePage
@@ -138,7 +152,7 @@ MODE_DEFAULT_ROLE = {
 # abbreviated mesh wizard (it commits cfg.mode="mesh" itself on Next).
 WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "mode", "localmesh", "phone", "quest", "deploy",
-                     "qemu", "meshemu", "localcloud",
+                     "e2e", "qemu", "meshemu", "localcloud",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "users_choice", "users",

@@ -51,8 +51,8 @@ PAGE_ORDER: tuple[str, ...] = WIZARD_PAGE_SLUGS
 #: skips them via applies_to on every image-mode walk; the TUI walk never visits
 #: them positionally). "sessions" is likewise entered only from the welcome screen
 #: (GUI: only WelcomePage.nextId routes INTO it).
-SIDE_FLOW_SLUGS = ("localmesh", "phone", "quest", "deploy", "qemu", "meshemu",
-                   "localcloud")
+SIDE_FLOW_SLUGS = ("localmesh", "phone", "quest", "deploy", "e2e", "qemu",
+                   "meshemu", "localcloud")
 
 #: The README's getting-started section — the same link the GUI welcome explainer
 #: carries (rendered as selectable text here; a terminal has no anchor to click).
@@ -75,7 +75,7 @@ WELCOME_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("build", "Start building",
      "Open the menu of choices — build a mesh node, run a local Docker "
      "mesh, build a desktop image, enroll MDM devices, publish to a cloud, "
-     "or boot built images as emulated QEMU devices."),
+     "or run the end-to-end test suite."),
     ("sessions", "Review prior sessions",
      "Previous builds and saved configurations: restart or redo a session, "
      "open its artifacts, read its logs — or load/save a config file."),
@@ -105,15 +105,21 @@ MODE_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("mesh", "Mesh node",
      "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
      "edge-AI — that run a mesh on dedicated hardware."),
-    # MIRROR of gui/pages/mode.py (T3): the two emulation cards say EPHEMERAL vs
-    # PERSISTENT before the click, because that — not "one image vs several" — is
-    # the difference an operator has to choose on. test_tui_gui_parity pins these
-    # descriptions word for word, so the two faces are edited together or not at all.
-    ("qemu", "QEMU device tests",
-     "Test built images: ephemeral asserted boots. Boot a build session's "
-     "images as emulated devices, check they provisioned correctly and "
-     "power them off — Pi roles first, then x86. Or build new images and "
-     "test them after."),
+    # MIRROR of gui/pages/mode.py. The "QEMU device tests" card that used to sit here
+    # was REMOVED on 2026-08-27 at the operator's request ("remove QEMU device
+    # emulation menu item as it does not do anything that cannot be done from the
+    # other menu, but add the run e2e tests button") and this took its slot. The QEMU
+    # device-test SCREEN survives on both faces and is reached FROM here — removing a
+    # menu card must not delete a lane, and that lane is the only Studio door to the
+    # Playwright-on-an-emulated-device harness and the SELinux AVC workout.
+    # test_tui_gui_parity pins these descriptions word for word, so the two faces are
+    # edited together or not at all.
+    ("e2e", "Run e2e tests",
+     "Run the end-to-end suite against a mesh that is ALREADY RUNNING — the "
+     "Docker compose stack, the local DevOps (kind) cluster, or a "
+     "QEMU-emulated device. Browse the suite as a tree, check the features "
+     "to run, and read exactly why a run is blocked when it is. Starts no "
+     "mesh. This is also the door to the emulated-device test lanes."),
     ("meshemu", "Mesh emulation",
      "Emulate the mesh you are readying for deployment: persistent devices, "
      "console, save-back. Boot every image of a prior build session and keep "
@@ -151,6 +157,8 @@ PENDING_NOTE = ("this step is not yet ported to the TUI — configure it in the 
 #: this set once :mod:`.qemu` landed — a real screen over core.emulation, read-only
 #: toward the host like :mod:`.meshemu` — so the two emulation lanes (TEST and
 #: DEPLOY) are both hosted here and only the MDM/cloud drivers remain stubbed.
+#: "e2e" (:mod:`.e2e`) is hosted for the same reason: the GUI grew a real page, so a
+#: stub here would be the TUI breaking a promise the menu makes on both faces.
 _SIDE_FLOW_STUB = {
     "localmesh": "Local Docker mesh",
     "phone": "MDM phone",
@@ -623,6 +631,7 @@ class Journey:
 
     def __init__(self, generator_dir: str = ".", cfg: ImageConfig | None = None):
         from .domains_step import DomainsScreen
+        from .e2e import E2EScreen
         from .localcloud import LocalCloudScreen
         from .meshemu import MeshEmuScreen
         from .qemu import QemuScreen
@@ -640,7 +649,7 @@ class Journey:
         self.overlay = None              # e.g. the Themes screen (a screen object)
         screens = [
             WelcomeScreen(), ModeScreen(),
-            LocalCloudScreen(), QemuScreen(), MeshEmuScreen(),
+            LocalCloudScreen(), E2EScreen(), QemuScreen(), MeshEmuScreen(),
             IdpScreen(), RoleScreen(), WorklistScreen(),
             YesNoStep("domains_choice", "Domains",
                       "Add more domains beyond the internal orchestration "
@@ -744,6 +753,21 @@ class Journey:
 
     # ── the mode commit (gui/pages/mode.py::validatePage, mirrored) ─────────────
     def commit_mode(self, mid: str) -> None:
+        # "qemu" is in SIDE_FLOW_SLUGS but is no longer a mode-menu id, so this
+        # comprehension only ever CLEARS qemu_selected. The single writer that can
+        # RAISE it is E2EScreen's device-lane door (the GUI twin: E2EPage._sync_arm).
+        # Its MEMBERSHIP is still load-bearing and must not be tidied away with the
+        # dead comparison: it is what keeps _advance's positional walk off the qemu
+        # screen and what lets goto("qemu") resolve. Pinned by
+        # test_tui_journey::test_qemu_stays_a_side_flow_slug_even_though_its_card_went.
+        #
+        # ModePage's mirror of this line is deliberately CONDITIONAL
+        # (``qemu_selected and mid == "e2e"``) rather than a flat clear, because Qt
+        # re-runs a visited page's validatePage from collect_all() and that would
+        # disarm an arm the operator had just picked. The TUI has no such re-run —
+        # commit_mode is reached only from ModeScreen.feed — and E2EScreen.enter()
+        # resets its own sub-state on every entry, so an unconditional clear here IS
+        # the same visible behaviour, not a second rule.
         self.flags = {f"{slug}_selected": (mid == slug)
                       for slug in SIDE_FLOW_SLUGS}
         if mid != "localcloud":
