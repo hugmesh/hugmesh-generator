@@ -410,7 +410,8 @@ not verify.
 | `hugmesh-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
 | `hugmesh-character-forge-bff-api` | build `hugmesh-character-forge-bff-api` (spring-bff archetype sibling) | `manifests/character-forge-bff-api` |
 | `hugmesh-api` | build `hugmesh-actions` | `manifests/hugmesh-apis` |
-| `hugmesh-remote-fragment` | build `hugmesh-remote-fragment` (sync image) | `manifests/remote-fragment` |
+| `hugmesh-remote-fragment` | build `hugmesh-remote-fragment` (the SYNC image — writes bundles into the shared docroot; its `SERVER_PORT: 8081` listener is actuator-only and serves no bundle bytes) | `manifests/remote-fragment` (the pod's `sync` container) |
+| `hugmesh-remote-fragment-web` | `nginxinc/nginx-unprivileged` serving the shared `remote-fragment-bundles` volume; **this is what the fe-gateway's `/_fragments/**` route targets**. Its nginx config is the cluster's own ConfigMap file, bind-mounted so the lanes cannot drift. | `manifests/remote-fragment` (the pod's `web` container + its `nginx.conf`) |
 | `hugmesh-host-shell` (service name kept — the fe-gateway route target) | build `hugmesh-host-shell` | `manifests/frontend` |
 | `hugmesh-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
 | `hugmesh-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
@@ -433,8 +434,13 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   `make stack-seed` (`tests/stack/seed-e2e.sh`) is a **required** follow-up step,
   not optional: it creates the `app-user-bff` OAuth2 client + the org/roles +
   e2e personas, and once it has run, **real browser SSO login works end-to-end**
-  (`/login` with an e2e persona, e.g. `e2e-admin`/`e2e-pass` — see "Seeding the
-  e2e fixtures" above). Before seeding — or for Casdoor **apps/users** this
+  (`/login` with an e2e persona, e.g. `e2e-admin` — see "Seeding the e2e
+  fixtures" above). **The password is generated fresh per run, never a fixed
+  literal**: `make stack-seed`'s banner prints the actual value, it's readable
+  afterward from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
+  at the repo root), and the Studio's local-mesh page shows it in a copyable
+  credentials table (or "not seeded yet" if that run hasn't happened). Before
+  seeding — or for Casdoor **apps/users** this
   stack still doesn't provision (the federation manifest's fragment-sync client,
   an `actions` client) — expect the UIs to load but those specific auth-gated
   flows to 401 (the cluster seeds those via `manifests/casdoor/init-*`). The

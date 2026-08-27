@@ -380,6 +380,127 @@ LOCAL_ONLY_GROUP: dict[str, str] = {"wiki": "Social & community",
                                     "argocd": "Network & access"}
 
 
+# ── the DevOps lane's OWN selection channel (operator ask 2026-08-26) ───────────
+# The MECH_KIND rows above are informational because the docker lane structurally
+# cannot drive a Kubernetes controller. That is still true — and it left a second,
+# quieter hole: the DevOps lane could not drive one EITHER. `make kind-up` passed
+# KIND_PROFILE and MFA and nothing else, so the curated Application set in
+# specs/cluster/bootstrap/kind-local/bootstrap-kind.sh could only be changed by
+# editing that file. specs/cluster/apps/01-metrics-server.yaml therefore sat in no
+# profile while KIND_PROFILE=sso deployed SEVEN HorizontalPodAutoscalers with no
+# resource-metrics API to read — HPAs that report `<unknown>/70%` forever and look
+# exactly like an idle cluster.
+#
+# These rows are a THIRD axis, deliberately kept out of LOCAL_SERVICES: they are
+# not compose profiles, not federation rows, and not the docker mesh's business at
+# all. Mixing them into `local_slugs()` would put a Kubernetes-only selection into
+# the compose bring-up's `--services` list, which is the lane confusion this whole
+# module exists to prevent.
+MECH_KIND_ADDON = "kind-addon"
+
+# The env var bootstrap-kind.sh reads, spelled ONCE. Its `none` sentinel is not
+# decoration: an EMPTY value is read by the script as UNSET (falling back to its own
+# default), because empty is what every layer in between produces by accident.
+KIND_ADDONS_ENV = "KIND_ADDONS"
+KIND_ADDONS_NONE = "none"
+
+
+@dataclass(frozen=True)
+class KindAddon:
+    """One infra Application the DevOps lane can be asked to add to its curated set.
+
+    ``slug`` is the KIND_ADDONS token, verbatim — bootstrap-kind.sh's KIND_ADDON_MAP
+    is the authority for what a slug maps to, and this side never re-derives it.
+    ``default_on`` mirrors that script's KIND_ADDONS_DEFAULT (asserted by
+    tests/scripts/test-kind-addon-channel.sh, which reads both)."""
+    slug: str
+    default_on: bool
+    label: str
+    note: str
+
+
+KIND_ADDONS: tuple[KindAddon, ...] = (
+    KindAddon(
+        slug="metrics-server", default_on=True,
+        label="Resource metrics (metrics-server)",
+        note="The cluster's CPU/memory metrics API. DEFAULT ON, and not a nicety: "
+             "the DevOps lane already deploys seven HorizontalPodAutoscalers "
+             "(admin-bff, user-bff, the host shell and four UI remotes) that read "
+             "it. Without it they report <unknown> forever and hold their "
+             "Deployments at the replicas floor — nothing reports that as a "
+             "failure. Also what makes `kubectl top` answer."),
+    KindAddon(
+        slug="keda", default_on=False,
+        label="Event-driven autoscaling (KEDA)",
+        note="Installs the KEDA operator (no ScaledObjects — the repo ships none "
+             "that this lane can run). Substrate for latency/queue-driven scaling; "
+             "the CPU/memory HPAs above do not need it."),
+)
+
+
+def kind_addon_slugs() -> tuple[str, ...]:
+    """Every DevOps-lane add-on slug, in catalogue order."""
+    return tuple(a.slug for a in KIND_ADDONS)
+
+
+def kind_addon_by_slug(slug: str) -> KindAddon | None:
+    for a in KIND_ADDONS:
+        if a.slug == slug:
+            return a
+    return None
+
+
+def kind_addon_default_selection() -> tuple[str, ...]:
+    """What `make kind-up` applies with no selection at all — the state the
+    checkboxes must start in, or the surface lies about the lane it describes."""
+    return tuple(a.slug for a in KIND_ADDONS if a.default_on)
+
+
+def validate_kind_addons(selection: Sequence[str] | None) -> list[str]:
+    """Problems with a DevOps-lane add-on selection (empty list = OK).
+
+    An unknown slug is REFUSED, never dropped: bootstrap-kind.sh's own parse is
+    fail-closed for the same reason, and a slug that vanishes silently between the
+    picker and the script is a selection channel that lies."""
+    if selection is None:
+        return []
+    problems: list[str] = []
+    for slug in selection:
+        if kind_addon_by_slug(slug) is None:
+            problems.append(
+                f"unknown DevOps-lane add-on '{slug}' — the lane knows "
+                f"{', '.join(kind_addon_slugs())}.")
+    return problems
+
+
+def kind_addon_env(selection: Sequence[str] | None) -> dict[str, str]:
+    """The env `make kind-up` needs to apply ``selection``, or {}.
+
+    Returns {} — i.e. changes NOTHING about the subprocess env — in the two cases
+    where there is genuinely nothing to say: ``selection is None`` (no picker was
+    used) and a selection that already equals what the lane ships. Same invariant
+    ``federation_env`` holds: an operator who touches nothing gets the same env,
+    byte for byte, as before this axis existed.
+
+    An EMPTY selection is exported as the literal ``none``, NOT as an empty string.
+    That distinction is the whole safety property of this channel: bootstrap-kind.sh
+    reads an empty KIND_ADDONS as UNSET and falls back to its default, so exporting
+    "" for "the operator unticked everything" would silently turn metrics-server
+    back ON while the surface said it was off.
+
+    Raises ValueError on an unknown slug — fail closed rather than export a
+    selection the script will refuse halfway through a bring-up."""
+    if selection is None:
+        return {}
+    problems = validate_kind_addons(selection)
+    if problems:
+        raise ValueError("; ".join(problems))
+    chosen = tuple(a.slug for a in KIND_ADDONS if a.slug in set(selection))
+    if set(chosen) == set(kind_addon_default_selection()):
+        return {}
+    return {KIND_ADDONS_ENV: ",".join(chosen) if chosen else KIND_ADDONS_NONE}
+
+
 # ── catalogue accessors ─────────────────────────────────────────────────────────
 def by_slug(slug: str) -> LocalService | None:
     """The catalogue entry for ``slug``, or None when the local stack cannot run it

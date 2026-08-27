@@ -1,0 +1,121 @@
+# federation-modules-gate — applies the BUILD-TIME service selection to the
+# `federation_modules` registry, which is what actually decides whether the host
+# shell renders a service's menu entry.
+#
+# WHAT WAS OBSERVED (2026-08-26). `--exclude-services akkoma` pruned akkoma from
+# every path the generator owns (Application, manifests, gateway routes,
+# route-access rows, installed-services ConfigMap "false", 13a element
+# installed:"false") and the host shell STILL showed the Mastodon entry, because
+# the shell resolves its remotes from the federation manifest — i.e. from
+# federation_modules — and every registration is an unconditional Liquibase
+# changeset seeding enabled = true. installed=true was reported for a service that
+# was not installed.
+#
+# WHY A POSTSYNC HOOK JOB. The registration changesets live in the SEPARATE
+# hugmesh-federation-api repo, so the generator can neither add nor (correctly)
+# edit one — editing an APPLIED changeset breaks Liquibase's checksum on every
+# existing mesh. A post-seed UPDATE from the GitOps tree is the only lane this
+# repo owns, and it is the same shape the local-mesh lane already uses (leg 4 of
+# tests/stack/seed-e2e.sh, driven by the Studio's HUGMESH_FEDERATION_ENABLE pair).
+#
+# ORDERING. This Application is sync-wave "3": after federation-db (wave 1) and
+# after hugmesh-federation-api (wave 2), which runs the Liquibase changelog at
+# boot. Waves are best-effort for a Job that depends on ANOTHER pod's startup
+# work, so gate.sql RAISEs when the table is absent and `backoffLimit` retries —
+# the Job converges once the changelog has landed instead of failing the sync.
+#
+# CREDENTIALS. Logs in as the NON-OWNER least-privilege role `federation_app`
+# (created by federation-db's initdb/10-roles.sh; ESO Secret federation-db-app-auth,
+# key `password`) — the SAME cred the federation-api runtime handle uses. That role
+# holds DML but no DDL, which is exactly the authority an UPDATE of an existing
+# row needs and no more.
+#
+# ⚠ THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY, so a green Job here proves
+# the Job works, NOT that the build-time selection was honoured. The REASON changed
+# on 2026-08-26 and the conclusion did not: bootstrap.sh no longer applies only
+# app-of-apps.yaml — it applies every baked apps/*.yaml, apps/29b included. But
+# apply_baked_app() rewrites repoURL and targetRevision and NOTHING ELSE, so
+# `source.path: specs/cluster/manifests/federation-modules-gate` still resolves in
+# a GIT repo and ArgoCD's repo-server mounts a gate.sql generated from the COMMITTED
+# file — not from the USB's rendered copy. This lands the mechanism and its guard;
+# the observed bug is not yet fixed on a device. See gate.sql's header.
+#
+# ⚠ AND EVEN THEN, UI HALF ONLY. enabled=false hides the MENU ENTRY. The Deployment
+# keeps running. The workload half requires the device to sync from a PRUNED tree:
+# the APPLICATION SET is pruned now (bootstrap.sh applies the baked apps/), but each
+# surviving Application still pulls specs/cluster/manifests/<dir> from the git repo.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: federation-modules-gate
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: federation-modules-gate
+    app.kubernetes.io/part-of: hugmesh.net
+  annotations:
+    # PostSync so the gate runs AFTER the wave's workloads reconcile; re-created on
+    # every sync (BeforeHookCreation) so a rebuilt/re-rendered gate.sql is applied
+    # rather than skipped because a completed Job of the same name still exists.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 30
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: federation-modules-gate
+        app.kubernetes.io/part-of: hugmesh.net
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70          # postgres in the alpine image
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: gate
+          # Same image tag as federation-db itself, so the client version can never
+          # drift ahead of the server it talks to.
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - { name: PGHOST,     value: "federation-db.hugmesh-backend.svc.cluster.local" }
+            - { name: PGPORT,     value: "5432" }
+            - { name: PGDATABASE, value: "federation" }
+            - { name: PGUSER,     value: "federation_app" }
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: federation-db-app-auth
+                  key: password
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              # Wait for the DB socket before the first psql so the retry budget is
+              # spent on the Liquibase race, not on DNS/port warm-up.
+              i=0
+              until pg_isready -q; do
+                i=$((i + 1))
+                [ "${i}" -lt 60 ] || { echo "federation-db not ready after 60 tries" >&2; exit 1; }
+                sleep 2
+              done
+              echo "== federation-modules-gate: applying the build-time service selection =="
+              psql -v ON_ERROR_STOP=1 -f /sql/gate.sql
+          volumeMounts:
+            - { name: sql, mountPath: /sql, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          resources:
+            requests: { cpu: "10m",  memory: "32Mi" }
+            limits:   { cpu: "200m", memory: "128Mi" }
+      volumes:
+        - name: sql
+          configMap: { name: federation-modules-gate-sql }
+        - name: tmp
+          emptyDir: {}

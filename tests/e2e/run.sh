@@ -247,6 +247,28 @@ if [ -n "${ENV_ID}" ]; then
   echo "    (not started by this script; to bring it up: ${ENV_HINT})"
 fi
 
+# ── the seeded password, RESOLVED, never generated (kept from main) ───────────
+# This lane drives an ALREADY-RUNNING stack, so the password must be the one that
+# stack was seeded with; minting a fresh one here would simply not match and every
+# login would fail for a reason nothing names. Env, else the run-state file, else
+# stop and say what to run.
+#
+# Only for MODE=run: --print-command/list/gen execute nothing and must not demand
+# a credential. And it must be passed EXPLICITLY into the container — the docker
+# invocation below mounts only ${HERE} at /work/e2e, so a repo-root
+# .e2e-credentials is invisible inside and the helpers' walk-up cannot reach it.
+if [ "${MODE}" = "run" ] && [ -z "${E2E_PASSWORD:-}" ]; then
+  . "${HERE}/../stack/e2e-password.sh"
+  E2E_PASSWORD="$(e2e_password_read E2E_PASSWORD)" || exit 1
+  export E2E_PASSWORD
+fi
+if [ "${MODE}" = "run" ] && [ -z "${E2E_PASSWORD:-}" ]; then
+  echo "run.sh: no e2e password resolved (checked \$E2E_PASSWORD and ${E2E_CREDENTIALS_FILE:-<repo>/.e2e-credentials})." >&2
+  echo "  This lane drives an already-running stack, so it will not mint one." >&2
+  echo "  Seed the stack first: make stack-seed" >&2
+  exit 1
+fi
+
 mkdir -p "${HERE}/screenshots"
 
 # The bundled-browser docker image is a BROWSERS image with only tests/e2e
@@ -266,6 +288,7 @@ if [ "${USE_DOCKER}" -eq 1 ]; then
   docker run --rm --network host --ipc=host \
     -v "${HERE}:/work/e2e" -w /work/e2e \
     -e SNAP_BASE_URL="${SNAP_BASE_URL:-https://localhost:8443}" -e SNAP_SHOTS=/work/e2e/screenshots \
+    -e E2E_PASSWORD="${E2E_PASSWORD:-}" \
     "${IMAGE}" "${PW_ARGV[@]}"
 else
   ( cd "${HERE}" && SNAP_SHOTS="${SNAP_SHOTS:-${HERE}/screenshots}" "${PW_ARGV[@]}" )

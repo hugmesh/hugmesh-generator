@@ -161,12 +161,12 @@ def test_pentest_env_knob_forwarded_both_backends(tmp_path):
     assert not any("--pentest" in x for x in native + docker[:-1])
 
 
-def test_qemu_e2e_env_knob_forwarded_both_backends(tmp_path):
-    """cfg.qemu_e2e (the post-build emulated-device tests) rides the SAME env
+def test_qemu_device_tests_env_knob_forwarded_both_backends(tmp_path):
+    """cfg.qemu_device_tests (the post-build emulated-device tests) rides the SAME env
     channel as PENTEST — HUGMESH_QEMU_E2E=1, the opt-in gate the qemu harness
     layer already reads — and never becomes a builder flag."""
     cfg = cfg_for("x86", tmp_path)
-    cfg.qemu_e2e = True
+    cfg.qemu_device_tests = True
     native = BuildDriver(str(tmp_path), host(is_root=True)).command(cfg, "native")
     assert native[:3] == ["env", "HUGMESH_QEMU_E2E=1", "bash"]
     docker = BuildDriver(str(tmp_path), host()).command(cfg, "docker")
