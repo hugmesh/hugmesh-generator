@@ -29,12 +29,11 @@ import {
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // Deterministic native password every seeded/invited persona signs in with —
 // resolved/generated, never a literal (see rbac-roles.ts sharedPassword()).
-const LOGIN_PASSWORD = sharedPassword();
 
 // Native sign-in through OUR /bff/login: the opaque httpOnly bff_session cookie is
 // stored in THIS context's cookie jar and rides subsequent /bff/** calls (no bearer
 // token is ever exposed). An un-provisioned username 401s.
-async function loginAs(api: APIRequestContext, username: string, password = LOGIN_PASSWORD): Promise<void> {
+async function loginAs(api: APIRequestContext, username: string, password = loginPassword()): Promise<void> {
   const r = await api.post('/bff/login', { data: { username, password } });
   expect(r.status(), `native login ${username} -> ${r.status()}`).toBe(200);
 }

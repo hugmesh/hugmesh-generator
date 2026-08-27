@@ -266,6 +266,7 @@ jobs:
             tests/scripts/test-container-image-tags.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
+            tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
             tests/scripts/test-fetch-retry-hardening.sh
@@ -496,6 +497,7 @@ jobs:
             tests/domain-registry/test-domain-reconcile-fuzz.sh
             tests/domain-registry/test-templating-rename-pr.sh
             tests/menu/ncurses_charset_test.sh
+            tests/scripts/test-e2e-reporter-shape.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect

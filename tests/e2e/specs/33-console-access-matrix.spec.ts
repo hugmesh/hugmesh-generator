@@ -1,7 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { onboard } from './helpers';
 import { tags } from './report-tags';
-import { sharedPassword } from './rbac-roles';
+import { loginPassword } from './rbac-roles';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 33 — CONSOLE ACCESS MATRIX: can each identity FIND and OPEN its consoles?
@@ -32,7 +32,6 @@ import { sharedPassword } from './rbac-roles';
 // ────────────────────────────────────────────────────────────────────────────
 
 // Resolved/generated, never a literal (see rbac-roles.ts sharedPassword()).
-const PASSWORD = sharedPassword();
 
 interface ConsoleExpectation {
   /** data-testid of the menubar entry. */
@@ -76,7 +75,7 @@ const PERSONAS: Persona[] = [
  *  on this seed (only tolerated for `optional` personas). */
 async function signIn(page: Page, username: string): Promise<boolean> {
   try {
-    await onboard(page, username, PASSWORD);
+    await onboard(page, username, loginPassword());
     return true;
   } catch {
     return false;
