@@ -110,6 +110,7 @@ PREMERGE_UNGATED=(
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
   tests/scripts/test-eso-target-collisions.sh
+  tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
