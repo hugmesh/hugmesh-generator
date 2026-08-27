@@ -650,7 +650,7 @@ def wired_page(qapp, fake_gen, monkeypatch):
                             lambda self: SimpleNamespace(running=True,
                                                          detail="stubbed"))
         monkeypatch.setattr(LocalStackNode, "e2e_ready",
-                            lambda self: list(blockers))
+                            lambda self, environment="docker": list(blockers))
         monkeypatch.setattr(lmb.LocalMeshBootstrap, "_stack_node", lambda self: node)
         monkeypatch.setattr(lmb.LocalMeshBootstrap, "superadmin_login",
                             lambda self: None)

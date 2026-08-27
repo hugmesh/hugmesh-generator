@@ -274,7 +274,8 @@ def test_run_e2e_hands_the_environment_to_make():
     node.e2e_ready = lambda environment="docker": []
     seen = {}
 
-    def fake_make(target, timeout, extra_env=None, on_line=None, cancel=None):
+    def fake_make(target, timeout, extra_env=None, on_line=None, cancel=None,
+                  args=None):
         seen["target"] = target
         seen["env"] = dict(extra_env or {})
         return True, "stubbed"
