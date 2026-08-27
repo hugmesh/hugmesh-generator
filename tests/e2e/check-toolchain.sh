@@ -46,7 +46,13 @@
 #      launches — headless runs use the headless shell), the revision named by
 #      node_modules/playwright-core/browsers.json must have its directory
 #      `<name with '-' -> '_'>-<revision>` and Playwright's own
-#      INSTALLATION_COMPLETE marker there. The path honours PLAYWRIGHT_BROWSERS_PATH
+#      INSTALLATION_COMPLETE marker there — and, because `playwright install`
+#      writes that marker LAST, a marker over an emptied directory is a lie:
+#      the revision dir must also hold at least one EXECUTABLE regular file
+#      (a partial rm/cp of the cache leaves marker-only dirs that would die at
+#      browserType.launch), and a revision dir that is a SYMLINK to a
+#      DIFFERENT revision's directory (the re-planted r1228 -> r1234 alias)
+#      is refused by name; a symlinked cache keeping the same revision passes. The path honours PLAYWRIGHT_BROWSERS_PATH
 #      exactly as Playwright does ("0" = node_modules/playwright-core/.local-browsers,
 #      a relative path resolves against INIT_CWD or $PWD, unset = XDG_CACHE_HOME or
 #      ~/.cache on linux, ~/Library/Caches on darwin, then ms-playwright/). As a
@@ -136,8 +142,9 @@ fi
 # `SUMMARY ...` line on success. It exits 0 in every case it could evaluate; a
 # non-zero exit is a crash and is reported as its own problem below.
 if [ -f "${PKG}" ] && [ -f "${LOCK}" ]; then
+  NODE_ERR="$(mktemp "${TMPDIR:-/tmp}/e2e-toolchain-err.XXXXXX")"
   set +e
-  NODE_OUT="$(E2E_DIR="${E2E_DIR}" BROWSERS_PATH="${BROWSERS_PATH}" E2E_BROWSERS="${E2E_BROWSERS}" node - <<'JS'
+  NODE_OUT="$(E2E_DIR="${E2E_DIR}" BROWSERS_PATH="${BROWSERS_PATH}" E2E_BROWSERS="${E2E_BROWSERS}" node - 2>"${NODE_ERR}" <<'JS'
 const fs = require('fs');
 const path = require('path');
 
@@ -246,7 +253,51 @@ if (pwCoreDir) {
     } else if (!fs.existsSync(marker)) {
       problem(`${name} r${d.revision} is incomplete: ${marker} is missing (interrupted download?)`);
     } else {
-      browserSummary.push(`${name} r${d.revision}`);
+      // The marker alone is not proof of a binary: `playwright install` writes
+      // INSTALLATION_COMPLETE *last*, so an interrupted download never has it —
+      // but a partial rm/cp (or a disk-full restore) can leave the marker over
+      // an emptied directory, and a marker-only dir dies at browserType.launch
+      // with exactly the "Executable doesn't exist" this probe exists to kill.
+      // Headless shell has no public executablePath() accessor, so walk the
+      // revision dir for at least one executable regular file besides
+      // Playwright's own markers. Symlinks are followed; unreadable entries
+      // are skipped (that can only make this fail CLOSED, never open).
+      const hasExecutable = (root) => {
+        const stack = [root];
+        while (stack.length) {
+          const cur = stack.pop();
+          let entries = [];
+          try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch (e) { continue; }
+          for (const ent of entries) {
+            const p = path.join(cur, ent.name);
+            let st;
+            try { st = fs.statSync(p); } catch (e) { continue; }   // dangling symlink etc.
+            if (st.isDirectory()) stack.push(p);
+            else if (st.isFile() && (st.mode & 0o111) && ent.name !== 'INSTALLATION_COMPLETE' && ent.name !== 'DEPENDENCIES_VALIDATED') return true;
+          }
+        }
+        return false;
+      };
+      // A LIVE alias is the other half of the 2026-08-26 shape: the DANGLING
+      // r1228 -> r1234 symlink is named above, but RECREATING the alias against
+      // a directory that exists used to pass silently — and then a different
+      // browser build runs. If the revision dir is a symlink whose target's
+      // basename ends in `-<digits>`, those digits must be the pinned revision.
+      // A relocated cache whose target keeps the same name (or carries no
+      // revision suffix) still passes: symlinks are not banned, lies are.
+      let alias = null;
+      try {
+        const target = fs.readlinkSync(bdir);   // throws when bdir is not a symlink
+        const m = path.basename(target).match(/-(\d+)$/);
+        if (m && m[1] !== d.revision) alias = { target, rev: m[1] };
+      } catch (e) { /* not a symlink */ }
+      if (alias) {
+        problem(`${name} r${d.revision} is ALIASED to a different revision: ${bdir} is a symlink to ${alias.target} (r${alias.rev}) — a different browser build would run; remove the alias and install the real r${d.revision}`);
+      } else if (!hasExecutable(bdir)) {
+        problem(`${name} r${d.revision} is broken: ${bdir} carries INSTALLATION_COMPLETE but contains NO executable file — the binary is gone (partial copy or delete of the cache; the marker is written last, so this is not an interrupted download); reinstall`);
+      } else {
+        browserSummary.push(`${name} r${d.revision}`);
+      }
     }
   }
   // The runtime's own answer for the headed binary (public API). Headless-shell
@@ -271,8 +322,14 @@ JS
 )"
   NODE_RC=$?
   set -e
+  # The helper's stderr still reaches the caller as before (passthrough held the
+  # stack trace), but a copy is kept so a crash can NAME its error in the problem
+  # line instead of quoting the empty tail of an empty stdout.
+  cat "${NODE_ERR}" >&2
   if [ "${NODE_RC}" -ne 0 ]; then
-    problem "the probe's node helper crashed (rc=${NODE_RC}): $(printf '%s' "${NODE_OUT}" | tail -n 1)"
+    ERR_HINT="$(grep -m 1 -e 'Error' "${NODE_ERR}" || tail -n 1 "${NODE_ERR}")"
+    [ -n "${ERR_HINT}" ] || ERR_HINT="$(printf '%s' "${NODE_OUT}" | tail -n 1)"
+    problem "the probe's node helper crashed (rc=${NODE_RC}): ${ERR_HINT}"
   else
     while IFS= read -r line; do
       case "${line}" in
@@ -284,6 +341,7 @@ JS
       esac
     done <<<"${NODE_OUT}"
   fi
+  rm -f "${NODE_ERR}"
 fi
 
 if [ "${#PROBLEMS[@]}" -eq 0 ]; then

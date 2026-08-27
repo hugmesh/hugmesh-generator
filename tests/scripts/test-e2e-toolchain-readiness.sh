@@ -28,6 +28,11 @@
 #      regenerate-and-commit command for a drifted lock. Every problem is listed,
 #      not just the first. Optional deps (fsevents on linux) may be absent.
 #      PLAYWRIGHT_BROWSERS_PATH is honoured exactly as playwright-core reads it.
+#      Includes the 2026-08-27 skeptic's fail-open shapes: a browser dir holding
+#      ONLY the INSTALLATION_COMPLETE marker (B2e), a LIVE symlink alias to a
+#      different revision (B2f), and an unparseable package.json that crashes
+#      the probe's node helper (B12) — each must exit 1 and be NAMED, and a
+#      relocated same-revision symlink cache must still pass (B2g).
 #   C. The Makefile RENDERS (`make -n`) the probe as the FIRST command of every
 #      e2e target, and playwright-deps renders `npm ci` with no `|| npm install`,
 #      `npx playwright install chromium` with `--with-deps` only under
@@ -148,6 +153,10 @@ mk_browsers() { # DIR [revision]
   : > "$1/chromium-${rev}/chrome-linux64/chrome"
   : > "$1/chromium_headless_shell-${rev}/INSTALLATION_COMPLETE"
   : > "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64/chrome-headless-shell"
+  # the probe demands an EXECUTABLE regular file under each revision dir (a
+  # marker-only dir is the fail-open the skeptic proved 2026-08-27), so the
+  # stub binaries carry the bit a real install has.
+  chmod +x "$1/chromium-${rev}/chrome-linux64/chrome" "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64/chrome-headless-shell"
 }
 
 # fresh NAME -> a new consistent tree + browsers dir; sets T (tree) and B (browsers)
@@ -220,6 +229,44 @@ fresh b2c; rm -f "${B}/chromium_headless_shell-9999/INSTALLATION_COMPLETE"
 probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
 eq "${RC}" "1" "B2c directory present but INSTALLATION_COMPLETE missing (interrupted download): exit 1"
 has "incomplete" "${ERR}" "B2c says incomplete and names the marker"
+
+# B2e. the marker WITHOUT the binary. `playwright install` writes the marker
+# LAST, so this is never an interrupted download — it is a partial rm/cp of the
+# cache, and it used to probe READY (the skeptic's 2026-08-27 fail-open proof:
+# a dir holding only INSTALLATION_COMPLETE passed, then browserType.launch died
+# with the exact "Executable doesn't exist" class the probe exists to kill).
+fresh b2e; rm -rf "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2e headless-shell dir holds ONLY the INSTALLATION_COMPLETE marker: exit 1"
+has "NO executable file" "${ERR}" "B2e says no executable file is under it"
+has "${B}/chromium_headless_shell-9999" "${ERR}" "B2e names the directory"
+hasnt "toolchain: READY" "${ERR}" "B2e nothing claims READY"
+
+# ... and a binary that LOST its exec bit is the same defect.
+fresh b2e2; chmod -x "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2e2 the headless-shell binary lost its exec bit: exit 1"
+has "NO executable file" "${ERR}" "B2e2 reported as the same no-executable defect"
+
+# B2f. a LIVE alias to a different revision — the re-planted 2026-08-26 shape.
+# B2d catches the alias once it DANGLES; recreating it against a directory that
+# EXISTS used to pass silently, and then a different browser build runs.
+fresh b2f; mk_browsers "${B}" 1234
+rm -rf "${B}/chromium_headless_shell-9999"
+ln -s "${B}/chromium_headless_shell-1234" "${B}/chromium_headless_shell-9999"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2f the revision dir is a LIVE symlink to a different revision's dir: exit 1"
+has "ALIASED" "${ERR}" "B2f says it is aliased"
+has "chromium_headless_shell-1234" "${ERR}" "B2f names the target so nobody re-plants the alias"
+
+# ... while a symlinked CACHE that keeps the revision honest still passes: the
+# check compares the target basename's revision, it does not ban symlinks.
+fresh b2g
+b2g_store="${TMP}/b2g/real-store"; mkdir -p "${b2g_store}"
+mv "${B}/chromium_headless_shell-9999" "${b2g_store}/chromium_headless_shell-9999"
+ln -s "${b2g_store}/chromium_headless_shell-9999" "${B}/chromium_headless_shell-9999"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "0" "B2g a symlink to the SAME revision (a relocated cache) is READY"
 
 # B3. package.json bumped, lock not regenerated: the DRIFT class, different fix.
 fresh b3; sed -i 's/"pngjs": "\^7.0.0"/"pngjs": "^8.0.0"/' "${T}/package.json"
@@ -347,6 +394,20 @@ fresh b11
 out="$(env -i PATH="${nonode}" HOME="${TMP}" E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}" bash "${PROBE}" 2>&1)"; rc=$?
 eq "${rc}" "2" "B11 no node on PATH: exit 2"
 has "'node' is not on PATH" "${out}" "B11 names node"
+
+echo
+echo "-- B12) a crashed helper is a PROBLEM, never READY --"
+# The skeptic's 2026-08-27 blind spot: with the crash handler deleted from the
+# probe, a tree whose package.json is unparseable garbage probed 'READY —
+# verified' rc=0 (no problems collected, SUMMARY unset) — and this suite stayed
+# green. This leg feeds the probe exactly that tree.
+fresh b12; printf 'not json {' > "${T}/package.json"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B12 package.json is unparseable garbage: exit 1"
+has "node helper crashed" "${ERR}" "B12 the crash is reported as a problem, not swallowed"
+has "Error" "${ERR}" "B12 the problem line carries the helper's own error (captured stderr), not an empty tail"
+hasnt "toolchain: READY" "${ERR}" "B12 nothing claims READY"
+eq "${OUT}" "" "B12 stdout stays empty even on a crash"
 
 echo
 echo "-- C) every e2e make target RENDERS the probe first (make -n) --"
