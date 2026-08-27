@@ -8,9 +8,12 @@
 # does NOT emulate RPi 5 firmware/PCIe — QEMU has no BCM2712 machine. The
 # image's kernel carries virtio + PL011 so the SAME Image boots under -M virt.
 #
-# Designed to run on a Gentoo host. Requires root (loop-mounts + extracts a
-# stage4 with xattrs). Tools: qemu-system-aarch64, mkfs.ext4, mkfs.vfat,
-# ssh, ssh-keygen, truncate.
+# Designed to run on a Gentoo host. Requires root — NOT for a loop mount (the
+# rootfs is built with `mkfs.ext4 -d` since 2026-08-26; see build_rootfs()) but
+# because unpacking a stage4 with its ownership and its security.* xattrs
+# intact needs CAP_CHOWN + CAP_SYS_ADMIN. Tools: qemu-system-aarch64,
+# mkfs.ext4 and debugfs (e2fsprogs >= 1.43, for -d), mkfs.vfat, ssh,
+# ssh-keygen, truncate, tar.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,8 +85,11 @@ step()  { echo "${CYAN}==> $*${RST}"; }
 warn()  { echo "${YEL}[qemu-test] WARN:${RST} $*"; }
 die()   { echo "${RED}[qemu-test] ERROR:${RST} $*" >&2; exit 1; }
 
-[ "$(id -u)" -eq 0 ] || die "run as root (loop-mount + stage4 extraction need it): sudo $0 ..."
-for t in qemu-system-aarch64 mkfs.ext4 mkfs.vfat ssh ssh-keygen truncate; do
+[ "$(id -u)" -eq 0 ] || die "run as root (the stage4 untar needs to restore ownership and security.* xattrs): sudo $0 ..."
+# debugfs is required, not optional: it is how build_rootfs() asserts POSTCONDITIONS
+# on the finished image (populated? labelled?) without mounting it. Dropping it to a
+# "skip if missing" would put the vacuous pass back exactly where it was.
+for t in qemu-system-aarch64 mkfs.ext4 debugfs mkfs.vfat ssh ssh-keygen truncate tar; do
     command -v "$t" >/dev/null || die "missing tool: $t"
 done
 
@@ -131,7 +137,10 @@ QEMU_PIDFILE="${TEST_DIR}/qemu.pid"
 
 cleanup() {
     [ -f "${QEMU_PIDFILE}" ] && kill "$(cat "${QEMU_PIDFILE}")" 2>/dev/null || true
-    umount "${TEST_DIR}/mnt" 2>/dev/null || true
+    # No umount here any more: build_rootfs() mounts nothing, so there is no
+    # loop device and no mountpoint to unwind. The old `umount ${TEST_DIR}/mnt
+    # || true` was also the reason a leaked loop device stayed leaked — it hid
+    # its own failure.
     if ! ${KEEP}; then rm -rf "${TEST_DIR}"; fi
 }
 trap cleanup EXIT
@@ -180,25 +189,164 @@ step "Building FAT32 KEYS image"
 "${SCRIPT_DIR}/make-test-keys.sh" "${KEYS_SRC}" "${KEYSIMG}" 64
 
 # ── Root filesystem image ──────────────────────────────────────────
-step "Building ext4 rootfs and extracting stage4 (this can take a minute)"
-truncate -s 6G "${ROOTFS}"
-mkfs.ext4 -q -F "${ROOTFS}"
-mkdir -p "${TEST_DIR}/mnt"
-mount -o loop "${ROOTFS}" "${TEST_DIR}/mnt"
-tar -C "${TEST_DIR}/mnt" --xattrs-include='*.*' -xpf "${STAGE4}" 2>/dev/null || \
-    tar -C "${TEST_DIR}/mnt" -xpf "${STAGE4}"
+# NO LOOP MOUNT, DELIBERATELY. Until 2026-08-26 this section was three
+# unchecked commands in a row:
+#
+#     mkfs.ext4 -q -F "${ROOTFS}"
+#     mount -o loop "${ROOTFS}" "${TEST_DIR}/mnt"
+#     tar -C "${TEST_DIR}/mnt" --xattrs-include='*.*' -xpf "${STAGE4}" 2>/dev/null || \
+#         tar -C "${TEST_DIR}/mnt" -xpf "${STAGE4}"
+#
+# with no `|| die` on any of them, no lock and no retry around the loop
+# allocation, and it then HELD that loop device for the entire boot + assert
+# window (TIMEOUT defaults to 1800s). /dev/loop* is a global, HOST-wide
+# resource even from inside a container: run-qemu-docker.sh fans several rows
+# out at once into --privileged containers that all share the host's loop
+# devices. A `mount` that lost that race did not stop anything — the tar then
+# landed in ${TEST_DIR}/mnt on the CONTAINER's own filesystem, the rootfs image
+# stayed the empty ext4 mkfs had just made, and the guest failed to boot for
+# reasons that pointed nowhere near this line.
+#
+# mkfs.ext4 -d populates the filesystem straight from a staging DIRECTORY, so
+# stage4 mode needs no loop device at all. -d landed in e2fsprogs 1.43 (2016)
+# and copies extended attributes along with the files it walks
+# (misc/create_inode.c, set_inode_xattr) — that is what carries the stage4's
+# security.selinux labels into the image. docker/Dockerfile.qemu-runner
+# installs Debian bookworm's e2fsprogs (1.47.0); the gate below refuses loudly
+# on anything older rather than producing an empty rootfs and a mystery boot
+# failure. The trade is peak disk: the staging tree and the image both exist
+# for the duration of the mkfs, so the tree is deleted the moment the
+# postconditions have passed.
 
-# QEMU-appropriate fstab + serial getty (the on-disk fstab targets mmcblk/NVMe)
-cat > "${TEST_DIR}/mnt/etc/fstab" <<'EOF'
+# build_rootfs ROOTFS_IMG STAGE4_TARBALL STAGING_DIR
+# Fabricates ${ROOTFS_IMG} from ${STAGE4_TARBALL} without mounting anything.
+# Every step is checked; every failure is fatal and named.
+build_rootfs() {
+    # bash 5.3 localises every name in a `local a=$1 b=$a` list BEFORE assigning
+    # any of them, so a later name referring to an earlier one dies under set -u
+    # (green on CI's bash 5.2, dead on this box). Declare, then assign.
+    local rootfs
+    local stage4
+    local stage
+    local xlog
+    local mkfs_v
+    local probe
+    local ea
+    rootfs="$1"
+    stage4="$2"
+    stage="$3"
+    xlog="${stage}-extract.log"
+
+    mkfs_v="$(mkfs.ext4 -V 2>&1 | sed -n 's/^mke2fs \([0-9][0-9.]*\).*$/\1/p' | head -1)"
+    [ -n "${mkfs_v}" ] || die "could not read the e2fsprogs version from 'mkfs.ext4 -V'"
+    [ "$(printf '1.43\n%s\n' "${mkfs_v}" | sort -V | head -1)" = "1.43" ] \
+        || die "e2fsprogs ${mkfs_v} is too old for 'mkfs.ext4 -d' (need >= 1.43). Upgrade sys-fs/e2fsprogs; do NOT reintroduce loop-mounting here."
+
+    rm -rf "${stage}"
+    mkdir -p "${stage}" || die "cannot create staging dir ${stage}"
+
+    # THE XATTR TAR'S STDERR IS NOT DISCARDED ANY MORE. It used to be `2>/dev/null
+    # || <plain tar>`, so a stage4 extracted WITHOUT its security.selinux labels
+    # looked exactly like a successful one — and the ~10 SELinux assertions in
+    # assertions.sh then graded that unlabelled rootfs and passed it. The plain
+    # tar is still the last-ditch fallback (a rootfs with no labels still boots
+    # and still exercises provisioning), but it is now impossible to reach
+    # quietly: the reason tar gave is replayed to stderr and the run is marked.
+    info "extracting stage4 into ${stage} (xattrs preserved)"
+    STAGE4_XATTRS=yes
+    if ! tar -C "${stage}" --xattrs-include='*.*' -xpf "${stage4}" 2>"${xlog}"; then
+        STAGE4_XATTRS=no
+        warn "XATTR-PRESERVING EXTRACTION FAILED — falling back to a PLAIN untar."
+        warn "The resulting rootfs will carry NO security.selinux labels, and the"
+        warn "SELinux assertions are graded against a rootfs-is-labelled"
+        warn "precondition (tests/qemu/assertions.sh) that will FAIL on it."
+        warn "tar said:"
+        sed -n '1,40p' "${xlog}" >&2
+        tar -C "${stage}" -xpf "${stage4}" \
+            || die "plain stage4 extraction failed too — see ${xlog}"
+    elif [ -s "${xlog}" ]; then
+        # Succeeded, but said something. Non-fatal tar warnings have preceded
+        # real damage here before; they are shown, never swallowed.
+        warn "stage4 extraction succeeded with warnings:"
+        sed -n '1,40p' "${xlog}" >&2
+    fi
+
+    # QEMU-appropriate fstab + serial getty (the on-disk fstab targets mmcblk/NVMe).
+    # mkdir -p first and `|| die` after: with errexit on, a tarball that unpacked
+    # without an /etc would otherwise abort the whole script on a bare redirection
+    # error with no diagnosis attached to it.
+    mkdir -p "${stage}/etc" || die "cannot create ${stage}/etc"
+    cat > "${stage}/etc/fstab" <<'EOF'
 /dev/vda   /     ext4    defaults,noatime   0 1
 tmpfs      /tmp  tmpfs   defaults,nosuid,nodev,noexec,size=256m 0 0
 tmpfs      /run  tmpfs   defaults,nosuid,nodev,mode=0755 0 0
 EOF
-if ! grep -q ttyAMA0 "${TEST_DIR}/mnt/etc/inittab" 2>/dev/null; then
-    echo 's0:12345:respawn:/sbin/agetty -L 115200 ttyAMA0 vt100' >> "${TEST_DIR}/mnt/etc/inittab"
-fi
-sync
-umount "${TEST_DIR}/mnt"
+    [ -s "${stage}/etc/fstab" ] || die "failed to write the QEMU fstab into ${stage}"
+    # grep -q on a FILE ARGUMENT has no upstream pipeline stage, so the
+    # pipefail/SIGPIPE coin-flip that has bitten this repo does not apply here.
+    if ! grep -q ttyAMA0 "${stage}/etc/inittab" 2>/dev/null; then
+        echo 's0:12345:respawn:/sbin/agetty -L 115200 ttyAMA0 vt100' >> "${stage}/etc/inittab"
+    fi
+
+    # Env seam (ROOTFS_SIZE), same shape as the SELINUX_* seams in
+    # assertions.sh: tests/qemu/stage4_rootfs_test.sh drives build_rootfs() for
+    # real against tiny fixtures, and a 6G sparse image per mutation leg would
+    # cost real metadata blocks on a box whose / is the tightest mount here.
+    # In the guest path the default is always what runs.
+    truncate -s "${ROOTFS_SIZE:-6G}" "${rootfs}" || die "truncate failed for ${rootfs}"
+    # Same mkfs options as the old path (-q -F) plus -d: the inode budget and
+    # every other default are unchanged, so a stage4 that fit before still fits.
+    mkfs.ext4 -q -F -d "${stage}" "${rootfs}" \
+        || die "mkfs.ext4 -d failed to build ${rootfs} from ${stage} (out of space or inodes?)"
+
+    # ── Postconditions on the RENDERED IMAGE, not on mkfs's exit code ───────
+    # mkfs.ext4 exits 0 for an empty filesystem just as happily as for a
+    # populated one, so "it returned success" says nothing. debugfs reads the
+    # image directly (no mount, no loop), which makes these assertions about the
+    # artefact that is about to be booted rather than about a renderer's rc.
+    #
+    # TWO SEPARATE FACTS ARE ASSERTED, because either one alone is weak:
+    #  1. /etc/fstab is in there  — proves mkfs -d copied the staging tree at all.
+    #     On its own it proves nothing about the TARBALL: this function writes
+    #     that fstab itself, so it exists even when the stage4 unpacked nowhere.
+    #  2. a file that can only have come OUT of the stage4 is in there. A list,
+    #     not a single path: /sbin may be a usrmerge symlink and the init
+    #     implementation differs across roles, so pinning one name would turn a
+    #     healthy image into a fatal error. Missing EVERY one of them is the
+    #     failure this catches — an image holding only what we wrote into it.
+    probe="$(debugfs -R 'stat /etc/fstab' "${rootfs}" 2>/dev/null || true)"
+    printf '%s\n' "${probe}" | grep -E '^Inode: [0-9]+' >/dev/null \
+        || die "rootfs postcondition FAILED: /etc/fstab is not in ${rootfs} — mkfs.ext4 -d copied nothing at all."
+    local found
+    found=""
+    for probe in ${ROOTFS_PROBE_PATHS:-/sbin/init /usr/sbin/init /bin/sh /bin/bash /etc/passwd /etc/shadow}; do
+        if debugfs -R "stat ${probe}" "${rootfs}" 2>/dev/null | grep -E '^Inode: [0-9]+' >/dev/null; then
+            found="${probe}"; break
+        fi
+    done
+    [ -n "${found}" ] \
+        || die "rootfs postcondition FAILED: ${rootfs} contains NONE of ${ROOTFS_PROBE_PATHS:-/sbin/init /usr/sbin/init /bin/sh /bin/bash /etc/passwd /etc/shadow} — the image holds only what this script wrote into it, so the stage4 never landed. Do not boot it."
+
+    # The SELinux labels are the whole reason this extraction preserves xattrs.
+    # Checked on the stage4-owned file found above, never on /etc/fstab — that
+    # one this script writes itself and it says nothing about the tarball.
+    ea="$(debugfs -R "ea_list ${found}" "${rootfs}" 2>/dev/null || true)"
+    if printf '%s\n' "${ea}" | grep -F 'security.selinux' >/dev/null; then
+        info "rootfs carries security.selinux (checked on ${found} via debugfs ea_list)"
+    else
+        warn "ROOTFS IS UNLABELLED: no security.selinux on ${found} in ${rootfs}"
+        warn "(xattr tar path: ${STAGE4_XATTRS}). The guest's SELinux assertions"
+        warn "are gated on a rootfs-is-labelled precondition and will FAIL loudly"
+        warn "rather than passing vacuously against an unlabelled tree."
+    fi
+
+    # Reclaim the staging tree now — it is a second full copy of the rootfs and
+    # nothing after this point reads it. --keep leaves it for post-mortems.
+    if ! ${KEEP}; then rm -rf "${stage}"; fi
+}
+
+step "Building ext4 rootfs from stage4 (no loop device; this can take a minute)"
+build_rootfs "${ROOTFS}" "${STAGE4}" "${TEST_DIR}/rootfs-stage"
 
 # ── Boot QEMU ──────────────────────────────────────────────────────
 step "Booting QEMU (machine=${QEMU_MACHINE}, cpu=${QEMU_CPU}, mem=${MEM}M)"
