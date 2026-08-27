@@ -46,6 +46,14 @@ FROM debian:bookworm-slim
 #                    Debian ships sfdisk in `fdisk`, NOT in `util-linux`.
 # mtools           : mcopy, so make-test-keys.sh can populate the FAT32 KEYS image
 #                    WITHOUT a loop mount (its preferred, faster path).
+# e2fsprogs        : mkfs.ext4 AND debugfs. Two hard requirements, not one:
+#                    tests/qemu/run-qemu-test.sh builds the stage4 rootfs with
+#                    `mkfs.ext4 -d` (e2fsprogs >= 1.43; bookworm ships 1.47.0)
+#                    so stage4 mode needs no loop device at all, and it then
+#                    asserts POSTCONDITIONS on the finished image with debugfs
+#                    — populated? carrying security.selinux? — again without
+#                    mounting it. Dropping debugfs would not fail the build; it
+#                    would put back a rootfs nobody checks.
 # xz-utils         : the artifacts ship as .img.xz / .stage4.tar.xz.
 # openssh-client   : the assertions are driven over ssh into the guest.
 ENV DEBIAN_FRONTEND=noninteractive

@@ -267,7 +267,11 @@ spring:
             - id: hugmesh-user-bff-api
               uri: http://hugmesh-user-bff-api:8080
               predicates:
-                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**
+                # /bff/password-reset/* are the ANONYMOUS forgot-password legs
+                # (user-bff PasswordResetController). They are listed as EXACT
+                # paths, like every other entry here, so a future sibling under
+                # that prefix does not route (or become public) by accident.
+                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**,/bff/password-reset/request,/bff/password-reset/confirm
             # Moderator BFF surface -> mod-bff (also precedes the admin catch-all).
             - id: hugmesh-mod-bff-api
               uri: http://hugmesh-mod-bff-api:8080

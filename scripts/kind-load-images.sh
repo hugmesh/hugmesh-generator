@@ -27,7 +27,8 @@ for bin in docker kind; do
 done
 [ -d "${STACK_SRC}" ] || { echo "STACK_SRC ${STACK_SRC} missing — run 'make stack-clone' first" >&2; exit 1; }
 
-# The three Java images resolve org-private systems.hugmesh artifacts through
+# The Java images (gateway, user-bff, admin-bff, federation-api) resolve org-private
+# systems.hugmesh artifacts through
 # their committed settings.xml (${env.CI_API_V4_URL} group registry) — locally
 # that is the m2-bootstrap static-registry container (tests/stack/
 # m2-bootstrap.sh writes its bridge address into .m2-registry.env, the same
@@ -161,12 +162,24 @@ IMAGES=(
   "hugmesh-matrix-ui=${REGISTRY}/hugmesh-matrix-ui:main="
   "hugmesh-mastodon-ui=${REGISTRY}/hugmesh-mastodon-ui:main="
   "hugmesh-admin-ui=${REGISTRY}/hugmesh-admin-ui:main="
+  # ── /user/** self-service (profile, preferences, PASSWORD CHANGE) ──────────
+  # Added with apps/47-user-ui.yaml in bootstrap-kind.sh's SSO_APPS. Before that
+  # the profile was ROUTED but never DEPLOYED on kind: apps/20-gateway-fe.yaml
+  # applies `- id: user-ui / uri: http://hugmesh-user-ui.hugmesh-frontend…:80 /
+  # path: /user/**` unconditionally, so /user/** resolved to a Service with no
+  # endpoints while /bff/user/** answered curl perfectly. Building the image is
+  # half of the fix; the Application is the other half and neither works alone.
+  "hugmesh-user-ui=${REGISTRY}/hugmesh-user-ui:main="
+  # federation-api — the vanity/public-profile publish target a profile save calls
+  # when Public is turned on (apps/29-federation-api.yaml, with its DB at
+  # apps/28-federation-db.yaml).
+  "hugmesh-federation-api=${REGISTRY}/hugmesh-federation-api:main=java"
 )
 
-# ONLY=<repo>[,<repo>...] — rebuild a SUBSET instead of all eight.
+# ONLY=<repo>[,<repo>...] — rebuild a SUBSET instead of all of them.
 #
 # Why this exists: iterating on one UI defect meant rebuilding every image,
-# including the three Java ones, which dominates the loop and has nothing to do
+# including the Java ones, which dominates the loop and has nothing to do
 # with the change. `make kind-images ONLY=hugmesh-host-shell` rebuilds and
 # reloads just that one.
 #
