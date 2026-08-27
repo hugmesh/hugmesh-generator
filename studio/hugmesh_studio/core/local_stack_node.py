@@ -917,11 +917,25 @@ class LocalStackNode:
                        "but unseeded; run `make stack-seed` (the bootstrap's "
                        "bring-up seeds automatically)")
 
-    def e2e_ready(self) -> list[str]:
+    def e2e_ready(self, environment: str = "docker") -> list[str]:
         """Every reason the e2e suite cannot run RIGHT NOW (empty = ready) —
         read-only probes only, cheapest first. This one list is BOTH the GUI
         button's enablement and run_e2e()'s fail-fast gate, so they can never
-        disagree."""
+        disagree.
+
+        SCOPED BY ENVIRONMENT (2026-08-26). Everything below the node_modules
+        check is a probe of the LOCAL DOCKER MESH: is this compose project up,
+        was it started with ENV=test, are its personas seeded. Those questions
+        are meaningless for the kind cluster and for an emulated device, and
+        answering them anyway would grey the Run button for a mesh the operator
+        never selected — the exact dishonesty the tri-state gate exists to
+        avoid. For a non-docker environment this returns only the checks that
+        still apply, and readiness of the mesh ITSELF is left to the harness,
+        which already skips per scenario with a reason naming what to start
+        (tests/e2e/steps/world.ts). Two components answering the same question
+        is how they come to disagree."""
+        from . import e2e_environments as _e2e_env
+        env_def = _e2e_env.environment(environment)   # raises on an unknown id
         problems: list[str] = []
         e2e_dir = os.path.join(self.generator_dir, "tests", "e2e")
         if not os.path.isdir(e2e_dir):
@@ -929,6 +943,10 @@ class LocalStackNode:
         elif not os.path.isdir(os.path.join(e2e_dir, "node_modules")):
             problems.append("tests/e2e/node_modules missing — run `make "
                             "playwright-deps` once (npm ci + chromium).")
+        if env_def.id != "docker":
+            # Nothing else here describes this mesh. Say so rather than
+            # silently returning a short list that reads like a full check.
+            return problems
         if not self.status().running:
             problems.append("the local stack is not running — bring it up first.")
             return problems
@@ -946,6 +964,7 @@ class LocalStackNode:
 
     def run_e2e(self, extra_env: dict[str, str] | None = None,
                 on_line=None, cancel=None,
+                environment: str = "docker",
                 specs: Sequence[str] | None = None) -> tuple[bool, str]:
         """`make stack-e2e` — the Playwright suite (tests/e2e) against the
         RUNNING local stack's TLS front door (SNAP_BASE_URL=web_url's port).
@@ -954,7 +973,22 @@ class LocalStackNode:
         hugmesh reporter's DURABLE artifact: passed/failed/skipped) is read
         back and reported as ONE honest counts line — never scraped from the
         scrolling list output; a missing summary is reported as exactly that."""
-        problems = self.e2e_ready()
+        from . import e2e_environments as _e2e_env
+        # THE ENVIRONMENT CHANNEL. One contract with the terminal: the chosen
+        # environment rides as SNAP_ENV on the child's environment, which is
+        # exactly what `SNAP_ENV=kind make stack-e2e-bdd-env` sets and what
+        # tests/e2e/steps/world.ts reads. Nothing about the choice is encoded in
+        # the target or in a config file, so there is no second spelling to
+        # drift. plan() also carries the per-environment pins (kind needs the
+        # chromium host-resolver rules; qemu's base URL follows the forwarded
+        # UI port) — restating those here would be that second spelling.
+        try:
+            plan = _e2e_env.plan(environment)
+        except ValueError as exc:
+            return False, str(exc)
+        if not plan.runnable:
+            return False, "\n".join(plan.refusals)
+        problems = self.e2e_ready(environment)
         if problems:
             return False, "\n".join(problems)
         report_rel = os.path.join(
@@ -964,7 +998,11 @@ class LocalStackNode:
         # into the suite — without it every superadmin login 401s on a
         # studio-bootstrapped mesh (spec-28 failure, 2026-08-14). Values ride
         # the subprocess env, never argv.
-        env = {"SNAP_REPORT_DIR": report_rel}
+        # plan.env FIRST, then the report dir and the identity bridge. run_env()
+        # already refuses to let a bridge dict re-point SNAP_ENV, so a caller
+        # cannot make the label say kind while the run drives docker.
+        env = dict(plan.env)
+        env["SNAP_REPORT_DIR"] = report_rel
         env.update(extra_env or {})
         # THE SELECTION, on its way to argv. `specs` are Playwright positional
         # filters (``specs/NN-x.spec.ts``, cwd tests/e2e) chosen in the feature tree;
@@ -982,7 +1020,7 @@ class LocalStackNode:
         if accepted and on_line is not None:
             on_line(f"[e2e] running {len(accepted)} selected spec file(s): "
                     + ", ".join(accepted))
-        ok, msg = self._make("stack-e2e", timeout=E2E_TIMEOUT_S,
+        ok, msg = self._make(plan.make_target, timeout=E2E_TIMEOUT_S,
                              extra_env=env, args=args,
                              on_line=on_line, cancel=cancel)
         summary_path = os.path.join(self.generator_dir, "tests", "e2e",
@@ -990,12 +1028,15 @@ class LocalStackNode:
         try:
             with open(summary_path, encoding="utf-8") as fh:
                 s = json.load(fh)
-            line = (f"[e2e] {s.get('passed', 0)} passed, "
+            line = (f"[e2e/{plan.environment}] {s.get('passed', 0)} passed, "
                     f"{s.get('failed', 0)} failed, "
                     f"{s.get('skipped', 0)} skipped — summary: {summary_path}")
         except (OSError, ValueError):
-            line = ("[e2e] no summary.json written (the run ended before the "
-                    "reporter finished) — see the log above.")
+            # The environment tag is on THIS line too, not only the happy one:
+            # a log whose only result line is "no summary" still has to say
+            # which of three meshes the run was pointed at.
+            line = (f"[e2e/{plan.environment}] no summary.json written (the run "
+                    "ended before the reporter finished) — see the log above.")
         if on_line is not None:
             on_line(line)
         return ok, f"{line}\n{msg}"

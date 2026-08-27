@@ -1967,3 +1967,161 @@ stack-logs: ## tail logs from the running local stack
 
 stack-ps: ## list the local stack's containers + status
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+
+# ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────
+# SEPARATE targets on purpose: the `stack-e2e` recipe above is edited by other
+# work in flight, so the BDD lane adds its own targets rather than growing that
+# recipe. Its own .PHONY line, for the same reason.
+#
+# tests/e2e/features/**/*.feature is compiled by `npx bddgen` into the GITIGNORED
+# tests/e2e/.features-gen/, which playwright.config.ts's `bdd` project runs.
+# Conventions every feature author follows: tests/e2e/features/README.md.
+#
+# EVERY TARGET BELOW DELEGATES TO tests/e2e/run.sh. That script is the single
+# CLI entry point for this suite; when these recipes spelled the invocation
+# themselves there were two divergent ways to run one lane, and they drifted.
+# Anything you can do here you can do by hand with the same flags, which is the
+# point -- `make stack-e2e-bdd BDD_ENV=qemu` is exactly
+# `bash tests/e2e/run.sh --bdd --env qemu`.
+#
+# KNOBS (all optional):
+#   BDD_ENV=docker|kind|qemu  which mesh (default docker; NOTHING is started)
+#   BDD_TAGS='@interface:cli' Gherkin tag expression, forwarded to bddgen
+#   BDD_FEATURES='cli/'       feature path(s), forwarded to playwright
+#   BDD_ARGS='--reporter=line' extra playwright arguments, verbatim
+#   SNAP_PLATFORM=rpi5|x86    narrows the PLATFORM axis to the image running
+#   SNAP_REPORT_DIR / SNAP_RUN_ID   where junit/json/summary + bdd-steps/ land
+.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check stack-e2e-bdd-evidence \
+        stack-e2e-bdd-env stack-e2e-bdd-guards
+
+BDD_ENV ?= docker
+BDD_RUN  = bash tests/e2e/run.sh --bdd --env $(BDD_ENV) \
+             $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) \
+             $(if $(strip $(BDD_FEATURES)),--features '$(BDD_FEATURES)',)
+
+stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwright specs (bddgen)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(BDD_RUN) --gen
+
+# OFFLINE gate. No stack, no network. Proves every .feature compiles, every step
+# is bound (bddgen is missingSteps:fail-on-gen, so an undefined step FAILS here),
+# Playwright collects the generated tests, and no generated artefact is tracked.
+# This is the one to run before committing a feature.
+# The three AXIS guards belong here and NOT in .github/workflows/shell-suites.yml:
+# both need tests/e2e/node_modules (playwright + a chromium), which the shell-suite
+# runner image does not carry, so a CI listing would turn their honest
+# "SKIPPED-LOUDLY ... checked NOTHING" exit 2 into a red pipeline. Wired at the
+# Makefile gate instead, exactly as the anti-decoration guard above is.
+#   env x interface — was UNWIRED on arrival (tests/scripts/test-guard-integrity.sh
+#   check 3 listed it as "suite(s) nothing runs" on this very tree); wired here.
+stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guards)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(BDD_RUN) --list --reporter=line
+	bash tests/scripts/test-e2e-gherkin-harness.sh
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-social-function-matrix.sh
+	bash tests/scripts/test-e2e-cli-lane.sh
+#   The media/games and governance FUNCTION guards arrived UNWIRED: their author
+#   branches added the scripts and never called them from anywhere, which
+#   tests/scripts/test-guard-integrity.sh check 2 reports as "suite(s) nothing
+#   runs" on the merged tree. A drift guard nothing executes is the decorative
+#   artefact this repo keeps re-learning about, so they are wired here.
+	bash tests/scripts/test-e2e-func-media-games.sh
+	bash tests/scripts/test-e2e-governance-function-matrix.sh
+
+# The Gherkin lane's TWO deeper guards, each with its own mutation battery. Split
+# out of stack-e2e-bdd-check because they are minutes rather than seconds: each
+# breaks production several ways on purpose, re-runs the lane against every
+# mutant, and restores the tree.
+#
+# THEY ARE A MAKE TARGET AND NOT A CI JOB, deliberately, and the reason is
+# written here so nobody "fixes" it by gating them: both need `npx playwright`
+# AND a Qt6 binding (they build the REAL PyQt wizard offscreen), and no image the
+# shell-suites workflow runs carries either. On such a host both exit 2 with a
+# SKIPPED-LOUDLY line naming the missing prerequisite — never 0, so they can
+# never be mistaken for a pass. Gating a suite that can only skip would train
+# everyone to ignore the job.
+#
+# NOTHING IS STARTED. Both are designed to be green with the compose stack, the
+# kind cluster and every emulator DOWN: they test the vocabulary, the chooser and
+# the evidence, not the meshes.
+stack-e2e-bdd-guards: ## OFFLINE: the Gherkin lane's axis + Studio-GUI guards (mutation batteries; minutes)
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-studio-gui-lane.sh
+
+# ── The e2e REPORT's shape ───────────────────────────────────────────────────
+# Its own target and its own .PHONY line, for the same reason the BDD lane has
+# them: the stack-e2e recipe above is edited by other work in flight.
+#
+# What it gates: reporters/hugmesh-reporter.ts must keep emitting a report a
+# feature tree can render - pivoted BY SPEC FILE, one record per test, with
+# attachment paths and a skip REASON on every skipped test - while still writing
+# the legacy role/layer pivot the admin-ui console and hugmesh_studio's
+# parse_summary() read. The shape is pinned in tests/e2e/reporters/summary.schema.json,
+# checked against a REPLAY of a recorded run (no suite, no stack, no browser, no
+# node_modules: bare node + python3, ~4s).
+.PHONY: e2e-reporter-check
+
+e2e-reporter-check: ## OFFLINE: verify the e2e reporter emits a per-spec/per-test/attachment/skip-reason summary.json
+	bash tests/scripts/test-e2e-reporter-shape.sh
+
+# LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
+# make playwright-deps) when BDD_ENV=docker. SNAP_PLATFORM=rpi5|x86 narrows the
+# PLATFORM axis to the image target actually running; unset runs every platform
+# row. SNAP_REPORT_DIR redirects junit/json/summary AND the per-step evidence
+# under bdd-steps/, which `make stack-e2e-bdd-evidence` then summarises.
+#
+# SNAP_BASE_URL is passed for BDD_ENV=docker only: run.sh reads it as the docker
+# mesh's address (PUBLIC_HTTPS_PORT is this repo's front door, not 8443), and
+# for kind/qemu run.sh resolves the address itself.
+stack-e2e-bdd: ## run the GHERKIN e2e lane (BDD_ENV=docker|kind|qemu; docker needs stack-up + stack-seed)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(if $(filter docker,$(BDD_ENV)),SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' ,)$(BDD_RUN) $(BDD_ARGS)
+
+# Where did this run's screenshots / transcripts / widget grabs go, and what is
+# in them? Reads the manifest the lane wrote and breaks it down per environment
+# and per interface. Exits non-zero when there is nothing there -- an empty
+# summary reported as success is how a lane that ran NOTHING passes for one that
+# ran everything.
+stack-e2e-bdd-evidence: ## summarise the Gherkin lane's evidence manifest (per env / per interface)
+	bash tests/e2e/run.sh --evidence
+
+# ── SNAP_ENV alias: the STUDIO's entry point ─────────────────────────────────
+# studio/hugmesh_studio/core/e2e_environments.py pins RUN_TARGET = this name and
+# studio/tests/test_e2e_environments.py asserts the target exists in this file,
+# so the name is load-bearing. It is deliberately a THIN ALIAS and not a second
+# implementation: the GUI lane and the CLI lane arrived independently, each with
+# its own way to select an environment (SNAP_ENV inline here / BDD_ENV through
+# run.sh), which is precisely the two-divergent-invocations drift the comment at
+# the top of this block warns about. One implementation, two spellings of the
+# knob. Nothing is started; a scenario whose mesh is down SKIPS with a reason.
+#
+#   make stack-e2e-bdd-env                       # docker (default)
+#   SNAP_ENV=kind make stack-e2e-bdd-env         # the kind cluster
+#   SNAP_ENV=qemu make stack-e2e-bdd-env         # a device somebody already booted
+stack-e2e-bdd-env: ## run the GHERKIN lane against the mesh SNAP_ENV names (docker|kind|qemu; nothing is started)
+	@$(MAKE) --no-print-directory stack-e2e-bdd \
+	  BDD_ENV='$(or $(SNAP_ENV),docker)' BDD_ARGS='$(BDD_ARGS) $(E2E_ARGS)'
+
+# ── THE GENERATIVE COVERAGE MATRIX ───────────────────────────────────────────
+# tests/e2e/features/coverage/ is EMITTED, not hand-written: every seeded
+# persona x every catalogued function x every service, with the expected
+# admitted/refused outcome computed from the COMMITTED gateway route-access seed.
+# Adding a persona to tests/e2e-extra-personas.sh, a service to
+# tests/e2e/steps/dimensions.ts SERVICES, or a function to
+# tests/e2e/steps/coverage-catalogue.ts FUNCTIONS expands the matrix
+# automatically — and the drift guard goes RED until it is re-emitted.
+.PHONY: stack-e2e-coverage-gen stack-e2e-coverage-check
+
+stack-e2e-coverage-gen: ## re-emit tests/e2e/features/coverage/ from the persona/service/function catalogues
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	bash tests/e2e/gen-coverage-matrix.sh
+
+# OFFLINE gate. Starts nothing. Re-emits into a scratch dir and DIFFS against the
+# committed tree, derives the expected persona/service/function/pair sets from the
+# catalogues and compares them with what `playwright test --list` actually
+# generates, runs the whole coverage lane, then breaks production six ways and
+# requires every break to turn it red. Takes ~10 minutes; COVERAGE_MATRIX_FULL=0
+# runs a representative subset instead while iterating.
+stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is complete, pinned and drift-guarded
+	bash tests/scripts/test-e2e-coverage-matrix.sh
