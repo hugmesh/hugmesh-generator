@@ -1283,6 +1283,20 @@ lint:mfa-raw-jwt-posture:
 # granting ROLE_FLEET_ADMIN on /bff/admin/phone-fleet/**, while the Casdoor seed
 # never declared that role — so no account on any cluster could hold it and the
 # fleet-owner phone console was unreachable. Both halves ran RED before the fix.
+# A generated credential that lands INSIDE a URL must be URL-safe. `openssl rand
+# -base64` emits + / and =; R2DBC URL-decodes the userinfo, so a `+` reaches Postgres
+# as a SPACE and the gateway cannot read route_access — at which point it enforces
+# NOTHING and a plain ROLE_USER gets the admin shell. ~63% of bootstraps mint at
+# least one such password; three of six were affected on the live cluster.
+lint:url-embedded-credentials:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache python3 openssl coreutils
+  script:
+    - bash tests/scripts/test-url-embedded-credentials.sh
+
 # Reading the e2e suite must not require a seeded stack. `playwright --list` starts
 # no browser and contacts nothing, but a credential resolved at MODULE SCOPE throws
 # at import, so enumeration returned 0 specs / 21 errors on main. The Studio's e2e

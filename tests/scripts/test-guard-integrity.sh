@@ -138,36 +138,42 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
 #
-# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated. Small, but
-# recorded for the same reason as the reconciliations above: this branch expected
-# 142 and main said 141, and the only number worth writing down is the one MEASURED
-# on the merged tree. It happened to agree with the branch this time; the previous
-# entries in this block are all cases where it did not.
-# 143 / 119 -> 145, denominator 164 -> 166, when fix/argocd-dashboard-honesty merged
-# main. This branch wires TWO new suites into shell-suites.yml
-# (tests/platform-capability-rbac/test-probe-rbac-namespaces.sh and
-# test-argocd-route-honesty.sh) and, correctly for ITS OWN base, wrote 119 into this
-# line -- the eighth value a branch has believed here, and, like the seven before it,
-# not true of the merged tree: main had moved to 141/163 and then 143/164 underneath
-# it. The merge conflicted on exactly this line for the eighth time, and then AGAIN
-# when main moved a second time mid-review -- MEASURED both times rather than carried
-# forward, which is why the number in this block is 145 and not the 143 the first
-# measurement produced against the older main.
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated, and
+# 141 -> 142 again, independently, when test-url-embedded-credentials.sh was gated
+# on a sibling branch. BOTH measured 142, and both were right about the tree they
+# measured and wrong about the merge: each was looking at a tree containing only
+# its OWN addition. This block exists because that keeps happening.
 #
-# Resolved by taking main's side WHOLESALE the first time -- main did not merely hold
-# a bigger number, it added the PREMERGE_UNGATED set-pin below, which the branch's
-# side predates entirely; a line-wise resolution that kept 119 would have silently
-# dropped that mechanism. The second conflict was two complementary comment blocks and
-# BOTH are kept, per the rule the blocks above already state. MEASURED on the merged
-# tree by running this file and reading the line it prints:
-#     145 of 166 suites are named by a pull_request-triggered workflow
+# The value below is MEASURED on the integrated tree, not carried over from either
+# branch — the merge measured 144, which is neither branch's 142 nor the 143 main
+# carried in. Re-run this file after any merge that adds a suite; do not reason about
+# what the number "should" be.
+#
+# 144 -> 146, denominator 165 -> 167, when fix/argocd-dashboard-honesty landed. This
+# branch wires TWO new suites into shell-suites.yml
+# (tests/platform-capability-rbac/test-probe-rbac-namespaces.sh and
+# test-argocd-route-honesty.sh) and has now been re-measured THREE times against three
+# different mains: it wrote 119 for its own base, then 145 when main was 143/164, and
+# 146 here, because main moved to 144/165 underneath it when test-url-embedded-credentials.sh
+# was gated. Every one of those three was correct about the tree it measured. That is
+# the ninth value a branch has believed on this line, and the eighth time this exact
+# line has conflicted.
+#
+# Resolved as a union, per the rule the blocks above already state: main's record and
+# this branch's are complementary, not competing, so BOTH are kept. Note that the first
+# resolution of this conflict had to take main's side WHOLESALE rather than line-wise --
+# main did not merely hold a bigger number, it added the PREMERGE_UNGATED set-pin below,
+# which this branch's side predates entirely, and a line-wise keep of 119 would have
+# silently dropped that mechanism.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     146 of 167 suites are named by a pull_request-triggered workflow
 # +2 gated, +2 total: both of this branch's suites are named by shell-suites.yml, which
-# is why the GATED count and the denominator moved together and the ungated SET pin
-# below was untouched by this branch (it is 21 here, down from 22, because MAIN gated
-# test-e2e-enumeration-without-credentials.sh -- not because this branch delisted
-# anything). Not derived by adding 2 to 143 -- that it agrees with the arithmetic is a
-# check on the measurement, not a substitute for it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-145}"
+# is why the gated count and the denominator moved together and the ungated SET pin
+# below was untouched (it stays 21). That this agrees with 144+2 is a CHECK on the
+# measurement, not a substitute for it -- the seven entries above are all cases where
+# the arithmetic and the measurement disagreed.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-146}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
