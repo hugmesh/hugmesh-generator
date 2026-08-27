@@ -1,5 +1,11 @@
 node_modules/
-package-lock.json
+# package-lock.json is TRACKED, deliberately, since 2026-08-27. It was ignored from
+# the day this file was created, so `npm ci` — which needs a lock — could only ever
+# run against whatever lock a box had generated locally, and that local lock
+# silently fell behind package.json (playwright-bdd declared, never locked): `npm ci`
+# could not succeed and `make playwright-deps` hid it with a `|| npm install`
+# fallback. tests/e2e/check-toolchain.sh now requires package.json and the committed
+# lock to agree; regenerate with `npm install` and commit the result.
 
 # Reporter output (junit.xml, report.json, summary.json, .last-run.json,
 # per-test trace/screenshot dirs) — see playwright.config.ts's SNAP_REPORT_DIR

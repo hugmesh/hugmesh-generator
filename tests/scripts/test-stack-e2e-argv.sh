@@ -26,9 +26,12 @@
 #
 # HERMETIC. Nothing here runs Playwright for real (except the last, optional leg),
 # starts the stack, or touches the repo working tree: each execution case copies the
-# repo Makefile into a fresh mktemp dir, creates the `tests/e2e/node_modules`
-# directory the recipe's precondition looks for, and puts a stub `npx` on PATH that
-# writes its argv, one argument per line, and exits 0.
+# repo Makefile into a fresh mktemp dir, plants a STUB tests/e2e/check-toolchain.sh
+# (the readiness probe every e2e recipe runs first — see E2E_READY in the Makefile)
+# that exits 0, and puts a stub `npx` on PATH that writes its argv, one argument per
+# line, and exits 0. The probe's own behaviour, and the fact that a FAILING probe
+# stops each recipe before npx, are tests/scripts/test-e2e-toolchain-readiness.sh's
+# business; this file only needs the recipe to get past it.
 #
 #   bash tests/scripts/test-stack-e2e-argv.sh
 #
@@ -54,10 +57,11 @@ TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 
 # ── the sandbox ──────────────────────────────────────────────────────────────
 # A COPY of the real Makefile, not the real tree. The recipe's own precondition
-# (`[ -d tests/e2e/node_modules ] || exit 2`) means an execution test has to run
-# somewhere that directory exists; creating it inside the repo would dirty a
-# checkout that other sessions share. The Makefile has no `include` lines and its
-# eight top-level $(shell …) calls are read-only, so it parses standalone.
+# (`bash tests/e2e/check-toolchain.sh || exit 2`) means an execution test has to
+# run somewhere that script exists and passes; the REAL probe would (rightly)
+# refuse a sandbox with no node_modules, so a stub that exits 0 stands in for it.
+# The Makefile has no `include` lines and its eight top-level $(shell …) calls are
+# read-only, so it parses standalone.
 # NOTE: mktemp, not a counter. mk_sandbox is called from inside $( ), so a
 # `SBOX_N=$((SBOX_N+1))` global increments in a SUBSHELL and never propagates —
 # every caller then got the same directory. That was invisible while the npx stub
@@ -66,8 +70,9 @@ TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 mk_sandbox() { # -> prints the sandbox dir
     local d
     d="$(mktemp -d "${TMP}/sbox.XXXXXX")"
-    mkdir -p "${d}/tests/e2e/node_modules" "${d}/bin"
+    mkdir -p "${d}/tests/e2e" "${d}/bin"
     cp "${MAKEFILE}" "${d}/Makefile"
+    printf '#!/bin/sh\nexit 0\n' > "${d}/tests/e2e/check-toolchain.sh"
     # Stub npx. One argument per line so a QUOTED $(E2E_ARGS) — which would arrive
     # as a single argv entry — is distinguishable from an unquoted one.
     cat > "${d}/bin/npx" <<'STUB'
@@ -182,7 +187,8 @@ _render_raw() {
 #     would fail to connect;
 #   * hardcoding that URL to the stale 8443, same effect;
 #   * changing PUBLIC_HTTPS_PORT's default out from under it;
-#   * deleting the `[ -d tests/e2e/node_modules ]` precondition from either target;
+#   * deleting the readiness-probe precondition (`bash tests/e2e/check-toolchain.sh
+#     || exit 2`, formerly `[ -d tests/e2e/node_modules ]`) from either target;
 #   * inserting a SECOND, earlier `npx playwright test` line (the suite runs twice).
 # Trailing text was always caught — only the prefix was blind.
 render_full() {
@@ -228,9 +234,13 @@ echo "-- 1b) the WHOLE recipe, PREFIX INCLUDED (render() above sees only the npx
 # BEFORE it, which is where the front-door URL and the node_modules precondition
 # live. See the render_full() header for the six mutations that used to survive.
 #
-# The echo's PROSE is deliberately NOT pinned — the Makefile is a shared file and
-# several sibling branches touch it, so this asserts the precondition's STRUCTURE
-# (which directory, and that it fails non-zero) rather than its wording.
+# The precondition is the readiness PROBE (tests/e2e/check-toolchain.sh) since
+# 2026-08-27: `[ -d tests/e2e/node_modules ]` passed on any stale install and the
+# targets then died on "Cannot find module 'playwright-bdd'". This asserts the
+# precondition's STRUCTURE (which script, and that a failure stops the recipe with
+# a non-zero status) rather than any wording; what the probe itself checks, and
+# that a failing probe really stops the recipe before npx, is
+# tests/scripts/test-e2e-toolchain-readiness.sh's business.
 
 cmd_line()     { render_full "$@" | sed -n '2p'; }
 pre_line()     { render_full "$@" | sed -n '1p'; }
@@ -260,7 +270,16 @@ if [ ! -f "${CFG}" ]; then
 else
     # Do NOT strip `//` comments here: the value being extracted is a URL and
     # `s://.*::` eats the `https://`. Comment lines are dropped by shape instead.
-    cfg_default="$(grep -e 'baseURL:' "${CFG}" | grep -v -e '^[[:space:]]*//' | sed -n -e "1s/.*||[[:space:]]*'\([^']*\)'.*/\1/p")"
+    # The fallback is `process.env.SNAP_BASE_URL || \`https://localhost:${...PUBLIC_HTTPS_PORT || '8488'}\``
+    # since e91e6572 — a template literal on the CONTINUATION line — so read the
+    # `baseURL:` line plus the lines up to the one carrying `||`, and take either a
+    # literal `https://localhost:NNNN` or the port default inside the `${...}`.
+    cfg_block="$(awk '/^[[:space:]]*\/\//{next} /baseURL:/{on=1} on{printf "%s ", $0; if ($0 ~ /\|\|/) exit}' "${CFG}")"
+    cfg_default="$(printf '%s\n' "${cfg_block}" | sed -n -e "s/.*||[[:space:]]*'\(https:[^']*\)'.*/\1/p")"
+    if [ -z "${cfg_default}" ]; then
+        cfg_port="$(printf '%s\n' "${cfg_block}" | sed -n -e "s/.*https:\/\/localhost:\${[^}]*||[[:space:]]*'\([0-9][0-9]*\)'}.*/\1/p")"
+        [ -n "${cfg_port}" ] && cfg_default="https://localhost:${cfg_port}"
+    fi
     if [ "${cfg_default}" = "https://localhost:8488" ]; then
         _ok "playwright.config.ts's own fallback already matches 8488 (SNAP_BASE_URL is belt-and-braces here)"
     elif [ -n "${cfg_default}" ]; then
@@ -274,9 +293,9 @@ for t in stack-e2e stack-e2e-list; do
     eq "$(recipe_lines unset "${t}")" "2" \
        "${t} renders exactly TWO commands — no extra playwright run smuggled in ahead of the real one"
     case "$(pre_line unset "${t}")" in
-      *"[ -d tests/e2e/node_modules ]"*"exit 2"*)
-          _ok "${t} still refuses to run when tests/e2e/node_modules is absent" ;;
-      *)  _bad "${t} lost its 'tests/e2e/node_modules missing' precondition: it will now run npx against an uninstalled tree"$'\n'"         got:  $(pre_line unset "${t}")" ;;
+      *"bash tests/e2e/check-toolchain.sh"*"|| exit 2"*)
+          _ok "${t} still runs the readiness probe first and stops on its failure" ;;
+      *)  _bad "${t} lost its 'tests/e2e/check-toolchain.sh || exit 2' precondition: it will now run npx against a stale or uninstalled tree"$'\n'"         got:  $(pre_line unset "${t}")" ;;
     esac
 done
 

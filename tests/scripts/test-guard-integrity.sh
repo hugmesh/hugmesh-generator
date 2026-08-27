@@ -233,7 +233,17 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # printed
 #     150 of 171 suites are named by a pull_request-triggered workflow
 # +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-150}"
+#
+# RE-MEASURED 2026-08-27 on fix/e2e-toolchain-readiness, same procedure: this
+# branch adds tests/scripts/test-e2e-toolchain-readiness.sh (the guard over
+# tests/e2e/check-toolchain.sh, the probe every e2e make target now runs in place
+# of `[ -d tests/e2e/node_modules ]`) and names it in shell-suites.yml's NODE job —
+# it builds its fixtures with node and needs no node_modules (its real-tree leg
+# SKIPS LOUDLY without one, counted as a skip). Running this file on the branch
+# printed
+#     151 of 172 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-151}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
