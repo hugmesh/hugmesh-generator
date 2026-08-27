@@ -187,6 +187,31 @@ spec:
             # IDENTITY: the org half of Casdoor's <org>/<userName> addressing comes
             # from casdoor.organization (CASDOOR_ORG above, `hugmesh`).
             - { name: CASDOOR_ACCOUNT_ENABLED, value: "true" }
+            # ANONYMOUS PASSWORD RESET — DELIBERATELY OFF, and deliberately a
+            # SEPARATE flag from CASDOOR_ACCOUNT_ENABLED above. PasswordResetConfig
+            # spells out why: the account flag governs an AUTHENTICATED surface, this
+            # one governs a permitAll, credential-WRITING surface that mails a code and
+            # then rotates a password on a bare username. An operator who enabled
+            # self-service password CHANGE has not thereby consented to expose an
+            # anonymous reset.
+            #
+            # IT WAS NOT WIRED AT ALL BEFORE THIS. The property had no env var in any
+            # environment, so there was no supported way to turn the feature on — the
+            # surface was dark with no switch, which reads as "broken" rather than
+            # "off". Present here at its real default so the switch EXISTS and is
+            # visible to whoever goes looking for it.
+            #
+            # PREREQUISITE, and the reason this must not be flipped casually: the reset
+            # is undeliverable until Casdoor SMTP is provisioned — manifests/casdoor/
+            # app-conf-configmap.yaml leaves the SMTP env unset while secret/<brand>/mail
+            # is absent. Enabling this without that mails nothing and fails silently to
+            # the user.
+            #
+            # BINDING: Spring maps casdoor.password-reset.enabled to this env name by
+            # uppercasing and replacing both '.' and '-' with '_'. The same rule is
+            # already load-bearing two lines down, where CASDOOR_ACCOUNT_BASE_URL binds
+            # casdoor.account.base-url on a leg that demonstrably works.
+            - { name: CASDOOR_PASSWORD_RESET_ENABLED, value: "false" }
             # casdoor.account.base-url — the in-cluster Casdoor Service, NEVER the
             # browser-facing issuer and NOT the pki-gateway: this is a server-to-
             # server REST leg (/api/set-password, /api/update-user) and the gateway
