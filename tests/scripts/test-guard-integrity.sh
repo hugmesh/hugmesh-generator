@@ -942,12 +942,40 @@ for sub in ("tests", "scripts"):
                 scan.append(os.path.relpath(os.path.join(root, fn), repo))
 scan.sort()
 PIPE_Q = re.compile(r'(?<!\|)\|(?!\|)\s*grep\s+(?:-(?!-)[A-Za-z]*q[A-Za-z]*\b|--quiet\b)')
+# pipefail can be INHERITED. `tests/menu/build_menu_cmd_test.sh` sets only `set -u`
+# and then `source`s scripts/build-menu.sh, which sets `set -uo pipefail` — so the
+# whole suite runs under pipefail while containing the string nowhere. Keying on a
+# file's OWN text skipped it entirely and left 17 sites invisible, one of them
+# deterministically RED in the alpine job and three of them NEGATIVE guards that
+# fail OPEN (SIGPIPE makes `... | grep -q setsid` report "no setsid" at the exact
+# moment a setsid IS present). Resolve `source`/`.` by basename over the same
+# census and take the transitive closure, so an inherited `set -o pipefail` counts.
+SOURCE_RE = re.compile(r'^\s*(?:source|\.)\s+[^\n]*?([A-Za-z0-9._-]+\.sh)', re.M)
+_text = {}
 for rel in scan:
     try:
-        txt = open(os.path.join(repo, rel), encoding="utf-8", errors="replace").read()
+        _text[rel] = open(os.path.join(repo, rel), encoding="utf-8", errors="replace").read()
     except OSError:
-        continue
-    if "pipefail" not in txt:
+        _text[rel] = ""
+_by_base = {}
+for rel, txt in _text.items():
+    _by_base.setdefault(os.path.basename(rel), []).append(rel)
+_pf = {rel: ("pipefail" in txt) for rel, txt in _text.items()}
+for _ in range(4):                       # transitive: a lib that sources a lib
+    changed = False
+    for rel, txt in _text.items():
+        if _pf[rel]:
+            continue
+        for base in SOURCE_RE.findall(txt):
+            if any(_pf.get(t) for t in _by_base.get(base, ())):
+                _pf[rel] = True
+                changed = True
+                break
+    if not changed:
+        break
+for rel in scan:
+    txt = _text[rel]
+    if not _pf[rel]:
         continue
     for i, line in enumerate(txt.split("\n"), 1):
         if line.lstrip().startswith("#") or "sigpipe-ok" in line:
@@ -1000,10 +1028,13 @@ if [ -z "${GUARD_SELFTEST_CHILD:-}" ]; then
     fi
   }
 
-  build_tree() { # build_tree SUITE_BODY  -> a minimal repo whose only suite is that body
+  build_tree() { # build_tree SUITE_BODY [LIB_BODY] -> a minimal repo whose only
+                 # suite is that body; LIB_BODY, when given, lands in
+                 # scripts/probe-lib.sh for the suite to source.
     rm -rf "${NEG}/tree"
-    mkdir -p "${NEG}/tree/tests/probe"
+    mkdir -p "${NEG}/tree/tests/probe" "${NEG}/tree/scripts"
     printf '%s\n' "$1" > "${NEG}/tree/tests/probe/test-probe.sh"
+    if [ "$#" -ge 2 ]; then printf '%s\n' "$2" > "${NEG}/tree/scripts/probe-lib.sh"; fi
     printf 'probe-job:\n  script:\n    - bash tests/probe/test-probe.sh\n' > "${NEG}/tree/.gitlab-ci.yml"
     printf 'all:\n\t@true\n' > "${NEG}/tree/Makefile"
   }
@@ -1195,6 +1226,22 @@ if cat /etc/hostname | grep ${Q} .; then ok \"host\"; else bad \"host\"; fi
 echo \"== \${P} passed, \${F} failed ==\"
 [ \"\${F}\" -eq 0 ]"
   neg_case "a pipe into a quiet grep under pipefail" "site(s) in a pipefail script"
+
+  # (h2) the same shape, but the suite NEVER SAYS "pipefail" — it inherits the
+  #      option from a library it sources. This is the real instance: the suite
+  #      sets only `set -u`, so keying on its own text skipped the whole file and
+  #      left every site in it unscanned. Without this control the resolver added
+  #      for that case could rot to a no-op and (h) above would still pass.
+  build_tree "set -u
+source \"\$(dirname \"\$0\")/../../scripts/probe-lib.sh\"
+P=0; F=0
+ok(){ echo \"  PASS \$*\"; P=\$((P+1)); }
+bad(){ echo \"  FAIL \$*\"; F=\$((F+1)); }
+if cat /etc/hostname | grep ${Q} .; then ok \"host\"; else bad \"host\"; fi
+echo \"== \${P} passed, \${F} failed ==\"
+[ \"\${F}\" -eq 0 ]" "set -uo pipefail"
+  neg_case "a quiet grep whose pipefail is INHERITED from a sourced library" \
+           "site(s) in a pipefail script"
 
   # (e) POSITIVE control: the same miniature repo, all defects removed, must PASS.
   #     Without this, cases (a)-(d) could be passing because the child ALWAYS fails.

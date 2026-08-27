@@ -621,9 +621,9 @@ case "${phone_region}" in
     *'--authkey-file'*) _ok ;;
     *) _fail "phone: region extraction vacuous (phone_screen/_phone_run not found)" ;;
 esac
-printf '%s' "${phone_region}" | grep -q 'setsid'       && _fail "phone: setsid in phone region (must run foreground)" || _ok
-printf '%s' "${phone_region}" | grep -q 'launch_build' && _fail "phone: launch_build in phone region (must run foreground)" || _ok
-printf '%s' "${phone_region}" | grep -q 'save_conf'    && _fail "phone: save_conf in phone region (state must stay function-local)" || _ok
+printf '%s' "${phone_region}" | grep 'setsid' >/dev/null       && _fail "phone: setsid in phone region (must run foreground)" || _ok
+printf '%s' "${phone_region}" | grep 'launch_build' >/dev/null && _fail "phone: launch_build in phone region (must run foreground)" || _ok
+printf '%s' "${phone_region}" | grep 'save_conf' >/dev/null    && _fail "phone: save_conf in phone region (state must stay function-local)" || _ok
 
 # save_conf stays phone-free: a fresh save leaks no phone/auth-key material.
 reset_opts; save_conf
@@ -705,11 +705,11 @@ assert_eq "phone run: nonzero driver rc survives" "$?" "0"
 # reads from /dev/tty, never stdin) — that's also why the walk below stubs
 # ui_menu/ui_input/ui_password rather than feeding stdin into the real ones.
 ui_password_body="$(sed -n '/^ui_password() {/,/^}/p' "${MENU_SH}")"
-printf '%s' "${ui_password_body}" | grep -qF 'def="${3:-}"' \
+printf '%s' "${ui_password_body}" | grep -F 'def="${3:-}"' >/dev/null \
     && _ok || _fail "ui_password: no DEFAULT (3rd) param — regressed #10's preserve-on-cancel contract"
-printf '%s' "${ui_password_body}" | grep -qF '|| { printf '"'"'%s'"'"' "${def}"; return 0; }' \
+printf '%s' "${ui_password_body}" | grep -F '|| { printf '"'"'%s'"'"' "${def}"; return 0; }' >/dev/null \
     && _ok || _fail "ui_password: whiptail-cancel path no longer falls back to DEFAULT"
-printf '%s' "${ui_password_body}" | grep -qF '|| val="${def}"' \
+printf '%s' "${ui_password_body}" | grep -F '|| val="${def}"' >/dev/null \
     && _ok || _fail "ui_password: non-TUI read-failure path no longer falls back to DEFAULT"
 
 # Stub _phone_run (capture argv instead of exec'ing the driver) and ui_menu/
@@ -783,20 +783,20 @@ case "${quest_region}" in
     *'--xr-chat-url'*) _ok ;;
     *) _fail "quest: region extraction vacuous (quest_screen/_quest_run not found)" ;;
 esac
-printf '%s' "${quest_region}" | grep -q 'setsid'       && _fail "quest: setsid in quest region (must run foreground)" || _ok
-printf '%s' "${quest_region}" | grep -q 'launch_build' && _fail "quest: launch_build in quest region (must run foreground)" || _ok
-printf '%s' "${quest_region}" | grep -q 'save_conf'    && _fail "quest: save_conf in quest region (state must stay function-local)" || _ok
+printf '%s' "${quest_region}" | grep 'setsid' >/dev/null       && _fail "quest: setsid in quest region (must run foreground)" || _ok
+printf '%s' "${quest_region}" | grep 'launch_build' >/dev/null && _fail "quest: launch_build in quest region (must run foreground)" || _ok
+printf '%s' "${quest_region}" | grep 'save_conf' >/dev/null    && _fail "quest: save_conf in quest region (state must stay function-local)" || _ok
 # class contract: the unsupported verbs are ABSENT from the quest surface — no
 # pickable item and no dispatch tag for any of them (the phone screen keeps
 # them; the quest screen must never offer what the driver refuses).
 for _qverb in fetch flash attest profile rotate-profile-pass remove-profile; do
-    printf '%s' "${quest_region}" | grep -qE "^[[:space:]]*${_qverb}[[:space:]]+\"" \
+    printf '%s' "${quest_region}" | grep -E "^[[:space:]]*${_qverb}[[:space:]]+\"" >/dev/null \
         && _fail "quest: unsupported verb '${_qverb}' offered as a menu item" || _ok
 done
-printf '%s' "${quest_region}" | grep -q -- '--channel' \
+printf '%s' "${quest_region}" | grep -- '--channel' >/dev/null \
     && _fail "quest: --channel in quest region (no GrapheneOS release channel on a headset)" || _ok
 # the class flag rides FIRST after the verb (the Makefile _QUEST_ARGS shape)
-printf '%s' "${quest_region}" | grep -qF -- '("${verb}" --device-class quest)' \
+printf '%s' "${quest_region}" | grep -F -- '("${verb}" --device-class quest)' >/dev/null \
     && _ok || _fail "quest: _quest_run does not pin --device-class quest first"
 
 # save_conf stays quest-free: a fresh save leaks no quest material.
@@ -950,11 +950,11 @@ case "${deploy_region}" in
     *'--creds-file'*) _ok ;;
     *) _fail "deploy: region extraction vacuous (deploy_screen/_deploy_run not found)" ;;
 esac
-printf '%s' "${deploy_region}" | grep -q 'setsid'         && _fail "deploy: setsid in deploy region (apply/destroy must run foreground)" || _ok
-printf '%s' "${deploy_region}" | grep -q 'launch_build'   && _fail "deploy: launch_build in deploy region (never a build)" || _ok
-printf '%s' "${deploy_region}" | grep -q 'save_conf'      && _fail "deploy: save_conf in deploy region (state must stay function-local)" || _ok
-printf '%s' "${deploy_region}" | grep -q 'build_make_cmd' && _fail "deploy: build_make_cmd in deploy region (never a build)" || _ok
-printf '%s' "${deploy_region}" | grep -qE 'CD_ASSUME_YES|--yes' && _fail "deploy: confirmation bypass in deploy region" || _ok
+printf '%s' "${deploy_region}" | grep 'setsid' >/dev/null         && _fail "deploy: setsid in deploy region (apply/destroy must run foreground)" || _ok
+printf '%s' "${deploy_region}" | grep 'launch_build' >/dev/null   && _fail "deploy: launch_build in deploy region (never a build)" || _ok
+printf '%s' "${deploy_region}" | grep 'save_conf' >/dev/null      && _fail "deploy: save_conf in deploy region (state must stay function-local)" || _ok
+printf '%s' "${deploy_region}" | grep 'build_make_cmd' >/dev/null && _fail "deploy: build_make_cmd in deploy region (never a build)" || _ok
+printf '%s' "${deploy_region}" | grep -E 'CD_ASSUME_YES|--yes' >/dev/null && _fail "deploy: confirmation bypass in deploy region" || _ok
 
 # save_conf stays deploy-free: a fresh save leaks no deploy/creds material.
 reset_opts; save_conf
