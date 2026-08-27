@@ -69,7 +69,22 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # "N of M suites are named by a pull_request-triggered workflow" line, and set it to
 # N. Guessing it defeats the check: a baseline nobody derived from the tree is a
 # number that only ever agrees with itself.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-132}"
+#
+# 130 -> 133 on merge with fix/profile-password-flows: that branch wires
+# test-password-reset-front-door.sh, test-kind-profile-route-closure.sh and
+# test-route-access-oracle.sh into the pull_request workflow. MEASURED at the
+# merge, not carried over from either side -- the branch itself said 120, main
+# said 130, and neither number is true of the merged tree.
+#
+# 133 -> 135 on integrate/studio-e2e, and for the same reason a third time. That
+# integration wires two more: tests/scripts/test-stack-e2e-argv.sh (from
+# feat/stack-e2e-argv-passthrough, which listed it itself) and
+# tests/qemu/qemu-e2e-lane_test.sh (from feat/studio-qemu-e2e-lane, which did
+# NOT -- its own copy of this file predates the *_test.sh census and could not
+# see its own new suite). NO branch's number was correct for the merged tree:
+# the two e2e branches both said 118, main said 133. This is the number this
+# file printed when run against the merged tree, and nothing else.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-135}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -106,6 +121,7 @@ PREMERGE_UNGATED=(
   tests/scripts/test-eso-target-collisions.sh
   tests/scripts/test-liquibase-grant-roles.sh
   tests/scripts/test-service-env-contract.sh
+  tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
   tests/stack/test-web-locales-wiring.sh
 )
