@@ -1,5 +1,17 @@
 # federation_modules registration — character-studio (TODO: separate repo)
 
+> **STATUS 2026-08-26 — THIS WAVE HAS LANDED. The number below is WRONG.**
+> The registration shipped in `hugmesh-federation-api` as
+> `src/main/resources/db/changelog/040-register-character-studio-module.xml`, not the `036-…`
+> this file predicted: 036 and 037 were taken first by the unrelated
+> `036-system-findings.xml` / `037-system-findings-subject-ref.xml` pair, so every
+> "next free number" claim below went stale. `specs/cluster/optional-services.yaml`
+> now names the real changeset, and `scripts/validate-federation-module-slugs.sh`
+> re-derives both sides each run so this cannot drift again unnoticed. The changeset
+> body below is kept only as the historical record of what was requested — the
+> shipped one is authoritative and, being merged Liquibase history, immutable.
+
+
 The `character-studio` slug must be registered as a federation module so the Angular
 host loads its remote at runtime and the public `/api/federation/capabilities`
 projection can grey it out when not installed. That registry row is a **Liquibase
