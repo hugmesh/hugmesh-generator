@@ -174,27 +174,51 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # measurement, not a substitute for it -- the seven entries above are all cases where
 # the arithmetic and the measurement disagreed.
 #
-# 146 -> 147, denominator 167 -> 168, when feat/workload-console-versions met main
-# again. This branch previously measured 144 of 165 and was right about that tree; main
-# has since gained the argocd pair (fix/argocd-dashboard-honesty), so 144 describes a
-# tree that no longer exists. Tenth and eleventh values written into this one line by
-# sides that each believed theirs.
+# 146 -> 147, denominator 167 -> 168, when feat/appstore-effector-enable landed. This
+# branch has now met main FOUR times and written a different number each time: 118
+# against its own base of 117, then 142, then 144, and 147 here. Every one of the four
+# was correct about the tree in front of it and wrong about the merge, because main
+# gained suites underneath it each time -- most recently the two from
+# fix/argocd-dashboard-honesty.
 #
-# Main's side is taken WHOLESALE rather than line-wise, and the comment blocks are kept
-# as a UNION -- both for the reasons the entries above already give: main's half carries
-# the PREMERGE_UNGATED set-pin that several branch halves predate, and each block records
-# a real reconciliation whose deletion would erase why a number moved.
+# The shape of this merge is the benign one and is STILL not a free pass: each side
+# gates suites the other does not have (tests/scripts/test-appstore-effector-flags.sh
+# here; main's argocd pair and the url-credentials suite), so the merged tree sits above
+# the higher of the two and neither side's number describes it. Adding the deltas by hand
+# would have been right by luck.
 #
-# MEASURED on the merged tree by running this file and reading the line it prints:
+# Note also why main's side is taken WHOLESALE rather than line-wise: main's half carries
+# the PREMERGE_UNGATED set-pin, which the branch's half predates. A resolution that kept
+# only the branch's number would have deleted that mechanism while looking like a
+# one-line change -- the same trap the first appstore reconciliation recorded.
+#
+# MEASURED by running this file against the merged tree and reading the line it prints:
 #     147 of 168 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total: the branch's single new suite is named by shell-suites.yml, so it
+# lands GATED and does not belong in PREMERGE_UNGATED -- which is why that list is
+# unchanged at 21 and check 7's set assertion stayed green across this merge.
+#
+# 147 -> 148, denominator 168 -> 169, when feat/workload-console-versions landed. This
+# branch has now written three numbers into this line: 144 of 165, then 147 of 168, and
+# 148 of 169 here. Each was measured and each was correct about the tree in front of it.
+#
+# THE PREVIOUS ENTRY IS THE WORKED EXAMPLE, so it is left standing above rather than
+# tidied away. When this branch measured 147/168, feat/appstore-effector-enable ALSO sat
+# at 147/168 -- both add exactly one gated suite to a main at 146/167, so both were right
+# and the two were mutually exclusive. That branch landed first, main became 147/168, and
+# this one had to be re-measured at 148/169. The prediction was written into this file
+# before it happened and is what made the re-measure routine instead of a surprise.
+#
+# Main's side is taken WHOLESALE rather than line-wise, and both comment blocks are kept
+# as a union, for the reasons the entries above give: main's half carries the
+# PREMERGE_UNGATED set-pin that older branch halves predate, so a line-wise keep would
+# delete that mechanism while looking like a number change.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     148 of 169 suites are named by a pull_request-triggered workflow
 # +1 gated, +1 total: this branch's suite is named by shell-suites.yml, so it lands GATED
 # and never enters PREMERGE_UNGATED, which stays 21.
-#
-# READ THIS IF YOU ARE LANDING THIS BRANCH AFTER feat/appstore-effector-enable: that
-# branch also sits at 147/168 right now, because it too adds exactly one gated suite to
-# main-at-146. The two are NOT compatible -- whichever lands second faces a main at
-# 147/168 and must measure 148/169. Do not carry this 147 forward; re-run this file.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-147}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-148}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

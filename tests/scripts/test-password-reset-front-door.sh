@@ -211,5 +211,40 @@ else
 fi
 
 echo
+echo "-- the switch (that it EXISTS, not that it is on) --"
+# A FIFTH thing has to be true and it is not a file agreeing with another file:
+# casdoor.password-reset.enabled. PasswordResetConfig ships the surface DARK behind
+# it — every leg 503s until it is true — and keeps it deliberately separate from
+# casdoor.account.enabled, because this one is permitAll and credential-WRITING and
+# is undeliverable until Casdoor SMTP is provisioned.
+#
+# So this does NOT assert the flag is on; default-off is correct. It asserts the flag
+# has an env var AT ALL. It had none, in any environment: the property existed only
+# in Java, so there was no supported way to turn the feature on. A dark surface whose
+# switch cannot be reached is indistinguishable from a broken one, and the four
+# layers above can all be green while the whole path still 503s.
+#
+# BINDING: Spring maps casdoor.password-reset.enabled to CASDOOR_PASSWORD_RESET_ENABLED
+# by uppercasing and replacing '.' and '-' with '_' — the same rule already carrying
+# CASDOOR_ACCOUNT_BASE_URL -> casdoor.account.base-url in that same env block.
+_sw_missing=""
+for _f in "${REPO}/specs/cluster/manifests/user-bff-api/deployment.yaml" \
+          "${REPO}/tests/stack/compose.local.yaml"; do
+  if [[ ! -f ${_f} ]]; then
+    _sw_missing="${_sw_missing} ${_f#"${REPO}/"}(ABSENT)"
+  elif ! grep -q 'CASDOOR_PASSWORD_RESET_ENABLED' "${_f}"; then
+    _sw_missing="${_sw_missing} ${_f#"${REPO}/"}"
+  fi
+done
+if [[ -n ${_sw_missing} ]]; then
+  bad "casdoor.password-reset.enabled has no env var in:${_sw_missing}
+       => the property defaults to false in code, so with no env var there is no
+          supported way to enable the feature; every leg 503s and the four layers
+          above cannot tell you why."
+else
+  ok "CASDOOR_PASSWORD_RESET_ENABLED exists in both the cluster deployment and compose"
+fi
+
+echo
 echo "== password-reset front door: ${pass} passed, ${fail} failed =="
 [[ ${fail} -eq 0 ]]
