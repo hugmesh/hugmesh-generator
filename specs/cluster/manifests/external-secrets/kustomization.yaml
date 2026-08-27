@@ -67,6 +67,14 @@ resources:
   # materializes once the always-on apps/60-image-builder.yaml Application
   # has created the namespace.
   - image-builder-externalsecrets.yaml   # image-builder-registry
+  # SUPERADMIN Service Catalog Kaniko builder PUSH credential (ns
+  # hugmesh-service-catalog-builds, dockerconfigjson) — the SAME Harbor push robot as
+  # the line above, in the OTHER build namespace. Its Job template
+  # (manifests/service-catalog-builder/kaniko-build-job.template.yaml) mounts the
+  # Secret NON-optionally, so without this the build pod hangs in ContainerCreating
+  # until activeDeadlineSeconds rather than failing. Materializes once
+  # apps/54-service-catalog-builder.yaml has created the namespace.
+  - service-catalog-builder-externalsecrets.yaml   # service-catalog-builder-registry
   # Azure Intune (Graph) phone-lock credential — DEFAULT-OFF, OPT-IN. Intune is a
   # CO-EQUAL second MDM provider alongside the sovereign self-hosted Headwind DPC;
   # Headwind is the DEFAULT. This leg routes lock traffic through Microsoft

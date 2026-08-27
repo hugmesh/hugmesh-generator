@@ -54,6 +54,93 @@
 #      (1) passed it happily: a ConfigMap value is a FILE in another language and
 #      nothing in this gate had ever looked inside one.
 #
+#  10. The SUPERADMIN Service Catalog console shipped with four of its five links
+#      present and the middle one MISSING. A federation descriptor named a Service;
+#      a superadmin-gateway route forwarded to that Service; a route-access row
+#      gated its path ROLE_SUPERADMIN; docs/SECURITY.md reserved its SA + MCS
+#      category. There was no Deployment and no Service, so every request to the
+#      console 503'd at the gateway. Worse, the ONE check that could have seen it —
+#      [route-service] — had been taught to EXEMPT that exact Service with the
+#      rationale "rendered by the service-catalog-builder ApplicationSet (apps/54)".
+#      apps/54 is `kind: Application`, NOT an ApplicationSet, and its kustomization
+#      renders a Namespace and a NetworkPolicy. Every clause of that rationale was
+#      false; the gate ran, PASSED, and counted the route as resolved. The exemption
+#      is deleted, and [federation-remote] now walks the whole chain from the
+#      descriptor outward: Service -> backing workload -> the Application that syncs
+#      its directory -> the gateway route at mountAt -> the route-access row.
+#  11. That console's gateway route ALSO shipped with no StripPrefix. The remote is a
+#      standalone nginx with <base href="/"> and an SPA `try_files ... /index.html`,
+#      so /superadmin/service-catalog/remoteEntry.json comes back as index.html with
+#      HTTP 200 and Content-Type text/html; native federation JSON.parses that HTML
+#      and the page renders BLANK — a 200, not a 404, which is why review does not
+#      catch it. apps/20-gateway-fe.yaml carried exactly this on EVERY micro-frontend
+#      remote for years before it was found.
+#  12. manifests/service-catalog-builder/kaniko-build-job.template.yaml mounts the
+#      Secret `service-catalog-builder-registry` NON-optionally and nothing created
+#      it. A non-optional secret volume is a hard kubelet precondition, so a real
+#      build would have been created successfully and then sat in ContainerCreating/
+#      FailedMount for its whole activeDeadlineSeconds (1800s) — a silent half-hour
+#      hang, not an error the calling effector could surface. Because the Job is a
+#      TEMPLATE, ArgoCD never applies it, so nothing else here could see it.
+#  13. docs/SECURITY.md had RESERVED s0:c49 for that console before its Deployment
+#      existed. edge-ai-analysis later took c49 as "next free" — correctly, by the
+#      only evidence available to it: a scan of the live manifests, where nothing
+#      carried c49. [mcs] could not see the clash either, because it compares
+#      WORKLOADS and a reservation with no Deployment is not one. The durable defect
+#      was that edge-ai-analysis had NO ROW in the matrix at all, so it was invisible
+#      to the next "next free" scan.
+#
+# ── FOUND BY REVIEW OF 10-13, 2026-08-26 — THE GUARDS THEMSELVES WERE THE DEFECT ──
+# An adversarial reviewer re-broke production against the first cut of 10-13 and
+# four of the breakages went undetected. Those are 14-17; 18-19 are two mutations
+# the first cut had DECLARED as surviving and left open.
+#
+#  14. [remote-strip-prefix] REPORTED A PASS WHILE ITS OWN DEFECT WAS PRESENT.
+#      It discovered a "remote" only via a FederationModuleRegistration descriptor
+#      (1 in the tree) or a workload whose HTTP probe path ends in /remoteEntry.json
+#      (2: character-forge, character-studio). The other EIGHT micro-frontend routes
+#      on apps/20-gateway-fe.yaml — matrix-ui, mastodon-ui, forum-ui, login-ui,
+#      admin-ui, mod-ui, user-ui, api-docs — name remoteEntry.json only in header
+#      COMMENTS, so they were invisible. Deleting the StripPrefix from /admin/** and
+#      /social/matrix/** left the gate at "21 checks passed, 0 findings". Discovery
+#      is now the TIER (any gateway route into a namespace where a descriptor/probe
+#      DID find a bundle root), with two derived exclusions — apex-served and
+#      self-served-prefix — both PRINTED by name on the pass line.
+#  15. COMMENT-TOKEN INVERSION, the house trap, inside [federation-remote] step (e):
+#      it re.search()ed the RAW text of 20-schema.sql for `('<gw>', '<pattern>',`
+#      with no anchor and no comment stripping. Turning the row into
+#      `-- DISABLED ('hugmesh-superadmin-gateway', ...` satisfied the check while
+#      initdb never seeds it, decide() returns NO_RULE, and the tailnet-only
+#      SUPERADMIN remote is forwarded on the coarse authenticated() floor. The
+#      file's OWN older parsers (ROW_RE) were comment-safe; the new one was not.
+#  16. TWO SILENT ESCAPE HATCHES IN [build-template-secret]. (a) it collected only
+#      NON-optional mounts, so one added `optional: true` line dropped the kaniko
+#      push credential out of the checked set — the pass line shrank from "all 2" to
+#      "all 1" and nothing failed, though kaniko then starts with no
+#      /kaniko/.docker/config.json and the push 401s. (b) `if not refs: continue`
+#      skipped a whole directory in silence, so deleting the credential volume
+#      outright was cheaper than renaming it.
+#  17. "A YAML FILE EXISTS ON DISK" WAS TREATED AS "THE SECRET IS PROVISIONED".
+#      Deleting ONLY the line that wires the new ExternalSecret into
+#      external-secrets/kustomization.yaml left the gate green: ArgoCD would never
+#      apply it, the Secret would never materialise, and the build pod would hang in
+#      ContainerCreating for its full 1800s deadline — defect 12, restored. This is
+#      the standard [federation-remote] step (c) already stated out loud.
+#  18. A CROSS-NAMESPACE GATEWAY ROUTE ONTO A DEFAULT-DENIED POD. k8s NetworkPolicy
+#      is additive with no deny, so the moment any Ingress policy selects a pod only
+#      the union of the selecting from-sets can reach it. Deleting
+#      manifests/networkpolicy/superadmin-ui-ingress.yaml was free. Closing this
+#      found THREE more live instances nothing had ever checked: superadmin-gateway
+#      (hugmesh-pki) -> admin-bff-api and -> federation-api, both blocked by the
+#      hugmesh-backend tier from-set, and the fe-gateway's four matrix/mastodon
+#      routes onto the homeserver mTLS proxies, which homeserver-isolation.yaml
+#      admits only from hugmesh-backend pods. See
+#      manifests/networkpolicy/gateway-crossns-ingress.yaml.
+#  19. THE SERVICEACCOUNT COLUMN OF docs/SECURITY.md §3 WAS PROSE. [mcs-documented]
+#      pinned the SELinux half of the identity matrix; changing a Deployment's
+#      serviceAccountName off the RESERVED name, deleting the line, or deleting the
+#      ServiceAccount object all cost nothing.
+#
 # Each numbered check below fails on at least one of those, and each carries a
 # NEGATIVE CONTROL: the same assertion is re-run against a deliberately-corrupted
 # staged copy of the tree and MUST fail there, so a green run cannot be vacuous.
@@ -67,6 +154,16 @@ python3 -c 'import yaml' 2>/dev/null || { echo "  FAIL PyYAML not available (pip
 
 CHECKER="$(dirname "${BASH_SOURCE[0]}")/cluster_manifest_integrity.py"
 [ -f "${CHECKER}" ] || { echo "  FAIL missing checker: ${CHECKER}"; exit 1; }
+
+# [mcs-documented] compares the tree against docs/SECURITY.md, which lives OUTSIDE
+# the tree. The negative controls stage a copy of specs/cluster alone, so the
+# checker's default <root>/../../docs cannot resolve there and the check would fail
+# in EVERY staged run — noise that would train people to ignore it. Point it at the
+# real docs dir; a control that needs a MUTATED docs tree overrides this by writing
+# its path into ${WORK}/docsdir (see the [mcs-documented] rationale control).
+export HUGMESH_DOCS_DIR="${REPO}/docs"
+[ -f "${HUGMESH_DOCS_DIR}/SECURITY.md" ] || {
+  echo "  FAIL cannot find ${HUGMESH_DOCS_DIR}/SECURITY.md — [mcs-documented] has no authority to compare against"; exit 1; }
 
 echo "== cluster manifest referential-integrity gate =="
 echo "-- positive: the repo's own specs/cluster must pass every check --"
@@ -95,9 +192,26 @@ expect_catch() {
   local label="$1" want="$2" inject="$3"
   local T="${WORK}/tree"
   rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
-  ( T="${T}"; eval "${inject}" ) || { neg_bad "${label} (injection itself failed)"; return; }
+  rm -f "${WORK}/docsdir"
+  local before after
+  before="$(find "${T}" -type f -exec md5sum {} + | sort | md5sum)"
+  ( T="${T}"; WORK="${WORK}"; REPO="${REPO}"; eval "${inject}" ) \
+    || { neg_bad "${label} (injection itself failed)"; return; }
+  after="$(find "${T}" -type f -exec md5sum {} + | sort | md5sum)"
+  # An injection that matched nothing is the classic way one of these controls goes
+  # quietly vacuous (see control (4)'s asserted anchor and (3a)'s never-existent
+  # namespace). A control whose sed silently no-op'd would run, find no defect, and
+  # report the GATE as broken while the gate was fine — or, worse, be "fixed" by
+  # relaxing the gate. So the tree MUST actually differ, unless the control
+  # deliberately mutates something outside the tree and says so via ${WORK}/docsdir.
+  local docs="${HUGMESH_DOCS_DIR}"
+  [ -f "${WORK}/docsdir" ] && docs="$(cat "${WORK}/docsdir")"
+  if [ "${before}" = "${after}" ] && [ ! -f "${WORK}/docsdir" ]; then
+    neg_bad "${label} (INJECTION CHANGED NOTHING — the anchor has drifted; this control proves nothing)"
+    return
+  fi
   local out rc
-  out="$(python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
+  out="$(HUGMESH_DOCS_DIR="${docs}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
   # -F: the check ids contain [] and -, which grep would read as a bracket range.
   if [ "${rc}" -ne 0 ] && grep -qF "  FAIL ${want}" <<<"${out}"; then
     neg_ok "${label} -> caught by ${want}"
@@ -353,6 +467,441 @@ expect_catch "a Deployment re-pins replicas the HPA owns" "[hpa-replicas]" '
   sed -i "0,/^spec:$/s//spec:\n  replicas: 1/" \
       "$T/manifests/admin-bff-api/deployment.yaml"
   grep -q "^  replicas: 1$" "$T/manifests/admin-bff-api/deployment.yaml"
+'
+
+# ── (12) THE SUPERADMIN SERVICE CATALOG CHAIN ────────────────────────────────
+# (12a) THE SHIPPED DEFECT, re-injected: the console's Service deleted. Before this
+#       PR the ROUTE_SERVICE_ALLOW set exempted exactly this Service ("rendered by
+#       the service-catalog-builder ApplicationSet") and [route-service] reported a
+#       clean pass with the Service absent. With the false exemption gone it bites.
+expect_catch "superadmin service-catalog Service deleted (the exemption that hid it is gone)" "[route-service]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/manifests/superadmin-service-catalog-ui/deployment.yaml"
+s=open(p,encoding="utf-8").read()
+i=s.index("apiVersion: v1\nkind: Service")
+open(p,"w",encoding="utf-8").write(s[:s.rindex("---",0,i)])
+SCPY
+'
+# (12b) …and the descriptor-driven chain catches the SAME deletion independently, so
+#       the console stays covered even if a route allowlist entry is ever re-added.
+expect_catch "the same deleted Service, caught from the federation descriptor" "[federation-remote]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/manifests/superadmin-service-catalog-ui/deployment.yaml"
+s=open(p,encoding="utf-8").read()
+i=s.index("apiVersion: v1\nkind: Service")
+open(p,"w",encoding="utf-8").write(s[:s.rindex("---",0,i)])
+SCPY
+'
+# (12c) the Service kept, the Deployment deleted: a Service with no endpoints looks
+#       perfectly healthy in `kubectl get svc` and refuses every connection.
+expect_catch "remote Service with no backing workload (no endpoints)" "[federation-remote]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/manifests/superadmin-service-catalog-ui/deployment.yaml"
+s=open(p,encoding="utf-8").read()
+i=s.index("apiVersion: apps/v1\nkind: Deployment"); j=s.index("apiVersion: v1\nkind: Service")
+open(p,"w",encoding="utf-8").write(s[:i]+s[j:])
+SCPY
+'
+# (12d) manifests present and correct, but NO Application syncs the directory —
+#       correct YAML that ArgoCD never applies is indistinguishable from no YAML.
+expect_catch "remote manifest dir that no Application syncs" "[federation-remote]" '
+  rm "$T/apps/49d-superadmin-service-catalog-ui.yaml"
+'
+# (12e) the descriptor mountAt drifts away from the gateway route — the exact
+#       three-way disagreement this PR reconciled (descriptor + route-access said
+#       /superadmin/service-catalog while docs/ARCHITECTURE.md said /appstore).
+expect_catch "descriptor mountAt drifts off the gateway route" "[federation-remote]" '
+  sed -i "s|^  mountAt: /superadmin/service-catalog$|  mountAt: /appstore|" \
+      "$T/manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml"
+  grep -q "^  mountAt: /appstore$" "$T/manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml"
+'
+# (12f) the descriptor advertises a port the Service does not serve. That URL is
+#       handed to the browser verbatim, so it is a connection refused at runtime.
+expect_catch "descriptor remoteEntry port the Service does not expose" "[federation-remote]" '
+  sed -i "s|svc.cluster.local:8080/remoteEntry.json|svc.cluster.local:8081/remoteEntry.json|" \
+      "$T/manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml"
+  grep -q "svc.cluster.local:8081/remoteEntry.json" "$T/manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml"
+'
+# (12g) the route-access row for the mountAt removed: decide() returns NO_RULE and the
+#       gateway FORWARDS an internal/SUPERADMIN remote on the authenticated() floor.
+expect_catch "mountAt route-access row deleted (NO_RULE => forwarded)" "[federation-remote]" '
+  sed -i "/superadmin\/service-catalog\/\*\*/d" \
+      "$T/manifests/route-access/initdb/20-schema.sql"
+'
+
+# ── (13) THE STRIP-PREFIX / BLANK-PAGE CLASS ─────────────────────────────────
+# (13a) THE SHIPPED DEFECT, re-injected: the console route with no StripPrefix. The
+#       page renders BLANK on an HTTP 200, which is why this needs a gate, not a
+#       reviewer.
+expect_catch "federation remote route with no StripPrefix (blank page on a 200)" "[remote-strip-prefix]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/apps/22-gateway-superadmin.yaml"
+s=open(p,encoding="utf-8").read()
+i=s.index("          - id: superadmin-service-catalog-ui")
+j=s.index("          - id: superadmin-federation")
+blk=s[i:j]
+assert "StripPrefix=2" in blk, "the console route no longer carries StripPrefix=2"
+open(p,"w",encoding="utf-8").write(s[:i]+blk[:blk.index("            filters:")]+s[j:])
+SCPY
+'
+# (13b) the strip present but OFF BY ONE. Stripping too few leaves a prefix the
+#       container has no files under — the same index.html-with-200 outcome as (13a).
+expect_catch "federation remote route strips the wrong depth (2 -> 1)" "[remote-strip-prefix]" '
+  sed -i "s/^              - StripPrefix=2$/              - StripPrefix=1/" \
+      "$T/apps/22-gateway-superadmin.yaml"
+  grep -q "^              - StripPrefix=1$" "$T/apps/22-gateway-superadmin.yaml"
+'
+# (13c) a DIFFERENT remote on a DIFFERENT gateway, discovered by its own
+#       /remoteEntry.json probe rather than by any descriptor — proves the check is
+#       derived, not a list of this feature's routes.
+expect_catch "character-forge route loses ITS strip (different gateway, discovered by probe)" "[remote-strip-prefix]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/apps/20-gateway-fe.yaml"
+s=open(p,encoding="utf-8").read()
+old="""            path: /character-forge/**
+            filters:
+              - StripPrefix=1
+"""
+assert s.count(old)==1, "character-forge route anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old,"            path: /character-forge/**\n",1))
+SCPY
+'
+
+# ── (14) THE BUILD-TEMPLATE SECRET CLASS ─────────────────────────────────────
+# (14a) THE DERIVATION PROOF: rename the Secret in the KANIKO TEMPLATE ONLY. The
+#       ExternalSecret is untouched and still perfectly valid; only the template now
+#       asks for a name nothing provides. A check that hardcoded the Secret name
+#       would stay green here — that is the whole difference between a guard and a
+#       restatement of a literal.
+expect_catch "kaniko template renames its Secret (nothing else changes)" "[build-template-secret]" '
+  sed -i "s/^            secretName: service-catalog-builder-registry$/            secretName: service-catalog-builder-registry-RENAMED/" \
+      "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
+  grep -q "secretName: service-catalog-builder-registry-RENAMED" \
+      "$T/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
+'
+# (14b) the other direction — THE SHIPPED DEFECT re-injected: no ExternalSecret, the
+#       template still mounting the Secret non-optionally. A real build hangs in
+#       ContainerCreating for its full 1800s deadline and reports nothing.
+expect_catch "the builder push ExternalSecret removed (template mount left dangling)" "[build-template-secret]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml"
+s=open(p,encoding="utf-8").read()
+old="    name: service-catalog-builder-registry\n    creationPolicy: Owner"
+assert s.count(old)==1, "ES target anchor matched %d times, not 1" % s.count(old)
+s=s.replace(old,"    name: service-catalog-builder-registry-X\n    creationPolicy: Owner",1)
+s=s.replace("  name: service-catalog-builder-registry\n","  name: service-catalog-builder-registry-X\n",1)
+open(p,"w",encoding="utf-8").write(s)
+SCPY
+'
+
+# ── (15) THE UNLISTED-MCS-CATEGORY CLASS ─────────────────────────────────────
+# (15a) a workload takes a category that appears in NO row of the identity matrix —
+#       exactly the state edge-ai-analysis was in when it squatted the reserved c49.
+expect_catch "workload claims an MCS category the SECURITY.md matrix never lists" "[mcs-documented]" '
+  sed -i "s/^          level: \"s0:c49\"$/          level: \"s0:c99\"/" \
+      "$T/manifests/superadmin-service-catalog-ui/deployment.yaml"
+  grep -q "s0:c99" "$T/manifests/superadmin-service-catalog-ui/deployment.yaml"
+'
+# (15b) the console takes the category edge-ai-analysis was MOVED to — the plain
+#       collision, which [mcs] (not [mcs-documented]) must be the one to catch.
+expect_catch "console re-collides with edge-ai-analysis on s0:c87" "[mcs]" '
+  sed -i "s/^          level: \"s0:c49\"$/          level: \"s0:c87\"/" \
+      "$T/manifests/superadmin-service-catalog-ui/deployment.yaml"
+  grep -q "s0:c87" "$T/manifests/superadmin-service-catalog-ui/deployment.yaml"
+'
+# (15c) AN EXEMPTION WHOSE RATIONALE STOPS BEING TRUE. This gate lost weeks to a
+#       false exemption rationale (see WHY #10), so MCS_DOC_EXEMPT entries are
+#       self-verifying: the named evidence file must actually discuss the level. Here
+#       the TREE is untouched and the DOCS are mutated instead — the one control that
+#       legitimately changes nothing under $T, which is why it writes ${WORK}/docsdir.
+expect_catch "an MCS exemption whose stated evidence no longer mentions the level" "[mcs-documented]" '
+  rm -rf "$WORK/mdocs"; cp -r "$REPO/docs" "$WORK/mdocs"
+  sed -i "s|s0:c85/s0:c86|s0:cXX/s0:cYY|g" "$WORK/mdocs/DOMAIN-IDP.md"
+  grep -q "s0:cXX/s0:cYY" "$WORK/mdocs/DOMAIN-IDP.md"
+  printf "%s" "$WORK/mdocs" > "$WORK/docsdir"
+'
+
+# ── (16) THE REVIEW FINDINGS OF 2026-08-26, EACH AS ITS OWN CONTROL ──────────
+# An adversarial reviewer re-broke production against the first cut of checks
+# 12-15 and four mutations survived. Each one is a control below, so the same
+# hand cannot pass twice.
+
+# (16a) THE HEADLINE. Delete the StripPrefix from /admin/** — a micro-frontend route
+#       with NO descriptor and NO /remoteEntry.json probe, i.e. the MAJORITY in-repo
+#       shape. The first cut discovered remotes only two ways and found 3 of 11, so
+#       this exact deletion (the shipped defect class, on the gateway the fix commit
+#       said carried it "for years") left the gate at 21/0. Discovery is now the TIER.
+expect_catch "strip deleted from a route with NO descriptor and NO probe (/admin/**)" "[remote-strip-prefix]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/apps/20-gateway-fe.yaml"
+s=open(p,encoding="utf-8").read()
+old="""            path: /admin/**
+            filters:
+              - StripPrefix=1
+"""
+assert s.count(old)==1, "admin-ui route anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old,"            path: /admin/**\n",1))
+SCPY
+'
+# (16b) …and the same on /social/matrix/**, the other route the reviewer broke. Two
+#       different depths (1 and 2) so an off-by-one in the widening cannot pass both.
+expect_catch "strip deleted from /social/matrix/** (depth 2, comment-only remote)" "[remote-strip-prefix]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/apps/20-gateway-fe.yaml"
+s=open(p,encoding="utf-8").read()
+old="""            path: /social/matrix/**
+            filters:
+              - StripPrefix=2
+"""
+assert s.count(old)==1, "matrix-ui route anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old,"            path: /social/matrix/**\n",1))
+SCPY
+'
+# (16c) THE APEX EXCLUSION IS DERIVED, NOT LISTED. remote-deeplink-to-host-shell
+#       forwards eight remote paths to the host shell WITHOUT a strip, and correctly
+#       so: the shell is mounted at `/` and owns the whole path. The check knows that
+#       only because the same Service is also this gateway's `/**` target. Remove the
+#       apex route and those eight must immediately become strip-failures — otherwise
+#       the exclusion is a hardcoded blind spot wearing a derivation's clothes.
+expect_catch "host-shell loses its apex /** route (the strip exclusion must stop applying)" "[remote-strip-prefix]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/apps/20-gateway-fe.yaml"
+s=open(p,encoding="utf-8").read()
+old="""          - id: frontend-host
+            uri: http://hugmesh-host-shell.hugmesh-frontend.svc.cluster.local:80
+            path: /**
+"""
+assert s.count(old)==1, "frontend-host route anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old,"",1))
+SCPY
+'
+# (16d) THE SELF-SERVED EXCLUSION IS READ OUT OF THE NGINX CONFIG, NOT THE NAME.
+#       /_fragments/** must NOT strip, because manifests/remote-fragment/nginx.conf
+#       really does serve content-addressed bundles under /_fragments/. Rename those
+#       location blocks and the same route must become a strip-failure.
+expect_catch "remote-fragment nginx stops serving /_fragments (its skip must stop applying)" "[remote-strip-prefix]" '
+  sed -i "s|location ~\* \^/_fragments/|location ~* ^/nolonger/|; s|location /_fragments/ {|location /nolonger/ {|" \
+      "$T/manifests/remote-fragment/nginx.conf"
+  grep -c "_fragments" "$T/manifests/remote-fragment/nginx.conf" >/dev/null
+  ! grep -q "location.*_fragments" "$T/manifests/remote-fragment/nginx.conf"
+'
+# (16e) A CORRECTLY-STRIPPED ROUTE POINTED AT THE WRONG REMOTE — declared as a
+#       surviving mutation in the first cut. StripPrefix=2 is exactly as valid
+#       forwarding /social/matrix/** to the Mastodon shell as to the Matrix one; the
+#       Service exists, the pod is healthy, and the user simply gets the wrong app.
+expect_catch "correctly-stripped /social/matrix/** pointed at the MASTODON remote" "[remote-route-target]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/apps/20-gateway-fe.yaml"
+s=open(p,encoding="utf-8").read()
+old="""          - id: matrix-ui
+            uri: http://hugmesh-matrix-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /social/matrix/**"""
+assert s.count(old)==1, "matrix-ui uri anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(
+    old, old.replace("hugmesh-matrix-ui.hugmesh-frontend","hugmesh-mastodon-ui.hugmesh-frontend"),1))
+SCPY
+'
+# (16f) COMMENT-TOKEN INVERSION, the house trap. Control (12g) only ever DELETED the
+#       route-access row; the reviewer COMMENTED IT OUT instead and step (e) — which
+#       re.search()ed the raw file text with no anchor — accepted `-- DISABLED (...`
+#       as proof of the very row whose absence it exists to report. initdb never runs
+#       a commented row: decide() returns NO_RULE and the tailnet-only SUPERADMIN
+#       remote is forwarded on the coarse authenticated() floor.
+expect_catch "mountAt route-access row COMMENTED OUT rather than deleted" "[federation-remote]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/manifests/route-access/initdb/20-schema.sql"
+lines=open(p,encoding="utf-8").read().splitlines(True)
+n=0
+for i,l in enumerate(lines):
+    if "\x27/superadmin/service-catalog/**\x27" in l and l.lstrip().startswith("("):
+        lines[i]="  -- DISABLED "+l.lstrip(); n+=1
+assert n==1, "expected exactly 1 seed row to comment out, found %d" % n
+open(p,"w",encoding="utf-8").write("".join(lines))
+SCPY
+'
+# (16g) `optional: true` AS A SILENT ESCAPE HATCH. The first cut collected only
+#       NON-optional mounts, so one added line dropped the kaniko push credential out
+#       of the checked set: the pass line went from "all 2" to "all 1" and nothing
+#       failed. Here the shipped defect (no ExternalSecret) is re-injected WITH the
+#       optional flag — which does not make the build work, it only moves the death
+#       from FailedMount to a 401 after a full image build.
+expect_catch "push credential marked optional:true AND its ExternalSecret removed" "[build-template-secret]" '
+  python3 - "$T" <<SCPY
+import sys, os
+p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
+s=open(p,encoding="utf-8").read()
+old="            secretName: service-catalog-builder-registry\n"
+assert s.count(old)==1, "secretName anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old, old+"            optional: true\n",1))
+os.remove(sys.argv[1]+"/manifests/external-secrets/service-catalog-builder-externalsecrets.yaml")
+SCPY
+'
+# (16h) DELETING THE VOLUME MUST NOT BE CHEAPER THAN RENAMING IT. `if not refs:
+#       continue` skipped a whole directory in silence, so removing the credential
+#       outright was a free pass. A container running `--destination=` PUSHES, and a
+#       push with no credential 401s after building the whole image.
+expect_catch "kaniko push template loses its credential volume entirely" "[build-template-secret]" '
+  python3 - "$T" <<SCPY
+import sys
+p=sys.argv[1]+"/manifests/service-catalog-builder/kaniko-build-job.template.yaml"
+s=open(p,encoding="utf-8").read()
+vol="""        - name: docker-config
+          secret:
+            secretName: service-catalog-builder-registry
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+"""
+mnt="""            - name: docker-config
+              mountPath: /kaniko/.docker
+              readOnly: true
+"""
+assert s.count(vol)==1 and s.count(mnt)==1, "volume/mount anchors drifted"
+open(p,"w",encoding="utf-8").write(s.replace(vol,"",1).replace(mnt,"",1))
+SCPY
+'
+# (16i) "A FILE EXISTS ON DISK" IS NOT "THE SECRET IS PROVISIONED". Delete ONLY the
+#       kustomization line that wires the new ExternalSecret in — the file stays,
+#       perfectly valid — and ArgoCD never applies it, the Secret never materialises,
+#       and the build pod hangs in ContainerCreating for its full 1800s deadline.
+#       That is defect 12, restored, and the first cut could not see it.
+expect_catch "builder ExternalSecret un-wired from kustomization (file kept)" "[build-template-secret]" '
+  sed -i "/^  - service-catalog-builder-externalsecrets.yaml/d" \
+      "$T/manifests/external-secrets/kustomization.yaml"
+  ! grep -q "^  - service-catalog-builder-externalsecrets.yaml" \
+      "$T/manifests/external-secrets/kustomization.yaml"
+'
+
+# ── (17) THE CROSS-NAMESPACE NETWORKPOLICY CLASS ─────────────────────────────
+# (17a) THE SHIPPED-SHAPED DEFECT, and a declared surviving mutation of the first
+#       cut: delete the per-pod ingress policy and the console pod runs Ready,
+#       healthy and clean in `kubectl get` while every request through its gateway
+#       dies in the CNI — no event, no restart, no pod-side log.
+expect_catch "the console ingress NetworkPolicy deleted (silent CNI black hole)" "[gateway-netpol]" '
+  rm "$T/manifests/networkpolicy/superadmin-ui-ingress.yaml"
+  sed -i "/^  - superadmin-ui-ingress.yaml/d" "$T/manifests/networkpolicy/kustomization.yaml"
+'
+# (17b) …and the same defect the QUIET way: keep the file, delete only the line that
+#       wires it into the kustomization. Same standard as (16i) — a policy nothing
+#       renders protects nothing.
+expect_catch "the console ingress policy un-wired from kustomization (file kept)" "[gateway-netpol]" '
+  sed -i "/^  - superadmin-ui-ingress.yaml/d" "$T/manifests/networkpolicy/kustomization.yaml"
+  ! grep -q "^  - superadmin-ui-ingress.yaml" "$T/manifests/networkpolicy/kustomization.yaml"
+'
+
+# ── (18) THE SERVICEACCOUNT HALF OF THE IDENTITY MATRIX ──────────────────────
+# (18a) A declared surviving mutation of the first cut: the Deployment drifts off the
+#       ServiceAccount docs/SECURITY.md §3 RESERVES for it. The SA is the pod's
+#       cluster identity — its RBAC, its token audience, the subject every
+#       RoleBinding names — and nothing mechanical pinned that column.
+expect_catch "Deployment drifts off the reserved sa-service-catalog-ui" "[workload-sa]" '
+  sed -i "s/^      serviceAccountName: sa-service-catalog-ui$/      serviceAccountName: default/" \
+      "$T/manifests/superadmin-service-catalog-ui/deployment.yaml"
+  grep -q "^      serviceAccountName: default$" \
+      "$T/manifests/superadmin-service-catalog-ui/deployment.yaml"
+'
+# (18b) the other end of the same binding: the ServiceAccount object deleted while the
+#       Deployment still names it. The kubelet refuses the pod outright — a failure
+#       with no container log to explain it.
+expect_catch "reserved ServiceAccount deleted, binding left dangling" "[workload-sa]" '
+  rm "$T/manifests/superadmin-service-catalog-ui/service-account.yaml"
+  sed -i "/^  - service-account.yaml/d" "$T/manifests/superadmin-service-catalog-ui/kustomization.yaml"
+'
+
+# ── (19) THE VACUITY / FUTURE-REMOTE CONTROLS ────────────────────────────────
+# (19a) THE CLAIM THE REVIEWER CALLED UNSUPPORTED, NOW MEASURED. Add a remote the
+#       way the repo actually adds them — a plain nginx Deployment + Service in the
+#       frontend tier, NO FederationModuleRegistration descriptor and NO
+#       /remoteEntry.json probe — plus its gateway route with no StripPrefix. Under
+#       the first cut's two-way discovery this was invisible; it must now bite the
+#       day the route lands.
+expect_catch "a NEW tier remote + route added with no StripPrefix (future-remote coverage)" "[remote-strip-prefix]" '
+  python3 - "$T" <<SCPY
+import sys
+d=sys.argv[1]
+open(d+"/manifests/mod-ui/zz-new-remote.yaml","w",encoding="utf-8").write("""apiVersion: apps/v1
+kind: Deployment
+metadata: { name: hugmesh-widget-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-widget-ui } }
+spec:
+  selector: { matchLabels: { app: hugmesh-widget-ui } }
+  template:
+    metadata: { labels: { app: hugmesh-widget-ui } }
+    spec:
+      containers:
+        - name: web
+          image: hugmesh/widget-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: hugmesh-widget-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-widget-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+""")
+k=d+"/manifests/mod-ui/kustomization.yaml"
+s=open(k,encoding="utf-8").read()
+assert s.count("resources:\n")==1, "mod-ui kustomization resources: anchor drifted"
+open(k,"w",encoding="utf-8").write(s.replace("resources:\n","resources:\n  - zz-new-remote.yaml\n",1))
+p=d+"/apps/20-gateway-fe.yaml"
+s=open(p,encoding="utf-8").read()
+old="          - id: api-docs\n"
+assert s.count(old)==1, "api-docs route anchor matched %d times, not 1" % s.count(old)
+open(p,"w",encoding="utf-8").write(s.replace(old,"""          - id: widget-ui
+            uri: http://hugmesh-widget-ui.hugmesh-frontend.svc.cluster.local:80
+            path: /widget/**
+"""+old,1))
+SCPY
+'
+# (19b) BOTH discovery seeds killed at once (descriptor kind renamed AND both
+#       /remoteEntry.json probes retargeted). The tier can no longer be derived, so
+#       [remote-strip-prefix] must say so LOUDLY rather than report a clean pass over
+#       an empty set — the exact way this check was hollow before.
+expect_catch "every remote-discovery seed removed (the tier check must not go vacuous)" "[remote-strip-prefix]" '
+  sed -i "s/^kind: FederationModuleRegistration$/kind: FederationModuleRegistrationX/" \
+      "$T/manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml"
+  sed -i "s|path: /remoteEntry.json|path: /healthz|g" \
+      "$T/manifests/character-forge/deployment.yaml" "$T/manifests/character-studio/deployment.yaml"
+  ! grep -q "remoteEntry.json, port" "$T/manifests/character-forge/deployment.yaml"
+'
+# (19c) EVERY NetworkPolicy in the tree neutralised. With nothing default-denied there
+#       is nothing to admit, so [gateway-netpol] has no claim left — and must report
+#       that instead of a pass.
+expect_catch "every NetworkPolicy neutralised (the netpol check must not go vacuous)" "[gateway-netpol]" '
+  python3 - "$T" <<SCPY
+import sys, os
+n=0
+for dp,_dn,fns in os.walk(sys.argv[1]):
+    for f in fns:
+        if not f.endswith((".yaml",".yml")): continue
+        p=os.path.join(dp,f)
+        t=open(p,encoding="utf-8",errors="replace").read()
+        if "kind: NetworkPolicy" in t:
+            open(p,"w",encoding="utf-8").write(t.replace("kind: NetworkPolicy","kind: NetworkPolicyX"))
+            n+=1
+assert n > 0, "no NetworkPolicy manifests found to neutralise"
+SCPY
+'
+# (19d) THE AUTHORITY EDITED INSTEAD OF THE ARTEFACT. Rename the ServiceAccount cell
+#       in the docs/SECURITY.md §3 row while the Deployment keeps binding the real
+#       one. Enforcing the matrix in one direction only would let this un-enforce the
+#       row in silence — the same move that voided the s0:c49 reservation. Like
+#       control (15c), this mutates the DOCS and not the tree, so it declares that
+#       via ${WORK}/docsdir.
+expect_catch "the matrix ServiceAccount cell renamed while the manifest keeps the real SA" "[workload-sa]" '
+  rm -rf "$WORK/mdocs"; cp -r "$REPO/docs" "$WORK/mdocs"
+  sed -i "s/\`sa-service-catalog-ui\`/\`sa-catalog-console\`/" "$WORK/mdocs/SECURITY.md"
+  grep -q "sa-catalog-console" "$WORK/mdocs/SECURITY.md"
+  printf "%s" "$WORK/mdocs" > "$WORK/docsdir"
 '
 
 echo

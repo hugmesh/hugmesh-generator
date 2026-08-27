@@ -125,6 +125,26 @@ spec:
           - id: superadmin-service-catalog-ui
             uri: http://hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc.cluster.local:8080
             path: /superadmin/service-catalog/**
+            filters:
+              # ⚠ StripPrefix=2 — /superadmin + /service-catalog. WITHOUT IT THIS
+              # CONSOLE IS A BLANK PAGE, NOT A 404, and that is why it is easy to
+              # ship broken. The UI image bakes <base href="/"> and its nginx ends
+              # with `try_files $uri $uri/ /index.html`, so an unstripped request for
+              # /superadmin/service-catalog/remoteEntry.json arrives at the container
+              # as that literal path, misses every file, and the SPA fallback returns
+              # index.html with HTTP 200 and Content-Type text/html. Native federation
+              # then hands that HTML to JSON.parse and dies on `Unexpected token '<'`;
+              # every chunk request behind it does the same. The pod is Ready, the
+              # gateway logs 200s, and the operator sees an empty <body>.
+              #   This is the SAME defect apps/20-gateway-fe.yaml carried for years on
+              # every one of its micro-frontend remotes (see its route block: "the
+              # host's native-federation loader fetches e.g. /admin/remoteEntry.json,
+              # which without the strip forwards as literal path ... nginx's SPA
+              # try_files fallback then silently serves index.html instead"). The
+              # count is the SEGMENT DEPTH of this route's path, exactly as
+              # /social/matrix/** takes StripPrefix=2 and /login/** takes
+              # StripPrefix=1 there.
+              - StripPrefix=2
           # The federation manifest/bundles the superadmin console shell reads to
           # mount the service-catalog remote (the internal-visibility tier is enforced
           # inside federation-api by requiresRole=SUPERADMIN; this coarse row is the

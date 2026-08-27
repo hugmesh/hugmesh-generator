@@ -4,7 +4,9 @@ resources:
   - tier-ingress.yaml
   - db-ingress.yaml   # ADR-32 DB-hardening: per-DB-pod (Postgres :5432) + Cassandra (:9042) Ingress policies; paired with tier-ingress NotIn excludes (ships dark, MANUAL-sync, live-validate-only)
   - harbor-ingress.yaml   # Harbor registry per-pod Ingress backstop (be-gateway + hugmesh-image-builds only); paired with the tier-ingress `app: harbor` NotIn exclude
+  - superadmin-ui-ingress.yaml   # cross-namespace: the tailnet superadmin-gateway (hugmesh-pki) -> the Service Catalog console pod in hugmesh-frontend, which the hugmesh-frontend tier from-set does not cover
   - homeserver-isolation.yaml
+  - gateway-crossns-ingress.yaml   # cross-namespace gateway hops the tier/per-pod policies miss: superadmin-gateway (hugmesh-pki) -> admin-bff-api + federation-api, and fe-gateway -> the homeserver mTLS proxies :4443 (found by [gateway-netpol])
   - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
   - egress-vpn-interaction.yaml   # per-service opt-in (hugmesh.net/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)
   - tor-onion-marked.yaml   # per-service opt-in (hugmesh.net/tor-onion=true) egress to the node Tor SOCKS proxy; forward-hook for pod-egress-via-tor; PRUNED when tor is not selected (default-off)
