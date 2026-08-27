@@ -101,8 +101,10 @@ HELM_PINS="$(python3 "$(dirname "$0")/helm_image_pins.py" "${ROOT}" 2>/dev/null 
 # cleanup override). An empty result means the extractor stopped working -- a silent
 # regression back to the blind spot -- so say so rather than scanning one form only.
 if [ -z "${HELM_PINS//[[:space:]]/}" ]; then
-  echo "  FAIL helm split-form scan found NOTHING — the extractor has regressed and this gate is back to seeing only one-line image: keys"
-  F=$((F+1))
+  # `bad`, not a bare echo + an ad-hoc counter. This suite raises `fail`, and
+  # test-guard-integrity.sh check 2 exists precisely to catch a counter that is
+  # incremented and never turned into an exit status -- it caught this one.
+  bad "helm split-form scan found NOTHING — the extractor has regressed and this gate is back to seeing only one-line image: keys"
 else
   images="$(printf '%s\n%s\n' "${images}" "${HELM_PINS}" | grep -v '^$' | sort -u)"
 fi
