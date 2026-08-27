@@ -709,6 +709,50 @@ else
   bad "M6 could not be applied"; fi
 restore_all
 
+# M7 — the DOCKER probe trusts whatever answers on the shared port. Sibling of M6,
+# and the one that was missing: the collision logic lived ONLY on the probe's
+# FAILURE branch, so a status line from the kind node made docker report AVAILABLE
+# while the same probe's own detail recorded portOwner=hugmesh-local-control-plane.
+# An @env:docker scenario then RAN against the kind ingress and PASSED instead of
+# skipping. Measured on this box before the fix: "4 passed, 1 failed — @env:docker
+# scenario PASSED while the environment is down".
+#
+# DETECTED LIKE M2, NOT LIKE M6. vocab_lane only proves the vocabulary resolves; it
+# never exercises availability, so wiring this mutation to it reported SURVIVED
+# against a working fix. The catch condition is the per-environment status line:
+# with the owner check disabled, docker stops skipping.
+if [ -z "${BASE_ENVSTATUS}" ]; then
+  bad "M7 cannot run: the baseline analysis emitted no envstatus line"
+elif mutate tests/e2e/steps/dimensions.ts <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+# Both probe branches carry the identical condition, so anchor on the SUCCESS
+# branch's preceding comment. The assert must refuse a non-unique anchor rather
+# than mutate whichever site it reaches first.
+old = ("    // its pgrep gate above; docker had nothing equivalent.\n"
+       "    if (owner && def.id !== 'kind' && /control-plane/.test(owner)) {")
+new = ("    // its pgrep gate above; docker had nothing equivalent.\n"
+       "    if (false && owner && def.id !== 'kind' && /control-plane/.test(owner)) {")
+assert s.count(old) == 1, "anchor for M7 not unique: %d" % s.count(old)
+open(p, 'w').write(s.replace(old, new))
+PY
+then
+  regen >/dev/null 2>&1
+  run_lane m7 >/dev/null
+  analyse m7 lite || true
+  M7_ENVSTATUS="$(sed -n 's/^NOTE envstatus=//p' "${WORK}/m7.analysis" | head -1)"
+  if [ "${M7_ENVSTATUS}" = "${BASE_ENVSTATUS}" ]; then
+    mut_result "M7 docker accepts the kind node's ingress as the compose stack" 0 \
+      "the @env scenarios still reported '${M7_ENVSTATUS}' with the owner check disabled"
+  else
+    mut_result "M7 docker accepts the kind node's ingress as the compose stack" 1 ""
+    echo "             baseline envstatus: ${BASE_ENVSTATUS}"
+    echo "             mutated  envstatus: ${M7_ENVSTATUS}"
+  fi
+else
+  bad "M7 could not be applied"; fi
+restore_all
+
 echo "  mutations: ${CAUGHT} caught, ${SURVIVED} survived"
 
 # ── 4. the tree is back exactly as it was ────────────────────────────────────
