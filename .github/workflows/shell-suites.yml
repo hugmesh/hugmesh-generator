@@ -279,6 +279,7 @@ jobs:
             tests/stack/test-optional-services-exclude.sh
             tests/stack/test-probe-auth-surface.sh
             tests/stack/test-tls-front.sh
+            tests/stack/test-tube-media-signed-gate.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect

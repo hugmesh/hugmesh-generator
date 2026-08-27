@@ -75,7 +75,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # test-route-access-oracle.sh into the pull_request workflow. MEASURED at the
 # merge, not carried over from either side -- the branch itself said 120, main
 # said 130, and neither number is true of the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-133}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-134}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
