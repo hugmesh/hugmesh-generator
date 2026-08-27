@@ -378,6 +378,48 @@ def test_restart_with_deleted_workdir_offers_redo(qapp, wiz, tmp_path):
     assert "Redo" in why
 
 
+# ── the "Open build window" button on the real Sessions page ─────────────────────────
+def test_open_window_button_gating_and_route(qapp, wiz, tmp_path):
+    """Disabled with no selection, enabled with one, and it opens the SAME per-build
+    window object row activation opens (one route: open_build_window)."""
+    from hugmesh_studio.gui.pages import build_window
+    _seed_sessions(tmp_path)
+    wiz.cfg.output_dir = str(tmp_path / "out")
+    w = _sessions_page(wiz).previous_builds
+    w.refresh()
+    try:
+        w.table.clearSelection()
+        w._update_buttons()
+        assert not w.open_window_btn.isEnabled()   # nothing selected -> nothing to open
+        w.table.selectRow(0)
+        assert w.open_window_btn.isEnabled()
+        w.open_window_btn.click()
+        assert len(w._build_windows) == 1
+        win = w._build_windows[0]
+        assert isinstance(win, build_window.BuildActionsWindow)
+        assert win.row is w._row_data[0]
+        w._open_build_window()                     # the double-click/Enter route
+        assert w._build_windows == [win]           # SAME window, never a second one
+    finally:
+        for win in list(w._build_windows):
+            win.close()
+
+
+def test_no_cell_tells_the_user_to_click_the_row(qapp, wiz, tmp_path):
+    """The old "Click the row to open this build in its own window." tooltip is
+    retired — the Next cell describes itself neutrally instead."""
+    _seed_sessions(tmp_path)
+    wiz.cfg.output_dir = str(tmp_path / "out")
+    w = _sessions_page(wiz).previous_builds
+    w.refresh()
+    tips = [w.table.item(i, j).toolTip()
+            for i in range(w.table.rowCount())
+            for j in range(w.table.columnCount())
+            if w.table.item(i, j) is not None]
+    assert tips                                    # the Next cells do carry tooltips
+    assert not any("click the row" in t.lower() for t in tips), tips
+
+
 # ── delete / cleanup affordance ───────────────────────────────────────────────────────
 def test_delete_button_gating(qapp, wiz, tmp_path):
     _seed_sessions(tmp_path)
