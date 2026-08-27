@@ -709,26 +709,36 @@ else
   bad "M6 could not be applied"; fi
 restore_all
 
-# M7 — the DOCKER probe trusts whatever answers on the shared port. Sibling of M6,
-# and the one that was missing: the collision logic lived ONLY on the probe's
-# FAILURE branch, so a status line from the kind node made docker report AVAILABLE
-# while the same probe's own detail recorded portOwner=hugmesh-local-control-plane.
-# An @env:docker scenario then RAN against the kind ingress and PASSED instead of
-# skipping. Measured on this box before the fix: "4 passed, 1 failed — @env:docker
-# scenario PASSED while the environment is down".
+# M7 — an UNPROTECTED port collision on the docker probe. Sibling of M6.
 #
-# DETECTED LIKE M2, NOT LIKE M6. vocab_lane only proves the vocabulary resolves; it
-# never exercises availability, so wiring this mutation to it reported SURVIVED
-# against a working fix. The catch condition is the per-environment status line:
-# with the owner check disabled, docker stops skipping.
+# Two edits, one defect. The defect is "docker trusts whatever answers on a port it
+# does not own". Observing it needs the collision to EXIST, and after the port fix
+# docker asks :8488 where nothing on this host replies — so the first edit is SETUP
+# that points docker back at the shared :8443 (which the kind node publishes here),
+# and the second is the defect itself, removing the owner check.
+#
+# Doing only the setup would leave the guard correctly GREEN (docker skips, because
+# the owner check catches it) and report SURVIVED against a working fix — which is
+# what a first draft of this block did.
+#
+# Both halves were live at once before today: the fallback said 8443 AND the owner
+# check existed only on the probe's failure branch. Measured then: "4 passed, 1
+# failed — @env:docker scenario PASSED while the environment is down".
 if [ -z "${BASE_ENVSTATUS}" ]; then
   bad "M7 cannot run: the baseline analysis emitted no envstatus line"
 elif mutate tests/e2e/steps/dimensions.ts <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-# Both probe branches carry the identical condition, so anchor on the SUCCESS
-# branch's preceding comment. The assert must refuse a non-unique anchor rather
-# than mutate whichever site it reaches first.
+
+# SETUP: put docker back on the shared port so a collision can happen at all.
+setup_old = "        || `https://localhost:${process.env.PUBLIC_HTTPS_PORT || '8488'}`,"
+setup_new = "        || 'https://localhost:8443',"
+assert s.count(setup_old) == 1, "M7 setup anchor not unique: %d" % s.count(setup_old)
+s = s.replace(setup_old, setup_new)
+
+# THE DEFECT: both probe branches carry the identical condition, so anchor on the
+# SUCCESS branch's preceding comment. A non-unique anchor must refuse rather than
+# mutate whichever site it reaches first.
 old = ("    // its pgrep gate above; docker had nothing equivalent.\n"
        "    if (owner && def.id !== 'kind' && /control-plane/.test(owner)) {")
 new = ("    // its pgrep gate above; docker had nothing equivalent.\n"
@@ -743,7 +753,7 @@ then
   M7_ENVSTATUS="$(sed -n 's/^NOTE envstatus=//p' "${WORK}/m7.analysis" | head -1)"
   if [ "${M7_ENVSTATUS}" = "${BASE_ENVSTATUS}" ]; then
     mut_result "M7 docker accepts the kind node's ingress as the compose stack" 0 \
-      "the @env scenarios still reported '${M7_ENVSTATUS}' with the owner check disabled"
+      "the @env scenarios still reported '${M7_ENVSTATUS}' with docker back on :8443 and the owner check disabled"
   else
     mut_result "M7 docker accepts the kind node's ingress as the compose stack" 1 ""
     echo "             baseline envstatus: ${BASE_ENVSTATUS}"

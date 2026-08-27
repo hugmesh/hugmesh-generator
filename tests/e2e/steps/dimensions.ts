@@ -441,8 +441,20 @@ export const ENVIRONMENT_DEFS: Record<Environment, EnvironmentDef> = {
     // playwright.config.ts already reads, what tests/e2e/run.sh sets and what
     // run-qemu-e2e.sh exports. Keeping docker bound to it is what makes the
     // 453 pre-existing scenarios behave identically.
+    // THE FALLBACK PORT IS 8488, NOT 8443, and that is not a detail. compose.local.yaml
+    // publishes `${PUBLIC_HTTPS_PORT:-8488}:8443` — 8443 is the port INSIDE the
+    // container; the host door is 8488 (Makefile: PUBLIC_HTTPS_PORT ?= 8488, and
+    // `make stack-e2e` exports SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)').
+    //
+    // So a run that sets SNAP_BASE_URL — every run through the Makefile — was always
+    // right, and only the bare fallback was wrong. But the bare fallback is exactly
+    // what this suite's own lanes use, and on this host :8443 is published by the KIND
+    // node. Docker's probe therefore knocked on the kind ingress, got a 404, and
+    // called the compose stack available. Fixing the owner check (below) makes that
+    // SKIP correctly; fixing the port makes it ask the right door in the first place.
     baseUrl: () => trimSlash(
-      process.env.SNAP_ENV_DOCKER_BASE_URL || process.env.SNAP_BASE_URL || 'https://localhost:8443',
+      process.env.SNAP_ENV_DOCKER_BASE_URL || process.env.SNAP_BASE_URL
+        || `https://localhost:${process.env.PUBLIC_HTTPS_PORT || '8488'}`,
     ),
     probeTarget: () => ({ url: `${ENVIRONMENT_DEFS.docker.baseUrl()}/` }),
     startHint: 'make stack-up ENV=test   (then: make stack-seed)',
