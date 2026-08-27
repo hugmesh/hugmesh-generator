@@ -71,7 +71,7 @@ def _inner(cmd: list[str]) -> str:
 
 
 def _docker_cfg(tmp_path, **kw) -> ImageConfig:
-    cfg = ImageConfig(platform="x86", role="be", mode="mesh", env="test")
+    cfg = ImageConfig(platform="x86", role="backend", mode="mesh", env="test")
     for k, v in kw.items():
         setattr(cfg, k, v)
     return cfg
@@ -172,7 +172,7 @@ def test_stale_x86_only_path_does_not_block_an_arm_build(tmp_path):
     stale value riding an ARM config must NOT block a build over a flag that platform
     cannot receive."""
     assert "rpi5" not in PLATFORM_FIELD_SUPPORT["secureboot_key"]
-    cfg = ImageConfig(platform="rpi5", role="be", mode="mesh", env="test")
+    cfg = ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
     cfg.secureboot_key = str(tmp_path / "nope.pem")
     assert not [p for p in _driver().preflight(cfg, backend="docker") if "secureboot" in p]
 

@@ -28,7 +28,7 @@ from hugmesh_studio.core.keyzip import KeyZipContents
 
 
 def _node() -> ImageConfig:
-    return ImageConfig(platform="x86", role="be", mode="mesh", env="test")
+    return ImageConfig(platform="x86", role="backend", mode="mesh", env="test")
 
 
 def _desktop() -> ImageConfig:

@@ -219,7 +219,7 @@ def test_mesh_node_worklist_starts_all_images(monkeypatch, qapp, wiz):
     wl_page = advance_to(wiz, wizard_mod.WorklistPage)
     # check exactly two node images across two platforms; uncheck everything else so the
     # pre-checked mode-default row can't sneak a third image in.
-    want = {"omnibus.x86", "be.rpi5"}
+    want = {"omnibus.x86", "backend.rpi5"}
     for rid, item in wl_page.rows.items():
         item.setCheckState(0, Qt.CheckState.Checked if rid in want
                            else Qt.CheckState.Unchecked)
@@ -256,7 +256,7 @@ def test_mesh_node_worklist_starts_all_images(monkeypatch, qapp, wiz):
     # key-zips fired for BOTH node rows (reuses the test_pages_progress footer contract).
     footer = page.footer.text()
     assert "manifest" in footer.lower()
-    assert "omnibus.x86" in footer and "be.rpi5" in footer
+    assert "omnibus.x86" in footer and "backend.rpi5" in footer
 
 
 # ── (2) MESH DESKTOP CLIENT — cloud, single image ──────────────────────────────────────

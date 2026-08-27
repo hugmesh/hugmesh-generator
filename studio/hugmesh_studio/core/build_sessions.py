@@ -39,7 +39,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from . import secret_files
+from . import roles, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, SECRET_FIELDS
 from .state_paths import state_dir
 from .worklist import WorklistConfig
@@ -234,6 +234,20 @@ class BuildSession:
             v = vals[k]
             if not isinstance(v, str):
                 vals[k] = "" if v is None else str(v)
+        # CANONICALIZE THE ROLE ON READ, never rewrite the record. `images` rows are
+        # {id, role, platform, status, ...} and the role is persisted with no schema
+        # version and no load-time validation, so a session written before the role
+        # vocabulary converged holds `be`/`fe`/`be+gpu`/`edge_ai`. The row `id` is
+        # left as saved — it names this image's build tree, KEYS folder and log on
+        # disk, all of which are already-emitted artifacts.
+        imgs = vals.get("images")
+        if isinstance(imgs, list):
+            vals["images"] = [
+                ({**row, "role": roles.canonicalize(row["role"])}
+                 if isinstance(row, dict) and isinstance(row.get("role"), str) and row["role"]
+                 else row)
+                for row in imgs
+            ]
         return cls(**vals)
 
     def worklist(self) -> WorklistConfig:

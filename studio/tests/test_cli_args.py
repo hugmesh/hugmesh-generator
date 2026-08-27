@@ -80,9 +80,9 @@ def pairs(args):
 def test_role_catalog_covers_every_documented_role():
     flat = {(r, p) for roles in ROLE_CHOICES.values() for r, plats, _ in roles for p in plats}
     # SERVER/cluster
-    for r in ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai"):
+    for r in ("pki", "backend", "frontend", "backend-gpu", "omnibus", "edge-ai"):
         assert (r, "x86") in flat
-    for r in ("pki", "be", "fe"):
+    for r in ("pki", "backend", "frontend"):
         assert (r, "rpi5") in flat
     assert ("rpi5-desktop", "rpi5") in flat
     # CLIENT
@@ -94,9 +94,12 @@ def test_role_catalog_covers_every_documented_role():
     # PLAIN-GENTOO arms: the unaffiliated x86 desktop + the rpi5 generic arm64 server
     assert ("standalone-unaffiliated", "x86") in flat
     assert ("generic", "rpi5") in flat
-    # JETSON (EXPERIMENTAL)
-    for r in ("edge_ai", "full", "gpu-host", "jetson-desktop"):
+    # JETSON (EXPERIMENTAL). `full` and `gpu-host` are GONE as separate ids — they
+    # were the omnibus and backend-gpu roles under two more names (the builder's own
+    # comments said so), and both spellings remain accepted on its CLI forever.
+    for r in ("edge-ai", "omnibus", "backend-gpu", "jetson-desktop"):
         assert (r, "jetson") in flat
+    assert ("full", "jetson") not in flat and ("gpu-host", "jetson") not in flat
 
 
 def test_mode_defaults_stay_in_catalog():
@@ -393,7 +396,7 @@ def test_rpi_boards_for_role_gates_rpi3_to_desktop():
     assert rpi_boards_for_role("rpi5-desktop") == RPI_BOARDS
     assert "rpi3" in rpi_boards_for_role("rpi5-desktop")
     # node/appliance rpi5 roles -> rpi5/rpi4 ONLY (rpi3 excluded)
-    for node_role in ("pki", "be", "fe", "generic"):
+    for node_role in ("pki", "backend", "frontend", "generic"):
         boards = rpi_boards_for_role(node_role)
         assert boards == RPI_NODE_BOARDS
         assert "rpi3" not in boards
@@ -459,12 +462,13 @@ def test_committed_image_catalog_matches_emitter_and_gates_rpi3():
 def test_rpi5_node_on_rpi4_is_a_real_buildable_cell():
     """A Raspberry Pi 4 backend NODE is an explicit, valid selection (board rpi4 +
     node role) — the surfacing the request asks for. Emits --role backend --board rpi4."""
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", board="rpi4",
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", board="rpi4",
                        tailscale=True).to_cli_args()
     assert args[:5] == ["--role", "backend", "--board", "rpi4", "--env"]
 
 
-@pytest.mark.parametrize("role", ["pki", "be", "fe", "be+gpu", "omnibus", "edge_ai"])
+@pytest.mark.parametrize("role", ["pki", "backend", "frontend", "backend-gpu",
+                                  "omnibus", "edge-ai"])
 def test_x86_mesh_roles_golden(role):
     # G18: a mesh NODE role does NOT carry --person-role/--domains — the builder warns
     # + ignores them there (build-x86:1722-1724), so the Studio must not emit them.
@@ -519,9 +523,9 @@ def test_explicit_false_still_forces_no_flags_on_a_mesh_build():
 
 
 def test_arm_mesh_config_omitting_tailscale_keeps_its_mesh():
-    on = ImageConfig(mode="mesh", role="be", platform="rpi5").to_cli_args()
+    on = ImageConfig(mode="mesh", role="backend", platform="rpi5").to_cli_args()
     assert "--skip-mesh" not in on
-    off = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=False).to_cli_args()
+    off = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=False).to_cli_args()
     assert "--skip-mesh" in off
 
 
@@ -649,7 +653,7 @@ def test_x86_iso_finish_pairs_flip():
 # ---- rpi5: server node roles (be/fe spelled out) -----------------------------
 
 @pytest.mark.parametrize("role,builder_role",
-                         [("pki", "pki"), ("be", "backend"), ("fe", "frontend"),
+                         [("pki", "pki"), ("backend", "backend"), ("frontend", "frontend"),
                           ("rpi5-desktop", "desktop")])
 def test_rpi5_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="rpi5", tailscale=True).to_cli_args()
@@ -671,7 +675,7 @@ def test_rpi5_standalone_desktop():
 
 
 def test_rpi5_full_surface():
-    cfg = ImageConfig(mode="mesh", role="fe", platform="rpi5", tailscale=False,
+    cfg = ImageConfig(mode="mesh", role="frontend", platform="rpi5", tailscale=False,
                       brand="acme", brand_title="Acme", org="Acme-Org",
                       cluster_domain="acme.example", enable_wifi=True, enable_bluetooth=True,
                       root_login="prohibit-password", img_size=4096, compress=True, resume=True,
@@ -705,10 +709,10 @@ def test_rpi5_board_axis(board):
     — mirrors test_jetson_board_axis: --board rides right after --role, before
     the shared --env/_arm_common_args() surface. (This is a pure CLI-arg
     composition test — ImageConfig does not pre-validate rpi3's desktop-only
-    constraint; role="be" here would hard-error at the builder, which is by
+    constraint; role="backend" here would hard-error at the builder, which is by
     design — see test_rpi5_board_rpi3_composes_with_desktop_standalone below
     for the actually-valid rpi3 shape.)"""
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                        board=board).to_cli_args()
     assert args == ["--role", "backend", "--board", board, "--env", "test",
                     "--superdomain", "hugmesh.internal", *ALL_TAIL]
@@ -787,7 +791,7 @@ def test_jetson_encrypt_root_and_standalone_blocked():
         ImageConfig(mode="mesh", platform="jetson", role="desktop",
                     standalone=True, local_user="alice").to_cli_args()
     # bare jetson (no encrypt_root/standalone at all) is unaffected
-    args = ImageConfig(mode="mesh", platform="jetson", role="edge_ai").to_cli_args()
+    args = ImageConfig(mode="mesh", platform="jetson", role="edge-ai").to_cli_args()
     assert "--encrypt-root" not in args
     assert "--standalone" not in args
 
@@ -813,11 +817,53 @@ def test_frite_board_flavor_desktop_matrix(board, flavor, desktop):
     assert "--role" not in args
 
 
+# ---- every OLD spelling still reaches the right builder token -----------------
+# The contract is: aliases are accepted on INPUT forever, and NEVER appear on OUTPUT.
+# These two tests are the Studio-side half of that (tests/scripts/test-role-key-
+# spelling.sh is the shell-side half). They exist because a half-done rename is the
+# dangerous state: 251 saved session records on a working machine hold the old ids,
+# and every `.get(role, default)` in the Studio answers an unrecognised id with a
+# silent default rather than an error.
+
+@pytest.mark.parametrize("old,canonical", [
+    ("be", "backend"), ("fe", "frontend"), ("be+gpu", "backend-gpu"),
+    ("host", "backend-gpu"), ("edge_ai", "edge-ai"), ("edge-ai", "edge-ai"),
+    ("standalone-full", "standalone-thick"),
+])
+def test_an_old_x86_role_id_still_emits_the_canonical_token(old, canonical):
+    """A config restored from an older session (or hand-written by an operator who
+    learned the old `--role be`) must build the SAME image, and must EMIT the canonical
+    spelling — the builder never sees two names for one role."""
+    cfg = ImageConfig.from_dict({"mode": "mesh", "role": old, "platform": "x86",
+                                 "tailscale": True})
+    assert cfg.to_cli_args()[:2] == ["--role", canonical]
+
+
+@pytest.mark.parametrize("old,canonical", [
+    ("be", "backend"), ("fe", "frontend"), ("full", "omnibus"),
+    ("gpu-host", "backend-gpu"), ("gpu_host", "backend-gpu"), ("edge_ai", "edge-ai"),
+])
+def test_an_old_arm_role_id_still_emits_the_canonical_token(old, canonical):
+    plat = "rpi5" if canonical in ("backend", "frontend") else "jetson"
+    cfg = ImageConfig.from_dict({"mode": "mesh", "role": old, "platform": plat,
+                                 "tailscale": True})
+    assert cfg.to_cli_args()[:2] == ["--role", canonical]
+
+
+def test_the_composite_ids_are_NOT_folded_on_load():
+    """rpi5-desktop / jetson-desktop carry a PLATFORM, not just a spelling. Folding
+    them at load would drop that half and silently target the wrong builder; they are
+    resolved only by the per-platform argv emitters, which have already spent it."""
+    cfg = ImageConfig.from_dict({"mode": "mesh", "role": "rpi5-desktop", "platform": "rpi5"})
+    assert cfg.role == "rpi5-desktop"
+    assert cfg.to_cli_args()[:2] == ["--role", "desktop"]
+
+
 # ---- jetson: EXPERIMENTAL arm64 Tegra node (frite conventions + --role) -------
 
 @pytest.mark.parametrize("role,builder_role",
-                         [("edge_ai", "edge_ai"), ("full", "full"),
-                          ("gpu-host", "gpu-host"), ("jetson-desktop", "desktop")])
+                         [("edge-ai", "edge-ai"), ("omnibus", "omnibus"),
+                          ("backend-gpu", "backend-gpu"), ("jetson-desktop", "desktop")])
 def test_jetson_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="jetson", tailscale=True).to_cli_args()
     assert args == ["--role", builder_role, "--env", "test",
@@ -825,10 +871,10 @@ def test_jetson_roles_golden(role, builder_role):
 
 
 def test_jetson_shared_arm_surface():
-    args = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=False,
+    args = ImageConfig(mode="mesh", role="edge-ai", platform="jetson", tailscale=False,
                        brand="acme", enable_wifi=True, img_size=8192,
                        compress=True, resume=True).to_cli_args()
-    assert args == ["--role", "edge_ai", "--env", "test", "--brand", "acme",
+    assert args == ["--role", "edge-ai", "--env", "test", "--brand", "acme",
                     "--superdomain", "acme.internal",
                     "--skip-mesh", "--enable-wifi", "--img-size", "8192",
                     "--compress", "--resume"]
@@ -837,16 +883,16 @@ def test_jetson_shared_arm_surface():
 @pytest.mark.parametrize("board", ["orin-nano", "orin-nano-4gb",
                                    "orin-nx-8gb", "orin-nx-16gb"])
 def test_jetson_board_axis(board):
-    args = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
+    args = ImageConfig(mode="mesh", role="edge-ai", platform="jetson", tailscale=True,
                        board=board).to_cli_args()
-    assert args == ["--role", "edge_ai", "--board", board, "--env", "test",
+    assert args == ["--role", "edge-ai", "--board", board, "--env", "test",
                     "--superdomain", "hugmesh.internal", *ALL_TAIL]
 
 
 # ---- env threading (test|prod baked per channel) ------------------------------
 
 @pytest.mark.parametrize("platform,role", [("x86", "omnibus"), ("rpi5", "pki"),
-                                           ("frite", "frite"), ("jetson", "edge_ai")])
+                                           ("frite", "frite"), ("jetson", "edge-ai")])
 @pytest.mark.parametrize("env", ["test", "prod"])
 def test_env_threads_through_every_platform(platform, role, env):
     args = ImageConfig(mode="mesh" if platform != "frite" else "cloud",
@@ -1056,7 +1102,7 @@ def test_cluster_identity_applies_reads_only_platform_and_mode():
     `role not in X86_NODE_ROLES` gate that --person-role/--domains sit behind), so a class
     axis here would be an invented constraint — the exact failure mode FieldScope's
     docstring records for the --standalone class rule."""
-    for role in ("desktop", "laptop", "omnibus", "pki", "be", "fe"):
+    for role in ("desktop", "laptop", "omnibus", "pki", "backend", "frontend"):
         mode = "mesh" if role in X86_NODE_ROLES else "cloud"
         assert cluster_identity_applies(
             ImageConfig(mode=mode, role=role, platform="x86", tailscale=True, sso=True))
@@ -1103,7 +1149,7 @@ def test_g18_client_role_still_emits_domains():
 
 def test_g3_brand_profile_emits_config_on_every_platform():
     for plat, extra in (("x86", dict(role="desktop", mode="cloud")),
-                        ("rpi5", dict(role="be", mode="mesh")),
+                        ("rpi5", dict(role="backend", mode="mesh")),
                         ("frite", dict(role="frite", mode="cloud"))):
         args = ImageConfig(platform=plat, brand_profile="/tmp/brand.conf", **extra).to_cli_args()
         assert ("--config", "/tmp/brand.conf") in pairs(args)
@@ -1113,7 +1159,7 @@ def test_g4_release_state_x86_and_rpi5_only():
     x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
                     release_state="public").to_cli_args()
     assert ("--release-state", "public") in pairs(x)
-    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    r = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     release_state="internal").to_cli_args()
     assert ("--release-state", "internal") in pairs(r)
     # frite does not parse it -> never emitted
@@ -1126,7 +1172,7 @@ def test_g6_games_domain_x86_and_rpi5():
     x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
                     games_domain="games.acme.example").to_cli_args()
     assert ("--games-domain", "games.acme.example") in pairs(x)
-    r = ImageConfig(mode="mesh", role="fe", platform="rpi5", tailscale=True,
+    r = ImageConfig(mode="mesh", role="frontend", platform="rpi5", tailscale=True,
                     games_domain="games.acme.example").to_cli_args()
     assert ("--games-domain", "games.acme.example") in pairs(r)
 
@@ -1148,7 +1194,7 @@ def test_g5_secure_boot_tristate_and_keys():
 
 
 def test_g5_secure_boot_never_on_arm():
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                        secure_boot="on", keys_usb="/mnt/keys").to_cli_args()
     for flag in ("--secure-boot", "--no-secure-boot", "--keys-usb"):
         assert flag not in args
@@ -1193,7 +1239,7 @@ def test_g15_rpi5_infra_slugs_in_catalog():
 
 
 def test_g15_rpi5_tor_via_optional_services():
-    args = ImageConfig(mode="mesh", role="fe", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="frontend", platform="rpi5", tailscale=True,
                        optional_services=["akkoma", "tor"]).to_cli_args()
     assert ("--optional-services", "akkoma tor") in pairs(args)
 
@@ -1240,13 +1286,13 @@ def test_g23_x86_artifact_selection():
 
 
 def test_g24_rpi5_artifact_selection():
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                        build_iso=True, sd_only=True, build_tar="off").to_cli_args()
     assert "--iso" in args and "--sd-only" in args and "--no-tar" in args
 
 
 def test_g24_jetson_and_frite_artifacts():
-    j = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
+    j = ImageConfig(mode="mesh", role="edge-ai", platform="jetson", tailscale=True,
                     build_img="off", image_only=True).to_cli_args()
     assert "--no-img" in j and "--image-only" in j
     f = ImageConfig(mode="cloud", role="frite", platform="frite", image_only=True).to_cli_args()
@@ -1259,16 +1305,16 @@ def test_g24_jetson_and_frite_artifacts():
 # ---- G25/G26: grow + host identity ----------------------------------------------
 
 @pytest.mark.parametrize("platform,role,mode", [("x86", "standalone-thick", "standalone"),
-                                                ("rpi5", "be", "mesh"),
+                                                ("rpi5", "backend", "mesh"),
                                                 ("frite", "frite", "cloud"),
-                                                ("jetson", "edge_ai", "mesh")])
+                                                ("jetson", "edge-ai", "mesh")])
 def test_g25_grow_on_every_platform(platform, role, mode):
     args = ImageConfig(mode=mode, role=role, platform=platform, grow="fill").to_cli_args()
     assert ("--grow", "fill") in pairs(args)
 
 
 @pytest.mark.parametrize("platform,role,mode", [("x86", "standalone-thick", "standalone"),
-                                                ("rpi5", "be", "mesh"),
+                                                ("rpi5", "backend", "mesh"),
                                                 ("frite", "frite", "cloud")])
 def test_g26_hostname_timezone_user(platform, role, mode):
     args = ImageConfig(mode=mode, role=role, platform=platform,
@@ -1295,7 +1341,7 @@ def test_g27_node_fallback_creds_secret_and_x86_only():
     assert ("--user-password", "up") in pairs(args)
     assert ("--root-password", "rp") in pairs(args)
     # rpi5 does NOT get them (deprecated no-ops there)
-    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    r = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     user_password="up", root_password="rp").to_cli_args()
     assert "--user-password" not in r and "--root-password" not in r
 
@@ -1318,20 +1364,20 @@ def test_secret_fields_include_node_creds():
 
 def test_g28_arm_local_user_without_standalone():
     # renamed account, no --standalone
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                        local_user="alice", local_pass="pw").to_cli_args()
     assert ("--local-user", "alice") in pairs(args)
     assert ("--local-pass", "pw") in pairs(args)
     assert "--standalone" not in args
     # default account name with no password + no standalone stays quiet (existing goldens)
-    quiet = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True).to_cli_args()
+    quiet = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True).to_cli_args()
     assert "--local-user" not in quiet
 
 
 # ---- G29/G30: version pins + image stamps ---------------------------------------
 
 @pytest.mark.parametrize("platform,role,mode", [("x86", "omnibus", "mesh"),
-                                                ("rpi5", "be", "mesh"),
+                                                ("rpi5", "backend", "mesh"),
                                                 ("frite", "frite", "cloud")])
 def test_g29_version_pins_and_skip_tailscale(platform, role, mode):
     args = ImageConfig(mode=mode, role=role, platform=platform, tailscale=True,
@@ -1348,7 +1394,7 @@ def test_g30_version_all_release_tag_x86_only():
                     version="2026.07", release_tag="rc1").to_cli_args()
     assert ("--version", "2026.07") in pairs(x)
     assert ("--release-tag", "rc1") in pairs(x)
-    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    r = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     version="2026.07", release_tag="rc1").to_cli_args()
     assert ("--version", "2026.07") in pairs(r)
     assert "--release-tag" not in r
@@ -1417,7 +1463,7 @@ def test_g34_tristate_bool_backcompat():
 
 
 def test_g34_rpi5_force_off_character_studio():
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                        character_studio="off").to_cli_args()
     assert "--no-character-studio" in args
 
@@ -1446,9 +1492,9 @@ def test_character_forge_default_emits_nothing():
 
 
 def test_g34_rpi5_character_forge_tristate_both_ways():
-    on = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    on = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                      character_forge=True).to_cli_args()
-    off = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    off = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                       character_forge="off").to_cli_args()
     assert "--with-character-forge" in on
     assert "--no-character-forge" in off
@@ -1457,7 +1503,7 @@ def test_g34_rpi5_character_forge_tristate_both_ways():
 def test_character_forge_slug_in_services_list():
     """'character-forge' is a first-class --optional-services slug too (the
     checklist path, independent of the lone tri-state flag)."""
-    args = ImageConfig(mode="mesh", role="be", platform="x86", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="x86", tailscale=True,
                        optional_services=["akkoma", "character-forge"]).to_cli_args()
     assert ("--optional-services", "akkoma character-forge") in zip(args, args[1:])
 
@@ -1475,7 +1521,7 @@ def test_edge_ai_tts_x86_no_edge_ai_coupling():
 
 
 def test_edge_ai_tts_rpi5_emits():
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                        edge_ai_tts=True).to_cli_args()
     assert "--with-edge-ai-tts" in args
 
@@ -1504,32 +1550,32 @@ def test_g35_uboot_chain(platform, role):
 
 
 def test_g35_uboot_never_on_rpi5_or_jetson():
-    for platform, role, mode in (("rpi5", "be", "mesh"), ("jetson", "edge_ai", "mesh")):
+    for platform, role, mode in (("rpi5", "backend", "mesh"), ("jetson", "edge-ai", "mesh")):
         args = ImageConfig(mode=mode, role=role, platform=platform, tailscale=True,
                            uboot_url="http://x").to_cli_args()
         assert "--uboot-url" not in args
 
 
 def test_g36_jetson_kernel_flavor():
-    args = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
+    args = ImageConfig(mode="mesh", role="edge-ai", platform="jetson", tailscale=True,
                        kernel_flavor="l4t").to_cli_args()
     assert ("--kernel-flavor", "l4t") in pairs(args)
     # not a jetson-only leak: rpi5 never emits it
-    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    r = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     kernel_flavor="l4t").to_cli_args()
     assert "--kernel-flavor" not in r
 
 
 def test_g37_arm_kernel_board_overrides():
     # shared -c/-d on every ARM builder
-    for platform, role, mode in (("rpi5", "be", "mesh"), ("frite", "frite", "cloud"),
-                                 ("jetson", "edge_ai", "mesh")):
+    for platform, role, mode in (("rpi5", "backend", "mesh"), ("frite", "frite", "cloud"),
+                                 ("jetson", "edge-ai", "mesh")):
         a = ImageConfig(mode=mode, role=role, platform=platform, tailscale=True,
                         cpu="cortex-a53", defconfig="foo_defconfig").to_cli_args()
         assert ("--cpu", "cortex-a53") in pairs(a)
         assert ("--defconfig", "foo_defconfig") in pairs(a)
     # rpi5-only --dtb-prefix / --kernel-img / --pcie-gen3
-    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    r = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     dtb_prefix="bcm2712", kernel_img="Image", pcie_gen3=True).to_cli_args()
     assert ("--dtb-prefix", "bcm2712") in pairs(r) and ("--kernel-img", "Image") in pairs(r)
     assert "--pcie-gen3" in r
@@ -1548,7 +1594,7 @@ def test_g38_shared_plumbing_on_x86_and_arm():
     assert "--skip-kernel" in x and "--skip-clean" in x
     assert ("--build-subdir", "sub") in pairs(x) and ("--seed-url", "http://s") in pairs(x)
     assert ("--distdir", "/dist") in pairs(x)
-    a = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    a = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                     skip_kernel=True, extra_packages="app-editors/vim").to_cli_args()
     assert "--skip-kernel" in a
     assert ("--extra-packages", "app-editors/vim") in pairs(a)
@@ -1648,9 +1694,9 @@ _PROBE_PLATFORMS = ("x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero
 # (x86 uses a cloud CLIENT role so the cluster/person plane is live).
 _BASELINES = {
     "x86": dict(mode="cloud", role="desktop", platform="x86"),
-    "rpi5": dict(mode="mesh", role="be", platform="rpi5"),
+    "rpi5": dict(mode="mesh", role="backend", platform="rpi5"),
     "frite": dict(mode="cloud", role="frite", platform="frite"),
-    "jetson": dict(mode="mesh", role="edge_ai", platform="jetson"),
+    "jetson": dict(mode="mesh", role="edge-ai", platform="jetson"),
     "orangepi5": dict(mode="cloud", role="orangepi5", platform="orangepi5"),
     "orangepizero2": dict(mode="cloud", role="orangepizero2", platform="orangepizero2"),
     "orangepizero2w": dict(mode="cloud", role="orangepizero2w", platform="orangepizero2w"),
@@ -1799,13 +1845,13 @@ def test_platform_field_support_unaffiliated_is_x86_only():
     # composable on a standalone x86 role; ignored on ARM
     assert "--unaffiliated" in ImageConfig(mode="standalone", role="standalone-thin",
                                            platform="x86", unaffiliated=True).to_cli_args()
-    assert "--unaffiliated" not in ImageConfig(mode="mesh", role="be", platform="rpi5",
+    assert "--unaffiliated" not in ImageConfig(mode="mesh", role="backend", platform="rpi5",
                                                tailscale=True, unaffiliated=True).to_cli_args()
 
 
 # a valid mesh (role, platform) per builder — the shared cloud/mesh baselines can't be
 # reused because superdomain emits ONLY in mesh mode (WS-SUPER-B).
-_MESH_ROLE = {"x86": "omnibus", "rpi5": "be", "frite": "frite", "jetson": "edge_ai",
+_MESH_ROLE = {"x86": "omnibus", "rpi5": "backend", "frite": "frite", "jetson": "edge-ai",
               "orangepi5": "orangepi5", "orangepizero2": "orangepizero2",
               "orangepizero2w": "orangepizero2w", "orangepizero3": "orangepizero3",
               "orangepi3-lts": "orangepi3-lts", "orangepi4-lts": "orangepi4-lts"}
@@ -1856,7 +1902,7 @@ def test_superdomain_emitted_for_mesh_absent_for_standalone():
     # orchestration plane); an explicit value wins over the derived <brand>.internal.
     # A standalone image joins no plane, so it carries nothing.
     for kw in (dict(mode="mesh", role="omnibus", platform="x86", tailscale=True, sso=True),
-               dict(mode="mesh", role="be", platform="rpi5", tailscale=True)):
+               dict(mode="mesh", role="backend", platform="rpi5", tailscale=True)):
         args = ImageConfig(superdomain="acme.internal", **kw).to_cli_args()
         assert ("--superdomain", "acme.internal") in pairs(args)
         assert "--super-domain" not in args     # never the misspelled alias
@@ -1901,9 +1947,9 @@ def test_packages_add_drop_reach_argv():
     # --packages-drop as one argv element each (space-separated atom string), on
     # EVERY platform (all six builders parse them identically).
     for plat, extra in (("x86", dict(mode="mesh", role="omnibus", tailscale=True, sso=True)),
-                        ("rpi5", dict(mode="mesh", role="be", tailscale=True)),
+                        ("rpi5", dict(mode="mesh", role="backend", tailscale=True)),
                         ("frite", dict(mode="cloud", role="frite")),
-                        ("jetson", dict(mode="mesh", role="edge_ai")),
+                        ("jetson", dict(mode="mesh", role="edge-ai")),
                         ("orangepi5", dict(mode="cloud", role="orangepi5")),
                         ("orangepizero2", dict(mode="cloud", role="orangepizero2")),
                         ("orangepizero2w", dict(mode="cloud", role="orangepizero2w")),
@@ -1919,13 +1965,13 @@ def test_packages_add_drop_empty_emit_nothing():
     # byte-identity (I1): defaults ("") emit NEITHER flag on any platform, so every
     # existing flat config's argv is unchanged by the flip.
     for plat, extra in (("x86", dict(mode="mesh", role="omnibus", tailscale=True, sso=True)),
-                        ("rpi5", dict(mode="mesh", role="be", tailscale=True))):
+                        ("rpi5", dict(mode="mesh", role="backend", tailscale=True))):
         args = ImageConfig(platform=plat, **extra).to_cli_args()
         assert "--packages-add" not in args and "--packages-drop" not in args
 
 
 def test_packages_add_drop_round_trip(tmp_path):
-    cfg = ImageConfig(mode="mesh", role="be", platform="rpi5",
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5",
                       packages_add="app-editors/vim dev-vcs/git",
                       packages_drop="games-util/steam")
     p = tmp_path / "c.json"
@@ -1969,7 +2015,7 @@ def test_validate_package_atoms_rejects(bad):
 def test_extra_packages_kept_frozen_and_separate_from_packages_add():
     # extra_packages STILL emits --extra-packages on ARM (frozen, unchanged);
     # packages_add is now a SEPARATE emitted flag (--packages-add), never merged.
-    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    args = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                        extra_packages="app-editors/vim",
                        packages_add="app-misc/tmux").to_cli_args()
     assert ("--extra-packages", "app-editors/vim") in pairs(args)
@@ -1983,12 +2029,12 @@ def test_extra_packages_kept_frozen_and_separate_from_packages_add():
 def test_domain_images_round_trip(tmp_path):
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86",
                       domains=[Domain(name="a.example", title="A",
-                                      images=["omnibus.x86", "be.rpi5"]),
+                                      images=["omnibus.x86", "backend.rpi5"]),
                                Domain(name="b.example")])
     p = tmp_path / "c.json"
     cfg.save(str(p))
     r = ImageConfig.load(str(p))
-    assert r.domains[0].images == ["omnibus.x86", "be.rpi5"]
+    assert r.domains[0].images == ["omnibus.x86", "backend.rpi5"]
     assert r.domains[1].images == []
 
 
@@ -2092,7 +2138,7 @@ def test_image_class_desktop_vs_node():
                  "orangepi5"):
         assert image_class("cloud", role) == "desktop", role
     # node-class cluster infra + headless appliances
-    for role in ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai", "full", "gpu-host",
+    for role in ("pki", "backend", "frontend", "backend-gpu", "omnibus", "edge-ai", "full", "backend-gpu",
                  "orangepizero2", "orangepizero2w", "orangepizero3", "orangepi3-lts",
                  "generic"):
         assert image_class("mesh", role) == "node", role
@@ -2123,7 +2169,7 @@ def test_tailnet_sso_visible_predicate():
     # unaffiliated hard-conflicts with the tailnet -> hidden even in cloud
     assert not tailnet_sso_visible(ImageConfig(mode="cloud", role="standalone-unaffiliated"))
     # a node in cloud -> hidden
-    assert not tailnet_sso_visible(ImageConfig(mode="cloud", role="edge_ai"))
+    assert not tailnet_sso_visible(ImageConfig(mode="cloud", role="edge-ai"))
 
 
 def test_home_options_allowed_predicate():
@@ -2222,7 +2268,7 @@ def test_enter_mesh_defaults_never_raises_on_the_one_platform_without_fde():
 
 def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():
     # theme/home/secure_boot are x86-only -> stripped on an rpi5 node cfg
-    cfg = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5", tailscale=True,
                       theme="dark", secure_boot="off", home_mode="adopt",
                       brand="acme")
     cleared = strip_platform_unsupported(cfg)

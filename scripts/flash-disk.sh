@@ -29,6 +29,11 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=scripts/_disk-lib.sh
 source "${SCRIPT_DIR}/_disk-lib.sh"
+# THE role vocabulary (scripts/_roles-lib.sh) — the same declaration the builders
+# read, so this script can never accept a role no builder produces, and can glob for
+# an artifact that was built under an OLDER spelling.
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/_roles-lib.sh"
 
 # ── Defaults ───────────────────────────────────────────────────────
 ROLE="pki"
@@ -54,10 +59,15 @@ Usage: sudo $0 [OPTIONS] /dev/sdX
 
 Options:
   --role ROLE        Image role to flash. One of:
-                       pki | backend | frontend | host | be | fe | omnibus
-                     (be=backend, fe=frontend). Default: ${ROLE}
+                       pki | backend | frontend | backend-gpu | omnibus | edge-ai
+                       | generic | desktop
+                     Old spellings still work and are normalized at parse time:
+                       be=backend, fe=frontend, host/be+gpu/be-gpu/gpu-host=backend-gpu,
+                       full=omnibus, edge_ai=edge-ai. Default: ${ROLE}
   --arch ARCH        Target arch: arm64 (RPi5) | x86 (amd64 host). Default: ${ARCH}
-                     Selects the default --work-dir if you don't pass one.
+                     Selects the default --work-dir if you don't pass one, AND
+                     ANCHORS the artifact search — an x86 request can no longer
+                     resolve to an arm64 image.
   --work-dir DIR     Dir to search for artifacts.
                        arm64 default: ${RPI_WORK_DIR}
                        x86   default: ${X86_WORK_DIR}
@@ -113,12 +123,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Normalize role + arch ──────────────────────────────────────────
-case "${ROLE}" in
-    be) ROLE="backend" ;;
-    fe) ROLE="frontend" ;;
-    pki|backend|frontend|host|omnibus) : ;;
-    *) dl_die "--role must be one of: pki|backend|frontend|host|be|fe|omnibus (got '${ROLE}')" ;;
-esac
+# ONE normalization point. The old table here knew five spellings and rejected the
+# rest — `--role be+gpu`, `--role edge_ai` and `--role generic` all died on a flasher
+# that could not name half the images the builders produce.
+ROLE_RAW="${ROLE}"
+if ! ROLE="$(hugmesh_role_canonicalize "${ROLE_RAW}")"; then
+    dl_die "--role must be a role some builder produces: ${HUGMESH_ROLES_CANONICAL} (got '${ROLE_RAW}')"
+fi
 
 case "${ARCH}" in
     arm64|aarch64) ARCH="arm64" ;;
@@ -135,32 +146,52 @@ if [ -z "${WORK_DIR}" ]; then
 fi
 
 # ── Artifact auto-pick ─────────────────────────────────────────────
-# Build the glob patterns. The 'host' role on x86 names artifacts
-# 'gentoo-x86-hugmesh-host-*', which still matches '*-host-*'; the generic
-# '*-<role>-*' pattern covers both arches' naming.
+# Two things this must get right, both of which it used to get wrong.
 #
-# Echoes nothing if no match. Prefers .img over .iso, newest mtime first.
+# 1. THE ARCH ANCHOR. --arch only selected the default work dir; it never filtered
+#    the glob. Against a real mixed session dir,
+#      flash-disk.sh --role be --arch x86 --list
+#    printed "Would flash: hugmesh-rpi5-arm64-backend-…iso" — an arm64 Raspberry Pi
+#    image for an x86 backend request, silently, and reachable from the Studio's
+#    post-build "Flash to device" button. Every candidate is now required to carry
+#    the requested arch token in its name.
+# 2. THE OLD SPELLINGS. Images already on disk were named under whatever spelling
+#    was canonical when they were built (hugmesh-x86-amd64-be-…, …-host-…). Those
+#    files are not renamed — they are already-emitted artifacts — so the search
+#    covers the canonical role AND every alias that folds onto it.
+#
+# Naming conventions matched (newest-mtime-first, role-scoped first):
+#   • hugmesh-<platform>-<arch>-<role>-<env>-<stamp>.{img,iso}   builders + QEMU launchers
+#   • gentoo-<platform>-<arch>-<role>-k8s-<stamp>.iso            older ISO naming
+# kernel/initramfs/squashfs blobs are filtered out (they share .img).
+#
+# ARCH_GLOBS: the arch tokens that may appear in an artifact name for --arch.
+case "${ARCH}" in
+    x86)   ARCH_GLOBS=("x86" "amd64") ;;
+    arm64) ARCH_GLOBS=("arm64" "aarch64") ;;
+esac
+# ROLE_GLOBS: canonical first, then every alias of it (hugmesh_role_aliases_of).
+read -r -a ROLE_GLOBS <<< "$(hugmesh_role_aliases_of "${ROLE}")"
+
 list_candidates() {
     local kind="$1"   # img | iso
-    # Match BOTH naming conventions, newest-mtime-first, role-scoped first:
-    #   • hugmesh-* — the persistent .img artifact the QEMU launchers and the
-    #     .img builders agree on (hugmesh-rpi5-arm64-<role>-*.img,
-    #     hugmesh-host-amd64-*.img). This is the autodetect convention shared
-    #     with tests/qemu/launch-pi.sh and launch-x86.sh.
-    #   • gentoo-*    — the existing ISO/installer naming
-    #     (gentoo-rpi5-arm64-<role>-k8s-*.iso, gentoo-x86-hugmesh-host-*.iso).
-    # role-scoped globs come first so a matching role wins over a generic hit;
-    # the trailing generic globs catch host/x86 names that don't carry the role
-    # token. kernel/initramfs/squashfs blobs are filtered out (they share .img).
-    # ls -1t gives newest-mtime-first ordering (find can't sort by mtime
-    # portably); our build artifacts have safe, glob-stable names.
+    local pats=()
+    local r
+    local a
+    for r in "${ROLE_GLOBS[@]}"; do
+        for a in "${ARCH_GLOBS[@]}"; do
+            pats+=("${WORK_DIR}/hugmesh-"*"-${a}-${r}-"*".${kind}")
+            pats+=("${WORK_DIR}/gentoo-"*"-${a}-${r}-"*".${kind}")
+            # x86 'host'-era names put the brand between platform and role
+            # (gentoo-x86-hugmesh-host-*.iso), so allow the role right after arch too.
+            pats+=("${WORK_DIR}/hugmesh-"*"-${a}-"*"-${r}-"*".${kind}")
+            pats+=("${WORK_DIR}/gentoo-"*"-${a}-"*"-${r}-"*".${kind}")
+        done
+    done
+    # ls -1t gives newest-mtime-first ordering (find can't sort by mtime portably);
+    # our build artifacts have safe, glob-stable names.
     # shellcheck disable=SC2012
-    ls -1t \
-        "${WORK_DIR}"/hugmesh-*-"${ROLE}"-*."${kind}" \
-        "${WORK_DIR}"/gentoo-*-"${ROLE}"-*."${kind}" \
-        "${WORK_DIR}"/hugmesh-*"${ROLE}"*."${kind}" \
-        "${WORK_DIR}"/gentoo-*"${ROLE}"*."${kind}" \
-        2>/dev/null \
+    ls -1t "${pats[@]}" 2>/dev/null \
         | grep -ivE '/(.*-)?(kernel|initramfs|initrd|squashfs)[^/]*\.'"${kind}"'$' \
         | awk '!seen[$0]++'
 }
@@ -175,7 +206,11 @@ pick_artifact() {
 }
 
 if ${LIST_ONLY}; then
-    echo "Role     : ${ROLE}"
+    if [ "${ROLE_RAW}" != "${ROLE}" ]; then
+        echo "Role     : ${ROLE}   (normalized from '${ROLE_RAW}')"
+    else
+        echo "Role     : ${ROLE}"
+    fi
     echo "Arch     : ${ARCH}"
     echo "Work dir : ${WORK_DIR}"
     if [ ! -d "${WORK_DIR}" ]; then

@@ -470,7 +470,7 @@ def test_qemu_run_reports_the_verdicts_not_the_exit_status(wiz, qapp):
 
 def test_qemu_run_counts_every_bucket_it_finds(wiz, qapp, results):
     results("rpi5/pki", status="PASS", passed=12)
-    results("x86/be", status="FAIL", passed=3, failed=9)
+    results("x86/backend", status="FAIL", passed=3, failed=9)
     page = _qemu_page(wiz)
     page._launch(list_only=False)
     _finish(page, qapp)
@@ -533,8 +533,8 @@ def test_qemu_a_cancelled_run_does_not_accuse_its_rows_of_no_result(
 def test_qemu_table_holds_one_row_per_PLANNED_row_before_anything_runs(wiz):
     page = _qemu_page(wiz)
     assert page.results.rowCount() == 2
-    assert {page.results.item(r, 0).text() for r in range(2)} == {"rpi5/pki", "x86/be"}
-    assert _cell(page, "x86/be", 1).text() == emulation.STATE_PLANNED
+    assert {page.results.item(r, 0).text() for r in range(2)} == {"rpi5/pki", "x86/backend"}
+    assert _cell(page, "x86/backend", 1).text() == emulation.STATE_PLANNED
 
 
 def test_qemu_no_result_row_renders_explicitly_and_is_not_green(wiz, qapp, results):
@@ -548,7 +548,7 @@ def test_qemu_no_result_row_renders_explicitly_and_is_not_green(wiz, qapp, resul
     page = _qemu_page(wiz)
     page._launch(list_only=False)
     _finish(page, qapp)
-    cell = _cell(page, "x86/be", 2)
+    cell = _cell(page, "x86/backend", 2)
     assert cell.text() == emulation.VERDICT_NO_RESULT
     assert _colour(cell) != common.GREEN
     assert "no verdict" in cell.toolTip().lower() or "NO verdict" in cell.toolTip()
@@ -580,14 +580,14 @@ def test_qemu_stale_verdict_is_marked_rather_than_shown_as_this_run(wiz, results
 
 def test_qemu_a_real_pass_is_the_only_green(wiz, results):
     results("rpi5/pki", status="PASS", passed=12)
-    results("x86/be", status="FAIL", passed=2, failed=7)
+    results("x86/backend", status="FAIL", passed=2, failed=7)
     page = _qemu_page(wiz)
     page._reload_results()
-    ok, bad = _cell(page, "rpi5/pki", 2), _cell(page, "x86/be", 2)
+    ok, bad = _cell(page, "rpi5/pki", 2), _cell(page, "x86/backend", 2)
     assert ok.text() == "PASS" and _colour(ok) == common.GREEN
     assert bad.text() == "FAIL" and _colour(bad) == common.RED
     assert _cell(page, "rpi5/pki", 3).text() == "12"      # assertions passed
-    assert _cell(page, "x86/be", 4).text() == "7"         # assertions failed
+    assert _cell(page, "x86/backend", 4).text() == "7"         # assertions failed
 
 
 def test_qemu_table_shows_the_reconciled_state_of_a_live_row(wiz, registry, results):
@@ -656,13 +656,13 @@ def test_qemu_avc_button_runs_the_workout_over_ONE_planned_row(wiz, qapp,
     _gen, full, _abort = fake_generator
     page = _qemu_page(wiz)
     labels = [page.avc_combo.itemData(i) for i in range(page.avc_combo.count())]
-    assert labels == ["rpi5/pki", "x86/be"]          # the plan's rows, in boot order
-    page.avc_combo.setCurrentIndex(labels.index("x86/be"))
+    assert labels == ["rpi5/pki", "x86/backend"]          # the plan's rows, in boot order
+    page.avc_combo.setCurrentIndex(labels.index("x86/backend"))
     page.avc_btn.click()
     _finish(page, qapp)
     echoed = _echoed(page, "STUB-AVC")
     assert echoed, "the AVC workout stand-in never ran"
-    assert "--platform x86" in echoed[0] and "--role be" in echoed[0]
+    assert "--platform x86" in echoed[0] and "--role backend" in echoed[0]
     assert f"-w {full}" in echoed[0]                 # pinned to THIS session
 
 
@@ -935,13 +935,13 @@ def test_qemu_playwright_row_picker_offers_only_launchable_rows(wiz, fake_genera
     (full / "hugmesh-jetson-arm64-edge_ai-test-20260807T180000Z.img").write_bytes(b"")
     page = _qemu_page(wiz)
     page._reload_sessions()
-    assert "jetson/edge_ai" in page.plan.labels, "the fixture row was not planned"
+    assert "jetson/edge-ai" in page.plan.labels, "the fixture row was not planned"
     labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
-    assert labels == ["rpi5/pki", "x86/be"], labels
-    assert "jetson/edge_ai" not in labels
+    assert labels == ["rpi5/pki", "x86/backend"], labels
+    assert "jetson/edge-ai" not in labels
     # ...and the device-test lane, which CAN boot it, still offers it
     avc = [page.avc_combo.itemData(i) for i in range(page.avc_combo.count())]
-    assert "jetson/edge_ai" in avc
+    assert "jetson/edge-ai" in avc
 
 
 def test_qemu_playwright_list_button_runs_the_e2e_script_not_the_docker_runner(
@@ -952,7 +952,7 @@ def test_qemu_playwright_list_button_runs_the_e2e_script_not_the_docker_runner(
     _gen, full, _abort = fake_generator
     page = _qemu_page(wiz)
     labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
-    page.pw_row.setCurrentIndex(labels.index("x86/be"))
+    page.pw_row.setCurrentIndex(labels.index("x86/backend"))
     page.pw_list_btn.click()
     _finish(page, qapp)
     echoed = _pw_echoed(page)
@@ -960,7 +960,7 @@ def test_qemu_playwright_list_button_runs_the_e2e_script_not_the_docker_runner(
                     f"script; log was: {page.log.toPlainText()!r}")
     assert not _echoed(page, "STUB-RUNNER"), "the DOCKER runner was spawned instead"
     line = echoed[0]
-    assert "--target x86" in line and "--role be" in line
+    assert "--target x86" in line and "--role backend" in line
     assert f"-w {full}" in line                     # pinned to THIS session
     assert "--list" in line                          # the enumerate verb, not a boot
 

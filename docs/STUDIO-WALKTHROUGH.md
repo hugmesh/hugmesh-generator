@@ -305,7 +305,7 @@ Then it asks for consent, as an inline checkbox: *"I understand: k8s will stop t
 
 Next stays disabled until three things hold: the box is ticked, no teardown is in flight, and no cluster is still known to be up. After a teardown the page re-probes rather than trusting the exit status, because `kind delete cluster` exits 0 for a cluster that was never there and a failed or cancelled run can leave one half gone. The consent box is cleared again on every entry.
 
-On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `be`, `fe`, `be+gpu`, `omnibus`, `edge_ai`, `full`, `gpu-host`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.
+On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.
 
 The import is one-shot per entry, so edits you make later — the cluster domain on the Network step, say — are not clobbered when the Build screen re-collects every visited page. Imported superadmins land on the orchestration superdomain and everyone else on the imported apex, and the Users table is made reachable so you can see and edit them.
 
@@ -449,7 +449,7 @@ One trap, and it is destructive. Choosing the default card clears the domains li
 
 ### Domains & their services
 
-Skipped in standalone. In mesh it appears only if you chose "Add more domains" on the previous screen. In cloud it appears unless the role is one of the x86 cluster-node roles (`pki`, `be`, `fe`, `be+gpu`, `omnibus`, `edge_ai`) — which the cloud picker does not offer, so in practice it always appears there unless a loaded config carries one.
+Skipped in standalone. In mesh it appears only if you chose "Add more domains" on the previous screen. In cloud it appears unless the role is one of the x86 cluster-node roles (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`) — which the cloud picker does not offer, so in practice it always appears there unless a loaded config carries one.
 
 Each row is a domain: **Domain**, **Title**, **Optional services** (per-domain slugs, space or comma separated; empty means the cluster-wide set applies), **Applies to** and **Sign-in**. The last two are mesh-only and hidden in cloud.
 
@@ -485,7 +485,7 @@ Domain is a dropdown of the orchestration superdomain plus every name from the D
 
 A loaded row whose domain is not defined on the Domains page is kept and flagged `(not defined)` with an orange warning. It is never silently rewritten. Rows with a blank username are dropped when you leave.
 
-When you see it: never in standalone. In mesh, only if you chose the second card on the previous screen — that is a separate question from the domains opt-in, and either answer combines with either. In the mesh desktop client the gate is whether the image's role is one of the x86 cluster-node roles (`pki`, `be`, `fe`, `be+gpu`, `omnibus`, `edge_ai`), and that flow offers none of them, so in practice the table always appears there.
+When you see it: never in standalone. In mesh, only if you chose the second card on the previous screen — that is a separate question from the domains opt-in, and either answer combines with either. In the mesh desktop client the gate is whether the image's role is one of the x86 cluster-node roles (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`), and that flow offers none of them, so in practice the table always appears there.
 
 Downstream, these rows are provisioning data for the mesh manifest and the identity provider. One thing can reach the build, and only on the mesh desktop client: with the account tier left on `derive`, `--person-role` falls back to the first row's role. A mesh build does not take it from here — there the flag comes from the person named on the worklist's own desktop row.
 

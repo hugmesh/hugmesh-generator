@@ -533,7 +533,7 @@ def _saved_session(tmp_path, sid="20260303-000000-cccccc", status=bs.FAILED):
     (workdir / "build.log").write_text("something was produced\n", encoding="utf-8")
     s = bs.BuildSession(id=sid, created="2026-03-03T00:00:00", label="be · x86",
                         workdir=str(workdir), status=status,
-                        images=[{"id": "e1", "role": "be", "platform": "x86",
+                        images=[{"id": "e1", "role": "backend", "platform": "x86",
                                  "status": "failed"}],
                         hostname=os.uname().nodename if hasattr(os, "uname") else "")
     bs.save(s)

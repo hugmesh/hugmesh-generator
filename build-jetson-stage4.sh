@@ -20,12 +20,14 @@
 # an arm64 EDGE-AI node family (plus a desktop variant), not a lean GXL desktop.
 #
 # ROLES (--role):
-#   edge_ai  (DEFAULT, the headline) — GPU inference k8s worker: joins the mesh
+#   edge-ai  (DEFAULT, the headline) — GPU inference k8s worker: joins the mesh
 #            + cluster and hosts the arch-portable `edge-ai` service (Ollama,
 #            OpenAI-compatible /v1) exactly like the x86 RTX host.
-#   gpu-host — GPU k8s worker WITHOUT the inference service (be+gpu analogue).
-#   full     — full-stack single node (pki+backend+frontend+gpu on one Orin;
-#            the omnibus analogue: headscale control plane + kubeadm init).
+#   backend-gpu — GPU k8s worker WITHOUT the inference service. The SAME role x86
+#            builds under the same name (it was `gpu-host` here, `be+gpu` there).
+#   omnibus  — full-stack single node (pki+backend+frontend+gpu on one Orin:
+#            headscale control plane + kubeadm init). Was `full` here, `omnibus`
+#            on x86; one role, one name.
 #   desktop  — arm64 client desktop (lean LXDE; mesh client, no k8s).
 #
 # KERNEL DECISION (--kernel-flavor, see specs-jetson/kernel/README.md):
@@ -59,6 +61,12 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# THE role vocabulary (scripts/_roles-lib.sh). This builder's own comments already
+# said `gpu-host` was "the be+gpu analogue" and `full` "the omnibus analogue" — they
+# were the SAME logical roles under two more names. They are now spelled the same as
+# on x86 (backend-gpu / omnibus); gpu-host / gpu_host / full stay accepted forever.
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 
 # Cross-dracut helper: qemu-aarch64 binfmt registration + the availability
 # predicate the --encrypt-root fail-fast preflight and the qemu-chroot initramfs
@@ -176,7 +184,10 @@ SKIP_CLEAN=false
 RESUME=false
 IMAGE_ONLY=false          # skip Phase 1-3 entirely; go straight to image assembly
 
-ROLE="edge_ai"                           # edge_ai (DEFAULT) | gpu-host | full | desktop
+ROLE="edge-ai"                           # edge-ai (DEFAULT) | backend-gpu | omnibus | desktop
+                                         # RE-SPELLED, never re-pointed: the same image
+                                         # the old `edge_ai` default built. edge_ai /
+                                         # gpu-host / gpu_host / full still accepted.
 DESKTOP="none"                           # derived: 'light' for --role desktop, else none
 BUILD_IMG=true                           # produce the flashable raw .img (SD/NVMe); stage4 always emitted
 ROOT_MiB=0                               # 0 = role default (set below); --img-size overrides
@@ -272,16 +283,19 @@ DESCRIPTION
     Cross-compiles a hardened Gentoo image for the Jetson Orin Nano/NX devkits,
     reusing the aarch64 cross path, the SHARED mesh + KEYS-USB provisioning
     engine, and (for cluster roles) the SHARED specs/cluster GitOps tree — the
-    edge-ai inference service manifests are arch-portable, so the same `edge_ai`
+    edge-ai inference service manifests are arch-portable, so the same `edge-ai`
     role that runs on the x86 RTX host runs here.
 
 OPTIONS
   Role
-    -r, --role ROLE     edge_ai (DEFAULT, the headline: GPU inference k8s worker
-                        + the edge-ai service) | gpu-host (GPU k8s worker, no
-                        inference service) | full (full-stack single node:
+    -r, --role ROLE     edge-ai (DEFAULT, the headline: GPU inference k8s worker
+                        + the edge-ai service) | backend-gpu (GPU k8s worker, no
+                        inference service) | omnibus (full-stack single node:
                         headscale control plane + kubeadm init + all namespaces)
                         | desktop (arm64 client desktop; mesh, no k8s).
+                        Old spellings are STILL ACCEPTED, forever, and normalized
+                        at parse time: edge_ai=edge-ai, gpu-host/gpu_host=backend-gpu,
+                        full=omnibus (scripts/_roles-lib.sh).
 
   Board / kernel
     --board NAME        orin-nano (DEFAULT: Orin Nano [Super] Developer Kit,
@@ -372,10 +386,10 @@ OPTIONS
 EXAMPLES
     # The headline: Orin Nano edge-AI inference node (mainline kernel, CPU-only
     # inference until the L4T flavor lands)
-    ./build-jetson-stage4.sh --role edge_ai
+    ./build-jetson-stage4.sh --role edge-ai
 
     # Full single-node stack on one Orin, prod domain
-    ./build-jetson-stage4.sh --role full --env prod
+    ./build-jetson-stage4.sh --role omnibus --env prod
 
     # Plan-only validation across the matrix (no root, no writes)
     ./build-jetson-stage4.sh --role desktop --env prod --print-plan
@@ -512,34 +526,37 @@ select_board
 
 # ── Validate role; derive k8s intent, desktop weight, hostname, sizing ──
 ROLE_K8S="none"; ROLE_HEADSCALE=false; ROLE_CLIENT=false; EDGE_AI=false
+# ONE normalization point: every accepted spelling folds to its canonical token here.
+ROLE="$(hugmesh_role_validate "${ROLE}" jetson)" || exit 1
 case "${ROLE}" in
-    edge-ai) ROLE="edge_ai" ;;             # slug alias (matches the x86 builder)
-    gpu_host) ROLE="gpu-host" ;;           # underscore alias
-esac
-case "${ROLE}" in
-    edge_ai)
+    edge-ai)
         # The headline: GPU inference k8s worker + the edge-ai service.
         ROLE_K8S="worker"; EDGE_AI=true
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson-edge-ai"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname jetson "${ROLE}" "${BRAND}")"
         ${IMG_SIZE_SET} || ROOT_MiB=16384 ;;
-    gpu-host)
-        # GPU k8s worker without the inference service (be+gpu analogue).
+    backend-gpu)
+        # GPU k8s worker without the inference service — the SAME role x86 builds
+        # under the same name now (it was `gpu-host` here and `be+gpu` there).
         ROLE_K8S="worker"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson-gpu"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname jetson "${ROLE}" "${BRAND}")"
         ${IMG_SIZE_SET} || ROOT_MiB=14336 ;;
-    full)
-        # Full-stack single node (omnibus analogue): headscale control plane +
-        # kubeadm init + every namespace on one Orin.
+    omnibus)
+        # Full-stack single node: headscale control plane + kubeadm init + every
+        # namespace on one Orin. Was `full` here, `omnibus` on x86 — one role, one
+        # name. The hostname keeps its existing "-jetson-full" literal on purpose:
+        # a rename must not re-point a default (scripts/_roles-lib.sh).
         ROLE_K8S="single-node"; ROLE_HEADSCALE=true; EDGE_AI=true
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson-full"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname jetson "${ROLE}" "${BRAND}")"
         ${IMG_SIZE_SET} || ROOT_MiB=20480 ;;
     desktop)
         # arm64 client desktop: mesh client + lean LXDE, no k8s/cluster tree.
         ROLE_CLIENT=true; DESKTOP="light"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname jetson "${ROLE}" "${BRAND}")"
         ${IMG_SIZE_SET} || ROOT_MiB=16384 ;;
     *)
-        err "--role must be one of: edge_ai (default) | gpu-host | full | desktop (got '${ROLE}')"
+        # UNREACHABLE via the CLI (validate ran first); fail-closed net for drift
+        # between this block and HUGMESH_ROLES_JETSON in scripts/_roles-lib.sh.
+        err "internal: role '${ROLE}' passed validation but has no arm here — the case block has drifted from HUGMESH_ROLES_JETSON"
         exit 1 ;;
 esac
 
@@ -557,7 +574,7 @@ fi
 # ── --encrypt-root on a headless k8s role: this platform's disk-boot
 # initramfs only supports an interactive passphrase prompt (no keyfile/
 # Clevis/TPM factor yet — see the crypttab comment in Phase 4), so an
-# encrypted edge_ai/gpu-host/full node cannot rejoin the cluster after an
+# encrypted edge-ai/backend-gpu/omnibus node cannot rejoin the cluster after an
 # unattended reboot/power-cycle/panic without someone at a physical console.
 # STANDALONE (desktop-only, forced above) doesn't need this warning. ────────
 if ${ENCRYPT_ROOT} && ! ${ROLE_CLIENT}; then
@@ -1133,7 +1150,7 @@ dev-python/setuptools-scm **
 # and policycoreutils-3.11's pkg_postinst invoke HOST sefcontext_compile /
 # semodule against the ROOT!=/ merge ("sefcontext_compile: command not found"
 # -> die "Failed to recompile contexts"; "semodule: command not found" ->
-# die "Failed to rebuild policy store mcs" — real jetson edge_ai cross-build
+# die "Failed to rebuild policy store mcs" — real jetson edge-ai cross-build
 # failure, session 20260716-160638-f8c153). The build container ships neither
 # tool, and the 3.11 SELinux userspace is still ~amd64, so accept the window
 # host-side; host tool versions should be >= the target's 3.11 policy
@@ -1703,7 +1720,7 @@ DEFAULT_SVCS+=(hugmesh-update)
 if [ "${ROLE_K8S}" != "none" ]; then
     DEFAULT_SVCS+=(containerd kubelet)
 fi
-# headscale control plane runs ONLY on the 'full' single-node role; every other
+# headscale control plane runs ONLY on the 'omnibus' single-node role; every other
 # role is a mesh CLIENT (tailscaled only).
 if ${ROLE_HEADSCALE}; then
     DEFAULT_SVCS+=(headscale)

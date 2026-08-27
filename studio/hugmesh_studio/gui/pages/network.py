@@ -1144,7 +1144,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.egress_locked.setChecked(c.egress_vpn_locked)
         # same rule for the edge_ai role's auto-check (G11: jetson greys out too)
         edge_on = _on_off(c.edge_ai_service)
-        if c.role == "edge_ai":
+        if c.role in ("edge-ai", "edge_ai"):
             edge_on = True                          # the role auto-selects the service
         if not platform_supports("edge_ai_service", c.platform):
             edge_on = False

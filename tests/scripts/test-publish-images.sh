@@ -75,7 +75,7 @@ mk_session() {  # mk_session <dir> — the full intermixed tree
   "cluster_domain": "example.test",
   "images": [
     {"id": "pki.x86", "role": "pki", "platform": "x86", "flavor": ""},
-    {"id": "be.rpi5", "role": "be", "platform": "rpi5", "flavor": ""}
+    {"id": "be.rpi5", "role": "backend", "platform": "rpi5", "flavor": ""}
   ]
 }
 JSON

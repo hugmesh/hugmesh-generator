@@ -757,8 +757,11 @@ ICON_NAMES = tuple(ICON_PAINTERS)
 # role-family glyphs above by role id (+ the current mode for the desktop split).
 # Unknown/future roles fall through to the desktop pair — a wrong-family icon is
 # cosmetic, and paint() ignores unknown icon names outright.
-_SERVER_ROLES = frozenset({"pki", "be", "fe", "be+gpu", "omnibus",
-                           "edge_ai", "full", "gpu-host"})
+# Canonical node roles + the permanent input aliases, so an icon still resolves for
+# a role id restored from an older saved session (scripts/_roles-lib.sh).
+_SERVER_ROLES = frozenset({"pki", "backend", "frontend", "backend-gpu", "omnibus",
+                           "edge-ai", "generic",
+                           "be", "fe", "be+gpu", "edge_ai", "full", "gpu-host"})
 _BOARD_ROLES = frozenset({"generic", "frite", "orangepi5", "orangepizero2",
                           "orangepizero2w", "orangepizero3", "orangepi3-lts",
                           "orangepi4-lts"})

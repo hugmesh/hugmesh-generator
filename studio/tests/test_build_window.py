@@ -45,7 +45,7 @@ def _session(tmp_path, *, status, sid="20260101-000000-aaaaaa", artifacts=True,
                 fh.write("something was produced\n")
     s = bs.BuildSession(id=sid, created="2026-01-01T00:00:00", label="be · x86",
                         workdir=workdir, status=status,
-                        images=[{"id": "e1", "role": "be", "platform": "x86",
+                        images=[{"id": "e1", "role": "backend", "platform": "x86",
                                  "status": "ok" if status == bs.COMPLETE else "failed"}],
                         pid=pid, hostname=hostname or socket.gethostname())
     return sw._RowData("session", session=s)
@@ -114,10 +114,10 @@ def test_a_stale_running_record_is_resumable(tmp_path):
 
 
 def test_an_unmanaged_tree_has_no_config_so_no_resume_and_no_edit(tmp_path):
-    path = tmp_path / "out" / "wl-be.x86"
+    path = tmp_path / "out" / "wl-backend.x86"
     path.mkdir(parents=True)
     (path / "image.img").write_text("x")
-    u = bs.UnmanagedBuild(path=str(path), role="be", platform="x86", mtime=1.0,
+    u = bs.UnmanagedBuild(path=str(path), role="backend", platform="x86", mtime=1.0,
                           has_log=False, log_path="")
     row = sw._RowData("unmanaged", unmanaged=u)
     acts = build_window.actions_for(row)
@@ -614,7 +614,7 @@ def _widget_with_every_row_kind(qapp, tmp_path):
     out = tmp_path / "out"
     for sid in ("20260101-000000-aaaaaa", "20260202-000000-bbbbbb"):
         bs.save(_session(tmp_path, status=bs.FAILED, sid=sid).session)
-    for name in ("wl-be.x86", "wl-fe.arm64"):    # pre-session build trees
+    for name in ("wl-backend.x86", "wl-fe.arm64"):    # pre-session build trees
         (out / name).mkdir(parents=True, exist_ok=True)
         (out / name / "disk.img").write_text("x", encoding="utf-8")
     (out / bs.LOG_NAME).write_text("legacy log line\n", encoding="utf-8")
@@ -743,7 +743,7 @@ def test_row_identity_tells_builds_apart_and_survives_a_reload(tmp_path):
     """The pure half — no widgets. Identity is stable across a reload and distinct per
     build, which is the whole basis of the re-resolution."""
     out = tmp_path / "out"
-    (out / "wl-be.x86").mkdir(parents=True)
+    (out / "wl-backend.x86").mkdir(parents=True)
     (out / "wl-fe.arm64").mkdir(parents=True)
     first = [sw._RowData("unmanaged", unmanaged=u)
              for u in bs.discover_unmanaged(str(out))]

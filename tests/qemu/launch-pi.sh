@@ -39,6 +39,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# THE role vocabulary (scripts/_roles-lib.sh) — same declaration the builders read.
+# shellcheck source=scripts/_roles-lib.sh
+source "${REPO_DIR}/scripts/_roles-lib.sh"
 
 # ── Defaults ───────────────────────────────────────────────────────────────
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/rpi5-stage4-build}"
@@ -88,7 +91,8 @@ Usage: $0 [OPTIONS]
 
 Artifact selection (shared with flash-disk.sh / launch-x86.sh):
   -w, --work-dir DIR   Dir to autodetect the .img/kernel from. Default: ${WORK_DIR}
-  -r, --role ROLE      Role to select (pki|backend|frontend|generic). Default: ${ROLE}
+  -r, --role ROLE      Role to select (pki|backend|frontend|generic|desktop; the
+                       old short spellings be/fe are accepted). Default: ${ROLE}
       --img FILE       Explicit golden .img (skips autodetect).
       --kernel FILE    Explicit kernel Image (default: <work>/{sysroot,isoroot}/boot/${KERNEL_IMG_NAME}).
       --kernel-from-img  Extract ${KERNEL_IMG_NAME} from the image's FAT boot
@@ -186,11 +190,21 @@ command -v qemu-img            >/dev/null || die "missing qemu-img"
 
 # ── Resolve the .img (shared autodetect) ────────────────────────────────────
 autodetect_img() {
-    local d="$1" role="$2" c
-    for c in \
-        "${d}"/hugmesh-rpi5-*-"${role}"-*.img \
-        "${d}"/hugmesh-rpi5-*.img \
-        "${d}"/hugmesh-*-"${role}"-*.img ; do
+    local d="$1"
+    local role="$2"
+    local c
+    local r
+    # Canonical spelling first, then every declared alias: an image built as
+    # hugmesh-rpi5-arm64-be-… keeps its name and is still the backend image.
+    for r in $(hugmesh_role_aliases_of "${role}"); do
+        for c in \
+            "${d}"/hugmesh-rpi5-*-"${r}"-*.img \
+            "${d}"/hugmesh-*-"${r}"-*.img ; do
+            c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
+            [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
+        done
+    done
+    for c in "${d}"/hugmesh-rpi5-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
@@ -199,6 +213,8 @@ autodetect_img() {
         | grep -ivE '(kernel|initramfs|initrd|squashfs)' | head -1 || true
 }
 
+# ONE normalization point, before anything reads ROLE.
+ROLE="$(hugmesh_role_validate "${ROLE}" rpi5)" || exit 1
 if [ -z "${IMG}" ]; then
     IMG="$(autodetect_img "${WORK_DIR}" "${ROLE}")"
 fi

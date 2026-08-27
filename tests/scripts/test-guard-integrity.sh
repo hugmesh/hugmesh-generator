@@ -329,7 +329,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     155 of 177 suites are named by a pull_request-triggered workflow
 # +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
 # re-running this file, not by arithmetic - but the arithmetic agrees.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-155}"
+#
+# 2026-08-27, the one-role-vocabulary branch: adding
+# tests/scripts/test-role-key-spelling.sh (gated in shell-suites.yml alongside
+# test-platform-key-spelling.sh, its template) made this file MEASURE
+#     156 of 178 suites are named by a pull_request-triggered workflow
+# so the baseline is 156. Taken from the run, not computed: if this file conflicts
+# on merge, RE-MEASURE by running it rather than trusting either side's number.
+# PREMERGE_UNGATED is unchanged at 22 — the new suite is gated, not exempted.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-156}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -644,8 +652,15 @@ def raises(text, var):
 unraised = []
 for rel in suites:
     text = open(os.path.join(repo, rel), encoding="utf-8", errors="replace").read()
-    if has_set_e(text):
-        continue                      # set -e already re-raises
+    # NO `has_set_e` EXEMPTION. `set -e` aborts on a command that FAILS; it does
+    # nothing at all for `bad(){ echo FAIL; F=$((F+1)); }`, which succeeds every
+    # time it runs. A counting suite under `set -euo pipefail` that loses its
+    # closing `[ "${F}" -eq 0 ]` therefore prints its FAIL lines and exits 0 — the
+    # exact "dishonest exit status" this file's own header names, sailing straight
+    # through the check meant to catch it. Found 2026-08-27 by mutating the new
+    # tests/scripts/test-role-key-spelling.sh: replacing its final verdict with
+    # `exit 0`, over a planted Makefile defect, left this analyser GREEN.
+    pass
     counters, cur = set(), None
     for line in text.split("\n"):
         s = line.strip()

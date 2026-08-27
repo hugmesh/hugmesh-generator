@@ -127,9 +127,9 @@ def test_device_reads_the_t1_start_contract_fields_tolerantly(tmp_path):
     _write_device(tmp_path, "rpi5/pki", state="booting",
                   artifacts="/host/out/sessions/20260819-125930-89bb8e",
                   image="hugmesh-rpi5-arm64-pki-test-20260819T195951Z.img")
-    _write_device(tmp_path, "x86/be")          # pre-T1 shape: neither field
+    _write_device(tmp_path, "x86/backend")          # pre-T1 shape: neither field
     new = qd.device_by_label(qd.discover_devices(str(tmp_path)), "rpi5/pki")
-    old = qd.device_by_label(qd.discover_devices(str(tmp_path)), "x86/be")
+    old = qd.device_by_label(qd.discover_devices(str(tmp_path)), "x86/backend")
     assert new.artifacts == "/host/out/sessions/20260819-125930-89bb8e"
     assert new.image == "hugmesh-rpi5-arm64-pki-test-20260819T195951Z.img"
     # booting is a LIVE state: a row killed mid-boot is findable and stoppable.

@@ -175,6 +175,11 @@ def menu_tokens(menu_src: str, title: str) -> list[str]:
 # ── channel helper: docker/build-image.sh resolve_build_target(), really executed ─────
 _JOB_PROBE = r'''
 set -u
+# THE ROLE VOCABULARY, sourced exactly as docker/build-image.sh sources it. The
+# extracted resolve_build_target() body CALLS hugmesh_role_for /
+# hugmesh_role_keyprofile; a probe that omitted them would see every row reject and
+# would report a total JOB-channel outage as if it were a real regression.
+. "$2"
 PLATFORM=""; BUILD_ROLE=""; KEYS_ROLE=""
 RPI5_BOARD_OUT=""; JETSON_BOARD_OUT=""
 FRITE_BOARD_OUT=""; FRITE_FLAVOR_OUT=""
@@ -231,7 +236,8 @@ def probe_job(gen_dir: str, queries: list[tuple[str, str, str]]) -> dict[str, di
         with open(fpath, "w", encoding="utf-8") as fh:
             fh.write(fn)
         stdin = "".join(f"{k}|{t}|{h}\n" for k, t, h in queries)
-        res = subprocess.run(["bash", "-c", _JOB_PROBE, "bash", fpath],
+        roles_lib = os.path.join(gen_dir, "scripts", "_roles-lib.sh")
+        res = subprocess.run(["bash", "-c", _JOB_PROBE, "bash", fpath, roles_lib],
                              input=stdin, capture_output=True, text=True)
     if res.returncode != 0:
         raise SystemExit(f"emit-image-inventory: job probe failed: {res.stderr[-800:]}")

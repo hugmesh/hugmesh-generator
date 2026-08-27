@@ -205,7 +205,7 @@ def _mesh_base(tmp_path):
     return b
 
 
-def _mesh_worklist(tmp_path, roles=(("pki", "x86"), ("be", "rpi5"),
+def _mesh_worklist(tmp_path, roles=(("pki", "x86"), ("backend", "rpi5"),
                                     ("rpi5-desktop", "rpi5"))):
     return WorklistConfig(base=_mesh_base(tmp_path),
                           entries=[WorklistEntry(role=r, platform=p) for r, p in roles])
@@ -260,7 +260,7 @@ def test_all_succeed_rows_terminal_and_exit_enabled(monkeypatch, qapp, wiz, tmp_
 
 
 def test_failure_is_tolerated_and_run_still_completes(monkeypatch, qapp, wiz, tmp_path):
-    _install_fake_builddriver(monkeypatch, codes={"be": 3})   # middle image fails
+    _install_fake_builddriver(monkeypatch, codes={"backend": 3})   # middle image fails
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _mesh_worklist(tmp_path))
     page = _progress_page(wiz)
@@ -299,7 +299,7 @@ def test_mesh_manifest_and_node_keys_footer(monkeypatch, qapp, wiz, tmp_path):
     footer = page.footer.text()
     assert "manifest" in footer.lower()
     # the two node images generated key-zips; the desktop image did not.
-    assert "pki.x86" in footer and "be.rpi5" in footer
+    assert "pki.x86" in footer and "backend.rpi5" in footer
     assert "rpi5-desktop.rpi5" not in footer
 
 
@@ -570,7 +570,7 @@ def _install_streaming_builddriver(monkeypatch, lines, codes=None, default=0):
     monkeypatch.setattr(wd, "BuildDriver", StreamDriver)
 
 
-def _x86_worklist(tmp_path, roles=("pki", "be", "fe")):
+def _x86_worklist(tmp_path, roles=("pki", "backend", "frontend")):
     return WorklistConfig(base=_mesh_base(tmp_path),
                           entries=[WorklistEntry(role=r, platform="x86") for r in roles])
 
@@ -579,7 +579,7 @@ def test_job_tree_lists_all_images_up_front_and_advances_states(monkeypatch, qap
                                                                 tmp_path):
     """(a) the job list is fully populated the moment initializePage runs (GH-Actions lists
     every job up front) and each job reaches passed/failed as the driver dispatches it."""
-    _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM, codes={"be": 3})
+    _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM, codes={"backend": 3})
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _x86_worklist(tmp_path))
     page = _progress_page(wiz)
@@ -662,7 +662,7 @@ def test_next_failure_cycles_across_failed_images(monkeypatch, qapp, wiz, tmp_pa
     """(d) the Next-failure affordance cycles through every failed job, expanding it and
     loading its failing stage's log — GH-Actions failure list."""
     _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM,
-                                   codes={"pki": 2, "fe": 5})
+                                   codes={"pki": 2, "frontend": 5})
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _x86_worklist(tmp_path))
     page = _progress_page(wiz)
@@ -829,7 +829,7 @@ def test_back_is_disabled_while_a_build_is_in_flight(monkeypatch, qapp, wiz, tmp
 
 def test_back_is_rearmed_after_a_FAILED_run_so_the_operator_can_fix_and_retry(
         monkeypatch, qapp, wiz, tmp_path):
-    _install_fake_builddriver(monkeypatch, codes={"be": 3})
+    _install_fake_builddriver(monkeypatch, codes={"backend": 3})
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _mesh_worklist(tmp_path))
     page = _progress_page(wiz)
@@ -851,7 +851,7 @@ def test_back_is_rearmed_after_a_successful_run_too(monkeypatch, qapp, wiz, tmp_
 
 
 def test_back_goes_off_again_when_a_new_run_starts(monkeypatch, qapp, wiz, tmp_path):
-    _install_fake_builddriver(monkeypatch, codes={"be": 3})
+    _install_fake_builddriver(monkeypatch, codes={"backend": 3})
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _mesh_worklist(tmp_path))
     page = _progress_page(wiz)

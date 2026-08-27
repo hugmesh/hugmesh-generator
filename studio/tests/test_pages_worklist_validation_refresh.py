@@ -96,7 +96,7 @@ def test_accepting_the_person_dialog_reenables_next(page, monkeypatch):
     """The issue #50 repro: all necessary images checked (node trio + a desktop for
     one of the mesh's people); the who-uses-it dialog is answered; Next must enable
     WITHOUT toggling an unrelated node row to refresh the validation."""
-    for rid in ("pki.x86", "be.x86", "fe.x86"):
+    for rid in ("pki.x86", "backend.x86", "frontend.x86"):
         _check(page, rid)
     assert page.isComplete()
 

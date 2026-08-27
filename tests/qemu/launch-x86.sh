@@ -20,7 +20,8 @@
 # Same resolution order as launch-pi.sh so one WORK_DIR/role selects one
 # artifact everywhere:
 #   1. --img FILE                                       explicit
-#   2. ${WORK_DIR}/hugmesh-host-*-${ROLE}-*.img       (newest, role match)
+#   2. ${WORK_DIR}/hugmesh-host-*-${ROLE}-*.img       (newest, role match; the
+#      canonical role and every older spelling of it are searched)
 #   3. ${WORK_DIR}/hugmesh-host-*.img / hugmesh-x86-*.img
 #   4. ${WORK_DIR}/*.img (excluding kernel/initramfs/squashfs)
 # WORK_DIR defaults to ${REPO}/x86-host-build (build-x86-host-stage4.sh's
@@ -30,6 +31,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# THE role vocabulary (scripts/_roles-lib.sh): --role/ROLE= folds to canonical, and
+# the .img autodetect searches the canonical name AND every older spelling, because
+# an image already on disk keeps whatever name it was built under.
+# shellcheck source=scripts/_roles-lib.sh
+source "${REPO_DIR}/scripts/_roles-lib.sh"
 
 # ── OVMF firmware (host paths from the design notes) ────────────────────────
 OVMF_DIR="${OVMF_DIR:-/usr/share/edk2/OvmfX64}"
@@ -38,7 +44,9 @@ OVMF_VARS="${OVMF_VARS:-${OVMF_DIR}/OVMF_VARS.fd}"
 
 # ── Defaults ───────────────────────────────────────────────────────────────
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/x86-host-build}"
-ROLE="${ROLE:-host}"
+# RE-SPELLED, never re-pointed: `host` was always the be+gpu role. Passing `host`,
+# `be+gpu` or `backend-gpu` all select the same image.
+ROLE="${ROLE:-backend-gpu}"
 IMG=""                         # explicit .img (else autodetect)
 RUN_DIR=""                     # scratch dir for overlay/vars/pidfile/console
 OVERLAY_SIZE="32G"             # qcow2 overlay grows so growroot can expand; must exceed
@@ -175,12 +183,24 @@ command -v qemu-img           >/dev/null || die "missing qemu-img"
 
 # ── Resolve the .img (shared autodetect) ────────────────────────────────────
 autodetect_img() {
-    local d="$1" role="$2" c
+    local d="$1"
+    local role="$2"
+    local c
+    local r
+    # Role-scoped globs FIRST, canonical spelling first within them, then every
+    # declared alias — an image built as hugmesh-x86-amd64-be-… or -host-… is still
+    # the backend / backend-gpu image and must still be found by its role.
+    for r in $(hugmesh_role_aliases_of "${role}"); do
+        for c in \
+            "${d}"/hugmesh-host-*-"${r}"-*.img \
+            "${d}"/hugmesh-*-"${r}"-*.img ; do
+            c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
+            [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
+        done
+    done
     for c in \
-        "${d}"/hugmesh-host-*-"${role}"-*.img \
         "${d}"/hugmesh-host-*.img \
-        "${d}"/hugmesh-x86-*.img \
-        "${d}"/hugmesh-*-"${role}"-*.img ; do
+        "${d}"/hugmesh-x86-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
@@ -188,6 +208,8 @@ autodetect_img() {
         | grep -ivE '(kernel|initramfs|initrd|squashfs)' | head -1 || true
 }
 
+# ONE normalization point, before anything reads ROLE.
+ROLE="$(hugmesh_role_validate "${ROLE}" x86)" || exit 1
 if [ -z "${IMG}" ]; then
     IMG="$(autodetect_img "${WORK_DIR}" "${ROLE}")"
 fi
