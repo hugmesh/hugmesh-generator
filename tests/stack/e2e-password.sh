@@ -81,6 +81,23 @@ e2e_password_generate() {
 e2e_password_read() {  # <key>
   local key="$1"
   [ -f "${E2E_CREDENTIALS_FILE}" ] || return 0
+  # PRESENT BUT UNREADABLE IS NOT "ABSENT". `make e2e` drives the QEMU harness
+  # under sudo, and seed-accounts.sh then writes this file as ROOT, mode 600, at
+  # the repo root. Every later non-root run can stat it but not read it.
+  #
+  # Without this branch, awk exits 2 (EACCES) with its message sent to
+  # /dev/null, `pipefail` propagates that 2 through the `| tail -n1`, and the
+  # caller's `local x="$(...)"` inherits it — so a caller under `set -e` dies
+  # with rc=2 and NO output at all. Silence is the worst possible answer here:
+  # regenerating would be wrong (the value other processes already hold is in
+  # that file), and proceeding would diverge.
+  if [ ! -r "${E2E_CREDENTIALS_FILE}" ]; then
+    echo "e2e-password.sh: ${E2E_CREDENTIALS_FILE} exists but is not readable by" >&2
+    echo "  $(id -un) (owner $(stat -c '%U' "${E2E_CREDENTIALS_FILE}" 2>/dev/null || echo '?'), mode $(stat -c '%a' "${E2E_CREDENTIALS_FILE}" 2>/dev/null || echo '?'))." >&2
+    echo "  A sudo run (make e2e drives QEMU as root) writes it root-owned 0600." >&2
+    echo "  Fix: sudo chown $(id -un) ${E2E_CREDENTIALS_FILE}   (or delete it and re-seed)." >&2
+    return 1
+  fi
   awk -F= -v k="${key}" '$1==k { sub(/^[^=]*=/, ""); print }' \
     "${E2E_CREDENTIALS_FILE}" 2>/dev/null | tail -n1
 }
@@ -116,7 +133,7 @@ e2e_password_ensure() {
   fi
   # 2. The run-state file — whichever process needed a password FIRST wrote it.
   local from_file
-  from_file="$(e2e_password_read E2E_PASSWORD)"
+  from_file="$(e2e_password_read E2E_PASSWORD)" || return 1
   if [ -n "${from_file}" ]; then
     E2E_PASSWORD="${from_file}"
     export E2E_PASSWORD

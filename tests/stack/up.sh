@@ -24,7 +24,8 @@ if [ "${REAL_MATRIX:-0}" = "1" ]; then MATRIX_TARGET="${SYNAPSE_URL}"; else MATR
 # nothing else in this path would ever set it — resolve here, or `make stack-up`
 # dies at BFF startup on a fresh checkout.
 . "${HERE}/e2e-password.sh"
-e2e_password_ensure
+e2e_password_ensure \
+  || { echo "up.sh: could not resolve or generate E2E_PASSWORD — mock-bff.mjs cannot start without it." >&2; exit 1; }
 [ -d "${UI_DIST}" ] || { echo "ERROR: built UI not found at ${UI_DIST}. Build it first (see README)."; exit 1; }
 
 # The host is a native-federation shell; the 4 remotes must be assembled under

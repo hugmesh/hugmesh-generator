@@ -102,8 +102,14 @@ def test_missing_credentials_file_reports_not_seeded(tmp_path):
 
 # ── against the REAL seeder in this checkout (the anti-drift pin) ─────────────
 
-def test_loads_the_real_roster_from_this_checkout():
-    r = load_roster(GENERATOR_DIR)
+def test_loads_the_real_roster_from_this_checkout(tmp_path):
+    # ISOLATED FROM AMBIENT STATE. Passing an explicit env makes resolve_password
+    # read this dict instead of os.environ, and pointing E2E_CREDENTIALS_FILE at a
+    # path that does not exist keeps the file step out of it too. Without both,
+    # this test asserts on whatever the developer's checkout happens to hold: it
+    # went green here only because nothing had run `make stack-seed` yet, and
+    # would fail on any box that had (or that exports E2E_PASSWORD).
+    r = load_roster(GENERATOR_DIR, {"E2E_CREDENTIALS_FILE": str(tmp_path / "absent")})
     assert r.error == "", r.error
     assert r.users, "the real seeder declared no personas"
     names = {u.username for u in r.users}
@@ -111,8 +117,7 @@ def test_loads_the_real_roster_from_this_checkout():
     assert {"e2e-admin", "e2e-mod", "e2e-user"} <= names
     admin = next(u for u in r.users if u.username == "e2e-admin")
     assert "ROLE_ADMIN" in admin.roles
-    # this checkout has neither an E2E_PASSWORD env nor a .e2e-credentials file
-    # (nothing has run `make stack-seed` here), so the honest answer is the
+    # Nothing seeded in the isolated env above, so the honest answer is the
     # not-seeded marker — never a guessed/literal password.
     assert admin.password == _NOT_SEEDED
     assert bool(r) is True
