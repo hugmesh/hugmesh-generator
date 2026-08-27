@@ -33,6 +33,16 @@ SRC="${REPO}/specs/cluster"
 CONTRACT="${REPO}/specs/cluster/contracts/fleet-inventory.v1.json"
 READ_ROLE="${REPO}/specs/cluster/manifests/workload-console-rbac/read-role.yaml"
 DOC="${REPO}/docs/WORKLOAD-CONSOLE-STATS-AND-VERSIONS.md"
+# WHERE THE GATE LIVES IS NOT THIS SUITE'S BUSINESS TO HARDCODE. Main hoisted the
+# prune helpers and the per-slug case bodies out of the two stage4 builders into
+# scripts/_optional-services-lib.sh, which both builders source, and shipped ONE
+# resolver for every suite that needs them. It reproduces bash's own resolution
+# order (each sourced scripts/*-lib.sh, then the builder itself LAST), so a
+# builder-local override is what gets loaded — which is the whole point: the
+# per-builder parity check below still compares what each builder would REALLY
+# run. Use it rather than awk-ing a path; three x86 defects shipped from the two
+# builders' copies drifting, and that is what this resolver exists to catch.
+source "${REPO}/tests/lib/opt-gate-source.sh"
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -192,8 +202,11 @@ fi
 # M4 — the route-access rows are dropped by the REAL builder helper (not a re-implementation).
 T="$(sandbox m4)"; SQL="${T}/manifests/route-access/initdb/20-schema.sql"
 H="$(hash_of "${SQL}")"
-eval "$(awk '/^_opt_drop_rows\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}' "${REPO}/build-rpi5-stage4.sh")"
-type _opt_drop_rows >/dev/null 2>&1 || bad "could not extract _opt_drop_rows from build-rpi5-stage4.sh"
+# Load _opt_drop_rows as build-rpi5-stage4.sh itself resolves it (today: from the
+# shared library it sources). opt_gate_load fails loudly rather than leaving the
+# case below to run against an undefined name.
+opt_gate_load "${REPO}/build-rpi5-stage4.sh" _opt_drop_rows \
+  || bad "could not load _opt_drop_rows from build-rpi5-stage4.sh's source chain"
 _opt_drop_rows "${SQL}" hugmesh-be-gateway '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
 if changed "M4 route rows dropped" "${H}" "${SQL}"; then
   expect_dark_naming "M4 route-access rows dropped by the builder's own _opt_drop_rows" "$(posture "${T}")" "gate-1"
@@ -716,8 +729,17 @@ bash "${TOOL}" --tree="${T}" --db-admin-enabled=true --active-grants=1 --require
 
 # ── 6. END TO END: the REAL builder gate, executed, then measured ─────────────
 # Not a re-implementation of the prune — the builder's own case body against a sandbox.
-extract_fn_of()   { awk "/^$2\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "$1"; }
-extract_case_of() { awk -v lbl="$2" '$0 ~ ("^[[:space:]]*" lbl "\\)[[:space:]]*$"){p=1;next} p && $0 ~ /^[[:space:]]*;;[[:space:]]*$/{exit} p{print}' "$1"; }
+# WHERE THESE COME FROM MOVED, and the loop below is UNCHANGED because of it.
+# Both extractors now follow the builder's SOURCE CHAIN (each scripts/*-lib.sh it
+# sources, then the builder itself last) instead of awk-ing the builder file, so
+# they keep working now that the prune lives in scripts/_optional-services-lib.sh.
+# Semantics are identical for a builder that defines a function locally: last
+# definition wins, exactly as bash resolves it. That is what preserves the check
+# this loop exists for — iterating BOTH builders still asks whether each one, as
+# it would really run, prunes the console. If one grows a local override, the
+# override is what loads here and this loop goes red for that builder alone.
+extract_fn_of()   { opt_gate_extract_fn "$1" "$2"; }   # $1 = builder, $2 = function name
+extract_case_of() { opt_gate_case_body  "$1" "$2"; }   # $1 = builder, $2 = case label
 for B in build-rpi5-stage4.sh build-x86-host-stage4.sh; do
   BUILDER="${REPO}/${B}"
   [ -r "${BUILDER}" ] || { bad "builder ${B} unreadable"; continue; }
