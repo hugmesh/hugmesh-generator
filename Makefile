@@ -1909,6 +1909,22 @@ stack-e2e-bdd-guards: ## OFFLINE: the Gherkin lane's axis + Studio-GUI guards (m
 	bash tests/scripts/test-e2e-env-interface-dimensions.sh
 	bash tests/scripts/test-e2e-studio-gui-lane.sh
 
+# ── The e2e REPORT's shape ───────────────────────────────────────────────────
+# Its own target and its own .PHONY line, for the same reason the BDD lane has
+# them: the stack-e2e recipe above is edited by other work in flight.
+#
+# What it gates: reporters/hugmesh-reporter.ts must keep emitting a report a
+# feature tree can render - pivoted BY SPEC FILE, one record per test, with
+# attachment paths and a skip REASON on every skipped test - while still writing
+# the legacy role/layer pivot the admin-ui console and hugmesh_studio's
+# parse_summary() read. The shape is pinned in tests/e2e/reporters/summary.schema.json,
+# checked against a REPLAY of a recorded run (no suite, no stack, no browser, no
+# node_modules: bare node + python3, ~4s).
+.PHONY: e2e-reporter-check
+
+e2e-reporter-check: ## OFFLINE: verify the e2e reporter emits a per-spec/per-test/attachment/skip-reason summary.json
+	bash tests/scripts/test-e2e-reporter-shape.sh
+
 # LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
 # make playwright-deps) when BDD_ENV=docker. SNAP_PLATFORM=rpi5|x86 narrows the
 # PLATFORM axis to the image target actually running; unset runs every platform

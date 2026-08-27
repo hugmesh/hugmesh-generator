@@ -76,7 +76,13 @@ export default defineConfig({
   // artifacts the test-runner Job copies onto the test-reports PVC and the
   // admin-bff TestReportsController serves. The custom hugmesh reporter maps
   // each test -> role via the `role:<x>` annotation/tag convention (see
-  // specs/report-tags.ts) and emits summary.json{passed,failed,skipped,perRole[]}.
+  // specs/report-tags.ts) and emits summary.json{passed,failed,skipped,perRole[],
+  // perLayer[]} PLUS, since schemaVersion 2, the keys a feature tree needs:
+  // perSpec[] (pivoted by spec FILE), tests[] (one record per test, with its
+  // attachments and - for every skipped test - a skip REASON, never blank), and
+  // testTotals/unexplainedSkips. The shape is pinned in
+  // reporters/summary.schema.json and gated OFFLINE by
+  // `make e2e-reporter-check` (tests/scripts/test-e2e-reporter-shape.sh).
   // Output dir is overridable so the runner can write per-run-id paths on the PVC.
   //   SNAP_REPORT_DIR     base dir for junit/json/summary  (default ./test-results)
   //   SNAP_REPORT_TIER    LEAN|HEAVY                       (recorded in summary.json)
