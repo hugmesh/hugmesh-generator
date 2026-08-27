@@ -193,7 +193,7 @@ def test_definitely_off_reaches_the_argv_for_every_dedicated_flag(wiz):
     """The half of asks 1/4 that is not about pixels: "unchecked" must MEAN off.
 
     An unchecked box that emitted nothing would leave a brand.conf's WANT_TOR=true in
-    force (brand.conf is sourced at build-x86-host-stage4.sh:888, BEFORE the arg loop
+    force (brand.conf is sourced at build-x86-host-stage4.sh:959, BEFORE the arg loop
     at :891),
     so the operator would be looking at an unticked box over a running Tor onion — the
     exact ambiguity ask 1 is about, merely relocated. Every dedicated-flag service
@@ -880,7 +880,7 @@ def test_the_same_fields_stay_reachable_on_the_desktop_mesh_track(wiz):
     non-vacuity proof for the test above: a gate that hid these everywhere would pass it
     while deleting the flow they belong to.
 
-    A mesh worklist made entirely of desktop rows IS that track (build-rpi5-stage4.sh:998
+    A mesh worklist made entirely of desktop rows IS that track (build-rpi5-stage4.sh:1007
     sets ROLE_CLIENT=true for exactly this arm), so the login and home surfaces are still
     on screen there."""
     mesh(wiz, "rpi5-desktop.rpi5")
@@ -926,7 +926,7 @@ def test_hiding_those_fields_changes_no_argv_for_a_flow_that_never_had_them(wiz)
     a flag is a build change wearing a UI change's clothes.
 
     `--local-user <default account>` is the deliberate survivor and is asserted PRESENT:
-    the x86 builder honours --local-user on every role (build-x86-host-stage4.sh:1732),
+    the x86 builder honours --local-user on every role (build-x86-host-stage4.sh:1912),
     the field defaults to the invoking user (default_local_user()), so blanking it would
     have changed every existing mesh build."""
     mesh(wiz, "pki.x86")

@@ -523,7 +523,7 @@ def test_a_loaded_unaffiliated_config_is_not_rewritten_by_a_page_visit(qapp):
     assert "--unaffiliated" in after, "a page visit dropped --unaffiliated"
     assert "--bundle-source" not in after, (
         "--bundle-source was added to an unaffiliated image — the builder hard-errors on "
-        "that pair (build-x86-host-stage4.sh:1410)")
+        "that pair (build-x86-host-stage4.sh:1590)")
     assert after == before, f"a page visit rewrote the image:\n {before}\n {after}"
 
 

@@ -364,7 +364,7 @@ def test_the_x86_standalone_desktop_gets_no_services_picker_at_all(wiz):
     what was measured on this exact config before the change is the argument: the
     nine-row picker was live with akkoma/tuwunel/phpbb PRE-TICKED and the wizard really
     emitted `--optional-services akkoma tuwunel phpbb` — for a role
-    build-x86-host-stage4.sh:2054 plans as `none` and never gives a cluster GitOps tree
+    build-x86-host-stage4.sh:2234 plans as `none` and never gives a cluster GitOps tree
     (the `cp -r "${SHARED_SPECS}/cluster" …` at :4621 is in the non-client arm).
 
     The heads-up note keeps its job on the CLOUD desktop path, which is deliberately
@@ -495,7 +495,7 @@ def test_the_unaffiliated_picker_takes_the_same_explicit_none(wiz):
 
     The unaffiliated arm emits no --config at all (validatePage clears brand_profile), so
     it looks immune to the profile leak. It is not: the builder auto-detects
-    `$(pwd)/brand.conf` whenever no -C is given (build-x86-host-stage4.sh:884) and Studio
+    `$(pwd)/brand.conf` whenever no -C is given (build-x86-host-stage4.sh:955) and Studio
     runs the builder with cwd=generator_dir — the directory brand.conf.example ships in.
     Measured from a directory holding OPTIONAL_SERVICES="akkoma tor":
 
@@ -639,7 +639,7 @@ def test_no_part_checked_state_survives_anywhere_on_the_page(wiz):
     advance_to(wiz, wizard_mod.KeyZipPage)
     c = wiz.cfg
     # …and "unchecked" now REACHES the argv as a definite off. That property is what the
-    # third state existed for (a brand.conf sourced at build-x86-host-stage4.sh:888, i.e.
+    # third state existed for (a brand.conf sourced at build-x86-host-stage4.sh:959, i.e.
     # BEFORE the arg loop, can set WANT_TOR=true), so losing it would have been a real
     # regression rather than a simplification.
     assert (c.aide, c.edge_ai_service, c.tor_onion_service, c.character_studio,
@@ -975,7 +975,7 @@ def test_the_apex_domain_IS_collected_on_a_standalone_rpi5_image(wiz):
     core/config.py::_arm_common_args emits --cluster-domain with NO mode fork — all nine
     arm64 builders — and _rpi5_args does the same for --release-state / --games-domain. A
     standalone rpi5 'generic' image really does bake a cluster domain
-    (build-rpi5-stage4.sh:3863); it is the one standalone role that carries a cluster
+    (build-rpi5-stage4.sh:3386); it is the one standalone role that carries a cluster
     GitOps tree (G16). A blanket mode hide would have looked correct on the operator's
     x86 image and blanked a live field on every Pi build."""
     c = wiz.cfg

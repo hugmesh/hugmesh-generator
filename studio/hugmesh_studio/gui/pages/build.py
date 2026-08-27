@@ -107,10 +107,10 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
 #
 # UNSET READS AS CHECKED, and that is not a guess: every flag-pair on this page has a
 # builder default of TRUE on every builder that parses it —
-#   BUILD_IMG=true   build-x86-host-stage4.sh:238, build-rpi5-stage4.sh:200, build-jetson-stage4.sh:181
-#   LIVE_ISO=true    build-x86-host-stage4.sh:243
-#   BUILD_TAR=true   build-x86-host-stage4.sh:245, build-rpi5-stage4.sh:202
-#   SECURE_BOOT=true build-x86-host-stage4.sh:516
+#   BUILD_IMG=true   build-x86-host-stage4.sh:293, build-rpi5-stage4.sh:209, build-jetson-stage4.sh:181
+#   LIVE_ISO=true    build-x86-host-stage4.sh:298
+#   BUILD_TAR=true   build-x86-host-stage4.sh:300, build-rpi5-stage4.sh:211
+#   SECURE_BOOT=true build-x86-host-stage4.sh:571
 # so "leave the builder's default" and "checked" were always the same PICTURE; the square
 # only ever advertised a distinction in the argv, not in the image. Making it explicit
 # adds --img/--live-iso/--tar/--secure-boot to the emitted command and changes nothing
@@ -412,7 +412,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # than assumed, because getting this wrong means quietly changing what a build
         # produces while claiming to have changed a checkbox:
         #
-        #   cached    ISO_CACHED=false   (build-x86-host-stage4.sh:415)  -> CHANGES the
+        #   cached    ISO_CACHED=false   (build-x86-host-stage4.sh:470)  -> CHANGES the
         #             build. Embeds the binpkg cache + distfiles in the live ISO: a
         #             materially larger ISO that can rebuild offline.
         #   compress  COMPRESS_IMG=false (x86:242, rpi5:186, jetson:165) -> CHANGES the
@@ -824,7 +824,7 @@ class BuildPage(QtWidgets.QWizardPage):
         self.installer_ui.setEnabled(c.platform in ("", "x86"))
         # Role-class honesty (#355 idiom): a headless x86 NODE cannot build the graphical
         # Calamares front-end — the desktop USE closure it needs is ROLE_CLIENT-gated in
-        # build-x86-host-stage4.sh:3676 — so materialize rewrites installer_ui to "cli"
+        # build-x86-host-stage4.sh:3438 — so materialize rewrites installer_ui to "cli"
         # (core.config.resolve_installer_ui_default). Show THAT, not a stale "all" the
         # image will never honour: without the setCurrentText the combo would lie, and
         # validatePage would write the lie back into the config.

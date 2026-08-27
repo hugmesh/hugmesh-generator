@@ -121,7 +121,7 @@ _OFF_TIP = ("Two-state: checked = ON for this build (--with-…), unchecked = OF
 #   * build-rpi5-stage4.sh:1712 gate_optional_services() prunes each unselected slug's
 #     Argo apps/*.yaml + manifests/ + gateway routes out of the baked CLUSTER GitOps
 #     tree at ${SYSROOT}/var/lib/hugmesh/cluster — it is not a node package set;
-#   * build-rpi5-stage4.sh:3898-3900 bakes that tree into EVERY cluster-class node (only
+#   * build-rpi5-stage4.sh:3421-3423 bakes that tree into EVERY cluster-class node (only
 #     ROLE_CLIENT desktops skip it), and specs/cluster/app-of-apps.yaml recurses with
 #     prune:true — so two nodes with different service sets would be two conflicting
 #     desired states for ONE cluster, and the surviving tree would DELETE the other's
@@ -148,8 +148,8 @@ _SERVICES_NODE_SCOPE_CAVEAT = (
 
 # Why "tick anything and the default set is gone" is the honest headline, and why ask 2
 # ("remove the exclude services field, it makes no sense") is safe to satisfy in the GUI.
-# The builders resolve this precedence themselves — build-x86-host-stage4.sh:138-141 and
-# build-rpi5-stage4.sh:243-245, both verbatim "built-in < brand.conf < flag":
+# The builders resolve this precedence themselves — build-x86-host-stage4.sh:193-196 and
+# build-rpi5-stage4.sh:252-254, both verbatim "built-in < brand.conf < flag":
 #
 #     OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
 #
@@ -200,7 +200,7 @@ _MANAGED_SCOPE_NOTE = (
 #   * core/config.py::_arm_common_args — `if self.cluster_domain != "hugmesh.net"` with
 #     NO mode fork, shared by all NINE arm64 builders; and _rpi5_args emits
 #     --release-state / --games-domain the same unconditional way. A standalone rpi5
-#     'generic' image really does carry a cluster domain (build-rpi5-stage4.sh:3863) —
+#     'generic' image really does carry a cluster domain (build-rpi5-stage4.sh:3386) —
 #     'generic' is the one standalone role that bakes a cluster GitOps tree (G16; see
 #     _client_class_role). Hiding the row there would have blanked a live field.
 #
@@ -346,7 +346,7 @@ def _on_off(value) -> bool:
     to_cli_args still honours all three. What changed is how the GUI READS it: '' (and the
     False dataclass default) now shows as UNCHECKED, because on every one of these flags
     the builder's own unset behaviour IS off — the default OPTIONAL_SERVICES set
-    (build-x86-host-stage4.sh:141) contains none of them, WANT_AIDE defaults false (:486)
+    (build-x86-host-stage4.sh:196) contains none of them, WANT_AIDE defaults false (:486)
     and EDGE_AI is set true only by the edge_ai role (:1289). So "unspecified" and "off"
     were always the same picture; the square only ever advertised a distinction the
     operator could not act on."""
@@ -633,7 +633,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.snort = QtWidgets.QCheckBox("Snort IDS (network intrusion detection)")
         # AIDE was the sixth tri-state on this page. It is two-state now like the rest —
         # and unlike tor/character-*/edge-ai-tts its unchecked arm is REAL subtraction
-        # (WANT_AIDE is consumed as a plain bool at build-x86-host-stage4.sh:4786 and
+        # (WANT_AIDE is consumed as a plain bool at build-x86-host-stage4.sh:4548 and
         # :5139), so "definitely off" here strips app-forensics/aide outright rather than
         # merely declining to add it. Converted with them because the page cannot keep one
         # lone square without keeping the legend that explains it, and the legend is what
@@ -734,7 +734,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         #     rather than an absence (G13).
         #   * "all" is NOT "tick every row": --all-services expands USER_LEVEL_SERVICES,
         #     which EXCLUDES the infra slugs this catalog also offers (tor, egress-vpn,
-        #     anubis, workloadConsole — build-rpi5-stage4.sh:743-744), so the two are not
+        #     anubis, workloadConsole — build-rpi5-stage4.sh:752-753), so the two are not
         #     the same argv (G14). It is also the ONE selection this table cannot express
         #     row-by-row on rpi5, where those infra rows exist.
         # A combo also states the mutual exclusion structurally instead of enforcing it in a
@@ -775,7 +775,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # builder, and the old page expressed that by showing the service twice:
         #   * `tor` on x86 is the dedicated --with-tor / --no-tor pair; on rpi5 there is no
         #     such flag at all and listing the slug in --optional-services is the ONLY way to
-        #     bake a Tor-onion node (build-rpi5-stage4.sh:746-748, G15);
+        #     bake a Tor-onion node (build-rpi5-stage4.sh:755-757, G15);
         #   * `character-studio` / `character-forge` / `games` have BOTH a dedicated flag and
         #     a catalogue slug on x86 and rpi5 — one service, two spellings, which is why the
         #     operator met `character-forge` twice on one screen.
@@ -814,7 +814,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.edge_ai = QtWidgets.QCheckBox()
         # ASK 1, verbatim: "leave optional services and edge ai unchecked instead of half
         # checked for default no". Two-state, default UNCHECKED — and unchecked here is the
-        # load-bearing kind: --no-edge-ai at build-x86-host-stage4.sh:932 is the ONLY way
+        # load-bearing kind: --no-edge-ai at build-x86-host-stage4.sh:1003 is the ONLY way
         # to suppress the edge_ai ROLE's automatic selection of the service.
         self.edge_ai.setToolTip(_OFF_TIP)
         self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_ON, self.edge_ai)
@@ -916,10 +916,10 @@ class NetworkPage(QtWidgets.QWizardPage):
 
         * NONE emits ``--optional-services ""``. It rewrites the slug list and nothing
           else, so a service this platform reaches through its own ``--with-<x>`` stays
-          live underneath it: the fold at build-x86-host-stage4.sh:1166 runs AFTER the arg
+          live underneath it: the fold at build-x86-host-stage4.sh:1246 runs AFTER the arg
           loop, so ``--optional-services "" --with-character-studio`` really does build
           character-studio alone. Only SLUG-channel rows are taken over.
-        * ALL emits ``--all-services``, which at build-x86-host-stage4.sh:1106-1111
+        * ALL emits ``--all-services``, which at build-x86-host-stage4.sh:1177-1191
           replaces OPTIONAL_SERVICES with USER_LEVEL_SERVICES **before** those folds. So it
           takes over TWO kinds of row:
             - every slug-channel row (the list is replaced wholesale — an rpi5 `anubis`
@@ -1215,7 +1215,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # Ask 23's rule, verbatim: "anything off by default is UNCHECKED; only pre-check
         # what is genuinely on by default" — and akkoma / tuwunel / phpbb are genuinely on
         # by default. `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"`
-        # (build-x86-host-stage4.sh:141, build-rpi5-stage4.sh:245) means an untouched mesh
+        # (build-x86-host-stage4.sh:196, build-rpi5-stage4.sh:254) means an untouched mesh
         # ships all three, so three unticked boxes over three running services is the same
         # lie as a part-checked square, merely spelled differently — and it made unticking
         # `phpbb` a no-op, because --optional-services REPLACES rather than subtracts, so
@@ -1334,7 +1334,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         #     was live with akkoma/tuwunel/phpbb PRE-TICKED, and the argv the wizard
         #     produced really carried `--optional-services akkoma tuwunel phpbb` — for a
         #     role whose build PLAN reports the selection as NONE
-        #     (build-x86-host-stage4.sh:2054,
+        #     (build-x86-host-stage4.sh:2234,
         #     `_plan OPTIONAL_SERVICES "$(${ROLE_CLIENT} && echo none || …)"`), on an
         #     image that gets no cluster GitOps tree at all — the
         #     `cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"` at
@@ -1516,7 +1516,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             # therefore greyed the row wherever only the SLUG channel exists. `tor` on
             # rpi5 is exactly that case — tor_onion_service is x86-only, so the flag gate
             # greyed the rpi5 tor row, which is the ONLY way to bake a Tor-onion Pi node
-            # (build-rpi5-stage4.sh:746-748, G15). Probe, before this line went:
+            # (build-rpi5-stage4.sh:755-757, G15). Probe, before this line went:
             #     mesh/pki/rpi5   tor  ON=_/dis      <- greyed, unbuildable
             #     mesh/pki/rpi5   tor  ON=_          <- after
             # The row-level `offered` flag computed above already covers everything this
@@ -1810,7 +1810,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # ASK 2, verbatim: "remove the exclude services field, it makes no sense". The
         # widget is gone; the FIELD and the --exclude-services flag are deliberately kept
         # (it is the only knob that can subtract a slug a brand.conf injected directly
-        # into OPTIONAL_SERVICES — build-x86-host-stage4.sh:1234-1246, applied last — and
+        # into OPTIONAL_SERVICES — build-x86-host-stage4.sh:1317-1329, applied last — and
         # tests/build-matrix/flag-coverage.sh would need two "no longer a GUI knob"
         # allowlist entries if it went). It is now reachable only from a brand profile
         # (-C) or extra flags. NOT reset here: a value loaded from a saved config or set

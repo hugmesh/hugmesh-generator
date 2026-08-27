@@ -472,7 +472,7 @@ def test_ask13_defaults_that_change_the_build_are_the_single_flags(wiz):
     produces?" — the question the lane brief demands be answered out loud rather than
     flipped quietly.
 
-    * live_iso     — NO. LIVE_ISO=true already (build-x86-host-stage4.sh:243); the box
+    * live_iso     — NO. LIVE_ISO=true already (build-x86-host-stage4.sh:298); the box
       now emits --live-iso explicitly where it emitted nothing, and the ISO is identical.
     * bundle_source — NO CHANGE BY THIS LANE, which is a weaker and more accurate claim
       than "the builder was already doing it": ImageConfig.bundle_source has defaulted
@@ -921,7 +921,7 @@ def test_three_arg_preflight_done_still_works(wiz):
 # The combo used to offer "all" and DEFAULT to it even for a mesh-node fleet, where the
 # graphical Calamares front-end is not merely expensive but UNBUILDABLE: its USE closure
 # (specs-x86/portage/package.use/desktop) is copied only for ROLE_CLIENT roles
-# (build-x86-host-stage4.sh:3676). A combo reading "all" on a node LIED about what the
+# (build-x86-host-stage4.sh:3438). A combo reading "all" on a node LIED about what the
 # image would get; materialize now rewrites it to "cli", and the combo must say so.
 
 def test_installer_ui_pinned_and_greyed_on_a_mesh_node(wiz):

@@ -1750,23 +1750,23 @@ fi
 # ${SKIP_MESH} ADDED 2026-08-26 — the warning above has always CLAIMED to cover
 # "standalone/--skip-tailscale", but the test did not. Measured hole:
 #   ./build-x86-host-stage4.sh --role chromebook --no-tailscale --no-sso --with-sunshine
-# --no-tailscale (an alias of --no-mesh, :967) sets SKIP_MESH=true and leaves
-# SKIP_TAILSCALE false; chromebook is ROLE_CLIENT so the :1566 guard passes; and
-# STANDALONE is false, so the STANDALONE fold at :1437 — the only thing that would
+# --no-tailscale (an alias of --no-mesh, :1038) sets SKIP_MESH=true and leaves
+# SKIP_TAILSCALE false; chromebook is ROLE_CLIENT so the :1746 guard passes; and
+# STANDALONE is false, so the STANDALONE fold at :1617 — the only thing that would
 # have raised SKIP_TAILSCALE — never runs. Sunshine was therefore baked, together
 # with its tailscale-ONLY nftables fence, onto an image that has no tailscale
 # interface at all: the stream port is fenced to an iface that never appears, so
 # the feature is silently dead rather than merely unreachable.
 # SKIP_MESH is the RIGHT second test, not a belt-and-braces one: tailscaled is
 # installed only when BOTH are false (`${SKIP_MESH} || ${SKIP_TAILSCALE} ||
-# SVCS+=(tailscaled)`, :4723; the same posture guards the binary install at
-# :5656/:5686), so SKIP_MESH=true means no tailnet, full stop.
+# SVCS+=(tailscaled)`, :4485; the same posture guards the binary install at
+# :5418/:5448), so SKIP_MESH=true means no tailnet, full stop.
 # DELIBERATELY NOT ${STANDALONE}: the STANDALONE fold supports an explicit
-# --with-tailscale (MESH_FORCED=on keeps the tailnet, :1444-1447 — "composable: a
+# --with-tailscale (MESH_FORCED=on keeps the tailnet, :1624-1447 — "composable: a
 # standalone desktop that still joins the tailnet"), and testing STANDALONE here
 # would drop Sunshine from exactly that supported combination. UNAFFILIATED is
 # kept although it now implies SKIP_MESH (it hard-conflicts with --with-tailscale
-# at :1412, so its standalone fold always raises SKIP_MESH) — it is the cheapest
+# at :1592, so its standalone fold always raises SKIP_MESH) — it is the cheapest
 # possible statement of intent for the role that must never stream anything.
 if ${WANT_SUNSHINE} && { ${SKIP_TAILSCALE} || ${SKIP_MESH} || ${UNAFFILIATED}; }; then
     warn "--with-sunshine needs the tailnet (the fence admits stream traffic ONLY on the tailscale iface); this desktop has none (standalone/unaffiliated/--skip-tailscale/--no-tailscale) — dropping it."
@@ -3151,7 +3151,7 @@ fi
 
 # ── BEGIN shared block: SELinux node-policy host tools ────────────────────────
 # The other NINE builders already gate the host SELinux policy toolchain
-# (HOST_POLICY_TOOLS, e.g. build-rpi5-stage4.sh:3013) because selinux-base's
+# (HOST_POLICY_TOOLS, e.g. build-rpi5-stage4.sh:2536) because selinux-base's
 # `emake base` shells out to it. This builder never needed it — until now: the
 # SELinux node-policy step (scripts/_selinux-policy-lib.sh, called before
 # "Packaging stage4 tarball") compiles specs/selinux/*.te with exactly these
@@ -4099,7 +4099,7 @@ if ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
     #    EMIT WHAT THE READER PARSES — NOT `printf %q`. THE READER IS NOT A SHELL.
     #    The applier reads this file with the strict parser headed
     #    "brand.conf loader (STRICT KEY=VALUE — never dot-source)" at
-    #    specs/usr/sbin/hugmesh-branding:83; its _load_brand_conf (:93-128) strips ONE
+    #    specs/usr/sbin/hugmesh-branding:83; its _load_brand_conf (:102-128) strips ONE
     #    layer of matching surrounding quotes and then takes the value LITERALLY — it
     #    never unescapes a backslash. `printf %q` escapes a space as `\ ` and a leading
     #    `#` as `\#`, and those escapes SURVIVE the read.

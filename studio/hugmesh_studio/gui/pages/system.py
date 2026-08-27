@@ -66,8 +66,8 @@ _NODE_CREDS_REASON = (
 # "Local user" (the NEXT page) is --local-user. They collapse into ONE name only where
 # the builder is actually TOLD the local user, because the collapse is the builder's own
 # line `[ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"`
-# (build-x86-host-stage4.sh:1733, verified with sed -n '1733p'; its ARM twins are
-# build-rpi5-stage4.sh:1311, build-jetson-stage4.sh:597, build-frite-stage4.sh:594,
+# (build-x86-host-stage4.sh:1913, verified with sed -n '1733p'; its ARM twins are
+# build-rpi5-stage4.sh:1329, build-jetson-stage4.sh:597, build-frite-stage4.sh:594,
 # build-orangepi5-stage4.sh:625 and the four orangepi-zero/lts builders). On those
 # images the operator typed one account twice and the argv carried both
 # "--local-user magus" and "--user magus" — and an operator who never opened this page
@@ -77,10 +77,10 @@ _NODE_CREDS_REASON = (
 # instead of reading, and the half that makes the difference:
 #   * x86: UNCONDITIONAL. `_x86_args` SEEDS the argv list with it —
 #     `a: list[str] = ["--role", self.role, "--env", self.env, "--local-user",
-#     self.local_user]` (config.py:3528).
+#     self.local_user]` (config.py:3545).
 #   * ARM: CONDITIONAL. `_arm_common_args` emits it only under
 #     `if self.standalone or self.local_user != default_local_user() or self.local_pass:`
-#     (config.py:3158).
+#     (config.py:3175).
 # So a PLAIN ARM DESKTOP (rpi5-desktop / jetson-desktop / orangepi4-lts …: no
 # --standalone, the Studio's own default account name, no local password) receives
 # NEITHER flag. Hiding -u there deduplicated nothing — it DELETED the only channel the
@@ -117,7 +117,7 @@ _DUP_USER_REASON = (
 #
 # What the value ACTUALLY does today, verified against origin/main rather than against
 # the intent in the docs:
-#   * build-x86-host-stage4.sh:4594 writes it to /etc/hugmesh/identity-role inside the
+#   * build-x86-host-stage4.sh:4356 writes it to /etc/hugmesh/identity-role inside the
 #     `elif ${ROLE_CLIENT}` branch (:4589) — i.e. person-device images only;
 #   * `superadmin` (and only superadmin, and only when NOT --standalone) ALSO bakes
 #     /etc/hugmesh/device-password-required (:4613-4614). That marker IS consumed:
@@ -214,8 +214,8 @@ def default_user_is_local_user(cfg, wiz=None) -> bool:
        ANY row still needs -u.
     2. **``--local-user`` is actually emitted for that image.** Not a restatement of the
        emitters (that would be a third copy of the condition): ``derive_default_user``
-       already IS that mirror — x86 unconditional (``_x86_args``, config.py:3528), ARM
-       conditional (``_arm_common_args``, config.py:3158) — and it is drift-guarded
+       already IS that mirror — x86 unconditional (``_x86_args``, config.py:3545), ARM
+       conditional (``_arm_common_args``, config.py:3175) — and it is drift-guarded
        against a real ``to_cli_args()``. "The builder's DEFAULT_USER already equals
        ``cfg.local_user``" is true exactly where the flag rides, which is exactly where
        -u would be the duplicate.
@@ -541,7 +541,7 @@ class SystemPage(QtWidgets.QWizardPage):
         # ── the duplicate account name (see _DUP_USER_REASON) ────────────────────────
         # HIDE only where HomePage's "Local user" REALLY becomes this image's default
         # account — i.e. where --local-user is emitted (x86 always; ARM only under
-        # _arm_common_args' condition, config.py:3158). A plain ARM desktop receives
+        # _arm_common_args' condition, config.py:3175). A plain ARM desktop receives
         # neither flag, so it keeps the row: there -u is the only channel. Run AFTER
         # _seed_user so the honest-blank note it may have raised is respected on the
         # flows that keep the row; the field is BLANKED here (the shape _seed_user's own

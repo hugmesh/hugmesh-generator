@@ -450,7 +450,7 @@ def test_system_identity_preselects_the_builder_derived_values(qapp):
 # "Default user" (-u) and HomePage's "Local user" (--local-user) are ONE account on a
 # desktop image: derive_default_user resolves -u's prefill to cfg.local_user on x86
 # (config.py:1627-1628) because the builder does DEFAULT_USER="${LOCAL_USER}"
-# (build-x86-host-stage4.sh:1733). So the operator typed the name twice and the argv
+# (build-x86-host-stage4.sh:1913). So the operator typed the name twice and the argv
 # carried both flags — and an operator who never opened SystemPage emitted no -u at all,
 # i.e. merely WALKING the wizard added a redundant flag.
 
@@ -544,7 +544,7 @@ def test_home_login_group_says_the_account_is_also_the_default_user(qapp):
 # The collapse hid -u on EVERY desktop image, justified by "a custom --local-user is
 # honoured by the ARM builders too". True — but --local-user is only EMITTED on ARM under
 # `if self.standalone or self.local_user != default_local_user() or self.local_pass:`
-# (config.py:3149); x86 emits it unconditionally (config.py:3519). So a plain ARM desktop
+# (config.py:3166); x86 emits it unconditionally (config.py:3536). So a plain ARM desktop
 # received NEITHER flag and fell back to its builder's own DEFAULT_USER ("pi" on rpi5)
 # while the wizard displayed the local user's name — the operator lost the ability to name
 # the baked account at all, which they HAD before the change set. Measured argv, before:
@@ -553,7 +553,7 @@ def test_home_login_group_says_the_account_is_also_the_default_user(qapp):
 
 def _arm_desktop(**kw):
     """A plain ARM desktop: no --standalone, the Studio's own default account name, no
-    local password — i.e. every arm of config.py:3149's condition false, so --local-user
+    local password — i.e. every arm of config.py:3166's condition false, so --local-user
     is NOT emitted and -u is the ONLY channel for naming the baked account."""
     base = dict(mode="cloud", role="rpi5-desktop", platform="rpi5", board="rpi5")
     base.update(kw)
@@ -590,7 +590,7 @@ def test_system_default_user_row_stays_on_a_plain_arm_desktop(qapp):
 def test_system_default_user_row_goes_on_an_arm_desktop_that_does_emit_local_user(
         qapp, kw, why):
     """The other side of the narrowing — it must still COLLAPSE where the duplicate is
-    real. Each of these turns on one arm of config.py:3149, so --local-user rides and the
+    real. Each of these turns on one arm of config.py:3166, so --local-user rides and the
     builder makes it DEFAULT_USER: a second name here would be the duplicate the operator
     reported."""
     cfg = _arm_desktop(**kw)
@@ -665,8 +665,8 @@ def test_home_login_note_appears_exactly_where_local_user_is_emitted(qapp, cfg_k
 
 def test_home_seed_stack_code_hidden_and_reset_on_unaffiliated(qapp):
     """"Seed stack code" offered none|repos|stack|mesh on a flow where anything but
-    "none" makes to_cli_args() RAISE (config.py:3501) and the builder exit 1
-    (build-x86-host-stage4.sh:1411) — a control whose only outcomes were "leave it
+    "none" makes to_cli_args() RAISE (config.py:3518) and the builder exit 1
+    (build-x86-host-stage4.sh:1591) — a control whose only outcomes were "leave it
     alone" or "break the build". Hidden, and reset to the dataclass default."""
     cfg = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
                       home_seed_code="stack")
@@ -886,7 +886,7 @@ def test_home_no_longer_carries_the_standalone_posture(qapp):
 
 def test_home_login_unlock_factor_not_offered_on_a_node(qapp):
     """The builder writes the login-factor marker from inside its `elif ${ROLE_CLIENT}`
-    branch (build-x86-host-stage4.sh:4606-4607), so on a cluster-node role
+    branch (build-x86-host-stage4.sh:4368-4369), so on a cluster-node role
     `--unlock-keyfile login` writes NO marker — the factor silently does not exist. The
     flag still PARSES (:1068) and validates (:1595) so nothing errs, and
     `--unlock-yubikey login` even adds sys-auth/pam-u2f to the package set at :5107,

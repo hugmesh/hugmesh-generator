@@ -121,7 +121,7 @@ _SUNSHINE_TIP = (
 # back to the ImageConfig dataclass default.
 # NAMES THE ARM, NOT A LINE RANGE, on purpose: this string is not a comment — it is the
 # reason the OPERATOR reads in a tooltip when the posture / --capable / desktop-weight
-# rows are hidden. The first spelling cited "build-x86-host-stage4.sh:1302-1329", which
+# rows are hidden. The first spelling cited "build-x86-host-stage4.sh:1482-1509", which
 # was already stale when it was written (see the RE-DERIVED note above) and would rot
 # again on the builder's next edit — in an operator-facing string, silently. The arm
 # name is stable: `grep -n 'standalone-thin)' build-x86-host-stage4.sh` finds it forever.
@@ -992,7 +992,7 @@ class RolePage(QtWidgets.QWizardPage):
         probe.platform = self._selected_machine() or c.platform
         in_scope = scope_allows("standalone", probe)
         # DECISION 2(b): a role that ALREADY IS the standalone posture must not re-ask
-        # for it. build-x86-host-stage4.sh:1325/:1332/:1344 set STANDALONE=true in the
+        # for it. build-x86-host-stage4.sh:1505/:1332/:1344 set STANDALONE=true in the
         # role arm itself (RE-DERIVED against the current file — see the module-level
         # note; the first spelling here cited the pre-diff :1310/:1317/:1329), and a
         # measured standalone walk of this wizard emits no
@@ -1033,11 +1033,11 @@ class RolePage(QtWidgets.QWizardPage):
         chromebook/standalone-thin the row above cannot express the image at all.
 
         Both arms mirror something the builder or the emitter really does:
-          * ``role == UNAFFILIATED_ROLE`` — build-x86-host-stage4.sh:1345 sets
+          * ``role == UNAFFILIATED_ROLE`` — build-x86-host-stage4.sh:1525 sets
             UNAFFILIATED=true in the role arm itself, and config.py's emitter suppresses
             the flag on that role (``if self.unaffiliated and self.role !=
             UNAFFILIATED_ROLE``), so clearing here moves no argv byte.
-          * ``mode in ("cloud", "mesh")`` — build-x86-host-stage4.sh:1414 hard-errors on
+          * ``mode in ("cloud", "mesh")`` — build-x86-host-stage4.sh:1594 hard-errors on
             --person-role/--domains with --unaffiliated, and
             ``config._check_unaffiliated_conflicts`` raises for exactly these two modes
             (measured: to_cli_args() on a cloud cfg with unaffiliated=True throws
@@ -1281,7 +1281,7 @@ class RolePage(QtWidgets.QWizardPage):
         # isVisible() would read False then and wipe the collected values.
         x86_client = self.client_box.isVisibleTo(self)
         # --capable is NOT cleared when _sync_client_gates hid it: that hide is the
-        # REDUNDANT kind (build-x86-host-stage4.sh:1332/:1344 set CAPABLE=true from the
+        # REDUNDANT kind (build-x86-host-stage4.sh:1512/:1344 set CAPABLE=true from the
         # role arm itself), so the flag riding along is a no-op and the image is
         # identical either way — while clearing it would silently rewrite a loaded
         # standalone-thick config on a mere page visit. The PLATFORM axis below is

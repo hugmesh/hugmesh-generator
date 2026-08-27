@@ -14,7 +14,7 @@ option for this in another table like with the node images."
     still reaches the argv — that property was the reason the third state existed, and
     losing it would have been a real regression rather than a simplification.
   * Per-node: NO. Answered from the builders, not from UI convenience —
-    ``build-rpi5-stage4.sh:1376`` gate_optional_services() prunes unselected slugs out of
+    ``build-rpi5-stage4.sh:1394`` gate_optional_services() prunes unselected slugs out of
     the CLUSTER GitOps tree at ``${SYSROOT}/var/lib/hugmesh/cluster``, and ``:2958``
     bakes that tree into EVERY cluster-class node. With app-of-apps recurse+prune, two
     nodes with different service sets = two conflicting desired states for one cluster,
@@ -500,7 +500,7 @@ def test_the_domain_row_STAYS_on_a_standalone_rpi5_image(wiz):
     operator's x86 image and silently blanked a field NINE arm64 builders parse:
     core/config.py::_arm_common_args emits --cluster-domain with no mode fork at all, and
     _rpi5_args does the same for --release-state / --games-domain. A standalone rpi5
-    'generic' image really does carry a cluster domain (build-rpi5-stage4.sh:3863) —
+    'generic' image really does carry a cluster domain (build-rpi5-stage4.sh:3386) —
     'generic' is the one standalone role that bakes a cluster GitOps tree (G16)."""
     page = _net(wiz, mode="standalone", role="generic", platform="rpi5")
     for name in ("domain_row", "games_domain_row", "release_state_row"):

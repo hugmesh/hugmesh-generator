@@ -129,7 +129,7 @@ def test_ask7_person_role_label_is_no_longer_the_unclear_one(wiz):
     assert "artifact's filename" in intro                 # the other thing it really does
     assert "GRANTS nothing" in intro                      # what it is NOT
     # ...and it does not claim a behaviour the code does not have. `git grep
-    # identity-role` finds ONE writer (build-x86-host-stage4.sh:4594) and ONE reader
+    # identity-role` finds ONE writer (build-x86-host-stage4.sh:4356) and ONE reader
     # (tests/qemu/verify-client.sh, a verification probe); keys-provision reads the
     # SIBLING `domains` marker, never this one. Saying the tier binds the device to an
     # account today would be inventing a semantic — exactly what ask 7 forbids.
@@ -139,7 +139,7 @@ def test_ask7_person_role_label_is_no_longer_the_unclear_one(wiz):
 def test_ask7_every_option_carries_its_own_description(wiz):
     """Per-option prose: selecting any option updates a visible description, and the
     superadmin option names its real, non-obvious consequence (the device-password
-    hardening the builder bakes at build-x86-host-stage4.sh:4613-4614)."""
+    hardening the builder bakes at build-x86-host-stage4.sh:4375-4376)."""
     pick_mode(wiz, "cloud")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert set(_PERSON_ROLE_HELP) == {"derive", *PERSON_ROLE_CHOICES}
@@ -511,7 +511,7 @@ def test_ask9_an_arm_desktop_can_still_name_its_baked_account(wiz):
 
     It is — but --local-user is only EMITTED to an ARM builder under
     `if self.standalone or self.local_user != default_local_user() or self.local_pass:`
-    (config.py:3149; x86 emits it unconditionally at config.py:3519). So a PLAIN ARM
+    (config.py:3166; x86 emits it unconditionally at config.py:3536). So a PLAIN ARM
     desktop received neither flag: `build-rpi5-stage4.sh` kept DEFAULT_USER="pi" (:288)
     while the wizard displayed the local user's name, and the operator could no longer
     name the baked account AT ALL — something they could do before the change set.
@@ -968,7 +968,7 @@ def test_ask21_encryption_is_always_on_outside_mesh_too(wiz, mode):
     assert home.encrypt_root.isChecked() and not home.encrypt_root.isEnabled()
     # ...and the consequence is stated HERE, not only on the mesh note: on x86 the
     # builder turns --encrypt-root into INSTALLER_ISO=true unconditionally
-    # (build-x86-host-stage4.sh:1600), so a cloud client that never asked for an
+    # (build-x86-host-stage4.sh:1780), so a cloud client that never asked for an
     # installer ISO now gets one.
     assert home.enc_always_note.isVisible()
     assert "installer ISO" in home.enc_always_note.text()
@@ -1205,7 +1205,7 @@ def test_ask21_standalone_live_where_the_posture_genuinely_composes(qapp):
     RE-POINTED from standalone-thick to CHROMEBOOK-in-standalone by DECISION 2(b)
     (operator, 2026-08-26: the wizard "asking same questions seemingly multiple
     times"). standalone-thick is one of the three roles whose builder arm PRESETS the
-    posture — build-x86-host-stage4.sh:1325 sets STANDALONE=true from the role case
+    posture — build-x86-host-stage4.sh:1505 sets STANDALONE=true from the role case
     itself — so offering a "Standalone image" tick beside an image type already
     called "Standalone thick" asked the same question twice, with only one legal
     answer. Those roles now hide the box.
@@ -1232,7 +1232,7 @@ def test_ask21_standalone_is_hidden_where_the_role_already_pins_it(qapp):
 
     DECISION 2(b): a knob whose value the chosen role already decided is a duplicate
     question. The three x86 standalone-* desktop roles preset STANDALONE=true in the
-    builder's own role case (build-x86-host-stage4.sh:1325/:1332/:1344), so the box goes —
+    builder's own role case (build-x86-host-stage4.sh:1505/:1332/:1344), so the box goes —
     box AND section, leaving no orphan header.
 
     The FIELD is deliberately NOT cleared here, unlike an out-of-scope hide: this is
@@ -1479,7 +1479,7 @@ def test_ask7_only_superadmin_is_claimed_to_change_the_image(wiz):
     """ASK 7's "describe what it ACTUALLY does" clause, held to the code.
 
     Exactly one tier changes what gets built — `superadmin`, which bakes
-    /etc/hugmesh/device-password-required (build-x86-host-stage4.sh:4613-4614), the one
+    /etc/hugmesh/device-password-required (build-x86-host-stage4.sh:4375-4376), the one
     person-role marker the shipped first-boot path really consumes
     (specs/etc/keys-provision/provision.sh:395). The other three are labels. The page
     must say so both ways round, or an operator picking `admin` will believe they have

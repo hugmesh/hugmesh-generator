@@ -66,8 +66,8 @@ _MEDIA_ROLE_CLASS_REASON = (
 # "Seed stack code" offers none|repos|stack|mesh, and anything but "none" seeds the
 # HugMesh stack into the home — which is affiliation, not look. It was visible AND
 # enabled on the unaffiliated flow, where every non-"none" value makes to_cli_args()
-# raise (config.py:3500 "home_seed_code (seeds the HugMesh stack into the home)")
-# and the builder exits 1 (build-x86-host-stage4.sh:1411). A control whose only outcomes
+# raise (config.py:3517 "home_seed_code (seeds the HugMesh stack into the home)")
+# and the builder exits 1 (build-x86-host-stage4.sh:1591). A control whose only outcomes
 # are "leave it alone" or "break the build" is not a choice: hidden, and reset to the
 # dataclass default in validatePage.
 _UNAFFILIATED_SEED_REASON = (
@@ -82,7 +82,7 @@ _UNAFFILIATED_SEED_REASON = (
 # comes from.
 #
 # Shown on EXACTLY that predicate, never on "is this a desktop": on a plain ARM desktop
-# --local-user is not emitted at all (config.py:3158's condition is false), so the first
+# --local-user is not emitted at all (config.py:3175's condition is false), so the first
 # cut of this note claimed a flag the argv did not contain while the image quietly kept
 # the builder's own DEFAULT_USER ("pi" on rpi5). The row is still offered on SystemPage
 # there, so there is nothing for this note to explain either.
@@ -270,7 +270,7 @@ class HomePage(QtWidgets.QWizardPage):
         el.addWidget(self.encrypt_root)
         # The consequence, stated in EVERY mode — not only mesh. On x86 the builder
         # turns --encrypt-root into INSTALLER_ISO=true unconditionally
-        # (build-x86-host-stage4.sh:1600), so a cloud desktop client that never asked
+        # (build-x86-host-stage4.sh:1780), so a cloud desktop client that never asked
         # for an installer ISO now gets one; and with no passphrase the installer
         # prompts at install time, which stalls an unattended install. The mesh-specific
         # note below adds only the fleet-scale framing.
@@ -293,7 +293,7 @@ class HomePage(QtWidgets.QWizardPage):
         # ASK 12 — encrypted root is now the MESH DEFAULT (config.enter_mesh_defaults,
         # applied on arrival in mesh). That changes what the build PRODUCES, so say so
         # here rather than let an operator discover it from the artifact list: on x86
-        # --encrypt-root also forces INSTALLER_ISO=true (build-x86-host-stage4.sh:1600),
+        # --encrypt-root also forces INSTALLER_ISO=true (build-x86-host-stage4.sh:1780),
         # and with no passphrase supplied the installer asks for one interactively.
         self.enc_mesh_note = QtWidgets.QLabel(
             "Mesh: node disks hold the cluster's PKI material, so root encryption is on "
@@ -356,7 +356,7 @@ class HomePage(QtWidgets.QWizardPage):
         """Offer the "login" unlock factor only on a desktop-class image (finding 8).
 
         The builder writes the login-factor marker from inside its `elif ${ROLE_CLIENT}`
-        branch (build-x86-host-stage4.sh:4606-4607), so on a cluster-node role
+        branch (build-x86-host-stage4.sh:4368-4369), so on a cluster-node role
         `--unlock-keyfile login` produces NO marker: the factor silently does not exist.
         The flag is still PARSED (:1068) and validated (:1595), so nothing errs — and
         `--unlock-yubikey login` even adds sys-auth/pam-u2f to the package set at :5107,
@@ -524,8 +524,8 @@ class HomePage(QtWidgets.QWizardPage):
         # only catches up on its next initializePage (Qt does not re-init a page reached
         # by Back). The worst case is a redundant `--user pi --local-user dana` in ONE
         # argv, never a wrong image: every builder applies LOCAL_USER AFTER -u
-        # (build-rpi5-stage4.sh:1013 parses -u, :1311 overrides it with LOCAL_USER;
-        # build-x86-host-stage4.sh:1733 is that same line), so the account is `dana`
+        # (build-rpi5-stage4.sh:1022 parses -u, :1311 overrides it with LOCAL_USER;
+        # build-x86-host-stage4.sh:1913 is that same line), so the account is `dana`
         # either way. Left alone rather than "fixed" by having this page reach over and
         # clear SystemPage's field — that would discard a -u the operator typed in the
         # same pass, on a page that does not own it.

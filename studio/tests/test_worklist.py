@@ -471,7 +471,7 @@ def test_resolve_platform_defaults_is_noop_for_valid_inputs():
 
 # ---- installer-UI role-class resolver (headless node -> cli) ---------------------
 # The Studio's flat `installer_ui: str = "all"` default made to_cli_args ALWAYS pass an
-# explicit value, so build-x86-host-stage4.sh:1244's `[ -z "${INSTALLER_UI}" ]` guard
+# explicit value, so build-x86-host-stage4.sh:1327's `[ -z "${INSTALLER_UI}" ]` guard
 # could never fire and every headless node inherited the standalone-only "all" — pulling
 # an app-admin/calamares whose USE closure (package.use/desktop) the builder only copies
 # for ROLE_CLIENT roles (:3676). That killed 5 x86 node images on boost[python] and 5

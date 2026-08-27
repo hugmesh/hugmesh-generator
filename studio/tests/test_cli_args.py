@@ -185,7 +185,7 @@ def test_x86_unaffiliated_never_emits_affiliation_flags():
 
     The LOOK flags (--theme/--wallpaper/…) are DELIBERATELY not in this list any more —
     2026-08-26 split them out of the conflict (see _check_unaffiliated_conflicts and
-    build-x86-host-stage4.sh:1351-1356: a brand is an affiliation, a wallpaper is not).
+    build-x86-host-stage4.sh:1531-1536: a brand is an affiliation, a wallpaper is not).
     They are unset on this config so they would be absent either way, which is exactly
     why asserting them here would be a vacuous restatement of the OLD contract.
     test_x86_unaffiliated_look_fields_are_allowed_and_emitted pins the new one."""
@@ -211,7 +211,7 @@ def test_x86_unaffiliated_never_emits_affiliation_flags():
 # The IDENTITY half of the 2026-08-26 identity/look split. Every entry here is a field
 # whose presence declares an AFFILIATION, which is the one thing the unaffiliated role is
 # defined by not having — so Studio raises with the same contract as
-# build-x86-host-stage4.sh:1347-1356. The LOOK half moved to the test below; keeping BOTH
+# build-x86-host-stage4.sh:1527-1536. The LOOK half moved to the test below; keeping BOTH
 # directions is the point (a conflict test that only proves the allowed direction would
 # pass just as happily with the whole check deleted).
 UNAFFILIATED_IDENTITY_CONFLICTS = [
@@ -260,7 +260,7 @@ def test_x86_unaffiliated_look_fields_are_allowed_and_emitted(field, value, flag
     menu for adding the themes as in the branded images" on their standalone-unaffiliated
     x86 image (session 20260826-151356-64070a). A theme is not an affiliation, so it must
     (a) NOT raise and (b) actually reach the builder — mirroring the same split landing at
-    build-x86-host-stage4.sh:1351-1356, where these eight flags come out of the
+    build-x86-host-stage4.sh:1531-1536, where these eight flags come out of the
     hard-conflict `if` while --brand-logo/--brand-locked stay in it."""
     kw = dict(mode="standalone", role="standalone-unaffiliated", platform="x86",
               bundle_source=False)
@@ -1021,11 +1021,11 @@ def test_cluster_identity_applies_is_platform_asymmetric():
     `mode in ("cloud","mesh")` — would be WRONG on ARM and would silently drop a flag the
     builders take:
 
-      * x86:  _x86_args:3565 wraps --cluster-domain/--games-domain/--release-state in
+      * x86:  _x86_args:3582 wraps --cluster-domain/--games-domain/--release-state in
               `if self.mode in ("cloud","mesh")`, so on a standalone x86 image the group
               asks a question with no emitted answer -> hide it.
-      * rpi5: _arm_common_args:3139-3140 emits --cluster-domain in EVERY mode (shared by
-              all nine ARM builder methods) and build-rpi5-stage4.sh:3863 bakes
+      * rpi5: _arm_common_args:3156-3157 emits --cluster-domain in EVERY mode (shared by
+              all nine ARM builder methods) and build-rpi5-stage4.sh:3386 bakes
               ${CLUSTER_DOMAIN} into /etc/hugmesh/cluster-domain with no mode or role
               fork at all -> a standalone rpi5 image REALLY carries a cluster domain.
 

@@ -154,7 +154,7 @@ def _print_command(tmp_path, name, cfg):
 # 20260826-151356-64070a). The negative case is KEPT rather than deleted, retargeted at
 # the identity flags that really are still hard conflicts: a conflict test that only
 # proves the allowed direction would pass just as happily with the whole check deleted.
-# Studio mirrors build-x86-host-stage4.sh:1347-1356, which is being split the same way.
+# Studio mirrors build-x86-host-stage4.sh:1527-1536, which is being split the same way.
 
 @pytest.mark.parametrize("field,value,flag", [
     ("theme", "dark", "--theme"),
@@ -446,7 +446,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
 # app.py's --print-command branch bypasses worklist._materialize_one, so it needs its OWN
 # resolve_installer_ui_default() call; without it a headless x86 node prints
 # `--installer-ui all` and pulls an UNSATISFIABLE app-admin/calamares (the desktop USE
-# closure is ROLE_CLIENT-gated, build-x86-host-stage4.sh:3676). See the real 5x failure in
+# closure is ROLE_CLIENT-gated, build-x86-host-stage4.sh:3438). See the real 5x failure in
 # session 20260716-235722-54d2f7.
 
 def _flag_value(command_line, flag):

@@ -426,8 +426,8 @@ SERVICES_NONE = "none"
 SERVICES_ALL = "all"
 
 # The builders' OWN built-in default selection when no --optional-services is given:
-#   build-x86-host-stage4.sh:141   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
-#   build-rpi5-stage4.sh:245       (identical line)
+#   build-x86-host-stage4.sh:196   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+#   build-rpi5-stage4.sh:254       (identical line)
 # The services table PRE-TICKS exactly these rows on arrival, because they are what an
 # untouched build genuinely ships — eight unticked boxes over a mesh that runs three of
 # them anyway is the same lie as a part-checked square (ask 23: "anything off by default
@@ -439,11 +439,11 @@ BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 
 # What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
 # line both node builders declare it on:
-#   build-x86-host-stage4.sh:127   USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast
+#   build-x86-host-stage4.sh:136   USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast
 #                                  tube character-studio character-forge"
-#   build-rpi5-stage4.sh:232       (identical line)
-# and expanded into OPTIONAL_SERVICES at build-x86-host-stage4.sh:1106-1111 /
-# build-rpi5-stage4.sh:1102-1107 — BEFORE the --with-<x> opt-in folds, so a slug in this set is
+#   build-rpi5-stage4.sh:241       (identical line)
+# and expanded into OPTIONAL_SERVICES at build-x86-host-stage4.sh:1177-1191 /
+# build-rpi5-stage4.sh:1111-1125 — BEFORE the --with-<x> opt-in folds, so a slug in this set is
 # BAKED by --all-services no matter what the dedicated flag says. That last clause is the
 # whole reason this constant exists in Studio: the wizard has to know which rows the "every
 # user-level service" preset takes over, or it shows `character-studio` unticked (and emits
@@ -525,7 +525,7 @@ X86_CLIENT_ROLES = ("laptop", "chromebook", "desktop")
 X86_NODE_ROLES = ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai")
 
 # --release-state: cluster ingress + Layer-3 nftables posture baked into the image
-# (build-x86:909 parses it, :3157 bakes /etc/hugmesh/release-state inside
+# (build-x86:909 parses it, :3174 bakes /etc/hugmesh/release-state inside
 # bake_host_firewall(); rpi5:1000). Only x86 + rpi5 parse it.
 RELEASE_STATE_CHOICES = ("internal", "public")
 
@@ -889,7 +889,7 @@ class FieldScope:
 
       * build-x86-host-stage4.sh   — 48 ROLE_CLIENT refs; ACCEPTS --standalone on a node
                                      role and builds the wrong image  -> class rule is real
-      * build-rpi5-stage4.sh:1284  — ${ROLE_CLIENT} || err ...; exit 1 -> class rule is real
+      * build-rpi5-stage4.sh:1302  — ${ROLE_CLIENT} || err ...; exit 1 -> class rule is real
       * build-frite / -orangepi5 / -orangepi-zero2-stage4.sh
                                    — ZERO occurrences of ROLE_CLIENT or ROLE_K8S. They
                                      compose ${STANDALONE} unconditionally, and
@@ -916,7 +916,7 @@ class FieldScope:
       * ``_arm_common_args`` (:3128; the unconditional --cluster-domain at :3139) emits it
         in EVERY mode and is shared by all NINE arm64 builder methods (call sites at :3213
         rpi5, :3271, :3287, :3304, :3323, :3343, :3370, :3389, :3428 jetson), and
-        build-rpi5-stage4.sh:3863 bakes ${CLUSTER_DOMAIN} into /etc/hugmesh/cluster-domain
+        build-rpi5-stage4.sh:3386 bakes ${CLUSTER_DOMAIN} into /etc/hugmesh/cluster-domain
         with no role or mode fork at all. A standalone rpi5 'generic' image GENUINELY
         carries a cluster domain.
 
@@ -986,9 +986,9 @@ _CLUSTER_IDENTITY_FIELDS = ("cluster_domain", "games_domain", "release_state")
 
 # The modes in which the cluster plane is baked AT ALL, and the builders on which that
 # rule is true. Transcribed from the emitters, not from intent:
-#   _x86_args:3565        if self.mode in ("cloud", "mesh"):  -> the trio is inside it
-#   _arm_common_args:3140 --cluster-domain, unconditional     -> no mode fork on ARM
-#   _rpi5_args:3219-3221  --release-state / --games-domain    -> also unconditional
+#   _x86_args:3582        if self.mode in ("cloud", "mesh"):  -> the trio is inside it
+#   _arm_common_args:3157 --cluster-domain, unconditional     -> no mode fork on ARM
+#   _rpi5_args:3236-3238  --release-state / --games-domain    -> also unconditional
 # so the narrowing is x86-ONLY. See FieldScope.mode_platforms for the regression this
 # shape prevents (a blanket mode key would hide + clear a domain the ARM builders bake).
 _CLUSTER_PLANE_MODES = ("cloud", "mesh")
@@ -1019,7 +1019,7 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # containerd and no cluster GitOps tree, while the full desktop stack IS built
     # (packages-desktop.list, ROOT_MiB 16384, Xorg/openbox/lightdm) — a node that can
     # never join the mesh it was built for, discovered hours later at deploy time. On rpi5
-    # the same worklist hard-errors at build-rpi5-stage4.sh:1037, after dispatch.
+    # the same worklist hard-errors at build-rpi5-stage4.sh:1046, after dispatch.
     # ...but ONLY on the two builders that actually have a role-class concept. frite,
     # orangepi5 and orangepi-zero2 have ZERO occurrences of ROLE_CLIENT/ROLE_K8S and
     # compose ${STANDALONE} unconditionally; orangepizero2's role is node-class and
@@ -1031,7 +1031,7 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # NO MODE AXIS — deliberately, and this was a REGRESSION this branch shipped and had to
     # take back. The first cut read modes=(standalone, cloud), on the reasoning above that
     # "--standalone is self-contradictory in mesh mode". That reasoning is prose, not builder
-    # truth, and it invented a constraint: build-rpi5-stage4.sh:1037 gates --standalone on
+    # truth, and it invented a constraint: build-rpi5-stage4.sh:1046 gates --standalone on
     # ROLE_CLIENT *only*, never on mode, and :998 sets ROLE_CLIENT=true for its desktop arm.
     # So mesh + rpi5-desktop + --standalone is ACCEPTED by the builder — and is a DOCUMENTED
     # combination: ROLE_CHOICES describes rpi5-desktop as "compose with --standalone for FDE,
@@ -1044,7 +1044,7 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     "standalone": FieldScope(platforms=_FIELD_PLATFORMS["standalone"], classes=("desktop",),
                              class_platforms=_STANDALONE_CLASS_GATED_PLATFORMS),
     # Egress VPN is a DESKTOP/tailnet-client feature and the builder says so itself:
-    #   build-x86-host-stage4.sh:4493  if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
+    #   build-x86-host-stage4.sh:4255  if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
     #                          :4494      warn "--egress-vpn given for a non-desktop role
     #                                      (${ROLE}); ... — ignoring."
     # HISTORY — why this scope entry exists, and what is no longer true. When it was written
@@ -1082,7 +1082,7 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # role=standalone-unaffiliated / platform=x86, session 20260826-151356-64070a).
     #
     # NO CLASS AXIS, deliberately: --cluster-domain is baked for every mesh NODE and every
-    # CLIENT alike (_x86_args:3565-3567 emits it outside the `role not in X86_NODE_ROLES`
+    # CLIENT alike (_x86_args:3582-3584 emits it outside the `role not in X86_NODE_ROLES`
     # gate that --person-role/--domains sit behind), so a class rule here would be an
     # invented constraint of exactly the kind FieldScope's docstring warns about.
     **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], modes=_CLUSTER_PLANE_MODES,
@@ -1261,11 +1261,11 @@ def cluster_identity_applies(cfg: "ImageConfig") -> bool:
     IT IS A FUNCTION OF (platform, mode), NOT MODE ALONE — this is the entire subtlety and
     the reason the answer is not a two-line `cfg.mode in ("cloud","mesh")`:
 
-      * x86:  _x86_args:3565 wraps all three flags in ``if self.mode in ("cloud","mesh")``.
-      * ARM:  _arm_common_args:3139-3140 emits --cluster-domain in EVERY mode, and is
-              shared by all NINE arm64 builder methods; build-rpi5-stage4.sh:3863 writes
+      * x86:  _x86_args:3582 wraps all three flags in ``if self.mode in ("cloud","mesh")``.
+      * ARM:  _arm_common_args:3156-3157 emits --cluster-domain in EVERY mode, and is
+              shared by all NINE arm64 builder methods; build-rpi5-stage4.sh:3386 writes
               ${CLUSTER_DOMAIN} to /etc/hugmesh/cluster-domain with no mode or role fork,
-              and _rpi5_args:3219-3221 emits --release-state/--games-domain unconditionally
+              and _rpi5_args:3236-3238 emits --release-state/--games-domain unconditionally
               too. A standalone rpi5 'generic' appliance genuinely carries a cluster
               domain, so a blanket mode-keyed answer would hide a live flag AND (via the
               paired clear) reset a typed domain to "hugmesh.net" behind the operator.
@@ -1298,7 +1298,7 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
     DESKTOP-CLASS, no mode axis — deliberately, and grounded the same way
     ``FieldScope.class_platforms`` is: a mesh flow made entirely of rpi5-desktop rows is
     the documented "desktop mesh track" the operator asked us to keep this on, and
-    build-rpi5-stage4.sh:998 sets ROLE_CLIENT=true for exactly that arm. A mode axis
+    build-rpi5-stage4.sh:1007 sets ROLE_CLIENT=true for exactly that arm. A mode axis
     would hide the group on the one flow it belongs to.
 
     ...OR wherever ``--standalone`` itself is still in scope, and that second arm is not
@@ -1316,7 +1316,7 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
     (Pinned by test_pages_home.test_home_standalone_live_on_the_orangepizero2_node_class_appliance.)
 
     NOT a claim about the builder, and it deliberately declares no FIELD_SCOPE
-    narrowing of its own: build-x86-host-stage4.sh:1732 honours --local-user on EVERY role
+    narrowing of its own: build-x86-host-stage4.sh:1912 honours --local-user on EVERY role
     (its guard is `${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]`,
     with no role test in it; :1733 overrides DEFAULT_USER), so narrowing the FIELD would invent a builder
     constraint that does not exist. This is a WIZARD-surface rule of the same family as
@@ -1335,7 +1335,7 @@ def external_media_applies(cfg: "ImageConfig") -> bool:
 
     Same evidence shape as ``egress_vpn``'s role-class narrowing, which is why it gets a
     predicate rather than a shrug: the x86 builder half-honours the option on a node.
-    ``build-x86-host-stage4.sh:1556`` role-gates the STEAM leg
+    ``build-x86-host-stage4.sh:1736`` role-gates the STEAM leg
     (``${ROLE_CLIENT} && ${MEDIA_DATA}``). HISTORY, re-verified 2026-08-26 rather than
     copied forward: when this predicate was written the media-detect STAGING leg and the
     ``packages-media-data.list`` PACKAGE leg were NOT role-gated, so a headless PKI node
@@ -1432,7 +1432,7 @@ def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
 
     The CLOUD arm is deliberately untouched: a cloud desktop client's Domains/Users step
     carries the FD-08 --domains + --person-role tie the image is literally built around
-    (build-x86-host-stage4.sh:4594-4595), which is not an "additional" domain at all."""
+    (build-x86-host-stage4.sh:4356-4357), which is not an "additional" domain at all."""
     if cfg.mode == "mesh":
         return bool(cfg.additional_domains)
     if cfg.mode == "cloud":
@@ -1492,7 +1492,7 @@ def person_role_applies(cfg: "ImageConfig") -> bool:
     Mirrors to_cli_args' own emission condition exactly (see the ``mode in
     ("cloud","mesh")`` / ``role not in X86_NODE_ROLES`` block): the builder writes
     /etc/hugmesh/identity-role from inside its ``elif ${ROLE_CLIENT}`` branch
-    (build-x86-host-stage4.sh:4589-4594) and warns "--person-role/--domains are ignored
+    (build-x86-host-stage4.sh:4351-4356) and warns "--person-role/--domains are ignored
     for non-client role" otherwise (:1722-1723). A standalone build emits it never, and
     ``--unaffiliated`` hard-CONFLICTS with it (:1414).
 
@@ -1517,13 +1517,13 @@ def person_role_applies(cfg: "ImageConfig") -> bool:
 # part after "{brand}-"; a role absent from a platform's map falls through to
 # "{brand}-{role}" (every builder's `*)` arm).
 _HOSTNAME_SUFFIX = {
-    # build-x86-host-stage4.sh:1260-1349 (the `case "${ROLE}" in` role switch)
+    # build-x86-host-stage4.sh:1440-1529 (the `case "${ROLE}" in` role switch)
     "x86": {"pki": "pki", "be": "be", "fe": "fe", "be+gpu": "host", "host": "host",
             "omnibus": "omnibus", "edge_ai": "edge-ai", "edge-ai": "edge-ai",
             "desktop": "desktop",
             "standalone-thin": "standalone-thin",
             "standalone-thick": "standalone", "standalone-full": "standalone"},
-    # build-rpi5-stage4.sh:1276-1277 — `generic` is the ONE role whose default drops
+    # build-rpi5-stage4.sh:1294-1295 — `generic` is the ONE role whose default drops
     # the brand entirely ("gentoo-${BOARD}"); handled in derive_hostname.
     "rpi5": {},
     "frite": {"desktop": "frite", "generic": "frite"},            # :569-570
@@ -1540,7 +1540,7 @@ _HOSTNAME_SUFFIX = {
 
 # Each builder's DEFAULT_USER initialiser — the account created when -u is omitted.
 _BUILDER_DEFAULT_USER = {
-    "x86": "snap",                       # build-x86-host-stage4.sh:191
+    "x86": "snap",                       # build-x86-host-stage4.sh:246
     "rpi5": "pi",                        # :288
     "frite": "frite",                    # :219
     "jetson": "jetson",                  # :203
@@ -1580,7 +1580,7 @@ def derive_hostname(cfg: "ImageConfig") -> str:
 
     Notes that make this honest rather than decorative:
     * the UNAFFILIATED x86 desktop is special-cased to ``gentoo-desktop``
-      (build-x86-host-stage4.sh:1424, applied AFTER the brand is neutralised);
+      (build-x86-host-stage4.sh:1604, applied AFTER the brand is neutralised);
     * rpi5's ``generic`` role drops the brand entirely (``gentoo-${BOARD}``, :1276);
     * an unknown role on any platform falls through to ``{brand}-{role}``, and an
       unset role on x86 to ``{brand}-host`` (:2072).
@@ -1589,9 +1589,9 @@ def derive_hostname(cfg: "ImageConfig") -> str:
     role = (cfg.role or "").strip()
     plat = (cfg.platform or "x86").strip() or "x86"
     if plat == "x86" and (role == UNAFFILIATED_ROLE or cfg.unaffiliated):
-        return "gentoo-desktop"           # build-x86-host-stage4.sh:1424
+        return "gentoo-desktop"           # build-x86-host-stage4.sh:1604
     if plat == "rpi5" and role == "generic":
-        return f"gentoo-{cfg.board or 'rpi5'}"   # build-rpi5-stage4.sh:1276
+        return f"gentoo-{cfg.board or 'rpi5'}"   # build-rpi5-stage4.sh:1294
     suffix = _HOSTNAME_SUFFIX.get(plat, {}).get(role)
     if suffix:
         return f"{brand}-{suffix}"
@@ -1606,7 +1606,7 @@ def derive_default_user(cfg: "ImageConfig") -> str:
     Two layers, both real:
     1. every builder ships a platform DEFAULT_USER (``_BUILDER_DEFAULT_USER``);
     2. **``--local-user`` overrides it** — ``[ -n "${LOCAL_USER}" ] && DEFAULT_USER=
-       "${LOCAL_USER}"`` (build-x86-host-stage4.sh:1733 and the ARM twins). x86 emits
+       "${LOCAL_USER}"`` (build-x86-host-stage4.sh:1913 and the ARM twins). x86 emits
        ``--local-user`` on EVERY image (``_x86_args``, an unconditional argv element),
        so on x86 the effective default is ``cfg.local_user``, not ``snap``. The ARM
        builders only receive it when standalone / a non-default name / a local password
@@ -1707,7 +1707,7 @@ def resolve_platform_defaults(cfg: "ImageConfig") -> None:
 
 
 # The --installer-ui values that flip the builder's WANT_CALAMARES true, hence pull
-# app-admin/calamares into PKGS (build-x86-host-stage4.sh:1621 / :5115). Mirrored here
+# app-admin/calamares into PKGS (build-x86-host-stage4.sh:1801 / :5115). Mirrored here
 # deliberately; tests/scripts/test-installer-ui-node-default.sh re-extracts the set from
 # that LIVE builder line and fails if the two ever drift.
 _CALAMARES_INSTALLER_UI = ("calamares", "all")
@@ -1721,7 +1721,7 @@ def resolve_installer_ui_default(cfg: "ImageConfig") -> str | None:
     """Role-class twin of resolve_platform_defaults (#337/#344): a headless x86 NODE must
     never request a graphical installer front-end.
 
-    The builder ALREADY implements this rule — build-x86-host-stage4.sh:1619 defaults an
+    The builder ALREADY implements this rule — build-x86-host-stage4.sh:1799 defaults an
     UNSET ``INSTALLER_UI`` to ``all`` for --standalone and ``cli`` for every other role —
     but the Studio's flat dataclass default (``installer_ui: str = "all"``) means
     to_cli_args:3794 always passes an explicit value, so that ``[ -z ... ]`` guard can
@@ -1872,9 +1872,9 @@ def mode_axis_violated(fld: str, cfg: "ImageConfig") -> bool:
     The exact twin of ``class_axis_violated``, and it exists for the same reason that one
     does: the raw ``cfg.mode not in scope.modes`` test asserts a field's mode rule holds on
     EVERY builder that parses the flag, and for the cluster-identity trio that is FALSE.
-    ``_x86_args:3565`` wraps --cluster-domain/--games-domain/--release-state in
-    ``mode in ("cloud","mesh")``; ``_arm_common_args:3139-3140`` emits --cluster-domain in
-    every mode for all nine ARM builders, and build-rpi5-stage4.sh:3863 bakes it into
+    ``_x86_args:3582`` wraps --cluster-domain/--games-domain/--release-state in
+    ``mode in ("cloud","mesh")``; ``_arm_common_args:3156-3157`` emits --cluster-domain in
+    every mode for all nine ARM builders, and build-rpi5-stage4.sh:3386 bakes it into
     /etc/hugmesh/cluster-domain unconditionally. Reading the mode tuple flat would put a
     standalone rpi5 image's REAL, EMITTED cluster domain out of scope — hiding the widget
     and (the wizard pairs every hide with an emission-neutral clear) resetting the typed
@@ -1928,7 +1928,7 @@ def field_in_scope(fld: str, cfg: "ImageConfig") -> bool:
 
 
 # Platforms whose builder HARD-ERRORS on --standalone with a cluster-node role, verbatim:
-#   build-rpi5-stage4.sh:1037
+#   build-rpi5-stage4.sh:1046
 #     ${ROLE_CLIENT} || { err "--standalone only composes onto --role desktop (got --role
 #                        ${ROLE})"; exit 1; }
 # x86 is deliberately NOT here: build-x86-host-stage4.sh ACCEPTS --standalone on a pki/be
@@ -2123,7 +2123,7 @@ def enter_mesh_defaults(cfg: "ImageConfig", *, fresh: bool = False) -> None:
       any row can still be forced "off", and a jetson row is still auto-exempted.
 
     THIS CHANGES WHAT A MESH BUILD PRODUCES — see the mesh note on HomePage: on x86
-    ``--encrypt-root`` also sets ``INSTALLER_ISO=true`` (build-x86-host-stage4.sh:1600),
+    ``--encrypt-root`` also sets ``INSTALLER_ISO=true`` (build-x86-host-stage4.sh:1780),
     so an encrypted node additionally yields an installer ISO, and without ``--luks-pass``
     the installer PROMPTS for a passphrase at install time.
 
@@ -3508,7 +3508,7 @@ class ImageConfig:
             conflicts.append(
                 "brand identity assets (" + ", ".join(identity_assets)
                 + " — a logo is an organization's mark and --brand-locked locks a brand "
-                  "this image does not have; see build-x86-host-stage4.sh:1398-1400)")
+                  "this image does not have; see build-x86-host-stage4.sh:1578-1580)")
         # bundle_source is NOT flagged here: its dataclass default is True (the
         # branded-standalone self-hosting default), so an untouched config would
         # false-conflict. The wizard clears it on role selection and _x86_args()
