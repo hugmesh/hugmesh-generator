@@ -77,9 +77,9 @@ else
   body="$(awk '/^export function sharedPassword\(\)/,/^}/' "${RR}")"
   if [ -z "${body}" ]; then
     bad "could not extract sharedPassword() from rbac-roles.ts (shape drift?) — NOT asserting a contract we could not read"
-  elif ! echo "${body}" | grep -q 'throw new Error'; then
+  elif ! echo "${body}" | grep 'throw new Error' >/dev/null; then
     bad "sharedPassword() no longer throws — a resolution that cannot fail means something guessable now authenticates"
-  elif echo "${body}" | grep -qE "\?\? *'[^']+'|\|\| *'[^']+'|return *'[^']+'"; then
+  elif echo "${body}" | grep -E "\?\? *'[^']+'|\|\| *'[^']+'|return *'[^']+'" >/dev/null; then
     bad "sharedPassword() has a LITERAL fallback — that is the retired 'e2e-pass' bug returning:
 $(echo "${body}" | grep -nE "\?\? *'[^']+'|\|\| *'[^']+'|return *'[^']+'" | sed 's/^/      /')"
   else

@@ -117,7 +117,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # their own value into this one line (118, 133, 137, 139) and not one of them was
 # true of the tree that resulted. MEASURED, by running this file:
 #     141 of 153 suites are named by a pull_request-triggered workflow
-PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
