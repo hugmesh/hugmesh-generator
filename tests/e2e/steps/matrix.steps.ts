@@ -47,7 +47,11 @@ function pathParam(value: string): string {
 const localpart = (mxid: string): string => mxid.replace(/^@/, '').split(':')[0];
 
 /** world keys this file owns. */
-const ROOM = 'matrix-room-id';
+/** world key holding the room id the scenario's Given created. EXPORTED so
+ *  steps/social-functions.steps.ts can drive the SAME room through the client
+ *  API without re-creating one (a second room would make "my peer sees it" a
+ *  claim about a room my peer was never in). */
+export const ROOM = 'matrix-room-id';
 const ROOM_A = 'matrix-room-a';
 const ROOM_B = 'matrix-room-b';
 const MY_MXID = 'matrix-my-mxid';

@@ -43,6 +43,7 @@ value throws with the legal set before a browser action runs.
 | SERVICE | `@service:<id>` | `tuwunel`, `akkoma`, `phpbb`, `games`, `owncast`, `tube`, `wiki`, `character-studio`, `character-forge`, `gateway`, `login`, `admin` |
 | ENVIRONMENT | `@env:<id>` | `docker`, `kind`, `qemu` |
 | INTERFACE | `@interface:<id>` | `browser`, `cli`, `studio` |
+| FUNCTION | *(Examples column, not a tag — see 2g)* | any id in `steps/social-functions.ts` `SOCIAL_FUNCTIONS` |
 | (reporting) | `@layer:<layer>` | `gateway`, `bff`, `homeserver`, `egress`, `casdoor`, `ui`, `sse` (`specs/report-tags.ts`) |
 
 `@role:` names a **persona handle** (`e2e-admin`, `alice@gmail.com`), never a
@@ -174,6 +175,67 @@ Scenario: the QEMU page renders
 `cli` and `studio` are availability-probed too: a host with no Qt6 binding skips
 the studio scenarios naming the package to install, rather than dying inside a
 python traceback four layers down.
+
+### 2g. FUNCTION — what a user actually DOES inside a social service
+
+The five axes above say WHO, on WHICH image, against WHICH service, in WHICH
+mesh, through WHICH interface. None of them says **what the user did**. That
+sixth thing is the FUNCTION, and for the three social services it is catalogued
+in `steps/social-functions.ts`.
+
+It is deliberately **not a tag**. There are 53 social functions and 31 seeded
+personas, and a `@function:` tag would invite one hand-written scenario per cell
+— 1,643 of them, which is decoration by volume. Instead the function is an
+Examples **column** whose step iterates the other axis internally:
+
+```gherkin
+Scenario Outline: <function> is gated for the whole roster exactly as the catalogue declares @service:tuwunel @layer:gateway
+  Then the route-access seed gates the "<function>" function of the service dimension for every seeded persona
+  And the "<function>" function of the service dimension is a "<arity>" interaction
+
+  Examples:
+    | function     | arity |
+    | send-message | pair  |
+```
+
+so the coverage is generative in **both** directions:
+
+| file | one row per | iterates internally | adding one widens |
+|---|---|---|---|
+| `features/{matrix,mastodon,forum}/function-surface.feature` | FUNCTION | the whole roster | a persona |
+| `features/platform/social-function-matrix.feature` | PERSONA | the whole catalogue | a function |
+
+**`arity`** (`solo` / `pair` / `group`) is the INTERACTION axis: how many
+DISTINCT cookie-separated identities the function needs before it means
+anything. A `pair` downgraded to `solo` is how "my peer sees it" quietly becomes
+one page asserting against itself.
+
+**Two independent sources, never one.** The catalogue *declares* the gate by
+hand; `specs/cluster/manifests/route-access/initdb/20-schema.sql` *deploys* it.
+The scenarios pass only when the two agree, so neither can drift alone. NOTE
+which oracle: the SQL seed, **not** `specs/rbac-route-access.ts` — measured on
+this tree the TypeScript mirror is a strict SUBSET (50 rows of the seed's 150)
+that never grew the forum/media/streaming/external-client planes, and
+`social-function-matrix.feature` pins that relationship so a future
+*contradiction* fails by name.
+
+**A probe path asserts the GATE, not the endpoint.** Its only load-bearing
+property is which `url_pattern` it matches; concrete ids in it
+(`!e2e:hugmesh.net`, a status id of `1`) are representative. Behaviour is the
+journey tier's job.
+
+**The drift guard is the deliverable.** `features/platform/social-function-matrix.feature`
+fails when a catalogued function has no Examples row, when a seeded persona has
+no scenario, when a `pair`/`group` function names neither a journey on disk nor
+a written reason, when a probe path stops resolving, or when a declared roster
+gap (`expectNoPersona`, today `ROLE_FORUM_MOD`) silently closes.
+`tests/scripts/test-e2e-social-function-matrix.sh` runs all of that plus a
+seven-mutation battery, and is wired into `make stack-e2e-bdd-check`.
+
+**Adding a function** — add it to `SOCIAL_FUNCTIONS` (id, arity, gate, gateway,
+probe path, and either a `journey` that exists on disk or a `pending` reason),
+then add one Examples row naming the id. Never spell a function id inline in a
+`.feature` without a catalogue entry: the guard cannot see it.
 
 ## 3. Steps
 

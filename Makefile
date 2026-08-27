@@ -1849,6 +1849,15 @@ stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwri
 stack-e2e-bdd-check: stack-e2e-bdd-gen ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guard)
 	cd tests/e2e && npx playwright test --list --project=bdd --reporter=line
 	bash tests/scripts/test-e2e-gherkin-harness.sh
+# The two AXIS guards belong here and NOT in .github/workflows/shell-suites.yml:
+# both need tests/e2e/node_modules (playwright + a chromium), which the shell-suite
+# runner image does not carry, so a CI listing would turn their honest
+# "SKIPPED-LOUDLY ... checked NOTHING" exit 2 into a red pipeline. Wired at the
+# Makefile gate instead, exactly as the anti-decoration guard above is.
+#   env x interface — was UNWIRED on arrival (tests/scripts/test-guard-integrity.sh
+#   check 3 listed it as "suite(s) nothing runs" on this very tree); wired here.
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-social-function-matrix.sh
 
 # LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
 # make playwright-deps). SNAP_PLATFORM=rpi5|x86 narrows the PLATFORM axis to the

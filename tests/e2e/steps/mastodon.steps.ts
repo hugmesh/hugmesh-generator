@@ -16,7 +16,9 @@ import { peer, signInPeers } from './social-peers';
  *  user-bff hsproxy prefix. */
 const HS = '/bff/user/mastodon';
 
-const MY_STATUS = 'mastodon-my-status';
+/** world key holding the body of the status THIS persona posted. EXPORTED so
+ *  the interaction steps can find the status again without posting a second one. */
+export const MY_STATUS = 'mastodon-my-status';
 const PEER_STATUS = 'mastodon-peer-status';
 
 /**
