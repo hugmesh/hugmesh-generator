@@ -190,8 +190,10 @@ class KeyZipPage(QtWidgets.QWizardPage):
         """Extract + wire a key-zip into the ImageConfig. Shared by Import (browse to a
         file) and Fetch (a remote-config link) so both behave identically."""
         try:
-            staging = os.path.join(os.path.expanduser("~"), ".hugmesh", "keyzip")
-            c = keyzip.extract(zip_path, staging)
+            # keyzip.staging_dir() (NOT a bare expanduser("~")) — extract() clears
+            # this dir recursively, so it has to be overridable: it honours the same
+            # $HUGMESH_STUDIO_STATE_DIR the rest of the state family does.
+            c = keyzip.extract(zip_path, keyzip.staging_dir())
             c.apply_to(self.wiz.cfg)
             self.wiz.cfg.keyzip = zip_path
             role_ids = keyzip.emit_passwordless_login_roles(
@@ -227,8 +229,7 @@ class KeyZipPage(QtWidgets.QWizardPage):
         if not url:
             self.out.setText("Paste a remote-config link first.")
             return
-        dest = os.path.join(os.path.expanduser("~"), ".hugmesh",
-                            "keyzip-fetch", "admin-config.zip")
+        dest = keyzip.fetch_zip_path()
         self.fetch_btn.setEnabled(False)
         self.out.setText(f"Fetching {url} … (the window stays responsive; this gives up "
                          f"after {_FETCH_TIMEOUT_S}s if the server never answers)")
