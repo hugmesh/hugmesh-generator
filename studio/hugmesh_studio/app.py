@@ -142,6 +142,37 @@ def main(argv=None) -> int:
                     help="with --delete-session: ALSO remove the session's "
                          "<out>/sessions/<id>/ artifact tree (guarded by the same "
                          "workdir shape-check as the GUI).")
+    # ── the e2e ENVIRONMENT channel (Qt-free) ───────────────────────────────
+    # The GUI chooser and the terminal must select an environment the SAME way,
+    # or the Studio's idea of "kind" drifts from the harness's and a GUI run
+    # silently drives the wrong mesh while the log says otherwise. So both go
+    # through core/e2e_environments.plan(), and this verb is how a script (or a
+    # Gherkin step) reads exactly what the GUI would spawn — argv, env, refusals
+    # — without spawning anything.
+    ap.add_argument("--e2e-plan", action="store_true",
+                    help="print what an e2e run against --e2e-env would spawn "
+                         "(argv + environment + refusals). Runs NOTHING.")
+    ap.add_argument("--e2e-env", metavar="ID", default=None,
+                    help="which mesh an e2e run drives: docker | kind | qemu "
+                         "(default: docker, which is what an unset SNAP_ENV has "
+                         "always meant). Used with --e2e-plan/--e2e-environments.")
+    ap.add_argument("--e2e-boot", action="store_true",
+                    help="with --e2e-plan: ask for the mesh to be BROUGHT UP too. "
+                         "Always refused — printed so the refusal and the exact "
+                         "command to type by hand are scriptable.")
+    ap.add_argument("--e2e-environments", action="store_true",
+                    help="print the e2e environment catalogue (the chooser's model).")
+    ap.add_argument("--e2e-evidence-live", action="store_true",
+                    help="with --e2e-evidence: read the manifest.jsonl APPEND LOG "
+                         "instead of manifest.json. Use this while a run is still "
+                         "going: manifest.json is rewritten at the end of every "
+                         "feature spec file, so mid-run it is a truncated index "
+                         "and good artefacts read as unindexed.")
+    ap.add_argument("--e2e-evidence", metavar="RUN_DIR",
+                    help="read a BDD run's evidence manifest and report it grouped "
+                         "by environment and interface, with the index verified "
+                         "against the disk BOTH ways. Accepts a run dir or a "
+                         "report dir containing bdd-steps/.")
     ap.add_argument("--json", action="store_true",
                     help="with --scan-hardware/--list-sessions/--show-session/"
                          "--session-artifacts: machine-readable JSON on stdout.")
@@ -267,6 +298,96 @@ def main(argv=None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         return 0
+
+    if args.e2e_environments:
+        # Qt-free: the chooser's model as data, so a script and the combo box
+        # can never disagree about which environments exist.
+        import json
+        from .core import e2e_environments as e2e_env
+        rows = e2e_env.describe()
+        if args.json:
+            print(json.dumps(rows, sort_keys=True))
+        else:
+            for r in rows:
+                print("%-7s %s" % (r["id"], r["label"]))
+                print("        run  : make %s   (with %s=%s)"
+                      % (r["makeTarget"], e2e_env.ENV_VAR, r["id"]))
+                print("        pins : %s" % (", ".join(r["pins"]) or "<none>"))
+                print("        start: %s" % r["startHint"])
+        return 0
+
+    if args.e2e_plan:
+        # Qt-free: EXACTLY what the GUI chooser would hand the runner. Printing
+        # it rather than running it is the whole point — this is the channel the
+        # guard asserts on, so "the selected environment reaches the spawned
+        # runner's argv/env" is a measurable claim instead of a comment.
+        import json
+        from .core import e2e_environments as e2e_env
+        try:
+            p = e2e_env.plan(args.e2e_env or e2e_env.DEFAULT_ENVIRONMENT,
+                             boot=args.e2e_boot)
+        except ValueError as exc:
+            print("error: %s" % exc, file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(p.to_dict(), sort_keys=True))
+        else:
+            print("environment : %s" % p.environment)
+            print("argv        : %s" % " ".join(p.argv))
+            for k in sorted(p.env):
+                print("env         : %s=%s" % (k, p.env[k]))
+            print("runnable    : %s" % ("yes" if p.runnable else "NO"))
+            for r in p.refusals:
+                print("REFUSED     : %s" % r)
+            print("start hint  : %s" % p.start_hint)
+        return 0
+
+    if args.e2e_evidence:
+        # Qt-free: the SAME model the Studio's evidence browser renders, so the
+        # terminal and the GUI can never show different numbers. Exits non-zero
+        # when the index and the disk disagree — a manifest that lies is worse
+        # than no manifest, because a reviewer counts the rows and believes them.
+        import json
+        from .core import e2e_evidence
+        target = args.e2e_evidence
+        dirs = [target] if os.path.isfile(os.path.join(target, "manifest.json")) \
+            or os.path.isfile(os.path.join(target, "manifest.jsonl")) \
+            else e2e_evidence.run_dirs(target)
+        if not dirs:
+            print("error: no evidence run directory under %s (looked for "
+                  "manifest.json / bdd-steps/*/manifest.json)" % target,
+                  file=sys.stderr)
+            return 2
+        bad = 0
+        reports = []
+        for d in dirs:
+            man = e2e_evidence.load(d, prefer_jsonl=args.e2e_evidence_live)
+            rep = e2e_evidence.report(man)
+            reports.append(rep)
+            if rep["problems"] or not rep["verification"]["ok"]:
+                bad += 1
+        if args.json:
+            print(json.dumps(reports if len(reports) > 1 else reports[0],
+                             sort_keys=True))
+        else:
+            for rep in reports:
+                print("run %s  (%s)" % (rep["runId"] or "?", rep["root"]))
+                print("  schema     : %s" % (rep["schema"] or "<none>"))
+                print("  artefacts  : %d (%d from failed steps)"
+                      % (rep["counts"]["rows"], rep["counts"]["failed"]))
+                print("  by env     : %s" % rep["counts"]["byEnv"])
+                print("  by iface   : %s" % rep["counts"]["byInterface"])
+                print("  by kind    : %s" % rep["counts"]["byKind"])
+                print("  index      : %s" % rep["verification"]["summary"])
+                for m in rep["verification"]["missing"]:
+                    print("  MISSING    : %s" % m)
+                for o in rep["verification"]["orphans"]:
+                    print("  ORPHAN     : %s" % o)
+                for m in rep["verification"]["malformed"]:
+                    print("  MALFORMED  : %s" % m)
+                for pr in rep["problems"]:
+                    print("  PROBLEM    : %s" % pr)
+        return 1 if bad else 0
 
     if args.scan_hardware:
         # Qt-free path: the exact core probe the wizard's Hardware page runs

@@ -1851,7 +1851,8 @@ stack-ps: ## list the local stack's containers + status
 #   BDD_ARGS='--reporter=line' extra playwright arguments, verbatim
 #   SNAP_PLATFORM=rpi5|x86    narrows the PLATFORM axis to the image running
 #   SNAP_REPORT_DIR / SNAP_RUN_ID   where junit/json/summary + bdd-steps/ land
-.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check stack-e2e-bdd-evidence
+.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check stack-e2e-bdd-evidence \
+        stack-e2e-bdd-env stack-e2e-bdd-guards
 
 BDD_ENV ?= docker
 BDD_RUN  = bash tests/e2e/run.sh --bdd --env $(BDD_ENV) \
@@ -1881,6 +1882,26 @@ stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is c
 	bash tests/scripts/test-e2e-social-function-matrix.sh
 	bash tests/scripts/test-e2e-cli-lane.sh
 
+# The Gherkin lane's TWO deeper guards, each with its own mutation battery. Split
+# out of stack-e2e-bdd-check because they are minutes rather than seconds: each
+# breaks production several ways on purpose, re-runs the lane against every
+# mutant, and restores the tree.
+#
+# THEY ARE A MAKE TARGET AND NOT A CI JOB, deliberately, and the reason is
+# written here so nobody "fixes" it by gating them: both need `npx playwright`
+# AND a Qt6 binding (they build the REAL PyQt wizard offscreen), and no image the
+# shell-suites workflow runs carries either. On such a host both exit 2 with a
+# SKIPPED-LOUDLY line naming the missing prerequisite — never 0, so they can
+# never be mistaken for a pass. Gating a suite that can only skip would train
+# everyone to ignore the job.
+#
+# NOTHING IS STARTED. Both are designed to be green with the compose stack, the
+# kind cluster and every emulator DOWN: they test the vocabulary, the chooser and
+# the evidence, not the meshes.
+stack-e2e-bdd-guards: ## OFFLINE: the Gherkin lane's axis + Studio-GUI guards (mutation batteries; minutes)
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-studio-gui-lane.sh
+
 # LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
 # make playwright-deps) when BDD_ENV=docker. SNAP_PLATFORM=rpi5|x86 narrows the
 # PLATFORM axis to the image target actually running; unset runs every platform
@@ -1901,6 +1922,23 @@ stack-e2e-bdd: ## run the GHERKIN e2e lane (BDD_ENV=docker|kind|qemu; docker nee
 # ran everything.
 stack-e2e-bdd-evidence: ## summarise the Gherkin lane's evidence manifest (per env / per interface)
 	bash tests/e2e/run.sh --evidence
+
+# ── SNAP_ENV alias: the STUDIO's entry point ─────────────────────────────────
+# studio/hugmesh_studio/core/e2e_environments.py pins RUN_TARGET = this name and
+# studio/tests/test_e2e_environments.py asserts the target exists in this file,
+# so the name is load-bearing. It is deliberately a THIN ALIAS and not a second
+# implementation: the GUI lane and the CLI lane arrived independently, each with
+# its own way to select an environment (SNAP_ENV inline here / BDD_ENV through
+# run.sh), which is precisely the two-divergent-invocations drift the comment at
+# the top of this block warns about. One implementation, two spellings of the
+# knob. Nothing is started; a scenario whose mesh is down SKIPS with a reason.
+#
+#   make stack-e2e-bdd-env                       # docker (default)
+#   SNAP_ENV=kind make stack-e2e-bdd-env         # the kind cluster
+#   SNAP_ENV=qemu make stack-e2e-bdd-env         # a device somebody already booted
+stack-e2e-bdd-env: ## run the GHERKIN lane against the mesh SNAP_ENV names (docker|kind|qemu; nothing is started)
+	@$(MAKE) --no-print-directory stack-e2e-bdd \
+	  BDD_ENV='$(or $(SNAP_ENV),docker)' BDD_ARGS='$(BDD_ARGS) $(E2E_ARGS)'
 
 # ── THE GENERATIVE COVERAGE MATRIX ───────────────────────────────────────────
 # tests/e2e/features/coverage/ is EMITTED, not hand-written: every seeded

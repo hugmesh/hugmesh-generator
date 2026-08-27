@@ -360,10 +360,16 @@ AfterStep(async ({ page, $bddContext, $step, $testInfo, dimensions }) => {
 // per artefact, so it survives a crash and so a workers>1 run cannot interleave
 // a partial record); manifest.json is the browsable index built from it here.
 //
-// AfterAll runs per worker, and materializeManifest() rebuilds the WHOLE index
-// from the JSONL every time, so N workers converge on the same complete file
-// rather than each writing a partial one. It is also exported for a runner that
-// needs to rebuild the index after a crashed run.
+// materializeManifest() rebuilds the WHOLE index from the JSONL every time, so
+// N workers converge on the same complete file rather than each writing a
+// partial one. It is also exported for a runner that needs to rebuild the index
+// after a crashed run.
+//
+// THIS HOOK FIRES PER FEATURE SPEC FILE, NOT ONCE PER WORKER — measured
+// 2026-08-26; playwright-bdd's AfterAll is Playwright's test.afterAll, which is
+// file-scoped. Rebuilding from the append log every time is what makes that
+// harmless for the FINAL file, but it does mean manifest.json is a partial index
+// while the suite is in flight. See the note in steps/evidence.ts.
 AfterAll(async () => {
   try {
     materializeManifest();
