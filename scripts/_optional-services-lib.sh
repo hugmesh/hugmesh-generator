@@ -587,3 +587,98 @@ _opt_wire_anubis_ingress() {
     ' "${fe}" > "${fe}.tmp" && mv "${fe}.tmp" "${fe}"
     info "ENV=${ENV}: Anubis installed — public ingress REROUTED through the Anubis PoW gate (:8923) -> fe-gateway (all shields up)"
 }
+
+# ── SLUG-VALIDATION PRIMITIVES (moved here 2026-08-26, integration) ──────────
+# These four were born in build-x86-host-stage4.sh, in the SAME commit window that
+# extracted the gate into this file — so the extraction shipped INCOMPLETE: the
+# `_opt_*` namespace was declared to live here, and four `_opt_*` functions were
+# still being defined in a builder. tests/stack/test-optional-services-exclude.sh
+# forbids exactly that ("re-defines gate function(s) locally, overriding the shared
+# lib"), and it is right to: a builder-local `_opt_*` definition is defined AFTER
+# the `source` line, so bash runs the builder's copy, which is the precise mechanism
+# by which three defects shipped on x86 only. rpi5 has no slug validator today; when
+# it grows one, the copy-paste that would have re-created the drift is already gone.
+#
+# NOTHING BUILDER-SPECIFIC LIVES HERE. Each of the three membership tests reads a
+# constant the CALLING BUILDER defines, and that is deliberate — the columns really
+# do differ per builder:
+#   KNOWN_OPTIONAL_SERVICES      every `slug:` in specs/cluster/optional-services.yaml
+#   GATED_OPTIONAL_SERVICES      the subset whose `gate:` is not none
+#   SELECTABLE_OPTIONAL_SERVICES the subset whose `buildGate:` lists THIS builder
+#   DESELECTABLE_OPTIONAL_SERVICES the subset for which the `-<slug>`/`no-<slug>`
+#                                  spelling has a real consumer (see below)
+# A builder that sets none of them and calls none of these is unaffected.
+#
+# Exact-token membership, never a substring/glob compare: `edge-ai` must not match
+# inside `edge-ai-analysis`, and a `case " $list " in *"$tok"*)` glob would. Each
+# name is declared on its OWN line: bash 5.3 localises every name in a
+# `local a=$1 b=$a` list BEFORE any assignment runs, so the second dies under set -u.
+# Multi-line bodies on purpose: the suites sed/awk-extract these with a
+# `/^name() {/,/^}/` range, which a one-line body defeats.
+_opt_svc_die() {
+    echo "FATAL(optional-services): $1" >&2
+    exit 1
+}
+_opt_svc_known() {
+    local _s
+    for _s in ${KNOWN_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
+    return 1
+}
+_opt_svc_gated() {
+    local _s
+    for _s in ${GATED_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
+    return 1
+}
+_opt_svc_selectable() {
+    local _s
+    for _s in ${SELECTABLE_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
+    return 1
+}
+# _opt_svc_deselectable — is the `-<slug>` / `no-<slug>` EXPLICIT-DESELECT spelling
+# honoured for this slug, ANYWHERE in this library?
+#
+# WHY THIS EXISTS, and why it is not just "true" (2026-08-26, integration). The
+# spelling is read by exactly ONE function: _opt_anubis_installed(), which is the
+# only install decision that is ENV-conditional rather than plain presence. For
+# every other slug, absence from OPTIONAL_SERVICES already means "off", so
+# `-games` is a token that matches no arm and is silently dropped — on BOTH
+# builders. x86's validator used to refuse the whole spelling as "rpi5-only", and
+# that was true only while x86 had no anubis handling. It has had it since the
+# extraction (the gate is this file), so the blanket refusal became a message that
+# LIED to the operator and, worse, left an x86 `--env prod` build with no way to
+# turn the public PoW shield OFF: --exclude-services cannot do it, because
+# _opt_anubis_installed falls through EXCLUDE_SERVICES' subtraction to the ENV
+# default. The refusal is now per-slug, and its set is asserted set-equal to the
+# slugs this file really passes to _opt_explicitly_deselected.
+_opt_svc_deselectable() {
+    local _s
+    for _s in ${DESELECTABLE_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
+    return 1
+}
+
+# _opt_negative_tokens — echo every EXPLICIT-DESELECT token ("-<slug>"/"no-<slug>")
+# currently in OPTIONAL_SERVICES, space-prefixed, or the empty string.
+#
+# WHY (2026-08-26, integration). The `all` sentinel replaces the WHOLE token list
+# with USER_LEVEL_SERVICES, so `--optional-services "all -anubis"` threw the
+# negative token away and shipped an `--env prod` image with the PoW shield UP,
+# silently. That was survivable while nothing claimed the spelling worked; it is
+# not survivable now that x86's validator ACCEPTS `-anubis` (it must — the shared
+# gate really does honour it, and --exclude-services cannot turn an ENV-conditional
+# slug off). Accepting a token and then discarding it in the expander is the exact
+# empty-promise shape the validator exists to abolish, so both builders re-append
+# what the expansion dropped. `all` is a positive allow-list; a negative token is
+# not part of that set and must survive it.
+#
+# The 3-line call site stays in each builder (the expansion is arg-parse-level and
+# each has its own logger line), but the RULE for what a negative token is lives
+# here, once, so the two cannot drift on it.
+_opt_negative_tokens() {
+    local s out=""
+    for s in ${OPTIONAL_SERVICES}; do
+        case "${s}" in
+            -?*|no-?*) out="${out} ${s}" ;;
+        esac
+    done
+    printf '%s' "${out}"
+}

@@ -112,17 +112,23 @@
 # flag gets accepted and dropped on the floor: `gate: runtime` says in as many
 # words that there is NO build-time consumer, so `--optional-services coturn`
 # could never bake coturn — yet a validator gating on `gate: != none` accepts it
-# and returns an affirmative signal to the operator. Worse, the two builders
-# DIVERGE: anubis has a build-time consumer in build-rpi5-stage4.sh
+# and returns an affirmative signal to the operator. The two builders CAN also
+# diverge, and did: anubis once had a build-time consumer in build-rpi5-stage4.sh
 # (_opt_anubis_installed renders its ConfigMap key + 13a element from the
 # selection) and NONE in build-x86-host-stage4.sh, and a union-of-both-builders
-# consumer set cannot see that.
+# consumer set cannot see that. The gate now lives in ONE sourced library
+# (scripts/_optional-services-lib.sh) so that particular divergence is closed —
+# but the column stays PER BUILDER, because the constants each builder feeds the
+# shared gate (SELECTABLE_OPTIONAL_SERVICES) still differ and a future arm added
+# to one builder would re-open it.
 #
 # So each row also declares, per builder, whether THAT builder reads the slug out
 # of the build-time selection:
 #   buildGate: [rpi5, x86]  both builders gate it (a gate_optional_services case
 #                           arm and/or a render loop driven by _opt_selected)
-#   buildGate: [rpi5]       rpi5 only — today: anubis (ENV-conditional, rpi5-side)
+#   buildGate: [rpi5]       rpi5 only — no row is in this state today (anubis was,
+#                           until the shared-gate extraction gave x86 the same
+#                           ENV-conditional handling; see its row)
 #   buildGate: []           NO builder bakes it. Either runtime-only (coturn,
 #                           meshbridge: flip the installed-services ConfigMap key
 #                           + the 13a element on a LIVE cluster) or `gate: none`.
@@ -906,7 +912,7 @@ spec:
     #   * Explicit operator choice ALWAYS wins: list "anubis" to force ON, or
     #     "-anubis"/"no-anubis" to force OFF (in either ENV).
     # The `default: off` below is the SAFE TEST BASELINE shipped in the ConfigMap;
-    # _opt_render_installed_services() in build-rpi5-stage4.sh (via
+    # _opt_render_installed_services() in scripts/_optional-services-lib.sh (via
     # _opt_anubis_installed) FLIPS it to "true" for PROD builds. No gatewayHost/
     # route-access rows (it is an INGRESS-layer gate, not a /bff/** upstream); when
     # OFF the BFF's AnubisClient degrades to "unreachable" (no 503) and the public
@@ -919,7 +925,16 @@ spec:
       default: off
       tier: infra
       gate: runtime          # no bootstrap Application to prune — 13a element + ConfigMap flag only
-      buildGate: [rpi5]
+      # buildGate: BOTH builders, since 2026-08-26. This column said [rpi5] while
+      # x86 carried NO anubis handling at all — that divergence was defect #2 of
+      # the x86 builder drift (an `--env prod` x86 image shipped the PUBLIC PoW
+      # shield OFF and the fe-gateway ingress un-rerouted). The fix EXTRACTED the
+      # whole gate into scripts/_optional-services-lib.sh, which both builders
+      # source, so _opt_anubis_installed / _opt_render_installed_services /
+      # _opt_wire_anubis_ingress now resolve identically from x86. The column is
+      # the metadata half of that fix: leaving it at [rpi5] made x86's own slug
+      # validator REFUSE a slug x86 genuinely bakes.
+      buildGate: [rpi5, x86]
       # The public PoW shield obeys the ENV policy (prod-on / test-off) rather than
       # plain presence in OPTIONAL_SERVICES.
       envConditional:

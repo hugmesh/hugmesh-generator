@@ -158,15 +158,28 @@ USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio ch
 # between the two is not academic. `gate: runtime` says IN AS MANY WORDS that a
 # row has no build-time consumer: coturn/meshbridge are turned on by flipping
 # their key in the installed-services ConfigMap + the 13a element on a LIVE
-# cluster, and no builder can bake them. anubis is worse — it HAS a build-time
-# consumer in build-rpi5-stage4.sh (_opt_anubis_installed) and NONE here, so a
-# consumer set unioned over both builders reports it as gated when this builder
-# would silently drop it. Gating on `gate: != none` therefore accepted three
-# slugs this script honours nowhere and told the operator they were fine. Each
-# of the three refusals below names the reason and the lever that DOES work.
+# cluster, and no builder can bake them. anubis USED to be worse — it had a
+# build-time consumer in build-rpi5-stage4.sh (_opt_anubis_installed) and NONE
+# here, so a consumer set unioned over both builders reported it as gated when
+# this builder would silently drop it. The shared-gate extraction closed that:
+# _opt_anubis_installed now resolves here from scripts/_optional-services-lib.sh,
+# anubis IS in this column, and the registry's buildGate: says [rpi5, x86].
+# Gating on `gate: != none` still accepts coturn/meshbridge, which this script
+# honours nowhere, so SELECTABLE stays strictly narrower than GATED. Each refusal
+# below names the reason and the lever that DOES work.
 KNOWN_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis metrics-server keda kyverno observability service-catalog-builder optional-services-operator"
 GATED_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis"
-SELECTABLE_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts egress-vpn tor workloadConsole headwind attestation-server"
+SELECTABLE_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts egress-vpn tor workloadConsole headwind attestation-server anubis"
+# DESELECTABLE_OPTIONAL_SERVICES = the subset for which the `-<slug>`/`no-<slug>`
+# EXPLICIT-DESELECT spelling has a real consumer. Exactly one slug does, and the
+# reason is structural rather than historical: the spelling is read ONLY by
+# _opt_anubis_installed(), because anubis is the ONLY slug whose install decision
+# is ENV-conditional (prod-on/test-off) instead of plain presence. For every other
+# slug, absence from OPTIONAL_SERVICES already means "off", so `-games` matches no
+# arm and is dropped on the floor — on BOTH builders, not just this one.
+# Asserted set-equal to the slugs scripts/_optional-services-lib.sh really passes
+# to _opt_explicitly_deselected, so it cannot rot into a comment.
+DESELECTABLE_OPTIONAL_SERVICES="anubis"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
 #   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
 #   DEFAULT-OFF (must be specifically added): games owncast tube character-studio
@@ -1148,7 +1161,16 @@ OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 # `all`, not `all akkoma`). Mirrors build-rpi5-stage4.sh.
 case " ${OPTIONAL_SERVICES} " in
     *" all "*)
+        # Carry the EXPLICIT-DESELECT tokens across the expansion. `all` is a
+        # positive allow-list; "-anubis"/"no-anubis" is not a member of that set,
+        # and replacing the whole token list used to DROP it — so `all -anubis`
+        # shipped a prod image with the PoW shield up and said nothing. The rule
+        # for what counts as a negative token lives in _opt_negative_tokens()
+        # (scripts/_optional-services-lib.sh) so both builders cannot drift on it.
+        _opt_neg="$(_opt_negative_tokens)"
         OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}"
+        OPTIONAL_SERVICES="${OPTIONAL_SERVICES}${_opt_neg}"
+        unset _opt_neg
         info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
         ;;
 esac
@@ -1297,10 +1319,12 @@ fi
 # gate_optional_services()' hardcoded slug loop, so an unrecognised token matches
 # no arm and is simply dropped on the floor. A typo (`akoma`) silently produced an
 # image with no Akkoma; a registered-but-ungated infra slug (`metrics-server`)
-# looked accepted and gated nothing; `coturn`/`meshbridge`/`anubis` — registered,
-# `gate: runtime`, and read by NOTHING in this script — looked accepted too, and
-# that one is worse than silence: the operator gets an AFFIRMATIVE signal for a
-# flag nothing will honour. None of them printed a word of warning. The
+# looked accepted and gated nothing; `coturn`/`meshbridge` — registered,
+# `gate: runtime`, and read by NOTHING this builder sources — looked accepted too,
+# and that one is worse than silence: the operator gets an AFFIRMATIVE signal for a
+# flag nothing will honour. (anubis was in that list too until the shared-gate
+# extraction; it now HAS a consumer here — see DESELECTABLE_OPTIONAL_SERVICES and
+# the EXCLUDE_SERVICES leg below.) None of them printed a word of warning. The
 # MANAGED_SERVICES sibling has failed closed on an unknown id since it shipped
 # (validate_managed_services -> _mgd_die); this is the same posture for the
 # optional-services path, and for the EXCLUDE_SERVICES knob, where a typo is worse
@@ -1313,65 +1337,76 @@ fi
 # Multi-line on purpose: the test suite sed-extracts these functions with the
 # repo-standard `/^name() {/,/^}/` range, which a one-line body defeats.
 #
-# DEFINED BEFORE THEY ARE CALLED, and that ordering is load-bearing, not style:
-# the call below is a TOP-LEVEL statement, so bash resolves it at the moment it
-# reaches this line. Moving these definitions after it leaves `bash -n` perfectly
-# happy and makes EVERY invocation of this script die with
-# "validate_optional_services: command not found" (rc=127). The suite asserts the
-# definition line is above the call line AND runs this script for real, because a
-# static extraction of the function bodies into a scratch file re-orders them and
-# structurally cannot see a definition-after-use fault.
-_opt_svc_die() {
-    echo "FATAL(optional-services): $1" >&2
-    exit 1
-}
-# _opt_svc_known / _opt_svc_gated / _opt_svc_selectable — exact-token membership,
-# no substring matching (`edge-ai` must not match `edge-ai-analysis`; a `case` glob
-# over a padded string would). Declared on separate lines: bash 5.3 localises every
-# name BEFORE any assignment runs, so `local s=$1 t=$2` dies under `set -u` here.
-_opt_svc_known() {
-    local _s
-    for _s in ${KNOWN_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
-    return 1
-}
-_opt_svc_gated() {
-    local _s
-    for _s in ${GATED_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
-    return 1
-}
-_opt_svc_selectable() {
-    local _s
-    for _s in ${SELECTABLE_OPTIONAL_SERVICES}; do [ "${_s}" = "$1" ] && return 0; done
-    return 1
-}
+# DEFINED BEFORE IT IS CALLED, and that ordering is load-bearing, not style: the
+# call below is a TOP-LEVEL statement, so bash resolves it at the moment it reaches
+# this line. Moving the definition after it leaves `bash -n` perfectly happy and
+# makes EVERY invocation of this script die with "validate_optional_services:
+# command not found" (rc=127). The same is true of the `source` line that supplies
+# the _opt_svc_* primitives. The suite asserts BOTH orderings AND runs this script
+# for real, because a static extraction of the function bodies into a scratch file
+# re-orders them and structurally cannot see a definition-after-use fault.
+# _opt_svc_die / _opt_svc_known / _opt_svc_gated / _opt_svc_selectable /
+# _opt_svc_deselectable are NOT defined here. They live in
+# scripts/_optional-services-lib.sh, sourced at the top of this file (line ~60),
+# alongside gate_optional_services() and every other `_opt_*` function. A local
+# copy here would be defined AFTER that source line, so BASH WOULD RUN THE LOCAL
+# COPY — which is exactly how three optional-service defects shipped on x86 only,
+# and is why tests/stack/test-optional-services-exclude.sh fails any builder that
+# defines an `_opt_*` name. What this builder owns is the four CONSTANTS above
+# (its own registry columns) and the policy below.
 validate_optional_services() {
     # Separate declaration lines: bash 5.3 localises every name in a `local a=$1
     # b=$a` list BEFORE any assignment runs, so the second would die under set -u.
     local _tok
-    local _hint
-    for _tok in ${OPTIONAL_SERVICES} ${EXCLUDE_SERVICES//,/ }; do
-        _hint="${_tok#no-}"; _hint="${_hint#-}"
-        # `-<slug>` / `no-<slug>` — the explicit-deselect spellings — are an
-        # RPI5-ONLY spelling and are REFUSED here. _opt_explicitly_deselected()
-        # lives in build-rpi5-stage4.sh and has NO definition, and no caller, in
-        # this script: the token matches no arm, `_opt_selected` never sees it, and
-        # it is dropped on the floor. That matters most where it looks like it
-        # works — `--optional-services "all -games"` expands the `all` sentinel over
-        # the WHOLE token list and games ships anyway. EXCLUDE_SERVICES is the
-        # subtractive knob on this builder, and it runs AFTER the expansion.
-        case "${_tok}" in
-            no-*|-*) _opt_svc_die \
-                "'${_tok}' uses the '-<slug>' / 'no-<slug>' explicit-deselect spelling, which is an rpi5-only spelling (_opt_explicitly_deselected exists in build-rpi5-stage4.sh; this builder has no definition and no caller for it, so the token would be silently ignored). On this builder use --exclude-services '${_hint}' (EXCLUDE_SERVICES), which subtracts AFTER the 'all' sentinel expands." ;;
-        esac
-        _opt_svc_known "${_tok}" || _opt_svc_die \
-            "unknown optional-service slug '${_tok}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
+    local _base
+    # ── the SELECTION knob ────────────────────────────────────────────────────
+    for _tok in ${OPTIONAL_SERVICES}; do
+        _base="${_tok#no-}"; _base="${_base#-}"
+        if [ "${_base}" != "${_tok}" ]; then
+            # An EXPLICIT-DESELECT token. This used to be refused wholesale as an
+            # "rpi5-only spelling", and that was true only while this builder had
+            # no anubis handling — defect #2 of the x86 drift. The gate is now ONE
+            # sourced library, so _opt_anubis_installed() resolves here identically
+            # to rpi5 and `-anubis` genuinely works. Refusing it left an x86
+            # `--env prod` build with NO way to turn the public PoW shield off:
+            # --exclude-services cannot, because the ENV-conditional decision never
+            # reads EXCLUDE_SERVICES. So the refusal is per-slug now, not blanket.
+            _opt_svc_deselectable "${_base}" || _opt_svc_die \
+                "'${_tok}' uses the '-<slug>' / 'no-<slug>' EXPLICIT-DESELECT spelling, which is honoured for exactly these slugs: ${DESELECTABLE_OPTIONAL_SERVICES}. It is read ONLY by _opt_anubis_installed() in scripts/_optional-services-lib.sh, because anubis is the only slug whose install decision is ENV-conditional instead of plain presence. For '${_base}', absence from --optional-services ALREADY means off, so this token would match no arm and be silently ignored — on BOTH builders. To drop a default-on service use --exclude-services '${_base}' (EXCLUDE_SERVICES), which subtracts AFTER the 'all' sentinel expands."
+        fi
+        _opt_svc_known "${_base}" || _opt_svc_die \
+            "unknown optional-service slug '${_base}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
         # Two DIFFERENT refusals, because the operator's next move differs.
-        _opt_svc_gated "${_tok}" || _opt_svc_die \
-            "'${_tok}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Selecting it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
-        _opt_svc_selectable "${_tok}" || _opt_svc_die \
-            "'${_tok}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --optional-services cannot bake it, because nothing in build-x86-host-stage4.sh reads it out of the selection. Turn it on/off on the LIVE cluster instead: flip the '${_tok}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Refusing rather than accepting a flag this builder honours nowhere. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_gated "${_base}" || _opt_svc_die \
+            "'${_base}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Selecting it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_selectable "${_base}" || _opt_svc_die \
+            "'${_base}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --optional-services cannot bake it, because nothing this builder sources reads it out of the selection. Turn it on/off on the LIVE cluster instead: flip the '${_base}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Refusing rather than accepting a flag this builder honours nowhere. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
     done
-    unset _tok _hint
+    # ── the SUBTRACTIVE knob ──────────────────────────────────────────────────
+    # EXCLUDE_SERVICES is read, never rewritten, by the subtraction block above, so
+    # validating it here still catches a typo in it. Two refusals are specific to
+    # this knob:
+    #   * a deselect spelling here is a DOUBLE NEGATIVE honoured by nothing;
+    #   * an ENV-CONDITIONAL slug cannot be turned off by subtraction at all.
+    #     `--exclude-services anubis` removes the token from OPTIONAL_SERVICES and
+    #     _opt_anubis_installed() then falls through to the ENV default, so in prod
+    #     the shield stays UP and the operator was told nothing. That is the exact
+    #     empty-promise shape this validator exists to abolish, so it is refused
+    #     and pointed at the negative token, which does work.
+    for _tok in ${EXCLUDE_SERVICES//,/ }; do
+        _base="${_tok#no-}"; _base="${_base#-}"
+        [ "${_base}" = "${_tok}" ] || _opt_svc_die \
+            "'${_tok}' uses the '-<slug>' / 'no-<slug>' explicit-deselect spelling inside --exclude-services, which is a double negative honoured by nothing: EXCLUDE_SERVICES subtracts whole tokens from the selection, and no code path ever compares one to '-${_base}'. Use --exclude-services '${_base}'."
+        _opt_svc_known "${_base}" || _opt_svc_die \
+            "unknown optional-service slug '${_base}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
+        _opt_svc_gated "${_base}" || _opt_svc_die \
+            "'${_base}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Excluding it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_selectable "${_base}" || _opt_svc_die \
+            "'${_base}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --exclude-services cannot un-bake what was never bakeable here, which is the same empty promise as selecting it. Turn it on/off on the LIVE cluster instead: flip the '${_base}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_deselectable "${_base}" && _opt_svc_die \
+            "'${_base}' is ENV-CONDITIONAL and CANNOT be turned off by --exclude-services. Subtraction only removes the token from the selection; _opt_anubis_installed() then falls through to the ENV default, so an '--env prod' build would ship '${_base}' ON anyway and say nothing. Use --optional-services '-${_base}' (or 'no-${_base}'), the explicit-deselect spelling, which this builder honours for: ${DESELECTABLE_OPTIONAL_SERVICES}."
+    done
+    unset _tok _base
 }
 validate_optional_services
 

@@ -852,11 +852,20 @@ seed_slugs = set(re.findall(r'^\s*slug:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$', see
 # mechanism of the headwind incident, so the loops are derived and each target is
 # checked for a line the renderer could actually hit.
 def render_loop(path, fn):
-    src = open(path, encoding="utf-8").read()
-    m = re.search(r"^%s\(\) \{\n(.*?)^\}$" % re.escape(fn), src, re.S | re.M)
-    if not m:
+    # RESOLVE LIKE BASH, exactly as gate_body() above does. The renderers moved
+    # into the shared library in the same extraction that moved the gate, so
+    # reading only the builder files returned EMPTY for both — and an empty loop
+    # set makes the headwind check below announce itself vacuous instead of
+    # silently passing, which is how this was caught. The check's POWER is
+    # unchanged: the loops are still DERIVED from the shipped implementation
+    # rather than restated here, and a builder-local override of a renderer still
+    # wins (it is last in resolution order), so a builder that regresses one is
+    # still what gets measured.
+    body = _body_of(path, fn)
+    if body is None:
+        body = _body_of(GATE_LIB, fn)
+    if body is None:
         return set()
-    body = nocomment(m.group(1))
     out = set()
     for mm in re.finditer(r"^\s*for slug in (.+?); do\s*$", body, re.M):
         out |= set(mm.group(1).split())
@@ -1100,28 +1109,42 @@ fi
 # the same posture on the optional-services path, BY EXECUTION: the real functions
 # are extracted from the builder and run in a child bash, not grepped for.
 echo "-- x86 builder: --optional-services / --exclude-services fail closed --"
-x86_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER_X86}"; }
+# RESOLVED, not awk'd out of the builder. The _opt_svc_* primitives live in
+# scripts/_optional-services-lib.sh since the integration — a builder that defines
+# an `_opt_*` name locally is a hard FAIL further up (it would shadow the library
+# at run time), so awk-ing the builder for them found nothing and this whole
+# section died "CANNOT RUN". opt_gate_extract_fn reproduces bash's own resolution
+# order (libs in source order, builder LAST), so a builder-local override is still
+# what gets extracted and executed here — the shadowing check and this one now
+# agree about which copy is real. validate_optional_services stays x86's own: the
+# POLICY is per-builder (its four columns differ), only the primitives are shared.
+# opt_gate_extract_fn printf's the body with NO trailing newline (it is built to be
+# eval'd, not concatenated), so the bodies must be newline-separated here or the
+# next definition line is glued onto the previous closing brace and the assembled
+# file fails `bash -n` — which this suite reports as "CANNOT RUN", loudly, rather
+# than silently skipping the section.
+x86_fn() { opt_gate_extract_fn "${BUILDER_X86}" "$1"; printf '\n'; }
 VALFILE="${WORK}/validate-optional-services.sh"
 {
   echo "set -u"
-  # The three mirrored constants, comment-stripped so a slug named in the long WHY
+  # The four mirrored constants, comment-stripped so a slug named in the long WHY
   # comment above them cannot end up in the list.
-  grep -v '^[[:space:]]*#' "${BUILDER_X86}" | grep -E '^(KNOWN|GATED|SELECTABLE)_OPTIONAL_SERVICES='
-  for _f in _opt_svc_die _opt_svc_known _opt_svc_gated _opt_svc_selectable validate_optional_services; do x86_fn "${_f}"; done
+  grep -v '^[[:space:]]*#' "${BUILDER_X86}" | grep -E '^(KNOWN|GATED|SELECTABLE|DESELECTABLE)_OPTIONAL_SERVICES='
+  for _f in _opt_svc_die _opt_svc_known _opt_svc_gated _opt_svc_selectable _opt_svc_deselectable validate_optional_services; do x86_fn "${_f}"; done
   echo ': "${OPTIONAL_SERVICES:=}"'
   echo ': "${EXCLUDE_SERVICES:=}"'
   echo 'validate_optional_services'
   echo 'echo VALIDATE_OK'
 } > "${VALFILE}"
 unset _f
-for _f in KNOWN_OPTIONAL_SERVICES= GATED_OPTIONAL_SERVICES= SELECTABLE_OPTIONAL_SERVICES= \
-          '_opt_svc_die()' '_opt_svc_known()' '_opt_svc_gated()' '_opt_svc_selectable()' 'validate_optional_services()'; do
+for _f in KNOWN_OPTIONAL_SERVICES= GATED_OPTIONAL_SERVICES= SELECTABLE_OPTIONAL_SERVICES= DESELECTABLE_OPTIONAL_SERVICES= \
+          '_opt_svc_die()' '_opt_svc_known()' '_opt_svc_gated()' '_opt_svc_selectable()' '_opt_svc_deselectable()' 'validate_optional_services()'; do
   grep -F "${_f}" "${VALFILE}" >/dev/null \
-    || { echo "  CANNOT RUN: could not extract '${_f}' from build-x86-host-stage4.sh" >&2; exit 2; }
+    || { echo "  CANNOT RUN: could not extract '${_f}' from build-x86-host-stage4.sh's source chain" >&2; exit 2; }
 done
 unset _f
 bash -n "${VALFILE}" || { echo "  CANNOT RUN: extracted validator does not parse" >&2; exit 2; }
-ok "extracted the REAL validate_optional_services + its two slug constants from build-x86-host-stage4.sh"
+ok "extracted the REAL validate_optional_services + the shared _opt_svc_* primitives + all four slug constants, as build-x86-host-stage4.sh resolves them"
 
 # The constants are the builder's mirror of the registry (it cannot parse YAML at
 # build time). Assert set-equality in BOTH directions so neither can rot.
@@ -1159,6 +1182,38 @@ if [ -n "${RUNTIME_ONLY_X86//[[:space:]]/}" ]; then
 else
   ok "x86: every gated registry slug is in x86's buildGate: column, so SELECTABLE == GATED is the correct state"
 fi
+
+# ── DESELECTABLE_OPTIONAL_SERVICES: derived, not restated ────────────────────
+# The '-<slug>'/'no-<slug>' spelling is honoured for a slug ONLY if some function
+# in the shared library actually passes that slug to _opt_explicitly_deselected().
+# Today exactly one does (_opt_anubis_installed, because anubis is the only slug
+# whose install decision is ENV-conditional rather than plain presence). Restating
+# "anubis" here is what would rot, so DERIVE the set from the library and assert
+# the builder's constant set-equals it. Wiring the spelling to a second slug, or
+# dropping the anubis call, then turns this red instead of minting a flag that is
+# accepted and ignored.
+# Comment-stripped: the library's long WHY block names _opt_explicitly_deselected
+# and anubis in prose directly above the code, and counting prose is the single
+# defect shape this repo has shipped most often.
+X86_DESELECTABLE="$(grep -v '^[[:space:]]*#' "${BUILDER_X86}" | sed -n 's/^DESELECTABLE_OPTIONAL_SERVICES="\(.*\)"$/\1/p' | head -1)"
+LIB_DESELECT_SLUGS="$(grep -v '^[[:space:]]*#' "${OPTLIB}" \
+  | grep -oE '_opt_explicitly_deselected[[:space:]]+[A-Za-z0-9][A-Za-z0-9._-]*' \
+  | awk '{print $2}' | sort -u | tr '\n' ' ')"
+if [ -z "${LIB_DESELECT_SLUGS//[[:space:]]/}" ]; then
+  bad "no slug is passed to _opt_explicitly_deselected anywhere in the shared library — the deselect spelling is inert on BOTH builders and DESELECTABLE_OPTIONAL_SERVICES claims otherwise"
+elif seteq "${X86_DESELECTABLE}" "${LIB_DESELECT_SLUGS}"; then
+  ok "x86: DESELECTABLE_OPTIONAL_SERVICES ('${X86_DESELECTABLE}') set-equals the slugs the shared library really passes to _opt_explicitly_deselected"
+else
+  bad "x86: DESELECTABLE_OPTIONAL_SERVICES='${X86_DESELECTABLE}' but the library deselect-checks='${LIB_DESELECT_SLUGS}' — the validator would accept-and-ignore, or refuse, a spelling the gate really honours"
+fi
+# ...and every deselectable slug must ALSO be selectable here, or the validator
+# would accept '-anubis' and then refuse the very slug it names.
+for _s in ${X86_DESELECTABLE}; do
+  _in "${_s}" "${X86_SELECTABLE}" \
+    && ok "x86: deselectable slug '${_s}' is also in SELECTABLE_OPTIONAL_SERVICES (the '-${_s}' spelling names a slug this builder bakes)" \
+    || bad "x86: '${_s}' is DESELECTABLE but not SELECTABLE — '-${_s}' would be accepted for a slug this builder honours nowhere"
+done
+unset _s
 
 # A validator nothing calls is the vacuity bug wearing a different hat, so pin the
 # CALL as well as the definition — and its POSITION: it must run AFTER the `all`
@@ -1303,15 +1358,50 @@ if [ -n "${RUNTIME_ONLY_X86//[[:space:]]/}" ]; then
   unset _n
 fi
 
-# (6) the rpi5-only deselect spelling, refused here with a pointer to the knob
-# that does work. See the rpi5-side legs at the end of this section for proof
-# that the spelling is genuinely honoured THERE.
+# (6) the EXPLICIT-DESELECT spelling, per slug. It is honoured for exactly the
+# slugs the shared library deselect-checks (derived above); for every other slug
+# absence already means off, so the token is inert on BOTH builders and is refused
+# with a pointer to the knob that does work.
 run_x86 --optional-services "akkoma -games" --role bogus
-if [ "${X86_RC}" -ne 0 ] && _has "rpi5-only spelling" "${X86_OUT}" && _has "--exclude-services 'games'" "${X86_OUT}"; then
-  ok "REAL build-x86-host-stage4.sh: REFUSES the rpi5-only '-<slug>' spelling and names --exclude-services as the x86 knob"
+if [ "${X86_RC}" -ne 0 ] && _has "EXPLICIT-DESELECT spelling" "${X86_OUT}" && _has "--exclude-services 'games'" "${X86_OUT}"; then
+  ok "REAL build-x86-host-stage4.sh: REFUSES '-games' (not deselectable — inert on both builders) and names --exclude-services as the knob that works"
 else
-  bad "REAL build-x86-host-stage4.sh: '-games' was not refused with the rpi5-only message (rc=${X86_RC}): ${X86_OUT}"
+  bad "REAL build-x86-host-stage4.sh: '-games' was not refused with the deselect message (rc=${X86_RC}): ${X86_OUT}"
 fi
+# ...and the mirror leg, which is the one the integration added: a slug the shared
+# gate REALLY deselect-checks must be ACCEPTED here, or x86 has no way at all to
+# turn the ENV-conditional PoW shield off in a prod build (--exclude-services
+# cannot: _opt_anubis_installed never reads EXCLUDE_SERVICES, so it falls through
+# to the ENV default and prod stays ON, silently).
+for _n in ${X86_DESELECTABLE}; do
+  run_x86 --optional-services "akkoma -${_n}" --role bogus
+  if ! _has 'command not found' "${X86_OUT}" && ! _has 'FATAL(optional-services)' "${X86_OUT}" \
+     && _has "${X86_ROLE_ERR}" "${X86_OUT}"; then
+    ok "REAL build-x86-host-stage4.sh: ACCEPTS '-${_n}' — the shared gate genuinely honours it, so refusing it would leave no lever at all"
+  else
+    bad "REAL build-x86-host-stage4.sh: '-${_n}' was REFUSED (rc=${X86_RC}) even though the shared library deselect-checks it: ${X86_OUT}"
+  fi
+  # and it must SURVIVE the 'all' sentinel, which replaces the whole token list.
+  run_x86 --optional-services "all -${_n}" --role bogus
+  if _has "sentinel expanded" "${X86_OUT}" && _has "-${_n}" "${X86_OUT}" && _has "${X86_ROLE_ERR}" "${X86_OUT}"; then
+    ok "REAL build-x86-host-stage4.sh: '-${_n}' SURVIVES the 'all' sentinel expansion (it is not a member of the positive allow-list and must not be discarded)"
+  else
+    bad "REAL build-x86-host-stage4.sh: 'all -${_n}' lost the deselect token in the sentinel expansion — accepted and then discarded (rc=${X86_RC}): ${X86_OUT}"
+  fi
+done
+unset _n
+# The ENV-conditional slug must NOT be accepted in --exclude-services: subtraction
+# removes the token from the selection and the ENV default then puts it back, so a
+# prod build would ship it ON having been told it was excluded.
+for _n in ${X86_DESELECTABLE}; do
+  run_x86 --optional-services akkoma --exclude-services "${_n}" --role bogus
+  if [ "${X86_RC}" -ne 0 ] && _has "ENV-CONDITIONAL" "${X86_OUT}" && _has "'-${_n}'" "${X86_OUT}"; then
+    ok "REAL build-x86-host-stage4.sh: REFUSES '--exclude-services ${_n}' (subtraction cannot beat the ENV default) and names '-${_n}' instead"
+  else
+    bad "REAL build-x86-host-stage4.sh: '--exclude-services ${_n}' was accepted (rc=${X86_RC}) — in prod the slug ships ON anyway: ${X86_OUT}"
+  fi
+done
+unset _n
 
 # ── the behavioural legs: run the real validator ─────────────────────────────
 VAL_OUT=""; VAL_RC=0
@@ -1352,23 +1442,36 @@ val_refuses "akkoma" "phpb" "unknown optional-service slug" \
 val_refuses "edge-a" "" "unknown optional-service slug" \
   "REFUSES a PREFIX of a real slug ('edge-a') — membership is an exact-token compare"
 
-# ── the '-<slug>' / 'no-<slug>' deselect spelling is RPI5-ONLY, and refused here ─
-# This suite used to PIN the opposite ("accepts the '-<slug>' explicit-deselect
-# spelling") — and that pin was wrong, which made the mistake load-bearing. The
-# spelling is implemented by _opt_explicitly_deselected(), which is DEFINED IN
-# build-rpi5-stage4.sh AND HAS NO DEFINITION AND NO CALLER IN build-x86-host-stage4.sh
-# (asserted below, so this is not folklore either). On x86 the token therefore
-# matched no arm and did nothing — a brand-new silently-inert flag minted by the
-# very change that was meant to abolish them, and worse than inert under the `all`
-# sentinel, which replaces the whole token list so `all -games` ships games.
-for _spell in "-games" "no-games" "-anubis" "no-anubis"; do
-  val_refuses "akkoma ${_spell}" "" "rpi5-only spelling" \
-    "REFUSES the rpi5-only deselect spelling '${_spell}' on x86 instead of accepting an inert token"
+# ── the '-<slug>' / 'no-<slug>' deselect spelling is PER-SLUG, not per-builder ─
+# THIS SUITE HAS NOW BEEN WRONG ABOUT THIS TWICE, IN OPPOSITE DIRECTIONS, so the
+# rule is derived rather than asserted from memory:
+#   v1 pinned "x86 accepts the spelling" — false: nothing consumed it there.
+#   v2 pinned "the spelling is RPI5-ONLY"  — true only while x86 carried no anubis
+#      handling. The shared-gate extraction gave x86 the identical
+#      _opt_explicitly_deselected/_opt_anubis_installed, so "rpi5-only" became a
+#      message that LIED and, worse, left an x86 --env prod build with no lever to
+#      turn the public PoW shield off at all.
+# THE ACTUAL RULE, and it is a property of the SLUG, not the builder: the spelling
+# is read only by _opt_anubis_installed(), because anubis is the only slug whose
+# install decision is ENV-conditional instead of plain presence. For every other
+# slug absence already means off, so '-games' is inert on BOTH builders. The
+# deselectable set is derived from the library above and both halves are asserted
+# here, so neither direction can rot back into folklore.
+for _spell in "-games" "no-games"; do
+  val_refuses "akkoma ${_spell}" "" "EXPLICIT-DESELECT spelling" \
+    "REFUSES '${_spell}' — not deselect-checked anywhere, so the token is inert on BOTH builders"
 done
 unset _spell
-val_refuses "akkoma" "-games" "rpi5-only spelling" \
+for _n in ${X86_DESELECTABLE}; do
+  val_accepts "akkoma -${_n}" "" "ACCEPTS '-${_n}' — the shared gate deselect-checks it, so this is the ONLY lever that turns it off"
+  val_accepts "akkoma no-${_n}" "" "ACCEPTS the 'no-${_n}' spelling too (both forms are compared in _opt_explicitly_deselected)"
+  val_refuses "akkoma" "${_n}" "ENV-CONDITIONAL" \
+    "REFUSES '${_n}' in EXCLUDE_SERVICES — subtraction loses to the ENV default, so a prod build would ship it ON regardless"
+done
+unset _n
+val_refuses "akkoma" "-games" "double negative" \
   "REFUSES the deselect spelling inside EXCLUDE_SERVICES too (double-negative, honoured by nothing)"
-val_refuses "-akoma" "" "rpi5-only spelling" \
+val_refuses "-akoma" "" "EXPLICIT-DESELECT spelling" \
   "REFUSES the deselect spelling even when the base slug is itself a typo"
 
 # ── the RUNTIME-ONLY refusal: gated somewhere, bakeable here by nothing ────────
@@ -1402,40 +1505,62 @@ else
   ok "no gate: none rows in the registry — the registered-but-ungated leg is inapplicable (every row has a consumer)"
 fi
 
-# ── 7b) the deselect spelling REALLY IS rpi5-only, and really works THERE ─────
-# The x86 refusal message says "_opt_explicitly_deselected exists in
-# build-rpi5-stage4.sh; this builder has no definition and no caller for it". A
-# message asserting a fact about another file is only as good as a check on that
-# fact, so check both halves — and then exercise the rpi5 function so the
-# spelling is pinned where it is implemented rather than where it is not. The
-# rpi5 helpers are already sourced into this shell at the top of this file.
-echo "-- the '-<slug>' deselect spelling is implemented in rpi5, absent in x86 --"
-# Comment-stripped AND string-literal-stripped: the x86 FATAL message NAMES
-# _opt_explicitly_deselected (it tells the operator where the spelling lives), and
-# counting that mention as a reference would invert this check — the same
-# comment-token shape, one layer in. `sed 's/"[^"]*"//g'` is not a shell parser,
-# but every occurrence in both files is either a bare statement or a single
-# double-quoted message on one line, so it separates "code that calls it" from
-# "prose that names it" exactly where it matters.
+# ── 7b) the deselect spelling is implemented ONCE, and resolves from BOTH ─────
+# WHAT THIS USED TO ASSERT, AND WHY THAT PREMISE IS GONE. Until the integration
+# this leg counted non-comment references and demanded
+# "_opt_explicitly_deselected: >0 in build-rpi5-stage4.sh, ZERO in
+# build-x86-host-stage4.sh", because the x86 refusal message asserted exactly that
+# about another file. Both functions have since moved into
+# scripts/_optional-services-lib.sh — the whole point of the extraction — so the
+# counts are 0 and 0 and the old assertion could only be satisfied by putting a
+# copy back in rpi5, i.e. by RE-CREATING the drift it was written to police.
+#
+# WHAT REPLACES IT, KEEPING THE SAME POWER. The question was never "which file
+# holds the text"; it was "can these two builders disagree about the spelling".
+# Three legs, and a one-builder-only regression still trips at least one:
+#   (i)  the implementation exists in EXACTLY ONE file — the shared library — and
+#        in NEITHER builder. A local copy in either is defined AFTER the source
+#        line, so bash runs it; that is the drift, and this is where it shows up.
+#        (The shadowing check further up covers the whole _opt_* namespace; this
+#        one is specific and names the two functions the message depends on.)
+#   (ii) the function RESOLVES from BOTH builders' source chains, byte-identically
+#        (opt_gate_extract_fn reproduces bash's resolution order). "Absent from
+#        rpi5" and "shadowed in x86" both go red here.
+#   (iii) it still WORKS when executed — exercised below, unchanged.
+echo "-- the '-<slug>' deselect spelling: ONE implementation, resolved from BOTH builders --"
+# Comment-stripped AND string-literal-stripped: the x86 FATAL messages NAME
+# _opt_explicitly_deselected and _opt_anubis_installed (they tell the operator
+# where the spelling lives), and counting that mention as a definition would
+# invert this check — the same comment-token shape, one layer in. `sed
+# 's/"[^"]*"//g'` is not a shell parser, but every occurrence in these files is
+# either a bare statement or a single double-quoted message on one line.
 _decode() { grep -v '^[[:space:]]*#' "$1" | sed 's/"[^"]*"//g'; }
-_x86_nc="${WORK}/x86-nc-fn.txt"
-_decode "${BUILDER_X86}" > "${_x86_nc}"
-_rpi5_nc="${WORK}/rpi5-nc-fn.txt"
-_decode "${BUILDER}" > "${_rpi5_nc}"
 for _fn in _opt_explicitly_deselected _opt_anubis_installed; do
-  _n_r="$(grep -c "${_fn}" "${_rpi5_nc}")"
-  _n_x="$(grep -c "${_fn}" "${_x86_nc}")"
-  if [ "${_n_r}" -gt 0 ] && [ "${_n_x}" -eq 0 ]; then
-    ok "${_fn}: ${_n_r} non-comment reference(s) in build-rpi5-stage4.sh, ZERO in build-x86-host-stage4.sh — the x86 refusal message states the truth"
+  # (i) defined in the library, defined in NEITHER builder.
+  _d_lib="$(_decode "${OPTLIB}"      | grep -cE "^[[:space:]]*(function[[:space:]]+)?${_fn}[[:space:]]*\(?")"
+  _d_r="$(  _decode "${BUILDER}"     | grep -cE "^[[:space:]]*(function[[:space:]]+)?${_fn}[[:space:]]*\(")"
+  _d_x="$(  _decode "${BUILDER_X86}" | grep -cE "^[[:space:]]*(function[[:space:]]+)?${_fn}[[:space:]]*\(")"
+  if [ "${_d_lib}" -gt 0 ] && [ "${_d_r}" -eq 0 ] && [ "${_d_x}" -eq 0 ]; then
+    ok "${_fn}: defined in scripts/_optional-services-lib.sh and in NEITHER builder — one implementation, nothing to drift"
   else
-    bad "${_fn}: rpi5=${_n_r} x86=${_n_x} — the x86 fail-closed message and the buildGate: column both assume rpi5-only; one of them is now wrong"
+    bad "${_fn}: lib=${_d_lib} rpi5-local=${_d_r} x86-local=${_d_x} — it must be defined in the shared library and in neither builder (a builder-local copy is defined after the source line, so bash runs THAT)"
+  fi
+  # (ii) and it resolves, byte-identically, from BOTH builders' chains.
+  _r_body="$(opt_gate_extract_fn "${BUILDER}"     "${_fn}")"
+  _x_body="$(opt_gate_extract_fn "${BUILDER_X86}" "${_fn}")"
+  if [ -z "${_r_body}" ] || [ -z "${_x_body}" ]; then
+    bad "${_fn}: does NOT resolve from $( [ -z "${_r_body}" ] && printf 'rpi5 '; [ -z "${_x_body}" ] && printf 'x86 ')— that builder would drop the spelling on the floor"
+  elif [ "${_r_body}" != "${_x_body}" ]; then
+    bad "${_fn}: resolves DIFFERENTLY from the two builders — one of them carries an override and the spelling means two different things"
+  else
+    ok "${_fn}: resolves BYTE-IDENTICALLY from both builders' source chains (so the x86 validator and the rpi5 gate agree about what '-<slug>' means)"
   fi
 done
-unset _fn _n_r _n_x _x86_nc _rpi5_nc; unset -f _decode
+unset _fn _d_lib _d_r _d_x _r_body _x_body; unset -f _decode
 if command -v _opt_explicitly_deselected >/dev/null 2>&1; then
   OPTIONAL_SERVICES="akkoma -anubis"
   _opt_explicitly_deselected anubis \
-    && ok "rpi5 _opt_explicitly_deselected: '-anubis' IS honoured there (the spelling has a real consumer, on the other builder)" \
+    && ok "_opt_explicitly_deselected: '-anubis' IS honoured (the spelling has a real consumer — and, since the extraction, the same one on both builders)" \
     || bad "rpi5 _opt_explicitly_deselected: '-anubis' not recognised — then the spelling is inert on BOTH builders"
   OPTIONAL_SERVICES="akkoma no-anubis"
   _opt_explicitly_deselected anubis \

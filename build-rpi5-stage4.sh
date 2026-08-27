@@ -1110,7 +1110,16 @@ OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 # full set (operators write `all`, not `all akkoma`).
 case " ${OPTIONAL_SERVICES} " in
     *" all "*)
+        # Carry the EXPLICIT-DESELECT tokens across the expansion. `all` is a
+        # positive allow-list; "-anubis"/"no-anubis" is not a member of that set,
+        # and replacing the whole token list used to DROP it — so `all -anubis`
+        # shipped a prod image with the PoW shield up and said nothing. The rule
+        # for what counts as a negative token lives in _opt_negative_tokens()
+        # (scripts/_optional-services-lib.sh) so both builders cannot drift on it.
+        _opt_neg="$(_opt_negative_tokens)"
         OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}"
+        OPTIONAL_SERVICES="${OPTIONAL_SERVICES}${_opt_neg}"
+        unset _opt_neg
         info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
         ;;
 esac
