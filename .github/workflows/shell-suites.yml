@@ -110,9 +110,14 @@ jobs:
           # If the install step ever silently degrades, the whole job would go green
           # having asserted almost nothing. Fail here instead.
           missing=""
-          for b in bash jq openssl python3 git make flock gawk; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          # mcopy/minfo/mformat (mtools) + sfdisk (util-linux) + cmp are what
+          # tests/qemu/launch_pi_kernel_test.sh builds its fixture image with. That
+          # suite exits 2 with a named reason when they are absent rather than
+          # exiting 0, so it cannot go quietly inert — but a missing package here
+          # would still cost the whole job that suite, so name it at the door.
+          for b in bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git make flock gawk"
+          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp"
       - name: run suites
         shell: bash
         run: |
@@ -147,6 +152,7 @@ jobs:
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
             tests/qemu/kernel_extract_test.sh
+            tests/qemu/launch_pi_kernel_test.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
