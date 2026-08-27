@@ -86,6 +86,27 @@ images="$(grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]"]+' "${ROOT}" 2
           | sort -u || true)"
 images="$(printf '%s\n' "${images}" | grep -v '^$' || true)"
 
+# ── the HELM SPLIT FORM ───────────────────────────────────────────────────────
+# The scan above matches a one-line `image: VALUE`. Helm values write the same thing
+# as a repository/tag PAIR under an `image:` key with nothing after the colon, so
+# every chart override in this repo was invisible here. See the header of
+# tests/scripts/helm_image_pins.py for how that was found and falsified.
+HELM_PINS="$(python3 "$(dirname "$0")/helm_image_pins.py" "${ROOT}" 2>/dev/null \
+  | grep -vE '\{\{|REPLACE_WITH_|@sha256:' \
+  | grep -E '[:/]' \
+  | grep -vE "${FIRST_PARTY_RE}" \
+  | grep -v 'registry\.hugmesh\.net' \
+  | sort -u || true)"
+# NON-VACUOUS: this repo demonstrably contains Helm-form pins (velero, and kyverno's
+# cleanup override). An empty result means the extractor stopped working -- a silent
+# regression back to the blind spot -- so say so rather than scanning one form only.
+if [ -z "${HELM_PINS//[[:space:]]/}" ]; then
+  echo "  FAIL helm split-form scan found NOTHING — the extractor has regressed and this gate is back to seeing only one-line image: keys"
+  F=$((F+1))
+else
+  images="$(printf '%s\n%s\n' "${images}" "${HELM_PINS}" | grep -v '^$' | sort -u)"
+fi
+
 probe() { # <repo> <tag> -> prints ALIVE|DEAD|INCONCLUSIVE
   local repo="$1" tag="$2" i tok code
   for i in $(seq 1 "${RETRIES}"); do
