@@ -309,8 +309,8 @@ AfterStep(async ({ page, $bddContext, $step, $testInfo, dimensions }) => {
     platform: dimensions.platform ?? null,
     service: dimensions.service ?? null,
     layer: dimensions.layer ?? null,
-    // MUTATION: env/interface dropped from the sidecar
-
+    env: envOf(dimensions),
+    interface: interfaceOf(dimensions),
     failed: $step?.error !== undefined,
     at: new Date().toISOString(),
   };
