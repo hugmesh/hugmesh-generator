@@ -58,20 +58,26 @@
 #
 # ⚠ THE HONEST CAVEAT, and it has TWO parts. Read both before believing anything
 # above.
-#   (1) THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY. apps/29b pins
-#       repoURL github.com/hugmesh/hugmesh-generator.git @ main, and
-#       specs/cluster/bootstrap/bootstrap.sh rewrites that literal into
-#       app-of-apps.yaml ONLY. ArgoCD's repo-server therefore clones GitHub main
-#       and generates the ConfigMap from the COMMITTED gate.sql — never from the
-#       USB's rendered copy. A USB built with `--exclude-services akkoma` bakes
-#       enabled=false into its own tree and the cluster still applies enabled=true.
-#       So this unit lands the MECHANISM and the GUARD, NOT the fixed behaviour;
-#       the observed bug is not yet fixed on a device. Leg 4c below asserts this
-#       both ways so the sentence cannot quietly become false.
+#   (1) THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY — and the REASON changed
+#       on 2026-08-26 while the conclusion did not. It USED to be "bootstrap.sh
+#       applies app-of-apps.yaml ONLY, so no child Application is retargeted"; the
+#       device-syncs-pruned-apps keystone deleted that premise (it now applies every
+#       baked apps/*.yaml, apps/29b included). What STILL holds is narrower:
+#       apply_baked_app() rewrites repoURL and targetRevision and NOTHING ELSE, so
+#       `source.path: specs/cluster/manifests/federation-modules-gate` still resolves
+#       in a GIT repo and ArgoCD generates the ConfigMap from the COMMITTED gate.sql
+#       — never from the USB's rendered copy. A USB built with
+#       `--exclude-services akkoma` bakes enabled=false into its own tree and the
+#       cluster still applies enabled=true. So this unit lands the MECHANISM and the
+#       GUARD, NOT the fixed behaviour. Leg 4c below asserts this both ways, and now
+#       asks the load-bearing question (does the bootstrap rewrite path:/source: at
+#       all) rather than the obsolete one, so the sentence cannot quietly become
+#       false — nor go on passing while measuring nothing.
 #   (2) Even once (1) is fixed, flipping `enabled` hides the MENU ENTRY only. The
 #       deselected service's Deployment keeps running: this is the UI half of "only
 #       start selected services", not the workload half — that needs the device to
-#       sync from a PRUNED tree, which it also does not do today.
+#       sync from a PRUNED tree. The Application SET is pruned now; the manifests
+#       each surviving Application pulls are still repo-sourced.
 #
 # Offline legs need bash + awk + sed only (python3 + PyYAML upgrade leg 1 from a
 # self-consistency check to an independent cross-check, and skip LOUDLY without).
@@ -558,21 +564,39 @@ fi
 
 # ── 4c) DOES THE RENDERED gate.sql EVER REACH A DEVICE? (it does not, today) ────
 # The unit's deliverable is INERT on a real device and this leg exists to keep that
-# sentence TRUE rather than comfortable. apps/29b pins
-# repoURL: https://github.com/hugmesh/hugmesh-generator.git + targetRevision: main;
-# specs/cluster/bootstrap/bootstrap.sh rewrites that literal into app-of-apps.yaml
-# ONLY — the single file it pipes to kubectl — and does NOT rewrite child
-# Applications (only the kind-local bootstrap does, bootstrap-kind.sh). So ArgoCD's
-# repo-server clones GitHub main and kustomize-generates the ConfigMap from the
-# COMMITTED gate.sql, never from the USB's rendered copy: a USB built with
-# `--exclude-services akkoma` bakes enabled=false into its own tree and the cluster
-# still applies enabled=true. That kills the UI half too, i.e. the whole behaviour —
-# what this unit lands is the MECHANISM and the GUARD, not the fixed behaviour.
+# sentence TRUE rather than comfortable.
+#
+# ⚠ THE REASON CHANGED UNDER THIS LEG, AND THE LEG WAS MEASURING THE OLD ONE
+# (2026-08-26, integration). As written on this branch the argument was: apps/29b
+# pins repoURL github.com/hugmesh/hugmesh-generator + targetRevision main, and
+# bootstrap.sh rewrites that literal into app-of-apps.yaml ONLY — "the single file
+# it pipes to kubectl" — so no child Application is ever retargeted. The sibling
+# keystone (fix/device-syncs-pruned-apps) DELETED that premise: bootstrap.sh now
+# applies every baked apps/*.yaml through the same repoURL/targetRevision sed, so
+# child Applications ARE applied from the device and ARE retargeted.
+#
+# THE CONCLUSION SURVIVES, FOR A DIFFERENT REASON, and that is the only reason
+# this leg still passes: apply_baked_app() rewrites repoURL and targetRevision and
+# NOTHING ELSE. `source.path: specs/cluster/manifests/federation-modules-gate` is
+# untouched, so ArgoCD's repo-server still clones a GIT repo and
+# kustomize-generates the ConfigMap from the COMMITTED gate.sql, never from the
+# USB's rendered copy. A USB built with `--exclude-services akkoma` bakes
+# enabled=false into its own tree and the cluster still applies enabled=true.
+# The keystone's own README says the same thing about every manifest under
+# manifests/; the gate is one instance of it.
+#
+# SO THE QUESTION IS RESTATED to the one that is actually load-bearing now: does
+# the gate Application's SOURCE resolve to the device, or to a git repo? Two ways
+# it could: the Application stops naming a remote git repoURL, or the bootstrap
+# starts rewriting `path:` (or the Application's source outright) at apply time.
+# Asking "does bootstrap rewrite anything under .../apps/" — the old probe — is now
+# TRUE-BY-CONSTRUCTION for a tree where the render still does not reach the device,
+# i.e. it would have gone on passing while measuring nothing.
 #
 # TWO-SIDED ON PURPOSE. If the caveat is deleted while the mechanism is still
 # broken, this fails. If someone later makes the device serve the gate from its
-# baked tree (the way the sibling fix/device-syncs-pruned-apps unit is doing for
-# apps/), the caveat becomes a LIE and this fails on that instead.
+# baked tree (a pruned source: an in-cluster repo server, or a path rewrite), the
+# caveat becomes a LIE and this fails on that instead.
 BOOT_SRC="${SRC}/bootstrap/bootstrap.sh"
 # Assembled from two halves ON PURPOSE: grep -F is line-based, so if the whole
 # phrase appeared literally on this line the check below would be satisfied by its
@@ -599,12 +623,15 @@ else
     app_repo="$(sed -E 's/(^|[[:space:]])#.*$//' "${APP_SRC}" \
       | awk '$1 == "repoURL:" && !seen { print $2; seen = 1 }')"
 
+    # WHAT bootstrap.sh's sed actually REWRITES on each applied manifest. Only
+    # repoURL/targetRevision today: both re-point the same REMOTE GIT REPO (that is
+    # the fork/mirror override), so neither moves the SOURCE onto the device. A
+    # `path:` rewrite, or a wholesale source replacement, would.
+    boot_rewrites_keys="$(sed -E 's/(^|[[:space:]])#.*$//' "${BOOT_SRC}" \
+      | grep -oE 's#(repoURL|targetRevision|path|source):' | sed 's/^s#//' | sort -u | tr '\n' ' ')"
     device_serves_gate=0
-    # NOTE the slashes: '${CLUSTER_DIR}/app-of-apps.yaml' contains the substring
-    # "apps" but is NOT the child-Application directory. Only a path under
-    # .../apps/ means the device bootstrap retargets child Applications.
-    case "${boot_rewrites}" in *"/apps/"*) device_serves_gate=1;; esac
-    case "${app_repo}" in ""|*"github.com/hugmesh/hugmesh-generator"*) : ;; *) device_serves_gate=1;; esac
+    case " ${boot_rewrites_keys} " in *" path: "*|*" source: "*) device_serves_gate=1 ;; esac
+    case "${app_repo}" in ""|*"github.com/hugmesh/hugmesh-generator"*) : ;; *) device_serves_gate=1 ;; esac
 
     missing=""
     for f in ${CAVEAT_FILES}; do
@@ -613,7 +640,7 @@ else
     done
 
     if [ "${device_serves_gate}" = "0" ]; then
-        ok "confirmed the gate's Application still sources '${app_repo}' and bootstrap.sh rewrites only '${boot_rewrites% }' — the build-time render does NOT reach a device"
+        ok "confirmed the gate's Application still sources '${app_repo}' and bootstrap.sh rewrites only [${boot_rewrites_keys% }] on the manifests it applies (${boot_rewrites% }) — the source.path still resolves in a GIT repo, so the build-time render does NOT reach a device"
         if [ -z "${missing}" ]; then
             ok "every caveat site says '${CAVEAT_MARK}' in so many words (gate.sql, job.yaml, apps/29b, docs, this header) — nobody can read this unit as the observed bug being fixed"
         else
@@ -621,9 +648,9 @@ else
         fi
     else
         if [ -n "${missing}" ]; then
-            ok "the device bootstrap now rewrites '${boot_rewrites% }' / the Application sources '${app_repo}', and the stale inert-on-a-device caveat has been removed"
+            ok "the device bootstrap now rewrites [${boot_rewrites_keys% }] / the Application sources '${app_repo}', so the gate resolves to the device's own tree — and the stale inert-on-a-device caveat has been removed"
         else
-            bad "the device now serves the gate from its own tree (bootstrap rewrites '${boot_rewrites% }', Application sources '${app_repo}') but the '${CAVEAT_MARK}' caveat is still there:${CAVEAT_FILES} — the docs now understate the fix"
+            bad "the device now serves the gate from its own tree (bootstrap rewrites [${boot_rewrites_keys% }], Application sources '${app_repo}') but the '${CAVEAT_MARK}' caveat is still there:${CAVEAT_FILES} — the docs now understate the fix"
         fi
     fi
 fi

@@ -1021,6 +1021,23 @@ lint:kind-profile-app-closure:
   script:
     - bash tests/scripts/test-kind-profile-app-closure.sh
 
+# The kind lane's SERVICE-SELECTION CHANNEL, end to end and offline: a selection
+# made in the Studio must survive the Makefile and arrive at bootstrap-kind.sh.
+# It exists because `make kind-up` passed only KIND_PROFILE and MFA, so
+# apps/01-metrics-server.yaml sat in no profile while KIND_PROFILE=sso deployed
+# seven HorizontalPodAutoscalers with no resource-metrics API to read — HPAs that
+# report <unknown> forever and look exactly like an idle cluster. Needs make and
+# python3 (the Studio half is asserted by CAPTURING the env `make` is handed, not
+# by reading the source for the word extra_env), hence python:3-slim + make.
+lint:kind-addon-channel:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends make >/dev/null
+  script:
+    - bash tests/scripts/test-kind-addon-channel.sh
+
 # Per-domain Casdoor lane (issue #47, Domain.idp=own): the casdoor-domains
 # ApplicationSet must ship an EMPTY element scaffold, both roots must carry the
 # ignoreDifferences+RespectIgnoreDifferences keystone (without it selfHeal

@@ -31,18 +31,19 @@
 # row needs and no more.
 #
 # ⚠ THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY, so a green Job here proves
-# the Job works, NOT that the build-time selection was honoured. apps/29b pins
-# repoURL github.com/hugmesh/hugmesh-generator.git @ main and bootstrap.sh rewrites
-# that literal into app-of-apps.yaml ONLY, so ArgoCD's repo-server mounts a gate.sql
-# generated from the COMMITTED file on GitHub main — not from the USB's rendered
-# copy. This lands the mechanism and its guard; the observed bug is not yet fixed
-# on a device.
+# the Job works, NOT that the build-time selection was honoured. The REASON changed
+# on 2026-08-26 and the conclusion did not: bootstrap.sh no longer applies only
+# app-of-apps.yaml — it applies every baked apps/*.yaml, apps/29b included. But
+# apply_baked_app() rewrites repoURL and targetRevision and NOTHING ELSE, so
+# `source.path: specs/cluster/manifests/federation-modules-gate` still resolves in
+# a GIT repo and ArgoCD's repo-server mounts a gate.sql generated from the COMMITTED
+# file — not from the USB's rendered copy. This lands the mechanism and its guard;
+# the observed bug is not yet fixed on a device. See gate.sql's header.
 #
 # ⚠ AND EVEN THEN, UI HALF ONLY. enabled=false hides the MENU ENTRY. The Deployment
-# keeps running. The workload half requires the device to sync from a PRUNED tree,
-# which it also does not do today (bootstrap.sh applies only app-of-apps.yaml,
-# whose root Application syncs specs/cluster/apps from
-# github.com/hugmesh/hugmesh-generator@main with recurse:true).
+# keeps running. The workload half requires the device to sync from a PRUNED tree:
+# the APPLICATION SET is pruned now (bootstrap.sh applies the baked apps/), but each
+# surviving Application still pulls specs/cluster/manifests/<dir> from the git repo.
 apiVersion: batch/v1
 kind: Job
 metadata:

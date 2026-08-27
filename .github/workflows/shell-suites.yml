@@ -98,6 +98,20 @@
 #       systems.hugmesh -> net.hugmesh package move (#141), and census_files()
 #       used `grep --exclude-dir`, which busybox does not have, so on alpine the
 #       census came back empty and reported nine false "blind spots".
+#   * tests/scripts/test-kind-metrics-api.sh
+#       structurally SKIP-ONLY here, MEASURED IN THIS IMAGE (2026-08-26,
+#       integration): `docker run --rm --network host alpine:3` + this job's apk
+#       set, then `bash tests/scripts/test-kind-metrics-api.sh` -> "SKIP kubectl is
+#       not on PATH", rc=0, zero assertions run. It asks a LIVE kind cluster
+#       whether metrics.k8s.io answers and whether a named HPA has stopped
+#       reporting <unknown>; no hosted runner has a cluster and this image has no
+#       kubectl, so listing it would raise the coverage number by one while gating
+#       exactly nothing — the inflation this block exists to prevent. NOT a
+#       claim that it passes: measured on a box WITH a kind cluster up but without
+#       metrics-server synced it goes RED (2 failures), which is the suite working.
+#       Run it after `make kind-up` (or `make kind-metrics-check`). Its OFFLINE
+#       half — the whole selection channel — IS gated, as
+#       tests/scripts/test-kind-addon-channel.sh.
 #   * tests/pentest/nuclei/test-templates.sh
 #       RED on issue #146; also needs a pinned nuclei v3.9.0 the CI images do not
 #       carry. #157 may already have fixed it (the failing check was a
@@ -241,6 +255,7 @@ jobs:
             tests/scripts/test-image-builder-always-on.sh
             tests/scripts/test-installer-ui-node-default.sh
             tests/scripts/test-kernel-artifact-cache.sh
+            tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh

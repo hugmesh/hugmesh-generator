@@ -23,20 +23,23 @@
 # the SQL itself RAISEs while the table is missing and the Job's backoffLimit
 # retries until the changelog has landed.
 #
-# ⚠ THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY, and THIS FILE IS WHY. The
-# repoURL/targetRevision below are the GitHub literals; specs/cluster/bootstrap/
-# bootstrap.sh rewrites those literals into app-of-apps.yaml ONLY (the single file
-# it pipes to kubectl) and does NOT rewrite child Applications — only the kind-local
-# bootstrap-kind.sh does. So on a real device ArgoCD's repo-server clones GitHub
-# main and generates the gate ConfigMap from the COMMITTED gate.sql, never from the
-# USB's rendered copy, and a `--exclude-services akkoma` build is ignored. Closing
-# this needs this source to point at the device's baked tree (the shape
-# fix/device-syncs-pruned-apps is taking for apps/). Guarded both ways by leg 4c of
-# tests/federation/test-federation-modules-selection.sh.
+# ⚠ THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY, and THIS FILE IS STILL WHY —
+# but for a NARROWER reason than it said before 2026-08-26. The old reason was
+# "bootstrap.sh applies app-of-apps.yaml ONLY and never retargets child
+# Applications"; the device-syncs-pruned-apps keystone deleted that premise, and
+# THIS Application is now applied from the device's own baked apps/ tree.
+# What still holds: apply_baked_app() rewrites repoURL and targetRevision and
+# NOTHING ELSE. The `path:` below is untouched, so ArgoCD's repo-server clones a
+# GIT repo and generates the gate ConfigMap from the COMMITTED gate.sql, never from
+# the USB's rendered copy, and a `--exclude-services akkoma` build is ignored.
+# Closing this needs a PRUNED SOURCE for manifests/ — deliberately out of scope for
+# the keystone, see specs/cluster/README.md "What the device syncs". Guarded both
+# ways by leg 4c of tests/federation/test-federation-modules-selection.sh.
 #
 # ⚠ AND EVEN THEN, UI HALF ONLY. This flips MENU VISIBILITY. The deselected
 # service's Deployment keeps running wherever one is still deployed; the workload
-# half needs the device to sync from a PRUNED tree, which it also does not do today.
+# half needs the device to sync from a PRUNED tree — the Application SET is pruned
+# now, the manifests each Application pulls are not.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

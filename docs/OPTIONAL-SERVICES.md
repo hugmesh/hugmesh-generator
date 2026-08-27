@@ -132,27 +132,34 @@ This is the **same shape** the local-mesh lane already uses: leg 4 of
 `HUGMESH_FEDERATION_ENABLE` / `_DISABLE` pair.
 
 > ⚠ **THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY — this lands the mechanism
-> and the guard, not the fixed behaviour.** `apps/29b-federation-modules-gate.yaml`
-> pins `repoURL: https://github.com/hugmesh/hugmesh-generator.git` +
-> `targetRevision: main`, and `specs/cluster/bootstrap/bootstrap.sh` rewrites that
-> literal into **`app-of-apps.yaml` only** — the single file it pipes to `kubectl`.
-> It does not rewrite child Applications; only the kind-local `bootstrap-kind.sh`
-> does. So ArgoCD's repo-server clones GitHub `main` and kustomize-generates the
+> and the guard, not the fixed behaviour.** The *reason* changed on 2026-08-26 and
+> the conclusion did not, so read the current one rather than the remembered one.
+>
+> It **used to be**: `bootstrap.sh` applies `app-of-apps.yaml` only, so no child
+> Application is ever retargeted. `fix/device-syncs-pruned-apps` deleted that
+> premise — `bootstrap.sh` now applies **every baked `apps/*.yaml`** directly,
+> `apps/29b-federation-modules-gate.yaml` included.
+>
+> What is **still** true is narrower, and is what keeps this render inert:
+> `apply_baked_app()` rewrites `repoURL` and `targetRevision` and **nothing else**.
+> `source.path: specs/cluster/manifests/federation-modules-gate` is untouched, so
+> ArgoCD's repo-server still clones a **git repo** and kustomize-generates the
 > ConfigMap from the **committed** `gate.sql`, never from the USB's rendered copy:
 > a USB built with `--exclude-services akkoma` bakes `enabled = false` into
 > `${SYSROOT}/var/lib/hugmesh/cluster/...` and the cluster still applies
 > `enabled = true`. **The observed bug is therefore not yet fixed on a device**, UI
-> half included. Closing it needs the gate's Application to source the device's
-> baked tree (the shape `fix/device-syncs-pruned-apps` is taking for `apps/`).
-> Leg 4c of the gate suite asserts this **both ways**, so the sentence cannot
-> quietly become false in either direction.
+> half included. Closing it needs a **pruned source** for `manifests/` — which the
+> keystone deliberately did not attempt (see `specs/cluster/README.md`, "What the
+> device syncs"). Leg 4c of the gate suite asserts this **both ways**, and now asks
+> the load-bearing question — *does the bootstrap rewrite `path:`/`source:` at all* —
+> rather than the obsolete one, so the sentence cannot quietly become false in
+> either direction.
 >
 > ⚠ **And even then: UI half only.** Flipping `enabled` hides the **menu entry**.
 > The deselected service's Deployment keeps running. The workload half needs the
-> device to sync from a **pruned** tree, which it also does not do today
-> (`bootstrap.sh` applies only `app-of-apps.yaml`, whose root Application syncs
-> `specs/cluster/apps` from `github.com/hugmesh/hugmesh-generator@main` with
-> `recurse:true`). Do not read a green gate Job as "only selected services start".
+> device to sync from a **pruned** tree: the *Application set* is pruned now, but
+> each surviving Application still pulls `specs/cluster/manifests/<dir>` from the
+> git repo. Do not read a green gate Job as "only selected services start".
 
 Gate: `tests/federation/test-federation-modules-selection.sh` (sources the real
 renderer as **both** stage4 builders resolve it (one shared library, no per-builder copy); asserts post-conditions on the rendered

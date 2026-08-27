@@ -28,26 +28,31 @@
 -- that field) and the builders' _opt_render_federation_modules() parses it there
 -- rather than carrying a second copy of the mapping.
 --
--- ⚠ THIS FILE'S BUILD-TIME RENDER IS INERT ON A DEVICE TODAY. apps/29b pins
--- repoURL github.com/hugmesh/hugmesh-generator.git @ main, and bootstrap.sh
--- rewrites that literal into app-of-apps.yaml ONLY (the single file it pipes to
--- kubectl) — it does not rewrite child Applications; only the kind-local
--- bootstrap-kind.sh does. ArgoCD's repo-server therefore clones GitHub main and
--- generates the gate ConfigMap from the COMMITTED copy of this file, never from
--- the USB's rendered copy. A USB built with `--exclude-services akkoma` bakes
--- enabled = false here and the cluster still applies enabled = true. THE OBSERVED
--- BUG IS NOT YET FIXED ON A DEVICE: this is the mechanism and the guard. Closing
--- it needs the gate's Application to source the device's baked tree.
+-- ⚠ THIS FILE'S BUILD-TIME RENDER IS INERT ON A DEVICE TODAY — and the REASON
+-- changed on 2026-08-26, while the conclusion did not. It used to be "bootstrap.sh
+-- applies app-of-apps.yaml ONLY, so no child Application is ever retargeted". That
+-- is no longer true: bootstrap.sh now applies every baked apps/*.yaml directly (the
+-- device-syncs-pruned-apps keystone), apps/29b included. What is STILL true is
+-- narrower and is what keeps this render inert: apply_baked_app() rewrites repoURL
+-- and targetRevision and NOTHING ELSE. `source.path:
+-- specs/cluster/manifests/federation-modules-gate` is untouched, so ArgoCD's
+-- repo-server still clones a GIT repo and generates the gate ConfigMap from the
+-- COMMITTED copy of this file, never from the USB's rendered copy. A USB built with
+-- `--exclude-services akkoma` bakes enabled = false here and the cluster still
+-- applies enabled = true. THE OBSERVED BUG IS NOT YET FIXED ON A DEVICE: this is
+-- the mechanism and the guard. Closing it needs the gate's Application to source
+-- the device's baked tree — a PRUNED SOURCE, which the keystone deliberately did
+-- not attempt for anything under manifests/.
 --
 -- ⚠ AND EVEN THEN, UI HALF ONLY. Flipping enabled=false hides the MENU ENTRY; the
 -- Deployment keeps running. The workload half needs the device to sync from a
--- PRUNED tree, which it also does not do today (bootstrap.sh applies only
--- app-of-apps.yaml, whose root Application syncs specs/cluster/apps from
--- github.com/hugmesh/hugmesh-generator@main with recurse:true).
+-- PRUNED tree. (The APPLICATION SET is pruned now — bootstrap.sh applies the baked
+-- apps/ — but each surviving Application still pulls its manifests from
+-- the GIT repo, so a baked edit under manifests/ still does not reach the cluster.)
 --
 -- ⚠ RENDERED FILE. Each row below is rewritten in place by
--- _opt_render_federation_modules() in build-rpi5-stage4.sh /
--- build-x86-host-stage4.sh from the resolved OPTIONAL_SERVICES selection. The
+-- _opt_render_federation_modules() in the SHARED scripts/_optional-services-lib.sh
+-- (sourced by both stage4 builders) from the resolved OPTIONAL_SERVICES selection. The
 -- line shape is the renderer's ANCHOR — keep it exactly:
 --     UPDATE federation_modules SET enabled = <true|false> WHERE slug = '<module>';
 -- The committed values are the DEFAULT-INCLUSION baseline from
