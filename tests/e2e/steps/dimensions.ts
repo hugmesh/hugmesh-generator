@@ -765,6 +765,35 @@ async function probeEnvironment(def: EnvironmentDef): Promise<Availability> {
   try {
     const status = await probeRequest(url, hostHeader);
     const owner = portOwner(port);
+    // THE COLLISION APPLIES ON THE SUCCESS PATH TOO, and this is where it was
+    // missing. A status line only proves SOMETHING is serving the port — the
+    // paragraph at the top of this file says exactly that, and then the failure
+    // branch below consults portOwner() while this branch merely PRINTED it into
+    // `detail`. So with the kind node holding :8443 and answering 404, docker was
+    // reported AVAILABLE by a probe whose own detail said
+    // `portOwner=hugmesh-local-control-plane`.
+    //
+    // The consequence is not a wrong label: an @env:docker scenario then RAN
+    // against the kind ingress and PASSED, instead of skipping with a reason. A
+    // green scenario that never touched the environment it names is worse than a
+    // red one.
+    //
+    // This is the same defect this suite's own mutation M6 pins for qemu
+    // ("accepts any server on the shared port as a device"). qemu was guarded by
+    // its pgrep gate above; docker had nothing equivalent.
+    if (owner && def.id !== 'kind' && /control-plane/.test(owner)) {
+      return {
+        available: false,
+        reason: `needs the ${def.name}, but host port :${port} is published by the `
+              + `container '${owner}' (the kind node), not by ${def.name}. Something `
+              + `answered HTTP ${status} at ${url} and it was NOT this environment — `
+              + `the two share this port and only one can hold it. `
+              + `Start it with: ${def.startHint}`,
+        detail: `status=${status} probe=${url}`
+              + (hostHeader ? ` host=${hostHeader}` : '')
+              + ` portOwner=${owner} verdict=foreign-owner`,
+      };
+    }
     return {
       available: true,
       reason: `${def.name} answered HTTP ${status} at ${url}`,
