@@ -1,4 +1,4 @@
-"""ModePage — the menu of choices: pick ONE of nine clearly-distinct things to build.
+"""ModePage — the menu of choices: pick ONE of ten clearly-distinct things to build.
 
 The choices map onto the EXISTING three emission modes plus six non-image
 side-flows, PRESENTED in the operator's mesh-building journey order (issue #50):
@@ -70,7 +70,7 @@ class ModePage(QtWidgets.QWizardPage):
             "built images as emulated devices, MESH EMULATION boots a whole "
             "built mesh locally, and CREATE NODES FOR LOCAL CLOUD "
             "turns the local mesh into buildable node images.")
-        # nine cards are taller than nine radios were: scroll, never clip
+        # ten cards are taller than the radios were: scroll, never clip
         lay = scrollable(self)
         self.group = ChoiceCardGroup(self)
         # NINE clearly-distinct choices, in the operator's mesh-building JOURNEY
