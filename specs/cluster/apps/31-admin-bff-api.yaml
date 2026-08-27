@@ -47,6 +47,13 @@ spec:
 #
 # The RUNTIME surface an operator/superadmin actually drives is the per-slug
 # OptionalService CRs, and those writes ARE exempted from selfHeal — on their own
-# objects, by NAME, not by index: apps/16-reserved-prefixes-policy.yaml for the
-# installed-services ConfigMap data keys, and app-of-apps.yaml + apps/00-app-of-
-# apps-waved.yaml for the 13a ApplicationSet elements.
+# objects, by NAME, not by index: the reserved-prefixes-policy Application
+# (apps/16) for the installed-services ConfigMap data keys, and the two app-of-apps
+# roots for the 13a ApplicationSet elements.
+#
+# ⚠ Deliberately NOT spelled as a full `apps/<n>-<name>.yaml` filename above.
+# tests/scripts/test-kind-profile-app-closure.sh treats that literal pattern in an
+# APPLIED Application as a bootstrap cross-reference and requires the named app to be
+# applied too. reserved-prefixes-policy is not in the kind profile, so naming it that
+# way here invented an unsatisfied dependency out of a prose citation and took the
+# suite from 22/1 to 21/2. Cite it by Application name, not by filename.
