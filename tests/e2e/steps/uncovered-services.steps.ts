@@ -69,7 +69,7 @@ function readRepoFile(rel: string): string {
 
 // ── 1. the fe-gateway route table ────────────────────────────────────────────
 
-interface FeRoute {
+export interface FeRoute {
   id: string;
   uri: string;
   paths: string[];
@@ -91,7 +91,7 @@ let feRoutesCache: FeRoute[] | undefined;
  * pattern below is anchored at `- <key>:` / `- Path=` with only whitespace
  * before it, and every comment in that file starts with `#`.
  */
-function feRoutes(): FeRoute[] {
+export function feRoutes(): FeRoute[] {
   if (feRoutesCache) return feRoutesCache;
   const out: FeRoute[] = [];
   let cur: FeRoute | undefined;
@@ -234,7 +234,7 @@ Then(
 
 // ── 2. the route-access seed ─────────────────────────────────────────────────
 
-interface AccessRow { gateway: string; pattern: string; role: string; allow: boolean }
+export interface AccessRow { gateway: string; pattern: string; role: string; allow: boolean }
 
 let accessRowsCache: AccessRow[] | undefined;
 
@@ -242,7 +242,7 @@ let accessRowsCache: AccessRow[] | undefined;
  *  of the committed route-access schema. Same authority the 33 handwritten specs
  *  mirror by hand in specs/rbac-route-access.ts — read here rather than copied,
  *  because a copy is how this repo grew three divergent persona lists. */
-function accessRows(): AccessRow[] {
+export function accessRows(): AccessRow[] {
   if (accessRowsCache) return accessRowsCache;
   const re = /\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false)\s*\)/g;
   const out: AccessRow[] = [];
