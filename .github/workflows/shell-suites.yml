@@ -411,6 +411,7 @@ jobs:
             tests/scripts/test-python-targets-seed.sh
             tests/scripts/test-url-embedded-credentials.sh
             tests/scripts/test-x86-artifact-integrity.sh
+            tests/stack/test-anubis-flip-wiring.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
             tests/workload-console/test-console-posture-and-inventory.sh
@@ -502,6 +503,7 @@ jobs:
             tests/domain-registry/test-domain-reconcile-fuzz.sh
             tests/domain-registry/test-templating-rename-pr.sh
             tests/menu/ncurses_charset_test.sh
+            tests/scripts/test-e2e-docker-base-url-parity.sh
             tests/scripts/test-e2e-reporter-shape.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
