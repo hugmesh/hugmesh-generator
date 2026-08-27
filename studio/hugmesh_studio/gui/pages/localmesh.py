@@ -1376,6 +1376,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                 f"finishes.")
         self.cancel_btn.setVisible(cancellable)
         self.cancel_btn.setEnabled(cancellable)
+        # A BANKED LINE BELONGS TO THE RUN THAT WAS CURRENT WHEN IT WAS BANKED.
+        # _drain_lines files every batch against _runs[-1], so anything still in
+        # the inbox when a new run is appended is silently re-attributed to that
+        # new run. Flush FIRST, while _runs[-1] is still the previous run, so a
+        # straggler from any source lands on its own run (or, if there is none, in
+        # the pane) rather than opening the next run's log with someone else's line.
+        self._drain_lines()
         run = _StageRun(label, verb_phases(verb))
         # the handler's own pre-flight lines are this run's first log lines
         run.buffer.extend(self._pending)
@@ -1445,6 +1452,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         saved = self._save_run_log(self._runs[-1], ok) if self._runs else ""
         if saved:
             self._on_line(f"[log] this run was saved to {saved}")
+            # DELIVER IT NOW, while _runs[-1] is still the run this notice is
+            # ABOUT. _on_line only banks into _line_inbox, and the drain timer was
+            # stopped a few lines above, so without this flush the notice sits in
+            # the inbox until the NEXT verb restarts the timer — and _drain_lines
+            # always files a batch against _runs[-1], which by then is a DIFFERENT
+            # run. That is not theoretical: every one of the 5 saved logs in the
+            # operator's corpus that carries a save notice opens with the PREVIOUS
+            # run's filename, a perfect misattribution chain.
+            self._drain_lines()
         if ok:
             self.status.setText("Done." + (f"  Log: {saved}" if saved else ""))
         else:
