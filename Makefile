@@ -1881,6 +1881,13 @@ stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is c
 	bash tests/scripts/test-e2e-env-interface-dimensions.sh
 	bash tests/scripts/test-e2e-social-function-matrix.sh
 	bash tests/scripts/test-e2e-cli-lane.sh
+#   The media/games and governance FUNCTION guards arrived UNWIRED: their author
+#   branches added the scripts and never called them from anywhere, which
+#   tests/scripts/test-guard-integrity.sh check 2 reports as "suite(s) nothing
+#   runs" on the merged tree. A drift guard nothing executes is the decorative
+#   artefact this repo keeps re-learning about, so they are wired here.
+	bash tests/scripts/test-e2e-func-media-games.sh
+	bash tests/scripts/test-e2e-governance-function-matrix.sh
 
 # The Gherkin lane's TWO deeper guards, each with its own mutation battery. Split
 # out of stack-e2e-bdd-check because they are minutes rather than seconds: each

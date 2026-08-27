@@ -93,7 +93,18 @@ restore_all() {
   MUTATED=()
 }
 cleanup() { restore_all; rm -rf "${WORK}"; }
-trap cleanup EXIT
+# INT TERM HUP as well as EXIT, because this guard MUTATES production files and
+# restores them in the trap. Bash runs no EXIT trap for an untrapped SIGTERM, so
+# a `timeout`, a Ctrl-C or a killed CI job could leave the tree MUTATED.
+#
+# THIS WIDENING IS NOT A COMPLETE FIX AND MUST NOT BE READ AS ONE. It fires on a
+# bare `kill -TERM` (verified in isolation), but a `timeout` arriving while the
+# script is blocked in a command substitution around `npx playwright test` was
+# measured TWICE to leave tests/e2e/steps/coverage-catalogue.ts still carrying
+# the M4 always-admit stub after the process was gone. The real protection is
+# the preflight below, which makes the NEXT run refuse instead of silently
+# trusting a poisoned oracle. Worktrees are shared here; that is the hazard.
+trap cleanup EXIT INT TERM HUP
 
 # mutate <relpath>  (python patch on stdin) — applies it and PROVES the file
 # really changed. A mutation that silently failed to apply would make this guard

@@ -97,7 +97,58 @@ restore_all() {
   MUTATED=()
 }
 cleanup() { restore_all; rm -rf "${WORK}"; }
-trap cleanup EXIT
+# INT TERM HUP as well as EXIT, because this guard MUTATES production files and
+# restores them in the trap. Bash runs no EXIT trap for an untrapped SIGTERM, so
+# a `timeout`, a Ctrl-C or a killed CI job could leave the tree MUTATED.
+#
+# THIS WIDENING IS NOT A COMPLETE FIX AND MUST NOT BE READ AS ONE. It fires on a
+# bare `kill -TERM` (verified in isolation), but a `timeout` arriving while the
+# script is blocked in a command substitution around `npx playwright test` was
+# measured TWICE to leave tests/e2e/steps/coverage-catalogue.ts still carrying
+# the M4 always-admit stub after the process was gone. The real protection is
+# the preflight below, which makes the NEXT run refuse instead of silently
+# trusting a poisoned oracle. Worktrees are shared here; that is the hazard.
+trap cleanup EXIT INT TERM HUP
+
+# ── PREFLIGHT: REFUSE TO RUN ON A TREE A PREVIOUS RUN POISONED ───────────────
+# The battery mutates these files. If a previous run died before restoring them
+# (see the trap note above — measured twice), they are still mutated now, and
+# every clause below would be evaluated against a broken oracle. The M4 stub in
+# particular makes seedDecision() admit EVERYONE, which does not fail loudly:
+# the emit-vs-committed diff goes red for reasons that read like ordinary drift,
+# and a reader "fixes" it by re-emitting, baking the poison into the tree.
+#
+# So: before touching anything, require every mutation target to match git HEAD.
+# This does not detect a *legitimate* uncommitted edit, and it must not — it
+# names the files and tells you how to check, rather than reverting work.
+MUTATION_TARGETS=(
+  tests/e2e-extra-personas.sh
+  tests/e2e/steps/dimensions.ts
+  tests/e2e/steps/coverage-catalogue.ts
+  tests/e2e/features/coverage/access-matrix-wiki.feature
+)
+preflight_clean_tree() {
+  git -C "${REPO}" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  local dirty=() rel
+  for rel in "${MUTATION_TARGETS[@]}"; do
+    git -C "${REPO}" diff --quiet HEAD -- "${rel}" 2>/dev/null || dirty+=("${rel}")
+  done
+  [ "${#dirty[@]}" -eq 0 ] && return 0
+  echo "REFUSING TO RUN: ${#dirty[@]} file(s) this guard mutates differ from git HEAD:" >&2
+  for rel in "${dirty[@]}"; do echo "    ${rel}" >&2; done
+  echo "" >&2
+  echo "If these are YOUR edits, commit or stash them and re-run." >&2
+  echo "If you did not edit them, a PREVIOUS RUN OF THIS GUARD WAS KILLED before" >&2
+  echo "it restored them — check for the always-admit stub with:" >&2
+  echo "    grep -n \"why: 'M4'\" tests/e2e/steps/coverage-catalogue.ts" >&2
+  echo "and restore with:  git -C ${REPO} checkout -- ${MUTATION_TARGETS[*]}" >&2
+  echo "" >&2
+  echo "Exiting 2. NOTHING WAS CHECKED — running on a poisoned oracle would be" >&2
+  echo "worse than not running at all." >&2
+  return 1
+}
+preflight_clean_tree || exit 2
+
 
 # mutate <relpath> <python-patch-file> — apply and PROVE the file changed. A
 # mutation that silently failed to apply would report a false CAUGHT, which is

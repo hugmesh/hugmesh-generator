@@ -166,32 +166,32 @@ Feature: Opening, building, exporting and saving a character in both editors
   # flips those rows is the Studio wizard's local-mesh page — the GUI half of the
   # operator's "cli and gui" ask for this domain.
   #
-  # IT CANNOT BE GRABBED HEADLESSLY TODAY, and that is measured, not assumed.
-  # LocalMeshPage.initializePage starts a _StatusProbe QThread; tests/e2e/studio-
-  # driver.py grabs the widget and exits without joining it, so the interpreter
-  # tears down with the thread still running and Qt aborts — SIGABRT, exit 134,
-  # "QThread: Destroyed while thread '' is still running" on stderr. The PNG is
-  # actually written first (~75 KB), so the failure is entirely in teardown; every
-  # other wizard page this suite grabs (welcome, mode, deploy, qemu) exits 0.
+  # IT COULD NOT BE GRABBED HEADLESSLY WHEN THIS FEATURE WAS WRITTEN, and this
+  # scenario used to pin that defect: LocalMeshPage.initializePage started a
+  # _StatusProbe QThread, tests/e2e/studio-driver.py grabbed the widget and
+  # exited without joining it, the interpreter tore down with the thread still
+  # running, and Qt aborted — SIGABRT, exit 134, "QThread: Destroyed while
+  # thread '' is still running". The PNG was written first (~75 KB), so the
+  # failure was entirely in teardown.
   #
-  # So this scenario asserts the CURRENT behaviour rather than the behaviour we
-  # want, exactly as games-console.feature pins the /login-redirect inconsistency:
-  # the day the driver joins its probe threads (or the page stops starting one on
-  # a headless grab), THIS goes red, which is the prompt to replace it with the
-  # positive @interface:studio scenario the domain is owed:
+  # THE DEFECT IS FIXED, AND THE PIN IS WHAT CAUGHT IT. The pinned-defect
+  # scenario asserted `the command failed`; feat/e2e-matrix-gui-lane landed
+  # _live_thread_names() + a thread join in tests/e2e/studio-driver.py and the
+  # matching change in studio/hugmesh_studio/gui/pages/localmesh.py, so the
+  # driver now exits 0 reporting "liveThreads": []. The two branches touched
+  # disjoint files and merged without a git conflict — the ONLY thing that said
+  # anything had changed was this scenario going red on the merged tree, exactly
+  # as its author wrote that it would.
   #
-  #     When I grab the Studio wizard page "localmesh"
-  #     Then the Studio grab is a non-empty PNG
-  #     And the Studio grab shows the wizard page "localmesh"
-  #
-  # A green-looking skip would have hidden this. A grab scenario asserting success
-  # would have failed for a reason nobody could read off the report.
-  @function:open @service:character-forge @interface:cli @layer:ui
-  Scenario: PINNED DEFECT — the Studio local-mesh page aborts when grabbed headlessly @function:open @service:character-forge @interface:cli @layer:ui
-    When I run the shell command "QT_QPA_PLATFORM=offscreen ${SNAP_STUDIO_PYTHON:-python3} tests/e2e/studio-driver.py --page localmesh --grab ${TMPDIR:-/tmp}/hugmesh-localmesh-grab-probe.png"
-    Then the command failed
-    And the command output contains "QThread: Destroyed while thread"
-    And the evidence manifest holds a "transcript" artefact for this scenario
+  # So it is now replaced with the positive scenario that comment prescribed,
+  # verbatim. Do NOT weaken this back to a skip: a green-looking skip here is
+  # what would have hidden the original defect.
+  @function:open @service:character-forge @interface:studio @layer:ui
+  Scenario: the Studio local-mesh page — the operator GUI that enables these services — grabs cleanly @function:open @service:character-forge @interface:studio @layer:ui
+    When I grab the Studio wizard page "localmesh"
+    Then the Studio grab is a non-empty PNG
+    And the Studio grab shows the wizard page "localmesh"
+    And the evidence manifest holds a "widget-grab" artefact for this scenario
     And every evidence artefact recorded for this scenario exists on disk
 
   # The positive control for the driver itself. Without it, the scenario above
