@@ -865,13 +865,18 @@ rebrand_sysroot() {
         # FROZEN k8s label-KEY / API-group namespace `hugmesh.net/<suffix>` must NOT
         # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
         # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
-        # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
+        # equals, quote, backtick); every HOST/URL form is preceded by a dot or slash. The
+        # equals is the KEY=VALUE shape of specs/cluster/egress-vpn-secret-contract.env:
+        # without it every non-default-domain build rebranded that env contract to
+        # <org>.net/ while the manifests' nodeSelector stayed literal, so the two halves
+        # disagreed on a FROZEN label key (tests/scripts/test-rebrand-frozen-label-keys.sh
+        # drives this exact function over every builder). Protect the KEY
         # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
         # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
         # neither `hugmesh.net` nor `hugmesh-`, so the middle rules skip it.
         sed -i \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
-            -e "s|\([ {(,\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
             -e "s|hugmesh|${_org}|g" \
             -e "s|hugmesh\.net|${_domain}|g" \

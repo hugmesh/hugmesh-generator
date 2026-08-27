@@ -233,7 +233,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # printed
 #     150 of 171 suites are named by a pull_request-triggered workflow
 # +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-150}"
+#
+# RE-MEASURED 2026-08-27 on fix/rebrand-sentinel-eq-and-fetch-repos, same procedure:
+# this commit adds tests/scripts/test-rebrand-frozen-label-keys.sh (drives the REAL
+# rebrand_sysroot of all ten builders over a fixture sysroot; bash + sed + awk) and
+# names it in shell-suites.yml's ALPINE job. Running this file on the integrated
+# tree printed
+#     151 of 172 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-151}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
