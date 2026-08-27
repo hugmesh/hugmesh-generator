@@ -25,13 +25,9 @@ from ..core import theme, theme_presets
 
 __all__ = ["ThemesScreen", "EFFECT_LABELS", "VANTA_DEPENDENCY_NOTE", "chrome_summary"]
 
-#: Why the vanta rows cannot be picked yet — the same dependency the GUI editor
-#: names (hugmesh-host-shell PR #20 deferred porting the loader to the shell).
-VANTA_DEPENDENCY_NOTE = (
-    "Vanta effects need the three.js + vanta effect loader that today ships only "
-    "in hugmesh-login-ui; porting it to the host shell was deferred by "
-    "hugmesh-host-shell PR #20. The choice is already persisted by the theme "
-    "model, and these rows unlock once the login-ui loader lands in the shell.")
+#: Re-exported from core.theme, which is the single definition. Kept in __all__
+#: because callers and the GUI/TUI parity test both read it from this module.
+from hugmesh_studio.core.theme import VANTA_DEPENDENCY_NOTE  # noqa: F401
 
 #: effect id -> human label — parity-pinned against the GUI editor's labels.
 EFFECT_LABELS = {

@@ -31,6 +31,13 @@ from ...core import theme
 from ._logintheme import LoginThemeGroup, populate_preset_combo
 from ._widgets import NoWheelComboBox, _row
 
+#: The same sentence the TUI shows, read from the ONE definition in core.theme so
+#: the two front ends cannot drift again. test_tui_gui_parity.py asserts the
+#: equality; it went red because this module had no such attribute at all, which
+#: meant a GUI user could pick a vanta effect and be told nothing about why it
+#: would not render in the host shell.
+VANTA_DEPENDENCY_NOTE = theme.VANTA_DEPENDENCY_NOTE
+
 _EFFECT_LABELS = {
     "gradient": "Moving gradient (shipped default — colours follow the theme)",
     "none": "None — flat themed background",
@@ -204,7 +211,8 @@ class ThemeEditorDialog(QtWidgets.QDialog):
             "Emitted as --sd-bg-effect (omitted for the default gradient). The vanta "
             "effects animate with the theme's own colours; consumers degrade any "
             "value they cannot render to the themed gradient, and honour "
-            "prefers-reduced-motion by never starting an animation.")
+            "prefers-reduced-motion by never starting an animation.\n\n"
+            + VANTA_DEPENDENCY_NOTE)
         self.bg_effect.currentIndexChanged.connect(
             lambda _i: g.set_chrome(
                 "bg_effect", self.bg_effect.currentData() or theme.BG_EFFECT_DEFAULT))
