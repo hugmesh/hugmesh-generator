@@ -393,6 +393,7 @@ jobs:
             tests/platform-capability-rbac/test-argocd-route-honesty.sh
             tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
             tests/phone/test-phone-wizard.sh
+            tests/scripts/test-appstore-effector-flags.sh
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh
@@ -412,6 +413,7 @@ jobs:
             tests/scripts/test-x86-artifact-integrity.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
+            tests/workload-console/test-console-posture-and-inventory.sh
             tests/workload-console/test-workload-console.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
