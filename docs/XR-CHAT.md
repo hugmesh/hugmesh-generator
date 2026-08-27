@@ -78,9 +78,10 @@ A MULTI-APP slug shaped like phpbb (BFF db + BFF api + UI remote), registered in
   `scripts/clone-all-repos.sh`.
 
 **Federation registration** (`federation_modules`, kind `remote-shell`, mounted
-at `/character-forge`, ROLE_USER) lives in the separate `hugmesh-federation-api`
-repo — changeset 037; see
-`specs/cluster/manifests/character-forge/FEDERATION-REGISTRATION-TODO.md`.
+at `/character-forge`, ROLE_USER) is registered in the separate
+`hugmesh-federation-api` repo as changeset
+`038-register-character-forge-module.xml` (plus a follow-up
+`039-rebrand-character-forge-remote-entry.xml` repointing `remote_entry_url`).
 
 ## 3. coturn dependency note (A/V)
 

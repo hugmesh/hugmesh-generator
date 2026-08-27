@@ -81,7 +81,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # tests/qemu/role_topology_test.sh's siblings' census correction, with
 # test-kind-metrics-api.sh (A1) landing UNGATED and recorded below. Letting any
 # branch's number win would have pinned a cardinality nobody derived from this tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-134}"
+# 130 -> 133 on merge with fix/profile-password-flows: that branch wires
+# test-password-reset-front-door.sh, test-kind-profile-route-closure.sh and
+# test-route-access-oracle.sh into the pull_request workflow. MEASURED at the
+# merge, not carried over from either side -- the branch itself said 120, main
+# said 130, and neither number is true of the merged tree.
+#
+# 134 -> 139 / denominator 144 -> 150 when main was merged in (it had moved to
+# 135/146 meanwhile via the tube signed-media gate, the fragment route gate and
+# the password-reset front door). BOTH comment blocks above are kept because both
+# record a real reconciliation; neither number is true of THIS tree. MEASURED here
+# by running this file and reading the line it prints:
+#     139 of 150 suites are named by a pull_request-triggered workflow
+PREMERGE_BASELINE="${GUARD_PREMERGE:-139}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -125,6 +137,7 @@ PREMERGE_UNGATED=(
   tests/scripts/test-kind-metrics-api.sh
   tests/scripts/test-liquibase-grant-roles.sh
   tests/scripts/test-service-env-contract.sh
+  tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
   tests/stack/test-web-locales-wiring.sh
 )

@@ -1237,7 +1237,7 @@ mesh-emu-down: ## stop every emulated device the harness started (sweeps stale p
 # kind-e2e resolver-maps hugmesh.net -> 127.0.0.1 (kind-local.yaml maps
 # the internal ingress out on :8443) and runs spec 27. No /etc/hosts edits,
 # no sudo. See specs/cluster/bootstrap/kind-local/README.md.
-# ONLY=<repo>[,<repo>...] rebuilds a SUBSET rather than all eight images — the
+# ONLY=<repo>[,<repo>...] rebuilds a SUBSET rather than every image — the
 # difference between a one-image UI iteration and a full rebuild that includes
 # three unrelated Java builds. Unknown names FAIL rather than filtering to
 # nothing, because a typo that loads no image while exiting 0 leaves the cluster
