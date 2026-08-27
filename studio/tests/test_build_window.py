@@ -351,6 +351,32 @@ def test_the_open_window_button_mirrors_activation_for_every_row_kind(qapp, tmp_
         w.deleteLater()
 
 
+def test_the_open_window_button_is_laid_out_and_its_window_is_shown(qapp, tmp_path):
+    """Skeptic finding (mutation-proven): clicking the button and counting
+    _build_windows cannot see (1) a button wired but never added to a layout —
+    findChildren()/.click() still work while users never see it — or (2)
+    open_build_window() creating + appending a window it no longer show()s.
+    Both mutations were applied to production; the rest of this suite stayed
+    green under (2), and this test failed on each."""
+    w = _widget_with_one_session(qapp, tmp_path)
+    try:
+        w.show()
+        assert w.open_window_btn.isVisible(), "button exists but users never see it"
+        assert any(lay.indexOf(w.open_window_btn) != -1
+                   for lay in w.findChildren(QtWidgets.QLayout)), \
+            "button was never added to any layout"
+        w.table.selectRow(0)
+        w.open_window_btn.click()
+        assert len(w._build_windows) == 1
+        assert w._build_windows[0].isVisible(), \
+            "window object created but never show()n — a silent no-op for the user"
+    finally:
+        for win in list(w._build_windows):
+            win.close()
+        w.hide()
+        w.deleteLater()
+
+
 def test_nothing_carries_the_retired_click_the_row_tooltip(qapp, tmp_path):
     """(d) the "Click the row to open…" instruction is retired: the button says it
     now. No table cell and no child widget may still carry that copy."""
