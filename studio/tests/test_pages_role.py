@@ -17,9 +17,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from hugmesh_studio.core.config import ROLE_CHOICES  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from hugmesh_studio.core.config import (  # noqa: E402
+    ImageConfig, ROLE_CHOICES, UNAFFILIATED_ROLE, x86_desktop_axis,
+)
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from hugmesh_studio.gui.pages.role import RolePage  # noqa: E402
 from hugmesh_studio.gui.qt import Qt  # noqa: E402
 
 from _helpers import advance_to, pick_mode, pick_role, pick_platform  # noqa: E402
@@ -256,3 +261,393 @@ def test_desktop_weight_explicit_thin_survives_the_desktop_role(wiz):
     joined = " ".join(args)
     assert "--desktop thin" in joined
     assert (wiz.cfg.role, wiz.cfg.desktop) == ("desktop", "thin")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# THE 2026-08-26 DE-DUPLICATION ROUND
+#
+# Operator report, verbatim: "standalone menu is asking same questions seemingly multiple
+# times when nothing should be an image there related to the mesh or domain at all."
+# Their image was role=standalone-unaffiliated / platform=x86 (session
+# 20260826-151356-64070a, build-standalone-unaffiliated.x86.log). A measured headless walk
+# proved no page is visited twice — every duplicate is a REPEATED QUESTION inside one
+# screen or across two adjacent ones. The four this file owns:
+#
+#   (a) the machine SCAN, offered on RolePage AND on the very next HardwarePage;
+#   (b) the knobs the chosen ROLE already pins (--standalone / --capable / desktop weight)
+#       and --with-sunshine, which standalone mode has already answered;
+#   (c) the TWO SPELLINGS of "unaffiliated" — the ROLE ROW and a composable checkbox on
+#       the same screen, producing the identical image.
+#
+# The gates below are pinned in BOTH directions: every hide has a mutation guard proving
+# the surface survives where it still means something. That is the whole risk of a
+# de-duplication round — a rule that hid the control from everyone would satisfy the
+# operator's report and silently delete four real capabilities.
+# ══════════════════════════════════════════════════════════════════════════════════════
+
+def _role_page(cfg):
+    """RolePage against a stub wizard (it touches nothing but ``.cfg`` and
+    ``.generator_dir``) — the same construction test_pages_fields_asks.py uses, so a gate
+    can be probed for an arbitrary (mode, role, platform) without walking the flow."""
+    page = RolePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    return page
+
+
+# ---- (a) ONE machine scanner in the flow -------------------------------------------
+
+def test_the_machine_scan_is_offered_exactly_once(wiz):
+    """DECISION 2(a). The scanner lived on two consecutive pages: a synthetic
+    ``this-machine-scan`` row in RolePage's machine-profile combo (running hw_scan.scan()
+    into a RolePage-local output label) and HardwarePage's "Scan THIS machine" button —
+    same call, same three fields, same text template. It now exists only on HardwarePage,
+    which owns the fields a scan writes."""
+    role = advance_to(wiz, wizard_mod.RolePage)
+    ids = [role.profile.itemData(i) for i in range(role.profile.count())]
+    assert "this-machine-scan" not in ids, (
+        "the synthetic scanner row is back in the machine-profile combo — that is the "
+        "duplicate of HardwarePage's Scan button, one page earlier")
+    assert not hasattr(role, "scan_out"), (
+        "RolePage still carries the scan output label; with the scan gone it can only "
+        "ever render empty")
+    hw = advance_to(wiz, wizard_mod.HardwarePage)
+    assert hw.scan_btn.isVisibleTo(hw) and hasattr(hw, "scan_out"), (
+        "the surviving scanner must be the HardwarePage one — removing BOTH would also "
+        "satisfy the assertions above")
+
+
+def test_every_machine_profile_is_a_real_machine(wiz):
+    """The mutation guard for the removal: the combo still lists the curated machines
+    (only the ACTION row went), and each id resolves to a loaded profile."""
+    role = advance_to(wiz, wizard_mod.RolePage)
+    ids = [role.profile.itemData(i) for i in range(role.profile.count())
+           if role.profile.itemData(i)]
+    assert len(ids) > 30, f"the profile catalog collapsed to {len(ids)} entries"
+    assert set(ids) == {pr.id for pr in role.profiles}, (
+        "the combo and the loaded catalog disagree — a synthetic, machine-less row is "
+        "exactly the shape the removed scanner entry had")
+    assert "framework-13-intel" in ids       # the profile the fold tests above drive
+
+
+# ---- (b) the knobs the ROLE already pins -------------------------------------------
+
+@pytest.mark.parametrize("role", ["standalone-thin", "standalone-thick",
+                                  UNAFFILIATED_ROLE])
+def test_image_posture_is_hidden_where_the_role_presets_it(qapp, role):
+    """build-x86-host-stage4.sh sets STANDALONE=true in the role arm itself (:1325 thin,
+    :1332 thick, :1344 unaffiliated — RE-DERIVED against the current file, these first
+    shipped as the pre-diff :1310/:1317/:1329), and the measured standalone walk emits no
+    --standalone at all — so the "Image posture" box asked the operator to re-answer what
+    the image type above had already decided. The SECTION goes with the checkbox: a
+    mode-gated group must not leave an orphan header behind."""
+    page = _role_page(ImageConfig(mode="standalone", role=role, platform="x86"))
+    assert not page.standalone.isVisibleTo(page)
+    assert not page.posture_box.isVisibleTo(page), (
+        "the 'Image posture' header survived its only control")
+
+
+@pytest.mark.parametrize("mode,role,platform", [
+    ("standalone", "chromebook", "x86"),          # composes: a standalone Chromebook
+    ("cloud", "laptop", "x86"),                   # composes: an FDE cloud laptop
+    ("standalone", "orangepizero2", "orangepizero2"),   # the appliance's DEFINING posture
+])
+def test_image_posture_survives_where_it_genuinely_composes(qapp, mode, role, platform):
+    """MUTATION GUARD for the gate above — and the finding-1 regression pin. A rule that
+    keyed on "standalone mode" instead of "this role presets it" would hide the box on the
+    Chromebook (where --standalone is the only way to drop the mesh plane) and on the ARM
+    appliances, whose builders compose ${STANDALONE} unconditionally
+    (build-orangepi-zero2-stage4.sh:637-648) and whose whole point it is."""
+    page = _role_page(ImageConfig(mode=mode, role=role, platform=platform))
+    assert page.standalone.isVisibleTo(page)
+    assert page.posture_box.isVisibleTo(page)
+    assert "compose the same posture" in page.standalone.toolTip()
+
+
+def test_capable_is_hidden_only_where_the_role_presets_it(qapp):
+    """--capable: :1332 and :1344 set CAPABLE=true for standalone-thick and
+    standalone-unaffiliated, so the checkbox there is a no-op question. :1325 does NOT set
+    it for standalone-thin — that is exactly the compose G21 was added for, so the
+    checkbox stays. (Numbers RE-DERIVED; the pre-diff :1317/:1329/:1310 pointed at
+    unrelated code.)"""
+    for role in ("standalone-thick", UNAFFILIATED_ROLE):
+        page = _role_page(ImageConfig(mode="standalone", role=role, platform="x86"))
+        assert not page.capable.isVisibleTo(page), role
+    page = _role_page(ImageConfig(mode="standalone", role="standalone-thin", platform="x86"))
+    assert page.capable.isVisibleTo(page)
+    assert page.capable.isEnabled()
+
+
+def test_desktop_weight_row_is_hidden_when_the_role_pins_the_only_answer(qapp):
+    """A combo offering "(default)" plus the one weight the role already pins is not a
+    choice. The gate keys on the SAME x86_desktop_axis() the combo is filtered by, so the
+    two can never disagree; the caption row and the weight help label go with it rather
+    than being left as orphans over a hidden control."""
+    for role in ("standalone-thin", "standalone-thick", UNAFFILIATED_ROLE):
+        page = _role_page(ImageConfig(mode="standalone", role=role, platform="x86"))
+        assert len(x86_desktop_axis(role)) == 1, role   # the premise
+        assert not page.desktop_row.isVisibleTo(page), role
+        assert not page.desktop_help.isVisibleTo(page), role
+
+
+def test_desktop_weight_row_survives_on_a_role_with_a_real_choice(qapp):
+    """MUTATION GUARD: the client roles really take both weights, so the row must stay —
+    a rule that hid it everywhere would also pass the test above."""
+    for mode, role in (("standalone", "chromebook"), ("cloud", "desktop"),
+                       ("cloud", "laptop")):
+        page = _role_page(ImageConfig(mode=mode, role=role, platform="x86"))
+        assert len(x86_desktop_axis(role)) == 2, role   # the premise
+        assert page.desktop_row.isVisibleTo(page), role
+        assert page.desktop_help.isVisibleTo(page), role
+
+
+def test_sunshine_is_hidden_and_cleared_on_a_standalone_image(qapp):
+    """DECISION 2(d). Sunshine streams "to mesh headsets over the tailnet only", but
+    ModePage's standalone arm force-clears both (`cfg.tailscale = cfg.sso = False`) — no
+    tailnet for its nftables fence to admit. Unlike the role-pinned knobs above this is
+    the INAPPLICABLE kind of hide, so the field is CLEARED: the builder's own drop-guard
+    does not fire on this argv shape (the guard tested only SKIP_TAILSCALE||UNAFFILIATED, while
+    --no-tailscale sets only SKIP_MESH; widened to include ${SKIP_MESH} in the same change
+    set — `grep -n 'if ${WANT_SUNSHINE}'` finds it, since the line number has already moved
+    twice this session), so a stale tick really would bake Sunshine onto
+    a tailnet-less desktop."""
+    cfg = ImageConfig(mode="standalone", role="chromebook", platform="x86", sunshine=True)
+    page = _role_page(cfg)
+    assert not page.sunshine.isVisibleTo(page)
+    assert page.validatePage()
+    assert cfg.sunshine is False, "a hidden Sunshine tick still rode the standalone argv"
+    assert "--with-sunshine" not in cfg.to_cli_args()
+
+
+def test_sunshine_survives_on_a_cloud_client_desktop(qapp):
+    """MUTATION GUARD: cloud clients DO have the tailnet Sunshine's fence needs, so the
+    checkbox — and its long "what does this bake" tooltip, which the gate helper blanks on
+    every allowed pass — must both survive."""
+    cfg = ImageConfig(mode="cloud", role="laptop", platform="x86", sunshine=True)
+    page = _role_page(cfg)
+    assert page.sunshine.isVisibleTo(page)
+    assert "nftables fence" in page.sunshine.toolTip(), (
+        "the in-scope tooltip was blanked by the gate and never restored")
+    assert page.validatePage()
+    assert cfg.sunshine is True
+    assert "--with-sunshine" in cfg.to_cli_args()
+
+
+# ---- (c) the TWO spellings of "unaffiliated" ----------------------------------------
+#
+# REWRITTEN 2026-08-26. The first cut of decision 2(c) hid the composable checkbox for the
+# whole of standalone mode and cleared cfg.unaffiliated wherever it was hidden, and the
+# two tests here pinned that drop. Both the premise and the code were wrong:
+#
+#   * PREMISE. "Both spellings produce the identical build" holds for standalone-thick
+#     alone. build-x86-host-stage4.sh's standalone-unaffiliated arm PINS DESKTOP="full"
+#     and CAPABLE=true (:1344), so `--role chromebook --unaffiliated` (a coreboot/UEFI
+#     laptop image) and `--role standalone-thin --unaffiliated` (the light LXDE weight)
+#     are images the role row CANNOT express. The hide deleted them from the wizard.
+#   * CODE. The hide axis (mode != "standalone") was ANDed with the legality axis (mode ==
+#     "standalone" and role != UNAFFILIATED_ROLE) into one `tickable`. They are mutually
+#     exclusive on mode, so tickable was False in EVERY mode and validatePage's identical
+#     pair cleared the field unconditionally — measured in
+#     test_a_loaded_unaffiliated_config_is_not_rewritten_by_a_page_visit below.
+#
+# The rule these tests now pin: HIDE and CLEAR are separate axes, and only the
+# INAPPLICABLE one clears (RolePage._unaffiliated_block).
+
+
+def test_unaffiliated_is_hidden_only_on_the_role_that_already_is_it(qapp):
+    """The duplicate the operator really reported: on ``standalone-unaffiliated`` the
+    checkbox re-asks what the image-type row ONE LINE ABOVE has already answered — the
+    builder's own role arm sets UNAFFILIATED=true there. So it is hidden AND cleared.
+
+    The clear is safe precisely because it is argv-NEUTRAL: config.py emits the flag as
+    ``if self.unaffiliated and self.role != UNAFFILIATED_ROLE``, so it was never going to
+    ride this role's command line. That is asserted here rather than assumed — an
+    argv-changing "neutral" clear is the defect this file exists to keep out."""
+    cfg = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
+                      unaffiliated=True)
+    before = cfg.to_cli_args()
+    page = _role_page(cfg)
+    assert not page.unaffiliated.isVisibleTo(page)
+    assert not page.unaffiliated.isEnabled()
+    assert "IS the unaffiliated desktop" in page.unaffiliated.toolTip(), (
+        "the hidden row must still carry the reason it is hidden")
+    assert page.validatePage()
+    assert cfg.unaffiliated is False
+    assert cfg.to_cli_args() == before, (
+        "the clear on the dedicated role moved the argv — it is only allowed because the "
+        "emitter suppresses the flag on this role anyway")
+
+
+@pytest.mark.parametrize("role", ["chromebook", "standalone-thin", "standalone-thick"])
+def test_the_composable_flag_stays_offered_on_every_other_standalone_role(qapp, role):
+    """MUTATION GUARD for the tautology. Hiding (or disabling) the checkbox across
+    standalone mode makes ``--unaffiliated`` unreachable in EVERY mode, because cloud/mesh
+    is where the compose is a builder hard-conflict — there is no third mode. On
+    chromebook and standalone-thin it also deletes an image nothing else can build."""
+    page = _role_page(ImageConfig(mode="standalone", role=role, platform="x86"))
+    assert page.unaffiliated.isVisibleTo(page), (
+        f"the composable --unaffiliated checkbox is unreachable on standalone/{role}")
+    assert page.unaffiliated.isEnabled()
+    assert "CANNOT" in page.unaffiliated.toolTip(), (
+        "the in-scope tooltip — which is what now answers the operator's 'asked twice' "
+        "report, instead of deleting the capability — was blanked by the gate")
+
+
+def test_a_loaded_unaffiliated_config_is_not_rewritten_by_a_page_visit(qapp):
+    """THE REGRESSION PIN for the 2026-08-26 defect, with the measured argv in full.
+
+    ImageConfig(mode="standalone", role="chromebook", platform="x86", unaffiliated=True),
+    walked with initializePage() + validatePage() and NOTHING touched:
+
+        BEFORE  --role chromebook … --unaffiliated --snort …
+        AFTER   --role chromebook … --no-tailscale --no-sso --snort … --bundle-source …
+
+    --unaffiliated was gone and --bundle-source had appeared (validatePage's
+    ``if c.role == UNAFFILIATED_ROLE or c.unaffiliated:`` no longer fired), so the image
+    silently regained BRAND=hugmesh, the /etc/hugmesh marker tree, the hugmesh-* tooling,
+    the HUGMESH_LIVE/HUGMESH_INSTALL volids and hugmesh.efi. The role row still read
+    "chromebook" and nothing warned.
+
+    This is the REDUNDANT axis (the role row offers a related spelling), and a redundant
+    hide must never rewrite a loaded config — the same rule --capable states beside it."""
+    cfg = ImageConfig(mode="standalone", role="chromebook", platform="x86",
+                      unaffiliated=True)
+    before = cfg.to_cli_args()
+    assert "--unaffiliated" in before and "--bundle-source" not in before
+    page = _role_page(cfg)
+    assert page.unaffiliated.isChecked(), (
+        "initializePage dropped the loaded tick — the restore is gated on something "
+        "other than 'is this compose impossible'")
+    assert page.validatePage()
+    assert cfg.unaffiliated is True
+    after = cfg.to_cli_args()
+    assert "--unaffiliated" in after, "a page visit dropped --unaffiliated"
+    assert "--bundle-source" not in after, (
+        "--bundle-source was added to an unaffiliated image — the builder hard-errors on "
+        "that pair (build-x86-host-stage4.sh:1410)")
+    assert after == before, f"a page visit rewrote the image:\n {before}\n {after}"
+
+
+def test_a_live_role_switch_does_not_untick_the_composable_flag(qapp):
+    """MUTATION-BATTERY PIN (the one that survived the first pass). The regression test
+    above cannot see a stray ``setChecked(False)`` in the gate, because on a page VISIT
+    the gate runs from ``_role_changed`` BEFORE initializePage's restore, which puts the
+    tick straight back. It is only reachable through a live ``currentRowChanged`` — the
+    operator moving through the image-type list — and there an unconditional untick would
+    silently drop --unaffiliated from a config they only browsed past.
+
+    chromebook -> standalone-thin is the interesting move: both are REDUNDANT-axis roles,
+    and both compose --unaffiliated into an image the standalone-unaffiliated row cannot
+    express (it pins the full/capable weight)."""
+    cfg = ImageConfig(mode="standalone", role="chromebook", platform="x86",
+                      unaffiliated=True)
+    page = _role_page(cfg)
+    assert page.unaffiliated.isChecked()
+    assert page.select_role("standalone-thin")
+    assert page.unaffiliated.isChecked(), (
+        "a role switch between two roles that both COMPOSE the flag unticked it")
+    assert page.unaffiliated.isVisibleTo(page) and page.unaffiliated.isEnabled()
+    assert page.validatePage()
+    assert cfg.unaffiliated is True
+    assert "--unaffiliated" in cfg.to_cli_args()
+
+
+def test_unaffiliated_checkbox_still_explains_itself_outside_standalone(qapp):
+    """MUTATION GUARD: cloud/mesh is the INAPPLICABLE axis — greyed, cleared, and the
+    tooltip is the only place that explains why an unaffiliated cloud desktop is
+    impossible. Hiding it there would answer the operator's question by concealing it."""
+    page = _role_page(ImageConfig(mode="cloud", role="laptop", platform="x86"))
+    assert page.unaffiliated.isVisibleTo(page)
+    assert not page.unaffiliated.isEnabled()
+    assert "hard-conflict" in page.unaffiliated.toolTip()
+
+
+def test_the_cloud_clear_is_re_derived_from_cfg_not_from_the_widget(qapp):
+    """BELT & BRACES on the axis that really must clear. The gate already leaves the box
+    unticked in cloud mode, so deleting validatePage's own conjunct changes nothing UNLESS
+    the box is ticked behind the gate's back — a failed re-gate, or a collect_all() after
+    a ModePage switch that never re-visited this page. validatePage re-derives the axis
+    from cfg, so it must still refuse; if it did not, ``to_cli_args()`` would RAISE
+    (config._check_unaffiliated_conflicts hard-errors for mode cloud/mesh) and the
+    BuildPage preview would show a traceback instead of a command."""
+    cfg = ImageConfig(mode="cloud", role="laptop", platform="x86")
+    page = _role_page(cfg)
+    page.unaffiliated.setChecked(True)
+    assert page.validatePage()
+    assert cfg.unaffiliated is False, (
+        "validatePage collected a tick the cloud gate had refused — the preview now raises")
+    assert "--unaffiliated" not in cfg.to_cli_args()
+
+
+# ---- the two hide REASONS carry different emission obligations ----------------------
+
+def test_a_role_pinned_hide_does_not_rewrite_a_loaded_config(qapp):
+    """The rule that separates the two kinds of hide. --standalone / --capable / an
+    agreeing --desktop are REDUNDANT on standalone-thick: the builder's role arm sets the
+    same values, so the image is identical whether the flags ride along or not. Clearing
+    them would silently rewrite a loaded config on a mere page visit — so they are left
+    alone. (Contrast test_sunshine_is_hidden_and_cleared_on_a_standalone_image, where the
+    value would reach a builder that cannot honour it.)"""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      standalone=True, capable=True, desktop="full")
+    page = _role_page(cfg)
+    assert not page.standalone.isVisibleTo(page)
+    assert not page.capable.isVisibleTo(page)
+    assert not page.desktop_row.isVisibleTo(page)
+    assert page.validatePage()
+    assert (cfg.standalone, cfg.capable, cfg.desktop) == (True, True, "full")
+
+
+def test_the_out_of_scope_standalone_clear_still_fires(qapp):
+    """REGRESSION PIN: adding the "redundant" arm must not weaken the ORIGINAL ask-21
+    guard. standalone-thick/x86 is in scope; generic/rpi5 (an arm64 server appliance) is
+    not, and a tick made on the former must still be dropped on the latter — the builder
+    hard-errors on --standalone with a node role."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      standalone=True)
+    page = _role_page(cfg)
+    assert page.select_role("generic")
+    assert not page.standalone.isVisibleTo(page)
+    assert page.validatePage()
+    assert cfg.standalone is False
+    assert "--standalone" not in cfg.to_cli_args()
+
+
+# ---- DECISION 1: an unaffiliated image has a LOOK but no IDENTITY -------------------
+
+def test_the_unaffiliated_commit_splits_identity_from_look(qapp):
+    """DECISION 1 (operator, 2026-08-26): "There should be the menu for adding the themes
+    as in the branded images". RolePage used to blank EVERY branding field when the
+    unaffiliated role was committed, which is why the theme menu was unreachable on that
+    image. A brand IS an affiliation, but a wallpaper names nobody — so the LOOK fields
+    survive the commit and the IDENTITY fields are still forced back to the neutral
+    identity the builder demands."""
+    cfg = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
+                      theme="dark", branding_dir="/tmp/b", wallpaper="/tmp/w.png",
+                      grub_background="/tmp/gb", grub_theme="/tmp/g",
+                      login_background="/tmp/lb", accent_color="#ff0000",
+                      color_scheme="BreezeDark",
+                      brand="acme", brand_title="Acme Inc", org="acme",
+                      brand_logo="/tmp/l.png", brand_locked=True)
+    page = _role_page(cfg)
+    assert page.validatePage()
+    for fld, want in (("theme", "dark"), ("branding_dir", "/tmp/b"),
+                      ("wallpaper", "/tmp/w.png"), ("grub_background", "/tmp/gb"),
+                      ("grub_theme", "/tmp/g"), ("login_background", "/tmp/lb"),
+                      ("accent_color", "#ff0000"), ("color_scheme", "BreezeDark")):
+        assert getattr(cfg, fld) == want, f"LOOK field {fld} was blanked by the commit"
+    # IDENTITY is reset to the DATACLASS DEFAULTS, not to "": the builder's conflict test
+    # is "differs from the neutral identity" (:1383-1385), not "non-empty", so blanking
+    # brand/brand_title/org would TRIP the very check it is meant to satisfy.
+    assert (cfg.brand, cfg.brand_title, cfg.org) == ("hugmesh", "HugMesh Systems", "hugmesh")
+    assert cfg.brand_logo == "" and cfg.brand_locked is False
+    assert cfg.bundle_source is False        # unchanged: bundled source IS platform machinery
+
+
+def test_a_branded_role_keeps_both_its_look_and_its_identity(qapp):
+    """MUTATION GUARD for the split: the clear must still run only on the unaffiliated
+    posture. A branded standalone desktop keeps everything."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      theme="dark", brand="acme", brand_locked=True)
+    page = _role_page(cfg)
+    assert page.validatePage()
+    assert (cfg.theme, cfg.brand, cfg.brand_locked) == ("dark", "acme", True)

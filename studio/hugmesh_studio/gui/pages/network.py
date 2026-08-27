@@ -32,7 +32,6 @@ Services are MESH-WIDE (see _SERVICES_SCOPE_NOTE): they are baked into the clust
 GitOps tree every node shares, so there is deliberately no per-node service table."""
 from __future__ import annotations
 
-from dataclasses import MISSING
 
 # NOT `from ..qt import Qt, QtWidgets` any more, and the missing name is the point: this
 # module used to be where the wizard's 3-state checkbox idiom lived (it owned _tri_state /
@@ -43,6 +42,11 @@ from dataclasses import MISSING
 # not having.
 from ..qt import QtWidgets
 from ._scroll import scrollable
+# Imported as a MODULE, not by name, purely so this page can prefer core.config's named
+# predicate the moment it exists without an import-time hard dependency on it — see
+# _cluster_identity_applies() for why both routes are the same rule and neither is a
+# page-local copy of it.
+from ...core import config as _config
 from ...core.config import (
     BUILTIN_DEFAULT_SERVICES,
     ImageConfig,
@@ -59,6 +63,7 @@ from ...core.config import (
     UNAFFILIATED_ROLE,
     USER_LEVEL_SERVICES,
     X86_NODE_ROLES,
+    field_default,
     tailnet_sso_visible,
 )
 from ._gating import (
@@ -90,22 +95,22 @@ from ._widgets import _file_picker, _row, collapsible
 #
 # and that is the right call even though four of those six are no-ops in the common case:
 #
-#   * build-x86-host-stage4.sh acts ONLY on the `true` arm for tor (:1108),
-#     character-studio (:1119), character-forge (:1136) and edge-ai-tts (:1173) — there is
-#     no `= false` arm at all — and the builder's own default set (:134,
+#   * build-x86-host-stage4.sh acts ONLY on the `true` arm for tor (:1150),
+#     character-studio (:1166), character-forge (:1182) and edge-ai-tts (:1218) — there is
+#     no `= false` arm at all — and the builder's own default set (:141,
 #     OPTIONAL_SERVICES="akkoma tuwunel phpbb") contains none of them. So with no brand
 #     profile in play, --no-tor changes nothing;
-#   * BUT brand.conf is sourced at :841, BEFORE the arg loop at :887. A brand profile that
+#   * BUT brand.conf is sourced at :888, BEFORE the arg loop at :891. A brand profile that
 #     sets WANT_TOR=true IS overridden by --no-tor. Emitting nothing there would leave the
 #     service ON while this page showed an unchecked box — the checkbox would be lying,
 #     which is precisely the ambiguity the operator asked us to remove. So we emit the
 #     strongest "off" the flag can express and the box's claim stays true.
-#   * --no-aide (:454 WANT_AIDE=false, consumed as a plain bool at :4245/:4574) and
-#     --no-edge-ai (:1082, the only way to suppress the edge_ai ROLE's auto-selection) are
+#   * --no-aide (:486 WANT_AIDE=false, consumed as a plain bool at :4786/:5139) and
+#     --no-edge-ai (:932, the only way to suppress the edge_ai ROLE's auto-selection) are
 #     REAL subtraction, so for those two "definitely off" is load-bearing on every build.
 #
 # The one thing --no-* cannot do is remove a slug a brand.conf put directly into
-# OPTIONAL_SERVICES; only EXCLUDE_SERVICES (applied last, :1181-1199) does that. The
+# OPTIONAL_SERVICES; only EXCLUDE_SERVICES (applied last, :1234-1246) does that. The
 # services checklist covers that case instead — see _SERVICES_OVERRIDE_NOTE.
 _OFF_TIP = ("Two-state: checked = ON for this build (--with-…), unchecked = OFF "
             "(--no-…, which also overrides a brand profile that switched it on).")
@@ -113,10 +118,10 @@ _OFF_TIP = ("Two-state: checked = ON for this build (--with-…), unchecked = OF
 # Services are MESH-WIDE, not per-node — stated on the page because the operator
 # reasonably asked whether they were selectable per node (as the worklist's per-node
 # columns are). Grounded in the builders, not in UI convenience:
-#   * build-rpi5-stage4.sh:1376 gate_optional_services() prunes each unselected slug's
+#   * build-rpi5-stage4.sh:1712 gate_optional_services() prunes each unselected slug's
 #     Argo apps/*.yaml + manifests/ + gateway routes out of the baked CLUSTER GitOps
 #     tree at ${SYSROOT}/var/lib/hugmesh/cluster — it is not a node package set;
-#   * build-rpi5-stage4.sh:2958 bakes that tree into EVERY cluster-class node (only
+#   * build-rpi5-stage4.sh:3898-3900 bakes that tree into EVERY cluster-class node (only
 #     ROLE_CLIENT desktops skip it), and specs/cluster/app-of-apps.yaml recurses with
 #     prune:true — so two nodes with different service sets would be two conflicting
 #     desired states for ONE cluster, and the surviving tree would DELETE the other's
@@ -132,8 +137,8 @@ _SERVICES_SCOPE_NOTE = (
 )
 
 # The honest exception, stated rather than papered over: two slugs really are
-# node-scoped in the registry (specs/cluster/optional-services.yaml:498 egress-vpn and
-# :534 tor both carry `scope: node`), but Studio has no per-node service field and
+# node-scoped in the registry (specs/cluster/optional-services.yaml:560 egress-vpn and
+# :636 tor both carry `scope: node`), but Studio has no per-node service field and
 # adding one would change the emitted argv — out of scope for a presentation fix.
 # Queued as a real feature rather than silently omitted.
 _SERVICES_NODE_SCOPE_CAVEAT = (
@@ -143,8 +148,8 @@ _SERVICES_NODE_SCOPE_CAVEAT = (
 
 # Why "tick anything and the default set is gone" is the honest headline, and why ask 2
 # ("remove the exclude services field, it makes no sense") is safe to satisfy in the GUI.
-# The builders resolve this precedence themselves — build-x86-host-stage4.sh:130-134 and
-# build-rpi5-stage4.sh:214-218, both verbatim "built-in < brand.conf < flag":
+# The builders resolve this precedence themselves — build-x86-host-stage4.sh:138-141 and
+# build-rpi5-stage4.sh:243-245, both verbatim "built-in < brand.conf < flag":
 #
 #     OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
 #
@@ -176,6 +181,109 @@ _MANAGED_SCOPE_NOTE = (
     "are supplied separately via the KEYS USB (ESO/Vault), never here. "
     "See docs/MANAGED-SERVICES.md."
 )
+
+
+# ── THE CLUSTER-IDENTITY AXIS (apex domain / games domain / release state) ───────────
+# Operator report, 2026-08-26, verbatim: "There should also be no inbetween menu for
+# configuring domain" — on an image measured as role=standalone-unaffiliated /
+# platform=x86 (out/sessions/20260826-151356-64070a/build-standalone-unaffiliated.x86.log),
+# which arrived at this page with a prefilled "hugmesh.net" apex-domain box.
+#
+# WHY THE GATE IS NOT `cfg.mode == "standalone"`, which is what the report reads like.
+# The two arg builders disagree ON PURPOSE, and a blanket mode test would have regressed
+# every ARM standalone build:
+#
+#   * core/config.py::_x86_args — --cluster-domain, --games-domain and --release-state
+#     all sit INSIDE `if self.mode in ("cloud", "mesh")`. On a standalone x86 image not
+#     one of them can reach the argv, so the box the operator saw was collecting a value
+#     the builder would never be told. THAT is the defect.
+#   * core/config.py::_arm_common_args — `if self.cluster_domain != "hugmesh.net"` with
+#     NO mode fork, shared by all NINE arm64 builders; and _rpi5_args emits
+#     --release-state / --games-domain the same unconditional way. A standalone rpi5
+#     'generic' image really does carry a cluster domain (build-rpi5-stage4.sh:3863) —
+#     'generic' is the one standalone role that bakes a cluster GitOps tree (G16; see
+#     _client_class_role). Hiding the row there would have blanked a live field.
+#
+# So the rule is a MODE narrowing that is true on x86 ONLY, and it lives in core/config.py
+# with every other axis rule — FIELD_SCOPE's `mode_platforms` twin of `class_platforms`,
+# _CLUSTER_IDENTITY_FIELDS / _CLUSTER_PLANE_MODE_GATED_PLATFORMS. This page must not own
+# a second spelling of it (the _gating.py module note: one implementation, so the wizard
+# and the Qt-free consumers cannot disagree).
+def _cluster_identity_applies(cfg) -> bool:
+    """Does this image bake a cluster identity plane at all?
+
+    ONE rule, reachable by two names, because two lanes landed it in the same checkout:
+    core.config's named predicate if it is present, else the generic composed field gate
+    over ``cluster_domain``. They are not alternatives — the named predicate reads the
+    same FIELD_SCOPE entry — and ``cluster_domain`` is the right field to ask through:
+    it is declared for ALL TEN builders (every build-*-stage4.sh has exactly one
+    ``--cluster-domain|--domain)`` arm), so its scope carries the mode axis alone with
+    no platform or class term to muddy the answer.
+
+    Deliberately NOT asked per-field for the other two. ``games_domain`` and
+    ``release_state`` are x86+rpi5-only, and their PLATFORM axis is already answered
+    downstream by ``gate_widgets`` — which GREYS with a "cleared when you leave the page"
+    tooltip rather than hiding, the established treatment for "this builder has no flag"
+    (tests/test_pages_identity.py::test_release_state_and_games_domain_grey_and_clear_
+    off_x86_rpi5 pins that grey on a frite cloud build). Routing the platform axis through
+    this hide would have silently converted that explained grey into a disappearance."""
+    named = getattr(_config, "cluster_identity_applies", None)
+    if named is not None:
+        return bool(named(cfg))
+    return scope_allows("cluster_domain", cfg)
+
+
+# The reason shown on the hidden cluster rows. Hand-written rather than taken from
+# ``out_of_scope_note``: that helper's MODE arm says "every image in this flow exists to
+# join the cluster, which is exactly what this option turns off" — true of the flows it
+# was written for, and the exact opposite of the truth here, where the flow is standalone
+# and it is the CLUSTER that is absent. A wrong why is worse than none (the lesson
+# out_of_scope_note itself records).
+_CLUSTER_IDENTITY_NOTE = (
+    "Not applicable to this image: the x86 builder bakes the cluster plane "
+    "(--cluster-domain / --games-domain / --release-state) only for cloud and mesh "
+    "images, so a value here would be dropped from the build. ARM builds keep the row — "
+    "they bake a cluster domain in every mode.")
+
+# The reason shown when the brand-identity rows are hidden. DECISION 1 (operator,
+# 2026-08-26) is split into two halves and this text must carry both, or it reads as
+# "no theming at all" and contradicts the branding step the operator asked for:
+#   IDENTITY stays forbidden — --brand / --brand-title / --org / --brand-logo /
+#     --brand-locked / a -C brand profile. core/config.py::_check_unaffiliated_conflicts
+#     raises ValueError on any of them, mirroring build-x86-host-stage4.sh, which exits
+#     non-zero on the same flags. A brand IS an affiliation.
+#   LOOK is now allowed — theme / branding-dir / wallpaper / grub background + theme /
+#     login background / accent colour / colour scheme, baked under NEUTRAL names.
+_BRAND_IDENTITY_NOTE = (
+    "This image bakes NO HugMesh brand identity — brand id, brand title, org and a "
+    "brand profile (-C) are what make an image affiliated, and the builder exits "
+    "non-zero if it is given any of them for this role. Its LOOK is still yours: theme, "
+    "wallpaper, accent colour and the login/GRUB backgrounds are set on the branding "
+    "step and bake under neutral names.")
+
+
+def _identity_help_text(brand: bool, cluster: bool, superdomain_on_screen: bool) -> str:
+    """The "Identity & domain" help line, COMPOSED from what the section still contains.
+
+    Defect (2): the fixed sentence said "...distinct from the internal superdomain below",
+    but the superdomain row lives in ``mesh_box``, which every standalone flow hides — so
+    on the operator's image the help pointed at a control that was not on the page, and
+    then went on to describe an apex-domain box that (defect 1) should not have been
+    either. Same treatment as ``tailnet_reason``: say only what is true of THIS visit.
+
+    Returns "" when neither half survives, which is the whole-section-hidden case."""
+    if brand and cluster:
+        head = ("Brand identity plus the PUBLIC apex domain the image serves — the "
+                "go-live target")
+    elif brand:
+        head = "The brand identity baked into this image"
+    elif cluster:
+        head = "The PUBLIC apex domain this image serves — the go-live target"
+    else:
+        return ""
+    # The "below" reference is only honest while the superdomain row is actually below.
+    return head + (" (distinct from the internal superdomain below)." if
+                   cluster and superdomain_on_screen else ".")
 
 
 def _hint(text: str) -> "QtWidgets.QLabel":
@@ -217,16 +325,17 @@ def _client_class_role(role: str, platform: str) -> bool:
     return False
 
 
-def _field_default(name: str):
-    """An ImageConfig field's declared default.
-
-    Used by the default-expansion rule so it compares against the dataclass's own
-    truth rather than literals restated in the GUI (``snort`` defaults to True, for
-    example, which a hand-written "off means default" check gets exactly backwards).
-    Mirrors _gating.clear_unsupported's default lookup.
-    """
-    f = ImageConfig.__dataclass_fields__[name]
-    return f.default_factory() if f.default is MISSING else f.default
+#: An ImageConfig field's declared default — ``core.config.field_default``, imported
+#: under this module's historical name rather than reimplemented.
+#:
+#: This was a byte-identical copy of config's own lookup until 2026-08-26. Three pages
+#: had grown one (here, build.py, and role.py via the underscore import), which is one
+#: implementation too many for a rule every emission-neutral hide depends on: each hide
+#: added on this page resets its field to THIS value, so a page whose idea of "default"
+#: drifts from the dataclass's silently starts emitting on a hidden control. The public
+#: name landed in core.config for exactly that reason; the alias keeps the ~20 call
+#: sites below unchanged.
+_field_default = field_default
 
 
 def _on_off(value) -> bool:
@@ -237,8 +346,8 @@ def _on_off(value) -> bool:
     to_cli_args still honours all three. What changed is how the GUI READS it: '' (and the
     False dataclass default) now shows as UNCHECKED, because on every one of these flags
     the builder's own unset behaviour IS off — the default OPTIONAL_SERVICES set
-    (build-x86-host-stage4.sh:134) contains none of them, WANT_AIDE defaults false (:454)
-    and EDGE_AI is set true only by the edge_ai role (:1243). So "unspecified" and "off"
+    (build-x86-host-stage4.sh:141) contains none of them, WANT_AIDE defaults false (:486)
+    and EDGE_AI is set true only by the edge_ai role (:1289). So "unspecified" and "off"
     were always the same picture; the square only ever advertised a distinction the
     operator could not act on."""
     return value is True or value == "on"
@@ -349,9 +458,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         # set once, on the collapsible() call right after each group is built.
         self.identity_box = QtWidgets.QGroupBox("")
         il = QtWidgets.QVBoxLayout(self.identity_box)
-        self.identity_help = _hint(
-            "Brand identity plus the PUBLIC apex domain the image serves — the go-live "
-            "target (distinct from the internal superdomain below).")
+        # Text is COMPOSED per visit in initializePage (_identity_help_text): with the
+        # brand rows and the cluster rows now gated on two independent axes, a fixed
+        # sentence describes a section that is often not on screen — see defect (2).
+        self.identity_help = _hint("")
         il.addWidget(self.identity_help)
         # brand profile (G3): -C/--config brands/*.conf — the sole carrier of the
         # HEADSCALE_URL / RELEASE_STATE / ADMIN_EMAILS / MAIL_* / EXCLUDE_SERVICES
@@ -361,29 +471,54 @@ class NetworkPage(QtWidgets.QWizardPage):
         bbtn = _file_picker(self, self.brand_profile, "Brand profile", "Brand profile (*.conf)")
         bw = QtWidgets.QWidget(); bh = QtWidgets.QHBoxLayout(bw); bh.setContentsMargins(0, 0, 0, 0)
         bh.addWidget(self.brand_profile, 1); bh.addWidget(bbtn)
-        il.addWidget(_row("Brand profile (-C)", bw))
+        # EVERY row below is captured on the page, the way self.superdomain_row and
+        # self.egress_row already were, because a bare `il.addWidget(_row(...))` throws
+        # the caption away: _row() builds a label + widget container, so gating the inner
+        # QLineEdit alone leaves "Public apex domain" floating over nothing. The two gates
+        # that consume these are BRAND IDENTITY (defect 3) and CLUSTER IDENTITY
+        # (defect 1) — two independent axes, hence two tuples rather than one.
+        self.brand_profile_row = _row("Brand profile (-C)", bw)
+        il.addWidget(self.brand_profile_row)
         self.brand = QtWidgets.QLineEdit()
         self.brand_title = QtWidgets.QLineEdit()
         self.org = QtWidgets.QLineEdit()          # --org (G7): emitted on every platform
         self.domain = QtWidgets.QLineEdit()
-        il.addWidget(_row("Brand id", self.brand))
-        il.addWidget(_row("Brand title", self.brand_title))
-        il.addWidget(_row("Org", self.org))
+        self.brand_row = _row("Brand id", self.brand)
+        self.brand_title_row = _row("Brand title", self.brand_title)
+        self.org_row = _row("Org", self.org)
+        il.addWidget(self.brand_row)
+        il.addWidget(self.brand_title_row)
+        il.addWidget(self.org_row)
         # --cluster-domain is the PUBLIC apex (the go-live target), distinct from the
         # permanently-internal orchestration superdomain in the mesh control plane below.
-        il.addWidget(_row("Public apex domain", self.domain))
+        self.domain_row = _row("Public apex domain", self.domain)
+        il.addWidget(self.domain_row)
         # games domain (G6, x86+rpi5): the games.<domain> host + games OIDC issuer.
         self.games_domain = QtWidgets.QLineEdit()
         self.games_domain.setPlaceholderText("games.<cluster domain>  (empty = builder default)")
-        il.addWidget(_row("Games domain", self.games_domain))
+        self.games_domain_row = _row("Games domain", self.games_domain)
+        il.addWidget(self.games_domain_row)
         # release state (G4, x86+rpi5): the baked Layer-3 nftables / go-live posture.
         self.release_state = QtWidgets.QComboBox()
         self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
-        il.addWidget(_row("Release state (--release-state)", self.release_state))
+        self.release_state_row = _row("Release state (--release-state)", self.release_state)
+        il.addWidget(self.release_state_row)
         # Identity carries the REQUIRED fields (brand id, the public apex domain), so it
         # is never collapsed by default — default expansion must not hide a must-set field.
         self.identity_section = collapsible("Identity & domain", self.identity_box)
         lay.addWidget(self.identity_section)
+        # Shown INSTEAD of the rows this page gates away, and deliberately a PAGE-LEVEL
+        # SIBLING of the section rather than a child of identity_box — exactly the
+        # tailnet_reason placement, and for exactly the same reason: on a standalone
+        # UNAFFILIATED x86 image BOTH axes reject, every row inside the box is hidden,
+        # and initializePage hides identity_section itself (the orphan-header rule). A
+        # note living inside the section would vanish with it, leaving the operator a
+        # wizard that silently lost its brand fields.
+        self.identity_reason = QtWidgets.QLabel()
+        self.identity_reason.setWordWrap(True)
+        self.identity_reason.setStyleSheet("color: gray;")
+        self.identity_reason.setVisible(False)
+        lay.addWidget(self.identity_reason)
 
         # ---- Group 2: tailnet + SSO (cloud branded desktops only, spec 3) --------
         self.tailnet_box = QtWidgets.QGroupBox("")
@@ -498,8 +633,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.snort = QtWidgets.QCheckBox("Snort IDS (network intrusion detection)")
         # AIDE was the sixth tri-state on this page. It is two-state now like the rest —
         # and unlike tor/character-*/edge-ai-tts its unchecked arm is REAL subtraction
-        # (WANT_AIDE is consumed as a plain bool at build-x86-host-stage4.sh:4245 and
-        # :4574), so "definitely off" here strips app-forensics/aide outright rather than
+        # (WANT_AIDE is consumed as a plain bool at build-x86-host-stage4.sh:4786 and
+        # :5139), so "definitely off" here strips app-forensics/aide outright rather than
         # merely declining to add it. Converted with them because the page cannot keep one
         # lone square without keeping the legend that explains it, and the legend is what
         # the operator was objecting to.
@@ -599,7 +734,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         #     rather than an absence (G13).
         #   * "all" is NOT "tick every row": --all-services expands USER_LEVEL_SERVICES,
         #     which EXCLUDES the infra slugs this catalog also offers (tor, egress-vpn,
-        #     anubis, workloadConsole — build-rpi5-stage4.sh:573-581), so the two are not
+        #     anubis, workloadConsole — build-rpi5-stage4.sh:743-744), so the two are not
         #     the same argv (G14). It is also the ONE selection this table cannot express
         #     row-by-row on rpi5, where those infra rows exist.
         # A combo also states the mutual exclusion structurally instead of enforcing it in a
@@ -640,7 +775,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # builder, and the old page expressed that by showing the service twice:
         #   * `tor` on x86 is the dedicated --with-tor / --no-tor pair; on rpi5 there is no
         #     such flag at all and listing the slug in --optional-services is the ONLY way to
-        #     bake a Tor-onion node (build-rpi5-stage4.sh:573-581, G15);
+        #     bake a Tor-onion node (build-rpi5-stage4.sh:746-748, G15);
         #   * `character-studio` / `character-forge` / `games` have BOTH a dedicated flag and
         #     a catalogue slug on x86 and rpi5 — one service, two spellings, which is why the
         #     operator met `character-forge` twice on one screen.
@@ -679,7 +814,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.edge_ai = QtWidgets.QCheckBox()
         # ASK 1, verbatim: "leave optional services and edge ai unchecked instead of half
         # checked for default no". Two-state, default UNCHECKED — and unchecked here is the
-        # load-bearing kind: --no-edge-ai at build-x86-host-stage4.sh:1082 is the ONLY way
+        # load-bearing kind: --no-edge-ai at build-x86-host-stage4.sh:932 is the ONLY way
         # to suppress the edge_ai ROLE's automatic selection of the service.
         self.edge_ai.setToolTip(_OFF_TIP)
         self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_ON, self.edge_ai)
@@ -781,10 +916,10 @@ class NetworkPage(QtWidgets.QWizardPage):
 
         * NONE emits ``--optional-services ""``. It rewrites the slug list and nothing
           else, so a service this platform reaches through its own ``--with-<x>`` stays
-          live underneath it: the fold at build-x86-host-stage4.sh:1119 runs AFTER the arg
+          live underneath it: the fold at build-x86-host-stage4.sh:1166 runs AFTER the arg
           loop, so ``--optional-services "" --with-character-studio`` really does build
           character-studio alone. Only SLUG-channel rows are taken over.
-        * ALL emits ``--all-services``, which at build-x86-host-stage4.sh:1067-1069
+        * ALL emits ``--all-services``, which at build-x86-host-stage4.sh:1106-1111
           replaces OPTIONAL_SERVICES with USER_LEVEL_SERVICES **before** those folds. So it
           takes over TWO kinds of row:
             - every slug-channel row (the list is replaced wholesale — an rpi5 `anubis`
@@ -792,7 +927,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             - every row whose slug is in USER_LEVEL_SERVICES **whatever its channel**,
               because the expansion bakes the slug and the dedicated flag cannot take it
               back out: --no-character-studio / --no-character-forge only SKIP a fold-in
-              (:1124-1130, :1140-1146 are `if [ "${WANT_…}" = "true" ]` with no false arm),
+              (:1166-1171, :1182-1187 are `if [ "${WANT_…}" = "true" ]` with no false arm),
               and `games` has no --no- flag at all.
           What it does NOT take over is a flag-channel row outside that set — `tor` on x86
           and `edge-ai-tts` — which is the (true) half of the claim this method's
@@ -870,14 +1005,29 @@ class NetworkPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        # UNAFFILIATED, computed FIRST because three surfaces below need the same answer
+        # and one spelling of the flag is itself part of the operator's ask (it used to be
+        # recomputed inline at the services gate). Both routes count: the dedicated ROLE
+        # id and the composable --unaffiliated flag on any client role (config.py
+        # _x86_args, G22) — _check_unaffiliated_conflicts refuses a brand identity for
+        # either, so a gate that knew only the role id would have left the flag path
+        # inviting an entry the builder then rejects.
+        unaffiliated = (c.role == UNAFFILIATED_ROLE or getattr(c, "unaffiliated", False))
         # Path-aware header (spec 3-7): a standalone desktop has no mesh/tailnet, so this
         # page IS its network-identity / egress / security step; cloud/mesh use it for the
         # domain, the orchestration superdomain and the cluster services.
         if c.mode == "standalone":
             self.setTitle("Network identity, egress & security")
+            # …and on an unaffiliated image it is not a BRAND identity step either: the
+            # brand rows are gated away below (defect 3), so a subtitle promising "Brand
+            # identity" would describe a section this visit does not have — the same
+            # orphan-prose defect as the identity help line (defect 2), one level up.
             self.setSubTitle(
-                "Brand identity, the optional egress VPN and the host security "
-                "stack for this standalone desktop. No mesh, no tailnet, no SSO.")
+                ("The optional egress VPN and the host security stack for this "
+                 "unaffiliated desktop. No brand, no mesh, no tailnet, no SSO."
+                 if unaffiliated else
+                 "Brand identity, the optional egress VPN and the host security "
+                 "stack for this standalone desktop. No mesh, no tailnet, no SSO."))
         else:
             self.setTitle("Domain, mesh & services")
             self.setSubTitle(
@@ -942,6 +1092,54 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.domain.setText(c.cluster_domain)
         self.games_domain.setText(c.games_domain)
         self.release_state.setCurrentText(c.release_state or "default")
+        # ── DEFECT 1: the "inbetween menu for configuring domain" ───────────────────
+        # The three rows are HIDDEN (not greyed) when this image bakes no cluster plane —
+        # the spec's treatment for a surface that is inapplicable rather than
+        # unsupported, and the same call shape the egress row and the home group use.
+        # Re-run on EVERY visit, so an image that becomes cloud/mesh (or moves to an ARM
+        # platform) on an earlier page gets the rows — and their emission — straight back.
+        # See _cluster_identity_applies for why the predicate is platform-scoped.
+        cluster_ok = _cluster_identity_applies(c)
+        gate_widgets_role_class(
+            [self.domain_row, self.games_domain_row, self.release_state_row],
+            cluster_ok, _CLUSTER_IDENTITY_NOTE, hide=True)
+        # ── DEFECT 3: the brand trio hard-blocks an UNAFFILIATED build ──────────────
+        # Measured before this landed (standalone / standalone-unaffiliated / x86): the
+        # whole identity section was visible+enabled with brand='hugmesh',
+        # org='hugmesh', domain='hugmesh.net'. Type anything into Brand id / Brand title
+        # / Org and cfg.to_cli_args() raises ValueError out of
+        # core/config.py::_check_unaffiliated_conflicts — the wizard was inviting an
+        # entry that then REFUSES to build. build-x86-host-stage4.sh exits non-zero on
+        # the same flags, so this is the builder's contract, not a Studio preference.
+        # The brand profile (-C) goes with them: brands/*.conf is a brand identity in a
+        # file, and _brand_args emits --config from it.
+        #
+        # `unaffiliated` is computed ONCE at the top of this method (it used to be
+        # recomputed inline at the services gate) — the page subtitle, this gate and the
+        # services gate are three readings of one flag, not three rules.
+        brand_ok = not unaffiliated
+        gate_widgets_role_class(
+            [self.brand_profile_row, self.brand_row, self.brand_title_row, self.org_row],
+            brand_ok, _BRAND_IDENTITY_NOTE, hide=True)
+        # ── DEFECT 2: the orphan help text ─────────────────────────────────────────
+        # Path-aware, exactly as tailnet_reason is: the sentence named the superdomain
+        # "below", which lives in mesh_box and is on screen only for cloud/mesh
+        # (show_cp, computed above) — so every standalone visit pointed at a control
+        # that was not there. Composed from what the section still HOLDS.
+        self.identity_help.setText(_identity_help_text(brand_ok, cluster_ok, show_cp))
+        self.identity_help.setVisible(bool(self.identity_help.text()))
+        # Hide the SECTION when both axes reject, or the page keeps a bold
+        # "Identity & domain" header over an empty body — the orphan-header rule the
+        # tailnet and egress sections already follow (and which
+        # test_mode_gated_sections_hide_their_header_too pins). On a standalone
+        # unaffiliated x86 image that is exactly the state: every row inside is hidden.
+        self.identity_section.setVisible(brand_ok or cluster_ok)
+        # …and say WHY, page-level so it survives the section's own hide. One label, two
+        # independent causes, joined only when both fired.
+        reasons = ([_BRAND_IDENTITY_NOTE] if not brand_ok else []) + \
+                  ([_CLUSTER_IDENTITY_NOTE] if not cluster_ok else [])
+        self.identity_reason.setText("  ".join(reasons))
+        self.identity_reason.setVisible(bool(reasons))
         self.egress.setText(c.egress_vpn)
         self.egress_locked.setChecked(c.egress_vpn_locked)
         # same rule for the edge_ai role's auto-check (G11: jetson greys out too)
@@ -968,13 +1166,56 @@ class NetworkPage(QtWidgets.QWizardPage):
         # platform reaches it through. G15 lives here now instead of in a rebuilt list
         # widget: rpi5 has no --with-tor, so `tor` seeds from the optional_services SLUG
         # list there and from tor_onion_service on x86 — one row either way.
+        # ── the picker's HIDE, decided ONCE and decided HERE ────────────────────────
+        # Computed before the seeding below rather than beside the setVisible() calls it
+        # drives, because the un-hide has to undo the sentinel BEFORE `picked` and
+        # `seed_builtin_defaults` are read off the config — the seeder is what turns
+        # cfg.optional_services into ticked boxes, and it runs first.
+        #
+        # Both arms hide the whole cluster-services picker: an unaffiliated image (no
+        # HugMesh plane at all) and a standalone CLIENT-class desktop (no cluster GitOps
+        # tree is baked, so a selection here is accepted and ignored). `_client_class_role`
+        # — not a mode test — is what keeps standalone rpi5 'generic' OUT of the hide:
+        # generic is cluster-node class and DOES bake the tree (G16).
+        hide_services = (
+            (c.role == UNAFFILIATED_ROLE or getattr(c, "unaffiliated", False))
+            or (c.mode == "standalone"
+                and platform_supports("optional_services", c.platform)
+                and _client_class_role(c.role, c.platform)))
+        # THE HIDE IS NOT ONE-WAY. validatePage writes the [SERVICES_NONE] sentinel while
+        # the picker is hidden (that is the D6 fix — emitting NOTHING would hand the
+        # selection to whatever OPTIONAL_SERVICES a brand.conf carries). But the seeder
+        # below reads that sentinel back at face value as an operator decision, so without
+        # this it rides OUT of the standalone flow into the next one. Measured, with the
+        # operator never touching the services picker — they just walked the default path:
+        #     standalone-thick -> Back to Mode -> cloud desktop
+        #         --optional-services            (was: akkoma tuwunel phpbb)
+        #     standalone-thick -> Back to Mode -> mesh omnibus
+        #         --optional-services            (was: akkoma tuwunel phpbb)
+        # An untouched [] round-trips; the ["none"] the HIDE wrote did not.
+        #
+        # Provenance is PAGE state, not a cfg field, on purpose: the sentinel is a correct
+        # and persistable answer FOR A STANDALONE IMAGE, so it must survive save/load. What
+        # must not survive is INHERITING it into a flow that never hid the picker.
+        if hide_services:
+            self._services_none_is_ours = True
+        elif (getattr(self, "_services_none_is_ours", False)
+              and c.optional_services == [SERVICES_NONE]):
+            # Back on screen carrying OUR answer: drop it so `seed_builtin_defaults` below
+            # re-ticks BUILTIN_DEFAULT_SERVICES exactly as it does for a never-hidden flow.
+            # Cleared after one use — a none the operator picks from the VISIBLE picker on
+            # a later visit is theirs, and must round-trip untouched.
+            c.optional_services = []
+            self._services_none_is_ours = False
+        else:
+            self._services_none_is_ours = False
         catalog = tuple(OPTIONAL_SERVICES_BY_PLATFORM.get(c.platform or "x86", ()))
         picked = [s for s in c.optional_services if s not in (SERVICES_NONE, SERVICES_ALL)]
         # ── the builders' OWN default set arrives TICKED ──────────────────────────────
         # Ask 23's rule, verbatim: "anything off by default is UNCHECKED; only pre-check
         # what is genuinely on by default" — and akkoma / tuwunel / phpbb are genuinely on
         # by default. `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"`
-        # (build-x86-host-stage4.sh:134, build-rpi5-stage4.sh:218) means an untouched mesh
+        # (build-x86-host-stage4.sh:141, build-rpi5-stage4.sh:245) means an untouched mesh
         # ships all three, so three unticked boxes over three running services is the same
         # lie as a part-checked square, merely spelled differently — and it made unticking
         # `phpbb` a no-op, because --optional-services REPLACES rather than subtracts, so
@@ -1063,7 +1304,6 @@ class NetworkPage(QtWidgets.QWizardPage):
         #     would snapshot the pre-forced (empty) state and blank the table on that
         #     switch, i.e. turn a fine-tuning gesture into "no services at all".
         self._custom_checked = None
-        self.services_box.setVisible(True)
         # CLIENT-class role (builder ROLE_CLIENT — see _client_class_role): the
         # services are accepted but IGNORED (no cluster GitOps tree in a desktop
         # image; the plan echoes OPTIONAL_SERVICES as n/a). Show the honesty note;
@@ -1079,36 +1319,176 @@ class NetworkPage(QtWidgets.QWizardPage):
                 "but IGNORED by the builder (the build plan shows OPTIONAL_SERVICES "
                 "as n/a). They only take effect on cluster NODE roles.")
         self.services_role_note.setVisible(client)
-        # …and on an UNAFFILIATED image, HIDE the cluster-services picker outright
-        # rather than merely captioning it. Operator report: "the unaffiliated
-        # desktop image wizard still shows options like mesh services and branding
-        # and login when it shouldn't". For every other client-class role the
-        # heads-up note above is the right call — the flags ARE parsed, they just
-        # do nothing on a desktop, and a branded desktop can legitimately be
-        # re-rolled as a node later. Unaffiliated is categorically different: the
-        # role exists to bake ZERO HugMesh affiliation, and cluster services are
-        # the platform machinery it is defined by NOT having. Offering a mesh
-        # service list on that screen is offering a choice that cannot mean
-        # anything. Values are cleared below so hiding changes no argv.
-        unaffiliated = (c.role == UNAFFILIATED_ROLE or getattr(c, "unaffiliated", False))
-        if unaffiliated:
-            # Clear to the UNSET state, NOT to the "none" sentinel: SERVICES_NONE is
-            # an explicit choice that emits `--optional-services none`, so checking it
-            # here would ADD a flag the operator never picked — hiding a control must
-            # not change the build. (Caught by
-            # test_hiding_the_services_box_leaves_the_emission_neutral, which failed on
-            # exactly that first attempt.)
-            self.services_preset.setCurrentIndex(_PRESET_CUSTOM)
+        # …and on an image with no cluster to serve, HIDE the picker outright rather
+        # than merely captioning it. Two roles reach that state, and the first one has
+        # been here since the earlier report ("the unaffiliated desktop image wizard
+        # still shows options like mesh services and branding and login when it
+        # shouldn't"):
+        #
+        #   * UNAFFILIATED — the role exists to bake ZERO HugMesh affiliation, and
+        #     cluster services are the platform machinery it is defined by NOT having.
+        #     (`unaffiliated` is computed ONCE, at the top of this method with the brand
+        #     gate — one spelling of the flag, which is itself part of the operator's ask.)
+        #   * DEFECT 4, new: EVERY standalone CLIENT-class role. Measured on
+        #     standalone / standalone-thick / x86 before this landed: the nine-row picker
+        #     was live with akkoma/tuwunel/phpbb PRE-TICKED, and the argv the wizard
+        #     produced really carried `--optional-services akkoma tuwunel phpbb` — for a
+        #     role whose build PLAN reports the selection as NONE
+        #     (build-x86-host-stage4.sh:2054,
+        #     `_plan OPTIONAL_SERVICES "$(${ROLE_CLIENT} && echo none || …)"`), on an
+        #     image that gets no cluster GitOps tree at all — the
+        #     `cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"` at
+        #     :4621 sits in the non-client arm, whose own comment reads "a client is a
+        #     desktop, not a node" (:4591). Nine rows of a choice that cannot mean
+        #     anything, and three of them pre-ticked.
+        #
+        # THE HIDE STAYS — WHAT IT EMITS IS NOT "NOTHING" (DEFECT 6, the regression this
+        # replaced). The first cut of this hide dropped --optional-services AND the
+        # --no-<x> definitely-offs from every standalone client argv, and justified it
+        # with a proof that is FALSE. It claimed the builder performs the client-role
+        # override itself at :1130 / :1146 / :1162 / :1178 / :1214. Those five guards
+        # exist and read as advertised — but every one of them tests ${ROLE_CLIENT} while
+        # it is still FALSE:
+        #     :92   ROLE_CLIENT=false   EARLY bound default, whose own comment says "the
+        #                               opt-in guards for --with-tor /
+        #                               --with-character-studio / --with-edge-ai-tts run
+        #                               BEFORE that derivation"
+        #     :1259 ROLE_CLIENT=false   re-set, immediately above `case "${ROLE}" in`
+        #     :1299/:1302/:1318/:1328/:1338  ROLE_CLIENT=true — INSIDE that role case
+        #                               (laptop|chromebook / desktop / standalone-thin /
+        #                               standalone-thick|full / standalone-unaffiliated)
+        #     :1438 ROLE_CLIENT=true    the composable --standalone fold, later still
+        # All five guards sit at :1130-:1214, i.e. BEFORE :1259. Demonstrated — the
+        # override never fires, and not one "has no effect" warning is printed:
+        #     ./build-x86-host-stage4.sh --role standalone-thick --with-tor \
+        #         --with-character-studio --with-edge-ai-tts --print-plan
+        #     -> PLAN_OPTIONAL_SERVICES=none, zero warnings
+        # PLAN_OPTIONAL_SERVICES is a DISPLAY (`${ROLE_CLIENT} && echo none || …`, :2054)
+        # computed after the role case; the variable the BUILD reads is untouched by the
+        # role. Measured on a node role, which unmasks the same resolution because the
+        # folds never see ROLE_CLIENT true either way — brand profile b.conf holding
+        # OPTIONAL_SERVICES="akkoma tor":
+        #     --config b.conf                           -> akkoma tor
+        #     --config b.conf --optional-services ""    -> none
+        # and b2.conf holding WANT_TOR=true / WANT_CHARACTER_STUDIO=true instead:
+        #     --config b2.conf                          -> …phpbb tor character-studio
+        #     --config b2.conf --optional-services ""    -> tor character-studio
+        #     --config b2.conf --optional-services ""
+        #                      --no-tor --no-character-studio  -> none
+        # so BOTH channels have to be answered: the allow-list AND the per-service
+        # definitely-offs. And `tor` is not academic — the PKGS line
+        # `_opt_selected tor && PKGS="${PKGS} net-vpn/tor"` (:5134) carries NO ROLE_CLIENT
+        # guard, unlike its runlevel neighbour at :4833, so a leaked slug really does
+        # emerge net-vpn/tor into a standalone desktop image that never carried it.
+        #
+        # SO THE HIDE CLEARS THE PICKER TO ITS "NO SERVICES" STATE AND validatePage
+        # COLLECTS THAT, exactly as if the operator had unticked every row by hand:
+        # --optional-services "" plus the --no-<x> of every row the builder can express
+        # here. That is this page's OWN established trade, already stated above for the
+        # pre-ticked default set — "the box beats the brand profile, because a box that a
+        # profile can silently contradict is the ambiguity the whole redo was asked to
+        # remove". A hidden box has an answer too, and its answer is none. Absent a
+        # profile the added tokens are provably inert (measured, node role):
+        #     --no-tor --no-character-studio --no-character-forge --no-edge-ai-tts
+        #     -> akkoma tuwunel phpbb, byte-identical to emitting none of them
+        # `--no-edge-ai` is untouched by any of this: the edge-AI widgets are not rows of
+        # this table (the AI GROUP row carries its own mode gate), and its unchecked arm
+        # is real subtraction on every build.
+        #
+        # ONE ANSWER FOR BOTH ARMS, and it is measured rather than symmetry for its own
+        # sake. The unaffiliated arm emits no --config at all (validatePage clears
+        # brand_profile — DEFECT 3), so it looks immune. It is not: the builder
+        # auto-detects `$(pwd)/brand.conf` whenever no -C is given (:884), and Studio runs
+        # the builder with cwd=generator_dir (core/build_driver.py, _spawn) — the very
+        # directory brand.conf.example ships in. Measured from a directory holding that
+        # same profile:
+        #     --role standalone-unaffiliated                        -> akkoma tor
+        #     --role standalone-unaffiliated --optional-services ""  -> none  (exit 0)
+        # An unaffiliated image silently emerging net-vpn/tor is the exact inverse of the
+        # role's definition, so this arm needs the explicit answer at least as much as the
+        # branded one — hence one rule, not two.
+        #
+        # KNOWN RESIDUE, stated rather than papered over: `games` is a flag row whose OFF
+        # arm has no builder flag to emit (there is no --no-games; ENABLE_GAMES=true in a
+        # profile folds `games` in at :1117-1122 and nothing on the Studio side can
+        # override it). That gap predates this change set and hits the VISIBLE picker on
+        # cloud/mesh identically, so it is a builder ask, not something this hide can close.
+        #
+        # WHY `standalone AND client`, NOT `client` ALONE. The CLOUD desktop path is
+        # deliberately left exactly as it was: a branded cloud client can legitimately be
+        # re-rolled as a node later, so there the heads-up note above is the honest
+        # treatment — the flags ARE parsed, they just do nothing on today's role. A
+        # standalone image has no mesh to be re-rolled into; the cluster is not "not
+        # yet", it is absent.
+        #
+        # And `_client_class_role` — not a mode test — is what keeps standalone rpi5
+        # 'generic' OUT of this hide: generic is cluster-node class and DOES bake the
+        # tree (G16), which is the whole reason that helper exists.
+        #
+        # Re-gated on EVERY visit, and the clear below is what validatePage then collects.
+        # `hide_services` was decided (and its sentinel reconciled) ABOVE THE SEEDER — see
+        # "the picker's HIDE, decided ONCE" for why it cannot be computed here. `client`
+        # and `unaffiliated` above are the same two terms, recomputed for the notes; this
+        # block reads the hoisted decision so the rule has exactly ONE implementation.
+        #
+        # No assert restating that equality: an exception escaping initializePage is a
+        # qFatal under the PyQt6 the operator runs (the venv is PySide6, so a test run
+        # would never show it), and a duplicated predicate is the thing being avoided, not
+        # a thing to check twice.
+        if hide_services:
+            # Clear to the "no services" state — the NONE preset, not CUSTOM. The widget
+            # state has to MATCH the emission (--optional-services "" plus the unticked
+            # rows' --no-<x>), or a later un-hide on the same wizard — Back, switch to a
+            # cloud client — would re-seed the picker from a config that says one thing
+            # while the argv said another. _PRESET_NONE also makes the emission
+            # independent of the CUSTOM/`slug_rows_offered` fallback in validatePage,
+            # which is bookkeeping rather than an answer.
+            #
+            # This REPLACES the earlier "clear to the UNSET state, never to the
+            # SERVICES_NONE sentinel" rule, which read hiding-must-not-change-the-build as
+            # hiding-must-emit-nothing. Emitting nothing is not neutral here: it hands the
+            # selection to whatever OPTIONAL_SERVICES a brand.conf happens to carry (see
+            # the measurements above). The house rule is that the ARGV must not change for
+            # a config the operator did not touch, and absent a profile these tokens are
+            # measurably byte-identical to emitting none of them.
+            self.services_preset.setCurrentIndex(_PRESET_NONE)
             for box in self.service_boxes.values():
                 box.setChecked(False)
-            self.services_box.setVisible(False)
             self.services_role_note.setVisible(False)
-        # Remembered on the page so validatePage can keep the hide emission-neutral: with
-        # two-state boxes an unchecked row would otherwise collect "off" and put
-        # --no-tor / --no-character-studio on an UNAFFILIATED argv — a role defined by
-        # carrying no platform machinery at all. Hiding a control must not change the
-        # build, in either direction.
-        self._services_hidden = unaffiliated
+        # ── DEFECT 5: the ORPHAN SERVICES HEADER ───────────────────────────────────
+        # services_scope_note and services_node_scope_note sit in `svc_content`, OUTSIDE
+        # services_box, and it is svc_content that the collapsible wraps. Hiding only the
+        # box therefore left an unaffiliated run with the "Services & apps" header and
+        # two paragraphs of mesh-wide prose ("Chosen ONCE for the whole mesh…", "tor and
+        # egress-vpn are node-scoped…") over nothing. Hide the SECTION — the house rule,
+        # and the idiom the tailnet and egress sections already use.
+        #
+        # setVisible on BOTH, not just the section: every existing gate assertion is
+        # written against services_box (and gate_widgets still greys that box per
+        # platform), so the box keeps carrying the answer to "is the picker on screen".
+        self.services_box.setVisible(not hide_services)
+        self.services_section.setVisible(not hide_services)
+        # Remembered on the page so validatePage knows the picker's answer was SETTLED
+        # rather than merely left at its defaults: it collects the cleared rows (every
+        # definitely-off the builder parses here) and writes the explicit-none sentinel,
+        # instead of reading a screen the operator never saw. Kept as page state rather
+        # than recomputed there because it is the ONE place the hide is decided.
+        self._services_hidden = hide_services
+        # …and remember that WE authored any explicit-none now in the config, so an
+        # un-hide can undo it. Without this the hide is ONE-WAY: validatePage writes the
+        # [SERVICES_NONE] sentinel, the seeder above reads it back at face value as an
+        # operator decision (`if c.optional_services == [SERVICES_NONE]: preset =
+        # _PRESET_NONE`, which runs BEFORE this gate), and it rides out of the standalone
+        # flow into the next one. Measured, before this flag existed — the operator never
+        # touched the services picker, they just walked the default path:
+        #     standalone-thick -> Back to Mode -> cloud desktop
+        #         --optional-services            (was: akkoma tuwunel phpbb)
+        #     standalone-thick -> Back to Mode -> mesh omnibus
+        #         --optional-services            (was: akkoma tuwunel phpbb)
+        # An untouched `[]` round-trips; the `["none"]` the HIDE wrote did not. Page state
+        # rather than a cfg field on purpose: the sentinel is a correct, persistable answer
+        # FOR A STANDALONE IMAGE (that is the D6 fix), so it must survive save/load — what
+        # must not survive is inheriting it into a flow that never hid the picker.
         # per-platform capability greying (G10/G11/G12): x86-only emission fields
         # used to sit un-greyed on ARM and silently drop their values from the argv.
         # validatePage() clears whatever is greyed here (clear_unsupported).
@@ -1136,7 +1516,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             # therefore greyed the row wherever only the SLUG channel exists. `tor` on
             # rpi5 is exactly that case — tor_onion_service is x86-only, so the flag gate
             # greyed the rpi5 tor row, which is the ONLY way to bake a Tor-onion Pi node
-            # (build-rpi5-stage4.sh:573-581, G15). Probe, before this line went:
+            # (build-rpi5-stage4.sh:746-748, G15). Probe, before this line went:
             #     mesh/pki/rpi5   tor  ON=_/dis      <- greyed, unbuildable
             #     mesh/pki/rpi5   tor  ON=_          <- after
             # The row-level `offered` flag computed above already covers everything this
@@ -1249,14 +1629,63 @@ class NetworkPage(QtWidgets.QWizardPage):
         # DERIVED value read-only — never write it back (would pin the derived string).
         if c.mode == "mesh":
             c.superdomain = self.superdomain.text().strip()
-        c.brand_profile = self.brand_profile.text().strip()
-        c.brand = self.brand.text().strip() or "hugmesh"
-        c.brand_title = self.brand_title.text().strip() or "HugMesh Systems"
-        c.org = self.org.text().strip() or "hugmesh"
-        c.cluster_domain = self.domain.text().strip() or "hugmesh.net"
-        c.games_domain = self.games_domain.text().strip()
-        rs = self.release_state.currentText()
-        c.release_state = "" if rs == "default" else rs
+        # ── the identity rows, collected ONLY while their axis has them on screen ──
+        # THE HOUSE RULE, both halves. initializePage hides a row it does not apply to,
+        # and a hidden QLineEdit KEEPS its text — so a scope-blind collect here would let
+        # a brand typed while the role was standalone-thick ride a later switch to
+        # standalone-unaffiliated straight into to_cli_args(), which raises ValueError on
+        # it. The reset arm is what makes the hide emission-neutral in the OTHER
+        # direction too: the field goes back to its ImageConfig dataclass default, read
+        # from the dataclass rather than restated as a literal (_field_default — the same
+        # lookup clear_unsupported uses), so hiding a control can neither add nor remove
+        # an argv token. The predicates are recomputed rather than cached off
+        # initializePage: validatePage must be correct for a headless caller that never
+        # drew the page, and cfg is the source of truth initializePage re-reads anyway.
+        #
+        # DEFECT 3 — brand identity is FORBIDDEN on an unaffiliated image (a brand IS an
+        # affiliation; core/config.py::_check_unaffiliated_conflicts and
+        # build-x86-host-stage4.sh both refuse it). Its LOOK is NOT: theme / wallpaper /
+        # accent colour / colour scheme are the branding step's business now, per the
+        # operator's 2026-08-26 split, and nothing here touches them.
+        if not (c.role == UNAFFILIATED_ROLE or getattr(c, "unaffiliated", False)):
+            c.brand_profile = self.brand_profile.text().strip()
+            c.brand = self.brand.text().strip() or _field_default("brand")
+            c.brand_title = self.brand_title.text().strip() or _field_default("brand_title")
+            c.org = self.org.text().strip() or _field_default("org")
+        else:
+            c.brand_profile = _field_default("brand_profile")     # ""
+            c.brand = _field_default("brand")                     # "hugmesh"
+            c.brand_title = _field_default("brand_title")         # "HugMesh Systems"
+            c.org = _field_default("org")                         # "hugmesh"
+        # DEFECT 1 — the cluster plane. COLLECT only when the rows are on screen; when
+        # they are hidden, LEAVE THE FIELDS ALONE. Platform-scoped: a standalone rpi5
+        # 'generic' image keeps the rows and collects them, because its builder really
+        # does bake them (build-rpi5-stage4.sh writes /etc/hugmesh/cluster-domain
+        # unconditionally).
+        #
+        # NO RESET ARM — this is the REDUNDANT axis, not the inapplicable one, and the
+        # distinction is the whole lesson of the 2026-08-26 review. `cluster_domain` is
+        # ONE field shared across the wizard session, while `_cluster_identity_applies`
+        # is a function of (platform, mode). A reset arm therefore let an x86 DETOUR
+        # reach over and destroy a domain typed for a Pi image the operator was still
+        # building. Measured, before this was removed:
+        #     rpi5 visit, operator types example.org  -> --cluster-domain example.org
+        #     flip the device to x86 on RolePage      -> cluster_domain = hugmesh.net
+        #     flip back to rpi5                       -> STILL hugmesh.net, widget blank
+        # i.e. the clear REMOVED an argv token from an image the operator never touched,
+        # which is precisely what the emission-neutrality rule forbids.
+        #
+        # Dropping it is emission-neutral for the hidden image too: `_x86_args` gates the
+        # whole trio behind its own `mode in ("cloud", "mesh")` test, so an x86 standalone
+        # emits none of them whatever the field holds. The clear bought nothing there and
+        # cost the ARM lane its value. This is the same REDUNDANT treatment role.py gives
+        # --capable and --standalone, for the same stated reason: clearing would silently
+        # rewrite a loaded config on a mere page visit.
+        if _cluster_identity_applies(c):
+            c.cluster_domain = self.domain.text().strip() or _field_default("cluster_domain")
+            c.games_domain = self.games_domain.text().strip()
+            rs = self.release_state.currentText()
+            c.release_state = "" if rs == "default" else rs
         # Scope-gated collect, mirroring HomePage's standalone line: the hidden widget
         # KEEPS its text/checked state, so without this a conf picked while the role was a
         # desktop would silently ride a later switch to a node role. cfg is the source of
@@ -1285,17 +1714,61 @@ class NetworkPage(QtWidgets.QWizardPage):
         # cleared every service" from "this platform's builder parses no --optional-services
         # and there was never a row to clear" — see the empty-picked branch below.
         slug_rows_offered = False
-        offered = self._service_offered if not self._services_hidden else {}
+        offered = self._service_offered
+        # DEFECT 6. The HIDDEN picker is not an unanswered one — the role settles it, and
+        # initializePage cleared every row to that answer, so those cleared rows are
+        # collected exactly as a hand-unticked visible picker would be. The earlier shape
+        # blanked `offered` here (`… if not self._services_hidden else {}`) and emitted
+        # nothing at all, which handed the whole selection to whatever OPTIONAL_SERVICES /
+        # WANT_<x> a brand.conf carried — measured leak, comment on the hide above.
+        # `tor` is the row this matters most for, and it is the row a hide that collects
+        # only what was OFFERED still misses: --no-tor was never on a standalone argv even
+        # before the hide, because the flag row is mode-gated off outside cloud/mesh (the
+        # `slug == "tor"` gate in initializePage). So tor is the one token the fix ADDS
+        # rather than restores — and it is exactly the token that stops a profile's
+        # WANT_TOR=true from emerging net-vpn/tor (:5134, unguarded) into a standalone
+        # desktop. Measured, --role standalone-thick, a profile holding WANT_TOR=true /
+        # WANT_CHARACTER_STUDIO=true, `--exclude-services zzz` used only to force the
+        # builder's own `final selection:` line (:1244, idempotent no-op):
+        #     -C b2.conf                                        -> akkoma tuwunel phpbb
+        #                                                          tor character-studio
+        #     -C b2.conf --optional-services ""                 -> tor character-studio
+        #     -C b2.conf --optional-services "" --no-tor
+        #        --no-character-studio --no-character-forge
+        #        --no-edge-ai-tts                               -> none
+        # i.e. the explicit-none sentinel ALONE leaves tor selected. Identical on
+        # standalone-unaffiliated, where the profile arrives WITHOUT a -C at all — the
+        # builder auto-detects `$(pwd)/brand.conf` (:884) and Studio spawns it with
+        # cwd=generator_dir (core/build_driver.py `_spawn`), the directory
+        # brand.conf.example ships in. Measured from a directory holding that same
+        # profile, feeding the builder the WHOLE argv this page now emits:
+        #     --role standalone-unaffiliated (bare, profile auto-detected)
+        #                                              -> akkoma tor character-studio
+        #     …the pre-fix wizard argv (no --no-tor)   -> tor
+        #     …the post-fix wizard argv                -> none
+        # and with no profile anywhere the post-fix argv is still `none`, while the CLOUD
+        # desktop argv is byte-identical either way (akkoma tuwunel phpbb).
+        hidden = self._services_hidden
         for slug, box in self.service_boxes.items():
             channel = _service_channel(slug, c.platform, catalog)
             if channel == "slug" and offered.get(slug):
                 slug_rows_offered = True
-            if not offered.get(slug):
-                # Not offered on this flow (unreachable flag, off-mode tor, or the whole
-                # box hidden for an UNAFFILIATED role): leave the field at its dataclass
-                # default. Hiding a control must change no argv, and with two-state boxes
-                # "collect what is on screen" would have emitted --no-tor etc. for a
-                # decision the operator was never shown.
+            # Was this row ANSWERED on this flow? Normally that is "it was on screen".
+            # Under the WHOLE-PICKER hide it is wider by exactly one row: the ROLE answered
+            # every flag the builder parses here, tor included, even though the mode gate
+            # had already taken tor's row off screen. The hide's clear above unticked that
+            # box with all the others, so widget state and emission still agree.
+            # Restricted to the FLAG channel on purpose — `offered` starts life as
+            # bool(channel), so a catalogue slug can never be un-offered, and a row with no
+            # channel has no flag to emit in the first place.
+            answered = bool(offered.get(slug)) or (hidden and channel == "flag")
+            if not answered:
+                # Not answered on this flow (unreachable flag, or off-mode tor while the
+                # picker IS on screen): leave the field at its dataclass default. Hiding a
+                # single ROW must change no argv, and with two-state boxes "collect what is
+                # on screen" would emit --no-tor for a decision this flow never showed —
+                # different from the whole-picker hide above, where the role has answered
+                # for every row at once.
                 if channel == "flag":
                     fld, _tri = _FLAG_SERVICE_FIELDS[slug]
                     setattr(c, fld, _field_default(fld))
@@ -1308,8 +1781,14 @@ class NetworkPage(QtWidgets.QWizardPage):
         # the whole-set preset replaces the slug rows (see _services_args: [none] emits
         # --optional-services "" and [all] emits --all-services) (G13/G14)
         preset = self.services_preset.currentIndex()
-        if self._services_hidden:
-            c.optional_services = []
+        if hidden:
+            # EXPLICIT none — `--optional-services ""`, which is what the builder's own
+            # plan claims a client role gets (:2054) and, unlike emitting nothing, is what
+            # it actually gets. Stated here rather than left to the preset chain so the
+            # invariant survives a headless caller that never drew the page: hidden picker
+            # => explicit empty selection, full stop. (initializePage sets the preset
+            # widget to _PRESET_NONE too, so the two agree.)
+            c.optional_services = [SERVICES_NONE]
         elif preset == _PRESET_NONE:
             c.optional_services = [SERVICES_NONE]
         elif preset == _PRESET_ALL:
@@ -1331,7 +1810,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # ASK 2, verbatim: "remove the exclude services field, it makes no sense". The
         # widget is gone; the FIELD and the --exclude-services flag are deliberately kept
         # (it is the only knob that can subtract a slug a brand.conf injected directly
-        # into OPTIONAL_SERVICES — build-x86-host-stage4.sh:1181-1199, applied last — and
+        # into OPTIONAL_SERVICES — build-x86-host-stage4.sh:1234-1246, applied last — and
         # tests/build-matrix/flag-coverage.sh would need two "no longer a GUI knob"
         # allowlist entries if it went). It is now reachable only from a brand profile
         # (-C) or extra flags. NOT reset here: a value loaded from a saved config or set

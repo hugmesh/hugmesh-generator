@@ -49,7 +49,6 @@ from __future__ import annotations
 import copy
 import os
 
-from dataclasses import MISSING
 
 from ..qt import Qt, QtCore, QtWidgets, Signal
 from .. import console
@@ -62,7 +61,7 @@ from ...core import secret_files
 from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
 from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE,
-                            effective_installer_ui, image_class,
+                            effective_installer_ui, field_default, image_class,
                             resolve_installer_ui_default, resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
 from ._device_table import DeviceTable
@@ -108,10 +107,10 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
 #
 # UNSET READS AS CHECKED, and that is not a guess: every flag-pair on this page has a
 # builder default of TRUE on every builder that parses it —
-#   BUILD_IMG=true   build-x86-host-stage4.sh:231, build-rpi5-stage4.sh:173, build-jetson-stage4.sh:154
-#   LIVE_ISO=true    build-x86-host-stage4.sh:236
-#   BUILD_TAR=true   build-x86-host-stage4.sh:238, build-rpi5-stage4.sh:175
-#   SECURE_BOOT=true build-x86-host-stage4.sh:484
+#   BUILD_IMG=true   build-x86-host-stage4.sh:238, build-rpi5-stage4.sh:200, build-jetson-stage4.sh:181
+#   LIVE_ISO=true    build-x86-host-stage4.sh:243
+#   BUILD_TAR=true   build-x86-host-stage4.sh:245, build-rpi5-stage4.sh:202
+#   SECURE_BOOT=true build-x86-host-stage4.sh:516
 # so "leave the builder's default" and "checked" were always the same PICTURE; the square
 # only ever advertised a distinction in the argv, not in the image. Making it explicit
 # adds --img/--live-iso/--tar/--secure-boot to the emitted command and changes nothing
@@ -159,12 +158,12 @@ def _hint(text):
     return lab
 
 
-def _field_default(name):
-    """An ImageConfig field's declared default (mirrors NetworkPage._field_default and
-    _gating.clear_unsupported's lookup) — the default-expansion rule compares against
-    the dataclass's own truth, never literals restated in the GUI."""
-    f = ImageConfig.__dataclass_fields__[name]
-    return f.default_factory() if f.default is MISSING else f.default
+#: An ImageConfig field's declared default — ``core.config.field_default`` under this
+#: module's historical name. Was a third byte-identical copy of the same four lines
+#: until 2026-08-26 (see the note in network.py); the default-expansion rule must
+#: compare against the dataclass's own truth, never literals restated in the GUI, and
+#: that truth is now stated in exactly one place.
+_field_default = field_default
 
 
 def _picker_row(parent, line_edit, caption, file_filter="All files (*)", directory=False):
@@ -413,7 +412,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # than assumed, because getting this wrong means quietly changing what a build
         # produces while claiming to have changed a checkbox:
         #
-        #   cached    ISO_CACHED=false   (build-x86-host-stage4.sh:403)  -> CHANGES the
+        #   cached    ISO_CACHED=false   (build-x86-host-stage4.sh:415)  -> CHANGES the
         #             build. Embeds the binpkg cache + distfiles in the live ISO: a
         #             materially larger ISO that can rebuild offline.
         #   compress  COMPRESS_IMG=false (x86:242, rpi5:186, jetson:165) -> CHANGES the
@@ -820,7 +819,7 @@ class BuildPage(QtWidgets.QWizardPage):
         self.installer_ui.setEnabled(c.platform in ("", "x86"))
         # Role-class honesty (#355 idiom): a headless x86 NODE cannot build the graphical
         # Calamares front-end — the desktop USE closure it needs is ROLE_CLIENT-gated in
-        # build-x86-host-stage4.sh:2496 — so materialize rewrites installer_ui to "cli"
+        # build-x86-host-stage4.sh:3676 — so materialize rewrites installer_ui to "cli"
         # (core.config.resolve_installer_ui_default). Show THAT, not a stale "all" the
         # image will never honour: without the setCurrentText the combo would lie, and
         # validatePage would write the lie back into the config.

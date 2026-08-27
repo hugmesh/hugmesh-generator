@@ -57,6 +57,39 @@ WHY A PATCH AND NOT A KNOB
 USAGE
     patch-portage-file-copy.py ROOT
         ROOT: a portage root — "/" (builder container) or a stage4 sysroot.
+        Leaves NOTHING beside the file it edits: no sidecar, no backup.
+    patch-portage-file-copy.py --backup ROOT
+        As above, PLUS a pristine copy saved beside each patched file as
+        <file>.hugmesh-orig. OPT-IN, and only for a caller that also runs the
+        --revert below before it packages anything (see WHY THE BACKUP IS OPT-IN).
+    patch-portage-file-copy.py --revert ROOT
+        Restore the pristine file(s) from the .hugmesh-orig copies saved at patch
+        time, and delete those copies (a stray copy beside an UNpatched file is
+        deleted too). Used to keep the patch a BUILD-TIME artifact:
+        a shipped image whose portage differs from what its vdb CONTENTS records
+        would make `equery check sys-apps/portage` (and any file-integrity baseline)
+        report a modified file forever, for a workaround the device does not need —
+        it merges onto its own root, not onto the builder's eCryptfs work dir.
+
+    The backup MUST live beside the patched file, never in a sidecar tree keyed by
+    ROOT: the x86 lane patches in-chroot as ROOT="/" and reverts from OUTSIDE the
+    chroot as ROOT="${SYSROOT}" — two spellings of the SAME file — so a
+    root-path-keyed location would simply not be found at revert time.
+
+WHY THE BACKUP IS OPT-IN (regression, found and fixed 2026-08-26)
+    It was unconditional for exactly one change set. --revert has ONE caller
+    (build-x86-host-stage4.sh, immediately before its "Packaging stage4 tarball"
+    banner), but pcs_quiet_sendfile_noise — which ALL TEN stage4 builders call on
+    their SYSROOT — does not revert. So the nine ARM/Jetson lanes each began
+    shipping usr/lib*/python3.*/site-packages/portage/util/file_copy.py.hugmesh-orig:
+    a ~4 KB vdb-unowned duplicate of a portage source file that did not exist before
+    that diff, inside images that stage AIDE. Precisely the build-time residue
+    --revert was added to eliminate, reintroduced nine times over.
+    Opt-in inverts the default so a lane that never asks for a backup cannot leave
+    one — the nine ARM lanes are byte-identical to their pre-diff behaviour again —
+    and the pairing (opt in => you MUST revert) is enforced mechanically by the SFO
+    bucket in tests/build-matrix/check.sh, so a FUTURE builder cannot reintroduce it
+    silently either.
 
 EXIT CODES
     0  patched now, or already patched (idempotent)
@@ -69,6 +102,10 @@ import os
 import sys
 
 MARKER = "HUGMESH PINNED WORKAROUND"
+# Pristine copy saved beside the patched file so --revert restores it byte-exactly.
+# Written ONLY under --backup (see WHY THE BACKUP IS OPT-IN above); --revert
+# consumes and removes it, including a stray one beside an unpatched file.
+BACKUP_SUFFIX = ".hugmesh-orig"
 
 # The exact upstream text of portage-3.0.81.2 (whitespace included).
 ANCHOR_TRY = """\
@@ -118,8 +155,10 @@ def log(msg, err=False):
     print(f"[sendfile-quiet] {msg}", file=sys.stderr if err else sys.stdout)
 
 
-def patch_one(path):
-    """Returns 0 (patched or already patched) or 3 (anchor missing)."""
+def patch_one(path, backup=False):
+    """Patch PATH in place; with backup=True also save a pristine copy beside it.
+
+    Returns 0 (patched or already patched) or 3 (anchor missing)."""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     if MARKER in text:
@@ -144,15 +183,40 @@ def patch_one(path):
     )
     # Refuse to write anything that does not compile.
     compile(new, path, "exec")
-    tmp = path + ".hugmesh-tmp"
     st = os.stat(path)
+    # Keep the pristine bytes so --revert can restore them EXACTLY. Re-deriving
+    # the original by un-applying the transform would be a second, independently
+    # wrong-able implementation of the same edit; a byte copy cannot drift. Taken
+    # only on a real patch (the MARKER early-return above leaves an existing
+    # backup alone), so re-patching a root never overwrites the true original
+    # with an already-patched file — and so a re-patch AFTER an in-chroot
+    # sys-apps/portage self-update refreshes the backup to the NEW version's
+    # pristine bytes, which is the version --revert has to restore.
+    # OPT-IN (`backup`): a caller that will not --revert must not leave the copy
+    # behind — that residue is exactly what --revert exists to prevent, and the
+    # nine ARM lanes shipped it for a day. See WHY THE BACKUP IS OPT-IN above.
+    if backup:
+        try:
+            with open(path, "rb") as src, open(path + BACKUP_SUFFIX, "wb") as dst:
+                dst.write(src.read())
+            os.chmod(path + BACKUP_SUFFIX, st.st_mode)
+        except OSError as exc:                   # non-fatal: the patch still applies
+            log(f"WARN: could not save {path}{BACKUP_SUFFIX} ({exc}) — --revert will "
+                "not be able to restore this file", err=True)
+    tmp = path + ".hugmesh-tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(new)
     os.chmod(tmp, st.st_mode)
     os.replace(tmp, path)
-    # Drop stale cached bytecode (any interpreter tag — the target root's
-    # python may not be the one running this script); it regenerates on the
-    # next import (the source mtime changed anyway — belt-and-braces).
+    _drop_pycache(path)
+    log(f"patched: {path}")
+    return 0
+
+
+def _drop_pycache(path):
+    """Drop stale cached bytecode (any interpreter tag — the target root's python
+    may not be the one running this script); it regenerates on the next import
+    (the source mtime changed anyway — belt-and-braces)."""
     for stale in glob.glob(
         os.path.join(os.path.dirname(path), "__pycache__", "file_copy.*.pyc")
     ):
@@ -160,15 +224,51 @@ def patch_one(path):
             os.unlink(stale)
         except OSError:
             pass
-    log(f"patched: {path}")
+
+
+def revert_one(path):
+    """Undo patch_one from the saved pristine copy. Returns 0 always — a root that
+    was never patched, or whose backup is gone, is not an error worth failing a
+    multi-hour build over."""
+    backup = path + BACKUP_SUFFIX
+    if MARKER not in open(path, encoding="utf-8").read():
+        log(f"not patched, nothing to revert: {path}")
+        # A stray backup with no patched file is cruft either way.
+        if os.path.exists(backup):
+            try:
+                os.unlink(backup)
+            except OSError:
+                pass
+        return 0
+    if not os.path.isfile(backup):
+        log(f"WARN: {path} is patched but {backup} is missing — leaving it patched "
+            "(the file still WORKS; only its vdb checksum will differ)", err=True)
+        return 0
+    st = os.stat(path)
+    with open(backup, "rb") as src, open(path + ".hugmesh-tmp", "wb") as dst:
+        dst.write(src.read())
+    os.chmod(path + ".hugmesh-tmp", st.st_mode)
+    os.replace(path + ".hugmesh-tmp", path)
+    try:
+        os.unlink(backup)
+    except OSError:
+        pass
+    _drop_pycache(path)
+    log(f"reverted: {path}")
     return 0
 
 
 def main(argv):
-    if len(argv) != 2:
-        log("usage: patch-portage-file-copy.py ROOT", err=True)
+    revert = "--revert" in argv[1:]
+    backup = "--backup" in argv[1:]
+    args = [a for a in argv[1:] if a not in ("--revert", "--backup")]
+    if len(args) != 1 or (revert and backup):
+        # `--revert --backup` is not "revert and re-save": revert DELETES the copy.
+        # Refuse the pairing rather than silently pick one, so a caller that wrote it
+        # by accident finds out at the first build instead of at image-inspection time.
+        log("usage: patch-portage-file-copy.py [--backup | --revert] ROOT", err=True)
         return 1
-    root = argv[1]
+    root = args[0]
     paths = sorted(
         p
         for libdir in ("usr/lib", "usr/lib64")
@@ -184,7 +284,7 @@ def main(argv):
         return 2
     rc = 0
     for path in paths:
-        rc = max(rc, patch_one(path))
+        rc = max(rc, revert_one(path) if revert else patch_one(path, backup))
     return rc
 
 

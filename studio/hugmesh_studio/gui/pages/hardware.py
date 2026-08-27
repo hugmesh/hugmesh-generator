@@ -2,7 +2,17 @@
 
 The machine-defining PROFILE PRESET moved to the RolePage's x86 machine card (spec fold
 2): the target machine is chosen in ONE place. The GPU/Wi-Fi/Bluetooth/kernel controls
-here are TUNING (the profile only pre-fills them), and the this-machine scan stays."""
+here are TUNING (the profile only pre-fills them), and the this-machine scan stays.
+
+DECISION 2(a), operator report 2026-08-26 ("asking same questions seemingly multiple
+times"): the scan below is now the ONLY scanner in the flow. RolePage used to offer a
+second one, a synthetic ``this-machine-scan`` row in the machine-profile combo that ran
+the same ``hw_scan.scan()`` and printed the same summary one page earlier — the same
+question on two consecutive screens. The RolePage copy went (with its
+specs-x86/hwprofiles/profiles.json entry and its output label); this one stayed, because
+THIS is the page that owns the three fields a scan writes (GPU driver, Wi-Fi, Bluetooth)
+and finalises them into the argv. Anything that re-adds a scan trigger elsewhere is
+re-opening the duplicate."""
 from __future__ import annotations
 
 from ..qt import QtWidgets

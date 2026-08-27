@@ -39,12 +39,14 @@ from hugmesh_studio.core.config import (
     RPI_NODE_BOARDS,
     branding_allowed,
     clear_role_class_fields,
+    cluster_identity_applies,
     enter_mesh_defaults,
     home_options_allowed,
     image_class,
     rpi_boards_for_role,
     strip_platform_unsupported,
     tailnet_sso_visible,
+    unaffiliated_image,
 )
 
 
@@ -179,15 +181,20 @@ def test_x86_standalone_unaffiliated_golden():
 
 def test_x86_unaffiliated_never_emits_affiliation_flags():
     """Mirror of test_rpi5_never_emits_x86_only_flags: generic options flow through,
-    every affiliation flag (a builder hard-conflict) is absent."""
+    every affiliation flag (a builder hard-conflict) is absent.
+
+    The LOOK flags (--theme/--wallpaper/…) are DELIBERATELY not in this list any more —
+    2026-08-26 split them out of the conflict (see _check_unaffiliated_conflicts and
+    build-x86-host-stage4.sh:1351-1356: a brand is an affiliation, a wallpaper is not).
+    They are unset on this config so they would be absent either way, which is exactly
+    why asserting them here would be a vacuous restatement of the OLD contract.
+    test_x86_unaffiliated_look_fields_are_allowed_and_emitted pins the new one."""
     args = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
                        bundle_source=False, gpu_driver="nvidia", encrypt_root=True,
                        luks_pass="sekrit", unlock_keyfile="boot", unlock_yubikey="login",
                        compress=True, resume=True).to_cli_args()
     for flag in ("--brand", "--brand-title", "--org",
-                 "--theme", "--branding-dir", "--wallpaper", "--grub-background",
-                 "--grub-theme", "--login-background", "--brand-logo", "--accent-color",
-                 "--color-scheme", "--brand-locked",
+                 "--brand-logo", "--brand-locked",
                  "--bundle-source", "--no-bundle-source", "--home-seed-code",
                  "--with-tailscale", "--no-tailscale", "--with-sso", "--no-sso",
                  "--person-role", "--domains"):
@@ -201,32 +208,85 @@ def test_x86_unaffiliated_never_emits_affiliation_flags():
     assert "--compress" in args and "--resume" in args
 
 
-@pytest.mark.parametrize("conflict", [
+# The IDENTITY half of the 2026-08-26 identity/look split. Every entry here is a field
+# whose presence declares an AFFILIATION, which is the one thing the unaffiliated role is
+# defined by not having — so Studio raises with the same contract as
+# build-x86-host-stage4.sh:1347-1356. The LOOK half moved to the test below; keeping BOTH
+# directions is the point (a conflict test that only proves the allowed direction would
+# pass just as happily with the whole check deleted).
+UNAFFILIATED_IDENTITY_CONFLICTS = [
     {"brand": "acme"},
     {"brand_title": "Acme"},
     {"org": "Acme-Org"},
     {"brand": "gentoo"},              # even the neutral id: the builder forces it ITSELF
-    {"theme": "dark"},
-    {"branding_dir": "/tmp/brand"},
-    {"wallpaper": "wp.png"},
-    {"grub_background": "g.png"},
-    {"login_background": "l.png"},
-    {"brand_logo": "logo.png"},
-    {"accent_color": "#123456"},
-    {"color_scheme": "dark"},
-    {"brand_locked": True},
+    {"brand_logo": "logo.png"},       # a logo IS an organization's mark
+    {"brand_locked": True},           # locks a brand this image does not have
     {"home_seed_code": "repos"},
     {"tailscale": True},
     {"sso": True},
     {"mode": "cloud"},                # would emit --person-role/--domains
     {"mode": "mesh"},
-])
+]
+
+# The LOOK half: desktop APPEARANCE, which carries no identity. Flag names paired with
+# the field so the test asserts the value really reaches argv — the split would be
+# worthless if the ValueError were merely traded for a silent drop. It is not: _x86_args
+# emits this block OUTSIDE the `if not unaffiliated:` brand-plane gate, so removing the
+# conflict is all that was needed.
+UNAFFILIATED_LOOK_ALLOWED = [
+    ("theme", "dark", "--theme"),
+    ("branding_dir", "/tmp/brand", "--branding-dir"),
+    ("wallpaper", "wp.png", "--wallpaper"),
+    ("grub_background", "g.png", "--grub-background"),
+    ("grub_theme", "/tmp/grub-theme", "--grub-theme"),
+    ("login_background", "l.png", "--login-background"),
+    ("accent_color", "#123456", "--accent-color"),
+    ("color_scheme", "dark", "--color-scheme"),
+]
+
+
+@pytest.mark.parametrize("conflict", UNAFFILIATED_IDENTITY_CONFLICTS)
 def test_x86_unaffiliated_conflicting_fields_raise(conflict):
     kw = dict(mode="standalone", role="standalone-unaffiliated", platform="x86",
               bundle_source=False)
     kw.update(conflict)
     with pytest.raises(ValueError, match="unaffiliated"):
         ImageConfig(**kw).to_cli_args()
+
+
+@pytest.mark.parametrize("field,value,flag", UNAFFILIATED_LOOK_ALLOWED)
+def test_x86_unaffiliated_look_fields_are_allowed_and_emitted(field, value, flag):
+    """DECISION of 2026-08-26 — "split identity from look". The operator asked for "the
+    menu for adding the themes as in the branded images" on their standalone-unaffiliated
+    x86 image (session 20260826-151356-64070a). A theme is not an affiliation, so it must
+    (a) NOT raise and (b) actually reach the builder — mirroring the same split landing at
+    build-x86-host-stage4.sh:1351-1356, where these eight flags come out of the
+    hard-conflict `if` while --brand-logo/--brand-locked stay in it."""
+    kw = dict(mode="standalone", role="standalone-unaffiliated", platform="x86",
+              bundle_source=False)
+    kw[field] = value
+    args = ImageConfig(**kw).to_cli_args()          # must not raise
+    assert (flag, value) in pairs(args), f"{flag} was accepted but silently dropped"
+    # ...and the brand plane is STILL suppressed: look without identity.
+    for identity_flag in ("--brand", "--brand-title", "--org", "--brand-logo",
+                          "--brand-locked"):
+        assert identity_flag not in args
+
+
+def test_x86_unaffiliated_look_and_identity_split_covers_every_branding_field():
+    """Anti-rot guard. THEME_FIELDS is exactly the ten-field family the old single
+    "branding assets" conflict lumped together (theme/branding_dir/wallpaper/
+    grub_background/grub_theme/login_background/brand_logo/accent_color/color_scheme/
+    brand_locked). Every one of them must still be CLASSIFIED by the split — identity
+    (raises) or look (emitted) — so a field added to the family later cannot land in
+    neither list and quietly go untested in both directions."""
+    classified = ({next(iter(c)) for c in UNAFFILIATED_IDENTITY_CONFLICTS}
+                  | {f for f, _, _ in UNAFFILIATED_LOOK_ALLOWED})
+    missing = set(THEME_FIELDS) - classified
+    assert not missing, f"branding field(s) in neither the identity nor the look list: {missing}"
+    # and the two halves are disjoint — a field cannot be both forbidden and emitted
+    assert not ({next(iter(c)) for c in UNAFFILIATED_IDENTITY_CONFLICTS}
+                & {f for f, _, _ in UNAFFILIATED_LOOK_ALLOWED})
 
 
 def test_x86_unaffiliated_bundle_source_default_is_normalized_not_a_conflict():
@@ -252,6 +312,29 @@ def test_x86_unaffiliated_generic_iso_knobs_flow_through():
     assert "--cached" in args and "--no-live-toram" in args
     assert "--no-proxy-stack" in args
     assert "--bundle-source" not in args and "--no-bundle-source" not in args
+
+
+def test_unaffiliated_image_is_the_one_spelling_of_the_axis():
+    """The contract gui/pages/branding.py:132 filed for the config lane. BOTH spellings
+    must answer True — the dedicated role id and the composable --unaffiliated flag (G22)
+    — because _x86_args now DELEGATES its brand-plane suppression to this predicate, so a
+    page gating on it and the emitter deciding on it can no longer disagree (the asymmetry
+    branding.py records: role="standalone-thick", unaffiliated=True rendered a live
+    branding page for a config whose to_cli_args() raises)."""
+    assert unaffiliated_image(ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE,
+                                          platform="x86", bundle_source=False))
+    assert unaffiliated_image(ImageConfig(mode="standalone", role="standalone-thick",
+                                          platform="x86", unaffiliated=True))
+    assert not unaffiliated_image(ImageConfig(mode="standalone", role="standalone-thick",
+                                              platform="x86"))
+    # and the delegation is live: the identity conflict fires through the composable flag
+    with pytest.raises(ValueError, match="unaffiliated"):
+        ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                    bundle_source=False, unaffiliated=True, brand_logo="logo.png").to_cli_args()
+    # ...while a LOOK field on that same composable spelling is emitted, not refused
+    args = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                       bundle_source=False, unaffiliated=True, theme="dark").to_cli_args()
+    assert ("--theme", "dark") in pairs(args) and "--unaffiliated" in args
 
 
 def test_unaffiliated_role_constant_matches_catalog():
@@ -384,7 +467,7 @@ def test_rpi5_node_on_rpi4_is_a_real_buildable_cell():
 @pytest.mark.parametrize("role", ["pki", "be", "fe", "be+gpu", "omnibus", "edge_ai"])
 def test_x86_mesh_roles_golden(role):
     # G18: a mesh NODE role does NOT carry --person-role/--domains — the builder warns
-    # + ignores them there (build-x86:1220-1222), so the Studio must not emit them.
+    # + ignores them there (build-x86:1722-1724), so the Studio must not emit them.
     args = ImageConfig(mode="mesh", role=role, platform="x86",
                        tailscale=True, sso=True).to_cli_args()
     # WS-SUPER-B: every mesh image records its orchestration plane (derived
@@ -925,6 +1008,74 @@ def test_g1_cluster_domain_default_and_standalone_suppress():
     assert "--cluster-domain" not in ImageConfig(mode="standalone", role="standalone-thick",
                                                  platform="x86",
                                                  cluster_domain="acme.example").to_cli_args()
+
+
+# ---- the cluster-identity SURFACE predicate (NetworkPage's "Identity & domain") ----
+
+def test_cluster_identity_applies_is_platform_asymmetric():
+    """cluster_identity_applies() must be a function of (platform, mode), NOT mode alone.
+
+    Operator report 2026-08-26: "There should also be no inbetween menu for configuring
+    domain" on the standalone flow (their image: role=standalone-unaffiliated /
+    platform=x86, session 20260826-151356-64070a). The obvious fix — key the gate on
+    `mode in ("cloud","mesh")` — would be WRONG on ARM and would silently drop a flag the
+    builders take:
+
+      * x86:  _x86_args:3565 wraps --cluster-domain/--games-domain/--release-state in
+              `if self.mode in ("cloud","mesh")`, so on a standalone x86 image the group
+              asks a question with no emitted answer -> hide it.
+      * rpi5: _arm_common_args:3139-3140 emits --cluster-domain in EVERY mode (shared by
+              all nine ARM builder methods) and build-rpi5-stage4.sh:3863 bakes
+              ${CLUSTER_DOMAIN} into /etc/hugmesh/cluster-domain with no mode or role
+              fork at all -> a standalone rpi5 image REALLY carries a cluster domain.
+
+    The three asserts below are exactly those two builders' truth plus the control case.
+    Each is cross-checked against the ARGV so the predicate cannot drift away from what
+    to_cli_args() actually emits — which is the only property a hide-gate may key on
+    (hiding is paired with an emission-neutral clear)."""
+    x86_standalone = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                                 cluster_domain="acme.example")
+    rpi5_standalone = ImageConfig(mode="standalone", role="generic", platform="rpi5",
+                                  cluster_domain="acme.example")
+    x86_cloud = ImageConfig(mode="cloud", role="desktop", platform="x86", tailscale=True,
+                            sso=True, cluster_domain="acme.example")
+
+    assert cluster_identity_applies(x86_standalone) is False
+    assert cluster_identity_applies(rpi5_standalone) is True
+    assert cluster_identity_applies(x86_cloud) is True
+
+    # ...and the predicate agrees with emission in all three cells.
+    assert "--cluster-domain" not in x86_standalone.to_cli_args()
+    assert ("--cluster-domain", "acme.example") in pairs(rpi5_standalone.to_cli_args())
+    assert ("--cluster-domain", "acme.example") in pairs(x86_cloud.to_cli_args())
+
+
+def test_cluster_identity_applies_reads_only_platform_and_mode():
+    """MUTATION-STYLE GUARD: the role must NOT move the answer. --cluster-domain is baked
+    for cluster NODES and CLIENTS alike (_x86_args emits it outside the
+    `role not in X86_NODE_ROLES` gate that --person-role/--domains sit behind), so a class
+    axis here would be an invented constraint — the exact failure mode FieldScope's
+    docstring records for the --standalone class rule."""
+    for role in ("desktop", "laptop", "omnibus", "pki", "be", "fe"):
+        mode = "mesh" if role in X86_NODE_ROLES else "cloud"
+        assert cluster_identity_applies(
+            ImageConfig(mode=mode, role=role, platform="x86", tailscale=True, sso=True))
+    for role in ("standalone-thin", "standalone-thick", UNAFFILIATED_ROLE):
+        assert not cluster_identity_applies(
+            ImageConfig(mode="standalone", role=role, platform="x86", bundle_source=False))
+
+
+def test_cluster_identity_applies_stays_true_where_only_cluster_domain_is_parsed():
+    """`any`, not `all`. On frite/jetson/orangepi* --games-domain and --release-state are
+    not parsed at all (PLATFORM_FIELD_SUPPORT: x86+rpi5), but --cluster-domain IS baked in
+    every mode — so the surface must still be offered there, and NetworkPage's separate
+    per-field platform gate (gate_widgets) is what greys the two rows that do not apply."""
+    for plat, role in (("frite", "frite"), ("jetson", "jetson-desktop"),
+                       ("orangepi5", "orangepi5")):
+        cfg = ImageConfig(mode="standalone", role=role, platform=plat,
+                          cluster_domain="acme.example")
+        assert cluster_identity_applies(cfg), f"{plat} bakes a cluster domain in standalone"
+        assert set(PLATFORM_FIELD_SUPPORT["games_domain"]) == {"x86", "rpi5"}
 
 
 # ---- G18: explicit --person-role picker; node roles carry none ------------------

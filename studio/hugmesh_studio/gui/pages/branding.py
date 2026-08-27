@@ -1,18 +1,41 @@
 """BrandingPage — TWO branding surfaces with opposite scopes:
 
 * DESKTOP assets (premade theme XOR custom boot/login/wallpaper/GRUB/accent, plus
-  the brand lock): x86-only emission, greys+clears on node images
-  (``branding_allowed`` / ``_desktop_half_allowed``) and on the unaffiliated role
-  (a builder hard-conflict). In MESH mode the half is live whenever the worklist
-  carries a desktop-class x86 entry — the theme rides the shared cfg and
-  materialize()'s per-entry clear keeps it off every node image (operator ask
-  2026-08-14; supersedes spec 2's never-in-mesh). The premade picker and the eight
-  custom fields are an exclusive either/or so the two branding channels can never
-  fight.
+  the brand logo and the brand lock): x86-only emission, greys+clears on node images
+  (``branding_allowed`` / ``_desktop_half_allowed``). In MESH mode the half is live
+  whenever the worklist carries a desktop-class x86 entry — the theme rides the
+  shared cfg and materialize()'s per-entry clear keeps it off every node image
+  (operator ask 2026-08-14; supersedes spec 2's never-in-mesh). The premade picker
+  and the eight custom fields are an exclusive either/or so the two branding
+  channels can never fight.
 * The WEB LOGIN THEME (colours/fonts for the login page the MESH serves to
   browsers): NON-argv mesh-plane fields (config NON_ARGV_FIELDS), deliberately
   OUTSIDE the desktop gating — mesh mode visits this page exactly FOR this half,
   and greying it there would gate the knob off on the only plane that renders it.
+  SHOWN ONLY IN MESH since 2026-08-26: a standalone/cloud desktop serves no
+  login-ui (the page's own applies_to docstring already conceded this), so the
+  section themed nothing there while still persisting its login_* keys into that
+  image's saved config. The COMMIT stays unconditional, so a mesh config survives a
+  stray visit unharmed. It is also retitled "Web login theme": the DESKTOP cards
+  live under a "Desktop theme" header while the thing literally titled "Themes" was
+  the web one, which is the ambiguity behind the operator's "the menu for adding the
+  themes".
+
+IDENTITY vs LOOK on an UNAFFILIATED image (operator decision, 2026-08-26). This page
+used to delete itself wholesale for ``standalone-unaffiliated`` / the composable
+``--unaffiliated`` flag — which is exactly what the operator's report is about:
+"There should be the menu for adding the themes as in the branded images". A BRAND is
+an affiliation; a WALLPAPER is not. The two halves are now gated separately:
+
+  * IDENTITY stays FORBIDDEN — ``--brand`` / ``--brand-title`` / ``--org`` (the
+    NetworkPage plane) plus this page's ``--brand-logo`` and ``--brand-locked``. Both
+    widgets are HIDDEN here and cleared in ``validatePage``;
+    ``ImageConfig._check_unaffiliated_conflicts`` and build-x86-host-stage4.sh keep
+    hard-erroring on them, so the wizard cannot hand over a config they reject.
+  * LOOK is OFFERED — the four premade themes and the neutral custom assets
+    (branding dir, wallpaper, GRUB background, GRUB theme dir, login background,
+    accent colour, colour scheme). The builder bakes them under NEUTRAL names on this
+    role, the way the home/installer/media machinery already does.
 
 ASK 6 — "redo entire branding section as well and remove existing themes and leave a
 light and a dark, a purple, and a grey theme selectable". What changed and why:
@@ -41,7 +64,9 @@ from __future__ import annotations
 from ..qt import QtWidgets
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ...core.branding_themes import theme_set_problem
-from ...core.config import UNAFFILIATED_ROLE, branding_allowed, image_class
+from ...core.config import (
+    UNAFFILIATED_ROLE, branding_allowed, image_class, unaffiliated_image,
+)
 from ._gating import (
     clear_unsupported, gate_widgets_role_class, platform_supports, unsupported_note,
 )
@@ -64,6 +89,39 @@ _BRANDING_FIELDS = ("theme", "branding_dir", "wallpaper", "grub_background",
 _CUSTOM_FIELDS = ("branding_dir", "wallpaper", "grub_background", "grub_theme",
                   "login_background", "brand_logo", "color_scheme", "accent_color")
 
+# The two IDENTITY widgets on this page. Hidden + cleared on an unaffiliated image
+# (decision 2026-08-26 "split identity from look"): a logo and a managed-image lock
+# are a brand's marks, and both remain builder hard conflicts there
+# (config._check_unaffiliated_conflicts' `assets` list; build-x86-host-stage4.sh's
+# unaffiliated err). Everything else this page owns is a LOOK and stays offered.
+_IDENTITY_FIELDS = ("brand_logo", "brand_locked")
+
+_UNAFFILIATED_NOTE = (
+    "Unaffiliated build: no brand IDENTITY is baked — no brand name, no logo, no "
+    "branding lock (the builder hard-errors on those). The LOOK is yours: pick a "
+    "premade theme or supply your own wallpaper, boot screen, greeter and colours. "
+    "They are baked under neutral names, with no HugMesh marks.")
+
+_IDENTITY_HIDDEN_REASON = (
+    "A brand logo and a managed-image branding lock are brand IDENTITY, which an "
+    "unaffiliated image has none of — build-x86-host-stage4.sh exits 1 on either "
+    "flag for this role. The rest of the look (themes, wallpaper, GRUB, greeter, "
+    "colours) is offered. Cleared when you leave the page.")
+
+# The page's own subtitle, per plane. The web-login half only exists in mesh, so the
+# non-mesh flows must not advertise it (initializePage swaps them).
+_SUBTITLE_IMAGE = ("Desktop branding for this image: a premade theme, or your own "
+                   "wallpaper, boot screen, greeter and colours.")
+_SUBTITLE_MESH = ("Desktop branding for the desktop images in this worklist, plus the "
+                  "look of the login page this mesh serves to browsers.")
+
+_DESKTOP_HDR = (
+    "<b>Desktop theme</b> — baked into the IMAGE itself: wallpaper, GRUB boot "
+    "screen, login greeter, colours.")
+_DESKTOP_HDR_MESH = _DESKTOP_HDR[:-1] + (
+    ". (The web login page this mesh serves to browsers is themed separately, "
+    "below.)")
+
 _ROLE_CLASS_REASON = (
     "Desktop theming applies to desktop images only — cluster-node images take "
     "the brand defaults. In mesh mode it unlocks when the worklist carries a "
@@ -71,6 +129,28 @@ _ROLE_CLASS_REASON = (
     "entries and never to the nodes. Cleared when you leave the page.")
 
 _NOTE_STYLE = "color: #a65d00;"
+
+
+# ``unaffiliated_image`` is imported from core.config above and RE-EXPORTED here.
+#
+# It was defined in this module for one working day. The docstring it carried recorded
+# why it had to exist: ``applies_to`` tested ``role == UNAFFILIATED_ROLE or
+# cfg.unaffiliated`` while ``initializePage``/``validatePage`` tested ONLY the role, so
+# ``role="standalone-thick", unaffiliated=True`` rendered this page fully live — brand
+# assets enabled, no note — for a config whose ``to_cli_args()`` raises. That asymmetry
+# was harmless while the page removed itself for both spellings, and went live the
+# moment DECISION 1 put the page back on screen.
+#
+# It also said the rule "belongs in core.config beside branding_allowed /
+# person_role_applies — filed as a contract for the config lane". That contract is now
+# honoured (core/config.py, beside branding_allowed / cluster_identity_applies), and
+# ``_x86_args`` — which had a THIRD inline copy of the same expression — calls it too,
+# so the emitter and the wizard cannot disagree about what "unaffiliated" means.
+#
+# The name stays importable from this module because pages/home.py imports it from here
+# (``from .branding import unaffiliated_image``) and because deleting a name a sibling
+# page imports is a separate change from moving its implementation. There is exactly one
+# implementation, in core.
 
 
 def _note(text: str = "") -> QtWidgets.QLabel:
@@ -87,29 +167,34 @@ class BrandingPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Branding")
-        self.setSubTitle("Desktop branding (a premade theme or your own assets) plus "
-                         "the Themes for the web pages the mesh serves.")
+        # The NON-mesh sentence; initializePage swaps in the mesh one, because the
+        # web-login half is only shown there (module docstring, second bullet).
+        self.setSubTitle(_SUBTITLE_IMAGE)
         # scrollable: the login-theme group grew this page past the #400 jitter
         # budget — tall content scrolls inside the page instead of resizing the window.
         lay = scrollable(self)
-        # shown INSTEAD of the (disabled) form when the unaffiliated role is selected
-        self.unaffiliated_note = _note(
-            "Branding does not apply — unaffiliated build (plain Gentoo, zero brand identity).")
+        # shown ABOVE the (LIVE) form on an unaffiliated image: the identity/look split
+        # in one sentence. It used to read "Branding does not apply", which was true
+        # only while the page removed itself — and is the sentence the operator's
+        # 2026-08-26 report is about ("there should be the menu for adding the themes
+        # as in the branded images").
+        self.unaffiliated_note = _note(_UNAFFILIATED_NOTE)
         lay.addWidget(self.unaffiliated_note)
-        # every branding widget lives in one container so the role-class / platform /
-        # unaffiliated grey can disable the whole surface at once.
+        # every branding widget lives in one container so the role-class / platform
+        # grey can disable the whole surface at once. The UNAFFILIATED axis is no
+        # longer part of that grey: it hides the two identity widgets (_gate_identity)
+        # and leaves the look live.
         self.form = QtWidgets.QWidget()
         form_lay = QtWidgets.QVBoxLayout(self.form)
         form_lay.setContentsMargins(0, 0, 0, 0)
         form_lay.setSpacing(8)
         # The page hosts TWO theme surfaces with different destinations; name this
         # one so it can never be confused with the web login theme group below.
-        desktop_hdr = QtWidgets.QLabel(
-            "<b>Desktop theme</b> — baked into the IMAGE itself: wallpaper, GRUB "
-            "boot screen, login greeter, colours. (The web login page the mesh "
-            "serves to browsers is themed separately, below.)")
-        desktop_hdr.setWordWrap(True)
-        form_lay.addWidget(desktop_hdr)
+        # Text set per visit: the "themed separately, below" pointer is only true in
+        # mesh, where the web-login section is the half that is actually shown.
+        self.desktop_hdr = QtWidgets.QLabel(_DESKTOP_HDR)
+        self.desktop_hdr.setWordWrap(True)
+        form_lay.addWidget(self.desktop_hdr)
 
         # ── the fork: premade theme XOR custom branding ──────────────────────────
         # An exclusive either/or (spec 2). Both stay visible/scannable; selecting one
@@ -159,6 +244,10 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.custom_group = QtWidgets.QGroupBox("Custom branding assets")
         cg = QtWidgets.QVBoxLayout(self.custom_group)
         self.fields = {}
+        # key -> the _row() wrapper (caption + edit + Browse…). The identity gate hides
+        # the ROW: hiding the bare QLineEdit leaves the caption stranded over an empty
+        # slot, which is the same orphan-header defect network.py:1180-1186 records.
+        self.field_rows = {}
         for key, label, flt, is_dir in (
             # --branding-dir: a whole hand-rolled branding tree — the manual
             # counterpart of the keyzip import, which was the ONLY way to set it (G8)
@@ -176,8 +265,10 @@ class BrandingPage(QtWidgets.QWizardPage):
             btn = _file_picker(self, le, label, flt or "All files (*)", directory=is_dir)
             w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
             h.addWidget(le, 1); h.addWidget(btn)
-            cg.addWidget(_row(label, w))
+            row = _row(label, w)
+            cg.addWidget(row)
             self.fields[key] = le
+            self.field_rows[key] = row
         self.accent = QtWidgets.QLineEdit()
         self.accent.setPlaceholderText("#3f5b8c")
         cg.addWidget(_row("Accent colour", self.accent))
@@ -192,6 +283,7 @@ class BrandingPage(QtWidgets.QWizardPage):
         form_lay.addWidget(self.both_set_note)
 
         # brand lock stays OUTSIDE the either/or (applies to any branding channel).
+        # IDENTITY, not look: hidden + cleared on an unaffiliated image (_gate_identity).
         self.locked = QtWidgets.QCheckBox("Lock branding (user cannot re-theme — managed image)")
         form_lay.addWidget(self.locked)
         lay.addWidget(self.form)
@@ -202,9 +294,14 @@ class BrandingPage(QtWidgets.QWizardPage):
         # by default in desktop flows; initializePage expands it in mesh, where it
         # is the reason the page is shown at all.
         self.login_theme = LoginThemeGroup()
-        # "Themes", not "Web login theme" (#50 item 2): label-only rename — the
-        # persisted login_* config keys keep their names so old sessions load.
-        self.login_collapsible = collapsible("Themes", self.login_theme,
+        # "Web login theme" (2026-08-26), superseding #50 item 2's plain "Themes".
+        # #50 renamed it to "Themes" when this page had ONE theme surface; it now has
+        # two, and the DESKTOP one sits under a "Desktop theme" header while the thing
+        # literally titled "Themes" was the web one — so an operator asking for "the
+        # menu for adding the themes" was pointed at the wrong plane. Still a
+        # LABEL-ONLY change: the persisted login_* config keys keep their names, so old
+        # sessions load unchanged.
+        self.login_collapsible = collapsible("Web login theme", self.login_theme,
                                              expanded=False)
         lay.addWidget(self.login_collapsible)
         lay.addStretch(1)
@@ -235,29 +332,31 @@ class BrandingPage(QtWidgets.QWizardPage):
             traceback.print_exc(file=sys.stderr)
 
     def applies_to(self, cfg) -> bool:
-        """SKIP this page entirely on an unaffiliated image (operator report: "the
-        unaffiliated desktop image wizard still shows options like mesh services and
-        branding and login when it shouldn't").
+        """The page applies to every image EXCEPT an unaffiliated one with no desktop
+        half to offer.
 
-        The role builds a plain Gentoo desktop with ZERO HugMesh affiliation, so
-        EVERY field this page owns is a builder hard conflict
-        (_check_unaffiliated_conflicts) — the page could only ever be shown greyed
-        with an apology note, which is what it did. A greyed-out screen the operator
-        must still click Next through is not a choice; it is noise.
+        HISTORY, because this reverses a deliberate decision. The page removed itself
+        for the unaffiliated role after the operator reported "the unaffiliated desktop
+        image wizard still shows options like mesh services and branding and login when
+        it shouldn't" — correct at the time, because EVERY field here was then a
+        builder hard conflict (_check_unaffiliated_conflicts), so the screen could only
+        render greyed with an apology note. The 2026-08-26 decision splits identity from
+        look (module docstring): a theme, a wallpaper, a GRUB screen and an accent
+        colour are no longer conflicts on this role, so the page again has something to
+        offer — which is the operator's third ask, "there should be the menu for adding
+        the themes as in the branded images".
 
-        Emission-neutral, the documented precondition for applies_to() -> False: the
-        RolePage now blanks every branding field at the moment the role is committed,
-        so nothing this page would have cleared can survive to the argv.
+        So the skip now keys on the DESKTOP HALF, not on the role: an unaffiliated image
+        that is desktop-class on a theme-emitting builder (the only shape that role has
+        — x86 standalone) SHOWS the page; anything else still disappears, and stays
+        emission-neutral exactly as before via RolePage's clear at role-commit time.
 
-        The web-login-theme half goes with it. Those fields are mesh-plane and
-        deliberately NOT cleared for the unaffiliated ROLE (an unaffiliated image can
-        ride a mesh whose login page is themed — different scopes), but that scope
-        only exists in MESH mode, where the RolePage never runs and this role is
-        unreachable. In the standalone/cloud flows that DO reach it there is no
-        login-ui being served, so the section themed nothing.
+        The web-login-theme half no longer rides on this decision either way: it is
+        hidden outside mesh by initializePage, where an unaffiliated image never is.
         """
-        return not (getattr(cfg, "role", "") == UNAFFILIATED_ROLE
-                    or getattr(cfg, "unaffiliated", False))
+        if not unaffiliated_image(cfg):
+            return True
+        return self._desktop_half_allowed(cfg)
 
     def _desktop_half_allowed(self, c) -> bool:
         """The desktop-theme half applies when the image (or, in mesh, ANY worklist
@@ -277,13 +376,17 @@ class BrandingPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
-        unaffiliated = c.role == UNAFFILIATED_ROLE
+        # ONE predicate at all three sites (see unaffiliated_image): this line used to
+        # read `c.role == UNAFFILIATED_ROLE`, which missed the composable flag that
+        # applies_to already honoured.
+        unaffiliated = unaffiliated_image(c)
         self.unaffiliated_note.setVisible(unaffiliated)
         # theming is desktop-class AND x86-only emission — grey the whole form when
-        # (a) the unaffiliated role is selected, (b) neither the image nor any mesh
-        # worklist entry is a themable desktop (_desktop_half_allowed), or (c) the
-        # platform's builder parses no --theme/… flag.
-        enabled = not unaffiliated and self._desktop_half_allowed(c)
+        # (a) neither the image nor any mesh worklist entry is a themable desktop
+        # (_desktop_half_allowed) or (b) the platform's builder parses no --theme/…
+        # flag. The unaffiliated axis is NO LONGER part of this grey (decision
+        # 2026-08-26): it hides the two identity widgets and leaves the look live.
+        enabled = self._desktop_half_allowed(c)
 
         # SET EQUALITY, surfaced. theme_set_problem() compares the offered four
         # against the on-disk theme directories — which ARE the set the builder
@@ -312,15 +415,29 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.fields["grub_background"].setText(c.grub_background)
         self.fields["grub_theme"].setText(c.grub_theme)
         self.fields["login_background"].setText(c.login_background)
-        self.fields["brand_logo"].setText(c.brand_logo)
         self.fields["color_scheme"].setText(c.color_scheme)
         self.accent.setText(c.accent_color)
-        self.locked.setChecked(c.brand_locked)
+        # The two IDENTITY widgets load EMPTY on an unaffiliated image rather than
+        # showing a value the operator cannot see or reach — the wipe idiom
+        # SystemPage._optin_toggled uses, so nothing can be submitted from a hidden
+        # control. validatePage clears the fields themselves.
+        self.fields["brand_logo"].setText("" if unaffiliated else c.brand_logo)
+        self.locked.setChecked(False if unaffiliated else c.brand_locked)
 
         # decide the active channel: theme-only or neither → preset; any custom field
         # → custom; BOTH set → custom wins (theme cleared) with the orange warning.
+        #
+        # The vote is over the fields this image is actually OFFERED. Measured, before
+        # this narrowing: a saved unaffiliated config carrying brand_logo="/tmp/l.png"
+        # (a leftover from a branded role) counted as "has custom assets", flipped the
+        # page to the custom channel, and DISCARDED the theme the operator then picked —
+        # explained by a both-set note pointing at a widget that is hidden on this role.
+        # brand_logo/brand_locked are about to be cleared here anyway, so they get no
+        # vote in a reconciliation they cannot be part of.
+        offered_custom = tuple(f for f in _CUSTOM_FIELDS
+                               if not (unaffiliated and f in _IDENTITY_FIELDS))
         has_theme = bool(c.theme)
-        has_custom = any(getattr(c, f) for f in _CUSTOM_FIELDS)
+        has_custom = any(getattr(c, f) for f in offered_custom)
         self.both_set_note.setVisible(has_theme and has_custom)
         self.mode_group.blockSignals(True)
         (self.rb_custom if has_custom else self.rb_preset).setChecked(True)
@@ -339,11 +456,46 @@ class BrandingPage(QtWidgets.QWizardPage):
         # explains why it cannot carry a theme.
         self.form.setVisible(not (c.mode == "mesh" and not enabled))
 
-        # web login theme: ALWAYS active (mesh-plane, not desktop). In mesh it is
-        # the half every worklist renders, so keep it opened by default there
-        # (respecting an operator who folded it themselves).
+        # IDENTITY vs LOOK: the brand logo + the branding lock are the only two
+        # widgets an unaffiliated image may not have. Re-gated EVERY visit, so a role
+        # switch back to a branded desktop makes them reachable AND collectable again.
+        self._gate_identity(unaffiliated)
+
+        # WEB LOGIN THEME — mesh-plane, and now shown ONLY in mesh. It themes the
+        # login-ui a MESH serves to browsers; a standalone/cloud desktop serves no
+        # login-ui, so outside mesh the section themed nothing while still writing its
+        # login_* keys into that image's saved config. Hiding the COLLAPSIBLE (not the
+        # group inside it) takes the header with the content — network.py:906-909 /
+        # :1180-1186 are the idiom; an orphan "Web login theme" header that expands to
+        # nothing is the defect that rule exists to stop. Emission-neutral by
+        # construction: every login_* field is NON_ARGV (config.py:755-766) and the
+        # commit in validatePage stays UNCONDITIONAL, so a mesh config still round-trips
+        # through a stray visit. Kept opened by default in mesh, where it is the half
+        # the worklist actually renders (respecting an operator who folded it).
+        mesh = c.mode == "mesh"
+        self.desktop_hdr.setText(_DESKTOP_HDR_MESH if mesh else _DESKTOP_HDR)
+        self.setSubTitle(_SUBTITLE_MESH if mesh else _SUBTITLE_IMAGE)
         self.login_theme.load(c)
-        self.login_collapsible.set_default_expanded(c.mode == "mesh")
+        self.login_collapsible.setVisible(mesh)
+        self.login_collapsible.set_default_expanded(mesh)
+
+    def _gate_identity(self, unaffiliated: bool) -> None:
+        """Hide/show the two IDENTITY widgets — the brand logo picker and the branding
+        lock — on the unaffiliated axis (decision 2026-08-26).
+
+        HIDE rather than grey, matching the #348 idiom the other pages use for "this
+        image class cannot have this at all": a greyed control still advertises a
+        decision, and there is none here. The logo's whole _row() is the gate target,
+        not the bare line edit, or the "Brand logo" caption is left stranded over an
+        empty slot (network.py:1180-1186).
+
+        Emission-neutral in both directions, the documented precondition: validatePage
+        resets both fields to their ImageConfig defaults ("" / False) while the widgets
+        are hidden, and this runs on EVERY visit, so a switch back to a branded desktop
+        restores the widgets and their collectable values.
+        """
+        gate_widgets_role_class([self.field_rows["brand_logo"], self.locked],
+                                not unaffiliated, _IDENTITY_HIDDEN_REASON, hide=True)
 
     def selected_theme(self) -> str:
         """The premade theme this page would commit ("" = stock look / custom channel).
@@ -366,11 +518,11 @@ class BrandingPage(QtWidgets.QWizardPage):
         # clears below may touch it (an unaffiliated IMAGE can ride a mesh whose
         # login page is themed — different scopes).
         self.login_theme.commit(c)
-        if c.role == UNAFFILIATED_ROLE:
-            # branding is a builder HARD CONFLICT on the unaffiliated role — clear
-            # everything so a role switch cannot poison the argv.
-            self._blank_all(c)
-            return True
+        # The blank-EVERYTHING arm for the unaffiliated role is gone (decision
+        # 2026-08-26): the look is legal on this image now, and blanking it here would
+        # silently delete the very theme the operator just picked. What replaces it is
+        # the identity-only clear at the bottom of this method, which uses the same
+        # predicate as the gate that hid the widgets.
         if not self._desktop_half_allowed(c):
             # node / off-x86 / mesh-without-desktop-entries: the form is greyed —
             # clear every branding field (belt & braces, mirrored by materialize()'s
@@ -398,6 +550,15 @@ class BrandingPage(QtWidgets.QWizardPage):
             c.color_scheme = self.fields["color_scheme"].text().strip()
             c.accent_color = self.accent.text().strip()
         c.brand_locked = self.locked.isChecked()
+        if unaffiliated_image(c):
+            # IDENTITY clear, paired with _gate_identity's hide. Both fields go back to
+            # their ImageConfig dataclass defaults rather than to whatever the hidden
+            # widgets hold, so the GATE decides the argv, not the screen — and
+            # _check_unaffiliated_conflicts / build-x86-host-stage4.sh, which still
+            # hard-error on either flag for this role, can never be reached. The LOOK
+            # collected above is deliberately kept.
+            c.brand_logo = ""
+            c.brand_locked = False
         # platform belt & braces (the form is already greyed off-x86, but keep the
         # established clear so nothing can linger).
         clear_unsupported(c, _BRANDING_FIELDS)

@@ -7,6 +7,9 @@ images, then whole-mesh emulation, then the publish/flash side-flows, then the t
 single-image desktop builds:
 
   - LOCAL DOCKER MESH    -> NO cfg.mode            (side-flow: run a dockerized mesh HERE)
+                                                    THE ONLY door to it since 2026-08-26:
+                                                    WelcomePage used to offer the same
+                                                    destination one screen earlier
   - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
   - QEMU DEVICE TESTS    -> NO cfg.mode            (side-flow: boot built images emulated)
   - MESH EMULATION       -> NO cfg.mode            (side-flow: boot a WHOLE built mesh locally)
@@ -83,6 +86,12 @@ class ModePage(QtWidgets.QWizardPage):
         # (standalone) below, NOT by index, so a visual reorder can't change which
         # choice the no-pick default flow exercises.
         self.modes = [
+            # SOLE ENTRY POINT (operator report, 2026-08-26: "asking same questions
+            # seemingly multiple times"). WelcomePage's "Start a local mesh" card was
+            # this same destination — same transient wiz.localmesh_selected flag, same
+            # LocalMeshPage — offered on the screen before this one, while that screen's
+            # own "Start building" text already enumerated these cards. That card is
+            # gone; nothing about this one changed.
             ("localmesh", "Local Docker mesh",
              "Run a mesh on THIS machine in Docker — no separate server hardware. "
              "Configure it and launch the dockerized node right here."),

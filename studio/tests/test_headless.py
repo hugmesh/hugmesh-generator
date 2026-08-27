@@ -5,6 +5,7 @@ for every role x platform x env — so the path must never import a Qt binding.
 """
 import json
 import os
+import shlex
 import subprocess
 import sys
 
@@ -131,22 +132,70 @@ def test_print_command_unaffiliated_bundle_default_normalized(tmp_path):
     assert "--no-bundle-source" not in r.stdout
 
 
-def test_print_command_unaffiliated_conflict_fails_loudly(tmp_path):
-    """A genuinely poisoned config (a branding theme on the unaffiliated role) must
-    make --print-command exit non-zero with the conflict named — mirroring the
-    builder's own hard error, never a silently wrong argv."""
-    cfg = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
-                      bundle_source=False, theme="dark")
-    p = tmp_path / "poisoned.json"
+def _print_command(tmp_path, name, cfg):
+    """Run the real headless entrypoint in a subprocess (the matrix harness's own path)
+    and hand back the CompletedProcess. Shared by the two halves of the identity/look
+    split below so both directions are proved through the SAME channel — a conflict that
+    is only checked in-process can still be bypassed by the argv the harness builds."""
+    p = tmp_path / name
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
-    r = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
-    assert r.returncode != 0
+
+
+# ── the 2026-08-26 identity/look split, proved in BOTH directions ────────────────────
+# This test used to be one negative case: `theme="dark"` on the unaffiliated role had to
+# fail loudly. The operator's decision that day — verbatim, "There should be the menu for
+# adding the themes as in the branded images" — moved a theme from FORBIDDEN to ALLOWED
+# (their image is role=standalone-unaffiliated / platform=x86, session
+# 20260826-151356-64070a). The negative case is KEPT rather than deleted, retargeted at
+# the identity flags that really are still hard conflicts: a conflict test that only
+# proves the allowed direction would pass just as happily with the whole check deleted.
+# Studio mirrors build-x86-host-stage4.sh:1347-1356, which is being split the same way.
+
+@pytest.mark.parametrize("field,value,flag", [
+    ("theme", "dark", "--theme"),
+    ("wallpaper", "/tmp/wp.png", "--wallpaper"),
+    ("accent_color", "#123456", "--accent-color"),
+])
+def test_print_command_unaffiliated_look_is_allowed_and_reaches_the_argv(
+        tmp_path, field, value, flag):
+    """POSITIVE half. A LOOK field on the unaffiliated role must exit 0 AND print the
+    flag: trading the old ValueError for a silent drop would be a worse bug than the one
+    being fixed, since the operator would see the theme menu, use it, and get a plain
+    image anyway."""
+    cfg = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                      bundle_source=False, **{field: value})
+    r = _print_command(tmp_path, f"look-{field}.json", cfg)
+    assert r.returncode == 0, r.stderr
+    # shlex, not a substring: --print-command SHELL-QUOTES its values, so an accent colour
+    # prints as `--accent-color '#123456'` (the # would otherwise start a comment). A raw
+    # `f"{flag} {value}" in stdout` check silently fails on exactly the values that need
+    # quoting — measured, not hypothetical: it is how this assertion first went red.
+    argv = shlex.split(r.stdout)
+    assert (flag, value) in list(zip(argv, argv[1:])), r.stdout
+
+
+@pytest.mark.parametrize("field,value", [
+    ("brand", "acme"),          # a brand IS an affiliation, including a custom one
+    ("brand_logo", "/tmp/logo.png"),   # a logo is an organization's mark
+    ("brand_locked", True),     # locks a brand this image does not have
+])
+def test_print_command_unaffiliated_identity_conflict_fails_loudly(tmp_path, field, value):
+    """NEGATIVE half. A genuinely poisoned config (brand identity on the unaffiliated
+    role) must make --print-command exit non-zero with the conflict named — mirroring the
+    builder's own hard error, never a silently wrong argv."""
+    cfg = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                      bundle_source=False, **{field: value})
+    r = _print_command(tmp_path, f"poisoned-{field}.json", cfg)
+    assert r.returncode != 0, r.stdout
     assert "unaffiliated" in r.stderr
-    assert "theme" in r.stderr
+    # the FIELD is named, not just "a conflict" — the operator has to know what to clear
+    # ("brand" also matches the "a brand identity (brand/brand_title/org …)" wording)
+    assert field in r.stderr, r.stderr
 
 
 @pytest.mark.parametrize("flag", ["--print-command", "--print-commands", "--print-specs"])
@@ -397,7 +446,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
 # app.py's --print-command branch bypasses worklist._materialize_one, so it needs its OWN
 # resolve_installer_ui_default() call; without it a headless x86 node prints
 # `--installer-ui all` and pulls an UNSATISFIABLE app-admin/calamares (the desktop USE
-# closure is ROLE_CLIENT-gated, build-x86-host-stage4.sh:2496). See the real 5x failure in
+# closure is ROLE_CLIENT-gated, build-x86-host-stage4.sh:3676). See the real 5x failure in
 # session 20260716-235722-54d2f7.
 
 def _flag_value(command_line, flag):

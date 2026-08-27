@@ -140,8 +140,8 @@ def test_the_tri_state_legend_is_gone_because_there_is_nothing_left_to_explain(w
 
 def test_unchecked_still_reaches_the_argv_as_a_definite_off(wiz):
     """The property the third state existed for, kept. A brand profile (-C) can set
-    WANT_TOR=true (build-x86-host-stage4.sh sources brand.conf at :841, BEFORE the arg
-    loop at :887), so an unchecked box that emitted NOTHING would leave the service on
+    WANT_TOR=true (build-x86-host-stage4.sh sources brand.conf at :888, BEFORE the arg
+    loop at :891), so an unchecked box that emitted NOTHING would leave the service on
     while claiming otherwise. Unchecked emits --no-*; the box never lies."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
     page.validatePage()
@@ -457,3 +457,188 @@ def test_collapsed_is_not_the_mode_gate_on_the_edge_ai_group(wiz):
     # inapplicable mode => the gate hides the group row, and with it every child.
     page = _net(wiz, mode="standalone", role="generic", platform="rpi5")
     assert page.group_items[_AI_GROUP].isHidden()
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# OPERATOR REPORT 2026-08-26, verbatim: "standalone menu is asking same questions
+# seemingly multiple times when nothing should be an image there related to the mesh or
+# domain at all. There should also be no inbetween menu for configuring domain."
+#
+# The image was role=standalone-unaffiliated / platform=x86
+# (out/sessions/20260826-151356-64070a/build-standalone-unaffiliated.x86.log). Three of
+# the six defects that report named live on this page's SECTIONS, so they are pinned
+# here; the emission halves are in test_pages_identity.py.
+#
+# The whole block leans on ONE rule, which is why it sits next to
+# test_out_of_scope_egress_section_leaves_no_orphan_header and
+# test_mode_gated_sections_hide_their_header_too: hide the SECTION, not just the inner
+# box. A Collapsible whose content is gated away still draws its header and still
+# expands — to nothing.
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+def test_the_domain_rows_are_gone_on_a_standalone_x86_image(wiz):
+    """DEFECT 1 — "There should also be no inbetween menu for configuring domain".
+
+    core/config.py::_x86_args keeps --cluster-domain / --games-domain / --release-state
+    inside `if self.mode in ("cloud", "mesh")`, so on a standalone x86 image not one of
+    them can reach the argv — yet the page offered a prefilled "hugmesh.net" apex box.
+
+    _row() captions are asserted through the ROW, not the inner widget: gating the
+    QLineEdit alone would have left "Public apex domain" floating over nothing, which is
+    the same orphan-caption bug the egress row already had.
+    """
+    page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
+    for name in ("domain_row", "games_domain_row", "release_state_row"):
+        assert not getattr(page, name).isVisibleTo(page), f"{name} still on screen"
+    assert page.identity_reason.isVisible(), "the explain-why note went with the rows"
+    assert "cloud and mesh" in page.identity_reason.text()
+
+
+def test_the_domain_row_STAYS_on_a_standalone_rpi5_image(wiz):
+    """The non-vacuity half, and the regression the platform-scoped predicate exists to
+    prevent. A blanket `mode == "standalone"` hide would have looked right on the
+    operator's x86 image and silently blanked a field NINE arm64 builders parse:
+    core/config.py::_arm_common_args emits --cluster-domain with no mode fork at all, and
+    _rpi5_args does the same for --release-state / --games-domain. A standalone rpi5
+    'generic' image really does carry a cluster domain (build-rpi5-stage4.sh:3863) —
+    'generic' is the one standalone role that bakes a cluster GitOps tree (G16)."""
+    page = _net(wiz, mode="standalone", role="generic", platform="rpi5")
+    for name in ("domain_row", "games_domain_row", "release_state_row"):
+        assert getattr(page, name).isVisibleTo(page), f"{name} wrongly hidden on rpi5"
+    assert page.identity_section.isVisible()
+    assert not page.identity_reason.isVisible()
+
+
+def test_the_identity_section_header_goes_with_its_last_row(wiz):
+    """DEFECT 1 + 3, meeting the orphan-header rule. On a standalone UNAFFILIATED x86
+    image BOTH axes reject — the brand trio and the brand profile because a brand IS an
+    affiliation (core/config.py::_check_unaffiliated_conflicts raises on them), the
+    cluster trio because the x86 builder bakes no cluster plane in standalone mode. Every
+    row inside identity_box is then hidden, so the section itself must go: otherwise the
+    page keeps a bold "Identity & domain" header that expands to an empty box."""
+    page = _net(wiz, mode="standalone", role="standalone-unaffiliated", platform="x86")
+    for name in ("brand_profile_row", "brand_row", "brand_title_row", "org_row",
+                 "domain_row", "games_domain_row", "release_state_row"):
+        assert not getattr(page, name).isVisibleTo(page), f"{name} still on screen"
+    assert not page.identity_box.isVisible()
+    assert not page.identity_section.isVisible(), "orphan Identity & domain header"
+    # …and the note that replaces it is a PAGE-LEVEL sibling, like tailnet_reason, so it
+    # survives the section's own hide. A note inside the box would have vanished with it.
+    assert page.identity_reason.isVisible(), (
+        "the whole section disappeared with no explanation on screen")
+
+
+def test_a_half_rejected_identity_section_keeps_its_header(wiz):
+    """Non-vacuity for the test above: the section must only vanish when it is EMPTY. An
+    affiliated standalone desktop still owns a brand, so the header stays and carries the
+    four rows that survive."""
+    page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
+    assert page.identity_section.isVisible()
+    for name in ("brand_profile_row", "brand_row", "brand_title_row", "org_row"):
+        assert getattr(page, name).isVisibleTo(page), f"{name} wrongly hidden"
+
+
+def test_the_identity_help_line_describes_only_what_is_on_screen(wiz):
+    """DEFECT 2 — the orphan help text. The fixed sentence ended "...distinct from the
+    internal superdomain below", but the superdomain row lives in mesh_box, which every
+    standalone flow hides. Same treatment as tailnet_reason: say only what is true of
+    THIS visit."""
+    # cloud/mesh: both halves present AND the superdomain really is below.
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    assert page.superdomain_row.isVisibleTo(page), "precondition"
+    assert "superdomain below" in page.identity_help.text()
+    # standalone rpi5: apex domain yes, superdomain no -> the dangling clause must go.
+    page = _net(wiz, mode="standalone", role="generic", platform="rpi5")
+    assert not page.superdomain_row.isVisibleTo(page), "precondition"
+    assert "apex domain" in page.identity_help.text()
+    assert "superdomain" not in page.identity_help.text(), (
+        "the help line still points at a row that is not on the page")
+    # standalone x86: brand only.
+    page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
+    assert "brand identity" in page.identity_help.text().lower()
+    assert "apex domain" not in page.identity_help.text()
+    assert "superdomain" not in page.identity_help.text()
+    # Nothing left: no sentence at all, and the label carries its OWN hide rather than
+    # merely inheriting the section's. Asserted against identity_box, not against the
+    # page: isVisibleTo(page) is False here for BOTH labels-that-hid-themselves and
+    # labels-inside-a-hidden-box, so it could not tell the two apart and a mutation that
+    # dropped `identity_help.setVisible(...)` escaped it (mutation battery M13).
+    # isVisibleTo(identity_box) asks only "would it show if its own box were shown".
+    page = _net(wiz, mode="standalone", role="standalone-unaffiliated", platform="x86")
+    assert page.identity_help.text() == ""
+    assert not page.identity_help.isVisibleTo(page.identity_box), (
+        "an empty help label is still taking a line in the section")
+
+
+def test_the_services_section_header_goes_with_its_box(wiz):
+    """DEFECT 5 — the orphan SERVICES header. services_scope_note and
+    services_node_scope_note are added to `svc_content`, OUTSIDE services_box, and it is
+    svc_content the collapsible wraps. Hiding only the box therefore left a standalone
+    desktop with a "Services & apps" header plus two paragraphs of mesh-wide prose
+    ("Chosen ONCE for the whole mesh…", "tor and egress-vpn are node-scoped…") over an
+    invisible picker."""
+    for role in ("standalone-thick", "standalone-unaffiliated"):
+        page = _net(wiz, mode="standalone", role=role, platform="x86")
+        assert not page.services_box.isVisible(), f"{role}: precondition"
+        assert not page.services_section.isVisible(), f"{role}: orphan services header"
+        assert not page.services_scope_note.isVisibleTo(page), (
+            f"{role}: mesh-wide prose left on a standalone screen")
+        assert not page.services_node_scope_note.isVisibleTo(page), f"{role}: ditto"
+
+
+def test_the_services_section_survives_where_the_cluster_is_real(wiz):
+    """Non-vacuity for the test above, on both sides of the interesting boundary.
+
+    * standalone rpi5 'generic' is NODE-class and DOES bake the cluster tree (G16), so it
+      keeps the picker even though it is a standalone image;
+    * a CLOUD x86 desktop keeps it too — deliberately. That path is left exactly as it
+      was: a branded cloud client can legitimately be re-rolled as a node later, so the
+      honest treatment there is the heads-up note, not a disappearance.
+    """
+    page = _net(wiz, mode="standalone", role="generic", platform="rpi5")
+    assert page.services_section.isVisible() and page.services_box.isVisible()
+    page = _net(wiz, mode="cloud", role="laptop", platform="x86")
+    assert page.services_section.isVisible() and page.services_box.isVisible()
+    assert page.services_role_note.isVisible(), (
+        "the cloud desktop path lost the heads-up note it is supposed to keep")
+
+
+def test_a_re_gate_on_every_visit_brings_the_hidden_rows_back(wiz):
+    """THE OTHER HALF OF THE HOUSE RULE, and the one a hide-only fix always forgets: a
+    field that becomes applicable again must be REACHABLE and EMITTED again.
+
+    Structural rather than conventional — every gate above is computed inside
+    initializePage from cfg, and QWizard fires initializePage on each visit, so there is
+    no cached "already hidden" state to go stale. Driven here by re-entering the same
+    page object with a different config."""
+    page = _net(wiz, mode="standalone", role="standalone-unaffiliated", platform="x86")
+    assert not page.identity_section.isVisible() and not page.services_section.isVisible()
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    for name in ("brand_profile_row", "brand_row", "brand_title_row", "org_row",
+                 "domain_row", "games_domain_row", "release_state_row"):
+        assert getattr(page, name).isVisibleTo(page), f"{name} never came back"
+    assert page.identity_section.isVisible()
+    assert page.services_section.isVisible() and page.services_box.isVisible()
+    assert not page.identity_reason.isVisible()
+    # and it emits again — the value, not just the widget, has to survive the round trip
+    page.domain.setText("example.org")
+    page.validatePage()
+    assert ("--cluster-domain", "example.org") in list(
+        zip(wiz.cfg.to_cli_args(), wiz.cfg.to_cli_args()[1:]))
+
+
+def test_the_standalone_subtitle_does_not_promise_a_brand_it_hid(wiz):
+    """DEFECT 6 — the last mesh-plane leak the sweep turned up, and the same orphan-prose
+    class as defect 2, one level up. The standalone subtitle read "Brand identity, the
+    optional egress VPN and the host security stack…" on EVERY standalone image — on an
+    unaffiliated one it named a section the page had just gated away.
+
+    The flag behind it is computed once, at the top of initializePage, and read by three
+    surfaces (this subtitle, the brand rows, the services picker) — one spelling, which
+    is itself part of the operator's ask."""
+    page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
+    assert "Brand identity" in page.subTitle(), "precondition: an affiliated desktop"
+    page = _net(wiz, mode="standalone", role="standalone-unaffiliated", platform="x86")
+    assert "Brand identity" not in page.subTitle(), page.subTitle()
+    assert "unaffiliated" in page.subTitle().lower()
+    assert "no brand" in page.subTitle().lower()

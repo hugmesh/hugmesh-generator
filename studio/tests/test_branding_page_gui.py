@@ -26,7 +26,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.core.branding_themes import PREMADE_THEMES, THEME_SPECS  # noqa: E402
-from hugmesh_studio.core.config import ImageConfig  # noqa: E402
+from hugmesh_studio.core.config import ImageConfig, UNAFFILIATED_ROLE  # noqa: E402
 from hugmesh_studio.gui.pages._themecards import (  # noqa: E402
     NO_THEME, CustomAssetsSwatch, ThemeCard, ThemeStripSwatch, ThemeSwatch,
 )
@@ -46,9 +46,34 @@ def qapp():
 def _page(qapp, **cfg_kw):
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       **cfg_kw)
-    page = BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    return _page_for(cfg)
+
+
+def _page_for(cfg, worklist=None):
+    """Build + initialize the page for an arbitrary config. Direct instantiation, so
+    visibility is asserted with ``isVisibleTo(page)`` (the file's established idiom for
+    an unshown page — a plain isVisible() is False for every widget here)."""
+    page = BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR,
+                                        worklist=worklist))
     page.initializePage()
     return page, cfg
+
+
+def _unaff(**kw):
+    """The operator's image: role=standalone-unaffiliated, platform=x86 (session
+    20260826-151356-64070a)."""
+    base = dict(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86")
+    base.update(kw)
+    return ImageConfig(**base)
+
+
+def _composable_unaff(**kw):
+    """The SAME builder posture reached the other way (G22): --unaffiliated composed
+    onto a branded x86 client role."""
+    base = dict(mode="standalone", role="standalone-thick", platform="x86",
+                unaffiliated=True)
+    base.update(kw)
+    return ImageConfig(**base)
 
 
 # ── the offered set ──────────────────────────────────────────────────────────────
@@ -335,3 +360,187 @@ def test_theme_card_name_is_not_derived_from_its_title(qapp):
     card = ThemeCard("grey", "Something Else Entirely", "desc")
     assert card.theme_name == "grey"
     assert card.text() == "Something Else Entirely"
+
+
+# ── IDENTITY vs LOOK on an unaffiliated image (operator decision, 2026-08-26) ─────
+# The operator's report, verbatim: "There should be the menu for adding the themes as
+# in the branded images". Their image is role=standalone-unaffiliated / x86. The page
+# used to remove itself for that role (applies_to -> False), because every field on it
+# was then a builder hard conflict — which is exactly why the theme menu was missing.
+# The decision splits the surface: a BRAND is an affiliation, a WALLPAPER is not.
+
+@pytest.mark.parametrize("cfg_fn", [_unaff, _composable_unaff])
+def test_the_page_applies_to_an_unaffiliated_desktop(qapp, cfg_fn):
+    """The reversal, pinned. BOTH spellings of unaffiliated — the dedicated role id and
+    the composable flag — get the page, because both are desktop-class x86 images whose
+    builder parses --theme."""
+    page, cfg = _page_for(cfg_fn())
+    assert page.applies_to(cfg) is True
+
+
+def test_the_page_still_skips_an_unaffiliated_image_with_no_desktop_half(qapp):
+    """Mutation guard: the skip did not become "never skip". An unaffiliated image on a
+    builder that parses no --theme has nothing to offer, so the page still disappears —
+    and that stays emission-neutral through RolePage's clear at role-commit time."""
+    page, cfg = _page_for(_composable_unaff(role="rpi5-desktop", platform="rpi5"))
+    assert page.applies_to(cfg) is False
+
+
+@pytest.mark.parametrize("cfg_fn", [_unaff, _composable_unaff])
+def test_unaffiliated_offers_the_whole_theme_menu(qapp, cfg_fn):
+    """THE ASK. Every premade theme card (and the stock-look card) is visible AND
+    enabled on an unaffiliated image — not greyed, not hidden, not a subset."""
+    page, _ = _page_for(cfg_fn())
+    assert page.form.isVisibleTo(page) and page.form.isEnabled()
+    assert list(page.theme_group.cards) == [NO_THEME] + list(PREMADE_THEMES)
+    for name, card in page.theme_group.cards.items():
+        assert card.isVisibleTo(page), name
+        assert card.isEnabled(), name
+
+
+@pytest.mark.parametrize("cfg_fn", [_unaff, _composable_unaff])
+def test_unaffiliated_hides_the_two_identity_widgets(qapp, cfg_fn):
+    """...and ONLY those two. brand_logo and "Lock branding" stay hard conflicts
+    (config._check_unaffiliated_conflicts; build-x86-host-stage4.sh's unaffiliated err),
+    so they are hidden — the whole _row(), never the bare edit, or the "Brand logo"
+    caption is left stranded over an empty slot."""
+    page, _ = _page_for(cfg_fn())
+    assert not page.field_rows["brand_logo"].isVisibleTo(page)
+    assert not page.locked.isVisibleTo(page)
+    for key in ("branding_dir", "wallpaper", "grub_background", "grub_theme",
+                "login_background", "color_scheme"):
+        assert page.field_rows[key].isVisibleTo(page), key
+    assert page.accent.isVisibleTo(page)
+
+
+def test_a_branded_desktop_keeps_its_identity_widgets(qapp):
+    """The mutation guard for the hide: a rule that hid the logo from EVERYONE would
+    also satisfy the test above."""
+    page, _ = _page(qapp)
+    assert page.field_rows["brand_logo"].isVisibleTo(page)
+    assert page.locked.isVisibleTo(page)
+
+
+@pytest.mark.parametrize("cfg_fn", [_unaff, _composable_unaff])
+def test_unaffiliated_note_says_look_is_available_not_that_the_page_is_moot(qapp, cfg_fn):
+    """The note used to read "Branding does not apply" — true only while the page
+    removed itself, and the sentence the operator's report is about. It must now say
+    what IS excluded (identity) and what is not (the look)."""
+    page, _ = _page_for(cfg_fn())
+    assert page.unaffiliated_note.isVisibleTo(page)
+    text = page.unaffiliated_note.text().lower()
+    assert "identity" in text and ("logo" in text and "lock" in text)
+    assert "theme" in text or "look" in text
+    assert "does not apply" not in text
+
+
+@pytest.mark.parametrize("cfg_fn", [_unaff, _composable_unaff])
+@pytest.mark.parametrize("name", PREMADE_THEMES)
+def test_a_theme_picked_on_an_unaffiliated_image_reaches_the_argv(qapp, cfg_fn, name):
+    """End to end: the card commits, the config emits, and to_cli_args() — which still
+    raises on an identity field — accepts it."""
+    page, cfg = _page_for(cfg_fn())
+    page.theme_group.cards[name].setChecked(True)
+    assert page.validatePage()
+    assert cfg.theme == name
+    argv = cfg.to_cli_args()
+    assert argv[argv.index("--theme") + 1] == name
+
+
+@pytest.mark.parametrize("cfg_fn", [_unaff, _composable_unaff])
+def test_unaffiliated_clears_identity_but_keeps_the_look(qapp, cfg_fn):
+    """The emission half of the hide, in both directions at once: the two hidden fields
+    go back to their ImageConfig defaults whatever the widgets hold, and the neutral
+    assets collected beside them survive."""
+    page, cfg = _page_for(cfg_fn())
+    page.rb_custom.setChecked(True)
+    page.fields["wallpaper"].setText("/tmp/w.png")
+    page.fields["grub_theme"].setText("/tmp/g")
+    page.fields["brand_logo"].setText("/tmp/logo.png")   # hidden control
+    page.locked.setChecked(True)                          # hidden control
+    assert page.validatePage()
+    assert cfg.wallpaper == "/tmp/w.png" and cfg.grub_theme == "/tmp/g"
+    assert cfg.brand_logo == "" and cfg.brand_locked is False
+    args = cfg.to_cli_args()          # raises on a leftover identity asset
+    assert "--brand-logo" not in args and "--brand-locked" not in args
+    assert "--wallpaper" in args
+
+
+def test_a_stale_brand_logo_cannot_steal_the_theme_channel(qapp):
+    """MEASURED REGRESSION. brand_logo is one of the eight custom-asset fields, so a
+    saved unaffiliated config carrying one (a leftover from a branded role) counted as
+    "has custom assets", flipped the page to the custom channel and DISCARDED the theme
+    the operator then picked — explained by a both-set note pointing at a widget that is
+    hidden on this role. Fields the image is not offered get no vote."""
+    page, cfg = _page_for(_unaff(theme="purple", brand_logo="/tmp/logo.png"))
+    assert page.rb_preset.isChecked()
+    assert page.theme_group.selected() == "purple"
+    assert not page.both_set_note.isVisibleTo(page)
+    assert page.fields["brand_logo"].text() == ""     # hidden control loads empty
+    assert page.validatePage()
+    assert cfg.theme == "purple" and cfg.brand_logo == ""
+
+
+def test_the_closed_set_is_unchanged_on_an_unaffiliated_image(qapp):
+    """The ask-6 invariant survives the reversal: nothing is appended to the offered set
+    on this role either (the brand name, a saved unknown value — the origin/main defect
+    this file exists to pin)."""
+    page, cfg = _page_for(_unaff(brand="acme", theme="boogiepop"))
+    assert list(page.theme_group.cards) == [NO_THEME] + list(PREMADE_THEMES)
+    assert page.theme_group.selected() == NO_THEME
+    assert not page.stale_theme_note.isHidden()
+    assert page.validatePage()
+    assert cfg.theme == ""
+
+
+@pytest.mark.parametrize("cfg_fn", [_unaff, _composable_unaff])
+def test_both_unaffiliated_spellings_gate_identically(qapp, cfg_fn):
+    """THE THREE-PREDICATE ASYMMETRY, closed. applies_to tested "role or flag" while
+    initializePage and validatePage tested ONLY the role — so a config with
+    role="standalone-thick", unaffiliated=True rendered the page fully live (brand
+    assets enabled, no note) for a config whose to_cli_args() raises. One predicate now
+    answers all three, which means the two spellings must be indistinguishable HERE."""
+    page, cfg = _page_for(cfg_fn())
+    state = (page.applies_to(cfg),
+             page.unaffiliated_note.isVisibleTo(page),
+             page.field_rows["brand_logo"].isVisibleTo(page),
+             page.locked.isVisibleTo(page))
+    assert state == (True, True, False, False)
+
+
+# ── the web login theme is a MESH surface (and is named for its plane) ────────────
+
+def test_web_login_theme_is_named_for_its_plane(qapp):
+    """The page hosts TWO theme surfaces. The desktop cards sit under a "Desktop theme"
+    header while the collapsible literally titled "Themes" was the WEB one — which is
+    why "the menu for adding the themes" was ambiguous. Label-only: the persisted
+    login_* keys are untouched (test_theme_editor_gui pins that)."""
+    page, _ = _page(qapp)
+    assert page.login_collapsible.title() == "Web login theme"
+
+
+@pytest.mark.parametrize("mode,role,shown", [("standalone", "standalone-thick", False),
+                                             ("standalone", UNAFFILIATED_ROLE, False),
+                                             ("cloud", "laptop", False),
+                                             ("mesh", "pki", True)])
+def test_web_login_theme_shown_only_in_mesh(qapp, mode, role, shown):
+    """It themes the login-ui a MESH serves to browsers; a standalone/cloud desktop
+    serves no login-ui, which the page's own applies_to docstring already conceded. The
+    COLLAPSIBLE is the gate target, so the header goes with the content — an orphan
+    header that expands to nothing is the defect network.py:906-909 records."""
+    page, _ = _page_for(ImageConfig(mode=mode, role=role, platform="x86"))
+    assert page.login_collapsible.isVisibleTo(page) is shown
+    if shown:
+        assert page.login_collapsible.is_expanded()
+
+
+def test_web_login_theme_still_round_trips_through_a_stray_visit(qapp):
+    """Hiding it is emission-neutral BECAUSE the commit stays unconditional: the fields
+    are NON_ARGV (config.py:755-766), and a mesh config that walks this page in another
+    mode must come out the other side unharmed."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      login_primary_color="#123456")
+    page, _ = _page_for(cfg)
+    assert not page.login_collapsible.isVisibleTo(page)
+    assert page.validatePage()
+    assert cfg.login_primary_color == "#123456"

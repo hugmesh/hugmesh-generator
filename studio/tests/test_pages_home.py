@@ -24,9 +24,10 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import timezones  # noqa: E402
 from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     SECRET_FIELDS, UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, ImageConfig,
-    derive_default_user, derive_hostname,
+    default_local_user, derive_default_user, derive_hostname,
 )
 from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
+from hugmesh_studio.core.worklist import WorklistEntry  # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
 from hugmesh_studio.gui.pages.home import HomePage, _MEDIA_DEFAULT  # noqa: E402
 from hugmesh_studio.gui.pages.system import SystemPage  # noqa: E402
@@ -131,31 +132,67 @@ def test_branding_dir_scheme_grub_theme_grey_and_clear_on_arm(wiz):
         assert flag not in args
 
 
-def test_branding_dir_scheme_grub_theme_clear_for_unaffiliated(wiz):
-    """The unaffiliated role hard-conflicts on ALL branding assets — a role switch
-    must not poison the argv (config._check_unaffiliated_conflicts lists all three).
+def test_branding_look_survives_unaffiliated_and_identity_does_not(wiz):
+    """DECISION 1 (operator, 2026-08-26) — "split identity from look", walked end to end.
 
-    Updated for the unaffiliated-surface fix: the BrandingPage is no longer PART of
-    this flow at all (applies_to skips it — a page whose every field is a hard
-    conflict has nothing to offer), so the clearing this test used to observe on
-    the page's validate now happens at ROLE COMMIT, and the walk below must land on
-    the NetworkPage without ever seeing a branding screen. The original assertions
-    — fields cleared, argv emittable, no branding flags — are unchanged; only WHERE
-    the flow satisfies them moved."""
+    HISTORY. This test used to be test_branding_dir_scheme_grub_theme_clear_for_
+    unaffiliated and asserted the exact opposite: all three custom-asset fields BLANKED,
+    because every branding field was then a builder hard conflict on this role, which is
+    why BrandingPage removed itself from the flow (applies_to) and RolePage blanked the
+    fields at role-commit time. The operator's report — "There should be the menu for
+    adding the themes as in the branded images" — split that contract: a wallpaper names
+    nobody, a LOGO names an organization.
+
+    So the shape inverts. The page is BACK in the unaffiliated flow (that IS the theme
+    menu), the three neutral asset fields ride through it and REACH the argv, and only
+    the two identity fields are cleared. The one thing that did not change is the
+    property that matters: the emitted config is still one the builder accepts —
+    to_cli_args() raises on a leftover --brand-logo/--brand-locked, so it is the
+    assertion doing the work here, exactly as before."""
     c = wiz.cfg
     c.branding_dir = "/tmp/brand-tree"; c.grub_theme = "/tmp/grub-theme"
     c.color_scheme = "/tmp/Acme.colors"
+    c.brand_logo = "/tmp/logo.png"; c.brand_locked = True
     pick_role(wiz, UNAFFILIATED_ROLE)
-    page = advance_to(wiz, wizard_mod.NetworkPage)
-    assert not isinstance(page, wizard_mod.BrandingPage)
-    # the walk from role -> network must not have passed through BrandingPage
-    assert not any(isinstance(wiz.page(i), wizard_mod.BrandingPage)
-                   for i in wiz.visitedIds() if i != -1), \
-        "the BrandingPage was visited on an unaffiliated flow"
-    assert c.branding_dir == "" and c.grub_theme == "" and c.color_scheme == ""
-    args = c.to_cli_args()   # would raise on any leftover branding asset
-    for flag in ("--branding-dir", "--grub-theme", "--color-scheme"):
-        assert flag not in args
+    branding = advance_to(wiz, wizard_mod.BrandingPage)   # no longer skipped
+    assert branding.unaffiliated_note.isVisible()
+    assert branding.theme_group.cards[""].isVisible()     # the theme menu is HERE
+    assert not branding.field_rows["brand_logo"].isVisible()
+    assert not branding.locked.isVisible()
+    advance_to(wiz, wizard_mod.NetworkPage)
+    # LOOK survives...
+    assert c.branding_dir == "/tmp/brand-tree" and c.grub_theme == "/tmp/grub-theme"
+    assert c.color_scheme == "/tmp/Acme.colors"
+    # ...IDENTITY does not (RolePage clears it at commit; BrandingPage clears it again
+    # on leave — either alone is enough, and both together are the belt & braces the
+    # emission-neutrality precondition asks for).
+    assert c.brand_logo == "" and c.brand_locked is False
+    args = c.to_cli_args()   # would raise on a leftover identity asset
+    pairs = flag_pairs(args)
+    assert ("--branding-dir", "/tmp/brand-tree") in pairs
+    assert ("--grub-theme", "/tmp/grub-theme") in pairs
+    assert ("--color-scheme", "/tmp/Acme.colors") in pairs
+    assert "--brand-logo" not in args and "--brand-locked" not in args
+
+
+def test_the_theme_menu_is_reachable_on_the_unaffiliated_flow(wiz):
+    """The operator's third ask, as a flow assertion rather than a page one: walking the
+    standalone-unaffiliated wizard must PASS THROUGH a branding screen whose premade
+    theme cards are visible and enabled, and the theme picked there must reach the argv.
+
+    Pinned at the wizard level on purpose — applies_to() returning True is only a
+    promise; nextId() is what the operator walks, and the report ("There should be the
+    menu for adding the themes") is about the walk."""
+    pick_role(wiz, UNAFFILIATED_ROLE)
+    branding = advance_to(wiz, wizard_mod.BrandingPage)
+    assert branding.form.isVisible() and branding.form.isEnabled()
+    for name, card in branding.theme_group.cards.items():
+        assert card.isVisible() and card.isEnabled(), name
+    branding.theme_group.cards["purple"].setChecked(True)
+    advance_to(wiz, wizard_mod.NetworkPage)
+    c = wiz.cfg
+    assert c.theme == "purple"
+    assert ("--theme", "purple") in flag_pairs(c.to_cli_args())
 
 
 # ---- BrandingPage: premade-theme XOR custom-branding either/or (spec 2) ---------
@@ -339,6 +376,20 @@ def _system_page(cfg=None):
     return SystemPage(SimpleNamespace(cfg=cfg or ImageConfig()))
 
 
+def _node_cfg(**kw):
+    """A NODE-class image — the flow that still OWNS the -u/--user question.
+
+    The identity tests below used the dataclass default (standalone-thick, a DESKTOP),
+    which stopped exercising -u on 2026-08-26: on a desktop --local-user IS the baked
+    default account, so SystemPage hides its "Default user" row and clears the field
+    (system.default_user_is_local_user). Driving them on a node keeps them testing what
+    they were written to test — the -H/-T/-u collect — while the desktop half gets its
+    own tests below."""
+    base = dict(mode="mesh", role="pki", platform="x86")
+    base.update(kw)
+    return ImageConfig(**base)
+
+
 def _pick_zone(page, zone):
     """Select a zone in the ask-9 timezone DROPDOWN (adding it first when this host's
     tz database does not carry it, exactly as the page's own seeding does)."""
@@ -350,8 +401,10 @@ def _pick_zone(page, zone):
 
 
 def test_system_identity_collects_and_emits(qapp):
-    """G26: -H/--hostname, -T/--timezone, -u/--user collect and reach the argv."""
-    page = _system_page()
+    """G26: -H/--hostname, -T/--timezone, -u/--user collect and reach the argv.
+
+    On a NODE image (see _node_cfg): -u is the account there, and only there."""
+    page = _system_page(_node_cfg())
     page.initializePage()
     assert page.hostname.isEnabled() and page.timezone.isEnabled() and page.user.isEnabled()
     page.hostname.setText("node-1")
@@ -375,8 +428,11 @@ def test_system_identity_preselects_the_builder_derived_values(qapp):
     hostname/user values are exactly what the builder would have derived itself
     (config.derive_hostname / derive_default_user transcribe its role switch), so the
     image is unchanged; only the argv is now explicit. The timezone comes from this
-    build HOST, which IS a real change from the builders' UTC default."""
-    page = _system_page()
+    build HOST, which IS a real change from the builders' UTC default.
+
+    On a NODE image (see _node_cfg) — the desktop half asks for the account ONCE, on
+    HomePage, and is covered by the duplicate-account tests below."""
+    page = _system_page(_node_cfg())
     page.initializePage()
     c = page.wiz.cfg
     assert page.hostname.text() == derive_hostname(c) != ""
@@ -387,6 +443,253 @@ def test_system_identity_preselects_the_builder_derived_values(qapp):
     assert ("--hostname", derive_hostname(c)) in pairs
     assert ("--user", derive_default_user(c)) in pairs
     assert ("--timezone", timezones.default_timezone()) in pairs
+
+
+# ---- the DUPLICATE ACCOUNT NAME (operator report, 2026-08-26) ------------------
+# "standalone menu is asking same questions seemingly multiple times". SystemPage's
+# "Default user" (-u) and HomePage's "Local user" (--local-user) are ONE account on a
+# desktop image: derive_default_user resolves -u's prefill to cfg.local_user on x86
+# (config.py:1627-1628) because the builder does DEFAULT_USER="${LOCAL_USER}"
+# (build-x86-host-stage4.sh:1733). So the operator typed the name twice and the argv
+# carried both flags — and an operator who never opened SystemPage emitted no -u at all,
+# i.e. merely WALKING the wizard added a redundant flag.
+
+@pytest.mark.parametrize("mode,role", [("standalone", "standalone-thick"),
+                                       ("standalone", UNAFFILIATED_ROLE),
+                                       ("cloud", "laptop")])
+def test_system_default_user_row_is_hidden_on_a_desktop_image(qapp, mode, role):
+    """HIDDEN (not greyed) and EMISSION-NEUTRAL: c.user goes back to its dataclass
+    default, so the argv carries --local-user alone — exactly what an operator who never
+    opened this page produced. The image is unchanged; only the duplicate flag is gone."""
+    cfg = ImageConfig(mode=mode, role=role, platform="x86", user="magus")
+    page = _system_page(cfg)
+    page.initializePage()
+    assert not page.user_row.isVisibleTo(page)
+    assert page.user.text() == ""            # nothing submittable from a hidden control
+    assert not page.user_note.isVisibleTo(page)
+    assert page.validatePage()
+    assert cfg.user == ImageConfig.__dataclass_fields__["user"].default == ""
+    args = cfg.to_cli_args()
+    assert "--user" not in args
+    assert ("--local-user", cfg.local_user) in flag_pairs(args)
+
+
+def test_system_default_user_is_cleared_on_collect_not_only_wiped_on_screen(qapp):
+    """The collect-side half of the gate, pinned SEPARATELY. initializePage also blanks
+    the widget, so a test that only walks init->validate passes even with the
+    validatePage clear deleted (measured, in this lane's mutation battery). Repopulate
+    the field AFTER the gate has run — the shape a loaded config or a Back-navigation
+    restore produces — and the emitted value must still be the dataclass default."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = _system_page(cfg)
+    page.initializePage()
+    assert not page.user_row.isVisibleTo(page)
+    page.user.setText("smuggled")          # from behind the hidden row
+    assert page.validatePage()
+    assert cfg.user == ""
+    assert "--user" not in cfg.to_cli_args()
+
+
+def test_system_default_user_row_stays_on_a_node_image(qapp):
+    """The mutation guard: a rule that hid the row from EVERY image would also satisfy
+    the test above. On a node --local-user is NOT the account (HomePage's whole login
+    group is hidden there by local_login_applies), so -u is the only way to name it."""
+    cfg = _node_cfg()
+    page = _system_page(cfg)
+    page.initializePage()
+    assert page.user_row.isVisibleTo(page)
+    assert page.user.text() == derive_default_user(cfg) != ""
+    page.user.setText("operator")
+    assert page.validatePage()
+    assert cfg.user == "operator"
+    assert ("--user", "operator") in flag_pairs(cfg.to_cli_args())
+
+
+def test_system_default_user_row_returns_when_the_flow_becomes_a_node(qapp):
+    """The other half of emission-neutrality: a field hidden on one visit must be
+    reachable AND emitted again on the next, or the gate has silently deleted a knob."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = _system_page(cfg)
+    page.initializePage()
+    assert not page.user_row.isVisibleTo(page)
+    page.validatePage()
+    cfg.mode, cfg.role = "mesh", "pki"          # the flow becomes a node build
+    page.initializePage()
+    assert page.user_row.isVisibleTo(page)
+    assert page.user.text() == derive_default_user(cfg) != ""
+    assert page.validatePage()
+    assert ("--user", derive_default_user(cfg)) in flag_pairs(cfg.to_cli_args())
+
+
+def test_home_login_group_says_the_account_is_also_the_default_user(qapp):
+    """The other side of the same fix: with SystemPage's row gone on a desktop, THIS
+    group has to say what became of it — otherwise the -u knob just disappears with no
+    account of where its value comes from. Said only where it is true (a node still asks
+    for the default account on SystemPage)."""
+    desktop = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=desktop, worklist=None))
+    page.initializePage()
+    assert page.local_user_note.isVisibleTo(page)
+    assert "default user" in page.local_user_note.text().lower()
+    page = HomePage(SimpleNamespace(cfg=_node_cfg(), worklist=None))
+    page.initializePage()
+    # isHidden(), not isVisibleTo(): on a node the WHOLE login group is hidden
+    # (local_login_applies), so an ancestor already makes isVisibleTo() False and a
+    # mutation that shows this note unconditionally would sail past it — measured, in
+    # the mutation battery for this lane. isHidden() reads the widget's OWN flag.
+    assert page.local_user_note.isHidden()
+
+
+# ---- REGRESSION: the ARM desktops the first cut of the collapse silently muted ---
+# The collapse hid -u on EVERY desktop image, justified by "a custom --local-user is
+# honoured by the ARM builders too". True — but --local-user is only EMITTED on ARM under
+# `if self.standalone or self.local_user != default_local_user() or self.local_pass:`
+# (config.py:3149); x86 emits it unconditionally (config.py:3519). So a plain ARM desktop
+# received NEITHER flag and fell back to its builder's own DEFAULT_USER ("pi" on rpi5)
+# while the wizard displayed the local user's name — the operator lost the ability to name
+# the baked account at all, which they HAD before the change set. Measured argv, before:
+#     --role desktop --board rpi5 ... --timezone America/Los_Angeles --compress --resume
+# (no --user, no --local-user). These tests are that measurement, pinned.
+
+def _arm_desktop(**kw):
+    """A plain ARM desktop: no --standalone, the Studio's own default account name, no
+    local password — i.e. every arm of config.py:3149's condition false, so --local-user
+    is NOT emitted and -u is the ONLY channel for naming the baked account."""
+    base = dict(mode="cloud", role="rpi5-desktop", platform="rpi5", board="rpi5")
+    base.update(kw)
+    return ImageConfig(**base)
+
+
+def test_system_default_user_row_stays_on_a_plain_arm_desktop(qapp):
+    """THE REGRESSION. Desktop-class is not sufficient: the row may only go where
+    --local-user actually rides. On a plain ARM desktop it does not, so the row stays,
+    prefills the builder's own account, and -u still reaches the argv."""
+    cfg = _arm_desktop()
+    assert cfg.local_user == default_local_user(), "fixture is no longer a DEFAULT name"
+    assert "--local-user" not in cfg.to_cli_args(), (
+        "fixture no longer exercises the neither-flag case this test exists for")
+    page = _system_page(cfg)
+    page.initializePage()
+    assert page.user_row.isVisibleTo(page), (
+        "an ARM desktop lost its only channel for naming the baked account")
+    assert page.user.text() == derive_default_user(cfg) == "pi"
+    page.user.setText("operator")
+    assert page.validatePage()
+    assert cfg.user == "operator"
+    args = cfg.to_cli_args()
+    assert ("--user", "operator") in flag_pairs(args), (
+        "the operator named the account and the builder was never told")
+    assert "--local-user" not in args     # ...and no second flag appeared either
+
+
+@pytest.mark.parametrize("kw,why", [
+    (dict(local_user="dana"), "a customized account name"),
+    (dict(local_pass="s3cr3t"), "a local password"),
+    (dict(standalone=True), "the --standalone posture"),
+])
+def test_system_default_user_row_goes_on_an_arm_desktop_that_does_emit_local_user(
+        qapp, kw, why):
+    """The other side of the narrowing — it must still COLLAPSE where the duplicate is
+    real. Each of these turns on one arm of config.py:3149, so --local-user rides and the
+    builder makes it DEFAULT_USER: a second name here would be the duplicate the operator
+    reported."""
+    cfg = _arm_desktop(**kw)
+    args_before = cfg.to_cli_args()
+    assert "--local-user" in args_before, f"{why} no longer emits --local-user"
+    page = _system_page(cfg)
+    page.initializePage()
+    assert not page.user_row.isVisibleTo(page), f"-u still duplicates --local-user with {why}"
+    page.user.setText("smuggled")
+    assert page.validatePage()
+    assert cfg.user == ""
+    args = cfg.to_cli_args()
+    assert "--user" not in args
+    assert ("--local-user", cfg.local_user) in flag_pairs(args)
+
+
+def test_system_default_user_row_stays_on_an_all_arm_desktop_mesh_worklist(qapp):
+    """The flow quantifier, on the axis the narrowing added. A worklist made only of ARM
+    desktop rows is desktop-class end to end — the OLD predicate said "hide" — but no row
+    receives --local-user, so every row would lose its account name at once."""
+    entries = [WorklistEntry(role="rpi5-desktop", platform="rpi5", board="rpi5"),
+               WorklistEntry(role="jetson-desktop", platform="jetson", board="orin-nano")]
+    cfg = ImageConfig(mode="mesh", role="rpi5-desktop", platform="x86")
+    page = SystemPage(SimpleNamespace(
+        cfg=cfg, worklist=SimpleNamespace(entries=entries)))
+    page.initializePage()
+    assert page.user_row.isVisibleTo(page), (
+        "a desktop-only ARM worklist lost -u on every row at once")
+    # ...and the base being pinned to x86 (WorklistPage does that) must not be what
+    # decides it: keying condition 2 on the base would have hidden the row here.
+    assert cfg.platform == "x86"
+
+
+def test_home_login_note_is_silent_on_a_plain_arm_desktop(qapp):
+    """The caption that LIED. It asserted "the builder makes --local-user the image's
+    DEFAULT_USER" on a flow whose argv contained no --local-user at all. It is now gated
+    on the same predicate as the row, so it can only appear where the flag does."""
+    cfg = _arm_desktop()
+    page = HomePage(SimpleNamespace(cfg=cfg, worklist=None))
+    page.initializePage()
+    assert page.local_user.isVisibleTo(page), "the ARM desktop login group vanished"
+    # isHidden(), not isVisibleTo(): the login group around it is SHOWN here, so this
+    # reads the note's own flag rather than an ancestor's.
+    assert page.local_user_note.isHidden(), (
+        "the note claims a --local-user flag this image's argv does not carry")
+    assert "--local-user" not in cfg.to_cli_args()
+
+
+@pytest.mark.parametrize("cfg_kw", [
+    dict(mode="cloud", role="rpi5-desktop", platform="rpi5", board="rpi5"),
+    dict(mode="cloud", role="jetson-desktop", platform="jetson", board="orin-nano"),
+    dict(mode="cloud", role="laptop", platform="x86"),
+    dict(mode="standalone", role="standalone-thick", platform="x86"),
+    dict(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86"),
+    dict(mode="cloud", role="rpi5-desktop", platform="rpi5", board="rpi5",
+         local_user="dana"),
+])
+def test_home_login_note_appears_exactly_where_local_user_is_emitted(qapp, cfg_kw):
+    """The invariant, as one property rather than five cases: the note names --local-user,
+    so it is visible IF AND ONLY IF --local-user is in the argv. A note that claims a flag
+    the build does not pass is the defect; so is a hidden note on a build that does."""
+    cfg = ImageConfig(**cfg_kw)
+    page = HomePage(SimpleNamespace(cfg=cfg, worklist=None))
+    page.initializePage()
+    shown = not page.local_user_note.isHidden()
+    emitted = "--local-user" in cfg.to_cli_args()
+    assert shown == emitted, (
+        f"note shown={shown} but --local-user emitted={emitted} for {cfg_kw}")
+
+
+# ---- the stack seed on an unaffiliated image (operator report, 2026-08-26) -----
+
+def test_home_seed_stack_code_hidden_and_reset_on_unaffiliated(qapp):
+    """"Seed stack code" offered none|repos|stack|mesh on a flow where anything but
+    "none" makes to_cli_args() RAISE (config.py:3501) and the builder exit 1
+    (build-x86-host-stage4.sh:1411) — a control whose only outcomes were "leave it
+    alone" or "break the build". Hidden, and reset to the dataclass default."""
+    cfg = ImageConfig(mode="standalone", role=UNAFFILIATED_ROLE, platform="x86",
+                      home_seed_code="stack")
+    page = HomePage(SimpleNamespace(cfg=cfg, worklist=None))
+    page.initializePage()
+    assert not page.seed_row.isVisibleTo(page) and not page.seed.isVisibleTo(page)
+    assert page.validatePage()
+    assert cfg.home_seed_code == \
+        ImageConfig.__dataclass_fields__["home_seed_code"].default == "none"
+    cfg.to_cli_args()          # would raise on any leftover seed
+
+
+def test_home_seed_stack_code_stays_on_a_branded_desktop(qapp):
+    """Mutation guard + emission-neutrality: the row is back (and collectable) the
+    moment the role is a branded desktop again."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, worklist=None))
+    page.initializePage()
+    assert page.seed_row.isVisibleTo(page) and page.seed.isVisibleTo(page)
+    page.seed.setCurrentText("stack")
+    assert page.validatePage()
+    assert cfg.home_seed_code == "stack"
+    assert ("--home-seed-code", "stack") in flag_pairs(cfg.to_cli_args())
 
 
 def test_system_credentials_masked_secret_and_never_saved(qapp):
@@ -583,10 +886,11 @@ def test_home_no_longer_carries_the_standalone_posture(qapp):
 
 def test_home_login_unlock_factor_not_offered_on_a_node(qapp):
     """The builder writes the login-factor marker from inside its `elif ${ROLE_CLIENT}`
-    branch (build-x86-host-stage4.sh:3174-3175), so on a cluster-node role
+    branch (build-x86-host-stage4.sh:4606-4607), so on a cluster-node role
     `--unlock-keyfile login` writes NO marker — the factor silently does not exist. The
-    flag still parses and validates (:1220) so nothing errs, and `--unlock-yubikey login`
-    even adds sys-auth/pam-u2f to the package set at :3561, which is NOT role-gated: the
+    flag still PARSES (:1068) and validates (:1595) so nothing errs, and
+    `--unlock-yubikey login` even adds sys-auth/pam-u2f to the package set at :5107,
+    which is NOT role-gated: the
     node emerged a PAM module for a login factor it was never going to have.
 
     Note this is an ITEM-level gate, not a hidden row: 'boot' stays valid on a node (the
