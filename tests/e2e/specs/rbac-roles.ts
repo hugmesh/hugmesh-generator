@@ -27,10 +27,15 @@
 //     an admin approves it.
 //
 // Password resolution mirrors the games harness: per-user env override
-// (E2E_<UPPER>_PASSWORD) -> shared E2E_PASSWORD -> 'e2e-pass'. seed-accounts.sh
-// --roles renders the matching systems Casdoor init payload with the same
-// deterministic passwords so a real-Casdoor login carries the right `roles`
-// claim; the mock stack (mock-bff) reads the same catalogue for its role grants.
+// (E2E_<UPPER>_PASSWORD) -> shared E2E_PASSWORD, resolved by sharedPassword()
+// below (env, else the run-state credentials file tests/stack/e2e-password.sh
+// maintains, else throw — never a literal). seed-accounts.sh --roles renders
+// the matching systems Casdoor init payload with the same GENERATED password
+// so a real-Casdoor login carries the right `roles` claim; the mock stack
+// (mock-bff) reads the same catalogue for its role grants.
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export type SystemsRole =
   | 'ROLE_SUPERADMIN'  // infra control-plane tier; ABOVE admin. Reaches the tailnet-only
@@ -52,7 +57,8 @@ export type SystemsRole =
 export interface SystemsSeedUser {
   /** Casdoor username in org "hugmesh" (also the login handle). */
   username: string;
-  /** Per-user password env var; falls back to E2E_PASSWORD then 'e2e-pass'. */
+  /** Per-user password env var; falls back to sharedPassword() (E2E_PASSWORD,
+   *  resolved/generated — see that function; never a literal). */
   passwordEnv: string;
   /** Roles GRANTED directly in the systems Casdoor seed (NOT the derived role). */
   roles: SystemsRole[];
@@ -274,7 +280,7 @@ export const SWARM_DEFAULTS = { users: 120, mods: 4, admins: 2 } as const;
  *  a single env var unlocks the whole population. NOT per-user (126 distinct env
  *  vars would be unusable); the seed uses the identical derivation. */
 export function swarmPassword(): string {
-  return process.env['E2E_SWARM_PASSWORD'] ?? process.env['E2E_PASSWORD'] ?? 'e2e-swarm-pass';
+  return process.env['E2E_SWARM_PASSWORD'] ?? sharedPassword();
 }
 
 export interface SwarmMember extends SystemsSeedUser {
@@ -417,13 +423,56 @@ export const GAMES_SEED_USERS: GamesSeedUser[] = [
   },
 ];
 
-/** Resolve a seed user's password — per-user env override or E2E_PASSWORD
- *  fallback — without throwing on a missing env. Mirrors games roles.ts
- *  passwordFor(). */
+/**
+ * Read one KEY from the run-state credentials file tests/stack/e2e-password.sh
+ * maintains (plain `KEY=value` lines, no quotes — see that file's header for
+ * the full contract). Returns undefined when the file or the key is absent;
+ * never throws, so callers layer their own fallback/throw behavior on top.
+ * E2E_CREDENTIALS_FILE overrides the path, same env name the shell seeders use.
+ */
+function readCredentialsFile(key: string): string | undefined {
+  const file = process.env.E2E_CREDENTIALS_FILE
+    ?? path.resolve(__dirname, '../../../.e2e-credentials');
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+  let found: string | undefined;
+  for (const line of text.split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    if (line.slice(0, eq) === key) found = line.slice(eq + 1).trim();
+  }
+  return found || undefined;
+}
+
+/**
+ * Resolve the shared e2e password: explicit env wins, else the run-state
+ * credentials file (written by whichever of seed-e2e.sh / seed-accounts.sh /
+ * bootstrap-kind.sh generated first in this run, via tests/stack/
+ * e2e-password.sh), else THROW. NEVER a literal fallback — a guessable
+ * default that still authenticates and goes green is the exact bug the
+ * random-per-run password work removes (see the contract's Rule 4).
+ */
+export function sharedPassword(): string {
+  const fromEnv = process.env['E2E_PASSWORD'];
+  if (fromEnv) return fromEnv;
+  const fromFile = readCredentialsFile('E2E_PASSWORD');
+  if (fromFile) return fromFile;
+  throw new Error(
+    'E2E_PASSWORD is not set and no run-state credentials file was found. ' +
+    'Run `make stack-seed` first (it writes .e2e-credentials at the repo root), ' +
+    'or set E2E_PASSWORD explicitly.'
+  );
+}
+
+/** Resolve a seed user's password — per-user env override, else
+ *  sharedPassword() (E2E_PASSWORD, resolved/generated/thrown — see that
+ *  function). Mirrors games roles.ts passwordFor(). */
 export function passwordFor(user: { passwordEnv: string }): string {
-  return process.env[user.passwordEnv]
-      ?? process.env['E2E_PASSWORD']
-      ?? 'e2e-pass';
+  return process.env[user.passwordEnv] ?? sharedPassword();
 }
 
 /** The superadmin's LOGIN HANDLE: env-driven on a studio-bootstrapped mesh

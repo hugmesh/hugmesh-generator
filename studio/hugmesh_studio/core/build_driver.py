@@ -291,17 +291,22 @@ class BuildDriver:
         the fleet/make layer (scripts/build-all-roles.sh / the Makefile), forwarded
         here so the BuildPage checkbox is never a widget-level no-op and the same
         config drives every channel identically. HUGMESH_QEMU_E2E=1 rides the same
-        channel for cfg.qemu_e2e (the post-build emulated-device tests): it is the
-        opt-in gate the qemu harness layer already reads (tests/qemu/, the Makefile's
-        qemu-matrix target), so any build-side hook sees the SAME knob the Studio's
-        own post-build step acts on — never a builder flag. Empty/false values are
-        omitted so an untouched config adds nothing."""
+        channel for cfg.qemu_device_tests (the post-build emulated-device tests).
+        THE ENV VAR KEEPS ITS NAME ON PURPOSE, and it is INERT for the builders: the
+        only readers of HUGMESH_QEMU_E2E anywhere in this tree are
+        tests/qemu/run-matrix-e2e.sh and the Makefile's `qemu-matrix` target — no
+        build-*-stage4.sh looks at it. So its presence in a build environment is NOT
+        evidence that anything is wired; the real post-build step is
+        gui/pages/progress.py::_maybe_qemu_tests, which spawns
+        tests/qemu/run-qemu-docker.sh directly. It is forwarded anyway so a build-side
+        hook that ever wants the gate reads the SAME knob — never a builder flag.
+        Empty/false values are omitted so an untouched config adds nothing."""
         env: dict[str, str] = {}
         if cfg.headscale_url:
             env["HEADSCALE_URL"] = cfg.headscale_url
         if cfg.pentest:
             env["PENTEST"] = "1"
-        if cfg.qemu_e2e:
+        if cfg.qemu_device_tests:
             env["HUGMESH_QEMU_E2E"] = "1"
         return env
 

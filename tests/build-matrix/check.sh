@@ -1307,6 +1307,24 @@ expect_fail() { # NAME cmd...
     fi
 }
 
+# ...and its twin: a cell that must be ACCEPTED. Added 2026-08-26 with the
+# identity/look split (see the UNAFFILIATED block in run_negative_checks). A
+# boundary is two-sided, and this bucket only ever tested one side: when a flag
+# moves from refused to allowed, deleting its expect_fail leaves NOTHING pinning
+# the new behaviour, so the builder could start refusing it again — or, worse,
+# accept it while silently dropping it — with every probe still green.
+# Shares the NEG counters deliberately: gui_gate() below already does the same,
+# so this bucket is "flag-boundary probes", not "must-fail" alone.
+expect_ok() { # NAME cmd...
+    local name="$1"; shift
+    local out="${TMP_DIR}/neg.out"
+    if "$@" >"${out}" 2>&1; then
+        NEG_PASS=$((NEG_PASS+1))
+    else
+        _fail NEG "${name}" "expected exit 0, got non-zero" "${out}"; NEG_FAIL=$((NEG_FAIL+1))
+    fi
+}
+
 run_negative_checks() {
     expect_fail "x86: invalid role"          ./build-x86-host-stage4.sh --role bogus --print-plan
     expect_fail "rpi5: invalid role"         ./build-rpi5-stage4.sh --role laptop --print-plan
@@ -1373,9 +1391,12 @@ run_negative_checks() {
         ./build-orangepi3-lts-stage4.sh --board bogus --print-plan
     expect_fail "orangepi3-lts: --role path-traversal rejected" \
         ./build-orangepi3-lts-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
-    # UNAFFILIATED desktop: branding flags are a HARD conflict (no brand identity
-    # at all), and --unaffiliated composes onto desktop/client roles only — a
-    # cluster node is HugMesh platform machinery by definition.
+    # UNAFFILIATED desktop: brand IDENTITY is a HARD conflict, and --unaffiliated
+    # composes onto desktop/client roles only — a cluster node is HugMesh platform
+    # machinery by definition.
+    # REVISED 2026-08-26 ("split identity from look"): it is no longer "branding flags"
+    # wholesale. A brand names WHOSE image this is; a wallpaper names nobody. See the
+    # three probes at the end of this block — one for each direction of the new line.
     # Weight-pinning standalone roles: the weight is IN THE ROLE NAME, so an explicit
     # --desktop that CONTRADICTS it must hard-error naming both sides — never be
     # silently overridden (the disease that made cloud/x86/desktop/thin a phantom).
@@ -1386,8 +1407,28 @@ run_negative_checks() {
         ./build-x86-host-stage4.sh --role standalone-thick --desktop thin --print-plan
     expect_fail "x86: standalone-unaffiliated + contradictory --desktop thin" \
         ./build-x86-host-stage4.sh --role standalone-unaffiliated --desktop thin --print-plan
-    expect_fail "x86: unaffiliated role + --theme conflicts" \
+    # THE 2026-08-26 SPLIT, pinned in BOTH directions. This single probe used to be
+    # `expect_fail ... --theme dark`, back when the unaffiliated fold rejected all ten
+    # branding flags in one `if`. That check also removed the entire theme step from the
+    # image, which is what the operator reported against session 20260826-151356-64070a:
+    # "There should be the menu for adding the themes as in the branded images."
+    # LOOK is now accepted (neutral-named artefacts: /etc/gentoo, /usr/sbin/branding,
+    # gentoo-background.png), IDENTITY still is not — so the boundary needs one probe
+    # per side, or a regression in either direction goes unnoticed.
+    expect_ok   "x86: unaffiliated role + --theme is ALLOWED (a look, not an identity)" \
         ./build-x86-host-stage4.sh --role standalone-unaffiliated --theme dark --print-plan
+    expect_ok   "x86: unaffiliated role + --wallpaper/--accent-color allowed" \
+        ./build-x86-host-stage4.sh --role standalone-unaffiliated --wallpaper /tmp/w.png \
+            --accent-color '#ff0000' --print-plan
+    # --brand-logo is the one that must NOT slip across with the look half: the logo IS
+    # the mark (the applier installs it as the greeter's default-user-image), which is
+    # why it stayed on the identity side while --wallpaper moved.
+    expect_fail "x86: unaffiliated role + --brand-logo conflicts (the logo IS the mark)" \
+        ./build-x86-host-stage4.sh --role standalone-unaffiliated --brand-logo /tmp/l.png --print-plan
+    expect_fail "x86: unaffiliated role + --brand-locked conflicts (locking implies a managed brand)" \
+        ./build-x86-host-stage4.sh --role standalone-unaffiliated --brand-locked --print-plan
+    expect_fail "x86: unaffiliated role + --brand identity conflicts" \
+        ./build-x86-host-stage4.sh --role standalone-unaffiliated --brand acme --print-plan
     # BRANDING LANE (ask 6): --print-plan is the validator every channel preflights
     # with, so it must accept EXACTLY the themes the build accepts. It used to exit 0
     # on any string — the theme was only resolved ~2100 lines later, at the branding
@@ -2283,6 +2324,8 @@ run_nongating_smokes() {
                 "idp-builder-functions:${REPO_DIR}/tests/scripts/test-idp-builder-functions.sh" \
                 "qemu-matrix-assertions:${REPO_DIR}/tests/qemu/assertions_test.sh" \
                 "qemu-avc-workout:${REPO_DIR}/tests/qemu/avc-workout_test.sh" \
+                "qemu-stage4-rootfs:${REPO_DIR}/tests/qemu/stage4_rootfs_test.sh" \
+                "qemu-e2e-lane:${REPO_DIR}/tests/qemu/qemu-e2e-lane_test.sh" \
                 "qemu-mesh-cluster:${REPO_DIR}/tests/qemu/mesh-cluster_test.sh" \
                 "kubelet-join-bootstrap:${REPO_DIR}/tests/boot/test-kubelet-join-bootstrap.sh" \
                 "platform-key-spelling:${REPO_DIR}/tests/scripts/test-platform-key-spelling.sh" \
@@ -2363,6 +2406,301 @@ score_sharedbinpkg_smokes() {
     fi
 }
 
+# ── sendfile-noise ORDERING + residue (SFO) ─────────────────────────────────────
+# The sendfile-noise pin (scripts/patch-portage-file-copy.py) is worth ~88k traceback
+# lines per x86 build (308386 measured in out/build-snap-build-x86.log), and its whole
+# value is in WHERE the calls sit. Nothing pinned that until this bucket:
+#   * the in-chroot RE-patch must run AFTER the payload's
+#     `emerge --oneshot --update --newuse sys-apps/portage` (that self-update replaces
+#     util/file_copy.py with the pristine upstream file and undoes the pre-chroot patch)
+#     and BEFORE the @world pass (which merges the hundreds of thousands of files whose
+#     tracebacks are the actual noise). Move it one line the wrong side of either and the
+#     build is silently noisy again — no failure, no warning, just a drowned log pane.
+#   * the staging `cp` of the patcher into ${SYSROOT}/tmp must precede the chroot heredoc,
+#     or the in-chroot leg degrades to its "patcher not staged" warning.
+#   * the revert must sit AFTER the kernel chroot (which merges gentoo-sources under the
+#     same portage) and BEFORE the packaging banner, or the shipped image keeps a portage
+#     that disagrees with its own vdb CONTENTS md5 forever.
+# And the RESIDUE pairing, which is a real 2026-08-26 regression: the pristine
+# <file>.hugmesh-orig copy was unconditional for one change set. --revert has ONE caller,
+# but pcs_quiet_sendfile_noise is called by ALL TEN builders, so the nine ARM/Jetson lanes
+# each shipped a ~4 KB vdb-unowned duplicate of a portage source file inside images that
+# stage AIDE. The copy is opt-in now (`backup` / --backup); this bucket fails any builder
+# that opts in WITHOUT reverting, which is what stops a future lane copying the x86 call.
+# FAIL-CLOSED: 14 expected (6 ordering + 1 pairing sweep + 7 live patcher/lib behaviours).
+SFO_EXPECTED=14
+SFO_PASS=0; SFO_FAIL=0
+# line number of the FIRST line of ${1} containing the FIXED string ${2}; empty if absent.
+_sfo_line() { grep -nF -m1 -- "$2" "$1" 2>/dev/null | cut -d: -f1; }
+_sfo_ord() { # NAME FILE EARLIER-FIXED-STRING LATER-FIXED-STRING
+    local name="$1" f="$2" a b
+    a="$(_sfo_line "${f}" "$3")"; b="$(_sfo_line "${f}" "$4")"
+    if [ -z "${a}" ] || [ -z "${b}" ]; then
+        printf 'missing anchor in %s\n  earlier: %s -> %s\n  later:   %s -> %s\n' \
+            "${f}" "$3" "${a:-<not found>}" "$4" "${b:-<not found>}" >"${TMP_DIR}/sfo.out"
+        _fail SFO "${name}" "anchor text not found (the probe or the builder drifted)" "${TMP_DIR}/sfo.out"
+        SFO_FAIL=$((SFO_FAIL+1)); return 0
+    fi
+    if [ "${a}" -lt "${b}" ]; then
+        SFO_PASS=$((SFO_PASS+1))
+    else
+        printf '%s:%s  %s\n%s:%s  %s\n' "${f}" "${a}" "$3" "${f}" "${b}" "$4" >"${TMP_DIR}/sfo.out"
+        _fail SFO "${name}" "expected line ${a} to come BEFORE line ${b}" "${TMP_DIR}/sfo.out"
+        SFO_FAIL=$((SFO_FAIL+1))
+    fi
+}
+_sfo_chk() { # NAME RC DETAIL-FILE  — RC 0 = pass
+    if [ "$2" -eq 0 ]; then SFO_PASS=$((SFO_PASS+1))
+    else _fail SFO "$1" "assertion failed" "$3"; SFO_FAIL=$((SFO_FAIL+1)); fi
+}
+run_sendfile_ordering_checks() {
+    local x86=build-x86-host-stage4.sh out="${TMP_DIR}/sfo.out" rc
+    # (a) ORDERING — every anchor is a FIXED string, so a reflow that keeps the code but
+    #     moves the line still passes, while an actual re-ordering fails loudly.
+    _sfo_ord "stage-cp before the payload chroot" "${x86}" \
+        'cp "${SCRIPT_DIR}/scripts/patch-portage-file-copy.py" "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"' \
+        'chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT'
+    _sfo_ord "pre-chroot patch before the payload chroot" "${x86}" \
+        'pcs_quiet_sendfile_noise "${SYSROOT}" backup' \
+        'chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT'
+    _sfo_ord "re-patch AFTER the portage self-update" "${x86}" \
+        'emerge --oneshot --update --newuse sys-apps/portage' \
+        'python3 /tmp/hugmesh-patch-portage-file-copy.py --backup /'
+    _sfo_ord "re-patch BEFORE the @world pass" "${x86}" \
+        'python3 /tmp/hugmesh-patch-portage-file-copy.py --backup /' \
+        'emerge --update --deep --newuse --keep-going --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world 2>&1'
+    # the 4-space indent selects the KERNEL chroot heredoc, not the payload one at col 0.
+    _sfo_ord "revert AFTER the kernel chroot" "${x86}" \
+        '    chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT' \
+        'pcs_unquiet_sendfile_noise "${SYSROOT}"'
+    _sfo_ord "revert BEFORE the packaging banner" "${x86}" \
+        'pcs_unquiet_sendfile_noise "${SYSROOT}"' \
+        'banner "Packaging stage4 tarball"'
+    # (b) PAIRING — opting into the pristine backup obliges you to consume it. Scans every
+    #     stage4 builder: a `backup` opt-in with no later revert in the SAME file is the
+    #     regression this bucket exists to forbid. Comment lines are stripped so the
+    #     explanatory prose around each call cannot satisfy (or trip) the check.
+    : >"${out}"
+    local b optin rev
+    for b in build-*-stage4.sh; do
+        [ -e "${b}" ] || continue
+        optin="$( { grep -nF -- 'pcs_quiet_sendfile_noise "${SYSROOT}" backup' "${b}"
+                    grep -nF -- 'patch-portage-file-copy.py --backup' "${b}"
+                  } | grep -v '^[0-9]*:[[:space:]]*#' | cut -d: -f1 | sort -n | head -1)"
+        rev="$( { grep -nF -- 'pcs_unquiet_sendfile_noise' "${b}"
+                  grep -nF -- 'patch-portage-file-copy.py" --revert' "${b}"
+                } | grep -v '^[0-9]*:[[:space:]]*#' | cut -d: -f1 | sort -n | tail -1)"
+        if [ -n "${optin}" ] && [ -z "${rev}" ]; then
+            echo "${b}: opts into the .hugmesh-orig backup at line ${optin} but never reverts — the image would ship a vdb-unowned copy of portage/util/file_copy.py" >>"${out}"
+        elif [ -n "${optin}" ] && [ -n "${rev}" ] && [ "${rev}" -lt "${optin}" ]; then
+            echo "${b}: reverts at line ${rev}, BEFORE its backup opt-in at line ${optin} — the copy survives into the image" >>"${out}"
+        fi
+    done
+    [ -s "${out}" ]; rc=$?     # rc 0 means the file HAS content, i.e. a failure
+    _sfo_chk "backup opt-in is paired with a revert (all ten builders)" \
+        "$( [ "${rc}" -eq 0 ] && echo 1 || echo 0 )" "${out}"
+    # (c) LIVE BEHAVIOUR — run the real patcher against a synthetic sysroot built from the
+    #     patcher's OWN anchor constants, so the fixture cannot drift from the pin and the
+    #     probe needs no portage installed on the CI box.
+    local sfo="${TMP_DIR}/sfo-root"
+    rm -rf "${sfo}"; mkdir -p "${sfo}"
+    if ! "${PYTHON}" - "${REPO_DIR}" "${sfo}" >"${out}" 2>&1 <<'SFOPY'
+import importlib.util, os, sys
+repo, w = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location(
+    "pf", os.path.join(repo, "scripts/patch-portage-file-copy.py"))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)          # __name__ != "__main__", so main() does not run
+body = (
+    "import errno\nimport sys\nimport logging\n\nlogger = logging.getLogger(__name__)\n\n\n"
+    "def _do_sendfile(srcfd, dstfd, offset, count):\n    pass\n\n\n"
+    "def _fastcopy(srcfd, dstfd, offset, count):\n"
+    "    if srcfd:\n        if dstfd:\n            if offset:\n"
+    + mod.ANCHOR_TRY
+    + "\n\ndef _get_chunks(src):\n    return None\n"
+)
+compile(body, "fixture", "exec")      # the patcher refuses to write non-compiling output
+d = os.path.join(w, "sysroot", "usr", "lib", "python3.13",
+                 "site-packages", "portage", "util")
+os.makedirs(d, exist_ok=True)
+open(os.path.join(d, "file_copy.py"), "w").write(body)
+open(os.path.join(w, "pristine.py"), "w").write(body)
+SFOPY
+    then
+        _fail SFO "fixture" "could not build the synthetic sysroot" "${out}"
+        SFO_FAIL=$((SFO_FAIL + 6)); return 0
+    fi
+    local root="${sfo}/sysroot"
+    local fc="${root}/usr/lib/python3.13/site-packages/portage/util/file_copy.py"
+    local patcher="${REPO_DIR}/scripts/patch-portage-file-copy.py"
+    # 1. the NINE ARM lanes' spelling (no opt-in): patches, and leaves NOTHING beside it.
+    cp "${sfo}/pristine.py" "${fc}"
+    "${PYTHON}" "${patcher}" "${root}" >"${out}" 2>&1
+    { grep -q 'HUGMESH PINNED WORKAROUND' "${fc}" \
+        && [ -z "$(find "${root}" -name '*.hugmesh-orig' -print -quit)" ]; }; rc=$?
+    _sfo_chk "plain patch applies and leaves no .hugmesh-orig" "${rc}" "${out}"
+    # 2. --backup DOES leave one (the x86 lane's opt-in still works).
+    cp "${sfo}/pristine.py" "${fc}"; rm -f "${fc}.hugmesh-orig"
+    "${PYTHON}" "${patcher}" --backup "${root}" >"${out}" 2>&1
+    [ -f "${fc}.hugmesh-orig" ]; rc=$?
+    _sfo_chk "--backup saves the pristine copy beside the file" "${rc}" "${out}"
+    # 3. --revert restores the pristine bytes EXACTLY and removes the copy.
+    "${PYTHON}" "${patcher}" --revert "${root}" >"${out}" 2>&1
+    { cmp -s "${fc}" "${sfo}/pristine.py" && [ ! -e "${fc}.hugmesh-orig" ]; }; rc=$?
+    _sfo_chk "--revert restores byte-exactly and deletes the copy" "${rc}" "${out}"
+    # 4. `--revert --backup` is refused, not silently resolved one way.
+    "${PYTHON}" "${patcher}" --revert --backup "${root}" >"${out}" 2>&1; rc=$?
+    _sfo_chk "--revert --backup is refused" "$( [ "${rc}" -ne 0 ] && echo 0 || echo 1 )" "${out}"
+    # 5/6. THE LIB, the way a builder actually calls it. Run in a FRESH bash: shell
+    #      functions are not exported, so hostguard_mutation_allowed cannot leak in from
+    #      this harness and the "/" leg fails closed — the probe never touches the CI
+    #      machine's own portage.
+    cp "${sfo}/pristine.py" "${fc}"; rm -f "${fc}.hugmesh-orig"
+    bash -c 'set -u; unset -f hostguard_mutation_allowed 2>/dev/null
+             . "$1/scripts/_portage-config-lib.sh"; pcs_quiet_sendfile_noise "$2"' \
+        _ "${REPO_DIR}" "${root}" >"${out}" 2>&1
+    { grep -q 'HUGMESH PINNED WORKAROUND' "${fc}" \
+        && [ -z "$(find "${root}" -name '*.hugmesh-orig' -print -quit)" ]; }; rc=$?
+    _sfo_chk "pcs_quiet_sendfile_noise SYSROOT (the ARM spelling) leaves no residue" "${rc}" "${out}"
+    # The round-trip is asserted in TWO halves, and the mid-flight half is the load-bearing
+    # one. "Reverted file == pristine file" is ALSO true when the patch never applied at
+    # all, so on its own this probe passes vacuously for any breakage that stops the
+    # patcher running — measured: mutating the lib so it feeds the patcher an unknown flag
+    # makes pcs_quiet_sendfile_noise warn, return 0, leave the file pristine, and this
+    # check went GREEN. So: patch, ASSERT IT ACTUALLY HAPPENED (marker in, backup beside
+    # it), then revert and assert the bytes came back with nothing left over.
+    cp "${sfo}/pristine.py" "${fc}"; rm -f "${fc}.hugmesh-orig"
+    bash -c 'set -u; unset -f hostguard_mutation_allowed 2>/dev/null
+             . "$1/scripts/_portage-config-lib.sh"
+             pcs_quiet_sendfile_noise "$2" backup' \
+        _ "${REPO_DIR}" "${root}" >"${out}" 2>&1
+    { grep -q 'HUGMESH PINNED WORKAROUND' "${fc}" && [ -f "${fc}.hugmesh-orig" ]; }; rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        printf 'patched=%s backup=%s (the round-trip below cannot mean anything)\n' \
+            "$(grep -q 'HUGMESH PINNED WORKAROUND' "${fc}" && echo yes || echo NO)" \
+            "$([ -f "${fc}.hugmesh-orig" ] && echo yes || echo NO)" >>"${out}"
+    fi
+    _sfo_chk "pcs_quiet_sendfile_noise ... backup actually patches AND saves the copy" "${rc}" "${out}"
+    bash -c 'set -u; unset -f hostguard_mutation_allowed 2>/dev/null
+             . "$1/scripts/_portage-config-lib.sh"
+             pcs_unquiet_sendfile_noise "$2"' \
+        _ "${REPO_DIR}" "${root}" >"${out}" 2>&1
+    { cmp -s "${fc}" "${sfo}/pristine.py" \
+        && [ -z "$(find "${root}" -name '*.hugmesh-orig' -print -quit)" ]; }; rc=$?
+    _sfo_chk "pcs_unquiet_sendfile_noise restores byte-exactly and leaves no residue" "${rc}" "${out}"
+    # fail-closed: a silently skipped (or added) check trips one failure
+    if [ $((SFO_PASS + SFO_FAIL)) -ne "${SFO_EXPECTED}" ]; then
+        _fail SFO "completeness" "$((SFO_PASS + SFO_FAIL))/${SFO_EXPECTED} checks ran"
+        SFO_FAIL=$((SFO_FAIL + 1))
+    fi
+}
+
+# ── image-side identity artefacts (BCF) ─────────────────────────────────────────
+# Two writer<->reader contracts that both failed SILENTLY — a wrong image, a green build:
+#   (a) brand.conf. build-x86-host-stage4.sh writes BRAND_NAME/BRAND_TITLE/ACCENT_COLOR
+#       into the image-side brand.conf; specs/usr/sbin/hugmesh-branding reads it with the
+#       STRICT KEY=VALUE parser at :83 ("never dot-source"), whose _load_brand_conf strips
+#       ONE layer of surrounding quotes and then takes the value LITERALLY — it never
+#       unescapes a backslash. The writer used `printf %q`, justified by a comment that
+#       claimed the file was dot-sourced. Measured consequence, the real applier over a
+#       staged sysroot: GRUB_DISTRIBUTOR="Gentoo\ Linux", theme.txt
+#       title-text: "Gentoo\ Linux", wallpaper Name=Gentoo\ Linux — the BOOT SCREEN — and
+#       ACCENT_COLOR arriving as \#4d7fd6, which _norm_accent rejects, silently discarding
+#       the operator's --accent-color. So: feed a brand.conf written by THE BUILDER'S OWN
+#       emitter through THE APPLIER'S OWN parser, both EXTRACTED verbatim, and assert the
+#       values come back byte-identical. Neither side can drift alone without failing here.
+#   (b) the two modprobe.d drop-ins. --unaffiliated's usage text promises "no hugmesh-*
+#       tools or /etc/hugmesh markers", but harden_radios' single call site has NO
+#       unaffiliated gate (and it truncates its file unconditionally, so the file — and
+#       the name — exists even with both radios ON), and the nouveau blacklist is gated
+#       only on the NVIDIA driver, which `--role standalone-unaffiliated --gpu-driver
+#       nvidia` legitimately selects. Assert BOTH arms of the name pair still exist and
+#       that no write site spells a hugmesh-* modprobe.d path literally any more.
+# FAIL-CLOSED: 6 expected (2 extraction + 1 round-trip + 3 neutral-name).
+BCF_EXPECTED=6
+BCF_PASS=0; BCF_FAIL=0
+run_brandconf_fidelity_checks() {
+    local out="${TMP_DIR}/bcf.out" x86=build-x86-host-stage4.sh
+    local applier="${REPO_DIR}/specs/usr/sbin/hugmesh-branding"
+    local w="${TMP_DIR}/bcf"; rm -rf "${w}"; mkdir -p "${w}"
+    # (a) ROUND-TRIP. Both halves are EXTRACTED, never re-typed: _brand_conf_kv from the
+    #     builder and _load_brand_conf from the applier. A future edit to either that
+    #     breaks the contract fails here rather than on the operator's boot screen.
+    awk '/^    _brand_conf_kv\(\) \{/,/^    \}$/' "${x86}" | sed 's/^    //' >"${w}/emit.sh"
+    awk '/^_load_brand_conf\(\) \{/,/^\}$/' "${applier}" >"${w}/load.sh"
+    local half
+    for half in emit load; do
+        if [ ! -s "${w}/${half}.sh" ]; then
+            printf 'could not extract %s (the function was renamed or reshaped)\n' "${half}" >"${out}"
+            _fail BCF "extract-${half}" "half of the writer<->reader pair is missing" "${out}"
+            BCF_FAIL=$((BCF_FAIL+1))
+        else
+            BCF_PASS=$((BCF_PASS+1))
+        fi
+    done
+    if [ -s "${w}/emit.sh" ] && [ -s "${w}/load.sh" ]; then
+        # Values chosen to be the exact shapes printf %q mangled: a space, and a leading #.
+        if bash -c '
+            set -u
+            err() { printf "ERROR: %s\n" "$*" >&2; }
+            warn() { printf "WARN: %s\n" "$*" >&2; }
+            . "$1/emit.sh"
+            {   echo "# written by the builder emitter, extracted verbatim"
+                _brand_conf_kv BRAND_NAME   "gentoo"
+                _brand_conf_kv BRAND_TITLE  "Gentoo Linux"
+                _brand_conf_kv ACCENT_COLOR "#4d7fd6"
+            } > "$1/brand.conf"
+            . "$1/load.sh"
+            BRAND_NAME=x; BRAND_TITLE=x; ACCENT_COLOR=x; COLOR_SCHEME_NAME=x
+            _load_brand_conf "$1/brand.conf"
+            rc=0
+            [ "${BRAND_NAME}"   = "gentoo" ]       || { echo "BRAND_NAME came back as [${BRAND_NAME}]"; rc=1; }
+            [ "${BRAND_TITLE}"  = "Gentoo Linux" ] || { echo "BRAND_TITLE came back as [${BRAND_TITLE}] — the writer emitted something this reader does not unescape"; rc=1; }
+            [ "${ACCENT_COLOR}" = "#4d7fd6" ]      || { echo "ACCENT_COLOR came back as [${ACCENT_COLOR}] — _norm_accent REJECTS this and silently uses the default"; rc=1; }
+            case "${BRAND_TITLE}${ACCENT_COLOR}" in *\\*) echo "a BACKSLASH survived the read — this is the printf %q defect"; rc=1 ;; esac
+            [ "${rc}" -eq 0 ] || cat "$1/brand.conf"
+            exit "${rc}"' _ "${w}" >"${out}" 2>&1
+        then
+            BCF_PASS=$((BCF_PASS+1))
+        else
+            _fail BCF "brand.conf round-trip" "the builder's emitter and the applier's parser disagree" "${out}"
+            BCF_FAIL=$((BCF_FAIL+1))
+        fi
+    else
+        BCF_FAIL=$((BCF_FAIL+1))   # keep the assertion count fixed when extraction failed
+    fi
+    # (b) NEUTRAL NAMES — one assertion per arm, plus "no literal left at a write site".
+    : >"${out}"
+    { grep -q 'MODPROBE_RADIO_CONF="gentoo-radio-blacklist.conf"' "${x86}" \
+      && grep -q 'MODPROBE_NVIDIA_CONF="gentoo-nvidia.conf"' "${x86}"; } \
+        || echo "the unaffiliated arm no longer declares neutral modprobe.d names" >>"${out}"
+    if [ -s "${out}" ]; then
+        _fail BCF "unaffiliated modprobe.d names" "missing" "${out}"; BCF_FAIL=$((BCF_FAIL+1))
+    else BCF_PASS=$((BCF_PASS+1)); fi
+    : >"${out}"
+    { grep -q 'MODPROBE_RADIO_CONF="hugmesh-radio-blacklist.conf"' "${x86}" \
+      && grep -q 'MODPROBE_NVIDIA_CONF="hugmesh-nvidia.conf"' "${x86}"; } \
+        || echo "the BRANDED arm no longer declares the historical modprobe.d names (docs/RUNNING.md documents /etc/modprobe.d/hugmesh-radio-blacklist.conf)" >>"${out}"
+    if [ -s "${out}" ]; then
+        _fail BCF "branded modprobe.d names" "drifted" "${out}"; BCF_FAIL=$((BCF_FAIL+1))
+    else BCF_PASS=$((BCF_PASS+1)); fi
+    # A write site must resolve the variable, never spell a name — that is the whole point
+    # of the pair, and it is how an ungated call site (harden_radios) stops leaking one.
+    : >"${out}"
+    grep -n 'etc/modprobe\.d/hugmesh-' "${x86}" | grep -v '^[0-9]*:[[:space:]]*#' >>"${out}" || true
+    if [ -s "${out}" ]; then
+        _fail BCF "literal hugmesh-* modprobe.d path at a write site" \
+            "must resolve \${MODPROBE_RADIO_CONF}/\${MODPROBE_NVIDIA_CONF} instead" "${out}"
+        BCF_FAIL=$((BCF_FAIL+1))
+    else
+        BCF_PASS=$((BCF_PASS+1))
+    fi
+    if [ $((BCF_PASS + BCF_FAIL)) -ne "${BCF_EXPECTED}" ]; then
+        _fail BCF "completeness" "$((BCF_PASS + BCF_FAIL))/${BCF_EXPECTED} checks ran"
+        BCF_FAIL=$((BCF_FAIL + 1))
+    fi
+}
+
 # ── walk the matrix ─────────────────────────────────────────────────────────────
 [ -f "${MATRIX}" ] || { echo "matrix.tsv not found at ${MATRIX}" >&2; exit 1; }
 
@@ -2394,11 +2732,13 @@ run_selinux_policy_checks
 run_portage_config_sync_checks
 # ── END shared block: SELinux node-policy install (SLX) ────
 run_requested_atoms_checks
+run_sendfile_ordering_checks
+run_brandconf_fidelity_checks
 run_nongating_smokes
 score_sharedbinpkg_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + EPL_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + RAR_PASS + SBP_PASS + PCS_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + EPL_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + RAR_FAIL + SBP_FAIL + PCS_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + EGB_PASS + EPL_PASS + TAXO_PASS + CAT_PASS + SLX_PASS + RAR_PASS + SBP_PASS + PCS_PASS + SFO_PASS + BCF_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + EGB_FAIL + EPL_FAIL + TAXO_FAIL + CAT_FAIL + SLX_FAIL + RAR_FAIL + SBP_FAIL + PCS_FAIL + SFO_FAIL + BCF_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -2423,7 +2763,7 @@ printf  'MENU (build_make_cmd):  %3d passed, %d failed\n' "${MENU_PASS}" "${MENU
 printf  'GUI  (--print-command): %3d passed, %d failed\n' "${GUI_PASS}"  "${GUI_FAIL}"
 printf  'JOB  (build-image.sh):  %3d passed, %d failed\n' "${JOB_PASS}"  "${JOB_FAIL}"
 printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_FAIL}"
-printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
+printf  'NEG  (flag boundary):   %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
 printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_FAIL}"
 printf  'EGB  (emerge-group banners): %3d passed, %d failed\n' "${EGB_PASS}" "${EGB_FAIL}"
 printf  'EPL  (emerge-plan preview): %3d passed, %d failed\n' "${EPL_PASS}" "${EPL_FAIL}"
@@ -2433,6 +2773,8 @@ printf  'SLX  (selinux policy install): %3d passed, %d failed\n' "${SLX_PASS}" "
 printf  'PCS  (portage-config sync): %3d passed, %d failed\n' "${PCS_PASS}" "${PCS_FAIL}"
 printf  'RAR  (requested-atoms resolvable): %3d passed, %d failed\n' "${RAR_PASS}" "${RAR_FAIL}"
 printf  'SBP  (shared-binpkg/assets, gated): %3d passed, %d failed\n' "${SBP_PASS}" "${SBP_FAIL}"
+printf  'SFO  (sendfile ordering/residue): %3d passed, %d failed\n' "${SFO_PASS}" "${SFO_FAIL}"
+printf  'BCF  (brand.conf + neutral names): %3d passed, %d failed\n' "${BCF_PASS}" "${BCF_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
 if [ -n "${SMOKE_REPORT}" ]; then
     echo "── developer smokes (informational, NOT in TOTAL — EXCEPT the"

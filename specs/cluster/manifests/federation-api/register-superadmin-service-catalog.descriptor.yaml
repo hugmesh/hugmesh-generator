@@ -22,7 +22,12 @@ metadata:
   name: superadmin-service-catalog
   # The federation-api Liquibase changeset that performs the INSERT (forward-reference,
   # mirroring optional-services.yaml's `changeset` field — the federation-api wave owns it).
-  changeset: "040-register-superadmin-service-catalog-module.xml"
+  # 042 is the next FREE number: this descriptor said 040 until 2026-08-26, but 040 had
+  # since been taken by 040-register-character-studio-module.xml (and 041 by the
+  # remote-entry rebrand), so the forward reference pointed at a name this registration
+  # could never land under. A forward reference to an occupied number is a FAIL in
+  # scripts/validate-federation-module-slugs.sh, which re-derives both sides every run.
+  changeset: "042-register-superadmin-service-catalog-module.xml"
 spec:
   # The federation_modules row this descriptor stands for. Column shape matches the
   # federation-api federation_modules registry (slug + remoteEntry + exposedModule + mountAt

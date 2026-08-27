@@ -73,8 +73,18 @@
 #   MATRIX_SERVER_NAME    default localhost    (must match up-real.sh / the
 #                                           tuwunel service's TUWUNEL_SERVER_NAME)
 #   MASTODON_URL          default http://localhost:3000
-#   E2E_PASSWORD          default e2e-pass (per-user E2E_<UPPER>_PASSWORD wins —
-#                                           the seed-accounts.sh convention)
+#   E2E_PASSWORD          GENERATED per run when unset (per-user E2E_<UPPER>_
+#                                           PASSWORD still wins — the seed-accounts.sh
+#                                           convention). See tests/stack/e2e-password.sh:
+#                                           a fresh CSPRNG value is minted the first time
+#                                           any process in this run needs one, persisted to
+#                                           ${E2E_CREDENTIALS_FILE:-<repo-root>/.e2e-credentials},
+#                                           and every other seeder in the same run (tests/
+#                                           qemu/seed-accounts.sh, bootstrap-kind.sh) loads
+#                                           that same file instead of re-deriving. The
+#                                           literal "e2e-pass" no longer exists as a default
+#                                           anywhere — printed by `make stack-seed` at the
+#                                           end of a run so it reaches the operator.
 #   SEED_WORKDIR          default tests/stack/.seed-e2e (rendered JSON + minted
 #                                           JWTs land here; gitignored)
 #   SEED_STRICT           default 0        (1 = the second-tenant WARN becomes fatal)
@@ -111,7 +121,8 @@ CASDOOR_BRAND_B_URL="${CASDOOR_BRAND_B_URL:-}"
 SYNAPSE_URL="${SYNAPSE_URL:-http://localhost:8008}"
 MATRIX_SERVER_NAME="${MATRIX_SERVER_NAME:-localhost}"
 MASTODON_URL="${MASTODON_URL:-http://localhost:3000}"
-E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}"
+# E2E_PASSWORD is resolved/generated just below, once log()/warn()/die() exist
+# (see tests/stack/e2e-password.sh's header for the full precedence chain).
 SEED_WORKDIR="${SEED_WORKDIR:-${HERE}/.seed-e2e}"
 SEED_STRICT="${SEED_STRICT:-0}"
 # SEED_CASDOOR_ONLY=1 seeds ONLY the Casdoor identity leg (org + roles + app-user-bff
@@ -136,6 +147,16 @@ SEED_COMPLETE_REGISTRATION="${SEED_COMPLETE_REGISTRATION:-0}"
 log()  { echo "[seed-e2e] $*"; }
 warn() { echo "[seed-e2e] WARN: $*" >&2; }
 die()  { echo "${PROG}: UNMET DEPENDENCY: $*" >&2; exit 2; }
+
+# GENERATE-never-require (see e2e-password.sh's header): resolves an explicit
+# override, else the run-state credentials file, else mints + persists a fresh
+# CSPRNG value — this is very likely the FIRST process in a compose run to need
+# one, so it is usually the one doing the persisting. seed-accounts.sh below
+# inherits it via the explicit E2E_PASSWORD="${E2E_PASSWORD}" on its invocation.
+# The literal "e2e-pass" no longer exists as a default anywhere in this chain.
+# shellcheck source=./e2e-password.sh
+. "${HERE}/e2e-password.sh"
+e2e_password_ensure || die "could not resolve/generate E2E_PASSWORD (see tests/stack/e2e-password.sh)"
 
 # ── Preflight: tools + the running stack, each named on failure ──────────────
 command -v curl   >/dev/null 2>&1 || die "curl is required"

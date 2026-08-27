@@ -115,25 +115,58 @@ def test_role_capable_composes_on_cloud_laptop(wiz):
     assert "--capable" in wiz.cfg.to_cli_args()
 
 
-def test_role_unaffiliated_composes_on_standalone_thin(wiz):
-    """G22: an unaffiliated standalone-thin — inexpressible before — emits the
-    composable flag, suppresses the brand plane + bundle pair, and greys the
-    BuildPage bundle-source control exactly like the dedicated role does."""
-    page = pick_role(wiz, "standalone-thin")
-    assert page.unaffiliated.isEnabled()
-    page.unaffiliated.setChecked(True)
+def test_the_unaffiliated_role_suppresses_the_brand_plane_and_bundle_pair(wiz):
+    """REWRITTEN by DECISION 2(c) (was test_role_unaffiliated_composes_on_standalone_
+    thin, which drove the composable checkbox on standalone-thin).
+
+    The operator's 2026-08-26 report is about being asked the same thing twice, and
+    "unaffiliated" had TWO spellings on one page: the dedicated role ROW in the image
+    type list, and a composable ``--unaffiliated`` checkbox below it. The role row
+    wins, so the checkbox is hidden whenever the flow is standalone — which is the
+    only mode where composing was ever legal (G22), and therefore the only mode where
+    the two spellings could collide.
+
+    Everything downstream of the choice is the valuable half of this test and is kept
+    verbatim: the brand plane and the bundle pair are suppressed, BuildPage's
+    bundle-source control is greyed and unticked with its note shown, and the preview
+    renders rather than raising. Only the ROUTE to the posture changed.
+
+    One emission difference, and it is the builder's own doing: the composable FLAG
+    emitted ``--unaffiliated``, while the role row emits ``--role standalone-
+    unaffiliated`` and the builder's role case presets the posture itself — so the
+    flag is correctly absent here (the same assertion
+    test_role_unaffiliated_checkbox_disabled_on_dedicated_role already makes)."""
+    page = pick_role(wiz, UNAFFILIATED_ROLE)
+    # DECISION 2(c): the second spelling is GONE from this mode, not merely greyed
+    assert not page.unaffiliated.isVisibleTo(page), (
+        "the composable --unaffiliated checkbox still duplicates the role row")
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert wiz.cfg.unaffiliated is True
+    assert wiz.cfg.role == UNAFFILIATED_ROLE
     assert not build.bundle_source.isEnabled()
     assert not build.bundle_source.isChecked()
     assert build.bundle_note.isVisible()
     args = wiz.cfg.to_cli_args()
-    assert "--unaffiliated" in args
+    assert "--role" in args and UNAFFILIATED_ROLE in args
+    assert "--unaffiliated" not in args, (
+        "the role arm presets the posture — emitting the flag too would be the "
+        "duplicate, one layer down")
     for flag in ("--brand", "--with-tailscale", "--no-tailscale", "--with-sso",
                  "--no-sso", "--bundle-source", "--no-bundle-source"):
         assert flag not in args
     # the preview succeeded — no conflict raised on a default identity
     assert "./build-x86-host-stage4.sh" in build.cmd.toPlainText()
+
+
+def test_the_composable_unaffiliated_checkbox_survives_where_it_explains_itself(wiz):
+    """Mutation guard for the hide above, and the reason it is a HIDE in standalone
+    only. In cloud/mesh the row stays on screen but greyed, because its tooltip is the
+    only thing that explains why an unaffiliated cloud desktop is impossible — a
+    silent disappearance there would answer the operator's question by hiding it."""
+    pick_mode(wiz, "cloud")
+    page = pick_role(wiz, "laptop")
+    assert page.unaffiliated.isVisibleTo(page)
+    assert not page.unaffiliated.isEnabled()
+    assert "unaffiliated" in page.unaffiliated.toolTip()
 
 
 def test_role_unaffiliated_checkbox_disabled_in_cloud(wiz):
@@ -439,7 +472,7 @@ def test_ask13_defaults_that_change_the_build_are_the_single_flags(wiz):
     produces?" — the question the lane brief demands be answered out loud rather than
     flipped quietly.
 
-    * live_iso     — NO. LIVE_ISO=true already (build-x86-host-stage4.sh:243); the box
+    * live_iso     — NO. LIVE_ISO=true already (build-x86-host-stage4.sh:298); the box
       now emits --live-iso explicitly where it emitted nothing, and the ISO is identical.
     * bundle_source — NO CHANGE BY THIS LANE, which is a weaker and more accurate claim
       than "the builder was already doing it": ImageConfig.bundle_source has defaulted
@@ -888,7 +921,7 @@ def test_three_arg_preflight_done_still_works(wiz):
 # The combo used to offer "all" and DEFAULT to it even for a mesh-node fleet, where the
 # graphical Calamares front-end is not merely expensive but UNBUILDABLE: its USE closure
 # (specs-x86/portage/package.use/desktop) is copied only for ROLE_CLIENT roles
-# (build-x86-host-stage4.sh:2496). A combo reading "all" on a node LIED about what the
+# (build-x86-host-stage4.sh:3438). A combo reading "all" on a node LIED about what the
 # image would get; materialize now rewrites it to "cli", and the combo must say so.
 
 def test_installer_ui_pinned_and_greyed_on_a_mesh_node(wiz):

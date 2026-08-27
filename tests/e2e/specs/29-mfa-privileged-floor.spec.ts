@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import { shot, apiContext } from './helpers';
 import { totpCode, totpCodeForStep } from './totp';
+import { sharedPassword } from './rbac-roles';
 
 // 29 — GATEWAY MFA ENFORCEMENT on the seeded mfa_required rows, end-to-end against
 // the real compose stack. First e2e coverage of the two halves that were previously
@@ -76,7 +77,8 @@ const FLOOR = process.env.MFA_FLOOR === '1';
  * wrong layer that looks like a pass of the wrong test.
  */
 const MFA_ENFORCEMENT = process.env.APP_MFA_ENABLED !== 'false';
-const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
+// Resolved/generated, never a literal (see rbac-roles.ts sharedPassword()).
+const LOGIN_PASSWORD = sharedPassword();
 
 // fe-gateway mfa_required surfaces (20-schema.sql, after its closing UPDATE):
 //   /bff/admin/**              -> ROLE_ADMIN

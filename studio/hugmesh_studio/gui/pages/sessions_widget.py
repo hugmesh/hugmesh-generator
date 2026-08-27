@@ -252,7 +252,16 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self._build_windows: list = []      # keep the non-modal windows alive
         lay.addWidget(self.table)
 
-        btns = QtWidgets.QHBoxLayout()
+        # GRID, not a single QHBoxLayout. Six buttons in one row give this group box a
+        # minimumSizeHint of 670px + margins = 724px, which exceeds the wizard's 736px
+        # medium width once the page's own margins are added — and a QWizard sizes to its
+        # WIDEST page, so one un-shrinkable row here dragged EVERY page wider,
+        # permanently. A push button will not shrink below its own text, so no amount of
+        # stretch fixes a row that is simply too long; the row has to wrap.
+        # 3 columns x 2 rows: min width becomes max-per-column (~402px), not the sum.
+        # Buttons are still exposed under the SAME attribute names, so nothing that
+        # reaches for self.restart_btn & co. (tests included) changes.
+        btns = QtWidgets.QGridLayout()
         self.restart_btn = QtWidgets.QPushButton("Restart")
         self.restart_btn.clicked.connect(self._restart)
         self.redo_btn = QtWidgets.QPushButton("Redo (edit as new)")
@@ -261,17 +270,17 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.open_btn.clicked.connect(self._open_artifacts)
         self.log_btn = QtWidgets.QPushButton("View errors/log")
         self.log_btn.clicked.connect(self._view_log)
-        for b in (self.restart_btn, self.redo_btn, self.open_btn, self.log_btn):
-            btns.addWidget(b)
-        btns.addStretch(1)
-        # destructive actions live on the right, past the stretch — a session record is a
-        # cheap unlink, artifacts a confirmed opt-in; both refuse an in-progress build.
+        # destructive actions keep their own row rather than their own side — a session
+        # record is a cheap unlink, artifacts a confirmed opt-in; both refuse an
+        # in-progress build. Separation of intent survives the reflow.
         self.delete_btn = QtWidgets.QPushButton("Delete")
         self.delete_btn.clicked.connect(self._delete)
         self.delete_all_btn = QtWidgets.QPushButton("Delete all finished…")
         self.delete_all_btn.clicked.connect(self._delete_all)
-        for b in (self.delete_btn, self.delete_all_btn):
-            btns.addWidget(b)
+        for i, b in enumerate((self.restart_btn, self.redo_btn, self.open_btn,
+                               self.log_btn, self.delete_btn, self.delete_all_btn)):
+            btns.addWidget(b, i // 3, i % 3)
+        btns.setColumnStretch(3, 1)     # keep the buttons left-packed
         lay.addLayout(btns)
         self._update_buttons()
 

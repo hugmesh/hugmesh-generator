@@ -30,13 +30,12 @@ ok(){ echo "  PASS $*"; P=$((P+1)); }
 bad(){ echo "  FAIL $*"; F=$((F+1)); }
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
 
-extract_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER}"; }
-eval "$(extract_fn _opt_selected)"
-eval "$(extract_fn _opt_drop_rows)"
-eval "$(extract_fn _opt_drop_kustomize_line)"
-type _opt_selected >/dev/null 2>&1 || { echo "  FAIL could not extract _opt_selected"; exit 1; }
-type _opt_drop_rows >/dev/null 2>&1 || { echo "  FAIL could not extract _opt_drop_rows"; exit 1; }
-type _opt_drop_kustomize_line >/dev/null 2>&1 || { echo "  FAIL could not extract _opt_drop_kustomize_line"; exit 1; }
+# The _opt_* helpers moved out of the builders into the SHARED
+# scripts/_optional-services-lib.sh on 2026-08-26. Load them the way the BUILDER
+# resolves them (its source chain, last definition wins) so a builder-local
+# override would still be the code this suite executes.
+source "${REPO}/tests/lib/opt-gate-source.sh"
+opt_gate_load "${BUILDER}" _opt_selected _opt_drop_rows _opt_drop_kustomize_line || exit 1
 
 echo "== workload-console generator unit test =="
 
@@ -265,16 +264,11 @@ seed_tree() {
 # which is exactly the drift it claims to prevent. So: extract the `workloadConsole)`
 # case body + the helper functions it calls FROM THE BUILDER, run them against a sandbox
 # tree seeded from the checked-in manifests, and assert the EFFECT.
-extract_fn_of() {  # $1 = builder, $2 = function name
-  awk "/^$2\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "$1"
-}
-extract_case_of() {  # $1 = builder, $2 = case label — body between `<label>)` and `;;`
-  awk -v lbl="$2" '
-    $0 ~ ("^[[:space:]]*" lbl "\\)[[:space:]]*$") { p=1; next }
-    p && $0 ~ /^[[:space:]]*;;[[:space:]]*$/ { exit }
-    p { print }
-  ' "$1"
-}
+# Both of these now follow the builder's SOURCE CHAIN rather than only its own
+# body, because the gate lives in scripts/_optional-services-lib.sh. Semantics are
+# unchanged for a builder that defines the function locally: last definition wins.
+extract_fn_of()   { opt_gate_extract_fn "$1" "$2"; }   # $1 = builder, $2 = function name
+extract_case_of() { opt_gate_case_body  "$1" "$2"; }   # $1 = builder, $2 = case label
 
 # Run the REAL builder's gate for one slug against ${tree}. Nothing about the prune is
 # restated here: OPTIONAL_SERVICES, _opt_selected and the case body are all the builder's.
@@ -350,9 +344,14 @@ PY
 
 # DESELECTED (default) — run the real branch of EVERY builder that has the gate
 # (discovered, not listed: a new platform builder cannot quietly opt out).
+# Discovery follows each builder's SOURCE CHAIN, not just its own body: since
+# 2026-08-26 the gate lives in the shared scripts/_optional-services-lib.sh, so
+# `grep '^gate_optional_services() {' <builder>` finds NOTHING and this loop would
+# quietly shrink to zero builders — the §8 count assertion below is what makes
+# that loud rather than vacuous.
 gate_builders=()
 for b in "${REPO}"/build-*-stage4.sh; do
-  grep -q '^gate_optional_services() {' "${b}" && gate_builders+=("${b}")
+  [ -n "$(opt_gate_extract_fn "${b}" gate_optional_services)" ] && gate_builders+=("${b}")
 done
 for b in "${gate_builders[@]}"; do
   bn="$(basename "${b}")"
@@ -747,11 +746,96 @@ fi
 # to the prune PATTERN — it matches the `rm -f` line — and a grep for the
 # `_opt_drop_kustomize_line "<file>"` call ignores the pattern argument entirely, which
 # is the only argument that decides whether the kustomization line goes.)
-grep -qE "for slug in .*workloadConsole" "${BUILDER}" && ok "builder render loop includes workloadConsole" || bad "render loop missing workloadConsole"
+# COMMENT-STRIPPED, AND — the real assertion — RUN AGAINST A TREE.
+# The first version of this check piped the extracted function body straight into
+# `grep -E "for slug in .*workloadConsole"`. MEASURED (2026-08-26, adversarial
+# review): dropping workloadConsole from the render loop in the shared lib while
+# leaving a comment line
+#     # NOTE: for slug in ... workloadConsole ... (documented, not executed)
+# in the same function left this suite at 55 passed / 0 failed. Deleting only the
+# comment turned the SAME breakage red. The comment alone was the guard — the exact
+# comment-token inversion this repo has been bitten by four times, and the rule this
+# unit's own commit message claims every check honours. The mutation is real
+# breakage: workloadConsole stops being written into the installed-services
+# ConfigMap and into the 13a ApplicationSet element.
+#
+# So: strip comments first, and then assert the POST-CONDITION — render the real
+# function against a seeded ConfigMap + 13a pair, selected and deselected, and read
+# the resulting bytes. A grep cannot tell you the loop ran; these bytes can.
+opt_gate_extract_fn "${BUILDER}" _opt_render_installed_services | sed -e 's/#.*$//' \
+  | grep -E "for slug in .*workloadConsole" >/dev/null \
+  && ok "builder render loop includes workloadConsole (comment-stripped)" \
+  || bad "render loop missing workloadConsole (comment-stripped: a comment naming it does not count)"
+
+# POST-CONDITION: the render loop actually writes workloadConsole's flag into BOTH
+# artefacts. Seeded from the checked-in specs/cluster files, rendered by the REAL
+# function as ${BUILDER} resolves it.
+CM_SRC="${REPO}/specs/cluster/manifests/policy/installed-services-configmap.yaml"
+APPSET_SRC="${REPO}/specs/cluster/apps/13a-optional-services.yaml"
+if [ ! -f "${CM_SRC}" ] || [ ! -f "${APPSET_SRC}" ]; then
+  bad "installed-services ConfigMap / 13a ApplicationSet fixture missing — the render post-condition would be vacuous"
+else
+  render_flags() {  # $1 = OPTIONAL_SERVICES ; $2 = destination root -> renders both artefacts
+    local sel="$1" root="$2"
+    rm -rf "${root}"; mkdir -p "${root}/var/lib/hugmesh/cluster/manifests/policy" \
+                               "${root}/var/lib/hugmesh/cluster/apps"
+    cp "${CM_SRC}"     "${root}/var/lib/hugmesh/cluster/manifests/policy/"
+    cp "${APPSET_SRC}" "${root}/var/lib/hugmesh/cluster/apps/"
+    (
+      set -uo pipefail
+      info(){ :; }; warn(){ :; }
+      SYSROOT="${root}"; ENV="test"; OPTIONAL_SERVICES="${sel}"
+      # 20-gateway-fe.yaml and the CR seed are deliberately NOT seeded: both callees
+      # return 0 on a missing file, so this exercises the render loop alone.
+      # DERIVE the whole gate function set instead of naming it. This list was
+      # hand-written and it rotted the moment the 13a cut-over guard landed:
+      # _opt_render_appset_flag calls _opt_appset_cutover_done and
+      # _opt_appset_element_path, neither of which was named here, so both died as
+      # `command not found` -- to stderr, unchecked -- and the render loop then left
+      # the 13a element false while the suite went on reporting a verdict. That is the
+      # third time in this file family that a hand-maintained function list has silently
+      # under-loaded; opt_gate_load_all fails LOUDLY when the derivation yields zero.
+      opt_gate_load_all "${BUILDER}" || exit 3
+      _opt_render_installed_services
+    )
+  }
+  cm_flag() {  # $1 = root ; $2 = slug -> true|false|MISSING
+    local v; v="$(grep -E "^[[:space:]]*$2:[[:space:]]*\"(true|false)\"" \
+         "$1/var/lib/hugmesh/cluster/manifests/policy/installed-services-configmap.yaml" \
+         2>/dev/null | head -1 | grep -oE '(true|false)')"
+    echo "${v:-MISSING}"
+  }
+  appset_flag() {  # $1 = root ; $2 = slug -> true|false|MISSING
+    local v; v="$(grep -oE "\{[[:space:]]*slug:[[:space:]]*$2[[:space:]]*,.*installed:[[:space:]]*\"(true|false)\"" \
+         "$1/var/lib/hugmesh/cluster/apps/13a-optional-services.yaml" 2>/dev/null \
+         | head -1 | grep -oE 'installed:[[:space:]]*"(true|false)"' | grep -oE '(true|false)')"
+    echo "${v:-MISSING}"
+  }
+  # workloadConsole itself has NO element in apps/13a-optional-services.yaml — it is
+  # not one of that generator's slugs — so `_opt_render_appset_flag workloadConsole` is
+  # a no-op by design and there is no 13a byte to assert for it. `games` rides the SAME
+  # loop and DOES have an element, so it is flipped alongside workloadConsole in each
+  # case: that keeps the loop's OTHER effect (the 13a render) under an absolute
+  # assertion here too, instead of assuming it.
+  for _case in "selected|akkoma games workloadConsole|true" "deselected|akkoma|false"; do
+    IFS='|' read -r _lbl _sel _want <<< "${_case}"
+    _root="${WORK}/render-${_lbl}"
+    if render_flags "${_sel}" "${_root}"; then
+      [ "$(cm_flag "${_root}" workloadConsole)" = "${_want}" ] \
+        && ok "render loop [${_lbl}]: installed-services ConfigMap workloadConsole \"${_want}\"" \
+        || bad "render loop [${_lbl}]: ConfigMap workloadConsole is $(cm_flag "${_root}" workloadConsole), expected ${_want}"
+      [ "$(appset_flag "${_root}" games)" = "${_want}" ] \
+        && ok "render loop [${_lbl}]: the SAME loop rendered the 13a element for games \"${_want}\"" \
+        || bad "render loop [${_lbl}]: 13a element games is $(appset_flag "${_root}" games), expected ${_want} (a repo-synced ArgoCD reads THIS byte)"
+    else
+      bad "render loop [${_lbl}]: _opt_render_installed_services did not run"
+    fi
+  done
+fi
 [ "${#gate_builders[@]}" -ge 2 ] && ok "found ${#gate_builders[@]} builders with gate_optional_services" \
   || bad "expected >=2 builders with gate_optional_services, found ${#gate_builders[@]}"
 for b in "${gate_builders[@]}"; do
-  grep -qE "^[[:space:]]*workloadConsole\)[[:space:]]*$" "${b}" \
+  [ -n "$(opt_gate_case_body "${b}" workloadConsole)" ] \
     && ok "$(basename "${b}") carries the workloadConsole gate case" \
     || bad "$(basename "${b}") has gate_optional_services but NO workloadConsole case"
 done

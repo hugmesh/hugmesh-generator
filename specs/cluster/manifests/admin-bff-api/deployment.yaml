@@ -518,6 +518,38 @@ spec:
             # Where the optional-services reconciler writes its policy objects: the
             # deployed namespace is hugmesh-policy (namespaces/namespaces.yaml).
             - { name: APP_OPTIONAL_SERVICES_RECONCILE_POLICY_NAMESPACE, value: "hugmesh-policy" }
+            # ── THE OPTIONAL-SERVICES RECONCILER MASTER SWITCH (GitOps-only) ──
+            # app.optional-services.reconcile.enabled. Until this line existed the
+            # flag appeared EXACTLY ONCE in the whole platform — as the ":false"
+            # default of ${APP_OPTIONAL_SERVICES_RECONCILE_ENABLED} in the BFF's own
+            # application.yml — and was set by no manifest, no builder, no brand.conf
+            # and no CLI flag. A feature with no reachable lever is not opt-in, it is
+            # unreachable: `kubectl set env` against this Deployment is REVERTED on
+            # the next selfHeal pass of apps/31-admin-bff-api.yaml (automated:
+            # {prune:true,selfHeal:true}). Declaring it HERE is the lever: this file
+            # is the single source, and flipping the value below to "true" is a
+            # one-line reviewed commit that ArgoCD syncs and then ENFORCES.
+            #
+            # WHY IT STAYS "false" (the default is NOT flipped, deliberately):
+            # turning the reconciler on makes it authoritative over the WHOLE closed
+            # slug set on its very first tick — a known slug with NO OptionalService
+            # CR is reconciled to false. The seed CRs ship akkoma/tuwunel/phpbb
+            # enabled:true, and apps/30-akkoma.yaml, apps/30-tuwunel.yaml and
+            # apps/30-phpbb.yaml are STILL hardcoded Applications, so the very first
+            # lit tick makes the 13a ApplicationSet create optional-akkoma /
+            # optional-tuwunel / optional-phpbb that DOUBLE-MANAGE manifests a
+            # hardcoded Application already owns — two ArgoCD Applications fighting
+            # over one manifest directory on every live mesh at once. That is the
+            # hardcoded-app CUT-OVER (docs/OPTIONAL-SERVICES.md §10), and it is the
+            # precondition for flipping this, not a follow-up to it.
+            #
+            # WHY THERE IS NO ignoreDifferences FOR IT: see the block in
+            # apps/31-admin-bff-api.yaml. Short version — ArgoCD addresses env vars
+            # by ARRAY INDEX, so the only pointer that could exempt this one var is
+            # positional and silently starts exempting a DIFFERENT variable the next
+            # time anything is inserted above it. The per-slug toggles are the
+            # runtime surface (the OptionalService CRs); this master switch is not.
+            - { name: APP_OPTIONAL_SERVICES_RECONCILE_ENABLED, value: "false" }
             # ── A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled) — GO-LIVE ──
             # Platform-wide rollout: a FRESH bff_session MFA stamp becomes a co-equal,
             # license-independent step-up satisfier alongside the existing token-based
