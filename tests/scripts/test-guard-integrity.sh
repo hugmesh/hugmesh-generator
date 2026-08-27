@@ -152,7 +152,25 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     142 of 164 suites are named by a pull_request-triggered workflow
 # The ungated SET is unchanged at 22 -- which is the check that proves the new
 # suite is gated rather than merely counted.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated. Small, but
+# recorded for the same reason as the reconciliations above: this branch expected
+# 142 and main said 141, and the only number worth writing down is the one MEASURED
+# on the merged tree. It happened to agree with the branch this time; the previous
+# entries in this block are all cases where it did not.
+#
+# 142 / 143 -> 144, denominator 164 / 165 -> 165, when the two met.
+# BOTH blocks above are kept, for the reason this file already gives twice: each
+# records a real reconciliation, and deleting either erases why a number moved.
+# The two sides are INDEPENDENT +1s over a shared 141 -- main gated
+# test-e2e-enumeration-without-credentials.sh, this branch gates
+# test-console-posture-and-inventory.sh -- so neither side's number is true of a
+# tree that has both. Ninth and tenth values written into this line by sides that
+# each believed theirs. MEASURED on the merged tree, by running this file:
+#     144 of 165 suites are named by a pull_request-triggered workflow
+# and by nothing else. The ungated SET also moved, 22 -> 21, and that is main's
+# doing rather than this branch's: PR #193 gated a suite that was previously
+# listed as ungated. This branch's suite lands GATED and never enters that list.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-144}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -210,17 +228,16 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
 #   test-e2e-social-function-matrix.sh   needs node_modules + a chromium
 #   test-e2e-studio-gui-lane.sh          needs node_modules + chromium + Qt6
 #
-# THE NINTH IS DIFFERENT AND IS SAID SO OUT LOUD. tests/scripts/test-e2e-reporter-shape.sh
-# needs NOTHING but node >= 23.6 and python3 — its own header says "OFFLINE, NO
-# STACK, NO ROOT, NO node_modules", and MEASURED here with node_modules moved
-# aside it still exits 0 with 30 passed. The node:24-alpine job already installs
-# python3, so it is gateable as a one-line addition. It is recorded rather than
-# wired because this workflow's own rule is that "every suite below was EXECUTED
-# in the image named by its job before being listed here — not classified by
-# reading it", and the integration session that merged these lanes could not run
-# containers to do that. Run it in node:24-alpine, add it to that job's SUITES
-# list, and raise PREMERGE_BASELINE by one. THAT IS A REAL, NAMED FOLLOW-UP, not
-# an exemption.
+# THE NINTH WAS DIFFERENT, AND IS NOW WIRED. tests/scripts/test-e2e-reporter-shape.sh
+# needs NOTHING but node >= 23.6 and python3 -- its own header says "OFFLINE, NO
+# STACK, NO ROOT, NO node_modules". The session that merged the gherkin lanes
+# recorded it here instead of gating it because it could not run containers to
+# measure it, and named the follow-up out loud rather than dressing it up as an
+# exemption. THAT FOLLOW-UP IS NOW DONE: MEASURED in node:24-alpine under that
+# job's own apk set, with tests/e2e/node_modules absent from the tree entirely
+# rather than merely moved aside -- 30 passed, 0 failed, rc=0 -- and added to that
+# job's SUITES list. Nothing about the other eight changed; they still need a
+# node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
@@ -232,7 +249,6 @@ PREMERGE_UNGATED=(
   tests/scripts/test-e2e-func-media-games.sh
   tests/scripts/test-e2e-gherkin-harness.sh
   tests/scripts/test-e2e-governance-function-matrix.sh
-  tests/scripts/test-e2e-reporter-shape.sh
   tests/scripts/test-e2e-social-function-matrix.sh
   tests/scripts/test-e2e-studio-gui-lane.sh
   tests/scripts/test-eso-target-collisions.sh
