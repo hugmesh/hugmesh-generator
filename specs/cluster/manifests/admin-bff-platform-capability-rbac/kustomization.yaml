@@ -4,9 +4,9 @@ kind: Kustomization
 # the merged platform-capability probe needs to detect ArgoCD / Velero / x86
 # build-node presence from the in-cluster API. A cluster-read ClusterRole +
 # ClusterRoleBinding (CRDs get, Nodes list) plus namespaced read Role + RoleBinding
-# in EACH of argocd + velero (Deployments get/list). Bound to the admin-bff pod's
+# in EACH of devops + velero (Deployments get/list). Bound to the admin-bff pod's
 # backups-effector ServiceAccount. NOTHING write. NO top-level `namespace:` here —
-# the resources carry their own namespaces (argocd / velero) inline and the
+# the resources carry their own namespaces (devops / velero) inline and the
 # cluster-scoped objects must stay namespaceless; a kustomization namespace override
 # would wrongly relocate the namespaced RBAC.
 resources:

@@ -340,6 +340,8 @@ jobs:
             tests/managed-services/test-managed-services-gate.sh
             tests/node-storage/test-appset.sh
             tests/node-storage/test-node-agent.sh
+            tests/platform-capability-rbac/test-argocd-route-honesty.sh
+            tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
             tests/phone/test-phone-wizard.sh
             tests/scripts/test-appstore-effector-flags.sh
             tests/scripts/test-cassandra-cluster-wiring.sh
