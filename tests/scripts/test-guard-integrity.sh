@@ -138,12 +138,17 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
 #
-# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated. Small, but
-# recorded for the same reason as the reconciliations above: this branch expected
-# 142 and main said 141, and the only number worth writing down is the one MEASURED
-# on the merged tree. It happened to agree with the branch this time; the previous
-# entries in this block are all cases where it did not.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-143}"
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated, and
+# 141 -> 142 again, independently, when test-url-embedded-credentials.sh was gated
+# on a sibling branch. BOTH measured 142, and both were right about the tree they
+# measured and wrong about the merge: each was looking at a tree containing only
+# its OWN addition. This block exists because that keeps happening.
+#
+# The value below is MEASURED on the integrated tree, not carried over from either
+# branch — the merge measured 144, which is neither branch's 142 nor the 143 main
+# carried in. Re-run this file after any merge that adds a suite; do not reason about
+# what the number "should" be.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-144}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
