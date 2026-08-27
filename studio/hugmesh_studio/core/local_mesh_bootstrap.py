@@ -269,6 +269,16 @@ class LocalMeshBootstrapConfig:
     # proves (host ports 8001+, issuer http://casdoor-<slug>.localtest.me:<port>)
     # and threads the gateways' multi-issuer registry — see core/own_casdoor.py.
     own_idp_domains: tuple[str, ...] = ()
+    # WHICH infra Applications the DEVOPS (kind) lane adds to its curated set
+    # (core/local_services.KIND_ADDONS slugs). A SEPARATE axis from `services`:
+    # these are Kubernetes Applications, they have no compose profile and no
+    # federation row, and the docker bring-up ignores them entirely.
+    #
+    # DEFAULT None means "no picker was used" and exports nothing, so
+    # `make kind-up` runs byte-identically to before this axis existed. An EMPTY
+    # tuple is an explicit "none of them" and IS exported (as the literal `none`) —
+    # see local_services.kind_addon_env for why those two must not collapse.
+    kind_addons: tuple[str, ...] | None = None
 
     def is_prod(self) -> bool:
         return self.env == "prod"
@@ -451,7 +461,8 @@ class LocalMeshBootstrap:
                               idp_issuer=self.cfg.idp_issuer.strip(),
                               idp_client_id=self.cfg.idp_client_id.strip(),
                               idp_jwks=self.cfg.effective_idp_jwks(),
-                              own_idp_domains=self.cfg.own_idp_domains)
+                              own_idp_domains=self.cfg.own_idp_domains,
+                              kind_addons=self.cfg.kind_addons)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(

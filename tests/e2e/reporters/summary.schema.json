@@ -1,0 +1,183 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "hugmesh e2e summary.json",
+  "$comment": "THE CONTRACT, PINNED SEPARATELY FROM THE WRITER. reporters/hugmesh-reporter.ts emits this file; tests/scripts/test-e2e-reporter-shape.sh validates the emitted JSON against THIS document. Asserting on summary.json by reading summary.json back would only prove the reporter agrees with itself, so the shape lives here, where the reporter cannot reach it. Consumers: hugmesh_studio/core/e2e_catalogue.py (parse_summary + the feature tree) and the admin-ui test-reports console via admin-bff TestReportsController. additionalProperties is false EVERYWHERE on purpose: a new key must be added here deliberately, so nobody can grow the payload without the consumers being told.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tier", "runId", "result", "passed", "failed", "skipped",
+    "perRole", "perLayer",
+    "schemaVersion", "reportDir", "rootDir", "testTotals", "unexplainedSkips",
+    "perSpec", "tests", "finishedAt"
+  ],
+  "properties": {
+    "tier": {
+      "type": "string",
+      "description": "LEAN|HEAVY, from SNAP_REPORT_TIER. LEGACY KEY."
+    },
+    "runId": { "type": "string", "description": "SNAP_RUN_ID. LEGACY KEY." },
+    "result": {
+      "type": "string",
+      "enum": ["passed", "failed", "timedout", "interrupted"],
+      "description": "Playwright's FullResult.status. LEGACY KEY."
+    },
+    "passed": {
+      "type": "integer", "minimum": 0,
+      "description": "LEGACY KEY, counted per RESULT (attempt), not per test. A test that fails then passes on retry adds one here AND one to `failed`. Use testTotals for per-test counts."
+    },
+    "failed": { "type": "integer", "minimum": 0, "description": "LEGACY KEY, per RESULT." },
+    "skipped": { "type": "integer", "minimum": 0, "description": "LEGACY KEY, per RESULT." },
+    "perRole": {
+      "type": "array",
+      "description": "LEGACY PIVOT, per RESULT. Bucket 'unknown' is a real bucket: an untagged test is counted, never dropped.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "passed", "failed", "skipped"],
+        "properties": {
+          "role": { "type": "string" },
+          "passed": { "type": "integer", "minimum": 0 },
+          "failed": { "type": "integer", "minimum": 0 },
+          "skipped": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "perLayer": {
+      "type": "array",
+      "description": "LEGACY PIVOT, per RESULT.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["layer", "passed", "failed", "skipped"],
+        "properties": {
+          "layer": { "type": "string" },
+          "passed": { "type": "integer", "minimum": 0 },
+          "failed": { "type": "integer", "minimum": 0 },
+          "skipped": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "schemaVersion": {
+      "type": "integer", "minimum": 2,
+      "description": "2 = per-spec/per-test/attachments/skip-reasons. 1 was role+layer only and is no longer written."
+    },
+    "reportDir": {
+      "type": "string",
+      "description": "SNAP_REPORT_DIR as the run saw it. Attachment paths are Playwright's own and are NOT rewritten; a consumer that needs them relative resolves them against this."
+    },
+    "rootDir": {
+      "type": "string",
+      "description": "Playwright's FullConfig.rootDir. `specFile` and `perSpec[].file` are relative to it, which is the same spelling report.json's spec.file uses, so the two files JOIN."
+    },
+    "testTotals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "failed", "skipped", "total"],
+      "description": "Per TEST, final attempt winning - the counts a tree renders. NOT equal to the legacy per-RESULT totals when anything retried.",
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "unexplainedSkips": {
+      "type": "integer", "minimum": 0,
+      "description": "Skipped tests with no machine-readable reason. A surface that shows the skip count and not this one lets mystery greys hide inside explained ones."
+    },
+    "perSpec": {
+      "type": "array",
+      "description": "THE PIVOT A FEATURE TREE IS BUILT ON: one entry per spec FILE. Per TEST, final attempt.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "passed", "failed", "skipped", "total", "unexplainedSkips"],
+        "properties": {
+          "file": {
+            "type": "string", "minLength": 1,
+            "description": "Relative to rootDir, matching report.json's spec.file."
+          },
+          "passed": { "type": "integer", "minimum": 0 },
+          "failed": { "type": "integer", "minimum": 0 },
+          "skipped": { "type": "integer", "minimum": 0 },
+          "total": { "type": "integer", "minimum": 0 },
+          "unexplainedSkips": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "description": "One entry per TEST (not per attempt): result -> file -> test -> attachment.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "specFile", "title", "titlePath", "id", "line", "column", "project",
+          "role", "layer", "status", "expectedStatus", "durationMs", "retries",
+          "skipReason", "skipReasonKnown", "error", "attachments", "attempts"
+        ],
+        "properties": {
+          "specFile": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "titlePath": { "type": "array", "items": { "type": "string" } },
+          "id": { "type": "string" },
+          "line": { "type": "integer", "minimum": 0 },
+          "column": { "type": "integer", "minimum": 0 },
+          "project": { "type": "string" },
+          "role": { "type": "string", "minLength": 1, "description": "'unknown' when untagged - never absent." },
+          "layer": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["passed", "failed", "skipped"] },
+          "expectedStatus": { "type": "string" },
+          "durationMs": { "type": "integer", "minimum": 0 },
+          "retries": { "type": "integer", "minimum": 0 },
+          "skipReason": {
+            "type": "string",
+            "description": "REQUIRED, ALWAYS PRESENT. '' for a test that did not skip; for one that did it is either the test.skip()/fixme() description or the explicit unknown stand-in - never ''. An absent field reads as 'fine', which is the bug this key exists to close. The stand-in's spelling is pinned by the guard, not here."
+          },
+          "skipReasonKnown": {
+            "type": "boolean",
+            "description": "false when skipReason is the stand-in. 'skipped because LIVE_GATEWAY is unset' and 'skipped, nobody knows why' are different facts."
+          },
+          "error": { "type": "string" },
+          "attachments": {
+            "type": "array",
+            "description": "Every attempt's attachments, unioned. Retry-0 evidence is not superseded by a retry.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "contentType", "path", "retry"],
+              "properties": {
+                "name": { "type": "string" },
+                "contentType": { "type": "string" },
+                "path": { "type": "string", "description": "'' for a body-only attachment, which has no file on disk." },
+                "retry": { "type": "integer", "minimum": 0 }
+              }
+            }
+          },
+          "attempts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["retry", "status", "durationMs", "error", "skipReason", "skipReasonKnown"],
+              "properties": {
+                "retry": { "type": "integer", "minimum": 0 },
+                "status": { "type": "string", "enum": ["passed", "failed", "skipped"] },
+                "durationMs": { "type": "integer", "minimum": 0 },
+                "error": { "type": "string" },
+                "skipReason": { "type": "string" },
+                "skipReasonKnown": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "finishedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}",
+      "description": "ISO-8601 UTC. LEGACY KEY."
+    }
+  }
+}

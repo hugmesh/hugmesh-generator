@@ -3,10 +3,10 @@
 Proves the REQUIREMENT set offscreen:
 (a) a FRESH start lands on the Welcome screen: the hugmesh explainer (with the
     GitHub README getting-started link as a real, externally-opened anchor) plus
-    THREE large icon buttons in the ChoiceCard idiom;
+    TWO large icon buttons in the ChoiceCard idiom;
 (b) each button navigates to the right page id — START BUILDING -> "mode",
-    START A LOCAL MESH -> "localmesh" (raising the same transient wizard flag
-    ModePage's card raises), REVIEW PRIOR SESSIONS -> "sessions";
+    REVIEW PRIOR SESSIONS -> "sessions" — and the local-mesh journey is entered
+    from the MODE menu, which raises the transient wizard flag;
 (c) a CLICK on a card is choosing-is-proceeding (ask 14 / choice_nav), while a bare
     setChecked never navigates on its own;
 (d) the demoted sessions screen carries the Previous-builds manager + Load/Save,
@@ -60,7 +60,25 @@ def _welcome(wiz):
     return wiz.page(wiz._page_ids["welcome"])
 
 
-# ── (a) the first screen: explainer + three cards ─────────────────────────────────────
+def _mode(wiz):
+    """The ModePage — since DECISION 2(d) the ONLY door onto the local-mesh flow."""
+    return wiz.page(wiz._page_ids["mode"])
+
+
+def _pick_localmesh(mode_page):
+    """Tick ModePage's "Local Docker mesh" card the way test_local_mesh.py does.
+
+    By PROPERTY, not by index: ModePage.modes is deliberately reordered (item (e)
+    of this file's own contract), so an index would rot the moment the journey
+    order changes again."""
+    for b in mode_page.group.buttons():
+        if b.property("mode") == "localmesh":
+            b.setChecked(True)
+            return b
+    raise AssertionError("ModePage no longer offers a 'localmesh' card")
+
+
+# ── (a) the first screen: explainer + two cards ───────────────────────────────────────
 
 def test_fresh_start_lands_on_welcome(wiz):
     assert isinstance(wiz.currentPage(), wizard_mod.WelcomePage)
@@ -69,17 +87,29 @@ def test_fresh_start_lands_on_welcome(wiz):
     assert wiz.currentId() == wiz._page_ids["welcome"]
 
 
-def test_welcome_renders_three_icon_cards(wiz):
+def test_welcome_renders_two_icon_cards(wiz):
+    # DECISION 2(d) (operator, 2026-08-26: "asking same questions seemingly multiple
+    # times"): the welcome "Start a local mesh" card and ModePage's "Local Docker
+    # mesh" card were two doors onto ONE flow. The mode menu keeps it; welcome
+    # dropped it. Was three cards, is two.
     page = _welcome(wiz)
     cards = page.group.buttons()
-    assert len(cards) == 3 == len(page.choices)
-    assert [c.property("choice") for c in cards] == ["build", "localmesh", "sessions"]
+    assert len(cards) == 2 == len(page.choices)
+    assert [c.property("choice") for c in cards] == ["build", "sessions"]
     for i, card in enumerate(cards):
         assert isinstance(card, cc.ChoiceCard)
         assert page.group.button(i) is card        # id == option index (ModePage idiom)
     # default is START BUILDING, so a plain Next keeps the historical welcome -> mode
     assert page._buttons["build"].isChecked()
     assert page.isComplete()
+    # THE NEGATIVE, kept as a negative: the duplicate door is gone from every surface
+    # this page exposes — no card, no button registry entry, and (welcome.py:51-54)
+    # no routing target, because a target for a card nobody can pick would leave an
+    # unreachable branch in nextId().
+    assert "localmesh" not in page._buttons
+    assert "localmesh" not in welcome_mod._CHOICE_TARGET
+    assert "localmesh" not in welcome_mod._CHOICE_ICONS
+    assert all(c.property("choice") != "localmesh" for c in cards)
 
 
 def test_welcome_explainer_links_to_the_readme_getting_started(wiz):
@@ -102,12 +132,19 @@ def test_build_choice_advances_to_the_mode_menu(wiz):
     assert isinstance(wiz.currentPage(), wizard_mod.ModePage)
 
 
-def test_localmesh_choice_advances_to_the_local_stack_flow(wiz):
-    _welcome(wiz)._buttons["localmesh"].setChecked(True)
+def test_the_local_mesh_door_is_the_mode_menu_not_welcome(wiz):
+    # RE-POINTED by DECISION 2(d). The property this test has always pinned — that
+    # the local-mesh journey is REACHABLE and raises the transient flag — is intact;
+    # only the door moved. Welcome -> "Start building" -> mode -> "Local Docker mesh"
+    # is now the single route, one screen longer and one duplicate shorter.
+    _welcome(wiz)._buttons["build"].setChecked(True)
+    wiz.next()
+    assert wiz.currentId() == wiz._page_ids["mode"]
+    _pick_localmesh(_mode(wiz))
     wiz.next()
     assert wiz.currentId() == wiz._page_ids["localmesh"]
     assert isinstance(wiz.currentPage(), wizard_mod.LocalMeshPage)
-    # the SAME transient flag ModePage's card raises (LocalMeshPage.applies_to
+    # the SAME transient flag the welcome card used to raise (LocalMeshPage.applies_to
     # reads it) — and never persisted into cfg (cfg.mode stays an image mode)
     assert wiz.localmesh_selected is True
     assert wiz.cfg.mode in ("standalone", "cloud", "mesh")
@@ -121,15 +158,33 @@ def test_sessions_choice_advances_to_the_sessions_screen(wiz):
 
 
 def test_mode_choice_after_a_localmesh_detour_clears_the_flag(wiz):
-    # welcome -> localmesh, Back, welcome -> mode: the transient flag must not
-    # strand True (the wizard's skip-walk would otherwise stop on LocalMeshPage)
-    page = _welcome(wiz)
-    page._buttons["localmesh"].setChecked(True)
+    # mode -> localmesh, Back, mode -> standalone: the transient flag must not
+    # strand True (the wizard's skip-walk would otherwise stop on LocalMeshPage).
+    # DECISION 2(d) moved the DETOUR's start from welcome to mode; the stranding
+    # hazard it guards is unchanged, and is now wholly ModePage's to clear.
+    _welcome(wiz)._buttons["build"].setChecked(True)
     wiz.next()
+    mp = _mode(wiz)
+    _pick_localmesh(mp)
+    wiz.next()
+    assert wiz.currentId() == wiz._page_ids["localmesh"]
     wiz.back()
-    page._buttons["build"].setChecked(True)
-    wiz.next()
     assert wiz.currentId() == wiz._page_ids["mode"]
+    mp._buttons["standalone"].setChecked(True)
+    wiz.next()
+    assert wiz.localmesh_selected is False
+    assert wiz.currentId() != wiz._page_ids["localmesh"]
+
+
+def test_welcome_still_lowers_a_stranded_localmesh_flag(wiz):
+    # The card is gone but WelcomePage.validatePage STILL clears the flag, written
+    # as a constant False rather than a comparison against an id nothing can select
+    # (welcome.py:206). That is what makes a Back-navigation from ModePage's card all
+    # the way to the first screen safe: without it, a stranded True would send the
+    # very next Next into LocalMeshPage. Set it by hand — no card can raise it here.
+    page = _welcome(wiz)
+    wiz.localmesh_selected = True
+    assert page.validatePage() is True
     assert wiz.localmesh_selected is False
 
 

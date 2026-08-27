@@ -27,6 +27,7 @@ has no flow to be wrong about.
 import inspect
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -52,11 +53,13 @@ from hugmesh_studio.core.config import (                          # noqa: E402
     USER_LEVEL_SERVICES,
     default_local_user,
     external_media_applies,
+    image_class,
     flow_allows,
     home_options_allowed,
     local_login_applies,
 )
 from hugmesh_studio.core.platform_info import HostInfo             # noqa: E402
+from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS           # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                # noqa: E402
 from hugmesh_studio.gui.pages import network as network_mod        # noqa: E402
 from hugmesh_studio.gui.pages.network import (                     # noqa: E402
@@ -100,10 +103,28 @@ def wiz(qapp):
 
 def mesh(wiz, *ids):
     """Enter mesh mode and check exactly `ids` on the WorklistPage (default: one x86
-    cluster node). Returns the WorklistPage."""
+    cluster node). Returns the WorklistPage.
+
+    A checked DESKTOP-class row must also name its person, or ``validatePage`` refuses
+    the page and every ``advance_to`` past it fails with "flow stuck on WorklistPage"
+    (worklist.py: ``any(image_class("mesh", e.role) == "desktop" and not e.desktop_user)``
+    — the isComplete mirror). In the GUI the check-popup collects that pair; a test that
+    sets the check state directly bypasses the popup, so it has to seed
+    ``_desktop_people`` itself. tests/test_pages_home.py does exactly this, one line
+    inline, and cites the same operator ask (2026-08-14).
+
+    Seeded HERE, in the shared helper, rather than in each test: the three tests below
+    that use a desktop worklist were written before the person requirement landed and
+    were silently failing for want of it, which is precisely the kind of rot a per-test
+    copy invites. Only desktop-class rows are touched, so a node-only worklist is
+    byte-identical to before."""
     pick_mode(wiz, "mesh")
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, *(ids or ("omnibus.x86",)))
+    checked = check_worklist_rows(wl, *(ids or ("omnibus.x86",)))
+    for rid in checked:
+        role = rid.rsplit(".", 1)[0]
+        if image_class("mesh", role) == "desktop":
+            wl._desktop_people[rid] = ("gamer", "user")
     return wl
 
 
@@ -172,7 +193,8 @@ def test_definitely_off_reaches_the_argv_for_every_dedicated_flag(wiz):
     """The half of asks 1/4 that is not about pixels: "unchecked" must MEAN off.
 
     An unchecked box that emitted nothing would leave a brand.conf's WANT_TOR=true in
-    force (brand.conf is sourced at build-x86-host-stage4.sh:841, BEFORE the arg loop),
+    force (brand.conf is sourced at build-x86-host-stage4.sh:959, BEFORE the arg loop
+    at :891),
     so the operator would be looking at an unticked box over a running Tor onion — the
     exact ambiguity ask 1 is about, merely relocated. Every dedicated-flag service
     therefore emits its --no-<flag> arm from the default page."""
@@ -536,11 +558,11 @@ def test_user_level_services_match_both_builders():
 #
 #   * the "every user-level service" preset left games / character-studio / character-forge
 #     ENABLED and UNCHECKED (and emitted --no-character-studio) while --all-services baked
-#     all three — the --no- arms are fold-SKIPS (:1124-1130, :1140-1146 are
+#     all three — the --no- arms are fold-SKIPS (:1166-1171, :1182-1187 are
 #     `if [ "${WANT_…}" = "true" ]` with no false arm) and cannot subtract from the
-#     expansion at :1067-1069;
+#     expansion at :1106-1111;
 #   * the arriving mesh screen showed akkoma / tuwunel / phpbb UNCHECKED while
-#     `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"` (:134) built all
+#     `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"` (:141) built all
 #     three, which also made unticking `phpbb` a no-op.
 #
 # Both are "the box reads OFF, the service is ON", which is ask 1/4/23's complaint in its
@@ -808,6 +830,37 @@ def _pages(wiz):
     return {"network": net, "home": home}
 
 
+def _flow_pages(wiz):
+    """Every page the flow actually routes through from here on, WITHOUT entering
+    ProgressPage.
+
+    Written instead of a `try: advance_to(...) except AssertionError:` reachability
+    probe, which is how the caller below used to ask this question. That probe walks to
+    the END of the flow when the page it wants is absent — which is the point, but the
+    last page is ProgressPage, and ProgressPage.initializePage() calls _start_worker():
+    it spawns a real _WorklistWorker QThread and starts an actual image build. The
+    thread then outlives the wizard's teardown and Qt's qFatal fires from ~QObject
+    ("QThread: Destroyed while thread is still running"), aborting the interpreter — so
+    this whole FILE could not be run to completion on this box.
+
+    The next id is peeked with nextId() BEFORE navigating, so the walk can decline to
+    enter that page rather than entering and regretting it. Everything up to and
+    including LaunchPage is inert on arrival (ask 22 pins that the build screen
+    dispatches nothing), so stopping there costs no coverage."""
+    seen = []
+    for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
+        page = wiz.currentPage()
+        seen.append(page)
+        nxt = wiz.nextId()
+        if nxt == -1 or isinstance(wiz.page(nxt), wizard_mod.ProgressPage):
+            break
+        before = wiz.currentId()
+        wiz.next()
+        if wiz.currentId() == before:      # validatePage refused: the flow ends here
+            break
+    return seen
+
+
 def test_standalone_desktop_fields_are_unreachable_in_the_mesh_node_flow(wiz):
     """ASKS 3 and 11 together: "options for standalone desktops shouldnt appear in the
     mesh wizard" / "your login/standalone account doesnt belong on mesh builds".
@@ -827,7 +880,7 @@ def test_the_same_fields_stay_reachable_on_the_desktop_mesh_track(wiz):
     non-vacuity proof for the test above: a gate that hid these everywhere would pass it
     while deleting the flow they belong to.
 
-    A mesh worklist made entirely of desktop rows IS that track (build-rpi5-stage4.sh:998
+    A mesh worklist made entirely of desktop rows IS that track (build-rpi5-stage4.sh:1007
     sets ROLE_CLIENT=true for exactly this arm), so the login and home surfaces are still
     on screen there."""
     mesh(wiz, "rpi5-desktop.rpi5")
@@ -873,7 +926,7 @@ def test_hiding_those_fields_changes_no_argv_for_a_flow_that_never_had_them(wiz)
     a flag is a build change wearing a UI change's clothes.
 
     `--local-user <default account>` is the deliberate survivor and is asserted PRESENT:
-    the x86 builder honours --local-user on every role (build-x86-host-stage4.sh:1597),
+    the x86 builder honours --local-user on every role (build-x86-host-stage4.sh:1912),
     the field defaults to the invoking user (default_local_user()), so blanking it would
     have changed every existing mesh build."""
     mesh(wiz, "pki.x86")
@@ -1040,11 +1093,167 @@ def test_standalone_posture_is_unreachable_in_every_mesh_flow(wiz, entry):
     """
     import hugmesh_studio.gui.wizard as _wm
     mesh(wiz, entry)
-    try:
-        advance_to(wiz, _wm.RolePage)
-        reached = True
-    except AssertionError:
-        reached = False
+    reached = any(isinstance(p, _wm.RolePage) for p in _flow_pages(wiz))
     assert not reached, (
         f"RolePage became reachable on mesh({entry}) — the standalone posture is "
         "settable on a mesh image again; re-check asks 3/11/21 together")
+
+
+# =====================================================================================
+# DEFECT 6 — a HIDDEN picker still has to say "none", and say it to the BUILDER
+# =====================================================================================
+# The standalone hide (DEFECT 4) is right and stays: a client image bakes no cluster
+# GitOps tree, so a nine-row cluster-services picker on a standalone desktop is one of
+# the "same questions" the operator was asked twice. Its FIRST cut, though, emitted
+# nothing at all and justified that with a proof about ROLE_CLIENT that does not hold.
+# These three tests pin the correction from the builder's side, so a future
+# "simplification" back to `optional_services = []` fails here and not in an image.
+
+BUILDER_X86 = os.path.join(GENERATOR_DIR, "build-x86-host-stage4.sh")
+
+# A NODE role, used purely to UNMASK the plan. PLAN_OPTIONAL_SERVICES is printed as
+# `${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}"`, so on a client role
+# it reports the role's INTENT rather than the variable the build actually reads. Swapping
+# the role is sound precisely BECAUSE of the defect: every fold that resolves
+# OPTIONAL_SERVICES runs before ROLE_CLIENT is ever true, so the resolution is
+# role-independent — which is the thing under test. (test_..._before_the_role_case below
+# is what keeps that justification honest.)
+_UNMASK_ROLE = "be+gpu"
+
+
+def _plan_optional_services(argv, cwd):
+    """The OPTIONAL_SERVICES the builder REALLY resolves for `argv`, as a set.
+
+    Runs the builder's own pure resolver (--print-plan exits before the root gate, before
+    mkdir and before any fetch or sysroot write), so this is a measurement and not a model
+    of one — unlike resolve_optional_services() above, it sees --config brand profiles and
+    the WANT_<x> fold-ins for free. `cwd` matters and is required: the builder auto-detects
+    `$(pwd)/brand.conf` when no -C is given, so a test that ran in GENERATOR_DIR would
+    silently source whatever profile the checkout happens to hold."""
+    stripped, i = [], 0
+    while i < len(argv):                       # drop the role the wizard chose
+        if argv[i] == "--role":
+            i += 2
+            continue
+        stripped.append(argv[i])
+        i += 1
+    proc = subprocess.run([BUILDER_X86, "--role", _UNMASK_ROLE, *stripped, "--print-plan"],
+                          cwd=str(cwd), capture_output=True, text=True)
+    assert proc.returncode == 0, f"builder refused the argv:\n{proc.stdout}{proc.stderr}"
+    line = [l for l in proc.stdout.splitlines()
+            if l.startswith("PLAN_OPTIONAL_SERVICES=")]
+    assert len(line) == 1, proc.stdout
+    value = line[0].split("=", 1)[1].strip()
+    return set() if value == "none" else set(value.split())
+
+
+def _services_profile(tmp_path, body):
+    """A brand profile (-C) carrying nothing but a services selection."""
+    conf = tmp_path / "services-only.conf"
+    conf.write_text(body + "\n", encoding="utf-8")
+    return conf
+
+
+def test_the_client_role_overrides_cannot_fire_before_the_role_case():
+    """THE MUTATION GUARD for the false proof, asserted against the builder's own text.
+
+    The hide's first justification was that build-x86-host-stage4.sh drops --with-tor /
+    --with-character-studio / --with-character-forge / --with-edge-ai-tts / --with-edge-ai
+    itself on a client role, so Studio's --no-<x> overrides were redundant. Every one of
+    those five guards reads ${ROLE_CLIENT} BEFORE the role case that assigns it, so all
+    five are dead on arrival. Pinned by ORDER rather than by line number so it survives the
+    builder moving (and so a fix that reorders the builder makes this test say so)."""
+    src = open(BUILDER_X86, encoding="utf-8").read().splitlines()
+
+    def line_of(needle, occurrence=0):
+        hits = [i + 1 for i, l in enumerate(src) if needle in l]
+        assert len(hits) > occurrence, f"builder no longer contains {needle!r}"
+        return hits[occurrence]
+
+    guards = {
+        "--with-edge-ai":          line_of("if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then"),
+        "--with-tor":              line_of('if [ "${WANT_TOR}" = "true" ] && ${ROLE_CLIENT}; then'),
+        "--with-character-studio": line_of('if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then'),
+        "--with-character-forge":  line_of('if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then'),
+        "--with-edge-ai-tts":      line_of('if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then'),
+    }
+    reset = line_of("ROLE_CLIENT=false            # true for person-device desktop roles")
+    first_true = min(i + 1 for i, l in enumerate(src) if "ROLE_CLIENT=true" in l)
+    for flag, at in sorted(guards.items(), key=lambda kv: kv[1]):
+        assert at < reset, (
+            f"the {flag} client guard at :{at} now runs AFTER the ROLE_CLIENT reset at "
+            f":{reset} — the builder may have been fixed. If ROLE_CLIENT is genuinely "
+            "true there, the hide in gui/pages/network.py can stop emitting the --no-<x> "
+            "overrides; re-measure with --print-plan before changing anything.")
+    assert reset < first_true, (
+        f"ROLE_CLIENT=true now appears at :{first_true}, before the reset at :{reset}")
+
+
+def test_a_hidden_picker_cannot_inherit_a_brand_profiles_services(wiz, tmp_path):
+    """THE DEFECT, measured end to end through the REAL builder.
+
+    The "Brand profile (-C)" row is still offered on standalone-thin/thick/chromebook, and
+    brand.conf is sourced BEFORE the arg loop — so with the picker hidden and emitting
+    nothing, the profile became the selection. `tor` is the slug that makes it concrete:
+    the PKGS line `_opt_selected tor && PKGS="${PKGS} net-vpn/tor"` carries NO ROLE_CLIENT
+    guard (unlike its runlevel neighbour), so a leaked slug really does emerge net-vpn/tor
+    into a standalone desktop image that never carried it."""
+    profile = _services_profile(tmp_path, 'OPTIONAL_SERVICES="akkoma tor"')
+    # the control: this profile really does decide the build when nothing overrides it
+    assert _plan_optional_services([], tmp_path) == {"akkoma", "tuwunel", "phpbb"}
+    assert _plan_optional_services(["--config", str(profile)], tmp_path) == {"akkoma", "tor"}
+
+    pick_role(wiz, "standalone-thick")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_box.isVisible(), "the hide itself is gone — wrong defect"
+    net.brand_profile.setText(str(profile))
+    advance_to(wiz, wizard_mod.SystemPage)          # Next past Network collects
+    argv = wiz.cfg.to_cli_args()
+    assert ("--config", str(profile)) in pairs(argv), "the profile never reached the argv"
+    assert _plan_optional_services(argv, tmp_path) == set(), (
+        "a standalone desktop inherited services from a brand profile the operator was "
+        f"never shown a picker for. argv: {' '.join(argv)}")
+
+
+def test_the_hidden_pickers_none_also_beats_the_WANT_x_fold_ins(wiz, tmp_path):
+    """The SECOND channel, and why `--optional-services ""` alone is not the whole fix.
+
+    A profile can select a service two ways: OPTIONAL_SERVICES (answered by the explicit
+    none) and WANT_<x>=true, which folds the slug in AFTER the arg loop has run — so the
+    allow-list flag cannot reach it and only the per-service --no-<x> can. Measured:
+
+        --config <WANT_TOR=true …>                          -> …tor character-studio
+        --config <…> --optional-services ""                  -> tor character-studio
+        --config <…> --optional-services "" --no-tor
+                     --no-character-studio                   -> none
+    """
+    profile = _services_profile(
+        tmp_path, 'WANT_TOR=true\nWANT_CHARACTER_STUDIO=true')
+    assert _plan_optional_services(["--config", str(profile)], tmp_path) >= {
+        "tor", "character-studio"}
+    assert _plan_optional_services(
+        ["--config", str(profile), "--optional-services", ""], tmp_path) == {
+            "tor", "character-studio"}, (
+        "the allow-list flag alone closed the WANT_<x> channel — re-check whether the "
+        "--no-<x> tokens are still load-bearing before trimming them from the hide")
+
+    pick_role(wiz, "standalone-thick")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    net.brand_profile.setText(str(profile))
+    advance_to(wiz, wizard_mod.SystemPage)
+    argv = wiz.cfg.to_cli_args()
+    assert _plan_optional_services(argv, tmp_path) == set(), (
+        f"WANT_<x>=true survived the hidden picker. argv: {' '.join(argv)}")
+
+
+def test_the_added_no_flags_are_inert_without_a_profile(wiz, tmp_path):
+    """The other half of "hiding a control must not change the build": with no profile in
+    play the tokens the hide now emits are byte-for-byte the same build as emitting none
+    of them. Without this, the fix above could be closing the leak by simply subtracting
+    services from every standalone image."""
+    bare = _plan_optional_services([], tmp_path)
+    with_offs = _plan_optional_services(
+        ["--no-tor", "--no-character-studio", "--no-character-forge", "--no-edge-ai-tts"],
+        tmp_path)
+    assert bare == with_offs == set(BUILTIN_DEFAULT_SERVICES), (
+        f"the definitely-off flags are not inert: {sorted(bare)} vs {sorted(with_offs)}")

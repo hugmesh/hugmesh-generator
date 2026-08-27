@@ -46,11 +46,118 @@
 #     route-access rows). Driven by OPTIONAL_SERVICES (brand.conf) +
 #     --optional-services (CLI). Precedence: built-in default (all on) <
 #     brand.conf < CLI flag.
+#   * BUILD-TIME (federation half): _opt_render_federation_modules() in the SHARED
+#     scripts/_optional-services-lib.sh (sourced by both stage4 builders) reads each
+#     service's `federationModule.slug` below and renders
+#     manifests/federation-modules-gate/sql/gate.sql — one
+#     `UPDATE federation_modules SET enabled = <bool> WHERE slug = '<module>';` per
+#     gated module, applied on-cluster by a PostSync hook Job. THIS FIELD WAS DEAD
+#     UNTIL 2026-08-26: a USB built with `--exclude-services akkoma` pruned every
+#     artefact the gate owns AND rendered installed:"false" in both places, and the
+#     host shell still showed the Mastodon entry — because the shell resolves its
+#     remotes from `federation_modules` (GET /api/federation/capabilities), which the
+#     selection never touched. The mapping is NOT 1:1 (phpbb -> forum), which is why
+#     it is declared here and never re-derived from the catalogue slug. See
+#     docs/OPTIONAL-SERVICES.md §3.1. ⚠ This is the MENU-VISIBILITY half only; the
+#     Deployment of a deselected service keeps running.
 #   * RUNTIME (model): rendered into the installed-services ConfigMap
 #     (manifests/policy/installed-services-configmap.yaml) that the
 #     13-service-catalog-style optional-services ApplicationSet keys off, so a
 #     live add/remove flips ONE list instead of editing baked files the running
 #     ArgoCD never re-reads (see docs/OPTIONAL-SERVICES.md, "Runtime add/remove").
+#
+# ── `tier:` — USER-LEVEL vs INFRA (added 2026-08-26) ─────────────────────────
+# Every row now carries `tier: user-level | infra`. Until this key landed the
+# split existed in FOUR hand-maintained copies and NOWHERE in the registry:
+#   * build-x86-host-stage4.sh:127   USER_LEVEL_SERVICES="akkoma tuwunel phpbb
+#                                    games owncast tube character-studio character-forge"
+#   * build-rpi5-stage4.sh:232       (byte-identical line)
+#   * studio/hugmesh_studio/core/config.py  OPTIONAL_SERVICES_CHOICES  (the same 8)
+#   * studio/hugmesh_studio/core/config.py  INFRA_SERVICES_CHOICES     (4 of the 11)
+# The MECHANICAL meaning of the tier — the only one any code acts on — is:
+#   user-level = a member of USER_LEVEL_SERVICES, i.e. what the `all` sentinel
+#                (OPTIONAL_SERVICES=all / --all-services) expands to.
+#   infra      = everything else: NOT expanded by `all`, so it can only be baked
+#                by naming the slug (or via a dedicated --with-<x> flag).
+# So `tier` is not a taste judgement about who the service is "for" — edge-ai is
+# user-facing and still tier: infra, because `all` does not take it. Studio's
+# INFRA_SERVICES_CHOICES is a strict SUBSET of tier: infra (the 4 slugs the rpi5
+# wizard currently offers), NOT its complement; do not treat the two as equal.
+# tests/stack/test-optional-services-exclude.sh DERIVES the user-level set from
+# this key and asserts set-equality against both builders' USER_LEVEL_SERVICES
+# string, so the copies above can no longer drift apart silently.
+#
+# ── `gate:` — WHAT ACTUALLY READS THIS ROW, and the vacuity hazard ───────────
+# ⚠️ THE FAILURE MODE THIS KEY EXISTS TO STOP: a registry row that NOTHING READS.
+# That already happened here. `headwind` sat in BOTH builders' hardcoded
+# _opt_render_installed_services() render loops with NO matching key in
+# manifests/policy/installed-services-configmap.yaml — so the sed renderer, which
+# rewrites an EXISTING `<slug>: "true|false"` line in place, matched nothing,
+# changed nothing, and returned 0. It was a silent no-op for weeks. The backfill
+# note is still in that ConfigMap above the `headwind: "false"` key it added.
+# The lesson: presence in a list proves nothing; only a CONSUMER does.
+#
+# Every row therefore declares which consumer gates it:
+#   gate: build-time  gate_optional_services() in build-{x86-host,rpi5}-stage4.sh
+#                     has a `case` arm for this slug that prunes what it owns.
+#                     (Most of these ALSO carry a ConfigMap key + 13a element.)
+#   gate: runtime     DELIBERATELY no build-time prune arm: the slug ships no
+#                     bootstrap Application at all, so there is nothing to prune.
+#                     It is created/removed by flipping its `<slug>` key in the
+#                     installed-services ConfigMap + the matching element in
+#                     apps/13a-optional-services.yaml. (coturn/meshbridge/anubis.)
+#   gate: none        NOTHING reads this row yet. REQUIRES a `gateReason:` saying
+#                     why, in prose. This is the honest spelling of "registered
+#                     but not yet selectable" — and the builders REFUSE such a
+#                     slug on --optional-services rather than ignoring it.
+#
+# tests/stack/test-optional-services-exclude.sh checks this BIDIRECTIONALLY, and
+# it DERIVES the consumer set from the shipped files rather than restating a list:
+#   * gate: build-time => a `case` arm for the slug really exists in a builder
+#   * gate: runtime    => a ConfigMap key AND a 13a element exist, and NO build arm
+#   * gate: none       => NO build arm, NO ConfigMap key, NO 13a element, AND a
+#                        non-empty gateReason
+# Adding a row with no consumer and no `gate: none` turns that suite RED, which
+# is the whole point: registry growth now has to prove itself.
+#
+# ── buildGate: — WHICH BUILDER CAN HONOUR `--optional-services <slug>` ────────
+# `gate:` above answers "does ANYTHING read this row, ANYWHERE". That is NOT the
+# question `--optional-services` has to answer, and conflating the two is how a
+# flag gets accepted and dropped on the floor: `gate: runtime` says in as many
+# words that there is NO build-time consumer, so `--optional-services coturn`
+# could never bake coturn — yet a validator gating on `gate: != none` accepts it
+# and returns an affirmative signal to the operator. The two builders CAN also
+# diverge, and did: anubis once had a build-time consumer in build-rpi5-stage4.sh
+# (_opt_anubis_installed renders its ConfigMap key + 13a element from the
+# selection) and NONE in build-x86-host-stage4.sh, and a union-of-both-builders
+# consumer set cannot see that. The gate now lives in ONE sourced library
+# (scripts/_optional-services-lib.sh) so that particular divergence is closed —
+# but the column stays PER BUILDER, because the constants each builder feeds the
+# shared gate (SELECTABLE_OPTIONAL_SERVICES) still differ and a future arm added
+# to one builder would re-open it.
+#
+# So each row also declares, per builder, whether THAT builder reads the slug out
+# of the build-time selection:
+#   buildGate: [rpi5, x86]  both builders gate it (a gate_optional_services case
+#                           arm and/or a render loop driven by _opt_selected)
+#   buildGate: [rpi5]       rpi5 only — no row is in this state today (anubis was,
+#                           until the shared-gate extraction gave x86 the same
+#                           ENV-conditional handling; see its row)
+#   buildGate: []           NO builder bakes it. Either runtime-only (coturn,
+#                           meshbridge: flip the installed-services ConfigMap key
+#                           + the 13a element on a LIVE cluster) or `gate: none`.
+# A builder's slug validator gates on ITS OWN buildGate column, so a slug it
+# cannot honour is REFUSED with the reason, never accepted-and-ignored. The suite
+# derives each builder's real consumer set SEPARATELY (never a union) and asserts
+# it set-equals this column, so porting anubis to x86 — or dropping a case arm
+# from one builder — is a red test, not a silent divergence.
+#
+# ── DELIBERATELY NOT REGISTERED (see spec.notRegistered at the foot of this file)
+# Three cluster apps an operator might reasonably expect here are excluded ON
+# PURPOSE, each for a different reason (always-on / already selectable on another
+# axis). They are listed in `spec.notRegistered` with those reasons so the next
+# person does not "fix" the omission by adding a second spelling of a service that
+# already has one.
 #
 # EDIT THIS ONE FILE; the generator derives the rest. Keep it in sync with the
 # reserved-prefixes.yaml labels (games/forum/phpbb/mastodon/matrix are already
@@ -67,8 +174,10 @@
 #     BOTH.
 #   * The gateway image's baked CanonicalSeed.java floor (hugmesh-GATEWAY
 #     repo) must match the pruned route-access rows or the in-image snapshot
-#     re-enforces removed rows on datastore fallback. That is a SEPARATE repo /
-#     image rebuild — tracked as a TODO for the gateway wave, NOT pruned here.
+#     re-enforces removed rows on datastore fallback. The gateway-wave rebuild
+#     landed — CanonicalSeed.java is in sync with the current route-access rows
+#     (including games) — but it cannot be GitOps-pruned, so any FUTURE
+#     route-access change still needs a matching gateway image rebuild.
 #   * 45-social-ui.yaml serves BOTH the matrix + mastodon micro-frontends from
 #     one app, so it is SHARED — it is NOT owned by akkoma or tuwunel alone and
 #     is left in place (the UI greys the absent platform via the federation
@@ -86,6 +195,9 @@ spec:
       displayName: "Akkoma (Mastodon)"
       namespace: hugmesh-backend
       default: on
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       # ArgoCD Application YAMLs this slug OWNS (pruned when deselected). The
       # shared social-ui is listed under sharedApps, NOT here.
       apps:
@@ -111,7 +223,14 @@ spec:
         - { gateway: hugmesh-be-gateway, urlPattern: /api/pleroma/admin/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /pleroma/admin/** }
       # federation_modules registration (federation-api repo — separate wave).
-      federationModule: { slug: akkoma, mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }
+      # NOTE the module slug is `mastodon`, NOT the catalogue slug `akkoma`: the row
+      # 023-register-akkoma-module.xml actually seeds is `slug=mastodon`, and that is
+      # the string the host shell resolves the remote by at runtime and the seeder
+      # (tests/stack/seed-e2e.sh leg 4) UPDATEs federation_modules on. `mastodon` is
+      # also FROZEN as a feature slug (reserved-prefixes.yaml + 041's header), so the
+      # DB side is authoritative and this metadata mirrors it. Asserted per-slug by
+      # scripts/validate-federation-module-slugs.sh, which re-derives BOTH sides.
+      federationModule: { slug: mastodon, mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }
       casdoorSeed: null
 
     # ── tuwunel — Matrix homeserver (Conduit fork) ─────────────────────────────
@@ -119,6 +238,9 @@ spec:
       displayName: "tuwunel (Matrix)"
       namespace: hugmesh-backend
       default: on
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/30-tuwunel.yaml
       sharedApps:
@@ -132,7 +254,12 @@ spec:
         - { gateway: hugmesh-be-gateway, urlPattern: /_matrix/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /.well-known/matrix/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /_synapse/** }
-      federationModule: { slug: tuwunel, mountAt: /social/matrix, changeset: "024-register-tuwunel-module.xml" }
+      # federation_modules registration. Module slug is `matrix`, NOT the catalogue
+      # slug `tuwunel` — same rule as akkoma/mastodon above: 024 seeds `slug=matrix`,
+      # that is what the host shell and the seeder key on, and `matrix` is a frozen
+      # feature slug. Re-derived and compared by
+      # scripts/validate-federation-module-slugs.sh.
+      federationModule: { slug: matrix, mountAt: /social/matrix, changeset: "024-register-tuwunel-module.xml" }
       casdoorSeed: null
 
     # ── phpbb — forum homeserver (backend-only, isolated namespace) ────────────
@@ -144,6 +271,9 @@ spec:
       displayName: "phpBB (Forum)"
       namespace: hugmesh-forum
       default: on
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/30-phpbb.yaml
         - apps/38-forum-bff-db.yaml
@@ -175,6 +305,9 @@ spec:
       # DEFAULT-OFF (policy 2026-06-17): games is OPT-IN — add it explicitly
       # (--enable-games / 'games' in --optional-services / OPTIONAL_SERVICES=all).
       default: off
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/06-casdoor-games.yaml
         - apps/50-games.yaml
@@ -220,6 +353,9 @@ spec:
       displayName: "LocalTube (YouTube archive)"
       namespace: hugmesh-tube
       default: off
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/53-tube.yaml
       sharedApps: []
@@ -241,6 +377,9 @@ spec:
       displayName: "Owncast (live streaming)"
       namespace: hugmesh-owncast
       default: off
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/52-owncast.yaml
       sharedApps: []
@@ -273,6 +412,9 @@ spec:
       displayName: "Character Studio (VN)"
       namespace: hugmesh-frontend
       default: off
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/49b-character-studio-ui.yaml
       sharedApps: []
@@ -284,22 +426,22 @@ spec:
       routeAccessRows:
         - { gateway: hugmesh-fe-gateway, urlPattern: /character-studio/** }
       # federation_modules registration lives in the SEPARATE hugmesh-federation-api
-      # repo (Liquibase changelog), NOT in this generator repo. The changeset to add
-      # there is 036-register-character-studio-module.xml (next free number after 035),
-      # mirroring 025-register-games-module.xml field-for-field with
-      # slug=character-studio, kind=remote-shell, exposed_module=./routes,
-      # mountAt=/character-studio, requiresRole=ROLE_USER,
-      # remote_entry_url=http://hugmesh-character-studio-ui:8080/remoteEntry.json,
-      # plus a db.changelog-master.xml <include>. Documented in the generator manifest
-      # dir (manifests/character-studio/FEDERATION-REGISTRATION-TODO.md) until that
-      # repo's wave lands. mountAt/requiresRole/exposed are recorded inline here so the
-      # generator can derive the registration when the federation-api wave runs.
+      # repo (Liquibase changelog), NOT in this generator repo. That wave HAS LANDED:
+      # the changeset is 040-register-character-studio-module.xml (this file predicted
+      # "036, the next free number after 035" — 036/037 were taken by the
+      # system-findings pair first, so the prediction went stale and pointed at a
+      # changeset that does not exist). It mirrors 025-register-games-module.xml
+      # field-for-field: slug=character-studio, kind=remote-shell,
+      # exposed_module=./routes, mountAt=/character-studio, requiresRole=ROLE_USER.
+      # mountAt/requiresRole/exposed are recorded inline here so the generator can
+      # derive the registration; scripts/validate-federation-module-slugs.sh re-reads
+      # the named changeset and fails if it is absent or disagrees.
       federationModule:
         slug: character-studio
         mountAt: /character-studio
         requiresRole: ROLE_USER
         exposed: ./routes
-        changeset: "036-register-character-studio-module.xml"   # in hugmesh-federation-api (separate repo)
+        changeset: "040-register-character-studio-module.xml"   # in hugmesh-federation-api (separate repo)
       casdoorSeed: null
 
     # ── character-forge — Character Forge (3D character maker + XR chat avatars) ──
@@ -332,6 +474,9 @@ spec:
       # hugmesh-frontend via its own Application, like phpbb's forum-ui).
       namespace: hugmesh-backend
       default: off
+      tier: user-level
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/38b-character-forge-bff-db.yaml
         - apps/39b-character-forge-bff-api.yaml
@@ -349,17 +494,16 @@ spec:
         - { gateway: hugmesh-fe-gateway, urlPattern: /character-forge/** }
         - { gateway: hugmesh-fe-gateway, urlPattern: /bff/character-forge/** }
       # federation_modules registration lives in the SEPARATE hugmesh-federation-api
-      # repo (Liquibase changelog), NOT in this generator repo. 036 is reserved for
-      # character-studio, so character-forge takes the next free number, 037. See
-      # manifests/character-forge/FEDERATION-REGISTRATION-TODO.md for the exact
-      # changeset. mountAt/requiresRole/exposed are recorded inline here so the
-      # generator can derive the registration when the federation-api wave runs.
+      # repo (Liquibase changelog), NOT in this generator repo. It landed as
+      # 038-register-character-forge-module.xml, plus a follow-up
+      # 039-rebrand-character-forge-remote-entry.xml repointing remote_entry_url.
+      # mountAt/requiresRole/exposed are recorded inline here to match the landed row.
       federationModule:
         slug: character-forge
         mountAt: /character-forge
         requiresRole: ROLE_USER
         exposed: ./routes
-        changeset: "037-register-character-forge-module.xml"   # in hugmesh-federation-api (separate repo)
+        changeset: "038-register-character-forge-module.xml"   # in hugmesh-federation-api (separate repo); see also 039-rebrand-character-forge-remote-entry.xml
       casdoorSeed: null
 
     # ── edge-ai — GPU inference node serving an OpenAI-compatible model API ─────
@@ -375,6 +519,9 @@ spec:
       displayName: "Edge AI (inference)"
       namespace: hugmesh-inference
       default: off
+      tier: infra
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/54-edge-ai.yaml
       sharedApps: []
@@ -404,6 +551,9 @@ spec:
       displayName: "Edge AI — analysis API"
       namespace: hugmesh-inference
       default: off
+      tier: infra
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/55-edge-ai-analysis.yaml
       sharedApps: []
@@ -434,6 +584,9 @@ spec:
       displayName: "Edge AI — voice synthesis (TTS)"
       namespace: hugmesh-inference
       default: off
+      tier: infra
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/55b-edge-ai-tts.yaml
       sharedApps: []
@@ -477,6 +630,9 @@ spec:
       displayName: "coturn (TURN/STUN server)"
       namespace: hugmesh-backend
       default: off
+      tier: infra
+      gate: runtime          # no bootstrap Application to prune — 13a element + ConfigMap flag only
+      buildGate: []
       # RUNTIME-ONLY: no bootstrap Application (see header) — gated solely by the
       # 13a ApplicationSet element + the installed-services ConfigMap flag.
       apps: []
@@ -519,6 +675,9 @@ spec:
       displayName: "Mesh radio bridge (Meshtastic ↔ Matrix)"
       namespace: hugmesh-backend
       default: off
+      tier: infra
+      gate: runtime          # no bootstrap Application to prune — 13a element + ConfigMap flag only
+      buildGate: []
       # RUNTIME-ONLY: no bootstrap Application (see header) — gated solely by the
       # 13a ApplicationSet element + the installed-services ConfigMap flag.
       apps: []
@@ -557,6 +716,9 @@ spec:
       displayName: "Egress VPN (split-tunnel)"
       namespace: hugmesh-backend
       default: off
+      tier: infra
+      gate: build-time       # NODE-level: packages.list + service links, not an Application
+      buildGate: [rpi5, x86]
       scope: node            # NODE service, not a cluster Application
       apps: []
       sharedApps: []
@@ -633,6 +795,9 @@ spec:
       displayName: "Tor (v3 hidden service)"
       namespace: hugmesh-backend
       default: off
+      tier: infra
+      gate: build-time       # NODE-level: packages.list + service links, not an Application
+      buildGate: [rpi5, x86]
       scope: node            # NODE service, not a cluster Application
       apps: []
       sharedApps: []
@@ -675,6 +840,9 @@ spec:
       displayName: "Workload Console"
       namespace: hugmesh-backend
       default: off
+      tier: infra
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/14-workload-console-rbac.yaml
       sharedApps: []
@@ -709,6 +877,9 @@ spec:
       displayName: "Headwind MDM (managed phones)"
       namespace: hugmesh-pki
       default: off
+      tier: infra
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/23-headwind.yaml
       sharedApps: []
@@ -735,6 +906,9 @@ spec:
       displayName: "GrapheneOS AttestationServer (Hardware Trust Root)"
       namespace: hugmesh-pki
       default: off
+      tier: infra
+      gate: build-time
+      buildGate: [rpi5, x86]
       apps:
         - apps/24-attestation-server.yaml
       sharedApps: []
@@ -765,7 +939,7 @@ spec:
     #   * Explicit operator choice ALWAYS wins: list "anubis" to force ON, or
     #     "-anubis"/"no-anubis" to force OFF (in either ENV).
     # The `default: off` below is the SAFE TEST BASELINE shipped in the ConfigMap;
-    # _opt_render_installed_services() in build-rpi5-stage4.sh (via
+    # _opt_render_installed_services() in scripts/_optional-services-lib.sh (via
     # _opt_anubis_installed) FLIPS it to "true" for PROD builds. No gatewayHost/
     # route-access rows (it is an INGRESS-layer gate, not a /bff/** upstream); when
     # OFF the BFF's AnubisClient degrades to "unreachable" (no 503) and the public
@@ -776,6 +950,18 @@ spec:
       # SAFE TEST BASELINE. PROD flips this on at build time (ENV-conditional —
       # see the ENV policy note above); the operator can override either way.
       default: off
+      tier: infra
+      gate: runtime          # no bootstrap Application to prune — 13a element + ConfigMap flag only
+      # buildGate: BOTH builders, since 2026-08-26. This column said [rpi5] while
+      # x86 carried NO anubis handling at all — that divergence was defect #2 of
+      # the x86 builder drift (an `--env prod` x86 image shipped the PUBLIC PoW
+      # shield OFF and the fe-gateway ingress un-rerouted). The fix EXTRACTED the
+      # whole gate into scripts/_optional-services-lib.sh, which both builders
+      # source, so _opt_anubis_installed / _opt_render_installed_services /
+      # _opt_wire_anubis_ingress now resolve identically from x86. The column is
+      # the metadata half of that fix: leaving it at [rpi5] made x86's own slug
+      # validator REFUSE a slug x86 genuinely bakes.
+      buildGate: [rpi5, x86]
       # The public PoW shield obeys the ENV policy (prod-on / test-off) rather than
       # plain presence in OPTIONAL_SERVICES.
       envConditional:
@@ -791,6 +977,247 @@ spec:
       apps: []
       sharedApps: []
       manifestPath: manifests/anubis
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # INFRA TIER — cluster-platform services (registered 2026-08-26).
+    #
+    # Until now these were HARDCODED cluster apps: present in apps/ on every
+    # image, selectable nowhere — not a slug in this registry, not a key in the
+    # installed-services ConfigMap, not a 13a element, not a builder gate arm,
+    # not a Studio catalogue entry. The operator asked for them to be first-class
+    # SELECTABLE services. This unit does the REGISTRY half ONLY.
+    #
+    # ⚠️ EVERY ROW BELOW IS `gate: none`, AND THAT IS THE HONEST STATE, NOT AN
+    # OVERSIGHT. Nothing reads them yet: there is no gate_optional_services case
+    # arm, no ConfigMap key and no 13a element for any of them. Writing
+    # `gate: build-time` here would be exactly the headwind lie the `gate:` key
+    # was added to prevent — a row that looks wired and prunes nothing.
+    # Consequently the builders REFUSE these slugs on --optional-services
+    # (validate_optional_services in build-x86-host-stage4.sh) instead of
+    # silently ignoring them: a build that asks for something that cannot happen
+    # must fail, not succeed while doing nothing.
+    #
+    # The gate arms are unit A4. They are deliberately NOT implemented here
+    # because pruning an infra Application from the BAKED tree is meaningless
+    # until the device actually syncs from the pruned tree — the live cluster
+    # syncs apps/ from the gitops repo, so a build-time prune only stops the
+    # one-time bootstrap seed (see the ⚠ RUNTIME NOTE on gate_optional_services).
+    # ═════════════════════════════════════════════════════════════════════════
+
+    # ── metrics-server — the resource-metrics API every v2 HPA reads ──────────
+    # Upstream Helm chart (kubernetes-sigs), sync-wave "-1", lands in kube-system.
+    # DEFAULT-ON: it is the metric source for every autoscaling/v2 HPA the
+    # stateless BFF/UI fleet and the gateway chart ship (manifests/<svc>/hpa.yaml).
+    # Deselecting it does NOT delete those HPAs — it strips the API they read, so
+    # they degrade to "unknown" targets and stop scaling. That coupling is the
+    # first thing unit A4's gate arm has to decide, and it is why this row is
+    # registered before any arm exists.
+    - slug: metrics-server
+      displayName: "metrics-server (resource metrics API)"
+      namespace: kube-system
+      default: on
+      tier: infra
+      gate: none
+      buildGate: []
+      gateReason: >-
+        REGISTRY-ONLY (unit A3). No gate_optional_services arm, no
+        installed-services ConfigMap key and no 13a element exist for this slug;
+        the builders therefore refuse it on --optional-services. Gating is unit
+        A4, and it must first answer what happens to the ~dozen autoscaling/v2
+        HPAs that read this API when it is absent.
+      apps:
+        - apps/01-metrics-server.yaml
+      sharedApps: []
+      # Upstream Helm chart, not an in-repo kustomization — nothing under manifests/.
+      manifestPath: null
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+
+    # ── keda — event-driven autoscaling operator (+ the DARK latency pass) ────
+    # Upstream Helm chart (kedacore), sync-wave "-1", lands in the `keda` ns.
+    # KEDA ships IDLE today: apps/01b-keda.yaml installs the operator only, and the
+    # ScaledObjects that would use it live in apps/01c-autoscaling-latency.yaml,
+    # which is MANUAL-sync dark (no syncPolicy.automated) pending a Prometheus that
+    # does not exist in this cluster. Both are listed here because a gate arm that
+    # removed the operator and left the ScaledObjects behind would leave orphaned
+    # CRs referencing an absent CRD.
+    - slug: keda
+      displayName: "KEDA (event-driven autoscaling)"
+      namespace: keda
+      default: on
+      tier: infra
+      gate: none
+      buildGate: []
+      gateReason: >-
+        REGISTRY-ONLY (unit A3). No gate_optional_services arm, no
+        installed-services ConfigMap key and no 13a element exist for this slug;
+        the builders therefore refuse it on --optional-services. Gating is unit
+        A4, which must prune 01b and 01c together (operator + its dark
+        ScaledObjects) or neither.
+      apps:
+        - apps/01b-keda.yaml
+        - apps/01c-autoscaling-latency.yaml
+      sharedApps: []
+      manifestPath: manifests/autoscaling-latency
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+
+    # ── kyverno — admission-policy engine (+ the two policy Applications) ─────
+    # Upstream Helm chart, lands in the `kyverno` ns. ⚠️ INSTALLING KYVERNO IS NOT
+    # NEUTRAL: apps/16-reserved-prefixes-policy.yaml and apps/16a-securitycontext-
+    # policy.yaml are ClusterPolicies that ENFORCE over the whole platform the
+    # moment the engine is present. That is why the three are one slug and not
+    # three: deselecting the engine while leaving the policies behind leaves
+    # ClusterPolicy objects whose CRD is gone, and selecting the engine on a
+    # cluster that has never run the policies turns enforcement on everywhere at
+    # once. Unit A4 owns that decision; nothing here changes today's behaviour.
+    - slug: kyverno
+      displayName: "Kyverno (admission policy engine)"
+      namespace: kyverno
+      default: on
+      tier: infra
+      gate: none
+      buildGate: []
+      gateReason: >-
+        REGISTRY-ONLY (unit A3). No gate_optional_services arm, no
+        installed-services ConfigMap key and no 13a element exist for this slug;
+        the builders therefore refuse it on --optional-services. Gating is unit
+        A4, which must treat the engine and its two ClusterPolicy Applications as
+        one unit — the policies Enforce platform-wide as soon as the engine is
+        present, and outlive it as orphaned CRs if it is pruned alone.
+      apps:
+        - apps/15-kyverno.yaml
+        - apps/16-reserved-prefixes-policy.yaml
+        - apps/16a-securitycontext-policy.yaml
+      sharedApps: []
+      manifestPath: manifests/securitycontext-policy
+      extraManifestPaths:
+        - manifests/policy
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+
+    # ── observability — Uptrace + OpenTelemetry Collector (logs/traces) ───────
+    # HEAVY amd64 tier, already MANUAL-sync (apps/36-observability.yaml has no
+    # syncPolicy.automated: it renders Out-Of-Sync on a Pi-only cluster instead of
+    # churning). Uptrace DEPENDS on ClickHouse (apps/35-analytics-clickhouse.yaml,
+    # also MANUAL) — a dependsOn a gate arm will have to model, and one the
+    # MANAGED-services axis already touches (clickhouse is a tier-1/2 managed id,
+    # so a managed ClickHouse endpoint is repointed into this deployment by
+    # _mgd rewriting manifests/observability/deployment.yaml). No gateway route:
+    # uptrace/grafana/clickhouse are deliberately unreachable from outside
+    # (20-schema.sql:152 records that as policy).
+    - slug: observability
+      displayName: "Observability (Uptrace + OpenTelemetry)"
+      namespace: observability
+      default: off
+      tier: infra
+      gate: none
+      buildGate: []
+      gateReason: >-
+        REGISTRY-ONLY (unit A3). No gate_optional_services arm, no
+        installed-services ConfigMap key and no 13a element exist for this slug;
+        the builders therefore refuse it on --optional-services. Gating is unit
+        A4. Note it is ALREADY effectively opt-in by a different mechanism
+        (MANUAL-sync, no automated block), and its ClickHouse dependency is also
+        reachable from the MANAGED_SERVICES axis — A4 must reconcile all three
+        rather than add a fourth switch.
+      apps:
+        - apps/36-observability.yaml
+      sharedApps: []
+      manifestPath: manifests/observability
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+
+    # ── service-catalog-builder — the superadmin Kaniko build namespace ───────
+    # Syncs ONLY the build namespace + its default-deny NetworkPolicy; the Kaniko
+    # Job is a template admin-bff instantiates per build, so it is NOT in the
+    # kustomization and ArgoCD never applies it. SHIPS DARK already (inert until a
+    # build lands there). Registered so the Service-Catalog "build from a
+    # Dockerfile/ZIP" capability can be turned off as a unit rather than by
+    # deleting a namespace by hand.
+    - slug: service-catalog-builder
+      displayName: "Service Catalog builder (Kaniko)"
+      namespace: hugmesh-service-catalog-builder
+      default: on
+      tier: infra
+      gate: none
+      buildGate: []
+      gateReason: >-
+        REGISTRY-ONLY (unit A3). No gate_optional_services arm, no
+        installed-services ConfigMap key and no 13a element exist for this slug;
+        the builders therefore refuse it on --optional-services. Gating is unit
+        A4, which must also decide what the admin-bff AddService task does when
+        the build namespace is absent (today it would fail at Job-create time).
+      apps:
+        - apps/54-service-catalog-builder.yaml
+      sharedApps: []
+      manifestPath: manifests/service-catalog-builder
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+
+    # ── optional-services-operator — the OptionalService CRD + seed CRs ───────
+    # ⚠️ SELF-REFERENTIAL, and that shapes the gate: this Application deploys the
+    # very machinery (the OptionalService CRD, the operator/BFF RBAC and the seed
+    # CRs) that the LIVE add/remove path uses to turn services back on. A RUNTIME
+    # toggle for it would be a switch that, once flipped off, removes the switch —
+    # the ConfigMap/13a lever would have no controller left to honour a flip back.
+    #
+    # DECISION (recorded here so A4 does not have to re-derive it): this slug is
+    # BUILD-TIME-GATE-ONLY. It gets no installed-services ConfigMap key and no 13a
+    # element, ever; the only supported way to omit it is to build an image
+    # without it, and re-enabling it means a rebuild or a manual `kubectl apply`
+    # of the Application. `gate: none` below is today's TRUE state (unit A3 adds
+    # no arm at all); A4 must set it to `build-time`, not `runtime`.
+    - slug: optional-services-operator
+      displayName: "Optional-services operator (OptionalService CRD)"
+      namespace: devops
+      default: on
+      tier: infra
+      gate: none
+      buildGate: []
+      gateReason: >-
+        REGISTRY-ONLY (unit A3). No gate_optional_services arm exists yet, so the
+        builders refuse this slug on --optional-services. When unit A4 wires it,
+        it must be BUILD-TIME ONLY — never a ConfigMap/13a runtime toggle —
+        because this Application ships the CRD and RBAC the runtime toggle path
+        itself depends on: turning it off at runtime would delete the machinery
+        that turns it back on.
+      apps:
+        - apps/13d-optional-services-operator.yaml
+      sharedApps: []
+      manifestPath: manifests/optional-services-operator
       esoFile: null
       esoKeys: []
       gatewayHost: null
@@ -818,3 +1245,46 @@ spec:
       app: apps/20-gateway-be.yaml
       routeId: games
       uri: http://hugmesh-games.hugmesh-games.svc.cluster.local:8080
+
+  # ── DELIBERATELY NOT REGISTERED ─────────────────────────────────────────────
+  # Cluster apps that look like they belong in spec.services and are excluded ON
+  # PURPOSE. This block exists so the omission is a DECISION on the record rather
+  # than a gap: the failure mode it guards against is somebody "completing" the
+  # infra tier by adding a second, independent on/off spelling of a service that
+  # is already selectable on another axis — the one-service-two-spellings bug.
+  # tests/stack/test-optional-services-exclude.sh asserts that no slug named here
+  # also appears in spec.services, so adding the duplicate row goes RED.
+  notRegistered:
+    - id: image-builder
+      apps: [apps/60-image-builder.yaml]
+      reason: >-
+        ALWAYS-ON by design and CI-enforced. tests/scripts/test-image-builder-always-on.sh
+        (+ image_builder_always_on.py) asserts 60-image-builder.yaml lives in apps/ and is
+        NOT excluded from the waved app-of-apps root; moving it to apps-optional/ or adding
+        it to the root's exclude list turns that suite RED. Registering it as an optional
+        slug would create a knob whose only reachable setting is "on".
+    - id: harbor
+      apps: [apps/03a-harbor.yaml, apps/03b-harbor-provision.yaml]
+      reason: >-
+        ALREADY selectable on the MANAGED-vs-SELF-HOSTED axis, not an on/off axis.
+        `harbor` is a MANAGED_SERVICES id (studio/hugmesh_studio/core/config.py
+        MANAGED_SERVICE_TIER3_IDS; build-*-stage4.sh _MGD_TIER3_IDS), where it is
+        currently FAIL-CLOSED REFUSED in v1 with a written blocker (registry host literal
+        in ~30 kustomizations + dockerconfigjson + kaniko; the robot-account Job has no
+        ECR/ACR analog; 12h ECR tokens break static pull secrets; it loses air-gap).
+        Adding an INDEPENDENT `harbor` on/off row here would give one service two
+        spellings that can disagree — --managed-service harbor=... refused while
+        --optional-services harbor accepted, or both set to contradictory values. Whoever
+        wants harbor deselectable must RECONCILE the two axes in one change (decide what
+        `harbor` means when it is simultaneously managed and deselected) — not add a row.
+    - id: velero
+      apps: [apps/55-velero.yaml, apps/56-velero-config.yaml]
+      reason: >-
+        SAME reason as harbor, one tier up: `velero-objectstore` is a TIER-1/2 MANAGED
+        id (_MGD_TIER12_IDS / MANAGED_SERVICE_TIER12_IDS) that gate_backing_services()
+        already ACTS on — _mgd_velero() repoints the backup object store at a hosted
+        endpoint. So velero today has a live, tested selector on the managed axis. A
+        second independent on/off row would mean `--managed-service velero-objectstore=s3://...`
+        and `--exclude-services velero` can both be given, with no defined precedence.
+        Reconcile the axes first (does deselecting velero also invalidate a managed
+        object-store endpoint?), then register — this unit deliberately does neither.

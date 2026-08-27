@@ -25,6 +25,12 @@ from ._gating import (
     platform_supports,
     scope_allows_flow,
 )
+# Two axis rules this page must ANSWER THE SAME WAY as the pages that own them, rather
+# than re-implement: "is this image unaffiliated" (BrandingPage, which gates the whole
+# identity/look split on it) and "is --local-user already this image's default account"
+# (SystemPage, which hides its own -u row on exactly that predicate).
+from .branding import unaffiliated_image
+from .system import default_user_is_local_user
 from ._widgets import _file_picker, _row
 
 # the media-data combo's leave-the-builder-default sentinel (the builder default is
@@ -55,6 +61,35 @@ _MEDIA_ROLE_CLASS_REASON = (
     "cluster node the builder still emerges the media-data package set "
     "(packages-media-data.list) for a desktop session that never exists, so the wizard "
     "does not offer it here. Cleared when you leave the page.")
+
+# ── the stack seed on an UNAFFILIATED image (operator report, 2026-08-26) ────────────
+# "Seed stack code" offers none|repos|stack|mesh, and anything but "none" seeds the
+# HugMesh stack into the home — which is affiliation, not look. It was visible AND
+# enabled on the unaffiliated flow, where every non-"none" value makes to_cli_args()
+# raise (config.py:3517 "home_seed_code (seeds the HugMesh stack into the home)")
+# and the builder exits 1 (build-x86-host-stage4.sh:1591). A control whose only outcomes
+# are "leave it alone" or "break the build" is not a choice: hidden, and reset to the
+# dataclass default in validatePage.
+_UNAFFILIATED_SEED_REASON = (
+    "An unaffiliated image carries no HugMesh stack to seed — the builder hard-errors "
+    "on any --home-seed-code but 'none' for this role. Not offered here; reset to "
+    "'none' when you leave the page.")
+
+# ASK: HomePage and SystemPage were asking for one account twice (see
+# system.default_user_is_local_user). SystemPage's "Default user" row is hidden wherever
+# --local-user really becomes the image's default account, so THIS group has to say what
+# became of it — otherwise the -u knob just disappears with no account of where the value
+# comes from.
+#
+# Shown on EXACTLY that predicate, never on "is this a desktop": on a plain ARM desktop
+# --local-user is not emitted at all (config.py:3175's condition is false), so the first
+# cut of this note claimed a flag the argv did not contain while the image quietly kept
+# the builder's own DEFAULT_USER ("pi" on rpi5). The row is still offered on SystemPage
+# there, so there is nothing for this note to explain either.
+_LOCAL_USER_IS_DEFAULT_NOTE = (
+    "This account is also the image's BAKED DEFAULT USER: this build passes it as "
+    "--local-user and the builder makes that the image's DEFAULT_USER, so the System "
+    "step does not ask for a second name.")
 
 # Plain-language description of each home mode (the four values were opaque; each is a
 # different way the local user's home is provisioned into the built image). Keyed by the
@@ -114,7 +149,13 @@ class HomePage(QtWidgets.QWizardPage):
         hl.addWidget(self.encrypted)
         self.seed = QtWidgets.QComboBox()
         self.seed.addItems(["none", "repos", "stack", "mesh"])
-        hl.addWidget(_row("Seed stack code", self.seed))
+        # the ROW is a gate target too (the unaffiliated hide below, and the role-class
+        # hide via _home_widgets): hiding the bare combo strands its "Seed stack code"
+        # caption over an empty slot — network.py's orphan-caption rule, stated on the
+        # egress section there ("_row()'s 'Egress VPN' caption … is not a gate member");
+        # named rather than cited by line so it cannot rot on that module's next edit.
+        self.seed_row = _row("Seed stack code", self.seed)
+        hl.addWidget(self.seed_row)
         # home extras (G31): bake a home archive into the image (what makes
         # home_mode=archive actually work), seed code from a local checkout instead
         # of cloning, and seed the binpkg set from a package list — x86-only, greyed
@@ -144,8 +185,8 @@ class HomePage(QtWidgets.QWizardPage):
         # the home-provisioning widgets role-class gating targets (individually, so
         # each widget's own enabled flag is set — never ancestor-shadowed).
         self._home_widgets = (self.mode, self.device, self.backup_row, self.encrypted,
-                              self.seed, self.include_archive_row, self.seed_code_from_row,
-                              self.seed_packages_row)
+                              self.seed, self.seed_row, self.include_archive_row,
+                              self.seed_code_from_row, self.seed_packages_row)
         # external media-data device (G32): Steam library + gocryptfs Vaults set —
         # x86 standalone surface; only --steam was fielded before.
         media = QtWidgets.QGroupBox("External media-data device (Steam library + gocryptfs Vaults)")
@@ -195,6 +236,11 @@ class HomePage(QtWidgets.QWizardPage):
         ll.addWidget(self.local_note)
         self.local_user = QtWidgets.QLineEdit()
         ll.addWidget(_row("Local user", self.local_user))
+        # ...and what happened to SystemPage's "Default user" (see the constant).
+        self.local_user_note = QtWidgets.QLabel(_LOCAL_USER_IS_DEFAULT_NOTE)
+        self.local_user_note.setWordWrap(True)
+        self.local_user_note.setStyleSheet("color: gray;")
+        ll.addWidget(self.local_user_note)
         self.local_pass = QtWidgets.QLineEdit()
         self.local_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.local_pass.setPlaceholderText("hashed at build time; NOT saved to configs")
@@ -224,7 +270,7 @@ class HomePage(QtWidgets.QWizardPage):
         el.addWidget(self.encrypt_root)
         # The consequence, stated in EVERY mode — not only mesh. On x86 the builder
         # turns --encrypt-root into INSTALLER_ISO=true unconditionally
-        # (build-x86-host-stage4.sh:1472), so a cloud desktop client that never asked
+        # (build-x86-host-stage4.sh:1780), so a cloud desktop client that never asked
         # for an installer ISO now gets one; and with no passphrase the installer
         # prompts at install time, which stalls an unattended install. The mesh-specific
         # note below adds only the fleet-scale framing.
@@ -247,7 +293,7 @@ class HomePage(QtWidgets.QWizardPage):
         # ASK 12 — encrypted root is now the MESH DEFAULT (config.enter_mesh_defaults,
         # applied on arrival in mesh). That changes what the build PRODUCES, so say so
         # here rather than let an operator discover it from the artifact list: on x86
-        # --encrypt-root also forces INSTALLER_ISO=true (build-x86-host-stage4.sh:1465),
+        # --encrypt-root also forces INSTALLER_ISO=true (build-x86-host-stage4.sh:1780),
         # and with no passphrase supplied the installer asks for one interactively.
         self.enc_mesh_note = QtWidgets.QLabel(
             "Mesh: node disks hold the cluster's PKI material, so root encryption is on "
@@ -279,7 +325,9 @@ class HomePage(QtWidgets.QWizardPage):
         self.unlock_keyfile = QtWidgets.QComboBox()
         self.unlock_keyfile.addItems(["(off)", "boot", "login"])
         # Provenance is otherwise invisible from this page, so spell it out here
-        # (build-x86:6598 generates; install-x86.sh:173/200 enrolls + places it).
+        # (build-x86:7212 generates the 4 KiB keyfile onto the installer ISO;
+        # specs-x86/installer/install-x86.sh:175 luksAddKey's it as a 2nd keyslot and
+        # :201 installs it to the ESP as /boot/cryptroot.key).
         self.unlock_keyfile.setToolTip(
             "Where the keyfile comes from:\n"
             "  boot — the BUILD generates a random 4 KiB keyfile (build host\n"
@@ -308,15 +356,16 @@ class HomePage(QtWidgets.QWizardPage):
         """Offer the "login" unlock factor only on a desktop-class image (finding 8).
 
         The builder writes the login-factor marker from inside its `elif ${ROLE_CLIENT}`
-        branch (build-x86-host-stage4.sh:3174-3175), so on a cluster-node role
+        branch (build-x86-host-stage4.sh:4368-4369), so on a cluster-node role
         `--unlock-keyfile login` produces NO marker: the factor silently does not exist.
-        The flag is still PARSED and validated (:1220), so nothing errs — and
-        `--unlock-yubikey login` even adds sys-auth/pam-u2f to the package set at :3561,
+        The flag is still PARSED (:1068) and validated (:1595), so nothing errs — and
+        `--unlock-yubikey login` even adds sys-auth/pam-u2f to the package set at :5107,
         which is NOT role-gated. So a node paid to emerge a PAM module for a login factor
         it was never going to have.
 
         Per-ITEM rather than per-field on purpose: "boot" is genuinely valid on a node (the
-        installer enrolls it as a LUKS keyslot, :4796-4802), so this removes exactly the one
+        installer enrolls it as a LUKS keyslot — specs-x86/installer/install-x86.sh:175),
+        so this removes exactly the one
         choice the builder cannot honour and leaves the rest of the row working. FIELD_SCOPE
         is a field-level model and cannot express this, which is why it is a page-local rule
         and not a scope declaration — recording that rather than bending the model.
@@ -454,12 +503,33 @@ class HomePage(QtWidgets.QWizardPage):
         # Emission-neutral by construction, which is why this is a hide and not a
         # narrowing of the FIELD: local_user stays at its dataclass default (so
         # --local-user <invoking user> is emitted exactly as before — the x86 builder honours it on
-        # every role, :1597, and inventing a class rule there would repeat the mistake
+        # every role, :1732 — `if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || …`, with no
+        # role test in it — and inventing a class rule there would repeat the mistake
         # _STANDALONE_CLASS_GATED_PLATFORMS records), and local_pass is empty by default,
         # so the only thing that stops reaching a node is a password the operator typed on
         # a screen they should not have been shown.
         login_ok = capability_allows_flow(local_login_applies, c, self.wiz)
         gate_widgets_role_class(self.login, login_ok, _LOCAL_LOGIN_REASON, hide=True)
+        # Say it only where it is TRUE: SystemPage still asks for the default account
+        # itself on a node-class flow AND on a desktop whose builder never receives
+        # --local-user (a plain ARM desktop), and claiming otherwise here would be a lie
+        # about the argv — a measured one, the pre-fix rpi5-desktop walk carried neither
+        # flag. Same predicate FUNCTION as the gate that hides that row, so the note and
+        # the row cannot drift apart.
+        #
+        # ORDERING, stated because it is visible and NOT a defect: on an ARM desktop the
+        # predicate depends on `local_user`, which THIS page collects — one page AFTER
+        # SystemPage has already gated. So typing a custom name here (or a local
+        # password) makes --local-user start being emitted mid-flow, and SystemPage's row
+        # only catches up on its next initializePage (Qt does not re-init a page reached
+        # by Back). The worst case is a redundant `--user pi --local-user dana` in ONE
+        # argv, never a wrong image: every builder applies LOCAL_USER AFTER -u
+        # (build-rpi5-stage4.sh:1022 parses -u, :1311 overrides it with LOCAL_USER;
+        # build-x86-host-stage4.sh:1913 is that same line), so the account is `dana`
+        # either way. Left alone rather than "fixed" by having this page reach over and
+        # clear SystemPage's field — that would discard a -u the operator typed in the
+        # same pass, on a page that does not own it.
+        self.local_user_note.setVisible(default_user_is_local_user(c, self.wiz))
         # ── ASK 3: the external media-data device (Steam library + gocryptfs Vaults) ──
         # Had NO role-class gate at all — only the x86 platform one, which a mesh flow
         # passes unconditionally because WorklistPage forces the base platform to "x86".
@@ -492,6 +562,22 @@ class HomePage(QtWidgets.QWizardPage):
                 f"This device ({label}) cannot do full-disk encryption — the Orin's "
                 "single boot+root partition has no separate LUKS path yet "
                 "(docs/STANDALONE-DESKTOP.md).")
+        # ── the stack seed on an unaffiliated image (see _UNAFFILIATED_SEED_REASON) ──
+        # LAST WRITER on this row, so the predicate has to be the COMPOSED one: the
+        # home_allowed block above re-shows every _home_widgets member (seed_row among
+        # them) on a desktop flow, and a bare `not unaffiliated` here would then un-hide
+        # the row on a mesh NODE — measured, before this composition: node flow showed
+        # "Seed stack code" with an invisible combo under it. The REASON follows the
+        # cause that actually rejected, never a blanket one (the "wrong why" trap
+        # _gating.out_of_scope_note records). Re-gated every visit, so a switch back to
+        # a branded desktop restores the row and its collectable value.
+        unaffiliated = unaffiliated_image(c)
+        seed_ok = home_allowed and not unaffiliated
+        gate_widgets_role_class(
+            self.seed_row, seed_ok,
+            "" if seed_ok else (_UNAFFILIATED_SEED_REASON if unaffiliated
+                                else _HOME_ROLE_CLASS_REASON),
+            hide=True)
         self.mode_help.setVisible(home_allowed)
         self.copy_home_btn.setVisible(home_allowed)
         # the copy-home preset only makes sense where home provisioning is live — track
@@ -505,6 +591,11 @@ class HomePage(QtWidgets.QWizardPage):
         c.home_backup = self.backup.text().strip()
         c.home_encrypted = self.encrypted.isChecked()
         c.home_seed_code = self.seed.currentText()
+        # emission half of the unaffiliated seed gate: back to the ImageConfig default
+        # ("none"), so a value picked before the role switch cannot reach a to_cli_args()
+        # that raises on it. The gate decides the argv, not what the hidden widget holds.
+        if unaffiliated_image(c):
+            c.home_seed_code = ImageConfig.__dataclass_fields__["home_seed_code"].default
         c.include_home_archive = self.include_archive.text().strip()
         c.home_seed_code_from = self.seed_code_from.text().strip()
         c.seed_packages_from = self.seed_packages.text().strip()

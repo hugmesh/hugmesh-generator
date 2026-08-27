@@ -7,7 +7,12 @@ Three families, in the order an operator meets them:
    (``core.config.derive_hostname`` / ``derive_default_user`` transcribe the builders'
    own role switches; the timezone comes from this build host via ``core.timezones``),
    and the timezone is a DROPDOWN over the host's real tz database rather than a free
-   text box a typo can ruin.
+   text box a typo can ruin. Since 2026-08-26 the DEFAULT ACCOUNT row is withheld from
+   the images where it asked the same question HomePage's "Local user" already asks —
+   i.e. a desktop image whose builder is ACTUALLY handed ``--local-user``. Every other
+   image (a node, and a plain ARM desktop, which receives neither flag) keeps the row,
+   because there ``-u`` is the only channel for naming the baked account. See
+   ``default_user_is_local_user``.
 2. **Who the image is built for** (``--person-role``; G18) — ASK 7. Moved here from the
    bottom of the superadmin Users TABLE, where a per-IMAGE build-time control sat under
    an "Add user / Remove selected" button row and read as "which of the accounts above
@@ -40,7 +45,10 @@ from ...core.config import (
     PERSON_ROLE_CHOICES, derive_default_user, derive_hostname, image_class,
     person_role_applies,
 )
-from ._gating import clear_unsupported, gate_widgets, gate_widgets_role_class, platform_supports
+from ._gating import (
+    capability_allows_flow, clear_unsupported, gate_widgets, gate_widgets_role_class,
+    platform_supports,
+)
 from ._widgets import _row
 
 # Node fallback creds are only MEANINGFUL when an x86 node-class image is being built
@@ -52,6 +60,54 @@ _NODE_CREDS_REASON = (
     "Node fallback login applies to mesh NODE images only — a desktop image logs in "
     "with the local user set on the Home step. Hidden here; reappears on the mesh flow.")
 
+# ── the DUPLICATE ACCOUNT NAME (operator report, 2026-08-26: "standalone menu is asking
+# same questions seemingly multiple times") ──────────────────────────────────────────
+# Two pages asked for one account. This page's "Default user" is -u/--user; HomePage's
+# "Local user" (the NEXT page) is --local-user. They collapse into ONE name only where
+# the builder is actually TOLD the local user, because the collapse is the builder's own
+# line `[ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"`
+# (build-x86-host-stage4.sh:1913, verified with sed -n '1733p'; its ARM twins are
+# build-rpi5-stage4.sh:1329, build-jetson-stage4.sh:597, build-frite-stage4.sh:594,
+# build-orangepi5-stage4.sh:625 and the four orangepi-zero/lts builders). On those
+# images the operator typed one account twice and the argv carried both
+# "--local-user magus" and "--user magus" — and an operator who never opened this page
+# emitted no -u at all, i.e. merely WALKING the wizard added a redundant flag.
+#
+# WHERE --local-user IS ACTUALLY EMITTED — the half the first cut of this rule assumed
+# instead of reading, and the half that makes the difference:
+#   * x86: UNCONDITIONAL. `_x86_args` SEEDS the argv list with it —
+#     `a: list[str] = ["--role", self.role, "--env", self.env, "--local-user",
+#     self.local_user]` (config.py:3545).
+#   * ARM: CONDITIONAL. `_arm_common_args` emits it only under
+#     `if self.standalone or self.local_user != default_local_user() or self.local_pass:`
+#     (config.py:3175).
+# So a PLAIN ARM DESKTOP (rpi5-desktop / jetson-desktop / orangepi4-lts …: no
+# --standalone, the Studio's own default account name, no local password) receives
+# NEITHER flag. Hiding -u there deduplicated nothing — it DELETED the only channel the
+# operator had for naming the baked account, and the image silently fell back to the
+# builder's own DEFAULT_USER ("pi" on rpi5) while the wizard went on displaying the
+# local user's name. MEASURED on cloud/rpi5/rpi5-desktop, full offscreen wizard walk,
+# before this narrowing:
+#     --role desktop --board rpi5 --env test --hostname hugmesh-rpi5-desktop
+#     --timezone America/Los_Angeles --compress --resume --encrypt-root ...
+# — no --user, no --local-user anywhere in it. Same loss through materialize() on a mesh
+# worklist of desktop rows: rpi5-desktop.rpi5 lost `--user pi`, jetson-desktop.jetson
+# lost `--user jetson`.
+#
+# Hence default_user_is_local_user() below asks BOTH halves, per IMAGE: desktop-class
+# AND "--local-user really reaches THIS builder". The second half is not re-spelled here
+# — derive_default_user() is its single implementation (its layer 2 IS the two emitter
+# lines above, and the ask-9 drift-guard test re-derives it from a real to_cli_args()),
+# so the gate is phrased as "would the builder's DEFAULT_USER already be cfg.local_user?"
+_DUP_USER_REASON = (
+    "On this image the account is the \"Local user\" on the next step — the build passes "
+    "it as --local-user and the builder makes that the image's default account, so "
+    "asking for a second name here would emit --user with the same value. Still offered "
+    "on cluster-node images, and on ARM desktops that never receive --local-user, where "
+    "this row is the only way to name the baked account. Cleared when you leave the "
+    "page.")
+
+
 # ── ask 7 — the person-role rewrite ──────────────────────────────────────────────────
 # Old label, verbatim: "This device's person role". Nothing on the page said what a
 # "person role" was, what it decided, or that it is baked at BUILD time; the only
@@ -61,24 +117,25 @@ _NODE_CREDS_REASON = (
 #
 # What the value ACTUALLY does today, verified against origin/main rather than against
 # the intent in the docs:
-#   * build-x86-host-stage4.sh:4102 writes it to /etc/hugmesh/identity-role inside the
-#     `elif ${ROLE_CLIENT}` branch — i.e. person-device images only;
+#   * build-x86-host-stage4.sh:4356 writes it to /etc/hugmesh/identity-role inside the
+#     `elif ${ROLE_CLIENT}` branch (:4589) — i.e. person-device images only;
 #   * `superadmin` (and only superadmin, and only when NOT --standalone) ALSO bakes
-#     /etc/hugmesh/device-password-required (:4121-4122). That marker IS consumed:
-#     specs/etc/keys-provision/provision.sh:394 makes the device demand a SEPARATE
-#     device password at first boot from a salted+hashed value on the KEYS USB. A real
-#     hardening behaviour, not a label;
-#   * it tags the ARTIFACT FILENAME: ROLE_TAG="${ROLE}-${PERSON_ROLE}${-domain}" (:5732,
-#     and the build plan line :1839);
+#     /etc/hugmesh/device-password-required (:4613-4614). That marker IS consumed:
+#     specs/etc/keys-provision/provision.sh:395 (`provision_device_password()`, gated on
+#     the marker at :396) makes the device demand a SEPARATE device password at first
+#     boot from a salted+hashed value on the KEYS USB. A real hardening behaviour, not a
+#     label;
+#   * it tags the ARTIFACT FILENAME: ROLE_TAG="${ROLE}-${PERSON_ROLE}${-domain}" (:6455,
+#     and the --print-plan twin at :2014);
 #   * on a cluster NODE role the builder warns "--person-role/--domains are ignored"
-#     (:1594-1595), and --unaffiliated hard-CONFLICTS with it (:1340).
+#     (:1723), and --unaffiliated hard-CONFLICTS with it (:1414).
 #
 # AND WHAT IT DOES NOT DO, which the first cut of this page claimed: the identity-role
 # marker is NOT read by the shipped first-boot path. `git grep identity-role` finds one
 # writer (the builder), one reader (tests/qemu/verify-client.sh:199, a verification
-# probe), and nothing in specs/etc/keys-provision/provision.sh — which reads the SIBLING
-# `domains` marker, not this one, to render the desktop-governance tie
-# (docs/CLIENT-IMAGES.md:98). CLIENT-IMAGES.md is explicit that the Casdoor desktop
+# probe, :199), and nothing in specs/etc/keys-provision/provision.sh — which reads the
+# SIBLING `domains` marker, not this one, to render the desktop-governance tie
+# (docs/CLIENT-IMAGES.md:98-101). CLIENT-IMAGES.md is explicit that the Casdoor desktop
 # login is still future work ("A later provision_casdoor_desktop() will wire the OIDC
 # desktop login"). So the text below says "stamped ... nothing reads it yet", because
 # telling an operator it binds their account today would be inventing a semantic — the
@@ -140,6 +197,61 @@ def _muted(text: str) -> QtWidgets.QLabel:
     return lab
 
 
+def default_user_is_local_user(cfg, wiz=None) -> bool:
+    """True when ``--local-user`` IS this flow's baked default account, so a separate
+    ``-u/--user`` row would ask the same question twice.
+
+    TWO conditions, both required. The second was missing until 2026-08-26 and cost the
+    ARM desktops their account knob outright — see ``_DUP_USER_REASON`` for the measured
+    argv:
+
+    1. **Desktop-class**, asked of the WHOLE FLOW (``capability_allows_flow``) rather
+       than of the shared mesh base — the same reason ``_node_creds_apply`` reads the
+       worklist entries: WorklistPage stamps the base role from ``entries[0]``, and two
+       mesh roles are desktop-class, so a base-keyed test would hide the row (and clear
+       ``user``) for a whole worklist because one desktop row happened to be listed
+       first. ALL, not ANY: the base rides onto every entry, so the row must stay while
+       ANY row still needs -u.
+    2. **``--local-user`` is actually emitted for that image.** Not a restatement of the
+       emitters (that would be a third copy of the condition): ``derive_default_user``
+       already IS that mirror — x86 unconditional (``_x86_args``, config.py:3545), ARM
+       conditional (``_arm_common_args``, config.py:3175) — and it is drift-guarded
+       against a real ``to_cli_args()``. "The builder's DEFAULT_USER already equals
+       ``cfg.local_user``" is true exactly where the flag rides, which is exactly where
+       -u would be the duplicate.
+
+    Condition 2 is probed PER ROW with that row's platform, never off the base:
+    WorklistPage forces the base platform to "x86", where condition 2 is unconditionally
+    true — keying it on the base would hide the row for an all-ARM desktop worklist, the
+    single case it exists to protect. The name/posture inputs (``local_user`` /
+    ``standalone`` / ``local_pass``) come off the BASE on purpose: nothing per-entry ever
+    strips them (``WorklistConfig._materialize_one`` deepcopies the base and
+    ``clear_role_class_fields`` touches only the theme/home families), so the base value
+    is what every row will emit. Only the three ``ImageAxes`` attributes are read off
+    ``img`` itself, which is what ``test_services_section`` pins.
+
+    Module-level and shared with ``pages/home.py`` (which uses it to say, on the login
+    group, that the account is also the image's default user) so the two pages cannot
+    disagree about which one is asking — and so that note can never claim a flag the
+    argv lacks."""
+    local = (getattr(cfg, "local_user", "") or "").strip()
+    if not local:
+        # Nothing for -u to be a duplicate OF: with no local user there is no name to
+        # inherit, so keep the row — it is the only remaining channel.
+        return False
+    standalone = bool(getattr(cfg, "standalone", False))
+    local_pass = getattr(cfg, "local_pass", "") or ""
+
+    def _local_user_is_this_images_default(img) -> bool:
+        if image_class(img.mode, img.role) != "desktop":
+            return False
+        return derive_default_user(SimpleNamespace(
+            platform=img.platform, local_user=local,
+            standalone=standalone, local_pass=local_pass)) == local
+
+    return capability_allows_flow(_local_user_is_this_images_default, cfg, wiz)
+
+
 def _log_swallowed(where: str) -> None:
     """A guarded slot failed: record it loudly on stderr but keep the Studio alive —
     under PyQt6 the alternative is qFatal killing the whole process."""
@@ -181,7 +293,13 @@ class SystemPage(QtWidgets.QWizardPage):
         self.user.setPlaceholderText("Default account name (leave blank for the builder default)")
         self.user.setToolTip("The baked default account — the -u/--user builder flag "
                              "(distinct from --local-user).")
-        lay.addWidget(_row("Default user", self.user))
+        # the ROW is the gate target, not the bare edit: hiding the edit alone would
+        # strand its "Default user" caption — network.py's orphan-caption rule, stated
+        # on the egress section there ("_row()'s 'Egress VPN' caption … is not a gate
+        # member"); named rather than cited by line, because a line range in another
+        # module rots on that module's next edit.
+        self.user_row = _row("Default user", self.user)
+        lay.addWidget(self.user_row)
         # The default-account twin of hostname_note: shown only where the worklist's
         # boards derive DIFFERENT accounts, which is exactly where a single prefilled
         # value would override each ARM builder's own DEFAULT_USER (see _seed_user).
@@ -420,12 +538,38 @@ class SystemPage(QtWidgets.QWizardPage):
         # in validatePage plus clear_unsupported.
         gate_widgets_role_class(self.creds, self._node_creds_apply(c),
                                 _NODE_CREDS_REASON, hide=True)
+        # ── the duplicate account name (see _DUP_USER_REASON) ────────────────────────
+        # HIDE only where HomePage's "Local user" REALLY becomes this image's default
+        # account — i.e. where --local-user is emitted (x86 always; ARM only under
+        # _arm_common_args' condition, config.py:3175). A plain ARM desktop receives
+        # neither flag, so it keeps the row: there -u is the only channel. Run AFTER
+        # _seed_user so the honest-blank note it may have raised is respected on the
+        # flows that keep the row; the field is BLANKED here (the shape _seed_user's own
+        # disagreeing-worklist arm uses) so nothing can be submitted from a control the
+        # operator cannot see, and validatePage resets c.user to its dataclass default.
+        # Re-gated every visit: a switch to a node (or plain-ARM-desktop) flow brings the
+        # row, its seed and its emission straight back.
+        dup_user = default_user_is_local_user(c, self.wiz)
+        gate_widgets_role_class(self.user_row, not dup_user, _DUP_USER_REASON, hide=True)
+        if dup_user:
+            self.user.clear()
+            self.user_note.setVisible(False)
 
     def validatePage(self):
         c = self.wiz.cfg
         c.hostname = self.hostname.text().strip()
         c.timezone = self.timezone.currentText().strip()
         c.user = self.user.text().strip()
+        # ...and the emission half of the duplicate-account gate: with the row hidden,
+        # -u goes back to its ImageConfig default ("" = "emit nothing", exactly what an
+        # operator who never opened this page produced). Safe ONLY because the predicate
+        # now also requires that --local-user actually reaches this builder — it is the
+        # flag that then carries the account, so the built image is unchanged and only
+        # the redundant -u goes. On any image where --local-user is NOT emitted the row
+        # stays visible and this clear never fires, which is what keeps a LOADED config's
+        # `user` from being silently rewritten on a flow that has no other channel.
+        if default_user_is_local_user(c, self.wiz):
+            c.user = ""
         # ask 10: nothing about the credentials is collected unless the operator opted
         # in. Belt & braces with the wipe in _optin_toggled — the collect itself carries
         # the gate, so even a widget left populated by some other path emits nothing.

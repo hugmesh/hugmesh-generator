@@ -21,10 +21,13 @@ catalog merely pivoted (device→roles instead of role→machines).
 """
 from __future__ import annotations
 
+import sys
+import traceback
+
 from .. import choice_icons
 from ..qt import Qt, QtCore, QtGui, QtWidgets
 from ._scroll import scrollable
-from ...core import device_catalog, hw_scan, profiles
+from ...core import device_catalog, profiles
 from ...core.config import (
     FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES,
     JETSON_BOARDS, KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
@@ -32,6 +35,7 @@ from ...core.config import (
     ORANGEPI4LTS_FLAVORS,
     ROLE_CHOICES, RPI_BOARDS,
     UNAFFILIATED_ROLE,
+    field_default, role_presets_capable, role_presets_standalone,
     rpi_boards_for_role, x86_desktop_axis,
 )
 from ._gating import gate_widgets_role_class, out_of_scope_note, scope_allows
@@ -54,6 +58,156 @@ _STANDALONE_TIP = (
     "The x86 standalone-* roles set this themselves inside the builder; tick it to "
     "compose the same posture onto another client role (the documented rpi5-desktop + "
     "--standalone FDE desktop, for example).")
+
+# The Sunshine tooltip, hoisted out of __init__ for the SAME reason _STANDALONE_TIP is
+# (gate_widgets_role_class writes `"" if allowed else reason` on every pass, so a tooltip
+# set at construction is blanked by the first gate and never seen again) — _sync_client_gates
+# restores it whenever the checkbox is on-surface.
+_SUNSHINE_TIP = (
+    "Bakes Sunshine + a mesh-scoped nftables fence (stream ports admitted "
+    "ONLY on the tailscale interface from 100.64/10; pairing web UI "
+    "loopback-only) + an in-session autostart, so a mesh-enrolled Quest "
+    "running Moonlight (the MDM Quest wizard's thin-desktop toggle) can "
+    "open this desktop. Tailnet CLIENT desktops only — the builder "
+    "warn-drops it on cluster roles and on tailnet-less desktops "
+    "(standalone needs --with-tailscale). See docs/MDM.md 'Thin desktop'.")
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# DECISION 2(b) — "the RolePage knobs the chosen role already pins".
+#
+# Operator report, 2026-08-26: "standalone menu is asking same questions seemingly
+# multiple times". Three of the duplicates on THIS page are not two widgets asking the
+# same thing — they are ONE widget re-asking what the ROLE ROW directly above it has
+# already answered. build-x86-host-stage4.sh's own role `case` sets the variable in the
+# same breath as the role name:
+#
+#     :1317 standalone-thin)                  … :1325  STANDALONE=true; DESKTOP="thin"
+#     :1327 standalone-thick|standalone-full)  … :1332  STANDALONE=true; DESKTOP="full"; CAPABLE=true
+#     :1337 standalone-unaffiliated)           … :1344  STANDALONE=true; DESKTOP="full"; CAPABLE=true
+#                                                :1345  UNAFFILIATED=true
+#
+# (RE-DERIVED 2026-08-26 against the CURRENT builder — this block first shipped citing
+# :1302/:1310/:1312/:1317/:1322/:1329, which were the PRE-diff numbers: the same change
+# set inserted ~215 lines ABOVE the role case, so every one of them pointed at unrelated
+# code by the time it was written. The builder is edited by other lanes while this file is
+# — the two Sunshine guards below moved twice in one hour — so verify with
+# `sed -n '<n>p' build-x86-host-stage4.sh` before trusting or touching any number here,
+# and prefer naming the arm/condition wherever the region is not stable.)
+#
+# so on those three roles --standalone / --capable / --desktop are no-ops the operator is
+# nonetheless asked about. Both sets are DERIVED from core.config's own tables rather than
+# re-spelled here (house rule: no second, page-local implementation of an axis rule):
+#
+#   * ``role_presets_standalone(role)`` — config's name for the three x86 role ids that
+#     ARE the standalone posture;
+#   * ``role_presets_capable(role)`` — the subset whose pinned desktop weight is "full",
+#     which is the builder's own structure: CAPABLE=true appears only on the two arms
+#     that also pin DESKTOP="full" (:1332, :1344), and never on the thin arm (:1325).
+# Both are NAMED PREDICATES in core.config (added 2026-08-26 for this page, replacing the
+# two frozensets this module used to derive from config's private role tuple): the rule
+# now lives beside branding_allowed / cluster_identity_applies / person_role_applies with
+# the rest of the axis family, and this page states no role list of its own.
+#
+# NOT a general "hide what the role implies" rule: --standalone still genuinely COMPOSES
+# onto chromebook-in-standalone and onto every ARM appliance role (whose builders compose
+# ${STANDALONE} unconditionally — build-orangepi-zero2-stage4.sh:642, the composable
+# posture block at :637-648), and those keep
+# the box. See _sync_standalone_gate / _sync_client_gates for the two-reason hide rule.
+# ══════════════════════════════════════════════════════════════════════════════════════
+# The two hide REASONS, kept apart because they carry different emission obligations
+# (see validatePage): a REDUNDANT widget's value is merely implied by the role and the
+# image is byte-identical either way, so the field round-trips untouched; an INAPPLICABLE
+# widget's value would reach a builder that cannot honour it, so validatePage clears it
+# back to the ImageConfig dataclass default.
+# NAMES THE ARM, NOT A LINE RANGE, on purpose: this string is not a comment — it is the
+# reason the OPERATOR reads in a tooltip when the posture / --capable / desktop-weight
+# rows are hidden. The first spelling cited "build-x86-host-stage4.sh:1482-1509", which
+# was already stale when it was written (see the RE-DERIVED note above) and would rot
+# again on the builder's next edit — in an operator-facing string, silently. The arm
+# name is stable: `grep -n 'standalone-thin)' build-x86-host-stage4.sh` finds it forever.
+_REDUNDANT_NOTE = (
+    "Already decided by the image type above — the standalone-thin / standalone-thick / "
+    "standalone-unaffiliated arm of build-x86-host-stage4.sh's role case sets this for "
+    "{role} in the same breath as the role name, so there is nothing to choose. "
+    "Pick a different image type to change it.")
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# DECISION 2(c), CORRECTED 2026-08-26 — the two spellings of "unaffiliated".
+#
+# THE ORIGINAL DECISION, AND WHY IT WAS WRONG. ROLE_CHOICES["standalone"] (config.py:207)
+# carries a dedicated ``standalone-unaffiliated`` ROW, and the client box carries a
+# composable ``--unaffiliated`` CHECKBOX. Reading that as one question asked twice, the
+# first cut HID the checkbox for the whole of standalone mode and CLEARED cfg.unaffiliated
+# wherever it was hidden. Two reviewers proved both the premise and the implementation
+# wrong:
+#
+#   * "Both produce the identical build" is true for standalone-thick ALONE. The builder's
+#     standalone-unaffiliated arm PINS DESKTOP="full" and CAPABLE=true (:1344), so
+#     ``--role chromebook --unaffiliated`` (a coreboot/UEFI laptop image, ADR-16) and
+#     ``--role standalone-thin --unaffiliated`` (the light LXDE weight) are images that row
+#     CANNOT express. Hiding the checkbox deleted them from the wizard — the exact compose
+#     G22 was added for.
+#   * The hide axis (``mode != "standalone"``) and the legality axis (``mode ==
+#     "standalone" and role != UNAFFILIATED_ROLE``) were ANDed into one ``tickable``. They
+#     are mutually exclusive on mode, so tickable was False on EVERY path in EVERY mode,
+#     and validatePage repeated the same pair, driving c.unaffiliated to False
+#     unconditionally. MEASURED on ImageConfig(mode="standalone", role="chromebook",
+#     platform="x86", unaffiliated=True) — a bare initializePage() + validatePage() with
+#     nothing touched:
+#         BEFORE  --role chromebook … --unaffiliated --snort …
+#         AFTER   --role chromebook … --no-tailscale --no-sso --snort … --bundle-source …
+#     The loaded config LOST --unaffiliated and GAINED --bundle-source (validatePage's
+#     ``if c.role == UNAFFILIATED_ROLE or c.unaffiliated:`` no longer fired), so the image
+#     regained BRAND=hugmesh, the /etc/hugmesh marker tree, the hugmesh-* tooling, the
+#     HUGMESH_LIVE/HUGMESH_INSTALL volids and hugmesh.efi. Nothing warned, and the role row
+#     still read "chromebook".
+#
+# THE RULE NOW — the HIDE axis and the CLEAR axis are SEPARATE, exactly as the --capable
+# checkbox beside it already documents ("clearing it would silently rewrite a loaded
+# standalone-thick config on a mere page visit"):
+#
+#   INAPPLICABLE — composing is impossible. Hidden-or-greyed AND cleared:
+#     * ``role == UNAFFILIATED_ROLE``: the builder's own role arm sets UNAFFILIATED=true
+#       (:1345), so there is nothing to compose. HIDDEN — the answer is the row one line
+#       above, which is the duplicate the operator actually reported. The clear is
+#       argv-NEUTRAL by construction: config.py's emitter is
+#       ``if self.unaffiliated and self.role != UNAFFILIATED_ROLE``, so the flag was never
+#       going to be emitted on this role and the image cannot move.
+#     * ``mode in ("cloud", "mesh")``: a builder HARD CONFLICT — :1414 rejects
+#       --person-role/--domains on an unaffiliated image, and
+#       config._check_unaffiliated_conflicts RAISES for these modes (measured: a cloud
+#       cfg with unaffiliated=True makes to_cli_args() throw ValueError). Left VISIBLE and
+#       greyed, unchanged from before this change set: the tooltip is the only place that
+#       explains why an unaffiliated cloud desktop is impossible, and the clear is what
+#       keeps the preview from raising.
+#
+#   REDUNDANT — standalone mode on any other client role. NEITHER hidden NOR cleared. The
+#   compose is legal (:1380 asks only for ROLE_CLIENT, which every role reachable here is)
+#   and on chromebook / standalone-thin it is the ONLY spelling of that image. The checkbox
+#   stays on screen and tickable and a loaded unaffiliated=True rides through to the argv
+#   untouched. The duplicate the operator reported is answered by the TOOLTIP below rather
+#   than by deleting the capability.
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Why the compose exists at all, said on the screen where it is offered. Applied by
+# _role_changed on every pass for the SAME reason _STANDALONE_TIP is (the gate helper
+# writes `"" if allowed else reason` on every pass, blanking a tooltip set in __init__).
+_UNAFFILIATED_TIP = (
+    "Composes the unaffiliated posture — plain Gentoo, zero HugMesh branding/tooling — "
+    "onto THIS image type. On standalone-thick it builds the same image as the "
+    "'Unaffiliated desktop' row above. On chromebook or standalone-thin it builds one "
+    "that row CANNOT: standalone-unaffiliated pins the full/capable desktop weight, so "
+    "the light LXDE weight and the coreboot/UEFI Chromebook image are reachable only "
+    "through this checkbox.")
+# The two INAPPLICABLE reasons — the CLEAR axis, one string per axis so the operator is
+# told which wall they hit (the first cut used one string for both).
+_UNAFFILIATED_IS_THE_ROLE_NOTE = (
+    "This image type IS the unaffiliated desktop — build-x86-host-stage4.sh's "
+    "standalone-unaffiliated role arm sets UNAFFILIATED=true itself, so there is nothing "
+    "to compose. Pick another image type to compose it onto one.")
+_UNAFFILIATED_MODE_NOTE = (
+    "Composable --unaffiliated applies to a STANDALONE build on a role other "
+    "than standalone-unaffiliated (that role already presets it); cloud/mesh "
+    "person-device identity is a builder hard-conflict.")
 
 
 class RolePage(QtWidgets.QWizardPage):
@@ -172,10 +326,21 @@ class RolePage(QtWidgets.QWizardPage):
         self.profile_note.setWordWrap(True)
         self.profile_note.setStyleSheet("color: gray;")
         lay.addWidget(self.profile_note)
-        self.scan_out = QtWidgets.QLabel("")
-        self.scan_out.setWordWrap(True)
-        self.scan_out.setStyleSheet("color: #3f5b8c;")
-        lay.addWidget(self.scan_out)
+        # DECISION 2(a) — THE SCAN IS NOT HERE. It used to be, twice over: a synthetic
+        # profiles.json row ("this-machine-scan") ran hw_scan.scan() from the combo above
+        # and printed its result into a `self.scan_out` label right here, while
+        # HardwarePage — the very NEXT page — offers "Scan THIS machine" writing the
+        # identical three fields from the identical text template (hardware.py: the
+        # scan_btn at :35 and _scan at :115 — that file is under edit in a parallel lane,
+        # so grep the button label rather than trusting the numbers). The operator saw
+        # the same question on two consecutive screens
+        # (report, 2026-08-26). The scan stays on HardwarePage because that is where the
+        # three fields it writes (GPU driver / Wi-Fi / Bluetooth) actually live and are
+        # finalised; this page's own note already pointed there. The synthetic profile
+        # row, the branch that handled it, and this label are all gone — the "target
+        # machine is defined in exactly ONE place" rule in the module docstring is about
+        # the MACHINE (device/platform/board/preset), which is unaffected: a scanner is
+        # an action on the tuning fields, not a machine.
 
         # frite board/flavor/desktop knobs (visible only when platform == frite)
         self.frite_box = QtWidgets.QGroupBox("La Frite board options")
@@ -322,17 +487,23 @@ class RolePage(QtWidgets.QWizardPage):
         # payload/affiliation flags (G21/G22)
         self.client_box = QtWidgets.QGroupBox("Client desktop options")
         cl = QtWidgets.QVBoxLayout(self.client_box)
-        client_help = QtWidgets.QLabel(
+        # The help text is ONLY about the desktop weight, so it is gated with the row
+        # (decision 2b) rather than left behind as an orphan caption over a hidden combo —
+        # the same "hide the section, not just the inner box" rule NetworkPage applies to
+        # its collapsibles (named, not cited by line: that file is under edit in a
+        # parallel lane — grep its QGroupBox setVisible calls).
+        self.desktop_help = QtWidgets.QLabel(
             "Desktop weight overrides the role's baseline: thin = light LXDE desktop, "
             "full = full Plasma desktop. Leave at (default) to keep the role's built-in weight.")
-        client_help.setWordWrap(True)
-        client_help.setStyleSheet("color: gray;")
-        cl.addWidget(client_help)
+        self.desktop_help.setWordWrap(True)
+        self.desktop_help.setStyleSheet("color: gray;")
+        cl.addWidget(self.desktop_help)
         self.desktop = QtWidgets.QComboBox()
         self.desktop.addItems(["(default)", "thin", "full"])
         self.steam = QtWidgets.QComboBox()
         self.steam.addItems(["(default)", "native", "flatpak", "none"])
-        cl.addWidget(_row("Desktop weight", self.desktop))
+        self.desktop_row = _row("Desktop weight", self.desktop)
+        cl.addWidget(self.desktop_row)
         cl.addWidget(_row("Steam delivery", self.steam))
         # Thin-desktop stream host (Sunshine; §8b) — tri-state like the Network
         # page's service toggles (G34: on / force-off / leave builder default).
@@ -340,14 +511,7 @@ class RolePage(QtWidgets.QWizardPage):
             "Thin-desktop stream host (Sunshine) — stream this desktop to mesh "
             "headsets over the tailnet only (default off)")
         self.sunshine.setTristate(True)
-        self.sunshine.setToolTip(
-            "Bakes Sunshine + a mesh-scoped nftables fence (stream ports admitted "
-            "ONLY on the tailscale interface from 100.64/10; pairing web UI "
-            "loopback-only) + an in-session autostart, so a mesh-enrolled Quest "
-            "running Moonlight (the MDM Quest wizard's thin-desktop toggle) can "
-            "open this desktop. Tailnet CLIENT desktops only — the builder "
-            "warn-drops it on cluster roles and on tailnet-less desktops "
-            "(standalone needs --with-tailscale). See docs/MDM.md 'Thin desktop'.")
+        # Tooltip applied by _sync_client_gates, NOT here — see _SUNSHINE_TIP.
         cl.addWidget(self.sunshine)
         # --capable composes onto ANY client/standalone role (G21) — before this
         # checkbox it was only implicit via role standalone-thick.
@@ -373,7 +537,7 @@ class RolePage(QtWidgets.QWizardPage):
         #
         # Its own group rather than inside client_box, because client_box is x86-only
         # (see _sync_machine_boxes) while --standalone is the DEFINING posture of the
-        # ARM appliance images too (build-orangepi-zero2-stage4.sh:218-226) — folding it
+        # ARM appliance images too (build-orangepi-zero2-stage4.sh:637-648) — folding it
         # in there would hide it on the flows whose whole point it is. The scope gate is
         # unchanged (FieldScope "standalone"), and it is HIDDEN rather than greyed
         # out-of-scope, exactly as the Home step used to do it.
@@ -632,7 +796,6 @@ class RolePage(QtWidgets.QWizardPage):
         x86 = machine == "x86"
         self.profile_row.setVisible(x86)
         self.profile_note.setVisible(x86)
-        self.scan_out.setVisible(x86)
 
     # ---- test / navigation entry points ------------------------------------------
     def select_device(self, device_id: str) -> None:
@@ -790,9 +953,17 @@ class RolePage(QtWidgets.QWizardPage):
             skip_w.setChecked(c.skip_uboot)
         self.kernel_flavor.setCurrentIndex(max(0, self.kernel_flavor.findData(c.kernel_flavor or "")))
         self.capable.setChecked(c.capable)
-        # only restore where the compose is legal (_role_changed may have just
-        # disabled + cleared the checkbox for this mode/role)
-        self.unaffiliated.setChecked(c.unaffiliated and self.unaffiliated.isEnabled())
+        # Restore from cfg on the axis that MATTERS, and only that one. The isEnabled()
+        # conjunct this replaces read the widget's paint state, which the tautology above
+        # it had already forced to False in every mode — so a loaded unaffiliated=True was
+        # dropped on the floor here before validatePage ever saw it. Deriving the same
+        # predicate validatePage clears on keeps restore and emission in step: on the
+        # REDUNDANT axis (standalone, any role but the dedicated one) the loaded value
+        # comes back ticked and rides to the argv; on the INAPPLICABLE axis it does not
+        # come back, and does not emit.
+        self.unaffiliated.setChecked(
+            c.unaffiliated
+            and not self._unaffiliated_block(c.mode, self._current_role()[0] or c.role))
         # (ask 21) the standalone posture, restored + scope-gated for the selection
         self.standalone.setChecked(c.standalone)
         self._sync_standalone_gate()
@@ -819,12 +990,200 @@ class RolePage(QtWidgets.QWizardPage):
         probe = copy.copy(c)
         probe.role = self._current_role()[0] or c.role
         probe.platform = self._selected_machine() or c.platform
-        ok = scope_allows("standalone", probe)
+        in_scope = scope_allows("standalone", probe)
+        # DECISION 2(b): a role that ALREADY IS the standalone posture must not re-ask
+        # for it. build-x86-host-stage4.sh:1505/:1332/:1344 set STANDALONE=true in the
+        # role arm itself (RE-DERIVED against the current file — see the module-level
+        # note; the first spelling here cited the pre-diff :1310/:1317/:1329), and a
+        # measured standalone walk of this wizard emits no
+        # --standalone at all (session 20260826-151356-64070a,
+        # build-standalone-unaffiliated.x86.log), so the box was pure noise on exactly
+        # the three roles the standalone flow is built around. It stays live where it
+        # genuinely COMPOSES — chromebook in standalone mode, rpi5-desktop, and the ARM
+        # appliance roles whose builders compose ${STANDALONE} unconditionally.
+        redundant = role_presets_standalone(probe.role)
+        ok = in_scope and not redundant
         gate_widgets_role_class(self.standalone, ok,
-                                out_of_scope_note("standalone", probe), hide=True)
+                                _REDUNDANT_NOTE.format(role=probe.role) if redundant
+                                else out_of_scope_note("standalone", probe), hide=True)
+        # Hide the SECTION with its content — a mode/role-gated group must not leave an
+        # orphan "Image posture" header over an empty body. NetworkPage is where the idiom
+        # lives (it setVisible()s the whole QGroupBox alongside the gate on its children);
+        # named rather than cited by line because that file is under edit in a parallel
+        # lane — `grep -n 'setVisible' network.py` finds it. test_pages_network_sections
+        # pins the rule there, test_pages_role.py pins it here.
         self.posture_box.setVisible(ok)
         if ok:
             self.standalone.setToolTip(_STANDALONE_TIP)
+
+    @staticmethod
+    def _unaffiliated_block(mode: str, role: str) -> str:
+        """Why composable ``--unaffiliated`` is IMPOSSIBLE for this (mode, role) — "" when
+        it composes fine.
+
+        THE SINGLE AXIS, stated once and consumed by all three callers (_role_changed for
+        the render, initializePage for the restore, validatePage for the clear), because
+        the defect this replaces was two *almost* identical expressions that ANDed into a
+        tautology. A predicate with one implementation cannot contradict itself.
+
+        It answers ONLY "is this impossible" — deliberately NOT "is this redundant". The
+        redundant case (standalone mode on chromebook / standalone-thin / standalone-thick,
+        where the image-type row above offers a related spelling) returns "" and is left
+        alone: hiding or clearing it is what rewrote loaded configs, and on
+        chromebook/standalone-thin the row above cannot express the image at all.
+
+        Both arms mirror something the builder or the emitter really does:
+          * ``role == UNAFFILIATED_ROLE`` — build-x86-host-stage4.sh:1525 sets
+            UNAFFILIATED=true in the role arm itself, and config.py's emitter suppresses
+            the flag on that role (``if self.unaffiliated and self.role !=
+            UNAFFILIATED_ROLE``), so clearing here moves no argv byte.
+          * ``mode in ("cloud", "mesh")`` — build-x86-host-stage4.sh:1594 hard-errors on
+            --person-role/--domains with --unaffiliated, and
+            ``config._check_unaffiliated_conflicts`` raises for exactly these two modes
+            (measured: to_cli_args() on a cloud cfg with unaffiliated=True throws
+            ValueError). The clear is what keeps the BuildPage preview renderable.
+
+        Not gated on ROLE_CLIENT (the builder's other requirement, :1380): every role this
+        page can reach in standalone/cloud mode on x86 is a client role, and the non-x86
+        and node-class cases are already carried by validatePage's ``x86_client`` axis —
+        a second, weaker spelling of that gate here would be the very duplication the
+        module docstring forbids.
+        """
+        if role == UNAFFILIATED_ROLE:
+            return _UNAFFILIATED_IS_THE_ROLE_NOTE
+        if mode in ("cloud", "mesh"):
+            return _UNAFFILIATED_MODE_NOTE
+        return ""
+
+    def _sync_client_gates(self, role: str) -> None:
+        """DECISION 2(b)/(c)/(d): gate the x86 client-box knobs the ROLE or the MODE has
+        already answered. Called from _role_changed, so — like _sync_standalone_gate —
+        it re-runs on every selection change AND on every page visit, which is what keeps
+        a hidden field REACHABLE again the moment it becomes applicable (the documented
+        emission-neutrality precondition).
+
+        FOUR gates, two different reasons, and the difference decides what validatePage
+        owes each field:
+
+        * REDUNDANT (--capable, the desktop-weight row, and composable --unaffiliated on
+          every standalone role but the dedicated one): the role's own builder arm sets
+          the identical value (:1332/:1344 CAPABLE=true; the weight is IN the role name),
+          so the built image is byte-identical whether the flag rides along or not. The
+          field is therefore NOT cleared — an operator loading a saved standalone-thick
+          config with capable=true gets it back unchanged (operator: "keep the FIELD
+          itself untouched so a saved config round-trips"), and nothing hidden can change
+          the image, which is the property the emission-neutrality rule protects.
+        * INAPPLICABLE (--with-sunshine on standalone; --unaffiliated in cloud/mesh or on
+          the standalone-unaffiliated role): the value would reach a builder that CANNOT
+          honour it — or, for the dedicated role, an emitter that already suppresses it —
+          so validatePage resets it to the ImageConfig default, exactly like the
+          x86_client blanking beside it.
+
+        The --unaffiliated gate is the one where those two reasons COLLIDE on one widget,
+        and getting them backwards is what broke it the first time: it is hidden on the
+        dedicated role (inapplicable, cleared) and merely redundant everywhere else in
+        standalone mode (shown, tickable, NEVER cleared).
+
+        GUARDED: this runs inside ``_role_changed``, a ``currentRowChanged`` slot, and an
+        exception escaping a slot calls qFatal under the operator's PyQt6 (the venv here
+        is PySide6, which only prints — so an unguarded bug is invisible in test and
+        fatal in production). Swallowing is safe precisely BECAUSE validatePage derives
+        its clears from cfg rather than from these widgets' visibility: the worst a
+        failed pass can do is show a knob that does nothing.
+        """
+        try:
+            self._sync_client_gates_unguarded(role)
+        except Exception:
+            print("role: swallowed exception in _sync_client_gates", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+    def _sync_client_gates_unguarded(self, role: str) -> None:
+        # (2b) --capable: standalone-thick / standalone-unaffiliated already carry
+        # CAPABLE=true from the builder's role arm (:1332, :1344). standalone-thin does
+        # NOT (:1325 sets only DESKTOP="thin"), so the checkbox stays live there — that
+        # is the compose G21 was added for. (Numbers RE-DERIVED against the current
+        # builder; the first spelling cited the pre-diff :1317/:1329/:1310.)
+        capable_redundant = role_presets_capable(role)
+        gate_widgets_role_class(self.capable, not capable_redundant,
+                                _REDUNDANT_NOTE.format(role=role), hide=True)
+
+        # (2b) Desktop weight: _role_changed has just filtered the combo to
+        # ["(default)"] + x86_desktop_axis(role). For the weight-pinning standalone roles
+        # that axis has a SINGLE member, so the combo offers "(default)" and the one
+        # answer that is already the default — a question with one answer is not a
+        # choice. Hide the whole ROW (its "Desktop weight" caption rides in the _row()
+        # container) and the help label that describes only this control, so no orphan
+        # caption is left behind.
+        weight_is_a_choice = len(x86_desktop_axis(role)) > 1
+        gate_widgets_role_class((self.desktop_row, self.desktop_help), weight_is_a_choice,
+                                _REDUNDANT_NOTE.format(role=role), hide=True)
+
+        # (2d) Sunshine streams "to mesh headsets over the TAILNET only" — and ModePage's
+        # standalone arm force-clears the pair (`cfg.tailscale = cfg.sso = False`,
+        # mode.py ~:281-282; that file is being edited in a parallel lane, so grep the
+        # assignment rather than trusting the number), so a standalone image has no
+        # tailnet for the fence to admit and the checkbox can only produce a dropped
+        # flag. Hidden here and CLEARED in validatePage.
+        #
+        # THE BUILDER HOLE THIS GATE WAS FOUND BY — now CLOSED on both sides. Measured:
+        # a standalone chromebook emits "--role chromebook --no-tailscale --no-sso
+        # --with-sunshine" and NEITHER of build-x86-host-stage4.sh's two warn-drop guards
+        # fired. The first (`if ${WANT_SUNSHINE} && ! ${ROLE_CLIENT}`) needs a non-client
+        # role and a chromebook IS ROLE_CLIENT; the second tested only
+        # SKIP_TAILSCALE||UNAFFILIATED, while --no-tailscale (an alias of --no-mesh,
+        # :967) sets SKIP_MESH and leaves SKIP_TAILSCALE false, and the STANDALONE fold
+        # that would raise SKIP_TAILSCALE (:1437 opens it, :1446 does the raise) never
+        # runs without an explicit --standalone. Sunshine + its tailscale-only nftables
+        # fence were therefore baked onto an image with no tailscale interface at all.
+        #
+        # The builder side landed in this same change set: the second guard now reads
+        # `if ${WANT_SUNSHINE} && { ${SKIP_TAILSCALE} || ${SKIP_MESH} || ${UNAFFILIATED};
+        # }`, so the flag is warn-dropped there too. This gate stays as the WIZARD half —
+        # it keeps the flag out of the argv instead of emitting one the builder then
+        # drops, which is what makes the preview honest.
+        #
+        # THE TWO SUNSHINE GUARDS ARE CITED BY CONDITION, NOT BY LINE, deliberately. This
+        # comment first shipped citing :1483/:1487 (pre-diff numbers, already wrong when
+        # written); re-derived they were :1533/:1558, and a parallel lane moved them to
+        # :1566/:1591 within the same hour. `grep -n 'if ${WANT_SUNSHINE}'` finds both
+        # forever. Numbers are kept only where the surrounding region is stable, and
+        # every one of them was verified with `sed -n '<n>p'` against the CURRENT file.
+        sunshine_ok = self.wiz.cfg.mode != "standalone"
+        gate_widgets_role_class(
+            self.sunshine, sunshine_ok,
+            "Sunshine needs the tailnet (its fence admits stream traffic ONLY on the "
+            "tailscale interface); a standalone image has no mesh and no SSO — "
+            "the first screen already decided that. The builder drops the flag.",
+            hide=True)
+        if sunshine_ok:
+            self.sunshine.setToolTip(_SUNSHINE_TIP)
+
+        # (2c) composable --unaffiliated: ONE axis decides the clear, and it is NOT the
+        # hide axis. See the module-level block for the measurement that forced this
+        # rewrite (a loaded chromebook config silently lost --unaffiliated and gained
+        # --bundle-source on a bare page visit). The whole rule is _unaffiliated_block():
+        # non-empty == the compose is IMPOSSIBLE, and that — nothing else — is what greys,
+        # unticks and (in validatePage) clears the field.
+        block = self._unaffiliated_block(self.wiz.cfg.mode, role)
+        # HIDE only on the dedicated role row, which is the duplicate the operator
+        # actually reported ("the same image, one question earlier" — and here the
+        # question IS one line above, in the image-type list). Every other path keeps the
+        # checkbox on screen: in standalone mode because the compose is real and, on
+        # chromebook/standalone-thin, the ONLY spelling of that image; in cloud/mesh
+        # because the greyed row's tooltip is the only explanation of why an unaffiliated
+        # cloud desktop is impossible.
+        gate_widgets_role_class(self.unaffiliated, role != UNAFFILIATED_ROLE,
+                                block, hide=True)
+        self.unaffiliated.setEnabled(not block)
+        if block:
+            # INAPPLICABLE only. NOT a hide-driven clear: on the redundant axis (standalone
+            # mode, any role but the dedicated one) the tick is left exactly as loaded, so
+            # a mere page visit cannot rewrite the operator's image.
+            self.unaffiliated.setChecked(False)
+        # gate_widgets_role_class blanks the tooltip on every ALLOWED widget, so both the
+        # refusal reason and the in-scope "why would I tick this" text are (re)applied
+        # after it — same idiom as _STANDALONE_TIP.
+        self.unaffiliated.setToolTip(block or _UNAFFILIATED_TIP)
 
     def _role_changed(self, _row):
         role, _platforms = self._current_role()
@@ -861,20 +1220,13 @@ class RolePage(QtWidgets.QWizardPage):
                 if keep in weights:
                     self.desktop.setCurrentText(keep)
                 self.desktop.blockSignals(False)
-        # composable --unaffiliated is standalone-only (cloud/mesh bake person-device
-        # identity — a builder hard-conflict, mirrored by config.py) and redundant on
-        # the dedicated role id, which presets it in the builder's own role switch.
-        composable_ok = self.wiz.cfg.mode == "standalone" and role != UNAFFILIATED_ROLE
-        self.unaffiliated.setEnabled(composable_ok)
-        if not composable_ok:
-            self.unaffiliated.setChecked(False)
-        self.unaffiliated.setToolTip(
-            "" if composable_ok else
-            "Composable --unaffiliated applies to a STANDALONE build on a role other "
-            "than standalone-unaffiliated (that role already presets it); cloud/mesh "
-            "person-device identity is a builder hard-conflict.")
         # (ask 21) the standalone posture box follows the role selection too
         self._sync_standalone_gate()
+        # (decision 2b/2c/2d) …and so do the role/mode-pinned client-box knobs — the
+        # composable --unaffiliated gate MOVED IN THERE (it was inline here) so it runs
+        # behind the same try/except: it lives in client_box, it is decision 2(c), and an
+        # exception escaping this currentRowChanged slot calls qFatal under PyQt6.
+        self._sync_client_gates(role)
 
     # ---- machine-profile preset (folded from the Hardware page) ------------------
     def _seed_gpu(self, c, value: str) -> None:
@@ -890,18 +1242,15 @@ class RolePage(QtWidgets.QWizardPage):
         """A profile is a PRESET: pre-fill cfg's GPU/Wi-Fi/Bluetooth (which the Hardware
         step reads into its widgets and finalises) — exactly what HardwarePage._profile_changed
         did to the widgets, but written to cfg so a page BEFORE Hardware can seed them.
-        hw_profile itself is NON_ARGV (never emitted); RolePage.validatePage records it."""
+        hw_profile itself is NON_ARGV (never emitted); RolePage.validatePage records it.
+
+        Every entry is a real MACHINE now: the synthetic "this-machine-scan" row (and the
+        hw_scan.scan() branch that served it) was removed with the duplicate scanner —
+        see the DECISION 2(a) note in __init__ and specs-x86/hwprofiles/profiles.json's
+        _comment. An unknown/removed id simply seeds nothing, so a saved config still
+        naming it round-trips instead of raising."""
         c = self.wiz.cfg
         pid = self.profile.currentData()
-        if pid == "this-machine-scan":
-            s = hw_scan.scan()
-            self._seed_gpu(c, s.recommended_gpu_driver)
-            c.enable_wifi = s.recommend_wifi
-            c.enable_bluetooth = s.recommend_bluetooth
-            gpus = ", ".join(g.name for g in s.gpus) or "none"
-            self.scan_out.setText(f"CPU: {s.cpu or '?'}  ·  GPU: {gpus}  ·  "
-                                  f"recommended driver: {s.recommended_gpu_driver}")
-            return
         p = next((x for x in self.profiles if x.id == pid), None)
         if p:
             self._seed_gpu(c, p.gpu_driver)
@@ -931,9 +1280,30 @@ class RolePage(QtWidgets.QWizardPage):
         # while ANOTHER page is current (the whole page hidden), and plain
         # isVisible() would read False then and wipe the collected values.
         x86_client = self.client_box.isVisibleTo(self)
+        # --capable is NOT cleared when _sync_client_gates hid it: that hide is the
+        # REDUNDANT kind (build-x86-host-stage4.sh:1512/:1344 set CAPABLE=true from the
+        # role arm itself), so the flag riding along is a no-op and the image is
+        # identical either way — while clearing it would silently rewrite a loaded
+        # standalone-thick config on a mere page visit. The PLATFORM axis below is
+        # unchanged: an ARM build still zeroes it, because no ARM builder parses it.
         c.capable = self.capable.isChecked() if x86_client else False
+        # --unaffiliated is cleared on the INAPPLICABLE axis ONLY (decision 2c, CORRECTED
+        # — see the module-level block). NOT on the hide axis: the dedicated role row
+        # being a second spelling of the posture makes the checkbox REDUNDANT on the
+        # standalone client roles, and a redundant hide must never rewrite a loaded config
+        # — the same rule --capable above states, and the one the first cut broke (a
+        # loaded chromebook/unaffiliated=True config silently lost --unaffiliated and
+        # gained --bundle-source on a bare page visit).
+        #
+        # RE-EVALUATED FROM cfg rather than read off the widget's paint state, because
+        # collect_all() can re-validate this page after a ModePage switch that never
+        # re-visited it — a gate applied under the previous mode would then leave a tick
+        # collectable. Deriving from cfg (which ModePage has already committed, and whose
+        # role/platform were committed a few lines above) cannot go stale that way, and it
+        # means a failure to re-gate can only mis-RENDER, never mis-emit.
         c.unaffiliated = (self.unaffiliated.isChecked()
-                          if x86_client and self.unaffiliated.isEnabled() else False)
+                          if x86_client and not self._unaffiliated_block(c.mode, c.role)
+                          else False)
         # (ask 21) --standalone, collected with its own scope gate — NOT x86_client:
         # the ARM appliance/desktop platforms take the posture too, and their boxes are
         # deliberately not part of the x86 client group (see _sync_standalone_gate).
@@ -945,20 +1315,52 @@ class RolePage(QtWidgets.QWizardPage):
         # clear it here so the wizard default cannot poison the argv.
         if c.role == UNAFFILIATED_ROLE or c.unaffiliated:
             c.bundle_source = False
-            # Every branding field is a builder HARD CONFLICT on an unaffiliated
-            # image (_check_unaffiliated_conflicts: "branding assets (… — nothing
-            # to theme against)"), so clear them HERE, at the moment the role is
-            # committed, rather than relying on the BrandingPage's own
-            # validatePage. That page is now SKIPPED for this role (applies_to),
-            # and a skipped page never validates — so an operator who set a theme
-            # and then switched to unaffiliated would otherwise carry the stale
-            # value straight into a ValueError at preview/build time. Clearing at
-            # the commit point is also what makes the skip emission-neutral, the
-            # documented precondition for applies_to() returning False.
-            c.theme = c.branding_dir = c.wallpaper = c.grub_background = ""
-            c.grub_theme = c.login_background = c.brand_logo = ""
-            c.accent_color = c.color_scheme = ""
-            c.brand_locked = False
+            # ── DECISION 1 (operator, 2026-08-26) — "SPLIT IDENTITY FROM LOOK" ────────
+            # This clear used to blank EVERY branding field, because the builder's
+            # unaffiliated fold rejected all of them alike
+            # (build-x86-host-stage4.sh, the single ten-flag `if` that is now the two
+            # identity checks at :1383-1385 and :1398-1400;
+            # config._check_unaffiliated_conflicts). The operator's report — "There should be the menu for
+            # adding the themes as in the branded images" — splits that contract in two:
+            #
+            #   IDENTITY stays FORBIDDEN.  A brand IS an affiliation: --brand /
+            #     --brand-title / --org / --brand-logo / --brand-locked (and a --config
+            #     brand profile) name WHOSE image this is, which is precisely what an
+            #     unaffiliated build must not carry.
+            #   LOOK becomes ALLOWED.  --theme / --branding-dir / --wallpaper /
+            #     --grub-background / --grub-theme / --login-background / --accent-color
+            #     / --color-scheme only say what the desktop LOOKS LIKE. A wallpaper
+            #     names nobody. The branding lane bakes them under NEUTRAL artefact names
+            #     on this image, the way the home/installer/media machinery already does.
+            #
+            # So the LOOK fields are deliberately NOT touched here any more — clearing
+            # them was the reason the theme menu was unreachable on the operator's
+            # standalone-unaffiliated x86 build (session 20260826-151356-64070a).
+            # The IDENTITY fields are still zeroed AT THE COMMIT POINT — but note the
+            # REASON changed under the same decision, so do not read this clear as
+            # redundant and delete it. It used to be load-bearing because BrandingPage
+            # removed itself for this role (applies_to) and a skipped page never
+            # validates; that page is now IN the flow again for an unaffiliated desktop
+            # (branding.py applies_to -> _desktop_half_allowed), and it clears the two
+            # identity widgets itself in its own validatePage (_gate_identity).
+            #
+            # This clear survives as the belt to that page's braces, and it is still the
+            # ONLY clear on two real paths:
+            #   * an unaffiliated image with NO themable desktop half (a non-x86 or
+            #     node-class shape) — applies_to still returns False there, so
+            #     BrandingPage genuinely never validates and this is the sole writer;
+            #   * the role switch itself, which is where an operator who typed a brand
+            #     and THEN chose unaffiliated gets it taken back — one page earlier than
+            #     BrandingPage would, so the stale identity never reaches an argv even
+            #     if the flow is abandoned before the branding step.
+            # Either way it keeps applies_to()'s emission-neutral precondition true.
+            #
+            # field_default() rather than literals: brand/brand_title/org do NOT default
+            # to "" (they are "hugmesh"/"HugMesh Systems"/"hugmesh"), and the builder's
+            # conflict test is "differs from the neutral identity", not "non-empty" — a
+            # blanket blank would have TRIPPED the very check it was meant to satisfy.
+            for fld in ("brand", "brand_title", "org", "brand_logo", "brand_locked"):
+                setattr(c, fld, field_default(fld))
         # per-platform-only axes default clear; the selected platform's branch
         # below overrides (same lingering-value rule as the composable flags)
         c.kernel_flavor = ""
@@ -1027,14 +1429,31 @@ class RolePage(QtWidgets.QWizardPage):
         else:
             c.board = ""
             c.flavor = ""
+            # The weight row may be HIDDEN (decision 2b: the role pins the only answer).
+            # That is the REDUNDANT kind of hide, so the value is read as-is rather than
+            # forced to "": _role_changed has already filtered the combo to
+            # ["(default)"] + x86_desktop_axis(role), so a contradicting saved weight
+            # cannot be selected in the first place (setCurrentText no-ops on a missing
+            # entry) and the only thing that can survive is a weight the builder's role
+            # arm sets anyway — an agreeing explicit --desktop, which the three arms'
+            # DESKTOP_SET contradiction guards (:1322/:1329/:1341) accept as the no-op it
+            # is. (Numbers RE-DERIVED against the current builder.)
             weight = self.desktop.currentText()
             c.desktop = "" if (weight == "(default)" or not x86_client) else weight
         steam = self.steam.currentText()
         c.steam = "" if (steam == "(default)" or not x86_client) else steam
         # sunshine: tri-state (True / "off" / False-as-default); False when the
         # client box is not on this build's surface — mirrors steam's x86_client
-        # blanking so a stale value never rides a server/ARM argv.
-        c.sunshine = _tri_value(self.sunshine) if x86_client else False
+        # blanking so a stale value never rides a server/ARM argv. DECISION 2(d) adds
+        # the MODE conjunct: a standalone image has no tailnet (ModePage's standalone arm
+        # force-clears tailscale/sso), so this is the INAPPLICABLE kind of hide and the field
+        # is reset to its dataclass default rather than left to ride an argv that would
+        # only be warn-dropped one layer down (build-x86-host-stage4.sh's second
+        # `if ${WANT_SUNSHINE} && { … }` guard, which this same change set widened to
+        # include ${SKIP_MESH} — see _sync_client_gates_unguarded for the measurement and
+        # for why that guard is cited by condition instead of by line).
+        c.sunshine = (_tri_value(self.sunshine)
+                      if x86_client and c.mode != "standalone" else False)
         # machine-profile preset (folded from Hardware): NON_ARGV round-trip field.
         # x86-only (the picker is hidden on ARM devices) so a stale x86 profile can't
         # linger on an ARM build's saved config.

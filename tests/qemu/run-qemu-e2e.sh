@@ -54,13 +54,19 @@ TIMEOUT="${TIMEOUT:-1800}"   # seconds to wait for SSH (slow under TCG)
 UI_TIMEOUT="${UI_TIMEOUT:-300}"
 KEEP=false
 DRY_RUN=false
+LIST_ONLY=false
 LAUNCH_X86="${LAUNCH_X86:-${SCRIPT_DIR}/launch-x86.sh}"
 LAUNCH_PI="${LAUNCH_PI:-${SCRIPT_DIR}/launch-pi.sh}"
 KERNEL_IMG_NAME="kernel_2712.img"
 
 usage() {
 cat <<EOF
-Usage: sudo $0 [OPTIONS] [-- <extra playwright args>]
+Usage: $0 [OPTIONS] [-- <extra playwright args>]
+
+Booting needs uid 0 (the launchers loop-mount the golden image). Run it from a
+root shell or from the privileged hugmesh-qemu-runner container — this script
+never invokes sudo, because the Studio drives it and a GUI cannot answer a
+password prompt. --list and --dry-run need no root at all.
 
   -t, --target T       Which VM(s): x86 | pi | both. Default: ${TARGET}
   -r, --role ROLE      Image role to boot/test. Default: ${ROLE}
@@ -79,6 +85,8 @@ Usage: sudo $0 [OPTIONS] [-- <extra playwright args>]
       --ui-timeout SEC Max wait for the forwarded UI. Default: ${UI_TIMEOUT}
       --keep           Don't tear down / delete scratch on exit.
       --dry-run        Resolve artifacts + print the plan; don't boot (no root).
+      --list           Enumerate the boot plan AND the Playwright specs that would
+                       run, as JSON; boots nothing, needs no root and no network.
   -h, --help           Show this help.
 
 Everything after -- is passed through to Playwright (e.g. -- 01-frontpage).
@@ -87,6 +95,11 @@ exit "${1:-0}"
 }
 
 PW_ARGS=()
+# The invocation as typed, kept so the non-root refusal can echo back the SAME
+# command with --list/--dry-run appended instead of a generic stub. `$*` inside the
+# loop below is already empty (every arm shifts), which is what made the first cut
+# of that hint print a bare flag.
+ORIG_ARGV=("$@")
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -t|--target)   TARGET="$2"; shift 2 ;;
@@ -106,6 +119,7 @@ while [[ $# -gt 0 ]]; do
         --ui-timeout)  UI_TIMEOUT="$2"; shift 2 ;;
         --keep)        KEEP=true; shift ;;
         --dry-run)     DRY_RUN=true; shift ;;
+        --list)        LIST_ONLY=true; shift ;;
         -h|--help)     usage 0 ;;
         --)            shift; PW_ARGS=("$@"); break ;;
         *)             echo "Unknown arg: $1" >&2; usage 1 ;;
@@ -170,6 +184,103 @@ resolve_accel() {
     fi
 }
 
+# ── --list: enumerate what this lane WOULD run, boot nothing ───────────────
+# Added 2026-08-26 so the feature tree (and the Studio's QEMU page) can answer
+# "what does the QEMU Playwright lane actually run?" without root, without an
+# image and without a network. It runs BEFORE the autodetect-or-die block below
+# on purpose: a tree with no artifacts yet must still be able to enumerate the
+# lane, so here a missing image is a REPORTED null, not a fatal.
+#
+# The spec half is `playwright test --list`, which resolves and loads every spec
+# file, prints the tree and exits — no browser, no request.
+#
+# --reporter=json is FORCED, and that is not cosmetic (measured for `make
+# stack-e2e-list` on 2026-08-26): under this config's own reporter array a bare
+# --list still fires every FILE writer, leaving junit.xml, report.json and the
+# hugmesh reporter's summary.json in SNAP_REPORT_DIR describing zero tests — an
+# enumeration would clobber the durable artifacts of the last real run. A CLI
+# --reporter REPLACES the array, so the one flag both makes this machine-readable
+# and disarms the writers.
+#
+# It deliberately does NOT go through tests/e2e/run.sh: run.sh hardcodes
+# --reporter=list (which would re-arm nothing but also RUN nothing useful here)
+# and picks a docker engine from whether PW_IMAGE happens to exist on the box.
+json_str() {   # escape one value for JSON: backslash, quote, then control chars
+    local v="$1"
+    v="${v//\\/\\\\}"
+    v="${v//\"/\\\"}"
+    v="${v//$'\n'/\\n}"
+    v="${v//$'\t'/\\t}"
+    printf '"%s"' "${v}"
+}
+json_or_null() { if [ -n "$1" ]; then json_str "$1"; else printf 'null'; fi; }
+
+if ${LIST_ONLY}; then
+    # Non-fatal resolution: report what IS on disk, blank what is not.
+    if [[ "${TARGET}" == "x86" || "${TARGET}" == "both" ]]; then
+        autodetect_x86 || IMG=""
+        resolve_accel
+    fi
+    if [[ "${TARGET}" == "pi" || "${TARGET}" == "both" ]]; then
+        autodetect_pi || true
+    fi
+    pw_json="null"
+    pw_skip="null"
+    if [ ! -d "${E2E_DIR}/node_modules" ]; then
+        # LOUD, NAMED skip — never a silent empty list that reads as "no specs".
+        pw_skip="$(json_str "tests/e2e/node_modules is missing: run 'make playwright-deps' once to enumerate the specs")"
+        echo "[qemu-e2e --list] SKIPPING the spec enumeration: ${E2E_DIR}/node_modules is missing (run 'make playwright-deps')." >&2
+    elif ! command -v npx >/dev/null 2>&1; then
+        pw_skip="$(json_str "npx is not on PATH: install Node to enumerate the specs")"
+        echo "[qemu-e2e --list] SKIPPING the spec enumeration: npx is not on PATH." >&2
+    else
+        # `cd` in a subshell so the enumeration cannot leave this script somewhere
+        # else, and `|| true` so a Playwright parse error degrades to a reported
+        # null instead of taking the boot-plan half down with it.
+        pw_out="$( (cd "${E2E_DIR}" && npx playwright test -c playwright.config.ts \
+                        --list --reporter=json "${PW_ARGS[@]}") 2>/dev/null || true)"
+        if [ -n "${pw_out}" ]; then
+            pw_json="${pw_out}"
+        else
+            pw_skip="$(json_str "playwright test --list produced no output (see stderr)")"
+            echo "[qemu-e2e --list] the spec enumeration produced no output." >&2
+        fi
+    fi
+    cat <<EOF
+{
+  "lane": "qemu-playwright",
+  "script": $(json_str "${BASH_SOURCE[0]}"),
+  "what_it_does": "boot ONE role VM through launch-x86.sh/launch-pi.sh, seed the e2e identities over SSH, run the UNCHANGED tests/e2e Playwright specs against the guest's forwarded UI",
+  "needs_root": true,
+  "target": $(json_str "${TARGET}"),
+  "role": $(json_str "${ROLE}"),
+  "work_dir": $(json_str "${WORK_DIR}"),
+  "test_dir": $(json_str "${TEST_DIR}"),
+  "ssh_port": ${SSH_PORT},
+  "ui_port": ${UI_PORT},
+  "ssh_user": $(json_str "${SSH_USER}"),
+  "accel": $(json_str "${ACCEL}"),
+  "base_url": $(json_str "https://localhost:${UI_PORT}"),
+  "artifacts": {
+    "x86_img": $(json_or_null "${IMG}"),
+    "pi_kernel": $(json_or_null "${KERNEL}"),
+    "pi_stage4": $(json_or_null "${STAGE4}")
+  },
+  "phases": [
+    "[1/5] boot the role VM(s) via launch-x86.sh / launch-pi.sh",
+    "[2/5] wait for SSH, then for the forwarded UI over HTTPS",
+    "[3/5] seed the e2e accounts into the booted node's BFF (seed-accounts.sh)",
+    "[4/5] run tests/e2e/run.sh against the forwarded UI",
+    "[5/5] power the guest down and capture screenshots"
+  ],
+  "playwright_args": [$(if [ ${#PW_ARGS[@]} -gt 0 ]; then for a in "${PW_ARGS[@]}"; do printf '%s,' "$(json_str "${a}")"; done | sed 's/,$//'; fi)],
+  "playwright": ${pw_json},
+  "playwright_skipped": ${pw_skip}
+}
+EOF
+    exit 0
+fi
+
 if [[ "${TARGET}" == "x86" || "${TARGET}" == "both" ]]; then
     autodetect_x86 || die "x86 .img not found in ${WORK_DIR} (pass --img). Build the .img first."
     resolve_accel
@@ -200,7 +311,58 @@ if ${DRY_RUN}; then
     exit 0
 fi
 
-[ "$(id -u)" -eq 0 ] || die "run as root (launchers need loop-mount / KVM): sudo $0 ..."
+# ── the root requirement, and the container that answers it ────────────────
+# launch-x86.sh / launch-pi.sh loop-mount the golden .img to lift its kernel out of
+# the boot partition (losetup -P), so this lane genuinely needs uid 0. That is the
+# SAME constraint tests/qemu/run-qemu-docker.sh already solved WITHOUT sudo, by
+# running the whole harness inside a --privileged container: a privileged container
+# is root for anyone in the `docker` group, which is why the Studio can drive the
+# device-test lane unattended and could not drive this one at all.
+#
+# This refusal therefore NAMES that route instead of only saying "run as root" —
+# a GUI cannot answer an interactive sudo prompt, and telling an operator to sudo
+# is telling them to do the one thing the Studio must not.
+#
+# WHAT IS NOT DONE HERE, said plainly: this script does not yet RE-EXEC itself into
+# that container. Doing so is more than a wrapper — Dockerfile.qemu-runner keeps the
+# guest's port forwards INSIDE the container on purpose (its NETWORKING NOTE), and it
+# ships no Node/Playwright, so the browser half would have to run on the host against
+# a PUBLISHED --ui-port while phases 1-3 run inside. That is a new entrypoint, and it
+# cannot be verified without booting a guest. Until it exists, --list and --dry-run
+# are the non-root verbs, and the recipe below is the working root-free path.
+if [ "$(id -u)" -ne 0 ]; then
+    cat >&2 <<EOF
+${RED}[qemu-e2e] ERROR:${RST} this lane needs root: the launchers loop-mount the golden
+image (losetup -P) to lift its kernel out of the boot partition, and prep the KVM disk.
+
+Three ways forward, in the order you probably want them:
+
+  1. NO ROOT NEEDED — enumerate or preview instead of booting:
+       $0 ${ORIG_ARGV[*]:+${ORIG_ARGV[*]} }--list
+       $0 ${ORIG_ARGV[*]:+${ORIG_ARGV[*]} }--dry-run
+
+  2. CONTAINERIZED, the way the device-test lane already solves this exact problem.
+     A --privileged container is root for anyone in the \`docker\` group, so no sudo
+     and no password are involved:
+       make qemu-docker-image        # builds hugmesh-qemu-runner:latest
+       docker run --rm --privileged \\
+           \$( [ -r /dev/kvm ] && [ -w /dev/kvm ] && echo --device /dev/kvm ) \\
+           -p ${UI_PORT}:${UI_PORT} -p ${SSH_PORT}:${SSH_PORT} \\
+           -v "${REPO_DIR}":/src -v "${WORK_DIR}":/work \\
+           --entrypoint /src/tests/qemu/run-qemu-e2e.sh \\
+           hugmesh-qemu-runner:latest -w /work --target ${TARGET} --role ${ROLE} \\
+           --ssh-port ${SSH_PORT} --ui-port ${UI_PORT}
+     NOTE: that image ships qemu + ssh + curl but NOT Node, so phase [4/5] needs a
+     Playwright it can reach — run tests/e2e against the PUBLISHED :${UI_PORT} from the
+     host (\`make stack-e2e\`-style, SNAP_BASE_URL=https://localhost:${UI_PORT}), or add
+     Node to docker/Dockerfile.qemu-runner. This is why the re-exec is not automatic.
+
+  3. From a shell that is ALREADY root (a root login, a CI runner). This script does
+     not invoke sudo and never will: the Studio drives it, and a GUI cannot answer an
+     interactive password prompt.
+EOF
+    exit 1
+fi
 for t in ssh ssh-keygen curl; do command -v "$t" >/dev/null || die "missing tool: $t"; done
 
 rm -rf "${TEST_DIR}"; mkdir -p "${TEST_DIR}"

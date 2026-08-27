@@ -61,11 +61,192 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # GUARD_PREMERGE overrides it for the negative-control children below, exactly as
 # GUARD_ALLOW does for the allowlist: this number describes THE REAL REPO, and a
 # synthesised one-suite tree cannot be measured against it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-117}"
+#
+# 117 -> 125 on 2026-08-26, and the DENOMINATOR moved 126 -> 134 in the same
+# commit. Both moved for one reason: the census above matched `test-*.sh` only, so
+# the eight `*_test.sh` suites in tests/qemu/ and tests/menu/ were neither counted
+# nor countable. This number is MEASURED, never estimated — run this file, read the
+# "N of M suites are named by a pull_request-triggered workflow" line, and set it to
+# N. Guessing it defeats the check: a baseline nobody derived from the tree is a
+# number that only ever agrees with itself.
+#
+# 130 -> 134 / denominator 138 -> 144 on 2026-08-26 (integrate/services-and-keystones).
+# EVERY ONE OF THE FOUR MERGED BRANCHES CARRIED ITS OWN NUMBER — 118, 118, 130 —
+# each correct against its own base and none correct against the merged tree, and
+# each conflicted on exactly this line. All four were resolved to OURS and then
+# reconciled ONCE, HERE, by running this file and reading the number it MEASURES:
+#     134 of 144 suites are named by a pull_request-triggered workflow
+# +6 suites, +4 gated: test-bootstrap-applies-baked-apps.sh (C1),
+# test-federation-modules-selection.sh (C3), test-kind-addon-channel.sh (A1) and
+# tests/qemu/role_topology_test.sh's siblings' census correction, with
+# test-kind-metrics-api.sh (A1) landing UNGATED and recorded below. Letting any
+# branch's number win would have pinned a cardinality nobody derived from this tree.
+# 130 -> 133 on merge with fix/profile-password-flows: that branch wires
+# test-password-reset-front-door.sh, test-kind-profile-route-closure.sh and
+# test-route-access-oracle.sh into the pull_request workflow. MEASURED at the
+# merge, not carried over from either side -- the branch itself said 120, main
+# said 130, and neither number is true of the merged tree.
+#
+# 134 -> 139 / denominator 144 -> 151 across two merges of main (which had moved
+# to 135/146 via the tube signed-media gate, the fragment route gate and the
+# password-reset front door, then to 135/147 via the federation module-slug gate).
+# BOTH comment blocks above are kept because both record a real reconciliation;
+# no branch's number was true of this tree. MEASURED here, by running this file and
+# reading the line it prints:
+#     139 of 151 suites are named by a pull_request-triggered workflow
+# The GATED count did not move on the second merge -- the slug gate lands UNGATED,
+# recorded in PREMERGE_UNGATED below with its reason -- so only the denominator did.
+# 133 -> 135 on integrate/studio-e2e, and for the same reason a third time. That
+# integration wires two more: tests/scripts/test-stack-e2e-argv.sh (from
+# feat/stack-e2e-argv-passthrough, which listed it itself) and
+# tests/qemu/qemu-e2e-lane_test.sh (from feat/studio-qemu-e2e-lane, which did
+# NOT -- its own copy of this file predates the *_test.sh census and could not
+# see its own new suite). NO branch's number was correct for the merged tree:
+# the two e2e branches both said 118, main said 133. This is the number this
+# file printed when run against the merged tree, and nothing else.
+#
+# 135 -> 137 / denominator 145 -> 148 when main was merged in. Main had moved
+# under this branch three times (the tube signed-media gate, the fragment route
+# target gate, the password-reset front door, the federation module-slug gate).
+# MEASURED on the merged tree by running this file and reading its own line:
+#     137 of 148 suites are named by a pull_request-triggered workflow
+#
+# 137/139 -> 141, denominator -> 153, when the studio-e2e integration and this one
+# met on main. BOTH histories above are kept: each records a real reconciliation,
+# and deleting either erases why a number moved. Four branches have now written
+# their own value into this one line (118, 133, 137, 139) and not one of them was
+# true of the tree that resulted. MEASURED, by running this file:
+#     141 of 153 suites are named by a pull_request-triggered workflow
+# 135 -> 135 at the 2026-08-26 gherkin/e2e integration, and the number staying put
+# is the finding, not a non-event: the merged tree gained NINE suites and the
+# DENOMINATOR moved 146 -> 155 while the gated count did not move at all, because
+# not one of the nine is named by a pull_request workflow. MEASURED by running
+# this file on the merged tree; the branches said 117 and main said 135, and
+# 117 was true of neither.
+#
+# 141 / 135 -> 141, denominator 153 / 155 -> 163, when the two independently built
+# gherkin/e2e integrations met. BOTH histories above are kept, for the reason the
+# block above already gives: each records a real reconciliation, and deleting
+# either erases why a number moved. Seven values have now been written into this
+# one line by branches that each believed theirs (117, 118, 133, 135, 137, 139,
+# 141) and not one of them was true of the tree that resulted -- the two sides of
+# THIS merge said 135 and 141 over denominators of 155 and 153, and the merged
+# tree is 141 over 163. The GATED count is unchanged here and the denominator is
+# what moved: every suite the merge added lands ungated and is recorded in
+# PREMERGE_UNGATED below. MEASURED by running this file against the merged tree
+# and reading the line it prints:
+#     141 of 163 suites are named by a pull_request-triggered workflow
+# and by nothing else.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
+
+# ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
+# PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
+# one-for-one swap. MEASURED on this repo (2026-08-26, an adversarial review's
+# reproduction, re-run here before this block existed): delete
+# `tests/stack/test-tls-front.sh` from .github/workflows/shell-suites.yml and add
+# one new wired suite in the SAME edit, and the analyser printed
+#     125 of 135 suites are named by a pull_request-triggered workflow
+#     PASS pre-merge suite coverage pinned at 125/135
+# rc=0, fully green. A suite that used to block a bad merge no longer did, and the
+# guard whose failure message exists to say exactly that said nothing. Check 3 was
+# silent too, because test-tls-front.sh is still named in .gitlab-ci.yml.
+#
+# So pin the SET. This list is the COMPLEMENT — the suites that are NOT named by
+# any pull_request workflow. The complement is pinned rather than the 125 gated
+# paths for two reasons: it is nine lines instead of a hundred and twenty-five,
+# and it only changes when someone lands a suite the pre-merge gate does not run,
+# which is precisely the event that wants a human to look. It is exactly as
+# strong: `gated = suites - ungated`, so pinning `len(gated)` (above) AND this
+# complement determines the gated set element by element, and determines the
+# denominator too (total == n + len(ungated), by construction).
+#
+# Delisting a gated suite now NAMES it, whatever else lands in the same commit.
+#
+# MEASURED, never hand-written: run this file and read the "ungated:" lines it
+# prints on mismatch, or `GUARD_PREMERGE_UNGATED=x bash tests/scripts/test-guard-integrity.sh`
+# to have it print the whole corrected list. Nothing is exempted by being here —
+# an entry is a statement that the suite does not gate a PR, not permission.
+#
+# THE NINE test-e2e-* ENTRIES (added 2026-08-26 at the gherkin/e2e integration).
+# Every one of them is RUN — the Makefile's stack-e2e-bdd-check / -guards /
+# e2e-reporter-check targets invoke all nine, which is why check 3 above is green
+# — but a make target gates nothing, so they belong here and the reason is stated
+# per suite rather than as a shrug.
+#
+# EIGHT of the nine REFUSE TO RUN without tests/e2e/node_modules/playwright-bdd
+# and a Playwright browser: they exit 2 with "SKIPPED-LOUDLY ... this guard
+# checked NOTHING" rather than 0. MEASURED, not read: each was executed on this
+# tree with tests/e2e/node_modules moved aside and each exited 2 — which was true
+# of only seven of them when the measurement started: test-e2e-func-media-games.sh
+# had no such preflight and exited 1, indistinguishable from a real drift finding,
+# so it was given the block its eight siblings already carried. No image the
+# shell-suites workflow runs carries that install — alpine:3, python:3.12-slim
+# (x2) and node:24-alpine — and THREE of the eight additionally build the REAL
+# PyQt wizard offscreen and need a Qt6 binding (the three marked '+ Qt6' below). Listing them would gate a job
+# that can only ever skip, which is the failure mode
+# .github/workflows/shell-suites.yml's header describes at length.
+#
+#   test-e2e-cli-lane.sh                 needs node_modules + a chromium
+#   test-e2e-coverage-matrix.sh          needs node_modules + a chromium
+#   test-e2e-env-interface-dimensions.sh needs node_modules + chromium + Qt6
+#   test-e2e-func-media-games.sh         needs node_modules + chromium + Qt6
+#   test-e2e-gherkin-harness.sh          needs node_modules + a chromium
+#   test-e2e-governance-function-matrix.sh needs node_modules + a chromium
+#   test-e2e-social-function-matrix.sh   needs node_modules + a chromium
+#   test-e2e-studio-gui-lane.sh          needs node_modules + chromium + Qt6
+#
+# THE NINTH IS DIFFERENT AND IS SAID SO OUT LOUD. tests/scripts/test-e2e-reporter-shape.sh
+# needs NOTHING but node >= 23.6 and python3 — its own header says "OFFLINE, NO
+# STACK, NO ROOT, NO node_modules", and MEASURED here with node_modules moved
+# aside it still exits 0 with 30 passed. The node:24-alpine job already installs
+# python3, so it is gateable as a one-line addition. It is recorded rather than
+# wired because this workflow's own rule is that "every suite below was EXECUTED
+# in the image named by its job before being listed here — not classified by
+# reading it", and the integration session that merged these lanes could not run
+# containers to do that. Run it in node:24-alpine, add it to that job's SUITES
+# list, and raise PREMERGE_BASELINE by one. THAT IS A REAL, NAMED FOLLOW-UP, not
+# an exemption.
+PREMERGE_UNGATED=(
+  tests/casdoor/test-jwt-custom-token.sh
+  tests/device-registry/test-layer-a-headscale-acl.sh
+  tests/egress-vpn/test-secret-contract.sh
+  tests/pentest/nuclei/test-templates.sh
+  tests/scripts/test-e2e-cli-lane.sh
+  tests/scripts/test-e2e-coverage-matrix.sh
+  tests/scripts/test-e2e-env-interface-dimensions.sh
+  tests/scripts/test-e2e-func-media-games.sh
+  tests/scripts/test-e2e-gherkin-harness.sh
+  tests/scripts/test-e2e-governance-function-matrix.sh
+  tests/scripts/test-e2e-reporter-shape.sh
+  tests/scripts/test-e2e-social-function-matrix.sh
+  tests/scripts/test-e2e-studio-gui-lane.sh
+  tests/scripts/test-eso-target-collisions.sh
+  # LIVE-CLUSTER ONLY, and MEASURED in the shell-suites job image before being
+  # listed here: alpine:3 + that job's apk set prints "SKIP kubectl is not on PATH"
+  # and exits 0 having run ZERO assertions. Gating it would raise the coverage
+  # number by one and gate nothing. Not a claim that it passes — on a box with a
+  # kind cluster up but no metrics-server synced it goes RED with 2 failures.
+  # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
+  tests/scripts/test-kind-metrics-api.sh
+  tests/scripts/test-federation-module-slugs.sh
+  tests/scripts/test-liquibase-grant-roles.sh
+  # Needs the hugmesh-admin-bff-api checkout for its fifth surface (the
+  # controller's OptionalServiceRegistry). It reports INCOMPLETE and FAILS without
+  # it rather than checking four surfaces of five, so a hosted runner that cannot
+  # clone the org-private repo would go red for a missing clone, not a defect.
+  # Gated post-merge by .gitlab-ci.yml's lint:optional-service-slug-closure.
+  tests/scripts/test-optional-service-slug-closure.sh
+  tests/scripts/test-service-env-contract.sh
+  tests/stack/test-gateway-auth-flag-parity.sh
+  tests/stack/test-m2-bootstrap.sh
+  tests/stack/test-web-locales-wiring.sh
+)
+if [ -n "${GUARD_PREMERGE_UNGATED+x}" ]; then UNGATED_TEXT="${GUARD_PREMERGE_UNGATED}"
+else UNGATED_TEXT="$(printf '%s\n' "${PREMERGE_UNGATED[@]}")"; fi
 
 echo "== guard integrity: every guard can fail, and something runs it =="
 
-REPO="${GUARD_ROOT}" ALLOW_UNWIRED="${ALLOW_TEXT}" PREMERGE_BASELINE="${PREMERGE_BASELINE}" python3 - <<'PY'
+REPO="${GUARD_ROOT}" ALLOW_UNWIRED="${ALLOW_TEXT}" PREMERGE_BASELINE="${PREMERGE_BASELINE}" PREMERGE_UNGATED="${UNGATED_TEXT}" python3 - <<'PY'
 import os, re, sys
 
 repo = os.environ["REPO"]
@@ -82,20 +263,82 @@ def ok(m):  print("  PASS " + m); P[0] += 1
 def bad(m): print("  FAIL " + m); F[0] += 1
 
 # ── collect the suites ───────────────────────────────────────────────────────
+# TWO NAMING CONVENTIONS, and for months this walker only knew one.
+#
+# WHAT WAS OBSERVED (2026-08-26). Check 7 printed "117 of 126 suites are named by
+# a pull_request-triggered workflow" and passed. Both numbers were computed from a
+# walk that matched `test-*.sh` ONLY. tests/qemu/ and tests/menu/ use the OTHER
+# convention this repo writes, `*_test.sh`, and every file with that name was
+# outside the census entirely: not counted in the 126, not eligible to be counted
+# in the 117, and — because checks 1, 2, 3 and 7 iterate THIS list — not analysed
+# by any of those four either. Eight suites were in that hole, among them
+# tests/qemu/verdict_test.sh, which exists specifically to stop the harness
+# reporting false PASSes and was itself gating nothing.
+#
+# WHICH CHECKS THE CENSUS ACTUALLY FEEDS — MEASURED, and narrower than the first
+# version of this comment claimed. That version said checks 1/2/3/6/8 iterate this
+# list; an adversarial review disproved it, and re-running the PRE-change file and
+# the POST-change file against this same repo confirms the correction:
+#
+#   checks 1, 2, 3, 7  iterate `suites`. These four, and only these four, are what
+#                      widening the census extended. 126 -> 134 suites analysed.
+#
+#   check 6            does NOT. Its per-suite silent-skip analysis iterates
+#                      `batch`, which is built from .gitlab-ci.yml alone (the
+#                      re.finditer over `ci` in check 6 below). Batch-run suites:
+#                      40 BEFORE, 40 AFTER — unchanged. None of the eight is in
+#                      any SUITES= list: seven appear in no GitLab job at all, and
+#                      mesh-cluster_test.sh appears only as a bare
+#                      `- bash tests/qemu/mesh-cluster_test.sh` script line
+#                      (.gitlab-ci.yml:578), which is not a batch list. The eight
+#                      are gated in GitHub Actions and check 6 keys on GitLab, so
+#                      they were outside check 6 before this change and STILL ARE.
+#                      Check 6's section touches `suites` in exactly one place —
+#                      the tail guard asking whether ANY suite calls
+#                      guard_require_*, which only decides whether the
+#                      guard-preflight.sh check runs — not in the silent-skip
+#                      analysis, which is the part that matters.
+#                      Consequence worth stating plainly: check 6 IS the
+#                      silent-skip guard, and this change's own headline finding
+#                      (ncurses_charset_test.sh recording 20 passed / 0 failed on
+#                      busybox grep while a real regression was planted) is a
+#                      textbook check-6 defect that check 6 did not and cannot
+#                      report. It was found BY HAND. The route around it is the
+#                      node job's `grep -P` preflight, not this walker.
+#
+#   check 8            never used the census at all. It runs its OWN os.walk over
+#                      tests/ AND scripts/ for every *.sh (see check 8 below), so
+#                      the eight were always inside it: 250 .sh files scanned
+#                      BEFORE, 250 AFTER — unchanged.
+#
+# This is the identical "in NEITHER place" defect the 2026-08-22 sweep closed for
+# test-*.sh (see the header of .github/workflows/shell-suites.yml). It reopened
+# purely through a naming difference, which is the argument for matching on BOTH
+# spellings here rather than on the one that happened to be typed first.
+#
+# Matching is deliberately broad: `test-*.sh` OR `*_test.sh`. A third convention
+# would slip through again, so the rule to keep is "add the spelling here the day
+# someone introduces it", and the negative control (j) below is what proves this
+# walker actually reaches the second one.
 suites = []
 for root, dirs, files in os.walk(os.path.join(repo, "tests")):
     dirs[:] = [d for d in dirs if d not in (".git", "node_modules")]
     for fn in files:
-        if fn.startswith("test-") and fn.endswith(".sh"):
+        if not fn.endswith(".sh"):
+            continue
+        if fn.startswith("test-") or fn.endswith("_test.sh"):
             suites.append(os.path.relpath(os.path.join(root, fn), repo))
 suites.sort()
 
 if not suites:
-    bad("found ZERO test-*.sh suites under tests/ — this guard would be vacuous")
+    bad("found ZERO test-*.sh / *_test.sh suites under tests/ — this guard would be vacuous")
     print()
     print("== guard integrity: %d passed, %d failed ==" % (P[0], F[0]))
     sys.exit(1)
-ok("enumerated %d test-*.sh suites under tests/" % len(suites))
+_dash  = sum(1 for s in suites if os.path.basename(s).startswith("test-"))
+_under = len(suites) - _dash
+ok("enumerated %d suites under tests/ (%d test-*.sh + %d *_test.sh)"
+   % (len(suites), _dash, _under))
 
 # ── "what is the last thing this script actually runs?" ──────────────────────
 # Read BACKWARD from EOF. A forward heredoc-state machine is the obvious design
@@ -534,6 +777,51 @@ else:
         "PREMERGE_BASELINE to %d so the recorded number stays true"
         % (n, PREMERGE_BASELINE, n))
 
+# ── 7b) WHICH suites are ungated, not merely how many ────────────────────────
+# The count above cannot see a ONE-FOR-ONE SWAP: delist a gated suite and gate a
+# different one in the same commit and n is unchanged, so the check that exists to
+# say "a suite that used to block a bad merge no longer does" says nothing. That
+# was reproduced against this file on 2026-08-26 — rc=0, fully green, while
+# tests/stack/test-tls-front.sh had just been removed from the workflow.
+#
+# `gated = suites - ungated`, so pinning this complement pins the gated SET
+# element by element, and pins `total` with it (total == n + len(ungated) by
+# construction — the denominator can no longer drift unremarked either).
+#
+# SKIPPED when the tree has no pull_request workflow at all: there is then nothing
+# to compare, and the case is not a hole because n would be 0 and the cardinality
+# check above already goes loudly RED. It is also what lets the miniature trees in
+# the negative-control section below stay clean.
+pinned_ungated = sorted(
+    l.strip() for l in os.environ.get("PREMERGE_UNGATED", "").splitlines() if l.strip()
+)
+actual_ungated = sorted(set(suites) - set(gated))
+if not pr_wf:
+    ok("no pull_request workflow in this tree — the ungated SET has nothing to be "
+       "compared against (the count above is what speaks here)")
+else:
+    delisted = [s for s in actual_ungated if s not in pinned_ungated]
+    regated  = [s for s in pinned_ungated if s not in actual_ungated]
+    if delisted:
+        bad("suite(s) outside the pre-merge gate that PREMERGE_UNGATED does not "
+            "record — either one that used to block a bad merge and now does not, "
+            "or a new suite that landed outside the gate:")
+        for s in delisted:
+            print("         %s" % s)
+    if regated:
+        bad("PREMERGE_UNGATED names suite(s) that ARE gated now (or no longer "
+            "exist) — the recorded list has rotted:")
+        for s in regated:
+            print("         %s" % s)
+    if delisted or regated:
+        print("         the pin must be REPLACED with the measured list below "
+              "(and PREMERGE_BASELINE set to %d):" % n)
+        for s in actual_ungated:
+            print("           %s" % s)
+    else:
+        ok("the ungated SET matches its pin exactly (%d suite(s)) — a one-for-one "
+           "swap cannot hide a delisting behind an unchanged count" % len(pinned_ungated))
+
 # ── 8) `| grep -q` UNDER pipefail IS A COIN FLIP ─────────────────────────────
 # `grep -q` exits the instant it matches and closes its end of the pipe. If the
 # stage upstream has not finished writing, the kernel kills it with SIGPIPE and
@@ -728,6 +1016,86 @@ echo "== ${P} passed, ${F} failed =="
     > "${NEG}/tree/.github/workflows/pr.yml"
   neg_case "a pre-merge-gated suite the baseline does not record" \
            "raise PREMERGE_BASELINE"
+
+  # (j) THE BLIND SPOT ITSELF: an orphaned suite named in the OTHER convention.
+  #     Until 2026-08-26 the census walked for `test-*.sh` only, so a file called
+  #     `<something>_test.sh` was not merely ungated — it was not a suite at all as
+  #     far as this analyser was concerned, and checks 1, 2, 3 and 7 all skipped
+  #     it in silence. (NOT 6 or 8: check 8 walks every *.sh itself and always saw
+  #     them; check 6 keys on .gitlab-ci.yml batch lists and still does not — see
+  #     the measured breakdown in the census header.) Eight real suites lived in
+  #     that hole, tests/qemu/verdict_test.sh
+  #     among them. THIS CONTROL IS THE PROOF THE WALKER REACHES THE SECOND NAME:
+  #     reverting the census to `fn.startswith("test-")` makes it stop biting
+  #     (measured — the child then goes green and this case reports "did NOT bite"),
+  #     which is exactly what a regression on the collector looks like.
+  #
+  #     The tree is otherwise CLEAN — test-probe.sh is wired by the generated
+  #     .gitlab-ci.yml — so nothing but the *_test.sh file can be producing the red.
+  build_tree 'P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+ok "nothing wrong"
+echo "== ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]'
+  # Body kept counter-free ON PURPOSE, and it is the same shape control (c) plants.
+  # An `ok(){ P=$((P+1)); }` written inline here would be read by check 2's
+  # LINE-BASED function tracker as belonging to the enclosing `bad()` of the
+  # build_tree body above it, and this analyser would then flag ITSELF for a
+  # "counter P counted but never raised". Observed while writing this control.
+  printf 'echo orphan\nexit 0\n' > "${NEG}/tree/tests/probe/orphan_test.sh"
+  neg_case "an orphaned suite using the *_test.sh convention" \
+           "tests/probe/orphan_test.sh"
+
+  # (k) THE ONE-FOR-ONE SWAP — the hole check 7's CARDINALITY pin cannot see, and
+  #     the reason 7b exists. Reproduced against the real repo on 2026-08-26:
+  #     removing tests/stack/test-tls-front.sh from shell-suites.yml while adding
+  #     one new gated suite in the same edit printed "pinned at 125/135" and
+  #     exited 0. Check 3 stayed quiet too — test-tls-front.sh is still named in
+  #     .gitlab-ci.yml, so "something runs it" remained true; what stopped being
+  #     true is that it blocks a merge.
+  #
+  #     The tree below is that edit in miniature. THREE suites, all three wired in
+  #     .gitlab-ci.yml (so checks 1/2/3 are clean and only check 7 can be red).
+  #     Before the swap the workflow gated probe+second; here it gates probe+THIRD.
+  #     The count is IDENTICAL — GUARD_PREMERGE=2 is the honest pre-swap baseline
+  #     and it still agrees — so check 7's cardinality line PASSES, and 7b is the
+  #     only thing that can name tests/probe/test-second.sh. If the count alone
+  #     could catch this, this control would bite with 7b deleted; it does not
+  #     (measured: with the pin check removed the child exits 0).
+  #
+  #     The clean body goes through build_tree, NOT through an inline one-line
+  #     printf. Writing `ok(){ …; P=$((P+1)); }` and the `[ "${F}" -eq 0 ]` raise
+  #     on a SINGLE line of this file makes check 2's line-based counter tracker
+  #     read them as one unit and flag THIS file for "counter P counted but never
+  #     raised" — observed while writing this control, and the same class of
+  #     self-flagging that control (j) records just above.
+  build_tree 'P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+ok "nothing wrong"
+echo "== ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]'
+  mkdir -p "${NEG}/tree/.github/workflows"
+  # Counter-free bodies, for the reason control (j) records above.
+  printf 'echo second\nexit 0\n' > "${NEG}/tree/tests/probe/test-second.sh"
+  printf 'echo third\nexit 0\n'  > "${NEG}/tree/tests/probe/test-third.sh"
+  printf 'probe-job:\n  script:\n    - bash tests/probe/test-probe.sh\n    - bash tests/probe/test-second.sh\n    - bash tests/probe/test-third.sh\n' \
+    > "${NEG}/tree/.gitlab-ci.yml"
+  printf 'all:\n\t@true\n' > "${NEG}/tree/Makefile"
+  printf 'name: pr\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash tests/probe/test-probe.sh\n      - run: bash tests/probe/test-third.sh\n' \
+    > "${NEG}/tree/.github/workflows/pr.yml"
+  swap_out="$(GUARD_SELFTEST_CHILD=1 GUARD_ROOT="${NEG}/tree" GUARD_ALLOW="" \
+              GUARD_PREMERGE=2 GUARD_PREMERGE_UNGATED="tests/probe/test-third.sh" \
+              bash "${SELF}" 2>&1)"; swap_rc=$?
+  if [ "${swap_rc}" -ne 0 ] \
+     && printf '%s' "${swap_out}" | grep -F "tests/probe/test-second.sh" >/dev/null \
+     && printf '%s' "${swap_out}" | grep -F "pre-merge suite coverage pinned at 2/3" >/dev/null; then
+    ok "negative control bites: a one-for-one swap that leaves the gated COUNT unchanged"
+  else
+    bad "negative control did NOT bite (rc=${swap_rc}): a one-for-one swap that leaves the gated COUNT unchanged"
+    printf '%s\n' "${swap_out}" | sed 's/^/           /'
+  fi
 
   # (h) `| grep -q` in a pipefail suite. The literal is ASSEMBLED here so this
   #     file does not itself carry the shape its own check 8 forbids — writing it

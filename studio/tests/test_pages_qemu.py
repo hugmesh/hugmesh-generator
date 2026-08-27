@@ -1,4 +1,4 @@
-"""QemuPage — the THIN test face — plus the two ends of the qemu_e2e build chain.
+"""QemuPage — the THIN test face — plus the two ends of the device-test build chain.
 
 After T3 this page is one thing: run a build session's rows to completion and say
 what each row's verdict actually was. The persistent-device console it used to carry
@@ -27,7 +27,8 @@ WHAT THIS FILE PINS
   runner's exit status as "device tests passed".
 * WHAT LEFT — no device table, no keep-alive tick, no second spawn lane. A test that
   only added the new face would let the old one rot back in.
-* THE BUILD CHAIN — unchanged, and asserted unchanged: the radio seeds cfg.qemu_e2e,
+* THE BUILD CHAIN — unchanged, and asserted unchanged: the radio seeds
+  cfg.qemu_device_tests,
   BuildPage's checkbox owns it from the moment it is reached, and the --env gate holds.
 
 WHAT IS REAL HERE, AND WHY IT MATTERS
@@ -49,6 +50,7 @@ import dataclasses
 import inspect
 import json
 import os
+import shlex
 import time
 from types import SimpleNamespace
 
@@ -92,6 +94,20 @@ exit 0
 #: The AVC workout stand-in (issue #45). Same echo discipline.
 _STUB_AVC = """#!/usr/bin/env bash
 echo "STUB-AVC $*"
+exit 0
+"""
+
+#: The PLAYWRIGHT lane's stand-in (tests/qemu/run-qemu-e2e.sh). A SEPARATE marker
+#: from _STUB_RUNNER on purpose: the assertions below are about which of the two
+#: scripts the page actually spawned, and a shared marker would make the one
+#: mutation that matters — aiming the envelope at run-qemu-docker.sh — invisible.
+#: It echoes "$*" for the readable one-line assertions AND one line per argument,
+#: because "$*" JOINS with spaces: a quoting regression that hands '--grep @smoke'
+#: over as ONE argument is invisible in the joined form and obvious in the list.
+#: (Measured: a mutation doing exactly that survived the joined-form assertions.)
+_STUB_PLAYWRIGHT = """#!/usr/bin/env bash
+echo "STUB-QEMU-E2E $*"
+for a in "$@"; do echo "STUB-QEMU-E2E-ARG $a"; done
 exit 0
 """
 
@@ -178,6 +194,9 @@ def fake_generator(tmp_path):
     avc = qdir / "avc-workout.sh"
     avc.write_text(_STUB_AVC)
     avc.chmod(0o755)
+    pw = qdir / "run-qemu-e2e.sh"
+    pw.write_text(_STUB_PLAYWRIGHT)
+    pw.chmod(0o755)
     return gen, full, abort
 
 
@@ -680,7 +699,7 @@ def test_qemu_use_existing_is_terminal_and_arms_nothing(wiz):
     page = _qemu_page(wiz)
     assert page.nextId() == -1 and page.isFinalPage()
     assert page.validatePage() is True
-    assert wiz.cfg.qemu_e2e is False   # "test what exists" must not arm the hook
+    assert wiz.cfg.qemu_device_tests is False   # "test what exists" must not arm the hook
 
 
 def test_qemu_build_first_rejoins_the_image_flow_and_arms_the_hook(wiz):
@@ -689,9 +708,9 @@ def test_qemu_build_first_rejoins_the_image_flow_and_arms_the_hook(wiz):
     assert page.nextId() != -1                          # rejoins, not terminal
     assert not page.session_box.isVisible()             # picker is the other arm's
     assert not page.console_pointer.isVisible()         # so is the console pointer
-    assert wiz.cfg.qemu_e2e is False
+    assert wiz.cfg.qemu_device_tests is False
     wiz.next()
-    assert wiz.cfg.qemu_e2e is True                     # armed on the way out
+    assert wiz.cfg.qemu_device_tests is True                     # armed on the way out
     assert not isinstance(wiz.currentPage(), wizard_mod.QemuPage)
 
 
@@ -733,7 +752,7 @@ def test_qemu_build_first_makes_the_wizard_next_button_live(wiz, qapp):
     nxt.click()                                       # the REAL route, not wiz.next()
     qapp.processEvents()
     assert not isinstance(wiz.currentPage(), wizard_mod.QemuPage)
-    assert wiz.cfg.qemu_e2e is True
+    assert wiz.cfg.qemu_device_tests is True
 
     back_to(wiz, wizard_mod.QemuPage)
     qapp.processEvents()
@@ -791,41 +810,41 @@ def test_qemu_page_without_sessions_forces_build_first(wiz, monkeypatch):
     assert page.nextId() != -1
 
 
-def test_build_qemu_e2e_gate_follows_env(real_wiz):
+def test_build_qemu_device_tests_gate_follows_env(real_wiz):
     """The checkbox lives and dies with --env: greyed + unticked on prod (a prod
     image prunes the in-cluster test runner, so the assertions would target a stack
     the build removed on purpose), reversible on test — and never an argv token."""
     build = advance_to(real_wiz, wizard_mod.BuildPage)
     assert build.env.currentText() == "test"            # the builders' own default
-    assert build.qemu_e2e.isEnabled()
-    build.qemu_e2e.setChecked(True)
+    assert build.qemu_device_tests.isEnabled()
+    build.qemu_device_tests.setChecked(True)
     build.env.setCurrentText("prod")
-    assert not build.qemu_e2e.isEnabled()
-    assert not build.qemu_e2e.isChecked()               # prod may not carry the flag
-    assert "prod" in build.qemu_e2e.toolTip()           # the WHY is on the widget
+    assert not build.qemu_device_tests.isEnabled()
+    assert not build.qemu_device_tests.isChecked()               # prod may not carry the flag
+    assert "prod" in build.qemu_device_tests.toolTip()           # the WHY is on the widget
     build.env.setCurrentText("test")
-    assert build.qemu_e2e.isEnabled()                   # reversible, not destroyed
-    build.qemu_e2e.setChecked(True)
+    assert build.qemu_device_tests.isEnabled()                   # reversible, not destroyed
+    build.qemu_device_tests.setChecked(True)
     build._preview()
-    assert real_wiz.cfg.qemu_e2e is True
+    assert real_wiz.cfg.qemu_device_tests is True
     assert not any("qemu" in a.lower() for a in real_wiz.cfg.to_cli_args())
 
 
-def test_build_qemu_e2e_collect_reenforces_the_env_gate(real_wiz):
+def test_build_qemu_device_tests_collect_reenforces_the_env_gate(real_wiz):
     """Belt and braces: even a programmatic check while prod is selected (the greyed
     widget still accepts setChecked) must not let a prod config carry the flag."""
     build = advance_to(real_wiz, wizard_mod.BuildPage)
     build.env.setCurrentText("prod")
-    build.qemu_e2e.setChecked(True)                     # bypasses the greyed gate
+    build.qemu_device_tests.setChecked(True)                     # bypasses the greyed gate
     build._preview()
-    assert real_wiz.cfg.qemu_e2e is False
+    assert real_wiz.cfg.qemu_device_tests is False
 
 
 def test_qemu_opt_out_on_buildpage_survives_a_page_revisit(real_wiz):
     """Unticking the BuildPage checkbox must STAY unticked across a page revisit.
 
     This is the operator-visible bug and it is the PRIMARY forward route, not an
-    exotic one. QemuPage.validatePage() only ever SETS cfg.qemu_e2e True, and
+    exotic one. QemuPage.validatePage() only ever SETS cfg.qemu_device_tests True, and
     BuildPage.initializePage() calls wiz.collect_all(), which re-runs the
     validatePage of every VISITED page. QemuPage is still visited on this route, so
     it re-arms the flag the operator just cleared, and build.py:888 re-ticks the
@@ -837,13 +856,13 @@ def test_qemu_opt_out_on_buildpage_survives_a_page_revisit(real_wiz):
     qp = _qemu_page(real_wiz)
     qp.build_first.setChecked(True)
     real_wiz.next()
-    assert real_wiz.cfg.qemu_e2e is True, "build-first should arm the hook"
+    assert real_wiz.cfg.qemu_device_tests is True, "build-first should arm the hook"
 
     build = advance_to(real_wiz, wizard_mod.BuildPage)
     build.env.setCurrentText("test")          # the checkbox is gated on --env test
-    build.qemu_e2e.setChecked(False)          # the operator opts OUT
+    build.qemu_device_tests.setChecked(False)          # the operator opts OUT
     build._preview()
-    assert real_wiz.cfg.qemu_e2e is False, "unticking must clear the flag"
+    assert real_wiz.cfg.qemu_device_tests is False, "unticking must clear the flag"
 
     real_wiz.back()                           # leave BuildPage...
     real_wiz.next()                           # ...and walk straight back into it
@@ -851,10 +870,10 @@ def test_qemu_opt_out_on_buildpage_survives_a_page_revisit(real_wiz):
     page = real_wiz.currentPage()
     assert isinstance(page, wizard_mod.BuildPage), \
         f"expected to land back on BuildPage, got {type(page).__name__}"
-    assert real_wiz.cfg.qemu_e2e is False, (
-        "revisiting BuildPage re-armed qemu_e2e — the operator's opt-out was silently "
+    assert real_wiz.cfg.qemu_device_tests is False, (
+        "revisiting BuildPage re-armed qemu_device_tests — the operator's opt-out was "
         "reverted, so the post-build device tests would run anyway")
-    assert build.qemu_e2e.isChecked() is False, "the checkbox re-ticked itself"
+    assert build.qemu_device_tests.isChecked() is False, "the checkbox re-ticked itself"
 
 
 # ---- ProgressPage: the post-build hook ----------------------------------------------
@@ -863,7 +882,7 @@ def test_progress_runs_the_device_tests_after_an_all_ok_build(wiz, fake_generato
                                                               qapp):
     _gen, full, _abort = fake_generator
     prog = wiz.page(wiz._page_ids["progress"])
-    wiz.cfg.qemu_e2e = True
+    wiz.cfg.qemu_device_tests = True
     prog._session = SimpleNamespace(workdir=str(full))
     prog._maybe_qemu_tests()
     assert prog.qemu_worker is not None
@@ -877,7 +896,185 @@ def test_progress_runs_the_device_tests_after_an_all_ok_build(wiz, fake_generato
 
 def test_progress_skips_the_device_tests_without_the_opt_in(wiz):
     prog = wiz.page(wiz._page_ids["progress"])
-    wiz.cfg.qemu_e2e = False
+    wiz.cfg.qemu_device_tests = False
     prog._session = SimpleNamespace(workdir="/nowhere")
     prog._maybe_qemu_tests()
     assert prog.qemu_worker is None
+
+
+# ---- the Playwright browser suite over an emulated device (ask 4) ---------------------
+#
+# VACUITY NOTE, and it is the whole design of this section: asserting that the widgets
+# EXIST proves nothing — tests/qemu/run-qemu-e2e.sh had worked for months with no door
+# in the Studio, and a door that spawns the wrong script is worse than none. Every
+# assertion below reads the argv a CHILD PROCESS received (the stub echoes its own
+# "$*"), exactly as the device-test lane's assertions do.
+
+def _pw_echoed(page):
+    """The joined "$*" line(s) — readable, but blind to word splitting."""
+    return [ln for ln in page.log.toPlainText().splitlines()
+            if ln.startswith("STUB-QEMU-E2E ")]
+
+
+def _pw_argv(page):
+    """The argv as a LIST, one entry per argument the child really received."""
+    marker = "STUB-QEMU-E2E-ARG "
+    return [ln[len(marker):] for ln in page.log.toPlainText().splitlines()
+            if ln.startswith(marker)]
+
+
+def test_qemu_playwright_row_picker_offers_only_launchable_rows(wiz, fake_generator):
+    """run-qemu-e2e.sh wires launch-x86.sh and launch-pi.sh and REJECTS any other
+    --target, so a row it cannot boot must not be offered.
+
+    The session is given a JETSON row for this test — without one the filter is
+    untestable, and a mutation that dropped it entirely survived the earlier version
+    of this assertion because every fixture row happened to be launchable.
+    """
+    _gen, full, _abort = fake_generator
+    (full / "hugmesh-jetson-arm64-edge_ai-test-20260807T180000Z.img").write_bytes(b"")
+    page = _qemu_page(wiz)
+    page._reload_sessions()
+    assert "jetson/edge_ai" in page.plan.labels, "the fixture row was not planned"
+    labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
+    assert labels == ["rpi5/pki", "x86/be"], labels
+    assert "jetson/edge_ai" not in labels
+    # ...and the device-test lane, which CAN boot it, still offers it
+    avc = [page.avc_combo.itemData(i) for i in range(page.avc_combo.count())]
+    assert "jetson/edge_ai" in avc
+
+
+def test_qemu_playwright_list_button_runs_the_e2e_script_not_the_docker_runner(
+        wiz, qapp, fake_generator):
+    """THE naming test. If the envelope were aimed at run-qemu-docker.sh — the
+    confusion cfg.qemu_e2e's name caused for months — the child would echo
+    STUB-RUNNER and this goes red."""
+    _gen, full, _abort = fake_generator
+    page = _qemu_page(wiz)
+    labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
+    page.pw_row.setCurrentIndex(labels.index("x86/be"))
+    page.pw_list_btn.click()
+    _finish(page, qapp)
+    echoed = _pw_echoed(page)
+    assert echoed, ("nothing echoed by run-qemu-e2e.sh — the page spawned some other "
+                    f"script; log was: {page.log.toPlainText()!r}")
+    assert not _echoed(page, "STUB-RUNNER"), "the DOCKER runner was spawned instead"
+    line = echoed[0]
+    assert "--target x86" in line and "--role be" in line
+    assert f"-w {full}" in line                     # pinned to THIS session
+    assert "--list" in line                          # the enumerate verb, not a boot
+
+
+def test_qemu_playwright_list_carries_the_ports_and_the_spec_filter(wiz, qapp):
+    """The ports and the passthrough travel through the OPTIONS/ENVELOPE, so what
+    the preview shows and what the child gets are one value."""
+    page = _qemu_page(wiz)
+    page.pw_ui_port.setValue(9443)
+    page.pw_ssh_port.setValue(2299)
+    page.pw_args.setText("--grep @smoke")
+    page.pw_list_btn.click()
+    _finish(page, qapp)
+    argv = _pw_argv(page)
+    assert argv[argv.index("--ui-port") + 1] == "9443"
+    assert argv[argv.index("--ssh-port") + 1] == "2299"
+    # The passthrough arrives behind the script's own separator as TWO SEPARATE
+    # arguments. Asserted on the LIST: the joined "$*" form reads identically
+    # whether they were split or handed over as one string, which is exactly the
+    # quoting regression the Makefile's E2E_ARGS passthrough documents.
+    assert argv[-3:] == ["--", "--grep", "@smoke"], argv
+
+
+def test_qemu_playwright_preview_is_a_dry_run_and_never_a_boot(wiz, qapp):
+    page = _qemu_page(wiz)
+    page.pw_preview_btn.click()
+    _finish(page, qapp)
+    line = _pw_echoed(page)[0]
+    assert "--dry-run" in line and "--list" not in line
+
+
+def test_qemu_playwright_run_refuses_without_root_and_spawns_nothing(wiz):
+    """The Studio must never reach for sudo. The refusal is stated BEFORE the spawn,
+    inline (no modal), and names the containerized route."""
+    if os.geteuid() == 0:
+        pytest.skip("running as root: the non-root refusal cannot be exercised here")
+    page = _qemu_page(wiz)
+    assert not page.pw_run_btn.isEnabled(), "the Run button was live without root"
+    assert "--privileged" in page.pw_note.text()
+    assert "hugmesh-qemu-runner" in page.pw_note.text()
+    # ...and forcing the click anyway still spawns nothing
+    page._launch_playwright(list_only=False)
+    assert page.worker is None
+    assert not _pw_echoed(page)
+    assert "refused" in page.log.toPlainText()
+    # the non-root verbs stay live
+    assert page.pw_list_btn.isEnabled() and page.pw_preview_btn.isEnabled()
+
+
+def test_qemu_playwright_real_run_argv_when_root_is_available(wiz, qapp, monkeypatch,
+                                                              fake_generator):
+    """The BOOT argv, asserted on the child — with the root gate stubbed open at its
+    one named seam (emulation.playwright_root_blocker) rather than by acquiring root,
+    which this box cannot and must not do."""
+    _gen, full, _abort = fake_generator
+    monkeypatch.setattr(qemu_page.emulation, "playwright_root_blocker", lambda: "")
+    page = _qemu_page(wiz)
+    labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
+    page.pw_row.setCurrentIndex(labels.index("rpi5/pki"))
+    page.pw_args.setText("specs/01-frontpage.spec.ts")
+    assert page.pw_run_btn.isEnabled()
+    page.pw_run_btn.click()
+    _finish(page, qapp)
+    line = _pw_echoed(page)[0]
+    assert "--target pi" in line and "--role pki" in line      # derived from the row
+    assert f"-w {full}" in line
+    assert "--list" not in line and "--dry-run" not in line    # a REAL run
+    assert _pw_argv(page)[-2:] == ["--", "specs/01-frontpage.spec.ts"]
+    # every port/size flag rides even at its default (run-qemu-e2e.sh reads those
+    # defaults from the ENVIRONMENT, so omitting one is not the same as passing it)
+    for flag in ("--ssh-port", "--ui-port", "--ssh-user", "--mem", "--smp",
+                 "--accel", "--timeout", "--ui-timeout"):
+        assert flag in line, f"{flag} missing from the boot argv"
+
+
+def test_qemu_playwright_preview_matches_what_the_child_receives(wiz, qapp):
+    """The printed command is the spawned command. A preview that can drift from the
+    run is the failure mode the Run-envelope box's own docstring exists to prevent."""
+    page = _qemu_page(wiz)
+    page.pw_args.setText("--grep @smoke")
+    preview = page.pw_cmd_view.toPlainText()
+    assert preview.endswith("-- --grep @smoke"), preview
+    page.pw_list_btn.click()
+    _finish(page, qapp)
+    # Compared as LISTS: the preview is shlex-quoted, so a shell-split of it is the
+    # argv it promises. The button's own --list verb is the only allowed difference.
+    got = [a for a in _pw_argv(page) if a != "--list"]
+    assert shlex.split(preview)[1:] == got, (preview, got)
+
+
+def test_qemu_playwright_group_belongs_to_the_use_existing_arm(wiz):
+    page = _qemu_page(wiz)
+    assert page.pw_group.isVisible()
+    page.build_first.setChecked(True)
+    assert not page.pw_group.isVisible()
+
+
+def test_qemu_playwright_group_names_its_own_script(wiz):
+    """The rename, on the WIDGET an operator reads. Three harnesses in this tree are
+    called "e2e"; the group title must say WHICH."""
+    page = _qemu_page(wiz)
+    assert "run-qemu-e2e.sh" in page.pw_group.title()
+    assert "Playwright" in page.pw_group.title()
+
+
+def test_build_checkbox_names_the_assertion_lane_not_the_browser_one(real_wiz):
+    """The other half of the naming defect: BuildPage's post-build opt-in drives
+    run-qemu-docker.sh's IN-GUEST assertions, and its label used to read as a promise
+    to run the browser suite (the field was called cfg.qemu_e2e, which is the OTHER
+    script's name)."""
+    build = advance_to(real_wiz, wizard_mod.BuildPage)
+    label = build.qemu_device_tests.text()
+    assert "run-qemu-docker.sh" in label, label
+    assert "assertions" in label.lower(), label
+    assert "playwright" not in label.lower(), label
+    assert "playwright" not in build.qemu_device_tests.toolTip().lower() or (
+        "not the Playwright" in build.qemu_device_tests.toolTip())
